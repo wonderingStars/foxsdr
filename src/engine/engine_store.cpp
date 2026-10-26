@@ -984,6 +984,49 @@ void Engine::buildApiListsStore(ApiListBlock& b) {
             fact("plugin.origin." + v.file, word + "\t" + oneField(source), true);
         }
     }
+    // --- WHAT THE FITTED MODULES WINDOW AND THE DECODE BANK NEED OF EACH LOADED OR REFUSED MODULE THAT THE LISTS DO NOT CARRY (stub campaign
+    //     B5, STORE-B2; master 0.99.72 - 0.99.77: the window used to read the install records, the catalogue and the module's own tables):
+    //       fact.plugin.<file>.record   "<catalogue key> TAB <abi version> TAB <installed at, unix seconds> TAB <category>" - the install
+    //                                   record of that file (the key is the id for an official plugin and "<id>@<site label>" for a site's, ""
+    //                                   when the record names no id; the category is the catalogue entry's, "" when the catalogue does not
+    //                                   hold it or was never read); "" when no record names the file. LOCAL (the key carries a site's host).
+    //       fact.plugin.<file>.windows  one line for each window the module's own tables declare beyond a picture window (which its capability
+    //                                   word says): "panel TAB <title>" and "instrument TAB <title>" - the title the module gave, which the
+    //                                   window's identity carries (a plugin that is ASLEEP has no instance to read it from, and its rail row
+    //                                   and its Fitted modules double-click must name the window all the same). "" for a module with none.
+    //     Present for every file the host holds a record of, so "none" is told from "no such file".
+    for (const core::LoadedPlugin& p : pluginHost_.plugins()) {
+        const std::string file = core::pluginKey(p);
+        if (file.empty()) { continue; }
+        std::string record;
+        for (const core::InstalledPlugin& ip : pluginInventory_.plugins) {
+            if (!sameFileName(ip.file, file)) { continue; }
+            const std::string key = ip.id.empty() ? std::string() : core::PluginRepo::catalogueKey(ip.source, ip.id);
+            std::string category;
+            if (!key.empty()) {
+                for (const core::PluginCatalogEntry& ce : catalog_) {
+                    if (core::PluginRepo::catalogueKey(ce.source, ce.id) == key) {
+                        category = ce.category;
+                        break;
+                    }
+                }
+            }
+            record = oneField(key) + "\t" + std::to_string(ip.abiVersion) + "\t" + std::to_string(ip.installedAtUnix) + "\t" + oneField(category);
+            break;
+        }
+        fact("plugin." + file + ".record", std::move(record), true);
+        std::string windows;
+        if (p.loaded) {
+            if (p.panel != nullptr) {
+                windows += "panel\t" + oneField(p.panel->title != nullptr ? std::string(p.panel->title) : p.name);
+            }
+            if (p.instrument != nullptr) {
+                if (!windows.empty()) { windows += "\n"; }
+                windows += "instrument\t" + oneField(p.instrument->title != nullptr ? std::string(p.instrument->title) : p.name);
+            }
+        }
+        fact("plugin." + file + ".windows", std::move(windows));
+    }
 }
 
 }  // namespace cascade::engine

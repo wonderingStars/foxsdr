@@ -4133,7 +4133,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     if (ps.sampleRateHz > 0.0 && device_ != nullptr &&
         pipeline_.activeSource().sampleRateHz() != ps.sampleRateHz) {
         const cascade::gui::RateSetOutcome set =
-            cascade::gui::applySourceRate(*device_, ps.sampleRateHz, sourceError_);
+            cascade::gui::applySourceRate(*device_, ps.sampleRateHz, sourceError_, /*explicitRequest=*/true);
         if (set.ok) {
             // A rate the driver COERCED is said (the refusal stays advisory,
             // as above).
@@ -4157,6 +4157,13 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         // the receiver was not running and, on the next click, apply it.
         bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
         if (vfoBandwidthHz_ != bwBefore) { logBandwidthChange("decoder preset"); }
+    }
+
+    // FLAT AUDIO (CASCADE_PRESET_FLAT_AUDIO, stub campaign B5 - master's, lost with the rest of applyPluginPreset's 0.99.7x lines): the receiver's
+    // de-emphasis goes Off, the state saved and shown by the receiver control.
+    if ((ps.flags & CASCADE_PRESET_FLAT_AUDIO) != 0u) {
+        deemphIndex_ = 2;
+        pipeline_.setDeemphasisUs(kDeemphUs[deemphIndex_]);
     }
 
     // WHERE the frequency goes differs by decoder kind, and getting it wrong
@@ -4206,7 +4213,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // FOXAPI_EVENT_PRESET_APPLIED, text the module's file name - raised once per application, in this pass's endPass. The
     // engine used to call the window's openPluginWindowsFor from here, which writes the map pages, the plugin windows and the
     // Decoder output window's flag.)
-    api_->presetApplied(cascade::core::pluginKey(p));
+    api_->presetApplied(cascade::core::pluginKey(p), ps.flags);
 
     std::string note;
     cascade::core::formatUtf8(note, tr("Tuned to %.4f MHz for %s"), ps.frequencyHz / 1.0e6,
@@ -4798,7 +4805,13 @@ void Engine::maybeAutoPreset(const std::string& pluginKey, const char* verb, boo
                                                           deviceRateHz);
     if (idx < 0) { return; }
 
-    const CascadePreset& ps = presets[static_cast<std::size_t>(idx)];
+    CascadePreset ps = presets[static_cast<std::size_t>(idx)];
+    // KEEP TUNED ON START (CASCADE_PRESET_KEEP_TUNED_ON_START, 0.99.74; stub campaign B5 - master's, lost with the rest of this function's lines): the
+    // plugin asks for its reception SETTINGS (mode, bandwidth, de-emphasis) at the frequency the receiver is on now, not a retune to its preset's.
+    if ((ps.flags & CASCADE_PRESET_KEEP_TUNED_ON_START) != 0u) {
+        ps.frequencyHz = deviceCentreHz + vfoOffsetHz;
+        ps.flags &= ~CASCADE_PRESET_DEVICE_CENTRE;
+    }
     // THE IDENTICAL PATH THE BUTTON TAKES: mode, bandwidth, device rate, the
     // tune itself and the plugin's own windows. Starting a decoder (or
     // opening its window) is meant to feel like pressing its preset for it,

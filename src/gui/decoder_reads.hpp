@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,14 @@ struct PluginRow {
     bool fed = false;     // DECODERS FED: fed signal now (false with the receiver stopped)
     bool mutes = false;   // DECODERS MUTES: "mute audio while running" is on
     std::string idle;     // DECODERS detail: why the decoder is idle; "" running
+    // WHAT THE DECODE BANK GROUPS AND THE WINDOW ROWS NAME BY (stub campaign B5; fact.plugin.<file>.record and .windows, API 0.3 9.5): the
+    // catalogue's category of the plugin the install record names ("" with no record or no catalogue entry - the bank then has no heading for
+    // it), the run id (the file name without its version: what scopes the bank's widget ids, so two files of one plugin are one section), and
+    // the titles of the module's own panel and instrument ("" when it has none; the table's own, so an ASLEEP module's window can be named).
+    std::string category;
+    std::string runId;
+    std::string panelTitle;
+    std::string instrumentTitle;
     // The preset keys this plugin offers, as the mute snapshot held them: the plugin's own (raw index, bounded
     // label, the bandwidth it declared), then the operator's (1000 + ordinal). `ownPresets` of them are the
     // plugin's.
@@ -66,6 +75,69 @@ struct StaleGrantRow {
     std::string file;
     bool refused = false;
 };
+
+// --- the two per-file facts of stub campaign B5 (API 0.3 9.5) ----------------------------------------------
+
+// fact.plugin.<file>.record: "<catalogue key> TAB <abi version> TAB <installed at, unix seconds> TAB <category>" - the install record that names the
+// file ("" when none does). The key is "" when the record names no id. Written into `out`, whose strings keep their room.
+struct PluginRecordFact {
+    bool have = false;            // a record names the file
+    std::string key;              // the catalogue key (the id; "<id>@<site label>" for a plugin from a site); "" with no id
+    std::uint32_t abiVersion = 0;
+    std::int64_t installedAtUnix = 0;
+    std::string category;         // the catalogue entry's category; "" when the catalogue does not hold it
+};
+
+inline void parsePluginRecord(const std::string& text, PluginRecordFact& out) {
+    out.have = !text.empty();
+    out.key.clear();
+    out.abiVersion = 0;
+    out.installedAtUnix = 0;
+    out.category.clear();
+    if (!out.have) { return; }
+    const std::size_t t1 = text.find('\t');
+    if (t1 == std::string::npos) { return; }
+    out.key.assign(text, 0, t1);
+    const std::size_t t2 = text.find('\t', t1 + 1);
+    if (t2 == std::string::npos) { return; }
+    out.abiVersion = static_cast<std::uint32_t>(std::strtoul(text.c_str() + t1 + 1, nullptr, 10));
+    const std::size_t t3 = text.find('\t', t2 + 1);
+    if (t3 == std::string::npos) { return; }
+    out.installedAtUnix = static_cast<std::int64_t>(std::strtoll(text.c_str() + t2 + 1, nullptr, 10));
+    out.category.assign(text, t3 + 1, std::string::npos);
+}
+
+// Just the category of a record, for the rail (which needs nothing else of it).
+inline void pluginRecordCategory(const std::string& text, std::string& category) {
+    category.clear();
+    std::size_t at = 0;
+    for (int tab = 0; tab < 3; ++tab) {
+        at = text.find('\t', at);
+        if (at == std::string::npos) { return; }
+        ++at;
+    }
+    category.assign(text, at, std::string::npos);
+}
+
+// fact.plugin.<file>.windows: "panel TAB <title>" and "instrument TAB <title>", a line each; "" for a module with none.
+inline void pluginWindowTitles(const std::string& text, std::string& panelTitle, std::string& instrumentTitle) {
+    panelTitle.clear();
+    instrumentTitle.clear();
+    std::size_t at = 0;
+    while (at < text.size()) {
+        std::size_t end = text.find('\n', at);
+        if (end == std::string::npos) { end = text.size(); }
+        const std::size_t tab = text.find('\t', at);
+        if (tab != std::string::npos && tab < end) {
+            if (text.compare(at, tab - at, "panel") == 0) {
+                panelTitle.assign(text, tab + 1, end - tab - 1);
+            } else if (text.compare(at, tab - at, "instrument") == 0) {
+                instrumentTitle.assign(text, tab + 1, end - tab - 1);
+            }
+        }
+        at = end + 1;
+    }
+}
 
 // --- the conversions from the table's entries to what the members were handed ------------------------------
 

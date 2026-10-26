@@ -249,7 +249,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     prepare, RecordStart opens, pollRecordStarts arms; test_record_start)
   * a catalogue refresh reloads nothing when nothing changed; every reload logs its steps ..... re-expressed, C4 (Engine::rescanPluginsIfChanged; test_plugin_rescan_log;
     test_plugin_rescan_skip converted by stub batch B2: re-expressed)
-  * the Fitted modules window reads no plugin file's size per frame ......................... stubbed STORE-VIEW (test_fitted_modules_no_disk red)
+  * the Fitted modules window reads no plugin file's size per frame ......................... re-expressed, stub batch B5 (the size is PLUGINS value[1], measured by the
+    engine when the table's block is made; the window's draw function and the cache it reads - src/gui/app_window_fitted.cpp - ask the file system nothing:
+    test_fitted_modules_no_disk, whose scan now reads that file and both functions, edited with its reason beside it)
   * freeze reports name a late-loaded module ................................................ re-expressed, C1 (ForeignModuleWatch; test_foreign_modules_app)
 
 0.99.64
@@ -295,8 +297,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * an airport lookup while listening changes nothing played ................................ stubbed AIRBAND
   * a pasted report is recognised; `upload local-only` says what it means ..................... stubbed PROBLEM-REPORT (core/pasted_report is in; the page's
     attach-diagnostics rows, the preview and the recognised-report line are not - lostlines: drawProblemReportPage)
-  * Fitted modules names the files not installed from the store ............................ stubbed STORE-VIEW (the engine's half - `fact.plugin.origin.<file>`:
-    orphan / site / removed-site - is back since stub batch B3; the window's words and REMOVE FILE key are batch B5)
+  * Fitted modules names the files not installed from the store ............................ re-expressed, stub batches B3 and B5 (the engine's half - `fact.plugin.origin.<file>`:
+    orphan / site / removed-site - is B3's; the window's words, the row's note and the orphan's REMOVE FILE key (FOXAPP_OP_STORE_CLEAN_OLD ival[0] 1) are
+    B5's: test_fitted_modules_window A, E, test_plugin_dup_app)
   * the log and every report name the other programs' DLLs ................................... re-expressed, C1 (test_foreign_modules_app, test_diag_context_app)
   * the usage report says how an unclean session ended ....................................... re-expressed, C1 (exit causes)
   * the ADS-B scope's compass labels ......................................................... carried (gui/scope_view.cpp)
@@ -316,14 +319,18 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     around gui/plugin_store_view.cpp, master's own, in the new src/gui/app_window_store.cpp: the BROWSE and UPDATES tabs, the cards - the whole card is the
     page's key - the page with its pictures and sections in their fixed order, GET greyed until the notice's tick, GET EVERYTHING, UPDATE ALL, the window's
     rectangle kept in the config; the model is built from the table once for each listSeq move; tests/test_plugin_store_window.cpp REWRITTEN against
-    master's 0.99.72 model, test_plugin_store_view, test_plugin_store_app). FITTED MODULES like an operating panel is stubbed STORE-VIEW (batch B5); the
-    FITTED MODULES scenarios of test_plugin_store_app are carved out as the part store_app_fitted until then
+    master's 0.99.72 model, test_plugin_store_view, test_plugin_store_app). FITTED MODULES like an operating panel is re-expressed since stub batch B5
+    (src/gui/app_window_fitted.cpp: the window around gui/plugins_view.cpp, master's own - the list, the module's page, the chips, IDLE and KEEP RUNNING, the
+    command plate, CLEAN UP, RESET WINDOW SIZES - over the table's PLUGINS (value[3] the run state), its per-file facts and the two new ones of API 0.3
+    9.5; tests/test_fitted_modules_window.cpp REWRITTEN against master's 0.99.72 model, restated from MASTER's drawFittedModulesWindow); the FITTED MODULES
+    scenarios of test_plugin_store_app run again (the part store_app_fitted is gone)
 
 0.99.73
   * the radio and its sound stay responsive with many modules fitted ......................... re-expressed: the audio buffer that deepens itself
     (C1, test_audio_lead_app); a fitted plugin that runs only while it is used is the ENGINE's since stub batch B2 (engine_plugin_run.cpp,
     FOXAPP_OP_PLUGIN_RUN_MODE / _USE; test_plugin_rescan_skip, the part audio_lead_plugin_wake restored, test_engine_api_03 group N). The Fitted
-    modules window's half (the IDLE chip, KEEP RUNNING, the rows of a dormant plugin's windows) is stub batch B5: test_plugin_inuse_app stays red until then
+    modules window's half - the IDLE chip, START and the KEEP RUNNING tick, the window rows and map pages of a plugin that is asleep, listed from what the
+    module declares (fact.plugin.<file>.windows) - is stub batch B5's: test_plugin_inuse_app, nine scenarios in real processes, is green
   * the DECODER OUTPUT and plugin picture windows open inside the main window; RESET WINDOW SIZES places them there ........ stubbed WINDOW-PLACEMENT
     (placeInsideMainWindow; test_decoder_window_app). Found by the gui-labelled tests, not by the release-note pass: the ledger had not listed it.
 
@@ -365,11 +372,14 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * a Linux scan helper with no reader is not a crash ........................................ carried (source/)
 
 0.99.77
-  * the Fitted modules / DECODE lists grouped under the store's headings ..................... stubbed STORE-VIEW
+  * the Fitted modules / DECODE lists grouped under the store's headings ..................... re-expressed, stub batch B5 (the category is the install record's catalogue entry's:
+    fact.plugin.<file>.record; the bank's rows are scoped by the plugin's run id, so two files of one plugin are one section; a double-click on a Fitted
+    modules row opens that plugin's window: openPluginOwnWindow; test_plugin_inuse_app groups and dblclick, test_fitted_modules_window)
   * a row in a plugin's panel is a key ....................................................... stubbed PLUGIN-ROW-KEYS (test_programme_audio_app)
   * an old copy of a renamed plugin no longer loads beside the new one; ImGui's duplicate-ID box is off in the shipped build
     .......................................................................................... carried (core/plugin_host, gui/imgui_debug_policy.hpp) and held in part by
-    test_plugin_host_origin (C4)
+    test_plugin_host_origin (C4); the window's half - ConfigDebugHighlightIdConflicts set from the policy, its log line and the `imgui:idconflict` census
+    note - was lost by the merge and is back since stub batch B5 (test_plugin_dup_app)
   * Linux builds of 41 of 43 plugins ......................................................... n/a
 
 0.99.78
@@ -437,7 +447,8 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   STORE-VIEW (6)          test_plugin_store_window test_fitted_modules_window test_plugin_store_view test_fitted_modules_no_disk
                           test_plugin_dup_app test_plugin_store_app   [B3 removed test_plugin_catalogue_app, test_plugin_cleanup_app and
                           test_plugin_update_cleanup_app; B4 removed test_plugin_store_window, test_plugin_store_view and test_plugin_store_app,
-                          leaving test_fitted_modules_window, test_fitted_modules_no_disk and test_plugin_dup_app, and added the part store_app_fitted]
+                          leaving test_fitted_modules_window, test_fitted_modules_no_disk and test_plugin_dup_app, and added the part store_app_fitted;
+                          B5 removed the rest and the part: STORE-VIEW is whole]
   PLUGIN-SETTINGS-UI (3)  test_plugin_settings_ui test_decoder_settings_fold_app test_plugin_pathpick_app
   PLUGIN-ROW-KEYS (2)     test_programme_audio_app test_row_keys_app
   TX-PLUGIN (3)           test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app
@@ -447,12 +458,12 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   PATCH-VIEW (2)          test_patch_canvas_nav test_patch_info_pane
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
   one each                PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
-                          SOURCE-ROWS test_source_row_app; AIRBAND test_airband_app; PLUGIN-RUN test_plugin_inuse_app; UPDATES test_store_update_app;
+                          SOURCE-ROWS test_source_row_app; AIRBAND test_airband_app; UPDATES test_store_update_app;
                           IMPORT-DIALOG test_import_dialog_app; RADIO-SETUP test_radio_setup_app; TESTER-USAGE test_team_message_app;
                           MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
   parts (3)               transmit_page_plugin_key (TX-PLUGIN), excuse_cap_pickfile (IMPORT-DIALOG), audio_lead_plugin_wake (PLUGIN-RUN)
                           [B2 removed audio_lead_plugin_wake and added nothing; B1 had added display_fold_airband_section (AIRBAND); B4 added
-                          store_app_fitted (STORE-VIEW: the FITTED MODULES scenarios of test_plugin_store_app)]
+                          store_app_fitted (STORE-VIEW: the FITTED MODULES scenarios of test_plugin_store_app); B5 removed store_app_fitted]
 
 UPDATE 2026-10-26, stub batch B1 (docs/engine-stage4.md 6.22): test_app_rail, test_rail_fold, test_rail_fold_app, test_status_fold, test_status_fold_app
 and test_display_fold_app are converted and green, and the placeholders of those six are gone (RAIL-CHROME is now test_deck_knobs_app and test_theme_census,
@@ -477,6 +488,16 @@ CASCADE_STORE_APP_FITTED_PART). The red placeholders are therefore the 44 of B3,
 capabilities, install state, the installed copy's file), the version-aware "installed" rule of master's 0.99.72, and UPDATE ALL (FOXAPP_OP_STORE_ADD_ALL
 ival[1] 1). test_i18n: 149 stale, 0 missing (the three keys that returned: "From a site you added: %s", "Offered by foxsdr.com in some countries only." and
 the Catalogue-source tooltip's last two lines).
+
+UPDATE 2026-10-26, stub batch B5 (docs/engine-stage4.md 6.22): test_fitted_modules_window (REWRITTEN against master's 0.99.72 model, restated from MASTER's
+drawFittedModulesWindow; it keeps its _stepped and _free registrations), test_plugin_dup_app, test_plugin_inuse_app and test_fitted_modules_no_disk (an
+expectation edit, with its reason beside it) are green and their placeholders are gone, and so is the part store_app_fitted (master's text of the FITTED
+MODULES scenarios of test_plugin_store_app is back as it was): STORE-VIEW and PLUGIN-RUN are whole. The red placeholders are the 42 of B4, less four tests and
+one part: 37 (34 tests and 3 parts). The engine grew by two facts a module (API 0.3 9.5: the install record and the module's own window titles), the preset
+event's value[0] (the preset's flags), and three lines of applyPluginPreset / maybeAutoPreset that the merge had lost (CASCADE_PRESET_FLAT_AUDIO,
+the explicit rate request, CASCADE_PRESET_KEEP_TUNED_ON_START). The window got back what the merge had lost around it: the `switchrow:` census rect, the
+`image:window:` / `panel:window:` / `instrument:window:` / `decoder:window:` census rects, the ImGui ID-conflict setup. test_i18n: 147 stale, 0 missing (the two keys
+that returned: "Installed from %s, a site you removed. It gets no updates." and "Installed from %s, not from the FoxSDR catalogue.").
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

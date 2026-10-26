@@ -137,7 +137,8 @@ public:
     // API 0.3 8.14: a plugin's preset was applied (Engine::applyPluginPreset). The pumping thread's call; the event
     // FOXAPI_EVENT_PRESET_APPLIED (text: the module's file name, what PLUGINS' detail and every plugin op key by) is
     // broadcast by this pass's endPass, once for each application, after the publish that carries what it changed.
-    void presetApplied(const std::string& moduleFile);
+    // `presetFlags` is the preset's CASCADE_PRESET_* word, carried in the event's value[0] (stub campaign B5).
+    void presetApplied(const std::string& moduleFile, std::uint32_t presetFlags = 0u);
     // TESTS ONLY - nothing in the product calls it: put one spectrum frame in
     // the ring the way endPass puts the pipeline's newest there (the next
     // sequence number, `count` bins of dB, the centre and span the frame

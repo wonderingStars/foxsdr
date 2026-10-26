@@ -100,6 +100,9 @@
 // unique_ptr behind forward declarations for exactly that reason.
 #include "gui/plugin_store_view.hpp"
 #include "engine/running_view.hpp"
+#include "core/plugin_run.hpp"
+#include "gui/imgui_debug_policy.hpp"
+#include "gui/plugin_window_ids.hpp"
 #include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
@@ -136,6 +139,17 @@ using cascade::i18n::trId;
 // - or two demonstrations - into a single window; the title goes in as well.
 static std::string instrumentWindowId(const cascade::core::HostInstrument& in) {
     return in.title + "###instrument_" + in.plugin + "|" + in.title;
+}
+
+// THE PAGE `windowId` AS IMGUI HOLDS IT THIS FRAME, in the census under `name` (0.99.73 - 0.99.77; stub campaign B5 - the lines were lost in the 0.99.84
+// merge). By window id rather than ImGui::GetWindowPos(): once beginPage has answered true the current window is the page's well (a child inset by
+// the cabinet's margin), whose rectangle is not the page's. Called after beginPage whether or not it answered true, so a page rolled up to its rail
+// is still on the list. Nothing at all unless the census is on.
+static void noteWindowRectInCensus(std::string_view name, const char* windowId) {
+    if (!cascade::gui::census::enabled()) { return; }
+    const ImGuiWindow* w = ImGui::FindWindowByName(windowId);
+    if (w == nullptr) { return; }
+    cascade::gui::census::rect(name, w->Pos.x, w->Pos.y, w->Pos.x + w->Size.x, w->Pos.y + w->Size.y);
 }
 
 namespace {
@@ -1337,6 +1351,29 @@ int AppWindow::run(int frames) {
         cascade::core::diagLogf("%s", why);
     }
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // DEAR IMGUI'S "PROGRAMMER ERROR" BOX STAYS OUT OF SHIPPED BUILDS (0.99.77; stub campaign B5 - the block was lost in the 0.99.84 merge). A US
+    // tester (2026-10-13, 0.99.75) had a red "Programmer error: 2 visible items with conflicting ID!" box open over the waterfall, outlining the
+    // "+ Save" keys of two TETRA sections - two loaded copies of one plugin, which the host resolves now. ImGui turns
+    // io.ConfigDebugHighlightIdConflicts ON by default and the box itself says to switch it off "in non-programmers builds", which is what this
+    // is. It stays ON in a Debug build and under the test hooks of a bounded run (FOXSDR_UI_CENSUS, FOXSDR_INPUT_SCRIPT), so a test can still
+    // surface a conflict: the frame loop notes `imgui:idconflict` in the census when ImGui reports one (it does so for an item the pointer is
+    // over), and the line below says which way this run went.
+    {
+        const char* inputScript = std::getenv("FOXSDR_INPUT_SCRIPT");
+#ifdef NDEBUG
+        constexpr bool kDebugBuild = false;
+#else
+        constexpr bool kDebugBuild = true;
+#endif
+        const char* idBoxWhy = cascade::gui::idConflictBoxReason(kDebugBuild, frames, cascade::gui::census::enabled(),
+                                                                  inputScript != nullptr && *inputScript != '\0');
+        ImGui::GetIO().ConfigDebugHighlightIdConflicts = *idBoxWhy != '\0';
+        if (*idBoxWhy != '\0') {
+            cascade::core::diagLogf("imgui: ID-conflict box on (%s)", idBoxWhy);
+        } else {
+            cascade::core::diagLogf("imgui: ID-conflict box off (shipped build)");
+        }
+    }
     // TORN-OFF WINDOWS GET NO FRAME FROM THE OPERATING SYSTEM (0.78.0). From
     // 0.66.0 they had one - a native title bar with the desktop's own
     // minimise, maximise and close, added after a user could not find a way
@@ -1788,6 +1825,12 @@ int AppWindow::run(int frames) {
         ImGui_ImplGlfw_NewFrame();
         if (inputScriptActive_) { applyInputScript(rendered); }
         ImGui::NewFrame();
+        // DEAR IMGUI SAYS IT FOUND TWO ITEMS WITH ONE ID (0.99.77; stub campaign B5): the census records it, so a bounded run can assert there is
+        // none. ImGui sets this in NewFrame for the item the pointer was over last frame, and only while the highlighter is on
+        // (gui/imgui_debug_policy.hpp: a Debug build or a test hook), so a shipped run never reaches the note.
+        if (cascade::gui::census::enabled() && ImGui::GetCurrentContext()->DebugDrawIdConflictsId != 0) {
+            cascade::gui::census::note("imgui:idconflict");
+        }
         // Ctrl+=/Ctrl+-/Ctrl+0: read inside the frame (ImGui owns the
         // keyboard state here), applied on the NEXT pass through
         // applyPendingUiScale above - one frame later, same as every other
@@ -3199,6 +3242,11 @@ bool benchSwitchRow(const char* label, bool on, const char* chipText,
     ImGui::PushID(label);
     const ImVec2 tl = ImGui::GetCursorScreenPos();
     const ImVec2 br(tl.x + w, tl.y + kRowH);
+    // WHERE THE ROW IS, by its visible name (0.99.73; stub campaign B5 - the line was lost in the 0.99.84 merge), so a test can press it the way a
+    // hand does: the note above says a row was drawn, this says where. Only when the census is asked for.
+    if (cascade::gui::census::enabled()) {
+        cascade::gui::census::rect("switchrow:" + shown, tl.x, tl.y, br.x, br.y);
+    }
 
     ImGui::BeginDisabled(!enabled);
     ImGui::SetNextItemAllowOverlap();
@@ -9627,6 +9675,10 @@ void AppWindow::drawDecodersSection() {
     std::string stopKey;   // a row's STOP/START key, applied after the loop
     bool stopTo = false;
     bool anyRow = false;
+    // WHICH PLUGINS GET A ROW, DECIDED ONCE, AND IN WHAT ORDER (0.99.77; stub campaign B5). It was decided inside the loop; it is decided before it
+    // now because the order depends on it: a US tester, through the owner (2026-10-13), asked for the store's grouping here as well - "if you
+    // install them all, the list is quite long, intermixed and kind-of alphabetical" - and a heading goes only over a group that has a row.
+    std::vector<std::size_t> railRows;
     for (std::size_t i = 0; i < list.size(); ++i) {
         const cascade::gui::PluginRow& p = list[i];
         // A REFUSED CANDIDATE HAS NOTHING TO SET. Its reason is printed in the
@@ -9636,12 +9688,56 @@ void AppWindow::drawDecodersSection() {
         if (!p.loaded) { continue; }
         // (The presets are the VALIDATED ones the table lists: a plugin whose every preset is not a frequency has
         // nothing to press and no row of its own unless it is a decoder.)
-        const bool hasPresets = p.ownPresets > 0u;
+        if (p.ownPresets == 0u && !p.decoder) { continue; }
+        railRows.push_back(i);
+    }
+    // THE STORE'S GROUPS, when any module has a catalogue category (the same join the Fitted modules window groups by); otherwise the scan order
+    // this list has always had, with no headings. The category is the table's (fact.plugin.<file>.record), read when the lists move.
+    std::vector<cascade::gui::StoreListEntry> railEntries;
+    railEntries.reserve(railRows.size());
+    for (const std::size_t at : railRows) { railEntries.push_back(cascade::gui::StoreListEntry{list[at].category, list[at].name}); }
+    const bool railGrouped = cascade::gui::storeListIsGrouped(railEntries);
+    const std::vector<int> railOrder = cascade::gui::storeGroupedOrder(railEntries);
+    bool railHaveGroup = false;
+    cascade::gui::StoreCategory railGroup = cascade::gui::StoreCategory::Other;
+    for (const int railPos : railOrder) {
+        const std::size_t i = railRows[static_cast<std::size_t>(railPos)];
+        const cascade::gui::PluginRow& p = list[i];
         const bool isDecoder = p.decoder;
-        if (!hasPresets && !isDecoder) { continue; }
         anyRow = true;
-        ImGui::PushID(static_cast<int>(i));
+        if (railGrouped) {
+            const cascade::gui::StoreCategory g =
+                cascade::gui::storeCategoryFor(railEntries[static_cast<std::size_t>(railPos)].category);
+            if (!railHaveGroup || g != railGroup) {
+                // The store's heading over the group, in the section's own idiom and in the phosphor the rail letters its sections in, so it
+                // reads one step above the plugin names under it.
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+                ImGui::SeparatorText(cascade::gui::storeCategoryHeading(g));
+                ImGui::PopStyleColor();
+                if (cascade::gui::census::enabled()) {
+                    const std::string name = cascade::gui::storeCategoryCensusName(g);
+                    cascade::gui::census::note("decoders:group:", name);
+                    const ImVec2 hMin = ImGui::GetItemRectMin();
+                    const ImVec2 hMax = ImGui::GetItemRectMax();
+                    cascade::gui::census::rect("decoders:group:" + name, hMin.x, hMin.y, hMax.x, hMax.y);
+                }
+                railHaveGroup = true;
+                railGroup = g;
+            }
+        }
+        // THE ROW IS IDENTIFIED BY THE PLUGIN, NOT BY ITS PLACE IN THE LIST (0.99.74). The index was the id while every item in the row was a
+        // button, which keeps no state. The "Plugin settings" node (a later batch's) does - its open state is ImGui's, kept against this id - and
+        // a rescan (a plugin installed, updated or removed) moves every index after it, so a fold opened on one plugin would have reappeared open
+        // on the NEXT one's row. The run id is the module's file name without its version, so an update keeps it too - and so two files of one
+        // plugin whose declared name changed between them (a US tester's two TETRA sections, 0.99.77) are one section, not two widgets of one id.
+        ImGui::PushID(p.runId.c_str());
         ImGui::SeparatorText(p.name.c_str());
+        if (cascade::gui::census::enabled()) {
+            // WHERE EACH PLUGIN'S ENTRY STARTS, so a test can read the order the bank lists them in.
+            const ImVec2 eMin = ImGui::GetItemRectMin();
+            const ImVec2 eMax = ImGui::GetItemRectMax();
+            cascade::gui::census::rect("decoders:entry:" + p.name, eMin.x, eMin.y, eMax.x, eMax.y);
+        }
         drawPluginPresets(p);
         if (isDecoder) {
             // ONE KEY, THE ONE THAT CHANGES WHAT YOU ARE LOOKING AT (0.99.8).
@@ -9786,7 +9882,11 @@ void AppWindow::drawPluginsSection() {
     // What this row owes a user who has not opened the window is the fact that
     // there is something in it to read.
     const int refused = static_cast<int>(store.refused);
-    const bool notFed = receiverRunning && decoders > fedPlugins;
+    // AN IDLE DECODER IS NOT A FAULT (0.99.73; stub campaign B5): a decoder set to AUTO that nothing is using is not running by design, and
+    // counting it here would put "28 fitted decoders are not being fed" on a rail whose owner asked for exactly that.
+    const std::size_t idlePlugins = store.idleDecoders;
+    const std::size_t notFedPlugins = decoders > fedPlugins + idlePlugins ? decoders - fedPlugins - idlePlugins : 0u;
+    const bool notFed = receiverRunning && notFedPlugins > 0u;
     if (refused > 0 || notFed) {
         ImGui::PushStyleColor(ImGuiCol_Text,
                               refused > 0 ? kErrorRed : cascade::gui::theme::warning());
@@ -9797,10 +9897,10 @@ void AppWindow::drawPluginsSection() {
                                refused);
         } else {
             ImGui::TextWrapped(
-                (decoders - fedPlugins) == 1u
+                notFedPlugins == 1u
                     ? tr("%zu fitted decoder is not being fed. The window says why.")
                     : tr("%zu fitted decoders are not being fed. The window says why."),
-                decoders - fedPlugins);
+                notFedPlugins);
         }
         ImGui::PopStyleColor();
     }
@@ -13880,139 +13980,8 @@ void AppWindow::placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h
 // (AppWindow::drawPluginStoreWindow and AppWindow::storeLists - the plugin store window and what it keeps of the engine's table - are in
 // app_window_store.cpp, stub campaign B4.)
 
-void AppWindow::drawFittedModulesWindow() {
-    // VERIFICATION ONLY, the plugin store's own seam above for its sibling:
-    // nothing in a config opens this window since 0.79.1, and a translated
-    // module list can only be judged by looking at it. Once, at the first
-    // frame, so a session that closes it again is not fought.
-    static const bool openForCapture = std::getenv("FOXSDR_OPEN_FITTED_MODULES") != nullptr;
-    static bool openedForCapture = false;
-    if (openForCapture && !openedForCapture) {
-        openedForCapture = true;
-        fittedWindowOpen_ = true;
-    }
-    if (!fittedWindowOpen_) { return; }
-    uiNotePanel("fitted modules");
-
-    ImGuiWindowClass fittedClass;
-    fittedClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
-    ImGui::SetNextWindowClass(&fittedClass);
-    // WHERE THE USER LEFT IT, and only if that place still exists on this
-    // machine; otherwise a different slot from the store's, so opening both
-    // for the first time does not stack one exactly on the other.
-    placeSavedFeatureWindow(7, fittedWinX_, fittedWinY_, fittedWinW_, fittedWinH_,
-                            1060.0f, 720.0f);
-    bool open = true;
-    const bool drawn = beginPage("Fitted modules###fittedmoduleswindow", tr("FITTED MODULES"),
-                                 &open, 0, 1060.0f, 720.0f);
-    if (!open) { fittedWindowOpen_ = false; }
-    // READ BACK EVERY FRAME, which is the whole of the persistence: ImGui's
-    // own .ini is switched off in this application, so unless the rectangle is
-    // copied out here and into AppConfig it exists only until the process
-    // ends. The POSITION is read even when Begin answered false - a collapsed
-    // window is not gone and can still be dragged, and freezing its position
-    // would lose a move made while it was rolled up - but the SIZE is not,
-    // because a collapsed window reports its title-bar-only height and
-    // persisting that would corrupt the real one.
-    // ...and NOT while the window is maximised or rolled up by its own keys:
-    // that rectangle is the key's, and persisting it would reopen the window
-    // filling a monitor it may no longer be on.
-    if (!pageGeometryTransient("Fitted modules###fittedmoduleswindow")) {
-        const ImVec2 wpos = ImGui::GetWindowPos();
-        fittedWinX_ = static_cast<int>(wpos.x);
-        fittedWinY_ = static_cast<int>(wpos.y);
-        if (drawn) {
-            const ImVec2 wsize = ImGui::GetWindowSize();
-            fittedWinW_ = static_cast<int>(wsize.x);
-            fittedWinH_ = static_cast<int>(wsize.y);
-        }
-    }
-    if (drawn) {
-        // --- what the window is told ----------------------------------------
-        // FROM THE TABLE ONLY (window port, group 9; API 0.3 section 8.8): the model is the cache's, built
-        // when listSeq moves, so a frame in which nothing changed builds nothing (fittedLists also sets the
-        // receiver's run state and the install sentence, which are not the lists').
-        const cascade::gui::FittedModulesModel& model = fittedLists().model;
-
-        // --- the cabinet ----------------------------------------------------
-        // NO TITLE PLATE HERE: drawFittedModulesPanel draws its own FITTED
-        // MODULES plate as the first thing in its layout, and a second plate
-        // above it would be the window's name twice.
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const ImVec2 tl = ImGui::GetCursorScreenPos();
-        const ImVec2 avail = ImGui::GetContentRegionAvail();
-        cascade::gui::FittedModulesAction act;
-        if (dl != nullptr && avail.x > 8.0f && avail.y > 8.0f) {
-            const ImVec2 br(tl.x + avail.x, tl.y + avail.y);
-            // THE CABINET IS THE PAGE'S OWN NOW - beginPage drew it, screws,
-            // rail and keys - so the face goes straight into the well.
-            const float margin = 0.0f;
-            const ImVec2 pTL(tl.x + margin, tl.y + margin);
-            const ImVec2 pBR(br.x - margin, br.y - margin);
-            const float pad = 8.0f;
-            const float faceW = pBR.x - pTL.x - pad * 2.0f;
-            const float faceH = pBR.y - pTL.y - pad * 2.0f;
-            if (faceW > 40.0f && faceH > 40.0f) {
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-                ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, pTL.y + pad));
-                ImGui::BeginChild("##fittedface", ImVec2(faceW, faceH),
-                                  ImGuiChildFlags_None,
-                                  ImGuiWindowFlags_NoScrollbar |
-                                      ImGuiWindowFlags_NoScrollWithMouse);
-                ImGui::PopStyleVar();
-                ImGui::PopStyleColor();
-                act = cascade::gui::drawFittedModulesPanel(*fittedDeck_, model);
-                ImGui::EndChild();
-            } else {
-                ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, pTL.y + pad));
-                ImGui::TextDisabled("%s", tr("Too small - drag the window larger."));
-            }
-        }
-
-        // --- what the frame's keys asked for --------------------------------
-        // APPLIED AFTER THE PANEL, never inside it, and as COMMANDS on the window's session
-        // (uiSubmit): every one of these rebuilds the plugin set - rescan unloads and re-loads every
-        // module, a stop or a start rebuilds every instance, a remove deletes a file and rescans - and
-        // the engine does it in its next pass, so the model the panel was drawn from is the model it
-        // replaces only at the next refresh of the cache, never mid-frame.
-        namespace cmd = cascade::core::cmd;
-        switch (act.kind) {
-            case cascade::gui::FittedModulesAction::Kind::Rescan:
-                uiSubmit(cmd::make(FOXAPI_OP_PLUGIN_RESCAN));
-                break;
-            case cascade::gui::FittedModulesAction::Kind::Start:
-                uiSubmit(cmd::makeText(FOXAPI_OP_DECODER_START, act.file));
-                break;
-            case cascade::gui::FittedModulesAction::Kind::Stop:
-                uiSubmit(cmd::makeText(FOXAPI_OP_DECODER_STOP, act.file));
-                break;
-            case cascade::gui::FittedModulesAction::Kind::Remove:
-                uiSubmit(cmd::makeText(FOXAPI_OP_STORE_REMOVE, act.file));
-                break;
-            case cascade::gui::FittedModulesAction::Kind::SetTune:
-                uiSubmit(cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, act.file, 1, act.flag ? 1 : 0));
-                break;
-            case cascade::gui::FittedModulesAction::Kind::SetSettings:
-                uiSubmit(cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, act.file, 2, act.flag ? 1 : 0));
-                break;
-            case cascade::gui::FittedModulesAction::Kind::Command:
-                // Queued for the plugin to take with poll_command; nothing of
-                // the plugin's runs here, on the GUI thread's frame.
-                uiSubmit(cmd::makeText(FOXAPI_OP_PLUGIN_COMMAND, act.file,
-                                       static_cast<std::int64_t>(act.commandId)));
-                break;
-            case cascade::gui::FittedModulesAction::Kind::ResetWindows:
-                // Safe from inside this page's own body: beginPage has already
-                // returned, and endPage reads none of the state this clears.
-                resetPageWindows();
-                break;
-            case cascade::gui::FittedModulesAction::Kind::None:
-                break;
-        }
-    }
-    endPage();
-}
+// (AppWindow::drawFittedModulesWindow and AppWindow::fittedLists - the Fitted modules window and what it keeps of the engine's table - and
+// AppWindow::openPluginOwnWindow and declaredTrackPluginNames are in app_window_fitted.cpp, stub campaign B5.)
 
 namespace {
 
@@ -14140,7 +14109,7 @@ void AppWindow::drawPluginWindows() {
     }
 
     // --- the map pages ------------------------------------------------------
-    // ONE PAGE PER PLUGIN THAT HAS A TRACK INSTANCE. The single "Map" window
+    // ONE PAGE PER PLUGIN THAT DECLARES A TRACK SOURCE. The single "Map" window
     // this replaces drew every plugin's targets merged, so switching from the
     // Satellites plugin to ADS-B still showed "the satellite map". The page
     // set is decided by CAPABILITY, not content: an ADS-B page with no
@@ -14148,7 +14117,14 @@ void AppWindow::drawPluginWindows() {
     // empty" answers the user's question and "the page is missing" does not.
     // Pages are created lazily here and never destroyed while the app runs;
     // rescanPlugins() leaves them in place.
-    for (const std::string& name : hostTrackPluginNames()) {
+    //
+    // CAPABILITY, NOT INSTANCE (0.99.73; stub campaign B5): a tracker set to AUTO that nothing is
+    // using is asleep and has no track instance, yet its page must exist - the page's row on the
+    // rail, and opening it, is how the tracker is woken. The names come from the table's PLUGINS
+    // rows (loaded, a track source by the capability word, not stopped), not from the plugin UI's
+    // instances.
+    const std::vector<std::string> declaredTrackers = declaredTrackPluginNames();
+    for (const std::string& name : declaredTrackers) {
         ensureMapPage(name);
     }
     // A page whose plugin is GONE (removed, or a rescan came back without it)
@@ -14157,7 +14133,7 @@ void AppWindow::drawPluginWindows() {
     // than in rescanPlugins is what lets live pages survive a rescan with
     // their view state intact (see there).
     {
-        const std::vector<std::string>& live = hostTrackPluginNames();
+        const std::vector<std::string>& live = declaredTrackers;
         bool anyDead = false;
         for (const MapPage& pg : mapPages_) {
             if (std::find(live.begin(), live.end(), pg.plugin) == live.end()) {
@@ -14669,8 +14645,13 @@ void AppWindow::drawPluginWindows() {
         // the window out of pluginWindows_ and its row's lamp goes out.
         bool imageOpen = true;
         const std::string railName = pluginPageLegend(tr("%s IMAGE"), im.plugin);
-        if (beginPage(id.c_str(), railName.c_str(), &imageOpen, 0, kSeparatePageW,
-                      kSeparatePageH)) {
+        const bool imageDrawn = beginPage(id.c_str(), railName.c_str(), &imageOpen, 0, kSeparatePageW,
+                                          kSeparatePageH);
+        // WHERE THE PICTURE WINDOW IS, every frame it is shown (the census; see tests/test_decoder_window_app.cpp for the Decoder output window's).
+        if (cascade::gui::census::enabled()) {
+            noteWindowRectInCensus("image:window:" + im.plugin, id.c_str());
+        }
+        if (imageDrawn) {
             drawPluginPresetBar(im.plugin);
             if (im.width == 0 || im.height == 0) {
                 ImGui::TextDisabled("%s", tr("Waiting for the first image..."));
@@ -14799,7 +14780,14 @@ void AppWindow::drawPluginWindows() {
         // The plugin's own title in capitals, a character at a time: a
         // plugin may name itself in any language.
         const std::string railName = cascade::core::upperLegend(p.title);
-        if (beginPage(id.c_str(), railName.c_str(), &panelOpen, 0, kPanelW, kPanelH)) {
+        const bool panelDrawn = beginPage(id.c_str(), railName.c_str(), &panelOpen, 0, kPanelW, kPanelH);
+        // WHERE THE PANEL'S WINDOW IS, every frame it is shown (the census; the picture window's twin), and how many rows it holds, so a test can ask
+        // whether it is open (tests/test_row_keys_app). Nothing is put together unless the census is on.
+        if (cascade::gui::census::enabled()) {
+            noteWindowRectInCensus("panel:window:" + p.plugin, id.c_str());
+            cascade::gui::census::note("panel:rows:", p.plugin + ":" + std::to_string(p.rows.size()));
+        }
+        if (panelDrawn) {
             drawPluginPresetBar(p.plugin);
             drawRowTable(p.headings, p.rows);
         }
@@ -14828,7 +14816,10 @@ void AppWindow::drawPluginWindows() {
         ImGui::SetNextWindowSize(ImVec2(kInstrumentW, kInstrumentH), ImGuiCond_FirstUseEver);
         bool open = true;
         const std::string railName = cascade::core::upperLegend(in.title);
-        if (beginPage(id.c_str(), railName.c_str(), &open, 0, kInstrumentW, kInstrumentH)) {
+        const bool instrumentDrawn = beginPage(id.c_str(), railName.c_str(), &open, 0, kInstrumentW, kInstrumentH);
+        // WHERE THE INSTRUMENT'S WINDOW IS, every frame it is shown (the census).
+        if (cascade::gui::census::enabled()) { noteWindowRectInCensus("instrument:window:" + in.plugin, id.c_str()); }
+        if (instrumentDrawn) {
             drawPluginPresetBar(in.plugin);
             const double now = ImGui::GetTime();
             InstrumentSeen& seen = instrumentSeen_[id];
@@ -15122,8 +15113,8 @@ void AppWindow::drawPluginWindowRows() {
     // applies to opening a decoder's picture exactly as it does to starting
     // it. The three loops below only carry the plugin's DISPLAY name
     // (HostImage::plugin etc., same as applyPluginPreset's own window-opening
-    // code), so pluginKeyForDisplayName translates it back to the module file
-    // key maybeAutoPresetOnShow needs; an empty result (module unloaded since
+    // code), so moduleFileForName translates it back to the module file
+    // key the op needs; an empty result (module unloaded since
     // this row was drawn) is silently skipped rather than risking a
     // path-less-plugin match. A helper local to this function so all three
     // window kinds and the map-page rows below dispatch through one line.
@@ -15136,51 +15127,88 @@ void AppWindow::drawPluginWindowRows() {
             uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_AUTO_PRESET, key, 1));
         }
     };
-    for (const cascade::core::HostImage& im : pluginImages_) {
-        const std::string id = im.plugin + " image###image_" + im.plugin;
+    // LISTED FROM WHAT EACH MODULE DECLARES, NOT FROM ITS INSTANCES (0.99.73; stub campaign B5). A plugin set to AUTO that nothing is using is
+    // asleep and has no instance, yet its window rows must be here: pressing one is how a sleeping plugin is woken (the window reports it shown
+    // and the engine's lifecycle starts that plugin alone, one pass later). A row of a plugin that is running reads as it always did; one of a
+    // sleeping plugin reads IDLE, there being nothing to count or to wait for yet. A STOPPED plugin has no rows, as before - stopped means no
+    // windows at all. The declarations are the table's: PLUGINS' capability word, and the titles of the module's own panel and instrument
+    // (fact.plugin.<file>.windows).
+    const std::vector<cascade::gui::PluginRow>& rows = pluginLists().plugins;
+    for (const cascade::gui::PluginRow& lp : rows) {
+        if (!lp.loaded || (lp.caps & CASCADE_CAP_IMAGE_DECODER) == 0u || lp.stopped) { continue; }
+        const cascade::core::HostImage* live = nullptr;
+        for (const cascade::core::HostImage& cand : pluginImages_) {
+            if (cand.plugin == lp.name) {
+                live = &cand;
+                break;
+            }
+        }
+        const std::string id = cascade::gui::imageWindowId(lp.name);
         const bool on = pluginWindows_.shown(id);
-        const char* chip = (im.width == 0u || im.height == 0u) ? tr("WAIT")
-                                                               : (im.complete ? tr("IMG") : "RX");
+        const char* chip = live == nullptr
+                               ? tr("IDLE")
+                               : ((live->width == 0u || live->height == 0u)
+                                      ? tr("WAIT")
+                                      : (live->complete ? tr("IMG") : "RX"));
         // The visible half as one format string; the id after ### is unchanged.
         std::string rowShown;
-        cascade::core::formatUtf8(rowShown, tr("%s image"), ident(im.plugin).c_str());
-        const std::string row = rowShown + "###imgrow:" + ident(im.plugin);
+        cascade::core::formatUtf8(rowShown, tr("%s image"), ident(lp.name).c_str());
+        const std::string row = rowShown + "###imgrow:" + ident(lp.name);
         if (benchSwitchRow(row.c_str(), on, chip, cascade::gui::theme::kPhosphor, on, true,
                            tr("Opens this decoder's picture window. WAIT until the first\n"
                               "picture arrives, RX while one is coming in, IMG when it is\n"
                               "complete. Nothing opens this window for you - opening it\n"
                               "also tunes and starts the decoder, just like its preset."))) {
             pluginWindows_.toggle(id);
-            autoPresetOnClick(on, im.plugin);
+            autoPresetOnClick(on, lp.name);
         }
     }
-    for (const cascade::core::HostPanel& p : hostPanels()) {
-        const std::string id = p.title + "###panel_" + p.plugin;
+    for (const cascade::gui::PluginRow& lp : rows) {
+        if (!lp.loaded || (lp.caps & CASCADE_CAP_PANEL) == 0u || lp.stopped) { continue; }
+        const std::string title = lp.panelTitle.empty() ? lp.name : lp.panelTitle;
+        const cascade::core::HostPanel* live = nullptr;
+        for (const cascade::core::HostPanel& cand : hostPanels()) {
+            if (cand.plugin == lp.name && cand.title == title) {
+                live = &cand;
+                break;
+            }
+        }
+        const std::string id = cascade::gui::panelWindowId(lp.name, title);
         const bool on = pluginWindows_.shown(id);
         std::string chip;
-        cascade::core::formatUtf8(chip, tr("%d ROW"), static_cast<int>(p.rows.size()));
-        const std::string row =
-            ident(p.title) + "###panelrow:" + ident(p.plugin) + ":" + ident(p.title);
+        if (live == nullptr) {
+            chip = tr("IDLE");
+        } else {
+            cascade::core::formatUtf8(chip, tr("%d ROW"), static_cast<int>(live->rows.size()));
+        }
+        const std::string row = ident(title) + "###panelrow:" + ident(lp.name) + ":" + ident(title);
         if (benchSwitchRow(row.c_str(), on, chip.c_str(), cascade::gui::theme::kPhosphor, on, true,
                            tr("Opens this plugin's own window. Nothing opens it for you;\n"
                               "close it from its key and it stays closed - opening it also\n"
                               "tunes and starts the decoder, just like its preset."))) {
             pluginWindows_.toggle(id);
-            autoPresetOnClick(on, p.plugin);
+            autoPresetOnClick(on, lp.name);
         }
     }
-    for (const cascade::core::HostInstrument& in : hostInstruments()) {
-        const std::string id = instrumentWindowId(in);
+    // INSTRUMENTS: every live one first (the demonstration faces among them, which belong to no module), then the declared ones of a module that
+    // has no instance because it is asleep.
+    const auto instrumentRow = [&](const std::string& pluginName, const std::string& title,
+                                   const cascade::core::HostInstrument* in) {
+        const std::string id = cascade::gui::instrumentWindowIdFor(pluginName, title);
         const bool on = pluginWindows_.shown(id);
         // NEW while an event has arrived that the window has not drawn - the
         // chip is how a closed pager still says it has a message.
-        const auto seen = instrumentSeen_.find(id);
-        const bool unread =
-            in.have && (seen == instrumentSeen_.end() || seen->second.seq != in.state.seq);
-        char chip[24];
-        cascade::gui::instrumentChip(in, unread, chip, sizeof chip);
-        const std::string row =
-            ident(in.title) + "###instrow:" + ident(in.plugin) + ":" + ident(in.title);
+        bool unread = false;
+        char chipBuf[24] = {0};
+        const char* chip = chipBuf;
+        if (in != nullptr) {
+            const auto seen = instrumentSeen_.find(id);
+            unread = in->have && (seen == instrumentSeen_.end() || seen->second.seq != in->state.seq);
+            cascade::gui::instrumentChip(*in, unread, chipBuf, sizeof chipBuf);
+        } else {
+            chip = tr("IDLE");
+        }
+        const std::string row = ident(title) + "###instrow:" + ident(pluginName) + ":" + ident(title);
         if (benchSwitchRow(row.c_str(), on, chip,
                            unread ? cascade::gui::theme::kGold : cascade::gui::theme::kPhosphor,
                            on || unread, true,
@@ -15189,8 +15217,23 @@ void AppWindow::drawPluginWindowRows() {
                               "for you; close it from its key and it stays closed - opening\n"
                               "it also tunes and starts the decoder, just like its preset."))) {
             pluginWindows_.toggle(id);
-            autoPresetOnClick(on, in.plugin);
+            autoPresetOnClick(on, pluginName);
         }
+    };
+    for (const cascade::core::HostInstrument& in : hostInstruments()) {
+        instrumentRow(in.plugin, in.title, &in);
+    }
+    for (const cascade::gui::PluginRow& lp : rows) {
+        if (!lp.loaded || (lp.caps & CASCADE_CAP_INSTRUMENT) == 0u || lp.stopped) { continue; }
+        const std::string title = lp.instrumentTitle.empty() ? lp.name : lp.instrumentTitle;
+        bool hasInstance = false;
+        for (const cascade::core::HostInstrument& in : hostInstruments()) {
+            if (in.plugin == lp.name && in.title == title) {
+                hasInstance = true;
+                break;
+            }
+        }
+        if (!hasInstance) { instrumentRow(lp.name, title, nullptr); }
     }
 }
 
@@ -15941,39 +15984,47 @@ void AppWindow::drawPluginPresets(const cascade::gui::PluginRow& p) {
 // calls this with the PLUGINS row's name and capability word; run()'s bounded-run seam calls it with what the loaded plugin
 // declares. `caps` is CASCADE_CAP_*: the table pointers the old body tested (p.decoder, p.imageDecoder) are set exactly when the
 // module declared the bit (PluginHost::load).
-void AppWindow::openPluginWindowsFor(const std::string& name, std::uint32_t caps) {
+void AppWindow::openPluginWindowsFor(const std::string& name, std::uint32_t caps, std::uint32_t presetFlags) {
+    // DECIDED FROM WHAT THE MODULE DECLARES (0.99.73; stub campaign B5), not from instances: a plugin that was asleep a moment ago has none yet, and
+    // this runs before the engine's next pass wakes it. `caps` is CASCADE_CAP_*: the table pointers the old body tested (p.decoder, p.imageDecoder)
+    // are set exactly when the module declared the bit (PluginHost::load). A panel's and an instrument's id carry the module's OWN TITLES, which
+    // the table gives (fact.plugin.<file>.windows, on the PLUGINS row); a module the table has no row for answers from its instances, as before.
     const bool imageDecoder = (caps & CASCADE_CAP_IMAGE_DECODER) != 0u;
     const bool textDecoder = (caps & CASCADE_CAP_DECODER) != 0u;
-    {
-        const std::vector<std::string>& trackNames = hostTrackPluginNames();
-        if (std::find(trackNames.begin(), trackNames.end(), name) != trackNames.end()) {
-            MapPage& pg = ensureMapPage(name);
-            pg.open = true;
+    const PluginRow* row = nullptr;
+    for (const PluginRow& r : pluginLists().plugins) {
+        if (r.loaded && r.name == name) {
+            row = &r;
+            break;
         }
+    }
+    const bool tracker = (caps & CASCADE_CAP_TRACK_SOURCE) != 0u && !(row != nullptr && row->stopped);
+    if (tracker) {
+        MapPage& pg = ensureMapPage(name);
+        pg.open = true;
     }
     if (imageDecoder) {
-        pluginWindows_.show(name + " image###image_" + name);
+        pluginWindows_.show(cascade::gui::imageWindowId(name));
     }
-    // A panel's id carries the panel's OWN TITLE, which only the instance
-    // knows, so this asks the instances rebuilt a moment ago rather than the
-    // descriptor. A module may publish more than one.
-    for (const cascade::core::HostPanel& hp : hostPanels()) {
-        if (hp.plugin == name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
-    }
-    bool ownWindow = imageDecoder;
-    {
-        const std::vector<std::string>& trackNames = hostTrackPluginNames();
-        if (std::find(trackNames.begin(), trackNames.end(), name) != trackNames.end()) {
-            ownWindow = true;
+    bool ownWindow = imageDecoder || tracker;
+    if ((caps & CASCADE_CAP_PANEL) != 0u) {
+        ownWindow = true;
+        if (row != nullptr && !row->panelTitle.empty()) {
+            pluginWindows_.show(cascade::gui::panelWindowId(name, row->panelTitle));
+        } else {
+            for (const cascade::core::HostPanel& hp : hostPanels()) {
+                if (hp.plugin == name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
+            }
         }
     }
-    for (const cascade::core::HostPanel& hp : hostPanels()) {
-        if (hp.plugin == name) { ownWindow = true; }
-    }
-    for (const cascade::core::HostInstrument& in : hostInstruments()) {
-        if (in.plugin == name) {
-            pluginWindows_.show(instrumentWindowId(in));
-            ownWindow = true;
+    if ((caps & CASCADE_CAP_INSTRUMENT) != 0u) {
+        ownWindow = true;
+        if (row != nullptr && !row->instrumentTitle.empty()) {
+            pluginWindows_.show(cascade::gui::instrumentWindowIdFor(name, row->instrumentTitle));
+        } else {
+            for (const cascade::core::HostInstrument& in : hostInstruments()) {
+                if (in.plugin == name) { pluginWindows_.show(instrumentWindowId(in)); }
+            }
         }
     }
     // A TEXT DECODER WITH NO WINDOW OF ITS OWN is read in the shared Decoder
@@ -15981,7 +16032,12 @@ void AppWindow::openPluginWindowsFor(const std::string& name, std::uint32_t caps
     // pressing POCSAG tuned the radio and showed nothing at all (GitHub issue
     // 2). See cascade::gui::presetOpensDecoderOutput. Logged, because "a
     // window opened" is otherwise invisible to anyone reading a report.
-    if (cascade::gui::presetOpensDecoderOutput(textDecoder, ownWindow) &&
+    //
+    // AND A PRESET THAT ASKS FOR IT opens the shared window beside the module's own (CASCADE_PRESET_SHOW_TEXT_OUTPUT, 0.99.74 - an own page may
+    // contain settings rather than received message text): only the explicit flag overrides the own-window rule. The flags are the event's
+    // value[0] (stub campaign B5; API 0.3 8.14.1).
+    if ((cascade::gui::presetOpensDecoderOutput(textDecoder, ownWindow) ||
+         cascade::gui::presetOpensDecoderOutput(textDecoder, /*hasOwnWindow=*/true, presetFlags)) &&
         !decoderWindowOpen_) {
         decoderWindowOpen_ = true;
         cascade::core::diagLogf("preset: opened the Decoder output window for %s",
@@ -16586,8 +16642,11 @@ void AppWindow::drawDecoderWindow() {
         ImGui::SetNextWindowPos(ImVec2(mv->Pos.x + 420.0f, mv->Pos.y + 200.0f),
                                 ImGuiCond_FirstUseEver);
     }
-    if (beginPage("Decoder output###decoderout", tr("DECODER OUTPUT"), &decoderWindowOpen_, 0,
-                  kSeparatePageW, kSeparatePageH)) {
+    const bool pageDrawn = beginPage("Decoder output###decoderout", tr("DECODER OUTPUT"), &decoderWindowOpen_, 0,
+                                     kSeparatePageW, kSeparatePageH);
+    // WHERE THE WINDOW IS, every frame it is shown (the census), so a test can ask whether it is on the screen and how much of it is.
+    noteWindowRectInCensus("decoder:window", "Decoder output###decoderout");
+    if (pageDrawn) {
         ImGui::Checkbox(trId("Follow"), &decoderAutoScroll_);
         ImGui::SameLine();
         if (ImGui::SmallButton(trId("Clear##declog"))) {
@@ -17225,9 +17284,10 @@ const AppWindow::PluginListCache& AppWindow::pluginLists() {
         if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i), &it) <= i) { break; }
         cascade::gui::PluginRow& r = c.plugins[rows++];
         r.name = it.name;
-        if (r.file != it.detail) {  // (a row that stays the same file keeps its key: no string is built)
+        if (r.file != it.detail) {  // (a row that stays the same file keeps its keys: no string is built)
             r.file = it.detail;
             r.userKey = cascade::core::userPresetKey(r.file);
+            r.runId = cascade::core::pluginRunId(r.file);
         }
         r.caps = static_cast<std::uint32_t>(it.value[0]);
         r.loaded = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
@@ -17242,6 +17302,24 @@ const AppWindow::PluginListCache& AppWindow::pluginLists() {
         r.idle.clear();
         r.presets.clear();
         r.ownPresets = 0;
+        // The category the install record's catalogue entry gives it (the DECODE bank's headings) and the titles of its own panel and
+        // instrument (a window row of a plugin that is ASLEEP is named from them): two facts a loaded module, read when the lists move.
+        r.category.clear();
+        r.panelTitle.clear();
+        r.instrumentTitle.clear();
+        if (r.loaded && !r.file.empty()) {
+            c.factKey.assign("fact.plugin.");
+            c.factKey += r.file;
+            c.factKey += ".record";
+            readFactText(c.factKey.c_str(), c.factText);
+            cascade::gui::pluginRecordCategory(c.factText, r.category);
+            if ((r.caps & (CASCADE_CAP_PANEL | CASCADE_CAP_INSTRUMENT)) != 0u) {
+                c.factKey.resize(c.factKey.size() - 6);
+                c.factKey += "windows";
+                readFactText(c.factKey.c_str(), c.factText);
+                cascade::gui::pluginWindowTitles(c.factText, r.panelTitle, r.instrumentTitle);
+            }
+        }
     }
     c.plugins.resize(rows);
 
@@ -17328,92 +17406,6 @@ const AppWindow::PluginListCache& AppWindow::pluginLists() {
     return c;
 }
 
-// THE FITTED MODULES WINDOW'S MODEL (window port, group 9; API 0.3 section 8.8, the cache is in app_window.hpp and
-// gui/plugins_view.hpp). Read when listSeq has moved and only from the window's own draw: PLUGINS first - one
-// record a plugin file the host holds, loaded or not, in the host's order - and for each the eight whole texts of
-// fact.plugin.<file>.* (path, version, author, licence, error, idle, notice, integrity), then PLUGIN_COMMANDS
-// filed under the module they name, then fact.plugin.dir. The rows go through the same builder a test holds
-// equal to the one that reads a host's own records (makeFittedModuleFromRow). Strings and vectors keep their
-// room, so a refresh that finds nothing bigger allocates only what the table's get_setting does (about eight
-// of those a module). `got <= i` is the end of a list that changed under the read: what was read stands.
-cascade::gui::FittedListCache& AppWindow::fittedLists() {
-    cascade::gui::FittedListCache& c = *fittedCache_;
-    // WHAT IS NOT THE LISTS', set every call (a frame): the receiver's run state - it gates FED for every
-    // module at once, which is why the panel states it rather than leaving it to be inferred from four idle
-    // rows - and the install sentence, which depends on whether the store window drew this frame. ONLY WHEN
-    // THE STORE DID NOT PRINT IT: the install report and error are written by an install AND by a remove, so
-    // both windows can hold the same sentence; printing it in both reads as two separate outcomes, and in
-    // neither loses a failed remove entirely. They are the status lines the engine handed over after this
-    // frame's commands (statusLines_), so a remove's sentence and the row it removed arrive in the same frame.
-    // (A string assigned something no longer than its room allocates nothing.)
-    c.model.receiverRunning = (uiState_.flags & FOXAPI_RX_RUNNING) != 0u;
-    if (!pluginBrowserDrawnThisFrame_) {
-        c.model.report = statusLines_.installReport;
-        c.model.error = statusLines_.installError;
-    } else {
-        c.model.report.clear();
-        c.model.error.clear();
-    }
-    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
-    c.listSeq = uiState_.listSeq;
-    ++c.refreshes;
-    const auto entry = [](FoxListItem& it) {
-        it = FoxListItem{};
-        it.structSize = sizeof(it);
-    };
-    FoxListItem it{};
-    cascade::gui::FittedRow& r = c.row;
-    const auto fact = [&](const char* leaf, std::string& out) {
-        c.key.assign("fact.plugin.");
-        c.key += r.file;
-        c.key += '.';
-        c.key += leaf;
-        readFactText(c.key.c_str(), out);
-    };
-
-    const int32_t plugins = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGINS, 0, nullptr));
-    c.model.modules.resize(static_cast<std::size_t>(plugins));
-    std::size_t rows = 0;
-    for (int32_t i = 0; i < plugins; ++i) {
-        entry(it);
-        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i), &it) <= i) { break; }
-        r.file = it.detail;
-        r.name = it.name;
-        r.caps = static_cast<std::uint32_t>(it.value[0]);
-        r.sizeBytes = static_cast<std::uint64_t>(it.value[1] > 0 ? it.value[1] : 0);
-        r.noticeLevel = static_cast<std::uint32_t>(it.value[2] > 0 ? it.value[2] : 0);
-        r.loaded = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
-        r.stopped = (it.flags & FOXAPI_ITEM_STOPPED) != 0u;
-        r.tuneAllowed = (it.flags & FOXAPI_ITEM_TUNE_ALLOWED) != 0u;
-        r.settingsAllowed = (it.flags & FOXAPI_ITEM_SETTINGS_ALLOWED) != 0u;
-        r.matched = (it.flags & FOXAPI_ITEM_MATCHED) != 0u;
-        r.askedSettings = (it.flags & FOXAPI_ITEM_ASKED_SETTINGS) != 0u;
-        fact("path", r.path);
-        fact("version", r.version);
-        fact("author", r.author);
-        fact("licence", r.licence);
-        fact("error", r.error);
-        fact("idle", r.idle);
-        fact("notice", r.notice);
-        fact("integrity", r.integrity);
-        cascade::gui::fillFittedModule(c.model.modules[rows++], r);
-    }
-    c.model.modules.resize(rows);
-
-    const int32_t keys = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGIN_COMMANDS, 0, nullptr));
-    for (int32_t i = 0; i < keys; ++i) {
-        entry(it);
-        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGIN_COMMANDS, static_cast<uint32_t>(i), &it) <= i) { break; }
-        for (cascade::gui::FittedModule& m : c.model.modules) {
-            if (m.file != it.detail) { continue; }
-            m.commands.push_back(cascade::gui::FittedModule::Command{static_cast<std::uint32_t>(it.id), it.name});
-            break;
-        }
-    }
-    readFactText("fact.plugin.dir", c.model.directory);
-    return c;
-}
-
 // THE DECODER OUTPUT (the cache is in app_window.hpp): the ring is read when the state's decoderLinesTotal has
 // moved, from the newest entry back to the highest id the window holds - the ids are the line numbers, strictly
 // increasing, so that is exactly the lines that are new, read once each - and appended oldest first. An entry
@@ -17479,7 +17471,7 @@ void AppWindow::handleUiEvent(const FoxEvent& ev) {
         const PluginListCache& c = pluginLists();
         for (const cascade::gui::PluginRow& row : c.plugins) {
             if (row.file == ev.text) {
-                openPluginWindowsFor(row.name, row.caps);
+                openPluginWindowsFor(row.name, row.caps, static_cast<std::uint32_t>(ev.value[0]));
                 break;
             }
         }

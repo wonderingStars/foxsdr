@@ -402,8 +402,31 @@ FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped
     return m;
 }
 
+FittedOwnWindow fittedOwnWindowOfCaps(std::uint32_t caps, bool loaded) {
+    // The same order fittedOwnWindowOf asks the table pointers in. A LOADED module's declared bit has its table behind it (the host proves that
+    // before it lets a module load), so the capability word and the pointer are the same answer for the table's reader.
+    if (!loaded) { return FittedOwnWindow::None; }
+    if ((caps & CASCADE_CAP_PANEL) != 0u) { return FittedOwnWindow::Panel; }
+    if ((caps & CASCADE_CAP_IMAGE_DECODER) != 0u) { return FittedOwnWindow::Picture; }
+    if ((caps & CASCADE_CAP_INSTRUMENT) != 0u) { return FittedOwnWindow::Instrument; }
+    if ((caps & CASCADE_CAP_TRACK_SOURCE) != 0u) { return FittedOwnWindow::Map; }
+    return FittedOwnWindow::None;
+}
+
 void fillFittedModule(FittedModule& m, const FittedRow& r) {
     m.file = r.file;
+    // The row's name for the census and the page's pictures is the file until the install record gives the module a catalogue id.
+    m.id = r.file;
+    m.catalogueId.clear();
+    m.category.clear();
+    m.originNote.clear();
+    m.orphaned = false;
+    m.abiVersion = 0;
+    m.fittedAtUnix = 0;
+    m.catalogueIndex = -1;
+    m.idle = r.loaded && r.asleep;
+    m.keepRunning = r.loaded && r.runMode == 1;
+    m.ownWindow = fittedOwnWindowOfCaps(r.caps, r.loaded);
     m.path = r.path;
     // A caps word of 0 is "no descriptor read" (the host validates a descriptor, which refuses a zero word,
     // before it copies a name): the table's `name` is the file's own then, and the window has no name.

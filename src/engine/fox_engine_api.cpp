@@ -1485,8 +1485,9 @@ private:
         char caption[FOXAPI_NAME_CHARS] = {};
     };
     std::vector<PendingImage> pendingImages_;
-    // API 0.3 8.14: the presets applied since the last endPass, by the module's file name (the pumping thread's; room kept).
-    std::vector<std::string> pendingPresets_;
+    // API 0.3 8.14: the presets applied since the last endPass, by the module's file name, with the preset's CASCADE_PRESET_* flags (the pumping
+    // thread's; room kept).
+    std::vector<std::pair<std::string, std::uint32_t>> pendingPresets_;
 
     // API 0.3: the patch radios' spectra, one ring per node with a radio
     // (made when a node's radio first publishes, dropped when it goes).
@@ -1538,7 +1539,7 @@ public:
     }
     // API 0.3 8.14: a plugin's preset was applied (Engine::applyPluginPreset, on the pumping thread); the event is
     // broadcast by this pass's endPass, once per application.
-    void presetApplied(const std::string& moduleFile) { pendingPresets_.push_back(moduleFile); }
+    void presetApplied(const std::string& moduleFile, std::uint32_t presetFlags) { pendingPresets_.emplace_back(moduleFile, presetFlags); }
     // The pumping thread's: queued here, broadcast by this pass's endPass.
     void patchImageArrived(uint64_t node, uint64_t imageId, const std::string& caption) {
         PendingImage p;
@@ -2292,9 +2293,12 @@ void ApiHostImpl::endPass() {
     // API 0.3 8.14: FOXAPI_EVENT_PRESET_APPLIED - a plugin's preset was applied in this pass (or since the last endPass, for
     // an application made between passes). The state it changed is in the publish above, so an interface that is told reads it.
     if (!pendingPresets_.empty()) {
-        for (const std::string& file : pendingPresets_) {
+        for (const auto& [file, flags] : pendingPresets_) {
             FoxEvent e{};
             e.kind = FOXAPI_EVENT_PRESET_APPLIED;
+            // value[0]: the preset's CASCADE_PRESET_* flags (stub campaign B5), which decide whether the shared Decoder output window opens beside
+            // a module's own window (CASCADE_PRESET_SHOW_TEXT_OUTPUT). 0 for a preset that sets none.
+            e.value[0] = static_cast<double>(flags);
             copyText(e.text, file.c_str());
             broadcast(e);
         }
@@ -2961,7 +2965,7 @@ void ApiHost::takeDecoderLines(const std::deque<cascade::core::DecodedLine>& log
     impl_->takeDecoderLines(log, total);
 }
 void ApiHost::muteTuneAway(std::uint32_t names) { impl_->muteTuneAway(names); }
-void ApiHost::presetApplied(const std::string& moduleFile) { impl_->presetApplied(moduleFile); }
+void ApiHost::presetApplied(const std::string& moduleFile, std::uint32_t presetFlags) { impl_->presetApplied(moduleFile, presetFlags); }
 void ApiHost::engineStopping() { impl_->engineStopping(); }
 std::uint64_t ApiHost::offPassKeyTouches() const { return impl_->offPassKeyTouches(); }
 ApiHost::TxFacts ApiHost::txFacts() const { return impl_->txFacts(); }

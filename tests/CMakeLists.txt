@@ -670,7 +670,7 @@ endforeach()
 # stage-1 text decoder and the group-13 picture decoder).
 add_library(fixture_group14_plugin SHARED fixture_group14_plugin.cpp)
 target_include_directories(fixture_group14_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
-foreach(_t IN ITEMS test_map_window test_plugin_window test_plugin_status_report test_engine_api_03)
+foreach(_t IN ITEMS test_map_window test_plugin_window test_plugin_status_report test_engine_api_03 test_fitted_modules_window)
     if(TARGET ${_t})
         add_dependencies(${_t} fixture_group14_plugin)
         target_compile_definitions(${_t} PRIVATE

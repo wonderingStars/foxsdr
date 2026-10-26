@@ -145,6 +145,7 @@ cascade::gui::StoreListCache& AppWindow::storeLists(bool full) {
         c.hosts.resize(static_cast<std::size_t>(plugins));
         std::size_t held = 0;
         c.refused = 0;
+        c.idleDecoders = 0;
         for (int32_t i = 0; i < plugins; ++i) {
             entry(it);
             if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i), &it) <= i) { break; }
@@ -154,7 +155,9 @@ cascade::gui::StoreListCache& AppWindow::storeLists(bool full) {
             h.loaded = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
             h.stopped = (it.flags & FOXAPI_ITEM_STOPPED) != 0u;
             h.tune = (it.flags & FOXAPI_ITEM_TUNE_ALLOWED) != 0u;
+            h.asleep = (static_cast<int>(it.value[3]) & 4) != 0;
             if (!h.loaded) { ++c.refused; }
+            if (h.loaded && h.asleep && (h.caps & (CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | CASCADE_CAP_IMAGE_DECODER)) != 0u) { ++c.idleDecoders; }
         }
         c.hosts.resize(held);
 

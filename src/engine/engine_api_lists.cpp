@@ -253,6 +253,8 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.text(r.id);
         f.text(r.source);  // (where the module came from: plugin.origin.<file>, stub campaign B3)
         f.value(r.digestMismatch);
+        f.value(static_cast<std::uint64_t>(r.abiVersion));  // (fact.plugin.<file>.record, stub campaign B5: what the Fitted modules window draws of it)
+        f.value(static_cast<std::int64_t>(r.installedAtUnix));
     }
     // ...the tune grants held for any module - PLUGINS' TUNE_ALLOWED is a plugin's key in this list, and
     // STALE_GRANTS lists the ones no loaded module holds - the last refused request to tune

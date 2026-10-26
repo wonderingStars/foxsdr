@@ -36,10 +36,8 @@ endmacro()
 
 cascade_merge_pending(RAIL-CHROME      # 0.99.74 dials (the interface size, the rail fold, the status fold and the TOOLS bank returned in stub batch B1)
     test_deck_knobs_app)
-cascade_merge_pending(STORE-VIEW       # 0.99.50 / 0.99.72 / 0.99.74 plugin store and Fitted modules window on the table (the engine's half - the kept
-                       # catalogue, the sites, the pictures, the clean-up of old copies - returned in stub batch B3: test_plugin_catalogue_app,
-                       # test_plugin_cleanup_app and test_plugin_update_cleanup_app are the engine's now)
-    test_fitted_modules_window test_fitted_modules_no_disk)
+# (STORE-VIEW - 0.99.50 / 0.99.72 / 0.99.74 plugin store and Fitted modules window on the table - is whole: the engine's half returned in stub batch
+# B3, the store window in B4, the Fitted modules window in B5: test_fitted_modules_window, test_fitted_modules_no_disk and test_plugin_dup_app.)
 cascade_merge_pending(PLUGIN-SETTINGS-UI    # 0.99.43 CASCADE_CAP_SETTINGS_UI: fields the host draws for a plugin
     test_plugin_settings_ui)
 cascade_merge_pending(PLUGIN-ROW-KEYS  # 0.99.77 a row in a plugin's panel as a key
@@ -74,14 +72,10 @@ cascade_merge_pending(DISPLAY-RANGE    # 0.99.7x the spectrum's and waterfall's 
     test_display_menu_app)
 cascade_merge_pending(PLUGIN-SETTINGS-UI
     test_decoder_settings_fold_app test_plugin_pathpick_app)
-cascade_merge_pending(PLUGIN-RUN       # 0.99.7x a plugin that is not used is dormant (FOXSDR_DORMANT_AFTER_MS), run modes
-    test_plugin_inuse_app)
+# (PLUGIN-RUN - 0.99.73 a plugin that is not used is dormant (FOXSDR_DORMANT_AFTER_MS), run modes - is whole: the engine's half returned in stub batch B2,
+# test_plugin_inuse_app, which needs the Fitted modules window, in B5.)
 cascade_merge_pending(PLUGIN-ROW-KEYS
     test_row_keys_app)
-cascade_merge_pending(STORE-VIEW       # (the store window itself - test_plugin_store_window, test_plugin_store_view, test_plugin_store_app - returned in stub batch B4)
-    test_plugin_dup_app)
-cascade_merge_pending_part(STORE-VIEW store_app_fitted
-    "tests/test_plugin_store_app.cpp, the FITTED MODULES WINDOW scenarios (the block headed THE FITTED MODULES WINDOW in main(): fitted:chip:*, fitted:row:*, fitted:page:*, the IDLE and KEEP RUNNING keys). They read the census of the 0.99.72 Fitted modules window, which is stub batch B5's; master's own text is kept untouched behind CASCADE_STORE_APP_FITTED_PART. B5 removes this part and the guard.")
 cascade_merge_pending(UPDATES          # 0.99.7x the Store's own update notice and the site banner
     test_store_update_app)
 cascade_merge_pending(IMPORT-DIALOG

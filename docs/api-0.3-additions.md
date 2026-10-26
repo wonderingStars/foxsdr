@@ -1610,7 +1610,9 @@ Two hooks the engine used to call into the interface from its own pass became th
 rate the preset asks for, rebuilt the decoders against the receiver they are now pointed at - and an interface is told, once for
 each application, so it can open what that plugin contributes (a map page, the picture window, a panel, an instrument, or the shared
 Decoder output window for a text decoder with no window of its own). `text`: the plugin's **module file name** - `PLUGINS`' `detail`,
-the key every plugin op and grant takes (a display name is the plugin's own choice and is not unique). No other field is set.
+the key every plugin op and grant takes (a display name is the plugin's own choice and is not unique). `value[0]` (stub campaign B5): the
+applied preset's `CASCADE_PRESET_*` flags word as a number (0 for a preset that sets none) - the interface needs it to know whether the preset asks
+for the shared Decoder output window beside the module's own (`CASCADE_PRESET_SHOW_TEXT_OUTPUT`). No other field is set.
 - **When.** Raised by the `endPass` of the pass that applied the preset, after the publish that carries what it changed - the new
   frequency, the decoder rows (`DECODERS`, `PLUGINS`) - so an interface that is told finds them already in the lists. A preset applied
   by any route raises it: the `FOXAPI_OP_PLUGIN_PRESET` command (a preset bar's key, the browser's `pluginPresetName`), a user preset
@@ -1769,7 +1771,8 @@ stop them. `value[0]`: how many plugins; `MUTE_CAUSES` names them (`value[0] = 1
 Once for each tune-away, raised by the publish that shows the held mute (section 8.7).
 Subscribe with `FOXAPI_EVENT_MASK(FOXAPI_EVENT_MUTE_TUNE_AWAY)`.
 
-`FOXAPI_EVENT_PRESET_APPLIED` (12): a plugin's preset was applied (section 8.14.1). `text`: the plugin's module file name.
+`FOXAPI_EVENT_PRESET_APPLIED` (12): a plugin's preset was applied (section 8.14.1). `text`: the plugin's module file name; `value[0]`: the preset's
+`CASCADE_PRESET_*` flags word.
 Once for each application, raised by the `endPass` of the pass that applied it, after the publish that shows what it changed.
 Subscribe with `FOXAPI_EVENT_MASK(FOXAPI_EVENT_PRESET_APPLIED)`.
 
@@ -1990,6 +1993,25 @@ that sent it: `ApiHostImpl::apply` sets `Engine::commandFromRemote_` around its 
 **What moves `listSeq`.** The kept copy's flags and time, the sites and what each said, `siteError`, the regional outcome, the pictures (one counter, bumped at every
 change of a picture's state or of the queue), whether a picture or a clean-up is in flight, the old copies and the clean-up's report, and the busy and result keys - all
 hashed in place from members; nothing allocates in a pass (tests/test_engine_publish_alloc).
+
+### 9.5 What the Fitted modules window and the DECODE bank need of each module (stub campaign B5; docs/engine-stage4.md 6.22)
+
+Two per-file facts, keyed like the other `fact.plugin.<file>.*` (the module file name, the leaf parsed from the right), present for every file the host
+holds a record of - loaded or refused - so "none" is told from "no such file". Built when the lists are rebuilt (a rescan, a change of the install
+records, the catalogue or the sites moves the fingerprint; the install record's ABI and time are hashed now, which the first of them was not).
+
+| Fact | What it says | |
+|---|---|---|
+| `fact.plugin.<file>.record` | the install record that names the file: `<catalogue key> TAB <abi version> TAB <installed at, unix seconds> TAB <category>`. The key is the id for an official plugin and `<id>@<site label>` for one installed from a site, `""` when the record names no id; the category is the catalogue entry's (`aircraft`, `marine`, ... or `""` when the catalogue does not hold it or was never read). `""` when no record names the file (a hand-fitted module) | LOCAL |
+| `fact.plugin.<file>.windows` | one line for each window the module's OWN tables declare beyond a picture window (which its capability word says): `panel TAB <title>` and `instrument TAB <title>`, the title the module gave (a window's identity carries it). `""` for a module with none and for a file the host refused | |
+
+Why the table must say it: a plugin set to AUTO that nothing is using is ASLEEP (9.3) and has no instance, but its window rows on the rail and the
+double-click on its Fitted modules row must name its windows all the same - opening one is how it is woken. A track source needs nothing more (its map page
+is named by its display name), a picture decoder neither; a panel and an instrument carry a title only the module's table knows.
+
+**`FOXAPI_EVENT_PRESET_APPLIED` carries the preset's flags** in `value[0]` (8.14.1). `FOXAPP_OP_PLUGIN_RUN_MODE` is sent by the Fitted modules page's KEEP RUNNING
+tick (`ival[0]` 1 / 0), `FOXAPI_OP_DECODER_START` / `_STOP` by the row's key, `FOXAPP_OP_STORE_CLEAN_OLD` (`ival[0]` 1) by an orphan's REMOVE FILE, and
+`FOXAPP_OP_PLUGIN_USE` by the window for every window shown - no new op.
 
 ## 10. What stays a GAP after 0.3
 

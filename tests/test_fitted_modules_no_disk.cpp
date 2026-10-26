@@ -136,28 +136,39 @@ int main() {
               .empty());
 
     // --- THE WINDOW, as it is ----------------------------------------------
-    const fs::path appWindow = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
+    //
+    // (EDITED, stub campaign B5, with its reason: the window's draw function and the cache it reads moved out of app_window.cpp - which is at the
+    // compiler's object-file limit - into src/gui/app_window_fitted.cpp, so that is the file scanned; and the model is the engine's table now, built
+    // by AppWindow::fittedLists once for each move of listSeq, so the rule - nothing on the draw path asks the file system anything - is held on
+    // BOTH functions: the one that draws every frame and the one that fills the cache. A stat in either is the defect.)
+    const fs::path appWindow = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window_fitted.cpp";
     const std::string source = readText(appWindow);
     CHECK(!source.empty());
     const std::string body = functionBody(source, "void AppWindow::drawFittedModulesWindow(");
-    std::printf("  drawFittedModulesWindow: %zu bytes of source\n", body.size());
-    // The function was found, and what was cut out is that function and not the
-    // rest of a 600 KB file: a body that ran on past its brace would be scanned
-    // for disk calls it does not make (the window's neighbours open files).
+    const std::string cacheBody = functionBody(source, "FittedListCache& AppWindow::fittedLists(");
+    std::printf("  drawFittedModulesWindow: %zu bytes of source; fittedLists: %zu\n", body.size(), cacheBody.size());
+    // The functions were found, and what was cut out is each function and not the rest of the file: a body that ran on past its brace would be
+    // scanned for disk calls it does not make (the window's neighbours open files).
     CHECK(body.size() > 2000);
     CHECK(body.size() < 40000);
+    CHECK(cacheBody.size() > 2000);
+    CHECK(cacheBody.size() < 40000);
 
-    const std::vector<std::string> hits = diskCallsIn(body);
-    for (const std::string& h : hits) {
-        std::printf("  drawFittedModulesWindow asks the disk: %s\n", h.c_str());
+    for (const std::string* fn : {&body, &cacheBody}) {
+        const std::vector<std::string> hits = diskCallsIn(*fn);
+        for (const std::string& h : hits) {
+            std::printf("  the Fitted modules window asks the disk: %s\n", h.c_str());
+        }
+        CHECK(hits.empty());
     }
-    CHECK(hits.empty());
 
-    // The window still builds its rows through makeFittedModule, which is where
-    // the record's size is carried to the plate (tests/test_plugins_view.cpp): a
-    // window that stopped building them would pass the scan above by deleting
-    // the feature.
-    CHECK(withoutLineComments(body).find("makeFittedModule(") != std::string::npos);
+    // The window still builds its rows through the row builder, which is where the record's size is carried to the plate
+    // (tests/test_plugins_view.cpp): a window that stopped building them would pass the scan above by deleting the feature.
+    // (EDITED, stub campaign B5, with its reason: the rows were made by makeFittedModule( from a LoadedPlugin, which the interface no longer
+    // holds - the table's PLUGINS row carries the size, value[1], and the cache's refresh builds each module in place through
+    // fillFittedModule(), the in-place form of the makeFittedModuleFromRow adapter that tests/test_fitted_modules_window.cpp holds equal to
+    // makeFittedModule.)
+    CHECK(withoutLineComments(cacheBody).find("fillFittedModule(") != std::string::npos);
 
     return testSummary("test_fitted_modules_no_disk");
 }

@@ -822,6 +822,9 @@ struct StoreListCache {
     std::uint64_t addAllTotal = 0;
     std::string addAllName;
     std::size_t refused = 0;  // PLUGINS records the host did not load
+    // LOADED DECODERS THAT ARE ASLEEP (stub campaign B5; PLUGINS value[3] bit 2 of a loaded module that declares a decoder bit): the plugins key's "not
+    // being fed" line leaves them out - a decoder nothing is using is not running by design (0.99.73). Counted from the records the rail tier reads anyway.
+    std::size_t idleDecoders = 0;
     std::vector<StoreBlockedRow> blocked;
     std::vector<std::string> planIds;  // STORE_UPDATES' names
     // The edges the consents are cleared on.
@@ -847,6 +850,7 @@ struct StoreListCache {
         bool loaded = false;
         bool stopped = false;
         bool tune = false;
+        bool asleep = false;  // PLUGINS value[3] bit 2
     };
     std::vector<Host> hosts;
     std::string scratch;  // a fact's text, read into room it keeps

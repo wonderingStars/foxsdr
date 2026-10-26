@@ -216,7 +216,8 @@ struct FittedModule {
     int catalogueIndex = -1;
 
     // Which window a double-click on the row opens (0.99.77): from the TABLE POINTERS the host
-    // kept (fittedOwnWindowOf), never from the declared bits, for the reason tuneCapable is.
+    // kept (fittedOwnWindowOf), never from the declared bits, for the reason tuneCapable is. (The window that holds no LoadedPlugin
+    // reads the capability word of a LOADED module, which is the same answer: fittedOwnWindowOfCaps.)
     FittedOwnWindow ownWindow = FittedOwnWindow::None;
 };
 
@@ -307,20 +308,21 @@ struct FittedModulesAction {
         Rescan,    // FOXAPI_OP_PLUGIN_RESCAN
         Start,     // FOXAPI_OP_DECODER_START (the file)
         Stop,      // FOXAPI_OP_DECODER_STOP (the file)
-        // The "keep running" tick on the module's page (0.99.73): AppWindow::setPluginRun(file,
-        // flag ? ALWAYS : AUTO). `flag` is the state being asked for.
-        // FIXME(2026-10-21 merge, ledger PLUGIN-RUN): no engine op carries it yet; the window never emits it.
+        // The "keep running" tick on the module's page (0.99.73): FOXAPP_OP_PLUGIN_RUN_MODE (the file,
+        // flag ? ALWAYS : AUTO). `flag` is the state being asked for. (Stub campaign B2 made the op; B5 sends it.)
         SetKeepRunning,
         Remove,    // FOXAPI_OP_STORE_REMOVE (the file)
-        // AppWindow::removeOrphanedPlugin(file) (0.99.69): the same two-step key on a file that is
-        // not in the plugin index and not running - and the app re-checks that before it deletes
-        // anything. FIXME(2026-10-21 merge, ledger PLUGIN-ORPHAN): no engine op yet; never emitted.
+        // FOXAPP_OP_STORE_CLEAN_OLD, ival[0] 1 (the file) (0.99.69): the same two-step key on a file that is
+        // not in the plugin index and not running - and the engine re-checks that against its own scan
+        // before it deletes anything.
         RemoveOrphan,
         SetTune,   // FOXAPI_OP_PLUGIN_GRANT, slot 1 (the file, the flag)
         // Host API level 1: FOXAPI_OP_PLUGIN_GRANT, slot 2 (the file, the flag),
         // and a press of one of the module's own command keys: FOXAPI_OP_PLUGIN_COMMAND (the file, the id).
         SetSettings,
         // Host API level 2: AppWindow::setPluginTransmitAllowed(file, flag).
+        // FIXME(2026-10-26, stub campaign B13, TX-PLUGIN): no engine op carries it yet; the window never emits it (and the model never offers
+        // the key: txCapable stays false until the transmit grant is on the table).
         SetTransmit,
         Command,
         // AppWindow::resetPageWindows() (the window's own: no command). THE WAY BACK FROM A WINDOW DRAGGED
@@ -332,11 +334,11 @@ struct FittedModulesAction {
         // from the rail whatever state the other windows are in.
         ResetWindows,
         // CLEAN UP OLD VERSIONS, confirmed once for all of them
-        // (AppWindow::cleanUpOldVersionsConfirmed).
+        // (FOXAPP_OP_STORE_CLEAN_OLD, ival[0] 0).
         CleanUp,
-        // A DOUBLE-CLICK ON A ROW (0.99.77): AppWindow::openPluginOwnWindow(file) shows the module's own
-        // window - its panel, picture, instrument or map page, in that order - and the plugin lifecycle
-        // wakes it. Only ever asked for a module that fittedOpensOwnWindow() says has one.
+        // A DOUBLE-CLICK ON A ROW (0.99.77): AppWindow::openPluginOwnWindow(file) (the window's own: no command) shows
+        // the module's own window - its panel, picture, instrument or map page, in that order - and the engine's plugin
+        // lifecycle wakes it (the window reports it shown: FOXAPP_OP_PLUGIN_USE). Only ever asked for a module that fittedOpensOwnWindow() says has one.
         OpenWindow,
     };
     Kind kind = Kind::None;
@@ -438,6 +440,10 @@ std::vector<FittedGroupBreak> fittedGroupBreaks(const std::vector<FittedModule>&
 // panel, else the picture window, else the instrument, else the map page, else None. A module that is
 // not loaded has none.
 FittedOwnWindow fittedOwnWindowOf(const cascade::core::LoadedPlugin& p);
+// The same answer from the capability word the table carries (PLUGINS value[0]), for the window that has no LoadedPlugin: a loaded
+// module's declared bit has its table behind it, so the two cannot differ (tests/test_fitted_modules_window.cpp holds them equal on real
+// modules).
+FittedOwnWindow fittedOwnWindowOfCaps(std::uint32_t caps, bool loaded);
 // Whether the double-click opens a WINDOW for this row: loaded, has one, and is not stopped. A stopped
 // plugin has no instances, so no window of its could draw (the rail lists no window rows for one, and
 // a stopped tracker has no map page); its double-click opens its module page, which says STOPPED and
@@ -477,6 +483,10 @@ struct FittedRow {
     bool settingsAllowed = false;     // SETTINGS_ALLOWED
     bool matched = false;             // MATCHED: the runner would feed it, the receiver running or not
     bool askedSettings = false;       // ASKED_SETTINGS
+    // HOW IT RUNS (value[3], stub campaign B5; API 0.3 9.3): 0 AUTO, 1 ALWAYS ("keep running"), 2 STOPPED; and whether it is ASLEEP - AUTO and
+    // nothing is using it, so it has no instance. Asleep is the Fitted modules window's IDLE: not stopped and not failing.
+    int runMode = 0;
+    bool asleep = false;
     std::string path, version, author, licence, error, idle, notice, integrity;  // fact.plugin.<file>.*
 };
 
@@ -500,6 +510,13 @@ struct FittedListCache {
     FittedModulesModel model;
     FittedRow row;                     // scratch: one module's row, its strings keeping their room
     std::string key;                   // scratch: a fact's key
+    std::string text;                  // scratch: a fact's text
+    // THE CATALOGUE'S RECORD OF THE MODULE WHOSE PAGE IS OPEN (stub campaign B5): `model.catalogue` is the store model's modules, copied only while a
+    // page is open and only when the store's own model moved (`catalogueSeq`, the store cache's fullSeq) or the page is another module's
+    // (`cataloguePage`); with no page open it is empty and every module's catalogueIndex is -1.
+    std::uint64_t catalogueSeq = 0;
+    std::uint64_t catalogueListSeq = 0;  // the listSeq the modules' catalogueIndex was worked out at (a refresh resets it to -1)
+    std::string cataloguePage;
 };
 
 // --- the window --------------------------------------------------------------

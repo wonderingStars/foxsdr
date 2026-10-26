@@ -1050,7 +1050,17 @@ private:
     // panels and instruments, or Decoder output for a text decoder. The engine no longer calls it (the pump move's step P2): the
     // press is an EVENT, FOXAPI_EVENT_PRESET_APPLIED (the module's file name), that pumpUiEvents takes in the look and answers
     // with this, from the PLUGINS row; run()'s bounded-run seam calls it directly with what the loaded plugin declares.
-    void openPluginWindowsFor(const std::string& name, std::uint32_t caps);
+    // `presetFlags`: the preset's CASCADE_PRESET_* word (the event's value[0]); 0 from the capture seam, whose press is of a plugin with none.
+    void openPluginWindowsFor(const std::string& name, std::uint32_t caps, std::uint32_t presetFlags = 0u);
+    // THE ONE WINDOW A DOUBLE-CLICK ON A FITTED MODULES ROW OPENS (0.99.77; stub campaign B5, app_window_fitted.cpp): the panel, else the picture
+    // window, else the instrument, else the map page, of the plugin the module file names, marked shown. A STOPPED plugin has no instances, so
+    // nothing is shown for it (false). Marking it shown is the whole of the work: the window reports it (reportPluginUse) and the engine's
+    // lifecycle wakes a plugin that was asleep.
+    bool openPluginOwnWindow(const std::string& pluginKey);
+    // THE TRACK SOURCES THE TABLE DECLARES, by display name: loaded, a track source by its capability word, not stopped (master 0.99.73). The map
+    // pages are made and pruned from this, and not from the plugin UI's instances: a tracker set to AUTO that nothing is using is asleep and has
+    // none, and its page's row on the rail - and opening it - is how it is woken.
+    std::vector<std::string> declaredTrackPluginNames();
     // The REMNANT of the receiver-control rows, and it is the half the fitted
     // window cannot draw: the refusal notice PluginUi records, and the grants
     // held by modules that are NOT installed any more. The fitted window
@@ -2985,6 +2995,7 @@ private:
         std::string muteSubject;           // fact.mute.subject
         std::string lastDenied;            // fact.plugin.lastDenied
         std::string factText;              // the fact as just read (kept for its room)
+        std::string factKey;               // the key of a per-file fact being read (kept for its room)
     };
     PluginListCache pluginCache_;
     const PluginListCache& pluginLists();
@@ -3295,6 +3306,9 @@ private:
     // lives behind imgui.h.
     std::unique_ptr<FittedListCache> fittedCache_;
     FittedListCache& fittedLists();
+    // The listSeq at which the open module page's pictures were last asked for (the store window's storePicturesWantSeq_ for this window): a page
+    // asks on the edge of opening, and later at most once for a move of listSeq and only for a picture the table lists nobody asked for.
+    std::uint64_t fittedPicturesWantSeq_ = 0;
     // WHAT THE PLUGIN STORE TAKES FROM THE TABLE (window port, group 10; API 0.3 section 8.9,
     // gui/plugin_store_view.hpp): two tiers, both read when listSeq moves. The RAIL tier - the store key's chip, the
     // retired rows under it, the plugins key's refused count, and the edges the deck's consents are cleared on

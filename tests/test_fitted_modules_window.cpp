@@ -1,22 +1,32 @@
-// test_fitted_modules_window.cpp - THE FITTED MODULES WINDOW READS ITS ENGINE API SESSION (window port, group 9:
-// drawFittedModulesWindow and fittedLists; engine-stage4.md 6.5, API 0.3 section 8.8).
+// test_fitted_modules_window.cpp - THE FITTED MODULES WINDOW READS ITS ENGINE API SESSION (window port, group 9: drawFittedModulesWindow and
+// fittedLists, app_window_fitted.cpp; engine-stage4.md 6.5 and 6.22 B5, API 0.3 sections 8.8, 9.3 - 9.5).
 //
-// What the window draws is the table's PLUGINS list and per-file facts, PLUGIN_COMMANDS, two status lines and the
-// state's RX_RUNNING flag; what it changes it changes by seven commands on its session. This holds the window's
-// side of that against the real engine with three REAL fixture modules fitted (tests/fixture_stage1_plugin.cpp,
-// fixture_group8_plugin.cpp and fixture_group9_plugin.cpp: the last an audio processor with two command keys and a
-// descriptor of its own) and a file the host refuses:
-//   A  the model the window is built from the table, held equal field for field to the one the window built from
-//      the engine's own records before the port (the code it replaced, restated here), in every state a module can
-//      be in: fed, stopped, idle, a grant of each kind, a notice, an integrity finding, a refused file
+// REWRITTEN IN STUB CAMPAIGN B5 against master's 0.99.72 - 0.99.77 window. This was the port's own test of the 0.99.42 window (not master's: master
+// has no such test), whose section A held the model built from the table equal to "the model the window built from the engine's own members before
+// the port". That model has since grown eleven fields (the module's page, the IDLE state and KEEP RUNNING, where a file came from, its install
+// record, the catalogue's category and record of it, the clean-up of old copies, the window a double-click opens), so section A now restates MASTER'S
+// 0.99.72 builder - AppWindowTestAccess::masterModel, written from drawFittedModulesWindow@20647 of master (origin/master 04cba53a) and from nothing
+// the new code does - and holds the table's model equal to it, field for field, in every state a module can be in. The five deliberate differences
+// are stated where compared (the TRANSMIT plate, which is stub batch B13's and which no fixture here declares; the install record's catalogue
+// key, which master worked out from the record and the table gives whole; the file's size, which is the engine's own measure when the table's block
+// is made where master carried the scan's; the pictures, which are the store's cache's; and the catalogue's modules, held by id and count).
+//
+// What the window draws is the table's PLUGINS list and per-file facts, PLUGIN_COMMANDS, the store's old-copy facts, two status lines and the
+// state's RX_RUNNING flag; what it changes it changes by commands on its session. This holds the window's side of that against the real engine with
+// three REAL fixture modules fitted (tests/fixture_stage1_plugin.cpp, fixture_group8_plugin.cpp and fixture_group9_plugin.cpp: the last an audio
+// processor with two command keys and a descriptor of its own) and a file the host refuses:
+//   A  the model the window builds from the table, held equal field for field to master's 0.99.72 model, in every state a module can be in: fed,
+//      stopped, ASLEEP, kept running, a grant of each kind, a notice, an integrity finding, a refused file, an orphan, an install record, a plugin
+//      site and a site since removed, a page open
 //   B  what the window is told: the modules, size, descriptor, notice, grants, MATCHED with the receiver stopped
-//   C  the cache follows listSeq: one rebuild when it moves, none when a decoder prints a line, none while the
-//      window is closed - and a settled frame allocates nothing (1000 reads of an unchanged state: 0)
-//   D  the real window drawn: every widget found, clicked, sends exactly the commands it should; the draw changes
-//      when the state does and not otherwise
-//   E  each control, clicked, lands at the engine's NEXT pass (not in the click's own frame) and the window reads
-//      the engine's value the frame after: Stop, Start, the two grants, a module's command key, Rescan, Remove
-//      (with its two presses) and the sentence a remove leaves
+//   C  the cache follows listSeq: one rebuild when it moves, none when a decoder prints a line, none while the window is closed - and a settled
+//      frame allocates nothing (1000 reads of an unchanged state: 0)
+//   D  the real window drawn: every widget of the list and of a module's page found, clicked, sends exactly the commands it should; the draw
+//      changes when the state does and not otherwise
+//   E  each control, clicked, lands at the engine's NEXT pass (not in the click's own frame) and the window reads the engine's value the frame
+//      after: Stop, Start, the two grants, a module's command key, Rescan, Remove (with its two presses) and the sentence a remove leaves
+//   F  THE RUN STATES (0.99.73): a module nothing uses is IDLE - listed, not failing, its key says START - and START and the page's KEEP RUNNING
+//      tick pin it (PLUGIN_RUN_MODE / DECODER_START), unticking sends AUTO; a double-click on a row opens that plugin's own window
 //
 // THE TEST-ACCESSOR TRAP: a ported member reads the SESSION, so every frame here looks first, as drawUi does (the
 // engine's pass takes the session's queue, publishes, the window reads its state), draws, and lets the NEXT look
@@ -54,12 +64,15 @@
 #endif
 
 #include "core/app_commands.hpp"
+#include "core/plugin_cleanup.hpp"
 #include "core/plugin_repo.hpp"
+#include "core/plugin_run.hpp"
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
+#include "gui/plugin_window_ids.hpp"
 #include "gui/plugins_view.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -248,18 +261,87 @@ struct AppWindowTestAccess {
         passseam::on(rawEngine(a.engine_), [&] { setEnv(name, value); });
     }
 
-    // THE WINDOW AS IT WAS BEFORE THE PORT: the model built from the engine's own records, every frame (the code
-    // drawFittedModulesWindow held from the day it was written to the day it was ported, restated). Built on the pass;
-    // `allocs`, when given, gets what the build allocated, counted on the thread that built it.
-    static FittedModulesModel oldModel(AppWindow& a, long* allocs = nullptr) {
+    // STUB CAMPAIGN B5 (0.99.73, docs/engine-stage4.md 6.22): a fitted plugin runs only while it is USED, and in a hermetic frame nothing uses a decoder
+    // - so a module nothing reads is ASLEEP (IDLE), which is a state this test holds on purpose (F, and A's first state). Where the test needs the
+    // instances to run - FED, a decoder's command keys - the plugins are PINNED to ALWAYS ("keep running"), the state the product has for a plugin the
+    // user keeps running (test_decoders_mute_grants.cpp does the same, for the same reason).
+    static void pinPlugins(AppWindow& a) {
+        Engine& e = rawEngine(a.engine_);
+        passseam::on(e, [&] {
+            std::vector<std::string> keys;
+            for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
+                if (p.loaded) { keys.push_back(cascade::core::pluginKey(p)); }
+            }
+            for (const std::string& k : keys) { e.setPluginRun(k, cascade::core::PluginRun::Always); }
+        });
+    }
+    static void resetDeck(AppWindow& a) { a.fittedDeck_ = std::make_unique<FittedModulesDeck>(); }
+    static void addRecord(AppWindow& a, const cascade::core::InstalledPlugin& rec) { addInventory(a, rec); }
+    static void setSites(AppWindow& a, const std::vector<std::string>& sites) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pluginSites_ = sites; });
+    }
+    // A catalogue entry, as the engine holds one after a read (catalogSeq_ is what moves the table's fingerprint for it).
+    static void addCatalogue(AppWindow& a, const std::string& id, const std::string& name, const std::string& category, const std::string& source = {}) {
+        passseam::on(rawEngine(a.engine_), [&] {
+            cascade::core::PluginCatalogEntry ce;
+            ce.id = id;
+            ce.name = name;
+            ce.version = "1.0.0";
+            ce.author = "Catalogue Test Maker";
+            ce.licence = "MIT";
+            ce.category = category;
+            ce.source = source;
+            ce.abiVersion = CASCADE_PLUGIN_ABI_VERSION;
+            rawEngine(a.engine_).catalog_.push_back(ce);
+            ++rawEngine(a.engine_).catalogSeq_;
+        });
+    }
+    static void clearCatalogue(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).catalog_.clear();
+            ++rawEngine(a.engine_).catalogSeq_;
+        });
+    }
+    static void setOldCopies(AppWindow& a, const std::vector<cascade::core::SupersededPlugin>& copies, const std::string& report) {
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pluginOldCopies_ = copies;
+            rawEngine(a.engine_).pluginCleanupReport_ = report;
+        });
+    }
+    static FittedModulesDeck& openPage(AppWindow& a, const std::string& file) {
+        resetDeck(a);
+        a.fittedDeck_->pageFile = file;
+        return *a.fittedDeck_;
+    }
+
+    // THE MODEL MASTER'S 0.99.72 WINDOW BUILT, every frame it was open, from the application's own members - restated from drawFittedModulesWindow@20647
+    // of master (origin/master 04cba53a, src/gui/app_window.cpp) and from nothing in the code under test: the Engine's members carry master's names
+    // (pluginIsIdle, pluginRunMode, catalog_, pluginSites_, pluginOldCopies_, pluginCleanupReport_, pluginInventory_), so each line below is master's
+    // line with `this` read as the engine. `pageFile` is the module whose page is open ("" = the list): master built the store's whole model, and joined
+    // every module to it by the catalogue key, only then. Built on the pass; `allocs`, when given, gets what the build allocated, counted on the thread
+    // that built it.
+    static FittedModulesModel masterModel(AppWindow& a, const std::string& pageFile = std::string(), long* allocs = nullptr) {
         return passseam::read<FittedModulesModel>(rawEngine(a.engine_), [&] {
             const long mark = t_allocs;
-            FittedModulesModel m = oldModelOnPass(a);
+            FittedModulesModel m = masterModelOnPass(a, pageFile);
             if (allocs != nullptr) { *allocs += t_allocs - mark; }
             return m;
         });
     }
-    static FittedModulesModel oldModelOnPass(AppWindow& a) {
+    // pluginCategoryOf, master's (app_window.cpp@23523): the install record's catalogue key, then the catalogue's entry's category.
+    static std::string masterCategoryOf(Engine& e, const std::string& file) {
+        for (const cascade::core::InstalledPlugin& ip : e.pluginInventory_.plugins) {
+            if (!cascade::gui::equalsFileNameAscii(ip.file, file)) { continue; }
+            if (ip.id.empty()) { return std::string(); }
+            const std::string key = cascade::core::PluginRepo::catalogueKey(ip.source, ip.id);
+            for (const cascade::core::PluginCatalogEntry& ce : e.catalog_) {
+                if (cascade::core::PluginRepo::catalogueKey(ce.source, ce.id) == key) { return ce.category; }
+            }
+            return std::string();
+        }
+        return std::string();
+    }
+    static FittedModulesModel masterModelOnPass(AppWindow& a, const std::string& pageFile) {
         Engine& e = rawEngine(a.engine_);
         FittedModulesModel model;
         model.directory = e.pluginDir_;
@@ -267,6 +349,15 @@ struct AppWindowTestAccess {
         const std::vector<cascade::core::DecoderStatus> status = e.pluginRunner_.status();
         const std::vector<cascade::core::LoadedPlugin>& list = e.pluginHost_.plugins();
         const std::vector<std::string> settingsAskers = e.pluginApi_->settingsRequesters();
+        const std::vector<cascade::core::PluginFileVerdict> verdicts =
+            cascade::core::classifyPluginFiles(list, e.pluginInventory_.plugins, e.catalog_);
+        // THE CATALOGUE'S RECORDS of the page that is open: one a catalogue entry, in the catalogue's order, named by its catalogue key.
+        std::vector<std::string> catalogueIds;
+        if (!pageFile.empty()) {
+            for (const cascade::core::PluginCatalogEntry& ce : e.catalog_) {
+                catalogueIds.push_back(cascade::core::PluginRepo::catalogueKey(ce.source, ce.id));
+            }
+        }
         model.modules.reserve(list.size());
         for (const cascade::core::LoadedPlugin& p : list) {
             const std::string file = cascade::core::pluginKey(p);
@@ -277,11 +368,13 @@ struct AppWindowTestAccess {
                 idleDetail = s.detail;
                 break;
             }
-            FittedModule m = makeFittedModule(p, e.pluginIsStopped(file), e.pluginRunner_.isFeeding(file),
-                                              std::move(idleDetail),
-                                              rawPluginUi(*a.pluginFeed_).tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
+            FittedModule m = makeFittedModule(p, e.pluginIsStopped(file), e.pluginRunner_.isFeeding(file), std::move(idleDetail),
+                                              rawPluginUi(*a.pluginFeed_).tuneAllowed(cascade::core::PluginUi::tuneKey(p)), e.pluginIsIdle(file),
+                                              e.pluginRunMode(file) == cascade::core::PluginRun::Always);
             m.settingsCapable = std::find(settingsAskers.begin(), settingsAskers.end(), file) != settingsAskers.end();
             m.settingsAllowed = rawPluginUi(*a.pluginFeed_).settingsAllowed(file);
+            // (master's TRANSMIT block - txAllowed, txCapable, txPlate for a CASCADE_CAP_TX_AUDIO module - is stub batch B13's; no fixture here
+            // declares the bit, so the three stay as makeFittedModule left them, which is what the table's model holds too.)
             for (const cascade::core::HostCommand& hc : e.pluginApi_->commands(file)) {
                 m.commands.push_back(FittedModule::Command{hc.id, hc.label});
             }
@@ -290,12 +383,65 @@ struct AppWindowTestAccess {
                 m.notice = nit->second.text;
             }
             m.integrityNote = cascade::core::PluginRepo::changedSinceInstallNote(e.pluginInventory_.plugins, file);
-            std::error_code sizeEc;
-            const std::uintmax_t bytes = std::filesystem::file_size(p.path, sizeEc);
-            if (!sizeEc) { m.sizeBytes = static_cast<std::uint64_t>(bytes); }
+            for (const cascade::core::PluginFileVerdict& v : verdicts) {
+                if (v.file == file) {
+                    m.orphaned = v.orphaned();
+                    break;
+                }
+            }
+            for (const cascade::core::InstalledPlugin& ip : e.pluginInventory_.plugins) {
+                if (!cascade::gui::equalsFileNameAscii(ip.file, file)) { continue; }
+                m.abiVersion = ip.abiVersion;
+                m.fittedAtUnix = ip.installedAtUnix;
+                if (!ip.id.empty()) {
+                    m.catalogueId = cascade::core::PluginRepo::catalogueKey(ip.source, ip.id);
+                    m.id = m.catalogueId;
+                }
+                if (!ip.source.empty()) {
+                    const std::string label = cascade::core::PluginRepo::siteLabel(ip.source);
+                    const bool stillListed = std::find(e.pluginSites_.begin(), e.pluginSites_.end(), ip.source) != e.pluginSites_.end();
+                    m.originNote = cascade::core::formatText(
+                        stillListed ? "Installed from %s, not from the FoxSDR catalogue." : "Installed from %s, a site you removed. It gets no updates.",
+                        label.c_str());
+                }
+                break;
+            }
+            m.category = masterCategoryOf(e, file);
+            if (!m.catalogueId.empty() && !catalogueIds.empty()) {
+                for (int ci = 0; ci < static_cast<int>(catalogueIds.size()); ++ci) {
+                    if (catalogueIds[static_cast<std::size_t>(ci)] == m.catalogueId) {
+                        m.catalogueIndex = ci;
+                        break;
+                    }
+                }
+            }
+            // THE SIZE IS THE RECORD'S, and makeFittedModule has already carried it (LoadedPlugin::fileBytes).
             model.modules.push_back(std::move(m));
         }
+        for (const cascade::core::SupersededPlugin& o : e.pluginOldCopies_) {
+            model.oldCopies.push_back({o.name, o.version, o.file, o.keptVersion});
+        }
+        model.cleanupReport = e.pluginCleanupReport_;
         return model;
+    }
+    static bool openOwn(AppWindow& a, const std::string& file) { return a.openPluginOwnWindow(file); }
+    static bool shown(AppWindow& a, const std::string& id) { return a.pluginWindows_.shown(id); }
+    static auto& pluginWindows(AppWindow& a) { return a.pluginWindows_; }
+    static std::vector<std::string> trackers(AppWindow& a) { return a.declaredTrackPluginNames(); }
+    static const AppWindow::PluginListCache& rows(AppWindow& a) { return a.pluginLists(); }
+    static std::string fact(AppWindow& a, const std::string& key) {
+        std::string s;
+        a.readFactText(key.c_str(), s);
+        return s;
+    }
+    static std::vector<std::string> masterCatalogueIds(AppWindow& a) {
+        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] {
+            std::vector<std::string> ids;
+            for (const cascade::core::PluginCatalogEntry& ce : rawEngine(a.engine_).catalog_) {
+                ids.push_back(cascade::core::PluginRepo::catalogueKey(ce.source, ce.id));
+            }
+            return ids;
+        });
     }
 };
 
@@ -344,9 +490,16 @@ void junk(const std::string& file) {
 // state read and its window open.
 struct Fresh {
     AppWindow app;
-    Fresh() {
+    // `pin`: the fitted modules are kept running (ALWAYS), the state the product has for a plugin the user keeps - so their instances exist and
+    // are FED, which B to E read; F and the first state of A are the ones that leave them to the engine's own decision (AUTO: asleep).
+    explicit Fresh(bool pin = true) {
         Access::look(app);
         Access::look(app);
+        if (pin) {
+            Access::pinPlugins(app);
+            Access::look(app);
+            Access::look(app);
+        }
         // A window tall enough for the list AND the plate beside it (the display is made to fit it).
         Access::setRect(app, 20, 20, 1560, 1900);
         Access::setOpen(app, true);
@@ -440,6 +593,22 @@ bool sameModule(const FittedModule& got, const FittedModule& want, const char* w
     check(got.notice == want.notice, "notice");
     check(got.integrityNote == want.integrityNote, "integrityNote");
     check(got.sizeBytes == want.sizeBytes, "sizeBytes");
+    // ...and the eleven fields master's 0.99.72 - 0.99.77 window added to the model (stub campaign B5). The run state is the table's for a module the host
+    // LOADED (PLUGINS value[3]; a refused file has none, and the panel never reads it for one).
+    check(got.idle == (want.loaded && want.idle), "idle");
+    check(got.keepRunning == (want.loaded && want.keepRunning), "keepRunning");
+    check(got.ownWindow == want.ownWindow, "ownWindow");
+    check(got.originNote == want.originNote, "originNote");
+    check(got.orphaned == want.orphaned, "orphaned");
+    check(got.id == want.id, "id");
+    check(got.catalogueId == want.catalogueId, "catalogueId");
+    check(got.category == want.category, "category");
+    check(got.abiVersion == want.abiVersion, "abiVersion");
+    check(got.fittedAtUnix == want.fittedAtUnix, "fittedAtUnix");
+    check(got.catalogueIndex == want.catalogueIndex, "catalogueIndex");
+    // (DELIBERATE DIFFERENCE, stub batch B13: the TRANSMIT grant and plate. Master offered them to a module that declares CASCADE_CAP_TX_AUDIO; the
+    // table carries neither yet, so the model never offers the key. No fixture here declares the bit, so master's three stay at their defaults too.)
+    check(got.txCapable == want.txCapable && got.txAllowed == want.txAllowed && got.txPlate == want.txPlate, "tx*");
     bool sameKeys = got.commands.size() == want.commands.size();
     for (std::size_t i = 0; sameKeys && i < got.commands.size(); ++i) {
         sameKeys = got.commands[i].id == want.commands[i].id && got.commands[i].label == want.commands[i].label;
@@ -448,37 +617,81 @@ bool sameModule(const FittedModule& got, const FittedModule& want, const char* w
     return ok;
 }
 
-// The whole model against the old window's, module by module, and the two things beside the modules.
-int sameModel(AppWindow& a, const char* when) {
+// The whole model against master's 0.99.72 one, module by module, and the things beside the modules: the clean-up's old copies and report, and - while
+// a page is open (`pageFile`) - the catalogue's records its modules are joined to.
+int sameModel(AppWindow& a, const char* when, const std::string& pageFile = std::string()) {
     Access::look(a);
-    const cascade::gui::FittedModulesModel old = Access::oldModel(a);
+    // The window's own frame, so the catalogue copy a page needs is the one it made (a window draws before its model is read in the shipped
+    // loop; here the page is opened on the deck and the model is asked for the way the draw asks).
+    if (!pageFile.empty()) {
+        Access::openPage(a, pageFile);
+        Access::setOpen(a, true);
+        lookDraw(a);
+        lookDraw(a);
+    }
+    const cascade::gui::FittedModulesModel want = Access::masterModel(a, pageFile);
     const cascade::gui::FittedModulesModel& got = Access::lists(a).model;
-    CHECK_EQ(got.modules.size(), old.modules.size());
-    CHECK_EQ(got.directory, old.directory);
-    CHECK_EQ(got.receiverRunning, old.receiverRunning);
+    CHECK_EQ(got.modules.size(), want.modules.size());
+    CHECK_EQ(got.directory, want.directory);
+    CHECK_EQ(got.receiverRunning, want.receiverRunning);
     int compared = 0;
-    for (std::size_t i = 0; i < got.modules.size() && i < old.modules.size(); ++i) {
-        if (sameModule(got.modules[i], old.modules[i], when)) { ++compared; }
+    for (std::size_t i = 0; i < got.modules.size() && i < want.modules.size(); ++i) {
+        if (sameModule(got.modules[i], want.modules[i], when)) { ++compared; }
         // ...and the same strip: the census the window prints is a function of the model
         CHECK_EQ(static_cast<int>(cascade::gui::fittedState(got.modules[i], got.receiverRunning)),
-                 static_cast<int>(cascade::gui::fittedState(old.modules[i], old.receiverRunning)));
+                 static_cast<int>(cascade::gui::fittedState(want.modules[i], want.receiverRunning)));
     }
     const cascade::gui::FittedCounts a1 = cascade::gui::countStates(got.modules, got.receiverRunning);
-    const cascade::gui::FittedCounts b1 = cascade::gui::countStates(old.modules, old.receiverRunning);
+    const cascade::gui::FittedCounts b1 = cascade::gui::countStates(want.modules, want.receiverRunning);
     CHECK(a1.fed == b1.fed && a1.notFed == b1.notFed && a1.noSignal == b1.noSignal && a1.stopped == b1.stopped &&
-          a1.refused == b1.refused && a1.total == b1.total);
+          a1.refused == b1.refused && a1.total == b1.total && a1.idle == b1.idle);
+    // The old copies and the report of the last clean-up.
+    bool sameCopies = got.oldCopies.size() == want.oldCopies.size();
+    for (std::size_t i = 0; sameCopies && i < got.oldCopies.size(); ++i) {
+        sameCopies = got.oldCopies[i].name == want.oldCopies[i].name && got.oldCopies[i].version == want.oldCopies[i].version &&
+                     got.oldCopies[i].file == want.oldCopies[i].file && got.oldCopies[i].keptVersion == want.oldCopies[i].keptVersion;
+    }
+    CHECK(sameCopies);
+    CHECK_EQ(got.cleanupReport, want.cleanupReport);
+    // THE CATALOGUE'S RECORDS (DELIBERATE DIFFERENCE: held by count and id. Master built the store's whole model for the page, which the store window's
+    // own test, test_plugin_store_window.cpp A, holds equal to master's field for field; this window copies the store's cache's.) Only while a page is
+    // open, and then one a catalogue entry in the catalogue's order.
+    const std::vector<std::string> ids = pageFile.empty() ? std::vector<std::string>() : Access::masterCatalogueIds(a);
+    CHECK_EQ(got.catalogue.size(), ids.size());
+    for (std::size_t i = 0; i < got.catalogue.size() && i < ids.size(); ++i) { CHECK_EQ(got.catalogue[i].id, ids[i]); }
     return compared;
 }
 
 // --- A -----------------------------------------------------------------------
 
-void testModelEqualsTheOldWindow() {
-    std::printf("  A: the model the window draws from the table, equal to the one it built from the engine's records\n");
-    Fresh f;
+void testModelEqualsMastersModel() {
+    std::printf("  A: the model the window draws from the table, equal to the one master's 0.99.72 window built from the engine's members\n");
+    Fresh f(/*pin=*/false);
     AppWindow& app = f.app;
     int compared = 0;
-    compared += sameModel(app, "four files fitted, the receiver stopped");
-    CHECK_EQ(Access::lists(app).model.modules.size(), 4u);  // three modules and the file the host refused
+    int states = 0;
+    const auto same = [&](const char* when, const std::string& page = std::string()) {
+        compared += sameModel(app, when, page);
+        ++states;
+    };
+    same("four files fitted, nothing using a decoder, the receiver stopped");
+    CHECK_EQ(Access::lists(app).model.modules.size(), 4u);  // three modules and the file the host refuses
+    // ASLEEP (0.99.73): the two decoders are AUTO and nothing uses them, so they have no instance and the window says IDLE; the audio processor is in
+    // use for as long as it is fitted (a standing duty), and a refused file has no run state. The refused file is an ORPHAN: no index knows it and
+    // nothing runs it.
+    CHECK(mod(app, kStage1)->idle && mod(app, kGroup8)->idle);
+    CHECK(!mod(app, kGroup9)->idle && !mod(app, kRefused)->idle);
+    CHECK(!mod(app, kStage1)->keepRunning && !mod(app, kGroup8)->keepRunning);
+    CHECK(mod(app, kRefused)->orphaned && !mod(app, kStage1)->orphaned && !mod(app, kGroup9)->orphaned);
+    CHECK(cascade::gui::fittedState(*mod(app, kStage1), false) == cascade::gui::FittedState::Idle);
+    CHECK(cascade::gui::countStates(Access::lists(app).model.modules, false).idle == 2);
+
+    // KEPT RUNNING: pinned to ALWAYS, which is what START and the page's tick do. Nothing is IDLE then, and the window says the module is kept.
+    Access::pinPlugins(app);
+    Access::look(app);
+    Access::look(app);
+    same("the three modules kept running");
+    CHECK(mod(app, kStage1)->keepRunning && mod(app, kGroup8)->keepRunning && !mod(app, kStage1)->idle && !mod(app, kGroup8)->idle);
 
     // The receiver running: the decoders and the processor are fed.
     Access::command(app, cmd::makeNum(FOXAPI_OP_SET_VOLUME, 0.0));
@@ -486,7 +699,7 @@ void testModelEqualsTheOldWindow() {
     Access::look(app);
     Access::look(app);
     CHECK(Access::running(app));
-    compared += sameModel(app, "the receiver running");
+    same("the receiver running");
     CHECK(mod(app, kGroup9)->fed && mod(app, kStage1)->fed && mod(app, kGroup8)->fed);
     CHECK(!mod(app, kRefused)->fed);
 
@@ -494,7 +707,7 @@ void testModelEqualsTheOldWindow() {
     Access::command(app, cmd::makeText(FOXAPI_OP_DECODER_STOP, kGroup9));
     Access::look(app);
     Access::look(app);
-    compared += sameModel(app, "one stopped");
+    same("one stopped");
     CHECK(mod(app, kGroup9)->stopped && !mod(app, kGroup9)->fed);
     Access::command(app, cmd::makeText(FOXAPI_OP_DECODER_START, kGroup9));
     Access::command(app, cmd::makeInt(FOXAPI_OP_RUN, 0));
@@ -511,31 +724,102 @@ void testModelEqualsTheOldWindow() {
     CHECK_EQ(Access::core(app).log(c9, CASCADE_LOG_WARN, "the antenna is not what I was built for"), CASCADE_API_OK);
     Access::look(app);
     Access::look(app);
-    compared += sameModel(app, "a tune grant, a request, a warning");
+    same("a tune grant, a request, a warning");
     CHECK(mod(app, kGroup9)->tuneAllowed && mod(app, kGroup9)->settingsCapable && !mod(app, kGroup9)->settingsAllowed);
     CHECK_EQ(mod(app, kGroup9)->noticeLevel, static_cast<std::uint32_t>(CASCADE_LOG_WARN));
     Access::command(app, cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, kGroup9, 2, 1));
     CHECK_EQ(Access::core(app).log(c9, CASCADE_LOG_ERROR, std::string(300, 'e').c_str()), CASCADE_API_OK);
     Access::look(app);
     Access::look(app);
-    compared += sameModel(app, "a radio-settings grant, an error of 300 characters");
+    same("a radio-settings grant, an error of 300 characters");
     CHECK(mod(app, kGroup9)->settingsAllowed);
     CHECK_EQ(mod(app, kGroup9)->noticeLevel, static_cast<std::uint32_t>(CASCADE_LOG_ERROR));
     CHECK_EQ(mod(app, kGroup9)->notice.size(), 300u);  // whole: a list item's detail would cut it at 159
 
-    // A finding of the install record's re-hash.
+    // A finding of the install record's re-hash, and the record itself: the catalogue key the record gives the module, the plugin ABI the fitted
+    // build was made for, and when it was fitted.
     cc::InstalledPlugin rec;
     rec.id = "group-nine-fixture";
     rec.name = kNineName;
     rec.file = kGroup9;
+    rec.abiVersion = CASCADE_PLUGIN_ABI_VERSION;
+    rec.installedAtUnix = 1790000000;
     rec.digestMismatch = true;
-    Access::addInventory(app, rec);
+    Access::addRecord(app, rec);
     Access::look(app);
     Access::look(app);
-    compared += sameModel(app, "an integrity finding");
+    same("an integrity finding and an install record");
     CHECK(mod(app, kGroup9)->integrityNote.find("is not the file that was installed") != std::string::npos);
     CHECK(mod(app, kGroup8)->integrityNote.empty());
+    CHECK_EQ(mod(app, kGroup9)->catalogueId, std::string("group-nine-fixture"));
+    CHECK_EQ(mod(app, kGroup9)->id, std::string("group-nine-fixture"));
+    CHECK_EQ(mod(app, kGroup9)->abiVersion, static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION));
+    CHECK_EQ(mod(app, kGroup9)->fittedAtUnix, static_cast<std::int64_t>(1790000000));
+    CHECK(mod(app, kGroup8)->catalogueId.empty() && mod(app, kGroup8)->id == kGroup8);  // a hand-fitted module keeps its file name for an id
+    CHECK(mod(app, kGroup9)->category.empty());                                         // the catalogue was never read
+    CHECK(!mod(app, kGroup9)->orphaned);                                                 // an install record makes a file the index's
+
+    // THE CATALOGUE'S CATEGORY, and its record of the module when the module's page is open (master built the store's whole model then).
+    Access::addCatalogue(app, "group-nine-fixture", kNineName, "meters");
+    Access::addCatalogue(app, "another-plugin", "Another Plugin", "marine");
+    Access::look(app);
+    Access::look(app);
+    same("a catalogue that knows the module, no page open");
+    CHECK_EQ(mod(app, kGroup9)->category, std::string("meters"));
+    CHECK(Access::lists(app).model.catalogue.empty() && mod(app, kGroup9)->catalogueIndex == -1);
+    same("the same, the module's page open", kGroup9);
+    CHECK_EQ(Access::lists(app).model.catalogue.size(), 2u);
+    CHECK_EQ(mod(app, kGroup9)->catalogueIndex, 0);
+    CHECK(mod(app, kGroup8)->catalogueIndex == -1);
+    Access::resetDeck(app);
+    lookDraw(app);
+    CHECK(Access::lists(app).model.catalogue.empty());  // the page shut: the copy goes, and every index with it
+    CHECK(mod(app, kGroup9)->catalogueIndex == -1);
+
+    // WHERE A MODULE CAME FROM (0.99.74): installed from a plugin site that is still listed, and from one the user has since removed. The refused
+    // file is given a record too, so it is no longer an orphan (and the verdict word is the record's).
+    cc::InstalledPlugin site;
+    site.id = "stage-one";
+    site.source = "https://plugins.example.org/index.json";
+    site.name = "Stage One";
+    site.file = kStage1;
+    Access::addRecord(app, site);
+    cc::InstalledPlugin known;
+    known.id = "refused-one";
+    known.name = "Refused One";
+    known.file = kRefused;
+    Access::addRecord(app, known);
+    Access::setSites(app, {site.source});
+    Access::look(app);
+    Access::look(app);
+    same("a module installed from a plugin site that is listed; the refused file recorded");
+    CHECK(mod(app, kStage1)->originNote.find("Installed from ") == 0u && mod(app, kStage1)->originNote.find("plugins.example.org") != std::string::npos);
+    CHECK(mod(app, kStage1)->originNote.find("not from the FoxSDR catalogue") != std::string::npos);
+    CHECK_EQ(mod(app, kStage1)->catalogueId, std::string("stage-one@plugins.example.org"));  // the key of a site's plugin: "<id>@<site label>"
+    CHECK(!mod(app, kRefused)->orphaned);
+    Access::setSites(app, {});
+    Access::look(app);
+    Access::look(app);
+    same("the same site removed");
+    CHECK(mod(app, kStage1)->originNote.find("a site you removed. It gets no updates.") != std::string::npos);
+    CHECK(mod(app, kGroup9)->originNote.empty());
+
+    // THE OLD COPIES an update left behind, and what the last clean-up did.
+    cc::SupersededPlugin old;
+    old.file = kRefused;
+    old.name = kNineName;
+    old.version = "9.0.0";
+    old.keptFile = kGroup9;
+    old.keptVersion = "9.1.0";
+    Access::setOldCopies(app, {old}, "Removed 1 old copy");
+    Access::look(app);
+    Access::look(app);
+    same("an old copy and the clean-up's report");
+    CHECK_EQ(Access::lists(app).model.oldCopies.size(), 1u);
+    CHECK_EQ(Access::lists(app).model.cleanupReport, std::string("Removed 1 old copy"));
+    Access::setOldCopies(app, {}, "");
     Access::clearInventory(app);
+    Access::clearCatalogue(app);
 
     // Idle: the processor cannot start. The runner's sentence, whole.
     Access::envOnPass(app, kNoCreate, "1");
@@ -543,7 +827,7 @@ void testModelEqualsTheOldWindow() {
     Access::look(app);
     Access::look(app);
     Access::look(app);
-    compared += sameModel(app, "an audio processor that cannot start");
+    same("an audio processor that cannot start");
     CHECK(!mod(app, kGroup9)->fed);
     CHECK(mod(app, kGroup9)->idleDetail.find("failed to start its audio processor") != std::string::npos);
     CHECK(mod(app, kGroup8)->idleDetail.empty());
@@ -552,15 +836,16 @@ void testModelEqualsTheOldWindow() {
     Access::look(app);
     Access::look(app);
     Access::look(app);
-    compared += sameModel(app, "started again after a rescan");
+    same("started again after a rescan");
     CHECK(mod(app, kGroup9)->fed && mod(app, kGroup9)->idleDetail.empty());
     // (a rescan keeps what the plugin asked for: the flag is sticky)
     CHECK(mod(app, kGroup9)->settingsCapable);
-    std::printf("      %d modules held equal to the old window's, field for field, in eight states\n", compared);
-    CHECK_EQ(compared, 4 * 8);
+    std::printf("      %d modules held equal to master's, field for field, in %d states\n", compared, states);
+    CHECK_EQ(compared, 4 * states);
 
-    // The one conversion beside the table's, held on a real host's records: the builder over a row against the
-    // builder over a LoadedPlugin (what makeFittedModule is still used for), for every record.
+    // The one conversion beside the table's, held on a real host's records: the builder over a row against the builder over a LoadedPlugin
+    // (what makeFittedModule is still used for), for every record - and the window a double-click opens, which the row works out from the capability
+    // word and master worked out from the table pointers the host kept.
     for (const cc::LoadedPlugin& p : Access::host(app)) {
         const std::string file = cc::pluginKey(p);
         const FittedModule oldM = cascade::gui::makeFittedModule(p, false, false, "", false);
@@ -578,10 +863,12 @@ void testModelEqualsTheOldWindow() {
         CHECK(newM.file == oldM.file && newM.path == oldM.path && newM.name == oldM.name && newM.version == oldM.version &&
               newM.author == oldM.author && newM.licence == oldM.licence && newM.capabilities == oldM.capabilities &&
               newM.loaded == oldM.loaded && newM.error == oldM.error && newM.tuneCapable == oldM.tuneCapable);
+        CHECK(newM.ownWindow == oldM.ownWindow);
+        CHECK_EQ(newM.id, oldM.id);
     }
     // ...and the rules of the row builder on their own: the host-client key only for a LOADED module that declares
     // the bit; the name only when a descriptor was read (the table fills `name` with the file's own for a file that
-    // was refused first); the module's keys are not the row's.
+    // was refused first); the module's keys are not the row's; and the run state is the row's.
     {
         cascade::gui::FittedRow r;
         r.file = "x.dll";
@@ -598,25 +885,48 @@ void testModelEqualsTheOldWindow() {
         r.askedSettings = true;
         r.settingsAllowed = true;
         r.tuneAllowed = true;
+        r.runMode = 1;
+        r.asleep = true;
         FittedModule m = cascade::gui::makeFittedModuleFromRow(r);
         CHECK(m.tuneCapable && m.loaded && m.name == "X" && m.fed && m.stopped && m.sizeBytes == 12345u);
         CHECK(m.noticeLevel == 3u && m.notice == "n" && m.integrityNote == "i" && m.idleDetail == "w");
         CHECK(m.settingsCapable && m.settingsAllowed && m.tuneAllowed && m.commands.empty());
+        CHECK(m.idle && m.keepRunning && m.id == "x.dll");
+        CHECK(m.ownWindow == cascade::gui::FittedOwnWindow::None);  // a text decoder has no window of its own: the Decoder output window
+        // (the window a double-click opens: the panel, else the picture, else the instrument, else the map, and none for a module that is not loaded)
+        const auto windowOf = [&](std::uint32_t caps, bool loaded) {
+            r.caps = caps;
+            r.loaded = loaded;
+            return cascade::gui::makeFittedModuleFromRow(r).ownWindow;
+        };
+        using W = cascade::gui::FittedOwnWindow;
+        CHECK(windowOf(CASCADE_CAP_PANEL | CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_INSTRUMENT | CASCADE_CAP_TRACK_SOURCE, true) == W::Panel);
+        CHECK(windowOf(CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_INSTRUMENT | CASCADE_CAP_TRACK_SOURCE, true) == W::Picture);
+        CHECK(windowOf(CASCADE_CAP_INSTRUMENT | CASCADE_CAP_TRACK_SOURCE, true) == W::Instrument);
+        CHECK(windowOf(CASCADE_CAP_TRACK_SOURCE, true) == W::Map);
+        CHECK(windowOf(CASCADE_CAP_PANEL, false) == W::None);
+        // A refused module is neither asleep nor kept running, whatever the row's run word said.
         r.loaded = false;
         r.error = "refused";
         CHECK(!cascade::gui::makeFittedModuleFromRow(r).tuneCapable);  // (a duplicate the host turned off)
+        CHECK(!cascade::gui::makeFittedModuleFromRow(r).idle && !cascade::gui::makeFittedModuleFromRow(r).keepRunning);
         r.loaded = true;
         r.caps = CASCADE_CAP_DECODER;
         CHECK(!cascade::gui::makeFittedModuleFromRow(r).tuneCapable);
         r.caps = 0u;
         r.name = "x.dll";
         CHECK(cascade::gui::makeFittedModuleFromRow(r).name.empty());
-        // written into a record that has a name and keys: nothing of them is left
+        // written into a record that has a name, keys and an origin: nothing of them is left
         FittedModule used;
         used.name = "old";
         used.commands.push_back(FittedModule::Command{7u, "old"});
+        used.originNote = "old";
+        used.orphaned = true;
+        used.catalogueId = "old";
+        used.catalogueIndex = 3;
         cascade::gui::fillFittedModule(used, r);
-        CHECK(used.name.empty() && used.commands.empty());
+        CHECK(used.name.empty() && used.commands.empty() && used.originNote.empty() && !used.orphaned && used.catalogueId.empty() &&
+              used.catalogueIndex == -1);
     }
 }
 
@@ -740,14 +1050,13 @@ void testCacheFollowsListSeq() {
     std::printf("      1000 reads with the install sentence up: %ld allocation(s)\n", spent);
     CHECK_EQ(spent, 0L);
 
-    // What the window DID cost before the port, every frame it was open, for the record: the same four files.
-    long oldAllocs = 0;
+    // What master's window DID cost, every frame it was open, for the record: the same four files, its model built from the engine's members.
+    long masterAllocs = 0;
     const int frames = 100;
-    for (int i = 0; i < frames; ++i) { sink += Access::oldModel(app, &oldAllocs).modules.size(); }
-    const long oldPerFrame = oldAllocs / frames;
-    std::printf("      the old window's model, built every frame from the engine's records: %ld allocations a frame (and a stat of each file)\n",
-                oldPerFrame);
-    CHECK(oldPerFrame > 0);
+    for (int i = 0; i < frames; ++i) { sink += Access::masterModel(app, std::string(), &masterAllocs).modules.size(); }
+    const long masterPerFrame = masterAllocs / frames;
+    std::printf("      master's model, built every frame from the engine's members: %ld allocations a frame\n", masterPerFrame);
+    CHECK(masterPerFrame > 0);
 
     // A change of the lists: one rebuild, bounded.
     const auto aChange = [&](int n) {
@@ -873,22 +1182,29 @@ void clickNoPass(AppWindow& app, float x, float y) {
 struct Found {
     std::string command;     // what the click sent ("" nothing)
     std::string armed;       // the file the click armed for removal ("" none)
+    std::string page;        // the module whose page the click opened ("" the list)
     float x, y;
 };
 
-void selectModule(AppWindow& app, const std::string& file) {
-    Access::deck(app) = cascade::gui::FittedModulesDeck{};
-    Access::deck(app).selected = indexOf(app, file);
+// THE LIST (`file` empty) or the page of the module `file` (0.99.72: the window shows one or the other), in a fresh deck; `armed` is the file whose
+// REMOVE has been pressed once, so the list draws CONFIRM in its row.
+void selectModule(AppWindow& app, const std::string& file, const std::string& armed = std::string()) {
+    cascade::gui::FittedModulesDeck& deck = Access::openPage(app, file);
+    if (!armed.empty()) {
+        deck.confirmRemove = armed;
+        deck.confirmUntil = ImGui::GetTime() + 1.0e9;
+    }
     lookDraw(app);
 }
 
-// Every widget of the window with `file` on the plate, found and clicked once in a fresh deck each time, and what
-// the click did: the command it sent (nothing is applied: no pass runs) and the removal it armed. The caller's
-// tap is dropped; the caller puts its own back.
-std::vector<Found> survey(AppWindow& app, const std::string& file, std::vector<std::string>* commandsSent = nullptr) {
+// Every widget of the window - the list, or the page of `file` - found and clicked once in a fresh deck each time, and what
+// the click did: the command it sent (nothing is applied: no pass runs), the removal it armed and the page it opened. The
+// caller's tap is dropped; the caller puts its own back.
+std::vector<Found> survey(AppWindow& app, const std::string& file, std::vector<std::string>* commandsSent = nullptr,
+                          const std::string& armed = std::string()) {
     Access::Sent sent;
     Access::tap(app, &sent);
-    selectModule(app, file);
+    selectModule(app, file, armed);
     // The page's RESET WINDOWS key puts the window back at its opening place, so where the window sits is put
     // back before each click and after the last (a click that moved it would move every widget under the pointer).
     ImGuiWindow* w0 = ImGui::FindWindowByName(kWindowName);
@@ -904,11 +1220,11 @@ std::vector<Found> survey(AppWindow& app, const std::string& file, std::vector<s
     std::vector<Found> found;
     for (const Hit& s : spots) {
         putBack();
-        selectModule(app, file);
+        selectModule(app, file, armed);
         sent.clear();
         Access::unplug(app);
         clickNoPass(app, s.x, s.y);
-        Found fd{"", Access::deck(app).confirmRemove, s.x, s.y};
+        Found fd{"", Access::deck(app).confirmRemove == armed ? std::string() : Access::deck(app).confirmRemove, Access::deck(app).pageFile, s.x, s.y};
         for (const auto& q : sent) {
             if (q.c.op == FOXAPP_OP_NOTE_PANEL) { continue; }
             fd.command = describe(q);
@@ -919,8 +1235,8 @@ std::vector<Found> survey(AppWindow& app, const std::string& file, std::vector<s
     }
     Access::tap(app, nullptr);
     putBack();
-    selectModule(app, file);
-    selectModule(app, file);
+    selectModule(app, file, armed);
+    selectModule(app, file, armed);
     return found;
 }
 
@@ -957,24 +1273,20 @@ void testDrawnAndClicked() {
     CHECK_EQ(h0, h1);
     CHECK(Access::isOpen(app));
 
-    // Every widget with the module on the plate.
+    // THE LIST (0.99.72: the window shows the list, or one module's page - not both): every widget found, clicked once in a fresh deck, and what each did.
+    // The top bar's SCAN AGAIN (a rescan) and RESET WINDOW SIZES (the window's own: no command), the six chips and the search field (filters: no command);
+    // in each row the glyph and the name (they open the module's page), REMOVE (it arms, and sends nothing) and the module's key - STOP for a module that
+    // runs, which is every loaded one here (the fixtures are kept running), none for the file the host refused.
     std::vector<std::string> got;
-    const std::vector<Found> found = survey(app, kGroup9, &got);
-    std::printf("      %zu widgets found\n", found.size());
-    CHECK(found.size() >= 10u);
+    const std::vector<Found> list = survey(app, std::string(), &got);
+    std::printf("      the list: %zu widgets found\n", list.size());
+    CHECK(list.size() >= 20u);
     std::sort(got.begin(), got.end());
-    // Rescan; Stop on each of the three loaded rows and on the plate (for the module the plate shows); the tune
-    // grant; the module's two keys. (The refused row has no key; Remove arms and sends nothing; the settings
-    // grant is not offered to a module that has not asked.)
     std::vector<std::string> want = {
         expect("PLUGIN_RESCAN", 0, 0, ""),
         expect("DECODER_STOP", 0, 0, kGroup8),
         expect("DECODER_STOP", 0, 0, kGroup9),
-        expect("DECODER_STOP", 0, 0, kGroup9),
         expect("DECODER_STOP", 0, 0, kStage1),
-        expect("PLUGIN_GRANT", 1, 1, kGroup9),
-        expect("PLUGIN_COMMAND", 1, 0, kGroup9),
-        expect("PLUGIN_COMMAND", 2, 0, kGroup9),
     };
     std::sort(want.begin(), want.end());
     if (got != want) {
@@ -982,27 +1294,52 @@ void testDrawnAndClicked() {
         for (const std::string& w : want) { std::printf("        wanted %s\n", w.c_str()); }
     }
     CHECK(got == want);
-    int arms = 0;
-    for (const Found& fd : found) { arms += fd.armed == kGroup9 ? 1 : 0; }
-    CHECK_EQ(arms, 1);  // one key arms the removal of the module the plate shows, and sends nothing
-    std::printf("      %zu command(s) sent by the clicks and one arming of Remove, as expected\n", got.size());
+    // One REMOVE a file (four rows), each arming its own file; the glyph and the name of each row open that module's page.
+    std::set<std::string> armedFiles, openedPages;
+    for (const Found& fd : list) {
+        if (!fd.armed.empty()) { armedFiles.insert(fd.armed); }
+        if (!fd.page.empty()) { openedPages.insert(fd.page); }
+    }
+    CHECK(armedFiles == (std::set<std::string>{kStage1, kGroup8, kGroup9, kRefused}));
+    CHECK(openedPages == (std::set<std::string>{kStage1, kGroup8, kGroup9, kRefused}));
+    std::printf("      %zu command(s) sent by the clicks, one arming of Remove and one page for each of the four rows, as expected\n", got.size());
 
-    // A refused file's plate: no key to start it, Remove arms, nothing else but the rows'.
+    // A REMOVE ALREADY PRESSED ONCE shows CONFIRM in the row, and that key sends the removal of that file (and no other).
+    got.clear();
+    (void)survey(app, std::string(), &got, kGroup9);
+    CHECK(std::count(got.begin(), got.end(), expect("STORE_REMOVE", 0, 0, kGroup9)) == 1);
+    CHECK(std::count_if(got.begin(), got.end(), [](const std::string& s) { return s.rfind("STORE_REMOVE", 0) == 0; }) == 1);
+
+    // THE PAGE of a module: the key in its header (STOP), the receiver-control grant, the module's two keys and the top bar's SCAN AGAIN. (The
+    // settings grant is not offered to a module that has not asked, and the audio processor has no KEEP RUNNING tick: it is in use for as long as it
+    // is fitted. REMOVE is the list's.)
+    got.clear();
+    const std::vector<Found> page = survey(app, kGroup9, &got);
+    std::printf("      the page of %s: %zu widgets found\n", kGroup9.c_str(), page.size());
+    CHECK(page.size() >= 10u);
+    std::sort(got.begin(), got.end());
+    std::vector<std::string> wantPage = {
+        expect("PLUGIN_RESCAN", 0, 0, ""),
+        expect("DECODER_STOP", 0, 0, kGroup9),
+        expect("PLUGIN_GRANT", 1, 1, kGroup9),
+        expect("PLUGIN_COMMAND", 1, 0, kGroup9),
+        expect("PLUGIN_COMMAND", 2, 0, kGroup9),
+    };
+    std::sort(wantPage.begin(), wantPage.end());
+    if (got != wantPage) {
+        for (const std::string& g : got) { std::printf("        sent   %s\n", g.c_str()); }
+        for (const std::string& w : wantPage) { std::printf("        wanted %s\n", w.c_str()); }
+    }
+    CHECK(got == wantPage);
+    for (const Found& fd : page) { CHECK(fd.armed.empty()); }
+
+    // A refused file's page: no key to start it (a refused module has nothing to start) and nothing but the top bar's.
     got.clear();
     const std::vector<Found> bad = survey(app, kRefused, &got);
-    int armsBad = 0;
-    for (const Found& fd : bad) { armsBad += fd.armed == kRefused ? 1 : 0; }
-    CHECK_EQ(armsBad, 1);
+    for (const Found& fd : bad) { CHECK(fd.armed.empty()); }
     std::sort(got.begin(), got.end());
-    std::vector<std::string> wantBad = {
-        expect("PLUGIN_RESCAN", 0, 0, ""),
-        expect("DECODER_STOP", 0, 0, kGroup8),
-        expect("DECODER_STOP", 0, 0, kGroup9),
-        expect("DECODER_STOP", 0, 0, kStage1),
-    };
-    std::sort(wantBad.begin(), wantBad.end());
-    CHECK(got == wantBad);
-    std::printf("      the refused file's plate: %zu command(s), no key to start it, one arming of Remove\n", got.size());
+    CHECK(got == std::vector<std::string>{expect("PLUGIN_RESCAN", 0, 0, "")});
+    std::printf("      the refused file's page: %zu command(s), no key to start it\n", got.size());
 }
 
 // --- E -----------------------------------------------------------------------
@@ -1184,18 +1521,23 @@ void testControlsLandAtTheNextPass() {
         }
     }
 
-    // RESCAN: the whole list is replaced at the next pass; an armed Remove stays armed on its FILE.
+    // RESCAN: the whole list is replaced at the next pass; an armed Remove stays armed on its FILE. (REMOVE is the list's key: the surveys of the list
+    // find where each row's REMOVE and the top bar's SCAN AGAIN are.)
     {
+        const std::vector<Found> listSpots = survey(app, std::string());
+        Access::tap(app, &sent);
+        ImGui::GetIO().AddMousePosEvent(2.0f, 2.0f);
+        lookDraw(app);
         junk(moduleFile("zz_second_refused"));
-        const Found* arm = armSpot(spots, kGroup9);
+        const Found* arm = armSpot(listSpots, kGroup9);
         CHECK(arm != nullptr);
         if (arm != nullptr) {
-            selectModule(app, kGroup9);
+            selectModule(app, std::string());
             clickThenHold(app, arm->x, arm->y);
             lookDraw(app);
             CHECK_EQ(Access::deck(app).confirmRemove, kGroup9);
         }
-        const Found* rescan = spotFor(spots, expect("PLUGIN_RESCAN", 0, 0, ""));
+        const Found* rescan = spotFor(listSpots, expect("PLUGIN_RESCAN", 0, 0, ""));
         CHECK(rescan != nullptr);
         if (rescan != nullptr) {
             CHECK_EQ(Access::lists(app).model.modules.size(), 4u);
@@ -1215,26 +1557,35 @@ void testControlsLandAtTheNextPass() {
     }
 
     // REMOVE: two presses (arm, confirm); the file goes at the next pass, and its row and the sentence leave and
-    // arrive in the SAME frame.
-    {
-        const std::string victim = moduleFile("zz_second_refused");
-        spots = survey(app, victim);
+    // arrive in the SAME frame. (The list's REMOVE arms; CONFIRM takes the place of the row's STOP key beside it, so its place is found with the row
+    // armed.) TWO KINDS OF FILE: one the plugin index does not know and nothing runs is an ORPHAN (0.99.69) - its key says REMOVE FILE and the engine
+    // judges it again against its own scan (FOXAPP_OP_STORE_CLEAN_OLD, ival[0] 1) - and every other module is removed by FOXAPI_OP_STORE_REMOVE.
+    const auto removeFlow = [&](const std::string& victim, const std::string& wantedCommand, const char* what) {
+        const std::vector<Found> plain = survey(app, std::string());
+        const std::vector<Found> armedList = survey(app, std::string(), nullptr, victim);
         Access::tap(app, &sent);
         ImGui::GetIO().AddMousePosEvent(2.0f, 2.0f);
         lookDraw(app);
-        const Found* arm = armSpot(spots, victim);
-        CHECK(arm != nullptr);
-        if (arm != nullptr) {
-            selectModule(app, victim);
+        const Found* arm = armSpot(plain, victim);
+        const Found* confirm = spotFor(armedList, wantedCommand);
+        if (arm == nullptr || confirm == nullptr) {
+            std::printf("        no %s: the list's widgets, armed files and commands:\n", arm == nullptr ? "arm" : "confirm");
+            for (const Found& fd : armedList) {
+                std::printf("          armed  armed=[%s] page=[%s] cmd=[%s] at %.0f,%.0f\n", fd.armed.c_str(), fd.page.c_str(), fd.command.c_str(), fd.x, fd.y);
+            }
+        }
+        CHECK(arm != nullptr && confirm != nullptr);
+        if (arm != nullptr && confirm != nullptr) {
+            selectModule(app, std::string());
             sent.clear();
             clickThenHold(app, arm->x, arm->y);
             CHECK(sent.empty());  // the first press sends nothing
             lookDraw(app);
             CHECK_EQ(Access::deck(app).confirmRemove, victim);
             sent.clear();
-            clickThenHold(app, arm->x, arm->y);  // CONFIRM DELETE: the same key
+            clickThenHold(app, confirm->x, confirm->y);  // CONFIRM
             CHECK_EQ(sent.size(), 1u);
-            if (sent.size() == 1u) { CHECK_EQ(describe(sent[0]), expect("STORE_REMOVE", 0, 0, victim)); }
+            if (sent.size() == 1u) { CHECK_EQ(describe(sent[0]), wantedCommand); }
             CHECK(std::filesystem::exists(g_plugins / victim));          // not in the click's frame
             CHECK(mod(app, victim) != nullptr);
             (void)Access::answers(app);
@@ -1247,12 +1598,209 @@ void testControlsLandAtTheNextPass() {
             const auto answers = Access::answers(app);
             CHECK_EQ(answers.size(), 1u);
             if (answers.size() == 1u) { CHECK_EQ(answers[0].second, FOXAPI_OK); }
-            CHECK_EQ(Access::lists(app).model.modules.size(), 4u);
-            std::printf("      REMOVE: two presses; the file, its row and the sentence \"%s\" go at the next pass, in one frame\n",
+            std::printf("      REMOVE (%s): two presses; the file, its row and the sentence \"%s\" go at the next pass, in one frame\n", what,
                         Access::lists(app).model.report.c_str());
         }
+    };
+    {
+        // AN ORPHAN: the file the last rescan added, which no record names.
+        const std::string victim = moduleFile("zz_second_refused");
+        CHECK(mod(app, victim) != nullptr && mod(app, victim)->orphaned);
+        removeFlow(victim, expect("APP_STORE_CLEAN_OLD", 1, 0, victim), "an orphan: REMOVE FILE");
+        CHECK_EQ(Access::lists(app).model.modules.size(), 4u);
+    }
+    {
+        // A MODULE THE INDEX KNOWS (an install record names the file): the ordinary remove.
+        const std::string victim = moduleFile("zz_third_refused");
+        junk(victim);
+        Access::command(app, cmd::make(FOXAPI_OP_PLUGIN_RESCAN));
+        Access::look(app);
+        Access::look(app);
+        cc::InstalledPlugin rec;
+        rec.id = "third-refused";
+        rec.name = "Third Refused";
+        rec.file = victim;
+        Access::addRecord(app, rec);
+        Access::look(app);
+        Access::look(app);
+        CHECK(mod(app, victim) != nullptr && !mod(app, victim)->orphaned && !mod(app, victim)->loaded);
+        removeFlow(victim, expect("STORE_REMOVE", 0, 0, victim), "a recorded module");
+        CHECK_EQ(Access::lists(app).model.modules.size(), 4u);
     }
     Access::tap(app, nullptr);
+}
+
+// --- F -----------------------------------------------------------------------
+
+int countOf(const std::vector<std::string>& v, const std::string& s) { return static_cast<int>(std::count(v.begin(), v.end(), s)); }
+
+void testRunStatesAndOwnWindows() {
+    std::printf("  F: a module nothing uses is IDLE (START and the tick pin it); a module's own windows are named from what it declares\n");
+    {
+        Fresh f(/*pin=*/false);
+        AppWindow& app = f.app;
+        lookDraw(app);
+        lookDraw(app);
+        const FittedModule* s1 = mod(app, kStage1);
+        CHECK(s1 != nullptr);
+        if (s1 == nullptr) { return; }
+        // IDLE is not STOPPED and not failing: the module is listed, its sentence says it starts by itself, and its key offers START.
+        CHECK(s1->idle && !s1->keepRunning && !s1->stopped);
+        CHECK(cascade::gui::fittedState(*s1, false) == cascade::gui::FittedState::Idle);
+        CHECK(cascade::gui::fittedOffersStart(*s1));
+        CHECK_EQ(std::string(cascade::gui::fittedKeyWord(*s1)), std::string("START"));
+
+        // THE LIST: a START for each of the two sleeping decoders, a STOP for the processor that is in use whatever the screen shows.
+        std::vector<std::string> got;
+        const std::vector<Found> list = survey(app, std::string(), &got);
+        CHECK_EQ(countOf(got, expect("DECODER_START", 0, 0, kStage1)), 1);
+        CHECK_EQ(countOf(got, expect("DECODER_START", 0, 0, kGroup8)), 1);
+        CHECK_EQ(countOf(got, expect("DECODER_STOP", 0, 0, kGroup9)), 1);
+        CHECK_EQ(countOf(got, expect("DECODER_STOP", 0, 0, kStage1)), 0);
+
+        // THE PAGE: the header's key is START too, and the KEEP RUNNING tick is there, unticked - for a decoder, which can be idle; the audio
+        // processor has none (it is in use for as long as it is fitted).
+        got.clear();
+        std::vector<Found> spots = survey(app, kStage1, &got);
+        CHECK_EQ(countOf(got, expect("DECODER_START", 0, 0, kStage1)), 1);
+        if (countOf(got, expect("APP_PLUGIN_RUN_MODE", 1, 0, kStage1)) != 1) {
+            for (const std::string& g : got) { std::printf("        sent   %s\n", g.c_str()); }
+        }
+        CHECK_EQ(countOf(got, expect("APP_PLUGIN_RUN_MODE", 1, 0, kStage1)), 1);
+        got.clear();
+        (void)survey(app, kGroup9, &got);
+        CHECK(std::none_of(got.begin(), got.end(), [](const std::string& s) { return s.rfind("APP_PLUGIN_RUN_MODE", 0) == 0; }));
+
+        // THE TICK PRESSED: queued by the click, applied at the next pass - the module is kept running, no longer IDLE (its decoder is made, nothing
+        // using it) - and the tick is ticked, so the next press asks for AUTO.
+        const Found* tick = spotFor(spots, expect("APP_PLUGIN_RUN_MODE", 1, 0, kStage1));
+        CHECK(tick != nullptr);
+        if (tick == nullptr) { return; }
+        Access::Sent sent;
+        Access::tap(app, &sent);
+        ImGui::GetIO().AddMousePosEvent(2.0f, 2.0f);
+        selectModule(app, kStage1);
+        lookDraw(app);
+        sent.clear();
+        clickThenHold(app, tick->x, tick->y);
+        CHECK_EQ(sent.size(), 1u);
+        if (sent.size() == 1u) { CHECK_EQ(describe(sent[0]), expect("APP_PLUGIN_RUN_MODE", 1, 0, kStage1)); }
+        CHECK(mod(app, kStage1)->idle && !mod(app, kStage1)->keepRunning);  // the click only queued it
+        (void)Access::answers(app);
+        lookDraw(app);
+        CHECK(mod(app, kStage1)->keepRunning && !mod(app, kStage1)->idle);
+        {
+            const auto answers = Access::answers(app);
+            CHECK_EQ(answers.size(), 1u);
+            if (answers.size() == 1u) {
+                CHECK_EQ(answers[0].first, static_cast<std::uint32_t>(FOXAPP_OP_PLUGIN_RUN_MODE));
+                CHECK_EQ(answers[0].second, FOXAPI_OK);
+            }
+        }
+        CHECK_EQ(Access::fact(app, "fact.plugin.dir").empty() ? 1 : 0, 0);  // (the facts are read: the table is answering)
+        Access::tap(app, nullptr);
+        got.clear();
+        spots = survey(app, kStage1, &got);
+        CHECK_EQ(countOf(got, expect("APP_PLUGIN_RUN_MODE", 0, 0, kStage1)), 1);  // ticked: the next press UNticks
+        CHECK_EQ(countOf(got, expect("DECODER_STOP", 0, 0, kStage1)), 1);     // and the header's key is STOP
+        // UNTICKED: back to AUTO. The plugin was running and nothing has wanted it for no time at all, so it is not put out at once - the clock
+        // (30 s) does that, which the engine's tests hold (tests/test_engine_api_03.cpp group N) - and the window says so by not saying IDLE yet.
+        const Found* untick = spotFor(spots, expect("APP_PLUGIN_RUN_MODE", 0, 0, kStage1));
+        CHECK(untick != nullptr);
+        if (untick != nullptr) {
+            Access::tap(app, &sent);
+            ImGui::GetIO().AddMousePosEvent(2.0f, 2.0f);
+            selectModule(app, kStage1);
+            lookDraw(app);
+            sent.clear();
+            clickThenHold(app, untick->x, untick->y);
+            CHECK_EQ(sent.size(), 1u);
+            if (sent.size() == 1u) { CHECK_EQ(describe(sent[0]), expect("APP_PLUGIN_RUN_MODE", 0, 0, kStage1)); }
+            lookDraw(app);
+            CHECK(!mod(app, kStage1)->keepRunning && !mod(app, kStage1)->stopped);
+            Access::tap(app, nullptr);
+        }
+
+        // START on the other sleeping decoder's ROW pins it: DECODER_START is the user's own press, which the engine takes as ALWAYS.
+        const Found* start = spotFor(list, expect("DECODER_START", 0, 0, kGroup8));
+        CHECK(start != nullptr);
+        if (start != nullptr) {
+            Access::tap(app, &sent);
+            ImGui::GetIO().AddMousePosEvent(2.0f, 2.0f);
+            selectModule(app, std::string());
+            lookDraw(app);
+            sent.clear();
+            clickThenHold(app, start->x, start->y);
+            CHECK_EQ(sent.size(), 1u);
+            CHECK(mod(app, kGroup8)->idle);  // not in the click's frame
+            lookDraw(app);
+            CHECK(mod(app, kGroup8)->keepRunning && !mod(app, kGroup8)->idle && !mod(app, kGroup8)->stopped);
+            Access::tap(app, nullptr);
+        }
+        std::printf("      IDLE: START on a row and the page's tick pin the module (PLUGIN_RUN_MODE ALWAYS), unticking asks for AUTO; each lands at the next pass\n");
+    }
+
+    // A MODULE'S OWN WINDOWS are named from what it declares: the group-14 fixture is a track source that also declares a panel and an instrument.
+    {
+        const std::filesystem::path src(FIXTURE_GROUP14_PLUGIN);
+        const std::string file = src.filename().string();
+        std::error_code ec;
+        std::filesystem::copy_file(src, g_plugins / file, std::filesystem::copy_options::overwrite_existing, ec);
+        CHECK(!ec);
+        Fresh f(/*pin=*/false);
+        AppWindow& app = f.app;
+        lookDraw(app);
+        lookDraw(app);
+        const FittedModule* g14 = mod(app, file);
+        CHECK(g14 != nullptr);
+        if (g14 != nullptr) {
+            // Asleep (a track source nothing uses), and still a module that opens its own window: the panel, before the instrument and the map.
+            CHECK(g14->loaded && g14->idle);
+            CHECK(g14->ownWindow == cascade::gui::FittedOwnWindow::Panel);
+            CHECK(cascade::gui::fittedOpensOwnWindow(*g14));
+            // The table's own statements of it.
+            CHECK_EQ(Access::fact(app, "fact.plugin." + file + ".windows"), std::string("panel\tGroup Fourteen Panel\ninstrument\tGroup Fourteen Instrument"));
+            CHECK(Access::fact(app, "fact.plugin." + file + ".record").empty());  // hand-fitted: no install record
+            CHECK(Access::fact(app, "fact.plugin." + kStage1 + ".windows").empty() && Access::fact(app, "fact.plugin." + kStage1 + ".record").empty());
+            CHECK_EQ(Access::fact(app, "fact.plugin." + kRefused + ".windows"), std::string());  // a refused file declares nothing
+            const auto& rows = Access::rows(app);
+            const cascade::gui::PluginRow* row = nullptr;
+            for (const cascade::gui::PluginRow& r : rows.plugins) {
+                if (r.file == file) { row = &r; }
+            }
+            CHECK(row != nullptr);
+            if (row != nullptr) {
+                CHECK_EQ(row->panelTitle, std::string("Group Fourteen Panel"));
+                CHECK_EQ(row->instrumentTitle, std::string("Group Fourteen Instrument"));
+                CHECK(row->asleep && row->category.empty());
+                CHECK_EQ(row->runId, cc::pluginRunId(file));
+            }
+            // THE TRACK SOURCES THE TABLE DECLARES, asleep or not: the map page of a tracker nothing uses must exist for its row to wake it.
+            CHECK(Access::trackers(app) == std::vector<std::string>{"Group Fourteen Tracks"});
+
+            // THE DOUBLE-CLICK: the panel's window is marked shown by its declared title, on a plugin with no instance yet - which is what the
+            // report of what the window shows (and so the engine's wake) is made from.
+            const std::string panelId = cascade::gui::panelWindowId("Group Fourteen Tracks", "Group Fourteen Panel");
+            CHECK(!Access::shown(app, panelId));
+            CHECK(Access::openOwn(app, file));
+            CHECK(Access::shown(app, panelId));
+            CHECK(!Access::shown(app, cascade::gui::instrumentWindowIdFor("Group Fourteen Tracks", "Group Fourteen Instrument")));  // one window, not all
+            // A module with no window of its own opens none (its page is what the double-click gives).
+            CHECK(!Access::openOwn(app, kStage1));
+            CHECK(!Access::openOwn(app, moduleFile("no-such-module")));
+            // A STOPPED plugin has no instances, so nothing is shown for it and it declares no tracker.
+            Access::command(app, cmd::makeText(FOXAPI_OP_DECODER_STOP, file));
+            Access::look(app);
+            Access::look(app);
+            CHECK(mod(app, file)->stopped);
+            Access::pluginWindows(app).hide(panelId);
+            CHECK(!Access::openOwn(app, file));
+            CHECK(!Access::shown(app, panelId));
+            CHECK(Access::trackers(app).empty());
+            std::printf("      a track source with a panel and an instrument, asleep: declared as a map, its panel named \"Group Fourteen Panel\", opened by the double-click's call and wakeable; stopped: none\n");
+        }
+        std::filesystem::remove(g_plugins / file, ec);
+    }
 }
 
 }  // namespace
@@ -1292,7 +1840,7 @@ int main() {
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
     CHECK(cascade::gui::fonts::load());
 
-    testModelEqualsTheOldWindow();
+    testModelEqualsMastersModel();
     junk(kRefused);
     testWhatTheWindowIsTold();
     junk(kRefused);
@@ -1301,6 +1849,8 @@ int main() {
     testDrawnAndClicked();
     junk(kRefused);
     testControlsLandAtTheNextPass();
+    junk(kRefused);
+    testRunStatesAndOwnWindows();
 
     ImGui::DestroyContext();
     std::error_code ec;
