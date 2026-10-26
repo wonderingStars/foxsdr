@@ -237,6 +237,8 @@ struct ApiListBlock {
         // and - for a decoder - the effective "mute audio while running" setting.
         std::uint32_t capabilities = 0;
         bool stopped = false;
+        // PLUGINS value[3] (stub campaign B2, API 0.3 8.8): bits 0-1 how it runs (core::PluginRun: 0 auto, 1 always, 2 stopped), bit 2 asleep.
+        std::uint32_t runWord = 0;
         bool tuneAllowed = false;
         bool settingsAllowed = false;
         bool mutes = false;

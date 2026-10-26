@@ -4305,6 +4305,13 @@ void AppWindow::drawStatusColumn() {
     // that had stopped working. loadedDecoderCount() asks the runner's own
     // question instead: does this module supply a decoder table at all.
     const std::size_t installed = uiState_.decodersFitted;
+    // IDLE IS NOT "NOT FED" (0.99.73): a decoder set to AUTO that nothing is using has no instance by design, and "28 not fed" under a card
+    // of 30 fitted decoders would report as a fault the thing the owner asked for. It is counted on its own, from the PLUGINS rows.
+    std::size_t idleDecoders = 0;
+    for (const cascade::gui::PluginRow& r : pluginLists().plugins) {
+        if (r.loaded && r.decoder && r.asleep) { ++idleDecoders; }
+    }
+    const std::size_t notFedDecoders = installed > feeding + idleDecoders ? installed - feeding - idleDecoders : 0u;
     if (!rxRunning) {
         // READY, NOT RUNNING. The instances are built and matched; the receiver
         // that would feed them is stopped, so nothing is decoding and the card
@@ -4313,9 +4320,11 @@ void AppWindow::drawStatusColumn() {
         cascade::core::formatUtf8(l0, tr("of %zu fitted - receiver stopped"), installed);
     } else {
         cascade::core::formatUtf8(v, tr("%zu running"), feeding);
-        if (installed > feeding) {
+        if (notFedDecoders > 0) {
             cascade::core::formatUtf8(l0, tr("of %zu fitted, %zu not fed"), installed,
-                          installed - feeding);
+                          notFedDecoders);
+        } else if (idleDecoders > 0) {
+            cascade::core::formatUtf8(l0, tr("of %zu fitted, %zu idle"), installed, idleDecoders);
         } else {
             cascade::core::formatUtf8(l0, tr("of %zu fitted"), installed);
         }
@@ -9635,6 +9644,7 @@ void AppWindow::drawDecodersSection() {
             cascade::gui::RunnableDecoder row;
             row.stopped = p.stopped;
             row.feeding = p.fed;
+            row.idle = p.asleep;
             if (ImGui::Button(cascade::gui::rowKeyLabel(row), ImVec2(-1.0f, 0.0f))) {
                 stopKey = p.file;
                 stopTo = cascade::gui::rowOffersStop(row);
@@ -9644,6 +9654,12 @@ void AppWindow::drawDecodersSection() {
                     ImGui::SetTooltip(tr("Stop this decoder. It stays fitted and keeps its "
                                       "presets; nothing else is touched. Start it again "
                                       "with this key or with one of its presets."));
+                } else if (row.idle && !row.stopped) {
+                    // IDLE, not stopped (0.99.73): the decoder is working as designed.
+                    ImGui::SetTooltip(tr("This decoder is idle: nothing is using it, so it is "
+                                      "not running. It starts by itself when you open its "
+                                      "window or the Decoder output window. START keeps it "
+                                      "running all the time."));
                 } else {
                     ImGui::SetTooltip(tr("Start this decoder again. It begins decoding as "
                                       "soon as the receiver is on a frequency it can "
@@ -13101,6 +13117,7 @@ void AppWindow::hostPollPlugins() {
     // of the frame - where that may happen. Applying it also acknowledges it to the engine, which may be waiting to unmap a module.
     applyPluginDirective();
     pluginFeed_->poll();
+    reportPluginUse();
 }
 
 void AppWindow::applyPluginDirective() { pluginFeed_->applyNewestDirective(); }
@@ -13129,7 +13146,9 @@ void AppWindow::applyDirectiveAfter(const cascade::engine::PluginDirectiveFacts&
     trackInfo_.attach(d.trackInfo);
     // DEMONSTRATION instruments open their windows by themselves: the one deliberate exception to "nothing opens but by your hand"
     // (0.79.1), safe because a demonstration exists only when a developer set FOXSDR_DEMO_INSTRUMENT for this launch. The window that
-    // rebuilt them shows them - the engine used to ask for it through a hook.
+    // rebuilt them shows them - the engine used to ask for it through a hook. (Not for a wake or a sleep of one plugin: nothing was
+    // rebuilt, and a face the user closed stays closed.)
+    if (d.lifeOnly) { return; }
     for (const cascade::core::HostInstrument& in : pluginFeed_->instruments()) {
         if (in.plugin == "Demonstration") { pluginWindows_.show(instrumentWindowId(in)); }
     }
@@ -17416,6 +17435,8 @@ const AppWindow::PluginListCache& AppWindow::pluginLists() {
         r.caps = static_cast<std::uint32_t>(it.value[0]);
         r.loaded = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
         r.stopped = (it.flags & FOXAPI_ITEM_STOPPED) != 0u;
+        r.runMode = static_cast<int>(it.value[3]) & 3;
+        r.asleep = (static_cast<int>(it.value[3]) & 4) != 0;
         r.tuneAllowed = (it.flags & FOXAPI_ITEM_TUNE_ALLOWED) != 0u;
         r.settingsAllowed = (it.flags & FOXAPI_ITEM_SETTINGS_ALLOWED) != 0u;
         r.decoder = false;

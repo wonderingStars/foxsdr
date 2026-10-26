@@ -82,7 +82,7 @@ const std::set<std::string>& engineWritten() {
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
         "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed",
-        "pluginSettings", "pluginsStopped", "closedWindows", "pluginMuteOverride", "userPresets",
+        "pluginSettings", "pluginsStopped", "pluginRun", "closedWindows", "pluginMuteOverride", "userPresets",
         // Engine::telemetryJournal and the clean-exit flag
         "telemetryEnabled", "telemetryInstallId", "telemetryFirstRun", "telemetryFirstVersion", "telemetryLaunches",
         "telemetryCrashes", "telemetryExitsDied", "telemetryExitsKilled", "telemetryExitsEnded",
@@ -212,7 +212,7 @@ AppConfig seeded() {
     c.pluginStoreY = 22;
     c.pluginStoreWidth = 800;
     c.pluginStoreHeight = 600;
-    c.pluginRun["Radar Sweep"] = "always";
+    c.pluginRun["Radar Sweep"] = "always";   // (the engine's since stub batch B2 - how a plugin runs; asserted back below, as seeded)
     c.pluginTransmitAllowed = {"Radar Sweep"};
     c.messagesSeen = {"msg-0099", "msg-0100"};
     c.testerToken = "0123456789abcdef0123456789abcdef";   // 32 hex: the loader discards anything else
@@ -386,6 +386,9 @@ int main() {
         CHECK(afterFirst["mapPages"][0]["x"] == 120 && afterFirst["mapPages"][0]["width"] == 900);
     }
     CHECK(afterFirst["fittedModulesWidth"] == 700 && afterFirst["scopeRangeNm"] == 100);
+    // HOW EACH PLUGIN RUNS is the engine's since stub batch B2 (it is no longer a field nobody writes, so the saturation check above skips it
+    // - this is what holds it instead): a pinned plugin that is not even fitted here keeps its pin, as seeded, run after run.
+    CHECK(afterFirst["pluginRun"].is_object() && afterFirst["pluginRun"]["Radar Sweep"] == "always" && afterFirst["pluginRun"].size() == 1);
 
     // 5. the engine's half was restored and written back through the engine, and the file was REWRITTEN.
     CHECK(afterFirst["mode"] == "USB");
@@ -410,6 +413,7 @@ int main() {
     if (afterSecond.is_object()) {
         const Check c2 = compareNonEngine(afterFirst, afterSecond, "second run");
         CHECK(c2.differing == 0);
+        CHECK(afterSecond["pluginRun"] == afterFirst["pluginRun"]);
         CHECK(afterSecond["telemetryLaunches"] == 2);
         CHECK(afterSecond["telemetryCrashes"] == 0);       // the first run ended cleanly: nothing to count
         CHECK(afterSecond["telemetryCleanExit"] == true);

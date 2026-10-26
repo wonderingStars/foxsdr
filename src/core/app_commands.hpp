@@ -69,6 +69,20 @@
 #define FOXAPP_OP_DECODER_STOP_LIST      0x8704u /* text (or long text): plugin keys, one per line; ival[0]: 1 = and end the mute they caused */
 #define FOXAPP_OP_STORE_UPDATE           0x8705u /* text: catalogue id of an installed plugin to update */
 #define FOXAPP_OP_STORE_REMOVE_BLOCKED   0x8706u /* text: file name of a plugin the catalogue policy blocked */
+// HOW A FITTED PLUGIN RUNS (stub campaign B2, 0.99.73; docs/api-0.3-additions.md 9.3), both LOCAL sessions only.
+//   PLUGIN_RUN_MODE (SETTINGS): text: the plugin's module file name (or its id); ival[0]: 0 AUTO (runs while something uses it), 1 ALWAYS
+//   (pinned: "keep running"), 2 STOPPED. NOT_FOUND for a name no installed plugin carries and no run state records; OUT_OF_RANGE for any other
+//   ival[0]. Pins or stops that ONE plugin's instances; nothing else is rebuilt.
+//   PLUGIN_USE (VIEW): long text (or text), the window's whole table of what it shows, replacing the last: one line "<file>\t<bits>" per plugin
+//   with at least one signal, the bits FOXAPP_PLUGIN_USE_*. Empty text clears the table. Sent on CHANGE only; the engine adds the signals it
+//   knows itself (a patch node, the speakers, a text sink, a browser session, a standing duty).
+#define FOXAPP_OP_PLUGIN_RUN_MODE        0x8707u /* text: plugin key; ival[0]: 0 auto, 1 always, 2 stopped */
+#define FOXAPP_OP_PLUGIN_USE             0x8708u /* long text: "<file>\t<bits>" lines - what the window shows of each plugin; empty clears */
+#define FOXAPP_PLUGIN_USE_WINDOW         1u /* one of the plugin's image / panel / instrument windows is shown */
+#define FOXAPP_PLUGIN_USE_MAP_PAGE       2u /* the plugin's map page is open (a track source) */
+#define FOXAPP_PLUGIN_USE_RADAR_SCOPE    4u /* the radar scope is showing (every track source) */
+#define FOXAPP_PLUGIN_USE_DECODER_OUTPUT 8u /* the Decoder output window is open (a text decoder) */
+#define FOXAPP_PLUGIN_USE_ALL            15u
 // The Transmit page's open flag (engine/stage3b-pre 2b, docs/engine-stage3.md
 // OPEN 1/10, SAFETY): ival[0] 0/1. Since engine stage 4 the flag gates NO key:
 // the consent the window withdraws when its page closes (gui::txKeyCommands) is

@@ -179,7 +179,7 @@ through the map page's plugin APIs, which are not served yet.
 
 In 0.3 (8.7) `PLUGINS` carries `value[0]`, the plugin's capability word, and `STOPPED`, `TUNE_ALLOWED`
 and `SETTINGS_ALLOWED`, and (8.8) `value[1]`, the module file's size in bytes, `value[2]`, its notice level, and
-`MATCHED`, `ASKED_SETTINGS` and `DIGEST_MISMATCH`; `DECODERS` carries `MUTES`; `PRESETS` carries `DEVICE_CENTRE`; `MARKERS` carries
+`MATCHED`, `ASKED_SETTINGS` and `DIGEST_MISMATCH`, and (9.3) `value[3]`, how the plugin runs; `DECODERS` carries `MUTES`; `PRESETS` carries `DEVICE_CENTRE`; `MARKERS` carries
 `value[2]`, the colour, and `SPAN`, `DASHED` and `SPECTRUM_ONLY`.
 
 `GAINS` (0.2: `name`; `value[0..3]`: min, max, step, current) gains one word
@@ -1864,6 +1864,47 @@ Two facts, no op, no header change: `fact.source.uhdNoImages` and `fact.source.u
 `fact.source.faultedDrivers`. They are hashed into the publish fingerprint from the two engine members they are built from. Everything else master
 added to a window function in 0.99.85 to 0.99.90 either stayed the window's or moved to the engine without a new table entry (the pipeline ring's
 once-a-minute log line; the model scrub).
+
+### 9.3 A fitted plugin runs only while it is used (stub campaign B2; docs/engine-stage4.md 6.22)
+
+Master's 0.99.73 decided, in the window, which plugins have instances. It is the ENGINE's now - once a pass, from the signals the engine knows and the ones a
+window reports - so a headless engine makes the same decision. Two ops, one column, no list, no fact, no header struct; both ops are APP ops
+(`core/app_commands.hpp`), **LOCAL sessions only** (`DENIED` to a REMOTE one, and not in the web profile's closure of 38), each in `kOps` and
+covered by test_apply_command.
+
+  * `FOXAPP_OP_PLUGIN_RUN_MODE` (0x8707, grant SETTINGS): `text`: the plugin's module file name (or its id); `ival[0]`: 0 AUTO | 1 ALWAYS | 2 STOPPED.
+    AUTO runs while something uses the plugin and is dormant (no instance in the runner or the plugin UI, nothing polled) 30 seconds after the last use
+    ends; ALWAYS runs without a use ("keep running": a START press and a preset press set it); STOPPED runs nowhere. The state is kept by plugin id
+    (version-stripped: an update keeps it) and saved as `pluginRun` (AUTO is never written); the old `pluginsStopped` file-name list is migrated into it
+    once, by id, and saved empty. One plugin's instances are started or stopped; nothing else is rebuilt. `FOXAPI_OP_DECODER_START` / `_STOP` and the
+    preset ops now set ALWAYS / STOPPED / ALWAYS through the same call. A name no installed plugin carries and no run state records is `NOT_FOUND`, an
+    `ival[0]` outside 0..2 is `OUT_OF_RANGE`, no name is `BAD_ARGUMENT`.
+  * `FOXAPP_OP_PLUGIN_USE` (0x8708, grant VIEW): the window's WHOLE table of what it shows, replacing the last: one line `<file>\t<bits>` per plugin with
+    at least one signal, in `text` (or the long text), the bits `FOXAPP_PLUGIN_USE_WINDOW` 1 (one of its image / panel / instrument windows is shown),
+    `_MAP_PAGE` 2, `_RADAR_SCOPE` 4, `_DECODER_OUTPUT` 8. Empty text clears the table; a line that does not parse is skipped. Sent on CHANGE only. The engine
+    holds each bit to what the module can show (a window bit for a decoder with no window of its own wakes nothing) and adds the signals it knows: a running
+    patch node naming the plugin (and its wiring to a Text sink), the plugin holding the speakers or a manual tune offering an audio-output decoder its first
+    chance, a web session for a track or image source, and a STANDING DUTY - an in-chain audio processor, or a module that only attaches to the host - which is
+    in use for as long as it is fitted.
+  * `PLUGINS` `value[3]`: bits 0-1 how the plugin runs (0 AUTO, 1 ALWAYS, 2 STOPPED), bit 2 (value 4) ASLEEP - AUTO and nothing is using it, so it has no instance.
+    Hashed into the publish fingerprint from raw members by the plugin's cached id (nothing allocates; tests/test_engine_publish_alloc holds it).
+
+**The signal is one pass late by design (the window reads what a pass published and its command is applied by the next one); the wake is not later still.**
+A command lands at the head of a pass (`pumpFrameBegin`) and the lifecycle runs in the same pass's plugin phase, so the plugin is created in the pass that applies
+the report and the first block the DSP thread hands the runner afterwards is the plugin's first (tests/test_engine_api_03.cpp group N2: the probe decoder names
+each block by its first sample).
+
+**A host with no window runs every plugin (owner decision, 2026-10-26).** Nothing could ever report a window to a headless engine, so AUTO is treated as
+pinned there - today's behaviour, and what keeps the decoders of a Pi serving the web page. "No window" is "no front end has installed its plugin UI applier"
+(`Engine::setPluginUiApplier`); a window that goes away makes the engine window-less again, and what was asleep wakes.
+
+**One directive, no second applier.** The plugin UI's half rides the directive the engine already posts (core/plugin_directive.hpp): a rebuild carries the
+dormant set beside the stop set, and a wake or sleep of ONE plugin is the same struct with `lifeOnly` set, applied by the same `PluginUi::apply`. A life-only
+directive carries STATE (plugins, stop set, dormant set), not an event, so it is merged into a waiting directive (a rebuild keeps its services, a life-only
+takes the newest sets) and is dropped beside a waiting RELEASE, whose epoch the engine unmaps the modules on (test_plugin_directive H).
+
+**What the log says** (unchanged from master): `plugin: <name> woke - <signal>` and `plugin: <name> dormant after 30 s without a use`, one per transition of an AUTO
+plugin. `FOXSDR_DORMANT_AFTER_MS` (1 to 3 600 000) replaces the 30 seconds for the engine's first lifecycle step; the line still says "30 s".
 
 ## 10. What stays a GAP after 0.3
 

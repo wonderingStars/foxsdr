@@ -70,8 +70,17 @@ struct PluginDirective {
     // The loaded plugins, COPIED: the records point into the modules' images, so a directive is only valid until the engine
     // posts its next one - which a release always is, before any unmapping.
     std::vector<LoadedPlugin> plugins;
-    // The plugins the user has stopped, by module file name.
+    // The plugins the user has stopped, by module file name (or plugin id: the stop set reduces both).
     std::vector<std::string> stopped;
+    // The plugins set to AUTO that nothing is using (stub campaign B2, 0.99.73, core/plugin_run.hpp): like the stop set, a plugin in it is
+    // given no instance by a rebuild, by plugin id.
+    std::vector<std::string> dormant;
+    // "Wake or put to sleep ONE plugin, rebuild nothing": `plugins`, `stopped` and `dormant` are the STATE the UI is to hold (not an event),
+    // and applying it starts the instances of a plugin that has come out of both sets and stops those of one that has gone into either. The
+    // services, the basemap and the track-info table are untouched by it except that the basemap and track-info tables are the engine's
+    // choice again (a stopped plugin may not supply them). Because it is state, a newer directive may stand for an older one - the link
+    // merges a life-only into what still waits (post) - and applying it twice changes nothing.
+    bool lifeOnly = false;
     HostServices services;
     // The basemap and track-info plugins chosen (first loaded, not stopped), or null.
     const CascadeBasemapApi* basemap = nullptr;
@@ -89,9 +98,35 @@ public:
         {
             std::lock_guard<std::mutex> lk(m_);
             d.epoch = ++posted_;
-            if (pending_.has_value()) { ++skipped_; }
-            pending_ = std::move(d);
-            epoch = posted_;
+            if (pending_.has_value()) {
+                ++skipped_;
+                if (d.lifeOnly && pending_->release) {
+                    // A RELEASE STILL WAITING IS NEVER REPLACED BY A LIFE-ONLY ONE: the engine unmaps the modules once the release's epoch
+                    // is acknowledged, and an acknowledgement of a newer directive that released nothing would say it was safe. The
+                    // release leaves nothing to wake, so the life-only is dropped and the caller waits on the release's own epoch.
+                    --posted_;
+                    return pending_->epoch;
+                }
+                if (d.lifeOnly) {
+                    // KEEP WHAT WAITS (a rebuild's services, its basemap and track-info choice), bring it to the newest state.
+                    PluginDirective merged = std::move(*pending_);
+                    merged.epoch = d.epoch;
+                    merged.plugins = std::move(d.plugins);
+                    merged.stopped = std::move(d.stopped);
+                    merged.dormant = std::move(d.dormant);
+                    merged.basemap = d.basemap;
+                    merged.trackInfo = d.trackInfo;
+                    pending_ = std::move(merged);
+                    epoch = posted_;
+                    d.epoch = 0;
+                } else {
+                    pending_ = std::move(d);
+                    epoch = posted_;
+                }
+            } else {
+                pending_ = std::move(d);
+                epoch = posted_;
+            }
         }
         // (Outside the lock: the hook takes locks of its own.)
         if (onPost_) { onPost_(); }

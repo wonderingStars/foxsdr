@@ -39,8 +39,6 @@ cascade_merge_pending(RAIL-CHROME      # 0.99.74 dials (the interface size, the 
 cascade_merge_pending(STORE-VIEW       # 0.99.50 / 0.99.72 / 0.99.74 plugin store and Fitted modules window on the table
     test_plugin_store_window test_fitted_modules_window test_plugin_catalogue_app test_plugin_cleanup_app
     test_plugin_update_cleanup_app test_plugin_store_view test_fitted_modules_no_disk)
-cascade_merge_pending(PLUGIN-RESCAN    # 0.99.63 / 0.99.73 a rescan that reloads nothing when nothing changed, a reload that logs its steps
-    test_plugin_rescan_skip)
 cascade_merge_pending(PLUGIN-SETTINGS-UI    # 0.99.43 CASCADE_CAP_SETTINGS_UI: fields the host draws for a plugin
     test_plugin_settings_ui)
 cascade_merge_pending(PLUGIN-ROW-KEYS  # 0.99.77 a row in a plugin's panel as a key
@@ -62,8 +60,6 @@ cascade_merge_pending(HEALTH-DIAG      # 0.99.61 - 0.99.69 diagnostics context, 
     test_slow_frames_app)
 cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, one chip one route, per-radio manual gain
     test_source_row_app)
-cascade_merge_pending_part(PLUGIN-RUN audio_lead_plugin_wake
-    "tests/test_audio_lead_app.cpp: a manual tune gives an AUTO audio-output decoder an independent wake signal before it has an instance (pluginUseOf / updatePluginLifecycle, 0.99.73). Restore master's block (git show origin/master:tests/test_audio_lead_app.cpp, 'A manual tune must give an AUTO audio-output decoder') when the plugin run modes are carried.")
 cascade_merge_pending_part(AIRBAND display_fold_airband_section
     "tests/test_display_fold_app.cpp, scenario 'tools': the TOOLS bank must keep the Airband section ('section:Airband###airband' in the list of names the TOOLS bank keeps - master's list is in git show origin/master:tests/test_display_fold_app.cpp). The Airband section (0.99.60-0.99.71, src/gui_pending/app_window_airband.cpp) is not on this window yet, so the one name was carved out when the rest of the test returned in stub batch B1. Restore the name when drawAirbandSection returns (B7).")
 

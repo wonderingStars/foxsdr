@@ -335,8 +335,9 @@ foreach(src ${CASCADE_TESTS})
         # Copies the two probe modules into a plugins folder of its own and
         # drives the real AppWindow's rescan against it; built first.
         add_dependencies(${name} rescan_probe_a rescan_probe_b)
-        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
-                 "$<TARGET_FILE:rescan_probe_b>")
+        # (the _stepped variant the pass seam adds is handed the same two modules: CASCADE_TEST_ARGS_<name>)
+        set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:rescan_probe_a>" "$<TARGET_FILE:rescan_probe_b>")
+        add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
     elseif(name STREQUAL "test_plugin_update_cleanup_app")
         # A real AppWindow updating a real plugin module (probe a 1.0.0 -> 1.1.0) beside an
         # unrelated one (probe b); all three built first, in that order on the command line.
@@ -668,13 +669,28 @@ endforeach()
 # stage-1 text decoder and the group-13 picture decoder).
 add_library(fixture_group14_plugin SHARED fixture_group14_plugin.cpp)
 target_include_directories(fixture_group14_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
-foreach(_t IN ITEMS test_map_window test_plugin_window test_plugin_status_report)
+foreach(_t IN ITEMS test_map_window test_plugin_window test_plugin_status_report test_engine_api_03)
     if(TARGET ${_t})
         add_dependencies(${_t} fixture_group14_plugin)
         target_compile_definitions(${_t} PRIVATE
             FIXTURE_GROUP14_PLUGIN="$<TARGET_FILE:fixture_group14_plugin>")
     endif()
 endforeach()
+# THE WAKE PROBE (stub campaign B2, PLUGIN-RUN; tests/fixture_wake_probe_plugin.cpp): an audio TEXT decoder that says one line per block it is
+# handed, naming the block by its first sample - the module that shows WHICH block a plugin woken by a window's signal decoded first
+# (test_engine_api_03 group N). Copied into a plugin directory of the test's own.
+add_library(fixture_wake_probe_plugin SHARED fixture_wake_probe_plugin.cpp)
+target_include_directories(fixture_wake_probe_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+if(TARGET test_engine_api_03)
+    # test_engine_api_03.cpp (nine thousand lines, group N the last) is past the 65,535 sections an ordinary MSVC object file holds
+    # ("error C1128"): /bigobj for that one file, as src/gui/app_window.cpp has it (CMakeLists.txt).
+    if(MSVC)
+        set_source_files_properties(test_engine_api_03.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+    endif()
+    add_dependencies(test_engine_api_03 fixture_wake_probe_plugin)
+    target_compile_definitions(test_engine_api_03 PRIVATE
+        FIXTURE_WAKE_PROBE_PLUGIN="$<TARGET_FILE:fixture_wake_probe_plugin>")
+endif()
 # ...and a SECOND track source from the same file under another name and id prefix ("Group Fourteen Tracks B", ids G14B...), for
 # the tests of one map page per plugin (test_plugin_window: the per-page filter of tracks and paths, a page pruned beside a
 # live one).

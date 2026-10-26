@@ -109,6 +109,7 @@ struct Env {
     std::unique_ptr<AppWindow> app;
     Env() {
         app = std::make_unique<AppWindow>();
+        Access::pinPlugins(*app);
         Access::poll(*app);
     }
     ~Env() {

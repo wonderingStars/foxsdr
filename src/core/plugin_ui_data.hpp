@@ -242,6 +242,8 @@ public:
         if (open_.erase(id) == 0u) { open_.insert(id); }
     }
     std::size_t count() const { return open_.size(); }
+    // Every identity shown (the window reports which plugins it is showing to the engine: FOXAPP_OP_PLUGIN_USE).
+    const std::set<std::string>& ids() const { return open_; }
 
 private:
     std::set<std::string> open_;

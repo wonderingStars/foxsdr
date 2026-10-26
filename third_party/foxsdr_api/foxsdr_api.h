@@ -760,7 +760,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_ANTENNAS      6u
 #define FOXAPI_LIST_BOOKMARKS     7u  /* sorted by frequency; id; name; detail: group ("" = none); value[0]: Hz, [1]: mode, [2]: bandwidth Hz; FOXAPI_ITEM_FAVOURITE */
 #define FOXAPI_LIST_DECODERS      8u  /* id; name; flags: running/fed; detail: status text; 0.3 (8.7): MUTES */
-#define FOXAPI_LIST_PLUGINS       9u  /* installed plugins; detail: file name; 0.3 (8.7): value[0]: the capability word (CASCADE_CAP_* of the plugin ABI); ACTIVE loaded; STOPPED, TUNE_ALLOWED, SETTINGS_ALLOWED; (8.8): value[1]: the module file's size in bytes, value[2]: its notice level (0 none, 2 warning, 3 error); MATCHED, ASKED_SETTINGS, DIGEST_MISMATCH */
+#define FOXAPI_LIST_PLUGINS       9u  /* installed plugins; detail: file name; 0.3 (8.7): value[0]: the capability word (CASCADE_CAP_* of the plugin ABI); ACTIVE loaded; STOPPED, TUNE_ALLOWED, SETTINGS_ALLOWED; (8.8): value[1]: the module file's size in bytes, value[2]: its notice level (0 none, 2 warning, 3 error); MATCHED, ASKED_SETTINGS, DIGEST_MISMATCH; (9.3): value[3]: how it runs - bits 0-1 the run state (0 AUTO, 1 ALWAYS, 2 STOPPED), bit 2 (4) asleep: AUTO and nothing is using it */
 #define FOXAPI_LIST_CATALOGUE     10u /* the store's entries; detail: the catalogue id; 0.3 (8.9): value[0]: the ABI version the entry's build declares, value[1]: the size in bytes of the build for this machine (0 = not stated or no build); INSTALLED, COMPATIBLE, BUILD_HERE */
 #define FOXAPI_LIST_AUDIO_DEVICES 11u
 #define FOXAPI_LIST_TX_DEVICES    12u

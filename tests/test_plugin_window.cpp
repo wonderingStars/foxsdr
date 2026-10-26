@@ -77,6 +77,21 @@ namespace cascade::gui {
 struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
 
+    // STUB CAMPAIGN B2 (0.99.73, docs/engine-stage4.md 6.22): a fitted plugin runs only while it is USED, and nothing in a hermetic frame
+    // shows a plugin's window - so the plugins this test reads the instances of are PINNED to ALWAYS ("keep running"), the state the
+    // product has for a plugin the user keeps running. What the test holds is unchanged: what a RUNNING plugin's targets, panels,
+    // pictures and rows are, as the window shows them. (How a plugin comes to run: tests/test_engine_api_03.cpp group N.)
+    static void pinPlugins(AppWindow& a) {
+        cascade::engine::Engine& e = rawEngine(a.engine_);
+        passseam::on(e, [&] {
+            std::vector<std::string> keys;
+            for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
+                if (p.loaded) { keys.push_back(cascade::core::pluginKey(p)); }
+            }
+            for (const std::string& k : keys) { e.setPluginRun(k, cascade::core::PluginRun::Always); }
+        });
+    }
+
     static void install() {
         Engine::testHooks_.makeDevice = &engine_api_test::makeFakeRadio;
         Engine::testHooks_.nativeScan = &engine_api_test::fakeNativeScan;
@@ -139,6 +154,17 @@ struct AppWindowTestAccess {
     static AppWindow::MapPage& ensurePage(AppWindow& a, const std::string& name) { return a.ensureMapPage(name); }
     static cascade::core::PluginWindows& windows(AppWindow& a) { return a.pluginWindows_; }
     static bool& decoderWindowOpen(AppWindow& a) { return a.decoderWindowOpen_; }
+    // What the window last told the engine it shows of each plugin (FOXAPP_OP_PLUGIN_USE), the radar scope's flag, the commands it sends,
+    // and what the engine holds of the report (read on the pass's own thread).
+    static const std::string& useSent(AppWindow& a) { return a.pluginUseSent_; }
+    static bool& scopeMode(AppWindow& a) { return a.scopeMode_; }
+    static void tap(AppWindow& a, std::vector<cmd::QueuedCommand>* log) { a.uiSubmitTap_ = log; }
+    static std::size_t engineReports(AppWindow& a, const std::string& file) {
+        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] {
+            const auto it = rawEngine(a.engine_).pluginUseReported_.find(cascade::core::pluginRunId(file));
+            return it == rawEngine(a.engine_).pluginUseReported_.end() ? std::size_t{0} : static_cast<std::size_t>(it->second);
+        });
+    }
     static CoverageMap& coverage(AppWindow& a) { return a.coverage_; }
     static const std::vector<cascade::core::HostImage>& images(AppWindow& a) { return a.pluginImages_; }
     static std::vector<std::uint64_t>& imageTexRev(AppWindow& a) { return a.imageTexRev_; }
@@ -254,6 +280,7 @@ struct Env {
     std::unique_ptr<AppWindow> app;
     Env() {
         app = std::make_unique<AppWindow>();
+        Access::pinPlugins(*app);
         passes(*app, 3);
     }
     AppWindow& a() { return *app; }
@@ -526,6 +553,92 @@ void testPages(AppWindow& a) {
     CHECK_EQ(Access::pages(a)[0].visibleCount, std::size_t(3));  // refreshed by the frame, same page
     std::printf("      the dead page went, the live one stayed open and was refreshed\n");
     Access::pages(a)[0].open = false;
+}
+
+// ======================================================================================================================
+// J. WHAT THE WINDOW REPORTS (stub campaign B2: FOXAPP_OP_PLUGIN_USE)
+// ======================================================================================================================
+// The window decides nothing about which plugins run any more; it tells the engine what it shows, and the engine decides. The four things
+// only a window can see - a plugin's window shown, its map page open, the radar scope showing, the Decoder output window open - go as one
+// table, "<module file>" TAB "<bits>" a line, WHEN IT CHANGES and not otherwise; the engine holds the last table it was given.
+void testUseReport(AppWindow& a) {
+    std::printf("  J: the window reports what it shows of each plugin to the engine, on change only (FOXAPP_OP_PLUGIN_USE)\n");
+    const std::string g14 = std::filesystem::path(FIXTURE_GROUP14_PLUGIN).filename().string();
+    const std::string g13 = std::filesystem::path(FIXTURE_GROUP13_PLUGIN).filename().string();
+    const std::string s1 = std::filesystem::path(FIXTURE_STAGE1_PLUGIN).filename().string();
+    const std::string tab(1, static_cast<char>(9));
+    const std::string nl(1, static_cast<char>(10));
+    const auto row = [&](const std::string& file, unsigned bits) { return file + tab + std::to_string(bits) + nl; };
+
+    // Nothing shown: everything the earlier sections opened is closed first.
+    {
+        const std::vector<std::string> ids(Access::windows(a).ids().begin(), Access::windows(a).ids().end());
+        for (const std::string& id : ids) { Access::windows(a).hide(id); }
+        Access::decoderWindowOpen(a) = false;
+        Access::scopeMode(a) = false;
+        for (auto& pg : Access::pages(a)) { pg.open = false; }
+        Access::pollPlugins(a);
+        passes(a, 2);
+        CHECK(Access::useSent(a).empty());
+        CHECK_EQ(Access::engineReports(a, g14), std::size_t(0));
+    }
+    std::vector<cmd::QueuedCommand> sent;
+    Access::tap(a, &sent);
+    const auto uses = [&] {
+        int n = 0;
+        for (const cmd::QueuedCommand& q : sent) { n += q.c.op == FOXAPP_OP_PLUGIN_USE ? 1 : 0; }
+        return n;
+    };
+    // A quiet window sends nothing, frame after frame.
+    for (int i = 0; i < 5; ++i) { Access::pollPlugins(a); }
+    CHECK_EQ(uses(), 0);
+
+    // The panel's window shown: the track source's "window" bit, from the window's own identity (the plugin's name is in it).
+    Access::windows(a).show(kPanelId);
+    Access::pollPlugins(a);
+    CHECK(Access::useSent(a) == row(g14, FOXAPP_PLUGIN_USE_WINDOW));
+    CHECK_EQ(uses(), 1);
+    for (int i = 0; i < 5; ++i) { Access::pollPlugins(a); }
+    CHECK_EQ(uses(), 1);                       // on CHANGE only
+    passes(a, 2);
+    CHECK_EQ(Access::engineReports(a, g14), std::size_t(FOXAPP_PLUGIN_USE_WINDOW));   // ...and the engine holds it
+
+    // The instrument's window too (the same plugin: still one line), and the picture decoder's window.
+    Access::windows(a).show(kInstrumentId);
+    Access::windows(a).show(kImage + " image###image_" + kImage);
+    Access::pollPlugins(a);
+    CHECK(Access::useSent(a) == row(g13, FOXAPP_PLUGIN_USE_WINDOW) + row(g14, FOXAPP_PLUGIN_USE_WINDOW));
+
+    // The Decoder output window: only a TEXT decoder is wanted by it (the stage-one decoder; not the picture decoder, not the tracks).
+    Access::decoderWindowOpen(a) = true;
+    Access::pollPlugins(a);
+    CHECK(Access::useSent(a) ==
+          row(g13, FOXAPP_PLUGIN_USE_WINDOW) + row(g14, FOXAPP_PLUGIN_USE_WINDOW) + row(s1, FOXAPP_PLUGIN_USE_DECODER_OUTPUT));
+
+    // The map page, and the radar scope: a TRACK SOURCE's.
+    Access::ensurePage(a, kTracks).open = true;
+    Access::scopeMode(a) = true;
+    Access::pollPlugins(a);
+    CHECK(Access::useSent(a) == row(g13, FOXAPP_PLUGIN_USE_WINDOW) +
+                                    row(g14, FOXAPP_PLUGIN_USE_WINDOW | FOXAPP_PLUGIN_USE_MAP_PAGE | FOXAPP_PLUGIN_USE_RADAR_SCOPE) +
+                                    row(s1, FOXAPP_PLUGIN_USE_DECODER_OUTPUT));
+
+    // Everything closed: the empty table is sent (the engine's table is cleared), once.
+    {
+        const std::vector<std::string> ids(Access::windows(a).ids().begin(), Access::windows(a).ids().end());
+        for (const std::string& id : ids) { Access::windows(a).hide(id); }
+        Access::decoderWindowOpen(a) = false;
+        Access::scopeMode(a) = false;
+        for (auto& pg : Access::pages(a)) { pg.open = false; }
+        const int before = uses();
+        Access::pollPlugins(a);
+        Access::pollPlugins(a);
+        CHECK_EQ(uses(), before + 1);
+        CHECK(Access::useSent(a).empty());
+        passes(a, 2);
+        CHECK_EQ(Access::engineReports(a, g14), std::size_t(0));
+    }
+    Access::tap(a, nullptr);
 }
 
 // ======================================================================================================================
@@ -982,6 +1095,7 @@ int main() {
         testPages(a);
         testOpenFor(a);
         testPresetEvent(a);
+        testUseReport(a);
         testImages(a);
         testWebExtras(a);
         testDisplayRange(a);

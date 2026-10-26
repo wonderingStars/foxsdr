@@ -140,9 +140,24 @@ void Engine::reportPluginStatus(const std::vector<cascade::core::HostImage>& ima
     // "stopped=0"), because "no line" and "nothing stopped" have to be
     // distinguishable in a bounded run's output - the same rule the counts
     // above follow.
-    std::printf("plugin stopped: count=%d\n", static_cast<int>(pluginsStopped_.size()));
-    for (const std::string& k : pluginsStopped_) {
-        std::printf("plugin stopped: file=%s\n", k.c_str());
+    // (0.99.73: the plugin's ID, not its file name - a stop outlives an update.)
+    {
+        const std::vector<std::string> stoppedIds = stoppedPluginIds();
+        std::printf("plugin stopped: count=%d\n", static_cast<int>(stoppedIds.size()));
+        for (const std::string& k : stoppedIds) {
+            std::printf("plugin stopped: file=%s\n", k.c_str());
+        }
+        // HOW EVERY OTHER PLUGIN RUNS: pinned ("always") ones, and which plugins are dormant right now. Printed in every run, including
+        // "none", for the reason the counts above are.
+        int always = 0;
+        for (const auto& [id, mode] : pluginRun_) {
+            if (mode == cascade::core::PluginRun::Always) { ++always; }
+        }
+        int idle = 0;
+        for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+            if (p.loaded && pluginIsIdle(cascade::core::pluginKey(p))) { ++idle; }
+        }
+        std::printf("plugin run: always=%d idle=%d\n", always, idle);
     }
     // THE SNAPSHOT THE MUTE DECISION IS TAKEN FROM, one line per loaded
     // plugin. `mutes` is the setting the checkbox shows - the capability

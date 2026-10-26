@@ -36,6 +36,10 @@ struct PluginRow {
     std::uint32_t caps = 0;  // the capability word as declared: PLUGINS value[0], CASCADE_CAP_*
     bool loaded = false;     // PLUGINS ACTIVE
     bool stopped = false;    // PLUGINS STOPPED: a loaded plugin the user stopped
+    // HOW IT RUNS (PLUGINS value[3], stub campaign B2): 0 AUTO, 1 ALWAYS (pinned), 2 STOPPED; and whether it is ASLEEP - AUTO and nothing is
+    // using it, so it has no instance. Asleep is not stopped and not failing: it costs nothing and wakes by itself.
+    int runMode = 0;
+    bool asleep = false;
     bool tuneAllowed = false;      // PLUGINS TUNE_ALLOWED
     bool settingsAllowed = false;  // PLUGINS SETTINGS_ALLOWED
     // A DECODERS entry (every loaded decoder has one; the display name is unique among loaded plugins):
@@ -129,6 +133,7 @@ inline std::vector<RunnableDecoder> runnableOf(const std::vector<PluginRow>& row
         d.key = r.file;
         d.stopped = r.stopped;
         d.feeding = r.fed;
+        d.idle = r.asleep;
         out.push_back(std::move(d));
     }
     return out;

@@ -1273,13 +1273,44 @@ void PluginUi::stepDemos(double nowSec) {
 }
 
 void PluginUi::apply(const PluginDirective& d) {
+    // A LIFE-ONLY directive wakes or puts to sleep single plugins and rebuilds nothing (stub campaign B2, 0.99.73): the services are the
+    // ones the last rebuild installed, and the instances of every other plugin stand as they are.
+    if (d.lifeOnly) {
+        applyLife(d);
+        return;
+    }
     // The services first, then the stop set, then the rebuild: attach() runs during the rebuild and may read the receiver at
     // once (the order refreshPluginRunner always kept). The core's own stop set and grants are the engine's, set before the
     // directive was posted. A RELEASE LEAVES THE SERVICES AS THEY WERE: the instances it destroys may ask the host for the time
     // or the centre on their way out (Survey Engine's destroy() does), and clear() never emptied them either.
     if (!d.release) { setServices(d.services); }
     stopped_.set(d.stopped);
+    // The dormant set rides the same directive as the stop set, for the same reason: it decides what the rebuild creates.
+    dormant_.set(d.dormant);
     rebuild(d.plugins);
+}
+
+void PluginUi::applyLife(const PluginDirective& d) {
+    // The state the directive carries against the state held: a plugin that was up (in neither set) and is now in either has its
+    // instances destroyed, one that was down and is now in neither has them created. A plugin whose state did not change is not touched, so
+    // applying the same directive twice (or one the link merged into a waiting one) changes nothing the second time.
+    const PluginStopSet wasStopped = stopped_;
+    const PluginStopSet wasDormant = dormant_;
+    stopped_.set(d.stopped);
+    PluginStopSet nowDormant;
+    nowDormant.set(d.dormant);
+    for (const LoadedPlugin& lp : d.plugins) {
+        if (!lp.loaded) { continue; }
+        const bool wasDown = wasStopped.contains(lp) || wasDormant.contains(lp);
+        const bool nowDown = stopped_.contains(lp) || nowDormant.contains(lp);
+        if (nowDown && !wasDown) {
+            stopPlugin(tuneKey(lp));
+        } else if (!nowDown && wasDown) {
+            (void)startPlugin(lp);
+        }
+    }
+    // (stopPlugin adds its plugin to the dormant set whether it was stopped or asleep; the directive's is the state.)
+    dormant_.set(d.dormant);
 }
 
 void PluginUi::clear() {

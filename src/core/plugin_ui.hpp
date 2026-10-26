@@ -748,6 +748,8 @@ private:
     PluginStopSet stopped_;
     // The plugins put to sleep (AUTO and not wanted); see setDormant().
     PluginStopSet dormant_;
+    // A life-only directive: single plugins woken or put to sleep over the state it carries (apply()).
+    void applyLife(const PluginDirective& d);
     // Shared with every bridge, and (since step P3) with the engine that created it. See api(). The tune grant, the
     // requesters and the last refusal are the core's.
     std::shared_ptr<PluginApiCore> api_ = std::make_shared<PluginApiCore>();

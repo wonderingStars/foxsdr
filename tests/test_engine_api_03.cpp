@@ -169,6 +169,9 @@
 #include "core/patch_draft.hpp"
 #include "core/patch_graph.hpp"
 #include "core/plugin_repo.hpp"
+#include "core/diag_log.hpp"
+#include "core/plugin_run.hpp"
+#include "core/plugin_ui.hpp"
 #include "engine/bias_tee.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
@@ -444,6 +447,20 @@ struct AppWindowTestAccess {
     // Group M: a plugin asks to tune the receiver (the host bridge's request_tune), by its module file name.
     static std::int32_t askToTune(cascade::engine::Engine& e, const std::string& key) {
         return e.headlessUi_.tuneRequestFromPlugin(key, 100.0e6);  // (no window here: the engine's own plugin UI answers the bridge)
+    }
+    // Group N (a fitted plugin runs only while it is used, stub campaign B2): a "window" - a plugin UI the way the interface's feed holds
+    // one, applying the directives the engine posts - and the engine's run state, each reachable alone.
+    static void installWindow(cascade::engine::Engine& e, cascade::core::PluginUi& ui) {
+        e.setPluginUiApplier([&ui](const cascade::core::PluginDirective& d) { ui.apply(d); });
+    }
+    static void removeWindow(cascade::engine::Engine& e) { e.setPluginUiApplier({}); }
+    static cascade::core::PluginRunner& runner(cascade::engine::Engine& e) { return e.pluginRunner_; }
+    static cascade::core::PluginRun runMode(cascade::engine::Engine& e, const std::string& key) { return e.pluginRunMode(key); }
+    static void restoreConfig(cascade::engine::Engine& e, const cascade::core::AppConfig& c) { e.applyConfig(c); }
+    static cascade::core::AppConfig readConfig(cascade::engine::Engine& e) {
+        cascade::core::AppConfig c;
+        e.fillConfig(c);
+        return c;
     }
     // Group 9: the host's side of the plugin API, which a plugin's own calls reach through the host
     // bridge's trampolines (log, add_command, a request that needs the settings grant...). The test makes
@@ -8315,8 +8332,387 @@ void testDiagContextAtApplyConfig() {
     CHECK(block.find(std::string("version: ") + cascade::versionString() + "\n") != std::string::npos);
 }
 
+// --- N: a fitted plugin runs only while it is used (stub campaign B2, PLUGIN-RUN; 0.99.73) -------------------------------------
+//
+// The engine decides, once a pass, which plugins have instances: a plugin set to AUTO runs while something uses it (a window shown, a map
+// page, the radar scope, a patch node, the speakers, a text sink, a browser, the Decoder output window for a text decoder), goes dormant
+// FOXSDR_DORMANT_AFTER_MS after the last of those ends, and wakes again on the next; ALWAYS (pinned) runs without a signal; STOPPED never
+// runs. A WINDOW-LESS host - no interface has installed its plugin UI applier - treats AUTO as pinned. The signals only a window can see
+// arrive as FOXAPP_OP_PLUGIN_USE, the run state as FOXAPP_OP_PLUGIN_RUN_MODE.
+//
+// THE WORLD: three REAL modules in a scratch folder - the wake probe (tests/fixture_wake_probe_plugin.cpp: an audio text decoder that says
+// one line per block it is handed, naming the block by its first sample), the group-14 track source with a panel and an instrument (the
+// plugin UI's half: tracks, panels), and the group-9 audio processor (a standing duty). The "window" is a plugin UI that applies the
+// engine's directives exactly as the interface's feed does (PluginUi::apply).
+//
+//   N1  AT START, with a window, nothing is running: no decoder instance, no UI instance, PLUGINS says AUTO and ASLEEP (value[3] = 4) -
+//       and the same folder under an engine with NO window runs everything (value[3] = 0): the owner's decision, today's behaviour;
+//   N2  THE FIRST FRAME OF A WAKE: the window's signal is applied at the head of the next pass and the plugin is created in THAT pass; the
+//       first block handed to the runner after it is the first block the decoder sees - and a block handed before it was seen by nobody.
+//       The same pass wakes the UI half (the track source's tracks, the panel). A signal a module cannot show (a window bit for a decoder
+//       with no window of its own) wakes nothing;
+//   N3  THE HYSTERESIS: the signal gone, the plugin keeps running for the interval and is put down after it (instances gone in both
+//       halves, one log line), and the next signal creates a NEW instance;
+//   N4  THE RUN STATES: ALWAYS runs with no signal at all, and un-pinned goes down only after the interval; STOPPED never wakes, whatever
+//       is shown; the op's refusals; a REMOTE session is DENIED both ops;
+//   N5  A STANDING DUTY (an in-chain audio processor) is never asleep, and says so;
+//   N6  THE CONFIG: pluginRun is restored and written; the old file-name stop list is migrated into it by id and written empty; an
+//       explicit AUTO wins over a stale legacy stop;
+//   N7  THE WINDOW GOES: an engine whose window disconnects is window-less again, and wakes what was asleep.
+namespace gn {
+
+using cascade::core::PluginRun;
+using Access = cascade::gui::AppWindowTestAccess;
+
+struct World {
+    std::filesystem::path dir;
+    static std::string hook;
+    World() {
+        const char* base = std::getenv("LOCALAPPDATA");
+        dir = std::filesystem::path(base != nullptr ? base : ".") / "plugins_groupN";
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        std::filesystem::create_directories(dir, ec);
+        for (const char* src : {FIXTURE_WAKE_PROBE_PLUGIN, FIXTURE_GROUP14_PLUGIN, FIXTURE_GROUP9_PLUGIN}) {
+            const std::filesystem::path p(src);
+            std::filesystem::copy_file(p, dir / p.filename(), std::filesystem::copy_options::overwrite_existing, ec);
+            CHECK(!ec);
+        }
+        hook = dir.string();
+        Access::setPluginDir(&World::path);
+    }
+    ~World() {
+        Access::setPluginDir(nullptr);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+    static std::string path() { return hook; }
+};
+std::string World::hook;
+
+const std::string kWake = std::filesystem::path(FIXTURE_WAKE_PROBE_PLUGIN).filename().string();
+const std::string kTracks = std::filesystem::path(FIXTURE_GROUP14_PLUGIN).filename().string();
+const char* const kWakeName = "Wake Probe";
+const char* const kTracksName = "Group Fourteen Tracks";
+const char* const kProcessorName = "Group Nine Fixture";
+
+// An engine with a "window": the plugin UI the interface's feed would hold, installed BEFORE the first scan as the feed does.
+struct Windowed {
+    cascade::engine::Engine eng;
+    cascade::core::PluginUi ui;
+    Windowed() : ui(eng.pluginApiShared()) {
+        eng.configureApi(kHooks);
+        Access::installWindow(eng, ui);
+        eng.initialise();
+        eng.controlPass();
+    }
+    ~Windowed() { Access::removeWindow(eng); }
+};
+
+bool awake(cascade::engine::Engine& e, const std::string& file) { return Access::runner(e).hasInstances(file); }
+
+// One block into the runner as the DSP thread would hand it (the receiver is not running here): `first` is its first sample, and what
+// the wake probe names it by. Returns the lines the decoders said about it.
+std::vector<std::string> feed(cascade::engine::Engine& e, float first, std::size_t frames = 480) {
+    std::vector<float> block(frames, 0.0f);
+    block[0] = first;
+    Access::runner(e).processAudio(block.data(), frames);
+    std::vector<std::string> out;
+    for (const cascade::core::DecodedLine& l : Access::runner(e).drainText()) { out.push_back(l.text); }
+    return out;
+}
+
+std::size_t logged(const std::string& needle) {
+    std::size_t n = 0;
+    for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+        if (line.find(needle) != std::string::npos) { ++n; }
+    }
+    return n;
+}
+
+// The table's word for a module: PLUGINS value[3] (bits 0-1 how it runs, bit 2 asleep).
+int runWord(testing::Session& s, const char* name) { return static_cast<int>(entryNamed(s, FOXAPI_LIST_PLUGINS, name).value[3]); }
+
+FoxCommand useCmd(const std::string& table) { return testing::cmd(FOXAPP_OP_PLUGIN_USE, 0.0, 0, table.c_str()); }
+FoxCommand runCmd(const std::string& file, int state) { return testing::cmd(FOXAPP_OP_PLUGIN_RUN_MODE, 0.0, state, file.c_str()); }
+
+// A command submitted and the NEXT pass - exactly one - run: the way the window's report meets the engine.
+void submitThenOnePass(cascade::engine::Engine& e, testing::Session& s, const FoxCommand& c) {
+    FoxSubmitResult sr{};
+    sr.structSize = sizeof(sr);
+    const int32_t n = api()->submit(s.raw(), &c, 1, &sr);
+    CHECK_EQ(n, 1);
+    CHECK_EQ(sr.status, FOXAPI_OK);
+    e.controlPass();
+}
+
+void testAtStart() {
+    World world;
+    {
+        Windowed w;
+        testing::Session s(api(), w.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        CHECK(s.ok());
+        passes(w.eng, 3);
+        std::printf("N1: with a window: wake probe word %d, tracks word %d, processor word %d\n", runWord(s, kWakeName),
+                    runWord(s, kTracksName), runWord(s, kProcessorName));
+        CHECK_EQ(runWord(s, kWakeName), 4);    // AUTO (0) and asleep (4)
+        CHECK_EQ(runWord(s, kTracksName), 4);
+        CHECK(!awake(w.eng, kWake));
+        w.ui.poll();
+        CHECK(w.ui.trackPluginNames().empty());   // the UI half has nothing either
+        CHECK(w.ui.panels().empty());
+        CHECK(feed(w.eng, 0.25f).empty());         // a block handed to nobody
+        // the group-9 processor is a standing duty: never asleep
+        CHECK_EQ(runWord(s, kProcessorName) & 4, 0);
+    }
+    {
+        // THE OWNER'S DECISION (docs/engine-stage4.md 6.22): no window, no signal could ever arrive - AUTO is pinned, as it always was.
+        Direct d;
+        testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        CHECK(s.ok());
+        passes(d.eng, 3);
+        std::printf("N1: with no window: wake probe word %d, tracks word %d\n", runWord(s, kWakeName), runWord(s, kTracksName));
+        CHECK_EQ(runWord(s, kWakeName), 0);
+        CHECK_EQ(runWord(s, kTracksName), 0);
+        CHECK(awake(d.eng, kWake));
+        CHECK_EQ(feed(d.eng, 0.25f).size(), 1u);
+        // ...and it stays so however long it runs with nothing shown
+        (void)passUntil(d.eng, [] { return false; }, 700);
+        CHECK(awake(d.eng, kWake));
+    }
+}
+
+void testFirstFrameOfAWake() {
+    World world;
+    Windowed w;
+    testing::Session s(api(), w.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(w.eng, 3);
+    CHECK(!awake(w.eng, kWake));
+
+    // A block before the signal is seen by nobody.
+    CHECK(feed(w.eng, 0.125f).empty());
+
+    // THE SIGNAL: the Decoder output window is open (a text decoder is wanted by it), and the group-14 plugin's window is shown.
+    // Submitted, NOT yet applied: the window's signal is one pass late by design, and until that pass the plugin is as asleep as ever.
+    FoxSubmitResult sr{};
+    sr.structSize = sizeof(sr);
+    const FoxCommand use = useCmd(kWake + "\t8\n" + kTracks + "\t1\n");
+    CHECK_EQ(api()->submit(s.raw(), &use, 1, &sr), 1);
+    CHECK(!awake(w.eng, kWake));
+    CHECK(feed(w.eng, 0.25f).empty());      // (still nobody)
+
+    // ONE pass later the plugin exists - created IN that pass, not the one after - and the very next block is its first.
+    w.eng.controlPass();
+    CHECK(awake(w.eng, kWake));
+    const std::vector<std::string> first = feed(w.eng, 0.5f);
+    std::printf("N2: the first block after the wake pass: %zu line(s)%s%s\n", first.size(), first.empty() ? "" : " - ",
+                first.empty() ? "" : first[0].c_str());
+    CHECK_EQ(first.size(), 1u);
+    if (!first.empty()) {
+        // THE FIRST FRAME IT SHOULD DECODE: block 0.5 (the first after the wake) and not a later one, whole (480 frames).
+        CHECK(first[0].find("first=0.500") != std::string::npos);
+        CHECK(first[0].find("frames=480") != std::string::npos);
+    }
+    const std::vector<std::string> second = feed(w.eng, 0.75f);
+    CHECK_EQ(second.size(), 1u);   // and the next after it, in order
+    if (!second.empty()) { CHECK(second[0].find("first=0.750") != std::string::npos); }
+    CHECK_EQ(logged("plugin: Wake Probe woke - decoder output window open"), 1u);
+
+    // THE UI HALF woke in the same pass, through the same directive path: the track source's targets and the panel exist.
+    w.ui.poll();
+    CHECK(!w.ui.trackPluginNames().empty());
+    CHECK(!w.ui.panels().empty());
+    CHECK_EQ(logged("plugin: Group Fourteen Tracks woke - window open"), 1u);
+    CHECK_EQ(runWord(s, kWakeName), 0);    // awake: no longer ASLEEP
+    CHECK_EQ(runWord(s, kTracksName), 0);
+
+    // A SIGNAL THE MODULE CANNOT SHOW wakes nothing: the wake probe is a decoder with no window of its own, so a "window shown" bit is
+    // the window's mistake. (Clear everything first: both go down after the interval.)
+    submitThenOnePass(w.eng, s, useCmd(std::string()));
+    CHECK(passUntil(w.eng, [&] { return !awake(w.eng, kWake); }, 4000));
+    submitThenOnePass(w.eng, s, useCmd(kWake + "\t1\n"));
+    passes(w.eng, 3);
+    CHECK(!awake(w.eng, kWake));
+    // ...nor does a bit it was not given: the map page of a decoder.
+    submitThenOnePass(w.eng, s, useCmd(kWake + "\t2\n"));
+    passes(w.eng, 3);
+    CHECK(!awake(w.eng, kWake));
+}
+
+void testHysteresis() {
+    World world;
+    Windowed w;
+    testing::Session s(api(), w.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(w.eng, 3);
+    // (The log ring is the process's, and the groups before this one woke and put down the same plugin: lines are counted from here.)
+    const std::size_t wokeBefore = logged("plugin: Group Fourteen Tracks woke - window open");
+    const std::size_t sleptBefore = logged("plugin: Group Fourteen Tracks dormant after 30 s without a use");
+    submitThenOnePass(w.eng, s, useCmd(kTracks + "\t1\n"));
+    w.ui.poll();
+    CHECK(!w.ui.trackPluginNames().empty());
+
+    // The signal goes: the plugin does NOT go with it. FOXSDR_DORMANT_AFTER_MS is 400 in this process (main).
+    submitThenOnePass(w.eng, s, useCmd(std::string()));
+    const auto cleared = std::chrono::steady_clock::now();
+    (void)passUntil(w.eng, [] { return false; }, 150);
+    w.ui.poll();
+    CHECK(!w.ui.trackPluginNames().empty());   // still up 150 ms after the last use
+    CHECK_EQ(runWord(s, kTracksName) & 4, 0);
+    CHECK(passUntil(w.eng, [&] { w.ui.poll(); return w.ui.trackPluginNames().empty(); }, 4000));
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cleared).count();
+    std::printf("N3: the track source went down %.0f ms after its last use (interval 400)\n", ms);
+    CHECK(ms >= 380.0);
+    CHECK(w.ui.panels().empty());
+    passes(w.eng, 2);
+    CHECK_EQ(runWord(s, kTracksName), 4);
+    CHECK_EQ(logged("plugin: Group Fourteen Tracks dormant after 30 s without a use"), sleptBefore + 1u);
+
+    // The next signal creates a NEW instance.
+    submitThenOnePass(w.eng, s, useCmd(kTracks + "\t1\n"));
+    w.ui.poll();
+    CHECK(!w.ui.trackPluginNames().empty());
+    CHECK_EQ(logged("plugin: Group Fourteen Tracks woke - window open"), wokeBefore + 2u);
+}
+
+void testRunStates() {
+    World world;
+    Windowed w;
+    testing::Session s(api(), w.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(w.eng, 3);
+
+    // ALWAYS: runs with no signal at all, and goes on running.
+    submitThenOnePass(w.eng, s, runCmd(kWake, 1));
+    CHECK(awake(w.eng, kWake));
+    CHECK_EQ(runWord(s, kWakeName), 1);
+    CHECK_EQ(feed(w.eng, 0.5f).size(), 1u);
+    (void)passUntil(w.eng, [] { return false; }, 900);   // twice the interval
+    CHECK(awake(w.eng, kWake));
+    CHECK_EQ(runWord(s, kWakeName), 1);
+    // ...un-pinned it is left running and goes down only after the interval, counted from the un-pinning.
+    submitThenOnePass(w.eng, s, runCmd(kWake, 0));
+    CHECK(awake(w.eng, kWake));
+    (void)passUntil(w.eng, [] { return false; }, 150);
+    CHECK(awake(w.eng, kWake));
+    CHECK(passUntil(w.eng, [&] { return !awake(w.eng, kWake); }, 4000));
+    passes(w.eng, 2);
+    CHECK_EQ(runWord(s, kWakeName), 4);
+
+    // STOPPED: never wakes, whatever is shown; PLUGINS says so both ways.
+    submitThenOnePass(w.eng, s, runCmd(kWake, 2));
+    submitThenOnePass(w.eng, s, useCmd(kWake + "\t8\n"));
+    passes(w.eng, 3);
+    CHECK(!awake(w.eng, kWake));
+    CHECK_EQ(runWord(s, kWakeName), 2);
+    CHECK((entryNamed(s, FOXAPI_LIST_PLUGINS, kWakeName).flags & FOXAPI_ITEM_STOPPED) != 0u);
+    CHECK(Access::runMode(w.eng, kWake) == PluginRun::Stopped);
+    // ...and back to AUTO with the signal still there wakes it: the stop was all that held it.
+    submitThenOnePass(w.eng, s, runCmd(kWake, 0));
+    passes(w.eng, 2);
+    CHECK(awake(w.eng, kWake));
+    CHECK_EQ(runWord(s, kWakeName), 0);
+
+    // THE OP'S REFUSALS, and a REMOTE session's.
+    CHECK_EQ(pumped(w.eng, s, runCmd(kWake, 3)).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(pumped(w.eng, s, runCmd("no-such-plugin.dll", 1)).status(), FOXAPI_NOT_FOUND);
+    CHECK_EQ(pumped(w.eng, s, runCmd(std::string(), 1)).status(), FOXAPI_BAD_ARGUMENT);
+    testing::Session remote(api(), w.eng.apiHandle(), FOXAPI_SESSION_REMOTE, kAllGrants, "s3cret");
+    CHECK(remote.ok());
+    CHECK_EQ(pumped(w.eng, remote, runCmd(kWake, 2)).status(), FOXAPI_DENIED);
+    CHECK_EQ(pumped(w.eng, remote, useCmd(kWake + "\t8\n")).status(), FOXAPI_DENIED);
+    CHECK(Access::runMode(w.eng, kWake) == PluginRun::Auto);
+}
+
+void testStandingDuty() {
+    World world;
+    Windowed w;
+    testing::Session s(api(), w.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(w.eng, 3);
+    // An in-chain audio processor has no window, map or output that could ever wake it: it is in use for as long as it is fitted, and a
+    // dormant one would silently stop processing the audio.
+    const auto processing = [&] { return !Access::runner(w.eng).processorTitles().empty(); };
+    CHECK(processing());
+    (void)passUntil(w.eng, [] { return false; }, 900);   // twice the interval, nothing shown
+    CHECK(processing());
+    CHECK_EQ(runWord(s, kProcessorName) & 4, 0);
+}
+
+void testConfig() {
+    World world;
+    Windowed w;
+    testing::Session s(api(), w.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(w.eng, 3);
+    const std::string wakeId = cascade::core::pluginRunId(kWake);
+    const std::string tracksId = cascade::core::pluginRunId(kTracks);
+
+    // The OLD stop list (module file names) is migrated, by id; pluginRun is restored; both go back out as pluginRun alone.
+    cascade::core::AppConfig cfg;
+    cfg.pluginsStopped = {kWake};
+    cfg.pluginRun[tracksId] = "always";
+    Access::restoreConfig(w.eng, cfg);
+    CHECK(Access::runMode(w.eng, kWake) == PluginRun::Stopped);
+    CHECK(Access::runMode(w.eng, kTracks) == PluginRun::Always);
+    CHECK(!awake(w.eng, kWake));
+    w.ui.poll();
+    CHECK(!w.ui.trackPluginNames().empty());     // ALWAYS: up with nothing shown
+    cascade::core::AppConfig out = Access::readConfig(w.eng);
+    CHECK(out.pluginsStopped.empty());
+    CHECK_EQ(out.pluginRun.size(), 2u);
+    CHECK_EQ(out.pluginRun[wakeId], std::string("stopped"));
+    CHECK_EQ(out.pluginRun[tracksId], std::string("always"));
+    std::printf("N6: pluginRun written back: %s=%s %s=%s; pluginsStopped %zu entries\n", wakeId.c_str(), out.pluginRun[wakeId].c_str(),
+                tracksId.c_str(), out.pluginRun[tracksId].c_str(), out.pluginsStopped.size());
+
+    // An explicit AUTO wins over a stale legacy stop for the same id, and is never written.
+    cascade::core::AppConfig cfg2;
+    cfg2.pluginsStopped = {kWake};
+    cfg2.pluginRun[wakeId] = "auto";
+    Access::restoreConfig(w.eng, cfg2);
+    CHECK(Access::runMode(w.eng, kWake) == PluginRun::Auto);
+    CHECK(Access::runMode(w.eng, kTracks) == PluginRun::Auto);
+    out = Access::readConfig(w.eng);
+    CHECK(out.pluginRun.empty());
+    CHECK(out.pluginsStopped.empty());
+}
+
+void testTheWindowGoes() {
+    World world;
+    Windowed w;
+    testing::Session s(api(), w.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(w.eng, 3);
+    CHECK(!awake(w.eng, kWake));
+    Access::removeWindow(w.eng);   // the interface is gone: nothing could ever report a window again
+    passes(w.eng, 3);
+    CHECK(awake(w.eng, kWake));
+    CHECK_EQ(runWord(s, kWakeName), 0);
+    CHECK_EQ(feed(w.eng, 0.5f).size(), 1u);
+}
+
+}  // namespace gn
+
+void testPluginRunsOnlyWhileUsed() {
+    gn::testAtStart();
+    gn::testFirstFrameOfAWake();
+    gn::testHysteresis();
+    gn::testRunStates();
+    gn::testStandingDuty();
+    gn::testConfig();
+    gn::testTheWindowGoes();
+}
+
 int main() {
     engine_api_test::hermetic("api03");
+    // The plugins' hysteresis, shortened for group N (the engine reads it at its first lifecycle step; no other group has a window).
+#if defined(_WIN32)
+    _putenv_s("FOXSDR_DORMANT_AFTER_MS", "400");
+#else
+    setenv("FOXSDR_DORMANT_AFTER_MS", "400", 1);
+#endif
     cascade::gui::AppWindowTestAccess::installFakeRadio();
     testVersionGate();
     testEveryListIsServed();
@@ -8418,5 +8814,7 @@ int main() {
     testTelemetryFacts();
     testDiagContextIsTheEngines();
     testDiagContextAtApplyConfig();
+    // Group N: a fitted plugin runs only while it is used (stub campaign B2).
+    testPluginRunsOnlyWhileUsed();
     return check::finish("test_engine_api_03");
 }

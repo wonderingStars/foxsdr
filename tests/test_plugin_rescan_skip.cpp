@@ -62,7 +62,9 @@
 #include "core/plugin_dir_signature.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -86,32 +88,46 @@ bool hookedRead(const std::string& dir, cascade::core::PluginDirSignature& out) 
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static void installHooks() { AppWindow::testHooks_.pluginDirSignature = &hookedRead; }
+    static void installHooks() { cascade::engine::Engine::testHooks_.pluginDirSignature = &hookedRead; }
     // The catalogue fetch exactly as CHECK NOW runs it, to its completion on the
     // GUI thread: the worker reads the local file and caches the policies,
     // pollPluginAsync() collects it and decides what to do about the plugins.
+    // (THE ENGINE'S, since the window port: every read and write of it goes through the seam, tests/pass_seam.hpp - on the pass's own thread.)
     static bool fetchCatalogue(AppWindow& a, const std::string& url) {
-        a.pluginCatalogueUrl_ = url;
-        a.startCatalogFetch();
+        cascade::engine::Engine& e = rawEngine(a.engine_);
+        passseam::on(e, [&] {
+            e.pluginCatalogueUrl_ = url;
+            e.startCatalogFetch();
+        });
         for (int i = 0; i < 4000; ++i) {
-            a.pollPluginAsync();
-            if (!a.catalogPending_) { return a.catalogError_.empty(); }
+            bool pending = true;
+            passseam::on(e, [&] {
+                e.pollPluginAsync();
+                pending = e.catalogPending_;
+            });
+            if (!pending) { return passseam::read<bool>(e, [&] { return e.catalogError_.empty(); }); }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         return false;
     }
-    static void rescan(AppWindow& a) { a.rescanPlugins(); }
-    // The "keep running" tick: the plugin is pinned to ALWAYS and its decoder created alone.
+    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
+    // The "keep running" tick: the plugin is pinned to ALWAYS and its decoder created alone (FOXAPP_OP_PLUGIN_RUN_MODE is the same call).
     static void keepRunning(AppWindow& a, const std::string& file) {
-        a.setPluginRun(file, cascade::core::PluginRun::Always);
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setPluginRun(file, cascade::core::PluginRun::Always); });
     }
-    static void forgetSignature(AppWindow& a) { a.pluginScanSigValid_ = false; }
+    static void forgetSignature(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pluginScanSigValid_ = false; }); }
     // What a removal does before its rescan: every instance destroyed, every
     // module unmapped - and nothing loaded again until a scan says so.
-    static void takeDown(AppWindow& a) { a.detachAndUnloadPlugins(); }
-    static bool signatureTrusted(const AppWindow& a) { return a.pluginScanSigValid_; }
-    static std::size_t loadedCount(const AppWindow& a) { return a.pluginHost_.loadedCount(); }
-    static std::size_t blockedCount(const AppWindow& a) { return a.pluginBlocked_.size(); }
+    static void takeDown(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).detachAndUnloadPlugins(); }); }
+    static bool signatureTrusted(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginScanSigValid_; });
+    }
+    static std::size_t loadedCount(AppWindow& a) {
+        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginHost_.loadedCount(); });
+    }
+    static std::size_t blockedCount(AppWindow& a) {
+        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginBlocked_.size(); });
+    }
 };
 
 }  // namespace cascade::gui

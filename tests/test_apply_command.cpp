@@ -1977,6 +1977,33 @@ void pluginOps(AppWindow& a) {
         CHECK(ok(A::apply(a, text(FOXAPI_OP_DECODER_START, key))));
     }
 
+    covering(FOXAPP_OP_PLUGIN_RUN_MODE);
+    {
+        // HOW ONE PLUGIN RUNS (0.99.73, stub campaign B2): STOPPED, ALWAYS (pinned) and AUTO, by the module's file name; the engine holds
+        // the state by plugin id. (The instances' side of it - what wakes, what sleeps, when - is tests/test_engine_api_03.cpp group N.)
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_RUN_MODE, key, 2))));
+        CHECK(A::stopped(a, key));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_RUN_MODE, key, 1))));
+        CHECK(!A::stopped(a, key));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_RUN_MODE, key, 0))));
+        CHECK(!A::stopped(a, key));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_RUN_MODE, key, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_RUN_MODE, key, -1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_RUN_MODE, "nobody.dll", 1)), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_RUN_MODE, std::string(), 1)), FOXAPI_BAD_ARGUMENT));
+        // (left PINNED, as the START above left it)
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_RUN_MODE, key, 1))));
+    }
+
+    covering(FOXAPP_OP_PLUGIN_USE);
+    {
+        // The window's table of what it shows: one "<file>\t<bits>" line a plugin; an empty one clears it; a line that does not parse
+        // is skipped, never an error.
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_USE, key + "\t8\n"))));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_USE, "no tab here\n" + key + "\tnotanumber\n"))));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_USE, std::string()))));
+    }
+
     covering(FOXAPI_OP_PLUGIN_PRESET);
     {
         // By file key (the preset bars) and by display name (the web remote).

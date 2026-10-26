@@ -245,7 +245,7 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * Record does not freeze while the disk creates the file; a waiting start can be cancelled . re-expressed, C5 (Engine::startAudioRecording/startIqRecording
     prepare, RecordStart opens, pollRecordStarts arms; test_record_start)
   * a catalogue refresh reloads nothing when nothing changed; every reload logs its steps ..... re-expressed, C4 (Engine::rescanPluginsIfChanged; test_plugin_rescan_log;
-    test_plugin_rescan_skip waits for PLUGIN-RUN)
+    test_plugin_rescan_skip converted by stub batch B2: re-expressed)
   * the Fitted modules window reads no plugin file's size per frame ......................... stubbed STORE-VIEW (test_fitted_modules_no_disk red)
   * freeze reports name a late-loaded module ................................................ re-expressed, C1 (ForeignModuleWatch; test_foreign_modules_app)
 
@@ -311,9 +311,10 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * the plugin store laid out like a store; Fitted modules like an operating panel ........... stubbed STORE-VIEW
 
 0.99.73
-  * the radio and its sound stay responsive with many modules fitted ......................... re-expressed in part: the audio buffer that deepens itself
-    (C1, test_audio_lead_app); a fitted plugin that runs only while it is used is stubbed PLUGIN-RUN (test_plugin_rescan_skip and
-    merge_pending_part_audio_lead_plugin_wake)
+  * the radio and its sound stay responsive with many modules fitted ......................... re-expressed: the audio buffer that deepens itself
+    (C1, test_audio_lead_app); a fitted plugin that runs only while it is used is the ENGINE's since stub batch B2 (engine_plugin_run.cpp,
+    FOXAPP_OP_PLUGIN_RUN_MODE / _USE; test_plugin_rescan_skip, the part audio_lead_plugin_wake restored, test_engine_api_03 group N). The Fitted
+    modules window's half (the IDLE chip, KEEP RUNNING, the rows of a dormant plugin's windows) is stub batch B5: test_plugin_inuse_app stays red until then
   * the DECODER OUTPUT and plugin picture windows open inside the main window; RESET WINDOW SIZES places them there ........ stubbed WINDOW-PLACEMENT
     (placeInsideMainWindow; test_decoder_window_app). Found by the gui-labelled tests, not by the release-note pass: the ledger had not listed it.
 
@@ -426,16 +427,21 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   DISPLAY-RANGE (2)       test_display_menu_app test_display_fold_app
   PATCH-VIEW (2)          test_patch_canvas_nav test_patch_info_pane
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
-  one each                PLUGIN-RESCAN test_plugin_rescan_skip; PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
+  one each                PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
                           SOURCE-ROWS test_source_row_app; AIRBAND test_airband_app; PLUGIN-RUN test_plugin_inuse_app; UPDATES test_store_update_app;
                           IMPORT-DIALOG test_import_dialog_app; RADIO-SETUP test_radio_setup_app; TESTER-USAGE test_team_message_app;
                           MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
   parts (3)               transmit_page_plugin_key (TX-PLUGIN), excuse_cap_pickfile (IMPORT-DIALOG), audio_lead_plugin_wake (PLUGIN-RUN)
+                          [B2 removed audio_lead_plugin_wake and added nothing; B1 had added display_fold_airband_section (AIRBAND)]
 
 UPDATE 2026-10-26, stub batch B1 (docs/engine-stage4.md 6.22): test_app_rail, test_rail_fold, test_rail_fold_app, test_status_fold, test_status_fold_app
 and test_display_fold_app are converted and green, and the placeholders of those six are gone (RAIL-CHROME is now test_deck_knobs_app and test_theme_census,
 DISPLAY-RANGE is test_display_menu_app). A part is added: display_fold_airband_section (AIRBAND), the one name of test_display_fold_app's TOOLS-bank list
 that names a feature not yet on this window. test_i18n: 155 stale, 1 missing (the `VIEW` heading is gone from the source).
+
+UPDATE 2026-10-26, stub batch B2 (docs/engine-stage4.md 6.22): test_plugin_rescan_skip is converted (it now also runs as _stepped) and the part
+audio_lead_plugin_wake is restored in test_audio_lead_app: both placeholders are gone, 47 remain (test_plugin_inuse_app, PLUGIN-RUN's window half, stays for B5).
+The engine decides which plugins have instances; a window-less host runs every plugin (owner decision). test_i18n: 153 stale, 1 missing.
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

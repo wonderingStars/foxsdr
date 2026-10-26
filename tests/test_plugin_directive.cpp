@@ -16,6 +16,10 @@
 //      one applied, and the next call applies the new one.
 //   F  A STORM. A poster and a front end run flat out: epochs the applier sees only grow, the last post is eventually applied,
 //      and applied + skipped is exactly the number of posts.
+//   H  A LIFE-ONLY DIRECTIVE (stub campaign B2: wake or put to sleep ONE plugin, rebuild nothing) NEVER COSTS A WAITING ONE ITS WORK. It is state,
+//      not an event, so it is merged into what waits: into a rebuild (the rebuild stays, with the newest stop and dormant sets, under the
+//      newest epoch), into another life-only (still life-only), and DROPPED beside a waiting RELEASE - whose epoch the engine unmaps the
+//      modules on, and which an acknowledgement of anything else must never stand for. A rebuild posted over a waiting life-only replaces it.
 //   G  polls() MOVES WITH EVERY CALL (applied or not): it is how the engine tells a front end that is framing from one that is not.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -241,6 +245,92 @@ void testPolls() {
 
 }  // namespace
 
+void testLifeOnly() {
+    std::printf("  H: a life-only directive is merged into what waits, never replaces a release\n");
+    // into a rebuild
+    {
+        PluginDirectiveLink link;
+        PluginDirective full;
+        full.stopped = {"old-stop"};
+        full.dormant = {"old-dormant"};
+        full.services.tune = [](double) -> std::int32_t { return 7; };
+        const std::uint64_t e1 = link.post(std::move(full));
+        PluginDirective life;
+        life.lifeOnly = true;
+        life.stopped = {"new-stop"};
+        life.dormant = {"new-dormant-a", "new-dormant-b"};
+        const std::uint64_t e2 = link.post(std::move(life));
+        CHECK_EQ(e1, 1u);
+        CHECK_EQ(e2, 2u);
+        CHECK_EQ(link.skipped(), 1u);
+        int applied = 0;
+        CHECK(link.applyNewest([&](const PluginDirective& d) {
+            ++applied;
+            CHECK(!d.lifeOnly);                       // the rebuild stays a rebuild
+            CHECK(static_cast<bool>(d.services.tune));  // ...with its services
+            CHECK_EQ(d.epoch, 2u);                    // ...under the newest epoch
+            CHECK(d.stopped == std::vector<std::string>{"new-stop"});
+            CHECK_EQ(d.dormant.size(), 2u);
+        }));
+        CHECK_EQ(applied, 1);
+        CHECK(!link.hasPending());
+        CHECK(link.waitApplied(2, 1ms));
+    }
+    // into a life-only
+    {
+        PluginDirectiveLink link;
+        PluginDirective a;
+        a.lifeOnly = true;
+        a.dormant = {"x"};
+        (void)link.post(std::move(a));
+        PluginDirective b;
+        b.lifeOnly = true;
+        b.dormant = {"y"};
+        const std::uint64_t e = link.post(std::move(b));
+        CHECK_EQ(e, 2u);
+        CHECK(link.applyNewest([&](const PluginDirective& d) {
+            CHECK(d.lifeOnly);
+            CHECK(d.dormant == std::vector<std::string>{"y"});
+            CHECK_EQ(d.epoch, 2u);
+        }));
+    }
+    // beside a release: the release survives, the life-only is dropped, the caller waits on the release's epoch
+    {
+        PluginDirectiveLink link;
+        PluginDirective rel;
+        rel.release = true;
+        const std::uint64_t er = link.post(std::move(rel));
+        PluginDirective life;
+        life.lifeOnly = true;
+        life.dormant = {"z"};
+        const std::uint64_t el = link.post(std::move(life));
+        CHECK_EQ(er, 1u);
+        CHECK_EQ(el, er);                    // the waiter's epoch is the release's
+        CHECK_EQ(link.postedEpoch(), 1u);    // no epoch was spent on the dropped one
+        CHECK(link.applyNewest([&](const PluginDirective& d) {
+            CHECK(d.release);
+            CHECK(!d.lifeOnly);
+            CHECK_EQ(d.epoch, 1u);
+        }));
+        CHECK(link.waitApplied(el, 1ms));
+        CHECK(!link.hasPending());
+    }
+    // a rebuild over a waiting life-only replaces it
+    {
+        PluginDirectiveLink link;
+        PluginDirective life;
+        life.lifeOnly = true;
+        (void)link.post(std::move(life));
+        PluginDirective full;
+        full.stopped = {"f"};
+        (void)link.post(std::move(full));
+        CHECK(link.applyNewest([&](const PluginDirective& d) {
+            CHECK(!d.lifeOnly);
+            CHECK(d.stopped == std::vector<std::string>{"f"});
+        }));
+    }
+}
+
 int main() {
     std::printf("test_plugin_directive\n");
     testBasics();
@@ -250,5 +340,6 @@ int main() {
     testPostDuringApply();
     testStorm();
     testPolls();
+    testLifeOnly();
     return testSummary("test_plugin_directive");
 }

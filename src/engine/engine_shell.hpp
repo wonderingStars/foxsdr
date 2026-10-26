@@ -278,6 +278,9 @@ public:
 // the feed): a release (the engine is about to unmap the modules), and the basemap and track-info tables to attach.
 struct PluginDirectiveFacts {
     bool release = false;
+    // One plugin woken or put to sleep, nothing rebuilt (stub campaign B2): the basemap and track-info tables are the engine's choice again,
+    // but nothing was created that a window has to show.
+    bool lifeOnly = false;
     const CascadeBasemapApi* basemap = nullptr;
     const CascadeTrackInfoApi* trackInfo = nullptr;
 };

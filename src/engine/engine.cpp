@@ -3027,7 +3027,7 @@ bool Engine::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
     {
         cascade::core::PluginDirective release;
         release.release = true;
-        release.stopped = pluginsStopped_;
+        release.stopped = stoppedPluginIds();
         if (!deliverPluginDirective(std::move(release))) {
             cascade::core::diagWarnf(
                 "plugins: the interface did not release the plugin UI (it is not framing; waited at most %d ms); the modules are NOT unloaded, and this will be retried",
@@ -3053,9 +3053,11 @@ void Engine::setPluginUiApplier(PluginUiApplier applier) {
     if (applier) {
         pluginApplier_ = std::make_shared<const PluginUiApplier>(std::move(applier));
         pluginGuiThread_.store(std::this_thread::get_id());
+        frontEnd_.store(true, std::memory_order_release);
     } else {
         pluginApplier_.reset();
         pluginGuiThread_.store(std::thread::id{});
+        frontEnd_.store(false, std::memory_order_release);
     }
 }
 
@@ -3934,10 +3936,29 @@ void Engine::refreshPluginRunner() {
     // it changes: this function runs after every rescan, and a rescan is
     // exactly when the two halves have been cleared and could otherwise start a
     // plugin the user stopped.
-    pluginRunner_.setStopped(pluginsStopped_);
-    // The core's stop set is the engine's and thread-safe: set at once, so a stopped plugin's marks and commands leave the
-    // screen now and its queued requests are refused. The plugin UI's own copy rides in the directive below.
-    pluginApi_->setStopped(pluginsStopped_);
+    //
+    // AND THE DORMANT SET WITH IT (0.99.73, stub campaign B2): the plugins set to AUTO that nothing is using are given no instance by these
+    // wholesale rebuilds either, so a new source or rate recreates only what is running. A plugin pinned to ALWAYS is running by
+    // definition; it is marked so here, before the sets are worked out - and so is one that is in use for as long as it is fitted (a
+    // processor in the audio chain), which this rebuild builds like an ALWAYS one, so its first lifecycle step has nothing to wake. A
+    // WINDOW-LESS HOST (no front end installed) treats AUTO as pinned and marks every such plugin running too (engine_plugin_run.cpp).
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (!lp.loaded) { continue; }
+        const std::string lkey = cascade::core::pluginKey(lp);
+        if (lkey.empty()) { continue; }
+        const cascade::core::PluginRun mode = pluginRunMode(lkey);
+        const std::string lid = cascade::core::pluginRunId(lkey);
+        if (mode == cascade::core::PluginRun::Always ||
+            (mode == cascade::core::PluginRun::Auto &&
+             (cascade::core::pluginCapsStandingDuty(lp.capabilities) || !frontEndPresent()))) {
+            pluginLife_[lid].running = true;
+        } else if (mode == cascade::core::PluginRun::Stopped) {
+            pluginLife_[lid].running = false;
+        }
+    }
+    // The runner's stop and dormant sets and the API core's stop set (set at once, so a stopped plugin's marks and commands leave the
+    // screen now and its queued requests are refused); the plugin UI's own copies ride in the directive below.
+    pushPluginHoldSets();
     // THE HOST TABLE FIRST, THEN THE DECODERS (0.99.31). The ABI promises that
     // attach() runs before any capability's create() (CascadeHostClientApi);
     // the runner used to be rebuilt first, so on the first rebuild of a
@@ -4000,23 +4021,12 @@ void Engine::refreshPluginRunner() {
     // coastlines rather than keeping tiles from a plugin the user has switched
     // off. Skipping it in the runner and the UI half but not here would leave
     // the stopped plugin drawing the entire map background.
-    const CascadeBasemapApi* wantBasemap = nullptr;
-    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
-        if (lp.loaded && lp.basemap != nullptr &&
-            !pluginIsStopped(cascade::core::pluginKey(lp))) {
-            wantBasemap = lp.basemap;
-            break;
-        }
-    }
+    // (A DORMANT plugin is NOT skipped here: a basemap is a static table the map draws from, with no instance to create or poll, so being
+    // dormant changes nothing about it - only STOPPED does. chooseBasemapAndTrackInfo is the one choice, shared with the life-only directive.)
     // Track enrichment, by the same first-wins rule and for the same reason.
+    const CascadeBasemapApi* wantBasemap = nullptr;
     const CascadeTrackInfoApi* wantTrackInfo = nullptr;
-    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
-        if (lp.loaded && lp.trackInfo != nullptr &&
-            !pluginIsStopped(cascade::core::pluginKey(lp))) {
-            wantTrackInfo = lp.trackInfo;
-            break;
-        }
-    }
+    chooseBasemapAndTrackInfo(wantBasemap, wantTrackInfo);
     // THE DIRECTIVE: what the plugin UI is to be built over, as values. The interface rebuilds its track sources, panels and
     // instruments, attaches the host table (the ABI's attach(), before any capability's create()) and the basemap and the
     // track-info client from it, on its own thread. Where that thread is not this one the wait is bounded and is NOT an error
@@ -4025,7 +4035,8 @@ void Engine::refreshPluginRunner() {
     {
         cascade::core::PluginDirective d;
         d.plugins = pluginHost_.plugins();
-        d.stopped = pluginsStopped_;
+        d.stopped = stoppedPluginIds();
+        d.dormant = pluginDormantIds_;
         d.services = std::move(svc);
         d.basemap = wantBasemap;
         d.trackInfo = wantTrackInfo;
@@ -4259,7 +4270,7 @@ void Engine::applyUserPresetEdit(const PendingUserPresetEdit& edit) {
 }
 
 void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
-                                  const CascadePreset& ps) {
+                                  const CascadePreset& ps, bool pin) {
     // A PRESET ON A STOPPED PLUGIN STARTS IT. Pressing "ADS-B 1090 MHz" is an
     // unambiguous "I want this plugin now", and the alternative is the worst
     // outcome this feature can produce: the radio dutifully retunes to 1090 MHz
@@ -4269,7 +4280,11 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // the instances, and it has to happen after the receiver has moved anyway.
     //
     // The row keeps its Stop button, so this is undone with one click.
-    recordPluginStopped(cascade::core::pluginKey(p), false);
+    //
+    // AND IT PINS THE PLUGIN TO ALWAYS (0.99.73): a preset press is the deliberate "run this", so the plugin goes on running when its
+    // window is closed. The tune that merely OPENING a window does (pin == false) leaves the run state alone - the window wants the
+    // plugin while it is open, and that is all it should do.
+    if (pin) { recordPluginStopped(cascade::core::pluginKey(p), false); }
 
     // MODE FIRST, because the mode's default bandwidth would otherwise
     // overwrite the one the preset asked for.
@@ -4916,64 +4931,15 @@ std::size_t Engine::fedDecoderCount() const {
     return n;
 }
 
-bool Engine::pluginIsStopped(const std::string& pluginKey) const {
-    // An empty key is what a record with no path produces; it must never
-    // match, or one stray entry would stop every path-less plugin at once.
-    if (pluginKey.empty()) { return false; }
-    return std::find(pluginsStopped_.begin(), pluginsStopped_.end(), pluginKey) !=
-           pluginsStopped_.end();
-}
-
-void Engine::recordPluginStopped(const std::string& pluginKey, bool stopped) {
-    if (pluginKey.empty()) { return; }
-    const auto it = std::find(pluginsStopped_.begin(), pluginsStopped_.end(), pluginKey);
-    if (stopped && it == pluginsStopped_.end()) {
-        pluginsStopped_.push_back(pluginKey);
-    } else if (!stopped && it != pluginsStopped_.end()) {
-        pluginsStopped_.erase(it);
-    }
-    // Down into both halves immediately. refreshPluginRunner pushes them again
-    // before every rebuild, but a caller that only records (the preset path
-    // does) still leaves the live objects agreeing with the durable list.
-    pluginRunner_.setStopped(pluginsStopped_);
-    pluginApi_->setStopped(pluginsStopped_);
-    // The mute snapshot holds the same running state and is read every frame,
-    // so it has to follow here too, not only at the next rebuild.
-    rebuildMuteStates();
-}
-
-void Engine::setPluginStopped(const std::string& pluginKey, bool stopped) {
-    // THE SAME LIFECYCLE PATH AS EVERYTHING ELSE, deliberately. Stopping could
-    // have destroyed one plugin's instances in place, and that is precisely
-    // the second lifecycle this avoids: the retune grant, the basemap, the
-    // track-info client and the panel windows are all wired up in
-    // refreshPluginRunner, so a bespoke teardown would have to repeat every one
-    // of them and would drift from the original the first time one changed.
-    // Rebuilding costs the other plugins one create()/destroy() pair on a user
-    // action that happens seconds apart at worst.
-    recordPluginStopped(pluginKey, stopped);
-    refreshPluginRunner();
-
-    // ONLY ON A START, and only through THIS path. This is the "Start" key on
-    // the fitted-modules row (drawFittedModulesWindow's FittedModulesAction::
-    // Kind::Start), which is presently the sole place a plugin transitions
-    // from stopped to running — a preset BUTTON also starts a stopped plugin
-    // (applyPluginPreset's own recordPluginStopped(..., false)) but calls
-    // recordPluginStopped directly rather than through here, precisely so an
-    // explicit preset press is never second-guessed by this. See
-    // maybeAutoPresetOnStart's own comment for what "already inside" means.
-    if (!stopped) { maybeAutoPresetOnStart(pluginKey); }
-}
-
 void Engine::maybeAutoPresetOnStart(const std::string& pluginKey) {
-    maybeAutoPreset(pluginKey, "started");
+    maybeAutoPreset(pluginKey, "started", /*pin=*/true);
 }
 
 void Engine::maybeAutoPresetOnShow(const std::string& pluginKey) {
-    maybeAutoPreset(pluginKey, "window opened");
+    maybeAutoPreset(pluginKey, "window opened", /*pin=*/false);
 }
 
-void Engine::maybeAutoPreset(const std::string& pluginKey, const char* verb) {
+void Engine::maybeAutoPreset(const std::string& pluginKey, const char* verb, bool pin) {
     // FIND THE PLUGIN THIS KEY NAMES. Both callers only carry a file name —
     // the same identity recordPluginStopped and the tune grant use — never a
     // LoadedPlugin, so the object with its preset table has to be looked back
@@ -5022,7 +4988,7 @@ void Engine::maybeAutoPreset(const std::string& pluginKey, const char* verb) {
     // tune itself and the plugin's own windows. Starting a decoder (or
     // opening its window) is meant to feel like pressing its preset for it,
     // not a cut-down copy of doing so.
-    applyPluginPreset(*found, ps);
+    applyPluginPreset(*found, ps, pin);
 
     char label[CASCADE_PRESET_LABEL_CHARS + 1];
     std::snprintf(label, sizeof(label), "%.*s", CASCADE_PRESET_LABEL_CHARS,
@@ -5945,6 +5911,7 @@ std::vector<cascade::gui::RunnableDecoder> Engine::runnableDecoders() const {
         rd.key = cascade::core::pluginKey(lp);
         rd.stopped = pluginIsStopped(rd.key);
         rd.feeding = pluginRunner_.isFeeding(rd.key);
+        rd.idle = pluginIsIdle(rd.key);
         runnable.push_back(std::move(rd));
     }
     return runnable;
@@ -6182,6 +6149,9 @@ void Engine::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
     // applyPluginPreset, forwarded so a mismatch this produces can say which
     // plugin's button asked for it — see applyRetuneNow.
     retuneSourceHz(absHz - pipeline_.vfoOffsetHz(), isPluginPreset);
+    // A MANUAL TUNE gives an audio-output decoder its first chance to play (an independent wake signal before it has an instance to
+    // report as the playing plugin); the pass's lifecycle step consumes it (engine_plugin_run.cpp).
+    if (pipeline_.running() && !scanner_.active() && !isPluginPreset) { audioOutputTunePending_ = true; }
 }
 
 void Engine::retuneSourceHz(double centerHz, bool isPluginPreset) {
@@ -7581,8 +7551,29 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             applyUserPresetEdit(
                 {PendingUserPresetEdit::Op::Forget, text, static_cast<std::size_t>(c.ival[0])});
             return res;
+        case FOXAPP_OP_PLUGIN_RUN_MODE: {
+            // ONE PLUGIN'S RUN STATE (0.99.73; the Fitted modules window's KEEP RUNNING tick): the plugin's instances are started or stopped
+            // alone. A name no installed plugin carries and no run state records is NOT_FOUND, as DECODER_START's is; an AUTO for an id the
+            // map holds is how a stale entry is cleared.
+            if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no plugin named"); }
+            if (c.ival[0] < 0 || c.ival[0] > 2) { return refuse(FOXAPI_OUT_OF_RANGE, "no such run state"); }
+            bool known = pluginRun_.find(cascade::core::pluginRunId(text)) != pluginRun_.end();
+            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                known = known || cascade::core::pluginKey(lp) == text;
+            }
+            if (!known) { return refuse(FOXAPI_NOT_FOUND, "no plugin with that name is installed"); }
+            setPluginRun(text, c.ival[0] == 1 ? cascade::core::PluginRun::Always
+                               : c.ival[0] == 2 ? cascade::core::PluginRun::Stopped
+                                                : cascade::core::PluginRun::Auto);
+            return res;
+        }
+        case FOXAPP_OP_PLUGIN_USE:
+            // What the window shows of each plugin (the whole table; empty clears it). Applied here, at the head of the pass; the lifecycle
+            // step of THIS pass reads it - the window's signal is one pass late by design, the wake is not later still.
+            applyPluginUse(text);
+            return res;
         case FOXAPP_OP_PLUGIN_AUTO_PRESET:
-            maybeAutoPreset(text, c.ival[0] == 1 ? "window opened" : "started");
+            maybeAutoPreset(text, c.ival[0] == 1 ? "window opened" : "started", /*pin=*/c.ival[0] != 1);
             return res;
         case FOXAPI_OP_PLUGIN_GRANT:
             if (c.ival[0] == 1) {
@@ -8453,7 +8444,9 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // rebuilds it without the stopped ones, which is also what the restored
     // source needs; doing it here means a stopped plugin never survives a
     // launch even for a frame.
-    pluginsStopped_ = cfg.pluginsStopped;
+    //
+    // HOW EACH PLUGIN RUNS (0.99.73), and the one-time migration of the old stop list (restorePluginRun).
+    restorePluginRun(cfg);
     // AppConfig::closedWindows is no longer applied. Until 0.79.1 every plugin
     // window appeared by itself and this list kept the ones the user had shut
     // from coming back; now no plugin window appears until the user opens it
@@ -8900,7 +8893,13 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
     cfg.pluginSettingsAllowed = pluginSettingsAllowed_;
     cfg.pluginSettings = pluginSettings_;
-    cfg.pluginsStopped = pluginsStopped_;
+    // The old file-name list is dropped (0.99.73): applyConfig migrated it, by id, into pluginRun, and an older build that reads this file
+    // sees nothing stopped rather than a stale list. AUTO is the default and is never written.
+    cfg.pluginsStopped.clear();
+    cfg.pluginRun.clear();
+    for (const auto& [id, mode] : pluginRun_) {
+        if (mode != cascade::core::PluginRun::Auto) { cfg.pluginRun[id] = cascade::core::pluginRunWord(mode); }
+    }
     // closedWindows is written empty: nothing reads it since 0.79.1 (see
     // applyConfig), and an empty list is what an older build would take to
     // mean "no window was shut" - the nearest true statement it can make
@@ -9166,6 +9165,9 @@ void Engine::pumpPlugins() {
     // An unload the interface could not take (it was not framing) is retried once it has framed (pump move step P3).
     retryPluginUnload();
     applyPluginApi();
+    // WHICH PLUGINS RUN THIS PASS (0.99.73): wake what has just been wanted, put to sleep what has not been for 30 seconds. After the
+    // commands (a window's report, a START, a preset) have landed, before the publish, so what the publish says is the plugins that exist.
+    updatePluginLifecycle();
     scannerFrame();
 }
 

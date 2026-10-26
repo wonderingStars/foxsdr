@@ -1010,6 +1010,12 @@ private:
     // method set of the one feed interface the fence will put in their place (docs/engine-stage4.md, group 14 part d).
     const std::vector<std::string>& hostTrackPluginNames();
     void hostPollPlugins();
+    // WHAT THE WINDOW SHOWS OF EACH PLUGIN, told to the engine (stub campaign B2, 0.99.73; app_window_plugin_use.cpp): the plugins whose
+    // windows are open, whose map page is open, the radar scope when it shows, the Decoder output window - the signals only a window
+    // can see, which wake a plugin set to AUTO. The whole table is sent when it CHANGES (FOXAPP_OP_PLUGIN_USE), never every frame.
+    void reportPluginUse();
+    std::string pluginUseText_;  // this frame's table (kept for its room)
+    std::string pluginUseSent_;  // the last one sent
     void hostPollImages(std::vector<cascade::core::HostImage>& out);
     // Does the receiver have a position? The state's FOXAPI_RX_POSITION_SET (rxLatDeg and rxLonDeg are valid with it).
     bool receiverPositionKnown() const { return (uiState_.flags & FOXAPI_RX_POSITION_SET) != 0u; }

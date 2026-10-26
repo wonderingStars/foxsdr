@@ -63,6 +63,7 @@ struct Env {
     std::unique_ptr<AppWindow> app;
     Env() {
         app = std::make_unique<AppWindow>();
+        Access::pinPlugins(*app);
         Access::poll(*app);  // the frame's first poll
     }
     ~Env() {
@@ -216,14 +217,38 @@ void testNewestWins() {
     CHECK_EQ(Access::link(a).appliedEpoch(), Access::link(a).postedEpoch());
     CHECK_EQ(Access::link(a).appliedCount(), applied0 + 1u);
     CHECK(waitFor([&] { return Access::link(a).postedEpoch() >= posted0 + 4u; }, 100));
-    CHECK_EQ(fx0.creates(), 1);        // one rebuild: the old instance destroyed, one made
-    CHECK_EQ(fx0.destroys(), 1);
+    // STUB CAMPAIGN B2 (0.99.73): a stop or a start is ONE plugin's instances, not a wholesale rebuild, and the directive that carries it is
+    // the STATE the interface is to hold (core/plugin_directive.hpp, lifeOnly), not an event. The frame applies the newest ONCE (above) -
+    // and the newest says "running", which is what the instance already is: STOP, START, STOP, START is a net nothing, so it is not
+    // destroyed and made again. (Before 0.99.73 each one rebuilt every instance; the churn the interface sees is the net one.)
+    CHECK_EQ(fx0.creates(), 0);
+    CHECK_EQ(fx0.destroys(), 0);
     CHECK_EQ(fx0.live(), 1);
     CHECK_EQ(Access::ui(a).trackCount(), 3u);
     // ...and the pass said so each time it could not confirm a rebuild: four lines (not an error: nothing is being unmapped).
     std::printf("      the pass could not confirm a rebuild, and said so %d time(s)\n",
                 diagLines("had not applied the plugin directive") - warned0);
     CHECK_EQ(diagLines("had not applied the plugin directive") - warned0, 4);
+    // A NET CHANGE is applied as one: STOP, START, STOP with the frame parked is one application, and it destroys the instance once;
+    // a START after it brings it back, created once.
+    {
+        const std::uint64_t applied1 = Access::link(a).appliedCount();
+        const std::uint64_t posted1 = Access::link(a).postedEpoch();
+        send(a, FOXAPI_OP_DECODER_STOP, key);
+        send(a, FOXAPI_OP_DECODER_START, key);
+        send(a, FOXAPI_OP_DECODER_STOP, key);
+        CHECK(waitFor([&] { return Access::link(a).postedEpoch() >= posted1 + 3u; }, 8000));
+        CHECK_EQ(Access::link(a).appliedCount(), applied1);   // the frame has not come back
+        Access::poll(a);
+        CHECK_EQ(Access::link(a).appliedCount(), applied1 + 1u);
+        CHECK_EQ(fx0.destroys(), 1);
+        CHECK_EQ(fx0.live(), 0);
+        CHECK_EQ(Access::ui(a).trackCount(), 0u);
+        send(a, FOXAPI_OP_DECODER_START, key);
+        CHECK(framesUntil(a, [&] { return Access::ui(a).trackCount() == 3u; }, 5000));
+        CHECK_EQ(fx0.creates(), 1);
+        CHECK_EQ(fx0.live(), 1);
+    }
     Access::stopControl(a);
     CHECK_EQ(fx0.staleCalls(), 0);
 }

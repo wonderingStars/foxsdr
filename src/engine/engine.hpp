@@ -70,6 +70,7 @@
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/plugin_runner.hpp"
+#include "core/plugin_run.hpp"
 #include "core/plugin_ui.hpp"
 #include "core/receiver_snapshot.hpp"
 #include "core/recorder.hpp"
@@ -370,7 +371,9 @@ private:
     // and re-validated `ps` from the plugin itself: a preset is a plugin
     // publishing where it listens, never a plugin retuning the radio — that
     // still needs the separate per-plugin permission.
-    void applyPluginPreset(const cascade::core::LoadedPlugin& p, const CascadePreset& ps);
+    // `pin`: a preset PRESS pins the plugin to ALWAYS (the deliberate "run this", 0.99.73); the tune that merely OPENING a window does for
+    // you (maybeAutoPresetOnShow) leaves the run state alone - the window wants the plugin while it is open, and that is all.
+    void applyPluginPreset(const cascade::core::LoadedPlugin& p, const CascadePreset& ps, bool pin = true);
     // THE ONE ENUMERATION, used by drawPluginPresets, maybeAutoPreset,
     // rebuildMuteStates and the web status snapshot: walks `p`'s preset table
     // (capped at kMaxPresetsPerPlugin, exactly as every consumer has always
@@ -505,14 +508,48 @@ private:
     // Whether the user has stopped this plugin. `pluginKey` is a module file
     // name (cascade::core::pluginKey), the same identity the tune grant uses.
     bool pluginIsStopped(const std::string& pluginKey) const;
-    // Records a stop or a start WITHOUT rebuilding: updates the durable list
+    // ===== HOW EACH PLUGIN RUNS (stub campaign B2, 0.99.73; engine/engine_plugin_run.cpp, core/plugin_run.hpp) =====
+    // AUTO (the default: runs while something uses it), ALWAYS (pinned) or STOPPED, kept by plugin id so an update of the module keeps it.
+    // The `ById` forms take an id already reduced (the pass's hot path: no string is built).
+    cascade::core::PluginRun pluginRunMode(const std::string& pluginKey) const;
+    cascade::core::PluginRun pluginRunModeById(const std::string& id) const;
+    // Whether the plugin has instances now (or, for a module with nothing to start, always): STOPPED never, ALWAYS always, AUTO while its
+    // life says it is running - and always on a window-less host, which treats AUTO as pinned (see engine_plugin_run.cpp).
+    bool pluginShouldRun(const cascade::core::LoadedPlugin& p) const;
+    bool pluginShouldRunById(const cascade::core::LoadedPlugin& p, const std::string& id) const;
+    // AUTO and asleep: nothing is using it, so it has no instance. Not stopped, not failing - the table's PLUGINS value[3] bit 2.
+    bool pluginIsIdle(const std::string& pluginKey) const;
+    std::size_t idleDecoderCount() const;
+    std::vector<std::string> stoppedPluginIds() const;
+    // Down into the runner (its stop and dormant sets) and the API core (the stop set); the plugin UI's copy rides the next directive.
+    void pushPluginHoldSets();
+    // The config's half: pluginRun in, and the old file-name stop list migrated into it (fillConfig writes them back).
+    void restorePluginRun(const cascade::core::AppConfig& cfg);
+    // ONE PLUGIN'S RUN STATE, applied: its instances (runner and plugin UI) started or stopped alone, nothing else rebuilt.
+    void setPluginRun(const std::string& pluginKey, cascade::core::PluginRun mode);
+    void postPluginLife();
+    void startPluginInstances(const cascade::core::LoadedPlugin& p);
+    void stopPluginInstances(const std::string& pluginKey);
+    // FOXAPP_OP_PLUGIN_USE: the window's table of what it shows (replaces the last).
+    void applyPluginUse(const std::string& text);
+    // The signals that make `p` wanted, from the window's table and the engine's own state; and the pass's one step over every plugin.
+    cascade::core::PluginUse pluginUseOf(const cascade::core::LoadedPlugin& p, const std::string& playingKey,
+                                         std::size_t browserSessions) const;
+    cascade::core::PluginUse pluginUseOfKeyed(const cascade::core::LoadedPlugin& p, const std::string& key, const std::string& id,
+                                              const std::string& playingKey, std::size_t browserSessions) const;
+    void updatePluginLifecycle();
+    // Whether a front end (a window) has installed its plugin UI applier. False: nothing could ever report a window.
+    bool frontEndPresent() const { return frontEnd_.load(std::memory_order_acquire); }
+    // The basemap and track-info plugins chosen (first loaded, not stopped), or null.
+    void chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const CascadeTrackInfoApi*& trackInfo) const;
+    // Records a stop or a start WITHOUT rebuilding: updates the durable state
     // and pushes it into the runner and the UI half, so the next rebuild sees
     // it. Split from the button's action below because applyPluginPreset has
     // to start a plugin and then rebuild ONCE, having also moved the receiver.
+    // A START is ALWAYS (pinned), a stop is STOPPED.
     void recordPluginStopped(const std::string& pluginKey, bool stopped);
-    // The Stop/Start button's action: record it, then rebuild through the one
-    // lifecycle path everything else uses, so a stop tears the plugin's
-    // instances down and a start builds them against the CURRENT receiver.
+    // The Stop/Start button's action: ONE plugin's instances are stopped or
+    // started (setPluginRun), not a wholesale rebuild.
     void setPluginStopped(const std::string& pluginKey, bool stopped);
     // "WE WANT THE USER TO HAVE TO DO NOTHING" (the owner's words). Called
     // from setPluginStopped's own START branch only: looks the plugin back up
@@ -540,7 +577,7 @@ private:
     // `verb` standing in for what just happened ("started" / "window
     // opened"). `verb` is a string literal from the two call sites, never
     // plugin-supplied text.
-    void maybeAutoPreset(const std::string& pluginKey, const char* verb);
+    void maybeAutoPreset(const std::string& pluginKey, const char* verb, bool pin);
     // THE REVERSE OF cascade::core::pluginKey(): HostImage/HostPanel/
     // HostInstrument/MapPage all carry a plugin's DISPLAY name (LoadedPlugin::
     // name), the same identity drawPluginWindowRows and drawMapPageSections
@@ -2342,7 +2379,25 @@ private:
     // are: PluginRunner and PluginUi are rebuilt on every source change and
     // cleared on every rescan, so the decision has to live somewhere neither
     // touches.
-    std::vector<std::string> pluginsStopped_;
+    //
+    // 0.99.73 (stub campaign B2): the durable state is now HOW EACH PLUGIN RUNS, by plugin id (AppConfig::pluginRun); a stop is
+    // `Stopped` in it, and the old file-name list is only migrated at the config's door (restorePluginRun; fillConfig writes it back).
+    std::map<std::string, cascade::core::PluginRun> pluginRun_;
+    // Each plugin's life, by id: whether it has been woken and when it was last wanted (core/plugin_run.hpp). Only the pass writes it.
+    std::map<std::string, cascade::core::PluginLife> pluginLife_;
+    // What the window reported it shows (FOXAPP_OP_PLUGIN_USE), by id: FOXAPP_PLUGIN_USE_* bits. The whole table, replaced by each report.
+    std::map<std::string, std::uint32_t> pluginUseReported_;
+    // The ids of the plugins set to AUTO and asleep, as pushPluginHoldSets last worked them out: what a directive carries to the plugin UI.
+    std::vector<std::string> pluginDormantIds_;
+    // A manual tune gives an audio-output decoder its first chance to play (an independent wake signal before it has an instance); the
+    // lifecycle step consumes it.
+    bool audioOutputTunePending_ = false;
+    // The hysteresis, read from the environment on the first step (FOXSDR_DORMANT_AFTER_MS, else 30 s).
+    std::int64_t pluginDormantAfterMs_ = -1;
+    // Set by setPluginUiApplier: a window-less engine treats AUTO as pinned.
+    std::atomic<bool> frontEnd_{false};
+    // apiPluginKeys_'s ids (core::pluginRunId of each key), the pass's lookup keys for the run maps above.
+    std::vector<std::string> apiPluginIds_;
     // AppConfig::pluginMuteOverride. Held here for the same reason: the value
     // is a decision about a plugin, and the objects that act on it are torn
     // down and rebuilt underneath it.

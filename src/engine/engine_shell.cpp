@@ -85,6 +85,7 @@ private:
     void apply(const cascade::core::PluginDirective& d) {
         PluginDirectiveFacts f;
         f.release = d.release;
+        f.lifeOnly = d.lifeOnly;
         f.basemap = d.basemap;
         f.trackInfo = d.trackInfo;
         if (steps_.before) { steps_.before(f); }

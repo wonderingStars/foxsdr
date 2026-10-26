@@ -1327,7 +1327,7 @@ private:
             case FOXAPP_OP_TELEMETRY_CONSENT: case FOXAPP_OP_SET_CATALOGUE_URL:
                 return FOXAPI_GRANT_ADMIN;
             case FOXAPI_OP_PROBLEM_REPORT: case FOXAPI_OP_FEATURE_REQUEST: case FOXAPP_OP_NOTE_PANEL:
-            case FOXAPP_OP_SET_PATCH_PAGE_OPEN: case FOXAPP_OP_TRACK_INFO_LINE:
+            case FOXAPP_OP_SET_PATCH_PAGE_OPEN: case FOXAPP_OP_TRACK_INFO_LINE: case FOXAPP_OP_PLUGIN_USE:
                 return FOXAPI_GRANT_VIEW;
             default:
                 if ((op & 0xFF00u) == 0x0A00u) { return FOXAPI_GRANT_TRANSMIT; }
@@ -2442,6 +2442,8 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 // 0.3 (8.8): the module file's size (measured by the engine) and its newest notice's level.
                 it.value[1] = static_cast<double>(p.sizeBytes);
                 it.value[2] = static_cast<double>(p.noticeLevel);
+                // 0.3 (8.8, stub campaign B2): how the plugin runs - bits 0-1 AUTO/ALWAYS/STOPPED, bit 2 asleep.
+                it.value[3] = static_cast<double>(p.runWord);
                 if (p.loaded) { it.flags |= FOXAPI_ITEM_ACTIVE; }
                 if (p.stopped) { it.flags |= FOXAPI_ITEM_STOPPED; }
                 if (p.tuneAllowed) { it.flags |= FOXAPI_ITEM_TUNE_ALLOWED; }

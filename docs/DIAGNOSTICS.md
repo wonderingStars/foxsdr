@@ -2446,7 +2446,8 @@ The same 12CF report: thirty plugins loaded, and each of them fed every DSP bloc
 polled every GUI frame whether anyone was looking at it or not. Fitting a plugin used
 to create its decoder at once; now a plugin is created when something **uses** it and
 put down again 30 seconds after the last use ends (`core/plugin_run.hpp`,
-`AppWindow::updatePluginLifecycle`). **Nothing here is established to fix that
+`Engine::updatePluginLifecycle`, once a pass: the engine decides, the window only reports
+what it shows). **Nothing here is established to fix that
 user's machine**; the release notes say what it does and does not claim.
 
 **Three run states** per plugin, kept in the settings file as `pluginRun` (plugin id ->
@@ -2456,8 +2457,11 @@ lose a choice. The old `pluginsStopped` list of file names is read **once** and 
 entry becomes `pluginRun[<id>] = "stopped"`; the file is saved with the old list empty
 from then on (an older build that reads it sees nothing stopped).
 
-**What counts as a use** (`core::PluginUse`, evaluated once a frame on the window's
-thread by `AppWindow::pluginUseOf`): one of the plugin's windows is shown; its map page
+**What counts as a use** (`core::PluginUse`, evaluated once a pass by
+`Engine::pluginUseOf`; the four a window alone can see - a window shown, a map page, the
+radar scope, the Decoder output window - arrive as `FOXAPP_OP_PLUGIN_USE`, sent by the
+window when they change, so the engine wakes the plugin in the pass that applies the
+report): one of the plugin's windows is shown; its map page
 is open; the radar scope is showing and it is a track source; a running patch has a
 Decoder node naming it; it is the audio-out plugin holding the speakers; the Decoder
 output window is open and it is a text decoder; the web server has a live session and
@@ -2466,7 +2470,9 @@ additions the owner's list did not name**, because without them two kinds of plu
 would silently stop working: an in-chain audio processor, and a module that only
 attaches to the host, are in use as long as they are fitted (`standing duty`). The
 passive consumers - coverage accumulation, the web snapshot, aircraft-info look-ups -
-do **not** count. A START press and a preset press set ALWAYS; the tune that opening a
+do **not** count. **A host with no window runs every plugin** (the headless engine, a Pi
+serving the web page): nothing there could ever report a window, so AUTO is treated as
+pinned - today's behaviour - and `plugin run:` says `idle=0`. A START press and a preset press set ALWAYS; the tune that opening a
 window does for you does not; STOP sets STOPPED.
 
 **Two log lines**, one per transition of an AUTO plugin:

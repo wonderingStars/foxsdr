@@ -158,8 +158,10 @@ void Engine::refreshApiPluginKeys() {
     if (f.h == apiPluginPathsHash_ && apiPluginKeys_.size() == pluginHost_.plugins().size()) { return; }
     apiPluginPathsHash_ = f.h;
     apiPluginKeys_.clear();
+    apiPluginIds_.clear();
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         apiPluginKeys_.push_back(cascade::core::pluginKey(p));
+        apiPluginIds_.push_back(cascade::core::pluginRunId(apiPluginKeys_.back()));
     }
 }
 
@@ -213,7 +215,10 @@ std::uint64_t Engine::apiListsFingerprint() {
     for (std::size_t i = 0; i < pluginHost_.plugins().size(); ++i) {
         const cascade::core::LoadedPlugin& p = pluginHost_.plugins()[i];
         f.value(p.loaded);
-        f.value(pluginIsStopped(apiPluginKeys_[i]));
+        f.value(pluginRunModeById(apiPluginIds_[i]) == cascade::core::PluginRun::Stopped);  // (by the cached id: nothing allocates)
+        // How it runs (PLUGINS value[3]): the run state and whether it is asleep - from the cached ids, nothing allocates.
+        f.value(static_cast<int>(pluginRunModeById(apiPluginIds_[i])));
+        f.value(pluginRunModeById(apiPluginIds_[i]) == cascade::core::PluginRun::Auto && !pluginShouldRunById(p, apiPluginIds_[i]));
         // API 0.3 8.7: what PLUGINS and DECODERS say beyond that - the capability word, the settings grant and the
         // "mute audio while running" setting. The keys are the cached ones: nothing here allocates.
         f.value(p.capabilities);
@@ -614,6 +619,12 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
         // API 0.3 8.7.
         w.capabilities = p.capabilities;
         w.stopped = p.loaded && pluginIsStopped(w.key);
+        // PLUGINS value[3] (stub campaign B2): bits 0-1 the run state (0 auto, 1 always, 2 stopped), bit 2 (4) asleep - AUTO and nothing
+        // is using it, so it has no instance. A refused file has neither.
+        if (p.loaded) {
+            w.runWord = static_cast<std::uint32_t>(pluginRunMode(w.key)) |
+                        ((pluginIsIdle(w.key)) ? 4u : 0u);
+        }
         w.tuneAllowed = listHolds(pluginTuneAllowed_, w.key);
         w.settingsAllowed = listHolds(pluginSettingsAllowed_, w.key);
         w.mutes = w.decoder && pluginMutesFor(p, w.key);

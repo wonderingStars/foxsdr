@@ -141,6 +141,21 @@ struct AppWindowTestAccess {
     using Plugins = AppWindow::PluginListCache;
     using Lines = AppWindow::DecoderLineCache;
 
+    // STUB CAMPAIGN B2 (0.99.73, docs/engine-stage4.md 6.22): a fitted plugin runs only while it is USED, and nothing in a hermetic frame
+    // shows a plugin's window - so the plugins this test reads the instances of are PINNED to ALWAYS ("keep running"), the state the
+    // product has for a plugin the user keeps running. What the test holds is unchanged: what a RUNNING plugin's rows, status and
+    // counts are, as the window shows them. (How a plugin comes to run: tests/test_engine_api_03.cpp group N.)
+    static void pinPlugins(AppWindow& a) {
+        cascade::engine::Engine& e = rawEngine(a.engine_);
+        passseam::on(e, [&] {
+            std::vector<std::string> keys;
+            for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
+                if (p.loaded) { keys.push_back(cascade::core::pluginKey(p)); }
+            }
+            for (const std::string& k : keys) { e.setPluginRun(k, cascade::core::PluginRun::Always); }
+        });
+    }
+
     // The hermetic world: the plugin folder, and no radio, USB walk or SoapySDR probe of the desk's.
     static void installHooks() {
         Engine::testHooks_.makeDevice = &engine_api_test::makeFakeRadio;
@@ -438,7 +453,10 @@ const std::string kRefused = moduleFile("zz_refused");  // the file in the plugi
 // A window with the two fixtures loaded, its state read.
 struct Fresh {
     AppWindow app;
-    Fresh() { Access::frames(app, 2); }
+    Fresh() {
+        Access::pinPlugins(app);
+        Access::frames(app, 2);
+    }
     ~Fresh() { releasePass(); }  // (a held pass must not outlive the window's teardown, which stops the thread)
 };
 

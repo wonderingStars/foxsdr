@@ -218,9 +218,13 @@ int main() {
             // Stopped (printed even when empty), the mute states, the audio mute (printed even when not muting), the runner.
             const int stopped = indexOfPrefix(out, "plugin stopped: count=0");
             CHECK(stopped == pic + 9);  // (the eight tracks stand between)
+            // HOW EVERY OTHER PLUGIN RUNS (0.99.73, stub campaign B2; docs/DIAGNOSTICS.md): the line master prints beside the stopped ones,
+            // printed in every run. An engine with no window (this one) runs every plugin - AUTO is pinned there - so nothing is idle and
+            // nothing is pinned by the user: always=0 idle=0. It stands between the stopped line and the mute states, which moved down by one.
+            CHECK(indexOfPrefix(out, "plugin run: always=0 idle=0") == stopped + 1);
             CHECK(countPrefix(out, "plugin mute: ") == 4);
-            CHECK(indexOfPrefix(out, "audio mute: muted=0 by=") == stopped + 5);
-            CHECK(indexOfPrefix(out, "plugin runner: active=") == stopped + 6);
+            CHECK(indexOfPrefix(out, "audio mute: muted=0 by=") == stopped + 6);
+            CHECK(indexOfPrefix(out, "plugin runner: active=") == stopped + 7);
             // Nothing is blocked, nothing is to be updated, and no line for either.
             CHECK(countPrefix(out, "plugin blocked: ") == 0);
             CHECK(countPrefix(out, "plugin update: ") == 0);
@@ -332,10 +336,15 @@ int main() {
             CHECK(!ec);
         }
         const std::filesystem::path cfg = scratch / "app_config.json";
-        {
+        // STUB CAMPAIGN B2 (0.99.73): a fitted plugin runs only while it is USED, and a bounded run opens nothing - so the report below, which
+        // is about plugins that RUN (their tracks, panels, pictures, decoders), is taken with the three fixtures PINNED to ALWAYS ("keep
+        // running") in the settings file the run restores; a second run with an empty file holds what a run with nothing in use reports.
+        const auto writeConfig = [&](const char* text) {
             std::ofstream c(cfg, std::ios::binary | std::ios::trunc);
-            c << "{}\n";
-        }
+            c << text << "\n";
+        };
+        writeConfig("{ \"pluginRun\": { \"fixture_stage1_plugin\": \"always\", \"fixture_group13_plugin\": \"always\", "
+                    "\"fixture_group14_plugin\": \"always\" } }");
         engine_api_test::setEnv("CASCADE_CONFIG_TEST", cfg.string());
         engine_api_test::setEnv("FOXSDR_DIAG_DIR", (scratch / "diag").string());
         engine_api_test::setEnv("FOXSDR_CRASH_URL", "http://127.0.0.1:9/");
@@ -384,6 +393,7 @@ int main() {
         CHECK(countPrefix(loud, "plugin host: ") == 3);
         CHECK(countPrefix(loud, "source status: kind=siggen ") == 1);
         CHECK(countPrefix(loud, "plugin ui: tracks=4 paths=1 panels=1 ") == 1);
+        CHECK(countPrefix(loud, "plugin run: always=3 idle=0") == 1);   // (the three pins, none asleep)
         // The picture the window's plugin windows polled, printed by the ENGINE, between the panel and the tracks.
         const int panel = indexOfPrefix(loud, "plugin panel: ");
         const int pic = indexOfPrefix(loud, "plugin image: from=Group Thirteen Fixture ");
@@ -397,6 +407,17 @@ int main() {
         const int teardown = indexOfPrefix(loud, "cascade: teardown ");
         const int audio = indexOfPrefix(loud, "audio mute: muted=0 by=");
         CHECK(status >= 0 && audio > status && (teardown < 0 || teardown > audio));
+
+        // THE SAME RUN WITH NOTHING PINNED AND NOTHING IN USE (an empty settings file): the three modules are loaded and every one of them is
+        // ASLEEP - no track, no panel, no decoder instance - and the report says so (docs/DIAGNOSTICS.md).
+        writeConfig("{}");
+        const std::vector<std::string> asleep = run(true);
+        for (const std::string& l : asleep) { std::printf("  | %s\n", l.c_str()); }
+        CHECK(countPrefix(asleep, "plugin host: ") == 3);
+        CHECK(countPrefix(asleep, "plugin ui: tracks=0 paths=0 panels=0 ") == 1);
+        CHECK(countPrefix(asleep, "plugin track: ") == 0);
+        CHECK(countPrefix(asleep, "plugin run: always=0 idle=3") == 1);
+        CHECK(countPrefix(asleep, "plugin runner: active=0 ") == 1);
         engine_api_test::setEnv("CASCADE_PLUGIN_STATUS", "");
         engine_api_test::setEnv("CASCADE_DECODE_TEST", "");
     }

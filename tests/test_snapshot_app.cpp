@@ -193,6 +193,20 @@ bool waitFor(Fn fn, int ms = 20000) {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
+    // STUB CAMPAIGN B2 (0.99.73, docs/engine-stage4.md 6.22): a fitted plugin runs only while it is USED, and nothing in a hermetic frame
+    // shows a plugin's window - so the plugins this test reads the instances of are PINNED to ALWAYS ("keep running"), the state the
+    // product has for a plugin the user keeps running. What the test holds is unchanged: what a RUNNING plugin's rows, status and
+    // counts are, as the window shows them. (How a plugin comes to run: tests/test_engine_api_03.cpp group N.)
+    static void pinPlugins(AppWindow& a) {
+        cascade::engine::Engine& e = rawEngine(a.engine_);
+        passseam::on(e, [&] {
+            std::vector<std::string> keys;
+            for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
+                if (p.loaded) { keys.push_back(cascade::core::pluginKey(p)); }
+            }
+            for (const std::string& k : keys) { e.setPluginRun(k, cascade::core::PluginRun::Always); }
+        });
+    }
     static void installHooks() {
         cascade::engine::Engine::testHooks_.pluginDir = &pluginDirHook;
         cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
@@ -592,6 +606,7 @@ int main() {
     ImGui::CreateContext();
     {
         AppWindow app;
+        A::pinPlugins(app);
         decodersAndCost(app);
         walkingOneWindow(app);
         webRowsFollowTheirBlock(app);

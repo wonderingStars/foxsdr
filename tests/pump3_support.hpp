@@ -209,6 +209,19 @@ struct AppWindowTestAccess {
     }
 
     static void setUnmapHook(void (*hook)()) { Engine::testHooks_.pluginsAboutToUnmap = hook; }
+    // STUB CAMPAIGN B2 (0.99.73, docs/engine-stage4.md 6.22): a fitted plugin runs only while it is USED, and these tests are about the
+    // thread that creates, polls and destroys a plugin's instance - so the fixture is PINNED to ALWAYS ("keep running") as the window is
+    // built, before any thread runs, the state the product has for a plugin the user keeps running. Every cross-thread edge the tests hold
+    // (the directive, its acknowledgement, the bounded wait, the unload handshake) is exercised exactly as before; how a plugin comes to run
+    // is tests/test_engine_api_03.cpp group N.
+    static void pinPlugins(AppWindow& a) {
+        Engine& e = rawEngine(a.engine_);
+        std::vector<std::string> keys;
+        for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
+            if (p.loaded) { keys.push_back(cascade::core::pluginKey(p)); }
+        }
+        for (const std::string& k : keys) { e.setPluginRun(k, cascade::core::PluginRun::Always); }
+    }
     static Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
     static void submit(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) { a.uiSubmit(q); }
 

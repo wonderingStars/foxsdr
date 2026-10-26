@@ -128,6 +128,7 @@ void rescan(AppWindow& a) { Access::submit(a, cmd::makeText(FOXAPI_OP_PLUGIN_RES
 void testWindowInsidePlugin() {
     std::printf("  H1: the window is inside the plugin's poll when the release is posted - nothing is unmapped until it is out\n");
     AppWindow app;
+    Access::pinPlugins(app);
     Access::poll(app);
     const Fx fx = fxNow(g_fixturePath);
     CHECK(fx.mapped);
@@ -179,6 +180,7 @@ void testWindowInsidePlugin() {
 void testNotFraming() {
     std::printf("  H2: the window is not framing - the wait is bounded, nothing is unmapped, the error is said once, the unload is retried\n");
     AppWindow app;
+    Access::pinPlugins(app);
     Access::poll(app);
     const Fx fx = fxNow(g_fixturePath);
     CHECK_EQ(fx.live(), 1);
@@ -236,6 +238,7 @@ void testNotFraming() {
 void testShutdown() {
     std::printf("  H3: shutdown with no window framing - the stop does not wait out the bound, the teardown releases itself\n");
     auto app = std::make_unique<AppWindow>();
+    Access::pinPlugins(*app);
     Access::poll(*app);
     const Fx fx = fxNow(g_fixturePath);
     CHECK_EQ(fx.live(), 1);
@@ -273,6 +276,7 @@ void testShutdown() {
 void testWatchdogPause() {
     std::printf("  H4: the control thread's watchdog is paused across the wait, and the pause is released\n");
     AppWindow app;
+    Access::pinPlugins(app);
     Access::poll(app);
     std::error_code mk;
     std::filesystem::create_directories(g_scratch / "wd", mk);
@@ -329,6 +333,7 @@ void testHeadless() {
 void testLatency() {
     std::printf("  H8: what the handshake costs when the window is framing (twelve rescans, the frame thread polling every millisecond)\n");
     AppWindow app;
+    Access::pinPlugins(app);
     Access::poll(app);
     const Fx fx0 = fxNow(g_fixturePath);
     CHECK_EQ(fx0.live(), 1);
@@ -375,6 +380,7 @@ void testLatency() {
 void testApply() {
     std::printf("  H6: PluginUi::apply - a directive is the whole of what the plugin UI is built from; a release leaves it empty\n");
     AppWindow app;
+    Access::pinPlugins(app);
     const Fx fx = fxNow(g_fixturePath);
     cascade::core::PluginApiCore& core = Access::core(app);
     cascade::core::PluginUi& ui = Access::ui(app);
