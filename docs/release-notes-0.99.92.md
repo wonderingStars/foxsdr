@@ -7,19 +7,19 @@ This is a repair only; nothing else changes. If you pressed "Install now and res
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.92.exe`:**
-`TBD`
+`422081d68a464b65e6c0fb1c2b3a6e29147caf8c7177ea6f07b9095e4ea87831`
 
 **SHA-256 of `FoxSDR-0.99.92-x86_64.AppImage`:**
-`TBD`
+`9310712302d5401eda2b569eb0106dc13992c63b05c47ebdc39b266ad7b7b846`
 
 **SHA-256 of `foxsdr-0.99.92-linux-x64.tar.gz`:**
-`TBD`
+`c10267547934c0e2537b4972a5f7a6ec9a9ec0414183fc9fe03a8bb1ab3f20eb`
 
 **SHA-256 of `FoxSDR-0.99.92-aarch64.AppImage`:**
-`TBD`
+`2dcfd1c339ec7cdb5361bbbee818ee81bd1442fa12c107b5aa87927f346ba601`
 
 **SHA-256 of `foxsdr-0.99.92-linux-arm64.tar.gz`:**
-`TBD`
+`e20b874a32fd79d3dc23c561a144125ec8323cb2b2c4eacdfa3ab22f27c95843`
 
 ## Features and fixes, 2026-10-26
 
