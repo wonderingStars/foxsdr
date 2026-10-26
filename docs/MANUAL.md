@@ -778,9 +778,15 @@ bandwidth), and the Airband monitor plays the ticked AM and NFM ones.
   decimal comma. Importing the same file twice adds nothing twice. SDR#'s
   converter Shift is not applied: the frequency is taken as written, and the
   import says when a list carried one.
+- **Groups of your own:** the box under the name is the group the next
+  **Add current** joins - type "MILANO MALPENSA" once and every frequency you
+  add after it lands in that group until you change or clear the box; the
+  arrow beside it lists the groups the list already has. Right-click a row to
+  move it to another group, to none, or to a new name typed in the menu.
 - **Find** with the search box (names, groups, or the start of a frequency in
-  MHz), the group list, and Favourites only. "Remove this group" takes a whole
-  imported group out again.
+  MHz), the group list, and Favourites only. With a group chosen, "Remove this
+  group" takes the whole group out again and "Rename this group" opens a field
+  for its new name - a name the list already has merges the two groups.
 - **Export for SDR#** writes the entries currently shown - so a search or a
   group picks what is shared - as a `frequencies.xml` in the recordings
   folder.

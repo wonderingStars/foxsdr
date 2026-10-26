@@ -3633,6 +3633,16 @@ private:
     int markerMenuNear_ = 0;          // a marker under the pointer, or 0
     std::string bookmarkError_;  // red text in the Bookmarks section
     char bookmarkName_[128] = "";  // editable name for the next "Add current"
+    // THE GROUP THE NEXT "Add current" JOINS (2026-10, a tester's request: an
+    // airport's tower, ground and approach kept together under its name). Typed
+    // once and left - the field is not cleared by Add, so a run of frequencies
+    // lands in one group; empty means ungrouped, as every bookmark was before.
+    char bookmarkGroup_[96] = "";
+    // "Rename this group": the inline field is open, and what it holds.
+    bool bookmarkRenameOpen_ = false;
+    char bookmarkRenameName_[96] = "";
+    // A row's right-click menu: the "new group" field it offers.
+    char bookmarkRowGroup_[96] = "";
     // --- A large imported list (0.99.19) ----------------------------------------
     // The list can be tens of thousands of entries, so nothing here walks it
     // per frame: the view is a cached index rebuilt only when the list or the

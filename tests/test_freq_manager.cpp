@@ -644,6 +644,61 @@ int main() {
         CHECK(m.list().size() == 2u);
     }
 
+    // --- renameGroup: rename, merge into an existing group, ungroup; a group
+    //     nobody has and a no-op rename move nothing and leave version() alone --
+    {
+        FreqManager m;
+        Bookmark a, b, c, d;
+        a.name = "TWR"; a.freqHz = 119.0e6; a.group = "MILANO MALPENSA";
+        b.name = "GND"; b.freqHz = 121.9e6; b.group = "MILANO MALPENSA";
+        c.name = "TWR"; c.freqHz = 118.1e6; c.group = "MILANO LINATE";
+        d.name = "LOOSE"; d.freqHz = 145.5e6;
+        CHECK(m.addMany({a, b, c, d}) == 4u);
+        const unsigned v0 = m.version();
+
+        // Nobody has it: nothing moves, version untouched.
+        CHECK(m.renameGroup("LUGANO", "VARESE") == 0u);
+        CHECK(m.version() == v0);
+        // Same name both sides: nothing moves, version untouched.
+        CHECK(m.renameGroup("MILANO MALPENSA", "MILANO MALPENSA") == 0u);
+        CHECK(m.version() == v0);
+
+        // A plain rename moves both rows, no others, and keeps the order.
+        CHECK(m.renameGroup("MILANO MALPENSA", "LIMC") == 2u);
+        CHECK(m.version() > v0);
+        CHECK_ORDER(m, "TWR,TWR,GND,LOOSE");
+        std::size_t inLimc = 0, inOld = 0;
+        for (const Bookmark& x : m.list()) {
+            inLimc += x.group == "LIMC";
+            inOld += x.group == "MILANO MALPENSA";
+        }
+        CHECK(inLimc == 2u);
+        CHECK(inOld == 0u);
+        CHECK(m.list()[0].group == "MILANO LINATE");  // Linate's TWR (118.1) untouched
+        CHECK(m.list()[3].group.empty());             // the ungrouped row untouched
+
+        // Into a group that exists: a merge, not a clash.
+        CHECK(m.renameGroup("MILANO LINATE", "LIMC") == 1u);
+        std::size_t inLimc2 = 0;
+        for (const Bookmark& x : m.list()) { inLimc2 += x.group == "LIMC"; }
+        CHECK(inLimc2 == 3u);
+
+        // To "": every row of the group becomes ungrouped.
+        CHECK(m.renameGroup("LIMC", "") == 3u);
+        for (const Bookmark& x : m.list()) { CHECK(x.group.empty()); }
+        // And back from "" into a name: the ungrouped rows are a group too.
+        CHECK(m.renameGroup("", "ALL") == 4u);
+        for (const Bookmark& x : m.list()) { CHECK(x.group == "ALL"); }
+
+        // The rename survives a round trip through the file.
+        std::string err;
+        CHECK(m.save(p("renamed.json"), err));
+        FreqManager back;
+        CHECK(back.load(p("renamed.json"), err));
+        CHECK(back.list().size() == 4u);
+        for (const Bookmark& x : back.list()) { CHECK(x.group == "ALL"); }
+    }
+
     const int rc = testSummary("test_freq_manager");
     if (rc == 0) {
         std::error_code ec;

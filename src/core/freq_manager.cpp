@@ -372,6 +372,19 @@ std::size_t FreqManager::removeGroup(const std::string& group) {
     return removed;
 }
 
+std::size_t FreqManager::renameGroup(const std::string& from, const std::string& to) {
+    if (from == to) { return 0; }
+    std::size_t moved = 0;
+    for (Bookmark& b : list_) {
+        if (b.group == from) {
+            b.group = to;
+            ++moved;
+        }
+    }
+    if (moved > 0) { ++version_; }
+    return moved;
+}
+
 std::vector<std::size_t> FreqManager::nearestSubset(double hereHz, std::size_t maxCount,
                                                     std::size_t maxFavourites) const {
     std::vector<std::size_t> out;

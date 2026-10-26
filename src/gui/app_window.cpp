@@ -28406,6 +28406,21 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
 
 // --- Bookmarks (P6) --------------------------------------------------------------
 
+namespace {
+
+// A group name as typed, less the blanks around it: "  LUGANO " and "LUGANO"
+// are one group, and a name of blanks alone is no group.
+std::string trimmedGroupName(const char* typed) {
+    std::string s(typed != nullptr ? typed : "");
+    const auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    while (!s.empty() && blank(s.back())) { s.pop_back(); }
+    std::size_t lead = 0;
+    while (lead < s.size() && blank(s[lead])) { ++lead; }
+    return s.substr(lead);
+}
+
+}  // namespace
+
 void AppWindow::rebuildBookmarkView() {
     // The key is everything the view depends on, so an unchanged filter over
     // an unchanged list costs one string compare a frame and nothing else.
@@ -28521,8 +28536,55 @@ void AppWindow::drawBookmarksSection() {
         b.freqHz = currentAbsoluteHz();
         b.mode = kModeNames[modeIndex_];
         b.bandwidthHz = vfoBandwidthHz_;
+        b.group = trimmedGroupName(bookmarkGroup_);
         freqMgr_.add(std::move(b));
         saveBookmarks();
+    }
+    cascade::gui::census::rect("bookmarks:add", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+
+    // --- the group the next Add current joins (2026-10) ----------------------
+    // A tester keeps an airport's tower, ground and approach together under
+    // its name ("MILANO MALPENSA", "MILANO LINATE", "LUGANO"): until now a
+    // group could only arrive with an imported file or an airport lookup. Typed
+    // here once, the name stays until it is changed - Add current does not
+    // clear it - so a run of frequencies lands in one group. The arrow beside
+    // it lists the groups the list already has, and picking one types it.
+    // Empty is ungrouped, as every bookmark was before.
+    rebuildBookmarkView();  // bookmarkGroups_ current for the arrow (a key compare when nothing changed)
+    {
+        const float pickW = ImGui::GetFrameHeight();
+        ImGui::SetNextItemWidth(bookmarkGroups_.empty() ? -1.0f : -(pickW + bmSpacing));
+        cascade::gui::inputTextWithFittedHint("##bm_group_new", tr("group (optional)"), bookmarkGroup_,
+                                              sizeof(bookmarkGroup_));
+        cascade::gui::census::rect("bookmarks:group", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", tr("New bookmarks join this group - type a new name, or pick one the\n"
+                                       "list already has from the arrow. Empty means no group. Right-click\n"
+                                       "a row below to move it to another group."));
+        }
+        if (!bookmarkGroups_.empty()) {
+            ImGui::SameLine();
+            if (ImGui::BeginCombo("##bm_group_pick", "",
+                                  ImGuiComboFlags_NoPreview | ImGuiComboFlags_HeightLarge)) {
+                ImGuiListClipper clip;
+                clip.Begin(static_cast<int>(bookmarkGroups_.size()));
+                while (clip.Step()) {
+                    for (int g = clip.DisplayStart; g < clip.DisplayEnd; ++g) {
+                        const std::string& name = bookmarkGroups_[static_cast<std::size_t>(g)];
+                        ImGui::PushID(g);
+                        if (ImGui::Selectable(name.c_str(), name == bookmarkGroup_)) {
+                            cascade::core::formatUtf8(bookmarkGroup_, sizeof(bookmarkGroup_), "%s", name.c_str());
+                        }
+                        ImGui::PopID();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            cascade::gui::census::rect("bookmarks:grouppick", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                       ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        }
     }
 
     // --- a frequency list from elsewhere (0.99.19) -------------------------
@@ -28596,11 +28658,16 @@ void AppWindow::drawBookmarksSection() {
                                           bookmarkGroupSel_ == g + 1)) {
                         bookmarkGroupSel_ = g + 1;
                     }
+                    cascade::gui::census::rect("bookmarks:groupsel:", g, ImGui::GetItemRectMin().x,
+                                               ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                               ImGui::GetItemRectMax().y);
                     ImGui::PopID();
                 }
             }
             ImGui::EndCombo();
         }
+        cascade::gui::census::rect("bookmarks:groupsel", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
     }
     ImGui::Checkbox(trId("Favourites only"), &bookmarkFavOnly_);
     cascade::gui::sameLineIfFits(cascade::gui::checkWidth(trId("On the spectrum")));
@@ -28627,6 +28694,7 @@ void AppWindow::drawBookmarksSection() {
     ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
     ImGui::Text(tr("%zu shown of %zu"), bookmarkView_.size(), bookmarkCount);
     ImGui::PopStyleColor();
+    cascade::gui::census::note("bookmarks:rows:", static_cast<int>(bookmarkView_.size()));
     if (!bookmarkView_.empty()) {
         ImGui::SameLine();
         // THE ONES SHOWN go out, so a search or a group picks what is shared.
@@ -28643,8 +28711,53 @@ void AppWindow::drawBookmarksSection() {
             const std::size_t n = freqMgr_.removeGroup(g);
             bookmarkImportNote_ = cascade::core::formatText(tr("Removed %zu from \"%s\""), n, g.c_str());
             bookmarkGroupSel_ = 0;
+            bookmarkRenameOpen_ = false;
             saveBookmarks();
             rebuildBookmarkView();
+        }
+        // RENAME (2026-10): the field opens under the row seeded with the
+        // group's name; Enter or the key applies it. Into a name the list
+        // already has, the two groups become one. Empty is refused here - the
+        // rows' own menu has "No group" for that - and the same name is a no-op.
+        cascade::gui::sameLineIfFits(cascade::gui::buttonWidth(trId("Rename this group")));
+        if (ImGui::SmallButton(trId("Rename this group"))) {
+            bookmarkRenameOpen_ = !bookmarkRenameOpen_;
+            if (bookmarkRenameOpen_) {
+                cascade::core::formatUtf8(bookmarkRenameName_, sizeof(bookmarkRenameName_), "%s",
+                                          bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)].c_str());
+            }
+        }
+        cascade::gui::census::rect("bookmarks:rename", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+    } else {
+        bookmarkRenameOpen_ = false;
+    }
+    if (bookmarkRenameOpen_) {
+        const float renW = cascade::gui::buttonWidth(trId("Rename"));
+        ImGui::SetNextItemWidth(-(renW + bmSpacing));
+        const bool entered = cascade::gui::inputTextWithFittedHint("##bm_rename", tr("new group name"),
+                                                                    bookmarkRenameName_, sizeof(bookmarkRenameName_),
+                                                                    ImGuiInputTextFlags_EnterReturnsTrue);
+        cascade::gui::census::rect("bookmarks:renamefield", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        ImGui::SameLine();
+        const bool renameKey = ImGui::Button(trId("Rename"));
+        cascade::gui::census::rect("bookmarks:renamekey", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        if (renameKey || entered) {
+            const std::string from = bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)];
+            const std::string to = trimmedGroupName(bookmarkRenameName_);
+            if (!to.empty() && to != from) {
+                const std::size_t n = freqMgr_.renameGroup(from, to);
+                bookmarkImportNote_ =
+                    cascade::core::formatText(tr("Renamed \"%s\" to \"%s\" (%zu)"), from.c_str(), to.c_str(), n);
+                saveBookmarks();
+                rebuildBookmarkView();  // the old name is gone from bookmarkGroups_, so the selection reset
+                for (std::size_t g = 0; g < bookmarkGroups_.size(); ++g) {
+                    if (bookmarkGroups_[g] == to) { bookmarkGroupSel_ = static_cast<int>(g) + 1; }
+                }
+                bookmarkRenameOpen_ = false;
+            }
         }
     }
 
@@ -28656,6 +28769,8 @@ void AppWindow::drawBookmarksSection() {
     int deleteIdx = -1;
     int starIdx = -1;
     int tickIdx = -1;
+    int moveIdx = -1;        // a row's right-click menu moved it to moveGroup
+    std::string moveGroup;
     const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
     const float delW = ImGui::GetFrameHeight();
     const float rows = std::min(12.0f, static_cast<float>(bookmarkView_.size()));
@@ -28695,6 +28810,70 @@ void AppWindow::drawBookmarksSection() {
                     tuneToBookmark(b);
                     testerUsage_.noteFeature("bookmarks");
                 }
+                cascade::gui::census::rect("bookmarks:row:", r, ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                           ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+                // THE ROW'S MENU is a right-click (2026-10): the group it
+                // belongs to, changed to any the list has, to none, or to a
+                // name typed here. The move itself is deferred past the loop
+                // like the delete, so updateAt never touches a row this frame
+                // still iterates.
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                    bookmarkRowGroup_[0] = '\0';
+                    ImGui::OpenPopup("##bm_row_menu");
+                }
+                if (ImGui::BeginPopup("##bm_row_menu")) {
+                    ImGui::TextDisabled("%s", b.name.c_str());
+                    ImGui::Separator();
+                    ImGui::TextUnformatted(tr("Move to group"));
+                    bool move = false;
+                    std::string target;
+                    const float menuW = std::max(200.0f, ImGui::CalcTextSize(label).x);
+                    if (ImGui::Selectable(trId("No group"), b.group.empty(), ImGuiSelectableFlags_None,
+                                          ImVec2(menuW, 0.0f))) {
+                        move = true;
+                    }
+                    cascade::gui::census::rect("bookmarks:menu:nogroup", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+                    if (!bookmarkGroups_.empty()) {
+                        const float listRows = std::min(8.0f, static_cast<float>(bookmarkGroups_.size()));
+                        if (ImGui::BeginChild("##bm_row_groups",
+                                              ImVec2(menuW, listRows * ImGui::GetTextLineHeightWithSpacing() + 2.0f),
+                                              ImGuiChildFlags_None)) {
+                            ImGuiListClipper groupClip;
+                            groupClip.Begin(static_cast<int>(bookmarkGroups_.size()));
+                            while (groupClip.Step()) {
+                                for (int g = groupClip.DisplayStart; g < groupClip.DisplayEnd; ++g) {
+                                    const std::string& name = bookmarkGroups_[static_cast<std::size_t>(g)];
+                                    ImGui::PushID(g);
+                                    if (ImGui::Selectable(name.c_str(), name == b.group)) {
+                                        move = true;
+                                        target = name;
+                                    }
+                                    cascade::gui::census::rect("bookmarks:menu:group:", g, ImGui::GetItemRectMin().x,
+                                                               ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                                               ImGui::GetItemRectMax().y);
+                                    ImGui::PopID();
+                                }
+                            }
+                        }
+                        ImGui::EndChild();
+                    }
+                    ImGui::SetNextItemWidth(menuW);
+                    if (cascade::gui::inputTextWithFittedHint("##bm_row_newgroup", tr("new group name"),
+                                                              bookmarkRowGroup_, sizeof(bookmarkRowGroup_),
+                                                              ImGuiInputTextFlags_EnterReturnsTrue)) {
+                        target = trimmedGroupName(bookmarkRowGroup_);
+                        move = !target.empty();
+                    }
+                    cascade::gui::census::rect("bookmarks:menu:newgroup", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+                    if (move) {
+                        moveIdx = i;
+                        moveGroup = target;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
+                }
                 ImGui::SameLine();
                 if (ImGui::Button("x", ImVec2(delW, 0.0f))) { deleteIdx = i; }
                 ImGui::PopID();
@@ -28712,6 +28891,13 @@ void AppWindow::drawBookmarksSection() {
         cascade::core::Bookmark b = list[static_cast<std::size_t>(starIdx)];
         b.favourite = !b.favourite;
         freqMgr_.updateAt(static_cast<std::size_t>(starIdx), b);
+        saveBookmarks();
+    }
+    if (moveIdx >= 0 && moveIdx < static_cast<int>(list.size()) &&
+        list[static_cast<std::size_t>(moveIdx)].group != moveGroup) {
+        cascade::core::Bookmark b = list[static_cast<std::size_t>(moveIdx)];
+        b.group = moveGroup;
+        freqMgr_.updateAt(static_cast<std::size_t>(moveIdx), b);
         saveBookmarks();
     }
     if (deleteIdx >= 0) {

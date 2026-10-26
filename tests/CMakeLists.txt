@@ -747,6 +747,7 @@ set(CASCADE_GUI_TESTS
     app_smoke
     test_airband_app
     test_bias_key_run
+    test_bookmark_groups_app
     test_bookmark_stacking_app
     test_clean_exit_marker
     test_console_owner_app
