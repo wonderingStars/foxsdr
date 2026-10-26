@@ -188,7 +188,13 @@ struct AppWindowTestAccess {
     static void drawRadio(AppWindow& a) { a.drawRadioSection(); }
     static void drawFilters(AppWindow& a) { a.drawAudioFilterSection(); }
     static void drawSinks(AppWindow& a) { a.drawSinksSection(); }
-    static void drawDisplay(AppWindow& a) { a.drawDisplaySection(); }
+    // The Display section starts FOLDED since 0.99.74 (stub batch B1: AppConfig::displayOpen, false on
+    // a fresh install) and draws its body only while open; this test reads the body, so it opens the
+    // section first - the same member the header's click writes back to (drawDisplaySection).
+    static void drawDisplay(AppWindow& a) {
+        a.displayOpen_ = true;
+        a.drawDisplaySection();
+    }
     static void drawLanguage(AppWindow& a) { a.drawLanguageSection(); }
     static void drawStereo(AppWindow& a) { a.drawStereoRdsControls(); }
     static void drawOverlay(AppWindow& a) { a.drawBandPlanOverlay(0.0f, 0.0f, 900.0f, 300.0f); }

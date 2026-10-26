@@ -540,7 +540,7 @@ endif()
 # drives whatever stale cascade.exe the build tree last held.
 foreach(_runs_app IN ITEMS test_bias_key_run test_crash_upload test_diag_hang test_diagnostics test_plugin_status_report
                            test_gps_app test_shutdown_budget test_startup_state
-                           test_stop_ends_recordings test_theme_census test_soapy_enum_proc
+                           test_stop_ends_recordings test_theme_census test_ui_scale_app test_soapy_enum_proc
                            test_soapy_source)
     if(TARGET ${_runs_app})
         add_dependencies(${_runs_app} cascade)
@@ -1259,6 +1259,7 @@ set(CASCADE_GUI_TESTS
     test_theme_census
     test_tx_audio_page_app
     test_tx_audio_plate_app
+    test_ui_scale_app
     test_unplaced_list_app
     test_viewports
     test_window_platform_app

@@ -132,8 +132,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     gui/plugin_settings_form.* are in the tree and their pure tests run; the window's forms and the engine's grants are not wired)
 
 0.99.44
-  * interface size, for 4K screens ........................................................... stubbed UI-SCALE (gui/ui_scale.* is in the tree and its
-    pure tests pass; no window code calls it: the scale never leaves 100%)
+  * interface size, for 4K screens ........................................................... re-expressed, stub batch B1 (docs/engine-stage4.md 6.22): the
+    window's geometry goes through gui/ui_scale.* (app_window_chrome.cpp, run()'s DPI block, ~25 sites), the config carries interfaceScale; held by
+    test_ui_scale_app (the census at 100% and 150%: every rail rectangle 1.5x, nothing drawn over anything new; written RED first), test_window_chrome_config
   * SDRplay asks for zero-IF ................................................................. carried (source/sdrplay_source.cpp) (unverified: no radio)
   * audio no longer crackles when the channel filter widens ................................... carried (dsp/) (test_bandwidth_app also exercises the filter, C3)
   * a per-frame system call removed .......................................................... carried (unverified)
@@ -164,7 +165,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 0.99.50
   * the plugin store cleans up after its own updates ......................................... stubbed STORE-VIEW (the engine keeps the scan's old copies, C4;
     test_plugin_cleanup_app, test_plugin_update_cleanup_app)
-  * FUNCTION SELECT folds to a strip ......................................................... stubbed RAIL-CHROME (test_rail_fold*, test_app_rail)
+  * FUNCTION SELECT folds to a strip ......................................................... re-expressed, stub batch B1 (test_rail_fold, test_rail_fold_app,
+    test_app_rail, test_window_chrome_config)
   * the patch page's information pane at the top right ....................................... stubbed PATCH-VIEW (lostlines: drawPatchView, drawPatchFaces)
   * the patch canvas pans by dragging empty canvas, the wheel pans ........................... stubbed PATCH-VIEW
   * two fixes for radios reported wrongly (the Source row's words) ........................... re-expressed in part: the one-chip-one-route rule runs in
@@ -317,9 +319,11 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 
 0.99.74
   * GAIN and SQUELCH dials with AUTO keys on the top bar ..................................... stubbed RAIL-CHROME (test_deck_knobs_app)
-  * the STATUS column folds ................................................................. stubbed RAIL-CHROME (test_status_fold*)
-  * the VIEW bank is TOOLS; Display moves to SYSTEM and starts folded ........................ carried in part (the bank rename is in rail_banks.hpp, C0); the
-    folded-Display memory is stubbed RAIL-CHROME
+  * the STATUS column folds ................................................................. re-expressed, stub batch B1 (test_status_fold, test_status_fold_app,
+    test_window_chrome_config)
+  * the VIEW bank is TOOLS; Display moves to SYSTEM and starts folded ........................ re-expressed, stub batch B1 (the bank rename is in rail_banks.hpp, C0; the
+    rail's heading and the Display section's place and remembered open state are the window's: test_display_fold_app, test_window_chrome_config). One name
+    of test_display_fold_app's list is carved out as the red part display_fold_airband_section: the TOOLS bank's Airband section is AIRBAND (B7)
   * each decoder's settings in a folded "Plugin settings" line ............................... stubbed PLUGIN-SETTINGS-UI
   * the ADS-B map lists only the aircraft you can see; no-altitude is grey ................... stubbed MAP-WINDOWS
   * third-party plugin sites in the store ................................................... stubbed STORE-VIEW
@@ -427,6 +431,11 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
                           IMPORT-DIALOG test_import_dialog_app; RADIO-SETUP test_radio_setup_app; TESTER-USAGE test_team_message_app;
                           MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
   parts (3)               transmit_page_plugin_key (TX-PLUGIN), excuse_cap_pickfile (IMPORT-DIALOG), audio_lead_plugin_wake (PLUGIN-RUN)
+
+UPDATE 2026-10-26, stub batch B1 (docs/engine-stage4.md 6.22): test_app_rail, test_rail_fold, test_rail_fold_app, test_status_fold, test_status_fold_app
+and test_display_fold_app are converted and green, and the placeholders of those six are gone (RAIL-CHROME is now test_deck_knobs_app and test_theme_census,
+DISPLAY-RANGE is test_display_menu_app). A part is added: display_fold_airband_section (AIRBAND), the one name of test_display_fold_app's TOOLS-bank list
+that names a feature not yet on this window. test_i18n: 155 stale, 1 missing (the `VIEW` heading is gone from the source).
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

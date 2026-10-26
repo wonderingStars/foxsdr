@@ -34,8 +34,8 @@ macro(cascade_merge_pending feature)
     endforeach()
 endmacro()
 
-cascade_merge_pending(RAIL-CHROME      # 0.99.44 interface size, 0.99.50 rail fold, 0.99.74 dials / status fold / TOOLS bank
-    test_app_rail test_rail_fold test_rail_fold_app test_status_fold test_status_fold_app test_deck_knobs_app)
+cascade_merge_pending(RAIL-CHROME      # 0.99.74 dials (the interface size, the rail fold, the status fold and the TOOLS bank returned in stub batch B1)
+    test_deck_knobs_app)
 cascade_merge_pending(STORE-VIEW       # 0.99.50 / 0.99.72 / 0.99.74 plugin store and Fitted modules window on the table
     test_plugin_store_window test_fitted_modules_window test_plugin_catalogue_app test_plugin_cleanup_app
     test_plugin_update_cleanup_app test_plugin_store_view test_fitted_modules_no_disk)
@@ -64,6 +64,8 @@ cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, on
     test_source_row_app)
 cascade_merge_pending_part(PLUGIN-RUN audio_lead_plugin_wake
     "tests/test_audio_lead_app.cpp: a manual tune gives an AUTO audio-output decoder an independent wake signal before it has an instance (pluginUseOf / updatePluginLifecycle, 0.99.73). Restore master's block (git show origin/master:tests/test_audio_lead_app.cpp, 'A manual tune must give an AUTO audio-output decoder') when the plugin run modes are carried.")
+cascade_merge_pending_part(AIRBAND display_fold_airband_section
+    "tests/test_display_fold_app.cpp, scenario 'tools': the TOOLS bank must keep the Airband section ('section:Airband###airband' in the list of names the TOOLS bank keeps - master's list is in git show origin/master:tests/test_display_fold_app.cpp). The Airband section (0.99.60-0.99.71, src/gui_pending/app_window_airband.cpp) is not on this window yet, so the one name was carved out when the rest of the test returned in stub batch B1. Restore the name when drawAirbandSection returns (B7).")
 
 # --- ADDED 2026-10-21, after the first run of the gui-labelled tests (real-binary tests; they build and run as they are, and fail only because
 # the feature they read the census of is not in the window yet). The ledger id says which feature.
@@ -71,8 +73,8 @@ cascade_merge_pending(AIRBAND          # 0.99.7x the airband monitor
     test_airband_app)
 cascade_merge_pending(MARKERS-SPECTRUM # 0.99.5x - 0.99.82 waterfall markers, peak hold / average / trace modes, close names stack, Shift+wheel slide
     test_bookmark_stacking_app test_freq_markers_app test_spectrum_trace_app test_passband_slide_app)
-cascade_merge_pending(DISPLAY-RANGE    # 0.99.7x the spectrum's and waterfall's range set by hand, the display menu and its tip
-    test_display_menu_app test_display_fold_app)
+cascade_merge_pending(DISPLAY-RANGE    # 0.99.7x the spectrum's and waterfall's range set by hand, the display menu and its tip (the folded Display section returned in B1)
+    test_display_menu_app)
 cascade_merge_pending(PLUGIN-SETTINGS-UI
     test_decoder_settings_fold_app test_plugin_pathpick_app)
 cascade_merge_pending(PLUGIN-RUN       # 0.99.7x a plugin that is not used is dormant (FOXSDR_DORMANT_AFTER_MS), run modes

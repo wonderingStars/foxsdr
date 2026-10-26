@@ -199,9 +199,16 @@ inline constexpr float kRailRowMinH = 28.0f;
 // The smallest gap above and below the label inside a row. Anything less and
 // the word touches the plate's bevel.
 inline constexpr float kRailRowPadY = 5.0f;
-inline float railRowHeight(float labelPx) {
-    const float fromType = labelPx + 2.0f * kRailRowPadY;
-    return fromType > kRailRowMinH ? fromType : kRailRowMinH;
+// `s` is the interface-scale factor (gui/ui_scale.hpp), defaulted to 1.0f so
+// every existing call — including every test that pins this against the base
+// font sizes — is unchanged. A real draw call site passes labelPx already at
+// its scaled size (fonts::uiPx() and friends) AND the same s, so the padding
+// around the label grows with the label rather than staying a fixed few
+// pixels beside increasingly large type.
+inline float railRowHeight(float labelPx, float s = 1.0f) {
+    const float fromType = labelPx + 2.0f * kRailRowPadY * s;
+    const float floorH = kRailRowMinH * s;
+    return fromType > floorH ? fromType : floorH;
 }
 
 // THE "SERIAL PORTS" ROW'S CHIP: how many the machine has right now, in the
@@ -254,17 +261,24 @@ inline constexpr float kRailKeyGap = 6.0f;      // key to the plate
 inline constexpr float kRailLabelPadX = 8.0f;   // plate's edge to the word
 inline constexpr float kRailKeyMin = 9.0f;
 inline constexpr float kRailKeyMax = 18.0f;
-inline float railKeySize(float rowH) {
-    const float s = rowH - 10.0f;
-    if (s < kRailKeyMin) { return kRailKeyMin; }
-    if (s > kRailKeyMax) { return kRailKeyMax; }
-    return s;
+// `scale` is the interface-scale factor; defaulted to 1.0f so every call
+// unaware of it - including every existing test - is unchanged. The local
+// `sized` shadows the parameter name `rowH - 10.0f` used to hold so the
+// keyMin/keyMax comparison below reads exactly as it always did, just against
+// the scaled floor and ceiling.
+inline float railKeySize(float rowH, float scale = 1.0f) {
+    const float sized = rowH - 10.0f * scale;
+    const float lo = kRailKeyMin * scale;
+    const float hi = kRailKeyMax * scale;
+    if (sized < lo) { return lo; }
+    if (sized > hi) { return hi; }
+    return sized;
 }
-inline float railPlateLeft(float rowLeft, float rowH) {
-    return rowLeft + kRailKeyInset + railKeySize(rowH) + kRailKeyGap;
+inline float railPlateLeft(float rowLeft, float rowH, float scale = 1.0f) {
+    return rowLeft + kRailKeyInset * scale + railKeySize(rowH, scale) + kRailKeyGap * scale;
 }
-inline float railLabelLeft(float rowLeft, float rowH) {
-    return railPlateLeft(rowLeft, rowH) + kRailLabelPadX;
+inline float railLabelLeft(float rowLeft, float rowH, float scale = 1.0f) {
+    return railPlateLeft(rowLeft, rowH, scale) + kRailLabelPadX * scale;
 }
 
 // WHAT THE STATE CHIP AND ITS LAMP TAKE OFF THE RIGHT END OF THE PLATE.
@@ -283,26 +297,29 @@ inline constexpr float kRailChipPadX = 5.0f;      // inside the chip, each side
 // read as separate things rather than as one run-on line.
 inline constexpr float kRailLabelChipGap = 4.0f;
 
-inline float railLampRadius(float rowH) {
+inline float railLampRadius(float rowH, float scale = 1.0f) {
     const float r = rowH * kRailLampRadiusShare;
-    return r > kRailLampRadiusMin ? r : kRailLampRadiusMin;
+    const float floorR = kRailLampRadiusMin * scale;
+    return r > floorR ? r : floorR;
 }
 // `chipTextWidth` < 0 means the row carries a lamp but no chip; the row's
 // callers here always pass one, and drawRailChip draws the lamp either way.
-inline float railChipReserve(float rowH, float chipTextWidth) {
-    const float lampR = railLampRadius(rowH);
-    const float toLampLeft = 2.0f * lampR + kRailLampEdgeGap;
+// `chipTextWidth` itself is a measurement (already at the drawn, scaled font
+// size at a real call site) and is never multiplied by `scale` here.
+inline float railChipReserve(float rowH, float chipTextWidth, float scale = 1.0f) {
+    const float lampR = railLampRadius(rowH, scale);
+    const float toLampLeft = 2.0f * lampR + kRailLampEdgeGap * scale;
     if (!(chipTextWidth >= 0.0f)) { return toLampLeft; }
-    return 2.0f * lampR + kRailChipLampGap + chipTextWidth + 2.0f * kRailChipPadX +
-           kRailLampEdgeGap;
+    return 2.0f * lampR + kRailChipLampGap * scale + chipTextWidth + 2.0f * kRailChipPadX * scale +
+           kRailLampEdgeGap * scale;
 }
 
 // The x a row's label must not cross. `chipTextWidth` < 0 for a row with no
 // chip at all, in which case only the plate's own padding is kept back.
-inline float railLabelRight(float rowRight, float rowH, float chipTextWidth) {
-    const float plateEdge = rowRight - kRailLabelPadX;
+inline float railLabelRight(float rowRight, float rowH, float chipTextWidth, float scale = 1.0f) {
+    const float plateEdge = rowRight - kRailLabelPadX * scale;
     const float beforeChip =
-        rowRight - railChipReserve(rowH, chipTextWidth) - kRailLabelChipGap;
+        rowRight - railChipReserve(rowH, chipTextWidth, scale) - kRailLabelChipGap * scale;
     return beforeChip < plateEdge ? beforeChip : plateEdge;
 }
 
@@ -330,6 +347,67 @@ inline float railLabelRight(float rowRight, float rowH, float chipTextWidth) {
 inline constexpr float kMenuWidth = 384.0f;   // left column
 inline constexpr float kRailPlatePad = 8.0f;  // plate inset inside that column
 
+// --- THE RAIL FOLDS AWAY (0.99.49 beta feedback) -----------------------------
+//
+// On a small laptop the FUNCTION SELECT column is 384 of 1366 pixels, and
+// the patch page and the spectrum beside it are what the user is working in.
+// A "<<" key at the right of the plate's title row folds the whole column to
+// a strip holding a ">>" key that opens it again; the main area - the patch
+// page or the receiver's spectrum - takes the width that frees. Remembered in
+// the config (AppConfig::railCollapsed). Every size here is logical pixels,
+// scaled by the caller with the interface size, like kMenuWidth itself.
+inline constexpr float kRailFoldedW = 34.0f;   // the strip the column folds to
+inline constexpr float kRailFoldKeyW = 26.0f;
+inline constexpr float kRailFoldKeyH = 20.0f;
+inline constexpr float kRailFoldKeyTop = 6.0f;  // from the plate's top edge
+
+// The left column's width, open or folded.
+inline float railColumnWidth(bool collapsed) { return collapsed ? kRailFoldedW : kMenuWidth; }
+
+// Where the fold key sits, in screen pixels, for a column at colX, colY
+// colW wide at interface size s: open, at the right end of the title row,
+// inside the plate's inset and above the rule under the title; folded,
+// centred on the strip at the same height.
+struct RailFoldKeyRect {
+    float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+};
+inline RailFoldKeyRect railFoldKeyRect(float colX, float colY, float colW, bool collapsed, float s) {
+    const float w = kRailFoldKeyW * s;
+    const float h = kRailFoldKeyH * s;
+    const float y0 = colY + kRailFoldKeyTop * s;
+    const float x0 = collapsed ? colX + (colW - w) * 0.5f : colX + colW - kRailPlatePad * s - w;
+    return RailFoldKeyRect{x0, y0, x0 + w, y0 + h};
+}
+
+// --- THE STATUS COLUMN FOLDS AWAY TOO (0.99.74 beta feedback) -----------------
+//
+// The tester, 2026-10-12: "Just like you added the << and >> to expand and
+// collapse the Function Select panel on the left side, can you do this for
+// the right side Status panel? I am just looking at it from the perspective
+// if that information is useful to the end user while they are looking at the
+// spectrum or whatever." The same key, mirrored: ">>" at the LEFT end of the
+// STATUS plate's title row (the end nearest the spectrum, as the rail's "<<"
+// sits at its right end) pushes the column away to a strip; "<<" on the strip
+// brings it back. Remembered in the config (AppConfig::statusCollapsed).
+// Logical pixels, scaled by the caller with the interface size.
+inline constexpr float kStatusW = 230.0f;        // the open column (was a local in drawUi)
+inline constexpr float kStatusFoldedW = 34.0f;   // the strip it folds to, the rail's width
+
+// The right column's width, open or folded.
+inline float statusColumnWidth(bool folded) { return folded ? kStatusFoldedW : kStatusW; }
+
+// Where the status fold key sits, in screen pixels, for a column at colX, colY
+// colW wide at interface size s: the rail's key (same size, same height, same
+// inset), mirrored - open, at the LEFT end of the title row inside the plate's
+// inset; folded, centred on the strip.
+inline RailFoldKeyRect statusFoldKeyRect(float colX, float colY, float colW, bool folded, float s) {
+    const float w = kRailFoldKeyW * s;
+    const float h = kRailFoldKeyH * s;
+    const float y0 = colY + kRailFoldKeyTop * s;
+    const float x0 = folded ? colX + (colW - w) * 0.5f : colX + kRailPlatePad * s;
+    return RailFoldKeyRect{x0, y0, x0 + w, y0 + h};
+}
+
 // THE FIVE BANK KEYS (drawRailBankKeys): the column's width shared five ways
 // after an 8 px inset each side and 4 px between keys, the word lettered at
 // fonts::kTinySize with 3 px of brass kept clear each side, and drawn smaller
@@ -343,8 +421,11 @@ inline constexpr float kBankKeyGap = 4.0f;
 inline constexpr float kBankKeyWordPadX = 3.0f;
 inline constexpr float kBankKeyWordPadMinX = 1.0f;
 inline constexpr float kBankKeyWordFloorPx = 9.0f;
-inline float bankKeyWidth(float colW, int count) {
-    return (colW - 2.0f * kBankKeyInset - kBankKeyGap * static_cast<float>(count - 1)) /
+// `colW` arrives already scaled (a real call site passes uiscale::px(kMenuWidth));
+// `scale` is what widens the inset and gap between the five keys with it, so
+// the keys do not crowd together as the column they share grows.
+inline float bankKeyWidth(float colW, int count, float scale = 1.0f) {
+    return (colW - 2.0f * kBankKeyInset * scale - kBankKeyGap * scale * static_cast<float>(count - 1)) /
            static_cast<float>(count);
 }
 // The brass kept clear each side of the word: kBankKeyWordPadX, or - only for
@@ -352,10 +433,11 @@ inline float bankKeyWidth(float colW, int count) {
 // "РАСШИРЕНИЯ" (ru) and "РОЗШИРЕННЯ" (uk) are 66.8 px at nine pixels in a
 // 64.4 px room; two more pixels of metal each side hold them whole, and a word
 // a pixel from the bevel is a tight key where a cut one is a broken key.
-// `wordWAtFloor` is the word's width at kBankKeyWordFloorPx.
-inline float bankKeyWordPadX(float wordWAtFloor, float keyW) {
-    return wordWAtFloor + 2.0f * kBankKeyWordPadX <= keyW + 0.5f ? kBankKeyWordPadX
-                                                                  : kBankKeyWordPadMinX;
+// `wordWAtFloor` is the word's width at kBankKeyWordFloorPx * scale.
+inline float bankKeyWordPadX(float wordWAtFloor, float keyW, float scale = 1.0f) {
+    return wordWAtFloor + 2.0f * kBankKeyWordPadX * scale <= keyW + 0.5f
+              ? kBankKeyWordPadX * scale
+              : kBankKeyWordPadMinX * scale;
 }
 
 // How wide ONE ROW ends up: the column, less the plate's inset on both sides,
@@ -680,6 +762,17 @@ private:
     // was already scattered. Drawn only when the window is wide enough that
     // taking 230 px from the spectrum is not a bad trade.
     void drawStatusColumn();
+    // The folded status column: a plate the width of kStatusFoldedW with the
+    // "<<" key that opens it, and nothing else (0.99.74). In
+    // app_window_chrome.cpp, with the rest of the window's fold and size chrome.
+    void drawStatusStrip();
+    // The ">>" / "<<" key (statusFoldKeyRect), for the open column and the
+    // strip.
+    void drawStatusFoldKey(float colX, float colY, float colW);
+    // What the key does, as one function so a test can press the real thing.
+    void toggleStatusFold();
+    // The status column is folded to its strip (AppConfig::statusCollapsed).
+    bool statusCollapsed_ = false;
     // The tuned-frequency counter, drawn into the geometry the top bar hands
     // it: the screen position of the well's top-left corner, and the scale the
     // bar is drawn at. Plain floats rather than an ImVec2 because this header
@@ -687,6 +780,17 @@ private:
     // above.
     void drawFrequencyReadout(float wellX, float wellY, float scale);
     void drawMenuColumn();
+    // The folded rail: a plate the width of kRailFoldedW with the ">>" key
+    // that opens it, and nothing else (0.99.49). In app_window_chrome.cpp.
+    void drawRailStrip();
+    // The "<<" / ">>" key (railFoldKeyRect), for the open rail and the strip.
+    void drawRailFoldKey(float colX, float colY, float colW);
+    // The rail is folded to its strip (AppConfig::railCollapsed).
+    bool railCollapsed_ = false;
+    // The Display section (first in the SYSTEM bank) is open
+    // (AppConfig::displayOpen). Folded on a fresh install; drawDisplaySection
+    // starts the header from it and writes the header's answer back.
+    bool displayOpen_ = false;
     // The update banner, and the work behind it. Drawn at the top of the menu
     // column because a build that cannot see the user's radio is the most
     // useful thing this application can say to them, and it is worth more than
@@ -1758,6 +1862,29 @@ private:
     // readings' preset sizes (Bench Classic XL is the 2x counter without its
     // switches), which the user may then change on their own.
     void pickTheme(const std::string& key);
+
+    // --- THE INTERFACE SIZE (2026-09-28; gui/ui_scale.hpp) --------------------
+    // "auto" (the default, follows the monitor's own Windows scaling) or one
+    // of uiscale::kSteps as decimal text - AppConfig::interfaceScale. Applied
+    // between frames like the theme: a change from the Display combo or from
+    // Ctrl+=/Ctrl+-/Ctrl+0 calls uiscale::setChoice(), and applyPendingUiScale
+    // - called every frame, cheap when nothing moved - rebuilds the ImGui
+    // style from its saved un-scaled snapshot when uiscale::factor() changes.
+    // Fonts need no such step: every real draw call site asks fonts::uiPx()
+    // and friends for the CURRENT scaled size on every frame already (Dear
+    // ImGui 1.92 draws any requested size from one loaded face at no atlas
+    // cost), so there is nothing to rebuild there.
+    // The un-scaled ImGuiStyle snapshot applyPendingUiScale rebuilds from
+    // lives as a file-local in app_window_chrome.cpp, not here: this header is
+    // compiled into the tests and must not need imgui.h (see the forward
+    // declarations note above), and nothing outside that one function needs
+    // to see it.
+    std::string interfaceScale_ = "auto";
+    void applyPendingUiScale();
+    // Ctrl+=/Ctrl+-/Ctrl+0: step through uiscale::kSteps, or back to "auto".
+    // Never armed while a text field wants the keyboard (WantTextInput) -
+    // the same guard drawRailBankKeys uses for F1-F5.
+    void handleInterfaceScaleKeys();
     // The counter's own settings (AppConfig::counterScale / counterSwitches)
     // and every other live figure's size (readingsScale). Read every frame.
     int counterScale_ = 1;
