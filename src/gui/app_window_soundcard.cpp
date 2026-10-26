@@ -76,6 +76,10 @@ void AppWindow::scanSoundCards() {
 
 void AppWindow::launchSoundCardOpen(bool restore, const SoundCardSettings& settings) {
     if (soundCardOpenPending_) { return; }
+    // A card the user chose (the startup restore of a saved card is `restore`):
+    // a saved radio that was only busy is no longer what the session is waiting
+    // for (pollSavedRadioRetry, 0.99.92).
+    if (!restore) { cancelSavedRadioRetry(); }
     const std::vector<SoundCardDevice> list = soundCardDevices_;
     const bool listed = soundCardListed_;
     // A DEAD CARD ON LINUX is not opened again by its index - ALSA may have

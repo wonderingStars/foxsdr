@@ -404,6 +404,10 @@ RadioReason classifyRadioOpen(std::string_view driverKind, std::string_view erro
     return RadioReason::Other;
 }
 
+std::string radioFailWhy(std::string_view driverKind, std::string_view error) {
+    return radioReasonWord(classifyRadioOpen(driverKind, error));
+}
+
 std::string tokenScanNone() { return "scan_none"; }
 std::string tokenRadioOpen(std::string_view k) { return build("radio_open", driverWord(k)); }
 std::string tokenRadioData(std::string_view k) { return build("radio_data", driverWord(k)); }

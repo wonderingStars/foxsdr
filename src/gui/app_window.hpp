@@ -2757,6 +2757,16 @@ private:
     // gone is tried once, not in a loop.
     double soapyReopenAttemptSec_ = -1.0;
 
+    // --- Trying a busy saved radio again (0.99.92; gui/saved_radio_retry.hpp) ---
+    // Tries made so far (0..4), when the last failure happened in
+    // ImGui::GetTime() seconds (0.0 for the start-up restore, which runs
+    // before the first frame), and whether that failure was BUSY - the only
+    // class that is retried. Armed by applyConfig's restore failure; cleared
+    // when the user chooses another source or a try fails any other way.
+    int savedRadioRetryAttempts_ = 0;
+    double savedRadioRetryLastFailSec_ = -1.0;
+    bool savedRadioRetryBusy_ = false;
+
     // --- Off-thread SoapySDR discovery and open --------------------------
     // SoapySDR::Device::enumerate()/make() do USB bus discovery and, for a
     // B200, an FPGA/firmware load: seconds of blocking work. Run inline they
@@ -2834,6 +2844,12 @@ private:
     // save does not write the generator in its place.
     cascade::gui::RememberedSource closedRadio;
     std::string closedLabel;
+    // THIS OPEN IS ONE OF pollSavedRadioRetry's TRIES at the radio the start-up
+    // restore found busy (0.99.92). It travels INSIDE the result so that
+    // finishDeviceOpen, which sees only the answer, knows whether a failure
+    // should arm the next try; an answer the user has moved on from drops it
+    // with the rest.
+    bool savedRadioRetry = false;
     };
     std::future<std::vector<cascade::source::SoapyDeviceInfo>> soapyScanFuture_;
     std::future<DeviceOpenResult> deviceOpenFuture_;
@@ -2978,6 +2994,20 @@ private:
     // the result. A reopen that fails leaves the ordinary failed-open state
     // and message, and nothing tries again.
     void pollSoapyRecovery();
+    // THE SAVED RADIO THAT WAS ONLY BUSY, TRIED AGAIN (0.99.92); called once
+    // per frame beside pollSoapyRecovery. A start-up restore that fails
+    // because the radio is held by another program (typically the previous
+    // FoxSDR, still letting go of the dongle after the in-app updater) arms
+    // savedRadioRetryBusy_; when gui::savedRadioRetryDue says so (2, 4, 8 and
+    // 16 s after the last failure) the saved radio is opened again through
+    // the ordinary asynchronous path, flagged savedRadioRetry. Every frame
+    // with nothing armed takes the first return, so every bounded --frames
+    // run is untouched.
+    void pollSavedRadioRetry();
+    // Stops the retries: the user chose something else, so the saved radio is
+    // no longer what the session is waiting for. restoreKeep_ itself is left
+    // for the exit save to read.
+    void cancelSavedRadioRetry() { savedRadioRetryBusy_ = false; }
     // The reopen itself, once pollSoapyRecovery has judged it due: reads the
     // rate, gains, running state and AIR centre off the dead radio (device_),
     // closes it and launches the open. Split from the gate so the carry-across

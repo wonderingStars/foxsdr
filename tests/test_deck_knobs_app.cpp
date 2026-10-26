@@ -644,6 +644,7 @@ void gainAuto(const Rect& key, const Rect& knob) {
     // One press: the radio's probe switched it off at open, the press switches it on.
     const Result one = once("agc-one", "agc", settle() + press(key, 30), "1600x1000", "");
     CHECK(one.ok);
+    CHECK(has(one, "deck:gain") && one.items.count("deck:gain:noradio") == 0);  // a radio is open
     {
         const std::vector<std::string> calls = agcCalls(one);
         CHECK(calls.size() == 2 && calls[0] == "agc 0" && calls[1] == "agc 1");
@@ -676,6 +677,8 @@ void gainNoAuto(const Rect& key) {
     const Result none = once("noagc", "noagc", settle() + press(key, 30), "1600x1000", "");
     CHECK(none.ok);
     CHECK(has(none, "deck:gainauto"));  // the key is present, however dead
+    // A radio IS open here (it just has no automatic gain): the dial must not claim otherwise.
+    CHECK(none.items.count("deck:gain:noradio") == 0);
     CHECK(agcCalls(none).empty());      // and a press asked the radio for nothing
     CHECK(memoryOf(none.saved) == -1);  // and was remembered as nothing
 }
@@ -688,6 +691,11 @@ void gainNoRadio(const Rect& knob, const Rect& key) {
         once("noradio", "none", settle() + press(key, 30) + twist(knob, 50, 2), "1600x1000", "");
     CHECK(r.ok);
     CHECK(has(r, "deck:gain") && has(r, "deck:gainauto"));
+    // THE DIAL SAYS WHY IT IS DEAD (0.99.92): drawn with no device behind it, it notes
+    // that, and its tooltip then names the missing radio instead of leaving "N/A" and
+    // a line about what the dial is for. (The 0.99.91 field report: "the Gain button
+    // no longer works" - the saved radio had been busy at start-up and nothing said so.)
+    CHECK(r.items.count("deck:gain:noradio") == 1);
     CHECK(r.log.empty());
     CHECK(r.saved.autoGainByRadio.empty());
 }

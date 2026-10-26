@@ -146,6 +146,14 @@ RadioReason classifyRadioOpen(std::string_view driverKind, std::string_view erro
 const char* radioReasonWord(RadioReason r);
 const char* soundReasonWord(SoundReason r);
 
+// THE REASON CLASS AS A WORD, for the two log lines that say a radio did not
+// open ("busy", "absent", "bind", "driver", "timeout", "vendor", "rate",
+// "other"): radioReasonWord(classifyRadioOpen(kind, error)). The word is from
+// the closed vocabulary above and says nothing of what the driver said - which
+// quotes the device arguments, and so the serial number, back - so it is safe
+// in the diagnostics ring, where the error text itself is not.
+std::string radioFailWhy(std::string_view driverKind, std::string_view error);
+
 std::string tokenScanNone();
 std::string tokenRadioOpen(std::string_view driverKind);
 std::string tokenRadioData(std::string_view driverKind);

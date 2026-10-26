@@ -3246,6 +3246,35 @@ never saw it because the scan runs in a child.
   again`. The reopen reaches the driver's own object: SoapySDR's factory hands
   back a device still in its table for the same args (`lib/Factory.cpp`), so
   no vendor find runs and nothing on the bus is probed.
+- `source: the saved radio (<model>, <driver>) did not reopen (<why>) - the receiver
+  is on the signal generator and the radio stays saved` and `source: <model>
+  (<driver>) did not open (<why>) - the receiver is on the signal generator`
+  — the start-up restore's failure and the Source list's (or a retry's), since
+  0.99.92 with the **reason class** in brackets: one of `busy`, `driver`, `bind`,
+  `absent`, `timeout`, `vendor`, `rate`, `other` - the same word the anonymous
+  failure count files the failure under (`radio_fail.<driver>.<why>`,
+  `core::health::radioFailWhy`). It is the class only, never the driver's own
+  message, which quotes the device arguments (the serial number) back. The 0.99.91
+  field report ("the Gain button no longer works") was a saved RTL-SDR that was
+  `busy` at start-up - the previous process, relaunched by the in-app updater's
+  installer, had not yet let go of the dongle - and had to be read off the
+  anonymous counts because the log said only "did not reopen".
+- `source: the saved radio is in use by another program - trying it again in 2, 4,
+  8 and 16 s`, then `source: trying the saved radio again (attempt N of 4)` and
+  either `source: the saved radio came free - <model> opened on attempt N` or the
+  ordinary `did not open (<why>)` line again — the **retry of a busy saved
+  radio** (`AppWindow::pollSavedRadioRetry`, `gui::savedRadioRetryDue`, 0.99.92).
+  Only a start-up restore that failed as `busy` arms it; the tries go through the
+  ordinary asynchronous open 2, 4, 8 and 16 s after the failure before each (30 s
+  in all, the first one 2 s into the frame loop), never while an open or a scan is
+  in flight, and stop at the first success, at the first failure that is not `busy`
+  (an unplugged dongle is not cured by waiting), at the fourth failure
+  (`source: the saved radio is still in use by another program after 4 more tries -
+  giving up`; the radio stays saved for the next start) or when the user chooses
+  another source. A busy-again try is not counted a second time in
+  `radio_fail.<driver>.busy`. While no radio is open the deck's GAIN dial and its
+  AUTO key say so in their tooltips (and name the saved radio's reason when there
+  is one).
 
 A hang report captures every thread because *a deadlock is only legible as a
 pair.* "The GUI thread is blocked" names no bug; "the GUI thread waits on the

@@ -75,6 +75,9 @@ void AppWindow::openIqFile() {
     // (the key is disabled, but a test and a key binding are not the key) changes
     // nothing.
     if (disk_->iqOpen.pending()) { return; }
+    // The user chose a file: a saved radio that was only busy at start-up is no
+    // longer what the session is waiting for (pollSavedRadioRetry, 0.99.92).
+    cancelSavedRadioRetry();
     // THE DISK IS NOT TOUCHED HERE. This made an IqFileSource and called open() on
     // it - an ifstream on the path the user typed and the RIFF header walked with
     // reads - on the thread that draws the window, and a recording on a network

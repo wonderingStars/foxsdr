@@ -103,6 +103,7 @@
 #include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
+#include "gui/saved_radio_retry.hpp"
 #include "gui/tune_control.hpp"
 #include "gui/tuner_ink.hpp"
 #include "gui/volume_meter.hpp"
@@ -4607,6 +4608,10 @@ void AppWindow::drawUi() {
     // faulted gets (0.90.1). After the poll above, so a reopen that just
     // resolved is seen before this asks whether another is due.
     pollSoapyRecovery();
+    // ...and the saved radio that was only busy at start-up (0.99.92): tried
+    // again at 2, 4, 8 and 16 s after each failure. One bool read on every frame
+    // with nothing armed.
+    pollSavedRadioRetry();
     // ...and the SDRplay API Service: a change in why the service last failed,
     // and a finished RESTART SDRPLAY SERVICE (0.99.55). Two atomic reads on
     // every frame that has nothing to do.
@@ -6642,6 +6647,10 @@ void AppWindow::drawToolbar() {
         {
             const bool haveGain = device_ != nullptr && !deviceGainNames_.empty();
             const bool gainLive = haveGain && !deviceAgc_;
+            // NO RADIO, AND NONE ON ITS WAY: while an open is in flight (the start-up
+            // restore's, a Source-list pick, a retry of a busy saved radio) the dial
+            // is dead for a moment and must not say there is no radio.
+            const bool noRadio = device_ == nullptr && !deviceOpenPending_;
             float loDb = kSoapyGainMinDb;
             float hiDb = kSoapyGainMaxDb;
             if (!deviceGainRanges_.empty() &&
@@ -6660,6 +6669,10 @@ void AppWindow::drawToolbar() {
             const float frac =
                 hiDb > loDb ? std::clamp((shownDb - loDb) / (hiDb - loDb), 0.0f, 1.0f) : 0.0f;
             g::census::note("deck:gain");
+            // A DIAL WITH NO RADIO BEHIND IT, noted so a test can hold that it says why
+            // (0.99.92): the 0.99.91 field report was "the Gain button no longer works"
+            // - there was no radio open, the saved one having been busy at start-up.
+            if (noRadio) { g::census::note("deck:gain:noradio"); }
             g::census::rect("deck:gain", cxs[0] - knobR, knobCy - knobR, cxs[0] + knobR,
                             knobCy + knobR);
             const float moved =
@@ -6670,6 +6683,18 @@ void AppWindow::drawToolbar() {
                 if (haveGain) {
                     tip += "\n";
                     tip += deviceGainNames_[0];
+                } else if (noRadio) {
+                    // WHY IT IS DEAD, NOT JUST THAT IT IS: no radio is open. When a saved
+                    // radio did not open, sourceError_ is the whole sentence ("<radio> did
+                    // not open: <reason> ..."), the same words the Source section shows
+                    // under its combo.
+                    tip += "\n";
+                    if (restoreKeep_.valid() && !sourceError_.empty()) {
+                        tip += cascade::core::formatText(tr("No radio is open: %s"),
+                                                         sourceError_.c_str());
+                    } else {
+                        tip += tr("No radio is open - choose one in the Source section");
+                    }
                 }
                 ImGui::SetTooltip("%s", tip.c_str());
             }
@@ -6718,7 +6743,8 @@ void AppWindow::drawToolbar() {
                             ImVec2(cxs[0] + autoKeyW * 0.5f, autoKeyTop + autoKeyH), deviceAgc_,
                             agcOk,
                             agcOk ? tr("Automatic gain - the radio sets its own gain")
-                                  : tr("This radio has no automatic gain"),
+                                  : noRadio ? tr("No radio is open")
+                                                       : tr("This radio has no automatic gain"),
                             "deck:gainauto")) {
                 pressDeckAutoGain();
             }
@@ -11197,11 +11223,33 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     if (!r.dev) {
         const std::string why = r.error.empty() ? "device open failed" : r.error;
         sourceError_ = why;
+        // THE REASON CLASS, for the log line below and for the retry (0.99.92):
+        // read off the driver's own words here, before the sentence is wrapped.
+        const cascade::core::health::RadioReason whyReason =
+            cascade::core::health::classifyRadioOpen(r.kind, why);
+        const std::string whyClass = cascade::core::health::radioReasonWord(whyReason);
+        // A TRY AT THE SAVED RADIO (pollSavedRadioRetry) THAT FAILED: busy again
+        // keeps the retries going on their schedule; anything else ends them, and
+        // the ordinary message stands - waiting does not cure an unplugged dongle.
+        // It is the SAME incident as the start-up failure already counted, so a
+        // busy-again try adds nothing to the anonymous count; a different reason
+        // is a new fact and is counted.
+        const bool retryBusyAgain =
+            r.savedRadioRetry && whyReason == cascade::core::health::RadioReason::Busy;
+        if (r.savedRadioRetry) {
+            savedRadioRetryBusy_ = retryBusyAgain;
+            savedRadioRetryLastFailSec_ = ImGui::GetTime();
+            if (retryBusyAgain && savedRadioRetryAttempts_ >= 4) {
+                cascade::core::diagWarnf(
+                    "source: the saved radio is still in use by another program after 4 more "
+                    "tries - giving up");
+            }
+        }
         // A RADIO THAT WOULD NOT OPEN, COUNTED ANONYMOUSLY (0.99.64,
         // core/health_events.hpp): the driver kind and one of eight reason
         // classes read off what the driver said - and nothing of what it said.
         // Not for a result the user had already moved on from (returned above).
-        cascade::core::health::noteRadioFail(r.kind, why);
+        if (!retryBusyAgain) { cascade::core::health::noteRadioFail(r.kind, why); }
         if (r.recovery) {
             // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was
             // closed before the attempt, the generator is what is installed,
@@ -11242,8 +11290,8 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
                 sourceError_ = cascade::gui::radioNotOpenedSentence(wanted, why);
             }
             cascade::core::diagWarnf(
-                "source: %s (%s) did not open - the receiver is on the signal generator%s",
-                model.c_str(), r.kind.c_str(),
+                "source: %s (%s) did not open (%s) - the receiver is on the signal generator%s",
+                model.c_str(), r.kind.c_str(), whyClass.c_str(),
                 restoreKeep_.valid() ? "; the saved radio is kept for the next start" : "");
         }
         // ...and the combo settles on whatever IS installed - unless a saved
@@ -11320,6 +11368,17 @@ void AppWindow::finishDeviceOpen(DeviceOpenResult r) {
     // not take, and the saved radio is still the best thing to try next time.)
     restoreKeep_ = cascade::gui::RememberedSource{};
     restoreKeepLabel_.clear();
+    if (r.savedRadioRetry) {
+        // THE SAVED RADIO CAME FREE (0.99.92): said once, with the model and never
+        // the args, like every other source line.
+        cascade::core::diagLogf("source: the saved radio came free - %s opened on attempt %d",
+                                (r.kind == "soapy"
+                                     ? cascade::core::sanitiseDevice(r.args)
+                                     : modelFromNativeLabel(nativeLabelFor(r.kind, r.args)))
+                                    .c_str(),
+                                savedRadioRetryAttempts_);
+    }
+    savedRadioRetryBusy_ = false;
     ++sourceGen_;  // this install is itself a source change
     installSource(std::move(r.dev));
     sourceKind_ = r.kind;
@@ -11535,6 +11594,68 @@ void AppWindow::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabe
     });
 }
 
+void AppWindow::pollSavedRadioRetry() {
+    // Two loads on every frame that matters: nothing armed (every bounded
+    // --frames run, and every session whose saved radio opened or failed any
+    // way but BUSY) takes the first return.
+    if (!savedRadioRetryBusy_) { return; }
+    // A RADIO KIND ONLY: the remembered source can also be an I/Q file or a
+    // sound card, which are not what this waits for.
+    if (!restoreKeep_.valid() || restoreKeep_.kind == "file" || restoreKeep_.kind == "soundcard" ||
+        restoreKeep_.kind == "siggen") {
+        return;
+    }
+    const double now = ImGui::GetTime();
+    if (!cascade::gui::savedRadioRetryDue(restoreKeep_.valid(), savedRadioRetryBusy_,
+                                          savedRadioRetryAttempts_, device_ != nullptr,
+                                          deviceOpenPending_, soapyScanPending_, now,
+                                          savedRadioRetryLastFailSec_)) {
+        return;
+    }
+    // Stamped BEFORE anything can fail, as pollSoapyRecovery does: the delay is
+    // counted from this try, and a try that never reaches the worker is not
+    // repeated on the next frame.
+    ++savedRadioRetryAttempts_;
+    savedRadioRetryLastFailSec_ = now;
+    cascade::core::diagLogf("source: trying the saved radio again (attempt %d of 4)",
+                            savedRadioRetryAttempts_);
+
+    // THE REQUEST THE SOURCE LIST WOULD HAVE MADE for this radio (selectSource),
+    // and the restore's own prefer-native rule: a config that says SoapySDR for
+    // a dongle this product drives itself opens natively, falling back to the
+    // Soapy args only if the native driver refuses the tuner.
+    DeviceOpenResult req;
+    req.kind = restoreKeep_.kind;
+    req.args = (req.kind == "soapy") ? restoreKeep_.soapyArgs : restoreKeep_.nativeArgs;
+    if (req.kind == "soapy") {
+        if (const std::optional<cascade::source::NativeDeviceInfo> nat =
+                cascade::gui::preferNativeFor("soapy", req.args, nativeDevices_)) {
+            req.fallbackSoapyArgs = req.args;
+            req.kind = nat->driver;
+            req.args = nat->args;
+        }
+    }
+    req.requestRateHz = restoreKeep_.sampleRateHz > 0.0 ? restoreKeep_.sampleRateHz
+                                                        : kSoapyRateHz[kSoapyRateDefaultIndex];
+    // The combo row of this radio when this machine still lists it, as the
+    // restore finds it; -1 otherwise (the preview then names the live source).
+    req.row = -1;
+    if (req.kind != "soapy") {
+        for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+            if (nativeDevices_[i].args == req.args) { req.row = kNativeRowBase + static_cast<int>(i); }
+        }
+    } else {
+        for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+            if (soapyDevices_[i].args == req.args) { req.row = soapyRowBase() + static_cast<int>(i); }
+        }
+    }
+    // The generator has been running since start-up and carries the saved
+    // frequency (applyConfig set it), so it is what the radio is told.
+    req.keepCenterHz = carriedAirCentre();
+    req.savedRadioRetry = true;
+    launchDeviceOpen(std::move(req), restoreKeepLabel_);
+}
+
 void AppWindow::pollSoapyRecovery() {
     // Cheap on every frame that matters: no device, or a live one, and this
     // is two loads. Every bounded --frames run takes the first return.
@@ -11742,6 +11863,10 @@ void AppWindow::selectSource(int idx, std::optional<double> carryAirHz) {
     // click did nothing.
     if (deviceOpenPending_) { return; }
     sourceError_.clear();
+    // THE USER CHOSE A SOURCE, so a saved radio that was only busy is no longer
+    // what the session is waiting for (0.99.92). restoreKeep_ stays for the exit
+    // save; a failed pick must not be followed by a retry of the radio they left.
+    cancelSavedRadioRetry();
 
     if (idx == 0) {
         // A DELIBERATE CHOICE OF THE GENERATOR STILL OVERWRITES THE SAVED
@@ -32797,6 +32922,16 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // nothing of the message - which quotes the device arguments back.
             // The most common failure there is, and the first thing this run does.
             cascade::core::health::noteRadioFail(kind, sourceError_);
+            // WHY, AS ONE WORD (0.99.92): the same reason class the count above
+            // files it under, and the only part of the driver's message that may
+            // go in the log - the message itself quotes the device arguments back
+            // (below). Taken HERE, before the sentence at the end of this branch
+            // wraps sourceError_ in the radio's name. The 0.99.91 field report
+            // had to be read off the anonymous counts to learn that the saved radio
+            // was merely busy; the log said only that it "did not reopen".
+            const std::string whyClass = cascade::core::health::radioFailWhy(kind, sourceError_);
+            const bool failedBusy = cascade::core::health::classifyRadioOpen(kind, sourceError_) ==
+                                    cascade::core::health::RadioReason::Busy;
             // openDeviceSync already set sourceError_. A radio that was there last
             // session and is not there now is the single most common support
             // question this product gets - but the driver's own message quotes
@@ -32813,9 +32948,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
                                          : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (triedModel.empty() || triedModel == args) { triedModel = kind; }
             cascade::core::diagWarnf(
-                "source: the saved radio (%s, %s) did not reopen - the receiver is on the signal "
-                "generator and the radio stays saved",
-                triedModel.c_str(), kind.c_str());
+                "source: the saved radio (%s, %s) did not reopen (%s) - the receiver is on the "
+                "signal generator and the radio stays saved",
+                triedModel.c_str(), kind.c_str(), whyClass.c_str());
 
             // ...AND THE CONFIG GOES ON NAMING IT. The session runs on the
             // generator above, which is right - it has to run on something -
@@ -32841,6 +32976,19 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
                                                   : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (label.empty() || label == args) { label = kind; }
             restoreKeepLabel_ = label;
+            // A RADIO THAT WAS ONLY BUSY IS TRIED AGAIN once the window is up
+            // (0.99.92, gui/saved_radio_retry.hpp): the previous FoxSDR, still letting
+            // go of the dongle after the in-app updater, is the case that was found.
+            // Armed for BUSY alone; the stamp is 0.0 because this runs before the
+            // ImGui context exists, so the first try is 2 s into the frame loop.
+            if (failedBusy && restoreKeep_.valid()) {
+                savedRadioRetryBusy_ = true;
+                savedRadioRetryAttempts_ = 0;
+                savedRadioRetryLastFailSec_ = 0.0;
+                cascade::core::diagLogf(
+                    "source: the saved radio is in use by another program - trying it again in "
+                    "2, 4, 8 and 16 s");
+            }
             // Which radio, why, and where the receiver is - the driver's own
             // reason is kept verbatim inside the sentence (0.99.36).
             sourceError_ = cascade::gui::radioNotOpenedSentence(label, sourceError_);
