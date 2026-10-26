@@ -115,14 +115,16 @@ std::string formatMarkerTime(std::int64_t unixSeconds, bool utc) {
     return buf;
 }
 
-std::string FreqMarkers::clipboardText(bool utc) const {
-    if (list_.empty()) { return std::string(); }
+std::string FreqMarkers::clipboardText(bool utc) const { return formatMarkersClipboard(list_, utc); }
+
+std::string formatMarkersClipboard(const std::vector<FreqMarker>& list, bool utc) {
+    if (list.empty()) { return std::string(); }
     std::vector<const FreqMarker*> byFreq;
-    byFreq.reserve(list_.size());
-    for (const FreqMarker& m : list_) { byFreq.push_back(&m); }
+    byFreq.reserve(list.size());
+    for (const FreqMarker& m : list) { byFreq.push_back(&m); }
     std::stable_sort(byFreq.begin(), byFreq.end(),
                      [](const FreqMarker* a, const FreqMarker* b) { return a->freqHz < b->freqHz; });
-    std::string out = "FoxSDR markers (" + std::to_string(list_.size()) + ")\n";
+    std::string out = "FoxSDR markers (" + std::to_string(list.size()) + ")\n";
     for (const FreqMarker* m : byFreq) {
         char line[96];
         std::snprintf(line, sizeof(line), "M%d\t%.6f MHz\t", m->number, m->freqHz / 1.0e6);

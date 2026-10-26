@@ -761,7 +761,7 @@ void testEveryListIsServed() {
     engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     int served = 0;
-    for (uint32_t l = 1; l <= FOXAPI_LIST_PLUGIN_SETTINGS; ++l) {  // (the newest list: 52, stub campaign B9; 51 is the live Airband list, test_engine_api_airband's)
+    for (uint32_t l = 1; l <= FOXAPI_LIST_FREQ_MARKERS; ++l) {  // (the newest list: 53, stub campaign B10; 52 is B9's settings forms and 51 the live Airband list, test_engine_api_airband's)
         if (l == 13u) { continue; }  // retired in 0.2
         if (l == FOXAPI_LIST_TRACKS) {
             // Map tracks come from track-source plugins through the map
@@ -1497,7 +1497,7 @@ void testStatusColumnRecordings() {
 void testListsBeforeFirstPublish() {
     const auto readEveryList = [](testing::Session& s, const char* when) {
         CHECK(s.ok());
-        for (uint32_t l = 1; l <= FOXAPI_LIST_PLUGIN_SETTINGS; ++l) {  // (the newest list: 52, stub campaign B9; 51 is the live Airband list, test_engine_api_airband's)
+        for (uint32_t l = 1; l <= FOXAPI_LIST_FREQ_MARKERS; ++l) {  // (the newest list: 53, stub campaign B10; 52 is B9's settings forms and 51 the live Airband list, test_engine_api_airband's)
             if (l == 13u || l == FOXAPI_LIST_TRACKS) { continue; }  // retired / not served
             FoxListItem it{};
             it.structSize = sizeof(it);

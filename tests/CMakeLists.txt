@@ -1263,6 +1263,7 @@ set(CASCADE_GUI_TESTS
     test_health_app
     test_import_dialog_app
     test_main_view
+    test_markers_window_app
     test_mouse_passthrough_cache
     test_passband_slide_app
     test_patch_canvas_nav

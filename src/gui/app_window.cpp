@@ -79,6 +79,9 @@
 #include "gui/fm_mpx_plan.hpp"
 #include "gui/demod_scope_face.hpp"
 #include "dsp/window.hpp"
+#include "gui/bookmark_marker_geometry.hpp"
+#include "gui/freq_marker_layout.hpp"
+#include "gui/press_gesture.hpp"
 #include "gui/fonts.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
@@ -3800,6 +3803,12 @@ void AppWindow::drawUi() {
     // top-level thing belongs at the top level, not nested in the borderless
     // root window's ID stack.
     drawDiagnosticsOffer();
+    // The waterfall markers' right-click menu and their list window: at the
+    // top level because the receiver and every patch Display part open the
+    // SAME menu, and a popup's id belongs to the ID stack it is opened in
+    // (stub campaign B10).
+    drawMarkerMenu();
+    drawMarkerWindow();
 
     // THE SAFE POINT for a settings-form edit whose surface disappeared mid-edit (a window closing, a fold shutting, the patch page selecting another
     // node): every place a form could have been drawn this frame has now had its turn. The edit goes as a command, like a box left the ordinary way.
@@ -9242,6 +9251,8 @@ void AppWindow::drawCenterPanels() {
     // the gridlines and the VFO overlay, which stay the topmost furniture: a
     // plugin can annotate the spectrum, never cover the user's tuning.
     drawPluginMarkers(specPos.x, specPos.y, width, spectrumHeight, false);
+    // The user's waterfall markers, as faint lines through the trace too (stub campaign B10).
+    drawFreqMarkerLines(scale_.viewLowHz(), scale_.viewHighHz(), specPos.x, specPos.y, width, spectrumHeight, 1.0f);
 
     for (int i = 0; i < tickCount; ++i) {
         // ticks() only returns in-view frequencies, so x stays in-panel.
@@ -9401,8 +9412,9 @@ void AppWindow::drawCenterPanels() {
     // the user's own marker stays on top. Draw calls only - no widget - so a
     // mark can never take a click meant for the waterfall.
     drawPluginMarkers(wfPos.x, wfPos.y, width, waterfallHeight, true);
-    // The waterfall's rectangle, under master's name for it: master reports it from the frequency-marker call (ledger MARKERS-SPECTRUM, stubbed);
-    // the rectangle is the layout fact tests/test_receiver_layout_app reads, so it is reported here without the markers.
+    // The user's own markers, dropped from the right-click menu below (stub campaign B10). Under the VFO line for the same reason the plugins' marks are.
+    const ImVec4 footPlate = waterfall_->footPlate();
+    drawFreqMarkers(scale_.viewLowHz(), scale_.viewHighHz(), wfPos.x, wfPos.y, width, waterfallHeight, 1.0f, &footPlate);
     cascade::gui::census::rect("fmk:wf:receiver", wfPos.x, wfPos.y, wfPos.x + width, wfPos.y + waterfallHeight);
 
     // Thin VFO marker on the waterfall (the parity spec's "where am I tuned"
@@ -9428,7 +9440,11 @@ void AppWindow::drawCenterPanels() {
     if (wfPanning_) {
         if (!ImGui::IsMouseDown(0)) {
             wfPanning_ = false;
-            if (!wfMoved_) {
+            // A LONG PRESS IS NOT A CLICK (gui/press_gesture.hpp): on Android
+            // it is the right-click that opens the marker menu, and tuning on
+            // its left-button half would defeat noting a frequency without
+            // tuning to it.
+            if (cascade::gui::pressIsClick(ImGui::GetTime() - wfPressT_, wfMoved_)) {
                 uiSubmit(cascade::core::cmd::makeNumInt(
                     FOXAPP_OP_VFO_TO_ABSOLUTE, scale_.xToHz(mouseFrac), io.KeyShift ? 0 : 1));
             }
@@ -9443,9 +9459,27 @@ void AppWindow::drawCenterPanels() {
     } else if (wfHovered && ImGui::IsMouseClicked(0)) {
         wfPanning_ = true;
         wfPressX_ = io.MousePos.x;
+        wfPressT_ = ImGui::GetTime();
         wfMoved_ = false;
     }
     if (wfHovered && ImGui::IsMouseDoubleClicked(0)) { scale_.resetView(); }
+    // The waterfall's gestures, said once the hand has rested - the spectrum
+    // above has had its own tooltip from the start, and the marker menu is
+    // found by nothing else. Not over a marker: its own tooltip wins there.
+    if (wfHovered && !wfPanning_ && !ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(0) &&
+        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
+        markerNearHz(scale_.xToHz(mouseFrac), 4.0 * (scale_.viewHighHz() - scale_.viewLowHz()) / width) == 0) {
+        // (the Shift + wheel line of the slide, 0.99.82, is batch B11's)
+        ImGui::SetTooltip("%s", tr("Click to tune here | drag to pan | wheel: zoom\n"
+                                   "Right-click: drop a marker here, list, copy or clear markers"));
+    }
+    // RIGHT-CLICK: the marker menu for the frequency under the pointer. The
+    // right button does nothing else on this panel, so it cannot collide with
+    // the click-to-tune and the pan above, both of which are left-button.
+    if (wfHovered && !wfPanning_ && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        requestMarkerMenu(scale_.xToHz(mouseFrac), (scale_.viewHighHz() - scale_.viewLowHz()) / static_cast<double>(width));
+    }
 
     // Wheel over EITHER panel zooms about the cursor (1.3x per notch; the
     // zoom floor and full-span clamp live in FreqScale). Both panels share
@@ -11908,6 +11942,33 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     }
                 } else {
                     marker(0.5 * (lo + hi), nullptr);
+                }
+
+                // THE USER'S MARKERS, on this part's waterfall as on the
+                // receiver's: one list, drawn wherever its frequencies are in
+                // view. The part works in offsets from its own radio's centre,
+                // so the view is put back into absolute hertz first - a part
+                // whose radio is gone has no centre and draws none (stub
+                // campaign B10).
+                const double centre = rrun != lists.radios.end() && rrun->second.open ? rrun->second.centreHz : 0.0;
+                if (std::isfinite(centre) && centre > 0.0) {
+                    drawFreqMarkerLines(centre + lo, centre + hi, x0, y0, x1 - x0, wy0 - y0, drawZoom);
+                    drawFreqMarkers(centre + lo, centre + hi, x0, wy0, x1 - x0, y1 - wy0, drawZoom);
+                    cascade::gui::census::rect("fmk:wf:patch", x0, wy0, x1, y1);
+                    // Right-click on the picture: the same menu. The face's
+                    // clip rect is already cut to the canvas and to any node
+                    // on top of this one, so a covered waterfall cannot take
+                    // the click. AllowWhenBlockedByActiveItem because the
+                    // canvas's own button takes the right button too and is
+                    // already the ACTIVE item on the frame of the press -
+                    // without it the window never reads as hovered then, and
+                    // the first scripted click opened no menu at all.
+                    const bool pictureHot = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                                            ImGui::IsMouseHoveringRect(ImVec2(x0, wy0), ImVec2(x1, y1));
+                    if (pictureHot && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                        const double frac = static_cast<double>(ImGui::GetIO().MousePos.x - x0) / static_cast<double>(x1 - x0);
+                        requestMarkerMenu(centre + lo + frac * (hi - lo), (hi - lo) / static_cast<double>(x1 - x0));
+                    }
                 }
                 break;
             }
@@ -19742,6 +19803,19 @@ void AppWindow::drawBookmarksSection() {
                                    "there is room. Only the ones on screen are looked at, so a list\n"
                                    "of tens of thousands costs nothing."));
     }
+    cascade::gui::sameLineIfFits(cascade::gui::checkWidth(trId("Stack close names")));
+    // DISABLED WHILE "On the spectrum" IS OFF, the mapTrailAltColours_ rule:
+    // a control for how names ARE drawn is a lie while none are being drawn,
+    // and would leave a user wondering which of the two settings was broken.
+    // The value itself is untouched, so turning markers back on restores
+    // whichever choice was made here.
+    ImGui::BeginDisabled(!bookmarkMarkers_);
+    ImGui::Checkbox(trId("Stack close names"), &bookmarkStackNames_);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("%s", tr("Names that would overlap are placed on up to three rows\n"
+                                   "instead of being hidden. Untick for one row."));
+    }
     rebuildBookmarkView();
     ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
     ImGui::Text(tr("%zu shown of %zu"), bookmarkView_.size(), bookmarkCount);
@@ -19898,10 +19972,26 @@ void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float heigh
     // carry text - never through them.
     const float headerY = spectrum_ != nullptr ? spectrum_->headerBottom() : y0;
     const float labelY = headerY + ImGui::GetTextLineHeight() + 2.0f;
-    // The x extents of the names drawn so far; a name that would touch one is
-    // left off (its tick still shows). A few dozen at most on any width.
-    std::vector<std::pair<float, float>> placed;
-    placed.reserve(64);
+    // STACKED NAMES (0.99.54, an Italian user's request): two bookmarks a
+    // couple of kHz apart used to drop the second name the moment its extent
+    // touched the first's - the tick still showed, but only one name was
+    // ever readable. "Stack close names" tries the row below instead of
+    // giving up, up to three rows, each name's own faint guide line running
+    // from the row it actually landed on down to the tick strip so a
+    // stacked name still visibly belongs to its tick. bookmarkStackNames_
+    // off (or a spectrum too short to offer a second row) is the same
+    // one-row budget the un-stacked code always had - see
+    // gui/bookmark_marker_geometry.hpp for the row choice itself.
+    const float lineH = font != nullptr ? font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, "Hg").y
+                                        : ImGui::GetTextLineHeight();
+    const float rowPitch = lineH + 1.0f;
+    const int rowCap = bookmarkStackNames_ ? cascade::gui::kBookmarkNameMaxRows : 1;
+    const int maxRows = cascade::gui::bookmarkNameRowCapacity(strip0 - labelY, rowPitch, rowCap);
+    // The x extents already placed on each row; a name that would touch one
+    // on every row it is allowed is left off (its tick still shows). A few
+    // dozen at most on any width, across every row combined.
+    std::vector<std::vector<std::pair<float, float>>> placedByRow(static_cast<std::size_t>(maxRows));
+    std::size_t placedTotal = 0;
     for (int pass = 0; pass < 2; ++pass) {
         float lastTickX = -1e9f;
         for (std::size_t i = span.first; i < span.second; i += (pass == 0 ? 1 : stride)) {
@@ -19912,25 +20002,29 @@ void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float heigh
             lastTickX = x;
             dl->AddLine(ImVec2(x, strip0), ImVec2(x, strip1), b.favourite ? favTick : tick,
                         b.favourite ? 2.0f : 1.0f);
+            // The row this bookmark's name lands on, or -1 when it is not
+            // named, the cap is already spent, it would run off the right
+            // edge, or every row available clashed.
+            int row = -1;
+            float a = 0.0f, e = 0.0f;
+            if ((b.favourite || sparse) && !b.name.empty() && placedTotal < 64) {
+                const ImVec2 sz = font != nullptr
+                                      ? font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, b.name.c_str())
+                                      : ImGui::CalcTextSize(b.name.c_str());
+                a = x + 3.0f;
+                e = a + sz.x;
+                if (e <= x0 + width) { row = cascade::gui::chooseBookmarkNameRow(placedByRow, a, e); }
+            }
+            const float lineTopY = row >= 0 ? labelY + static_cast<float>(row) * rowPitch : labelY;
             if (b.favourite || sparse) {
-                dl->AddLine(ImVec2(x, labelY), ImVec2(x, strip0), b.favourite ? tick : line, 1.0f);
+                dl->AddLine(ImVec2(x, lineTopY), ImVec2(x, strip0), b.favourite ? tick : line, 1.0f);
             }
-            if (!(b.favourite || sparse)) { continue; }
-            if (b.name.empty() || placed.size() >= 64) { continue; }
-            const ImVec2 sz = font != nullptr ? font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, b.name.c_str())
-                                              : ImGui::CalcTextSize(b.name.c_str());
-            const float a = x + 3.0f, e = x + 3.0f + sz.x;
-            if (e > x0 + width) { continue; }
-            bool clash = false;
-            for (const auto& p : placed) {
-                if (a < p.second + 6.0f && e + 6.0f > p.first) {
-                    clash = true;
-                    break;
-                }
-            }
-            if (clash) { continue; }
-            dl->AddText(font, fontPx, ImVec2(a, labelY), text, b.name.c_str());
-            placed.emplace_back(a, e);
+            if (row < 0) { continue; }
+            dl->AddText(font, fontPx, ImVec2(a, lineTopY), text, b.name.c_str());
+            placedByRow[static_cast<std::size_t>(row)].emplace_back(a, e);
+            ++placedTotal;
+            cascade::gui::census::note("bm:name:", row);
+            cascade::gui::census::rect("bm:name:", row, a, lineTopY, e, lineTopY + lineH);
         }
     }
     dl->PopClipRect();
@@ -21562,6 +21656,12 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     mapTrails_ = cfg.mapTrails;
     mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
     mapTrailStyle_ = cfg.mapTrailStyle;
+    // Bookmark spectrum markers and their stacking (0.99.54): PREVIOUSLY not
+    // in AppConfig at all, so bookmarkMarkers_ kept its true default at every
+    // launch no matter what the user last chose - see drawBookmarksSection.
+    // (Stub campaign B10: the port had dropped both lines.)
+    bookmarkMarkers_ = cfg.bookmarkMarkers;
+    bookmarkStackNames_ = cfg.bookmarkStackNames;
     aircraftIconPx_ = cascade::gui::clampAircraftIconPx(cfg.aircraftIconPx);
     mapTrailWidthPx_ = std::clamp(cfg.mapTrailWidthPx, 1, cascade::gui::kAircraftIconMaxPx);
 
@@ -21730,6 +21830,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
     cfg.mapTrailStyle = mapTrailStyle_;
+    cfg.bookmarkMarkers = bookmarkMarkers_;
+    cfg.bookmarkStackNames = bookmarkStackNames_;
     cfg.aircraftIconPx = aircraftIconPx_;
     cfg.mapTrailWidthPx = mapTrailWidthPx_;
     cfg.scopeMode = scopeMode_;

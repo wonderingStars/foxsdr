@@ -575,6 +575,8 @@ struct AppWindowTestAccess {
     static double scanHold(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanHoldMs_; }); }
     // The Airband monitor and the scanner's list mode (stub campaign B6).
     static bool scanTicked(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanTicked_; }); }
+    // The waterfall's markers (stub campaign B10): the engine's list, a copy.
+    static std::vector<cascade::core::FreqMarker> markers(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).freqMarkers_.list(); }); }
     static bool airbandListening(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandListening_; }); }
     static bool airbandPending(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandStartPending_; }); }
     static std::string airbandNote(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandNote_; }); }
@@ -1971,6 +1973,48 @@ cascade::core::Bookmark rowNamed(AppWindow& a, const std::string& name) {
     return cascade::core::Bookmark{};
 }
 
+void markerOps(AppWindow& a) {
+    // THE WATERFALL'S MARKERS (stub campaign B10): worked by number through the engine's one list; tests/test_engine_api_markers.cpp holds the rest (the
+    // list, the notes, the file, who may send them).
+    covering(FOXAPP_OP_MARKER_DROP);
+    {
+        FoxCommand drop = num(FOXAPP_OP_MARKER_DROP, 145.5e6, 2000.0);
+        FoxCommandResult r = A::apply(a, drop);
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 1.0 && r.applied[1] == 1.0);   // M1, a new one
+        CHECK(A::markers(a).size() == 1u);
+        CHECK(A::markers(a)[0].freqHz == 145.5e6);
+        r = A::apply(a, num(FOXAPP_OP_MARKER_DROP, 145.5015e6, 2000.0));
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 1.0 && r.applied[1] == 0.0);   // within the reach: the one already there
+        CHECK(A::markers(a).size() == 1u);
+        CHECK(refused(A::apply(a, num(FOXAPP_OP_MARKER_DROP, 0.0)), FOXAPI_OUT_OF_RANGE));
+    }
+    covering(FOXAPP_OP_MARKER_NOTE);
+    {
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_MARKER_NOTE, "a birdie", 1))));
+        CHECK(A::markers(a)[0].note == "a birdie");
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_MARKER_NOTE, "x", 9)), FOXAPI_NOT_FOUND));
+    }
+    covering(FOXAPP_OP_MARKER_REMOVE);
+    {
+        CHECK(ok(A::apply(a, num(FOXAPP_OP_MARKER_DROP, 146.5e6))));
+        CHECK(A::markers(a).size() == 2u);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_MARKER_REMOVE, 1))));
+        CHECK(A::markers(a).size() == 1u && A::markers(a)[0].number == 2);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_MARKER_REMOVE, 1)), FOXAPI_NOT_FOUND));   // gone, and its number is not handed out again
+        CHECK(A::apply(a, num(FOXAPP_OP_MARKER_DROP, 147.5e6)).applied[0] == 3.0);
+    }
+    covering(FOXAPP_OP_MARKER_CLEAR);
+    {
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_MARKER_CLEAR))));
+        CHECK(A::markers(a).empty());
+        CHECK(refused(A::apply(a, cmd::make(FOXAPP_OP_MARKER_CLEAR)), FOXAPI_NO_CHANGE));
+        CHECK(A::apply(a, num(FOXAPP_OP_MARKER_DROP, 148.5e6)).applied[0] == 1.0);   // only CLEAR starts at M1 again
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_MARKER_CLEAR))));
+    }
+}
+
 void airbandOps(AppWindow& a) {
     const bool pageWas = A::patchPageOpen(a);
 
@@ -3123,6 +3167,7 @@ int main() {
         storeOps(app);
         patchOps(app);
         airbandOps(app);
+        markerOps(app);
         transmitterOps(app);
         otherOps(app);
         statusLineOps(app);

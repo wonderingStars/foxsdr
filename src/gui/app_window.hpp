@@ -33,6 +33,7 @@ struct GLFWwindow;
 #include "core/config.hpp"
 #include "core/diag_history.hpp"
 #include "core/freq_import.hpp"
+#include "core/freq_markers.hpp"
 #include "core/file_pick.hpp"
 #include "core/radio_setup.hpp"
 #include "core/freq_manager.hpp"
@@ -1328,6 +1329,48 @@ private:
     // Bookmarks inside the visible span, as marks on the spectrum.
     void drawBookmarkMarkers(float x0, float y0, float width, float height);
 
+    // --- THE WATERFALL'S MARKERS (stub campaign B10, 0.99.57; app_window_markers.cpp has the why) ----------------------------------------
+    // A user's request (2026-09-30): drop a marker on the waterfall at a frequency of interest WITHOUT tuning there, list them, copy them, clear them. The
+    // list is the ENGINE's (Engine::freqMarkers_, markers.json, saved on a worker; core/freq_markers.hpp has the rules - the numbers M1, M2, ... are never
+    // reused); the window reads it as FREQ_MARKERS, again only when fact.markers.version moves, and works it only by FOXAPP_OP_MARKER_*.
+    struct MarkerListCache {
+        std::uint64_t listSeq = ~std::uint64_t{0};
+        std::string version;                           // fact.markers.version the rows were read at; "" never
+        std::vector<cascade::core::FreqMarker> rows;   // in the order dropped (ascending number); the note whole (fact.markers.note.<n>)
+        std::string error;                             // fact.markers.error: a damaged or unsaved markers.json, "" none
+        std::string factText;                          // the fact as just read (kept for its room)
+        std::string factKey;
+        std::uint32_t copies = 0;                      // times the rows were copied (a test reads it)
+    };
+    MarkerListCache markerCache_;
+    const MarkerListCache& markerLists();
+    // The number of the marker nearest `hz` within `tolHz`, or 0 (FreqMarkers::nearest's rule, over the window's copy).
+    int markerNearHz(double hz, double tolHz);
+    // Draws the markers inside [loHz, hiHz] over a waterfall at x0, y0 of `width` x `height`: a dashed line each and a tab ("M3 145.502") along the foot,
+    // stacked upward where tabs would touch. `scale` is the part's zoom (1 on the receiver); `avoid`, when given, is the waterfall's own foot plate (x0, y0,
+    // x1, y1) whose extent counts as taken. Draw calls only - no widget - so it can never take a click meant for the waterfall.
+    void drawFreqMarkers(double loHz, double hiHz, float x0, float y0, float width, float height, float scale, const ImVec4* avoid = nullptr);
+    // The same markers as faint lines through the SPECTRUM TRACE over [x0, x0+width] x [y0, y0+height], so a noted signal's peak can be found there too.
+    void drawFreqMarkerLines(double loHz, double hiHz, float x0, float y0, float width, float height, float scale);
+    // Asks for the marker menu at the pointer for frequency `hz` on a view of `hzPerPx` hertz a pixel. The menu itself is drawn by drawMarkerMenu, at the
+    // top level, because the receiver and every patch Display part open the SAME one. Opening it changes NOTHING.
+    void requestMarkerMenu(double hz, double hzPerPx);
+    void drawMarkerMenu();
+    void drawMarkerWindow();
+    bool markerWindowOpen_ = false;
+    bool markerMenuPending_ = false;    // open the menu at the top level this frame
+    double markerMenuHz_ = 0.0;         // where the right-click landed, rounded
+    double markerMenuStepHz_ = 1.0;     // that view's pixel, as a 1-2-5 step
+    int markerMenuNear_ = 0;            // a marker under the pointer, or 0
+    // A NOTE BEING TYPED: the note goes to the engine a keystroke at a time (the engine saves half a second after the last), and the box shows what was
+    // typed until the engine's list has it back - never the older text a frame later, which would eat the characters typed in between.
+    struct MarkerNoteHold {
+        int number = 0;
+        std::string text;
+        int frames = 0;
+    };
+    MarkerNoteHold markerNoteHold_;
+
     // --- THE AIRBAND SECTION (stub campaign B7, 0.99.60 - 0.99.71; app_window_airband.cpp has the why) -----------------------------------
     // The monitor is the engine's (src/engine/engine_airband.cpp): the window sends FOXAPP_OP_AIRBAND, FOXAPP_OP_BOOKMARK_TICK, _ADD_ROWS and
     // FOXAPI_OP_BOOKMARK_REMOVE_GROUP, reads fact.airband.* when listSeq moves, and reads the live list AIRBAND_CHANNELS once a frame - never
@@ -1543,6 +1586,8 @@ private:
     // gestures share the left button, so they can only be told apart on
     // release.
     float wfPressX_ = 0.0f;
+    // When the press began (ImGui time): a press held as long as a long press is a HOLD and tunes nothing (gui/press_gesture.hpp, 0.99.57).
+    double wfPressT_ = 0.0;
     bool wfMoved_ = false;
 
     bool freqEditing_ = false;
@@ -1921,6 +1966,7 @@ private:
     int bookmarkGroupSel_ = 0;           // 0 = every group
     bool bookmarkFavOnly_ = false;
     bool bookmarkMarkers_ = true;        // draw bookmarks on the spectrum
+    bool bookmarkStackNames_ = true;     // a name that would overlap goes on the row below, up to three (0.99.54; AppConfig::bookmarkStackNames)
     char bookmarkImportPath_[512] = "";
     std::vector<std::string> bookmarkGroups_;
     std::vector<std::uint32_t> bookmarkView_;

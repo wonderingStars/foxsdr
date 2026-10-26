@@ -2961,6 +2961,18 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.value[1] = static_cast<double>(f.maxLength);
             }
             break;
+        // ---- API 0.3 9.8 (stub campaign B10): the waterfall's markers --------------------------------------------------------------
+        case FOXAPI_LIST_FREQ_MARKERS:
+            // A marker's note is the local operator's own words.
+            if (!local) { return FOXAPI_DENIED; }
+            if (want(b->freqMarkers.size())) {
+                const auto& m = b->freqMarkers[index];
+                it.id = static_cast<std::uint64_t>(m.number);
+                copyText(it.name, m.note.c_str());
+                it.value[0] = m.freqHz;
+                it.value[1] = static_cast<double>(m.notedUnix);
+            }
+            break;
         case FOXAPI_LIST_PLUGIN_COMMANDS:
             if (want(b->pluginCommands.size())) {
                 const auto& c = b->pluginCommands[index];

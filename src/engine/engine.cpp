@@ -7374,6 +7374,16 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
             return res;
         }
+        // --- the waterfall's markers (stub campaign B10, docs/api-0.3-additions.md 9.8) ---------------------------------------------
+        case FOXAPP_OP_MARKER_DROP:
+        case FOXAPP_OP_MARKER_REMOVE:
+        case FOXAPP_OP_MARKER_CLEAR:
+        case FOXAPP_OP_MARKER_NOTE: {
+            std::string why;
+            const std::int32_t st = applyMarkerOp(c, text, res, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
 
         // --- decoders and plugins ------------------------------------------------------------
         case FOXAPI_OP_DECODER_START:

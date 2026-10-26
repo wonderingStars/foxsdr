@@ -158,6 +158,10 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_BOOKMARK_TICK, "APP_BOOKMARK_TICK", true},
     {FOXAPP_OP_BOOKMARK_ADD_ROWS, "APP_BOOKMARK_ADD_ROWS", true},
     {FOXAPP_OP_SCANNER_LIST, "APP_SCANNER_LIST", true},
+    {FOXAPP_OP_MARKER_DROP, "APP_MARKER_DROP", true},
+    {FOXAPP_OP_MARKER_REMOVE, "APP_MARKER_REMOVE", true},
+    {FOXAPP_OP_MARKER_CLEAR, "APP_MARKER_CLEAR", true},
+    {FOXAPP_OP_MARKER_NOTE, "APP_MARKER_NOTE", true},
 };
 
 constexpr std::size_t kOpCount = sizeof(kOps) / sizeof(kOps[0]);

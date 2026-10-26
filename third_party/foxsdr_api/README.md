@@ -10,11 +10,12 @@ table has no read for, in a new vendored header version"). Every 0.3 change
 is APPENDED, per the header's own rule 4, and each is documented in
 `docs/api-0.3-additions.md` in API.md's style, to be merged upstream; until
 that commit exists, this file and that document are the 0.3 contract.
-SHA-256 of the 0.3 header: `7f77c6d41342dd1346402714b3ec5ee8278c8b68158d4064241b8bc42db11792`.
+SHA-256 of the 0.3 header: `7cb5dc0a3b08650c9fad06cffb19e1a958c6aa256eaa51d513ffa36d716cb3f0`.
 (Refreshed at stage 5a, which added `FOXAPI_LIST_SERVERS` (49, docs/api-0.3-additions.md 8.16.5) - the only change; the hash is of the file with LF line ends, as git stores it. The value recorded before it, `f60701c2...`, had not been refreshed since the pump move's additions and matched no committed state of the header.)
 (Refreshed by stub campaign B3, which added `FOXAPI_LIST_STORE_PICTURES` (50, docs/api-0.3-additions.md 5.1 and 9.4). The value recorded before it, `91c101de...`, was stale: the header had changed since stage 5a (one line in the 0.99.84 merge's second pass, B2's) without the hash being refreshed. This hash is again that of the file as git stores it, LF line ends.)
 (Refreshed by stub campaign B6, which added `FOXAPI_LIST_AIRBAND_CHANNELS` (51), `FOXAPI_ITEM_TICKED` and `FOXAPI_ITEM_ON_AIR` and the `BOOKMARKS` `value[3]` word (docs/api-0.3-additions.md 5.1 - 5.3 and 9.6). The value recorded before it, `fe98c053...`, was B3's. The hash is again that of the file as git stores it, LF line ends.)
 (Refreshed by stub campaign B9, which added `FOXAPI_LIST_PLUGIN_SETTINGS` (52, docs/api-0.3-additions.md 5.1 and 9.7). The value recorded before it, `c5e97f86...`, was B6's. The hash is again that of the file as git stores it, LF line ends.)
+(Refreshed by stub campaign B10, which added `FOXAPI_LIST_FREQ_MARKERS` (53, docs/api-0.3-additions.md 5.1 and 9.8). The value recorded before it, `7f77c6d4...`, was B9's. The hash is again that of the file as git stores it, LF line ends.)
 
 Licence: MIT, in the header's own licence block.
 

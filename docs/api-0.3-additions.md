@@ -162,6 +162,7 @@ says when to read again.
 | `STORE_PICTURES` (50) | the plugin store's pictures, every one it was asked for (`FOXAPP_OP_STORE_PICTURES_WANT`) and still knows, in sha256 order (9.4). `id`: the first 64 bits of the sha256; `name`: the sha256 (64 hex digits - the cache key; the entry names its pictures in `fact.store.<key>.pictures`); `detail`: a Ready one's cached file path (**LOCAL sessions only**; whole in `fact.store.picture.<sha256>.path`), a Failed one's reason cut at 159 bytes (whole in `.reason`); `value[0]`: 1 pending (queued or in flight), 2 ready, 3 failed; `ACTIVE`: the one in flight. Moves `listSeq` with every change of a picture's state |
 | `AIRBAND_CHANNELS` (51) | the channels the Airband monitor plays (9.6): one entry per channel of the plan - not only the block on the air - in frequency order, and none while it is not listening. **Read at the call and never part of the lists' block: it never moves `listSeq`, so read it each time you draw** (`PATCH_LIVE`'s rule: a channel's level and heard time change every pass). `id`: the channel's number in the plan, from 1; `name`: the row that names it (the first ticked row on that frequency); `value[0]`: the frequency, Hz; `value[1]`: the channel width, Hz; `value[2]`: the level its squelch judges, dB (-200 until it has reported one); `value[3]`: the seconds heard since the monitor last wrote them to the list (add them to `BOOKMARKS`' `value[3]` for the figure to show); `ACTIVE`: its squelch is open now; `ON_AIR`: it is in the block on the air (none is, before the first block has been tuned - with several blocks that waits for the scan's first tick) |
 | `PLUGIN_SETTINGS` (52) | **LOCAL sessions only (`DENIED` to a REMOTE one).** The fields of the settings forms the loaded modules declare (`CASCADE_CAP_SETTINGS_UI`, 9.7), one entry per field the host can store, a module's fields together and in its own order. `id`: the entry's number in this list, from 1 (what `fact.plugin.setting.<id>` is read by; it moves when the modules do); `name`: the field's label (the plugin's own text); `detail`: the module file name (`PLUGINS`' detail); `value[0]`: the kind (0 TEXT, 1 NUMBER, 2 BOOL, 3 PATH), `value[1]`: the longest value in UTF-8 bytes. The field's key and placeholder are the fact `fact.plugin.setting.<id>.spec`, its value the fact `fact.plugin.setting.<id>`. The list moves `listSeq` when a field's value changes, whoever changed it |
+| `FREQ_MARKERS` (53) | **LOCAL sessions only (`DENIED` to a REMOTE one).** The markers dropped on the waterfall (9.8), in the order they were dropped (ascending number). `id`: the marker's number (M<id>; never handed out again while the list lives); `name`: its note, cut at 95 bytes (the whole note is the fact `fact.markers.note.<id>`); `value[0]`: the frequency, absolute Hz; `value[1]`: when it was dropped, seconds since 1970 UTC. The list moves `listSeq` when a marker is dropped, removed, cleared or its note changes; `fact.markers.version` is the list's own counter (read the rows again only when it moves), `fact.markers.error` the sentence of a damaged or unsaved `markers.json` ("" none) |
 
 ### 5.2 0.2 lists now served
 
@@ -2114,6 +2115,37 @@ then `settingsUiSet`) - `src/engine/engine_plugin_settings.cpp`.
 Held by tests/test_engine_api_settings.cpp (the list and the facts, LOCAL-only, accepted and refused edits, `settings_seq`, against the real fixture module), test_engine_api_03 (its "every
 list is served" loops run to list 52), test_apply_command (the op's cases), tests/test_plugin_settings_ui.cpp (the form's contract with a sink whose answer comes later),
 tests/test_plugin_settings_window.cpp (the real window against the real engine, frame by frame), and the real-binary tests test_decoder_settings_fold_app and test_plugin_pathpick_app.
+
+### 9.8 The waterfall's markers (stub campaign B10; docs/engine-stage4.md 6.22)
+
+Master's 0.99.57 let a user drop a marker on the waterfall - the receiver's, or a patch Display part's - at the frequency under the pointer, WITHOUT tuning there ("take note of it for later
+examination"), list the markers, copy them and clear them. A marker is not a bookmark: a frequency, a number to call it by, the moment it was made and a note added later. The list
+(`core/freq_markers.hpp`: the numbers, the merge rule, the 200 cap, the file) was the engine's already - loaded at start-up, saved on a worker half a second after a change
+(`Engine::flushMarkerSave`, `markers.json` beside `bookmarks.json`) - but nothing could reach it. Now the table does: four ops, one list and three facts
+(`src/engine/engine_markers.cpp`), so a marker dropped in the window and one dropped from anywhere else are the same thing, with one numbering.
+
+* **THE NUMBERS ARE NAMES.** M1, M2, ... are handed out in the order markers are dropped and **never again** while the list lives - a "M3" written on a scrap of paper keeps meaning the same
+  frequency after M2 is removed, and after a restart (the count is in the file: `"next"`). Only `MARKER_CLEAR` starts the count at M1 again. The engine never numbers a marker of its own: a drop
+  answers with the number the list gave.
+* **`FOXAPP_OP_MARKER_DROP` (0x8606, grant SETTINGS, LOCAL sessions only, not on the web profile)**: `num[0]`: the frequency, **absolute** Hz (a patch Display part works in offsets from its
+  radio's centre; the window puts the centre back in before it sends, so the engine only ever sees the absolute frequency); `num[1]`: the merge reach, Hz (0: none - only the same frequency):
+  a marker within it of one already there **is** that marker, nothing is added, nothing is written. The engine stamps the time. `applied[0]`: the marker's number; `applied[1]`: 1 a new marker,
+  0 the one already there. `OUT_OF_RANGE` for a frequency that is not above zero; `LIMIT` when the list holds its 200 (a merging drop needs no room).
+* **`FOXAPP_OP_MARKER_REMOVE` (0x8607)**: `ival[0]`: the number. `NOT_FOUND` for one the list does not hold; the number is not handed out again.
+* **`FOXAPP_OP_MARKER_CLEAR` (0x8608)**: no arguments. Empties the list and starts the numbering at M1. `NO_CHANGE` for an empty list.
+* **`FOXAPP_OP_MARKER_NOTE` (0x8609)**: `ival[0]`: the number; `text` (or long text): the note, as typed ("" clears it). `NOT_FOUND` for a number the list does not hold. The same note again changes
+  nothing and writes nothing. The window sends it a keystroke at a time (the engine's half-second debounce makes that at most two writes a second).
+* **`FREQ_MARKERS` (list 53, 5.1)**, LOCAL sessions only (a note is the local operator's own words). **`fact.markers.note.<id>`** (LOCAL): the whole note (the item's `name` is cut at 95 bytes).
+  **`fact.markers.version`** (LOCAL): the list's counter - every drop, remove, clear and note moves it; a reader copies the rows again only when it moves. **`fact.markers.error`** (LOCAL): the sentence of a
+  `markers.json` that was damaged (it is kept aside and the engine starts empty) or could not be saved; "" otherwise. The lists' block is rebuilt when the counter moves (the fingerprint hashes it).
+* **The window's half** (`app_window_markers.cpp`): the right-click menu ("Drop marker here", "Remove marker M<n>", "List markers...", "Copy markers to clipboard", "Clear all markers" behind a
+  confirmation) and the Markers window (note boxes, Tune = `SET_FREQUENCY`, Bookmark = `BOOKMARK_ADD_ROWS` as a list row in the current mode and bandwidth, remove); the tabs and lines on the
+  waterfall and the trace. **Opening the menu changes nothing**: "Drop marker here" is the only thing that sends a `MARKER_DROP`. And **a press held as long as a long press tunes nothing**
+  (`gui/press_gesture.hpp`; Android has no right button, its touch layer turns a finger held still for 450 ms into "left up, right down").
+
+Held by tests/test_engine_api_markers.cpp (the list, the facts, the ops' edges, the numbering across a remove and a restart, the 200 cap, who may send them, the file, a damaged file),
+test_apply_command (the ops' cases, 133 implemented, 133 tested), test_engine_api_03 (its "every list is served" loops run to list 53), and the real-binary tests test_freq_markers_app (a scripted
+right-click: the menu drops nothing; drop, remove, a new run draws it from disk; a long press tunes nothing; a patch Display part's drop in absolute hertz) and test_bookmark_stacking_app.
 
 ## 10. What stays a GAP after 0.3
 

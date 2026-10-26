@@ -189,8 +189,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     banner are not)
 
 0.99.54
-  * close bookmark names stack instead of hiding ............................................. stubbed MARKERS-SPECTRUM (the setting is in AppConfig and kept
-    by loadedCfg_; the spectrum's drawing is not)
+  * close bookmark names stack instead of hiding ............................................. re-expressed, stub batch B10 (drawBookmarkMarkers' rows, the Bookmarks
+    section's "Stack close names" key, and the window half of the config - applyConfig/currentConfig had dropped both bookmarkMarkers_ and
+    bookmarkStackNames_ - test_bookmark_stacking_app)
 
 0.99.55
   * the SDRplay API Service stopped or stuck is named and can be restarted ................... re-expressed in part: its two recovery troubles are counted by the
@@ -202,12 +203,14 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * audio no longer turns choppy ............................................................. carried (sink/)
 
 0.99.57
-  * markers on the waterfall ................................................................. stubbed MARKERS-SPECTRUM (the marker LIST and its persistence are
-    the engine's since C5: Engine::freqMarkers_, markers.json saved on a worker, tests/test_bookmark_save_async.cpp holds it; the waterfall's lines,
-    the right-click menu and the Markers window are not drawn)
+  * markers on the waterfall ................................................................. re-expressed, stub batch B10 (the marker LIST and its persistence were
+    the engine's since C5; now it is worked through FOXAPP_OP_MARKER_DROP/_REMOVE/_CLEAR/_NOTE 0x8606-0x8609 and read as FREQ_MARKERS (53), engine_markers.cpp;
+    the window's half is app_window_markers.cpp: the lines, the tabs, the right-click menu on the receiver's waterfall and on a patch Display part, the Markers
+    window; test_freq_markers_app, test_markers_window_app, test_engine_api_markers)
   * peak hold and average on the spectrum ................................................... stubbed MARKERS-SPECTRUM
   * the receiver's waterfall fits its window ................................................ stubbed MARKERS-SPECTRUM (spectrum/waterfall views are in the tree)
-  * holding the left button on the waterfall no longer tunes ................................. stubbed MARKERS-SPECTRUM
+  * holding the left button on the waterfall no longer tunes ................................. re-expressed, stub batch B10 (drawCenterPanels' release branch asks
+    gui::pressIsClick again, wfPressT_; held by test_freq_markers_app's long press)
 
 0.99.58
   * the map's coverage line counts only what a receiver could hear ........................... stubbed MAP-WINDOWS (lostlines: drawPluginWindows, recordCoverage)
@@ -472,7 +475,7 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   test_row_keys_app - were removed by B9: both ids are whole)
   TX-PLUGIN (3)           test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app
   TESTER-LINK (3)         test_tester_link_app test_link_request_poll test_tester_link
-  MARKERS-SPECTRUM (4)    test_bookmark_stacking_app test_freq_markers_app test_spectrum_trace_app test_passband_slide_app
+  MARKERS-SPECTRUM (2)    test_spectrum_trace_app test_passband_slide_app   [B10 removed test_bookmark_stacking_app and test_freq_markers_app]
   DISPLAY-RANGE (2)       test_display_menu_app test_display_fold_app
   PATCH-VIEW (2)          test_patch_canvas_nav test_patch_info_pane
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
@@ -538,6 +541,8 @@ and BOOKMARK_EXPORT writes SDR# XML), which B19 should fold into the disk-work f
 UPDATE 2026-10-26, stub batch B8 (docs/engine-stage4.md 6.22): the IMPORT-DIALOG and RADIO-SETUP pages are back in the window (src/gui/app_window_import_dialog.cpp, src/gui/app_window_radio_setup.cpp, git mv from src/gui_pending; AppWindow::pickFile in app_window.cpp, FOXSDR_FILE_PICK and FOXSDR_FAKE_RADIO_SETUP read again by run()). test_import_dialog_app and test_radio_setup_app are converted (the real binary: 114 and 156 checks) and the part excuse_cap_pickfile is gone (tests/test_excuse_cap.cpp counts master's 3 native-wait call sites): both placeholders and the part are gone, 32 remain (31 tests and 1 part). The ledger lines of 0.99.69 (the page), 0.99.80 (the dialog) and 0.99.82 (the path shapes) read re-expressed above; R1 (the INSTALL DRIVER key, 0.99.88) and R2 (the UHD images finding, 0.99.89) of docs/engine-merge-0.99.90.md section 3 are done with the page. test_radio_setup_app had NO scenario for the INSTALL DRIVER key (the plan could not tell): one was written RED first and now holds it, with a new bounded-run seam FOXSDR_FAKE_DRIVER_INSTALL; a new pure test, tests/test_radio_setup_inventory.cpp, holds the page's reading of the application's lists. ONE ENGINE CHANGE the plan did not list: FOXAPP_OP_BOOKMARK_IMPORT_FILE is answered FAILED (it was OK with only the note saying so) when it read nothing, and the note words the reason in the user's language - the window opens and closes its dialog on that answer (docs/api-0.3-additions.md section 9). Three existing tests were edited with their reasons beside the edit (test_recorder_bookmarks_scanner H, test_source_section_window's sweep helper with a new scenario A0 for the RADIO SETUP key, test_apply_command's added checks). The page raises itself again for a person with no radio: master counted the always-present rtl_tcp row as a radio found (decision 3 of the B8 note). Not engine work otherwise: no op, list or fact was added. test_gui_file_jobs' import sections stay B19's (it calls `consumePendingDrop`, which is AppWindow::submitPendingDrop here). test_i18n: 144 stale, 0 missing (unchanged).
 
 UPDATE 2026-10-26, stub batch B9 (docs/engine-stage4.md 6.22): the PLUGIN-SETTINGS-UI and PLUGIN-ROW-KEYS items are back (src/gui/plugin_settings_form.cpp, git mv from src/gui_pending, over a gui::SettingsEditSink; src/gui/app_window_plugin_settings.cpp; src/engine/engine_plugin_settings.cpp; the pressable-row rule hoisted into core/plugin_ui_data.hpp). The table grew by the list PLUGIN_SETTINGS (52), two facts a field and FOXAPP_OP_PLUGIN_SETTING_EDIT 0x870C (API 0.3 9.7; LOCAL only; the door did not move). test_plugin_settings_ui (edited: the adapter over PluginApiCore, its reason beside it, and the three publish calls; a section [S] added), test_decoder_settings_fold_app, test_plugin_pathpick_app (four scenarios of mine added), test_programme_audio_app (converted to the engine through rawEngine and the pass seam; it now also runs as _stepped) and test_row_keys_app are green and their placeholders are gone; PLUGIN-SETTINGS-UI and PLUGIN-ROW-KEYS are whole. New: tests/test_engine_api_settings.cpp and tests/test_plugin_settings_window.cpp (the real window against the real engine). The red placeholders are the 32 of B8 (31 tests and 1 part) less five tests: 27 (26 tests and 1 part). test_i18n: 143 stale, 0 missing (the one key that returned: "Plugin settings"). The preset lines B2 flagged are in the engine (verified line by line before test_programme_audio_app was converted).
+
+UPDATE 2026-10-26, stub batch B10 (docs/engine-stage4.md 6.22): the waterfall's markers (0.99.57), the close bookmark names that stack (0.99.54) and the press that is held (0.99.57) are back (src/gui/app_window_markers.cpp, src/engine/engine_markers.cpp; drawBookmarkMarkers and the Bookmarks section's "Stack close names" key in app_window.cpp; the window half of the config, which had dropped bookmarkMarkers_ and bookmarkStackNames_). The table grew by the ops FOXAPP_OP_MARKER_DROP / _REMOVE / _CLEAR / _NOTE 0x8606 - 0x8609 (LOCAL only, not on the web profile), the list FREQ_MARKERS (53, LOCAL only) and the facts fact.markers.version / .note.<id> / .error (API 0.3 9.8; the door did not move). test_freq_markers_app and test_bookmark_stacking_app are green, master's, unedited, and their placeholders are gone. New: tests/test_engine_api_markers.cpp (349 checks) and tests/test_markers_window_app.cpp (37 checks; the Markers window's note, Tune, Bookmark, x and Clear against the real binary); test_apply_command gained the four ops (133 implemented, 133 tested). The red placeholders are the 27 of B9 (26 tests and 1 part) less two tests: 25 (24 tests and 1 part). test_i18n: 122 stale, 0 missing (the 21 keys that returned are itemised in 6.22). Not here: the Display block of master's 0.99.76 that ends the marker menu, and the display tip - B11's.
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

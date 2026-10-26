@@ -275,6 +275,15 @@ struct ApiListBlock {
         std::uint32_t maxLength = 0;
     };
     std::vector<PluginSetting> pluginSettings;
+    // API 0.3 9.8 (stub campaign B10), FREQ_MARKERS: the waterfall's markers, in the order they were dropped. Rebuilt with the block, which the fingerprint moves
+    // for any change of the list (FreqMarkers::version()). The note is whole; the list item cuts it.
+    struct FreqMarkerRow {
+        int number = 0;
+        double freqHz = 0.0;
+        std::int64_t notedUnix = 0;
+        std::string note;
+    };
+    std::vector<FreqMarkerRow> freqMarkers;
 
     // ---- API 0.2's lists step 1 left out, and API 0.3's (docs/api-0.3-additions.md)
     struct Decoder {

@@ -79,6 +79,22 @@
 #define FOXAPP_OP_BOOKMARK_TICK          0x8604u /* ival[0]: the bookmark's id; ival[1]: 0 untick / 1 tick */
 #define FOXAPP_OP_BOOKMARK_ADD_ROWS      0x8605u /* long text: "<Hz>\t<mode>\t<bw Hz>\t<tick>\t<group>\t<name>" lines; ival[0]: 0 typed rows / 1 a list */
 #define FOXAPP_OP_SCANNER_LIST           0x860Au /* ival[0]: 0 range mode / 1 list mode / 2 start a list scan */
+// THE WATERFALL'S MARKERS (stub campaign B10, 0.99.57; docs/api-0.3-additions.md 9.8), all LOCAL sessions only and none of them on the web profile. A marker is
+// a pencil tick made while looking at something else - a frequency, a number to call it by, the moment it was made and a note added later - and NOT a bookmark;
+// the list is the engine's (Engine::freqMarkers_, markers.json, saved on a worker) and is read as the list FREQ_MARKERS (53). THE NUMBERS ARE NAMES: M1, M2, ... are
+// handed out in the order markers are dropped and never again while the list lives - only CLEAR starts the count at M1 again - and the count is persisted.
+//   MARKER_DROP (SETTINGS): num[0]: the frequency, ABSOLUTE Hz (the pointer's, on a patch Display part the part's radio's centre taken in: never the part's
+//   offset); num[1]: the merge reach, Hz (0: none) - a marker within it of one already there is THAT marker and nothing is added, so a second right-click
+//   on the same signal does not stack two flags on one pixel. applied[0]: the marker's number; applied[1]: 1 a new marker, 0 the one already there. The
+//   engine stamps the time. OUT_OF_RANGE for a frequency that is not positive, LIMIT when the list holds its 200 (or the numbers are spent).
+//   MARKER_REMOVE (SETTINGS): ival[0]: the marker's number. NOT_FOUND for a number the list does not hold. The number is not handed out again.
+//   MARKER_CLEAR (SETTINGS): no arguments. Empties the list and starts the numbering again at M1. NO_CHANGE for a list that is empty already.
+//   MARKER_NOTE (SETTINGS): ival[0]: the marker's number; text (or long text): the note, as typed ("" clears it). NOT_FOUND for a number the list does not
+//   hold; the same note again changes nothing and writes nothing.
+#define FOXAPP_OP_MARKER_DROP            0x8606u /* num[0]: absolute Hz; num[1]: merge reach Hz (0 none); applied[0]: the number, applied[1]: 1 new / 0 the one already there */
+#define FOXAPP_OP_MARKER_REMOVE          0x8607u /* ival[0]: the marker's number */
+#define FOXAPP_OP_MARKER_CLEAR           0x8608u /* no arguments: empties the list, the numbering starts again at M1 */
+#define FOXAPP_OP_MARKER_NOTE            0x8609u /* ival[0]: the marker's number; text (or long text): its note */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

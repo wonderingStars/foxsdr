@@ -125,6 +125,10 @@ double roundMarkerHz(double hz, double hzPerPixel);
 // 4, 50 Hz -> 5, 1 Hz -> 6; never fewer than 3 or more than 6.
 int markerMhzDecimals(double stepHz);
 
+// The text Copy puts on the clipboard, for a list that is not a FreqMarkers (the window's copy of the engine's): FreqMarkers::clipboardText(utc) is this over
+// its own list (stub campaign B10).
+std::string formatMarkersClipboard(const std::vector<FreqMarker>& list, bool utc = false);
+
 // "145.500" style, with markerMhzDecimals(stepHz) decimals and no unit.
 std::string formatMarkerMhz(double hz, double stepHz);
 

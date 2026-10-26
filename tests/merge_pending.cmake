@@ -61,8 +61,10 @@ cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, on
 
 # --- ADDED 2026-10-21, after the first run of the gui-labelled tests (real-binary tests; they build and run as they are, and fail only because
 # the feature they read the census of is not in the window yet). The ledger id says which feature.
-cascade_merge_pending(MARKERS-SPECTRUM # 0.99.5x - 0.99.82 waterfall markers, peak hold / average / trace modes, close names stack, Shift+wheel slide
-    test_bookmark_stacking_app test_freq_markers_app test_spectrum_trace_app test_passband_slide_app)
+# (The waterfall's markers - 0.99.57, with the press-hold rule that a long press tunes nothing - and the close bookmark names that stack - 0.99.54 - are back:
+# stub batch B10, test_freq_markers_app and test_bookmark_stacking_app.)
+cascade_merge_pending(MARKERS-SPECTRUM # 0.99.5x - 0.99.82 peak hold / average / trace modes, Shift+wheel slide
+    test_spectrum_trace_app test_passband_slide_app)
 cascade_merge_pending(DISPLAY-RANGE    # 0.99.7x the spectrum's and waterfall's range set by hand, the display menu and its tip (the folded Display section returned in B1)
     test_display_menu_app)
 # (PLUGIN-RUN - 0.99.73 a plugin that is not used is dormant (FOXSDR_DORMANT_AFTER_MS), run modes - is whole: the engine's half returned in stub batch B2,

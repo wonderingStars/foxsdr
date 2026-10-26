@@ -82,6 +82,8 @@ set(CASCADE_TSAN_TESTS
     test_engine_api_airband
     # stub batch B9: the settings edit (a command on the pass) against the plugin API's store a plugin's own thread writes
     test_engine_api_settings
+    # stub batch B10: the marker ops (commands on the pass) against the worker that saves markers.json and the API threads that read the list
+    test_engine_api_markers
     # the control thread against the front end's thread: the command queue (submit from
     # any thread, drain on one), the pumping engine, what the host answers from a thread
     # that is not the window's, the shutdown order

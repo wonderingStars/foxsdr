@@ -172,6 +172,11 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(vfoBandwidthHz_);
     f.value(freqMgr_.version());
     f.value(freqMgr_.list().size());
+    // THE WATERFALL'S MARKERS (FREQ_MARKERS, stub campaign B10): the list's own counter - bumped by every drop, remove, clear and note - and the sentence of a
+    // damaged or unsaved file; both from members, nothing allocates.
+    f.value(freqMarkers_.version());
+    f.value(freqMarkers_.size());
+    f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
     // measured against.
@@ -790,6 +795,18 @@ void Engine::buildApiLists03(ApiListBlock& b) {
                 b.pluginSettings.push_back(std::move(s));
             }
         }
+    }
+    // THE WATERFALL'S MARKERS (API 0.3 9.8, stub campaign B10): the list as it is now, in the order they were dropped, copied for the block (at most 200 rows,
+    // and the block is rebuilt only when the counter in the fingerprint moved). The notes are the local operator's own words and as long as they typed, so each is
+    // a fact of its own, whole (the item's name is cut); the counter and the file's error sentence are facts too - and LOCAL only, like the list.
+    {
+        b.freqMarkers.reserve(freqMarkers_.size());
+        for (const cascade::core::FreqMarker& m : freqMarkers_.list()) {
+            b.freqMarkers.push_back(ApiListBlock::FreqMarkerRow{m.number, m.freqHz, m.notedUnix, m.note});
+            fact("markers.note." + std::to_string(m.number), m.note, true);
+        }
+        fact("markers.version", std::to_string(freqMarkers_.version()), true);
+        fact("markers.error", markerError_, true);
     }
     // THE STORE: the catalogue, what is refused, what would update - and the
     // long texts an entry carries, as facts.

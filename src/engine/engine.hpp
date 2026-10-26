@@ -1790,7 +1790,8 @@ private:
     // THE WATERFALL'S MARKERS (0.99.57; core/freq_markers.hpp), kept beside the bookmarks and saved the same way: markers.json, a save half a
     // second after a change is first seen (a note is typed a character at a time), the text taken on the pass and the write a worker's. The
     // list belongs to the engine so that the file's persistence is one thing with the bookmarks'; the markers' interface (the waterfall's
-    // lines and the menu that drops one) is the window's, to be re-expressed (ledger MARKERS).
+    // lines and the menu that drops one) is the window's, and it works the list through FOXAPP_OP_MARKER_* and reads it as FREQ_MARKERS (stub campaign
+    // B10, engine_markers.cpp).
     cascade::core::FreqMarkers freqMarkers_;
     cascade::gui::BackgroundSaver markerSaver_{"markers", &cascade::core::FreqMarkers::writeFile};
     std::string markerPath_;
@@ -2985,6 +2986,9 @@ private:
     // module's own table declares and written through PluginApiCore::settingsUiSet. Returns the status; `verdict` is the core::SettingEditResult
     // (0 when accepted) and `why` its English.
     std::int32_t applyPluginSettingEdit(const std::string& text, double& verdict, std::string& why);
+    // FOXAPP_OP_MARKER_DROP / _REMOVE / _CLEAR / _NOTE (stub campaign B10, engine_markers.cpp): the waterfall's markers (freqMarkers_), worked by number. Returns the
+    // status; `why` is the sentence of a refusal and `res.applied` what the op says it carries.
+    std::int32_t applyMarkerOp(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
     // Starts the monitor on the preset in airbandGroup_: 0 it did not start (airbandNote_ says why), 1 listening, 2 waiting for the patch.
     int airbandStart();
     void airbandStop(const std::string& why);
