@@ -871,7 +871,7 @@ listed), in the sense of section 4 - the texts a list item would cut, or a state
 | `fact.store.<id>.author`, `.licence` | the entry's texts, whole: free text the plate prints as given. `.licence` is `""` for an entry that declares none, which is also why `.blocked` reads "the catalogue entry declares no licence" |
 | `fact.store.<id>.platforms` | the builds the index publishes, in the index's order, joined as the plate letters them: `windows/x64, linux/x64` (a finished string, nothing to parse); `""` for an entry announced before its first build |
 | `fact.store.<id>.floor` | the retirement floor (`minSupportedVersion`): an installed copy older than this is not loaded. `""` is the normal case, **no floor**, and must never be read as "retire everything" |
-| `fact.store.<id>.file` | the file name the build for this machine installs under: the catalogue's own spelling put through the loader's name rule (`PluginRepo::sanitiseFileName`), exactly what "is it installed" compares. **The join to `PLUGINS`:** compare it with a `PLUGINS` entry's `detail` ignoring ASCII case (the engine's own rule). A match is the host's record of the module (its `ACTIVE`, `STOPPED`, `TUNE_ALLOWED`, `value[0]`'s `CASCADE_CAP_HOST_CLIENT`, and `fact.plugin.<file>.error`); **no match on an entry that is `INSTALLED` is a retired module, which the host holds no record of** (it was renamed out of the scan), and is not an error. `""` with no build for this machine or a name the rule refuses |
+| `fact.store.<id>.file` | the file name the build for this machine installs under: the catalogue's own spelling put through the loader's name rule (`PluginRepo::sanitiseFileName`), exactly what "is it installed" compares. **The join to `PLUGINS`:** compare it with a `PLUGINS` entry's `detail` ignoring ASCII case (the engine's own rule). A match is the host's record of the module (its `ACTIVE`, `STOPPED`, `TUNE_ALLOWED`, `value[0]`'s `CASCADE_CAP_HOST_CLIENT`, and `fact.plugin.<file>.error`); **no match on an entry that is `INSTALLED` is a retired module, which the host holds no record of** (it was renamed out of the scan), and is not an error. `""` with no build for this machine or a name the rule refuses. (Since stub campaign B4 the join for an installed plugin is `.installedFile`, then this.) |
 | `fact.store.<id>.updateReason` | the update plan's reason, one English sentence (the window draws it as given); `""` when no update is planned. The entry has a plan exactly when its id is a `STORE_UPDATES` `name`, and that entry's `detail` is "from -> to" |
 
 `fact.store.url` is the catalogue index the store reads: an `https://` URL, or a path to a local `index.json` (an
@@ -1909,7 +1909,13 @@ takes the newest sets) and is dropped beside a waiting RELEASE, whose epoch the 
 **What the log says** (unchanged from master): `plugin: <name> woke - <signal>` and `plugin: <name> dormant after 30 s without a use`, one per transition of an AUTO
 plugin. `FOXSDR_DORMANT_AFTER_MS` (1 to 3 600 000) replaces the 30 seconds for the engine's first lifecycle step; the line still says "30 s".
 
-### 9.4 The plugin store's kept copy, sites, pictures and clean-up (stub campaign B3; docs/engine-stage4.md 6.22)
+### 9.4 The plugin store's kept copy, sites, pictures and clean-up (stub campaign B3; docs/engine-stage4.md 6.22; the card's facts and UPDATE ALL, B4)
+
+**`INSTALLED` is "installed in any version" (stub campaign B4; master 0.99.72).** `CATALOGUE`'s `INSTALLED` flag, the install gate's "already installed" and
+ADD ALL's `fitted` all ask `Engine::catalogEntryInstalled`, which decides by **plugin id, source and version** from the install records and the scan - an
+installed 1.8.0 makes the 1.8.1 entry an update, where the file-name test that stood here called it not installed (the 1.8.1 file has never been on disk) and
+offered a second install - and only then by the file name: a file with the very name `install()` would write is already in the folder (a side-loaded copy no
+record names, or a record whose file is there). The window draws a card from `fact.store.<key>.installState` and the host's record from `.installedFile`.
 
 Master's 0.99.49 - 0.99.74 ran all of this in the window. It is the ENGINE's now (`src/engine/engine_store.cpp`), so a headless engine keeps the store's catalogue
 offline, lists the sites a user added, fetches pictures and removes the old copies an update leaves. **No pass waits on the network or the disk**: a read, a
@@ -1933,6 +1939,11 @@ names the same key. `FOXAPI_OP_STORE_INSTALL` and `FOXAPP_OP_STORE_UPDATE` take 
   * `FOXAPP_OP_STORE_PICTURES_WANT` (0x870A): `text`: a catalogue key; `ival[0]`: 1 = ask again for a picture that failed. Queues the entry's pictures that are not
     already Ready, pending or in flight; `NOT_FOUND` for a key the catalogue does not hold. A site's picture whose address is not on the site's own host is never
     queued (`mergeSite` held every address to it when the list was made; this is the second look, at the request, because the request is what contacts an address).
+  * `FOXAPP_OP_STORE_ADD_ALL` (0x841E, 8.9) gains **`ival[1]`: 1 = UPDATE ALL** (stub campaign B4; 0, what every earlier client sends, is ADD ALL as it
+    was): the same queue with nothing to fetch in it - the plan's `install` and `skipped` lists are emptied, so only the updates the planner has a plan for
+    run, and what is passed over for want of a build or a notice is neither run nor logged. With nothing to update it starts nothing and `installError` says
+    "every module in the catalogue is already fitted, and none has a newer build". The tick and the one module named in `text` are ADD ALL's, and an
+    UPDATE ALL carries neither (a plugin that is fitted has had its notice shown).
   * `FOXAPP_OP_STORE_CLEAN_OLD` (0x870B): `ival[0]` 0: remove EVERY old copy the last scan found superseded (the store's CLEAN UP key, once the window has confirmed
     it); `ival[0]` 1: REMOVE FILE on the orphaned module named in `text`, judged again against the engine's own scan (a row gone stale removes nothing and
     `installError` says so; a name that tries to leave the folder removes nothing). The clean-up's one rule is `core::supersededPlugins`: only a copy the scan
@@ -1961,6 +1972,11 @@ names the same key. `FOXAPI_OP_STORE_INSTALL` and `FOXAPP_OP_STORE_UPDATE` take 
 | `fact.store.regional.state`, `.added`, `.dropped` | the regional list's outcome (`not-asked`, `ok`, `failed`), for the CASCADE_PLUGIN_TEST report and nothing else: the outcome itself would say which country answered, so it is never shown to a reader and never logged | LOCAL |
 | `fact.store.oldCopies` | one line per old copy the last scan found superseded: `<file>\t<name>\t<version>\t<kept file>\t<kept version>` - what CLEAN UP lists | LOCAL |
 | `fact.store.cleanupReport` | what the last clean-up did, in the language in force (a sentence; `""` when it did nothing) | |
+| `fact.store.<key>.category`, `.whatsNew`, `.published`, `.sha256` | (stub campaign B4) the shop-window fields of the entry, whole: the category's id (`aircraft`, `marine`, ... or `""`), the paragraph about THIS version, `YYYY-MM-DD`, and the digest of **this machine's** build (`""` with none). Present for every entry, `""` when the index said nothing, so "told nothing" is told from `NOT_FOUND` | |
+| `fact.store.<key>.experimental` | `1` when the index marks the plugin as never having decoded a real signal, else `0` | |
+| `fact.store.<key>.capabilities` | what the catalogue says the binary declares, as the decimal OR of the `CASCADE_CAP_*` bits of the names this build knows; **`2147483648` (0x80000000) when it names only capabilities this build has not heard of** - "declares one this build does not know", which the page letters differently from "declares nothing"; `""` when it names none (a fitted module's own descriptor wins once it is loaded: `PLUGINS` `value[0]`) | |
+| `fact.store.<key>.installState` | how the entry stands against what is installed, **by plugin id, source and version** (`PluginRepo::installStateFor`; the scan wins where it and an install record both know a module): `none`, `installed`, `update` (the catalogue's is newer than the newest installed) or `newer` (an installed copy is newer than the catalogue's) | |
+| `fact.store.<key>.installedVersion`, `.installedFile` | the newest installed version (`""` with none) and the module file of that copy, the join to `PLUGINS` when it is a scanned module - **use it before `.file`**: an update's own file has never been on disk, so `.file` finds nothing for it (`""` for an installed copy no scan describes, e.g. a retired module) | |
 | `fact.plugin.origin.<file>` | for every module file the host holds a record of: `<word>\t<address>`; the word is `orphan` (the plugin index does not know it and nothing runs it: REMOVE FILE is offered), `site` (installed from a site that is still listed), `removed-site` (installed from one the user has since removed: it gets no updates) or `""`; the address is the install record's source | LOCAL |
 
 **A plugin from a site is fitted from the desktop store only.** Its page, its notice and the tick under it are what stand between a stranger's native code and this

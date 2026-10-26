@@ -744,7 +744,12 @@ int main(int argc, char** argv) {
         CHECK(std::abs(jsonInt(cfg3, "pluginStoreWidth") - wDefault) > 100);
     }
 
-    // --- THE FITTED MODULES WINDOW ----------------------------------------------------
+    // --- THE FITTED MODULES WINDOW: CARVED OUT (stub campaign B4) ----------------------------------------------------------------------
+    // The scenarios below read the census of the 0.99.72 Fitted modules window (fitted:chip:*, fitted:row:*, fitted:page:*), which is stub
+    // campaign B5's (drawFittedModulesWindow, the IDLE and KEEP RUNNING keys); this window still draws the 0.99.42 list. They are master's own
+    // text, untouched, behind CASCADE_STORE_APP_FITTED_PART, and the red placeholder merge_pending_part_store_app_fitted keeps them counted:
+    // B5 removes the part from tests/merge_pending.cmake and the guard here, and they run. (The store scenarios above and below run.)
+#ifdef CASCADE_STORE_APP_FITTED_PART
     Rect fName, fRemove, fKey, fBack;
     {
         resetPluginsFolder(true);
@@ -903,6 +908,7 @@ int main(int argc, char** argv) {
             CHECK(!rb.has("fitted:page:closed:esc"));
         }
     }
+#endif  // CASCADE_STORE_APP_FITTED_PART
 
     // --- PLUGIN SITES (0.99.74) -----------------------------------------------------------------
     //

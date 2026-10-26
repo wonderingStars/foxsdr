@@ -3378,7 +3378,54 @@ std::vector<cascade::core::PluginUpdate> Engine::plannedPluginUpdates() const {
     return cascade::core::PluginRepo::planUpdates(catalog_, pluginInventory_.plugins);
 }
 
+std::vector<cascade::core::ScannedModule> Engine::scannedModules() const {
+    std::vector<cascade::core::ScannedModule> out;
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        // A module refused before its descriptor could be read has no name and no version: there is nothing to say about it by version. (Its
+        // install record, if it has one, still speaks - see PluginRepo::installStateFor.)
+        if (lp.name.empty() || lp.version.empty()) { continue; }
+        cascade::core::ScannedModule m;
+        m.file = std::filesystem::path(lp.path).filename().string();
+        m.version = lp.version;
+        // The catalogue id comes from the install record that names this file; the scan itself only knows the module's declared name.
+        m.id = lp.name;
+        for (const cascade::core::InstalledPlugin& ip : pluginInventory_.plugins) {
+            if (!ip.id.empty() && equalsFileNameAscii(ip.file, m.file)) {
+                m.id = ip.id;
+                // ...and the source it was installed from (0.99.74): the id alone does not name it.
+                m.source = ip.source;
+                break;
+            }
+        }
+        out.push_back(std::move(m));
+    }
+    return out;
+}
+
+cascade::core::InstallState Engine::pluginInstallState(const cascade::core::PluginCatalogEntry& e) const {
+    return cascade::core::PluginRepo::installStateFor(e, pluginInventory_.plugins, scannedModules());
+}
+
+std::string Engine::installedModuleFile(const cascade::core::PluginCatalogEntry& e) const {
+    // The newest scanned copy of this id from this source: an update's "from" copy is the record to report, not nothing (the file the NEW
+    // entry would write has never been on disk).
+    std::string bestFile;
+    std::string bestVersion;
+    for (const cascade::core::ScannedModule& m : scannedModules()) {
+        if (m.id != e.id || m.source != e.source) { continue; }
+        if (bestFile.empty() || cascade::core::PluginRepo::compareVersions(m.version, bestVersion) > 0) {
+            bestFile = m.file;
+            bestVersion = m.version;
+        }
+    }
+    if (!bestFile.empty()) { return bestFile; }
+    const cascade::core::LoadedPlugin* lp = installedPluginRecord(e);
+    return lp != nullptr ? std::filesystem::path(lp->path).filename().string() : std::string();
+}
+
 bool Engine::catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e) const {
+    // BY PLUGIN ID AND VERSION (0.99.72), from the install records and the scan - see the declaration.
+    if (pluginInstallState(e).kind != cascade::core::InstallStateKind::NotInstalled) { return true; }
     const cascade::core::PluginPlatform* p = e.thisPlatform();
     if (p == nullptr) { return false; }
     // Compare the SANITISED name — the exact name install() would write — so
@@ -3474,7 +3521,7 @@ std::string Engine::pluginInstallBlockedReason(int idx, bool acknowledged) const
     return {};
 }
 
-void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledgedId) {
+void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledgedId, bool updatesOnly) {
     if (addAllRun_.active || catalogPending_ || installPending_ || screenshotPending_ || cleanupPending_) { return; }
     // RE-PLANNED FROM LIVE STATE, not from the plan the key was drawn against.
     // The key was drawn one frame ago from a model built one frame ago, and
@@ -3507,7 +3554,16 @@ void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledg
     cat.listedNothing = !catalogStatus_.empty();
     cat.lastCheckFailed = !catalogError_.empty();
     cat.busy = catalogPending_ || installPending_ || screenshotPending_ || cleanupPending_;
-    const AddAllRule plan = planAddAllRows(rows, cat, noticesAcknowledged);
+    AddAllRule plan = planAddAllRows(rows, cat, noticesAcknowledged);
+    if (updatesOnly) {
+        // UPDATE ALL (0.99.72): the same queue with nothing to fetch in it. What is passed over for want of a build or a notice is not this
+        // key's business, so it is not listed either; "nothing to update" is its own reason.
+        plan.install.clear();
+        plan.skipped.clear();
+        if (cat.haveCatalogue && !cat.busy && plan.update.empty()) {
+            plan.blockedReason = FOX_TR_NOOP("every module in the catalogue is already fitted, and none has a newer build");
+        }
+    }
     if (!plan.blockedReason.empty()) {
         installError_ = plan.blockedReason;
         return;
@@ -7469,7 +7525,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPP_OP_STORE_ADD_ALL:
             // The store window's key: the ADD ALL tick, and the one module
             // whose own notice tick is on (OPEN 5).
-            startAddAll(on, text);
+            // ival[1] 1 (stub campaign B4): the UPDATE ALL key - the same queue, updates only.
+            startAddAll(on, text, c.ival[1] != 0);
             return res;
 
         // --- the patch page ---------------------------------------------------------------------

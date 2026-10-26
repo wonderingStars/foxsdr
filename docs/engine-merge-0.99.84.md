@@ -163,10 +163,11 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     unbound-id row; no window-specific part)
 
 0.99.50
-  * the plugin store cleans up after its own updates ......................................... re-expressed in part: the ENGINE's half since stub batch B3
-    (engine_store.cpp: an update removes the copy it replaced, on a worker, that plugin's only; CLEAN UP and REMOVE FILE are FOXAPP_OP_STORE_CLEAN_OLD;
-    a refused delete is queued for the next start; test_plugin_cleanup_app, test_plugin_update_cleanup_app, tests/test_engine_api_store.cpp S5). The
-    store's CLEAN UP OLD VERSIONS key and its confirmation are the window's: stub batch B4
+  * the plugin store cleans up after its own updates ......................................... re-expressed, stub batches B3 and B4 (B3, the ENGINE's half:
+    engine_store.cpp: an update removes the copy it replaced, on a worker, that plugin's only; CLEAN UP and REMOVE FILE are FOXAPP_OP_STORE_CLEAN_OLD;
+    a refused delete is queued for the next start; test_plugin_cleanup_app, test_plugin_update_cleanup_app, tests/test_engine_api_store.cpp S5. B4, the
+    window's: the CLEAN UP OLD VERSIONS key at the foot of the UPDATES tab and its one confirmation send FOXAPP_OP_STORE_CLEAN_OLD 0 and the foot lists
+    fact.store.oldCopies; tests/test_plugin_store_window.cpp A and D2c, test_plugin_store_view)
   * FUNCTION SELECT folds to a strip ......................................................... re-expressed, stub batch B1 (test_rail_fold, test_rail_fold_app,
     test_app_rail, test_window_chrome_config)
   * the patch page's information pane at the top right ....................................... stubbed PATCH-VIEW (lostlines: drawPatchView, drawPatchFaces)
@@ -311,7 +312,12 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * the Airband monitor says what it is hearing where you look ............................... stubbed AIRBAND
 
 0.99.72
-  * the plugin store laid out like a store; Fitted modules like an operating panel ........... stubbed STORE-VIEW
+  * the plugin store laid out like a store; Fitted modules like an operating panel ........... re-expressed in part: THE STORE since stub batch B4 (the window
+    around gui/plugin_store_view.cpp, master's own, in the new src/gui/app_window_store.cpp: the BROWSE and UPDATES tabs, the cards - the whole card is the
+    page's key - the page with its pictures and sections in their fixed order, GET greyed until the notice's tick, GET EVERYTHING, UPDATE ALL, the window's
+    rectangle kept in the config; the model is built from the table once for each listSeq move; tests/test_plugin_store_window.cpp REWRITTEN against
+    master's 0.99.72 model, test_plugin_store_view, test_plugin_store_app). FITTED MODULES like an operating panel is stubbed STORE-VIEW (batch B5); the
+    FITTED MODULES scenarios of test_plugin_store_app are carved out as the part store_app_fitted until then
 
 0.99.73
   * the radio and its sound stay responsive with many modules fitted ......................... re-expressed: the audio buffer that deepens itself
@@ -333,8 +339,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * third-party plugin sites in the store ................................................... re-expressed in part: the ENGINE's half since stub batch B3
     (engine_store.cpp: the sites list, each site read on the catalogue's worker, merged under the official list, kept as its own copy and loaded at start-up,
     ADD with the consent and REMOVE as FOXAPP_OP_STORE_SITE, a site's plugin fitted only with the notice acknowledged and NEVER by a REMOTE session - the
-    web page's rows and the install op carry the refusal sentence; test_plugin_catalogue_app, tests/test_engine_api_store.cpp S1, S2, S6). The SITES panel,
-    the consent tick, the THIRD PARTY badge and the page's sentences are the window's: stub batch B4
+    web page's rows and the install op carry the refusal sentence; test_plugin_catalogue_app, tests/test_engine_api_store.cpp S1, S2, S6) and the WINDOW's
+    since stub batch B4 (the SITES panel, the consent tick that ADD waits for - the op asks for it again - the THIRD PARTY badge, the page's "From a site you
+    added" line and notice; test_plugin_store_app sites, tests/test_plugin_store_window.cpp A, D2b)
   * the plugin store keeps the catalogue it read, so a failed read empties nothing (0.99.72) ........ re-expressed, stub batch B3 (the kept copy, the regional
     list's outcome, the pictures one transfer at a time; test_plugin_catalogue_app, tests/test_engine_api_store.cpp S3 and S4; the old contract that a failed
     refetch EMPTIED the catalogue, pinned by tests/test_engine_api_03.cpp I1 and I5, is replaced by master's)
@@ -429,7 +436,8 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   RAIL-CHROME (7)         test_app_rail test_rail_fold test_rail_fold_app test_status_fold test_status_fold_app test_deck_knobs_app test_theme_census
   STORE-VIEW (6)          test_plugin_store_window test_fitted_modules_window test_plugin_store_view test_fitted_modules_no_disk
                           test_plugin_dup_app test_plugin_store_app   [B3 removed test_plugin_catalogue_app, test_plugin_cleanup_app and
-                          test_plugin_update_cleanup_app]
+                          test_plugin_update_cleanup_app; B4 removed test_plugin_store_window, test_plugin_store_view and test_plugin_store_app,
+                          leaving test_fitted_modules_window, test_fitted_modules_no_disk and test_plugin_dup_app, and added the part store_app_fitted]
   PLUGIN-SETTINGS-UI (3)  test_plugin_settings_ui test_decoder_settings_fold_app test_plugin_pathpick_app
   PLUGIN-ROW-KEYS (2)     test_programme_audio_app test_row_keys_app
   TX-PLUGIN (3)           test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app
@@ -443,7 +451,8 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
                           IMPORT-DIALOG test_import_dialog_app; RADIO-SETUP test_radio_setup_app; TESTER-USAGE test_team_message_app;
                           MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
   parts (3)               transmit_page_plugin_key (TX-PLUGIN), excuse_cap_pickfile (IMPORT-DIALOG), audio_lead_plugin_wake (PLUGIN-RUN)
-                          [B2 removed audio_lead_plugin_wake and added nothing; B1 had added display_fold_airband_section (AIRBAND)]
+                          [B2 removed audio_lead_plugin_wake and added nothing; B1 had added display_fold_airband_section (AIRBAND); B4 added
+                          store_app_fitted (STORE-VIEW: the FITTED MODULES scenarios of test_plugin_store_app)]
 
 UPDATE 2026-10-26, stub batch B1 (docs/engine-stage4.md 6.22): test_app_rail, test_rail_fold, test_rail_fold_app, test_status_fold, test_status_fold_app
 and test_display_fold_app are converted and green, and the placeholders of those six are gone (RAIL-CHROME is now test_deck_knobs_app and test_theme_census,
@@ -459,6 +468,15 @@ converted to Engine members (through rawEngine and the pass seam; each now also 
 The engine keeps the catalogue it read (and the sites' copies), lists the sites a user added, fetches a plugin's pictures one transfer at a time and removes
 the old copies an update leaves, none of it on the pass; a REMOTE session cannot fit a plugin from a site. test_i18n: 152 stale, 1 missing (the Catalogue-source
 tooltip, B4's); the one key that returned is the refusal sentence.
+
+UPDATE 2026-10-26, stub batch B4 (docs/engine-stage4.md 6.22): test_plugin_store_window (REWRITTEN against master's 0.99.72 model, restated from MASTER's
+buildPluginStoreModel and fillStoreModule; it keeps its _stepped and _free registrations), test_plugin_store_view (un-pended unchanged: 387 checks) and
+test_plugin_store_app (the store and sites scenarios) are green and their placeholders are gone. The one red part added is store_app_fitted: the FITTED
+MODULES scenarios of test_plugin_store_app read the 0.99.72 Fitted modules window, which is B5's (master's text is untouched behind
+CASCADE_STORE_APP_FITTED_PART). The red placeholders are therefore the 44 of B3, less three, plus that one part: 42 (38 tests and 4 parts). The engine grew: facts for what a card draws (category, whatsNew, published, sha256,
+capabilities, install state, the installed copy's file), the version-aware "installed" rule of master's 0.99.72, and UPDATE ALL (FOXAPP_OP_STORE_ADD_ALL
+ival[1] 1). test_i18n: 149 stale, 0 missing (the three keys that returned: "From a site you added: %s", "Offered by foxsdr.com in some countries only." and
+the Catalogue-source tooltip's last two lines).
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

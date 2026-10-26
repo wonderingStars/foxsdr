@@ -3230,6 +3230,17 @@ private:
     // config at start-up since 0.79.1 (the application starts on the main
     // screen alone), and nothing ever opened it by itself.
     bool pluginBrowseOpen_ = false;
+    // WHERE THE PLUGIN STORE WINDOW SAT (stub campaign B4; master 0.99.72): AppConfig::pluginStoreX/Y/Width/Height, restored the way the
+    // fitted window's rectangle is - checked against the monitors that exist NOW, clamped to what fits where it lands - and read back from
+    // the live window every frame it is drawn, because ImGui's own .ini persistence is switched off in this application. Zero width means
+    // "nothing saved" (the map pages' sentinel). Members in app_window_store.cpp.
+    int storeWinX_ = 0;
+    int storeWinY_ = 0;
+    int storeWinW_ = 0;
+    int storeWinH_ = 0;
+    // The listSeq at which the store window last asked the engine for the open page's pictures that nobody had asked for (once a move, so a
+    // refusal is not repeated every frame): see drawPluginStoreWindow.
+    std::uint64_t storePicturesWantSeq_ = 0;
     // IS THE FITTED MODULES WINDOW OPEN, and where it sat.
     //
     // PERSISTED, exactly as its sibling is. This was a plain session member

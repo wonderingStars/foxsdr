@@ -1246,7 +1246,11 @@ std::string storeCleanupConfirmLabel(std::size_t count) {
 // ===========================================================================
 
 void fillStoreModule(StoreModule& sm, const StoreRow& r) {
+    // THE CATALOGUE KEY (0.99.74): the id for an official plugin - so every page id, census name and ImGui id that existed before sites is
+    // unchanged - and "<id>@<site>" for a site's. The table's CATALOGUE already names an entry by it.
     sm.id = r.id;
+    sm.thirdParty = !r.site.empty();
+    sm.siteHost = sm.thirdParty ? cascade::core::PluginRepo::siteLabel(r.site) : std::string();
     ModulePlate& p = sm.plate;
     p.haveDescriptor = true;
     p.name = r.name;
@@ -1257,26 +1261,88 @@ void fillStoreModule(StoreModule& sm, const StoreRow& r) {
     // THE SHORT ONE, KEPT APART (ModulePlate::summary).
     p.summary = r.summary;
     p.homepage = r.homepage;
-    p.legalNotice = r.legal;
-    // THE ABI IS KNOWN FOR A CATALOGUE ROW, and both halves of the comparison are stated so the plate can letter
-    // the mismatch rather than the verdict. The host's half is this build's own number (it is not in the table).
+    // A plugin from a site the user added ALWAYS carries a notice (0.99.74): that it comes from somewhere else and has not been reviewed,
+    // then the maker's own legal notice if there is one, verbatim. The page's notice box, its tick and the acknowledgement gate all follow
+    // from the notice being there.
+    p.legalNotice = sm.thirdParty ? storeComposeNotice(sm.siteHost, r.legal) : r.legal;
+    // WHERE IT COMES FROM, one muted line under the page's header: the regional list's sentence, or a plugin site's. Empty for every other
+    // plugin - ModulePlate::originNote draws nothing then.
+    if (r.regional) {
+        p.originNote = tr("Offered by foxsdr.com in some countries only.");
+    } else if (sm.thirdParty) {
+        p.originNote = cascade::core::formatText(tr("From a site you added: %s"),
+                                                 cascade::core::PluginRepo::siteDisplay(r.site, 90).c_str());
+    } else {
+        p.originNote.clear();
+    }
+    // THE SHOP-WINDOW FIELDS (0.99.72), read from the catalogue as they came.
+    p.category = r.category;
+    p.experimental = r.experimental;
+    p.whatsNew = r.whatsNew;
+    p.published = r.published;
+    // THE ABI IS KNOWN FOR A CATALOGUE ROW, and both halves of the comparison are stated so the plate can letter the mismatch rather than
+    // the verdict. The host's half is this build's own number (it is not in the table).
     p.haveAbi = true;
     p.abiVersion = r.abi;
     p.hostAbiVersion = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
     p.retirementFloor = r.floor;
     p.platforms = r.platforms;
+    // "windows/x64, linux/x64" - the builds the catalogue publishes - and which operating systems they are for, which is what the WINDOWS
+    // ONLY / LINUX ONLY badge says when this host has none.
+    sm.buildsWindows = false;
+    sm.buildsLinux = false;
+    {
+        std::string_view rest(r.platforms);
+        while (!rest.empty()) {
+            const std::size_t comma = rest.find(", ");
+            const std::string_view one = rest.substr(0, comma);
+            const std::string_view os = one.substr(0, one.find('/'));
+            const auto is = [&](const char* name) {
+                const std::size_t n = std::strlen(name);
+                if (os.size() != n) { return false; }
+                for (std::size_t i = 0; i < n; ++i) {
+                    char c = os[i];
+                    if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+                    if (c != name[i]) { return false; }
+                }
+                return true;
+            };
+            if (is("windows")) { sm.buildsWindows = true; }
+            if (is("linux")) { sm.buildsLinux = true; }
+            if (comma == std::string_view::npos) { break; }
+            rest.remove_prefix(comma + 2);
+        }
+    }
+    sm.haveBuildHere = r.buildHere;
+    p.sha256 = r.sha256;
     // ADVISORY, AND ONLY WHEN STATED: 0 is "the index did not say", never an empty file.
     p.haveSizeBytes = r.sizeBytes > 0u;
     p.sizeBytes = r.sizeBytes;
     // IS THERE A BUILD THIS MACHINE COULD RUN: the exact-ABI test and an os/arch build existing.
     sm.installableHere = r.compatible && r.buildHere;
+
+    // WHAT THE CATALOGUE SAYS THE BINARY DECLARES. Once the module is fitted the descriptor's bits win, below; until then these drive the
+    // reach words.
+    p.haveCapabilities = r.haveCapabilities;
+    p.capabilities = r.haveCapabilities ? r.capabilities : 0u;
+
+    // INSTALLED, AND HOW IT STANDS AGAINST THE CATALOGUE: by plugin id and version, from the install records and the scan, never by file name.
+    if (r.installState == "installed") {
+        sm.install = StoreInstallKind::Installed;
+    } else if (r.installState == "update") {
+        sm.install = StoreInstallKind::UpdateAvailable;
+    } else if (r.installState == "newer") {
+        sm.install = StoreInstallKind::NewerInstalled;
+    } else {
+        sm.install = StoreInstallKind::NotInstalled;
+    }
+    sm.installedVersion = r.installedVersion;
+    // FITTED: some version is installed, or a file with the name install() would write is already in the folder.
     p.fitted = r.installed;
     // The host's record, when it has one (a retired module has none).
     p.fileName.clear();
     p.loaded = false;
     p.refusalReason.clear();
-    p.haveCapabilities = false;
-    p.capabilities = 0;
     p.running = false;
     p.haveTuneGrant = false;
     p.tuneGranted = false;
@@ -1301,6 +1367,19 @@ void fillStoreModule(StoreModule& sm, const StoreRow& r) {
         sm.updateToVersion.clear();
         sm.updateReason.clear();
     }
+    // An update by version that the planner has no plan for (no build for this host, another ABI): the UPDATE key is greyed and says why.
+    sm.updateBlockedReason.clear();
+    if (sm.install == StoreInstallKind::UpdateAvailable && sm.updateToVersion.empty()) {
+        if (!r.compatible) {
+            sm.updateBlockedReason = pluginAbiMismatchReason(static_cast<unsigned>(r.abi),
+                                                             static_cast<unsigned>(CASCADE_PLUGIN_ABI_VERSION));
+        } else if (!r.buildHere) {
+            sm.updateBlockedReason = pluginNoBuildReason(std::string(cascade::core::PluginRepo::hostOs()) + "/" +
+                                                         cascade::core::PluginRepo::hostArch());
+        }
+    }
+    // THE PICTURES, and how far each has got. Nothing is fetched here: a page asks when it is opened, and never for the grid.
+    sm.pictures = r.pictures;
 }
 
 void setStoreBlockedReason(StoreModule& sm, bool acknowledged) {
@@ -1324,6 +1403,96 @@ std::string storeAddAllLine(std::uint64_t position, std::uint64_t total, const s
     // no name cannot tell a user which module is the slow one.
     return cascade::core::formatText(tr("installing %zu of %zu: %s"), static_cast<std::size_t>(position),
                                      static_cast<std::size_t>(total), name.empty() ? tr("starting") : name.c_str());
+}
+
+namespace {
+// The next TAB-separated field of `rest` (to the end when there is no more), and `rest` moved past it.
+inline std::string_view nextField(std::string_view& rest) {
+    const std::size_t tab = rest.find('\t');
+    const std::string_view field = rest.substr(0, tab);
+    rest = tab == std::string_view::npos ? std::string_view() : rest.substr(tab + 1);
+    return field;
+}
+inline long toLong(std::string_view s) {
+    long v = 0;
+    for (const char c : s) {
+        if (c < '0' || c > '9') { break; }
+        v = v * 10 + (c - '0');
+    }
+    return v;
+}
+// Calls `each(line)` for every non-empty line of `text`.
+template <class F>
+inline void forEachLine(const std::string& text, F each) {
+    std::string_view rest(text);
+    while (!rest.empty()) {
+        const std::size_t nl = rest.find('\n');
+        const std::string_view line = rest.substr(0, nl);
+        rest = nl == std::string_view::npos ? std::string_view() : rest.substr(nl + 1);
+        if (!line.empty()) { each(line); }
+    }
+}
+}  // namespace
+
+void parseStoreSites(const std::string& text, std::vector<StoreSite>& out) {
+    std::size_t n = 0;
+    forEachLine(text, [&](std::string_view line) {
+        if (out.size() <= n) { out.emplace_back(); }
+        StoreSite& s = out[n++];
+        const std::string_view url = nextField(line);
+        s.url.assign(url.data(), url.size());
+        s.label = cascade::core::PluginRepo::siteLabel(s.url);
+        s.display = cascade::core::PluginRepo::siteDisplay(s.url, 90);
+        switch (toLong(nextField(line))) {
+            case 1: s.state = StoreSite::State::Kept; break;
+            case 2: s.state = StoreSite::State::Read; break;
+            case 3: s.state = StoreSite::State::Failed; break;
+            default: s.state = StoreSite::State::NotRead; break;
+        }
+        s.plugins = static_cast<int>(toLong(nextField(line)));
+        s.hiddenSameId = static_cast<int>(toLong(nextField(line)));
+        s.hiddenOffHost = static_cast<int>(toLong(nextField(line)));
+        const std::string_view err = nextField(line);
+        s.error.assign(err.data(), err.size());
+    });
+    out.resize(n);
+}
+
+void parseStoreOldCopies(const std::string& text, std::vector<StoreOldCopy>& out) {
+    std::size_t n = 0;
+    forEachLine(text, [&](std::string_view line) {
+        if (out.size() <= n) { out.emplace_back(); }
+        StoreOldCopy& o = out[n++];
+        const std::string_view file = nextField(line);
+        const std::string_view name = nextField(line);
+        const std::string_view version = nextField(line);
+        (void)nextField(line);  // the kept FILE: the card says only which version stays
+        const std::string_view kept = nextField(line);
+        o.file.assign(file.data(), file.size());
+        o.name.assign(name.data(), name.size());
+        o.version.assign(version.data(), version.size());
+        o.keptVersion.assign(kept.data(), kept.size());
+    });
+    out.resize(n);
+}
+
+void parseStorePictures(const std::string& text, std::vector<StorePicture>& out) {
+    std::size_t n = 0;
+    forEachLine(text, [&](std::string_view line) {
+        if (out.size() <= n) { out.emplace_back(); }
+        StorePicture& p = out[n++];
+        const std::string_view sha = nextField(line);
+        const std::string_view caption = nextField(line);
+        p.sha256.assign(sha.data(), sha.size());
+        p.caption.assign(caption.data(), caption.size());
+        // (The index's width and height are advisory - the frame is 16:10 whatever they say - and the table does not carry them.)
+        p.width = 0;
+        p.height = 0;
+        p.state = PictureState::None;
+        p.path.clear();
+        p.reason.clear();
+    });
+    out.resize(n);
 }
 
 namespace {

@@ -14,7 +14,10 @@
 //       asked again only on a retry, the path LOCAL, and the one-transfer gate on everything else while one is in flight;
 //   S5  NO PASS WAITS ON A WORKER: a catalogue read held in the transport, a picture held in the transport and a clean-up held in the remover
 //       each leave every pass prompt (the pass collects what has finished and never what has not);
-//   S6  THE SITES AT START-UP: a configuration that names sites gets each one's kept copy merged under the official list, no request made.
+//   S6  THE SITES AT START-UP: a configuration that names sites gets each one's kept copy merged under the official list, no request made;
+//   S7  (stub campaign B4) A CARD'S FACTS AND HOW AN ENTRY STANDS AGAINST WHAT IS INSTALLED: the shop-window fields, the declared capabilities,
+//       the install state by id and version (an update whose file is not on disk is installed all the same), and UPDATE ALL - the same queue as
+//       ADD ALL with nothing to fetch in it, and its own reason when there is nothing to update.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -853,6 +856,132 @@ void testSitesAtStartUp() {
 
 }  // namespace
 
+// ---- S7: a card's facts, how an entry stands against what is installed, and UPDATE ALL (stub campaign B4) ---------------------------------------
+
+// `entryJson` with more fields in it (a raw JSON fragment without its trailing comma).
+std::string richEntryJson(const std::string& id, const std::string& version, const std::string& extra) {
+    std::string t = entryJson(id, version, "plugins.example.invalid");
+    const std::string marker = "\"licence\":\"MIT\",";
+    const std::size_t at = t.find(marker);
+    CHECK(at != std::string::npos);
+    if (at != std::string::npos) { t.insert(at + marker.size(), extra + ","); }
+    return t;
+}
+
+void testCardFacts() {
+    clearPlugins();
+    // THREE PLUGINS INSTALLED, by their records: p-up at 1.0.0 (the catalogue has 2.0.0: the file the entry would write is NOT on disk),
+    // p-same at 1.0.0 (the catalogue has it), p-new at 3.0.0 (the catalogue has 2.0.0: a NEWER copy is installed). The files are on disk (a
+    // record whose file the user deleted is not an installed plugin); they are not real modules, which is no matter for the records' sake.
+    std::string manifest = "{\"schemaVersion\":1,\"plugins\":[";
+    const struct {
+        const char* id;
+        const char* version;
+    } installed[] = {{"p-up", "1.0.0"}, {"p-same", "1.0.0"}, {"p-new", "3.0.0"}};
+    for (std::size_t i = 0; i < 3; ++i) {
+        const std::string file = std::string(installed[i].id) + "-" + installed[i].version + kModExt;
+        writeText(g_plugins / file, "bytes");
+        manifest += std::string(i == 0 ? "" : ",") + "{\"id\":\"" + installed[i].id + "\",\"name\":\"Plugin " + installed[i].id + "\",\"version\":\"" +
+                    installed[i].version + "\",\"file\":\"" + file + "\",\"abiVersion\":" + std::to_string(static_cast<unsigned>(CASCADE_PLUGIN_ABI_VERSION)) +
+                    ",\"installedAt\":1790000000}";
+    }
+    writeText(g_plugins / "installed.json", manifest + "]}");
+    const fs::path official = g_scratch / "official.json";
+    writeText(official,
+              indexJson({richEntryJson("p-up", "2.0.0", "\"capabilities\":[\"CASCADE_CAP_NOT_IN_THIS_BUILD\"]"),
+                         entryJson("p-same", "1.0.0", "plugins.example.invalid"), entryJson("p-new", "2.0.0", "plugins.example.invalid"),
+                         richEntryJson("p-none", "1.0.0",
+                                       "\"category\":\"marine\",\"experimental\":true,\"whatsNew\":\"1.0.0: the first release.\","
+                                       "\"published\":\"2026-10-07\",\"capabilities\":[\"CASCADE_CAP_DECODER\",\"CASCADE_CAP_NOT_IN_THIS_BUILD\"]")}));
+    auto net = std::make_shared<Net>();  // (nothing is served: every download is answered HTTP 503 at once)
+    serve(net);
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, testing::kAllGrants);
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS, "s3cret");
+    CHECK(s.ok() && remote.ok());
+    CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, official.string())).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_CATALOGUE) == 4 && count(s, FOXAPI_LIST_STORE_ACTIVITY) == 0; }));
+    passes(d.eng, 2);
+
+    // THE SHOP-WINDOW FIELDS: every key for every entry, "" when the index said nothing (known and empty, never NOT_FOUND).
+    int32_t st = 0;
+    CHECK_EQ(fact(s, "store.p-none.category", &st), std::string("marine"));
+    CHECK_EQ(fact(s, "store.p-none.experimental"), std::string("1"));
+    CHECK_EQ(fact(s, "store.p-none.whatsNew"), std::string("1.0.0: the first release."));
+    CHECK_EQ(fact(s, "store.p-none.published"), std::string("2026-10-07"));
+    CHECK_EQ(fact(s, "store.p-none.sha256"), std::string(64, 'a'));  // this host's build's digest
+    // ...the capabilities: the bit of the name this build knows (the unknown one sets none), and for an entry that names ONLY ones this build
+    // has not heard of, 0x80000000 - "declares one this build does not know", not "declares nothing".
+    CHECK_EQ(fact(s, "store.p-none.capabilities"), std::to_string(static_cast<unsigned>(CASCADE_CAP_DECODER)));
+    CHECK_EQ(fact(s, "store.p-up.capabilities"), std::string("2147483648"));
+    CHECK_EQ(fact(s, "store.p-same.category", &st), std::string());
+    CHECK_EQ(st, 0);
+    CHECK_EQ(fact(s, "store.p-same.experimental"), std::string("0"));
+    CHECK_EQ(fact(s, "store.p-same.capabilities", &st), std::string());  // the index said nothing: "not declared", not "declares none"
+    CHECK_EQ(st, 0);
+    CHECK_EQ(fact(s, "store.p-same.published"), std::string());
+
+    // HOW EACH STANDS AGAINST WHAT IS INSTALLED, by id and version - never by the file's name.
+    CHECK_EQ(fact(s, "store.p-up.installState"), std::string("update"));
+    CHECK_EQ(fact(s, "store.p-up.installedVersion"), std::string("1.0.0"));
+    CHECK_EQ(fact(s, "store.p-same.installState"), std::string("installed"));
+    CHECK_EQ(fact(s, "store.p-same.installedVersion"), std::string("1.0.0"));
+    CHECK_EQ(fact(s, "store.p-new.installState"), std::string("newer"));
+    CHECK_EQ(fact(s, "store.p-new.installedVersion"), std::string("3.0.0"));
+    CHECK_EQ(fact(s, "store.p-none.installState"), std::string("none"));
+    CHECK_EQ(fact(s, "store.p-none.installedVersion"), std::string());
+    // (the module file of the installed copy joins the entry to PLUGINS: none of these records is a loaded module, so there is none to name)
+    CHECK_EQ(fact(s, "store.p-up.installedFile", &st), std::string());
+    CHECK_EQ(st, 0);
+    // INSTALLED means installed in ANY version (0.99.72): the update's file has never been on disk, and the entry is installed all the same, and
+    // GET on it is refused - "already installed" - where the file-name test alone would have offered a second install.
+    CHECK(entryByKey(s, "p-up").flags & FOXAPI_ITEM_INSTALLED);
+    CHECK(entryByKey(s, "p-same").flags & FOXAPI_ITEM_INSTALLED);
+    CHECK(entryByKey(s, "p-new").flags & FOXAPI_ITEM_INSTALLED);
+    CHECK((entryByKey(s, "p-none").flags & FOXAPI_ITEM_INSTALLED) == 0u);
+    CHECK_EQ(fact(s, "store.p-up.blocked"), std::string("already installed"));
+    CHECK_EQ(fact(s, "store.p-new.blocked"), std::string("already installed"));
+    CHECK_EQ(fact(s, "store.p-none.blocked"), std::string());
+    // ...and the plan is the one update.
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_UPDATES), 1);
+    CHECK_EQ(std::string(item(s, FOXAPI_LIST_STORE_UPDATES, 0).name), std::string("p-up"));
+    // The facts are no secret from a browser: a REMOTE session reads them (only the site's address and the file paths are LOCAL).
+    CHECK_EQ(fact(remote, "store.p-none.category"), std::string("marine"));
+    CHECK_EQ(fact(remote, "store.p-up.installState"), std::string("update"));
+
+    // UPDATE ALL (the 0.99.72 key: FOXAPP_OP_STORE_ADD_ALL's ival[1] 1): the same queue with NOTHING TO FETCH in it. Over this catalogue ADD ALL
+    // is one to fetch (p-none) and one to update (p-up); UPDATE ALL is the update alone.
+    const auto runLine = [&](int ival1) {
+        cascade::core::DiagLog::instance().resetForTest();
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_STORE_ADD_ALL, "", 0, ival1)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_STORE_ACTIVITY) == 0 && !fact(s, "status.addAllSummary").empty(); }));
+        std::string line;
+        for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (l.find("plugin store: add all starting") != std::string::npos) { line = l; }
+        }
+        return line;
+    };
+    const std::string updateOnly = runLine(1);
+    CHECK(updateOnly.find("add all starting - 0 to fetch, 1 to update, 0 passed over") != std::string::npos);
+    const std::string both = runLine(0);
+    CHECK(both.find("add all starting - 1 to fetch, 1 to update") != std::string::npos);
+    // NOTHING TO UPDATE: a catalogue with no update in it - UPDATE ALL starts nothing and says why, in its own words; ADD ALL there still fetches.
+    writeText(official, indexJson({entryJson("p-same", "1.0.0", "plugins.example.invalid"), entryJson("p-none", "1.0.0", "plugins.example.invalid")}));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_CATALOGUE) == 2 && count(s, FOXAPI_LIST_STORE_ACTIVITY) == 0; }));
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_UPDATES), 0);
+    cascade::core::DiagLog::instance().resetForTest();
+    CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_STORE_ADD_ALL, "", 0, 1)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 0);
+    CHECK_EQ(fact(s, "status.installError"), std::string("every module in the catalogue is already fitted, and none has a newer build"));
+    for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) { CHECK(l.find("add all starting") == std::string::npos); }
+    PluginRepo::setTransportForTest(nullptr);
+    clearPlugins();
+}
+
 int main() {
     std::printf("test_engine_api_store\n");
     isolate();
@@ -862,6 +991,7 @@ int main() {
     testPictures();
     testNoPassWaitsOnAWorker();
     testSitesAtStartUp();
+    testCardFacts();
     std::error_code ec;
     fs::remove_all(g_scratch, ec);
     return check::finish("test_engine_api_store");

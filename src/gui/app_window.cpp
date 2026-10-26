@@ -9468,8 +9468,12 @@ void AppWindow::drawPluginStoreSection() {
     //
     // From the window's engine API session (window port, group 10): CATALOGUE's count, STORE_UPDATES' count and
     // STORE_ACTIVITY's first entry - read when listSeq moves, not walked every frame the rail is visible.
+    //
+    // (0.99.72, stub campaign B4) "looked" means read THIS session: the kept copy that fills the store at start-up is a list from some earlier
+    // day, and an OK or a count drawn from it before anyone asked would be the clean-zero this paragraph is about. The words stay, and the
+    // rail keeps meaning what it meant: fact.store.readThisSession, not "is the list empty".
     const cascade::gui::StoreListCache& store = storeLists(false);
-    const bool haveCatalog = store.haveCatalogue;
+    const bool haveCatalog = store.readThisSession;
     const std::size_t pendingUpdates = haveCatalog ? store.updates : 0u;
     const bool storeBusy = store.transfer;
     std::string storeChip;
@@ -9522,7 +9526,9 @@ void AppWindow::drawPluginStoreSection() {
         ImGui::SetTooltip(tr("An https:// catalogue, or a path to a local index.json.\n"
                           "Read when you first open the plugin store in a session, or\n"
                           "press CHECK NOW there - never at startup. Plugin downloads\n"
-                          "are always https and always sha256-verified."));
+                          "are always https and always sha256-verified.\n"
+                          "This replaces the FoxSDR catalogue. To add someone else's\n"
+                          "catalogue beside it, use SITES in the plugin store."));
     }
 
     // THE RETIRED MODULES HANG UNDER THE STORE'S KEY, and they are the one
@@ -13871,217 +13877,8 @@ void AppWindow::placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h
     placeFeatureWindow(slot, wantW, wantH);
 }
 
-void AppWindow::drawPluginStoreWindow() {
-    // RESET FIRST, AND UNCONDITIONALLY. The fitted window reads this flag to
-    // decide whether IT has to print the install/remove outcome, and a store
-    // window that is closed prints nothing - so the reset has to happen on
-    // every frame, before the open test, exactly as it used to happen before
-    // the section's own header test.
-    pluginBrowserDrawnThisFrame_ = false;
-    // VERIFICATION ONLY, same house rule as FOXSDR_OPEN_KEY_BINDINGS and
-    // FOXSDR_OPEN_FEATURE_REQUEST: the store's open flag is in no config and no
-    // remote control, so nothing a bounded self-capture can supply would put
-    // it on screen. Once, at the first frame, so a session that closes it
-    // again is not fought.
-    static const bool openForCapture = std::getenv("FOXSDR_OPEN_PLUGIN_STORE") != nullptr;
-    static bool openedForCapture = false;
-    if (openForCapture && !openedForCapture) {
-        openedForCapture = true;
-        pluginBrowseOpen_ = true;
-    }
-    // THE CONSENTS ARE WATCHED EVERY FRAME, the window open or shut (window port, group 10): the rail tier of the
-    // table's cache notices a fetch that began and an ADD ALL run that ended - where the engine used to call into
-    // the window from ITS thread for both, to clear the deck's ticks - and clears them here, on the window's own.
-    (void)storeLists(false);
-    if (!pluginBrowseOpen_) { return; }
-    uiNotePanel("plugin store");
-    // THE CACHE IS READ BEFORE ANYTHING ASKS IT A QUESTION. storeShouldCheckOnOpen settles on its first call, so
-    // asked of a cache that has never been read ("no catalogue") it would send a FETCH that the engine executes by
-    // CLEARING a catalogue another path - the web remote's, a bounded run's hook - had already loaded.
-    cascade::gui::StoreListCache& store = storeLists(true);
-    // THE FIRST OPEN READS THE CATALOGUE (0.99.16, gui/store_first_open.hpp):
-    // once per session, never at startup, never retried on its own.
-    if (cascade::gui::storeShouldCheckOnOpen(storeFirstOpen_, true, store.haveCatalogue, store.transfer)) {
-        uiSubmit(cascade::core::cmd::make(FOXAPI_OP_STORE_FETCH));
-    }
-
-    // A REAL OPERATING SYSTEM WINDOW, by the same two devices the map pages
-    // use: an opening rectangle that overhangs the main window, and
-    // NoAutoMerge to say outright what the overhang only implies - a window
-    // that FITS inside the main viewport is otherwise merged into it, and a
-    // store dragged small would silently stop being its own window.
-    ImGuiWindowClass storeClass;
-    storeClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
-    ImGui::SetNextWindowClass(&storeClass);
-    // Wide enough for the deck, the module list and the data plate side by
-    // side at the page's own engraving size - PluginStoreView refuses to lay
-    // out under 640 px and says so - and it OPENS INSIDE THE MAIN WINDOW.
-    //
-    // IT DID NOT, AND THAT WAS THE HALF OF "make the plugin store larger" A
-    // SIZE ALONE COULD NOT FIX. placeFeatureWindow's stagger slots put this
-    // page a couple of hundred pixels PAST the main window's right edge, which
-    // on this desk opened it at x=1657 - on a second monitor - and on a single
-    // monitor with the application maximised opens it off the screen entirely.
-    // A user who presses a key on the rail and sees nothing appear has been
-    // told nothing at all. The demod scope settled this for itself in 0.94.0;
-    // the arithmetic is in gui/page_geometry.hpp now so both do it one way and
-    // it can be checked without a frame.
-    //
-    // Dragging it out by its rail still makes it a separate operating system
-    // window, as any page does; it simply does not start as one.
-    constexpr float kStoreW = 1480.0f;
-    constexpr float kStoreH = 980.0f;
-    float sx = 0.0f;
-    float sy = 0.0f;
-    float sw = kStoreW;
-    float sh = kStoreH;
-    {
-        const ImGuiViewport* mv = ImGui::GetMainViewport();
-        cascade::gui::pageOpenInside(mv->Pos.x, mv->Pos.y, mv->Size.x, mv->Size.y, kStoreW,
-                                     kStoreH, sx, sy, sw, sh);
-    }
-    ImGui::SetNextWindowPos(ImVec2(sx, sy), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(sw, sh), ImGuiCond_FirstUseEver);
-    // NO WINDOW PADDING, because the content is a CABINET: the brass has to
-    // reach the frame the operating system drew, and four pixels of ImGui's
-    // window ground all the way round it would read as a gap between the
-    // instrument and its case.
-    bool open = true;
-    // The visible half of the title is the plate's own word; the ### half is
-    // the stable identity, and it is NOT "###pluginstore" - that id belongs to
-    // the rail row, and two widgets sharing one id is how a window's drag
-    // state and a rail row's press end up in the same hash bucket. beginPage
-    // draws the cabinet this window is, with its name and keys on the rail.
-    const bool drawn = beginPage("Plugin store###pluginstorewindow", tr("PLUGIN STORE"), &open,
-                                 0, sw, sh);
-    // The frame's close button is a real close: it puts the key on the rail
-    // back to off, and that is the only state either of them reads.
-    if (!open) { pluginBrowseOpen_ = false; }
-    if (drawn) {
-        // --- what the window is told: the table's, kept when listSeq moves ------
-        const cascade::gui::PluginStoreModel& model = store.model;
-
-        // --- the cabinet, and the plate as content --------------------------
-        // Whether PluginStoreView::draw actually ran; see the request block
-        // below for why that is not the same question as "the window drew".
-        bool viewDrawn = false;
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const ImVec2 tl = ImGui::GetCursorScreenPos();
-        const ImVec2 avail = ImGui::GetContentRegionAvail();
-        if (dl != nullptr && avail.x > 8.0f && avail.y > 8.0f) {
-            const ImVec2 br(tl.x + avail.x, tl.y + avail.y);
-            // THE CABINET IS THE PAGE'S OWN NOW - beginPage drew it, screws,
-            // rail and keys - so the plate goes straight into the well.
-            const float margin = 0.0f;
-            const ImVec2 pTL(tl.x + margin, tl.y + margin);
-            const ImVec2 pBR(br.x - margin, br.y - margin);
-            float bodyTop = pTL.y;
-            if (pBR.x > pTL.x + 32.0f && pBR.y > pTL.y + 32.0f) {
-                // THE PLATE STAYS AS CONTENT, which is the design's own
-                // arrangement - and the mock's minimise/maximise/close buttons
-                // beside it do not, because this is a real operating system
-                // window with the frame the operating system drew.
-                bodyTop = cascade::gui::addBenchPlate(dl, pTL, pBR, tr("PLUGIN STORE"));
-            }
-            const float pad = 8.0f;
-            const float faceW = pBR.x - pTL.x - pad * 2.0f;
-            const float faceH = pBR.y - pad - bodyTop;
-            if (faceW > 40.0f && faceH > 40.0f) {
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-                ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, bodyTop));
-                // SCROLLS WHEN IT HAS TO - see cascade::gui::storeFaceWindowFlags
-                // for the report that made this a pane that can.
-                ImGui::BeginChild("##storeface", ImVec2(faceW, faceH), ImGuiChildFlags_None,
-                                  cascade::gui::storeFaceWindowFlags());
-                ImGui::PopStyleVar();
-                ImGui::PopStyleColor();
-                pluginStoreView_->draw(faceW, faceH, model, *pluginStoreDeck_);
-                // THE CURSOR THE VIEW LEAVES BEHIND HAS TO BE DECLARED. Its
-                // last statement moves the cursor to the foot of what it drew
-                // so a caller can carry on below it, and a cursor moved past a
-                // window's content extent with no item after it is exactly
-                // what ImGui's own check reports: "Code uses SetCursorPos() to
-                // extend window/parent boundaries. Please submit an item e.g.
-                // Dummy() afterwards." It printed once per frame into the
-                // bounded run's output, which is the contract those runs have
-                // to keep clean. A zero-size Dummy is that item.
-                ImGui::Dummy(ImVec2(0.0f, 0.0f));
-                ImGui::EndChild();
-                viewDrawn = true;
-            } else {
-                ImGui::SetCursorScreenPos(ImVec2(pTL.x + pad, bodyTop + pad));
-                ImGui::TextDisabled("%s", tr("Too small - drag the window larger."));
-            }
-        }
-
-        // --- what the window ASKED for --------------------------------------
-        // THE VIEW ASKS, THIS APPLIES, and every one of these re-tests its own
-        // gate: a request is raised inside a draw and answered after it, and
-        // the state it was raised against can have moved on in between.
-        //
-        // ONLY IF THE VIEW ACTUALLY DREW THIS FRAME. Its four requests are
-        // cleared at the top of ITS draw and nowhere else, so a frame that
-        // skipped the draw - the window dragged too small, which is a state a
-        // user can hold with the mouse button down - would still be holding
-        // last frame's answers and would apply them again, once per frame. A
-        // second install of the module the user fitted a moment ago is not a
-        // theoretical fault; the transfer gate would refuse most of them and
-        // the first gap between two transfers would let one through.
-        //
-        // ...AND THE SAME TEST ANSWERS THE OTHER QUESTION. "Drawn" means the
-        // PANEL drew, not merely that the window did: the fitted window reads
-        // this flag to decide whether IT prints the install/remove outcome,
-        // and a store window dragged too small to lay out has printed nothing.
-        // It must not be the one claiming to have shown it, or a failed remove
-        // would appear on neither window.
-        pluginBrowserDrawnThisFrame_ = viewDrawn;
-        if (!viewDrawn) {
-            endPage();
-            return;
-        }
-        namespace cmd = cascade::core::cmd;
-        if (pluginStoreView_->checkNowRequested()) { uiSubmit(cmd::make(FOXAPI_OP_STORE_FETCH)); }
-        if (pluginStoreView_->cancelRequested()) { uiSubmit(cmd::make(FOXAPI_OP_STORE_CANCEL)); }
-        // THE BULK KEY, and it re-plans from live state rather than from the
-        // plan it was drawn against - see startAddAll. The acknowledgement is
-        // the deck's own ADD ALL tick, which is not the per-module one.
-        if (pluginStoreView_->addAllRequested()) {
-            // The ENGINE plans the run (OPEN 5); this says only what it
-            // cannot know - the ADD ALL tick, and which one module's own
-            // notice tick is on (the selected row's, as the model asks it).
-            // (master's 0.99.72 store has no row selection: the open PAGE is the one module a tick can belong to.)
-            const int sel = storeModuleIndexById(model, pluginStoreDeck_->pageId);
-            const std::string acknowledged =
-                (pluginStoreDeck_->legalAck && sel >= 0 && sel < static_cast<int>(model.modules.size()))
-                    ? model.modules[static_cast<std::size_t>(sel)].id
-                    : std::string();
-            uiSubmit(cmd::makeText(FOXAPP_OP_STORE_ADD_ALL, acknowledged, pluginStoreDeck_->addAllAck ? 1 : 0));
-        }
-        const int fitIdx = pluginStoreView_->fitRequested();
-        if (fitIdx >= 0 && fitIdx < static_cast<int>(model.modules.size())) {
-            // STORE_INSTALL RE-TESTS, never trusts: the view only offers the
-            // key where the reason was empty, but the predicate covers a
-            // transfer in flight and an acknowledgement that may have been
-            // cleared since the key was drawn - and it is the single gate the
-            // web control path goes through as well. The acknowledgement is
-            // read the same way the model built it: it belongs to the
-            // SELECTED module and to no other, so a fit asked for on any other
-            // row is asked for unacknowledged.
-            const bool ack = fitIdx == storeModuleIndexById(model, pluginStoreDeck_->pageId) && pluginStoreDeck_->legalAck;
-            uiSubmit(cmd::makeText(FOXAPI_OP_STORE_INSTALL, model.modules[static_cast<std::size_t>(fitIdx)].id,
-                                   ack ? 1 : 0));
-        }
-        const int updIdx = pluginStoreView_->updateRequested();
-        if (updIdx >= 0 && updIdx < static_cast<int>(model.modules.size())) {
-            // The plan is looked up again when it is applied (APP_STORE_UPDATE) - by the id, which names the
-            // module the user clicked: a catalogue replaced between the draw and the apply answers "no catalogue
-            // entry with that id", where an index could have named another.
-            uiSubmit(cmd::makeText(FOXAPP_OP_STORE_UPDATE, model.modules[static_cast<std::size_t>(updIdx)].id));
-        }
-    }
-    endPage();
-}
+// (AppWindow::drawPluginStoreWindow and AppWindow::storeLists - the plugin store window and what it keeps of the engine's table - are in
+// app_window_store.cpp, stub campaign B4.)
 
 void AppWindow::drawFittedModulesWindow() {
     // VERIFICATION ONLY, the plugin store's own seam above for its sibling:
@@ -17614,255 +17411,6 @@ cascade::gui::FittedListCache& AppWindow::fittedLists() {
         }
     }
     readFactText("fact.plugin.dir", c.model.directory);
-    return c;
-}
-
-// THE PLUGIN STORE'S TABLE (window port, group 10; API 0.3 section 8.9; the cache is gui/plugin_store_view.hpp's
-// StoreListCache). Two tiers, both read when listSeq moves, and a third thing read live.
-//
-// THE RAIL TIER (every call): CATALOGUE's count (is there a catalogue - the old `!catalog_.empty()`),
-// STORE_UPDATES (the plans' ids and their count), STORE_ACTIVITY (entry 1, a fetch or a download in flight; entry 2,
-// the ADD ALL run), STORE_BLOCKED with the two facts of each retired row, and PLUGINS' records (the host's, joined to
-// the catalogue by file name below, and the count it did not load). The rail's chip, the retired rows and the plugins
-// key draw from it whether the window is open or not.
-//
-// THE CONSENTS ARE CLEARED HERE, on the window's own thread. A tick the user gave is consent for a notice that was
-// listed: the engine used to reach into the deck from ITS thread (EngineHost::onCatalogueFetchStarting,
-// onAddAllFinished) at the two moments it must go, and the window now WATCHES the table for them: STORE_ACTIVITY's
-// first entry with value[1] 1 (a catalogue fetch began) clears all of it; entry 2 present and then gone (the run
-// ended) clears the ADD ALL tick, as does a new addAllSummary line; and the full tier, which can see the catalogue
-// itself, clears all of it when the catalogue it reads is not the one it read last (a fetch of a local index.json can
-// start and land between two reads, so no transfer entry is ever seen - the rows are the evidence then).
-//
-// THE FULL TIER (`full`: only from the window's draw, only while it is drawn): one StoreRow a CATALOGUE entry - its
-// columns, twelve facts (fact.store.<id>.*) and the PLUGINS record whose detail is the entry's `.file` (ASCII case
-// ignored: the engine's own rule), with that module's `fact.plugin.<file>.error` - through fillStoreModule. Strings
-// and vectors keep their room, so a refresh that finds nothing bigger allocates only what the table's get_setting
-// does. `got <= i` is the end of a list that changed under the read: what was read stands.
-//
-// EVERY CALL, whatever moved: the ADD ALL summary's edge, and for a full call the three things that are not the
-// lists' - the status lines the engine handed over (statusLines_: the catalogue's line and error, the install
-// report and error, the ADD ALL summary and its level), the rows' blockedReason (it depends on the deck's selection
-// and tick, which move between refreshes) and the transfer's PROGRESS, which moves with no list moving and is read
-// live (STORE_ACTIVITY's first entry, only while one is present).
-cascade::gui::StoreListCache& AppWindow::storeLists(bool full) {
-    cascade::gui::StoreListCache& c = *storeCache_;
-    cascade::gui::PluginStoreDeck& deck = *pluginStoreDeck_;
-    if (uiSession_ == nullptr) { return c; }
-    // THE RUN'S RESULT LINE ARRIVING is the run having ended, however briefly the run itself was on the table.
-    if (statusLines_.addAllSummary != c.lastAddAllSummary) {
-        c.lastAddAllSummary = statusLines_.addAllSummary;
-        if (!c.lastAddAllSummary.empty()) { deck.addAllAck = false; }
-    }
-    const auto entry = [](FoxListItem& it) {
-        it = FoxListItem{};
-        it.structSize = sizeof(it);
-    };
-    const auto size = [this](uint32_t list) {
-        return std::max<int32_t>(0, engineApi_->read_list(uiSession_, list, 0, nullptr));
-    };
-    FoxListItem it{};
-    const auto isPlanned = [&c](const std::string& id) {
-        if (id.empty()) { return false; }
-        for (const std::string& p : c.planIds) {
-            if (p == id) { return true; }
-        }
-        return false;
-    };
-
-    if (c.railSeq != uiState_.listSeq) {
-        c.railSeq = uiState_.listSeq;
-        ++c.railRefreshes;
-        c.haveCatalogue = size(FOXAPI_LIST_CATALOGUE) > 0;
-        c.model.haveCatalogue = c.haveCatalogue;
-
-        const int32_t plans = size(FOXAPI_LIST_STORE_UPDATES);
-        c.updates = static_cast<std::size_t>(plans);
-        c.planIds.resize(c.updates);
-        std::size_t planned = 0;
-        for (int32_t i = 0; i < plans; ++i) {
-            entry(it);
-            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STORE_UPDATES, static_cast<uint32_t>(i), &it) <= i) { break; }
-            c.planIds[planned++] = it.name;
-        }
-        c.planIds.resize(planned);
-
-        // What the store is doing: at most two entries, told apart by id.
-        c.transfer = false;
-        c.transferKind = 0;
-        c.transferName.clear();
-        c.addAll = false;
-        c.addAllPosition = 0;
-        c.addAllTotal = 0;
-        c.addAllName.clear();
-        const int32_t doing = size(FOXAPI_LIST_STORE_ACTIVITY);
-        for (int32_t i = 0; i < doing; ++i) {
-            entry(it);
-            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STORE_ACTIVITY, static_cast<uint32_t>(i), &it) <= i) { break; }
-            if (it.id == 1u) {
-                c.transfer = true;
-                c.transferKind = static_cast<int>(it.value[1]);
-                c.transferName = it.name;
-            } else if (it.id == 2u) {
-                c.addAll = true;
-                c.addAllPosition = static_cast<std::uint64_t>(it.value[0] > 0.0 ? it.value[0] : 0.0);
-                c.addAllTotal = static_cast<std::uint64_t>(it.value[1] > 0.0 ? it.value[1] : 0.0);
-                c.addAllName = it.name;
-            }
-        }
-        // A catalogue fetch began: whatever was ticked was for the catalogue that is going. A run ended: the tick
-        // was for that run, which took the notices it covered.
-        if (c.transfer && c.transferKind == 1) { cascade::gui::forgetCatalogueConsent(deck); }
-        if (c.addAllWasRunning && !c.addAll) { deck.addAllAck = false; }
-        c.addAllWasRunning = c.addAll;
-        // The model's lamp, label and ADD ALL line (their words are the window's own, in the language in force: a
-        // switch moves listSeq, so they are made again here).
-        c.model.busy = c.transfer;
-        c.model.busyLabel = c.transfer ? cascade::gui::storeBusyLabel(c.transferKind, c.transferName) : std::string();
-        c.model.addAllRunning = c.addAll;
-        c.model.addAllProgress =
-            c.addAll ? cascade::gui::storeAddAllLine(c.addAllPosition, c.addAllTotal, c.addAllName) : std::string();
-
-        // The host's records (PLUGINS), and how many it did not load.
-        const int32_t plugins = size(FOXAPI_LIST_PLUGINS);
-        c.hosts.resize(static_cast<std::size_t>(plugins));
-        std::size_t held = 0;
-        c.refused = 0;
-        for (int32_t i = 0; i < plugins; ++i) {
-            entry(it);
-            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i), &it) <= i) { break; }
-            cascade::gui::StoreListCache::Host& h = c.hosts[held++];
-            h.file = it.detail;
-            h.caps = static_cast<std::uint32_t>(it.value[0] > 0.0 ? it.value[0] : 0.0);
-            h.loaded = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
-            h.stopped = (it.flags & FOXAPI_ITEM_STOPPED) != 0u;
-            h.tune = (it.flags & FOXAPI_ITEM_TUNE_ALLOWED) != 0u;
-            if (!h.loaded) { ++c.refused; }
-        }
-        c.hosts.resize(held);
-
-        // The retired modules, with the two facts of each (keyed by the FILE: a module may be retired with no
-        // catalogue fetched at all).
-        const int32_t retired = size(FOXAPI_LIST_STORE_BLOCKED);
-        c.blocked.resize(static_cast<std::size_t>(retired));
-        std::size_t rows = 0;
-        for (int32_t i = 0; i < retired; ++i) {
-            entry(it);
-            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STORE_BLOCKED, static_cast<uint32_t>(i), &it) <= i) { break; }
-            cascade::gui::StoreBlockedRow& b = c.blocked[rows++];
-            b.file = it.name;
-            c.key.assign("fact.blocked.");
-            c.key += b.file;
-            c.key += ".id";
-            readFactText(c.key.c_str(), b.id);
-            c.key.assign("fact.blocked.");
-            c.key += b.file;
-            c.key += ".message";
-            readFactText(c.key.c_str(), b.message);
-            b.hasPlan = isPlanned(b.id);
-        }
-        c.blocked.resize(rows);
-    }
-
-    if (!full) { return c; }
-
-    if (c.fullSeq != uiState_.listSeq) {
-        c.fullSeq = uiState_.listSeq;
-        ++c.refreshes;
-        readFactText("fact.store.url", c.model.sourceUrl);
-        cascade::gui::StoreRow& r = c.row;
-        const auto fact = [&](const char* leaf, std::string& out) {
-            c.key.assign("fact.store.");
-            c.key += r.id;
-            c.key += '.';
-            c.key += leaf;
-            readFactText(c.key.c_str(), out);
-        };
-        const int32_t entries = size(FOXAPI_LIST_CATALOGUE);
-        c.model.modules.resize(static_cast<std::size_t>(entries));
-        std::size_t rows = 0;
-        std::uint64_t hash = 1469598103934665603ull;
-        for (int32_t i = 0; i < entries; ++i) {
-            entry(it);
-            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_CATALOGUE, static_cast<uint32_t>(i), &it) <= i) { break; }
-            r.id = it.detail;
-            r.name = it.name;
-            r.abi = static_cast<std::uint32_t>(it.value[0] > 0.0 ? it.value[0] : 0.0);
-            r.sizeBytes = static_cast<std::uint64_t>(it.value[1] > 0.0 ? it.value[1] : 0.0);
-            r.installed = (it.flags & FOXAPI_ITEM_INSTALLED) != 0u;
-            r.compatible = (it.flags & FOXAPI_ITEM_COMPATIBLE) != 0u;
-            r.buildHere = (it.flags & FOXAPI_ITEM_BUILD_HERE) != 0u;
-            fact("version", r.version);
-            fact("author", r.author);
-            fact("licence", r.licence);
-            fact("description", r.description);
-            fact("summary", r.summary);
-            fact("homepage", r.homepage);
-            fact("legal", r.legal);
-            fact("floor", r.floor);
-            fact("platforms", r.platforms);
-            fact("file", r.file);
-            fact("blocked", r.blocked);
-            fact("updateReason", r.updateReason);
-            r.hasPlan = isPlanned(r.id);
-            // THE JOIN to the host's record: the file this machine's build installs under against a PLUGINS
-            // record's file name, ASCII case ignored. No match on an installed entry is a retired module.
-            r.haveHost = false;
-            r.hostFile.clear();
-            r.hostLoaded = false;
-            r.hostStopped = false;
-            r.hostTune = false;
-            r.hostCaps = 0;
-            r.hostError.clear();
-            if (!r.file.empty()) {
-                for (const cascade::gui::StoreListCache::Host& h : c.hosts) {
-                    if (!equalsFileNameAscii(h.file, r.file)) { continue; }
-                    r.haveHost = true;
-                    r.hostFile = h.file;
-                    r.hostLoaded = h.loaded;
-                    r.hostStopped = h.stopped;
-                    r.hostTune = h.tune;
-                    r.hostCaps = h.caps;
-                    c.key.assign("fact.plugin.");
-                    c.key += h.file;
-                    c.key += ".error";
-                    readFactText(c.key.c_str(), r.hostError);
-                    break;
-                }
-            }
-            hash = cascade::gui::foldStoreRow(hash, r);
-            cascade::gui::fillStoreModule(c.model.modules[rows++], r);
-        }
-        c.model.modules.resize(rows);
-        // A DIFFERENT CATALOGUE from the one last read: the ticks were consent for the old one's notices.
-        if (c.haveCatalogueHash && hash != c.catalogueHash) { cascade::gui::forgetCatalogueConsent(deck); }
-        c.haveCatalogueHash = true;
-        c.catalogueHash = hash;
-    }
-
-    // What is not the lists', every frame (a string given what its room holds allocates nothing).
-    cascade::gui::PluginStoreModel& m = c.model;
-    m.sourceStatus = statusLines_.catalogStatus;
-    m.sourceError = statusLines_.catalogError;
-    m.resultReport = statusLines_.installReport;
-    m.resultError = statusLines_.installError;
-    m.addAllSummary = statusLines_.addAllSummary;
-    m.addAllFailed = statusLines_.addAllFailed;
-    // THE TICK BELONGS TO ONE MODULE, the selected row, and the reason each row gives is asked of it that way: every
-    // other row is asked as unacknowledged, so a module with a notice stays blocked until it is the one on the
-    // plate (a tick given to the plugin the user just read about must not unblock another's FIT key).
-    for (std::size_t i = 0; i < m.modules.size(); ++i) {
-        cascade::gui::setStoreBlockedReason(m.modules[i], deck.legalAck && m.modules[i].id == deck.pageId);
-    }
-    // THE PROGRESS, LIVE: the transfer's own figure, which moves with no list moving. 0 while the server has not
-    // sent a length; drawn only while something is busy.
-    m.progress = 0.0f;
-    if (c.transfer) {
-        entry(it);
-        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STORE_ACTIVITY, 0, &it) > 0 && it.id == 1u) {
-            m.progress = static_cast<float>(it.value[0]);
-        }
-    }
     return c;
 }
 
@@ -21953,6 +21501,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     fittedWinY_ = cfg.fittedModulesY;
     fittedWinW_ = cfg.fittedModulesWidth;
     fittedWinH_ = cfg.fittedModulesHeight;
+    // (stub campaign B4) the plugin store window's rectangle: put back where the user left it, if that place still exists
+    storeWinX_ = cfg.pluginStoreX;
+    storeWinY_ = cfg.pluginStoreY;
+    storeWinW_ = cfg.pluginStoreWidth;
+    storeWinH_ = cfg.pluginStoreHeight;
     // (The web server's and the CAT listener's half of the config - webEnabled, webBindAddress, webPort, webUsername, webPasswordRecord,
     // catEnabled, catBindAll, catPort - is the ENGINE's since stage 5b: Engine::applyConfig restores it and starts what it switches on, on a
     // worker. The panels' mirrors are taken from the table's facts once it has published them.)
@@ -22075,6 +21628,10 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.fittedModulesY = fittedWinY_;
     cfg.fittedModulesWidth = fittedWinW_;
     cfg.fittedModulesHeight = fittedWinH_;
+    cfg.pluginStoreX = storeWinX_;
+    cfg.pluginStoreY = storeWinY_;
+    cfg.pluginStoreWidth = storeWinW_;
+    cfg.pluginStoreHeight = storeWinH_;
     diagnosticsJournal(cfg);
     return cfg;
 }

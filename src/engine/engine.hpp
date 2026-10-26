@@ -2623,7 +2623,9 @@ private:
     // ADD ALL, planned HERE (engine/add_all_plan.hpp, docs/engine-stage3.md
     // OPEN 5) from the catalogue and inventory. `acknowledgedId` is the one
     // module whose own notice tick is on in the store window (empty: none).
-    void startAddAll(bool noticesAcknowledged, const std::string& acknowledgedId = {});
+    // `updatesOnly` is the store window's UPDATE ALL key (0.99.72): the same queue with nothing to fetch in it (stub campaign B4;
+    // FOXAPP_OP_STORE_ADD_ALL's ival[1]).
+    void startAddAll(bool noticesAcknowledged, const std::string& acknowledgedId = {}, bool updatesOnly = false);
     // Starts the next module in the queue when the slot is free, and writes
     // the summary when the queue empties. Called once per frame, after
     // pollPluginAsync has had its chance to clear installPending_.
@@ -2644,7 +2646,19 @@ private:
     // renamed out of the scan, so the host has no record of it at all — the
     // manifest is what keeps it from looking uninstalled and sending the user
     // down an Install path when Update is the remedy.
+    //
+    // BY PLUGIN ID AND VERSION FIRST (0.99.72; stub campaign B4): an installed 1.8.0 makes the 1.8.1 entry an UPDATE, where the file-name test
+    // alone called it not installed (the 1.8.1 file has never been on disk) and offered a second install. The records and the scan speak for it
+    // (pluginInstallState); the file name is the second question - a file with the very name install() would write is in the folder.
     bool catalogEntryInstalled(const cascade::core::PluginCatalogEntry& e) const;
+    // What the host scanned, as PluginRepo::installStateFor wants it (master's AppWindow::scannedModules): one row a module whose descriptor
+    // was read, its catalogue id and source coming from the install record that names its file.
+    std::vector<cascade::core::ScannedModule> scannedModules() const;
+    // How an entry stands against the install records and the scan, by id, source and version.
+    cascade::core::InstallState pluginInstallState(const cascade::core::PluginCatalogEntry& e) const;
+    // The module file of the NEWEST scanned copy of this entry's plugin (id and source), else the host record under the name this machine's
+    // build would be written as, else "" - what joins the entry to PLUGINS (fact.store.<key>.installedFile).
+    std::string installedModuleFile(const cascade::core::PluginCatalogEntry& e) const;
     // The HOST RECORD for a catalogue entry, or null when the host has none.
     //
     // Narrower than catalogEntryInstalled on purpose, and the difference is

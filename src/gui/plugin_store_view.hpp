@@ -739,6 +739,19 @@ struct StoreRow {
     // fact.store.<id>.*, whole ("" when there is none).
     std::string version, author, licence, description, summary, homepage, legal, floor, platforms, file, blocked,
         updateReason;
+    // THE REST OF A 0.99.72 CARD (stub campaign B4, API 0.3 9.4), whole, "" when there is none: the shop-window fields
+    // (fact.store.<key>.category / .whatsNew / .published / .sha256, `experimental` "1"), the catalogue's declared capabilities
+    // (`.capabilities`: the OR of the bits, 0x80000000 when it names only ones this build has not heard of, "" when it says nothing), where
+    // the entry comes from (`.site`, LOCAL: "" for an official one; `.regional`: the regional list offered it) and how it stands against
+    // what is installed (`.installState` none / installed / update / newer, `.installedVersion`, `.installedFile`: the module file of the
+    // newest installed copy, which joins the entry to PLUGINS - the file the entry itself would write is not on disk for an update).
+    std::string category, whatsNew, published, sha256, site, installState, installedVersion, installedFile;
+    bool experimental = false;
+    bool regional = false;
+    bool haveCapabilities = false;
+    std::uint32_t capabilities = 0;
+    // `.pictures`' lines, each with where STORE_PICTURES says that digest has got to.
+    std::vector<StorePicture> pictures;
     // The entry's id is a STORE_UPDATES name: an update is planned (`version` is what it goes to).
     bool hasPlan = false;
     // The PLUGINS record whose file name is `file` (ASCII case ignored), when the host holds one. An entry that is
@@ -756,6 +769,16 @@ struct StoreRow {
 // set here: it depends on the deck (setStoreBlockedReason, every frame); `blockedReasonIfAcknowledged` is the
 // table's `.blocked`.
 void fillStoreModule(StoreModule& sm, const StoreRow& r);
+
+// THE TABLE'S TEXTS, read into the model's own shapes. Each writes into `out` reusing what it already holds, so a rebuild of an unchanged shape
+// allocates only what a longer text needs (stub campaign B4).
+//   fact.store.sites:      "<address> TAB <state> TAB <listed> TAB <hidden-same-id> TAB <hidden-off-host> TAB <error>" a line, state 0 not read, 1 the kept
+//                          copy, 2 read, 3 failed (the label and the display line are PluginRepo's, made here).
+//   fact.store.oldCopies:  "<file> TAB <name> TAB <version> TAB <kept file> TAB <kept version>" a line.
+//   fact.store.<key>.pictures: "<sha256> TAB <caption>" a line (state None; the caller sets the state from STORE_PICTURES).
+void parseStoreSites(const std::string& text, std::vector<StoreSite>& out);
+void parseStoreOldCopies(const std::string& text, std::vector<StoreOldCopy>& out);
+void parseStorePictures(const std::string& text, std::vector<StorePicture>& out);
 
 // WHY FIT MAY NOT BE PRESSED, for a row, with the notice acknowledged or not. The table's `.blocked` is the
 // engine's gate asked WITH the notice taken as acknowledged; the engine's gates run busy, ABI, platform, licence,
@@ -804,6 +827,11 @@ struct StoreListCache {
     // The edges the consents are cleared on.
     bool addAllWasRunning = false;
     std::string lastAddAllSummary;
+    // fact.store.readThisSession: CATALOGUE holds a list read THIS session (the kept copy loaded at start-up is not a read): what the rail's
+    // IDLE and the store's one automatic read ask - never "is it empty".
+    bool readThisSession = false;
+    // STORE_PICTURES has a picture queued or in flight: the one transfer slot is held (the model's pictureBusy).
+    bool pictureBusy = false;
     // --- the full tier -------------------------------------------------------------------------------
     std::uint64_t fullSeq = 0;
     std::uint32_t refreshes = 0;
@@ -821,6 +849,15 @@ struct StoreListCache {
         bool tune = false;
     };
     std::vector<Host> hosts;
+    std::string scratch;  // a fact's text, read into room it keeps
+    // STORE_PICTURES, read once a rebuild: a digest and where it has got to, for the cards' StorePicture states.
+    struct PictureNow {
+        std::string sha256;
+        PictureState state = PictureState::None;
+        std::string path;
+        std::string reason;
+    };
+    std::vector<PictureNow> picturesNow;
 };
 
 // ===========================================================================

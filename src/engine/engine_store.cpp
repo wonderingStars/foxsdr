@@ -889,6 +889,31 @@ void Engine::buildApiListsStore(ApiListBlock& b) {
             pics += s.sha256 + "\t" + oneField(s.caption);
         }
         fact(k + "pictures", std::move(pics));
+        // --- THE SHOP-WINDOW FIELDS (0.99.72, stub campaign B4: the store window draws a card from these and the columns of CATALOGUE; every one
+        //     present for every entry, "" when the index said nothing, so "told nothing" is told from NOT_FOUND).
+        fact(k + "category", e.category);
+        fact(k + "experimental", e.experimental ? "1" : "0");
+        fact(k + "whatsNew", e.whatsNew);
+        fact(k + "published", e.published);
+        const core::PluginPlatform* here = e.thisPlatform();
+        fact(k + "sha256", here != nullptr ? here->sha256 : std::string());
+        // WHAT THE CATALOGUE SAYS THE BINARY DECLARES: the OR of the bits it names, or 0x80000000 when it names only capabilities this build has
+        // never heard of (so the page says "declares one this build does not know", not "declares nothing"); "" when it says nothing.
+        std::string caps;
+        if (e.capabilities != 0u || !e.capabilityNames.empty()) {
+            caps = std::to_string(e.capabilities != 0u ? e.capabilities : 0x80000000u);
+        }
+        fact(k + "capabilities", std::move(caps));
+        // HOW IT STANDS AGAINST WHAT IS INSTALLED, by id, source and version (PluginRepo::installStateFor): none, installed, update (the catalogue's
+        // is newer than the newest installed), newer (an installed copy is newer than the catalogue's); the newest installed version; and the
+        // module file of that copy (which joins the entry to PLUGINS: the file the entry itself would write is not on disk for an update).
+        const core::InstallState st = pluginInstallState(e);
+        fact(k + "installState", st.kind == core::InstallStateKind::Installed        ? "installed"
+                                 : st.kind == core::InstallStateKind::UpdateAvailable ? "update"
+                                 : st.kind == core::InstallStateKind::NewerInstalled  ? "newer"
+                                                                                      : "none");
+        fact(k + "installedVersion", st.installedVersion);
+        fact(k + "installedFile", installedModuleFile(e));
     }
     // --- the pictures themselves
     for (const auto& [sha, st] : pictures_) {
