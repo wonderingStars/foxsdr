@@ -21,6 +21,7 @@
 #include <objbase.h>
 
 #include <exception>
+#include <system_error>
 #include <thread>
 #endif
 
@@ -53,19 +54,29 @@ bool runShellOpenResponsive(const ShellPauseHooks& hooks, const std::function<bo
             ~Event() { if (handle) { ::CloseHandle(handle); } }
         } event;
         const HANDLE done = event.handle;
-        if (done == nullptr) { return false; }
+        // NO EVENT, OR NO THREAD TO BE HAD (handle or thread exhaustion): the call is made here,
+        // as it was before 0.99.91. The button still gets its answer; the only cost is the old
+        // symptom, a window Windows may call hung while the shell waits. Never an exception out
+        // of an ImGui button body, which no caller expects.
+        if (done == nullptr) { return call(); }
         bool answer = false;
         std::exception_ptr error;
-        std::thread worker([&call, &answer, &error, done] {
-            const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-            try {
-                answer = call();
-            } catch (...) {
-                error = std::current_exception();
-            }
-            if (SUCCEEDED(com)) { ::CoUninitialize(); }
-            ::SetEvent(done);
-        });
+        std::thread worker;
+        try {
+            worker = std::thread([&call, &answer, &error, done] {
+                const HRESULT com =
+                    ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+                try {
+                    answer = call();
+                } catch (...) {
+                    error = std::current_exception();
+                }
+                if (SUCCEEDED(com)) { ::CoUninitialize(); }
+                ::SetEvent(done);
+            });
+        } catch (const std::system_error&) {
+            return call();
+        }
         waitTakingSentMessages(done);
         worker.join();
         if (error) { std::rethrow_exception(error); }

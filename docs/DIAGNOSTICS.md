@@ -958,6 +958,39 @@ that is not capped, because what it waits for is a person; see rule 2b in *The
 5-second threshold* below. `cascade --frames N` prints the number of pauses a
 run took, so these are visible as a count and not only as a sentence.
 
+**And, since 0.99.91, on a thread of their own** (`gui::runShellOpenResponsive`,
+`gui/shell_open.cpp`). Field report, 0.99.89, 2026-10-25: `freeze: the frame was
+in user-wait`, the GUI thread in `launchInstaller` → `ShellExecuteW` →
+`windows.storage.dll` → a plain kernel wait in `ntdll`, 40 s after a STOP, with
+`aswhook.dll` (Avast) in the process. The install key had handed the downloaded
+0.99.90 installer to the shell, and the shell was waiting on SmartScreen, the
+antivirus or the elevation prompt **without taking messages**. The 0.99.87 rule
+above - the user-paced excuse ends when Windows calls the window hung - assumed
+a person is always waited for in a message loop; `ShellExecute` is the one wait
+in this application for which that is not so. So five seconds in, Windows
+greyed a healthy window "(Not Responding)" behind the prompt, and the watchdog
+filed a freeze. (It is very likely how the two 35ED0AF2 users came to close
+theirs from Windows' dialog.) Every `ShellExecute` - the installer, the reports
+folder and privacy link (`shellOpen`), RADIO SETUP's INSTALL DRIVER - now runs on
+a worker thread that initialises COM as the STA the documentation asks for, while
+the GUI thread waits for it in `MsgWaitForMultipleObjectsEx(QS_SENDMESSAGE)` plus
+a `PeekMessage(PM_NOREMOVE)` at least every 100 ms: sent messages are answered,
+Windows never calls the window hung, nothing posted is removed (input and paint
+wait for the frame loop, as they did while the call held the thread), and the
+call's answer or exception comes back to the button. The same bracket is taken on
+the GUI thread, so the frame timer's `user-wait` scope and the uncapped pause are
+as before. The file dialog keeps the plain bracket: it runs its own message loop
+on the thread that owns its parent. If the event or the thread cannot be made,
+the call is made inline as before 0.99.91. Measured by
+`tests/test_hung_window_excuse.cpp` cases 5 and 6 (a real window, a real
+watchdog, a call that sleeps past Windows' verdict: inline, the window reads hung
+and one report is written; off-thread, neither, and a `SendMessage` from another
+thread is answered) and `tests/test_shell_open.cpp` (bracket on the calling
+thread, the call on another, the answer and an exception passed back, posted
+messages and `WM_QUIT` left in the queue, the STA, two real `ShellExecuteEx`
+calls). **Not verified:** a real UAC or SmartScreen prompt behind the new path -
+the test's wait is a `Sleep` - and whether 35ED0AF2 stops recurring.
+
 **On Linux** (this port, 2026-09-15) `AppWindow::shellOpen()` no longer just
 returns `false`: it hands the target to `xdg-open` via `fork`+`execvp` — never
 a shell, so a target string is never reinterpreted — double-forked so the call

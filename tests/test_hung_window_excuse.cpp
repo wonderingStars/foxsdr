@@ -34,8 +34,10 @@
 //   5. a shell call that blocks for longer than Windows' verdict, made through
 //      runShellOpenResponsive under the same user-paced pause: the window is NEVER called hung
 //      while it lasts, nothing is reported, and the call's answer comes back;
-//   6. a SendMessage from another thread to that window during the call is answered (a shell
-//      dialog owned by the window, or a broadcast, cannot deadlock against the wait).
+//   6. a SendMessage from another thread to that window during the call is answered within its
+//      timeout - the GUI thread is taking sent messages, not merely alive (the product's shell
+//      calls pass no owner window, so this is the regression guard for the pump, not a test of
+//      an owned dialog).
 // 5 and 6 fail when the call is made inline on the GUI thread, as before 0.99.91 (the break-it
 // check: the window reads hung and one report is written; the SendMessage times out).
 //

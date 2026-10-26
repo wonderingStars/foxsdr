@@ -1,10 +1,8 @@
 # FoxSDR 0.99.91
 
-**FoxSDR no longer reports a false freeze when starting an update installer on Windows and the Windows shell takes time to respond.**
+**FoxSDR 0.99.91 fixes a false freeze report, and a window that went grey, when you pressed "Install now and restart" on an update - or INSTALL DRIVER in RADIO SETUP, or a link to foxsdr.com - and Windows took a few seconds to answer. While Windows checked the downloaded installer or showed its permission prompt, FoxSDR's window could turn "(Not Responding)" behind it, and since 0.99.87 FoxSDR filed that as a freeze. Nothing had frozen. The window now stays responsive while Windows asks, and no report is filed.**
 
-The installer launch now runs on a joined worker while FoxSDR continues taking Windows sent messages. The launch result still returns to the update banner, and a failed launch still reports failure. Links and the radio driver's installation prompt use the same handling. File pickers retain their native dialog loop.
-
-This does not change detection of a genuinely unresponsive application window. FoxSDR still waits for the shell operation to return before continuing its frame loop.
+This is a repair only; nothing else changes. If you updated from 0.99.87, 0.99.88 or 0.99.89 to 0.99.90 and saw the window grey out while Windows asked for permission, that was this. The Microsoft Store copy stays on its current version until the next submission is certified.
 
 ---
 
@@ -23,8 +21,8 @@ This does not change detection of a genuinely unresponsive application window. F
 **SHA-256 of `foxsdr-0.99.91-linux-arm64.tar.gz`:**
 `TBD`
 
-## Features and fixes, 2026-10-25
+## Features and fixes, 2026-10-26
 
-**Waiting for the Windows shell no longer looks like a frozen window.** A shell launch can block without processing the application's window messages. The update banner now keeps those messages flowing while the shell call runs on a COM-initialised worker. The existing user-wait watchdog pause stays in effect, and ordinary hung-window detection remains unchanged.
+**Waiting for Windows no longer looks like a freeze.** When FoxSDR hands something to Windows - the update installer it has just downloaded, the one-click RTL-SDR driver, a link to the website - Windows may take its time: SmartScreen looks at a new download, an antivirus scans it, or a permission prompt waits for your answer. Until now FoxSDR made that call on the thread that draws its window, and that call does not let the window answer Windows while it waits, so after about five seconds Windows greyed the window and offered to close it, and FoxSDR's own freeze watchdog, which since 0.99.87 trusts Windows' verdict, sent us a report of a freeze that was not one. A tester's report on 2026-10-25, 40 seconds into a session, pressing the key to install 0.99.90, showed exactly this. FoxSDR now makes the call on a helper thread and keeps the window answering Windows until it returns. You still cannot use FoxSDR while the prompt is up - that was always the case - but the window no longer greys, Windows no longer offers to close it, and nothing is reported. If the shell call fails, the message you see is the same as before.
 
-**Launch completion and errors remain visible.** Shell activation completes before the worker exits. FoxSDR waits for the result, including failures, before continuing. Posted input remains queued for the normal frame loop.
+**Nothing else about freeze reporting changes.** A window that really has stopped is reported exactly as in 0.99.87 to 0.99.90.
