@@ -1,0 +1,9 @@
+# The software OpenGL renderer shipped in softgl\ beside cascade.exe (Windows only).
+# Read by CMakeLists.txt (download, verify, extract, stage) and by tools/release.ps1 (payload
+# checks). One "key value [sha256]" per line; '#' starts a comment. Change all of it together,
+# and the notices in installer/THIRD-PARTY-LICENSES.txt with it (see README.md here).
+version 26.2.4
+url https://github.com/pal1000/mesa-dist-win/releases/download/26.2.4/mesa3d-26.2.4-release-msvc.7z
+archive mesa3d-26.2.4-release-msvc.7z 351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695
+member x64/opengl32.dll 75b295fc80df0eaa8f1264c28663f6932c8b72d36513eb092556608858b7f5e0
+member x64/libgallium_wgl.dll 53e49adf87590d5b0cab8553b1e98084812040cc1fca8c487695b17b7af3702e

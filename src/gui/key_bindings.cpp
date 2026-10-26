@@ -10,6 +10,7 @@
 // The definition behind the header's opaque declaration. This is the one
 // translation unit that needs the enumerators themselves.
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -516,5 +517,17 @@ constexpr bool actionTableInOrder() {
 }
 static_assert(actionTableInOrder(), "kActions must be in KeyAction order, one row per action");
 }  // namespace
+
+bool textFieldHoldsKeys() {
+    // Two questions, because ImGui answers two different ones. WantTextInput
+    // is "could typing land somewhere" - false for a read-only field, which
+    // takes no characters. GetInputTextState names the one InputText that is
+    // active, read-only or not: ImGui keeps a single such state and gives it
+    // to whichever field holds the keys, and a read-only field holds them
+    // while its text is being selected and copied.
+    const ImGuiIO& io = ImGui::GetIO();
+    if (io.WantTextInput) { return true; }
+    return ImGui::GetInputTextState(ImGui::GetActiveID()) != nullptr;
+}
 
 }  // namespace cascade::gui

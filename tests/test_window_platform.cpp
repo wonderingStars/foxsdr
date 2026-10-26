@@ -228,8 +228,123 @@ int main() {
         const std::string off = failureMessage(std::string());
         CHECK(contains(off, "no log was written") && contains(off, "Settings > Diagnostics"));
         CHECK(!contains(off, "foxsdr.log"));
+        // When the software renderer was tried too, the person is told so; when it was not, the
+        // message does not claim it (the default is "not tried", as every caller before 0.99.90).
+        const std::string tried = failureMessage(logPath, true);
+        CHECK(contains(tried, "also tried its built-in software renderer"));
+        CHECK(contains(tried, "\n" + logPath));
+        CHECK(!contains(withLog, "software renderer") && !contains(off, "software renderer"));
         // plain ASCII, so it reads the same in a message box of any code page
-        for (const char ch : withLog + off) { CHECK(ch == '\n' || (ch >= 0x20 && ch < 0x7F)); }
+        for (const char ch : withLog + off + tried) { CHECK(ch == '\n' || (ch >= 0x20 && ch < 0x7F)); }
+    }
+
+    // =======================================================================
+    // 4c. FOXSDR_GL, the old-driver check and the software renderer's lines (0.99.90)
+    // =======================================================================
+    {
+        // The GLFW numbers, held to the real macros.
+        const volatile int codes[] = {kApiUnavailable, kVersionUnavailable, kFormatUnavailable};
+        CHECK(codes[0] == GLFW_API_UNAVAILABLE);
+        CHECK(codes[1] == GLFW_VERSION_UNAVAILABLE);
+        CHECK(codes[2] == GLFW_FORMAT_UNAVAILABLE);
+        // Only the driver's refusals move the start-up to the software renderer; a platform error
+        // (a window class, a display) or no error at all does not.
+        CHECK(glfwErrorMeansNoDriver(GLFW_API_UNAVAILABLE));
+        CHECK(glfwErrorMeansNoDriver(GLFW_VERSION_UNAVAILABLE));
+        CHECK(glfwErrorMeansNoDriver(GLFW_FORMAT_UNAVAILABLE));
+        CHECK(!glfwErrorMeansNoDriver(GLFW_PLATFORM_ERROR));
+        CHECK(!glfwErrorMeansNoDriver(GLFW_NOT_INITIALIZED));
+        CHECK(!glfwErrorMeansNoDriver(GLFW_INVALID_VALUE));
+        CHECK(!glfwErrorMeansNoDriver(0));
+
+        // FOXSDR_GL: three words, any case, blanks trimmed; anything else ignored and said so.
+        CHECK(!parseGlRequest(nullptr).set && parseGlRequest(nullptr).mode == GlMode::Auto);
+        CHECK(!parseGlRequest("").set && !parseGlRequest("  \t").set);
+        CHECK(parseGlRequest("software").mode == GlMode::Software && parseGlRequest("software").valid);
+        CHECK(parseGlRequest(" SoftWare ").mode == GlMode::Software);
+        CHECK(parseGlRequest("hardware").mode == GlMode::Hardware);
+        CHECK(parseGlRequest("auto").mode == GlMode::Auto && parseGlRequest("auto").set);
+        {
+            const GlRequest bad = parseGlRequest("llvmpipe");
+            CHECK(bad.set && !bad.valid && bad.mode == GlMode::Auto && bad.text == "llvmpipe");
+        }
+        {
+            const GlRequest junk = parseGlRequest("soft\x01ware\xc3\xa9 and much more than twenty-four");
+            CHECK(!junk.valid && printable(junk.text) && junk.text.size() <= 24);
+        }
+        CHECK(glRequestLine(parseGlRequest(nullptr), true).empty());
+        CHECK(glRequestLine(parseGlRequest("software"), true) ==
+              "window: FOXSDR_GL=software; the software renderer is used from the start");
+        CHECK(glRequestLine(parseGlRequest("hardware"), true) ==
+              "window: FOXSDR_GL=hardware; the graphics driver only, with no software fallback");
+        CHECK(glRequestLine(parseGlRequest("auto"), true) ==
+              "window: FOXSDR_GL=auto; the software renderer only if the graphics driver cannot be used");
+        CHECK(glRequestLine(parseGlRequest("llvmpipe"), true) ==
+              "window: FOXSDR_GL=llvmpipe is not auto, software or hardware; ignored");
+        CHECK(contains(glRequestLine(parseGlRequest("software"), false), "LIBGL_ALWAYS_SOFTWARE=1"));
+        CHECK(contains(glRequestLine(parseGlRequest("software"), false), "; ignored"));
+        for (const char* v : {"software", "hardware", "auto", "llvmpipe", "\x01\x02 x"}) {
+            checkLine(glRequestLine(parseGlRequest(v), true));
+            checkLine(glRequestLine(parseGlRequest(v), false));
+        }
+
+        // GL_VERSION as drivers write it, and what is too old for "#version 130".
+        {
+            const GlVersion nv = parseGlVersion("4.6.0 NVIDIA 610.88");
+            CHECK(nv.parsed && nv.major == 4 && nv.minor == 6 && !glVersionTooOld(nv));
+            const GlVersion mesa = parseGlVersion("4.6 (Compatibility Profile) Mesa 26.2.4 (git-9a0169f2a7)");
+            CHECK(mesa.parsed && mesa.major == 4 && mesa.minor == 6);
+            const GlVersion gdi = parseGlVersion("1.1.0");
+            CHECK(gdi.parsed && gdi.major == 1 && gdi.minor == 1 && glVersionTooOld(gdi));
+            CHECK(glVersionTooOld(parseGlVersion("2.1 Mesa 7.0")));
+            CHECK(glVersionTooOld(parseGlVersion("2.99")));
+            // the boundary: exactly 3.0 is enough
+            CHECK(!glVersionTooOld(parseGlVersion("3.0")));
+            CHECK(!glVersionTooOld(parseGlVersion("3.0 - Build 9.17.10.4459")));
+            CHECK(!glVersionTooOld(parseGlVersion("10.0")));
+            // unreadable is never "old": the start-up goes on as before
+            for (const char* v : {static_cast<const char*>(nullptr), "", "OpenGL ES 3.2", "4", "4.", ".6", "x4.6"}) {
+                const GlVersion u = parseGlVersion(v);
+                CHECK(!u.parsed && !glVersionTooOld(u));
+            }
+            // a number too long for an int is clamped, not overflowed
+            CHECK(!glVersionTooOld(parseGlVersion("99999999999999999999.1")));
+            CHECK(oldDriverLine(gdi) == "window: the graphics driver offers OpenGL 1.1; FoxSDR needs 3.0");
+            CHECK(oldDriverCause(gdi) == "the graphics driver offers OpenGL 1.1; FoxSDR needs 3.0");
+            checkLine(oldDriverLine(gdi));
+        }
+
+        // Whether there is a second attempt, and the line when there is not.
+        CHECK(softwareSkip(GlMode::Auto, false, true, true) == SoftwareSkip::None);
+        CHECK(softwareSkip(GlMode::Hardware, false, true, true) == SoftwareSkip::Hardware);
+        CHECK(softwareSkip(GlMode::Auto, true, true, true) == SoftwareSkip::AlreadyTried);
+        CHECK(softwareSkip(GlMode::Software, true, true, true) == SoftwareSkip::AlreadyTried);
+        CHECK(softwareSkip(GlMode::Auto, false, false, true) == SoftwareSkip::Missing);
+        CHECK(softwareSkip(GlMode::Auto, false, true, false) == SoftwareSkip::NotThisPlatform);
+        // FOXSDR_GL=hardware wins over a renderer that is there, and is what the line says
+        CHECK(softwareSkip(GlMode::Hardware, true, false, true) == SoftwareSkip::Hardware);
+        CHECK(softwareSkipLine(SoftwareSkip::None).empty());
+        CHECK(softwareSkipLine(SoftwareSkip::NotThisPlatform).empty());
+        for (const SoftwareSkip s : {SoftwareSkip::Hardware, SoftwareSkip::AlreadyTried, SoftwareSkip::Missing}) {
+            CHECK(contains(softwareSkipLine(s), "window: no software fallback: "));
+            checkLine(softwareSkipLine(s));
+        }
+        CHECK(contains(softwareSkipLine(SoftwareSkip::Missing), "softgl\\opengl32.dll"));
+        CHECK(softwareRetryLine(noDriverCause(GLFW_API_UNAVAILABLE)) ==
+              "window: the graphics driver offers no usable OpenGL (GLFW error 65542); starting again with the "
+              "software renderer in softgl");
+        checkLine(softwareRetryLine(noDriverCause(GLFW_FORMAT_UNAVAILABLE)));
+        checkLine(softwareRetryLine(oldDriverCause(parseGlVersion("1.1.0"))));
+
+        // The test seam's words; anything else is no seam at all.
+        CHECK(parseTestWindowFail(nullptr) == TestWindowFail::None);
+        CHECK(parseTestWindowFail("") == TestWindowFail::None);
+        CHECK(parseTestWindowFail("1") == TestWindowFail::All);
+        CHECK(parseTestWindowFail("hardware") == TestWindowFail::Hardware);
+        CHECK(parseTestWindowFail("old-driver") == TestWindowFail::OldDriver);
+        CHECK(parseTestWindowFail("imgui") == TestWindowFail::ImGui);
+        CHECK(parseTestWindowFail("0") == TestWindowFail::None);
+        CHECK(parseTestWindowFail("yes") == TestWindowFail::None);
     }
 
     // =======================================================================

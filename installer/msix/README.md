@@ -69,8 +69,10 @@ difference, written down.
 
 Item for item what `installer\cascade.iss` ships, and `build-msix.ps1`
 enforces the same payload contract the `.iss` enforces at compile time (only
-`SoapySDR.dll` may appear as a runtime DLL; anything else aborts the build, so
-a new DLL is added to both packages deliberately or to neither).
+`SoapySDR.dll` may appear as a runtime DLL beside `cascade.exe`, and `softgl\`
+must hold exactly the software renderer's `opengl32.dll` and
+`libgallium_wgl.dll`; anything else aborts the build, so a new DLL is added to
+both packages deliberately or to neither).
 
 | In the package | From |
 |---|---|

@@ -476,13 +476,32 @@ public:
     // --- driving the callbacks -------------------------------------------
 
     // One block of signal, as the service delivers it: separate I and Q arrays
-    // of int16.
+    // of int16, numbered CONTIGUOUSLY from the block before (0.99.84): the
+    // service names every block's first sample in firstSampleNum, and a
+    // driver that reads it would see a gap between two blocks both claiming
+    // to start at 0. The real service's numbering was not observed on this
+    // machine; the contiguity is gr-sdrplay3's understanding of it.
     void pushSamples(const short* xi, const short* xq, unsigned int n) {
+        pushBlock(xi, xq, n, nextSampleNum, 0);
+    }
+
+    // The same block with the service's words chosen by the test: where it
+    // says the block starts, and whether it raises `reset` (a
+    // re-initialisation inside the API, after which the numbering is new).
+    // The next pushSamples continues from the end of this block.
+    void pushBlock(const short* xi, const short* xq, unsigned int n,
+                   unsigned int firstSampleNum, unsigned int reset) {
+        nextSampleNum = firstSampleNum + n;
         if (streamA == nullptr) { return; }
         abi::StreamCbParamsT p{};
+        p.firstSampleNum = firstSampleNum;
         p.numSamples = n;
-        streamA(const_cast<short*>(xi), const_cast<short*>(xq), &p, n, 0, cbContext);
+        streamA(const_cast<short*>(xi), const_cast<short*>(xq), &p, n, reset, cbContext);
     }
+
+    // Where the next pushSamples block starts; a stream the service restarts
+    // (Init) numbers from wherever it likes, which a test says with pushBlock.
+    unsigned int nextSampleNum = 0;
 
     // `tuner` is the selector the service passes with the event - the tuner
     // the event is ABOUT. Tuner_A unless a test says otherwise, which is what

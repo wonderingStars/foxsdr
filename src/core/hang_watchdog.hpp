@@ -460,10 +460,17 @@ public:
     // moment - its cap starts afresh then, so a rescan nested inside a long shell
     // call is not reported the instant the prompt closes.
     //
-    // WHAT THAT LEAVES UNREPORTED, BY DESIGN: a ShellExecute that never returns
-    // and shows no dialog. The wait is excused because it is indistinguishable,
-    // from here, from a prompt nobody has answered yet; the only watch on it is
-    // the person, who sees the window not responding.
+    // WHAT THAT USED TO LEAVE UNREPORTED: a ShellExecute (or a file dialog) that
+    // never returns. The wait was excused because it looked, from here, like a
+    // prompt nobody had answered yet, and the only watch on it was the person,
+    // who saw the window not responding - field signature 35ED0AF291113FC8, two
+    // windows closed from Windows' "not responding" dialog (exit code 0xCFFFFFFF)
+    // with no report but the sentinel's, which has no stack. Since 0.99.87 the
+    // excuse lasts only while Windows does not call the GUI thread's window hung
+    // (guiWindowHung): waiting for a person is done in a loop that takes
+    // messages, and Windows never calls such a thread hung. Past the verdict the
+    // stall is measured like any other, from the first poll that saw it.
+    // The same verdict ends rule 2's modal-loop excuse.
     //
     // RULE 2c (a stalled thread inside win32u.dll "is pumping") is excused for
     // as long as the thread stays there, and win32u.dll is the user-mode end of
@@ -629,6 +636,11 @@ private:
     // manager's own message wait. Answers from the injected module name when
     // one is set, otherwise from one register read of the GUI thread.
     bool guiThreadIsPumping() const;
+    // Whether Windows calls any top-level window of the GUI thread hung
+    // (IsHungAppWindow: no messages taken for about 5 s). False elsewhere, and
+    // for a GUI thread that owns no window. Ends the user-paced and modal-loop
+    // excuses, which are for a person holding a loop that is still turning.
+    bool guiWindowHung() const;
 
     std::thread thread_;
     std::atomic<bool> stop_{false};

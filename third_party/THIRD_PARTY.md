@@ -31,6 +31,13 @@ Vendoring our own SoapySDR would produce a second, private ABI that the
 installed vendor modules were never built for — breaking exactly the hardware
 support SoapySDR exists to provide. It therefore stays external by design.
 
+The second exception is **the software OpenGL renderer** (0.99.90): two
+prebuilt Mesa 3D files (62 MB) shipped in `softgl\` beside `cascade.exe` in the
+Windows packages. They are pinned by hash in `softgl/PINNED.txt` rather than
+committed, fetched and verified by CMake (`CASCADE_SOFTGL`); provenance,
+measurements, licences and the trace of Mesa's per-file licences are in
+`softgl/README.md`.
+
 ## Pinned versions
 
 | Library | Upstream | Tag / commit | Archive fetched | Archive SHA256 | License | Local dir |
@@ -46,6 +53,7 @@ support SoapySDR exists to provide. It therefore stays external by design.
 | Nova Mono | https://github.com/google/fonts | commit `90abd17b4f97671435798b6147b698aa9087612f` (`ofl/novamono/`) | `https://raw.githubusercontent.com/google/fonts/90abd17b4f97671435798b6147b698aa9087612f/ofl/novamono/NovaMono.ttf` | `648eadb6648c0801b186d3dcef60ee6aa84a791b1e09c726935c0712508b4807` | SIL OFL 1.1, reserved name "NovaMono" (`fonts/OFL-NovaMono.txt`) | `third_party/fonts/` |
 | Noto Sans Condensed (Medium, SemiBold) | https://github.com/notofonts/notofonts.github.io (release of https://github.com/notofonts/latin-greek-cyrillic) | commit `28b15b4b43b7bed62b5cf6e6b0b5ff5846270535` (Noto Sans v2.015, tag `NotoSans-v2.015` upstream), `fonts/NotoSans/unhinted/ttf/` | `https://raw.githubusercontent.com/notofonts/notofonts.github.io/28b15b4b43b7bed62b5cf6e6b0b5ff5846270535/fonts/NotoSans/unhinted/ttf/NotoSans-Condensed{Medium,SemiBold}.ttf`; licence `https://raw.githubusercontent.com/notofonts/latin-greek-cyrillic/NotoSans-v2.015/OFL.txt` | upstream Medium `f77b058861b9e63d18782e46787f6570a7968aacdf299cbd481a998658a71876`, SemiBold `b41ecd0838ecd17b706432a01c0d63f8bf977d851cc2cf37242324233edb9294`; vendored SUBSETS Medium `7db3cd58a5cbf6129c3cb73ee0fc97255d6449837a53987acca21ce8068bbca0`, SemiBold `caa8702bf3bb10a771d267cf322acb7f1cdcd995bee15dce587000a72976ebeb` | SIL OFL 1.1, NO reserved font name (`fonts/OFL-NotoSans.txt`, sha256 `cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a`) | `third_party/fonts/` |
 | FoxSDR engine API header | the private `foxsdr-api` repository (same author) | commit `8fb6522027cb580725fc2707355c5541324fe41e` (API 0.2, `include/foxsdr_api.h`), extended in this tree to API 0.3 by the owner's decision of 2026-09-29 (appended only; `docs/api-0.3-additions.md`) | copied from that commit's working tree, then extended | `91c101de96d3c8c30019e29e35fcae89546b75ef4dc6c5d0140f52f6d5a5230c` (the 0.3 header; the 0.2 copy was `c522f2abd8bdaae020816b9f75afff411624ef95a66ec74732eb0192a59e49a1`) | MIT (in the header's own licence block) | `third_party/foxsdr_api/` |
+| Mesa 3D (llvmpipe), as built by mesa-dist-win — **not vendored**: fetched by CMake | https://mesa3d.org, https://github.com/pal1000/mesa-dist-win | release `26.2.4`, MSVC build; `x64/opengl32.dll` (`75b295fc80df0eaa8f1264c28663f6932c8b72d36513eb092556608858b7f5e0`) and `x64/libgallium_wgl.dll` (`53e49adf87590d5b0cab8553b1e98084812040cc1fca8c487695b17b7af3702e`) only | `https://github.com/pal1000/mesa-dist-win/releases/download/26.2.4/mesa3d-26.2.4-release-msvc.7z` | `351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695` | Mesa: MIT core, per-file SPDX; LLVM 23.1.2: Apache-2.0 WITH LLVM-exception; zlib; mesa-dist-win: MIT (`softgl/licenses/`) | `third_party/softgl/` (pins and licences only; staged in `build\Release\softgl\`) |
 
 Integrity cross-check: the SHA512 of each fetched tar.gz was compared against
 the SHA512 recorded in the corresponding vcpkg portfile

@@ -63,8 +63,10 @@
 ; ---------------------------------------------------------------------------
 ; Compile-time payload contract checks — fail loudly, never ship silently.
 ; The build's runtime payload is cascade.exe + SoapySDR.dll ONLY (everything
-; else is statically linked). If another *.dll ever appears in build\Release,
-; the compile aborts so the new DLL is added here DELIBERATELY or removed.
+; else is statically linked), plus the software renderer's two files in its own
+; softgl\ folder (checked below). If another *.dll ever appears in
+; build\Release, the compile aborts so the new DLL is added here DELIBERATELY or
+; removed.
 ; ---------------------------------------------------------------------------
 #if !FileExists(BuildDir + "\cascade.exe")
   #pragma error "cascade.exe not found in build\Release — build the Release configuration first (see README.md)"
@@ -88,6 +90,23 @@
 #endif
 #if DllCount == 0
   #pragma error "SoapySDR.dll not found in build\Release — the build is incomplete"
+#endif
+; The software OpenGL renderer (0.99.90, third_party/softgl/README.md): exactly two
+; files in build\Release\softgl, staged by the build (CASCADE_SOFTGL) after their
+; hashes were checked against third_party/softgl/PINNED.txt. A build configured
+; without it runs only where there is an OpenGL driver, and is not packaged.
+#if !FileExists(BuildDir + "\softgl\opengl32.dll") || !FileExists(BuildDir + "\softgl\libgallium_wgl.dll")
+  #pragma error "softgl\opengl32.dll and softgl\libgallium_wgl.dll not found in build\Release — configure with CASCADE_SOFTGL=ON (the default) and build again"
+#endif
+#sub CheckSoftglDll
+  #define SoftglName LowerCase(FindGetFileName(FindHandle))
+  #if SoftglName != "opengl32.dll" && SoftglName != "libgallium_wgl.dll"
+    #pragma error "Unexpected file in build\Release\softgl: " + SoftglName + " — the software renderer is exactly opengl32.dll + libgallium_wgl.dll"
+  #endif
+#endsub
+#for {FindHandle = FindResult = FindFirst(BuildDir + "\softgl\*", 0); FindResult; FindResult = FindNext(FindHandle)} CheckSoftglDll
+#if FindHandle
+  #expr FindClose(FindHandle)
 #endif
 
 [Setup]
@@ -151,6 +170,12 @@ Name: "cleaninstall"; Description: "Delete existing FoxSDR settings, plugins, ca
 ; Core payload — the runtime binaries the build produces.
 Source: "{#BuildDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\SoapySDR.dll"; DestDir: "{app}"; Flags: ignoreversion
+; The software OpenGL renderer, in a folder of its own: beside cascade.exe its
+; opengl32.dll would replace the graphics driver for every start. FoxSDR loads it
+; only when the driver cannot be used (src/gui/software_gl.hpp). Both files are
+; Mesa's own build (unsigned) and import nothing but Windows itself.
+Source: "{#BuildDir}\softgl\opengl32.dll"; DestDir: "{app}\softgl"; Flags: ignoreversion
+Source: "{#BuildDir}\softgl\libgallium_wgl.dll"; DestDir: "{app}\softgl"; Flags: ignoreversion
 ; App-local MSVC runtime (from the VS Redist folder — NEVER from C:\Windows).
 ; cascade.exe and SoapySDR.dll import exactly these three; the UCRT they also
 ; need is an OS component on Windows 10+.

@@ -95,6 +95,59 @@ void testDeviceSerialIsStripped() {
     CHECK(sanitiseDevice("garbage with no equals").empty());
 }
 
+// THE LEAK THIS CLOSES (2026-10-24): the usage reports of the 30 days before
+// held eight rows whose model was a native radio's args - "serial=170204A600",
+// "rtltcp=garage.lan:1234", "uri=ip:192.168.1.9" - because the label lookup
+// fell back to the args when the row was not in the current list. Every string
+// below is one of those real rows, or its shape.
+void testNativeFallbackIsTheFamilyNeverTheArgs() {
+    CHECK(nativeFamilyModel("rtlsdr") == "RTL-SDR");
+    CHECK(nativeFamilyModel("rtltcp") == "rtl_tcp server (network)");
+    CHECK(nativeFamilyModel("pluto") == "ADALM-Pluto (network)");
+    CHECK(nativeFamilyModel("HackRF") == "HackRF");  // case does not matter
+    CHECK(nativeFamilyModel("") == "other");
+    CHECK(nativeFamilyModel("serial=170204A600") == "other");  // args are never a name
+    for (const char* key : {"rtlsdr", "hackrf", "airspy", "airspyhf", "hydrasdr", "mirisdr",
+                            "rx888", "sdrplay", "aor", "pluto", "rtltcp", "nonsense"}) {
+        const std::string m = nativeFamilyModel(key);
+        CHECK(!m.empty());
+        CHECK(m.find_first_of("=:/\\@") == std::string::npos);
+    }
+}
+
+void testScrubModelDropsEverySerialAndAddress() {
+    // The real leaked rows: nothing of them may survive.
+    CHECK(scrubModel("serial=170204A600") == "other");
+    CHECK(scrubModel("serial=0000000001") == "other");
+    CHECK(scrubModel("rtltcp=garage.lan:1234") == "other");
+    CHECK(scrubModel("rtltcp=192.168.0.10:1234") == "other");
+    CHECK(scrubModel("uri=ip:192.168.1.9") == "other");
+    CHECK(scrubModel("index=0") == "other");
+    CHECK(scrubModel("192.168.1.40") == "other");
+    CHECK(scrubModel("RTL2838 user@host") == "RTL2838");
+    // The models people actually send pass through unchanged.
+    for (const char* ok : {"Blog V4", "RTL2838UHIDIR", "HackRF One", "NESDR SMArt v5", "uhd b200",
+                           "SDRplay RSPdx-R2", "AIRSPY HF+", "ADALM-Pluto (network)",
+                           "rtl_tcp server (network)", "Mirics MSi2500"}) {
+        CHECK(scrubModel(ok) == ok);
+    }
+    // No radio stays no radio; it does not become "other".
+    CHECK(scrubModel("").empty());
+    CHECK(scrubModel("   ").empty());
+}
+
+void testReportScrubsTheModelWhateverFilledIt() {
+    TelemetryReport r;
+    r.installId = newInstallId();
+    r.appVersion = "0.99.88";
+    r.session.sdrModel = "rtltcp=garage.lan:1234";
+    const nlohmann::json j = nlohmann::json::parse(r.toJson());
+    CHECK(j["sdr"] == "other");
+    CHECK(r.toJson().find("garage") == std::string::npos);
+    r.session.sdrModel = "Blog V4";
+    CHECK(nlohmann::json::parse(r.toJson())["sdr"] == "Blog V4");
+}
+
 void testInstallIdIsRandomAndValidated() {
     const std::string a = newInstallId();
     const std::string b = newInstallId();
@@ -816,6 +869,9 @@ void testFirstRunFieldsSurviveASaveAndRefuseAnythingElse() {
 int main() {
     testPrivacyPolicyUrlIsTheSitePageOverHttps();
     testDeviceSerialIsStripped();
+    testNativeFallbackIsTheFamilyNeverTheArgs();
+    testScrubModelDropsEverySerialAndAddress();
+    testReportScrubsTheModelWhateverFilledIt();
     testInstallIdIsRandomAndValidated();
     testPayloadContainsOnlyTheAgreedFields();
     testPrivacyDocumentsEveryUsagePayloadField();

@@ -25,6 +25,23 @@
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/radio_setup.hpp"
+#include "core/winusb_install.hpp"
+#include "gui/shell_open.hpp"
+
+#include <atomic>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <thread>
+
+#if defined(_WIN32)
+// clang-format off
+#include <windows.h>
+#include <shellapi.h>
+// clang-format on
+#endif
 #include "gui/device_scan_plan.hpp"
 #include "gui/page_geometry.hpp"
 #include "gui/theme.hpp"
@@ -96,13 +113,161 @@ rs::Inventory AppWindow::radioSetupInventory() const {
     // The SoapySDR families are judged only against a scan that actually ran
     // and covered every driver.
     inv.soapyChecked = soapyScanned_ && !soapyScanPartial_ && !soapyScanPending_;
+    // ...and what that scan itself said about UHD's firmware images
+    // (2026-10-21): assess() reads it only beside soapyChecked, the same gate.
+    inv.uhdImagesMissing = soapyUhdNoImages_;
     return inv;
 }
 
 // Once a frame, from the frame loop: starts the probe on the first frame,
 // collects it without waiting, and makes the once-a-launch decision to raise
 // the page.
+// THE ONE-CLICK DRIVER INSTALL's state, shared with the thread that waits for
+// the elevated helper: the thread sets `done` and touches nothing else of the
+// window, so the job outliving the window (a helper still running at exit) is
+// harmless.
+struct AppWindow::DriverInstallJob {
+    std::atomic<bool> done{false};
+    bool consumed = false;
+    std::string resultPath;
+    // THE OUTCOME, written before `done` is set and read only after: by the
+    // launch itself when it never got as far as a process (the prompt was
+    // refused, or the shell call failed), otherwise by the waiting thread, which
+    // reads and removes the result file - disk work, so never the window's.
+    bool haveLaunchResult = false;
+    cascade::core::winusb::Result launchResult;
+};
+
+namespace wu = cascade::core::winusb;
+
+// INSTALL DRIVER: start `cascade --install-winusb <id> --result <file>` through
+// the shell's "runas" verb - one Windows permission prompt - and wait for it on
+// a thread of its own. The prompt is a person reading a dialog, so the shell
+// call goes through runShellOpen and the watchdog's user-paced pause, exactly
+// as the in-app installer launch does (gui/shell_open.hpp).
+void AppWindow::radioSetupInstallDriver(const std::string& instanceId) {
+    if (driverInstall_ && !driverInstall_->done.load()) { return; }
+    auto job = std::make_shared<DriverInstallJob>();
+    driverInstall_ = job;
+    driverInstallStatus_ = tr("Installing the driver - answer the Windows permission prompt...");
+    // Never the instance id: it carries the dongle's serial.
+    cascade::core::diagLogf("radio setup: one-click driver install requested");
+    // A SYNTHETIC MACHINE (FOXSDR_FAKE_RADIO_SETUP, bounded runs) has nothing to
+    // install onto, and a test run must never put a real permission prompt on
+    // somebody's desktop: the key answers without starting anything.
+    if (!radioSetupFake_.empty()) {
+        job->launchResult.outcome = wu::Outcome::NotFound;
+        job->launchResult.detail = "a synthetic machine: nothing was started";
+        job->haveLaunchResult = true;
+        job->done = true;
+        return;
+    }
+#if defined(_WIN32)
+    wchar_t tempDir[MAX_PATH] = {0};
+    wchar_t exe[MAX_PATH] = {0};
+    const DWORD tl = ::GetTempPathW(MAX_PATH, tempDir);
+    const DWORD el = ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (tl == 0 || tl >= MAX_PATH || el == 0 || el >= MAX_PATH) {
+        job->launchResult.outcome = wu::Outcome::Failed;
+        job->launchResult.detail = "the temporary folder or the program path could not be read";
+        job->haveLaunchResult = true;
+        job->done = true;
+        return;
+    }
+    char name[64];
+    std::snprintf(name, sizeof(name), "foxsdr-winusb-%lu-%llu.txt",
+                  static_cast<unsigned long>(::GetCurrentProcessId()),
+                  static_cast<unsigned long long>(::GetTickCount64()));
+    std::wstring resultW = std::wstring(tempDir) + std::wstring(name, name + std::strlen(name));
+    {
+        const int n = ::WideCharToMultiByte(CP_UTF8, 0, resultW.c_str(), -1, nullptr, 0, nullptr,
+                                            nullptr);
+        std::string s(static_cast<std::size_t>(n > 0 ? n - 1 : 0), '\0');
+        if (n > 1) {
+            ::WideCharToMultiByte(CP_UTF8, 0, resultW.c_str(), -1, s.data(), n, nullptr, nullptr);
+        }
+        job->resultPath = s;
+    }
+    const std::string params = wu::helperParameters(instanceId, job->resultPath);
+    if (params.empty()) {
+        job->launchResult.outcome = wu::Outcome::Refused;
+        job->launchResult.detail = "the device instance id could not be passed safely";
+        job->haveLaunchResult = true;
+        job->done = true;
+        return;
+    }
+    const int pn = ::MultiByteToWideChar(CP_UTF8, 0, params.c_str(), -1, nullptr, 0);
+    std::wstring paramsW(static_cast<std::size_t>(pn > 0 ? pn - 1 : 0), L'\0');
+    if (pn > 1) { ::MultiByteToWideChar(CP_UTF8, 0, params.c_str(), -1, paramsW.data(), pn); }
+
+    SHELLEXECUTEINFOW sei{};
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    sei.lpVerb = L"runas";
+    sei.lpFile = exe;
+    sei.lpParameters = paramsW.c_str();
+    sei.nShow = SW_HIDE;
+    DWORD launchError = 0;
+    const bool launched = cascade::gui::runShellOpen(watchdogShellHooks(), [&]() -> bool {
+        const bool ok = ::ShellExecuteExW(&sei) != FALSE;
+        if (!ok) { launchError = ::GetLastError(); }
+        return ok;
+    });
+    if (!launched || sei.hProcess == nullptr) {
+        job->launchResult.outcome =
+            launchError == ERROR_CANCELLED ? wu::Outcome::Cancelled : wu::Outcome::Failed;
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "the elevated installer did not start (Windows error %lu)",
+                      static_cast<unsigned long>(launchError));
+        job->launchResult.detail = buf;
+        job->haveLaunchResult = true;
+        job->done = true;
+        return;
+    }
+    const HANDLE process = sei.hProcess;
+    std::thread([job, process]() {
+        ::WaitForSingleObject(process, INFINITE);
+        ::CloseHandle(process);
+        wu::Result r;
+        {
+            std::ifstream in(job->resultPath, std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(in)),
+                                   std::istreambuf_iterator<char>());
+            if (!wu::parseResult(text, r)) {
+                r.outcome = wu::Outcome::Failed;
+                r.detail = "the installer left no readable result";
+            }
+        }
+        std::remove(job->resultPath.c_str());
+        job->launchResult = r;
+        job->haveLaunchResult = true;
+        job->done = true;
+    }).detach();
+#else
+    (void)instanceId;
+    job->launchResult.outcome = wu::Outcome::Failed;
+    job->launchResult.detail = "not on this platform";
+    job->haveLaunchResult = true;
+    job->done = true;
+#endif
+}
+
+// Once a frame while the page is up: a finished install is read once, said on
+// the page and in the log, and followed by CHECK AGAIN so the radio appears.
+void AppWindow::radioSetupPollDriverInstall() {
+    if (!driverInstall_ || !driverInstall_->done.load() || driverInstall_->consumed) { return; }
+    driverInstall_->consumed = true;
+    const wu::Result r = driverInstall_->launchResult;
+    driverInstallStatus_ = wu::resultSentence(r);
+    cascade::core::diagLogf("radio setup: driver install %s - %s", wu::outcomeName(r.outcome),
+                            r.detail.c_str());
+    if (r.outcome == wu::Outcome::Installed || r.outcome == wu::Outcome::AlreadyWinUsb) {
+        radioSetupCheckAgain();
+    }
+}
+
 void AppWindow::radioSetupFrame() {
+    radioSetupPollDriverInstall();
     if (!radioSetupStarted_) {
         radioSetupStarted_ = true;
         radioSetupStartProbe();
@@ -194,7 +359,11 @@ void AppWindow::drawRadioSetupPage() {
     const ImGuiStyle& style = ImGui::GetStyle();
 
     // The footer keeps its place: two rows - the key, then the tick.
-    const float footerH = ImGui::GetFrameHeightWithSpacing() * 2.0f + style.ItemSpacing.y;
+    // ...and, after an install, its sentence above them (two lines' room).
+    const float footerH = ImGui::GetFrameHeightWithSpacing() * 2.0f + style.ItemSpacing.y +
+                          (driverInstallStatus_.empty()
+                               ? 0.0f
+                               : ImGui::GetTextLineHeightWithSpacing() * 2.0f);
     if (running) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
         ImGui::TextUnformatted(tr("Checking this computer..."));
@@ -227,6 +396,27 @@ void AppWindow::drawRadioSetupPage() {
             ImGui::TextWrapped("%s", x.title.c_str());
             ImGui::PopStyleColor();
             ImGui::TextWrapped("%s", x.explanation.c_str());
+            // THE ONE-CLICK INSTALL (0.99.88): offered where FoxSDR can do the
+            // Zadig step itself - an RTL-SDR whose interface 0 is on the bus.
+            // The Zadig instructions stay below it, for anyone who prefers them
+            // or whose Windows refuses.
+            if (!x.installTarget.empty()) {
+                const bool busy = driverInstall_ && !driverInstall_->done.load();
+                ImGui::BeginDisabled(busy);
+                if (ImGui::Button(trId("INSTALL DRIVER"))) {
+                    radioSetupInstallDriver(x.installTarget);
+                }
+                ImGui::EndDisabled();
+                cascade::gui::census::note("radio-setup:install-driver");
+                {
+                    const ImVec2 k0 = ImGui::GetItemRectMin();
+                    const ImVec2 k1 = ImGui::GetItemRectMax();
+                    cascade::gui::census::rect("radio-setup:install-driver", index, k0.x, k0.y,
+                                               k1.x, k1.y);
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", tr("One Windows permission prompt, no Zadig. Or by hand:"));
+            }
             ImGui::TextWrapped("%s", x.install.c_str());
             // THE LINK: the vendor's own page, shown as the address itself so a
             // person sees where the key goes before pressing it. Under the
@@ -250,6 +440,12 @@ void AppWindow::drawRadioSetupPage() {
             ++index;
         }
         ImGui::EndChild();
+        if (!driverInstallStatus_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+            ImGui::TextWrapped("%s", driverInstallStatus_.c_str());
+            ImGui::PopStyleColor();
+            cascade::gui::census::note("radio-setup:install-status");
+        }
     } else {
         // Nothing yet: keep the footer where it will be.
         ImGui::Dummy(ImVec2(0.0f, std::max(0.0f, ImGui::GetContentRegionAvail().y - footerH)));

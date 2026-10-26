@@ -562,8 +562,11 @@ jobs:
       - name: MSIX
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path msix-in -Force | Out-Null
+          New-Item -ItemType Directory -Path msix-in\softgl -Force | Out-Null
           Copy-Item build\Release\cascade.exe, build\Release\SoapySDR.dll msix-in\
+          # The software OpenGL renderer (0.99.90, third_party\softgl\README.md): the build
+          # stages it in build\Release\softgl and build-msix.ps1 requires exactly its two files.
+          Copy-Item build\Release\softgl\opengl32.dll, build\Release\softgl\libgallium_wgl.dll msix-in\softgl\
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer\msix\build-msix.ps1 `
             -BuildDir "$PWD\msix-in" -VcCrtDir $env:VCCRT `
             -IdentityName hedgerowlabs.FoxSDR -IdentityPublisher "CN=A483DBDF-9D74-4013-9DFA-B1BE0334C31F" `

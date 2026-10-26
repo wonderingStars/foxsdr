@@ -1238,6 +1238,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // whose readback jitters in the last decimal place would tear the whole
     // DSP chain down and rebuild it on every source refresh.
     if (rateHz == cfg_.sampleRateHz) { return true; }
+    const double rateBeforeHz = cfg_.sampleRateHz;  // for the log line at the commit
 
     const bool live = run_.load(std::memory_order_relaxed);
     // Same split setSource makes, and for the same reason: whether to QUIESCE
@@ -1393,6 +1394,17 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // ...and the lock-free mirror inputRateHz() reads, in the same breath as
     // the field it mirrors, so the two can never disagree.
     mirrorInputRateHz_.store(rateHz, std::memory_order_relaxed);
+    // ONE LINE PER ACCEPTED CHANGE (0.99.85), here at the commit rather than at
+    // any caller, because every way the rate moves - the rail's Rate combo, a
+    // plugin preset, the browser, a retune the driver answered with another
+    // rate, a source change - ends in this function. Through 0.99.84 a change
+    // left nothing in the log but the DSP thread's restart line, so a field
+    // report with eight changes in it (GitHub issue 6) could not say which
+    // rate any minute had run at, and its per-minute sample counts had to be
+    // read backwards into rates. A no-op and a refusal returned above and
+    // leave no line: nothing changed.
+    cascade::core::diagLogf("dsp: input rate %.0f S/s -> %.0f S/s, channel %.0f S/s (decimate by %u)",
+                            rateBeforeHz, rateHz, chanRate, decim);
 
     if (live) {
         dspRun_.store(true, std::memory_order_relaxed);
@@ -1650,7 +1662,9 @@ void Pipeline::sourceThreadBody(double chainRateHz,
                 // Same overflow policy as the free-running path: if the DSP
                 // side stalled and the ring is full, the excess is dropped
                 // (write() accepts what fits) — never block a live device.
-                // Counted, so the loss is never silent.
+                // Counted, so the loss is never silent, and so is what was
+                // read, so the loss has a denominator (sourceSamplesRead).
+                srcSamplesRead_.fetch_add(got, std::memory_order_relaxed);
                 const std::size_t put = ring_->write(buf.data(), got);
                 if (put < got) { ringDropped_.fetch_add(got - put, std::memory_order_relaxed); }
             }
@@ -1711,7 +1725,8 @@ void Pipeline::sourceThreadBody(double chainRateHz,
         if (airView_.mirrors()) { cascade::core::conjugateInPlace(buf.data(), got); }
         // A real-time source must not block: if the DSP side stalled and the
         // ring is full, the overflow is dropped (write() accepts what fits),
-        // and counted.
+        // and counted - beside what was read, as in the self-paced loop.
+        srcSamplesRead_.fetch_add(got, std::memory_order_relaxed);
         const std::size_t put = ring_->write(buf.data(), got);
         if (put < got) { ringDropped_.fetch_add(got - put, std::memory_order_relaxed); }
         // The same fault poll as the self-paced branch, and it matters MORE

@@ -521,7 +521,7 @@ void Engine::refreshDiagContext() {
     ctx.deviceOpen = (device_ != nullptr);
     // MODEL ONLY - sanitiseDevice strips the serial, exactly as the usage
     // report does. A report is a support artefact, not a hardware fingerprint.
-    ctx.sdrModel = deviceModel_;
+    ctx.sdrModel = cascade::core::scrubModel(deviceModel_);
     // The crystal correction and how it is applied - never a frequency.
     ctx.ppm = ppmDiagText();
     // THE PATCH PAGE'S RADIOS, by driver kind and nothing else: the part of the
@@ -794,6 +794,41 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
     for (auto it = patchQuietMinutes_.begin(); it != patchQuietMinutes_.end();) {
         it = speakers.count(it->first) != 0 ? std::next(it) : patchQuietMinutes_.erase(it);
     }
+}
+
+void Engine::pollDspMinute() {
+    // The bundle's copy of the counters (core::setRingCounters): every pass, two loads and two stores, drop count first.
+    {
+        const std::uint64_t droppedNow = pipeline_.ringDroppedSamples();
+        const std::uint64_t readNow = pipeline_.sourceSamplesRead();
+        cascade::core::setRingCounters(droppedNow, readNow);
+    }
+    const double now = clockS();
+    if (now - lastDspLogSec_ >= 60.0) {
+        lastDspLogSec_ = now;
+        closeDspMinute();
+    }
+}
+
+void Engine::closeDspMinute() {
+    // THE DROP COUNT FIRST. The source thread adds a read to its count before the
+    // write that may drop part of it, so reading in this order never finds a drop
+    // whose read is not yet counted. Both counters are monotonic and the pipeline
+    // lives as long as the engine; the guards are for marks that ever got ahead.
+    const std::uint64_t droppedNow = pipeline_.ringDroppedSamples();
+    const std::uint64_t readNow = pipeline_.sourceSamplesRead();
+    const std::uint64_t dropped = droppedNow >= dspDroppedAtMinute_ ? droppedNow - dspDroppedAtMinute_ : 0;
+    const std::uint64_t read = readNow >= dspReadAtMinute_ ? readNow - dspReadAtMinute_ : 0;
+    dspDroppedAtMinute_ = droppedNow;
+    dspReadAtMinute_ = readNow;
+    // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it. 94
+    // characters at the widest a uint64 can make it - inside the log's line
+    // (DiagLog::kLineBytes), which a cut line would be masked whole by the scrub.
+    if (dropped == 0) { return; }
+    const std::string share = cascade::core::droppedShareText(dropped, read);
+    cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)",
+                            static_cast<unsigned long long>(dropped),
+                            share.empty() ? "share unknown" : share.c_str());
 }
 
 void Engine::setAudioBufferMs(int ms) {
@@ -1183,12 +1218,19 @@ void Engine::scanSoapy() {
     }
     const bool lookForNetworkUsrps = lookForNetworkUsrps_;
     soapyScanAbsent_ = std::make_shared<std::vector<std::string>>();
+    soapyScanUhdNoImages_ = std::make_shared<bool>(false);
+    soapyScanUsrpOnUsb_ = std::make_shared<bool>(false);
     const std::shared_ptr<std::vector<std::string>> absentOut = soapyScanAbsent_;
-    // enumerate() never throws and is simply empty on a machine with no
-    // vendor modules; this is also the hot-plug refresh path.
+    const std::shared_ptr<bool> uhdNoImagesOut = soapyScanUhdNoImages_;
+    const std::shared_ptr<bool> usrpOnUsbOut = soapyScanUsrpOnUsb_;
+    // enumerateIsolated() never throws and is simply empty on a machine with no
+    // vendor modules; this is also the hot-plug refresh path. Called directly
+    // rather than through SoapySource::enumerate() because that signature
+    // promises a list and nothing more, and this caller also needs the scan's
+    // uhdImagesMissing answer for the hint under the Source list.
     const auto scanHook = testHooks_.soapyScan;  // null in every build of the application
-    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs,
-                                                       lookForNetworkUsrps, absentOut, scanHook] {
+    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps,
+                                                       absentOut, uhdNoImagesOut, usrpOnUsbOut, scanHook] {
         if (scanHook != nullptr) { return scanHook(); }
         std::vector<cascade::usb::UsbId> present;
         const bool listed = cascade::usb::presentUsbIds(present);
@@ -1196,12 +1238,16 @@ void Engine::scanSoapy() {
         for (const cascade::usb::UsbId& id : present) { ids.push_back({id.vid, id.pid}); }
         const std::vector<std::string> absent = cascade::gui::soapyDriversWithNoHardware(
             ids, listed, namedSoapyArgs, lookForNetworkUsrps);
-        // Handed back for the hint under the Source list; the future being
-        // ready is what makes it safe to read there.
+        // Handed back for the hints under the Source list; the future being
+        // ready is what makes them safe to read there.
         *absentOut = absent;
-        return (skip.empty() && absent.empty())
-                   ? cascade::source::SoapySource::enumerate()
-                   : cascade::source::SoapySource::enumerate(skip, absent);
+        *usrpOnUsbOut = cascade::gui::anyUsrpUsbId(ids);
+        cascade::source::EnumOptions options;
+        options.skipDrivers = skip;
+        options.absentDrivers = absent;
+        cascade::source::EnumResult r = cascade::source::enumerateIsolated(options);
+        *uhdNoImagesOut = r.uhdImagesMissing;
+        return std::move(r.devices);
     });
 }
 
@@ -1236,6 +1282,13 @@ void Engine::pollSourceAsync() {
         soapyAbsentDrivers_ =
             soapyScanAbsent_ ? *soapyScanAbsent_ : std::vector<std::string>();
         soapyScanAbsent_.reset();
+        // ...and whether UHD said it has no firmware images while a USRP sat
+        // on the bus, for the hint under the Source list and the radio-setup
+        // page's images finding (2026-10-21).
+        soapyUhdNoImages_ = soapyScanUhdNoImages_ && *soapyScanUhdNoImages_;
+        soapyUsrpOnUsb_ = soapyScanUsrpOnUsb_ && *soapyScanUsrpOnUsb_;
+        soapyScanUhdNoImages_.reset();
+        soapyScanUsrpOnUsb_.reset();
         // THE DIAGNOSTICS THE SOURCE SECTION SAYS A LANDED SCAN WITH, taken here, once, and not asked of the
         // runtime by every frame that draws them (API 0.3 8.10). Only a WHOLE scan that found nothing is
         // evidence of "no radio hardware"; a scan beside an open radio left drivers out on purpose.
@@ -2533,11 +2586,17 @@ void Engine::followSourceRowAfterRescan(const std::vector<cascade::gui::SourceRo
     }
 }
 
+// The label of the scanned row this radio was opened from, or - when that row
+// is not in the current list (an rtl_tcp or Pluto address typed since the scan,
+// a radio restored before the scan ran) - the family's plain name. NEVER the
+// args: they are a serial or an address, and until 0.99.88 this fallback put
+// them into deviceModel_, and from there into the usage report, the log and
+// the crash context ("serial=170204A600", "rtltcp=garage.lan:1234").
 std::string Engine::nativeLabelFor(const std::string& kind, const std::string& args) const {
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         if (d.driver == kind && d.args == args) { return d.label; }
     }
-    return args;
+    return cascade::core::nativeFamilyModel(kind);
 }
 
 std::vector<cascade::gui::SourceRowKey> Engine::sourceRowKeys() const {
@@ -9372,6 +9431,9 @@ void Engine::pumpAudio() {
     pumpDiagContext();
     pollAudioOpen();
     pollAudioHealth();
+    // ...and the samples the pipeline's own ring could not hold, once a minute
+    // (0.99.86) - after the sink, but not gated on it.
+    pollDspMinute();
     // The usage record's counts that need a look once a pass (the output's first play, a radio's first samples, the recoveries
     // nothing else may count), and the evidence of how the previous session ended.
     healthPoll();

@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.99.84 LANGUAGES C CXX)
+project(cascade VERSION 0.99.90 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -450,7 +450,8 @@ if(WIN32)
     # device interface (never opening a device to list it), WinUSB for the
     # pipes. All three are inbox on Windows 10+, so the installer payload
     # contract (cascade.exe + SoapySDR.dll) does not change.
-    target_link_libraries(cascade_engine PUBLIC winusb setupapi cfgmgr32)
+    # newdev: the one-click RTL-SDR driver install (core/winusb_install.cpp, 0.99.88; master's line, on this branch's target).
+    target_link_libraries(cascade_engine PUBLIC winusb setupapi cfgmgr32 newdev)
     # The multimedia timer (timeBeginPeriod): the engine's control thread asks for a 1 ms tick so its period and floor mean what they say.
     target_link_libraries(cascade_engine PUBLIC winmm)
     # Media Foundation: Windows' own MP3 encoder for the patch page's MP3
@@ -955,14 +956,106 @@ endif()
 # Only the shipped executable needs it — the test binaries link it normally and
 # are given a copy of the DLL beside them (see tests/CMakeLists.txt).
 #
+# opengl32.dll is delay-loaded too (0.99.90), for a different reason: the
+# software renderer (src/gui/software_gl.hpp) can only stand in for the
+# system's OpenGL if nothing has loaded the system's first. A normal import
+# loads it before main(); delayed, it is loaded by the first GL call - which
+# comes after the start-up has decided whose OpenGL this process uses.
+# (cascade only: foxsdr-engine imports no OpenGL at all, which
+# test_engine_main_links_headless holds, and has no software renderer to stand in for it.)
+#
 # EVERYTHING FROM HERE TO THE TESTS IS THE WINDOW APPLICATION'S (cascade), so it is
 # only there with CASCADE_BUILD_INTERFACE ON; not indented, as the other bracketed
-# block above is not.
+# block above is not. That includes the software renderer's staging below.
 if(CASCADE_BUILD_INTERFACE)
 
 if(MSVC)
-    target_link_options(cascade PRIVATE "/DELAYLOAD:SoapySDR.dll")
+    target_link_options(cascade PRIVATE "/DELAYLOAD:SoapySDR.dll" "/DELAYLOAD:opengl32.dll")
     target_link_libraries(cascade PRIVATE delayimp)
+endif()
+
+# The software OpenGL renderer: Mesa's llvmpipe in softgl\ beside cascade.exe
+# (Windows, 0.99.90; src/gui/software_gl.hpp says how it is used, and
+# third_party/softgl/README.md where it comes from). Two files of one pinned
+# mesa-dist-win release, fetched once per build tree and checked against the
+# hashes in third_party/softgl/PINNED.txt - the archive's and each file's - so
+# a different download can never be staged, packaged or shipped.
+# CASCADE_SOFTGL_ARCHIVE names a copy already on disk (no network); the build
+# without the renderer (CASCADE_SOFTGL=OFF) still runs on every machine that
+# has an OpenGL driver, and cannot be packaged (installer\cascade.iss).
+if(WIN32)
+    option(CASCADE_SOFTGL "Stage Mesa's llvmpipe software OpenGL renderer in softgl/ beside cascade.exe" ON)
+    set(CASCADE_SOFTGL_ARCHIVE "" CACHE FILEPATH "A local copy of the pinned Mesa archive (skips the download)")
+endif()
+if(WIN32 AND CASCADE_SOFTGL)
+    file(STRINGS "${CMAKE_SOURCE_DIR}/third_party/softgl/PINNED.txt" _softgl_pins REGEX "^[a-z]")
+    set(_softgl_members "")
+    foreach(_pin IN LISTS _softgl_pins)
+        string(REGEX MATCHALL "[^ ]+" _f "${_pin}")
+        list(GET _f 0 _key)
+        if(_key STREQUAL "url")
+            list(GET _f 1 _softgl_url)
+        elseif(_key STREQUAL "archive")
+            list(GET _f 1 _softgl_archive_name)
+            list(GET _f 2 _softgl_archive_sha)
+        elseif(_key STREQUAL "member")
+            list(GET _f 1 _m)
+            list(GET _f 2 _sha)
+            list(APPEND _softgl_members "${_m}")
+            set(_softgl_sha_${_m} "${_sha}")
+        endif()
+    endforeach()
+    if(NOT _softgl_url OR NOT _softgl_archive_sha OR NOT _softgl_members)
+        message(FATAL_ERROR "third_party/softgl/PINNED.txt has no url, archive or member line")
+    endif()
+
+    set(_softgl_dir "${CMAKE_BINARY_DIR}/_softgl")
+    if(CASCADE_SOFTGL_ARCHIVE)
+        set(_softgl_archive "${CASCADE_SOFTGL_ARCHIVE}")
+    else()
+        set(_softgl_archive "${_softgl_dir}/${_softgl_archive_name}")
+    endif()
+    set(_softgl_have "")
+    if(EXISTS "${_softgl_archive}")
+        file(SHA256 "${_softgl_archive}" _softgl_have)
+    endif()
+    if(NOT _softgl_have STREQUAL _softgl_archive_sha)
+        if(CASCADE_SOFTGL_ARCHIVE)
+            message(FATAL_ERROR "CASCADE_SOFTGL_ARCHIVE ${_softgl_archive} is not the pinned archive "
+                    "(sha256 ${_softgl_have}, want ${_softgl_archive_sha})")
+        endif()
+        message(STATUS "softgl: downloading ${_softgl_url}")
+        file(DOWNLOAD "${_softgl_url}" "${_softgl_archive}"
+             EXPECTED_HASH SHA256=${_softgl_archive_sha} TLS_VERIFY ON STATUS _softgl_status)
+        list(GET _softgl_status 0 _softgl_code)
+        if(NOT _softgl_code EQUAL 0)
+            file(REMOVE "${_softgl_archive}")
+            message(FATAL_ERROR "softgl: download failed (${_softgl_status}). Fetch ${_softgl_url} by "
+                    "hand and pass -DCASCADE_SOFTGL_ARCHIVE=<file>, or configure with -DCASCADE_SOFTGL=OFF.")
+        endif()
+    endif()
+
+    set(_softgl_staged "")
+    foreach(_m IN LISTS _softgl_members)
+        set(_out "${_softgl_dir}/extract/${_m}")
+        set(_have "")
+        if(EXISTS "${_out}")
+            file(SHA256 "${_out}" _have)
+        endif()
+        if(NOT _have STREQUAL _softgl_sha_${_m})
+            file(ARCHIVE_EXTRACT INPUT "${_softgl_archive}" DESTINATION "${_softgl_dir}/extract" PATTERNS "${_m}")
+            file(SHA256 "${_out}" _have)
+            if(NOT _have STREQUAL _softgl_sha_${_m})
+                message(FATAL_ERROR "softgl: ${_m} from the archive has sha256 ${_have}, "
+                        "third_party/softgl/PINNED.txt says ${_softgl_sha_${_m}}")
+            endif()
+        endif()
+        list(APPEND _softgl_staged "${_out}")
+    endforeach()
+    message(STATUS "softgl: Mesa ${_softgl_archive_name} verified; staged beside cascade.exe in softgl/")
+    add_custom_command(TARGET cascade POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:cascade>/softgl"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_softgl_staged} "$<TARGET_FILE_DIR:cascade>/softgl")
 endif()
 
 # Stage SoapySDR.dll beside the executable, explicitly.

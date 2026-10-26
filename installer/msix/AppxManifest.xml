@@ -81,10 +81,49 @@
   </Properties>
 
   <Resources>
-    <!-- English only, declared deliberately. Store Policy 10.7: "You must
-         localize your product for all languages that it supports." FoxSDR
-         supports one, so it declares one. -->
+    <!-- Every language the interface ships a catalogue for (resources\lang\*.json,
+         compiled in by tools/embed-lang.py), English first as the default.
+         Store Policy 10.7: "You must localize your product for all languages
+         that it supports." The Store shows this list as the product's supported
+         languages and matches the Store listing languages against it; the
+         application itself picks the Windows display language at start-up
+         when its language setting is "auto" (core/i18n.cpp). Keep this list
+         equal to the catalogue set: a catalogue without a line here is a
+         language the Store does not know about. -->
     <Resource Language="en-GB" />
+    <Resource Language="bg" />
+    <Resource Language="ca" />
+    <Resource Language="cs" />
+    <Resource Language="da" />
+    <Resource Language="de" />
+    <Resource Language="el" />
+    <Resource Language="es" />
+    <Resource Language="et" />
+    <Resource Language="fi" />
+    <Resource Language="fr" />
+    <Resource Language="hr" />
+    <Resource Language="hu" />
+    <Resource Language="id" />
+    <Resource Language="it" />
+    <Resource Language="ja" />
+    <Resource Language="ko" />
+    <Resource Language="lt" />
+    <Resource Language="lv" />
+    <Resource Language="nb" />
+    <Resource Language="nl" />
+    <Resource Language="pl" />
+    <Resource Language="pt-BR" />
+    <Resource Language="pt-PT" />
+    <Resource Language="ro" />
+    <Resource Language="ru" />
+    <Resource Language="sk" />
+    <Resource Language="sl" />
+    <Resource Language="sv" />
+    <Resource Language="tr" />
+    <Resource Language="uk" />
+    <Resource Language="vi" />
+    <Resource Language="zh-CN" />
+    <Resource Language="zh-TW" />
   </Resources>
 
   <Dependencies>

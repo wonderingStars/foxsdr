@@ -632,6 +632,71 @@ int main() {
         // ...but a normal exit during a session close is still just a clean exit.
         CHECK(decideSentinel(facts(crumb(Phase::ShutdownClosingWindow, 500, 100, 0, breadcrumb::kFlagSessionEnding), 0)).cls == C::None);
 
+        // --- a STARTUP that had already hung is not excused by the session closing ----
+        // The 0.99.88 RSP2 bundle (2026-10-24): four 0.99.81 processes, started within a
+        // minute of each other, all still "building the application" and silent their whole
+        // lives (105, 115, 149 and 162 s), ended together with 0x40010004 while Windows
+        // said it was shutting down - and every one was filed "ended as the session
+        // closed" and kept on the machine. A start-up past the watchdog's own start-up
+        // budget had hung before anybody closed anything; the session ending is only
+        // how it finally went.
+        {
+            const std::uint64_t budget = HangWatchdog::kStartupThresholdMs;
+            for (const std::uint64_t silent : {105000ull, 115000ull, 149000ull, 162000ull}) {
+                SentinelFacts f = facts(crumb(Phase::BuildingApp, 0, silent), 0x40010004ul);
+                f.osSessionEnding = true;
+                const SentinelVerdict v = decideSentinel(f);
+                CHECK(v.cls == C::Startup && v.upload() && !sentinelReasonIsLocalOnly(v.reason));
+                CHECK(contains(v.reason, kSentinelReasonStartup));
+                CHECK(contains(v.reason, "phase building the application"));
+                CHECK(contains(v.reason, "silent " + std::to_string(silent / 1000) + " s"));
+                CHECK(v.signatureTag == "sentinel:startup:building-app");
+            }
+            // Every phase before the first frame, and the page's own flag as well as the
+            // operating system's word.
+            for (const Phase p : {Phase::Starting, Phase::BuildingApp, Phase::CreatingWindow,
+                                  Phase::AwaitingFirstFrame}) {
+                const std::uint64_t frames = p == Phase::AwaitingFirstFrame ? 1 : 0;
+                CHECK(decideSentinel(facts(crumb(p, frames, budget + 1, 0, breadcrumb::kFlagSessionEnding), 1)).cls == C::Startup);
+                SentinelFacts f = facts(crumb(p, frames, budget + 1), 1);
+                f.osSessionEnding = true;
+                CHECK(decideSentinel(f).cls == C::Startup);
+            }
+            // THE BOUNDARY IS THE WATCHDOG'S: at the budget it is still a slow start that a
+            // closing session ended - kept here - and a millisecond past it, a hang.
+            {
+                SentinelFacts at = facts(crumb(Phase::BuildingApp, 0, budget), 0x40010004ul);
+                at.osSessionEnding = true;
+                CHECK(decideSentinel(at).cls == C::Session);
+                SentinelFacts past = facts(crumb(Phase::BuildingApp, 0, budget + 1), 0x40010004ul);
+                past.osSessionEnding = true;
+                CHECK(decideSentinel(past).cls == C::Startup);
+            }
+            // The same bundle's 0.99.88 process: 17 s into its start-up when the session
+            // closed. Within the budget, so the session's, as before.
+            {
+                SentinelFacts f = facts(crumb(Phase::BuildingApp, 0, 17000), 0x40010004ul);
+                f.osSessionEnding = true;
+                const SentinelVerdict v = decideSentinel(f);
+                CHECK(v.cls == C::Session && !v.upload() && sentinelReasonIsLocalOnly(v.reason));
+            }
+            // A freeze the watchdog already filed for that start-up covers it: one report
+            // per death, the one with every thread's stack.
+            {
+                SentinelFacts f = facts(crumb(Phase::AwaitingFirstFrame, 1, budget + 5000), 1);
+                f.osSessionEnding = true;
+                f.freezeReportExists = true;
+                CHECK(decideSentinel(f).cls == C::None);
+            }
+            // UNCHANGED: a RUNNING application silent past its threshold when the session
+            // closed is still the session's (the rule above, 90 s silent), and so is an
+            // unreadable page - with no phase there is no start-up to call hung.
+            CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 90000, 0, breadcrumb::kFlagSessionEnding), 1)).cls == C::Session);
+            SentinelFacts g = facts(breadcrumb::Snapshot{}, 0x40010004ul);
+            g.osSessionEnding = true;
+            CHECK(decideSentinel(g).cls == C::Session);
+        }
+
         // --- off means off; one report per death -----------------------------
         CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 100, 0, breadcrumb::kFlagReportsOff), kFastFail)).cls == C::None);
         CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 100, 0, breadcrumb::kFlagReportsOff), 1)).cls == C::None);
@@ -769,6 +834,56 @@ int main() {
             // What was going on in the program outranks who was holding the window.
             CHECK(std::string(sentinelPhaseLabel(crumb(Phase::Running, 5, 0, breadcrumb::kUserPaced | breadcrumb::kOpeningRadio)).id) == "opening-radio");
             CHECK(std::string(sentinelPhaseLabel(crumb(Phase::Running, 5, 0, breadcrumb::kUserPaced)).words) == "held by the user");
+        }
+
+        // --- CLOSED BY WINDOWS AS NOT RESPONDING (0xCFFFFFFF) is a freeze --------
+        //
+        // Field signature 35ED0AF291113FC8 (0.99.78 and 0.99.84): "sentinel: crash exit code, no
+        // report from the process - unknown exit code; phase held by the user; in user-wait;
+        // silent 83 s", code 0xCFFFFFFF. That code is what Windows' "<program> is not responding"
+        // dialog leaves when the person presses Close the program (measured, see
+        // kWindowsHungCloseCode). Windows offers that dialog only for a window that has stopped
+        // taking messages, and a person holding the window keeps it taking them - so the
+        // page's "held by the user" does not excuse it: it is a freeze, sent, named as what it
+        // is, and grouped as a freeze of that part of the frame.
+        {
+            CHECK(kWindowsHungCloseCode == 0xCFFFFFFFul);
+            // The two field reports, replayed: in the scope user-wait, and with the window
+            // procedure's bit.
+            const SentinelVerdict prompt =
+                decideSentinel(facts(inScope(crumb(Phase::Running, 500, 83000), FrameScope::UserWait), kWindowsHungCloseCode));
+            CHECK(prompt.cls == C::Frozen && prompt.upload() && !sentinelReasonIsLocalOnly(prompt.reason));
+            CHECK(contains(prompt.reason, std::string(kSentinelReasonFrozen) +
+                                              " - closed by Windows as not responding (0xCFFFFFFF, its Close the "
+                                              "program button); phase held by the user; in user-wait; silent 83 s"));
+            CHECK(prompt.reason.size() <= 200u);
+            CHECK(prompt.signatureTag == "sentinel:frozen:user-held:user-wait");
+            CHECK(prompt.codeKnown && prompt.code == kWindowsHungCloseCode);
+            const SentinelVerdict held =
+                decideSentinel(facts(crumb(Phase::Running, 500, 38000, breadcrumb::kUserPaced), kWindowsHungCloseCode));
+            CHECK(held.cls == C::Frozen && held.upload());
+            CHECK(held.signatureTag == "sentinel:frozen:user-held");
+            // Not the group it was filed in before: a crash of the same phase hashes elsewhere.
+            CHECK(sentinelSignature(prompt, nullptr) !=
+                  sentinelSignature(decideSentinel(facts(inScope(crumb(Phase::Running, 500, 83000), FrameScope::UserWait), kFastFail)), nullptr));
+            // Nobody holding it: frozen too, silence of any length (Windows has already
+            // measured the five seconds that make it hung).
+            const SentinelVerdict plain = decideSentinel(facts(crumb(Phase::Running, 500, 100), kWindowsHungCloseCode));
+            CHECK(plain.cls == C::Frozen && plain.signatureTag == "sentinel:frozen:running");
+            // Still a crash-like code where that matters elsewhere (the previous-session
+            // classification of a start-up ending, and Windows' own crash record), and the
+            // classes that outrank it are unchanged: before the first frame is start-up,
+            // a session ending is the session's.
+            CHECK(isCrashLikeExitCode(kWindowsHungCloseCode));
+            CHECK(decideSentinel(facts(crumb(Phase::AwaitingFirstFrame, 1, 100), kWindowsHungCloseCode)).cls == C::Startup);
+            CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 100, 0, breadcrumb::kFlagSessionEnding), kWindowsHungCloseCode)).cls == C::Session);
+            // A freeze the watchdog already filed covers the ending: one report per death.
+            SentinelFacts filed = facts(inScope(crumb(Phase::Running, 500, 83000), FrameScope::UserWait), kWindowsHungCloseCode);
+            filed.freezeReportExists = true;
+            CHECK(!decideSentinel(filed).upload());
+            // The words, on their own.
+            CHECK(sentinelExitWords(true, kWindowsHungCloseCode) ==
+                  "closed by Windows as not responding (0xCFFFFFFF, its Close the program button)");
         }
 
         // --- what else was going on, in the phase the report names --------------
@@ -914,7 +1029,8 @@ int main() {
         std::set<std::string> ids;
         int written = 0;
         const unsigned long codes[] = {0ul,          1ul,          0xFFFFFFFFul, 0xC0000005ul, 0xC0000409ul,
-                                       0xC0000374ul, 0xC00000FDul, 0xC000013Aul, 0x40010004ul, 0xDEADBEEFul};
+                                       0xC0000374ul, 0xC00000FDul, 0xC000013Aul, 0x40010004ul, 0xDEADBEEFul,
+                                       kWindowsHungCloseCode};
         for (std::uint32_t p = 0; p <= 12; ++p) {
             for (const std::uint32_t activity : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u}) {
                 for (const unsigned long code : codes) {

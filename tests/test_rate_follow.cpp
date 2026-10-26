@@ -66,6 +66,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "core/pipeline.hpp"
 #include "engine/rate_follow_status.hpp"
 #include "source/hackrf_source.hpp"
@@ -92,6 +93,26 @@ double expectedChannelRate(double rateHz) {
     double decim = std::round(rateHz / 200000.0);
     if (decim < 1.0) { decim = 1.0; }
     return rateHz / decim;
+}
+
+// THE LINE A RATE CHANGE LEAVES IN THE LOG (0.99.85): one per ACCEPTED change,
+// none for a no-op or a refusal. Through 0.99.84 a change left nothing but the
+// DSP thread's restart line, so a field log with eight changes in it could not
+// say which rate any minute ran at (GitHub issue 6). Counted by prefix: the
+// pipeline's threads write their own lines into the same ring.
+std::size_t rateChangeLines() {
+    std::size_t n = 0;
+    for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+        if (l.find("dsp: input rate ") != std::string::npos) { ++n; }
+    }
+    return n;
+}
+
+bool rateChangeLogged(const std::string& text) {
+    for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+        if (l.find(text) != std::string::npos) { return true; }
+    }
+    return false;
 }
 
 // Polls getLatestFrame until a frame with seq > out.seq arrives or the
@@ -179,6 +200,7 @@ int main() {
     // --- 1. Decimation policy across {1, 2, 4, 8} MHz (switched while
     //        stopped: no threads exist, the rebuild path alone is exercised).
     {
+        const std::size_t linesBefore = rateChangeLines();
         const double rates[] = {1.0e6, 2.0e6, 4.0e6, 8.0e6};
         for (double r : rates) {
             CHECK(p.setInputRateHz(r));
@@ -189,6 +211,11 @@ int main() {
             CHECK(chan <= 250000.0);
         }
         CHECK(p.setInputRateHz(2.0e6));  // back to the construction rate
+        // Five accepted changes (2 -> 1 -> 2 -> 4 -> 8 -> 2 MHz), five lines,
+        // each naming the rate left, the rate reached and the channel built.
+        CHECK(rateChangeLines() == linesBefore + 5u);
+        CHECK(rateChangeLogged(
+            "dsp: input rate 4000000 S/s -> 8000000 S/s, channel 200000 S/s (decimate by 40)"));
     }
 
     // --- 2. Live switch 2 MHz -> 4 MHz: frames keep flowing and the
@@ -276,21 +303,25 @@ int main() {
 
     // --- 4. Same-rate call: cheap no-op, returns true, changes nothing. ----
     {
+        const std::size_t linesBefore = rateChangeLines();
         CHECK(p.setInputRateHz(300000.0) == true);
         CHECK(p.inputRateHz() == 300000.0);
         CHECK(p.channelRateHz() == 150000.0);
         CHECK(waitForNewFrame(p, f));
+        CHECK(rateChangeLines() == linesBefore);  // nothing changed: no line
     }
 
     // --- 5. Invalid rates: false, and NOTHING changes — frames and audio
     //        keep flowing at the old rate. ---------------------------------
     {
+        const std::size_t linesBefore = rateChangeLines();
         CHECK(p.setInputRateHz(3.0) == false);        // below the 8 kHz floor
         CHECK(p.setInputRateHz(100.0e6) == false);    // above 61.44 MHz
         // In range, but decim = round(2000001/200000) = 10 gives a channel
         // rate of 200000.1 Hz — not an integer, so the 48 kHz resampler ratio
         // could not be exact; the contract refuses it.
         CHECK(p.setInputRateHz(2000001.0) == false);
+        CHECK(rateChangeLines() == linesBefore);      // refused: no line
 
         CHECK(p.inputRateHz() == 300000.0);           // unchanged
         CHECK(p.channelRateHz() == 150000.0);         // unchanged

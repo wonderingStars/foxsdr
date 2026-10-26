@@ -10,7 +10,10 @@ self-contained Inno Setup 6 installer for FoxSDR.
    `cascade.exe` + `SoapySDR.dll` and nothing else — the `.iss` enumerates
    `build\Release\*.dll` at compile time and **aborts** if any other DLL
    appears, so a new runtime dependency must be added to
-   `installer\cascade.iss` deliberately.
+   `installer\cascade.iss` deliberately — plus the software OpenGL renderer,
+   exactly `softgl\opengl32.dll` and `softgl\libgallium_wgl.dll`, which the
+   build stages (`CASCADE_SOFTGL`, see `third_party\softgl\README.md`); the
+   compile aborts if either is missing or anything else is in `softgl\`.
 2. **Inno Setup 6** — `ISCC.exe`, typically at
    `C:\Program Files (x86)\Inno Setup 6\ISCC.exe` or
    `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`.

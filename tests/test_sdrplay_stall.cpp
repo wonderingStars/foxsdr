@@ -709,6 +709,67 @@ void testStopsOwnUninitIsBoundedAsTheFirstCall() {
     if (caller.joinable()) { caller.join(); }
 }
 
+// --- 11. a START after a device failure streams again ------------------------
+//
+// THE 0.99.88 RSP2 BUNDLE (2026-10-24), end to end through a real Pipeline. The
+// service raised DeviceFailure during an ADC-overload storm and kept
+// delivering; the pipeline faulted, as it should. Every START after that
+// entered a successful Init - and then the source thread read one chunk, found
+// the source's latch from the OLD stream still up, and left. The health line
+// at each following stop:
+//   reads 11136, with samples 20, timeouts 0, overflows 11117, ... 20000
+//   samples in 7 s
+// "timeouts 0" is the tell: nobody was calling read() at all. Here the service
+// keeps running across the restart exactly as the field one did, and the
+// restarted pipeline must keep reading from it.
+void testARestartAfterADeviceFailureStreamsAgain() {
+    cascade::core::DiagLog::instance().resetForTest();
+    FakeSdrPlayApi fake;
+    fake.addDevice("1706012347", abi::kRsp2);
+
+    cascade::core::Pipeline::Config cfg;
+    cfg.sampleRateHz = 2000000.0;
+    cfg.fftSize = 1024;
+    cfg.audioEnabled = false;
+    cascade::core::Pipeline p(cfg);
+
+    auto owned = std::make_unique<SdrPlaySource>();
+    SdrPlaySource* src = owned.get();
+    src->setApiForTest(&fake.table);
+    CHECK(src->open(""));
+    p.setSource(std::move(owned));
+    p.start();
+    fake.startService(kBlock, kPeriod, std::chrono::milliseconds(1000));
+    CHECK(waitFor([&] { return p.sourceSamplesRead() > 200000; }, 5000));
+
+    abi::EventParamsT ev{};
+    fake.fireEvent(abi::DeviceFailure, ev);
+    CHECK(waitFor([&] { return p.faulted(); }, 3000));
+
+    // The user's START, as in the log - stop() is what the GUI does first.
+    p.stop();
+    // Written by the stop's own drain: the faulted source thread left before
+    // another read() could write it.
+    CHECK(ringHas("source: SDRplay device failure - stopping"));
+    p.start();
+    CHECK(fake.countStarting("Init") == 2);
+    // Long enough for the old code's one chunk and its exit to be over.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const std::uint64_t settled = p.sourceSamplesRead();
+    const bool flowing =
+        waitFor([&] { return p.sourceSamplesRead() > settled + 400000; }, 3000);
+    std::printf("after the restart: %llu samples read in the settle, %s after it, "
+                "pipeline %s\n",
+                static_cast<unsigned long long>(settled), flowing ? "flowing" : "NOTHING",
+                p.faulted() ? "FAULTED" : "running");
+    CHECK(flowing);
+    CHECK(!p.faulted());
+    CHECK(!src->faulted());
+
+    p.stop();
+    fake.stopService();
+}
+
 }  // namespace
 
 int main() {
@@ -721,6 +782,10 @@ int main() {
     testAProcessFreezeIsNotAStall();
     testTheStallClockStartsAfterInit();
     testAStallIsStillNamedWhenTheReaderIsSlow();
+    // Before the bounded-Uninit test: that one leaks a fake with a worker
+    // parked in it on purpose, and nothing after it should share a process
+    // with that state unless it has to.
+    testARestartAfterADeviceFailureStreamsAgain();
     testStopsOwnUninitIsBoundedAsTheFirstCall();
     return testSummary("test_sdrplay_stall");
 }

@@ -28,8 +28,10 @@
 
 #include "core/config_lock.hpp"
 #include "core/diag_log.hpp"
+#include "core/sentinel.hpp"
 #include "engine/process_boot.hpp"
 #include "gui/app_window.hpp"
+#include "gui/software_gl.hpp"
 
 int main(int argc, char** argv) {
     // EVERYTHING before the window: the console, the helper modes, the crash
@@ -60,16 +62,46 @@ int main(int argc, char** argv) {
         }
     }
 
-    cascade::gui::AppWindow app(boot.configPath, boot.announceConfig);
-    // Empty unless this run is ALLOWED to write - which is not the same as
-    // whether the user wants it. run() gates the writing on the stored switch;
-    // handing over the directory regardless is what lets the Settings toggle
-    // work in a session that started with diagnostics off. The watchdog still
-    // runs and still logs a recovered stall to the ring either way, but it puts
-    // no file on a machine that only asked for a smoke test.
-    app.setDiagnosticsDir(boot.mayWrite ? cascade::core::diagCrashDir() : std::string());
-    app.setDiagStallMs(boot.diagStallMs);
-    app.setDiagToggle(boot.diagToggle);
-    app.setLinkTesterReveal(boot.linkTesterReveal);
-    return app.run(boot.frames);
+    int exitCode = 0;
+    bool softglRelaunch = false;
+    {
+        cascade::gui::AppWindow app(boot.configPath, boot.announceConfig);
+        // Empty unless this run is ALLOWED to write - which is not the same as
+        // whether the user wants it. run() gates the writing on the stored switch;
+        // handing over the directory regardless is what lets the Settings toggle
+        // work in a session that started with diagnostics off. The watchdog still
+        // runs and still logs a recovered stall to the ring either way, but it puts
+        // no file on a machine that only asked for a smoke test.
+        app.setDiagnosticsDir(boot.mayWrite ? cascade::core::diagCrashDir() : std::string());
+        app.setDiagStallMs(boot.diagStallMs);
+        app.setDiagToggle(boot.diagToggle);
+        app.setLinkTesterReveal(boot.linkTesterReveal);
+        exitCode = app.run(boot.frames);
+        softglRelaunch = app.relaunchWithSoftwareGl();
+    }
+    // THE GRAPHICS DRIVER COULD NOT BE USED, AND THE SOFTWARE RENDERER IS TO BE (0.99.90,
+    // gui/software_gl.hpp): a second process, started only now that this one's application object -
+    // its plugins, its sound device, its listening ports - is gone, so the two never hold anything
+    // at once. This one waits and ends with its exit code, which is what a script or a test that
+    // started FoxSDR sees. HOST ONLY BY CONSTRUCTION: this is the window application's main(); the
+    // headless engine (engine_main.cpp) has no window to fail and never reaches this. The marker
+    // the second process reads is taken in bootProcess's instance claim, at the position master
+    // took it (after the crash handlers are armed, before the flags are parsed).
+    if (softglRelaunch) {
+        // This process's watcher goes first: from here it only waits, and an ending it filed would
+        // be a second report of the second process's run, which that process's own watcher files.
+        cascade::core::sentinelSetEnabled(false);
+        // THE SETTINGS LOCK goes with the window (7c): the second process is the window application
+        // from here on and takes the lock for its own run; held across the wait, it would find it
+        // "held by another FoxSDR program" and carry on without it.
+        configLock.release();
+        const cascade::gui::softgl::RelaunchResult r = cascade::gui::softgl::relaunchAndWait();
+        if (!r.started) {
+            cascade::gui::softgl::tellUserRelaunchFailed(r.error, boot.frames);
+            return 1;
+        }
+        cascade::core::diagLogf("window: the second FoxSDR process ended with exit code %lu", r.exitCode);
+        return static_cast<int>(r.exitCode);
+    }
+    return exitCode;
 }

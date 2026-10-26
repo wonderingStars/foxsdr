@@ -1127,6 +1127,8 @@ int main() {
         in.crashes = 1;
         in.logLinesTotal = 4011;
         in.sdrPlayService = "stopped, manual start (SDRplayAPIService)";
+        in.ringDroppedSamples = 324608;
+        in.sourceSamplesRead = 2400000000ULL;
 
         // THE BUNDLE AS THE WINDOW MAKES IT (0.99.64): the builder's text with the
         // slow-frame line added by the function AppWindow::currentDiagnosticsBundle
@@ -1155,6 +1157,13 @@ int main() {
         // "my RSP will not open" report needs first, pinned in the exact
         // "name: value" form the inventory below parses.
         CHECK(bundle.find("\nsdrplay-service: stopped, manual start (SDRplayAPIService)\n") !=
+              std::string::npos);
+        // THE PIPELINE RING'S SESSION (0.99.86, GitHub issue 6), by value: what the
+        // ring had no room for, of what the source read, and the share.
+        CHECK(bundle.find("\ndsp-dropped: 324608 of 2400000000 samples (0.01%)\n") !=
+              std::string::npos);
+        // A session that read nothing has no share to give, and says the counts.
+        CHECK(buildDiagnosticsBundle(DiagBundleInput{}).find("\ndsp-dropped: 0 of 0 samples\n") !=
               std::string::npos);
 
         // THE OTHER SOFTWARE'S DLLs (0.99.69), by value, in the exact "name: value" form the

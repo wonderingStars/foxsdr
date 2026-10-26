@@ -321,7 +321,14 @@ foreach(src ${CASCADE_TESTS})
     elseif(name STREQUAL "test_window_failed_app")
         # Runs the real cascade.exe (built first) with its window refused on purpose
         # (FOXSDR_TEST_WINDOW_FAIL) and the sentinel on, and reads the report the watcher writes
-        # for it (field signature 85FF854AA2C772F9). No window is ever shown.
+        # for it (field signature 85FF854AA2C772F9), including the hand-over to a second process on
+        # the software renderer that is refused as well (0.99.90). No window is ever shown.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_software_gl_app")
+        # Runs the real cascade.exe (built first, with softgl\ staged beside it) with the graphics
+        # driver refused or taken to be too old, and with FOXSDR_GL=software, and reads the log both
+        # processes leave (0.99.90): the hand-over to the software renderer, ending in a window.
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_plugin_rescan_skip")
@@ -913,6 +920,10 @@ endif()
 if(TEST test_window_platform_app)
     set_tests_properties(test_window_platform_app PROPERTIES TIMEOUT 600)
 endif()
+# Six starts of the real application, three of them a hand-over to a second process on llvmpipe.
+if(TEST test_software_gl_app)
+    set_tests_properties(test_software_gl_app PROPERTIES TIMEOUT 600)
+endif()
 # The passband-slide test starts the real application about twenty times, 40 to 90 frames each.
 if(TEST test_passband_slide_app)
     set_tests_properties(test_passband_slide_app PROPERTIES TIMEOUT 600)
@@ -1187,8 +1198,9 @@ endforeach()
 # 40-minute suite serial. Everything else never opens a window and is safe
 # under -j: that includes the tests that only CONSTRUCT an AppWindow (the
 # window is made in run(), not the constructor), test_window_failed_app
-# (every spawn sets FOXSDR_TEST_WINDOW_FAIL, so glfwCreateWindow fails by
-# design and no window is ever shown), and test_soapy_enum_proc (the real
+# (every spawn sets FOXSDR_TEST_WINDOW_FAIL, so glfwCreateWindow - or, for
+# =imgui, the backend behind a still-hidden window - fails by design and no
+# window is ever shown), and test_soapy_enum_proc (the real
 # enumeration child is windowless).
 #
 # The list below is maintained BY HAND and checked twice at configure time:
@@ -1234,6 +1246,7 @@ set(CASCADE_GUI_TESTS
     test_sentinel_app
     test_shutdown_budget
     test_slow_frames_app
+    test_software_gl_app
     test_spectrum_trace_app
     test_stall_count
     test_startup_state

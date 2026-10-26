@@ -267,9 +267,12 @@ int main(int argc, char** argv) {
     // --- 2. The helper modes touch nothing --------------------------------------
     const std::string helpersView = slice(boot.view, helpers);
     const std::string helpersCode = slice(boot.blank, helpers);
+    // (0.99.90 merge: master's one-click driver install helper, `--install-winusb`, sits after the sentinel and before the
+    // enumeration helper, as it did in main(); its flag is the constant winusb::kHelperFlag, not a literal.)
     CHECK(inOrder(helpersView, {"\"--sdrplay-service-state\"", "\"--sdrplay-probe\"", "\"--sentinel\"",
-                                "\"--enumerate-json\""},
+                                "winusb::kHelperFlag", "\"--enumerate-json\""},
                   "runHelperModes"));
+    CHECK(countOf(helpersCode, "winusb::runHelperMain(") == 1);
     for (const char* touches : {"installCrashHandlers", "ConfigStore", "defaultPath", "setCrashCaptureEnabled",
                                 "DiagLog", "diagLogf", "claimPrimaryInstance", "installStderrCapture",
                                 "installConsoleCloseHandler", "sentinelConfigure", "writeLinkRequestFile",

@@ -156,6 +156,23 @@ private:
 // that invents a new key cannot leak it by default.
 std::string sanitiseDevice(const std::string& soapyArgs);
 
+// A NATIVE radio's model when its row is not in the application's current
+// list - an rtl_tcp or Pluto address typed since the last scan, or a radio
+// restored at startup before the scan ran: the family's plain name for the
+// driver key ("rtlsdr" -> "RTL-SDR"), "other" for a key it does not know.
+// NEVER the row's args, which are a serial ("serial=170204A600") or an address
+// ("rtltcp=garage.lan:1234"). Until 0.99.88 the fallback WAS the args, and the
+// usage reports of 30 days to 2026-10-24 held eight such rows.
+std::string nativeFamilyModel(const std::string& driverKey);
+
+// The model as it leaves the machine, whatever filled the field: every token
+// that could name a unit, a machine or a network - one holding '=', ':', '/',
+// '\\' or '@', or four dot-separated numbers - is dropped. A model with
+// nothing left becomes "other"; "" (no radio) stays "". The last guard behind
+// sanitiseDevice and nativeFamilyModel, applied to the usage report and the
+// crash context alike.
+std::string scrubModel(const std::string& model);
+
 // A fresh random install id: 32 lowercase hex characters from the system CSPRNG.
 // Random, never derived from anything about the machine or the user - a
 // hash of a MAC address or a hostname would be a fingerprint wearing a

@@ -306,6 +306,8 @@ std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecor
         case 0xFFFFFFFFul:
             return "ended by another process (exit code -1, as Stop-Process and Process.Kill do)";
         case 0x00000000ul: return "exit code 0 before the shutdown had finished";
+        case kWindowsHungCloseCode:
+            return "closed by Windows as not responding (0xCFFFFFFF, its Close the program button)";
         default: break;
     }
     return "unknown exit code";
@@ -348,11 +350,27 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
     const bool shutdownDone = b.valid && b.phase >= Phase::ShutdownClosingWindow;
     if (f.exitKnown ? (endIsZero(f.exitCode) && (shutdownDone || !b.valid)) : shutdownDone) { return v; }
 
+    // A START-UP THAT HAD ALREADY HUNG (0.99.89): before the first frame, and silent for
+    // longer than the freeze watchdog's own start-up budget. The 0.99.88 RSP2 bundle had
+    // four of these - "building the application" for 105 to 162 s, launched within a
+    // minute of each other - ended together as Windows shut down, and
+    // all four were filed as the session's and never sent. A closing session explains an
+    // ending; it does not explain two minutes without a window before it. Within the
+    // budget, a start-up a closing session cut short is still the session's.
+    const bool startupHung = b.valid && b.phase < Phase::Running && v.silentMs >= 0 &&
+                             static_cast<std::uint64_t>(v.silentMs) > sentinelFreezeThresholdMs(b);
     SentinelClass c = SentinelClass::Outside;
-    if ((b.valid && (b.flags & breadcrumb::kFlagSessionEnding) != 0) || f.osSessionEnding) {
+    if (((b.valid && (b.flags & breadcrumb::kFlagSessionEnding) != 0) || f.osSessionEnding) &&
+        !startupHung) {
         c = SentinelClass::Session;
     } else if (b.valid && b.phase < Phase::Running) {
         c = SentinelClass::Startup;
+    } else if (f.exitKnown && f.exitCode == kWindowsHungCloseCode) {
+        // WINDOWS SAID IT WAS NOT RESPONDING, and a person closed it from that dialog
+        // (kWindowsHungCloseCode): a freeze, not a crash, and a freeze even with the page
+        // saying a person was holding the window - a hold takes messages, and this window
+        // had stopped. Ahead of endIsFault, which a top nibble of C would otherwise claim.
+        c = SentinelClass::Frozen;
     } else if (f.exitKnown && endIsFault(f.exitCode)) {
         c = SentinelClass::Crash;
     } else if (b.valid && v.silentMs >= 0 &&

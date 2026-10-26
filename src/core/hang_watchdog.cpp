@@ -815,6 +815,36 @@ bool HangWatchdog::guiThreadIsPumping() const {
 #endif
 }
 
+bool HangWatchdog::guiWindowHung() const {
+#if defined(_WIN32)
+    // WINDOWS' OWN VERDICT, asked of every top-level window the GUI thread owns
+    // (the main window, and a dialog it is showing). IsHungAppWindow: "not
+    // waiting for input, is not in startup processing, and has not called
+    // PeekMessage within the internal timeout period of 5 seconds" - the same
+    // judgement that greys the window and titles it "(Not Responding)". It sends
+    // no message, so asking it of a stopped thread cannot block this one.
+    // Measured 2026-10-23, Windows 11 22631: a window whose thread sleeps reads
+    // hung after about 5 s, shown or hidden; one whose thread waits in
+    // GetMessage never does.
+    const DWORD tid = guiThreadId_.load(std::memory_order_relaxed);
+    if (tid == 0) { return false; }
+    bool hung = false;
+    ::EnumThreadWindows(
+        tid,
+        [](HWND w, LPARAM p) -> BOOL {
+            if (::IsHungAppWindow(w) != FALSE) {
+                *reinterpret_cast<bool*>(p) = true;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&hung));
+    return hung;
+#else
+    return false;
+#endif
+}
+
 HangWatchdog::Excuse HangWatchdog::excuse() const {
     const int mode = suppression_.load(std::memory_order_relaxed);
     if (mode == static_cast<int>(SuppressionForTest::NeverSuppress)) {
@@ -834,13 +864,17 @@ HangWatchdog::Excuse HangWatchdog::excuse() const {
     // 2. A nested Windows modal loop - a window drag, a resize, an open system
     //    or popup menu - stops the application's own loop turning over for as
     //    long as the user holds it, legitimately, sometimes for minutes.
+    //    That loop takes messages, so Windows never calls its thread hung; a
+    //    thread that is in the loop's mode but has stopped inside it (a handler
+    //    the loop called that never returned) is hung, and is not excused
+    //    (0.99.87, the same verdict as the user-paced pause's - see threadMain).
     GUITHREADINFO gi{};
     gi.cbSize = sizeof(gi);
     const DWORD tid = guiThreadId_.load(std::memory_order_relaxed);
     if (tid != 0 && ::GetGUIThreadInfo(tid, &gi) != 0) {
         const DWORD modal = GUI_INMOVESIZE | GUI_INMENUMODE | GUI_POPUPMENUMODE |
                             GUI_SYSTEMMENUMODE;
-        if ((gi.flags & modal) != 0) { return Excuse::Standing; }
+        if ((gi.flags & modal) != 0 && !guiWindowHung()) { return Excuse::Standing; }
     }
 #elif defined(__linux__)
     // 1. A break is not a hang, POSIX equivalent: /proc/self/status names the
@@ -912,10 +946,24 @@ void HangWatchdog::threadMain() {
         // while one is held an application-paced pause held with it is excused
         // too, and its own cap starts when the last user-paced one is released
         // (resumeUser re-stamps pausedSinceMs_).
+        //
+        // UNLESS WINDOWS SAYS THE WINDOW IS NOT RESPONDING (0.99.87). A person
+        // reading a prompt or choosing a file is waited for inside a loop that
+        // takes messages, and Windows never calls such a thread hung; it calls a
+        // thread hung when it has stopped taking them (guiWindowHung). Then the
+        // wait is not the person's, the excuse ends, and the clock runs from the
+        // first poll that saw the verdict - so the report, with every thread's
+        // stack, is written a threshold later. Field signature 35ED0AF291113FC8:
+        // two windows in this state closed by their users from Windows' own "not
+        // responding" dialog, and no report but the sentinel's, which has no stack.
+        bool windowsSaysHung = false;
         if (userPaused_.load(std::memory_order_relaxed) > 0) {
-            lastBeatMs_.store(now, std::memory_order_relaxed);
-            pumpExcusedSinceMs = 0.0;
-            continue;
+            windowsSaysHung = guiWindowHung();
+            if (!windowsSaysHung) {
+                lastBeatMs_.store(now, std::memory_order_relaxed);
+                pumpExcusedSinceMs = 0.0;
+                continue;
+            }
         }
 
         // AN APPLICATION-PACED PAUSE EXCUSES A STALL FOR AT MOST THE CAP (see
@@ -923,8 +971,9 @@ void HangWatchdog::threadMain() {
         // the first poll past the cap finds a stall of about one poll and the
         // report follows a threshold later. If the GUI thread is beating (a
         // minimised window) the clock never runs out, whatever the age of the
-        // pause.
-        if (paused_.load(std::memory_order_relaxed) > 0) {
+        // pause. (Not while a user-paced pause is held over a window Windows calls
+        // hung: that stall is measured from the verdict, above.)
+        if (!windowsSaysHung && paused_.load(std::memory_order_relaxed) > 0) {
             const double since = pausedSinceMs_.load(std::memory_order_relaxed);
             if (now - since < cap) {
                 lastBeatMs_.store(now, std::memory_order_relaxed);

@@ -106,6 +106,7 @@
 #include "gui/volume_meter.hpp"
 #include "gui/waterfall_view.hpp"
 #include "gui/present_grace.hpp"
+#include "gui/software_gl.hpp"
 #include "gui/win_frame.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/rsp_rows.hpp"
@@ -379,7 +380,13 @@ bool parseFrequencyHz(const char* text, double& outHz) {
 // whichever thread called in.
 std::atomic<unsigned> g_glfwDisplayErrors{0};
 
+// The code of the last GLFW error, for the start-up: a refused window is moved to the software
+// renderer only when the reason was the driver's OpenGL (gui/window_platform.hpp,
+// glfwErrorMeansNoDriver), and glfwCreateWindow says no more than NULL.
+std::atomic<int> g_lastGlfwError{0};
+
 void glfwErrorCallback(int code, const char* description) {
+    g_lastGlfwError.store(code, std::memory_order_relaxed);
     std::fprintf(stderr, "cascade: GLFW error %d: %s\n", code,
                  description ? description : "(no description)");
     // Matched on the MESSAGE as well as the code: GLFW_PLATFORM_ERROR covers
@@ -694,7 +701,7 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.transmitSplitHz == b.transmitSplitHz && a.transmitToneHz == b.transmitToneHz &&
            a.transmitMonitor == b.transmitMonitor && a.transmitArgs == b.transmitArgs &&
            a.railBank == b.railBank && a.keyBindings == b.keyBindings &&
-           a.updateCheckEnabled == b.updateCheckEnabled &&
+           a.updateCheckEnabled == b.updateCheckEnabled && a.updateChannel == b.updateChannel &&
            // The team messages marked Seen (0.99.79): the Seen key asks for a save of its
            // own, but the prune that follows an update check (pollUpdateAsync) does not -
            // and a press whose save is lost to a crash must still reach the file from here.
@@ -850,6 +857,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             }
             diagnosticsStartup(cfg);
             updateCheckEnabled_ = cfg.updateCheckEnabled;
+            updateChannel_ = cfg.updateChannel;
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
             // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (0.99.65, core/damaged_file.hpp).
@@ -939,9 +947,10 @@ namespace {
 // the `cascade: ... failed` message already went) and, on Windows in a real session, into a message box with no owner window - there is
 // no window to own it. A bounded --frames run only logs that the box was skipped, so a test never waits on a click. The log lines are
 // flushed one by one, so the one before the box is on disk while it is open.
-void tellUserWindowFailed(const char* what, int frames) {
+void tellUserWindowFailed(const char* what, int frames, bool softwareTried) {
     namespace wp = cascade::gui::windowplatform;
-    const std::string text = wp::failureMessage(cascade::core::DiagLog::instance().filePath());
+    const std::string text =
+        wp::failureMessage(cascade::core::DiagLog::instance().filePath(), softwareTried);
     std::fprintf(stderr, "cascade: %s\n%s\n", what, text.c_str());
     if (!wp::errorDialogAllowed(frames)) {
         cascade::core::diagLogf("window: error dialog suppressed for a flagged run");
@@ -951,6 +960,69 @@ void tellUserWindowFailed(const char* what, int frames) {
     cascade::core::diagLogf("window: error dialog shown");
     ::MessageBoxA(nullptr, text.c_str(), "FoxSDR", MB_OK | MB_ICONERROR);
 #endif
+}
+
+// LOADS THE SOFTWARE RENDERER (gui/software_gl.hpp) and says what became of it. True when this
+// process now draws with it.
+bool useSoftwareRenderer() {
+    namespace sg = cascade::gui::softgl;
+    const sg::LoadResult r = sg::load();
+    switch (r.status) {
+        case sg::LoadStatus::Loaded:
+            cascade::core::diagLogf("window: software renderer loaded from softgl (GALLIUM_DRIVER=%s)",
+                                    r.galliumDriver.empty() ? "(unset)" : r.galliumDriver.c_str());
+            return true;
+        case sg::LoadStatus::Missing:
+            cascade::core::diagWarnf(
+                "window: the software renderer is not installed (softgl\\opengl32.dll and libgallium_wgl.dll)");
+            return false;
+        case sg::LoadStatus::SystemStillLoaded:
+            cascade::core::diagWarnf(
+                "window: another opengl32.dll is already loaded, so the software renderer cannot take its "
+                "place in this run");
+            return false;
+        case sg::LoadStatus::Failed:
+            cascade::core::diagWarnf("window: the software renderer could not be loaded (Windows error %lu)",
+                                     r.error);
+            return false;
+    }
+    return false;
+}
+
+// THE SECOND ATTEMPT, after the graphics driver could not be used (`cause` says how): true when
+// this run may have one - a second process with the software renderer, which AppWindow::run hands
+// over to (relaunchWithSoftwareGl) - else false, with a line saying why not.
+bool softwareRelaunchWanted(cascade::gui::windowplatform::GlMode mode, const std::string& cause,
+                            bool softwareTried) {
+    namespace wp = cascade::gui::windowplatform;
+#if defined(_WIN32)
+    constexpr bool kWindows = true;
+#else
+    constexpr bool kWindows = false;
+#endif
+    const wp::SoftwareSkip skip =
+        wp::softwareSkip(mode, softwareTried || cascade::gui::softgl::loaded(), cascade::gui::softgl::present(),
+                         kWindows);
+    if (skip != wp::SoftwareSkip::None) {
+        const std::string line = wp::softwareSkipLine(skip);
+        if (!line.empty()) { cascade::core::diagLogf("%s", line.c_str()); }
+        return false;
+    }
+    cascade::core::diagLogf("%s", wp::softwareRetryLine(cause).c_str());
+    return true;
+}
+
+// glGetString, fetched through GLFW rather than called: cascade.exe delay-loads opengl32.dll, and
+// a direct call here would bind the delay-load to whichever opengl32.dll answers this context -
+// which, when the answer is "too old", is the one that must be let go of for the software renderer.
+#if defined(_WIN32)
+using GlGetStringFn = const unsigned char*(__stdcall*)(unsigned int);
+#else
+using GlGetStringFn = const unsigned char* (*)(unsigned int);
+#endif
+
+const char* glString(GlGetStringFn fn, unsigned int name) {
+    return fn != nullptr ? reinterpret_cast<const char*>(fn(name)) : nullptr;
 }
 }  // namespace
 
@@ -984,13 +1056,42 @@ int AppWindow::run(int frames) {
             glfwInitHint(GLFW_PLATFORM, request.platform);
         }
     }
+    // FOXSDR_GL=auto|software|hardware (0.99.90, gui/window_platform.hpp): whether the software
+    // renderer in softgl\ may stand in for the graphics driver, and whether it does from the start.
+    // FOXSDR_TEST_WINDOW_FAIL (the same header): the seam that reaches every one of these paths for
+    // real in a bounded run, on a machine whose driver works.
+    namespace wp = cascade::gui::windowplatform;
+#if defined(_WIN32)
+    constexpr bool kWindowsGl = true;
+#else
+    constexpr bool kWindowsGl = false;
+#endif
+    const wp::GlRequest glRequest = wp::parseGlRequest(std::getenv("FOXSDR_GL"));
+    if (const std::string line = wp::glRequestLine(glRequest, kWindowsGl); !line.empty()) {
+        cascade::core::diagLogf("%s", line.c_str());
+    }
+    const wp::TestWindowFail testFail =
+        frames >= 0 ? wp::parseTestWindowFail(std::getenv("FOXSDR_TEST_WINDOW_FAIL")) : wp::TestWindowFail::None;
+    bool softwareTried = false;
+    if (kWindowsGl && glRequest.valid && glRequest.mode == wp::GlMode::Software) {
+        softwareTried = true;
+        useSoftwareRenderer();  // on failure the graphics driver is asked, as without the variable
+    }
+    // WHEN THE GRAPHICS DRIVER CANNOT BE USED, AND THIS RUN MAY HAVE THE SOFTWARE RENDERER: run()
+    // returns and main() starts FoxSDR again with FOXSDR_GL=software once this application object
+    // is gone (gui/software_gl.hpp says why it cannot be done in this process).
+    auto handOffToSoftwareRenderer = [this]() {
+        relaunchWithSoftwareGl_ = true;
+        cascade::core::diagLogf("window: handing over to a second FoxSDR process with the software renderer");
+        return 0;
+    };
     if (!glfwInit()) {
         cascade::core::diagWarnf(
             "window: glfwInit failed; the GLFW error line before this, if there is one, says why");
         // TELLS THE SENTINEL THIS ENDING IS OUR OWN (core/breadcrumb.hpp, kFlagWindowFailed): an exit code 1 on Windows is also what
         // `taskkill /F` leaves, and the report must not call this one a kill (field signature 85FF854AA2C772F9).
         cascade::core::breadcrumb::noteWindowFailed();
-        tellUserWindowFailed("glfwInit failed", frames);
+        tellUserWindowFailed("glfwInit failed", frames, softwareTried);
         return 1;
     }
     cascade::core::diagLogf("window: GLFW initialised; platform chosen: %s",
@@ -1010,26 +1111,60 @@ int AppWindow::run(int frames) {
     // until a resize made the layers agree again. Nothing sees this window
     // until the style it will keep is the style it has.
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-    // FOXSDR_TEST_WINDOW_FAIL=1 (a test seam, honoured only in a bounded --frames run like every seam in this file): asks for an OpenGL
-    // version no driver has, so that glfwCreateWindow fails for real - the same call, the same GLFW error, the same return below - on a
-    // machine whose window can be made. The request is refused before a window exists, so nothing is ever shown, which is what lets a
-    // test run the whole failure path on a desktop.
-    if (frames >= 0) {
-        const char* forceFail = std::getenv("FOXSDR_TEST_WINDOW_FAIL");
-        if (forceFail != nullptr && forceFail[0] == '1') { glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 99); }
+    // FOXSDR_TEST_WINDOW_FAIL=1 or =hardware: asks for an OpenGL version no driver has, so that
+    // glfwCreateWindow fails for real - the same call, the same GLFW error, the same code below -
+    // on a machine whose window can be made (=hardware: only while the graphics driver is in use,
+    // so the second process, on the software renderer, gets its window). The request is refused
+    // before a window exists, so nothing is ever shown, which is what lets a test run the whole
+    // failure path on a desktop.
+    if (testFail == wp::TestWindowFail::All ||
+        (testFail == wp::TestWindowFail::Hardware && !cascade::gui::softgl::loaded())) {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 99);
     }
     GLFWwindow* window = glfwCreateWindow(1280, 720, title.c_str(), nullptr, nullptr);
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     mainWindow_ = window;
     if (window == nullptr) {
+        const int code = g_lastGlfwError.load(std::memory_order_relaxed);
         cascade::core::diagWarnf(
             "window: glfwCreateWindow failed; the GLFW error line before this, if there is one, says why");
-        cascade::core::breadcrumb::noteWindowFailed();  // see the glfwInit failure above
-        tellUserWindowFailed("glfwCreateWindow failed", frames);
         glfwTerminate();
+        if (wp::glfwErrorMeansNoDriver(code) &&
+            softwareRelaunchWanted(glRequest.mode, wp::noDriverCause(code), softwareTried)) {
+            return handOffToSoftwareRenderer();
+        }
+        cascade::core::breadcrumb::noteWindowFailed();  // see the glfwInit failure above
+        tellUserWindowFailed("glfwCreateWindow failed", frames, softwareTried);
         return 1;
     }
     cascade::core::diagLogf("window: window created (hidden until its frame is settled)");
+    // WHICH DRIVER ANSWERED, in the log (0.99.78): these strings are the ones every frame will be
+    // drawn with. A death after this line and before the first frame is the driver's or ImGui's,
+    // not the window system's. AND HOW OLD IT IS (0.99.90): the ImGui backend's "#version 130"
+    // needs OpenGL 3.0, and an older driver is let go of here, before anything is built on it.
+    glfwMakeContextCurrent(window);
+    const auto getString = reinterpret_cast<GlGetStringFn>(glfwGetProcAddress("glGetString"));
+    const char* glVersionText = glString(getString, 0x1F02 /* GL_VERSION */);
+    cascade::core::diagLogf(
+        "%s", wp::glLine(glString(getString, 0x1F00 /* GL_VENDOR */), glString(getString, 0x1F01 /* GL_RENDERER */),
+                         glVersionText)
+                  .c_str());
+    if (testFail == wp::TestWindowFail::OldDriver && !cascade::gui::softgl::loaded()) {
+        glVersionText = "2.1 (FOXSDR_TEST_WINDOW_FAIL=old-driver)";
+    }
+    if (const wp::GlVersion glVersion = wp::parseGlVersion(glVersionText); wp::glVersionTooOld(glVersion)) {
+        cascade::core::diagWarnf("%s", wp::oldDriverLine(glVersion).c_str());
+        glfwMakeContextCurrent(nullptr);
+        glfwDestroyWindow(window);
+        mainWindow_ = window = nullptr;
+        glfwTerminate();
+        if (softwareRelaunchWanted(glRequest.mode, wp::oldDriverCause(glVersion), softwareTried)) {
+            return handOffToSoftwareRenderer();
+        }
+        cascade::core::breadcrumb::noteWindowFailed();
+        tellUserWindowFailed("the OpenGL driver is older than 3.0", frames, softwareTried);
+        return 1;
+    }
     // A FLOOR ON THE WIDTH, because the top bar has one and could not keep it
     // alone: narrower than this and the volume dial is drawn outside the bar's
     // own child and clipped away, leaving no volume control at all.
@@ -1062,24 +1197,15 @@ int AppWindow::run(int frames) {
             g_dropTarget->pendingDropPath_ = paths[0];
         }
     });
-    // Before the context is made current: purely a window-manager property,
-    // independent of GL, so even a run that fails at backend init has already
-    // shown the right icon.
+    // Purely a window-manager property, independent of GL, so even a run
+    // that fails at backend init has already shown the right icon.
     applyWindowIcon(window);
     glfwMakeContextCurrent(window);
     // vsync: the GUI thread paces itself off the display. FOXSDR_VSYNC_OFF is
     // the measurement switch (gui/frame_log.hpp): an unsynchronised swap, so
     // a frame-time run measures the work rather than the refresh period.
     glfwSwapInterval(cascade::gui::FrameLog::vsyncOffRequested() ? 0 : 1);
-    // WHICH DRIVER ANSWERED, in the log (0.99.78; merged 2026-10-21 - the survey's function walk had missed this statement, test_window_platform_app
-    // found it): the context is current, so these strings are the ones every frame will be drawn with. A death after this line and before the
-    // first frame is the driver's or ImGui's, not the window system's.
-    cascade::core::diagLogf(
-        "%s", cascade::gui::windowplatform::glLine(
-                  reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
-                  reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
-                  reinterpret_cast<const char*>(glGetString(GL_VERSION)))
-                  .c_str());
+    // (WHICH DRIVER ANSWERED is logged where the window is made, above, with its version checked.)
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1168,15 +1294,26 @@ int AppWindow::run(int frames) {
     // ImGui corner disagree.
     cascade::gui::theme::applyTheme();
 
+    // A BACKEND THAT WILL NOT START ENDS THE RUN AS A REFUSED WINDOW DOES (0.99.90): in the log,
+    // to the sentinel and to the person. Until then these two returns wrote one line to stderr -
+    // which a windowed program on Windows has nowhere to put - and the process simply vanished.
     if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) {
         std::fprintf(stderr, "cascade: ImGui GLFW backend init failed\n");
+        cascade::core::diagWarnf("window: the Dear ImGui GLFW backend could not start");
+        cascade::core::breadcrumb::noteWindowFailed();
+        tellUserWindowFailed("ImGui GLFW backend init failed", frames, softwareTried);
         ImGui::DestroyContext();
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
     }
-    if (!ImGui_ImplOpenGL3_Init("#version 130")) {
+    // FOXSDR_TEST_WINDOW_FAIL=imgui takes the OpenGL 3 backend to have refused, without asking it.
+    if (testFail == wp::TestWindowFail::ImGui || !ImGui_ImplOpenGL3_Init("#version 130")) {
         std::fprintf(stderr, "cascade: ImGui OpenGL3 backend init failed\n");
+        cascade::core::diagWarnf(
+            "window: the Dear ImGui OpenGL 3 backend could not start (its shaders need OpenGL 3.0)");
+        cascade::core::breadcrumb::noteWindowFailed();
+        tellUserWindowFailed("ImGui OpenGL3 backend init failed", frames, softwareTried);
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
         glfwDestroyWindow(window);
@@ -7088,12 +7225,14 @@ void AppWindow::startUpdateCheck() {
     updateError_.clear();
     const std::string endpoint = cascade::core::updateEndpoint();
     const std::string version = cascade::versionString();
+    // Stable ("") unless the person chose every release (0.99.88).
+    const std::string channel = cascade::core::updateChannelParam(updateChannel_);
     // NOTHING OF `this` IS CAPTURED: the outcome comes back by value, which is
     // what lets ~AppWindow abandon a check stalled inside WinHTTP instead of
     // waiting out its timeouts (see core::UpdateCheckTask).
-    updateCheck_.start([endpoint, version]() {
+    updateCheck_.start([endpoint, version, channel]() {
         cascade::core::UpdateCheckOutcome o;
-        o.ok = cascade::core::checkForUpdate(endpoint, version, "", o.info, o.error);
+        o.ok = cascade::core::checkForUpdate(endpoint, version, channel, o.info, o.error);
         return o;
     });
 }
@@ -7542,6 +7681,16 @@ void AppWindow::drawSourceSection() {
             ImGui::TextWrapped("%s", tr(hint));
             ImGui::PopStyleColor();
         }
+    }
+    // SAID WHEN UHD ITSELF REPORTED NO FIRMWARE IMAGES while a USRP sat on the
+    // USB bus (2026-10-21, gui::uhdImagesMissingHint): radioconda installs
+    // SoapyUHD and uhd.dll but no images, so the scan lists nothing and the
+    // empty list reads as "no radio". Amber, not dim: unlike the line above,
+    // this one names something broken with one fix.
+    if (const char* hint = cascade::gui::uhdImagesMissingHint(c.uhdNoImages, c.usrpOnUsb); hint != nullptr) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", tr(hint));
+        ImGui::PopStyleColor();
     }
     if (scanGated) {
         // WHAT THE SCAN DOES BESIDE AN OPEN RADIO (2026-09-23): usually it
@@ -8213,6 +8362,13 @@ const AppWindow::SourceListCache& AppWindow::sourceLists() {
     readFactText("fact.source.scanGate", c.scanGate);
     readFactText("fact.source.scanSkip", c.scanSkip);
     readFactText("fact.source.faultedDrivers", c.faultedDrivers);
+    {
+        std::string flag;
+        readFactText("fact.source.uhdNoImages", flag);
+        c.uhdNoImages = flag == "1";
+        readFactText("fact.source.usrpOnUsb", flag);
+        c.usrpOnUsb = flag == "1";
+    }
     readFactText("fact.source.plutoUri", c.plutoUri);
     readFactText("fact.source.rtlTcpAddr", c.rtlTcpAddr);
 
@@ -19172,13 +19328,14 @@ void AppWindow::dispatchKeyBindings() {
         return;
     }
     ImGuiIO& io = ImGui::GetIO();
-    // NOT WHILE SOMETHING IS BEING TYPED. A frequency in the counter's editor,
-    // a bookmark name, a web password: every one of them is a field where M
-    // means the letter M, and a shortcut that fired anyway would make the
-    // fields unusable. WantTextInput is ImGui's own answer to "is a text field
-    // taking keys right now", so this follows the widget rather than a list of
-    // widgets that could go stale.
-    if (io.WantTextInput) { return; }
+    // NOT WHILE SOMETHING IS BEING TYPED - OR SELECTED. A frequency in the
+    // counter's editor, a bookmark name, a web password: every one of them is
+    // a field where M means the letter M, and a shortcut that fired anyway
+    // would make the fields unusable. The question follows the widget rather
+    // than a list of widgets that could go stale, and it covers a READ-ONLY
+    // field too (the report page's diagnostics box, whose Ctrl+A and Ctrl+C
+    // switched the mode to AM and CW through 0.99.84): see textFieldHoldsKeys.
+    if (cascade::gui::textFieldHoldsKeys()) { return; }
     // NOT WHILE A MODAL IS UP. A dialog is a question, and the radio must not
     // change underneath one while it is being answered - the mute popup asks
     // about the very audio the Mute key would toggle.
@@ -20461,6 +20618,32 @@ void AppWindow::drawUpdatesSection() {
             startUpdateCheck();
         }
     }
+    // WHICH RELEASES (0.99.88). Not for a Store copy: its updates are the
+    // Store's, which certifies every one and is the slower channel already.
+    // (A Store copy returned above on this branch; the test is master's.)
+    if (!packaged) {
+        const bool wasBeta = updateChannel_ == "beta";
+        bool beta = wasBeta;
+        if (ImGui::RadioButton(trId("Stable releases"), !beta)) { beta = false; }
+        ImGui::SameLine();
+        if (ImGui::RadioButton(trId("Every release (beta)"), beta)) { beta = true; }
+        cascade::gui::census::note("updates:channel-", beta ? "beta" : "stable");
+        if (beta != wasBeta) {
+            updateChannel_ = beta ? "beta" : "stable";
+            cascade::core::diagLogf("updates: channel set to %s", updateChannel_.c_str());
+            // A CHANGE ASKS AGAIN, as a re-tick does: the answer on screen was
+            // for the other channel.
+            if (updateCheckEnabled_ && !updatePending_) {
+                update_ = cascade::core::UpdateInfo{};
+                updateError_.clear();
+                updateStarted_ = false;
+                startUpdateCheck();
+            }
+        }
+        ImGui::TextDisabled("%s", tr("Stable is the release the FoxSDR team recommends to "
+                                        "everyone; beta is every release the day it is "
+                                        "published."));
+    }
     ImGui::TextWrapped(
         "%s",
         tr("Asks foxsdr.com once per launch whether a newer version exists, and sends the version "
@@ -21143,6 +21326,9 @@ std::string AppWindow::currentDiagnosticsBundle(bool freshHistory) {
     in.crashes = std::strtoull(uiFact("fact.diag.crashes").c_str(), nullptr, 10);
     // Asked now, of the Service Control Manager - read-only, a millisecond, and only when a bundle is made (0.99.55).
     in.sdrPlayService = cascade::source::sdrPlayServiceSummary(cascade::source::querySdrPlayService());
+    // The pipeline ring's whole session (0.99.86): the engine's pass publishes the two counters (core::setRingCounters), drops
+    // first for the reason closeDspMinute gives; the window may not reach the pipeline itself.
+    cascade::core::ringCounters(in.ringDroppedSamples, in.sourceSamplesRead);
     // The end of the previous session's log and the reports on this machine (0.99.62). Not included, and not read, while diagnostics are
     // off.
     in.history = diagHistoryForBundle(freshHistory);
@@ -21875,6 +22061,7 @@ void AppWindow::diagnosticsJournal(cascade::core::AppConfig& cfg) {
     // GUI's copy of the config is written back before the file is saved. It
     // has nothing to do with telemetry and shares no state with it.
     cfg.updateCheckEnabled = updateCheckEnabled_;
+    cfg.updateChannel = updateChannel_;
 
     // Same rationale: this is the one place the GUI's copy of the config is
     // written back, so the diagnostics switches ride along here too.

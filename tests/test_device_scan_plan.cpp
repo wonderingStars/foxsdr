@@ -281,6 +281,35 @@ void testTheNetworkUsrpHintOnlyWhenUhdWasSkipped() {
     CHECK(networkUsrpHint(Names({"rtlsdr", "uhdx", "sdrplay"})) == nullptr);
 }
 
+// THE HINT FOR UHD WITH NO FIRMWARE IMAGES (2026-10-21): shown exactly when
+// the scan itself reported UHD's "no firmware images" warning AND a USRP was
+// on the USB bus - so it never claims a radio that is not there, and never
+// blames the images for a list that is empty for some other reason.
+void testTheUhdImagesMissingHint() {
+    using cascade::gui::anyUsrpUsbId;
+    using cascade::gui::uhdImagesMissingHint;
+    using cascade::gui::UsbVidPid;
+    const std::string want =
+        "A USRP is plugged in but UHD has no firmware images - install the UHD images "
+        "package (radioconda: run uhd_images_downloader) or set UHD_IMAGES_DIR";
+
+    // The USB half, through the same id rule the scan's UHD gate uses.
+    CHECK(anyUsrpUsbId({{0x2500, 0x0020}}));                     // B200
+    CHECK(anyUsrpUsbId({{0x1DF7, 0x3060}, {0x3923, 0x7814}}));  // NI B210 beside an RSP
+    CHECK(!anyUsrpUsbId({{0x1DF7, 0x3060}}));                   // an RSP alone
+    CHECK(!anyUsrpUsbId({}));
+
+    // Both facts present: the hint, word for word (it is a catalogue key).
+    const char* hint = uhdImagesMissingHint(true, true);
+    CHECK(hint != nullptr);
+    CHECK(hint != nullptr && want == hint);
+
+    // Either fact missing: nothing drawn.
+    CHECK(uhdImagesMissingHint(true, false) == nullptr);
+    CHECK(uhdImagesMissingHint(false, true) == nullptr);
+    CHECK(uhdImagesMissingHint(false, false) == nullptr);
+}
+
 }  // namespace
 
 int main() {
@@ -294,5 +323,6 @@ int main() {
     testRowsWithoutADriverAreNotKeptBlindly();
     testUhdIsAskedOnlyWhenAUsrpCouldBeHere();
     testTheNetworkUsrpHintOnlyWhenUhdWasSkipped();
+    testTheUhdImagesMissingHint();
     return testSummary("test_device_scan_plan");
 }

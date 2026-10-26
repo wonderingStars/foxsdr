@@ -106,9 +106,12 @@ common HF modification wires an antenna to.
 **Native on Windows (WinUSB) and Linux (usbfs) alike**, like the HackRF driver,
 through the same `src/usb/usb_device.hpp` transport contract — see "Linux
 status" at the top of this file for what is and is not yet confirmed against
-real Linux hardware. **On Windows a dongle must be bound to WinUSB** (with
-Zadig) to be opened natively; one still running the DVB-T driver is not
-listed, because it cannot be opened. **On Linux nothing needs unbinding** —
+real Linux hardware. **On Windows a dongle must be bound to WinUSB** to be
+opened natively; one still running the DVB-T driver is not listed, because it
+cannot be opened. Since 0.99.88 the RADIO SETUP page's **INSTALL DRIVER** key
+does that binding itself (`src/core/winusb_install.hpp`: Windows' in-box,
+Microsoft-signed winusb.inf on interface 0 only, behind one permission prompt);
+Zadig still works exactly as before. **On Linux nothing needs unbinding** —
 `installer/linux/README.md` explains why.
 
 **How it is verified.** Both ways, because neither alone is enough.
@@ -444,6 +447,26 @@ Services first — the key cannot start a disabled service. The service name
 `SDRplayAPIService` comes from third-party listings rather than SDRplay's own
 documentation, so FoxSDR also looks the service up by its display name and by
 its program file, and uses whatever name Windows actually has for it.
+
+**Samples the service lost, counted** (0.99.84). An RSPduo report had clean
+airband audio at 2 MS/s and about thirteen broadband clicks a second at 4 MS/s,
+with no clipping and no silence in the recording — discontinuities in the I/Q
+stream itself. Until now the only loss the driver could count was its own:
+`overflows` in the stream-health line is blocks that did not fit FoxSDR's ring,
+the host falling behind, and a stream the *service* lost samples from on the
+USB side looked healthy. The SDRplay API names every block's first sample
+(`firstSampleNum`), so the driver now keeps the number the next block must
+start at, counts a block that starts anywhere else as a gap the service made,
+and ends the SDRplay health line with `service gaps N (M samples)`. A window
+holding one is written as a warning. The existing fields and the meaning of
+`overflows` are unchanged, so older logs read the same. What the specification
+says is only that `reset` marks a re-initialisation inside the API (the
+numbering is taken as new from that block, and from every start and rate
+change); that the numbering is contiguous and wraps at 2^32 is gr-sdrplay3's
+reading of it, shared by other independent consumers, and has not been checked
+against a real RSP here. If your log shows service gaps at a rate and none at a
+lower one, the loss is between the radio and the service — a USB port, hub or
+cable, or the service's own buffering — not in FoxSDR's processing.
 
 **A note on versions.** The driver's declarations of the API's structures were
 checked against SDRplay's published headers for 3.07, 3.11 and 3.15, compiled

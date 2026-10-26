@@ -15,6 +15,16 @@ installed): it is the hardware ABI boundary — runtime vendor modules
 (SoapyUHD etc.) must match the system SoapySDR ABI, so it is deliberately
 not vendored.
 
+**The software OpenGL renderer is downloaded at configure time** (0.99.90).
+The Windows build stages Mesa's llvmpipe — two files of one pinned
+mesa-dist-win release — in `build\Release\softgl\`, for machines whose graphics
+driver offers no usable OpenGL. The first configure of a build tree fetches the
+70 MB archive into `build\_softgl\` and checks it and both extracted files
+against `third_party\softgl\PINNED.txt`; a mismatch stops the configure. Offline,
+pass `-DCASCADE_SOFTGL_ARCHIVE=<the archive>`; `-DCASCADE_SOFTGL=OFF` leaves it
+out (that build runs wherever there is an OpenGL driver, and cannot be
+packaged). See [third_party/softgl/README.md](../third_party/softgl/README.md).
+
 ```
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build --config Release

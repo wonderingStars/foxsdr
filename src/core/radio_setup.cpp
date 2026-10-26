@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "core/i18n.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/telemetry.hpp"
 #include "core/utf8_text.hpp"
 #include "source/rtlsdr_source.hpp"
@@ -128,8 +129,15 @@ std::string familyForDriver(const std::string& driverKey) {
 //                                        04b4:8613 and 04b4:00f1 are the bare
 //                                        Cypress FX3 ids half the USB 3 world
 //                                        shares, so they are not claimed.
+//
+// NEVER DESTROYED (0.99.89, crash signature 74EEC22DE4163D64): collectInventory's
+// bus walk reads this on the probe's DETACHED worker (Probe::start), which can
+// still be running when main returns and the C runtime runs the static
+// destructors. A heap object nothing deletes outlives exit, like
+// source::rtlSdrUsbIds(); tests/test_radio_setup_exit.cpp holds both.
 const std::vector<KnownDevice>& knownDevices() {
-    static const std::vector<KnownDevice> table = []() {
+    static const std::vector<KnownDevice>* const table =
+        cascade::core::leakOnPurpose(new std::vector<KnownDevice>([]() {
         std::vector<KnownDevice> t = {
             {0x1d50, 0x60a1, kFamilyAirspy, "Airspy"},
             {0x03eb, 0x800c, kFamilyAirspyHf, "Airspy HF+"},
@@ -158,8 +166,8 @@ const std::vector<KnownDevice>& knownDevices() {
             t.push_back({id.vid, id.pid, kFamilyRtl, "RTL-SDR (RTL2832U)"});
         }
         return t;
-    }();
-    return table;
+    }()));
+    return *table;
 }
 
 const KnownDevice* findKnownDevice(std::uint16_t vid, std::uint16_t pid) {
@@ -352,6 +360,27 @@ Finding judge(const KnownDevice& d, const std::vector<const UsbNode*>& nodes,
         if (!b.anyWorking) { return wrongDriver(d, b); }
     }
 
+    // A USRP THE SCAN RAN AGAINST AND UHD COULD NOT IDENTIFY (2026-10-21):
+    // radioconda installs uhd.dll and SoapyUHD but ships no firmware images,
+    // so UHD's find warns "Could not find path for image ... <no images
+    // directory located>" and lists nothing - while the driver and the runtime
+    // above both check out. Judged BEFORE the generic "not listed" below,
+    // whose advice (install PothosSDR or radioconda) is exactly what this user
+    // already followed.
+    if (family == kFamilyUsrp && inv.soapyChecked && inv.uhdImagesMissing &&
+        !listed(inv, family)) {
+        return makeFinding(Kind::VendorMissing, d, b.installed,
+                           formatText(tr("%s: vendor software missing"), d.name),
+                           formatText(tr("%s is plugged in and UHD is installed, but UHD has no "
+                                         "firmware images, so it cannot identify or open a "
+                                         "USRP."),
+                                      d.name),
+                           tr("Install the UHD firmware images (radioconda: run "
+                              "uhd_images_downloader) or set UHD_IMAGES_DIR to an images "
+                              "directory, then press CHECK AGAIN."),
+                           kUhdUrl);
+    }
+
     // Both families that FoxSDR reaches only through a SoapySDR vendor module:
     // judged only once the application has actually run that scan.
     if ((family == kFamilyUsrp || family == kFamilyLime) && inv.soapyChecked &&
@@ -409,7 +438,17 @@ Findings assess(const Inventory& inv) {
         }
         if (nodes.empty()) { continue; }
         const KnownDevice* d = findKnownDevice(nodes.front()->vid, nodes.front()->pid);
-        out.items.push_back(judge(*d, nodes, inv));
+        Finding f = judge(*d, nodes, inv);
+        // THE ONE-CLICK INSTALL'S TARGET: interface 0 of an RTL-SDR on the
+        // wrong driver. The elevated helper checks it again against the device.
+        if (f.kind == Kind::WrongDriver && f.family == kFamilyRtl) {
+            for (const UsbNode* n : nodes) {
+                if (n->interfaceNumber == 0 && !n->instanceId.empty()) {
+                    f.installTarget = n->instanceId;
+                }
+            }
+        }
+        out.items.push_back(std::move(f));
     }
 
     if (out.items.empty()) {
@@ -464,7 +503,8 @@ std::vector<std::string> summaryLines(const Inventory& inv, const Findings& f) {
                     std::string(inv.sdrplay.dllFound ? "found" : "not found") + ", service " +
                     (inv.sdrplay.serviceState.empty() ? std::string("unknown")
                                                       : inv.sdrplay.serviceState) +
-                    "; uhd " + std::string(inv.uhdRuntime ? "found" : "not found"));
+                    "; uhd " + std::string(inv.uhdRuntime ? "found" : "not found") +
+                    std::string(inv.uhdImagesMissing ? " (no firmware images)" : ""));
     for (const Finding& x : f.items) {
         std::string s = "radio setup: ";
         if (!x.family.empty()) { s += x.family + " " + x.deviceName + " "; }
@@ -546,6 +586,19 @@ UsbNode node(std::uint16_t vid, std::uint16_t pid, const char* deviceId, int int
     n.pid = pid;
     n.deviceId = deviceId;
     n.interfaceNumber = interfaceNumber;
+    // The synthetic machines' instance ids follow Windows' shape: the parent's
+    // for the device node, an &MI_nn form for an interface.
+    if (interfaceNumber < 0) {
+        n.instanceId = deviceId;
+    } else {
+        // "USB\VID_0BDA&PID_2838\FAKE0001" -> "USB\VID_0BDA&PID_2838&MI_00\8&FAKE&0&0000"
+        const std::string d = deviceId;
+        const std::size_t cut = d.rfind('\\');
+        char mi[16];
+        std::snprintf(mi, sizeof(mi), "&MI_%02X", interfaceNumber);
+        n.instanceId = (cut == std::string::npos ? d + mi : d.substr(0, cut) + mi) +
+                       "\\8&FAKE&0&000" + std::to_string(interfaceNumber);
+    }
     n.isDeviceNode = interfaceNumber < 0;
     n.service = service;
     n.provider = provider;
@@ -599,11 +652,15 @@ bool fakeInventory(const std::string& name, Inventory& out) {
         } else {
             inv.sdrplay.serviceState = "not installed";
         }
-    } else if (name == "usrp-nouhd" || name == "usrp-ok" || name == "usrp-unlisted") {
+    } else if (name == "usrp-nouhd" || name == "usrp-ok" || name == "usrp-unlisted" ||
+               name == "usrp-noimages") {
         inv.usb.push_back(node(0x2500, 0x0020, "USB\\VID_2500&PID_0020\\FAKE0003", -1, "WinUSB",
                                "Ettus Research", "USRPs", 0));
         inv.uhdRuntime = (name != "usrp-nouhd");
         inv.soapyChecked = (name != "usrp-nouhd");
+        // The radioconda machine: driver and runtime in place, images absent,
+        // so the scan ran and listed nothing (2026-10-21).
+        inv.uhdImagesMissing = (name == "usrp-noimages");
         if (name == "usrp-ok") {
             inv.visible.push_back(kFamilyUsrp);
             inv.visibleCount = 1;
@@ -758,6 +815,7 @@ Inventory collectInventory() {
             n.vid = id.vid;
             n.pid = id.pid;
             const std::wstring instance = instanceIdOf(info.DevInst);
+            n.instanceId = narrow(instance.c_str());
             const std::size_t mi = instance.find(L"&MI_");
             if (mi != std::wstring::npos && mi + 6 <= instance.size()) {
                 n.interfaceNumber = static_cast<int>(

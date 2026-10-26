@@ -23,6 +23,7 @@
 
 #include "core/diag_log.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -42,6 +43,21 @@ SoapyLogAction classifySoapyLogLevel(int level, bool debugWanted);
 // unset, means not. Pure.
 bool soapyDebugWanted(const char* envValue);
 
+// UHD SAYING IT HAS NO FIRMWARE IMAGES (2026-10-21). radioconda installs
+// SoapyUHD and uhd.dll but ships NO images directory, so UHD's find warns
+//
+//   [WARNING] [B200] EnvironmentError: IOError: Could not find path for
+//   image: usrp_b200_fw.hex ... Using images directory: <no images directory
+//   located> ...
+//
+// and returns zero devices - while the B200 sits healthy on the bus with the
+// right driver, so the Source list is empty with nothing on screen to say
+// why. The line reaches this bridge through SoapyUHD's UHD-log forwarder;
+// this recognises it by either of its two load-bearing phrases, anywhere in
+// the message and whatever the case, so a UHD that reworks the surrounding
+// text or logs it at another level is still caught. Pure.
+bool uhdImagesMissingLine(const char* message);
+
 struct SoapyLogEmit {
     const char* level;  // "info" or "warn", the DiagLog level word
     std::string text;   // the whole line, prefix included
@@ -60,9 +76,17 @@ public:
 
     std::vector<SoapyLogEmit> feed(int level, const char* message, std::uint64_t nowMs);
 
+    // A UHD "no firmware images" line has passed through (uhdImagesMissingLine).
+    // Latched BEFORE the level map and the limiter, so a line that is dropped
+    // or suppressed still counts: the fact matters more than the log line.
+    bool uhdImagesMissing() const { return uhdImagesMissing_.load(std::memory_order_relaxed); }
+
 private:
     bool debugWanted_;
     core::LineRateLimiter limiter_;
+    // Atomic because feed() runs under the handler's own lock but the latch is
+    // read by whoever asks after the walk - another thread.
+    std::atomic<bool> uhdImagesMissing_{false};
 };
 
 // Registers the handler with SoapySDR. Reads FOXSDR_SOAPY_DEBUG, and when it
@@ -75,6 +99,12 @@ private:
 // LoadLibrary probe succeeds.
 void installSoapyLogBridge();
 bool soapyLogBridgeInstalled();
+
+// The installed bridge's uhdImagesMissing() latch - false when the bridge was
+// never installed (no SoapySDR runtime, so no UHD either). Read by the
+// enumeration helper child after its walk (soapy_enum_proc.cpp), so the
+// parent's scan can say WHY a healthy USRP was not listed.
+bool soapyUhdImagesMissingSeen();
 
 }  // namespace cascade::source
 

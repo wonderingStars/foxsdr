@@ -185,6 +185,7 @@ AppConfig seeded() {
     c.fittedModulesHeight = 500;
     // diagnosticsJournal's:
     c.updateCheckEnabled = false;
+    c.updateChannel = "beta";   // 0.99.88 (master), merged in 0.99.90: the field the saturation check below found missing from the seed
     c.diagnosticsEnabled = false;
     c.diagnosticsMinidump = true;
     c.crashUploadRecent = {"deadbeef:1700000000", "cafef00d:1700000100"};

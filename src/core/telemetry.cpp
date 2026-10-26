@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <system_error>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -119,6 +120,67 @@ std::string sanitiseDevice(const std::string& soapyArgs) {
     return out;
 }
 
+std::string nativeFamilyModel(const std::string& driverKey) {
+    // The driver keys of src/source (NativeDeviceInfo::driver) and the two
+    // address rows of the Source list. Plain family names: the exact model is
+    // only ever taken from a scanned row's label.
+    static const std::pair<const char*, const char*> kNames[] = {
+        {"rtlsdr", "RTL-SDR"},
+        {"hackrf", "HackRF"},
+        {"airspy", "Airspy"},
+        {"airspyhf", "Airspy HF+"},
+        {"hydrasdr", "HydraSDR"},
+        {"mirisdr", "Mirics MSi2500"},
+        {"rx888", "RX888"},
+        {"sdrplay", "SDRplay RSP"},
+        {"aor", "AOR receiver"},
+        {"pluto", "ADALM-Pluto (network)"},
+        {"rtltcp", "rtl_tcp server (network)"},
+    };
+    const std::string k = lower(trim(driverKey));
+    for (const auto& n : kNames) {
+        if (k == n.first) { return n.second; }
+    }
+    return "other";
+}
+
+std::string scrubModel(const std::string& model) {
+    const auto isDottedQuad = [](const std::string& t) {
+        int dots = 0;
+        for (char c : t) {
+            if (c == '.') {
+                ++dots;
+            } else if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return dots == 3;
+    };
+    std::string out;
+    std::string token;
+    bool dropped = false;
+    const auto flush = [&]() {
+        if (token.empty()) { return; }
+        if (token.find_first_of("=:/\\@") != std::string::npos || isDottedQuad(token)) {
+            dropped = true;
+        } else {
+            if (!out.empty()) { out += ' '; }
+            out += token;
+        }
+        token.clear();
+    };
+    for (char c : model) {
+        if (c == ' ' || c == '\t' || c == ',' || c == ';') {
+            flush();
+        } else {
+            token += c;
+        }
+    }
+    flush();
+    if (out.empty() && dropped) { return "other"; }
+    return out;
+}
+
 std::string newInstallId() {
     unsigned char bytes[16] = {0};
     // The system CSPRNG, not rand(): an id that could be predicted from the
@@ -219,7 +281,9 @@ std::string TelemetryReport::toJson() const {
     j["first"] = firstRun;
     j["fv"] = firstVersion;
     j["sessionSec"] = session.seconds;
-    j["sdr"] = session.sdrModel;
+    // Through scrubModel a second time, as health goes through its vocabulary:
+    // whatever this member was filled with, no serial or address leaves.
+    j["sdr"] = scrubModel(session.sdrModel);
     nlohmann::json modes = nlohmann::json::object();
     for (const auto& kv : session.modeSeconds) {
         modes[kv.first] = kv.second;

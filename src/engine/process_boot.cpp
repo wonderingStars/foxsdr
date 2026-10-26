@@ -28,11 +28,13 @@
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/exit_record.hpp"
+#include "core/relaunch_marker.hpp"
 #include "core/sentinel.hpp"
 #include "core/stop_signal.hpp"
 #include "core/tester_link.hpp"
 #include "core/updater.hpp"
 #include "core/version.hpp"
+#include "core/winusb_install.hpp"
 #include "net/web_policy.hpp"
 #include "source/sdrplay_probe.hpp"
 #include "source/sdrplay_service.hpp"
@@ -272,6 +274,21 @@ Step runHelperModes(int argc, char** argv) {
         return cascade::core::runSentinelMain(argc, argv);
     }
 
+    // THE ONE-CLICK DRIVER INSTALL (0.99.88, core/winusb_install.hpp):
+    //
+    //     cascade --install-winusb <device instance id> --result <file>
+    //
+    // Started by the RADIO SETUP page through the shell's "runas" verb, so it
+    // runs elevated, behind one Windows permission prompt. It binds Windows'
+    // own WinUSB driver to interface 0 of an RTL-SDR - checked against the
+    // device itself, never taken on trust from this command line - writes the
+    // result file and returns. Like the helpers above: no configuration, no
+    // window, no radio, no crash handler, no telemetry, and argv[1] must be the
+    // flag itself with exactly the four arguments parseHelperArgs accepts.
+    if (argc >= 2 && std::strcmp(argv[1], cascade::core::winusb::kHelperFlag) == 0) {
+        return cascade::core::winusb::runHelperMain(argc, argv);
+    }
+
     constexpr const char* kCrashDirFlag = "--crash-dir=";
     constexpr const char* kDriverFlag = "--driver=";
     constexpr const char* kListDriversFlag = "--list-drivers";
@@ -411,9 +428,23 @@ void claimInstance(ProcessKind kind, int argc, char** argv, BootResult& boot) {
         }
     }
     const char* instanceScope = std::getenv(cascade::core::kInstanceScopeEnv);
-    const bool primaryInstance = cascade::core::claimPrimaryInstance(
-        std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string(),
-        instanceTestHook, instanceScope != nullptr ? std::string(instanceScope) : std::string());
+    // A SECOND PROCESS STARTED ON THE SOFTWARE RENDERER (0.99.90, gui/software_gl.hpp) is the
+    // primary instance whatever the claim says: the first one holds the claim while it waits for
+    // this one and does nothing else, and a link it was handed must be opened here, not passed
+    // back to it. THE ENGINE NEVER GETS HERE (the kind gate above): it has no window, so it has no
+    // renderer to fall back on, no second process to start and no mark to take. The relaunch
+    // itself is the window application's alone (main.cpp, after the window is gone).
+    std::string softglParent;
+    const bool softglRelaunched = cascade::core::takeSoftwareGlRelaunchMarker(softglParent);
+    if (softglRelaunched) {
+        cascade::core::diagLogf("window: started again by process %s to use the software renderer",
+                                softglParent.empty() ? "?" : softglParent.c_str());
+    }
+    const bool primaryInstance =
+        cascade::core::claimPrimaryInstance(
+            std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string(),
+            instanceTestHook, instanceScope != nullptr ? std::string(instanceScope) : std::string()) ||
+        softglRelaunched;
     boot.primaryInstance = primaryInstance;
 }
 

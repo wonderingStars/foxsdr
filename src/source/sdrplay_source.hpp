@@ -32,7 +32,9 @@
 // the cbContext. The API documents that Uninit returns with the callbacks
 // stopped; if a callback is nevertheless still inside us when we are done
 // with the device, the Link is deliberately STRANDED (kept alive in a
-// process-scope graveyard) rather than freed under a thread that is in it -
+// process-scope graveyard that not even exit destroys, since the service's
+// thread outlives our static destructors) rather than freed under a thread
+// that is in it -
 // the same judgement the USB drivers make when they abandon a wedged reader,
 // because a leak is survivable and a use-after-free on somebody else's thread
 // is not.
@@ -838,7 +840,8 @@ public:
         std::uint64_t errors = 0;
     };
 
-    // The line for the window so far, and the window starts again. Empty when
+    // The lines for the window so far - the health line, a newline, the
+    // service-gap line (0.99.85) - and the window starts again. Empty when
     // nothing has been read since the last line.
     std::string streamHealthLine();
     void setStreamHealthWindowForTest(std::chrono::milliseconds w);
@@ -855,6 +858,13 @@ public:
     // a test asserts, because elapsed time alone still passes when the bound
     // is deleted.
     static unsigned long long linksStranded();
+
+    // TESTS ONLY: a weak reference to the Link most recently stranded, so a
+    // test can ask whether it is still alive at a moment of its choosing -
+    // in particular after the executable's own static destructors have run
+    // (tests/test_sdrplay_strand_exit.cpp). Empty until something has been
+    // stranded.
+    static std::weak_ptr<void> lastStrandedLinkForTest();
 
 private:
     // Everything the SERVICE's thread touches, behind a shared_ptr whose
@@ -908,6 +918,14 @@ private:
         bool faulted = false;
         bool deviceDead = false;
         std::string deadWhat;
+        // TRUE WHILE THE LATCH ABOVE IS ONE THE NEXT SUCCESSFUL Init SUPERSEDES
+        // (0.99.89): a fault the service raised about the STREAM - today only
+        // DeviceFailure - with the device still attached and selected. The
+        // 0.99.88 RSP2 bundle: the service raised it mid-overload and kept
+        // delivering, and every START after it found this latch still up and
+        // read nothing. Any other fault clears the flag, so a removal or a lost
+        // master that follows a failure is still judged as the worse one.
+        bool faultEndsWithStream = false;
 
         // THE CALLBACK'S HALF OF THE HEALTH WINDOW, LOCK-FREE (0.99.32).
         //
@@ -931,6 +949,44 @@ private:
         std::atomic<std::int64_t> cbLongestGapMs{0};
         std::atomic<std::int64_t> cbWindowStartNs{0};
         std::atomic<std::int64_t> cbLastSamplesNs{0};
+
+        // THE SERVICE'S OWN SAMPLE NUMBERING (0.99.84, the RSPduo airband
+        // report): what the SERVICE lost on its side of the USB, which
+        // `overflows` above cannot see. `overflows` counts blocks that did
+        // not fit OUR ring - the host fell behind. The report's recording
+        // (clean at 2 MS/s, thirteen broadband clicks a second at 4 MS/s, no
+        // clipping, no silence) is discontinuities in the I/Q stream itself,
+        // and every block the service delivers names its first sample:
+        // StreamCbParamsT::firstSampleNum. So the callback keeps the number
+        // the NEXT block must start at, and a block that starts anywhere
+        // else is a gap the service made, counted here and said in the
+        // health line as "service gaps N (M samples)".
+        //
+        // WHAT THE VENDOR'S SPECIFICATION SAYS AND DOES NOT SAY (v3.15,
+        // sections 2.10.2 and 3.21, read for this): the struct carries
+        // `unsigned int firstSampleNum` and `unsigned int numSamples`, and
+        // the callback's `reset` argument "Indicates if a re-initialisation
+        // has occurred within the API and that local buffering should be
+        // reset". It says NOTHING about firstSampleNum being contiguous, or
+        // about it wrapping. That `firstSampleNum + numSamples` of one block
+        // is `firstSampleNum` of the next, and that the number wraps at 2^32,
+        // is taken from gr-sdrplay3 (fventuri, lib/rsp_impl.cc,
+        // sample_gaps_check), whose check is exactly this one, and is agreed
+        // by two other independent consumers (msiner/sdrplay-go's drop
+        // detector, weakmon's sdrplay.py). Unverified against a real RSP on
+        // this machine, which has none.
+        //
+        // cbSampleNumExpected packs "armed" and "expected" into ONE word so
+        // the callback has one load and one compare-exchange, and a disarm
+        // from the control thread (a start, a rate change) cannot be torn
+        // against a callback mid-flight: bit 32 set means armed, the low 32
+        // bits are the expected firstSampleNum, 0 means disarmed. Disarmed
+        // blocks arm without counting; `reset` disarms, as the spec asks.
+        // Only blocks WITH samples take part: a zero-sample callback (the
+        // service's Update acknowledgement) carries no numbering.
+        std::atomic<std::uint64_t> cbSampleNumExpected{0};
+        std::atomic<std::uint64_t> cbApiGaps{0};
+        std::atomic<std::uint64_t> cbApiGapSamples{0};
 
         // THE STALL CLOCK (0.99.36), separate from the health window's because
         // that one is reset every time a window closes. lastCallbackNs is
@@ -1124,7 +1180,10 @@ private:
     sdrplay_abi::RxChannelParamsT* chParamsLocked() const;
 
     static void setErrorOn(Link& link, std::string msg);
-    static void noteFaultOn(Link& link, const char* what, const std::string& detail);
+    // endsWithStream: see Link::faultEndsWithStream. False for every fault
+    // but the service's DeviceFailure event.
+    static void noteFaultOn(Link& link, const char* what, const std::string& detail,
+                            bool endsWithStream = false);
 
     // TRUE WHEN NO THREAD OF OURS MAY ENTER THE VENDOR DLL FOR THIS DEVICE
     // AGAIN - the whole of the rule the file header states, in one place so
@@ -1190,9 +1249,21 @@ private:
     // link.healthMutex held. `rateWarning`, when given, receives the line
     // that says the window's samples arrived at a rate far from the one the
     // radio was set for (empty when they did not) - see Link::setRateHz.
-    static std::string healthLineLocked(Link& link, std::string* rateWarning = nullptr);
+    // `gapLine`, when given, receives the window's SECOND line - the gaps the
+    // service made in its own numbering (Link::cbSampleNumExpected) - empty
+    // exactly when the returned line is. Two lines rather than one tail
+    // (0.99.85): the tail took the line past the log's width in the first
+    // field report that carried it, and a cut line is masked whole by the
+    // upload scrub (DiagLog::kLineBytes). Written by writeHealthLines.
+    static std::string healthLineLocked(Link& link, std::string* rateWarning = nullptr,
+                                        std::string* gapLine = nullptr);
     // Service thread: atomics only. Never a lock, never the log.
     static void noteBlock(Link& link, std::size_t samples, bool dropped);
+    // Service thread, same rule: checks one delivered block's firstSampleNum
+    // against the number the previous block said the next would start at,
+    // and counts a service gap when they differ. See Link::cbSampleNumExpected.
+    static void noteSampleNumber(Link& link, std::uint32_t firstSampleNum,
+                                 std::uint32_t numSamples);
     // The pipeline's source thread (read()): closes a window that has run
     // out and writes its line, and logs what the event callback left.
     static void maybeWriteHealth(Link& link);

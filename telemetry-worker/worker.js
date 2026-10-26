@@ -31,6 +31,25 @@ const ID_RE = /^[0-9a-f]{32}$/; // exactly what newInstallId() produces
 function clamp(v, max) {
   return typeof v === 'string' ? v.slice(0, max) : '';
 }
+// The SDR model as it is stored (blob4): every token that could name a unit, a
+// machine or a network - one holding = : / \ or @, or four dot-separated
+// numbers - is dropped, and a model with nothing left is "other". The client
+// does the same from 0.99.88 (core::scrubModel); this is for the copies already
+// installed, whose native-radio fallback sent a row's args as its model: the
+// 30 days to 2026-10-24 stored "serial=170204A600", "rtltcp=garage.lan:1234"
+// and "uri=ip:192.168.1.9" among others.
+function scrubModel(v) {
+  if (typeof v !== 'string') return '';
+  const kept = [];
+  let dropped = false;
+  for (const t of v.split(/[\s,;]+/)) {
+    if (t === '') continue;
+    if (/[=:/\\@]/.test(t) || /^\d+\.\d+\.\d+\.\d+$/.test(t)) { dropped = true; continue; }
+    kept.push(t);
+  }
+  if (kept.length === 0) return dropped ? 'other' : '';
+  return kept.join(' ');
+}
 function num(v, max) {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), max) : 0;
@@ -324,7 +343,7 @@ export default {
         clamp(body.v, 48),      // blob1  app version
         clamp(body.os, 40),     // blob2  OS and build
         clamp(body.arch, 8),    // blob3  architecture
-        clamp(body.sdr, 32),    // blob4  SDR model, serial already stripped
+        clamp(scrubModel(body.sdr), 32), // blob4  SDR model: no serial, no address (scrubModel)
         topMode,                // blob5  most-used demodulator
         plugins,                // blob6  installed plugins
         panels,                 // blob7  panels opened

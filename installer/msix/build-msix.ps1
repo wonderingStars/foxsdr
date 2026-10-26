@@ -175,6 +175,14 @@ if ($unexpected.Count -gt 0) {
 }
 if ($foundDlls.Count -eq 0) { Fail "SoapySDR.dll not found in $BuildDir - the build is incomplete" }
 Write-Note "cascade.exe + SoapySDR.dll, as installer\cascade.iss requires"
+# The software OpenGL renderer (0.99.90, third_party\softgl\README.md): exactly its two files in
+# softgl\, the same check as installer\cascade.iss.
+$softglDir = Join-Path $BuildDir "softgl"
+$softglFiles = @(Get-ChildItem -LiteralPath $softglDir -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name.ToLowerInvariant() } | Sort-Object)
+if (($softglFiles -join "|") -ne "libgallium_wgl.dll|opengl32.dll") {
+    Fail ("{0} must hold exactly opengl32.dll and libgallium_wgl.dll (found: {1}) - configure with CASCADE_SOFTGL=ON (the default) and build again" -f $softglDir, ($softglFiles -join ", "))
+}
+Write-Note "softgl\opengl32.dll + softgl\libgallium_wgl.dll"
 
 # --- 3. Stage the layout ----------------------------------------------------
 
@@ -189,6 +197,8 @@ New-Item -ItemType Directory -Path $assetsDir | Out-Null
 $payload = @(
     @{ From = (Join-Path $BuildDir "cascade.exe");        To = "cascade.exe" },
     @{ From = (Join-Path $BuildDir "SoapySDR.dll");       To = "SoapySDR.dll" },
+    @{ From = (Join-Path $BuildDir "softgl\opengl32.dll");       To = "softgl\opengl32.dll" },
+    @{ From = (Join-Path $BuildDir "softgl\libgallium_wgl.dll"); To = "softgl\libgallium_wgl.dll" },
     @{ From = (Join-Path $VcCrtDir "msvcp140.dll");       To = "msvcp140.dll" },
     @{ From = (Join-Path $VcCrtDir "vcruntime140.dll");   To = "vcruntime140.dll" },
     @{ From = (Join-Path $VcCrtDir "vcruntime140_1.dll"); To = "vcruntime140_1.dll" },
@@ -198,7 +208,10 @@ $payload = @(
 )
 foreach ($item in $payload) {
     if (-not (Test-Path -LiteralPath $item.From)) { Fail "payload file missing: $($item.From)" }
-    Copy-Item -LiteralPath $item.From -Destination (Join-Path $layoutDir $item.To) -Force
+    $dest = Join-Path $layoutDir $item.To
+    $destDir = Split-Path -Parent $dest
+    if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir | Out-Null }
+    Copy-Item -LiteralPath $item.From -Destination $dest -Force
     Write-Note "$($item.To)"
 }
 

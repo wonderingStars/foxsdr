@@ -498,7 +498,7 @@ printed with `fprintf(stderr, …)`, and SoapyRTLSDR's warnings, sent through
 SoapySDR's logger to its **default handler, which prints to stderr** — went to
 a console nobody was reading. Three things changed, none of them the fault:
 
-**The stream-health line.** Once a minute the radio's read loop writes what the driver answered: `source: stream health - reads 612, with samples 598, timeouts 14, overflows 0, errors 0, longest gap 38 ms, 1434880 samples in 60 s`. The first minute after a start is always written, so a healthy radio leaves one line proving it; after that a minute is written only when something was not nominal (any timeout, overflow or error, or a gap of 250 ms or more without samples), and as a warning when there was an error or a gap of a second or more. A minute of stalled USB delivery before a driver fault - what the 0.88.0 field crash had, visible then only through the sound path's starvation counter - now reads as a line in the report's tail.
+**The stream-health line.** Once a minute the radio's read loop writes what the driver answered: `source: stream health - reads 612, with samples 598, timeouts 14, overflows 0, errors 0, longest gap 38 ms, 1434880 samples in 60 s`. The first minute after a start is always written, so a healthy radio leaves one line proving it; after that a minute is written only when something was not nominal (any timeout, overflow or error, or a gap of 250 ms or more without samples), and as a warning when there was an error or a gap of a second or more. A minute of stalled USB delivery before a driver fault - what the 0.88.0 field crash had, visible then only through the sound path's starvation counter - now reads as a line in the report's tail. An SDRplay radio's line ends with one more field, `service gaps N (M samples)` (0.99.84): blocks the SDRplay service itself lost before they reached FoxSDR, told from its sample numbering, which `overflows` (FoxSDR's own ring full) cannot see; a minute with one is written as a warning.
 
 **The transmitter's lines, all prefixed `tx:` (0.95.0).** A transmit path is
 the one part of this product whose faults are somebody else's problem as well
@@ -2168,6 +2168,39 @@ clock and the log write all happen on the side that is allowed to do them.
   `/api/status` (`audioPluginGaps`, `audioPluginGapFrames`), beside
   `audioSource` — the name of whatever is holding the speakers.
 
+### Samples lost between the source and the DSP (0.99.86)
+
+GitHub issue 6, an RSPduo at 4 MS/s with crackle: the 0.99.85 log showed the
+SDRplay service streaming cleanly through steady minutes - no service gaps, no
+link-ring overflows, no starved audio - which left one place samples could
+still be lost unseen. The pipeline's source thread writes every read into an
+SPSC ring the DSP thread drains, and a DSP side that falls behind finds the ring
+full: `SpscRing::write` keeps what fits and the rest is dropped, never blocking a
+live device. That loss was counted (`Pipeline::ringDroppedSamples`) but the count
+only reached the crash-report health events (`recovered.ringdrop`).
+
+Now `AppWindow::pollDspMinute`, called by the frame loop right after
+`pollAudioHealth` but on a clock of its own (the audio watchdog returns early on a
+machine where no sound output ever opened, and a ring overflows there just the
+same), closes a minute every sixty seconds. `closeDspMinute` writes one line for
+a minute in which samples were dropped and nothing for a clean one:
+
+    dsp: 412000 samples dropped between the source and the DSP in the last minute (0.17%)
+
+The share is of the minute's input, `Pipeline::sourceSamplesRead`, which the
+source thread counts before the write that may drop part of the same read (so
+the drop count, read first, never runs ahead of its read). A share too small for
+two decimals is `under 0.01%`, never `0.00%`. The bundle carries the session's
+total as `dsp-dropped: 324608 of 2400000000 samples (0.01%)`.
+
+**Reading it beside the SDRplay lines:** service gaps or link-ring overflows mean
+samples were lost before FoxSDR had them; a `dsp:` drop line means FoxSDR had
+them and its own processing could not keep up - a slow machine, or something
+holding the DSP thread. Neither line in a minute with crackle points past the
+receive path, to the audio side (`audio: N starved callbacks`) or the signal.
+`tests/test_dsp_drop_minute_app.cpp` stalls the DSP thread through
+`Pipeline::holdLockForTest` and pins the line, its count and its share.
+
 ### What a "no audio" report carries (0.99.61)
 
 0.99.58, an NESDR SMArt v5, "no audio from my speakers": five minutes of log and
@@ -3272,10 +3305,32 @@ own reason. Two of the excuses — a pause the application takes, and a stall in
      application-paced pauses are held with it; when the last is released, an
      application-paced pause still held starts a fresh 30 s from that moment, so
      a rescan nested inside a long shell call is not reported the instant the
-     prompt closes. **What this leaves unreported, by design:** a `ShellExecute`
-     that never returns and shows no dialog is indistinguishable from a prompt
-     nobody has answered yet, and the only watch on it is the person who sees
-     the window not responding.
+     prompt closes. **Until 0.99.87 this left unreported** a `ShellExecute` (or
+     a file dialog) that never returns: it looked like a prompt nobody had
+     answered yet, and the only watch on it was the person who saw the window
+     not responding. Field signature `35ED0AF291113FC8` is exactly that, twice
+     (0.99.78, 0.99.84): a GUI thread silent for 83 s and 38 s with the frame
+     timer in `user-wait` or the modal-loop bit raised, closed by its user from
+     Windows' own *is not responding* dialog (exit code `0xCFFFFFFF`, below),
+     and no report but the sentinel's, which has no stack. **Since 0.99.87 the
+     excuse lasts only while Windows does not call the window hung**
+     (`HangWatchdog::guiWindowHung`: `IsHungAppWindow` on every top-level window
+     the GUI thread owns, the same verdict that greys a window and titles it
+     *(Not Responding)*). A person is always waited for in a loop that takes
+     messages - a file dialog's, a menu's, a drag's - and Windows never calls
+     such a thread hung; it calls a thread hung when it has taken no message for
+     about 5 s. Measured 2026-10-23 on Windows 11 22631: a window whose thread
+     sleeps reads hung after 5.0-5.3 s, shown or hidden; one whose thread waits
+     in `GetMessage` never does. Past the verdict the stall is measured from the
+     first poll that saw it, so the report, with every thread's stack, follows a
+     threshold later (about 10 s after the thread stopped). The same verdict ends
+     rule 2's modal-loop excuse: a thread inside a drag's loop whose handler
+     never returned is hung, and is reported. `tests/test_hung_window_excuse.cpp`
+     holds all four cases on real windows: a user-paced pause over a stopped
+     thread (reported) and over a pumping one (not), and a real
+     `WM_SYSCOMMAND`/`SC_MOVE` loop with a stopped handler (reported) and a
+     pumping one (not). What is still excused without limit is a prompt whose
+     loop keeps taking messages, which is what a person reading it looks like.
 
    `cascade --frames N` prints how many pauses the run took (both kinds count)
    and `tests/test_diag_hang.cpp` requires at least one, so a rescan that stops
@@ -3578,17 +3633,32 @@ row and boundary in `tests/test_sentinel.cpp`):
    shutdown reached `closing the window`. (Exit code 0 *before* that stage is not
    clean: it is reported as a crash-class ending, `exit code 0 before the shutdown
    had finished`. A death after the marker with a crash code is still a crash.)
-4. The **session was closing** -> *session*, kept here.
+4. The **session was closing** -> *session*, kept here - **unless the start-up had
+   already hung** (since 0.99.89): before the first frame and silent for longer than
+   the watchdog's start-up budget (`kStartupThresholdMs`, 30 s), which goes on to 5.
+   A closing session explains an ending, not two minutes without a window before
+   it. The 0.99.88 RSP2 bundle of 2026-10-24 had four 0.99.81 processes, launched
+   within a minute of each other, all `building the application` and silent for 105 to 162 s,
+   ended together with exit code `0x40010004` while Windows was shutting down, and
+   all four filed as *session* and never sent. Within the budget, a start-up a
+   closing session cut short is still the session's (the same bundle's 0.99.88
+   process, 17 s in).
 5. It ended **before the first frame** (phase before *running*) -> *startup*, sent,
    whatever the exit code.
-6. A **crash exit code** the handler never saw -> *crash*, sent.
-7. The heartbeat had been **silent for longer than the watchdog's own threshold**,
+6. **Closed by Windows as not responding** (exit code `0xCFFFFFFF`, since 0.99.87) ->
+   *frozen*, sent, whoever the page says was holding the window: Windows offers that
+   dialog only for a window that has stopped taking messages, and a person holding a
+   window keeps it taking them. Before 0.99.87 this was a *crash* with `unknown exit
+   code` (field signature `35ED0AF291113FC8`); the class is part of the signature, so
+   the same ending now groups apart, as `sentinel:frozen:<phase>[:<scope>]`.
+7. A **crash exit code** the handler never saw -> *crash*, sent.
+8. The heartbeat had been **silent for longer than the watchdog's own threshold**,
    and **nobody was holding the window** -> *frozen*, sent. A drag, a resize, an
    open menu or a prompt being read stops the frame loop for as long as the
    person likes; the watchdog excuses each (its rule 2 and its user-paced pause)
    and so does this. A plugin reload or a radio open that never came back is not
    excused: the application set that pace, and that silence is the freeze.
-8. Anything else -> *outside*, kept here.
+9. Anything else -> *outside*, kept here.
 
 The "freeze threshold" is read from `HangWatchdog`'s own constants, so the two
 cannot disagree: its start-up budget (`kStartupThresholdMs`, 30 s) for the first
@@ -3641,6 +3711,7 @@ the table):
 | `0xC000013A` | `Ctrl+C or a console close` | `ntstatus.h`: `STATUS_CONTROL_C_EXIT` ("The application terminated as a result of a CTRL+C."). Since 0.99.67 the program answers Ctrl+C, Ctrl+Break and a closing console with its own close (`core/console_close.hpp`), so this code now means the shutdown did not finish inside the 5000 ms the system allows a closing console (HandlerRoutine's Timeouts table) |
 | `1` | `exit code 1 (as taskkill /F leaves it, or the application ended itself)`; with the application's own record (below), `the application ended itself: the window could not be created - see the window: lines in the log` | **Measured**, 2026-10-05, Windows 11 22631: `taskkill /F` ends a process with 1. Microsoft's `TerminateProcess` page documents only that the *caller* chooses the code; that Task Manager's *End task* also leaves 1 is widely stated but **was not measured here**, which is why the words name `taskkill /F` and not Task Manager. **1 is not proof of a kill**: `AppWindow::run` returns 1 itself when `glfwInit` or `glfwCreateWindow` fails, so the exit code alone cannot tell the two apart and the words no longer say it can (0.99.73's two reports of signature `85FF854AA2C772F9` read "ended by another process" for a window that could not be created) |
 | `-1` (`0xFFFFFFFF`) | `ended by another process (exit code -1, as Stop-Process and Process.Kill do)` | **Measured** in the same session: PowerShell 5.1's `Stop-Process -Force` and .NET's `Process.Kill()` both leave -1 |
+| `0xCFFFFFFF` (since 0.99.87) | `closed by Windows as not responding (0xCFFFFFFF, its Close the program button)` | **Measured**, 2026-10-23, Windows 11 22631: a test window whose thread stopped taking messages, its grey "(Not Responding)" ghost sent `SC_CLOSE`, and the `WerFault` dialog's own *Close the program* button pressed - the process ended with `0xCFFFFFFF`. Task Manager's route (`EndTask(hwnd, FALSE, TRUE)`) on the same hung window left `0`, not this, so the words name the dialog and not Task Manager. Filed as *frozen*, not *crash* (class rule 6 above) |
 | `0` before the shutdown finished | `exit code 0 before the shutdown had finished` | by construction |
 | `0x5058....` (since 0.99.78, Linux) | `exit code N (the process ended itself)`, `killed by signal N (SIGSEGV)`, ... | not an operating-system value: the application's own record of how it ended, tagged so that no Windows code reads as one - see *Platforms* below |
 | anything else | `unknown exit code` | - |
@@ -3719,7 +3790,12 @@ log off or shutdown in this application's situation (it is documented, not
 observed), that `SM_SHUTTINGDOWN` is already set when the sentinel wakes, that the
 sentinel itself outlives the application in a closing session at all, or what exit
 code the termination leaves. If the sentinel is ended first it writes nothing, which
-is the safe direction.
+is the safe direction. **Field evidence since (2026-10-24, inferred, not measured
+here):** the 0.99.88 RSP2 bundle holds five *session* reports of processes that
+never got past `building the application`, so had no window for `WM_ENDSESSION` to
+reach - the class can only have come from `SM_SHUTTINGDOWN`, which was therefore set
+when those sentinels woke, and the sentinels did outlive their applications. All
+five exit codes were `0x40010004`, still worded `unknown exit code`.
 
 ### One report per death
 
@@ -4394,6 +4470,93 @@ presence-only rule, the flush) and `tests/test_window_platform_app.cpp` (the rea
 lines in order before the first frame, `bad` ignored with the run still starting, `x11`
 refused on Windows, a forced platform on Linux). **Not verified:** that forcing `x11` or
 `wayland` cures the field report - its cause is not known; nothing here ran on Linux.
+
+### When the graphics driver cannot be used: the software renderer (0.99.90, Windows)
+
+Field log (0.99.89, Windows): `window: GLFW error 65542: WGL: The driver does not appear to
+support OpenGL`, then `glfwCreateWindow failed` and the error dialog. In GLFW's WGL code that error
+means every pixel format the machine offers is Windows' own GDI renderer (OpenGL 1.1, unaccelerated)
+- no graphics driver, a virtual machine without 3D, a remote session (`third_party/glfw/src/
+wgl_context.c`, `choosePixelFormatWGL`). The Windows packages now carry Mesa's **llvmpipe**, a
+complete OpenGL 4.6 drawn by the processor, in `softgl\` beside `cascade.exe` (two files, 62 MB,
+pinned and fetched by CMake: `third_party/softgl/README.md`). The graphics driver is always asked
+first; the software renderer stands in only when
+
+- `glfwCreateWindow` fails with `GLFW_API_UNAVAILABLE` (65542, the field case),
+  `GLFW_VERSION_UNAVAILABLE` (65543) or `GLFW_FORMAT_UNAVAILABLE` (65545) - the driver's OpenGL,
+  not the window system; or
+- the context works but `GL_VERSION` is older than 3.0, which Dear ImGui's `#version 130` shaders
+  need. That machine used to get as far as the ImGui backend, which refused, and the process ended
+  with one line on stderr (see below). The version is read through `glfwGetProcAddress`, not a
+  direct call, so that nothing has bound to that driver's `opengl32.dll` yet.
+
+**Why a second process.** `cascade.exe` delay-loads `opengl32.dll` (`/DELAYLOAD`), and Windows
+answers a load by name from the modules already in the process, so Mesa's `opengl32.dll`, loaded
+from its full path before GLFW asks for anything, becomes the process's `opengl32.dll` - GDI's own
+`SwapBuffers` included. But once a context has been asked of the system's `opengl32.dll` it stays
+loaded: measured on this desktop (NVIDIA), it is still in the process after `glfwTerminate`. So
+after a refusal `run()` returns, `main()` lets the application object go (plugins, sound device,
+listening ports), switches its own sentinel off, starts `cascade.exe` again with `FOXSDR_GL=software`
+and the same command line and redirected standard handles (and only those:
+`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), and waits; it ends with the second process's exit code. The
+second process is the primary instance (`FOXSDR_SOFTGL_RELAUNCH`, cleared at once so nothing it
+starts inherits it), loads Mesa before GLFW, and has its own sentinel. `GALLIUM_DRIVER=llvmpipe` is
+set unless the environment names a driver (Mesa's default with a D3D12 driver is its D3D12 back
+end, which needs a `dxil.dll` that is not shipped). The log of a hand-over, both processes in the
+one file (a real run with the `hardware` seam below):
+
+```
+window: GLFW error 65543: WGL: Driver does not support OpenGL version 99.0
+window: glfwCreateWindow failed; the GLFW error line before this, if there is one, says why
+window: the graphics driver offers no usable OpenGL (GLFW error 65543); starting again with the software renderer in softgl
+window: handing over to a second FoxSDR process with the software renderer
+FoxSDR 0.99.89 (...) starting
+window: started again by process 8244 to use the software renderer
+window: FOXSDR_GL=software; the software renderer is used from the start
+window: software renderer loaded from softgl (GALLIUM_DRIVER=llvmpipe)
+window: GLFW initialised; platform chosen: win32
+window: window created (hidden until its frame is settled)
+window: GL vendor Mesa; renderer llvmpipe (LLVM 23.1.2, 256 bits); version 4.6 (Compatibility Profile) Mesa 26.2.4 (git-9a0169f2a7)
+window: window shown; the Dear ImGui backends are up
+window: the second FoxSDR process ended with exit code 0
+```
+
+and, when there is no second attempt, one of `window: no software fallback: FOXSDR_GL=hardware`,
+`... the software renderer was already tried` or `... softgl\opengl32.dll and libgallium_wgl.dll
+are not beside the application`, then the error dialog as before - which now says the software
+renderer was tried too when it was.
+
+**`FOXSDR_GL=auto|software|hardware`** (environment, like `FOXSDR_WINDOW_PLATFORM` and for the
+same reason): `auto` or unset is the above; `software` uses llvmpipe from the start in one process
+(a driver that crashes; a check on a machine whose driver works); `hardware` never falls back.
+Anything else is logged and ignored. Off Windows `software` is logged as ignored and points at
+Mesa's own `LIBGL_ALWAYS_SOFTWARE=1`.
+
+**The silent ImGui exit is gone.** `ImGui_ImplGlfw_InitForOpenGL` or `ImGui_ImplOpenGL3_Init`
+refusing used to `return 1` with a line on stderr only - no log line, no breadcrumb flag, no
+dialog, and the sentinel filed it as `ended by another process (exit code 1, as taskkill /F does)`
+(seen with the fix removed: that is what `test_window_failed_app` then reads). Both now log
+`window: the Dear ImGui ... backend could not start`, set `kFlagWindowFailed` and tell the person,
+like a refused window.
+
+**Seams** (bounded `--frames` runs only), `FOXSDR_TEST_WINDOW_FAIL=`: `1` refuses every window (both
+processes); `hardware` refuses it only while the graphics driver is in use, so the hand-over is the
+real one; `old-driver` takes the driver's context to say OpenGL 2.1; `imgui` takes the OpenGL 3
+backend to have refused. **Tested** by `tests/test_window_platform.cpp` (every new line, the
+parsers, the version boundary at exactly 3.0, the skip rules), `tests/test_window_failed_app.cpp`
+(headless: `1` through the hand-over to exit 1 and ONE sentinel report; `hardware` with
+`FOXSDR_GL=hardware`; `software` with every window refused; a copy of `cascade.exe` without
+`softgl\`; `imgui` and its report) and `tests/test_software_gl_app.cpp` (gui: the hand-over ending
+in a window on llvmpipe and exit 0 passed back, the second process's stdout arriving through the
+first's handle; `old-driver`; `FOXSDR_GL=software`; a plain run touching none of it). Break-it
+checks, each RED for its own reason: without the sentinel switch-off (two reports), without the
+ImGui fix (the report reads "taskkill"), and without `/DELAYLOAD:opengl32.dll` (the second process
+cannot load Mesa and is refused again). **Measured** on this desktop: about 85 frames a second on
+llvmpipe at 1280x720, 39 with `LP_NUM_THREADS=2` (`third_party/softgl/README.md`). **Not
+verified:** a machine that really has no OpenGL driver (the field case is reproduced with the
+seam, whose GLFW error is 65543 rather than 65542), a remote desktop session, the MSIX package
+running from its install (it was built and its contents checked, not installed), and llvmpipe's
+cost on a slow processor.
 
 ### Known limits
 

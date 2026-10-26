@@ -160,6 +160,36 @@ foreach ($d in 1, 7) {
     }
 }
 
+# THE FIRST-RUN FUNNEL (2026-10-24). Of the installs in the window, how many
+# ever had a radio open (blob4, the SDR model, not empty), and how many listened
+# to one for over a minute in a session (double4, seconds in the most-used
+# demodulator); and of the installs whose first run falls in the window
+# (blob9, the first-run day, as YYYY-MM-DD), how many found a radio. The first
+# measurement, 30 days to 2026-10-24: 969 installs, 493 with a radio, 477
+# listened; 500 new, 241 of them found one. The radio is where people are lost,
+# not the listening - which is what the one-click RTL-SDR driver (0.99.88) is
+# for, and what this section exists to show moving.
+$since = (Get-Date).ToUniversalTime().AddDays(-$Days).ToString('yyyy-MM-dd')
+function Get-Count([string]$alias, [string]$where) {
+    $r = Invoke-Sql "SELECT count(DISTINCT index1) AS $alias FROM foxsdr_usage WHERE $window$where"
+    if ($r) { return [int]$r[0].$alias }
+    return $null
+}
+function Format-Share($part, $whole) {
+    if ($null -eq $part -or $null -eq $whole -or $whole -eq 0) { return "unknown" }
+    return ("{0} of {1} ({2}%)" -f $part, $whole, [math]::Round(100.0 * $part / $whole))
+}
+$all = [int]$i.installs
+$withRadio = Get-Count 'withRadio' " AND blob4 != ''"
+$listened = Get-Count 'listened' " AND blob4 != '' AND double4 > 60"
+$newInstalls = Get-Count 'newInstalls' " AND blob9 >= '$since'"
+$newWithRadio = Get-Count 'newWithRadio' " AND blob9 >= '$since' AND blob4 != ''"
+Write-Host ""
+Write-Host "First-run funnel" -ForegroundColor Cyan
+Write-Host ("  ever had a radio open    : {0}" -f (Format-Share $withRadio $all))
+Write-Host ("  listened over a minute   : {0}" -f (Format-Share $listened $all))
+Write-Host ("  new installs found radio : {0}" -f (Format-Share $newWithRadio $newInstalls))
+
 function Show-Breakdown([string]$title, [string]$sql, [string]$key) {
     $rows = Invoke-Sql $sql
     if (-not $rows) { return }

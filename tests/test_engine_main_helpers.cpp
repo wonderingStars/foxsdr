@@ -19,6 +19,8 @@
 //     sentinel, silently), never the parse's "unknown argument" and exit 1 - for
 //     `--enumerate-json --bogus`, `--sdrplay-probe` with no file or an option it does not
 //     take, `--sdrplay-service-state extra` and `--sentinel` with nothing it needs;
+//     (0.99.90 merge: and `--install-winusb`, the one-click driver install's elevated helper - master 0.99.88 put it in main() beside
+//     the others, so it is one of runHelperModes' flags; only its refusals are run here, the install itself changes Windows' drivers);
 //   * `--sdrplay-service-state` answers (it asks the OS, read-only);
 //   * the helper modes arm nothing and touch nothing: no file or directory appears
 //     under the profile or the working directory (a helper must not inherit the
@@ -95,6 +97,18 @@ int main() {
     CHECK(sentinelBad.exitCode == 2);
     CHECK(notTheParse(sentinelBad));
 
+    // The one-click driver install's helper (0.99.88): refused (exit 2, its own sentence) for anything but its exact four arguments,
+    // BEFORE it touches a device or writes the result file. It never gets as far as a device here.
+    const emt::RunResult winusbNone = engine({"--install-winusb"});
+    CHECK(winusbNone.exitCode == 2);
+    CHECK(emt::contains(winusbNone.err, "usage: --install-winusb <device instance id> --result <file>"));
+    CHECK(notTheParse(winusbNone));
+    const emt::RunResult winusbBad = engine({"--install-winusb", "-x", "--result", (home / "winusb.txt").string()});
+    CHECK(winusbBad.exitCode == 2);
+    CHECK(emt::contains(winusbBad.err, "must both be given"));
+    CHECK(notTheParse(winusbBad));
+    CHECK(!fs::exists(home / "winusb.txt"));
+
     // --- the service query answers --------------------------------------------------------------------------
     const emt::RunResult state = engine({"--sdrplay-service-state"});
     CHECK(state.exitCode == 0);
@@ -105,6 +119,9 @@ int main() {
     const emt::RunResult late = engine({"--seconds", "0", "--sentinel"});
     CHECK(late.exitCode == 1);
     CHECK(emt::contains(late.err, "unknown argument '--sentinel'"));
+    const emt::RunResult lateWinusb = engine({"--seconds", "0", "--install-winusb"});
+    CHECK(lateWinusb.exitCode == 1);
+    CHECK(emt::contains(lateWinusb.err, "unknown argument '--install-winusb'"));
 
     // --- and none of it touched anything -------------------------------------------------------------------
     const std::vector<std::string> after = emt::tree(home);

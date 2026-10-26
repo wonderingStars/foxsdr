@@ -1051,6 +1051,7 @@ family alone**, and does not use that entry's `ACTIVE`.
 | `fact.source.scanGate` | with `FOXAPI_SRC_SCAN_GATED`, the name the two deferral sentences quote: the open radio's model (never its serial), the label of the one opening, `the patch radio '<name>'`, `a patch radio`, or `a radio this session could not release`; `""` otherwise. English, quoted whole in the interface's own sentence | |
 | `fact.source.scanSkip` | with the scan gated, the drivers a scan beside the open radios leaves out, joined `", "`; **`""` means the whole SoapySDR scan is deferred** and a non-empty text means Refresh still runs and leaves exactly these out. `""` with nothing gating it | |
 | `fact.source.faultedDrivers` | the drivers whose scan child died earlier this session (they are not asked again), lower case, joined `", "`; `""` when none. Taken when a scan lands | |
+| `fact.source.uhdNoImages`, `fact.source.usrpOnUsb` | `"1"`/`"0"` (0.99.90 merge): UHD itself said, during the last scan that landed, that it has no firmware images; and that scan's USB listing held a USRP. The Source section says its one amber line (`uhdImagesMissingHint`) when BOTH are `"1"`. Taken when a scan lands | |
 | `fact.source.plutoUri` | the address in the Pluto box, as the engine holds it (`FOXAPP_OP_SET_PLUTO_URI` stores each edit; 191 bytes at most) | LOCAL |
 | `fact.source.id.<n>` | the whole `SELECT_SOURCE` id of `DEVICES` entry `n` (above) | |
 
@@ -1856,6 +1857,13 @@ no table entry, no struct, no fingerprint field was added - the facts below are 
 string built (the fingerprint runs on every pass and test_engine_publish_alloc counts its allocations). Nothing else about the lists
 changed. What was NOT added, and is stubbed in the window instead, is in the ledger of docs/engine-merge-0.99.84.md (section 6): where a
 stubbed feature will need an op (a marker list and its persistence, the plugin key's grant, the plugin settings' forms) the ledger says so.
+
+### 9.2 The 0.99.90 merge's additions (docs/engine-merge-0.99.90.md)
+
+Two facts, no op, no header change: `fact.source.uhdNoImages` and `fact.source.usrpOnUsb` (section 8.10's table), the text "1" or "0", public like
+`fact.source.faultedDrivers`. They are hashed into the publish fingerprint from the two engine members they are built from. Everything else master
+added to a window function in 0.99.85 to 0.99.90 either stayed the window's or moved to the engine without a new table entry (the pipeline ring's
+once-a-minute log line; the model scrub).
 
 ## 10. What stays a GAP after 0.3
 

@@ -1766,6 +1766,17 @@ holds the request, the code and that document to each other in both directions.
   side against stand-in declarations only: **none of it has run on Linux**, and whether
   forcing a window system cures that report is not known. Details in
   [docs/DIAGNOSTICS.md](DIAGNOSTICS.md) ("If FoxSDR ends before its window appears").
+- **On a Windows computer with no working graphics driver** - none installed, a virtual
+  machine without 3D, some remote desktop sessions - FoxSDR (0.99.90 and later) starts
+  anyway: when the graphics driver offers no usable OpenGL, or one older than 3.0, it
+  starts itself again on the software renderer it carries in its `softgl` folder (Mesa,
+  drawn by the processor). The window looks the same and works the same; it costs more
+  processor time, so on a slow computer the picture may not be as smooth. Installing the
+  graphics card's own driver is still the better fix. To choose for yourself, set the
+  environment variable `FOXSDR_GL` before starting FoxSDR: `software` always uses the
+  software renderer (useful if a graphics driver crashes), `hardware` never does. The
+  log's `window:` lines say which one drew the window. Details in
+  [docs/DIAGNOSTICS.md](DIAGNOSTICS.md) ("When the graphics driver cannot be used").
 - A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`. Since
   0.89.0 it records what the **radio driver** says as well as what FoxSDR
   does: SoapySDR's own log is bridged in (lines beginning `soapy:`), and in a
@@ -1862,6 +1873,27 @@ SoapySDR module search path itself; `SOAPY_SDR_ROOT` overrides the guess and a
 RTL-SDR dongle needs one further step on Windows**: it ships bound to the DVB-T
 television driver, under which it is invisible to every SDR application, and
 Zadig must be used to bind WinUSB to "Bulk-In, Interface (Interface 0)" instead.
+
+**Since 0.99.88 FoxSDR does that step itself.** When the **RADIO SETUP** page
+finds an RTL-SDR on the television driver, or on no driver at all, it shows an
+**INSTALL DRIVER** key under that radio. Press it and Windows asks once for
+permission; FoxSDR then gives the dongle's radio interface (interface 0 - never
+the whole dongle and never its remote-control interface) Windows' own WinUSB
+driver, the Microsoft-signed one Windows already carries, and checks the radios
+again. Nothing is downloaded, no certificate is added to the computer, and no
+other device is touched: the installer checks the device's own hardware ids
+before it changes anything. If Windows says a restart is needed, or the dongle
+is not listed straight away, unplug it, plug it back in and press **CHECK
+AGAIN**. Saying no to the permission prompt changes nothing. The Zadig
+instructions stay on the page beneath the key for anyone who prefers them.
+
+**To undo it** - to use the dongle as a television receiver again - open Device
+Manager, find the dongle's interface under *Universal Serial Bus devices*
+(*WinUsb Device*), choose **Uninstall device**, then unplug and replug it:
+Windows puts back the driver it would have chosen itself.
+
+This covers RTL-SDR dongles only so far, the radio most people start with; a
+HackRF, an Airspy, a Mirics or an RX888 is still bound with Zadig as below.
 
 An **RX888** is two devices. Plug it in and run Zadig once for
 **"WestBridge"** (USB ID `04B4:00F3` — the FX3 bootloader), then open it once

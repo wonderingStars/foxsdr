@@ -941,6 +941,14 @@ private:
     std::map<cascade::core::patch::NodeId, int> patchQuietMinutes_;
     // Closes the minute (starved callbacks, the log line, the step up or down), for the receiver's sink and each patch speaker.
     void closeAudioMinute(std::size_t ringFramesNow);
+    // THE PIPELINE'S RING, ONCE A MINUTE (0.99.86, GitHub issue 6; master's AppWindow::pollDspMinute / closeDspMinute, re-expressed
+    // here in the 0.99.90 merge because the pipeline is the engine's): the pass's poll, beside pollAudioHealth and on a clock of its
+    // own - the audio watchdog returns early on a machine where no sound output has opened, and a ring overflows there just the same.
+    void pollDspMinute();
+    // A MINUTE OF THE PIPELINE'S RING HAS CLOSED: one log line if the source thread read samples the ring had no room for in the
+    // minute just ended - `dsp: 412000 samples dropped between the source and the DSP in the last minute (0.17%)`, the share being of
+    // the minute's input - and nothing for a minute that lost none. Takes no clock, so a test closes minutes at will.
+    void closeDspMinute();
     // The audio buffer setting (FOXAPP_OP_SET_AUDIO_BUFFER and the restore): an invalid value is AUTOMATIC.
     void setAudioBufferMs(int ms);
     // The lead the sink demands now, in milliseconds (what a patch speaker made afterwards is seeded with).
@@ -970,6 +978,11 @@ private:
     std::size_t audioRingLowWaterFrames_ = SIZE_MAX;
     std::uint64_t audioUnderrunsAtLogStart_ = 0;
     std::uint64_t audioPrimingAtLogStart_ = 0;
+    // The pipeline ring's minute (pollDspMinute / closeDspMinute): its own clock, and the two monotonic pipeline counters as they
+    // stood when it last closed.
+    double lastDspLogSec_ = 0.0;
+    std::uint64_t dspDroppedAtMinute_ = 0;
+    std::uint64_t dspReadAtMinute_ = 0;
 
     // Moves the VFO so the tuned frequency lands on wantAbsHz, snapping to the
     // mode's raster unless the caller says otherwise, and clamping the band
@@ -991,6 +1004,15 @@ private:
     // gui::networkUsrpHint draws from under the Source list.
     std::shared_ptr<std::vector<std::string>> soapyScanAbsent_;
     std::vector<std::string> soapyAbsentDrivers_;
+    // WHAT THE SCAN SAID ABOUT UHD'S FIRMWARE IMAGES (2026-10-21, master 0.99.85), carried the same way as soapyScanAbsent_ above: the
+    // scan's own thread writes the shared values before its future is ready, pollSourceAsync copies them into the plain members once it
+    // is. uhdNoImages is EnumResult::uhdImagesMissing; usrpOnUsb is whether that scan's USB listing held a USRP (gui::anyUsrpUsbId).
+    // Together they drive gui::uhdImagesMissingHint under the Source list (the window reads them as fact.source.uhdNoImages and
+    // fact.source.usrpOnUsb) and the radio-setup page's images finding.
+    std::shared_ptr<bool> soapyScanUhdNoImages_;
+    std::shared_ptr<bool> soapyScanUsrpOnUsb_;
+    bool soapyUhdNoImages_ = false;
+    bool soapyUsrpOnUsb_ = false;
     // API 0.3 8.10, what the Source section says when a SoapySDR scan has landed (the section used to ask the
     // runtime for these every frame it showed the "No radio hardware found" block; each was a call into
     // SoapySDR.dll). faultedDrivers_ is the drivers whose scan child died this session, taken at every landing;

@@ -5,6 +5,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/utf8_text.hpp"
 #include "source/rsp_rows.hpp"
 
@@ -43,13 +44,40 @@ std::atomic<unsigned long long> g_linksStranded{0};
 // freed under a service thread that is still inside it. Deliberately never
 // emptied: the whole point is that nothing here is safe to destroy, and a
 // handful of rings is a price worth paying once per wedged teardown.
-std::mutex g_graveyardMutex;
-std::vector<std::shared_ptr<void>> g_graveyard;
+//
+// ...AND NEVER DESTROYED EITHER (the 0.99.84 RSPduo report of 2026-10-23,
+// signature 929BF825C4993CB3). Through 0.99.84 this was a namespace-scope
+// std::vector, which the C runtime destroys when main returns - on the main
+// thread, while every other thread in the process is still running; the
+// operating system ends those threads only AFTER the executable's static
+// destructors have finished. That report is the moment in between: a stream
+// declared stalled 29 s earlier while the service in fact kept delivering
+// (115296 blocks in that last window, into a ring nobody read), so stop()
+// stranded the Link without Uninit, the device was closed without
+// ReleaseDevice, main returned, the graveyard's destructor freed the Link -
+// and the service's thread, which nothing had told to stop, took its next
+// block into it: an access violation on the vendor's thread, two frames of
+// ours above sdrplay_api.dll, 107 s into the session. So "for the life of
+// the process" has to mean past the static destructors as well: the
+// graveyard is a heap object that nothing, not even exit, ever deletes.
+// tests/test_sdrplay_strand_exit.cpp holds the line from a child process.
+struct Graveyard {
+    std::mutex mutex;
+    std::vector<std::shared_ptr<void>> links;
+    std::weak_ptr<void> last;  // the most recent, for lastStrandedLinkForTest
+};
+
+Graveyard& graveyard() {
+    static Graveyard* const g = core::leakOnPurpose(new Graveyard());
+    return *g;
+}
 
 void strandLink(std::shared_ptr<void> link) {
     {
-        std::lock_guard<std::mutex> lk(g_graveyardMutex);
-        g_graveyard.push_back(std::move(link));
+        Graveyard& g = graveyard();
+        std::lock_guard<std::mutex> lk(g.mutex);
+        g.last = link;
+        g.links.push_back(std::move(link));
     }
     g_linksStranded.fetch_add(1, std::memory_order_relaxed);
 }
@@ -1154,6 +1182,12 @@ unsigned long long SdrPlaySource::linksStranded() {
     return g_linksStranded.load(std::memory_order_relaxed);
 }
 
+std::weak_ptr<void> SdrPlaySource::lastStrandedLinkForTest() {
+    Graveyard& g = graveyard();
+    std::lock_guard<std::mutex> lk(g.mutex);
+    return g.last;
+}
+
 // --- errors ---------------------------------------------------------------
 
 void SdrPlaySource::setErrorOn(Link& link, std::string msg) {
@@ -1161,13 +1195,17 @@ void SdrPlaySource::setErrorOn(Link& link, std::string msg) {
     link.lastError = std::move(msg);
 }
 
-void SdrPlaySource::noteFaultOn(Link& link, const char* what, const std::string& detail) {
+void SdrPlaySource::noteFaultOn(Link& link, const char* what, const std::string& detail,
+                                bool endsWithStream) {
     {
         std::lock_guard<std::mutex> lk(link.errorMutex);
         link.lastError = std::string(what) + ": " + detail;
         link.faulted = true;
         link.deviceDead = true;
         link.deadWhat = what;
+        // Assigned, not or-ed: the LATEST fault decides whether a restart may
+        // lower the latch, so a removal after a failure stays a removal.
+        link.faultEndsWithStream = endsWithStream;
     }
     // Wake a read() that is parked: a dead device must not cost the pipeline
     // a whole kReadWait before it hears about it.
@@ -1248,6 +1286,7 @@ void SdrPlaySource::clearError() {
     link_->faulted = false;
     link_->deviceDead = false;
     link_->deadWhat.clear();
+    link_->faultEndsWithStream = false;
 }
 
 const char* SdrPlaySource::lastError() const {
@@ -1301,6 +1340,19 @@ std::int64_t steadyNowNs() {
                                          .count());
 }
 
+// A window's two lines into the log, the service-gap line straight after the
+// health line and at the same level, or nothing when the window had no line.
+void writeHealthLines(const std::string& line, const std::string& gapLine, bool warn) {
+    if (line.empty()) { return; }
+    if (warn) {
+        cascade::core::diagWarnf("%s", line.c_str());
+        if (!gapLine.empty()) { cascade::core::diagWarnf("%s", gapLine.c_str()); }
+    } else {
+        cascade::core::diagLogf("%s", line.c_str());
+        if (!gapLine.empty()) { cascade::core::diagLogf("%s", gapLine.c_str()); }
+    }
+}
+
 }  // namespace
 
 void SdrPlaySource::noteBlock(Link& link, std::size_t samples, bool dropped) {
@@ -1330,8 +1382,38 @@ void SdrPlaySource::noteBlock(Link& link, std::size_t samples, bool dropped) {
     if (dropped) { link.cbOverflows.fetch_add(1, std::memory_order_relaxed); }
 }
 
-std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning) {
+void SdrPlaySource::noteSampleNumber(Link& link, std::uint32_t firstSampleNum,
+                                     std::uint32_t numSamples) {
+    // THE SERVICE'S THREAD: one load, one compare-exchange, nothing else.
+    constexpr std::uint64_t kArmed = std::uint64_t{1} << 32;
+    const std::uint64_t armed = link.cbSampleNumExpected.load(std::memory_order_relaxed);
+    if (armed != 0) {
+        const std::uint32_t expected = static_cast<std::uint32_t>(armed);
+        if (firstSampleNum != expected) {
+            // uint32 arithmetic, as gr-sdrplay3 does it: a gap that straddles
+            // the counter's wrap comes out right, and a service that started
+            // its numbering again WITHOUT raising `reset` shows as one gap of
+            // nearly 2^32 samples - which is itself the evidence that it did.
+            const std::uint32_t missing = firstSampleNum - expected;
+            link.cbApiGaps.fetch_add(1, std::memory_order_relaxed);
+            link.cbApiGapSamples.fetch_add(missing, std::memory_order_relaxed);
+        }
+    }
+    // Arm for the next block. A compare-exchange rather than a store so that a
+    // disarm from the control thread that lands between the load above and
+    // here (a rate change issued while this block was in flight) wins: the
+    // next block then arms afresh instead of being judged against a number
+    // from before the change.
+    std::uint64_t seen = armed;
+    link.cbSampleNumExpected.compare_exchange_strong(
+        seen, kArmed | static_cast<std::uint32_t>(firstSampleNum + numSamples),
+        std::memory_order_relaxed, std::memory_order_relaxed);
+}
+
+std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning,
+                                            std::string* gapLine) {
     if (rateWarning != nullptr) { rateWarning->clear(); }
+    if (gapLine != nullptr) { gapLine->clear(); }
     // CLOSED FIRST, then emptied: a block the callback lands in between opens
     // the next window and is counted in one of the two, never lost and never
     // counted twice.
@@ -1342,6 +1424,8 @@ std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning
     const std::uint64_t samples = link.cbSamples.exchange(0, std::memory_order_relaxed);
     const std::uint64_t overflows = link.cbOverflows.exchange(0, std::memory_order_relaxed);
     std::int64_t longestGapMs = link.cbLongestGapMs.exchange(0, std::memory_order_relaxed);
+    const std::uint64_t apiGaps = link.cbApiGaps.exchange(0, std::memory_order_relaxed);
+    const std::uint64_t apiGapSamples = link.cbApiGapSamples.exchange(0, std::memory_order_relaxed);
     StreamHealth& h = link.health;
     const StreamHealth mine = h;
     h = StreamHealth{};
@@ -1377,10 +1461,11 @@ std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning
         if (openGap > longestGapMs) { longestGapMs = openGap; }
     }
     const std::int64_t windowMs = (now > start) ? (now - start) / 1000000 : 0;
-    char buf[192];
+    char buf[256];
     // THE SAME FORMAT SoapySource::streamHealthLine WRITES, word for word, so
     // a reader of the diagnostic log does not have to know which driver was
-    // open to parse the line.
+    // open to parse the line. `overflows` keeps its meaning (our ring was
+    // full), so a log from before 0.99.84 reads the same as one after it.
     std::snprintf(buf, sizeof(buf),
                   "source: stream health - reads %llu, with samples %llu, timeouts %llu, "
                   "overflows %llu, errors %llu, longest gap %lld ms, %llu samples in %lld s",
@@ -1392,6 +1477,22 @@ std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning
                   static_cast<long long>(longestGapMs),
                   static_cast<unsigned long long>(samples),
                   static_cast<long long>((windowMs + 500) / 1000));
+    // THEN, ON A LINE OF ITS OWN, the one thing only this driver can know
+    // (0.99.84): the gaps the SERVICE made in its own sample numbering, which
+    // no other radio here reports. 0.99.84 put it at the end of the line
+    // above, and the first field report that carried it (GitHub issue 6, an
+    // RSPduo at 4 MS/s) wrote 194 characters into a log whose lines hold 191:
+    // the line was cut, the upload scrub masks every number on a cut line,
+    // and the count this exists for reached its reader as "service gaps #".
+    // A second line is what airspy_source.cpp does for the same reason; the
+    // widest line above is about 165 characters, this one under 70.
+    if (gapLine != nullptr) {
+        char gbuf[96];
+        std::snprintf(gbuf, sizeof(gbuf), "source: SDRplay service gaps %llu (%llu samples)",
+                      static_cast<unsigned long long>(apiGaps),
+                      static_cast<unsigned long long>(apiGapSamples));
+        *gapLine = gbuf;
+    }
     return std::string(buf);
 }
 
@@ -1403,6 +1504,7 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
     const std::int64_t start = link.cbWindowStartNs.load(std::memory_order_acquire);
     if (start == 0) { return; }
     std::string line;
+    std::string gapLine;
     std::string rateWarning;
     bool warn = false;
     {
@@ -1410,9 +1512,17 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
         const std::int64_t windowNs =
             std::chrono::duration_cast<std::chrono::nanoseconds>(link.healthWindow).count();
         if (steadyNowNs() - start < windowNs) { return; }
-        warn = link.cbOverflows.load(std::memory_order_relaxed) > 0 || link.health.errors > 0;
+        // A SERVICE GAP IS WORRYING (0.99.84): it is exactly the click the
+        // RSPduo airband report heard, so a window holding one is written,
+        // and as a warning, where a clean window after the first is not. It
+        // does NOT feed the rate warning above: that one exists for a plan
+        // mismatch (a factor of three), and samples lost to gaps already
+        // lower the delivered rate the honest way - and are now named as
+        // gaps, which is the more useful word.
+        warn = link.cbOverflows.load(std::memory_order_relaxed) > 0 ||
+               link.cbApiGaps.load(std::memory_order_relaxed) > 0 || link.health.errors > 0;
         const bool first = !link.healthEverWritten;
-        line = healthLineLocked(link, &rateWarning);
+        line = healthLineLocked(link, &rateWarning, &gapLine);
         // A wrong rate is said whether or not the window is otherwise worth
         // a line: it is the one thing in it that invalidates everything the
         // chain built.
@@ -1424,11 +1534,7 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
         if (!(warn || first)) { return; }
         link.healthEverWritten = true;
     }
-    if (warn) {
-        core::diagWarnf("%s", line.c_str());
-    } else {
-        core::diagLogf("%s", line.c_str());
-    }
+    writeHealthLines(line, gapLine, warn);
 }
 
 void SdrPlaySource::drainEventLogs(Link& link) {
@@ -1453,7 +1559,6 @@ void SdrPlaySource::drainEventLogs(Link& link) {
 
 void SdrPlaySource::streamCallbackA(short* xi, short* xq, abi::StreamCbParamsT* params,
                                     unsigned int numSamples, unsigned int reset, void* ctx) {
-    (void) reset;
     Link* link = static_cast<Link*>(ctx);
     if (link == nullptr) { return; }
     link->inCallback.fetch_add(1, std::memory_order_acq_rel);
@@ -1469,12 +1574,21 @@ void SdrPlaySource::streamCallbackA(short* xi, short* xq, abi::StreamCbParamsT* 
         if (params->rfChanged != 0) { link->rfChanged.store(1, std::memory_order_relaxed); }
         if (params->fsChanged != 0) { link->fsChanged.store(1, std::memory_order_relaxed); }
     }
+    // "A re-initialisation has occurred within the API and local buffering
+    // should be reset" (the specification's words for `reset`): the sample
+    // numbering starts again, so the block that carries it is a new baseline
+    // and not a gap. Done whether or not this block has samples.
+    if (reset != 0) { link->cbSampleNumExpected.store(0, std::memory_order_relaxed); }
 
     if (!link->accepting.load(std::memory_order_relaxed) || xi == nullptr || xq == nullptr ||
         numSamples == 0) {
         link->inCallback.fetch_sub(1, std::memory_order_acq_rel);
         return;
     }
+    // The service's own account of where this block sits in its stream - the
+    // one thing that can tell a block the SERVICE lost from one we did. See
+    // Link::cbSampleNumExpected.
+    if (params != nullptr) { noteSampleNumber(*link, params->firstSampleNum, numSamples); }
 
     // Converted HERE, on the service's thread, exactly as every other driver
     // converts on its reader thread: the ring carries finished samples so the
@@ -1623,7 +1737,11 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
             break;
 
         case abi::DeviceFailure:
-            noteFaultOn(link, "device failure", "the SDRplay service reported a device failure");
+            // A fault of THIS STREAM (0.99.89): the next successful Init
+            // supersedes it - see startStreamingLocked. The 0.99.88 RSP2 bundle
+            // had the service go on delivering after raising it.
+            noteFaultOn(link, "device failure", "the SDRplay service reported a device failure",
+                        /*endsWithStream=*/true);
             link.pendingEventLogs.fetch_or(kEventLogFailure, std::memory_order_acq_rel);
             break;
 
@@ -2027,6 +2145,13 @@ bool SdrPlaySource::startStreamingLocked() {
     link_->streamStartNs.store(0, std::memory_order_relaxed);
     link_->emptySinceNs.store(0, std::memory_order_relaxed);
     link_->lastEmptyReadNs.store(0, std::memory_order_relaxed);
+    // A NEW STREAM NUMBERS ITS SAMPLES FROM WHEREVER THE SERVICE LIKES
+    // (0.99.84): the first block after Init is a baseline, never a gap from
+    // the last block of the previous session, and that session's gaps are
+    // not this one's to report.
+    link_->cbSampleNumExpected.store(0, std::memory_order_relaxed);
+    link_->cbApiGaps.store(0, std::memory_order_relaxed);
+    link_->cbApiGapSamples.store(0, std::memory_order_relaxed);
     // A STALE ACK MUST NOT SURVIVE INTO A NEW SESSION (round 3, measured): an
     // overload that fired and was never drained (no read() between it and
     // stop()) left these flags set, and the very first read() of the NEXT
@@ -2042,6 +2167,39 @@ bool SdrPlaySource::startStreamingLocked() {
     cbs.StreamBCbFn = &SdrPlaySource::streamCallbackB;
     cbs.EventCbFn = &SdrPlaySource::eventCallback;
 
+    // A FAULT THE LAST STREAM RAISED ABOUT ITSELF ENDS WITH IT (0.99.89).
+    //
+    // The 0.99.88 RSP2 bundle: the service raised DeviceFailure during an
+    // ADC-overload storm and went on delivering. Every START after it made a
+    // successful Init, but the latch from the old stream was still up, so the
+    // pipeline's source thread read one chunk, saw faulted() and left - and
+    // each following stop's health line said "with samples 20, timeouts 0",
+    // the rest overflows. Only open() lowered the latch.
+    //
+    // Lowered HERE, BEFORE Init, not after it: once Init returns, the new
+    // stream's own event callback may already have raised a fault of its own,
+    // and that one must never be erased. Nothing of the old stream can still
+    // write the slot: start() reaches this only with initialised_ false after
+    // an Uninit that answered (a refused or abandoned one strands the Link and
+    // makes the vendor unreachable, which start() refuses before this). Only
+    // a stream fault (Link::faultEndsWithStream) is lowered - a removal, a lost
+    // master, a stall or a dead service still needs the radio picked again or
+    // the service restarted.
+    bool supersededFault = false;
+    std::string supersededWhat;
+    {
+        std::lock_guard<std::mutex> ek(link_->errorMutex);
+        if (link_->faulted && link_->faultEndsWithStream) {
+            supersededFault = true;
+            supersededWhat = link_->deadWhat;
+            link_->lastError.clear();
+            link_->faulted = false;
+            link_->deviceDead = false;
+            link_->deadWhat.clear();
+            link_->faultEndsWithStream = false;
+        }
+    }
+
     // The one cbContext the API takes is the LINK - see the header. `cbs`
     // itself is a stack local because the API copies the table; the reference
     // does the same.
@@ -2049,6 +2207,17 @@ bool SdrPlaySource::startStreamingLocked() {
     if (err != abi::Success) {
         link_->accepting.store(false, std::memory_order_relaxed);
         link_->dev = nullptr;
+        // A REFUSED Init has not replaced the stream that failed, so its fault
+        // goes back up: the pipeline then shows FAIL rather than a receiver
+        // that calls itself running on nothing. The message below is the newer
+        // truth and is the one shown.
+        if (supersededFault) {
+            std::lock_guard<std::mutex> ek(link_->errorMutex);
+            link_->faulted = true;
+            link_->deviceDead = true;
+            link_->deadWhat = supersededWhat;
+            link_->faultEndsWithStream = true;
+        }
         setError("SDRplay Init failed: " + errText(a, err));
         core::diagWarnf("source: SDRplay start failed - %s", lastError());
         return false;
@@ -2061,6 +2230,11 @@ bool SdrPlaySource::startStreamingLocked() {
                            std::memory_order_relaxed);
     initialised_ = true;
     running_.store(true, std::memory_order_relaxed);
+    if (supersededFault) {
+        // Said, so a field log shows the radio coming back and why it may.
+        core::diagLogf("source: SDRplay started again after a %s - the new stream starts clean",
+                       supersededWhat.c_str());
+    }
     return true;
 }
 
@@ -2120,12 +2294,13 @@ void SdrPlaySource::stopStreamingLocked() {
                            : "the SDRplay session was lost by another radio");
         strandLink(link_);
         std::string line;
+        std::string gapLine;
         std::string rateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            line = healthLineLocked(*link_, &rateWarning);
+            line = healthLineLocked(*link_, &rateWarning, &gapLine);
         }
-        if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+        writeHealthLines(line, gapLine, /*warn=*/false);
         if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
         link_->setRateHz.store(0.0, std::memory_order_relaxed);
         return;
@@ -2165,12 +2340,13 @@ void SdrPlaySource::stopStreamingLocked() {
         initialised_ = false;
         running_.store(false, std::memory_order_relaxed);
         std::string abandonedLine;
+        std::string abandonedGapLine;
         std::string abandonedRateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            abandonedLine = healthLineLocked(*link_, &abandonedRateWarning);
+            abandonedLine = healthLineLocked(*link_, &abandonedRateWarning, &abandonedGapLine);
         }
-        if (!abandonedLine.empty()) { core::diagLogf("%s", abandonedLine.c_str()); }
+        writeHealthLines(abandonedLine, abandonedGapLine, /*warn=*/false);
         if (!abandonedRateWarning.empty()) { core::diagWarnf("%s", abandonedRateWarning.c_str()); }
         link_->setRateHz.store(0.0, std::memory_order_relaxed);
         return;
@@ -2218,12 +2394,13 @@ void SdrPlaySource::stopStreamingLocked() {
         initialised_ = false;
         running_.store(false, std::memory_order_relaxed);
         std::string refusedLine;
+        std::string refusedGapLine;
         std::string rateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            refusedLine = healthLineLocked(*link_, &rateWarning);
+            refusedLine = healthLineLocked(*link_, &rateWarning, &refusedGapLine);
         }
-        if (!refusedLine.empty()) { core::diagLogf("%s", refusedLine.c_str()); }
+        writeHealthLines(refusedLine, refusedGapLine, /*warn=*/false);
         // The 0.99.43 report's own window would have said it here: 168956928
         // samples in the 28.2 s before the stall, against 2 MS/s set.
         if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
@@ -2257,12 +2434,13 @@ void SdrPlaySource::stopStreamingLocked() {
     // The stream-health line for whatever the window holds, so a session that
     // was too short to trip the window still leaves its numbers.
     std::string line;
+    std::string gapLine;
     std::string rateWarning;
     {
         std::lock_guard<std::mutex> hl(link_->healthMutex);
-        line = healthLineLocked(*link_, &rateWarning);
+        line = healthLineLocked(*link_, &rateWarning, &gapLine);
     }
-    if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+    writeHealthLines(line, gapLine, /*warn=*/false);
     if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
     link_->setRateHz.store(0.0, std::memory_order_relaxed);
 }
@@ -2293,6 +2471,8 @@ bool SdrPlaySource::start() {
             link_->lastError = sdrPlaySessionLostSentence();
             link_->faulted = true;
             link_->deviceDead = true;
+            // A lost session is never lowered by a restart, whatever came first.
+            link_->faultEndsWithStream = false;
             if (link_->deadWhat.empty()) { link_->deadWhat = "start"; }
         }
         // Shorter than the sentence: a log line is cut at 191 bytes.
@@ -2558,6 +2738,9 @@ void SdrPlaySource::syncMirrorsAfterLateSuccessLocked(abi::ReasonForUpdateT reas
         if (initialised_) {
             link_->rateChangedInWindow.store(true, std::memory_order_relaxed);
             link_->setRateHz.store(out, std::memory_order_relaxed);
+            // The numbering may start again with the rate; the next block is
+            // a baseline (see Link::cbSampleNumExpected).
+            link_->cbSampleNumExpected.store(0, std::memory_order_relaxed);
         }
     }
     if (has(abi::Update_Rsp1a_BiasTControl)) {
@@ -2966,6 +3149,9 @@ bool SdrPlaySource::setSampleRateHz(double hz) {
     if (initialised_) {
         link_->rateChangedInWindow.store(true, std::memory_order_relaxed);
         link_->setRateHz.store(best, std::memory_order_relaxed);
+        // The numbering may start again with the rate; the next block is a
+        // baseline (see Link::cbSampleNumExpected).
+        link_->cbSampleNumExpected.store(0, std::memory_order_relaxed);
     }
     return true;
 }
@@ -3541,8 +3727,17 @@ bool SdrPlaySource::setHdrMode(bool on) {
 // --- health ---------------------------------------------------------------
 
 std::string SdrPlaySource::streamHealthLine() {
+    // The test seam: both of the window's lines, the health line and then the
+    // service-gap line on a line of its own, exactly as the log receives them
+    // - or nothing, when the window has nothing.
     std::lock_guard<std::mutex> lk(link_->healthMutex);
-    return healthLineLocked(*link_);
+    std::string gapLine;
+    std::string line = healthLineLocked(*link_, nullptr, &gapLine);
+    if (!line.empty() && !gapLine.empty()) {
+        line += '\n';
+        line += gapLine;
+    }
+    return line;
 }
 
 void SdrPlaySource::setStreamHealthWindowForTest(std::chrono::milliseconds w) {

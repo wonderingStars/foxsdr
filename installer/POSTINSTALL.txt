@@ -151,6 +151,16 @@ similar, install ONE of:
 Either provides the SoapySDR module set (SoapyUHD, SoapyRTLSDR, ...) plus
 the vendor libraries (uhd.dll, librtlsdr, ...) they need.
 
+USRP owners, one more step with radioconda: it ships NO UHD firmware
+images, so UHD's discovery silently finds no USRP until you either run
+its downloader —
+
+  C:\Users\<you>\radioconda\Library\bin\uhd\utils\uhd_images_downloader.py
+
+— or set UHD_IMAGES_DIR to an existing images directory. When this is
+what is wrong, FoxSDR says so under the Source list and in the log
+("UHD reported it has no firmware images").
+
 FoxSDR finds either automatically, in their default locations, and adds
 them to its own module search path — nothing needs to be configured and
 nothing needs administrator rights. If you installed one somewhere else,

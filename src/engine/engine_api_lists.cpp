@@ -486,6 +486,9 @@ std::uint64_t Engine::apiListsFingerprint() {
     for (const auto& p : patchRadioPending_) { f.value(p.first); }
     f.value(lookForNetworkUsrps_);
     for (const std::string& d : soapyAbsentDrivers_) { f.text(d); }
+    //  - what the last scan said about UHD's firmware images (0.99.90 merge: fact.source.uhdNoImages / fact.source.usrpOnUsb)
+    f.value(soapyUhdNoImages_);
+    f.value(soapyUsrpOnUsb_);
     f.value(sdrPlayRowsFound_);
     //  - the Pluto's address, the dongles that cannot be opened, what the last scans said about drivers and the
     //    runtime (the evidence as one counter: its rows are paths)
@@ -1190,6 +1193,11 @@ void Engine::buildApiListsSource(ApiListBlock& b) {
         fact("source.scanSkip", std::move(skip));
     }
     fact("source.faultedDrivers", joined(faultedDrivers_));
+    // WHAT THE LAST SCAN SAID ABOUT UHD'S FIRMWARE IMAGES (master 0.99.85, re-expressed in the 0.99.90 merge): "1" when UHD itself
+    // reported it has none, and (separately) when the scan's USB listing held a USRP. The Source section draws
+    // gui::uhdImagesMissingHint(both) under the list, and the radio-setup page's images finding reads the first.
+    fact("source.uhdNoImages", soapyUhdNoImages_ ? "1" : "0");
+    fact("source.usrpOnUsb", soapyUsrpOnUsb_ ? "1" : "0");
     fact("source.plutoUri", plutoUri_, true);
     fact("source.rtlTcpAddr", rtlTcpAddr_, true);
     // The Sinks rail's AUDIO BUFFER (0.99.73): the chosen value (0 = AUTOMATIC) and the sentence's parts when automatic last moved the lead
