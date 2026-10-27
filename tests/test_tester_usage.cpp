@@ -584,41 +584,59 @@ void testTokenNeverAppearsNearALogCall(const std::string& givenRoot) {
         // core/tester_usage.cpp itself: the transport is silent by design
         // (see its header), so it must not contain ANY
         // diagLogf/diagWarnf/printf call at all.
-        const std::string src = readFile(repoRoot / "src" / "core" / "tester_usage.cpp");
-        CHECK(!src.empty());
-        CHECK(src.find("diagLogf") == std::string::npos);
-        CHECK(src.find("diagWarnf") == std::string::npos);
-        CHECK(src.find("std::printf") == std::string::npos);
-        CHECK(src.find("fprintf") == std::string::npos);
+        // (Both halves: tester_usage.cpp, and the session half split out of it in stub campaign B15, tester_usage_session.cpp.)
+        for (const char* file : {"tester_usage.cpp", "tester_usage_session.cpp"}) {
+            const std::string src = readFile(repoRoot / "src" / "core" / file);
+            CHECK(!src.empty());
+            CHECK(src.find("diagLogf") == std::string::npos);
+            CHECK(src.find("diagWarnf") == std::string::npos);
+            CHECK(src.find("std::printf") == std::string::npos);
+            CHECK(src.find("fprintf") == std::string::npos);
+        }
     }
     {
         // app_window.cpp is huge and logs plenty about everything else; the
         // narrower, meaningful check is that no LINE calling a log function
         // also mentions the token field or the raw input buffer.
-        const std::string src = readFile(repoRoot / "src" / "gui" / "app_window.cpp");
-        CHECK(!src.empty());
-        std::istringstream lines(src);
-        std::string line;
+        //
+        // EVERY FILE THE FEATURE LIVES IN (stub campaign B15): the beta tester's code moved out of app_window.cpp into app_window_tester.cpp (that file is at the
+        // object-file limit), and a scan of the old file alone would have gone on passing with nothing left in it to read. So the scan takes app_window.cpp and
+        // every app_window_*.cpp beside it, and the check that it is not vacuous is that the tester's own file is among them and has log lines to read.
         bool clean = true;
-        int lineNo = 0;
-        while (std::getline(lines, line)) {
-            ++lineNo;
-            const bool logs = line.find("diagLogf(") != std::string::npos ||
-                              line.find("diagWarnf(") != std::string::npos;
-            if (!logs) { continue; }
-            const bool leaks = line.find("testerToken_") != std::string::npos ||
-                               line.find("testerCodeBuf_") != std::string::npos ||
-                               line.find("testerAppToken_") != std::string::npos ||
-                               line.find("testerLinkPending_") != std::string::npos ||
-                               line.find("testerLinkResolvingToken_") != std::string::npos ||
-                               line.find(".token") != std::string::npos;
-            if (leaks) {
-                clean = false;
-                std::printf("FAIL app_window.cpp:%d logs the tester token: %s\n", lineNo,
-                            line.c_str());
+        int testerFileLogLines = 0;
+        std::vector<fs::path> files = {repoRoot / "src" / "gui" / "app_window.cpp"};
+        for (const auto& entry : fs::directory_iterator(repoRoot / "src" / "gui")) {
+            const std::string name = entry.path().filename().string();
+            if (name.rfind("app_window_", 0) == 0 && entry.path().extension() == ".cpp") { files.push_back(entry.path()); }
+        }
+        for (const fs::path& file : files) {
+            const std::string src = readFile(file);
+            CHECK(!src.empty());
+            std::istringstream lines(src);
+            std::string line;
+            int lineNo = 0;
+            while (std::getline(lines, line)) {
+                ++lineNo;
+                const bool logs = line.find("diagLogf(") != std::string::npos ||
+                                  line.find("diagWarnf(") != std::string::npos;
+                if (!logs) { continue; }
+                if (file.filename() == "app_window_tester.cpp") { ++testerFileLogLines; }
+                const bool leaks = line.find("testerToken_") != std::string::npos ||
+                                   line.find("testerCodeBuf_") != std::string::npos ||
+                                   line.find("testerAppToken_") != std::string::npos ||
+                                   line.find("testerLinkPending_") != std::string::npos ||
+                                   line.find("testerLinkResolvingToken_") != std::string::npos ||
+                                   line.find("testerLinkQueuedToken_") != std::string::npos ||
+                                   line.find(".token") != std::string::npos;
+                if (leaks) {
+                    clean = false;
+                    std::printf("FAIL %s:%d logs the tester token: %s\n", file.filename().string().c_str(), lineNo,
+                                line.c_str());
+                }
             }
         }
         CHECK(clean);
+        CHECK(testerFileLogLines >= 3);
     }
 }
 

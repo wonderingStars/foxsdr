@@ -1077,58 +1077,100 @@ void testTokenNeverAppearsNearALogCall(const std::string& givenRoot) {
     CHECK(linkSrc.find("diagWarnf") == std::string::npos);
     CHECK(linkSrc.find("std::printf") == std::string::npos);
     CHECK(linkSrc.find("fprintf") == std::string::npos);
+    // ...and the network half split out of it (2026-10-27, B15: tester_link_net.cpp), under the same rule.
+    const std::string netSrc = readFile(repoRoot / "src" / "core" / "tester_link_net.cpp");
+    CHECK(!netSrc.empty());
+    CHECK(netSrc.find("diagLogf") == std::string::npos);
+    CHECK(netSrc.find("diagWarnf") == std::string::npos);
+    CHECK(netSrc.find("std::printf") == std::string::npos);
+    CHECK(netSrc.find("fprintf") == std::string::npos);
 
-    // main.cpp: the one diagLogf call this feature adds logs only a length,
-    // never the token/URL variable - scan every logging line for the names
-    // that WOULD leak it.
-    const std::string mainSrc = readFile(repoRoot / "src" / "main.cpp");
-    CHECK(!mainSrc.empty());
-    std::istringstream lines(mainSrc);
-    std::string line;
+    // THE FOXSDR:// ACTIVATION LIVES IN src/engine/process_boot.cpp NOW (2026-10-27, stub campaign B15; the 0.99.84 merge's stage 7a moved it out of main.cpp, so a
+    // scan of main.cpp alone would pass for the wrong reason: main.cpp logs nothing of the link any more). The scan therefore reads BOTH files, and shows itself
+    // not to be vacuous by finding the log statements that carry the token's LENGTH in process_boot.cpp - the one thing about the token a log may say.
+    //
+    // A LOG STATEMENT, not a log line: the call and its arguments may run over several lines (process_boot.cpp's do), and a token on the second line of a call
+    // is as much in the log as one on the first. Each statement from `diagLogf(` / `diagWarnf(` to its `;` is taken whole, with string literals blanked (the words
+    // "tester link received" are not the credential), and may name the token's variable only as `linkToken.size()` and the raw argument only as `strlen(argv[N])`.
+    const auto logStatements = [](const std::string& src) {
+        std::vector<std::string> out;
+        for (const char* call : {"diagLogf(", "diagWarnf("}) {
+            for (std::size_t at = src.find(call); at != std::string::npos; at = src.find(call, at + 1)) {
+                std::string stmt;
+                bool inString = false;
+                for (std::size_t i = at; i < src.size(); ++i) {
+                    const char c = src[i];
+                    if (inString) {
+                        if (c == '\\') { ++i; continue; }
+                        if (c == '"') { inString = false; stmt.push_back(c); }
+                        continue;
+                    }
+                    if (c == '"') { inString = true; stmt.push_back(c); continue; }
+                    stmt.push_back(c);
+                    if (c == ';') { break; }
+                }
+                out.push_back(stmt);
+            }
+        }
+        return out;
+    };
+    const auto leaksTheToken = [](const std::string& stmt) {
+        std::string s = stmt;
+        // The two allowed forms, taken out before the names are looked for.
+        for (const std::string& ok : {std::string("linkToken.size()")}) {
+            for (std::size_t p = s.find(ok); p != std::string::npos; p = s.find(ok)) { s.erase(p, ok.size()); }
+        }
+        for (std::size_t p = s.find("strlen(argv["); p != std::string::npos; p = s.find("strlen(argv[")) {
+            const std::size_t close = s.find("])", p);
+            if (close == std::string::npos) { break; }
+            s.erase(p, close + 2 - p);
+        }
+        return s.find("linkToken") != std::string::npos || s.find("argv") != std::string::npos || s.find("token") != std::string::npos ||
+               s.find("Token") != std::string::npos;
+    };
     bool clean = true;
-    int lineNo = 0;
-    while (std::getline(lines, line)) {
-        ++lineNo;
-        const bool logs = line.find("diagLogf(") != std::string::npos ||
-                          line.find("diagWarnf(") != std::string::npos;
-        if (!logs) { continue; }
-        // linkToken.size() is fine (that is exactly what the one permitted
-        // log line reports) - what must never appear is the variable used
-        // any other way on a logging line.
-        const bool mentionsToken = line.find("linkToken") != std::string::npos;
-        const bool onlyItsSize = line.find("linkToken.size()") != std::string::npos &&
-                                 line.find("linkToken") == line.rfind("linkToken");
-        const bool leaks = (mentionsToken && !onlyItsSize) ||
-                           line.find("argv[1]") != std::string::npos;
-        if (leaks) {
-            clean = false;
-            std::printf("FAIL main.cpp:%d logs the tester link token: %s\n", lineNo, line.c_str());
+    int sawLength = 0;
+    for (const char* rel : {"process_boot.cpp", "../main.cpp"}) {
+        const std::string src = readFile(repoRoot / "src" / "engine" / rel);
+        CHECK(!src.empty());
+        for (const std::string& stmt : logStatements(src)) {
+            if (stmt.find("linkToken.size()") != std::string::npos) { ++sawLength; }
+            if (leaksTheToken(stmt)) {
+                clean = false;
+                std::printf("FAIL %s logs the tester link token: %s\n", rel, stmt.c_str());
+            }
         }
     }
     CHECK(clean);
+    // Not vacuous: the activation's one log statement that carries the length is there to be seen.
+    CHECK(sawLength >= 1);
 
-    // gui/app_window.cpp already has a line-scan for this in
-    // test_tester_usage.cpp; extend the same property here to the new field
-    // names this feature adds, independent of that file's own list.
-    const std::string appSrc = readFile(repoRoot / "src" / "gui" / "app_window.cpp");
-    CHECK(!appSrc.empty());
-    std::istringstream appLines(appSrc);
+    // THE WINDOW'S FILES: no log line in any of them names the token, the pasted code or the pending link (app_window.cpp has none of it any more, since the feature
+    // moved to app_window_tester.cpp; the scan takes every file of src/gui so a move back, or a third home, is read too). test_tester_usage.cpp has its own
+    // line-scan for the usage fields; this one adds the link's names, independent of that file's list.
     bool appClean = true;
-    int appLineNo = 0;
-    while (std::getline(appLines, line)) {
-        ++appLineNo;
-        const bool logs = line.find("diagLogf(") != std::string::npos ||
-                          line.find("diagWarnf(") != std::string::npos;
-        if (!logs) { continue; }
-        const bool leaks = line.find("testerAppToken_") != std::string::npos ||
-                           line.find("testerLinkPending_") != std::string::npos ||
-                           line.find("testerLinkResolvingToken_") != std::string::npos;
-        if (leaks) {
-            appClean = false;
-            std::printf("FAIL app_window.cpp:%d logs the app token: %s\n", appLineNo, line.c_str());
+    int appFiles = 0;
+    for (const auto& entry : fs::directory_iterator(repoRoot / "src" / "gui")) {
+        if (entry.path().extension() != ".cpp") { continue; }
+        ++appFiles;
+        std::istringstream appLines(readFile(entry.path()));
+        std::string line;
+        int appLineNo = 0;
+        while (std::getline(appLines, line)) {
+            ++appLineNo;
+            const bool logs = line.find("diagLogf(") != std::string::npos || line.find("diagWarnf(") != std::string::npos;
+            if (!logs) { continue; }
+            const bool leaks = line.find("testerAppToken_") != std::string::npos || line.find("testerLinkPending_") != std::string::npos ||
+                               line.find("testerLinkResolvingToken_") != std::string::npos || line.find("testerLinkQueuedToken_") != std::string::npos;
+            if (leaks) {
+                appClean = false;
+                std::printf("FAIL %s:%d logs the app token: %s\n", entry.path().filename().string().c_str(), appLineNo, line.c_str());
+            }
         }
     }
+    CHECK(appFiles > 10);
     CHECK(appClean);
+    CHECK(fs::is_regular_file(repoRoot / "src" / "gui" / "app_window_tester.cpp"));
 }
 
 }  // namespace

@@ -402,6 +402,7 @@ void AppWindow::drawPluginStoreWindow() {
         return;
     }
     uiNotePanel("plugin store");
+    testerUsage_->noteFeature("plugins");
     // THE CACHE IS READ BEFORE ANYTHING ASKS IT A QUESTION. storeShouldCheckOnOpen settles on its first call, so asked of a cache that has never
     // been read ("no catalogue") it would send a FETCH for a catalogue another path - the web remote's, a bounded run's hook - had already read.
     cascade::gui::StoreListCache& store = storeLists(true);

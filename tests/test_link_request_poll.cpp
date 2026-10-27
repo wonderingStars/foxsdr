@@ -299,7 +299,9 @@ void checkTheClaimIsNotMadeOnTheGuiThread() {
                             p.filename().string().c_str(), line);
                 ++directCalls;
             }
-            if (p.filename() == "app_window.cpp" &&
+            // (2026-10-27, stub campaign B15: the tester's flow is src/gui/app_window_tester.cpp now - app_window.cpp is at the object-file limit, so the
+            // feature came back in a file of its own. The expectation is the same one: AppWindow's own code asks the poll; only the file that holds it moved.)
+            if (p.filename() == "app_window_tester.cpp" &&
                 body.find("linkRequestPoll_.request(") != std::string::npos) {
                 ++pollUses;
             }

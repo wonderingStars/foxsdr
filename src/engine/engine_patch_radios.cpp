@@ -361,8 +361,8 @@ void Engine::patchReconcile() {
         if (const std::string kind = pc::deviceDriver(n->device); kind != "file" && kind != "siggen") {
             cascade::core::health::noteRadioOpen(kind);
         }
-        // FIXME(2026-10-21, 0.99.84 merge, ledger TESTER-USAGE): master counts the radio for the beta-tester usage record here
-        // (testerUsage_.noteRadio(driver) and noteFeature("native-drivers")); the engine has no tester-usage recorder yet.
+        // (Master also counted the radio for the beta-tester usage record here. That record is the WINDOW's, so the window reads the patch's open radios instead:
+        // AppWindow::testerNoteFacts, stub campaign B15.)
     }
 
     // --- which radios should run ------------------------------------------------

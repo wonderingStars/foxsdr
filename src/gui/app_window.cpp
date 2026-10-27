@@ -817,6 +817,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
       fittedDeck_(std::make_unique<FittedModulesDeck>()),
       fittedCache_(std::make_unique<FittedListCache>()),
       storeCache_(std::make_unique<StoreListCache>()) {
+    // THE TESTER RECORDER'S TWO MARKS ON THE ENGINE'S LISTENERS (stub campaign B15), before anything can start one: the settings file is restored below.
+    installTesterUsageHooks();
     configPath_ = std::move(configPath);
     configAnnounce_ = announceConfig;
     // THE RECEIVER'S START-UP (engine stage 3a): the recording folder, the
@@ -877,6 +879,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
                 engine_.telemetryStartup(cfg, configDir);
             }
             diagnosticsStartup(cfg);
+            // The beta tester's code and the report the last session left, folded into the retry queue. Sends nothing here: the poll does, off the constructor.
+            testerUsageStartup(cfg);
             updateCheckEnabled_ = cfg.updateCheckEnabled;
             updateChannel_ = cfg.updateChannel;
             // The team messages marked Seen (0.99.79, stub campaign B14): the window's own list, saved back by diagnosticsJournal.
@@ -3783,6 +3787,7 @@ void AppWindow::drawUi() {
                 const ImVec2 at = ImGui::GetWindowPos();
                 const ImVec2 sz = ImGui::GetWindowSize();
                 cascade::gui::census::note("view:receiver");
+                testerUsage_->noteFeature("spectrum");
                 cascade::gui::census::rect("view:receiver", at.x, at.y, at.x + sz.x, at.y + sz.y);
             }
             frameScope.to(cascade::core::FrameScope::Spectrum);
@@ -3834,6 +3839,8 @@ void AppWindow::drawUi() {
     // top-level thing belongs at the top level, not nested in the borderless
     // root window's ID stack.
     drawDiagnosticsOffer();
+    // The beta-tester link confirmation prompt, same top-level reasoning.
+    drawTesterLinkPrompt();
     // The waterfall markers' right-click menu and their list window: at the
     // top level because the receiver and every patch Display part open the
     // SAME menu, and a popup's id belongs to the ID stack it is opened in
@@ -3876,6 +3883,12 @@ void AppWindow::drawUi() {
     // stands between the workers and the sink.)
     frameScope.to(cascade::core::FrameScope::Polls);
     pollUpdateAsync();
+    // Beta tester usage reporting (SYSTEM > Beta tester), off unless a tester pastes their code; a no-op poll otherwise. See core/tester_usage.hpp. The marks the
+    // table says (a take, the scanner, RF going out, the radio in use) are read here, after the state this frame read.
+    testerNoteFacts();
+    testerUsagePoll();
+    // The portal-link flow: migration exchange, confirm-by-name, and the 1 Hz link-request file poll (on a worker). See core/tester_link.hpp.
+    testerLinkPoll();
     // The Airband section's once-a-frame half (stub campaign B7): its disk jobs, the view switch the engine asks for, the monitor's sentences. In
     // master the monitor's driver ran here as well; that part is the engine's pass now.
     airbandFrame();
@@ -6580,6 +6593,7 @@ void AppWindow::drawMenuColumn() {
             drawKeyBindingsSection();
             drawDiagnosticsSection();
             drawUsageReportingSection();
+            if (testerSectionVisible()) { drawTesterUsageSection(); }
             break;
     }
     // The last section's drawer, if it is mid-motion, is closed here rather
@@ -6664,6 +6678,7 @@ void AppWindow::drawRadioSection() {
             // bandwidth. FOXAPI_DEMOD_* is this table's order, 1-based.
             if (ImGui::Button(kModeNames[i], ImVec2(cellWidth, 0.0f))) {
                 uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, i + 1));
+                testerUsage_->noteFeature("modes");
             }
             if (litPushed > 0) { ImGui::PopStyleColor(litPushed); }
         }
@@ -9418,6 +9433,7 @@ void AppWindow::drawStereoRdsControls() {
         ImGui::TextDisabled((rds & FOXAPI_RDS_SYNCED) != 0u ? tr("RDS: syncing...") : tr("RDS: no data"));
         return;
     }
+    testerUsage_->noteFeature("fm-rds");
     if ((rds & FOXAPI_RDS_PS_VALID) != 0u) {
         ImGui::Text("PS  %s", st.rdsPs);
     } else {
@@ -9476,6 +9492,7 @@ void AppWindow::drawAudioFilterSection() {
     bool nr = (st.flags & FOXAPI_RX_NR) != 0u;
     if (ImGui::Checkbox(trId("Noise reduction"), &nr)) {
         uiSubmit(cmd::makeInt(FOXAPI_OP_SET_NR, nr ? 1 : 0, 0));
+        if (nr) { testerUsage_->noteFeature("cleanup"); }
     }
     ImGui::BeginDisabled(!nr);
     float nrStrength = static_cast<float>(st.nrStrength);
@@ -9489,6 +9506,7 @@ void AppWindow::drawAudioFilterSection() {
     bool notch = (st.flags & FOXAPI_RX_NOTCH) != 0u;
     if (ImGui::Checkbox(trId("Notch"), &notch)) {
         uiSubmit(cmd::makeInt(FOXAPI_OP_SET_NOTCH, notch ? 1 : 0, 0));
+        if (notch) { testerUsage_->noteFeature("cleanup"); }
     }
     ImGui::BeginDisabled(!notch);
     // Logarithmic: a linear 10 Hz..20 kHz slider spends 90% of its travel
@@ -13218,6 +13236,7 @@ void AppWindow::drawDemodScopeSection() {
                           "two traces and as a vector display. The time base, the\n"
                           "attenuator and the input selector are on the page itself."))) {
         demodScopeOpen_ = !demodScopeOpen_;
+        if (demodScopeOpen_) { testerUsage_->noteFeature("scope"); }
     }
 }
 
@@ -14237,6 +14256,7 @@ void AppWindow::drawPluginWindows() {
         // page: its rail row carries it, and that row is the invitation.
         if (!page.open) { continue; }
         uiNotePanel("map");
+        testerUsage_->noteFeature("map");
         // PLACED SO IT DOES NOT FIT INSIDE THE APPLICATION WINDOW, which is
         // what makes ImGui give it a real operating system window rather than
         // merging it into the main one. There is no "always be a separate
@@ -18921,6 +18941,7 @@ void AppWindow::dispatchKeyBindings() {
                              action == cascade::gui::KeyAction::TuneStepUp ||
                              action == cascade::gui::KeyAction::TuneStepDown;
         if (!ImGui::IsKeyPressed(want.key, repeats)) { continue; }
+        testerUsage_->noteFeature("keys");
         applyKeyAction(action);
         // ONE ACTION PER FRAME, even with a table that has a conflict in it:
         // two actions on one chord would otherwise both fire, and "it does two
@@ -18985,20 +19006,21 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             const float step = (action == KeyAction::SquelchUp) ? 2.0f : -2.0f;
             uiSubmit(cmd::makeNum(FOXAPI_OP_SET_SQUELCH,
                                   std::clamp(static_cast<float>(uiState_.squelchDb) + step, -120.0f, 0.0f)));
+            testerUsage_->noteFeature("cleanup");
             break;
         }
         // kModeNames order: NFM WFM AM DSB USB CW LSB RAW - FOXAPI_DEMOD_*
         // 1..8. Indices rather than a name lookup, because this switch is
         // already the mapping and a second one by string would be a second
         // place to get it wrong.
-        case KeyAction::ModeNFM: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_NFM)); break;
-        case KeyAction::ModeWFM: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_WFM)); break;
-        case KeyAction::ModeAM: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_AM)); break;
-        case KeyAction::ModeDSB: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_DSB)); break;
-        case KeyAction::ModeUSB: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_USB)); break;
-        case KeyAction::ModeCW: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_CW)); break;
-        case KeyAction::ModeLSB: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_LSB)); break;
-        case KeyAction::ModeRAW: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_RAW)); break;
+        case KeyAction::ModeNFM: { uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_NFM)); testerUsage_->noteFeature("modes"); break; }
+        case KeyAction::ModeWFM: { uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_WFM)); testerUsage_->noteFeature("modes"); break; }
+        case KeyAction::ModeAM: { uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_AM)); testerUsage_->noteFeature("modes"); break; }
+        case KeyAction::ModeDSB: { uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_DSB)); testerUsage_->noteFeature("modes"); break; }
+        case KeyAction::ModeUSB: { uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_USB)); testerUsage_->noteFeature("modes"); break; }
+        case KeyAction::ModeCW: { uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_CW)); testerUsage_->noteFeature("modes"); break; }
+        case KeyAction::ModeLSB: { uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_LSB)); testerUsage_->noteFeature("modes"); break; }
+        case KeyAction::ModeRAW: { uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_RAW)); testerUsage_->noteFeature("modes"); break; }
         case KeyAction::TuneStepUp:
         case KeyAction::TuneStepDown: {
             // One step on the 10 kHz digit: the counter switch's own
@@ -19370,6 +19392,7 @@ void AppWindow::drawBookmarksSection() {
                     // Click-to-tune: BOOKMARK_TUNE by the entry's id
                     // (tuneToBookmark - frequency, then mode, then bandwidth).
                     uiSubmit(cmd::makeInt(FOXAPI_OP_BOOKMARK_TUNE, static_cast<std::int64_t>(b.id)));
+                    testerUsage_->noteFeature("bookmarks");
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("x", ImVec2(delW, 0.0f))) { deleteIdx = i; }
@@ -21637,6 +21660,8 @@ void AppWindow::diagnosticsJournal(cascade::core::AppConfig& cfg) {
     cfg.updateChannel = updateChannel_;
     // ...and so does the list of team messages marked Seen (0.99.79), for the same reason.
     cfg.messagesSeen = messagesSeen_;
+    // ...and the beta tester's code, the retry queue and this session's report so far (nothing but the token fields when no code is set).
+    testerUsageJournal(cfg);
 
     // Same rationale: this is the one place the GUI's copy of the config is
     // written back, so the diagnostics switches ride along here too.

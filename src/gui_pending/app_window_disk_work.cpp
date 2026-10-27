@@ -687,7 +687,7 @@ void AppWindow::pollDiskJobs() {
                     // Show the preset the rows joined, as the lookup of an airport does -
                     // unless the monitor is listening, or the preset has nothing it can play.
                     airbandShowGroup(into.group);
-                    testerUsage_.noteFeature("airband");
+                    testerUsage_->noteFeature("airband");
                 } else {
                     char note[320];
                     cascade::core::formatUtf8(

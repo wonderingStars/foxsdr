@@ -261,6 +261,10 @@ Notes on the choices:
   Worker-facing was implemented. For the owner: should a headless engine's settings default usage reporting OFF (no panel on which
   anyone chose it)? should its record say which program it came from (a new `ch` word that fits 12 characters, or a new field)? With
   `--use-config` the identifier is the window's, so the window's own opt-out silences both.
+  **A beta tester's usage record is not among the things a headless engine sends** (stub campaign B15): the recorder, the retry queue and the
+  sender are the window's, so a tester code in a settings file the desktop shares is inert in `foxsdr-engine` - it keeps the code and any
+  report the window left in the file exactly as it found them, asks the tester portal nothing, and the built `foxsdr-engine` does not
+  contain the usage endpoint's address (`tests/test_tester_host_only.cpp`).
 - **The site's crash feed and a second module name.** A report names its module (`foxsdr-engine`, `foxsdr-engine.exe`) and its build
   id; whether the site's feed accepts and resolves a module other than `cascade` is not known from this tree (the site is another
   repository), and a headless engine uploads no report by default, so nothing is sent to find out. `release.ps1 -Steps symbols` sends

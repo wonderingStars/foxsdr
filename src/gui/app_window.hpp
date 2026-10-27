@@ -125,6 +125,9 @@ struct GLFWwindow;
 #include "gui/map_view.hpp"
 #include "core/telemetry.hpp"
 #include "core/crash_upload.hpp"
+#include "core/tester_usage.hpp"
+#include "core/tester_link.hpp"
+#include "gui/link_request_poll.hpp"
 #include "core/feature_request.hpp"
 #include "core/problem_report.hpp"
 #include "core/hang_watchdog.hpp"
@@ -686,8 +689,8 @@ public:
     // checkbox calls, so the mid-session behaviour of that switch can be
     // proved against the real application.
     void setDiagToggle(int mode);
-    // FIXME(2026-10-21, 0.99.84 merge, ledger TESTER-LINK): main.cpp passes master's --link-tester reveal; the Settings > Beta tester
-    // link flow (0.99.45) is not re-expressed onto the engine's table yet, so the flag is held and read by nothing.
+    // --link-tester (main.cpp, via the process boot's parse): reveals SYSTEM > Beta tester's paste box for this session even with no app token held
+    // yet. See the private testerLinkReveal_ field's own comment (stub campaign B15: the flow is the window's again).
     void setLinkTesterReveal(bool reveal) { testerLinkReveal_ = reveal; }
 
 private:
@@ -2270,6 +2273,217 @@ private:
     };
     TelemetryPending telemetryPending_;
 
+    // --- Beta tester usage (opt-in by pasting a code; see PRIVACY.md, -------
+    // core/tester_usage.hpp) --------------------------------------------------
+    // INDEPENDENT of telemetryEnabled_ above: a different switch, a different
+    // credential, a different purpose. Nothing here collects or sends while
+    // testerToken_ is empty - testerUsage_->armed() is exactly that condition.
+    //
+    // THE RECORDER IS THE WINDOW'S (stub campaign B15; stage-7 survey section 8, owner decision O8): a headless engine must never be able to send a tester
+    // report, so the recorder, the sender, the queue and the token live here, in host glue, fed from facts the table already publishes (testerNoteFacts) and
+    // from the window's own events (the noteFeature marks beside each control). It is shared, not a member by value, because the two listeners call it
+    // from threads of their own (installTesterUsageHooks) and a server's last request may come after this window's members are gone: the closures keep
+    // it alive for as long as a server holds them.
+    std::shared_ptr<cascade::core::TesterUsageRecorder> testerUsage_ = std::make_shared<cascade::core::TesterUsageRecorder>();
+    // Hands the recorder's two marks ("browser", "cat") to the engine's listeners, once, from the constructor (EngineShell::setServerUsageHooks).
+    void installTesterUsageHooks();
+    // The marks that need no control of their own because the table says them: a take in progress, the scanner, RF going out, the radio kind in use. Once
+    // a frame, after the state is read; a no-op while no code is set.
+    void testerNoteFacts();
+    std::uint64_t testerFactsSeq_ = ~std::uint64_t{0};  // the listSeq the radio kind was last read at
+    std::string testerSourceKind_;                      // the kind of the DEVICES entry that is the source in use ("siggen", "rtlsdr", "soapy", "soundcard", "file"; "" none)
+    // The module files being fed now (the receiver's decoders, and the patch's while it runs): what testerUsageAccrue credits a second to.
+    void testerFedPlugins(std::vector<std::string>& files, bool& patchDecoder);
+    void testerNoteRadio(const std::string& kind);
+    std::string testerToken_;
+    bool testerTokenInvalid_ = false;
+    // The retry queue carried from config, plus whatever this session's own
+    // finished report adds to it - see testerUsageStartup/testerUsageJournal.
+    // Kept free of any report not carrying THIS token - see
+    // core::TesterUsageQueue::dropOthers, called wherever testerToken_
+    // changes.
+    cascade::core::TesterUsageQueue testerUsageQueue_;
+    // ONE sender: the startup flush and the periodic in-session retry share
+    // it (never more than one send in flight at a time - busy() refuses a
+    // second). There is deliberately no exit-time sender any more: an
+    // earlier version tried a bounded attempt at clean exit and measured up
+    // to ~3.9s of added shutdown time against an unresponsive server (WinHTTP's
+    // own floor), which is not what "never delays exit" can mean. The
+    // finished session's report is saved to disk at exit exactly like
+    // telemetry's own, and sent at the NEXT launch - see testerUsageJournal
+    // and testerUsageStartup. TesterUsageSender's destructor never blocks
+    // (see its header comment), so a send still in flight when the window
+    // closes costs nothing at all.
+    cascade::core::TesterUsageSender testerUsageSender_;
+    double testerSessionStart_ = 0.0;  // glfwGetTime at start, for the duration
+    std::time_t testerSessionStartWall_ = 0;  // wall clock, for the RFC3339 stamp
+    cascade::core::SecondAccrual testerUsageAccrual_;
+    // Set once a launch's queue flush hits Invalid or Retry, so a black-holed
+    // endpoint or a bad code cannot turn testerUsagePoll() into a per-frame
+    // retry loop against it for the rest of the session.
+    bool testerUsageQueueTriedThisSession_ = false;
+    bool testerShowPreview_ = false;
+    bool testerPreviewOpenedByEnv_ = false;
+    std::string testerCodeError_;
+    // The SYSTEM bank's text field. A separate buffer from testerToken_,
+    // sized for a whole pasted portal link, so a half-typed paste never
+    // becomes "the token" until the Use button commits it
+    // (drawTesterUsageSection), and so the masked display can show something
+    // different from what is being typed. Rendered with
+    // ImGuiInputTextFlags_Password like the web server's own password field,
+    // so the credential is not shown in full while it is being typed either.
+    char testerCodeBuf_[256] = "";
+    // Sets testerToken_ to `token`, arms/disarms the recorder to match, and
+    // drops every queued report that does not carry this token (a fresh
+    // opt-in, a replaced code, and a removal all funnel through here) - the
+    // one place that decision is made, so paste and replace cannot disagree
+    // with it. `startFreshSession` is true only for a brand-new opt-in (the
+    // token was empty before): a session already being recorded under an
+    // old, now-replaced code keeps what it has, but one starting from
+    // nothing gets a clean slate.
+    void setTesterToken(const std::string& token, bool startFreshSession);
+    void testerUsageStartup(const cascade::core::AppConfig& cfg);
+    void testerUsageJournal(cascade::core::AppConfig& cfg);
+    // Called from within testerUsageJournal, the same cadence
+    // telemetryAccrueMode runs at: banks running time against whichever
+    // plugins are currently being fed.
+    void testerUsageAccrue();
+    cascade::core::TesterUsageReport buildTesterUsageReport(double sessionSeconds) const;
+    // Drains a finished send's outcome on the GUI thread and acts on it via
+    // core::applyTesterUsageOutcome (marks the token invalid, drops the head
+    // of the queue, or leaves it for next time) - called once a frame.
+    void testerUsagePoll();
+    void drawTesterUsageSection();
+
+    // --- Beta tester APP TOKEN / portal link (core/tester_link.hpp) --------
+    //
+    // A SECOND, DISTINCT identity from testerToken_ above (32 hex): the
+    // 40-hex credential minted for this ONE install via the portal's "Link
+    // FoxSDR" button or --link-tester, confirmed by the tester pressing Link
+    // after seeing their own name (PORTAL-LINK-VERDICT.md finding 1 - never
+    // stored silently). Non-empty means SYSTEM > Beta tester is visible even
+    // with no portal token at all - see testerSectionVisible().
+    std::string testerAppToken_;
+    std::string testerAppTokenName_;
+
+    // Confirm-by-name (job D): resolves a token's owner off the GUI thread
+    // before anything is stored.
+    cascade::core::BetaLinkNameSender testerLinkNameSender_;
+    // The app token currently being resolved by testerLinkNameSender_, if
+    // any - send() only takes the token, so this is what lets the result
+    // (name only) be turned back into a full TesterLinkPending once it
+    // arrives.
+    std::string testerLinkResolvingToken_;
+    // Migration (job E): exchanges an existing portal token for an app token
+    // once, in the background, at start-up.
+    cascade::core::BetaMigrationSender testerMigrationSender_;
+    bool testerMigrationTried_ = false;
+
+    // The link-request file (core/tester_link.hpp) is polled at ~1 Hz, not
+    // every frame - there is no reason to ask the disk 60 times a second for a
+    // file that, in the overwhelming majority of frames, does not exist.
+    // Starts far in the past so the VERY FIRST frame always polls once - a
+    // fresh launch that just wrote its own link-request file (main.cpp's
+    // primary-instance path) must not wait a second to notice it.
+    double testerLinkPollLast_ = -1.0e9;
+
+    // WHERE THE POLL'S FILESYSTEM CALL RUNS - A WORKER, NEVER THIS THREAD. The
+    // poll was a synchronous std::filesystem::exists() in a directory
+    // (%APPDATA%\foxsdr) that can be redirected, synced or scanned, and it
+    // froze the window (field report "hang ntdll.dll @ __std_fs_get_stats",
+    // 0.99.59). gui/link_request_poll.hpp carries the report and the argument;
+    // testerLinkPoll() only ever asks it and collects from it, and neither
+    // can block.
+    cascade::gui::LinkRequestPoll linkRequestPoll_;
+
+    // A token claimed from the link-request file while a confirm-by-name
+    // lookup was already in flight or a prompt was already awaiting the
+    // tester's decision - claimLinkRequestFile() has already deleted the
+    // file by the time this is known, so a request that could not be started
+    // immediately used to simply vanish. Held here instead and started the
+    // moment the sender/prompt frees up; a second arrival while one is
+    // already queued overwrites it - LATEST WINS, since only the most recent
+    // link click is what the tester actually meant.
+    std::string testerLinkQueuedToken_;
+
+    // --link-tester (main.cpp): reveals the paste box with no app token held,
+    // for this session only - never written to config (see main.cpp's own
+    // comment on why a bare flag, never --link-tester=<token>).
+    bool testerLinkReveal_ = false;
+
+    // The app token a migration exchange (job E) resolved to, THIS SESSION,
+    // for whatever portal token it was tried against - kept even after
+    // testerLinkPoll() has already acted on it (set testerAppToken_ and
+    // cleared testerToken_), so a LATER manual link confirmation over a
+    // still-held legacy portal token (the migration attempt failed with
+    // NetworkError, or was never tried) can ask "is this the same tester the
+    // migration already found?" - see TesterLinkPending::keepsLegacyQueue.
+    std::optional<std::string> testerMigrationResolvedAppToken_;
+
+    // Awaiting the tester's own Link/Not now decision - populated once
+    // testerLinkNameSender_ resolves a token's name, drained by
+    // drawTesterLinkPrompt(). Nothing is written to testerAppToken_ until
+    // the tester presses Link.
+    struct TesterLinkPending {
+        std::string token;
+        std::string name;
+        bool replacing = false;  // an app token OR a legacy portal token was already held
+        // Which identity `replacing` refers to - governs the prompt's
+        // wording (drawTesterLinkPrompt): an app-token replace names the old
+        // tester by their confirmed name, a legacy-token replace has no name
+        // to offer for the thing being replaced (a portal token is never
+        // resolved to a name on its own).
+        bool replacingLegacyPortalToken = false;
+        // Only meaningful when replacingLegacyPortalToken: true when this
+        // session's own migration exchange (testerMigrationResolvedAppToken_)
+        // already proved the legacy token and this new link resolve to the
+        // SAME tester, so the reports queued under the legacy token are kept
+        // (rewritten onto the new identity) rather than dropped. False,
+        // including "we simply do not know", is the safe default and is said
+        // plainly rather than assumed.
+        bool keepsLegacyQueue = false;
+    };
+    // Pulled out of testerLinkPoll() as its own pure function, callable with
+    // synthetic inputs, so the replacing/replacingLegacyPortalToken/
+    // keepsLegacyQueue decision is testable directly (tests/test_tester_link_app.cpp)
+    // rather than only reachable through a real confirm-by-name network
+    // round trip.
+    static TesterLinkPending computeLinkPending(
+        const std::string& token, const std::string& name, bool appTokenHeld,
+        bool portalTokenHeld, const std::optional<std::string>& migrationResolvedAppToken);
+    std::optional<TesterLinkPending> testerLinkPending_;
+    std::string testerLinkError_;  // "that link is not valid", shown once
+
+    // testerAppToken_ when held, else testerToken_ - the identity a usage
+    // report is actually sent under (core/tester_usage.hpp's contract
+    // accepts either during the migration transition).
+    std::string activeTesterToken() const;
+    // Stores a CONFIRMED app token (the tester has already pressed Link),
+    // clears the portal token and its queue (finding 7: the old identity
+    // must not survive beside the new one), arms the recorder, and starts a
+    // fresh session record exactly like a fresh portal-token opt-in does.
+    void setTesterAppToken(const std::string& token, const std::string& name);
+    // Clears the app token and its queued reports - used on revocation (a
+    // 404 while sending under it) and by "Unlink". Unlike an invalid PORTAL
+    // token, which is kept on screen for the tester to fix
+    // (testerTokenInvalid_), a revoked app token is cleared outright: there
+    // is nothing to fix in place, only a fresh portal link produces a new
+    // one (PORTAL-LINK-VERDICT.md §8).
+    void clearTesterAppToken();
+    // True iff SYSTEM > Beta tester should be drawn at all: a confirmed app
+    // token OR a legacy portal token is held (activeTesterToken()), a
+    // migration exchange is in flight, or --link-tester was given this
+    // session.
+    bool testerSectionVisible() const;
+    // Called once a frame: 1 Hz link-request file poll, migration sender
+    // drain, and confirm-by-name sender drain.
+    void testerLinkPoll();
+    // The "Link this FoxSDR to beta tester NAME?" prompt, top-level like
+    // drawDiagnosticsOffer - see that function's own comment for why a
+    // confirmation belongs outside the borderless root window's ID stack.
+    void drawTesterLinkPrompt();
+
+
     // -----------------------------------------------------------------------
     // Diagnostics (see core/crash_handler.hpp, core/hang_watchdog.hpp)
     // -----------------------------------------------------------------------
@@ -2293,7 +2507,6 @@ private:
     // Empty once it has been done, and in every run that is not a bounded one.
     std::string foreignModuleTestPath_;
     void loadForeignModuleForTest(int rendered);
-    bool testerLinkReveal_ = false;  // see setLinkTesterReveal
     // The whole diagnostics switch - crash handler, log AND watchdog - in one
     // place. The checkbox, the arming path in run() and the test hook all go
     // through it; they used to disagree about the watchdog.

@@ -47,8 +47,11 @@ endmacro()
 # transmit_page_plugin_key, tests/test_transmit_page.cpp section 10, re-pinned against the engine's key drive. The engine's own cases are tests/test_engine_api_txplugin.cpp.)
 # (IMPORT-DIALOG - the "Import a frequency list" window, 0.99.80, and pickFile, the BROWSE key's file dialog - is whole: back in stub batch B8,
 # test_import_dialog_app and the part excuse_cap_pickfile: tests/test_excuse_cap.cpp counts master's three native-wait call sites again.)
-cascade_merge_pending(TESTER-LINK      # 0.99.45 / 0.99.52 beta-tester portal link
-    test_tester_link_app test_link_request_poll)
+# (TESTER-USAGE and TESTER-LINK - the beta tester's usage record (0.99.44) and the link from the tester portal (0.99.45, 0.99.52) - are whole: back in stub batch B15,
+# src/gui/app_window_tester.cpp, the WINDOW's: test_tester_link_app and test_link_request_poll, converted (the members are the window's own, as master named them), and
+# test_tester_link, the real binary's, its token-never-logged scan re-pointed at engine/process_boot.cpp where stage 7a put the activation. TESTER-USAGE's section had no
+# placeholder of its own: tests/test_tester_usage_app.cpp is its test, written red first, and tests/test_tester_host_only.cpp holds that the headless engine cannot send
+# a tester report.)
 cascade_merge_pending(PATCH-PRESETS    # 0.99.49 whole-patch presets
     test_patch_presets_app)
 cascade_merge_pending(DISK-WORK        # 0.99.63 - 0.99.65 the window does no disk work (recorders, saves, file opens on workers)
@@ -73,8 +76,6 @@ cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, on
 # window half of PROBLEM-REPORT (0.99.69) had no pending placeholder; tests/test_problem_report_app.cpp is its test, written red first.)
 # (RADIO-SETUP - the page, its INSTALL DRIVER key and the UHD images finding, 0.99.69 - 0.99.89 - is whole: back in stub batch B8,
 # test_radio_setup_app.)
-cascade_merge_pending(TESTER-LINK
-    test_tester_link)
 cascade_merge_pending(MAP-WINDOWS      # 0.99.7x the ADS-B map's lists
     test_unplaced_list_app)
 cascade_merge_pending(PATCH-VIEW       # 0.99.7x the patch page's view keys, information pane and inspector

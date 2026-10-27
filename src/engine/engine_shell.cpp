@@ -308,6 +308,17 @@ void EngineShell::serveWebTiles(bool clearFirst, bool serve, std::size_t maxTile
     }
 }
 
+// The tester recorder's two hooks, handed to the servers that are the engine's (B15). Nothing here chooses what a hook does: it is the window's
+// closure, stored by the server and called from the server's own threads. Refused whole when either listener runs (the servers take the callback only
+// while stopped), so a half-installed pair is never the answer.
+bool EngineShell::setServerUsageHooks(std::function<void()> web, std::function<void()> cat) {
+    ServerHost& servers = SHELL_ENGINE.servers();
+    if (servers.webServer().running() || servers.catServer().running()) { return false; }
+    const bool webTaken = servers.webServer().setUsageCallback(std::move(web));
+    servers.catServer().setUsageCallback(std::move(cat));
+    return webTaken;
+}
+
 #undef SHELL_ENGINE
 
 }  // namespace cascade::engine

@@ -258,10 +258,11 @@ foreach(src ${CASCADE_TESTS})
         # repository root too. Run by hand without it, each walks up from its
         # working directory instead.
         add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}")
-    elseif(name STREQUAL "test_tester_usage" OR name STREQUAL "test_tester_link")
-        # Scans src/gui/app_window.cpp, src/core/tester_usage.cpp,
-        # src/core/tester_link.cpp and src/main.cpp for the
-        # token-never-logged property, so both need the repository root too.
+    elseif(name STREQUAL "test_tester_usage" OR name STREQUAL "test_tester_link" OR name STREQUAL "test_tester_host_only")
+        # Scans src/gui/app_window.cpp and src/gui/app_window_tester.cpp, src/core/tester_usage*.cpp,
+        # src/core/tester_link*.cpp, src/engine/process_boot.cpp and src/main.cpp for the
+        # token-never-logged property (test_tester_host_only: the engine's and the servers' sources
+        # for the means of sending a tester report), so all of them need the repository root too.
         add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}")
     elseif(name STREQUAL "test_json_dump_policy")
         # The only test in this loop that takes an argument: it scans src/
@@ -559,7 +560,7 @@ endif()
 # drives whatever stale cascade.exe the build tree last held.
 foreach(_runs_app IN ITEMS test_bias_key_run test_crash_upload test_diag_hang test_diagnostics test_plugin_status_report
                            test_gps_app test_problem_report_app test_shutdown_budget test_startup_state
-                           test_stop_ends_recordings test_theme_census test_ui_scale_app test_soapy_enum_proc
+                           test_stop_ends_recordings test_theme_census test_tester_usage_app test_ui_scale_app test_soapy_enum_proc
                            test_soapy_source)
     if(TARGET ${_runs_app})
         add_dependencies(${_runs_app} cascade)
@@ -573,7 +574,7 @@ foreach(_t IN ITEMS test_engine_main_version test_engine_main_args test_engine_m
                     test_engine_main_links_headless test_engine_main_config_roundtrip test_engine_main_clean_exit_marker
                     test_engine_main_damaged_config test_engine_main_second_instance_refused
                     test_engine_main_sigterm test_engine_main_sigterm_wedged test_engine_main_provision
-                    test_engine_main_password_not_in_argv)
+                    test_engine_main_password_not_in_argv test_tester_host_only)
     if(TARGET ${_t})
         add_dependencies(${_t} foxsdr-engine cascade)
     endif()
@@ -828,6 +829,14 @@ endif()
 # The report-page test starts the real application 26 times, 110 frames each (stub campaign B14): the same bound.
 if(TEST test_problem_report_app)
     set_tests_properties(test_problem_report_app PROPERTIES TIMEOUT 300)
+endif()
+# The beta-tester section test starts the real application about twenty times (stub campaign B15), a few of them holding the frame loop for real time while a worker
+# claims a link and a loopback site answers: the same bound. test_tester_host_only starts the engine and the window once each against a stand-in site.
+if(TEST test_tester_usage_app)
+    set_tests_properties(test_tester_usage_app PROPERTIES TIMEOUT 300)
+endif()
+if(TEST test_tester_host_only)
+    set_tests_properties(test_tester_host_only PROPERTIES TIMEOUT 300)
 endif()
 # The deck-knobs test starts the real application dozens of times (as a child of
 # itself, so that a fake radio can sit behind the window; the noise-floor and Airband
@@ -1303,8 +1312,10 @@ set(CASCADE_GUI_TESTS
     test_stop_ends_recordings
     test_store_update_app
     test_team_message_app
+    test_tester_host_only
     test_tester_link
     test_tester_usage
+    test_tester_usage_app
     test_theme_census
     test_tx_audio_page_app
     test_tx_audio_plate_app

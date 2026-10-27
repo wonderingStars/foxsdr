@@ -430,6 +430,18 @@ public:
     // tile, and one asked for anyway is answered 202 "pending" - the route records the want (bounded) and nothing drains it.
     void serveWebTiles(bool clearFirst, bool serve, std::size_t maxTiles, const WebTileSource& source);
 
+    // THE BETA TESTER'S USAGE MARKS FOR THE TWO LISTENERS (added 2026-10-27, stub campaign B15; END: stage 7h, when the host process holds the tester
+    // recorder and learns the listeners' use from the table instead). "Browser access" and "CAT control" were used is a fact only the servers' own
+    // threads know (a request served; a client accepted), and the SERVERS list can say it only for a browser that logged in. The recorder that wants it
+    // (core/tester_usage.hpp, the WINDOW's: a headless engine can never send a tester report) is host glue, so the hooks are handed over from the
+    // window: `web` is called once per request answered with anything but 404 or 401, on whichever thread served it, `cat` once per accepted client from
+    // the acceptor's thread - both must be safe to call from any thread and must never block. The engine installs NOTHING of its own on the servers
+    // (grep: src/engine and src/net name no recorder, and this is the only caller of setUsageCallback outside the servers themselves; tests/
+    // test_tester_host_only.cpp holds all of it). Returns false, and installs neither, when a listener is already running - the servers take the callback
+    // only while stopped, and the window hands these over in its constructor, before the settings file can start one. The hooks stay installed across
+    // a listener's restarts.
+    bool setServerUsageHooks(std::function<void()> web, std::function<void()> cat);
+
 private:
     EngineShell();
     struct Impl;

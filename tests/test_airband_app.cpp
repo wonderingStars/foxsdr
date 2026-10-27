@@ -96,6 +96,8 @@
 #include <unistd.h>
 #endif
 
+#include <nlohmann/json.hpp>
+
 #include "core/freq_manager.hpp"
 #include "test_check.hpp"
 
@@ -178,6 +180,25 @@ constexpr const char* kScroll = "30 screen 200 600\n32 wheel -30\n";
 
 fs::path bookmarksPath() { return g_dir / "appdata" / "foxsdr" / "bookmarks.json"; }
 
+// THE BETA TESTER'S RECORD (stub campaign B15, addition; no check of the earlier scenarios was touched). Every run's settings file carries a tester code, so the window's
+// recorder is armed, and the settings file the run saved says which features it used: the Airband section's marks ("airband" when a list is added to - an airport looked
+// up, a row added, a preset imported - and "airband-listen" when LISTEN is pressed) are the NOTEFEATURE call sites the Airband batches left for the recorder. The portal
+// and the usage endpoint point at a closed port in this test, so nothing is sent anywhere.
+const char* const kTesterToken = "0123456789abcdef0123456789abcdef";
+
+std::set<std::string> testerFeatures(const std::string& tag) {
+    std::set<std::string> out;
+    std::ifstream in(g_dir / (tag + ".json"), std::ios::binary);
+    const nlohmann::json cfg = nlohmann::json::parse(in, nullptr, false);
+    if (!cfg.is_object() || !cfg.contains("testerUsageCurrent") || !cfg["testerUsageCurrent"].is_string()) { return out; }
+    const nlohmann::json report = nlohmann::json::parse(cfg["testerUsageCurrent"].get<std::string>(), nullptr, false);
+    if (!report.is_object() || !report.contains("features")) { return out; }
+    for (const auto& f : report["features"]) {
+        if (f.is_string()) { out.insert(f.get<std::string>()); }
+    }
+    return out;
+}
+
 void writeBookmarks(const std::string& body) {
     std::error_code ec;
     fs::create_directories(bookmarksPath().parent_path(), ec);
@@ -194,7 +215,7 @@ Result once(const std::string& tag, int frames, const std::string& mainView, con
         std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
         f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, "
              "\"sourceKind\": \"siggen\", \"uiTheme\": \"today\", \"interfaceScale\": \"100\", "
-             "\"mainView\": \""
+             "\"testerToken\": \"" << kTesterToken << "\", \"mainView\": \""
           << mainView << "\", \"railBank\": 2, \"bandPlanOverlay\": false }\n";
     }
     const std::string scriptPath = (g_dir / (tag + ".script")).string();
@@ -454,7 +475,8 @@ int main() {
     setEnv("USERPROFILE", (g_dir / "home").string());
     setEnv("HOME", (g_dir / "home").string());
     for (const char* url : {"FOXSDR_TELEMETRY_URL", "FOXSDR_CRASH_URL", "FOXSDR_UPDATE_URL",
-                            "FOXSDR_REPORTS_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL"}) {
+                            "FOXSDR_REPORTS_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL",
+                            "FOXSDR_BETA_API_URL", "FOXSDR_TESTER_USAGE_URL"}) {
         setEnv(url, "http://127.0.0.1:9/");
     }
     setEnv("FOXSDR_SINGLE_VIEWPORT", "1");
@@ -498,6 +520,9 @@ int main() {
             std::printf("    saved: %zu O'Hare rows, %zu ticked\n", n, ticked);
             CHECK(n == 29);
             CHECK(ticked == 28);
+            // The airport's list was added to: a mark for the tester's record; the run that only drew the section (the layout pass) made none.
+            CHECK(testerFeatures("lookup").count("airband") == 1);
+            CHECK(testerFeatures("lookup-layout").count("airband") == 0);
             CHECK(atisUnticked);
             CHECK(groundTicked);
             CHECK(allAm);
@@ -567,6 +592,9 @@ int main() {
             const Result r = once("listen", 300, "receiver",
                                   click(60, layout.rects.at("airband:listen")) + hold(70));
             checkListen(r, "listen", "listen on the receiver view");
+            // LISTEN is a mark of its own for the tester's record.
+            CHECK(testerFeatures("listen").count("airband-listen") == 1);
+            CHECK(testerFeatures("listen-layout").count("airband-listen") == 0);
         }
     }
 

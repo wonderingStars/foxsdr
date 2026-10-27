@@ -37,8 +37,8 @@
 // WHAT IS NOT HERE, and where it is:
 //   - the IMPORT dialog (the empty-box press, a failed read) is app_window_import_dialog.cpp's (stub campaign B8): openImportDialog() opens it;
 //     a read that comes back with rows closes it (airbandPollJobs below);
-//   - the tester recorder's feature notes ("airband", "airband-listen" - master's testerUsage_.noteFeature): the window's recorder is batch B15's;
-//     the call sites are marked NOTEFEATURE;
+//   - the tester recorder's feature notes ("airband", "airband-listen" - master's testerUsage_.noteFeature) are made here, on the window's recorder (stub campaign B15,
+//     app_window_tester.cpp): the call sites carried a NOTEFEATURE mark until then;
 //   - (the top bar's SQUELCH AUTO and the deck's squelch dial following the monitor are batch B12's, app_window_deck.cpp; the slider and "Above the noise"
 //     below send the engine's actions, and the ENGINE turns AUTO off for them - master's setSquelchAuto(false) - so there is no window code for it.)
 //
@@ -553,7 +553,7 @@ void AppWindow::airbandFinishImport() {
     airband_.presetFolderKey = false;
     // Show the preset the rows joined, as the lookup of an airport does - unless the monitor is listening, or the preset has nothing it can play.
     if (!run.refused) { airbandShowGroup(run.group); }
-    // NOTEFEATURE: testerUsage_.noteFeature("airband") - master noted the feature here; the window's tester recorder is batch B15's.
+    testerUsage_->noteFeature("airband");
     cc::diagLogf("bookmarks: a preset import added %zu of %zu rows", run.added, run.found);
     run = AirbandImportRun{};
 }
@@ -653,7 +653,7 @@ void AppWindow::airbandExportPreset() {
 // preset while listening is already so; another is the monitor starting again on it.
 void AppWindow::airbandListen() {
     airbandSend(cmd::makeText(FOXAPP_OP_AIRBAND, airband_.group, 1), AirbandAsk::Kind::Listen, airband_.group, 0, 0);
-    // NOTEFEATURE: testerUsage_.noteFeature("airband-listen") - batch B15.
+    testerUsage_->noteFeature("airband-listen");
 }
 
 // --- the answers -----------------------------------------------------------------------------------------------------------------------
@@ -674,7 +674,7 @@ void AppWindow::airbandOnAnswer(const FoxCommandResult& r) {
                 a.addName[0] = '\0';
                 airbandShowGroup(ask.group);   // show the list it joined, as an airport's lookup does - unless listening
                 a.note.clear();
-                // NOTEFEATURE: testerUsage_.noteFeature("airband") - batch B15.
+                testerUsage_->noteFeature("airband");
             } else {
                 // The engine's sentence: a frequency outside what the open radio covers says what it does cover. The typed text stays.
                 a.note = r.message;
@@ -708,7 +708,7 @@ void AppWindow::airbandOnAnswer(const FoxCommandResult& r) {
                                        "hear it."),
                                     f.preset.c_str(), ask.group.c_str());
             }
-            // NOTEFEATURE: testerUsage_.noteFeature("airband") - batch B15.
+            testerUsage_->noteFeature("airband");
             cc::diagLogf("airband: an airport's list added (%zu frequencies, %zu new)", ask.total, added);
             break;
         }

@@ -1556,8 +1556,8 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
         cascade::core::health::noteRadioOpen(r.kind);
         healthWatchSamples(r.kind);
     }
-    // FIXME(2026-10-21, 0.99.84 merge, ledger TESTER-USAGE): master also counts the radio for the beta-tester usage record here
-    // (testerUsage_.noteRadio(kind), noteFeature("native-drivers"), noteFeature("siggen")); the engine has no tester-usage recorder yet.
+    // (Master also counted the radio for the beta-tester usage record here. That record is the WINDOW's - a headless engine must never be able to send a tester report -
+    // so the window reads the kind of the source in use from the DEVICES list instead: AppWindow::testerNoteFacts, stub campaign B15.)
     // A dongle the native driver refused, opened through SoapySDR instead, is
     // still the radio the user chose: its converter comes with it.
     if (!r.fellBackFromKey.empty()) {

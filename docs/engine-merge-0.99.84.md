@@ -143,12 +143,14 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * audio no longer crackles when the channel filter widens ................................... carried (dsp/) (test_bandwidth_app also exercises the filter, C3)
   * a per-frame system call removed .......................................................... carried (unverified)
   * Airspy ADS-B with decimation raised ...................................................... carried (source/)
-  * beta tester usage reporting .............................................................. stubbed TESTER-USAGE (core/tester_usage.* and its pure tests
-    are in; the Settings section, the hooks that note a feature, the engine's journal field are not)
+  * beta tester usage reporting .............................................................. re-expressed, stub batch B15 (src/gui/app_window_tester.cpp: the WINDOW's
+    recorder, fed from the table's facts and the window's own events; SYSTEM > Beta tester; the journal and the retry queue; the headless engine cannot send a tester
+    report: test_tester_host_only. The section's own test, written red first: test_tester_usage_app)
   * the crash-report cleaner and a plugin's name ............................................. carried (core/) (test_crash_scrub runs)
 
 0.99.45
-  * link FoxSDR from the tester portal ....................................................... stubbed TESTER-LINK (test_tester_link_app, test_link_request_poll)
+  * link FoxSDR from the tester portal ....................................................... re-expressed, stub batch B15 (app_window_tester.cpp: the link-request file
+    polled on a worker, confirm-by-name, the "Link this FoxSDR?" prompt, the portal-token exchange; test_tester_link_app, test_link_request_poll)
   * the usage report is sent once, not once per launch ....................................... carried (core/telemetry) with the engine's journal (C0, C1)
 
 0.99.46
@@ -184,7 +186,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * Raspberry Pi 64-bit downloads ............................................................ n/a
 
 0.99.52
-  * Windows testers can link from the tester page again ...................................... stubbed TESTER-LINK
+  * Windows testers can link from the tester page again ...................................... re-expressed, stub batch B15 (the foxsdr:// activation and the instance
+    claim are the process boot's, STEP 5, Host kind only - live since stage 7a; the window's poll and prompt are B15's; test_tester_link, its token-never-logged scan
+    now reading engine/process_boot.cpp)
 
 0.99.53
   * the Store version tells you when the Store has an update ................................. re-expressed, stub batch B14 (src/gui/app_window_updates.cpp: a Store copy
@@ -487,7 +491,7 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   (PLUGIN-SETTINGS-UI and PLUGIN-ROW-KEYS - test_plugin_settings_ui, test_decoder_settings_fold_app, test_plugin_pathpick_app, test_programme_audio_app and
   test_row_keys_app - were removed by B9: both ids are whole)
   (TX-PLUGIN - test_tx_audio_app, test_tx_audio_page_app, test_tx_audio_plate_app and the part transmit_page_plugin_key - was removed by B13: whole)
-  TESTER-LINK (3)         test_tester_link_app test_link_request_poll test_tester_link
+  (TESTER-LINK - test_tester_link_app, test_link_request_poll, test_tester_link - was removed by B15: whole)
   (MARKERS-SPECTRUM and DISPLAY-RANGE - test_bookmark_stacking_app and test_freq_markers_app removed by B10; test_spectrum_trace_app, test_passband_slide_app and
   test_display_menu_app removed by B11; test_display_fold_app by B1 - are whole)
   PATCH-VIEW (2)          test_patch_canvas_nav test_patch_info_pane
@@ -496,7 +500,8 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
                           SOURCE-ROWS test_source_row_app;
                           MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
                           [UPDATES (test_store_update_app) and the placeholder TESTER-USAGE held for the team message (test_team_message_app) were removed by B14: UPDATES is
-                          whole; TESTER-USAGE's own section is B15's and has no placeholder of its own - its census test is written red first at B15]
+                          whole; TESTER-USAGE's own section had no placeholder of its own - its census test, tests/test_tester_usage_app.cpp, was written red first at B15, and
+                          TESTER-USAGE is whole]
   parts (3)               transmit_page_plugin_key (TX-PLUGIN; removed by B13), excuse_cap_pickfile (IMPORT-DIALOG; removed by B8), audio_lead_plugin_wake (PLUGIN-RUN)
                           [B2 removed audio_lead_plugin_wake and added nothing; B1 had added display_fold_airband_section (AIRBAND); B4 added
                           store_app_fitted (STORE-VIEW: the FITTED MODULES scenarios of test_plugin_store_app); B5 removed store_app_fitted; B1's display_fold_airband_section (AIRBAND) and the test test_airband_app were removed by B7: AIRBAND is whole]
@@ -732,3 +737,15 @@ the page as it was; 109 checks, 0 failed after). Owner-approved addition of 2026
 kind of the newest reports on the machine) and `recovered:` (what the program recovered from this session, fixed words and counts) - core/diag_evidence.*, tests/test_diag_evidence.cpp, PRIVACY.md,
 docs/DIAGNOSTICS.md. THE BREADCRUMB TRAIL JOINS POST-MERGE (it lives on master's field-early-warning branch). Where the machine cannot say, the line says so: `recovered:` reads "(not counted - usage
 reporting is off)" while the health ledger is not counting, which is how a run with usage reporting off sees it. test_i18n: 62 stale, 0 missing (the 26 keys of the five window functions returned).
+
+UPDATE 2026-10-27, stub batch B15 (docs/engine-stage4.md 6.22, the B15 record): TESTER-USAGE and TESTER-LINK. The beta tester's two flows are back in the WINDOW (src/gui/app_window_tester.cpp, from master's text of
+0.99.90, unchanged to 0.99.95): SYSTEM > Beta tester (paste a code, Remove code, a confirmed link by name with Unlink, "Show what is sent" with the token masked), the usage record (the recorder, the retry queue
+and the sender are the window's: a headless engine cannot hold a code or send a report), the link-request file polled on a worker and the "Link this FoxSDR?" prompt with its confirm-by-name and portal-token
+exchange. The recorder is fed by the window's own events (the one-line marks beside each control, the four Airband NOTEFEATURE sites included) and by facts the table already publishes (a take, the scanner,
+RF going out, the radio in use, the plugin minutes); the two listeners' marks ("browser", "cat") come through ONE new door method, `EngineShell::setServerUsageHooks` (CLASS HOST, END stage 7h: test_engine_shell_guard
+HOST budget 2 -> 3, call sites 65 -> 66), called once by the window's constructor. src/core/tester_usage.cpp and tester_link.cpp were split with the code unchanged (tester_usage_session.cpp, tester_link_net.cpp) so that
+the built foxsdr-engine.exe does not contain the usage endpoint or the portal's paths. test_tester_link_app and test_link_request_poll are converted (the second with one expectation edit: the wiring scan reads
+app_window_tester.cpp), test_tester_link is un-pended with its token-never-logged scan re-pointed at engine/process_boot.cpp (where stage 7a put the activation; the old scan of main.cpp passed vacuously), all
+three placeholders are gone: the red placeholders are the 14 of B14 less three: 11 (11 tests, no part). New: tests/test_tester_usage_app.cpp (the section's census test, written RED first: 63 checks, 35 failed
+against the window as it was) and tests/test_tester_host_only.cpp (a headless engine can never send a tester report: the sources, the process boot, the built images, the running engine against a stand-in site, and the
+running window as the control); test_airband_app gained the two Airband marks. test_i18n: 36 stale, 0 missing (the 26 keys returned). The real settings file is untouched.
