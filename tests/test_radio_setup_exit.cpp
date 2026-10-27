@@ -146,8 +146,17 @@ int childMain() {
     // THE REAL PROBE, DETACHED AS IN THE APPLICATION. Its collector walks both
     // tables exactly as the bus walk and enumerateWinUsb do - an index taken
     // from the size, then an element read - for as long as the process lives.
-    rs::Probe* probe = new rs::Probe();  // never deleted: its thread outlives main
-    CHECK(probe->start([]() {
+    //
+    // THE PROBE ITSELF IS AN AUTOMATIC OBJECT, as the application's is (a member
+    // of AppWindow): it is destroyed when main returns, while its detached
+    // worker goes on. That is safe by construction - Probe::~Probe is the
+    // default, and the worker owns its own reference to the shared state it
+    // writes (Probe::start) - and it is the very situation this file exists
+    // for. It used to be `new`ed and dropped, which LeakSanitizer reported as a
+    // 192-byte leak (the first ASan run on Linux): nothing in the application
+    // leaks a Probe, so the test must not either.
+    rs::Probe probe;
+    CHECK(probe.start([]() {
         volatile unsigned sink = 0;
         for (;;) {
             const std::vector<cascade::usb::UsbId>& ids = cascade::source::rtlSdrUsbIds();
