@@ -394,5 +394,101 @@ int main() {
         CHECK(q.reusedRadio);
     }
 
+    // --- LISTEN TO THE TOWER: AM channels into speakers, no decoder ------------------
+    {
+        using cascade::core::patch::kListenDcClearHz;
+        using cascade::core::patch::ListenChannel;
+        using cascade::core::patch::listenCentre;
+        using cascade::core::patch::listenInBand;
+        Blueprint tower;
+        tower.title = "Listen to the tower: EGLL";
+        // Out of order on purpose: the rows come out ascending.
+        tower.listen = {{118700000.0, "TWR 118.700"},
+                        {118500000.0, "TWR 118.500"},
+                        {124475000.0, "TWR 124.475"}};
+
+        Graph g = seeded();
+        const NodeId starter = g.nodes()[0].id;
+        const Placed p = placeBlueprint(g, tower, "unused", kDefaultRate);
+        CHECK(p.result == Place::Ok);
+        CHECK(p.reusedRadio);
+        CHECK(p.radio == starter);
+        CHECK(p.decoder == kNoNode);
+        // 2 MS/s holds 118.5 and 118.7 together but not 124.475 as well.
+        CHECK(p.listenPlaced == 2u);
+        CHECK(p.listenDropped == 1u);
+        CHECK(g.count(NodeKind::Channel) == 2u);
+        CHECK(g.count(NodeKind::Demod) == 2u);
+        CHECK(g.count(NodeKind::Sink) == 2u);
+        CHECK(g.count(NodeKind::Display) == 1u);
+        CHECK(g.count(NodeKind::Decoder) == 0u);
+
+        const Node* r = g.find(starter);
+        const double centre = r->freqHz;
+        CHECK(r->centreChosen);
+        std::vector<const Node*> chans;
+        for (const Node& n : g.nodes()) {
+            if (n.kind == NodeKind::Channel) { chans.push_back(&n); }
+        }
+        CHECK(chans.size() == 2u);
+        if (chans.size() == 2u) {
+            CHECK(chans[0]->freqHz == 118500000.0);   // ascending, top row first
+            CHECK(chans[1]->freqHz == 118700000.0);
+            CHECK(chans[0]->y < chans[1]->y);
+            CHECK(chans[0]->name == "TWR 118.500");
+            for (const Node* c : chans) {
+                // Inside the band and clear of the DC spike at the centre.
+                CHECK(listenInBand(c->freqHz, centre, kDefaultRate));
+                CHECK(std::fabs(c->freqHz - centre) >= kListenDcClearHz);
+            }
+        }
+        for (const Node& n : g.nodes()) {
+            if (n.kind == NodeKind::Demod) {
+                CHECK(n.mode == 2);   // AM
+                CHECK(n.squelch);
+            }
+            if (n.kind == NodeKind::Sink) {
+                CHECK(n.device == "speakers");   // heard, not written to a file
+                CHECK(!n.inputs.empty() && n.inputs[0] == PortType::Audio);
+            }
+        }
+        bool anyOverlap = false;
+        for (std::size_t i = 0; i < g.nodes().size(); ++i) {
+            for (std::size_t j = i + 1; j < g.nodes().size(); ++j) {
+                if (overlap(g.nodes()[i], g.nodes()[j])) { anyOverlap = true; }
+            }
+        }
+        CHECK(!anyOverlap);
+
+        // It RUNS: no blocking problem, two channels and two speakers planned.
+        const Plan plan = compile(g, radios(g), &cat);
+        CHECK(blocking(plan) == 0u);
+        CHECK(plan.runnable);
+        CHECK(plan.channels.size() == 2u);
+        CHECK(plan.sinks.size() == 2u);
+
+        // A single channel never has the centre on it, and a channel exactly
+        // in the middle of a pair pushes the centre off it too.
+        const double one = listenCentre({{120000000.0, "a"}}, kDefaultRate);
+        CHECK(std::fabs(one - 120000000.0) >= kListenDcClearHz);
+        CHECK(listenInBand(120000000.0, one, kDefaultRate));
+        const double three = listenCentre(
+            {{119000000.0, "a"}, {119500000.0, "b"}, {120000000.0, "c"}}, kDefaultRate);
+        CHECK(std::fabs(three - 119500000.0) >= kListenDcClearHz);
+        for (const double f : {119000000.0, 119500000.0, 120000000.0}) {
+            CHECK(listenInBand(f, three, kDefaultRate));
+        }
+        CHECK(listenCentre({}, kDefaultRate) == 0.0);
+
+        // With every radio busy it is refused like any blueprint.
+        Graph full;
+        for (std::size_t i = 0; i < kMaxRadios; ++i) {
+            const NodeId rr = full.addNode(NodeKind::Radio, "Radio");
+            const NodeId ss = full.addNode(NodeKind::Display, "Spectrum", PortType::Iq);
+            full.connect(rr, 0, ss, 0);
+        }
+        CHECK(placeBlueprint(full, tower, "siggen", kDefaultRate).result == Place::RadiosFull);
+    }
+
     return testSummary("test_patch_blueprints");
 }

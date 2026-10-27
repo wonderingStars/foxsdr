@@ -89,13 +89,76 @@ inline int demodIndexForAbi(std::uint32_t abiMode) {
     return static_cast<int>(abiMode) - 1;
 }
 
+// One channel of a LISTEN blueprint: where it is and what it is called.
+struct ListenChannel {
+    double hz = 0.0;
+    std::string name;
+};
+
 struct Blueprint {
     // What the list shows before any "(picture)" the app adds: the plugin's
     // name, then the preset's label when it says something the name does not.
     std::string title;
     DecoderInfo decoder;        // the part the workflow is built round
     BlueprintTune tune;
+    // A LISTEN BLUEPRINT (owner, 2026-10-27: "add the listen to the tower to
+    // the patch panel plugin presets"): no decoder at all, but these channels,
+    // each demodulated as AM into a speaker of its own - the Airband section's
+    // LISTEN, as a patch. Empty for a plugin's blueprint.
+    std::vector<ListenChannel> listen;
 };
+
+// --- where a listen blueprint puts the radio -----------------------------------
+//
+// The centre that gets the MOST of the channels inside the usable band
+// (patch_plan.hpp's kUsableBandFraction - outside it compile() refuses the
+// channel), with no channel within kListenDcClearHz of it - a zero-IF radio's
+// DC spike sits on the centre, and an airband channel on it would hear a
+// carrier that is not there - and of those the one nearest the middle of the
+// channels it holds, so they sit centred in the band. Candidates are every
+// kListenCentreStepHz across a band's width round EACH channel, not only
+// round the middle of them all: one far-off channel must not stop the close
+// ones from being found together.
+inline constexpr double kListenDcClearHz = 25000.0;
+inline constexpr double kListenCentreStepHz = 25000.0;
+
+inline bool listenInBand(double hz, double centreHz, double rateHz) {
+    return std::fabs(hz - centreHz) <= 0.5 * rateHz * kUsableBandFraction;
+}
+
+inline double listenCentre(const std::vector<ListenChannel>& channels, double rateHz) {
+    if (channels.empty() || !(rateHz > 0.0)) { return 0.0; }
+    const int reach =
+        static_cast<int>(std::ceil(0.5 * rateHz * kUsableBandFraction / kListenCentreStepHz));
+    double best = channels.front().hz;
+    int bestCount = -1;
+    double bestOff = 0.0;
+    for (const ListenChannel& anchor : channels) {
+        for (int k = -reach; k <= reach; ++k) {
+            const double c = anchor.hz + static_cast<double>(k) * kListenCentreStepHz;
+            if (!(c > 0.0)) { continue; }
+            int count = 0;
+            bool clear = true;
+            double lo = 0.0;
+            double hi = 0.0;
+            for (const ListenChannel& ch : channels) {
+                if (std::fabs(ch.hz - c) < kListenDcClearHz) { clear = false; }
+                if (!listenInBand(ch.hz, c, rateHz)) { continue; }
+                lo = (count == 0) ? ch.hz : std::min(lo, ch.hz);
+                hi = (count == 0) ? ch.hz : std::max(hi, ch.hz);
+                ++count;
+            }
+            if (!clear || count == 0) { continue; }
+            const double off = std::fabs(c - 0.5 * (lo + hi));
+            if (count > bestCount || (count == bestCount && off < bestOff)) {
+                best = c;
+                bestCount = count;
+                bestOff = off;
+            }
+        }
+    }
+    return best;
+}
 
 namespace detail {
 inline std::string lowered(const std::string& s) {
@@ -189,7 +252,87 @@ struct Placed {
     float originX = 0.0f;         // the workflow's top-left, world units
     float originY = 0.0f;
     bool noFrequency = false;     // no preset: nothing was tuned
+    // A listen blueprint: how many of its channels were placed, and how many
+    // were left out because they do not fit in one radio's band.
+    std::size_t listenPlaced = 0;
+    std::size_t listenDropped = 0;
 };
+
+// The rest of a LISTEN blueprint, once placeBlueprint has the radio and the
+// corner: the radio retuned by listenCentre(), a Spectrum under it, and one
+// row per channel that fits - Channel on its frequency, Demod in AM (index 2
+// of the host's list) with the squelch on, a Speaker set to the speakers
+// rather than the default WAV file, since the point is to hear it - in
+// ascending frequency. Channels outside the band are counted, not placed.
+inline Placed placeListen(Graph& g, const Blueprint& bp, Placed out, double defaultRateHz) {
+    std::vector<ListenChannel> channels = bp.listen;
+    std::stable_sort(channels.begin(), channels.end(),
+                     [](const ListenChannel& a, const ListenChannel& b) { return a.hz < b.hz; });
+    double rate = defaultRateHz;
+    double centre = 0.0;
+    if (Node* r = g.mutableNode(out.radio)) {
+        r->on = true;
+        if (r->rateHz > 0.0) { rate = r->rateHz; }
+        centre = listenCentre(channels, rate);
+        r->freqHz = centre;
+        r->centreChosen = true;
+    }
+
+    float radioW = 0.0f;
+    float radioH = 0.0f;
+    defaultNodeSize(NodeKind::Radio, radioW, radioH);
+    const auto add = [&g, &out](NodeKind kind, const std::string& name, PortType feed, float x,
+                                float y) {
+        const NodeId id = g.addNode(kind, name, feed, x, y);
+        out.added.push_back(id);
+        return id;
+    };
+    const NodeId spectrum = add(NodeKind::Display, "Spectrum", PortType::Iq, out.originX,
+                                out.originY + radioH + kBlueprintRowGap);
+    g.connect(out.radio, 0, spectrum, 0);
+
+    // Columns: radio (with the wider Spectrum under it - the rows run down
+    // past it), channel, demodulator, speaker. A row is as tall as the
+    // tallest of its three parts.
+    float w = 0.0f;
+    float h = 0.0f;
+    float specW = 0.0f;
+    defaultNodeSize(NodeKind::Display, specW, h);
+    defaultNodeSize(NodeKind::Radio, w, h);
+    const float chanX = out.originX + std::max(w, specW) + kBlueprintColumnGap;
+    defaultNodeSize(NodeKind::Channel, w, h);
+    float rowH = h;
+    const float demodX = chanX + w + kBlueprintColumnGap;
+    defaultNodeSize(NodeKind::Demod, w, h);
+    rowH = std::max(rowH, h);
+    const float sinkX = demodX + w + kBlueprintColumnGap;
+    defaultNodeSize(NodeKind::Sink, w, h);
+    rowH = std::max(rowH, h) + kBlueprintRowGap;
+
+    float y = out.originY;
+    for (const ListenChannel& c : channels) {
+        if (!listenInBand(c.hz, centre, rate)) {
+            ++out.listenDropped;
+            continue;
+        }
+        const NodeId ch = add(NodeKind::Channel, c.name, PortType::Iq, chanX, y);
+        if (Node* n = g.mutableNode(ch)) { n->freqHz = c.hz; }
+        g.connect(out.radio, 0, ch, 0);
+        const NodeId dm = add(NodeKind::Demod, "AM", PortType::Iq, demodX, y);
+        if (Node* n = g.mutableNode(dm)) {
+            n->mode = 2;   // AM
+            n->squelch = true;
+        }
+        g.connect(ch, 0, dm, 0);
+        const NodeId spk = add(NodeKind::Sink, c.name, PortType::Audio, sinkX, y);
+        if (Node* n = g.mutableNode(spk)) { n->device = "speakers"; }
+        g.connect(dm, 0, spk, 0);
+        if (out.channel == kNoNode) { out.channel = ch; }
+        ++out.listenPlaced;
+        y += rowH;
+    }
+    return out;
+}
 
 // Places `bp` on `g`. `newRadioDevice` is the device a NEW radio is opened on
 // (ignored when an unwired radio is reused); `defaultRateHz` is what a radio
@@ -251,6 +394,7 @@ inline Placed placeBlueprint(Graph& g, const Blueprint& bp, const std::string& n
         out.radio = add(NodeKind::Radio, "Radio", PortType::Iq, out.originX, out.originY);
         if (Node* r = g.mutableNode(out.radio)) { r->device = newRadioDevice; }
     }
+    if (!bp.listen.empty()) { return placeListen(g, bp, out, defaultRateHz); }
     const bool iq = bp.decoder.feed == PortType::Iq;
     const bool tuned = bp.tune.freqHz > 0.0;
     out.noFrequency = !tuned;

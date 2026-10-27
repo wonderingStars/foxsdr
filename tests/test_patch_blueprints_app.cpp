@@ -131,6 +131,11 @@ struct AppWindowTestAccess {
     }
     static bool running(AppWindow& a) { return a.patchRunning_; }
     static std::size_t refused(AppWindow& a) { return a.patchRefused_.size(); }
+    static void setPosition(AppWindow& a, double lat, double lon) {
+        a.rxSet_ = true;
+        a.rxLat_ = lat;
+        a.rxLon_ = lon;
+    }
 };
 
 }  // namespace cascade::gui
@@ -306,6 +311,50 @@ int main(int argc, char** argv) {
         // own channel and demodulator.
         CHECK(Access::graph(app).count(pc::NodeKind::Channel) == 2u);
         CHECK(Access::graph(app).count(pc::NodeKind::Demod) == 2u);
+
+        // --- LISTEN TO THE TOWER, from the built-in airport table ---------------------
+        std::printf("  with a receiver position the list offers the nearest towers\n");
+        {
+            // No position and no airport looked up: no tower in the list.
+            std::size_t towers = 0;
+            for (const pc::Blueprint& b : Access::blueprints(app)) {
+                if (!b.listen.empty()) { ++towers; }
+            }
+            CHECK(towers == 0u);
+        }
+        // Beside Heathrow (51.4700 N, 0.4543 W).
+        Access::setPosition(app, 51.4700, -0.4543);
+        const std::vector<pc::Blueprint> withTowers = Access::blueprints(app);
+        const pc::Blueprint* egll = nullptr;
+        std::size_t towers = 0;
+        for (const pc::Blueprint& b : withTowers) {
+            if (b.listen.empty()) { continue; }
+            ++towers;
+            CHECK(b.title.rfind("Listen to the tower: ", 0) == 0);
+            if (b.title.find("EGLL") != std::string::npos) { egll = &b; }
+        }
+        std::printf("    %zu tower blueprint(s) offered\n", towers);
+        CHECK(towers >= 1u && towers <= 6u);
+        CHECK(egll != nullptr);
+        if (egll != nullptr) {
+            // Heathrow's tower channels are airband: 118-137 MHz, named TWR.
+            for (const pc::ListenChannel& c : egll->listen) {
+                CHECK(c.hz >= 118.0e6 && c.hz <= 137.0e6);
+                CHECK(c.name.rfind("TWR ", 0) == 0);
+            }
+            const std::size_t before = Access::graph(app).nodes().size();
+            Access::pick(app, *egll);
+            CHECK(Access::graph(app).count(pc::NodeKind::Radio) == 3u);   // a radio of its own
+            CHECK(Access::graph(app).nodes().size() > before);
+            std::size_t speakers = 0;
+            for (const pc::Node& n : Access::graph(app).nodes()) {
+                if (n.kind == pc::NodeKind::Sink && n.device == "speakers") { ++speakers; }
+            }
+            CHECK(speakers >= 1u);
+            CHECK(Access::note(app).find("Listen to the tower: EGLL") != std::string::npos);
+            std::printf("    Heathrow: %zu tower channel(s), %zu speaker(s) placed\n",
+                        egll->listen.size(), speakers);
+        }
 
         // --- five radios, all busy: refused, said, nothing placed ---------------------
         std::printf("  with five busy radios a pick places nothing and says why\n");

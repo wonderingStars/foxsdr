@@ -19423,6 +19423,48 @@ void AppWindow::drawPatchView() {
                         break;
                 }
 
+                // ITS SIZE (2026-10-27, owner: "allow the users to make the map
+                // larger in the patch also the other components so the user can
+                // enlarge or reduce them"). The corner grip always could; these
+                // keys do it without having to find a corner, and say the grip
+                // is there.
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::TextUnformatted(tr("Size"));
+                {
+                    // Smaller and Larger side by side, Default size under them
+                    // at full width: three to a row cut "Default size" short in
+                    // the drawer's width, and in longer languages the others.
+                    const float gap = ImGui::GetStyle().ItemSpacing.x;
+                    const float keyW = (ImGui::GetContentRegionAvail().x - gap) / 2.0f;
+                    // Where each key is, for a scripted press.
+                    const auto where = [](const char* name) {
+                        const ImVec2 k0 = ImGui::GetItemRectMin();
+                        const ImVec2 k1 = ImGui::GetItemRectMax();
+                        cascade::gui::census::rect(name, k0.x, k0.y, k1.x, k1.y);
+                    };
+                    if (ImGui::Button(trId("Smaller###patchsizedown"), ImVec2(keyW, 0.0f))) {
+                        cascade::gui::patch::scaleNodeSize(*sel, 0.8f);
+                        patchUi_.dirty = true;
+                    }
+                    where("patchsize:smaller");
+                    ImGui::SameLine();
+                    if (ImGui::Button(trId("Larger###patchsizeup"), ImVec2(keyW, 0.0f))) {
+                        cascade::gui::patch::scaleNodeSize(*sel, 1.25f);
+                        patchUi_.dirty = true;
+                    }
+                    where("patchsize:larger");
+                    if (ImGui::Button(trId("Default size###patchsizereset"), ImVec2(-FLT_MIN, 0.0f))) {
+                        cascade::gui::patch::resetNodeSize(*sel);
+                        patchUi_.dirty = true;
+                    }
+                    where("patchsize:default");
+                }
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
+                                                         cascade::gui::theme::kInkMuted));
+                ImGui::TextWrapped("%s", tr("Or drag the brass corner at the part's bottom right."));
+                ImGui::PopStyleColor();
+
                 ImGui::Spacing();
                 ImGui::Separator();
                 if (ImGui::Button(trId("Remove this node"), ImVec2(-FLT_MIN, 0.0f))) {
