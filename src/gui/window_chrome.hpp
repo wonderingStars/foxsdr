@@ -5,7 +5,7 @@
 // interface-size change both funnel through.
 //
 // WHY A HEADER OF ITS OWN. app_window.cpp is at the object-file limit (MSVC
-// C1128, src/gui_pending/app_window_disk_state.hpp), so every batch of the stub
+// C1128, src/gui/app_window_disk_state.hpp), so every batch of the stub
 // campaign puts its new window members in a translation unit of their own; these
 // are the few helpers such a unit has to call back into app_window.cpp for (or
 // that app_window.cpp has to call into it for), declared once here. Not part of

@@ -1207,20 +1207,20 @@ const KnownWait kKnownWaits[] = {
      "config_writer.hpp's, audio_open.hpp's and app_window.cpp's kQuitGrace"},
 
     // THE GUI THREAD'S REMAINING DISK WORK (0.99.64, docs/DIAGNOSTICS.md, "The
-    // window does no disk work"). gui/disk_job.hpp is record_start.hpp's shape for
+    // window does no disk work"). core/disk_job.hpp is record_start.hpp's shape for
     // any "do this blocking thing and give me what it made": the I/Q file's header,
     // a picture saved, the frequency list exported, F12's screenshot, the patch's
     // recordings list. request() and poll() never block, so there is no bound on the
     // frame loop and nothing on the shutdown path except the reap below.
-    {"src/gui/disk_job.hpp", "kStuckAfter", 0,
+    {"src/core/disk_job.hpp", "kStuckAfter", 0,
      "not a wait: the age at which a job still out is called stuck in the log (once). Nothing "
      "blocks for it - it is compared against a clock by poll() - and the frame loop that calls "
      "poll() has ended before beginShutdown() raises the threshold"},
-    {"src/gui/disk_job.hpp", "kNoWait", 0,
+    {"src/core/disk_job.hpp", "kNoWait", 0,
      "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. The "
      "frame loop has ended before beginShutdown() raises the threshold, so poll() is not even "
      "called on the teardown path"},
-    {"src/gui/disk_job.hpp", "kQuitGrace", 0,
+    {"src/core/disk_job.hpp", "kQuitGrace", 0,
      "DiskJob::reap()'s grace before a job still blocked in the filesystem is abandoned: called "
      "from ~DiskJob, i.e. from ~AppWindow after watchdog_.stop(), outside the budgeted stretch, "
      "exactly like record_start.hpp's, link_request_poll.hpp's, config_writer.hpp's, "

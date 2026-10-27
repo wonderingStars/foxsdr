@@ -282,14 +282,16 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     and drawUi; the recorder and reload scopes are the engine's OwnedFrameScope, with the frame loop's loan around stepPass; test_slow_frames_app, converted)
   * the usage record counts what quietly did not work ........................................ re-expressed, C1/C2 (test_health_app, test_health_paths)
   * eight more file operations off the drawing thread ........................................ re-expressed in part: the recorders (C5), the bookmark list's save
-    (C5), a patch speaker's file (C5); the picture save, the bookmark export, the I/Q open on a worker, the screenshot flush are stubbed DISK-WORK
-    (test_failure_files, test_gui_file_jobs, test_iq_open_async, test_gui_disk_audit)
+    (C5), a patch speaker's file (C5); the picture save, the bookmark export, the I/Q open on a worker, the screenshot flush ............ re-expressed, stub batch B19 (the
+    ENGINE's workers - src/engine/engine_disk_work.cpp: the I/Q file's open, the frequency list's import and export, the recordings list, the patch Radio's recording open -
+    and the WINDOW's - src/gui/app_window_disk_work.cpp: a plugin picture's save and F12's screenshot; test_gui_file_jobs, test_failure_files, test_iq_open_async,
+    test_gui_disk_audit, converted: docs/engine-stage4.md 6.22 B19)
   * five faults found with a memory checker .................................................. carried (core/)
 
 0.99.65
   * Stop then Record does not overwrite ...................................................... carried (core/recorder naming) and re-expressed, C5 (the queued Record)
   * a damaged settings, bookmark or marker file is kept ...................................... re-expressed, C5 (AppWindow::setAsideDamagedFile for the settings,
-    Engine::loadBookmarks for the two lists); test_failure_files (not converted) holds the three
+    Engine::loadBookmarks for the two lists); test_failure_files (converted, stub batch B19) holds the three
   * Linux: a folder in a list's place no longer ends the program ............................. carried (core/) (unverified: Linux)
   * stopping a recording does not freeze the window .......................................... re-expressed, C5 (finishTake / RecordFinisher; test_record_finish_async)
   * a freeze report keeps its log on a slow disk ............................................. carried (core/diag_log; test_diag_log_lock)
@@ -300,8 +302,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * the Airband monitor takes a typed list and plays NFM ..................................... re-expressed in part, stub batch B6 (the engine: a typed row, an NFM channel and one
     channel per frequency, test_engine_api_airband A2 / B3 / F1) and B7 (the add row, the mode list: test_airband_app, add row / nfm / one channel per frequency)
   * presets: a named list filled by hand, from a file, exported ............................. re-expressed, stub batch B7 (the preset field, Add, Remove preset - the engine stops
-    a monitor that plays the group, B6; IMPORT of a typed path and EXPORT CSV are window-side disk jobs in app_window_airband.cpp, see docs/engine-stage4.md 6.22 B7:
-    the existing BOOKMARK_IMPORT_FILE / BOOKMARK_EXPORT carry neither a group nor a CSV; the empty-box Import DIALOG is B8's - openImportDialog is the empty hook)
+    a monitor that plays the group, B6; IMPORT of a typed path is the window's worker in app_window_airband.cpp, its rows reaching the engine as ADD_ROWS; the empty-box
+    Import DIALOG is B8's) and B19 (BOOKMARK_ADD_ROWS carries the file's FAVOURITE column in a flags word, and EXPORT CSV is BOOKMARK_EXPORT ival[0] 1: the ENGINE writes the
+    preset from its store on a worker, every name whole - B7's two losses, fixed on the owner's approval; test_gui_file_jobs, converted)
   * the spectrum shows what the monitor is hearing ........................................... re-expressed, stub batch B7 (marks fed from AIRBAND_CHANNELS read every frame;
     the VFO band, its waterfall line and its peak figure are not drawn while it listens; test_airband_app, spectrum)
   * a native HydraSDR RFOne driver ........................................................... re-expressed, C0/C4 (engine enumeration and kind; the remembered
@@ -324,7 +327,7 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     test_engine_api_airband F1 reads it off the set as built); the section's note is B7's (the monitor's sentences are fact.airband.note, shown in the section)
   * an airport lookup while listening changes nothing played ................................ re-expressed in part, stub batch B6 (the engine's rule: the monitor's preset is the LISTEN's,
     a row added to another preset restarts nothing; test_engine_api_airband C2); the window's lookup leaves the group on show - and so the monitor - alone while it listens, B7
-    (test_airband_app, lookup while listening; the in-process mate checkAnAirportLookupKeepsAListeningMonitorsChoice of test_gui_file_jobs is B19's)
+    (test_airband_app, lookup while listening; the in-process mate checkAnAirportLookupKeepsAListeningMonitorsChoice of test_gui_file_jobs: B19, green)
   * a pasted report is recognised; `upload local-only` says what it means ..................... re-expressed, stub batch B14 (src/gui/app_window_report.cpp: the recognised-report
     line, the attach-the-diagnostics rows and the preview, `upload local-only` said in words, the no-email nudge on both pages; tests/test_problem_report_app.cpp, written RED first -
     this item had no pending placeholder). The bundle the page attaches also carries the signature ids of the reports on the machine and the recovered words (owner-approved
@@ -457,7 +460,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * a machine with no working OpenGL driver is told so ....................................... re-expressed, C1 (window failure message)
   * a Linux audio device reporting zero periods no longer crashes ........................... carried (sink/) (unverified: Linux)
   * Bookmark Import accepts the path shapes people use ....................................... re-expressed, stub batch B8 (cleanImportPath in the window BEFORE the op; a path with no root is
-    looked for on a worker; test_gui_file_jobs' section stays B19's)
+    looked for on a worker; test_gui_file_jobs' section: B19, green - and since B19 the engine's own read of the file is a worker's too, so the op answers OK "under way" and the
+    outcome is fact.bookmarks.import.*)
   * slide the tuned band with Shift + wheel .................................................. re-expressed, stub batch B11 (slidePassband over the state, SET_VFO_OFFSET and,
     past the end of the span, SET_FREQUENCY; the picture follows for 1.5 s; the second press of a double-click on the waterfall is not a click; test_passband_slide_app)
 
@@ -492,7 +496,7 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
 
 ### 6.3 The tests that are red, and why
 
-`ctest -L merge-pending`: 54 red placeholders (51 tests, 3 parts of converted tests). Each says its ledger id. In ids (tests):
+`ctest -L merge-pending`: 54 red placeholders (51 tests, 3 parts of converted tests) at the 0.99.84 merge, and NONE since stub batch B19. Each said its ledger id. In ids (tests):
 
   RAIL-CHROME (7)         test_app_rail test_rail_fold test_rail_fold_app test_status_fold test_status_fold_app test_deck_knobs_app test_theme_census
   STORE-VIEW (6)          test_plugin_store_window test_fitted_modules_window test_plugin_store_view test_fitted_modules_no_disk
@@ -507,7 +511,8 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   (MARKERS-SPECTRUM and DISPLAY-RANGE - test_bookmark_stacking_app and test_freq_markers_app removed by B10; test_spectrum_trace_app, test_passband_slide_app and
   test_display_menu_app removed by B11; test_display_fold_app by B1 - are whole)
   [PATCH-VIEW (test_patch_canvas_nav, test_patch_info_pane) and PATCH-PRESETS (test_patch_presets_app) were removed by B17: both ids are whole]
-  DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
+  [DISK-WORK (test_gui_file_jobs, test_failure_files, test_iq_open_async, test_gui_disk_audit) was removed by B19, the last window batch: the id is whole, and NOTHING IS PENDING -
+  zero placeholders, tests/merge_pending.cmake holds only its scaffolding, which B20 deletes]
   [HEALTH-DIAG (test_slow_frames_app) and SOURCE-ROWS (test_source_row_app) were removed by B18: both ids are whole; SDRPLAY-SERVICE and the SDRplay diagnostic had no placeholder -
   tests/test_sdrplay_service_app.cpp and tests/test_sdrplay_probe_app.cpp were written red first at B18, as was tests/test_recorder_start_app.cpp for the record-start labels]
                           [MAP-WINDOWS (test_unplaced_list_app) and WINDOW-PLACEMENT (test_decoder_window_app) were removed by B16: both ids are whole; the coverage rule
@@ -796,3 +801,5 @@ from the ENGINE's code through OwnedFrameScope, which writes the frame timer onl
 test_source_row_app and test_slow_frames_app are un-pended and converted (both also run as _stepped); three new tests were written red first (test_sdrplay_probe_app, test_recorder_start_app, test_sdrplay_service_app); test_engine_api_03
 and test_frame_timing gained cases; tests/test_source_section_window.cpp was edited with its reason beside the edit (it expected the old gate's wrong answer). The red placeholders are the 6 of B17 less two tests: 4 (4 tests, no part:
 DISK-WORK, B19's). test_i18n: 0 stale, 0 missing - the 24 keys returned, and the stale list is empty. 29 mutants, 29 RED.
+
+UPDATE 2026-10-27, stub batch B19 (docs/engine-stage4.md 6.22, the B19 record): DISK-WORK, the LAST window batch, and NOTHING IS PENDING. The window does no disk work, and the engine's pass does none of the work the window used to: the I/Q file's open (SELECT_SOURCE "file:"), the frequency list's import and export, the patch Radio's recordings list and the patch Radio's recording open were carried into the engine inline on the pass (the plan had them as already done) and are workers now, src/engine/engine_disk_work.cpp (+ engine_disk_state.hpp, and the patch radios' own open worker); the plugin picture's save and F12's screenshot are the window's, src/gui/app_window_disk_work.cpp (+ app_window_disk_state.hpp); DiskJob moved to src/core/disk_job.hpp; src/gui_pending/ is gone. The two B7 losses are fixed on the owner's approval: BOOKMARK_ADD_ROWS' fourth field is a word of flags (1 ticked, 2 favourite - an import into a preset keeps the file's favourite column) and BOOKMARK_EXPORT ival[0] 1 writes a preset's CSV from the engine's store (a name is no longer cut at 95 bytes). A command's answer is "under way" for the four disk ops, and the outcome is the note and twelve facts (fact.bookmarks.exporting / .export.*, .importing / .import.*, fact.source.iqOpening; docs/api-0.3-additions.md 9); this retires B8's "IMPORT_FILE is FAILED when it read nothing" (the window opens its Import window on fact.bookmarks.import.ok). test_gui_file_jobs, test_failure_files and test_iq_open_async are converted and green, test_gui_disk_audit's allowlist is rewritten (12 entries, 18 calls, a reason beside each; it found AppWindow::copyDiagnosticsBundle without the WatchdogPause the merge had dropped, restored) and holds the engine's two disk files to the same rule with no allowlist; the four placeholders are removed, so the red placeholders are ZERO (no test, no part; `ctest -L merge-pending` lists nothing) and tests/merge_pending.cmake holds only its scaffolding (B20 deletes it). New: two cases in test_gui_file_jobs for the owner-approved fixes and four in test_engine_api_03 (P1 - P4); tests that learned to wait for a worker, assertions unchanged: test_apply_command, test_recorder_bookmarks_scanner, test_patch_graph_draft_input, test_plugin_window, test_shutdown_budget (a path). test_i18n: 0 stale, 0 missing (2013 keys; no key came back or went). Registered 642 -> 642; headless 580: a full run with the red set EMPTY (the earlier runs' reds were this desk's flakes, each green on repeat); gui label 60 of 62 on the first full run (test_deck_knobs_app green solo, test_radio_setup_app environmental); 18 mutants, 18 RED, every restore sha256-checked; i18n 2013 keys, 0 stale, 0 missing in all 33 catalogues.

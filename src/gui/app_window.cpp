@@ -2278,28 +2278,29 @@ int AppWindow::run(int frames) {
                 char name[64];
                 std::snprintf(name, sizeof name, "shot-%llu.bmp",
                               static_cast<unsigned long long>(rendered));
-                std::string err;
                 const std::filesystem::path out = dir / name;
-                if (cascade::core::writeBmp24(img, out.string(), err)) {
-                    cascade::core::diagLogf("shot: wrote %s", out.string().c_str());
+                // THE FILES ARE WRITTEN BY A WORKER, NOT HERE (0.99.64, stub campaign B19): everything that needs this thread - the GL read-back,
+                // the window list - is done in this block, and the disk is handed the finished bytes (shotFlush, app_window_disk_work.cpp). The
+                // F12 key used to write a BMP and a text file on the thread that draws the window.
+                {
                     // WHERE EVERY WINDOW IS in this picture, beside it - so a
                     // capture can be cropped to one window from the numbers
                     // ImGui drew it with rather than from a guess at pixels.
                     std::filesystem::path rects = out;
                     rects.replace_extension(".windows.txt");
-                    if (std::FILE* rf = std::fopen(rects.string().c_str(), "wb")) {
-                        for (ImGuiWindow* wnd : ImGui::GetCurrentContext()->Windows) {
-                            if (wnd == nullptr || !wnd->WasActive || wnd->Hidden ||
-                                (wnd->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
-                                continue;
-                            }
-                            std::fprintf(rf, "%.0f\t%.0f\t%.0f\t%.0f\t%s\n", wnd->Pos.x, wnd->Pos.y,
-                                         wnd->Size.x, wnd->Size.y, wnd->Name);
+                    std::string windowList;
+                    char line[512];
+                    for (ImGuiWindow* wnd : ImGui::GetCurrentContext()->Windows) {
+                        if (wnd == nullptr || !wnd->WasActive || wnd->Hidden ||
+                            (wnd->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
+                            continue;
                         }
-                        std::fclose(rf);
+                        std::snprintf(line, sizeof line, "%.0f\t%.0f\t%.0f\t%.0f\t%s\n", wnd->Pos.x, wnd->Pos.y, wnd->Size.x, wnd->Size.y,
+                                      wnd->Name);
+                        windowList += line;
                     }
-                } else {
-                    cascade::core::diagWarnf("shot: %s", err.c_str());
+                    shotAddPicture(out.string(), std::move(img));
+                    shotAddText(rects.string(), std::move(windowList));
                 }
 
                 // THE TORN-OFF WINDOWS TOO. Each is its own GL window with
@@ -2346,14 +2347,11 @@ int AppWindow::run(int frames) {
                         std::snprintf(vname, sizeof vname, "shot-%llu-vp%d.bmp",
                                       static_cast<unsigned long long>(rendered), vpIndex++);
                         const std::filesystem::path vout = dir / vname;
-                        if (cascade::core::writeBmp24(vimg, vout.string(), err)) {
-                            cascade::core::diagLogf("shot: wrote %s", vout.string().c_str());
-                        } else {
-                            cascade::core::diagWarnf("shot: %s", err.c_str());
-                        }
+                        shotAddPicture(vout.string(), std::move(vimg));
                     }
                     glfwMakeContextCurrent(restore);
                 }
+                shotFlush();
             }
         }
 
@@ -3897,6 +3895,9 @@ void AppWindow::drawUi() {
     // The Airband section's once-a-frame half (stub campaign B7): its disk jobs, the view switch the engine asks for, the monitor's sentences. In
     // master the monitor's driver ran here as well; that part is the engine's pass now.
     airbandFrame();
+    // THE WINDOW'S OWN DISK WORK, COLLECTED (master 0.99.64, stub campaign B19): a picture saved shows its note, in the words it always had, in the window of
+    // the picture that was saved; a finished screenshot frees the next. See app_window_disk_work.cpp.
+    pollDiskJobs();
     // And the sink: everything above this line can be working perfectly while
     // the user hears nothing. The collect comes first - the health check must
     // not judge a stream an open is still installing.
@@ -8167,11 +8168,18 @@ void AppWindow::drawSourceSection() {
         ImGui::SetNextItemWidth(-60.0f);
         ImGui::InputText("##iq_path", iqPath_, sizeof(iqPath_));
         ImGui::SameLine();
+        // DISABLED WHILE THE HEADER IS BEING READ (0.99.64, stub campaign B19): the engine reads it on a worker (fact.source.iqOpening), and a second
+        // press would only be ignored; a wait of a second or more says it is the disk's and not the window's.
+        ImGui::BeginDisabled(iqOpenPending());
         if (ImGui::Button(trId("Open"))) {
             // SELECT_SOURCE "file:<path>" (openIqFile): the pipeline keeps
             // what it has unless the file opens. A path past 255 bytes rides
             // in the command's long text.
             uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, std::string("file:") + iqPath_));
+        }
+        ImGui::EndDisabled();
+        if (iqOpenPending() && iqOpenElapsedS() >= 1.0) {
+            ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"), iqOpenElapsedS());
         }
     }
 
@@ -14804,49 +14812,10 @@ void AppWindow::drawPluginWindows() {
                             im.width, im.height,
                             static_cast<unsigned long long>(im.sequence));
                 ImGui::SameLine();
-                if (ImGui::SmallButton(trId("Save as BMP"))) {
-                    // Named by plugin, sequence and wall-clock time, next to
-                    // the recordings rather than in the install directory.
-                    std::error_code ec;
-                    // The recorder's folder is read AT THE CLICK, from the session's facts (fact.recorder.dir), not cached.
-                    std::string recordDir;
-                    readFactText("fact.recorder.dir", recordDir);
-                    const std::filesystem::path dir = std::filesystem::path(recordDir.empty() ? "." : recordDir);
-                    std::filesystem::create_directories(dir, ec);
-                    char stamp[32];
-                    const std::time_t t = std::time(nullptr);
-                    std::tm tmv{};
-#if defined(_WIN32)
-                    localtime_s(&tmv, &t);
-#else
-                    localtime_r(&t, &tmv);
-#endif
-                    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tmv);
-                    std::string safe = im.plugin;
-                    for (char& c : safe) {
-                        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                                        (c >= '0' && c <= '9') || c == '-' || c == '_';
-                        if (!ok) { c = '_'; }
-                    }
-                    const std::filesystem::path out =
-                        dir / (safe + "-" + stamp + ".bmp");
-                    std::string err;
-                    // One format string per sentence, so a translation can
-                    // place the path or the reason where its language puts it.
-                    std::string note;
-                    if (cascade::core::writeBmp24(im, out.string(), err)) {
-                        cascade::core::formatUtf8(note, tr("Saved %s"), out.string().c_str());
-                    } else {
-                        cascade::core::formatUtf8(note, tr("Save failed: %s"), err.c_str());
-                    }
-                    imageSaveNote_ = note;
-                    // WHOSE WINDOW SAID IT, AND WHEN. Without these two the
-                    // note was drawn inside EVERY image window by the loop
-                    // below, so saving the APT picture put its filename under
-                    // the SSTV one as well.
-                    imageSaveNotePlugin_ = im.plugin;
-                    imageSaveNoteAtS_ = ImGui::GetTime();
-                }
+                // Disabled while the last one is being written (0.99.64: a worker writes it, and the note below says "Saving...").
+                ImGui::BeginDisabled(imageSavePending());
+                if (ImGui::SmallButton(trId("Save as BMP"))) { saveImageBmp(im); }
+                ImGui::EndDisabled();
 
                 // Fit to the window, preserving aspect: a weather image
                 // stretched to the pane is a misread image.
@@ -17436,9 +17405,15 @@ void AppWindow::actOnUiAnswers(bool stateRead) {
         if (r.op == FOXAPP_OP_SCAN_NATIVE_ONLY) { patchScanDone_ = std::max<std::uint64_t>(patchScanDone_, r.ticket); }
         // THE AIRBAND SECTION'S ANSWERS (stub campaign B7): the rows added for a lookup, a typed frequency or an import (the engine says how many, or
         // why a typed one was refused), a removed preset, a LISTEN that would not start.
-        if (r.op == FOXAPP_OP_BOOKMARK_ADD_ROWS || r.op == FOXAPI_OP_BOOKMARK_REMOVE_GROUP || r.op == FOXAPP_OP_AIRBAND) { airbandOnAnswer(r); }
-        // THE IMPORT'S ANSWER (stub campaign B8): FAILED when the engine read nothing - the "Import a frequency list" window opens with its
-        // sentence - and OK when it read rows, which closes that window.
+        // (...and a preset's Export CSV, which the engine now writes on a worker: its answer is that the write is under way, or that the preset has no
+        // rows; what the worker found comes as fact.bookmarks.export.* - stub campaign B19. The Bookmarks section's own export key keeps no ticket, so
+        // its answers find no ask here and fall through.)
+        if (r.op == FOXAPP_OP_BOOKMARK_ADD_ROWS || r.op == FOXAPI_OP_BOOKMARK_REMOVE_GROUP || r.op == FOXAPP_OP_AIRBAND ||
+            r.op == FOXAPP_OP_BOOKMARK_EXPORT) {
+            airbandOnAnswer(r);
+        }
+        // THE IMPORT'S ANSWER: since stub campaign B19 only that the read is under way (OK) or why not; what it found - rows, which close the "Import a
+        // frequency list" window, or a sentence, which opens it - is fact.bookmarks.import.* (importOutcomePoll).
         if (r.op == FOXAPP_OP_BOOKMARK_IMPORT_FILE) { importOnAnswer(r); }
         // A PLUGIN SETTINGS EDIT'S ANSWER (stub campaign B9): the verdict of the engine's judging - a refused box snaps back from it, once a frame, after
         // the answer and not before.
@@ -19179,6 +19154,8 @@ void AppWindow::drawBookmarksSection() {
         // ENGINE writes the file (FOXAPP_OP_BOOKMARK_EXPORT), from its store and not from
         // this copy - the copy's names and groups are cut at the list item's size - and
         // says where in the note above; the section sends the ids of the rows it shows.
+        // Disabled while the last one is being written (the engine writes it on a worker; the note above says "Saving..." and then where).
+        ImGui::BeginDisabled(bookmarkExportPending());
         if (ImGui::SmallButton(trId("Export for SDR#"))) {
             std::string ids;
             ids.reserve(bookmarkView_.size() * 7u);
@@ -19190,6 +19167,7 @@ void AppWindow::drawBookmarksSection() {
             }
             uiSubmit(cmd::makeText(FOXAPP_OP_BOOKMARK_EXPORT, ids));
         }
+        ImGui::EndDisabled();
     }
     if (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size())) {
         ImGui::SameLine();
@@ -20808,6 +20786,9 @@ void AppWindow::copyDiagnosticsBundle() {
     // is sent), so it is translated as it is written.
     diagBundleStatus_ = tr("Copied to the clipboard.");
     if (!crashDirForSave.empty()) {
+        // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): the reports folder and one small text file, on a press of Copy diagnostics. (The pause was lost in
+        // the 0.99.84 merge and found by tests/test_gui_disk_audit.cpp, whose allowlist said this function held one, when stub batch B19 turned it on.)
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(crashDirForSave), ec);
         const std::string path = crashDirForSave + "/diagnostics.txt";
@@ -21322,7 +21303,7 @@ void AppWindow::pollConfigWriter() {
         noteConfigWrite(false, configWriter_.lastError());
         // THE SETTINGS FILE COULD NOT BE WRITTEN (a read-only profile, a full disk, a file another program holds) and the window carries
         // on with what it has: counted, once a session - the debounce asks again by itself, so a count of 1 means "this session had it".
-        // Never the message (a path). (0.99.65's back-off - the wait lengthened after failures - is DISK-WORK, still to carry.)
+        // Never the message (a path). (0.99.65's back-off - the wait lengthened after failures - is noteConfigWrite's, just below.)
         cascade::core::health::noteRecovered(cascade::core::health::Recovered::CfgSave);
     }
 }

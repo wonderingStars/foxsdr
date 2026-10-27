@@ -1743,7 +1743,7 @@ slow disk**, and the cause of any one user's freeze is not established by any of
 
 The shapes the 0.99.58 - 0.99.63 fixes made, once, for the rest:
 
-- **`gui::DiskJob<Result>`** (`src/gui/disk_job.hpp`) is `RecordStart`'s shape for any
+- **`core::DiskJob<Result>`** (`src/core/disk_job.hpp`; `gui::DiskJob` in `src/gui/` until stub batch B19 moved it, so that the engine may use it too) is `RecordStart`'s shape for any
   "do this blocking thing and give me what it made". `request()` starts a worker and
   returns, `poll()` once a frame collects a finished one and returns; **neither can
   block**. One worker at a time (a disk that never answers costs one parked thread,

@@ -13,6 +13,7 @@
 #include <future>
 #include <limits>
 #include <map>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -196,6 +197,7 @@ struct FittedModulesDeck;
 struct FittedListCache;
 struct StoreListCache;
 struct ImportJobs;   // the import lookup's worker (app_window_import_dialog.cpp)
+struct DiskWorkState;   // the window's own disk workers: a picture's save and the screenshot's files (app_window_disk_work.cpp)
 
 // --- THE FUNCTION SELECT RAIL'S ROW GEOMETRY ---------------------------------
 //
@@ -1520,8 +1522,10 @@ private:
     void airbandAddManual();
     void airbandShowGroup(const std::string& group);
     void airbandImportPreset();                       // the Import key: the typed path's rows into the preset (the empty box: openImportDialog)
-    void airbandImportFile(const std::string& path);
+    void airbandImportFile(const std::string& path, const cascade::core::ImportInto& into);   // the preset (and tick) the rows join
     void airbandPollJobs();
+    bool airbandImportPending();   // the file for a preset is being read on its worker
+    void airbandPollExport();   // the preset's Export CSV the engine has finished writing (fact.bookmarks.export.*)
     void airbandSendChunks();
     void airbandFinishImport();
     void airbandRemovePreset();
@@ -1548,8 +1552,9 @@ private:
     void importSendOp(const std::string& path, const cascade::core::ImportInto& into);   // the op, its answer awaited
     void importLookupPoll();                        // once a frame: a finished lookup is sent on to the engine
     void importOnAnswer(const FoxCommandResult& r); // the engine's answer to an import this window sent
-    bool bookmarkImportPending() const;             // a lookup is out on its worker
-    double bookmarkImportElapsedS() const;
+    bool bookmarkImportPending();                   // a lookup is out on its worker, or the engine's read of the file is on its (fact.bookmarks.importing)
+    double bookmarkImportElapsedS();
+    void importOutcomePoll();                       // once a frame: an import the engine has finished reading (fact.bookmarks.import.*) opens or closes the window
     void drawImportDialog();
     // Opens it (the state only: the keys that ask are drawn inside the rail, before the root level exists, and ImGui wants OpenPopup and
     // BeginPopupModal in one ID stack - the deferral drawMutePopup() uses). `into` is where the rows go (a preset's name, or nothing: as the file
@@ -1562,8 +1567,12 @@ private:
     struct ImportAsk {
         std::uint64_t ticket = 0;
         cascade::core::ImportInto into;
+        std::string path;                           // what was sent: the engine's outcome names the path it read
     };
     std::vector<ImportAsk> importAsks_;             // the imports sent whose answer has not come
+    std::vector<ImportAsk> importOut_;              // answered OK: the engine is reading the file; its outcome is fact.bookmarks.import.*
+    std::uint64_t importSeqSeen_ = 0;               // fact.bookmarks.import.seq as last taken over
+    double importOutSinceS_ = -1.0;                 // when the engine's read was first seen out (the "waiting for the disk" line's clock)
     std::shared_ptr<cascade::gui::ImportJobs> importJobs_;   // made on first use; defined in app_window_import_dialog.cpp
     // THE BROWSE KEY'S FILE DIALOG (core/file_pick.hpp; 0.99.74): a blocking native dialog under the watchdog's user-paced pause
     // (runShellOpen(watchdogShellHooks(), ...)), or - in a bounded run - the seam FOXSDR_FILE_PICK: the variable's text is the file "chosen",
@@ -3825,6 +3834,28 @@ private:
     std::string imageSaveNotePlugin_;
     std::string imageSaveNote_;
     double imageSaveNoteAtS_ = -1.0;
+    // --- THE WINDOW'S OWN DISK WORK, on workers (stub campaign B19; app_window_disk_work.cpp has the why and what is NOT here) ----------------
+    // A plugin's picture saved as a BMP and F12's screenshot: the GUI thread does what only it can (the GL read-back, ImGui's window list, the file's
+    // name, a copy of the picture's pixels) and hands finished inputs to a worker that makes the folder and writes the file. One worker per feature at
+    // a time. The state is behind a shared_ptr the header cannot see into, made on first use (the object-file limit, C1128: every DiskJob<T>
+    // instantiation lives in app_window_disk_work.cpp).
+    void saveImageBmp(const cascade::core::HostImage& im);
+    bool imageSavePending() const;
+    void shotAddPicture(std::string path, cascade::core::HostImage image);
+    void shotAddText(std::string path, std::string text);
+    void shotFlush();
+    void pollDiskJobs();   // once a frame: a saved picture's note; a finished screenshot frees the next
+    // WHAT THE ENGINE'S WORKERS ARE DOING, as it publishes it (the keys that start them are disabled while they run, and a long wait says so):
+    bool bookmarkExportPending();    // fact.bookmarks.exporting: a frequency list is being written
+    bool iqOpenPending();            // fact.source.iqOpening: an I/Q file's header is being read
+    double iqOpenElapsedS();         // ...for how long (this window's clock from when it first saw it)
+    double iqOpenSinceS_ = -1.0;
+    cascade::gui::DiskWorkState& diskWork();
+    std::shared_ptr<cascade::gui::DiskWorkState> diskWork_;
+    // THE SLOW-DISK SEAM: called by each of the window's workers immediately before it touches the disk. A test binds one that sleeps - a slow disk
+    // as far as the frame loop can tell, with the real files and the real BMP encoder behind it. (The engine's workers have their own,
+    // Engine::setDiskHookForTest.)
+    std::function<void()> diskHookForTest_;
     // Long enough to read a full path off the window, short enough that it is
     // plainly about the save that just happened.
     static constexpr double kImageSaveNoteSeconds = 10.0;

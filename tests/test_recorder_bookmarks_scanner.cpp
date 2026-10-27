@@ -146,12 +146,32 @@ struct AppWindowTestAccess {
         a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
+    // THE DISK'S WORKERS (stub campaign B19): a frequency list's import and export, an I/Q file's open and the patch Radio's recordings list are workers'. A
+    // command the look just applied has started one; its outcome - the rows, the note - is collected on a pass of its own, so the look waits (bounded) for it
+    // and looks again, as the product's next pass does.
+    static bool diskJobsOut(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).iqOpenPending() || rawEngine(a.engine_).bookmarkImportPending() || rawEngine(a.engine_).bookmarkExportPending() ||
+                   rawEngine(a.engine_).recordingScanPending();
+        });
+    }
+    static void settleDiskJobs(AppWindow& a) {
+        const auto t0 = std::chrono::steady_clock::now();
+        while (diskJobsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollDiskJobs(); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
     static void look(AppWindow& a, bool scannerTick = false) {
         lookOnce(a, scannerTick);
         // The file of a take this look just asked for opens on a worker: wait for it, then look again, so the take is armed and published
         // (the product's next pass does the same).
         if (recordStartsOut(a)) {
             settleRecordStarts(a);
+            lookOnce(a, false);
+        }
+        if (diskJobsOut(a)) {
+            settleDiskJobs(a);
             lookOnce(a, false);
         }
     }
@@ -1569,10 +1589,11 @@ void testTheCommandsReachTheEngine() {
             Access::submit(app, q);
             Access::look(app, true);
             const auto answers = Access::answers(app);
-            // (Every command is accepted - but an import of a file that is not there, which the Import key's replay names, is answered FAILED
-            // since stub campaign B8: the engine says whether it read anything, and the window opens its "Import a frequency list" window on
-            // that answer. It was OK with only the note saying so; the note is checked below as it always was, and the answer is now held too.)
-            const int want = op == FOXAPP_OP_BOOKMARK_IMPORT_FILE ? FOXAPI_FAILED : FOXAPI_OK;
+            // (Every command is accepted. An import of a file that is not there, which the Import key's replay names, was answered FAILED by stub
+            // campaign B8 - the engine said whether it read anything - and is answered OK again since B19, because the read is a worker's and the answer is
+            // that it is under way: what it found is the note, checked below as it always was, and fact.bookmarks.import.ok, which the window opens its
+            // "Import a frequency list" window on. The export is the same: its answer is that the write is under way, and its note is the worker's.)
+            const int want = FOXAPI_OK;
             if (answers.size() != 1u || answers[0].second != want) {
                 std::printf("      %s: %zu answers, first %d\n", describe(q).c_str(), answers.size(),
                             answers.empty() ? 0 : answers[0].second);

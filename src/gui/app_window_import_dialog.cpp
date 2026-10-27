@@ -35,9 +35,12 @@
 //      place found - or, when none opened, the last place tried, so the failure says where it looked.
 //      (The worker reads and parses the file to find out; the engine reads it again when it imports. A
 //      relative path is a typed name, and the cost is a file read, never a frame.)
-//   4. THE ENGINE IMPORTS (FOXAPP_OP_BOOKMARK_IMPORT_FILE, LOCAL only) and answers: OK when it read
-//      rows (even rows already here), FAILED when it read nothing, with the note's sentence. That
-//      answer opens this window or closes it.
+//   4. THE ENGINE IMPORTS (FOXAPP_OP_BOOKMARK_IMPORT_FILE, LOCAL only) - ON A WORKER since stub campaign
+//      B19 (the read was the pass's own, and a pass that waits for a disk holds every answer behind it),
+//      so the op's answer is only that the read is under way, and what it found is the fact
+//      bookmarks.import.* (the engine's note, whole, and whether it read rows - even rows already here).
+//      That fact opens this window or closes it (importLookupPoll, once a frame). Until B19 the answer
+//      itself was FAILED when it read nothing.
 // An import for an Airband PRESET (ImportInto with a group) is the section's own (airbandImportFile:
 // its rows take the preset's name and tick, which BOOKMARK_IMPORT_FILE cannot carry).
 //
@@ -59,7 +62,7 @@
 #include "core/freq_import.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "gui/disk_job.hpp"
+#include "core/disk_job.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_census.hpp"
@@ -68,6 +71,7 @@ namespace cascade::gui {
 
 using cascade::i18n::tr;
 using cascade::i18n::trId;
+using cascade::core::DiskJob;
 
 // What the lookup worker hands back: the file it opened, or the last place it looked.
 struct ImportLookup {
@@ -93,9 +97,25 @@ void AppWindow::openImportDialog(const cascade::core::ImportInto& into, const st
     importDialogQueued_ = true;
 }
 
-bool AppWindow::bookmarkImportPending() const { return importJobs_ != nullptr && importJobs_->lookup.pending(); }
+// A READ IS OUT while the lookup of a path with no root is on its worker here, or the engine's own read of the file is on its worker there
+// (fact.bookmarks.importing).
+bool AppWindow::bookmarkImportPending() {
+    if (importJobs_ != nullptr && importJobs_->lookup.pending()) { return true; }
+    return uiFact("fact.bookmarks.importing") == "1";
+}
 
-double AppWindow::bookmarkImportElapsedS() const { return importJobs_ != nullptr ? importJobs_->lookup.elapsedS() : 0.0; }
+// How long the read now out has been out, for the line that says the window is waiting on the disk and not frozen. The lookup's own clock, or - the
+// engine's read being another thread's - the time since this window first saw it pending.
+double AppWindow::bookmarkImportElapsedS() {
+    if (importJobs_ != nullptr && importJobs_->lookup.pending()) { return importJobs_->lookup.elapsedS(); }
+    if (uiFact("fact.bookmarks.importing") != "1") {
+        importOutSinceS_ = -1.0;
+        return 0.0;
+    }
+    const double now = ImGui::GetTime();
+    if (importOutSinceS_ < 0.0) { importOutSinceS_ = now; }
+    return now - importOutSinceS_;
+}
 
 // THE IMPORT, FROM ANY OF ITS FOUR WAYS IN (the Import key, a Browse, a dropped file, the script's seam).
 void AppWindow::importBookmarkFile(const std::string& path, const cascade::core::ImportInto& into) {
@@ -103,7 +123,7 @@ void AppWindow::importBookmarkFile(const std::string& path, const cascade::core:
     const std::string p = cascade::core::cleanImportPath(path);
     if (!into.group.empty()) {
         // A PRESET'S IMPORT: the Airband section's, which puts the preset's name and tick on every row (its worker reads the file the same way).
-        airbandImportFile(p);
+        airbandImportFile(p, into);
         return;
     }
     // Nothing left of what was typed (a pasted line of white space): the box is empty, and an empty box opens the window.
@@ -131,7 +151,9 @@ void AppWindow::importBookmarkFile(const std::string& path, const cascade::core:
     readFactText("fact.recorder.dir", dir);
     j.into = into;
     j.path = p;
-    j.lookup.request([p, dir]() -> ImportLookup {
+    const auto hook = diskHookForTest_;
+    j.lookup.request([p, dir, hook]() -> ImportLookup {
+        if (hook) { hook(); }
         ImportLookup o;
         // The core's own rule (importFrequencyFileIn): a relative path is made absolute against the working directory and tried; when that
         // does not open it is tried in the recordings folder. `tried` is the file found, or the last place looked.
@@ -148,11 +170,13 @@ void AppWindow::importSendOp(const std::string& path, const cascade::core::Impor
     ImportAsk ask;
     ask.ticket = ticket;
     ask.into = into;
+    ask.path = path;
     importAsks_.push_back(std::move(ask));
 }
 
 // Once a frame: a finished lookup is sent on to the engine, and a list asked for while it was out is looked for next.
 void AppWindow::importLookupPoll() {
+    importOutcomePoll();
     if (!importJobs_) { return; }
     ImportJobs& j = *importJobs_;
     ImportLookup o;
@@ -174,23 +198,52 @@ void AppWindow::importLookupPoll() {
     }
 }
 
-// THE ENGINE'S ANSWER to an import this window sent.
+// THE ENGINE'S ANSWER to an import this window sent: that the read is under way (OK), or why not (an empty path). What the read FOUND comes later, as
+// the fact bookmarks.import.* (importOutcomePoll).
 void AppWindow::importOnAnswer(const FoxCommandResult& r) {
     const auto it = std::find_if(importAsks_.begin(), importAsks_.end(), [&](const ImportAsk& k) { return k.ticket == r.ticket; });
     if (it == importAsks_.end()) { return; }
     const ImportAsk ask = *it;
     importAsks_.erase(it);
     if (r.status == FOXAPI_OK || r.status == FOXAPI_NO_CHANGE) {
-        // An import the window was waiting for came back WITH rows: it has done its job.
+        // The read is out: its outcome is waited for. (The engine holds one read and the last one asked for; this list is only the targets, and
+        // importOutcomePoll drops the ones a later import superseded.)
+        importOut_.push_back(ask);
+        return;
+    }
+    openImportDialog(ask.into, r.message);
+}
+
+// ONCE A FRAME: an import the engine has finished reading (fact.bookmarks.import.seq moved). Rows (even rows already in the list) close the "Import a
+// frequency list" window and forget its sentence; none open it - already open, it takes the new sentence - with the engine's note whole and the target of
+// the import that failed (the section's note says it too, as it always did).
+void AppWindow::importOutcomePoll() {
+    const std::string& seqText = uiFact("fact.bookmarks.import.seq");
+    if (seqText.empty()) { return; }
+    const std::uint64_t seq = std::strtoull(seqText.c_str(), nullptr, 10);
+    if (seq == importSeqSeen_) { return; }
+    importSeqSeen_ = seq;
+    const bool ok = uiFact("fact.bookmarks.import.ok") == "1";
+    const std::string note = uiFact("fact.bookmarks.import.note");
+    const std::string path = uiFact("fact.bookmarks.import.path");
+    // WHO ASKED: the oldest ask for this path (the engine runs them in the order they were asked, the last-asked-wins ones dropped), and every older
+    // ask is one the engine never read - a list dropped while another was being read, replaced by a later one.
+    cascade::core::ImportInto into;
+    const auto it = std::find_if(importOut_.begin(), importOut_.end(), [&](const ImportAsk& k) { return k.path == path; });
+    if (it != importOut_.end()) {
+        into = it->into;
+        importOut_.erase(importOut_.begin(), it + 1);
+    } else if (!importOut_.empty()) {
+        into = importOut_.back().into;
+        importOut_.clear();
+    }
+    if (ok) {
         importDialogOpen_ = false;
         importDialogQueued_ = false;
         importDialogReason_.clear();
         return;
     }
-    // THE "Import a frequency list" WINDOW opens on any import that came back with no rows - typed, dropped or chosen - with the engine's
-    // sentence (the section's note says it too, as it always did) and the target of the import that failed; already open, it takes the new
-    // sentence.
-    openImportDialog(ask.into, r.message);
+    openImportDialog(into, note);
 }
 
 void AppWindow::drawImportDialog() {

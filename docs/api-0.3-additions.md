@@ -1064,6 +1064,7 @@ family alone**, and does not use that entry's `ACTIVE`.
 | `fact.source.scanGate` | with `FOXAPI_SRC_SCAN_GATED`, the name the two deferral sentences quote: the open radio's model (never its serial), the label of the one opening, `the patch radio '<name>'`, `a patch radio`, or `a radio this session could not release`; `""` otherwise. English, quoted whole in the interface's own sentence | |
 | `fact.source.scanSkip` | with the scan gated, the drivers a scan beside the open radios leaves out, joined `", "`; **`""` means the whole SoapySDR scan is deferred** and a non-empty text means Refresh still runs and leaves exactly these out. `""` with nothing gating it | |
 | `fact.source.faultedDrivers` | the drivers whose scan child died earlier this session (they are not asked again), lower case, joined `", "`; `""` when none. Taken when a scan lands | |
+| `fact.source.iqOpening` | `"1"`/`"0"` (stub campaign B19): the I/Q file's header is being read on its worker (`SELECT_SOURCE` `file:<path>`, section 9); the Open key is disabled and the Source section says it waits for the disk | |
 | `fact.source.uhdNoImages`, `fact.source.usrpOnUsb` | `"1"`/`"0"` (0.99.90 merge): UHD itself said, during the last scan that landed, that it has no firmware images; and that scan's USB listing held a USRP. The Source section says its one amber line (`uhdImagesMissingHint`) when BOTH are `"1"`. Taken when a scan lands | |
 | `fact.source.plutoUri` | the address in the Pluto box, as the engine holds it (`FOXAPP_OP_SET_PLUTO_URI` stores each edit; 191 bytes at most) | LOCAL |
 | `fact.source.id.<n>` | the whole `SELECT_SOURCE` id of `DEVICES` entry `n` (above) | |
@@ -1833,19 +1834,67 @@ could not be written is `FAILED` (the note says "Could not write <path>"). Nothi
 in the first two. A REMOTE session is `DENIED`. The text is at most `FOXAPI_MAX_LONG_TEXT` (1
 MiB): about 130 000 ids of seven digits.
 
+**The file is written on a worker** (stub campaign B19; docs/engine-stage4.md 6.22): the folder, the name and the file were
+the pass's own calls into a disk that can be a network share, and are a worker's now (`gui::DiskJob`: one in flight, the text
+made on the pass from the store and owned by the worker, a throw contained, abandoned and not joined at exit). So **`OK` says the
+write is under way**, and the note says "Saving..." until the worker answers, then "Exported <n> to <folder>/<file>" or "Could
+not write <path>". The name is taken atomically: two exports inside one second are two files (`...-<stamp>.xml`,
+`...-<stamp>-2.xml`), the second never over the first, and the note names the one on disk. The `FAILED` answer above is gone
+with the synchronous write - a write that fails is said in the note and in `fact.bookmarks.export.ok`, not in the answer - and a
+second export while one is out is `NO_CHANGE` ("an export is already being written"). `ival[0]` 1 (stub campaign B19; the
+default 0 is the above): `text` is a PRESET's name - a bookmark group - and the engine writes that group's rows, every mode, ticked
+or not, in the store's order, as the CSV the importer reads back whole (`core::exportCsv`: the tick, the favourite, a comma or a
+quote in a name) to `foxsdr-<preset>-<YYYYMMDD>-<HHMMSS>.csv` in the record folder - the preset's name in the file's as far as a
+file name can carry it (letters, digits, `-` and `_` stay, anything else is `_`, cut at 40 bytes). **The names go out whole** - a
+window that built this file from `BOOKMARKS` wrote a name cut at 95 bytes and a group at 159 (stub campaign B7's two losses, which
+this op is the fix for). A preset's export does not touch the `bookmarkNote` line: its result is `fact.bookmarks.export.*`
+(below). An empty name is `BAD_ARGUMENT`, a preset with no rows `NOT_FOUND` ("that preset has no rows"), any other `ival[0]`
+`OUT_OF_RANGE`.
+
+| Fact | What it says |
+|---|---|
+| `fact.bookmarks.exporting` | `1` while an export is being written, else `0`: the Export keys are disabled while it is |
+| `fact.bookmarks.export.seq` | how many exports have finished since the engine started, a decimal: it moves on every one, so a reader that polls sees each once |
+| `fact.bookmarks.export.ok`, `.preset`, `.count` | of the last finished export: `1` if the file was written, `1` if it was a preset's CSV (`ival[0]` 1), the rows it held |
+| `fact.bookmarks.export.path` (LOCAL) | of the last finished export: the path the note names - the folder and the name the file took ("-2" on a second in one second) - or, for a worker that threw, `(the file)` |
+
+**`FOXAPI_OP_SELECT_SOURCE` "file:<path>" is a worker's too** (stub campaign B19): the I/Q file's header was read on the pass,
+inline. It is read on a worker now, and the pipeline keeps the source it has until the file is open: the op answers `OK` when
+the open is under way, and the source is installed on the pass that finds it open - or the red line (`sourceError`, the
+source's own sentence) says why it would not. A second open while one is out changes nothing; a file that opens after the
+choice moved on (another source installed, a radio open under way, the combo moved off the row it was asked on) is dropped and
+closed off the pass. `fact.source.iqOpening` is `1` while the header is being read. The start-up restore of a saved file
+(`applyConfig`) still opens it inline, before the first pass, as it always did.
+
+`FOXAPP_OP_PATCH_LIST_RECORDINGS` is a worker's as well (stub campaign B19): the folders are listed and the headers read on a
+worker that owns a copy of the probe cache and hands both back; a request made while a listing is out is remembered and run when it
+comes back, and `PATCH_DEVICES` and `RECORDINGS` kind 3 change when the listing lands, a pass or more after the op. A patch Radio
+on an I/Q recording opens through the patch radios' own open worker (as it did in master since 0.99.65), the node taking the
+file's rate when it is open.
+
 `FOXAPP_OP_BOOKMARK_IMPORT_FILE` (0x8601, SETTINGS, **LOCAL sessions only** - it reads a file on this machine): `text` (or long
 text) is a PATH. The engine reads SDR#'s frequencies.xml or a CSV and adds every entry as the file wrote it (an identical row is
 skipped), then sets the `bookmarkNote` line ("<format>: <n> entries read, <m> added") and saves. The interface sends a path:
 what a person typed, pasted or dropped is cleaned first (`core::cleanImportPath`: the quotes of "Copy as path" or a terminal's
 drag-and-drop, the Enter or the space a paste leaves, a `file://` address with its `%XX` escapes), and a path with no root is
 looked for in the working directory and then the record folder by the window, on a worker, which sends the place it found (the
-engine reads the one path it is given, and never looks in two places). **The answer says whether it read anything** (stub
-campaign B8; it was `OK` either way, with the outcome only in the note): `OK` when it read entries, even entries that were all
-here already; `FAILED` - the list unchanged - when it read none, with the note's sentence as the message (cut at the message's
-127 bytes) and in the note whole: "Could not import: the file "<path>" could not be opened" (or "could not be read", or "no line of
-the file had a usable frequency"), in the user's language. The log names the failure's kind and never the file ("bookmarks: an
-import (.csv) failed: cannot open "(the file)""). The window opens its "Import a frequency list" window on `FAILED` and closes it
-on `OK`. An empty text is `BAD_ARGUMENT`; a REMOTE session is `DENIED`.
+engine reads the one path it is given, and never looks in two places). **The file is read on a worker** (stub campaign B19; docs/engine-stage4.md 6.22): the read and the
+parse were the pass's own calls into a disk that can be a network share, and are a worker's now (`core::DiskJob`, as for the export above). So **`OK` says the read is
+under way**; the rows join the list, and the `bookmarkNote` line says what happened - "<format>: <n> entries read, <m> added", or "Could not import: the file "<path>"
+could not be opened" (or "could not be read", or "no line of the file had a usable frequency"), in the user's language - on the pass that collects the worker, a pass
+or more later. One read is out at a time; one asked for while another is out is remembered (the last one asked for wins) and read when the first is back. (Stub campaign
+B8 answered `FAILED` from a read on the pass when it read nothing, and the window opened its dialog on that answer; the answer is `OK` now and the outcome is the facts
+below.) The log names the failure's kind and never the file ("bookmarks: an import (.csv) failed: cannot open "(the file)"").
+
+| Fact | What it says |
+|---|---|
+| `fact.bookmarks.importing` | `1` while a file is being read, else `0` |
+| `fact.bookmarks.import.seq` | how many imports have finished since the engine started: it moves on every one, so a reader that polls sees each once |
+| `fact.bookmarks.import.ok` | of the last finished import: `1` if it read entries (even entries that were all here already), `0` if it read none - the list unchanged |
+| `fact.bookmarks.import.note` | of the last finished import: the note's sentence WHOLE (the answer's message was cut at 127 bytes) |
+| `fact.bookmarks.import.path` (LOCAL) | of the last finished import: the path it was asked for, the quotes of "Copy as path" taken off |
+
+The window opens its "Import a frequency list" window when `fact.bookmarks.import.ok` is `0` for an import it sent, and closes it when it is `1`. An empty text is `BAD_ARGUMENT`; a REMOTE session is `DENIED`.
 
 `FOXAPP_OP_SET_PATCH_PAGE_OPEN` (0x8421, VIEW, **LOCAL sessions only**): `ival[0]` 0 or 1, whether the standard window's patch
 view is showing. The engine's pass runs the patch runtime while it is (the default) and its close rule when it goes (section 8.12).
@@ -2048,7 +2097,7 @@ word on `BOOKMARKS` (5.2, 5.3); the facts below. The patch runner and the pass's
 | Op | Grant | What it does |
 |---|---|---|
 | `FOXAPP_OP_BOOKMARK_TICK` (0x8604) | SETTINGS | `ival[0]`: the bookmark's id; `ival[1]`: 0 untick / 1 tick. `NOT_FOUND` for an id the list does not hold. A row already as asked changes nothing and writes nothing (the list's version does not move). The row stays where it is among its peers on one frequency (the monitor plays the first). |
-| `FOXAPP_OP_BOOKMARK_ADD_ROWS` (0x8605) | SETTINGS | `long text` (or `text`), one row a line: `<Hz> TAB <mode> TAB <bandwidth Hz> TAB <tick 0/1> TAB <group> TAB <name>` (the last two may be empty; a width that is no number takes the mode's default). `ival[0]` 0: rows TYPED IN - added as the list's own add does (a name in use gets " (2)"; a nameless row is named by its frequency, "121.5000 MHz") and judged by the rule a tune the radio refuses is: a frequency outside what the open radio covers (a converter's LO taken out) is `OUT_OF_RANGE` with the sentence that says what it does cover, and nothing is added; a radio that publishes no range (the generator, an I/Q file) refuses nothing. `ival[0]` 1: a LIST (an airport's rows) - added as an import adds (a row identical in name, frequency and group to one already there is skipped) and not judged. `applied[0]`: the rows added. `BAD_ARGUMENT` for text with no row in it, `OUT_OF_RANGE` for any other `ival[0]`. Why an op of its own: `FOXAPI_OP_BOOKMARK_IMPORT` is not served and `BOOKMARK_ADD` adds the tuned station only. |
+| `FOXAPP_OP_BOOKMARK_ADD_ROWS` (0x8605) | SETTINGS | `long text` (or `text`), one row a line: `<Hz> TAB <mode> TAB <bandwidth Hz> TAB <flags> TAB <group> TAB <name>` (the last two may be empty; a width that is no number takes the mode's default; **`<flags>` is bit 0 ticked, bit 1 favourite** - stub campaign B19: `0` and `1` are what every sender wrote before the favourite was carried and mean what they meant, `2` is a favourite not ticked, `3` both, so an import into a preset keeps the file's favourite column; a field that is no number in 0..3 is 0). `ival[0]` 0: rows TYPED IN - added as the list's own add does (a name in use gets " (2)"; a nameless row is named by its frequency, "121.5000 MHz") and judged by the rule a tune the radio refuses is: a frequency outside what the open radio covers (a converter's LO taken out) is `OUT_OF_RANGE` with the sentence that says what it does cover, and nothing is added; a radio that publishes no range (the generator, an I/Q file) refuses nothing. `ival[0]` 1: a LIST (an airport's rows) - added as an import adds (a row identical in name, frequency and group to one already there is skipped) and not judged. `applied[0]`: the rows added. `BAD_ARGUMENT` for text with no row in it, `OUT_OF_RANGE` for any other `ival[0]`. Why an op of its own: `FOXAPI_OP_BOOKMARK_IMPORT` is not served and `BOOKMARK_ADD` adds the tuned station only. |
 | `FOXAPP_OP_SCANNER_LIST` (0x860A) | TUNE | `ival[0]` 0: range mode (the scanner scans the range again); 1: list mode (it scans the ticked rows, in frequency order, each tuned with its own mode and bandwidth) - either stops a running scan, as the checkbox did; 2: START a list scan (list mode, whatever it was; the Airband monitor stands down). A start with nothing ticked is `NO_CHANGE` ("no frequency is ticked"). List mode is session-only (never in the config). While a list scan runs it follows the ticks: a row ticked or unticked restarts it from the first row, nothing ticked stops it; a heard time written or a bookmark added elsewhere leaves it where it is. `FOXAPI_OP_SCANNER_RUN` (a range scan, from the desk or a browser) leaves list mode - the range is what the command carried. |
 | `FOXAPP_OP_AIRBAND` (0x8429) | TUNE | `ival[0]` the action. **0 STOP** (`NO_CHANGE` when nothing listens or waits). **1 LISTEN**, `text`: the preset (a bookmark group) to play, "" for every ticked AM or NFM row: nothing ticked there is `NO_CHANGE` with the note "Tick at least one AM or NFM frequency to listen to."; a radio that cannot be divided to an audio rate, or a block the radio will not tune to, is `FAILED` with the note; the same preset while listening is already so, another is a restart on it. **2 NEXT BLOCK** (`NO_CHANGE` with one block). **3 ABOVE THE NOISE**: the squelch to 8 dB over the median channel level the strips have reported (`NO_CHANGE` with no level yet; `applied[1]`: the dB) - the one place the rule is written; the top bar's AUTO squelch (batch B12) calls it. **4 SQUELCH** `num[0]` dB, clamped to -110..0 (`CLAMPED`; `applied[1]`); a listening monitor rebuilds its block with it. **5 HOLD** `num[0]` seconds, clamped to 0..60: how long a block stays after its last word; a listening multi-block monitor starts again. **6 TUNE ONE** `ival[1]`: a bookmark's id - the monitor stops ("Tuned to <name> alone.") and the receiver tunes to the row, as a click on it would. `applied[0]` is the state after: 0 idle, 1 listening, 2 waiting for the patch to hand the radio back. |
 

@@ -1,6 +1,6 @@
 // app_window_source_row.cpp - what the Source row says about radios (0.99.49 beta feedback, stub campaign B18, ledger SOURCE-ROWS): the "No radio hardware found" gate, the
 // radios a running patch holds, and the chip and the combo's preview that name them. AppWindow members, kept out of app_window.cpp (which is at the object-file limit,
-// src/gui_pending/app_window_disk_state.hpp).
+// src/gui/app_window_disk_state.hpp).
 //
 // THE REPORT BEHIND IT. A tester on a small laptop with a NooElec NESDR SMArt v5 had a patch running that radio perfectly, while the Function Select panel said "No radio hardware
 // found" and the Source row's chip said "Signal gen". Two faults, both reading as "FoxSDR cannot see my radio": the warning was gated on the SoapySDR list alone, so a dongle the

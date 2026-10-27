@@ -1596,7 +1596,10 @@ int main() {
             CHECK(untilText(*a, "Another radio here already uses this device."));
             std::printf("   nodes %u and %u on one recording: the second's face says so\n", static_cast<unsigned>(first),
                         static_cast<unsigned>(second));
-            CHECK(shows("cannot open file"));                      // the first's own error, PATCH_RADIOS' detail
+            // The first's own error, PATCH_RADIOS' detail. A recording's header is read on the open worker (stub campaign B19: it was read inline on
+            // the pass), so the plan's sentence above lands first and the error a pass or more after it: the case waits for it, the assertion unchanged.
+            // (The limit is long on purpose: where "Z:" is a mapped share that is offline, the first open waits out the network's own 21 s.)
+            CHECK(untilText(*a, "cannot open file", 15000));
             CHECK(shows("Recording: recording.wav"));              // ...and the label of the key the list does not hold
         }
         // A NOTE under a running radio (a coerced rate, a retune it would not take): PATCH_RADIOS' detail.

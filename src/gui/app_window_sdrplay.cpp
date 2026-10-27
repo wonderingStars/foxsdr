@@ -1,5 +1,5 @@
 // app_window_sdrplay.cpp - THE SDRPLAY API SERVICE CARD'S RESTART KEY and THE SDRPLAY DIAGNOSTIC'S DIALOG (stub campaign B18; ledger SDRPLAY-SERVICE, 0.99.55, and 0.99.51). AppWindow members, kept out of
-// app_window.cpp (which is at the object-file limit, src/gui_pending/app_window_disk_state.hpp) and put back from master's text of 0.99.90 (drawSdrPlayServiceKey, finishSdrPlayServiceRestart,
+// app_window.cpp (which is at the object-file limit, src/gui/app_window_disk_state.hpp) and put back from master's text of 0.99.90 (drawSdrPlayServiceKey, finishSdrPlayServiceRestart,
 // pollSdrPlayService, startSdrPlayProbe, drawSdrPlayProbeDialog), with the UI census's notes added (tests/test_sdrplay_service_app.cpp and tests/test_sdrplay_probe_app.cpp read them).
 //
 // THE SERVICE. An RSP is driven through sdrplay_api.dll, and the DLL talks to a Windows SERVICE that holds the radio's USB handle. When the service is stopped or wedged every Open answers "fail"

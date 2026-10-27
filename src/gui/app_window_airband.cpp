@@ -69,7 +69,7 @@
 #include "core/write_fault.hpp"
 #include "gui/airband_marker_geometry.hpp"
 #include "gui/bench_rail.hpp"
-#include "gui/disk_job.hpp"
+#include "core/disk_job.hpp"
 #include "gui/fonts.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
@@ -79,11 +79,12 @@ namespace cascade::gui {
 
 using cascade::i18n::tr;
 using cascade::i18n::trId;
+using cascade::core::DiskJob;
 
 namespace cc = cascade::core;
 namespace cmd = cascade::core::cmd;
 
-// --- the two disk jobs (see airband_window_state.hpp) --------------------------------------------------------------------------------------
+// --- the disk job (see airband_window_state.hpp) -------------------------------------------------------------------------------------------
 
 // What the worker that reads a frequency list hands back: the rows already put in the preset (applyImportInto), as the lines the engine's
 // BOOKMARK_ADD_ROWS takes, cut into chunks it will accept.
@@ -99,17 +100,10 @@ struct AirbandImportOutcome {
     std::vector<std::string> chunks;  // ADD_ROWS text, at most kChunkBytes each
 };
 
-struct AirbandExportOutcome {
-    bool ok = false;
-    std::string shown;                // the path as the note names it
-    std::size_t count = 0;
-};
-
 struct AirbandJobs {
     DiskJob<AirbandImportOutcome> import{"Airband preset import"};
-    DiskJob<AirbandExportOutcome> exportCsv{"Airband preset export"};
-    // WHO ASKED, kept on the window's thread for the poll: the preset an import in flight was pressed for.
-    std::string importGroup;
+    // WHO ASKED, kept on the window's thread for the poll: the preset (and the tick) an import in flight was pressed for.
+    cc::ImportInto importInto;
     std::string importPath;
 };
 
@@ -151,14 +145,15 @@ std::string cleanField(const std::string& s) {
     return out;
 }
 
-// One ADD_ROWS line: "<Hz> TAB <mode> TAB <bandwidth Hz> TAB <tick 0/1> TAB <group> TAB <name>".
+// One ADD_ROWS line: "<Hz> TAB <mode> TAB <bandwidth Hz> TAB <flags> TAB <group> TAB <name>"; the flags are 1 ticked, 2 favourite (stub campaign B19: the
+// file's favourite column used to be lost here, ADD_ROWS having no field for it).
 void appendRow(std::string& text, const cc::Bookmark& b, bool tick) {
     char head[96];
     std::snprintf(head, sizeof(head), "%.6f\t", b.freqHz);
     text += head;
     text += cleanField(b.mode);
     char bw[48];
-    std::snprintf(bw, sizeof(bw), "\t%.3f\t%d\t", b.bandwidthHz, tick ? 1 : 0);
+    std::snprintf(bw, sizeof(bw), "\t%.3f\t%d\t", b.bandwidthHz, (tick ? 1 : 0) | (b.favourite ? 2 : 0));
     text += bw;
     text += cleanField(b.group);
     text += '\t';
@@ -184,6 +179,8 @@ std::vector<std::string> rowChunks(const std::vector<cc::Bookmark>& items) {
 }
 
 }  // namespace
+
+bool AppWindow::airbandImportPending() { return airband_.jobs != nullptr && airband_.jobs->import.pending(); }
 
 AirbandJobs& AppWindow::airbandJobs() {
     if (!airband_.jobs) { airband_.jobs = std::make_shared<AirbandJobs>(); }
@@ -400,28 +397,30 @@ void AppWindow::airbandImportPreset() {
     }
     airband_.presetNote.clear();
     airband_.presetFolderKey = false;
-    airbandImportFile(airband_.importPath);
+    airbandImportFile(airband_.importPath, cc::ImportInto{airbandPresetName(), true});
 }
 
 // THE DISK IS NOT TOUCHED HERE (0.99.65): the file the user typed - a path that can be a network share or a sleeping drive - is read and parsed
-// on a worker (gui/disk_job.hpp), which owns everything it touches by value; airbandPollJobs() collects it. ONE READ AT A TIME: a press made
-// while one is out is remembered (the last one) and read when the first is back.
-void AppWindow::airbandImportFile(const std::string& path) {
+// on a worker (core/disk_job.hpp), which owns everything it touches by value; airbandPollJobs() collects it. ONE READ AT A TIME: a press made
+// while one is out is remembered (the last one, WITH THE PRESET IT WAS PRESSED FOR) and read when the first is back.
+void AppWindow::airbandImportFile(const std::string& path, const cc::ImportInto& into) {
     // What was typed or pasted, as a path (cleanImportPath, 0.99.82): the quotes Explorer's "Copy as path" puts round it, the Enter or the space a
     // paste leaves after it, a file:// address.
     const std::string p = cc::cleanImportPath(path);
     AirbandJobs& j = airbandJobs();
     if (j.import.pending()) {
         airband_.importAgain = p;
+        airband_.importAgainInto = into;
         return;
     }
-    const std::string group = airbandPresetName();
-    j.importGroup = group;
+    j.importInto = into;
     j.importPath = p;
     std::string dir;
     readFactText("fact.recorder.dir", dir);
-    j.import.request([p, group, dir]() -> AirbandImportOutcome {
+    const auto hook = diskHookForTest_;
+    j.import.request([p, into, dir, hook]() -> AirbandImportOutcome {
         const auto t0 = std::chrono::steady_clock::now();
+        if (hook) { hook(); }
         AirbandImportOutcome o;
         o.path = p;
         // A RELATIVE PATH (0.99.80 for a bare name, 0.99.82 for any): "frequencies.xml", as Export showed it, opens relative to the process's
@@ -436,8 +435,9 @@ void AppWindow::airbandImportFile(const std::string& path) {
         o.skipped = r.skipped;
         o.shifted = r.shifted;
         // THE PRESET'S NAME AND TICK, put on every row here, after the file was read and before the rows join the list (0.99.66): whatever group
-        // and tick the file gave them, they are the preset's, ticked when the monitor can play them (AM, NFM) and not when it cannot.
-        cc::applyImportInto(r.items, cc::ImportInto{group, true});
+        // and tick the file gave them, they are the preset's, ticked when the monitor can play them (AM, NFM) and not when it cannot. (The file's
+        // FAVOURITE column is kept, and travels in the row's flags: stub campaign B19.)
+        cc::applyImportInto(r.items, into);
         for (const cc::Bookmark& b : r.items) { o.playable += playsName(b.mode) ? 1u : 0u; }
         o.chunks = rowChunks(r.items);
         o.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -447,13 +447,15 @@ void AppWindow::airbandImportFile(const std::string& path) {
 
 // A finished read is put in the list; a finished write says where it went. Once a frame (airbandFrame), whether the section is open or not.
 void AppWindow::airbandPollJobs() {
+    airbandPollExport();
     if (!airband_.jobs) { return; }
     AirbandJobs& j = *airband_.jobs;
     AirbandImportOutcome o;
     if (j.import.poll(o)) {
         AirbandImportRun& run = airband_.import;
         run = AirbandImportRun{};
-        const std::string group = j.importGroup;
+        const cc::ImportInto into = j.importInto;
+        const std::string group = into.group;
         // A worker that threw (an allocation, a corrupt file): the same sentence a file that cannot be read gets, instead of a crash in the frame.
         if (j.import.threw() && o.error.empty()) { o.error = "cannot read the file"; }
         const std::string& p = o.path.empty() ? j.importPath : o.path;
@@ -479,7 +481,7 @@ void AppWindow::airbandPollJobs() {
             cc::diagWarnf("bookmarks: an import (%s) failed: %s", kind.c_str(), why.c_str());
             // THE "Import a frequency list" WINDOW opens on any import that came back with no rows, with the sentence above and the target of the
             // import that failed (batch B8).
-            openImportDialog(cc::ImportInto{group, true}, airband_.presetNote);
+            openImportDialog(into, airband_.presetNote);
         } else {
             // An import the window was waiting for came back WITH rows: it has done its job, and the "Import a frequency list" window - open
             // if the import began there (a Browse, a dropped file) - closes (batch B8).
@@ -500,20 +502,10 @@ void AppWindow::airbandPollJobs() {
         if (!airband_.importAgain.empty()) {
             std::string next;
             next.swap(airband_.importAgain);
-            airbandImportFile(next);
+            const cc::ImportInto nextInto = airband_.importAgainInto;
+            airband_.importAgainInto = cc::ImportInto{};
+            airbandImportFile(next, nextInto);
         }
-    }
-    AirbandExportOutcome e;
-    if (j.exportCsv.poll(e)) {
-        std::string said;
-        if (j.exportCsv.threw() && !e.ok && e.shown.empty()) { e.shown = "(the file)"; }
-        if (e.ok) {
-            said = cc::formatText(tr("Exported %zu to %s"), e.count, e.shown.c_str());
-        } else {
-            said = cc::formatText(tr("Could not write %s"), e.shown.c_str());
-        }
-        airband_.presetNote = said;
-        airband_.presetFolderKey = e.ok;   // a file that was written offers to open its folder
     }
 }
 
@@ -568,82 +560,41 @@ void AppWindow::airbandRemovePreset() {
 }
 
 // THE PRESET'S EXPORT KEY (0.99.66): the rows of one group of the list, every mode, ticked or not, as a CSV that importCsv reads back whole, with
-// its tick - into the recordings folder, as foxsdr-<preset>-<stamp>.csv, written on a worker under a name taken atomically (two exports in one
-// second are two files).
+// its tick and its favourite - into the recordings folder, as foxsdr-<preset>-<stamp>.csv, under a name taken atomically (two exports in one second
+// are two files).
 //
-// BUILT FROM THE WINDOW'S COPY OF BOOKMARKS (tuningLists), so a name or a group the table cut at its item size (95 and 159 bytes) is exported cut
-// - the one thing this key does not do as master's did (which read the list itself); no figure of a row is lost otherwise (frequency, mode,
-// bandwidth, favourite and tick all travel). A mode no code names (the table's 0) is written empty: the importer reads it as the default.
+// THE ENGINE WRITES IT (stub campaign B19; FOXAPP_OP_BOOKMARK_EXPORT, ival[0] 1), FROM ITS STORE, ON A WORKER. Until B19 this key built the CSV from
+// the window's copy of BOOKMARKS (tuningLists), so a name the table had cut at its item size (95 bytes) or a group (159) went out cut - the one thing
+// this key did not do as master's did - and a worker of the window's own wrote the file. The engine owns the list, so it makes the text with the
+// names whole, and the file is its worker's (the folder and the file are disk calls, and the pass must not make them). What this key keeps is the
+// sentence: "Saving..." when the engine takes the op, then - when the worker has answered, fact.bookmarks.export.* - "Exported %zu to %s" or "Could
+// not write %s" in this section (airbandPollExport), and the key that opens the folder when the file was written.
 void AppWindow::airbandExportPreset() {
-    AirbandJobs& j = airbandJobs();
-    if (j.exportCsv.pending()) { return; }
+    if (airband_.exportWaiting) { return; }
     const std::string group = airbandPresetName();
-    static const char* const kCsvModeNames[] = {"", "NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"};   // by FOXAPI_DEMOD_*
-    std::vector<cc::Bookmark> out;
-    for (const cascade::gui::BookmarkRow& r : tuningLists().markers) {
-        if (r.group != group) { continue; }
-        cc::Bookmark b;
-        b.name = r.name;
-        b.freqHz = r.hz;
-        b.mode = r.mode <= 8u ? kCsvModeNames[r.mode] : "";
-        b.bandwidthHz = r.bandwidthHz;
-        b.group = r.group;
-        b.favourite = r.favourite;
-        b.scan = r.ticked;
-        out.push_back(std::move(b));
-    }
     airband_.presetFolderKey = false;
-    if (out.empty()) {
-        airband_.presetNote = cc::formatText(tr("Nothing to export: the preset \"%s\" has no rows."), group.c_str());
-        return;
+    airbandSend(cmd::makeText(FOXAPP_OP_BOOKMARK_EXPORT, group, 1), AirbandAsk::Kind::ExportPreset, group, 0, 0);
+}
+
+// Once a frame (airbandPollJobs): the export this section asked for has been written, or has failed. Only a preset's export is said here; the
+// Bookmarks section's is the engine's note.
+void AppWindow::airbandPollExport() {
+    const std::string& seqText = uiFact("fact.bookmarks.export.seq");
+    if (seqText.empty()) { return; }
+    const std::uint64_t seq = std::strtoull(seqText.c_str(), nullptr, 10);
+    if (seq == airband_.exportSeqSeen) { return; }
+    airband_.exportSeqSeen = seq;
+    if (!airband_.exportWaiting || uiFact("fact.bookmarks.export.preset") != "1") { return; }
+    airband_.exportWaiting = false;
+    const bool ok = uiFact("fact.bookmarks.export.ok") == "1";
+    const std::string shown = uiFact("fact.bookmarks.export.path");
+    if (ok) {
+        const std::size_t count = static_cast<std::size_t>(std::strtoull(uiFact("fact.bookmarks.export.count").c_str(), nullptr, 10));
+        airband_.presetNote = cc::formatText(tr("Exported %zu to %s"), count, shown.c_str());
+    } else {
+        airband_.presetNote = cc::formatText(tr("Could not write %s"), shown.c_str());
     }
-    // THE PRESET'S NAME IN THE FILE'S, as far as a file name can carry it: letters, digits, '-' and '_'; anything else (a space, a slash, a letter
-    // outside ASCII) is '_', and a long name is cut, so the name is a name on every file system.
-    std::string safe;
-    for (const char c : group) {
-        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
-        safe.push_back(ok ? c : '_');
-        if (safe.size() >= 40) { break; }
-    }
-    std::string dir;
-    readFactText("fact.recorder.dir", dir);
-    if (dir.empty()) { dir = "."; }
-    const std::time_t now = std::time(nullptr);
-    std::tm tmv{};
-#ifdef _WIN32
-    localtime_s(&tmv, &now);
-#else
-    localtime_r(&now, &tmv);
-#endif
-    char name[128];
-    std::strftime(name, sizeof(name), ("foxsdr-" + safe + "-%Y%m%d-%H%M%S.csv").c_str(), &tmv);
-    const std::string shown = dir + "/" + name;
-    const std::string path = (std::filesystem::path(dir) / name).string();
-    std::string text = cc::exportCsv(out);
-    const std::size_t count = out.size();
-    j.exportCsv.request([text = std::move(text), dir, path, shown, count]() -> AirbandExportOutcome {
-        AirbandExportOutcome r;
-        r.count = count;
-        r.shown = shown;
-        std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(dir), ec);
-        // THE NAME IS TAKEN ATOMICALLY HERE (0.99.65, core/unique_file.hpp): two exports inside one second are two files, and the note names the
-        // one on disk.
-        std::string used;
-        bool exhausted = false;
-        int index = 1;
-        if (!cc::reserveUnique(path, used, exhausted, &index)) { return r; }   // not written
-        r.shown = cc::numberedPath(shown, index);
-        std::ofstream f(used, std::ios::binary | std::ios::trunc);
-        f.write(text.data(), static_cast<std::streamsize>(text.size()));
-        cc::writeFaultPoint("export", f);   // test seam: a write that fails part way
-        f.close();
-        r.ok = static_cast<bool>(f);
-        // A list that did not reach the disk whole is not left behind (the empty file taken for it).
-        if (!r.ok) { std::filesystem::remove(std::filesystem::path(used), ec); }
-        return r;
-    });
-    airband_.presetNote = tr("Saving...");
+    airband_.presetFolderKey = ok;   // a file that was written offers to open its folder
 }
 
 // --- listening -------------------------------------------------------------------------------------------------------------------------
@@ -725,9 +676,25 @@ void AppWindow::airbandOnAnswer(const FoxCommandResult& r) {
             break;
         }
         case AirbandAsk::Kind::RemoveGroup:
+            // A preset with no rows is NOT_FOUND to the table (a group nothing is in changes nothing) and "Removed 0" to this section, as it always
+            // said it (stub campaign B19: the note and the group on show are master's - the group on show goes back to "every ticked" when it was the
+            // one removed, whatever it held).
+            if (ok || r.status == FOXAPI_NOT_FOUND) {
+                const std::size_t n = ok ? static_cast<std::size_t>(r.applied[0]) : 0u;
+                a.presetNote = cc::formatText(tr("Removed %zu from \"%s\""), n, ask.group.c_str());
+                if (a.group == ask.group) { a.group.clear(); }
+                cc::diagLogf("airband: a preset was removed (%zu rows)", n);
+            }
+            break;
+        case AirbandAsk::Kind::ExportPreset:
             if (ok) {
-                a.presetNote = cc::formatText(tr("Removed %zu from \"%s\""), static_cast<std::size_t>(r.applied[0]), ask.group.c_str());
-                cc::diagLogf("airband: a preset was removed (%zu rows)", static_cast<std::size_t>(r.applied[0]));
+                // The engine has taken it: the worker is writing. The result is a fact (airbandPollExport).
+                a.exportWaiting = true;
+                a.presetNote = tr("Saving...");
+            } else if (r.status == FOXAPI_NOT_FOUND) {
+                a.presetNote = cc::formatText(tr("Nothing to export: the preset \"%s\" has no rows."), ask.group.c_str());
+            } else {
+                a.presetNote = r.message;   // the engine's sentence (an export already out, a refused argument)
             }
             break;
         case AirbandAsk::Kind::Listen:
@@ -1025,7 +992,7 @@ void AppWindow::drawAirbandSection() {
         const bool keysBeside = cascade::gui::buttonWidth(trId("Export CSV##airband_export")) <= half &&
                                 cascade::gui::buttonWidth(trId("Remove preset##airband_remove")) <= half;
         const ImVec2 keySize(keysBeside ? half : -FLT_MIN, 0.0f);
-        ImGui::BeginDisabled(presetRows == 0 || jobs.exportCsv.pending());
+        ImGui::BeginDisabled(presetRows == 0 || a.exportWaiting || uiFact("fact.bookmarks.exporting") == "1");
         if (ImGui::Button(trId("Export CSV##airband_export"), keySize)) { airbandExportPreset(); }
         cascade::gui::census::rect("airband:export", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
                                    ImGui::GetItemRectMax().y);

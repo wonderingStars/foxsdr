@@ -354,14 +354,37 @@ struct AppWindowTestAccess {
         }
     }
 
+    // THE DISK'S WORKERS (stub campaign B19): the I/Q file's open (SELECT_SOURCE "file:"), the frequency list's import and export and the patch Radio's recordings
+    // list are workers' - a command's answer is that the work is under way, and what it found lands on a pass that collects it. A case that asked for one reads
+    // "the file is open / the rows are in / the list is made", so it waits (bounded) until none is out, polling as the pass does.
+    static bool diskJobsOut(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).iqOpenPending() || rawEngine(a.engine_).bookmarkImportPending() || rawEngine(a.engine_).bookmarkExportPending() ||
+                   rawEngine(a.engine_).recordingScanPending();
+        });
+    }
+    static void settleDiskJobs(AppWindow& a) {
+        const auto t0 = std::chrono::steady_clock::now();
+        while (diskJobsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollDiskJobs(); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    static bool isDiskOp(const FoxCommand& c, const std::string& lt) {
+        if (c.op == FOXAPP_OP_BOOKMARK_IMPORT_FILE || c.op == FOXAPP_OP_BOOKMARK_EXPORT || c.op == FOXAPP_OP_PATCH_LIST_RECORDINGS) { return true; }
+        return c.op == FOXAPI_OP_SELECT_SOURCE && (std::string(c.text).rfind("file:", 0) == 0 || lt.rfind("file:", 0) == 0);
+    }
+
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
         const FoxCommandResult r = rd(a, [&] { return rawEngine(a.engine_).applyCommand(c, lt); });
         if (c.op == FOXAPI_OP_RECORD_IQ || c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
+        if (isDiskOp(c, lt)) { settleDiskJobs(a); }
         return r;
     }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
         const FoxCommandResult r = rd(a, [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
         if (q.c.op == FOXAPI_OP_RECORD_IQ || q.c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
+        if (isDiskOp(q.c, q.longText)) { settleDiskJobs(a); }
         return r;
     }
     // (Engine::submitCommand is the front end's own call from any thread: the queue has its own lock, and it wakes the pass.)
@@ -1827,13 +1850,12 @@ void bookmarkOps(AppWindow& a) {
         CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, csv.string()))));
         CHECK(A::bookmarks(a).size() == before + 2u);
         CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, "")), FOXAPI_BAD_ARGUMENT));
-        // AN IMPORT THAT READ NOTHING IS ANSWERED FAILED (stub campaign B8; it was answered OK with a note): the window opens its "Import a
-        // frequency list" window on that answer. The note says why, in the user's language and with the path it tried (the log never names a
-        // file: tests/test_import_dialog_app's `failure`); the list is as it was.
+        // AN IMPORT THAT READ NOTHING says why in the note, in the user's language and with the path it tried (the log never names a file:
+        // tests/test_import_dialog_app's `failure`); the list is as it was. The read is a WORKER'S since stub campaign B19, so the command's answer is OK
+        // (the read is under way - stub campaign B8 answered FAILED from a read on the pass) and the sentence is the note and fact.bookmarks.import.note,
+        // which the window opens its "Import a frequency list" window on. (A::apply waits for the worker.)
         const std::filesystem::path missing = g_scratch / "no-such-list.csv";
-        const FoxCommandResult failed = A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, missing.string()));
-        CHECK(refused(failed, FOXAPI_FAILED));
-        CHECK(std::string(failed.message).rfind("Could not import: the file \"", 0) == 0);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, missing.string()))));
         CHECK(A::importNote(a) == "Could not import: the file \"" + missing.string() + "\" could not be opened");
         CHECK(A::bookmarks(a).size() == before + 2u);
         // ...and an import that read rows, even rows that were all here already, is answered OK.

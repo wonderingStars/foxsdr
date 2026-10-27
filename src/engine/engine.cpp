@@ -5593,44 +5593,6 @@ bool Engine::startIqRecording() {
     return true;
 }
 
-void Engine::openIqFile(const std::string& path) {
-    // The Source panel's IQ file Open. The pipeline keeps its current source
-    // until the open succeeds: a failed open constructs and destroys a
-    // throwaway IqFileSource without ever touching the pipeline.
-    auto file = std::make_unique<cascade::source::IqFileSource>();
-    if (!file->open(path)) {
-        sourceError_ = file->lastError();
-        return;
-    }
-    // Carry the displayed frequency over: a file's center is nominal anyway,
-    // and a readout that jumps to 0 on source switch would read as a tuning
-    // bug. The AIR frequency carries over; the file is told it through its
-    // own converter, which is off unless the user set one for I/Q files.
-    const double fileRadioHz =
-        radioHzForSource("file", std::string(), pipeline_.activeSource().centerFrequencyHz());
-    if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
-    device_ = nullptr;  // before setSource destroys a live device
-    soapyView_ = nullptr;
-    deviceArgs_.clear();
-    deviceModel_.clear();
-    sourceError_.clear();
-    ++sourceGen_;  // a device open still in flight is now stale
-    installSource(std::move(file));
-    sourceKind_ = "file";
-    applyConverterForSource();
-    iqOpenPath_ = path;
-    // A file is a deliberate choice of source like any other, so a radio
-    // remembered from a failed restore is superseded here too - see
-    // selectSource's generator row.
-    restoreKeep_ = cascade::gui::RememberedSource{};
-    restoreKeepLabel_.clear();
-    followInputRate();  // DSP chain + frequency axis track the file's rate
-    // The RATE, never the path: a file name is the user's own data and a
-    // report is a support artefact, not a listening record.
-    cascade::core::diagLogf("source: opened an I/Q file at %.0f S/s",
-                            pipeline_.activeSource().sampleRateHz());
-}
-
 void Engine::tuneToBookmark(const cascade::core::Bookmark& b) {
     // Click-to-tune on a bookmark row, and the web remote's bookmarkTune -
     // the DESKTOP's order, which is the one both take since stage 1:
@@ -5817,12 +5779,10 @@ void Engine::setModeIndex(int index) {
     cascade::core::diagLogf("mode: %s, bandwidth %.0f", kModeNames[index], vfoBandwidthHz_);
 }
 
-bool Engine::importBookmarkFile(const std::string& path) {
-    std::string p = path;
-    // A path pasted from Explorer's "Copy as path" arrives quoted.
-    if (p.size() >= 2 && p.front() == '"' && p.back() == '"') { p = p.substr(1, p.size() - 2); }
+// THE TAIL OF AN IMPORT, on the pass that collects the worker's read (engine_disk_work.cpp): the rows join the list, the note and the log say what
+// happened. `path` is the one the read was asked for (the quotes taken off), `readMs` the worker's time.
+bool Engine::finishBookmarkImport(cascade::core::ImportResult r, const std::string& p, double readMs) {
     const auto t0 = std::chrono::steady_clock::now();
-    cascade::core::ImportResult r = cascade::core::importFrequencyFile(p);
     if (!r.error.empty() && r.items.empty()) {
         // THE REASON IN THE USER'S LANGUAGE (0.99.80, stub campaign B8 - master's window said it so): the core's three reasons are English
         // sentences, which put an English tail on "Could not import: ..."; the log below keeps the core's own words. Anything else passes
@@ -5854,7 +5814,7 @@ bool Engine::importBookmarkFile(const std::string& path) {
     const std::size_t found = r.items.size();
     const std::size_t added = freqMgr_.addMany(std::move(r.items));
     const double ms =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        readMs + std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     char note[320];
     cascade::core::formatUtf8(note, sizeof(note),
                   "%s: %zu entries read, %zu added%s%s%s", r.format.c_str(), found, added,
@@ -5866,65 +5826,6 @@ bool Engine::importBookmarkFile(const std::string& path) {
                             r.format.c_str(), found, added, r.skipped, r.shifted, ms);
     if (added > 0) { saveBookmarks(); }
     return true;
-}
-
-// FOXAPP_OP_BOOKMARK_EXPORT (API 0.3 8.6): the bookmarks whose ids `idsText` names - decimal
-// numbers, anything else between them - written whole, IN THE STORE'S ORDER (the order they
-// are shown in), as SDR#'s frequencies.xml to a file under the record folder, which the engine
-// names (the sender names no path). The note says where, or that it could not. Written from the
-// store and not from the BOOKMARKS list because that list cuts a name at 95 bytes and a group at
-// 159, and carries the mode as a code (a mode no code names reads 0): a file made from it would
-// shorten and rewrite what the user shares.
-std::int32_t Engine::exportBookmarks(const std::string& idsText) {
-    std::unordered_set<std::uint64_t> wanted;
-    std::size_t named = 0;  // digit runs seen: zero means nothing was asked for
-    for (std::size_t i = 0; i < idsText.size();) {
-        if (idsText[i] < '0' || idsText[i] > '9') {
-            ++i;
-            continue;
-        }
-        std::uint64_t v = 0;
-        bool overflow = false;
-        for (; i < idsText.size() && idsText[i] >= '0' && idsText[i] <= '9'; ++i) {
-            const std::uint64_t digit = static_cast<std::uint64_t>(idsText[i] - '0');
-            if (v > (UINT64_MAX - digit) / 10u) {
-                overflow = true;
-            } else {
-                v = v * 10u + digit;
-            }
-        }
-        ++named;
-        if (!overflow && v != 0u) { wanted.insert(v); }  // 0 is "not in a list"
-    }
-    if (named == 0) { return FOXAPI_BAD_ARGUMENT; }
-    std::vector<cascade::core::Bookmark> out;
-    for (const cascade::core::Bookmark& b : freqMgr_.list()) {
-        if (wanted.count(b.id) != 0) { out.push_back(b); }
-    }
-    if (out.empty()) { return FOXAPI_NOT_FOUND; }
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(recordDir_), ec);
-    const std::time_t now = std::time(nullptr);
-    std::tm tmv{};
-#ifdef _WIN32
-    localtime_s(&tmv, &now);
-#else
-    localtime_r(&now, &tmv);
-#endif
-    char name[64];
-    std::strftime(name, sizeof(name), "foxsdr-frequencies-%Y%m%d-%H%M%S.xml", &tmv);
-    const std::filesystem::path path = std::filesystem::path(recordDir_) / name;
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    const std::string xml = cascade::core::exportSdrSharpXml(out);
-    f.write(xml.data(), static_cast<std::streamsize>(xml.size()));
-    f.close();
-    const std::string shown = recordDir_ + "/" + name;
-    if (f) {
-        bookmarkImportNote_ = cascade::core::formatText(tr("Exported %zu to %s"), out.size(), shown.c_str());
-        return FOXAPI_OK;
-    }
-    bookmarkImportNote_ = cascade::core::formatText(tr("Could not write %s"), shown.c_str());
-    return FOXAPI_FAILED;
 }
 
 void Engine::saveBookmarks() {
@@ -7330,18 +7231,23 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         }
         case FOXAPP_OP_BOOKMARK_IMPORT_FILE:
             if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no file named"); }
-            // AN IMPORT THAT READ NOTHING IS ANSWERED FAILED (stub campaign B8; it was answered OK with a note): the window opens its
-            // "Import a frequency list" window on that answer, with the sentence the note now holds (cut at the message's 127 bytes). The
-            // note and the log say it either way, and nothing but the note changed - the refusal's "changes nothing" rule holds for the list.
-            if (!importBookmarkFile(text)) { return refuse(FOXAPI_FAILED, bookmarkImportNote_.c_str()); }
+            // THE READ IS A WORKER'S (stub campaign B19): the answer is that it is under way. What it found - rows, or the sentence of a file
+            // that would not open - is the note and fact.bookmarks.import.* when the worker has answered, a pass or more later. (Stub campaign B8
+            // answered FAILED here, from a read on the pass, and the window opened its "Import a frequency list" window on that answer; it opens
+            // it on fact.bookmarks.import.ok "0" now.)
+            importBookmarkFile(text);
             return res;
         case FOXAPP_OP_BOOKMARK_EXPORT: {
-            // The ids of the bookmarks the section shows, by the long-text channel. The engine
-            // writes the file (see exportBookmarks); the note says where it went.
-            const std::int32_t st = exportBookmarks(text);
-            if (st == FOXAPI_BAD_ARGUMENT) { return refuse(st, "no bookmark ids named"); }
-            if (st == FOXAPI_NOT_FOUND) { return refuse(st, "none of those bookmarks exists"); }
-            if (st == FOXAPI_FAILED) { return refuse(st, "the file could not be written"); }
+            // ival[0] 0: the ids of the bookmarks the section shows, by the long-text channel; 1: the name of a preset (a bookmark group), whose
+            // rows go out as a CSV (stub campaign B19). The engine writes the file, ON A WORKER (see exportBookmarks): the answer is that it is
+            // under way, and the note - or, for a preset, fact.bookmarks.export.* - says where it went, or that it could not.
+            if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "ival[0] is 0 (SDR# for ids) or 1 (a preset as CSV)"); }
+            const bool preset = c.ival[0] == 1;
+            const std::int32_t st = exportBookmarks(text, preset);
+            if (st == FOXAPI_BAD_ARGUMENT) { return refuse(st, preset ? "no preset named" : "no bookmark ids named"); }
+            if (st == FOXAPI_NOT_FOUND) { return refuse(st, preset ? "that preset has no rows" : "none of those bookmarks exists"); }
+            if (st == FOXAPI_NO_CHANGE) { return refuse(st, "an export is already being written"); }
+            if (st != FOXAPI_OK) { return refuse(st, "the file could not be written"); }
             return res;
         }
 
@@ -9476,6 +9382,8 @@ void Engine::pumpWorkers() {
     // A recording's file that finished opening on its worker is armed here, and one that finished closing releases the Record pressed behind
     // it (pollRecordStarts).
     pollRecordStarts(clockS());
+    // ...and the disk's workers: an I/Q file's open, a frequency list's export, the patch Radio's recordings list (stub campaign B19).
+    pollDiskJobs();
     pollSourceAsync();
     // ...and a sound card's list or open, the same way (app_window_soundcard.cpp).
     pollSoundCard();

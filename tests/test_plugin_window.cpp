@@ -177,6 +177,9 @@ struct AppWindowTestAccess {
     static const std::vector<cascade::core::HostImage>& images(AppWindow& a) { return a.pluginImages_; }
     static std::vector<std::uint64_t>& imageTexRev(AppWindow& a) { return a.imageTexRev_; }
     static const std::string& imageSaveNote(AppWindow& a) { return a.imageSaveNote_; }
+    // The picture's save is a worker's since stub campaign B19 (app_window_disk_work.cpp): the press starts it and the frame's once-a-frame poll collects it.
+    static bool imageSavePending(AppWindow& a) { return a.imageSavePending(); }
+    static void pollDiskJobs(AppWindow& a) { a.pollDiskJobs(); }
     static std::map<std::string, AppWindow::InstrumentSeen>& instrumentSeen(AppWindow& a) { return a.instrumentSeen_; }
     // The engine's plugin host's records: a COPY made on the pass's thread (the pass owns the host; a reference into it
     // would be read from this thread beside a free-running pass).
@@ -967,6 +970,9 @@ void testImages(AppWindow& a) {
     CHECK(Access::imageSaveNote(a).empty());
     const bool clicked = clickInWindow([&] { Access::drawPluginWindows(a); }, kImageId, cascade::i18n::trId("Save as BMP"));
     CHECK(clicked);
+    // (The BMP is written by a worker: the press said "Saving..." and the frame's poll says where. Wait for the worker, bounded, then poll as the frame does.)
+    for (int i = 0; i < 5000 && Access::imageSavePending(a); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    Access::pollDiskJobs(a);
     int bmps = 0;
     for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
         const std::string n = e.path().filename().string();

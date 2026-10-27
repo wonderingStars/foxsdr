@@ -29,6 +29,15 @@
 //      picture is removed and no log line names a path - and two saves inside one
 //      second are two files, a stranger's file under the name never overwritten.
 //
+// CONVERTED FOR THE ENGINE'S TABLE (stub campaign B19; the 0.99.84 house pattern, docs/engine-stage4.md 6.22). Master's test drove one
+// object that held everything. Here the bookmark list and the markers are the ENGINE's (their saver, their red lines, the damaged
+// file kept aside when they load - Engine::loadBookmarks), and so is the export of the list (FOXAPP_OP_BOOKMARK_EXPORT, written on the
+// engine's worker); the settings' writer, the picture's save and the screenshot's files are the WINDOW's. Each case says which it
+// reaches. The assertions are master's; where master read a state the instant a key was pressed (an export pending), the case waits
+// for the worker's answer instead - the engine's count of finished exports (Engine::exportLast_.seq) - because the press reaches the
+// engine on the frame after it. "A change currentConfig() sees" is a window field (the band plan's overlay), not the crystal
+// correction, which is the engine's now. No case starts the engine's control thread, so the test's thread is the pass.
+//
 // WHAT COULD NOT BE REACHED. A disk that fills part way through a write: no
 // unprivileged way to fill a volume under a test, so the writers carry a seam
 // (core/write_fault.hpp) that sets the stream's badbit after the bytes are written -
@@ -52,6 +61,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -80,6 +90,8 @@
 #include "core/plugin_cleanup.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/write_fault.hpp"
+#include "core/app_commands.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
 #include "test_check.hpp"
 
@@ -92,7 +104,23 @@ using cascade::core::FreqMarkers;
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    // The settings.
+    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
+
+    // One frame's worth of the engine's part (the commands the last frame queued, the publish, the workers) and the window's look at it and its
+    // own once-a-frame polls: what carries a key's press to the engine and the workers' answers back.
+    static void frame(AppWindow& a) {
+        eng(a).pumpFrameBegin();
+        eng(a).drainLocalCommands();
+        eng(a).pumpInputs();
+        (void)eng(a).pumpPublish();
+        eng(a).pumpWorkers();
+        a.statusLines_ = eng(a).statusText();
+        a.refreshUiState();
+        a.pumpTransmitKey();
+        a.pollDiskJobs();
+    }
+
+    // The settings (the window's writer).
     static void saveNow(AppWindow& a) { a.saveConfigNow(); }
     static void maybeSave(AppWindow& a, double nowS) { a.maybeSaveConfig(nowS); }
     static void pollConfig(AppWindow& a) { a.pollConfigWriter(); }
@@ -106,43 +134,57 @@ struct AppWindowTestAccess {
     static void bindConfigWriter(AppWindow& a, cascade::gui::ConfigWriter::Writer w) {
         a.configWriter_.bind(std::move(w));
     }
-    // A change currentConfig() sees (a plain flag it writes out).
-    static void touchSettings(AppWindow& a) { a.ppmCorrectionOn_ = !a.ppmCorrectionOn_; }
-    static void addBookmarkToView(AppWindow& a, const std::string& name, double hz) {
-        addBookmark(a, name, hz);
-        a.bookmarkView_.push_back(static_cast<std::uint32_t>(a.freqMgr_.list().size() - 1));
-    }
-    // The lists.
-    static std::string bookmarkError(AppWindow& a) { return a.bookmarkError_; }
-    static std::string markerError(AppWindow& a) { return a.markerError_; }
-    static std::size_t bookmarkCount(AppWindow& a) { return a.freqMgr_.list().size(); }
-    static std::size_t markerCount(AppWindow& a) { return a.freqMarkers_.size(); }
+    // A change currentConfig() sees (a plain flag it writes out: the band plan's overlay, which is the window's own).
+    static void touchSettings(AppWindow& a) { a.bandPlanOverlay_ = !a.bandPlanOverlay_; }
+    static void addBookmarkToView(AppWindow& a, const std::string& name, double hz) { addBookmark(a, name, hz); }
+    // The lists: the ENGINE's (their saver and their red lines).
+    static std::string bookmarkError(AppWindow& a) { return eng(a).bookmarkError_; }
+    static std::string markerError(AppWindow& a) { return eng(a).markerError_; }
+    static std::size_t bookmarkCount(AppWindow& a) { return eng(a).freqMgr_.list().size(); }
+    static std::size_t markerCount(AppWindow& a) { return eng(a).freqMarkers_.size(); }
     static void addBookmark(AppWindow& a, const std::string& name, double hz) {
         cascade::core::Bookmark b;
         b.name = name;
         b.freqHz = hz;
         b.mode = "NFM";
-        a.freqMgr_.add(std::move(b));
-        a.bookmarkSaveDirty_ = true;
-        a.bookmarkSaveDueS_ = 0.0;
+        eng(a).freqMgr_.add(std::move(b));
+        eng(a).saveBookmarks();   // marks the list dirty, as a star clicked does (the save itself is flushLists')
     }
-    static void addMarker(AppWindow& a, double hz) { a.freqMarkers_.add(hz, 1700000000); }
+    static void addMarker(AppWindow& a, double hz) { eng(a).freqMarkers_.add(hz, 1700000000); }
     static void flushLists(AppWindow& a) {
-        a.flushBookmarkSave(true);
-        a.flushMarkerSave(true);
+        eng(a).flushBookmarkSave(true);
+        eng(a).flushMarkerSave(true);
     }
     static bool listsInFlight(AppWindow& a) {
-        return a.bookmarkSaver_.inFlight() || a.markerSaver_.inFlight();
+        return eng(a).bookmarkSaver_.inFlight() || eng(a).markerSaver_.inFlight();
     }
-    static void bindBookmarkSaver(AppWindow& a, cascade::gui::ConfigWriter::Writer w) {
-        a.bookmarkSaver_.bind(std::move(w));
+    // The export (the engine's worker), the picture and the screenshot (the window's).
+    static void setRecordDir(AppWindow& a, std::string d) {
+        eng(a).recordDir_ = std::move(d);
+        frame(a);
+        frame(a);   // published: the window reads it (fact.recorder.dir) when the picture is saved
     }
-    // The export, the picture and the screenshot.
-    static void setRecordDir(AppWindow& a, std::string d) { a.recordDir_ = std::move(d); }
-    static void poll(AppWindow& a) { a.pollDiskJobs(); }
-    static void exportBookmarks(AppWindow& a) { a.exportBookmarksForSdrSharp(); }
-    static bool exportPending(AppWindow& a) { return a.bookmarkExportPending(); }
-    static std::string note(AppWindow& a) { return a.bookmarkImportNote_; }
+    static void poll(AppWindow& a) { frame(a); }
+    // "Export for SDR#": the ids of the rows the section shows (here: every row), sent as the section sends them.
+    static void exportBookmarks(AppWindow& a) {
+        std::string ids;
+        for (const cascade::core::Bookmark& b : eng(a).freqMgr_.list()) {
+            ids += std::to_string(b.id);
+            ids += ' ';
+        }
+        exportTarget()[&a] = exportsDone(a) + 1;
+        a.uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_BOOKMARK_EXPORT, ids));
+    }
+    static bool exportPending(AppWindow& a) { return eng(a).bookmarkExportPending(); }
+    // How many exports have finished (the worker's answer is what a case waits for: the press reaches the engine on the frame after it).
+    static std::uint64_t exportsDone(AppWindow& a) { return eng(a).exportLast_.seq; }
+    // THE EXPORT THE LAST PRESS ASKED FOR HAS COME BACK: one more finished than there were when it was pressed.
+    static bool exportFinished(AppWindow& a) { return exportsDone(a) >= exportTarget()[&a]; }
+    static std::map<AppWindow*, std::uint64_t>& exportTarget() {
+        static std::map<AppWindow*, std::uint64_t> t;
+        return t;
+    }
+    static std::string note(AppWindow& a) { return eng(a).bookmarkImportNote_; }
     static void saveImage(AppWindow& a, const cascade::core::HostImage& im) { a.saveImageBmp(im); }
     static bool imagePending(AppWindow& a) { return a.imageSavePending(); }
     static std::string imageNote(AppWindow& a) { return a.imageSaveNote_; }
@@ -1338,10 +1380,10 @@ void checkTwoExportsInOneSecondAreTwoFiles() {
         const std::time_t second = alignToTheSecond();
         const std::string stamp = stampWithDashes(second);
         Access::exportBookmarks(app);
-        CHECK(waitFor([&] { Access::poll(app); return !Access::exportPending(app); }, 5000.0));
+        CHECK(waitFor([&] { Access::poll(app); return Access::exportFinished(app); }, 5000.0));
         const std::string first = Access::note(app);
         Access::exportBookmarks(app);
-        CHECK(waitFor([&] { Access::poll(app); return !Access::exportPending(app); }, 5000.0));
+        CHECK(waitFor([&] { Access::poll(app); return Access::exportFinished(app); }, 5000.0));
         const std::string second2 = Access::note(app);
         if (stampWithDashes(std::time(nullptr)) != stamp) { continue; }
         const std::vector<std::string> names = namesIn(dir);
@@ -1369,7 +1411,7 @@ void checkTheExportWhenTheWriteFails() {
         g_failWriter = "export";
         cascade::core::setWriteFaultHookForTest(&failThisWriter);
         Access::exportBookmarks(app);
-        CHECK(waitFor([&] { Access::poll(app); return !Access::exportPending(app); }, 5000.0));
+        CHECK(waitFor([&] { Access::poll(app); return Access::exportFinished(app); }, 5000.0));
         cascade::core::setWriteFaultHookForTest(nullptr);
         g_failWriter = nullptr;
         CHECK(Access::note(app).rfind("Could not write ", 0) == 0);
@@ -1384,7 +1426,7 @@ void checkTheExportWhenTheWriteFails() {
         if (ro.took) {
             Access::setRecordDir(app, dir.string());
             Access::exportBookmarks(app);
-            CHECK(waitFor([&] { Access::poll(app); return !Access::exportPending(app); }, 5000.0));
+            CHECK(waitFor([&] { Access::poll(app); return Access::exportFinished(app); }, 5000.0));
             CHECK(Access::note(app).rfind("Could not write ", 0) == 0);
             CHECK(namesIn(dir).empty());
             std::printf("  export, read-only folder: \"%s\"; nothing written\n",
@@ -1399,7 +1441,7 @@ void checkTheExportWhenTheWriteFails() {
         writeText(blocker, "x");
         Access::setRecordDir(app, (blocker / "sub").string());
         Access::exportBookmarks(app);
-        CHECK(waitFor([&] { Access::poll(app); return !Access::exportPending(app); }, 5000.0));
+        CHECK(waitFor([&] { Access::poll(app); return Access::exportFinished(app); }, 5000.0));
         CHECK(Access::note(app).rfind("Could not write ", 0) == 0);
     }
 }

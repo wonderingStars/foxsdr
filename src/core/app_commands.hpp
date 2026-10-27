@@ -61,13 +61,14 @@
 // Bookmarks and scanner.
 #define FOXAPP_OP_BOOKMARK_IMPORT_FILE   0x8601u /* text (or long text): a PATH on this machine; LOCAL only */
 #define FOXAPP_OP_SCANNER_RANGE          0x8602u /* ival[0]: mask 1 start 2 stop 4 step 8 reconfigure-if-running; num[0..2]: Hz */
-#define FOXAPP_OP_BOOKMARK_EXPORT        0x8603u /* long text: bookmark ids, decimal, space-separated; writes them as SDR# XML under the record folder; LOCAL only */
+#define FOXAPP_OP_BOOKMARK_EXPORT        0x8603u /* long text: bookmark ids, decimal, space-separated; writes them as SDR# XML under the record folder; ival[0] 1: the text is a preset's (group's) name and its rows go out as a CSV; the file is written on a worker (B19); LOCAL only */
 // THE FREQUENCY LIST'S TICK, ROWS TYPED IN, AND THE SCANNER'S LIST MODE (stub campaign B6, 0.99.60 - 0.99.66; docs/api-0.3-additions.md 9.6), all LOCAL
 // sessions only and none of them on the web profile. A bookmark's tick is what the scanner's list mode and the Airband monitor play.
 //   BOOKMARK_TICK (SETTINGS): ival[0]: the bookmark's id; ival[1]: 0 untick, 1 tick. NOT_FOUND for an id the list does not hold. A row already
 //   as asked changes nothing (and writes nothing).
-//   BOOKMARK_ADD_ROWS (SETTINGS): long text (or text), one row a line: "<Hz>\t<mode>\t<bandwidth Hz>\t<tick 0/1>\t<group>\t<name>" (the group and the
-//   name are the last two fields and may be empty; a name with a tab in it is the sender's to clean). ival[0]: 0 a row TYPED IN - added as the list's
+//   BOOKMARK_ADD_ROWS (SETTINGS): long text (or text), one row a line: "<Hz>\t<mode>\t<bandwidth Hz>\t<flags>\t<group>\t<name>" (the group and the
+//   name are the last two fields and may be empty; a name with a tab in it is the sender's to clean; <flags> is bit 0 ticked, bit 1 favourite - "0" and
+//   "1" as every sender wrote them before the favourite was carried, stub campaign B19). ival[0]: 0 a row TYPED IN - added as the list's
 //   own add does (a name already in use gets " (2)"), and judged by the rule a tune the radio refuses is: a frequency outside what the open radio
 //   covers (a converter's LO taken out) is OUT_OF_RANGE with the sentence that says what it does cover - 1 a LIST (an airport's rows) - added as an
 //   import does, a row identical in name, frequency and group to one already there skipped, no range judged. applied[0]: the rows added. BAD_ARGUMENT
@@ -77,7 +78,7 @@
 //   A start with nothing ticked is NO_CHANGE. List mode is session-only. While a list scan runs it follows the ticks: a row ticked or unticked
 //   restarts it from the first row, nothing ticked stops it. SCANNER_RUN (a range scan, from the desk or a browser) leaves list mode.
 #define FOXAPP_OP_BOOKMARK_TICK          0x8604u /* ival[0]: the bookmark's id; ival[1]: 0 untick / 1 tick */
-#define FOXAPP_OP_BOOKMARK_ADD_ROWS      0x8605u /* long text: "<Hz>\t<mode>\t<bw Hz>\t<tick>\t<group>\t<name>" lines; ival[0]: 0 typed rows / 1 a list */
+#define FOXAPP_OP_BOOKMARK_ADD_ROWS      0x8605u /* long text: "<Hz>\t<mode>\t<bw Hz>\t<flags: 1 tick, 2 favourite>\t<group>\t<name>" lines; ival[0]: 0 typed rows / 1 a list */
 #define FOXAPP_OP_SCANNER_LIST           0x860Au /* ival[0]: 0 range mode / 1 list mode / 2 start a list scan */
 // THE WATERFALL'S MARKERS (stub campaign B10, 0.99.57; docs/api-0.3-additions.md 9.8), all LOCAL sessions only and none of them on the web profile. A marker is
 // a pencil tick made while looking at something else - a frequency, a number to call it by, the moment it was made and a note added later - and NOT a bookmark;

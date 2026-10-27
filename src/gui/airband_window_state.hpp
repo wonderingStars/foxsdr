@@ -7,8 +7,9 @@
 // listSeq: a channel's level and open lamp change every pass and the list moves no listSeq at all).
 //
 // One struct rather than forty members so app_window.hpp (and with it every translation unit that includes it) grows by a handful of
-// lines; the members that act on it are in app_window_airband.cpp. The two disk jobs (Import into a preset, Export CSV) are behind an
-// opaque pointer for the reason src/gui_pending/app_window_disk_state.hpp gives: their DiskJob instantiations belong in one file.
+// lines; the members that act on it are in app_window_airband.cpp. The disk job (the file read for an Import into a preset) is behind an
+// opaque pointer for the reason app_window_disk_state.hpp gives: its DiskJob instantiation belongs in one file. (The preset's Export CSV was a
+// second job here until stub campaign B19: the ENGINE writes it now, from its store, on a worker of its own - FOXAPP_OP_BOOKMARK_EXPORT.)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_GUI_AIRBAND_WINDOW_STATE_HPP
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include "core/airband_data.hpp"
+#include "core/freq_import.hpp"
 
 namespace cascade::gui {
 
@@ -64,7 +66,7 @@ struct AirbandView {
 
 // One command the window sent and is waiting to hear the answer to.
 struct AirbandAsk {
-    enum class Kind { TypedRow, AirportRows, ImportRows, RemoveGroup, Listen };
+    enum class Kind { TypedRow, AirportRows, ImportRows, RemoveGroup, Listen, ExportPreset };
     Kind kind = Kind::TypedRow;
     std::uint64_t ticket = 0;
     std::string group;             // the preset / the airport's group the ask is about
@@ -121,6 +123,9 @@ struct AirbandWindowState {
     std::vector<AirbandAsk> asks;
     AirbandImportRun import;
     std::string importAgain;                 // an Import pressed while one was being read: the path, read when the first is back
+    cascade::core::ImportInto importAgainInto;   // ...and the preset (and tick) it was pressed for
+    bool exportWaiting = false;              // an Export CSV was accepted and its file is being written (the engine says when: fact.bookmarks.export.*)
+    std::uint64_t exportSeqSeen = 0;         // fact.bookmarks.export.seq as last taken over
     std::shared_ptr<AirbandJobs> jobs;       // made on first use
 };
 

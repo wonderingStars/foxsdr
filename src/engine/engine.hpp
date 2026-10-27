@@ -49,6 +49,7 @@
 #include "core/app_commands.hpp"
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
+#include "core/freq_import.hpp"
 #include "core/freq_manager.hpp"
 #include "core/gps_reader.hpp"
 #include "core/hang_watchdog.hpp"
@@ -100,6 +101,7 @@
 #include "source/aor_source.hpp"
 #include "source/hackrf_source.hpp"
 #include "source/hydrasdr_source.hpp"
+#include "source/iq_file_source.hpp"
 #include "source/mirisdr_source.hpp"
 #include "source/pluto_source.hpp"
 #include "source/pluto_tx.hpp"
@@ -130,6 +132,12 @@ struct TxPluginLease {
     bool sessionPresent = false;   // the session that armed the window is open (not closed, not detached)
     bool sessionRemote = false;    // ...and a REMOTE session never holds a window (it cannot open one; this is the second lock)
     std::int64_t beatAgeMs = 0;    // milliseconds since that session's last heartbeat
+};
+
+// The engine's disk workers, behind an opaque pointer (stub campaign B19; engine_disk_state.hpp has the why).
+struct EngineDiskWork;
+struct EngineDiskWorkDeleter {
+    void operator()(EngineDiskWork* p) const;   // engine_disk_work.cpp: the one file that sees the struct whole
 };
 
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
@@ -488,7 +496,11 @@ private:
     // the old control-request path used to hold inline (so both paths now share it).
     // GUI thread, like applyCommand.
     bool startIqRecording();
+    // THE I/Q FILE'S OPEN IS A WORKER'S (stub campaign B19; engine_disk_work.cpp): openIqFile asks, pollIqOpen (once a pass, pollDiskJobs) installs
+    // what the worker opened - installOpenedIqFile is the body the synchronous open ran after its header was read.
     void openIqFile(const std::string& path);
+    void pollIqOpen();
+    void installOpenedIqFile(std::unique_ptr<cascade::source::IqFileSource> file, const std::string& path);
     void openPlutoAt(const std::string& args);
     // The rtl_tcp row's Open key (SELECT_SOURCE "open-rtltcp:rtltcp=<addr>"): the Pluto's recipe, step for step.
     void openRtlTcpAt(const std::string& args);
@@ -862,14 +874,57 @@ private:
     // every star clicked is exactly the slowdown an imported list must not add.
     void saveBookmarks();
     void flushBookmarkSave(bool force);
-    // Imports an SDR# frequencies.xml or a CSV into the bookmarks. True when it read something (rows, even rows already here); false when
-    // it read nothing - the note then says why, in the user's language, and FOXAPP_OP_BOOKMARK_IMPORT_FILE answers FAILED (stub campaign B8:
-    // the window opens its "Import a frequency list" window on that answer).
-    bool importBookmarkFile(const std::string& path);
+    // Imports an SDR# frequencies.xml or a CSV into the bookmarks (FOXAPP_OP_BOOKMARK_IMPORT_FILE). THE FILE IS READ ON A WORKER (stub campaign B19;
+    // it was read on the pass, and answered FAILED when it read nothing - stub campaign B8): importBookmarkFile asks, and finishBookmarkImport - the
+    // body the synchronous import ran after its read - puts the rows in the list on the pass that collects them. True when it read something (rows,
+    // even rows already here); false when it read nothing - the note then says why, in the user's language. The outcome is importLast_
+    // (fact.bookmarks.import.*), which the window opens its "Import a frequency list" window on.
+    void importBookmarkFile(const std::string& path);
+    bool finishBookmarkImport(cascade::core::ImportResult r, const std::string& path, double readMs);
+    bool bookmarkImportPending() const;
+    struct ImportLast {
+        std::uint64_t seq = 0;
+        bool ok = false;
+        std::string path;
+        std::string note;
+    };
+    ImportLast importLast_;
     // Writes the bookmarks whose ids the text names, whole and in the store's order, as SDR#'s
-    // frequencies.xml under the record folder (FOXAPP_OP_BOOKMARK_EXPORT); sets the note.
-    // FOXAPI_OK, BAD_ARGUMENT (no id named), NOT_FOUND (none of them exists) or FAILED (the file).
-    std::int32_t exportBookmarks(const std::string& idsText);
+    // frequencies.xml under the record folder (FOXAPP_OP_BOOKMARK_EXPORT), or - `preset` - the rows of the group the text names as a CSV; THE FILE
+    // IS A WORKER'S (stub campaign B19, engine_disk_work.cpp), so the answer is only that the write is under way: FOXAPI_OK, BAD_ARGUMENT (nothing
+    // named), NOT_FOUND (none of those bookmarks exists, or the preset has no rows) or NO_CHANGE (one export is ever out). The note ("Saving...",
+    // then where it went or that it could not) is the Bookmarks section's for SDR#; a preset's result is exportLast_ (fact.bookmarks.export.*).
+    std::int32_t exportBookmarks(const std::string& text, bool preset = false);
+
+    // --- THE ENGINE'S DISK WORKERS (stub campaign B19; engine_disk_state.hpp, engine_disk_work.cpp) -----------------------------------------------
+    // The I/Q file's open, the frequency list's export and the patch Radio's recordings list run on workers (core/disk_job.hpp: one in flight, the
+    // worker owns what it touches, a throw is contained, a worker still inside the file system at quit is abandoned and not joined). The state
+    // is behind an opaque pointer for the window's reason (an object file's section limit; every instantiation in one file), made on first use.
+    EngineDiskWork& disk();
+    // Once a pass, from pumpWorkers: collects what the workers have finished. Never blocks.
+    void pollDiskJobs();
+    bool iqOpenPending() const;
+    bool bookmarkExportPending() const;
+    bool recordingScanPending() const;
+    std::unique_ptr<EngineDiskWork, EngineDiskWorkDeleter> diskWork_;
+    // THE SLOW-DISK SEAM: called by each worker immediately before it touches the disk. A test binds one that sleeps. Read when a worker is
+    // started (on the pass) and set by a test, so the two are under a lock.
+    void setDiskHookForTest(std::function<void()> hook);
+    std::function<void()> diskHook() const;
+    mutable std::mutex diskHookMutex_;
+    std::function<void()> diskHook_;
+    // The I/Q file Open's factory (a test's IqFileSource whose header read is slow). Empty = the real source. Read when an open starts.
+    std::function<std::unique_ptr<cascade::source::IqFileSource>()> iqFileFactory_;
+    // THE LAST EXPORT'S ANSWER, which the AIRBAND section words in its own language (fact.bookmarks.export.*): `seq` moves on every finished
+    // export, so a window that polls sees each once.
+    struct ExportLast {
+        std::uint64_t seq = 0;
+        bool ok = false;
+        bool preset = false;
+        std::size_t count = 0;
+        std::string shown;
+    };
+    ExportLast exportLast_;
 
     // Opens a radio of `kind` ("soapy" or one of the eight native driver keys)
     // by its args on

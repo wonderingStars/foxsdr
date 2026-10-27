@@ -10,7 +10,11 @@
 // one pass: the bookmark and marker saves, the I/Q file's Open, a speaker's WAV, a
 // screenshot, a saved picture... A test per function proves the functions that were
 // found. This one is about the next one: it reads the GUI translation units and
-// requires every file-system call in them to be ONE OF TWO THINGS.
+// requires every file-system call in them to be ONE OF TWO THINGS. (Since the engine
+// split the bookmark and marker saves, the I/Q file's Open, a speaker's WAV and the
+// rest of the engine's own work are the ENGINE's: stub campaign B19 re-wrote the list
+// below for the window that is left, and holds the engine's disk file to the same rule
+// in a second block - docs/engine-stage4.md 6.22.)
 //
 //   1. INSIDE CODE THAT RUNS ON A WORKER: the body of a lambda handed to
 //      std::async, std::thread, or a gui::DiskJob / RecordStart / ConfigWriter /
@@ -45,7 +49,7 @@
 // says why it has not been moved.
 //
 // HOW TO ADD TO THE ALLOWLIST: if your call can wait for a disk, DO NOT list it -
-// move it to a worker (gui/disk_job.hpp has the pattern, tests/test_gui_file_jobs.cpp
+// move it to a worker (core/disk_job.hpp has the pattern, tests/test_gui_file_jobs.cpp
 // shows the test). If it truly is a one-off, user-initiated, tiny call, add an
 // entry to kAllowed naming the FUNCTION (as it is defined, "AppWindow::name"), the
 // CATEGORIES of call it makes, the REASON and the PAUSE, and hold a WatchdogPause in
@@ -227,6 +231,7 @@ const std::vector<Wrapper>& wrappers() {
         {"ConfigStore::save(", "src/core/config.cpp", "writes config.json synchronously"},
         {"ConfigStore::writeFile(", "src/core/config.cpp", "the config file's blocking write"},
         {"importFrequencyFile(", "src/core/freq_import.cpp", "reads an imported frequency list"},
+        {"importFrequencyFileIn(", "src/core/freq_import.cpp", "reads an imported frequency list, looking in the working directory and the recordings folder"},
         {"listIqRecordings(", "src/core/patch_recordings.cpp", "lists a folder and opens headers"},
         {"openIqRecording(", "src/core/patch_recordings.cpp", "opens a recording"},
         {"IqFileSource>()", "src/source/iq_file_source.cpp", "constructs a file source (open() follows)"},
@@ -258,7 +263,7 @@ const std::vector<Wrapper>& wrappers() {
         // taken by an exclusive create. Neither belongs on the thread that draws the window.
         {"readTextFile(", "src/core/file_read.cpp", "reads a whole file (a developer hook's script or patch)"},
         {"setDamagedFileAside(", "src/core/damaged_file.cpp", "renames a damaged file aside and prunes older copies"},
-        {"setAsideDamagedFile(", "src/gui/app_window_disk_work.cpp", "keeps a damaged file aside (start-up only)"},
+        {"setAsideDamagedFile(", "src/gui/app_window.cpp", "keeps a damaged file aside (start-up only)"},
         {"reserveUnique(", "src/core/unique_file.cpp", "creates a file under the first free name"},
         {"createUnique(", "src/core/unique_file.cpp", "creates a file under the first free name"},
         // 0.99.74: the BROWSE key of a PATH settings field. pickFile shows a MODAL file dialog
@@ -602,135 +607,80 @@ struct Allowed {
 };
 
 // THE HONEST LIST OF WHAT IS STILL ON THE GUI THREAD. Not a list of what is fine.
-// Each entry is a decision to LEAVE a call, made in the 0.99.64 audit: a one-off,
-// user-initiated, tiny call; start-up before the first frame; or a stretch that
+// Each entry is a decision to LEAVE a call, made in the 0.99.64 audit and re-made, row by row, by stub campaign batch B19 against the window the
+// engine split left (docs/engine-stage4.md 6.22): a one-off, user-initiated, tiny call; start-up before the first frame; or a stretch that
 // already runs under a pause. See docs/DIAGNOSTICS.md.
+//
+// WHAT THE REWRITE TOOK OUT, and where it went (the entries of master's list that no longer match a line of src/gui, each removed because the call
+// is not the window's any more - an entry that matches nothing fails this test):
+//   AppWindow::applyConfig (the saved I/Q file's inline open at start-up), telemetryStartup (the stall ledger), loadBandPlan, readLocalCatalogue,
+//   rescanPlugins, rescanPluginsIfChanged, restoreQuarantinedPlugins, quarantineBlockedPlugins, cleanUpOldPluginVersions, removeInstalledPlugin,
+//   removeBlockedPlugin: the ENGINE's now (Engine::applyConfig, the plugin store and the plugin host - src/engine/). The window sends the
+//   command and reads the table; it holds no pause for them, and the engine's own start-up and plugin-folder work is not this test's scope
+//   (a scan of src/engine would be a list of its own: the plugin rescan under its pause is the open design question docs/DIAGNOSTICS.md names).
+//   The constructor's reads of bookmarks.json and markers.json (the engine loads them, and keeps a damaged one aside: Engine::loadBookmarks).
+//   AppWindow::setAsideDamagedFile moved files (app_window_disk_work.cpp of master's tree is gone); the two SDRplay diagnostic functions moved to
+//   app_window_sdrplay.cpp (stub batch B18).
+// WHAT B19 PUT ON WORKERS, so that it is not here: the plugin picture's save and the screenshot's files (app_window_disk_work.cpp), the Airband
+// preset's read of its file (app_window_airband.cpp) and the import window's lookup of a path with no root (app_window_import_dialog.cpp) are
+// window workers; the I/Q file's open, the frequency list's import and export and the patch Radio's recordings list are the engine's
+// (src/engine/engine_disk_work.cpp), and the second block of main() holds that file to the same rule.
 const std::vector<Allowed>& allowed() {
     static const std::vector<Allowed> v = {
         // ---- START-UP: before the first frame, with the watchdog not yet running ------
         {"app_window.cpp", "AppWindow::AppWindow", "helper", Pause::Startup, "",
-         "The constructor reads config.json, bookmarks.json and markers.json once, before the "
-         "first frame and before run() starts the watchdog. A slow profile delays the window's "
-         "first appearance, as it always has; no frame stops. Moving the start-up reads means a "
-         "window that opens before its settings are known: a different change."},
-        {"app_window.cpp", "AppWindow::applyConfig", "helper", Pause::Startup, "",
-         "Restores the saved I/Q file source by opening it inline, once, from the constructor, "
-         "before the first frame and before the watchdog starts. The same class as the Source "
-         "section's Open (moved to a worker in 0.99.64) but at start-up: a saved recording on a "
-         "network share delays the first window, and no frame stops. NOT MOVED in 0.99.65, on "
-         "purpose, because it is not a move: a restore on a worker (the sound card's pattern, "
-         "launchSoundCardOpen) changes what the FIRST frame shows (the generator, then the file), "
-         "what a bounded --frames run and the screenshot harness see, and what an exit save made "
-         "before the answer writes (restoreKeep_ would have to hold the file until it lands). "
-         "tests/test_tune_control.cpp (a restore that fails, and the exit save after it), "
-         "tests/test_stop_ends_recordings.cpp (a restored file plays) and tests/test_diagnostics.cpp "
-         "assert the synchronous behaviour. A change to what start-up promises, to be decided as "
-         "one, together with the constructor's three list reads above."},
-        {"app_window_disk_work.cpp", "AppWindow::setAsideDamagedFile", "helper", Pause::Startup, "",
-         "0.99.65: renames a damaged config.json, bookmarks.json or markers.json aside (and removes "
-         "older copies) where the constructor's load of it failed - at start-up, before the first "
-         "frame and before the watchdog starts, beside the three reads it follows. Called from "
-         "nowhere else; it adds nothing to a frame."},
-        {"app_window.cpp", "AppWindow::telemetryStartup", "helper", Pause::Startup, "",
-         "Removes the stall ledger of an opted-out run, at start-up, before the first frame "
-         "(the function's own comment: 'This is start-up: the read is not on the frame path')."},
+         "The constructor reads config.json once, before the first frame and before run() starts the watchdog, and keeps a damaged one aside "
+         "(setAsideDamagedFile). A slow profile delays the window's first appearance, as it always has; no frame stops. (Until the engine split "
+         "it read bookmarks.json and markers.json here as well: the engine loads those, and a window that opens before its settings are known "
+         "is a different change.)"},
+        {"app_window.cpp", "AppWindow::setAsideDamagedFile", "helper", Pause::Startup, "",
+         "0.99.65: renames a damaged config.json aside (and removes older copies) where the constructor's load of it failed - at start-up, before "
+         "the first frame and before the watchdog starts, beside the read it follows. Called from nowhere else; it adds nothing to a frame. (The "
+         "bookmark list's and the markers' are the engine's: Engine::loadBookmarks.)"},
 
         // ---- DEVELOPER AND TRANSLATOR HOOKS: an environment variable, read once -------
-        {"app_window.cpp", "AppWindow::run", "helper", Pause::NotNeeded, "",
-         "Two developer environment variables, FOXSDR_INPUT_SCRIPT and FOXSDR_PATCH_FILE: each "
-         "names a file the verification harness (bounded --frames runs, screenshot sweeps) reads "
-         "once, before the first frame or on it. No user sets them and a normal session never "
-         "reaches them; a stalled read there is a stalled test, which the harness's own timeout "
-         "reports. And, since 0.99.74, filePickAvailable(): ONCE, before the first frame, to decide "
-         "whether a PATH settings field gets a BROWSE key - on Linux a few stat calls down PATH for "
-         "zenity or kdialog (the first hit ends it; a PATH on a share that answers slowly delays "
-         "the first window, as the constructor's reads do), on Windows nothing at all."},
+        {"app_window.cpp", "AppWindow::run", "helper,stream", Pause::NotNeeded, "",
+         "Two developer environment variables, FOXSDR_INPUT_SCRIPT (readTextFile) and FOXSDR_PATCH_FILE (an ifstream): each names a file the "
+         "verification harness (bounded --frames runs, screenshot sweeps) reads once, before the first frame or on it. No user sets them and a "
+         "normal session never reaches them; a stalled read there is a stalled test, which the harness's own timeout reports. And, since 0.99.74, "
+         "filePickAvailable(): ONCE, before the first frame, to decide whether a PATH settings field gets a BROWSE key - on Linux a few stat calls "
+         "down PATH for zenity or kdialog (the first hit ends it; a PATH on a share that answers slowly delays the first window, as the "
+         "constructor's read does), on Windows nothing at all."},
         {"app_window.cpp", "AppWindow::pickFile", "helper", Pause::NotNeeded, "",
-         "0.99.74: the BROWSE key's file dialog. core::pickFile stats the folder the dialog opens in "
-         "(one call, on the press of a key) and then shows a MODAL dialog that blocks this thread "
-         "for as long as the person takes to choose. All of it runs inside runShellOpen with "
-         "watchdogShellHooks(): the user-paced pause every native modal wait goes through "
-         "(gui/shell_open.hpp), uncapped, and the wait is subtracted from the frame as 'user-wait'. "
-         "So a stall here cannot be mistaken for a hang. In a bounded run that set FOXSDR_FILE_PICK "
+         "0.99.74: the BROWSE key's file dialog. core::pickFile stats the folder the dialog opens in (one call, on the press of a key) and then "
+         "shows a MODAL dialog that blocks this thread for as long as the person takes to choose. All of it runs inside runShellOpen with "
+         "watchdogShellHooks(): the user-paced pause every native modal wait goes through (gui/shell_open.hpp), uncapped, and the wait is "
+         "subtracted from the frame as 'user-wait'. So a stall here cannot be mistaken for a hang. In a bounded run that set FOXSDR_FILE_PICK "
          "the dialog and the stat are skipped altogether."},
         {"app_window.cpp", "AppWindow::traceScriptFrame", "stdio", Pause::NotNeeded, "",
-         "The scripted-pointer trace (FOXSDR_SCRIPT_TRACE): one line appended a frame to a file "
-         "the verification harness names, only in a bounded run that set the variable. Never "
-         "reached in a normal session."},
+         "The scripted-pointer trace (FOXSDR_SCRIPT_TRACE): one line appended a frame to a file the verification harness names, only in a bounded "
+         "run that set the variable. Never reached in a normal session."},
         {"app_window_language.cpp", "AppWindow::applyPendingLanguage", "helper", Pause::NotNeeded, "",
-         "FOXSDR_LANG_FILE: a translator's catalogue read from disk once, the first time the "
-         "language is resolved, to check a translation in place without a build. No user sets "
-         "it; the shipped languages are compiled in."},
-
-        // ---- ON A WORKER, CALLED BY NAME: the scan cannot follow a call ---------------
-        {"app_window.cpp", "readLocalCatalogue", "fs,stream", Pause::NotNeeded, "",
-         "Reads a plugin catalogue given as a local path (no URL scheme: a developer's test "
-         "catalogue). It is called only from the catalogue fetch's own worker lambda "
-         "(catalogFuture_), never from a frame; listed because the lambda calls it by name, which "
-         "the scan does not follow."},
-
-        // ---- THE PLUGIN RESCAN: on the GUI thread, under a pause, an open design question
-        {"app_window.cpp", "AppWindow::rescanPlugins", "fs,helper", Pause::Held, "",
-         "The rescan lists the plugin folder, hashes every installed file and maps every module, "
-         "on the GUI thread, on a user's act or after a change to the folder (a catalogue fetch "
-         "that found nothing new no longer rescans: 0.99.63). It holds a WatchdogPause, capped at "
-         "kExcuseCapMs (30 s) and reported past it. Moving it is the open design question in "
-         "docs/DIAGNOSTICS.md, 'A plugin rescan runs on the GUI thread' (options A, B, C); not "
-         "settled here."},
-        {"app_window.cpp", "AppWindow::rescanPluginsIfChanged", "helper", Pause::Held, "",
-         "One directory listing of the plugin folder (and PluginHost::defaultPluginDir's probe "
-         "file) to decide whether a rescan is needed, after a catalogue fetch. Under its own "
-         "WatchdogPause; the same open question as rescanPlugins."},
-        {"app_window.cpp", "AppWindow::restoreQuarantinedPlugins", "fs", Pause::HeldBy,
-         "AppWindow::rescanPlugins",
-         "Part of the rescan: quarantined plugin files are renamed back before the inventory is "
-         "read. Reached only from rescanPlugins, which holds the WatchdogPause."},
-        {"app_window.cpp", "AppWindow::quarantineBlockedPlugins", "fs", Pause::HeldBy,
-         "AppWindow::rescanPlugins",
-         "Part of the rescan: a retired plugin's file is renamed aside so it is not loaded. "
-         "Reached only from rescanPlugins, which holds the WatchdogPause."},
+         "FOXSDR_LANG_FILE: a translator's catalogue read from disk once, the first time the language is resolved, to check a translation in "
+         "place without a build. No user sets it; the shipped languages are compiled in."},
 
         // ---- A USER'S PRESS, ONE SMALL CALL, UNDER A PAUSE ----------------------------
-        {"app_window.cpp", "AppWindow::loadBandPlan", "fs,helper", Pause::Held, "",
-         "The install folder's bandplans directory is looked at, listed and one plan file read, at "
-         "start-up and on a user's choice of plan or language, never per frame. A local install "
-         "folder answers at once; a portable install on a share is a freeze here, not a reported "
-         "hang."},
         {"app_window.cpp", "AppWindow::openReportsFolder", "fs", Pause::Held, "",
-         "One create_directories in the reports folder, on the press of 'Open reports folder', "
-         "before the shell is asked to show it (shellOpen holds its own bracket for the shell)."},
+         "One create_directories in the reports folder, on the press of 'Open reports folder', before the shell is asked to show it (shellOpen "
+         "holds its own bracket for the shell)."},
         {"app_window.cpp", "AppWindow::copyDiagnosticsBundle", "fs,stream", Pause::Held, "",
-         "The reports folder and one small text file, on the press of 'Copy diagnostics'; the "
-         "clipboard copy itself is not a disk call."},
-        {"app_window.cpp", "AppWindow::startSdrPlayProbe", "fs", Pause::Held, "",
-         "One create_directories in the reports folder, on the press of 'Run SDRplay diagnostic', "
-         "which then starts a child process for a minute or two."},
-        {"app_window.cpp", "AppWindow::drawSdrPlayProbeDialog", "stream", Pause::Held, "",
-         "One read of the small text file the diagnostic child wrote, on the frame it is first seen "
-         "to have exited: once per diagnostic the user asked for."},
+         "The reports folder and one small text file, on the press of 'Copy diagnostics'; the clipboard copy itself is not a disk call."},
+        {"app_window_sdrplay.cpp", "AppWindow::startSdrPlayProbe", "fs", Pause::Held, "",
+         "One create_directories in the reports folder, on the press of 'Run SDRplay diagnostic', which then starts a child process for a minute "
+         "or two. (Moved to app_window_sdrplay.cpp by stub batch B18.)"},
+        {"app_window_sdrplay.cpp", "AppWindow::drawSdrPlayProbeDialog", "stream", Pause::Held, "",
+         "One read of the small text file the diagnostic child wrote, on the frame it is first seen to have exited: once per diagnostic the user "
+         "asked for. (Moved to app_window_sdrplay.cpp by stub batch B18.)"},
         {"app_window.cpp", "AppWindow::applyDiagnosticsEnabled", "helper", Pause::Held, "",
-         "The reports folder and the log folder are made and the log file opened, once at start-up "
-         "and on a press of the Diagnostics switch."},
+         "The reports folder and the log folder are made and the log file opened, once at start-up and on a press of the Diagnostics switch."},
         {"app_window.cpp", "AppWindow::drawDiagnosticsSection", "helper", Pause::Held, "",
          "setCrashCaptureEnabled makes the reports folder, on a click of the memory-dump checkbox."},
-        {"app_window.cpp", "AppWindow::cleanUpOldPluginVersions", "helper", Pause::Held, "",
-         "Deletes the superseded copies of updated plugins - a handful of small files in the plugin "
-         "folder - on the press of the store's clean-up key or after an update."},
-        {"app_window.cpp", "AppWindow::removeInstalledPlugin", "helper", Pause::Held, "",
-         "Deletes one plugin file, on the press of Remove, after its module is unmapped. The pause "
-         "covers the delete only; the unload before it is third-party code whose freeze should be "
-         "reported."},
-        {"app_window.cpp", "AppWindow::removeBlockedPlugin", "helper", Pause::Held, "",
-         "Deletes one retired plugin file, on the press of Remove on a retired row (see "
-         "removeInstalledPlugin)."},
 
         // ---- NOTHING IS "STILL OPEN" ANY MORE (0.99.65) ----------------------------------
-        // The four entries the 0.99.64 scan found and deliberately did NOT pause (a pause
-        // deletes the report and keeps the freeze, gui/audio_open.hpp, so the report was
-        // how the next field freeze would be found) are on workers: stopIqRecording and
-        // stopAudioRecording (core/record_finish.hpp), importBookmarkFile (a DiskJob) and
-        // patchReconcile's I/Q recording (patchRadioPending_). Their tests are
-        // tests/test_record_finish_async.cpp and tests/test_gui_file_jobs.cpp.
+        // The four entries the 0.99.64 scan found and deliberately did NOT pause (a pause deletes the report and keeps the freeze, gui/audio_open.hpp,
+        // so the report was how the next field freeze would be found) are on workers: a take's stop and start (core/record_finish.hpp,
+        // engine/record_start.hpp - the engine's), the frequency list's import (the engine's worker, engine_disk_work.cpp) and patchReconcile's I/Q
+        // recording (the engine's patch radio open worker). Their tests are tests/test_record_finish_async.cpp and tests/test_gui_file_jobs.cpp.
     };
     return v;
 }
@@ -847,8 +797,10 @@ int main(int argc, char** argv) {
             workerHits += h.onWorker ? 1u : 0u;
         }
     }
-    CHECK(totalHits > 30u);
-    CHECK(workerHits > 5u);  // the workers' own calls (app_window_disk_work.cpp and the patch radio opens)
+    // (Stub batch B19 lowered the first from 30: the engine split took most of the calls this scan existed for out of src/gui altogether - the engine's
+    // own are in the second block below - and what is here is the window's own list, the 18 calls of the allowlist and the workers' lambdas.)
+    CHECK(totalHits > 15u);
+    CHECK(workerHits > 5u);  // the workers' own calls (app_window_disk_work.cpp, app_window_airband.cpp and app_window_import_dialog.cpp)
 
     if (report) {
         for (const FileScan& f : scans) {
@@ -904,7 +856,7 @@ int main(int argc, char** argv) {
                     "    network folder, a drive that has spun down, a scanner holding the file) is a\n"
                     "    frozen window for as long as the disk takes: four field freezes, 0.99.58 -\n"
                     "    0.99.63. WHAT TO DO:\n"
-                    "      * normally, MOVE IT TO A WORKER: gui/disk_job.hpp (a click that saves, opens\n"
+                    "      * normally, MOVE IT TO A WORKER: core/disk_job.hpp (a click that saves, opens\n"
                     "        or lists), core/background_saver.hpp (a file saved when it changes) or\n"
                     "        gui/record_start.hpp (a recording). Do the call inside the lambda you hand\n"
                     "        to request(); this test then sees it is a worker's. tests/test_gui_file_jobs.cpp\n"
@@ -961,5 +913,48 @@ int main(int argc, char** argv) {
 
     std::printf("  %zu calls scanned in %zu files: %zu on workers, %zu listed (%zu entries)\n",
                 totalHits, scans.size(), workerHits, totalHits - workerHits, allowed().size());
+
+    // --- THE ENGINE'S DISK FILES (stub campaign B19) ------------------------------------------------------------------------
+    // The engine's pass is the thread a window frame (the Host kind) or a browser's answer (the headless kind) waits on, so a file-system call there
+    // is the same defect as one in a draw function. The engine's own work is not this test's scope as a whole (its plugin rescan under a pause, its
+    // start-up reads and its plugin store are a list of their own), but the two files that carry the disk work the window used to do are held to the
+    // window's rule with NO allowlist: every file-system call in them is inside the lambda handed to a worker's request() or to std::async, or the
+    // build is red. engine_disk_work.cpp is the I/Q file's open, the frequency list's import and export and the recordings list; engine_patch_radios.cpp
+    // is the patch Radio's open, a recording's included.
+    {
+        std::size_t engineWorkerHits = 0;
+        int engineUnlisted = 0;
+        for (const char* name : {"engine_disk_work.cpp", "engine_patch_radios.cpp"}) {
+            const FileScan e = scanSource(name, readText(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / name));
+            for (const Hit& h : e.hits) {
+                if (h.onWorker) {
+                    ++engineWorkerHits;
+                    continue;
+                }
+                ++engineUnlisted;
+                std::printf("\n*** A FILE-SYSTEM CALL ON THE ENGINE'S PASS, in a file that holds none:\n"
+                            "      %s:%d  in %s  [%s]  %s\n"
+                            "    The pass is what every command, every answer and every publish waits on. Do the call inside the lambda you hand to\n"
+                            "    the job's request() (core/disk_job.hpp) or to std::async, as engine_disk_work.cpp's workers do.\n",
+                            h.file.c_str(), h.line, h.function.c_str(), kindName(h.kind), h.what.c_str());
+            }
+        }
+        CHECK(engineUnlisted == 0);
+        CHECK(engineWorkerHits >= 4u);   // the scan sees the workers' own calls: a scan that found none would pass for the wrong reason
+        std::printf("  the engine's two disk files: %zu calls, every one on a worker\n", engineWorkerHits);
+    }
+    // THE CONTROL for that block: the same scan, given the open as the engine did it before B19 (inline on the pass), flags it.
+    {
+        const std::string before =
+            "void Engine::openIqFile(const std::string& path) {\n"
+            "    auto file = std::make_unique<cascade::source::IqFileSource>();\n"
+            "    if (!file->open(path)) { return; }\n"
+            "    std::ofstream log(path + \".log\");\n"
+            "}\n";
+        const FileScan c = scanSource("engine_control.cpp", before);
+        std::size_t inlineCalls = 0;
+        for (const Hit& h : c.hits) { inlineCalls += h.onWorker ? 0u : 1u; }
+        CHECK(inlineCalls == 3u);   // the source's construction, its `file->open(` and the stream: the helpers and the stdio the scan knows
+    }
     return testSummary("test_gui_disk_audit");
 }

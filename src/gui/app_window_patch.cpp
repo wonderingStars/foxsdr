@@ -1,5 +1,5 @@
 // app_window_patch.cpp - the patch page's information pane, its inspector drawer's fold key and the canvas's own view keys (0.99.49 beta
-// feedback; 0.99.50). AppWindow members, kept out of app_window.cpp (which is at the object-file limit, src/gui_pending/
+// feedback; 0.99.50). AppWindow members, kept out of app_window.cpp (which is at the object-file limit, src/gui/
 // app_window_disk_state.hpp) and out of app_window_patch_radios.cpp (which is about the page's radios) because they are one subject: how
 // the page is LAID OUT and how its view is moved.
 //

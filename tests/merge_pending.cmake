@@ -55,9 +55,12 @@ endmacro()
 # (PATCH-PRESETS - whole-patch presets, 0.99.49 - is whole: back in stub batch B17, src/gui/app_window_patch_presets.cpp, the window's: test_patch_presets_app,
 # converted (the patch is built in the page's draft and committed through the session, START is the transport's command, the radios are read on the pass
 # thread through rawEngine).)
-cascade_merge_pending(DISK-WORK        # 0.99.63 - 0.99.65 the window does no disk work (recorders, saves, file opens on workers)
-    test_gui_file_jobs test_failure_files
-    test_iq_open_async test_gui_disk_audit)
+# (DISK-WORK - the window does no disk work, 0.99.63 - 0.99.66: the picture save, the bookmark export, the I/Q open on a worker, the screenshot flush, and the
+# audit that holds them - is whole: back in stub batch B19, the LAST window batch. The workers are where the work is: the engine's (src/engine/engine_disk_work.cpp:
+# the I/Q file's open, the frequency list's import and export, the patch Radio's recordings list and its recording open) and the window's (src/gui/
+# app_window_disk_work.cpp: a plugin picture's save, F12's screenshot). test_gui_file_jobs, test_failure_files and test_iq_open_async, converted, and test_gui_disk_audit,
+# its allowlist rewritten. NOTHING IS PENDING ANY MORE: this file now holds only the scaffolding below, which stub batch B20 deletes with its hooks in
+# tests/CMakeLists.txt.)
 # (HEALTH-DIAG - diagnostics context, health ledger, slow frames, previous-session bundle, 0.99.61 - 0.99.69 - is whole: the slow-frame record's last pending test returned in stub batch B18,
 # test_slow_frames_app, converted: the engine's own scopes (a plugin reload, a recording's start, stop and poll) are the engine's guards - core/frame_timing.hpp, OwnedFrameScope, with the
 # frame loop's loan around stepPass - and the window's part of a reload is the window's.)

@@ -16,19 +16,19 @@
 //   * (0.99.65) the Bookmarks section's "Import", and a list dropped on the window:
 //     the file the user typed read and parsed inline.
 //   * (0.99.66) the AIRBAND section's presets ride the same two workers: Import into a
-//     group (the group and the tick put on every row by pollDiskJobs, one preset per
-//     remembered request) and Export CSV of a group (checkAnImportIntoAPreset... to
+//     group (the group and the tick put on every row, one preset per remembered
+//     request) and Export CSV of a group (checkAnImportIntoAPreset... to
 //     checkAnExportOfNothing...). The review's fixes follow them (checkATypedFrequency...
-//     to checkAPresetImportSaysShiftValues...): a typed frequency is whole hertz, Add and
-//     Import (and, from 0.99.69, an airport lookup: checkAnAirportLookupKeeps...) leave a
-//     listening monitor's choice alone, Remove preset stops the monitor that
-//     plays that preset, a throwing export worker still answers the section that asked, and
-//     a preset import says when SDR#'s converter Shift was not applied.
+//     to checkAPresetImportSaysShiftValuesWereNotApplied): a typed frequency is whole
+//     hertz, Add and Import (and, from 0.99.69, an airport lookup:
+//     checkAnAirportLookupKeeps...) leave a listening monitor's choice alone, Remove
+//     preset stops the monitor that plays that preset, a throwing export worker still
+//     answers the section that asked, and a preset import says when SDR#'s converter
+//     Shift was not applied.
 //   * (0.99.65) a patch Radio whose device is an I/Q recording: its header opened
 //     inline in patchReconcile, when the patch starts or the node's device changes.
 //     (Before the fix: worst frame gap 2514 ms and a hang report for the import,
 //     2503 ms and a hang report for the recording; after, about 25 ms and none.)
-//
 //   * (0.99.80) the Import key's "Import a frequency list" window and a bare file name: a name with
 //     no folder part is looked for in the recordings folder on the import's worker, the core's
 //     reasons are said through tr(), any import that returns no rows opens the window, and a file
@@ -39,28 +39,47 @@
 // (docs/DIAGNOSTICS.md, "The window does no disk work").
 //
 // WHAT IS TESTED, and at which level. NOTHING HERE DEPENDS ON A REAL SLOW DISK:
-// AppWindow carries one seam for it, a hook its workers call immediately before
-// they touch the disk, and a test binds one that sleeps - a slow disk as far as the
-// frame loop can tell, with the real files, the real BMP encoder and the real
-// header parser behind it.
+// the window and the engine each carry one seam for it, a hook their workers call
+// immediately before they touch the disk, and a test binds one that sleeps - a slow
+// disk as far as the frame loop can tell, with the real files, the real BMP encoder
+// and the real header parser behind it.
 //
 //   1. THE HARNESS CAN SEE THE FAULT. A sleeping hook called on the thread that
 //      heartbeats is reported by a real HangWatchdog.
-//   2. THE REAL HANDLERS, through a real AppWindow, under a real HangWatchdog
-//      (800 ms threshold) and a frame loop, a 2.5 s slow disk each. Before the fix
-//      the frame loop stalled for the whole disk time and the watchdog filed a
-//      report (worst frame gap: recordings list 2505 ms, picture 2501 ms, SDR#
-//      export 2514 ms, screenshot 2503 ms); after it nothing waits, and what was
-//      asked for still arrives - the file, in the bytes the synchronous handler
-//      wrote, and the note, in its words.
+//   2. THE REAL HANDLERS, through a real AppWindow over its real Engine, under a real
+//      HangWatchdog (800 ms threshold) and a frame loop, a 2.5 s slow disk each. Before
+//      the fix the frame loop stalled for the whole disk time and the watchdog filed a
+//      report (worst frame gap: recordings list 2505 ms, picture 2501 ms, SDR# export
+//      2514 ms, screenshot 2503 ms); after it nothing waits, and what was asked for
+//      still arrives - the file, in the bytes the synchronous handler wrote, and the
+//      note, in its words.
 //   3. THE EDGES, each against the class: a save that fails says what it said, a
 //      second press while one is out changes nothing (and a second listing is
 //      remembered and run), and a window destroyed while all of them are wedged
 //      does not wait for the disk.
 //
-// WHAT IS NOT COVERED. The disabled keys and the "Saving..." note are ImGui output
-// no test reads; the state they read (the pending accessors, the note members) is
-// checked. Nothing here has met a genuinely slow disk.
+// CONVERTED FOR THE ENGINE'S TABLE (stub campaign B19; the 0.99.84 house pattern, docs/engine-stage4.md 6.22). Master's test drove
+// one object that held everything. Here the work is where the thing that does it lives, and each case says so:
+//   - THE ENGINE'S WORKERS (Engine::setDiskHookForTest): the recordings list, the SDR# export and a preset's CSV export, the frequency list
+//     import, the patch Radio on a recording. The press is the command the window sends (uiSubmit), the frame is the engine's part of one
+//     (the commands, the publish, the workers) and then the window's look, and what a case reads is the engine's own state (rawEngine) or
+//     what it published. The engine's pass is the thing that must not wait: the heartbeat loop beats between frames, and a frame that waits
+//     on the disk is a gap the watchdog reports.
+//   - THE WINDOW'S OWN WORKERS (AppWindow::diskHookForTest_): the plugin picture's save, F12's screenshot, the Airband section's read of the
+//     file for a preset, and the lookup of a path with no root.
+//   - THE ASSERTIONS ARE MASTER'S. Where master read a state the instant a key was pressed ("Saving..." in the same breath, a pending job),
+//     the case runs the frame that carries the key to the engine first, and says so. No inline-test seam was added to the engine for this
+//     file but the hook; no case reads a member the table publishes through anything but the table or the engine's member.
+//   - consumePendingDrop is submitPendingDrop (B8 renamed it; the rule it carries is the same).
+//   - THE FAVOURITE COLUMN (B7 lost it on an import into a preset, B19 gave BOOKMARK_ADD_ROWS the flag) is held by
+//     checkAnImportIntoAPresetKeepsTheFavouriteColumn, and the names an export cut at the table's 95 bytes by
+//     checkAnExportOfAPresetKeepsEveryNameWhole.
+// No test here includes tests/pass_seam.hpp: the cases never start the engine's control thread, so the test's thread is the pass (the
+// inline mode every window test has), and what they prove - that the work is a worker's and the pass does not wait - does not depend on
+// which thread the pass is.
+//
+// WHAT IS NOT COVERED. The disabled keys and the "Saving..." note are ImGui output no test reads; the state they read (the pending
+// accessors, the note members) is checked. Nothing here has met a genuinely slow disk.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -96,6 +115,7 @@
 #include <imgui_internal.h>
 
 #include "core/airband_data.hpp"
+#include "core/app_commands.hpp"
 #include "core/file_read.hpp"
 #include "core/freq_import.hpp"
 #include "core/hang_watchdog.hpp"
@@ -105,6 +125,7 @@
 #include "core/patch_graph.hpp"
 #include "core/patch_recordings.hpp"
 #include "core/recorder.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
 #include "test_check.hpp"
 
@@ -115,131 +136,191 @@ namespace cascade::gui {
 
 // The friend AppWindow names for the test files that drive its private members.
 struct AppWindowTestAccess {
-    static void setHook(AppWindow& a, std::function<void()> h) { a.diskHookForTest_ = std::move(h); }
-    static void setRecordDir(AppWindow& a, std::string d) { a.recordDir_ = std::move(d); }
-    // One frame's worth of the poll.
-    static void poll(AppWindow& a) { a.pollDiskJobs(); }
+    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
 
-    static void listRecordings(AppWindow& a) { a.patchListRecordings(); }
-    static std::vector<cascade::core::patch::RecordingInfo> recordings(AppWindow& a) {
-        return a.patchRecordings_;
+    // --- THE FRAME. The engine's part of one (the commands the last frame queued, the publish, the workers), then the window's look at what it
+    // published and the once-a-frame polls drawUi runs. No view is drawn.
+    static void frame(AppWindow& a) {
+        eng(a).pumpFrameBegin();
+        eng(a).drainLocalCommands();
+        eng(a).pumpInputs();
+        (void)eng(a).pumpPublish();
+        eng(a).pumpWorkers();
+        a.statusLines_ = eng(a).statusText();
+        a.refreshUiState();
+        a.pumpTransmitKey();
+        a.importLookupPoll();
+        a.airbandFrame();
+        a.pollDiskJobs();
     }
-    static std::size_t headerReads(AppWindow& a) { return a.patchRecordingCache_.opens; }
+    static void frames(AppWindow& a, int n) {
+        for (int i = 0; i < n; ++i) { frame(a); }
+    }
 
+    // THE SLOW-DISK SEAMS: the engine's workers and the window's, bound together.
+    static void setHook(AppWindow& a, std::function<void()> h) {
+        eng(a).setDiskHookForTest(h);
+        a.diskHookForTest_ = std::move(h);
+    }
+    static void setRecordDir(AppWindow& a, std::string d) {
+        eng(a).recordDir_ = std::move(d);
+        frames(a, 2);   // published: the window reads it (fact.recorder.dir) when a key is pressed
+    }
+
+    // --- the patch Radio's recordings list (FOXAPP_OP_PATCH_LIST_RECORDINGS: the key the Radio's device list sends)
+    static void listRecordings(AppWindow& a) { a.uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_PATCH_LIST_RECORDINGS, 0)); }
+    static std::vector<cascade::core::patch::RecordingInfo> recordings(AppWindow& a) { return eng(a).patchRecordings_; }
+    static std::size_t headerReads(AppWindow& a) { return eng(a).patchRecordingCache_.opens; }
+
+    // --- the plugin picture's save (the window's)
     static void saveImage(AppWindow& a, const cascade::core::HostImage& im) { a.saveImageBmp(im); }
     static bool imagePending(AppWindow& a) { return a.imageSavePending(); }
     static std::string imageNote(AppWindow& a) { return a.imageSaveNote_; }
     static std::string imageNotePlugin(AppWindow& a) { return a.imageSaveNotePlugin_; }
 
+    // --- the bookmark list (the engine's store) and the Bookmarks section's keys
     static void addBookmarks(AppWindow& a, int n) {
         for (int i = 0; i < n; ++i) {
             cascade::core::Bookmark b;
             b.name = "Station " + std::to_string(i);
             b.freqHz = 100.0e6 + 1.0e5 * i;
             b.mode = "NFM";
-            a.freqMgr_.add(std::move(b));
-            a.bookmarkView_.push_back(static_cast<std::uint32_t>(i));
+            eng(a).freqMgr_.add(std::move(b));
         }
+        frames(a, 1);
     }
-    static std::vector<cascade::core::Bookmark> bookmarks(AppWindow& a) { return a.freqMgr_.list(); }
-    static void exportBookmarks(AppWindow& a) { a.exportBookmarksForSdrSharp(); }
-    static bool exportPending(AppWindow& a) { return a.bookmarkExportPending(); }
-    static std::string exportNote(AppWindow& a) { return a.bookmarkImportNote_; }
+    static std::vector<cascade::core::Bookmark> bookmarks(AppWindow& a) { return eng(a).freqMgr_.list(); }
+    // "Export for SDR#": the ids of the rows the section shows (here: every row), sent as the section sends them.
+    static void exportBookmarks(AppWindow& a) {
+        std::string ids;
+        for (const cascade::core::Bookmark& b : eng(a).freqMgr_.list()) {
+            ids += std::to_string(b.id);
+            ids += ' ';
+        }
+        a.uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_BOOKMARK_EXPORT, ids));
+    }
+    static bool exportPending(AppWindow& a) { return eng(a).bookmarkExportPending(); }
+    // The Bookmarks section's note: the engine's.
+    static std::string exportNote(AppWindow& a) { return eng(a).bookmarkImportNote_; }
     // The Import button and a file dropped on the window both end here.
     static void importFile(AppWindow& a, const std::string& path) { a.importBookmarkFile(path); }
-    static bool importPending(AppWindow& a) { return a.bookmarkImportPending(); }
+    // A READ IS OUT: the engine's worker has the file, or the window's lookup of a path with no root, or the Airband section's read for a preset
+    // - or an answer, a fact or a chunk is still to come. (From the press to the last row in the list.)
+    static bool importPending(AppWindow& a) {
+        return eng(a).bookmarkImportPending() || a.bookmarkImportPending() || a.airbandImportPending();
+    }
+    static bool importBusy(AppWindow& a) {
+        return importPending(a) || !a.importAsks_.empty() || !a.importOut_.empty() || a.airband_.import.active || !a.airband_.asks.empty() ||
+               !a.airband_.importAgain.empty();
+    }
 
-    // THE "Import a frequency list" WINDOW (0.99.80): its state, the two ways it is opened, and the
-    // frame loop's handling of a dropped file (the real routine, not a copy of it).
+    // THE "Import a frequency list" WINDOW (0.99.80): its state, the two ways it is opened, and the frame loop's handling of a dropped file
+    // (the real routine, not a copy of it).
     static bool dialogOpen(AppWindow& a) { return a.importDialogOpen_; }
     static bool dialogQueued(AppWindow& a) { return a.importDialogQueued_; }
     static std::string dialogReason(AppWindow& a) { return a.importDialogReason_; }
     static cascade::core::ImportInto dialogInto(AppWindow& a) { return a.importDialogInto_; }
-    static void openDialog(AppWindow& a, const cascade::core::ImportInto& into, const std::string& reason) {
-        a.openImportDialog(into, reason);
-    }
+    static void openDialog(AppWindow& a, const cascade::core::ImportInto& into, const std::string& reason) { a.openImportDialog(into, reason); }
     static void dropFile(AppWindow& a, const std::string& path) {
         a.pendingDropPath_ = path;
-        a.consumePendingDrop();
+        a.submitPendingDrop();   // (master's consumePendingDrop: B8 renamed it, the rule is the same)
     }
 
-    // THE AIRBAND SECTION'S PRESETS (0.99.66). Import into a group, the notes it and
-    // the export say in that section, and the keys' own members.
+    // THE AIRBAND SECTION'S PRESETS (0.99.66). Import into a group, the notes it and the export say in that section, and the keys' own members.
     static void importInto(AppWindow& a, const std::string& path, const std::string& group, bool tick) {
         a.importBookmarkFile(path, cascade::core::ImportInto{group, tick});
     }
-    static void exportGroup(AppWindow& a, const std::string& group) { a.exportGroupCsv(group); }
-    static std::string presetNote(AppWindow& a) { return a.airbandPresetNote_; }
-    static bool presetFolderKey(AppWindow& a) { return a.airbandPresetFolderKey_; }
-    static std::string airbandGroup(AppWindow& a) { return a.airbandGroup_; }
-    static void setPresetField(AppWindow& a, const std::string& name) {
-        std::snprintf(a.airbandPresetName_, sizeof(a.airbandPresetName_), "%s", name.c_str());
+    static void exportGroup(AppWindow& a, const std::string& group) {
+        setPresetField(a, group);
+        a.airbandExportPreset();
     }
+    static std::string presetNote(AppWindow& a) { return a.airband_.presetNote; }
+    static bool presetFolderKey(AppWindow& a) { return a.airband_.presetFolderKey; }
+    static std::string airbandGroup(AppWindow& a) { return a.airband_.group; }
+    static void setPresetField(AppWindow& a, const std::string& name) { std::snprintf(a.airband_.presetName, sizeof(a.airband_.presetName), "%s", name.c_str()); }
     static std::string presetName(AppWindow& a) { return a.airbandPresetName(); }
-    // The monitor's state, forced: a window with no frame loop and no radio cannot LISTEN, but
-    // the keys' own rules about a monitor that is listening are decided by these three members
-    // alone (airbandRemovePreset, airbandShowGroup) and are checked against them.
-    static void setListening(AppWindow& a, bool on) { a.airbandListening_ = on; }
-    static bool listening(AppWindow& a) { return a.airbandListening_; }
-    static void setAirbandGroup(AppWindow& a, const std::string& g) { a.airbandGroup_ = g; }
-    // The airport field's Enter: a code typed and looked up (one match adds its list at once).
-    static void lookupAirport(AppWindow& a, const std::string& code) { a.airbandLookup(code); }
-    static std::string airbandNote(AppWindow& a) { return a.airbandNote_; }
-    static void setAirbandNote(AppWindow& a, const std::string& n) { a.airbandNote_ = n; }
+    // THE MONITOR'S STATE, forced: a window with no radio cannot LISTEN, but the keys' own rules about a monitor that is listening are decided by
+    // what the engine publishes (fact.airband.listening, .preset) and are checked against it. The monitor is the ENGINE's, so these are the
+    // engine's members, published by a frame; the pass part that would run the monitor (pumpPlugins) is not run, so nothing here stops it.
+    static void setListening(AppWindow& a, bool on) {
+        eng(a).airbandListening_ = on;
+        eng(a).airbandGroup_ = on ? a.airband_.group : std::string();
+        frames(a, 2);
+    }
+    static bool listening(AppWindow& a) { return eng(a).airbandListening_; }
+    // The group on show - and, while the monitor listens, the preset it plays (choosing in the combo restarts a listening monitor on it).
+    static void setAirbandGroup(AppWindow& a, const std::string& g) {
+        a.airband_.group = g;
+        eng(a).airbandGroup_ = g;
+        frames(a, 2);
+    }
+    // The airport field's Enter: a code typed and looked up (one match adds its list at once; the answer comes a frame or two later).
+    static void lookupAirport(AppWindow& a, const std::string& code) {
+        a.airbandLookup(code);
+        settle(a);
+    }
+    static std::string airbandNote(AppWindow& a) { return a.airband_.note; }
+    static void setAirbandNote(AppWindow& a, const std::string& n) {
+        a.airband_.note = n;
+        a.airband_.noteSeen = eng(a).airbandNote_;   // (what the engine last said is not news)
+    }
     // The add row's Add key with the frequency as typed, the mode's index (0 AM, 1 NFM), a name.
     static void addManual(AppWindow& a, const char* mhz, int mode, const char* name) {
-        std::snprintf(a.airbandAddMhz_, sizeof(a.airbandAddMhz_), "%s", mhz);
-        std::snprintf(a.airbandAddName_, sizeof(a.airbandAddName_), "%s", name);
-        a.airbandAddMode_ = mode;
+        std::snprintf(a.airband_.addMhz, sizeof(a.airband_.addMhz), "%s", mhz);
+        std::snprintf(a.airband_.addName, sizeof(a.airband_.addName), "%s", name);
+        a.airband_.addMode = mode;
         a.airbandAddManual();
+        settle(a);
     }
-    // How many channels the monitor would play from what is ticked.
-    static std::size_t wantedChannels(AppWindow& a) { return a.airbandWanted().size(); }
-    // The channels the monitor would play, and the rows that name them (what airbandStart
-    // takes from airbandWanted, and what the running monitor compares each frame).
-    static std::vector<cascade::core::MonitorChannel> wanted(AppWindow& a,
-                                                             std::vector<std::string>& names) {
-        return a.airbandWanted(&names);
+    // How many channels the monitor would play from what is ticked, and the rows that name them (what airbandStart takes from airbandWanted).
+    static std::size_t wantedChannels(AppWindow& a) { return eng(a).airbandWanted().size(); }
+    static std::vector<cascade::core::MonitorChannel> wanted(AppWindow& a, std::vector<std::string>& names) {
+        std::vector<cascade::engine::Engine::AirbandRow> rows;
+        const std::vector<cascade::core::MonitorChannel> want = eng(a).airbandWanted(&rows);
+        names.clear();
+        for (const auto& r : rows) { names.push_back(r.name); }
+        return want;
     }
-    // The channel table airbandStart builds from that list - the receiver, the block plan and
-    // the runner left out, which the heard-time flush does not read - and the heard time a
-    // channel has behind it that the flush has not yet put into the list.
+    // The channel table airbandStart builds from that list - the receiver, the block plan and the runner left out, which the heard-time flush
+    // does not read - and the heard time a channel has behind it that the flush has not yet put into the list.
     static void openChannels(AppWindow& a) {
-        std::vector<std::string> names;
-        const std::vector<cascade::core::MonitorChannel> want = a.airbandWanted(&names);
-        a.airbandChans_.clear();
+        std::vector<cascade::engine::Engine::AirbandRow> rows;
+        const std::vector<cascade::core::MonitorChannel> want = eng(a).airbandWanted(&rows);
+        eng(a).airbandChans_.clear();
         for (std::size_t i = 0; i < want.size(); ++i) {
-            AppWindow::AirbandChan c;
+            cascade::engine::Engine::AirbandChan c;
             c.freqHz = want[i].freqHz;
             c.bandwidthHz = want[i].bandwidthHz;
-            c.name = names[i];
-            a.airbandChans_.push_back(std::move(c));
+            c.name = rows[i].name;
+            c.rowId = rows[i].id;
+            eng(a).airbandChans_.push_back(std::move(c));
         }
     }
     static void setPendingHeard(AppWindow& a, const std::string& name, double seconds) {
-        for (AppWindow::AirbandChan& c : a.airbandChans_) {
+        for (cascade::engine::Engine::AirbandChan& c : eng(a).airbandChans_) {
             if (c.name == name) { c.pendingHeardS = seconds; }
         }
     }
     static double pendingHeard(AppWindow& a) {
         double s = 0.0;
-        for (const AppWindow::AirbandChan& c : a.airbandChans_) { s += c.pendingHeardS; }
+        for (const cascade::engine::Engine::AirbandChan& c : eng(a).airbandChans_) { s += c.pendingHeardS; }
         return s;
     }
     // The monitor's 20-second write of the heard time into the list.
-    static void flushHeard(AppWindow& a) { a.airbandFlushHeard(); }
+    static void flushHeard(AppWindow& a) { eng(a).airbandFlushHeard(); }
     // The Import key with the field and the path as typed.
     static void importPreset(AppWindow& a, const std::string& name, const std::string& path) {
         setPresetField(a, name);
-        std::snprintf(a.airbandImportPath_, sizeof(a.airbandImportPath_), "%s", path.c_str());
+        std::snprintf(a.airband_.importPath, sizeof(a.airband_.importPath), "%s", path.c_str());
         a.airbandImportPreset();
     }
     static void removePreset(AppWindow& a, const std::string& name) {
         setPresetField(a, name);
         a.airbandRemovePreset();
+        settle(a);
     }
-    static void addRow(AppWindow& a, const std::string& name, double freqHz, const char* mode,
-                       const std::string& group, bool ticked, bool favourite = false) {
+    static void addRow(AppWindow& a, const std::string& name, double freqHz, const char* mode, const std::string& group, bool ticked,
+                       bool favourite = false) {
         cascade::core::Bookmark b;
         b.name = name;
         b.freqHz = freqHz;
@@ -248,16 +329,25 @@ struct AppWindowTestAccess {
         b.group = group;
         b.scan = ticked;
         b.favourite = favourite;
-        a.freqMgr_.add(std::move(b));
+        eng(a).freqMgr_.add(std::move(b));
+        frames(a, 1);
+    }
+    // Frames until every command the Airband section sent has been answered (a few at most).
+    static void settle(AppWindow& a) {
+        for (int i = 0; i < 40; ++i) {
+            frame(a);
+            if (a.airband_.asks.empty() && !a.airband_.import.active && a.importAsks_.empty()) { break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        frames(a, 2);
     }
 
-    // The patch page's Radio node on an I/Q recording (0.99.65): reconciled once a
-    // frame, as the page does, until its radio runs.
+    // --- the patch page's Radio on an I/Q recording (0.99.65), reconciled once a frame, as the page does, until its radio runs. The patch is
+    // the ENGINE's (its graph, its radios and the worker that opens them), so the node is made there.
     static cascade::core::patch::NodeId addFileRadio(AppWindow& a, const std::string& path) {
         namespace pc = cascade::core::patch;
-        a.patchSeeded_ = true;  // no starter patch: this test builds its own
-        const pc::NodeId id = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-        if (pc::Node* n = a.patchGraph_.mutableNode(id)) {
+        const pc::NodeId id = eng(a).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+        if (pc::Node* n = eng(a).patchGraph_.mutableNode(id)) {
             n->device = pc::makeIqFileKey(path);
             n->freqHz = 100.0e6;
             n->rateHz = 2.4e6;
@@ -266,36 +356,29 @@ struct AppWindowTestAccess {
         return id;
     }
     static void reconcile(AppWindow& a) {
-        a.patchRunning_ = true;
-        a.patchWasOpen_ = true;  // the page's first-frame scan is not under test
-        a.patchReconcile();
+        eng(a).patchRunning_ = true;
+        eng(a).patchWasOpen_ = true;   // the page's first-frame scan is not under test
+        eng(a).patchReconcile();
     }
-    static bool radioRunning(AppWindow& a, cascade::core::patch::NodeId id) {
-        return a.patchRadios_.count(id) != 0;
-    }
-    static bool radioPending(AppWindow& a, cascade::core::patch::NodeId id) {
-        return a.patchRadioPending_.count(id) != 0;
-    }
+    static bool radioRunning(AppWindow& a, cascade::core::patch::NodeId id) { return eng(a).patchRadios_.count(id) != 0; }
+    static bool radioPending(AppWindow& a, cascade::core::patch::NodeId id) { return eng(a).patchRadioPending_.count(id) != 0; }
     static std::string radioError(AppWindow& a, cascade::core::patch::NodeId id) {
-        const auto it = a.patchRadioError_.find(id);
-        return it == a.patchRadioError_.end() ? std::string() : it->second;
+        const auto it = eng(a).patchRadioError_.find(id);
+        return it == eng(a).patchRadioError_.end() ? std::string() : it->second;
     }
     static double nodeRate(AppWindow& a, cascade::core::patch::NodeId id) {
-        const cascade::core::patch::Node* n = a.patchGraph_.find(id);
+        const cascade::core::patch::Node* n = eng(a).patchGraph_.find(id);
         return n == nullptr ? -1.0 : n->rateHz;
     }
     static void setNodeOn(AppWindow& a, cascade::core::patch::NodeId id, bool on) {
-        if (cascade::core::patch::Node* n = a.patchGraph_.mutableNode(id)) { n->on = on; }
+        if (cascade::core::patch::Node* n = eng(a).patchGraph_.mutableNode(id)) { n->on = on; }
     }
     static void setNodeDevice(AppWindow& a, cascade::core::patch::NodeId id, const std::string& path) {
-        if (cascade::core::patch::Node* n = a.patchGraph_.mutableNode(id)) {
-            n->device = cascade::core::patch::makeIqFileKey(path);
-        }
+        if (cascade::core::patch::Node* n = eng(a).patchGraph_.mutableNode(id)) { n->device = cascade::core::patch::makeIqFileKey(path); }
     }
 
     // What the screenshot block does once the frame's pictures are taken.
-    static void shot(AppWindow& a, const std::string& dir, int n, const cascade::core::HostImage& im,
-                     const std::string& windows) {
+    static void shot(AppWindow& a, const std::string& dir, int n, const cascade::core::HostImage& im, const std::string& windows) {
         a.shotAddPicture(dir + "/shot-" + std::to_string(n) + ".bmp", im);
         a.shotAddText(dir + "/shot-" + std::to_string(n) + ".windows.txt", windows);
         a.shotFlush();
@@ -331,12 +414,10 @@ void isolate() {
     fs::remove_all(g_scratch, ec);
     fs::create_directories(g_scratch, ec);
     const std::string s = g_scratch.string();
-    for (const char* v : {"LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME", "XDG_CONFIG_HOME",
-                          "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"}) {
+    for (const char* v : {"LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"}) {
         setEnv(v, s);
     }
-    // The patch's second recordings folder is read from here: a test must not
-    // inherit the owner's.
+    // The patch's second recordings folder is read from here: a test must not inherit the owner's.
     setEnv("FOXSDR_PATCH_SAMPLES", "");
     setEnv("FOXSDR_TELEMETRY_URL", "http://127.0.0.1:9");
     setEnv("FOXSDR_TESTER_USAGE_URL", "http://127.0.0.1:9");
@@ -344,9 +425,7 @@ void isolate() {
 }
 
 double nowMs() {
-    return std::chrono::duration<double, std::milli>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 // --- a slow disk -------------------------------------------------------------
@@ -414,12 +493,12 @@ void startWatchdog(HangWatchdog& w, const fs::path& dir) {
     CHECK(w.reportsWritten() == 0u);
 }
 
-// Waits for `cond` while feeding the window's per-frame poll.
+// Waits for `cond` while feeding the window's and the engine's per-frame work.
 template <class Cond>
 bool pumpApp(AppWindow& app, double ms, Cond&& cond) {
     const double until = nowMs() + ms;
     while (nowMs() < until) {
-        Access::poll(app);
+        Access::frame(app);
         if (cond()) { return true; }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -434,9 +513,7 @@ cascade::core::HostImage testImage() {
     im.format = CASCADE_IMAGE_RGB24;
     im.complete = true;
     im.pixels.assign(16u * 8u * 3u, 0x7F);
-    for (std::size_t i = 0; i < im.pixels.size(); ++i) {
-        im.pixels[i] = static_cast<std::uint8_t>(i * 7u);
-    }
+    for (std::size_t i = 0; i < im.pixels.size(); ++i) { im.pixels[i] = static_cast<std::uint8_t>(i * 7u); }
     return im;
 }
 
@@ -449,9 +526,7 @@ std::vector<fs::path> filesIn(const fs::path& dir, const char* ext = nullptr) {
     std::vector<fs::path> out;
     std::error_code ec;
     for (const auto& e : fs::directory_iterator(dir, ec)) {
-        if (e.is_regular_file(ec) && (ext == nullptr || e.path().extension() == ext)) {
-            out.push_back(e.path());
-        }
+        if (e.is_regular_file(ec) && (ext == nullptr || e.path().extension() == ext)) { out.push_back(e.path()); }
     }
     return out;
 }
@@ -490,12 +565,12 @@ void checkTheSynchronousCallIsReported() {
     w.stop();
 }
 
-// --- 2. THE REAL HANDLERS, THROUGH A REAL WINDOW --------------------------------
+// --- 2. THE REAL HANDLERS, THROUGH A REAL WINDOW OVER ITS REAL ENGINE ---------------
 
-// Runs `press` on the first frame of a loop that also polls, as drawUi does, and
-// checks what the watchdog and the frame gaps said.
-template <class Press>
-void stallCase(const char* what, AppWindow& app, std::shared_ptr<SlowDisk> disk, Press&& press) {
+// Runs `press` on the first frame of a loop that also runs the frame, as drawUi does, and checks what the watchdog and the frame gaps said.
+// `observe` runs after every frame (a state that is only there while the worker is out).
+template <class Press, class Observe>
+void stallCase(const char* what, AppWindow& app, std::shared_ptr<SlowDisk> disk, Press&& press, Observe&& observe) {
     HangWatchdog w;
     startWatchdog(w, reportDir(what));
     bool first = true;
@@ -504,16 +579,21 @@ void stallCase(const char* what, AppWindow& app, std::shared_ptr<SlowDisk> disk,
             first = false;
             press();
         }
-        Access::poll(app);
+        Access::frame(app);
+        observe();
     });
     CHECK(w.reportsWritten() == 0u);
     CHECK(s.frames > 100);
     CHECK(s.worstGapMs < 800.0);
     CHECK(!disk->askedFromCaller.load());
     CHECK(disk->calls.load() == 1);
-    std::printf("  %s: %d frames in 3.6 s, worst gap %.0f ms, hang reports %u\n", what, s.frames,
-                s.worstGapMs, w.reportsWritten());
+    std::printf("  %s: %d frames in 3.6 s, worst gap %.0f ms, hang reports %u\n", what, s.frames, s.worstGapMs, w.reportsWritten());
     w.stop();
+}
+
+template <class Press>
+void stallCase(const char* what, AppWindow& app, std::shared_ptr<SlowDisk> disk, Press&& press) {
+    stallCase(what, app, std::move(disk), std::forward<Press>(press), [] {});
 }
 
 void checkTheRecordingsListNeverHoldsAFrame() {
@@ -523,9 +603,8 @@ void checkTheRecordingsListNeverHoldsAFrame() {
     Access::setRecordDir(app, dir.string());
     auto disk = makeDisk(2500);
     Access::setHook(app, slowHook(disk));
-    // The list is asked for twice on the first frame (the key pressed again): the
-    // second is remembered and run when the first comes back, so the disk is asked
-    // twice in all, and the first is the one the loop's check counts.
+    // The list is asked for twice on the first frame (the key pressed again): the second is remembered and run when the first comes back, so
+    // the disk is asked twice in all, and the first is the one the loop's check counts.
     {
         HangWatchdog w;
         startWatchdog(w, reportDir("recordings list"));
@@ -536,15 +615,14 @@ void checkTheRecordingsListNeverHoldsAFrame() {
                 Access::listRecordings(app);
                 Access::listRecordings(app);
             }
-            Access::poll(app);
+            Access::frame(app);
         });
         CHECK(w.reportsWritten() == 0u);
         CHECK(s.frames > 200);
         CHECK(s.worstGapMs < 800.0);
         CHECK(!disk->askedFromCaller.load());
         CHECK(disk->calls.load() == 2);
-        std::printf("  recordings list: %d frames in 6.4 s, worst gap %.0f ms, hang reports %u\n",
-                    s.frames, s.worstGapMs, w.reportsWritten());
+        std::printf("  recordings list: %d frames in 6.4 s, worst gap %.0f ms, hang reports %u\n", s.frames, s.worstGapMs, w.reportsWritten());
         w.stop();
     }
     // The list arrived, and is the list a synchronous listing makes.
@@ -558,14 +636,12 @@ void checkTheRecordingsListNeverHoldsAFrame() {
         CHECK(got[0].rateHz == direct[0].rateHz);
         CHECK(got[0].rateHz == 250000.0);
     }
-    // One file, read once: the second listing went through the cache the first
-    // one grew.
+    // One file, read once: the second listing went through the cache the first one grew.
     CHECK(Access::headerReads(app) == 1u);
 }
 
-// A listing asked for while one is out is run when it comes back: a recording made
-// meanwhile is in the second list, and the cache means its neighbour is not read
-// again.
+// A listing asked for while one is out is run when it comes back: a recording made meanwhile is in the second list, and the cache means its
+// neighbour is not read again.
 void checkASecondListingIsRemembered() {
     AppWindow app;
     const fs::path dir = g_scratch / "list-again";
@@ -574,18 +650,14 @@ void checkASecondListingIsRemembered() {
     auto disk = makeDisk(1500);
     Access::setHook(app, slowHook(disk));
     Access::listRecordings(app);
-    // A second recording appears while the disk is busy; the user presses Look
-    // for radios again.
+    Access::frames(app, 2);   // (the press reaches the engine on the frame after it: the worker is out now)
+    // A second recording appears while the disk is busy; the user presses Look for radios again.
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));  // a different file name
     makeRecording(dir);
     Access::listRecordings(app);
-    // The first worker lists the folder only AFTER its disk answers (the hook is
-    // the disk), so it already sees both files; what is being proved is that the
-    // second press was not lost - a second listing is made when the first comes
-    // back - and that it cost no header read the cache had.
-    CHECK(pumpApp(app, 12000.0, [&] {
-        return Access::recordings(app).size() == 2u && disk->finished.load() == 2;
-    }));
+    // The first worker lists the folder only AFTER its disk answers (the hook is the disk), so it already sees both files; what is being proved
+    // is that the second press was not lost - a second listing is made when the first comes back - and that it cost no header read the cache had.
+    CHECK(pumpApp(app, 12000.0, [&] { return Access::recordings(app).size() == 2u && disk->finished.load() == 2; }));
     CHECK(disk->calls.load() == 2);
     // Two listings, two header reads: each file once.
     CHECK(Access::headerReads(app) == 2u);
@@ -624,8 +696,7 @@ void checkAFailedPictureSaveSaysWhatItSaid() {
     Access::setRecordDir(app, blockedDir("image-blocker"));
     Access::saveImage(app, testImage());
     CHECK(pumpApp(app, 5000.0, [&] { return !Access::imagePending(app); }));
-    // The synchronous handler ignored create_directories' failure and let the BMP
-    // writer say so: the same sentence, a frame or more later.
+    // The synchronous handler ignored create_directories' failure and let the BMP writer say so: the same sentence, a frame or more later.
     CHECK(Access::imageNote(app).rfind("Save failed: cannot open \"", 0) == 0);
     CHECK(Access::imageNotePlugin(app) == "APT decoder");
     // And the key works again.
@@ -641,12 +712,15 @@ void checkTheExportNeverHoldsAFrame() {
     Access::addBookmarks(app, 3);
     auto disk = makeDisk(2500);
     Access::setHook(app, slowHook(disk));
+    // (The engine takes the press on the frame after it, so "Saving..." and the pending job are seen by the loop, not by the press.)
     bool sawSaving = false;
-    stallCase("SDR# export", app, disk, [&] {
-        Access::exportBookmarks(app);
-        Access::exportBookmarks(app);  // pressed again: one export is ever out
-        sawSaving = Access::exportNote(app) == "Saving..." && Access::exportPending(app);
-    });
+    stallCase(
+        "SDR# export", app, disk,
+        [&] {
+            Access::exportBookmarks(app);
+            Access::exportBookmarks(app);  // pressed again: one export is ever out
+        },
+        [&] { sawSaving = sawSaving || (Access::exportNote(app) == "Saving..." && Access::exportPending(app)); });
     CHECK(sawSaving);
     CHECK(!Access::exportPending(app));
     // The file is the XML the synchronous handler wrote, and the note says where.
@@ -654,8 +728,7 @@ void checkTheExportNeverHoldsAFrame() {
     CHECK(files.size() == 1u);
     if (files.size() == 1u) {
         CHECK(readAll(files[0]) == cascade::core::exportSdrSharpXml(Access::bookmarks(app)));
-        CHECK(Access::exportNote(app) ==
-              "Exported 3 to " + dir.string() + "/" + files[0].filename().string());
+        CHECK(Access::exportNote(app) == "Exported 3 to " + dir.string() + "/" + files[0].filename().string());
     }
 }
 
@@ -664,12 +737,11 @@ void checkAFailedExportSaysWhatItSaid() {
     Access::setRecordDir(app, blockedDir("export-blocker"));
     Access::addBookmarks(app, 2);
     Access::exportBookmarks(app);
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::exportPending(app); }));
-    CHECK(Access::exportNote(app).rfind("Could not write ", 0) == 0);
+    CHECK(pumpApp(app, 5000.0, [&] { return Access::exportNote(app).rfind("Could not write ", 0) == 0; }));
+    CHECK(!Access::exportPending(app));
     Access::setRecordDir(app, (g_scratch / "export-after").string());
     Access::exportBookmarks(app);
-    CHECK(pumpApp(app, 5000.0,
-                  [&] { return Access::exportNote(app).rfind("Exported 2 to ", 0) == 0; }));
+    CHECK(pumpApp(app, 5000.0, [&] { return Access::exportNote(app).rfind("Exported 2 to ", 0) == 0; }));
 }
 
 // A frequency list to import: three CSV rows, or `n` rows starting at `first` MHz.
@@ -678,8 +750,7 @@ std::string writeCsv(const char* tag, int n, double firstMhz) {
     std::ofstream f(p, std::ios::binary);
     f << "frequency,name,mode\n";
     for (int i = 0; i < n; ++i) {
-        f << static_cast<long long>((firstMhz + 1.1 * i) * 1.0e6) << ",Import " << tag << " " << i
-          << ",NFM\n";
+        f << static_cast<long long>((firstMhz + 1.1 * i) * 1.0e6) << ",Import " << tag << " " << i << ",NFM\n";
     }
     return p.string();
 }
@@ -691,10 +762,9 @@ void checkTheImportNeverHoldsAFrame() {
     auto disk = makeDisk(2500);
     Access::setHook(app, slowHook(disk));
     bool sawPending = false;
-    stallCase("bookmark import", app, disk, [&] {
-        Access::importFile(app, csv);
-        sawPending = Access::importPending(app);
-    });
+    stallCase(
+        "bookmark import", app, disk, [&] { Access::importFile(app, csv); },
+        [&] { sawPending = sawPending || Access::importPending(app); });
     CHECK(sawPending);
     CHECK(!Access::importPending(app));
     // What was read, in the words the synchronous import used.
@@ -702,8 +772,8 @@ void checkTheImportNeverHoldsAFrame() {
     CHECK(Access::exportNote(app) == "CSV: 3 entries read, 3 added");
 }
 
-// An import asked for while one is out is REMEMBERED (a file dropped on the window
-// is not lost), the last one asked for wins, and it is run when the first is back.
+// An import asked for while one is out is REMEMBERED (a file dropped on the window is not lost), the last one asked for wins, and it is run when
+// the first is back.
 void checkASecondImportIsRemembered() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "import-again").string());
@@ -715,11 +785,17 @@ void checkASecondImportIsRemembered() {
     Access::importFile(app, a);
     Access::importFile(app, b);  // remembered...
     Access::importFile(app, c);  // ...and replaced: only the last asked for runs
+    Access::frames(app, 2);      // (the three presses reach the engine on the frame after them)
     CHECK(Access::importPending(app));
-    CHECK(pumpApp(app, 12000.0, [&] { return disk->finished.load() == 2 && !Access::importPending(app); }));
+    CHECK(pumpApp(app, 12000.0, [&] { return disk->finished.load() == 2 && !Access::importBusy(app); }));
     CHECK(disk->calls.load() == 2);
     CHECK(Access::bookmarks(app).size() == 5u);  // a's two and c's three
     CHECK(Access::exportNote(app) == "CSV: 3 entries read, 3 added");
+}
+
+void waitImport(AppWindow& app) {
+    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importBusy(app); }));
+    Access::frames(app, 2);
 }
 
 // The same words as before for a file that can be read: one pass, one note.
@@ -728,12 +804,12 @@ void checkAnImportSaysWhatItSaid() {
     Access::setRecordDir(app, (g_scratch / "import-ok").string());
     const std::string csv = writeCsv("ok", 4, 90.0);
     Access::importFile(app, "\"" + csv + "\"");  // a path pasted with Explorer's quotes
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::bookmarks(app).size() == 4u);
     CHECK(Access::exportNote(app) == "CSV: 4 entries read, 4 added");
     // A file that is not there: the reason, in the words it always had; nothing added.
     Access::importFile(app, (g_scratch / "no-such-list.csv").string());
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::exportNote(app).rfind("Could not import: ", 0) == 0);
     CHECK(Access::bookmarks(app).size() == 4u);
     // A folder squatting on the path: also a reason, also nothing added, no hang.
@@ -741,19 +817,18 @@ void checkAnImportSaysWhatItSaid() {
     std::error_code ec;
     fs::create_directories(dirAsFile, ec);
     Access::importFile(app, dirAsFile.string());
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::exportNote(app).rfind("Could not import: ", 0) == 0);
     CHECK(Access::bookmarks(app).size() == 4u);
 }
 
 // --- THE AIRBAND SECTION'S PRESETS (0.99.66) --------------------------------------
 //
-// A preset is a group of the frequency list. Its Import is the Bookmarks section's, with
-// the group and the tick put on every row on the window's thread; its Export CSV is the
-// SDR# export's worker with another text; both say what they did in the AIRBAND section.
+// A preset is a group of the frequency list. Its Import is the Bookmarks section's, with the group and the tick put on every row (by the
+// window's worker, which reads the file; the rows reach the list as the engine's ADD_ROWS); its Export CSV is the engine's, which writes the
+// preset from its store on a worker; both say what they did in the AIRBAND section.
 
-// Four rows whose files carry other groups and no tick: three the monitor can play
-// (AM, NFM) and one it cannot (WFM).
+// Four rows whose files carry other groups and no tick: three the monitor can play (AM, NFM) and one it cannot (WFM).
 std::string writeMixedCsv(const char* tag) {
     const fs::path p = g_scratch / (std::string(tag) + ".csv");
     std::ofstream f(p, std::ios::binary);
@@ -765,30 +840,27 @@ std::string writeMixedCsv(const char* tag) {
     return p.string();
 }
 
-const cascade::core::Bookmark* rowNamed(const std::vector<cascade::core::Bookmark>& list,
-                                        const std::string& name) {
+const cascade::core::Bookmark* rowNamed(const std::vector<cascade::core::Bookmark>& list, const std::string& name) {
     for (const cascade::core::Bookmark& b : list) {
         if (b.name == name) { return &b; }
     }
     return nullptr;
 }
 
-// THE GROUP AND THE TICK ARE FORCED on every row, whatever the file wrote - and the rest
-// of each row is the file's; the note is the AIRBAND section's and counts what the monitor
-// plays; the Bookmarks section's own Import is untouched by all of it.
+// THE GROUP AND THE TICK ARE FORCED on every row, whatever the file wrote - and the rest of each row is the file's; the note is the AIRBAND
+// section's and counts what the monitor plays; the Bookmarks section's own Import is untouched by all of it.
 void checkAnImportIntoAPresetForcesTheGroupAndTheTick() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "preset-import").string());
     const std::string csv = writeMixedCsv("preset-mixed");
     Access::importInto(app, csv, "Harbour", true);
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     std::vector<cascade::core::Bookmark> list = Access::bookmarks(app);
     CHECK(list.size() == 4u);
     for (const cascade::core::Bookmark& b : list) {
         CHECK(b.group == "Harbour");   // not Somewhere, Elsewhere, Radio, or none
-        // The file had no tick: the rows the monitor plays (AM, NFM) are ticked; the WFM one is
-        // not - ticked, it would be in the Scanner's list mode with no row in this section to
-        // untick it by.
+        // The file had no tick: the rows the monitor plays (AM, NFM) are ticked; the WFM one is not - ticked, it would be in the Scanner's list
+        // mode with no row in this section to untick it by.
         CHECK(b.scan == (b.mode == "AM" || b.mode == "NFM"));
     }
     const cascade::core::Bookmark* ch16 = rowNamed(list, "Ch 16");
@@ -800,32 +872,29 @@ void checkAnImportIntoAPresetForcesTheGroupAndTheTick() {
         CHECK(wfm->freqHz == 98500000.0 && wfm->mode == "WFM" && wfm->bandwidthHz == 150000.0);
         CHECK(!wfm->scan && ch16->scan);   // unticked, beside the NFM row that is
     }
-    CHECK(Access::presetNote(app) ==
-          "Preset \"Harbour\": 4 read, 4 new; the monitor can play 3 of the rows read (AM or NFM).");
+    CHECK(Access::presetNote(app) == "Preset \"Harbour\": 4 read, 4 new; the monitor can play 3 of the rows read (AM or NFM).");
     CHECK(Access::exportNote(app).empty());          // nothing under the Bookmarks section's Import
     CHECK(Access::airbandGroup(app) == "Harbour");   // the preset the rows joined is showing
     CHECK(!Access::presetFolderKey(app));
 
     // The same file again: nothing new, said so.
     Access::importInto(app, csv, "Harbour", true);
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::bookmarks(app).size() == 4u);
-    CHECK(Access::presetNote(app) ==
-          "Preset \"Harbour\": 4 read, 0 new; the monitor can play 3 of the rows read (AM or NFM).");
+    CHECK(Access::presetNote(app) == "Preset \"Harbour\": 4 read, 0 new; the monitor can play 3 of the rows read (AM or NFM).");
 
     // A file that is not there: the reason, in this section, and nothing added.
     Access::importInto(app, (g_scratch / "no-such-preset.csv").string(), "Harbour", true);
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::presetNote(app).rfind("Could not import: ", 0) == 0);
     CHECK(Access::exportNote(app).empty());
     CHECK(Access::bookmarks(app).size() == 4u);
 
-    // THE BOOKMARKS SECTION'S IMPORT, and a dropped file, are as they were: the file's own
-    // groups, nothing ticked, the note under that section's key.
+    // THE BOOKMARKS SECTION'S IMPORT, and a dropped file, are as they were: the file's own groups, nothing ticked, the note under that section's key.
     AppWindow plain;
     Access::setRecordDir(plain, (g_scratch / "preset-import-plain").string());
     Access::importFile(plain, csv);
-    CHECK(pumpApp(plain, 5000.0, [&] { return !Access::importPending(plain); }));
+    waitImport(plain);
     list = Access::bookmarks(plain);
     CHECK(list.size() == 4u);
     const cascade::core::Bookmark* tower = rowNamed(list, "Tower");
@@ -858,7 +927,7 @@ void checkAnImportIntoAPresetForcesTheGroupAndTheTick() {
         AppWindow ticked;
         Access::setRecordDir(ticked, (g_scratch / "preset-import-ticked").string());
         Access::importFile(ticked, p.string());
-        CHECK(pumpApp(ticked, 5000.0, [&] { return !Access::importPending(ticked); }));
+        waitImport(ticked);
         const std::vector<cascade::core::Bookmark> got = Access::bookmarks(ticked);
         const cascade::core::Bookmark* kept = rowNamed(got, "Kept");
         const cascade::core::Bookmark* left = rowNamed(got, "Left");
@@ -867,15 +936,61 @@ void checkAnImportIntoAPresetForcesTheGroupAndTheTick() {
     }
 }
 
+// THE FILE'S FAVOURITE COLUMN SURVIVES AN IMPORT INTO A PRESET (stub campaign B19; B7 lost it: BOOKMARK_ADD_ROWS had no field for it). The rows
+// travel as ADD_ROWS text whose fourth field is a word of flags (1 ticked, 2 favourite); the favourite is the file's, whatever the preset forces.
+void checkAnImportIntoAPresetKeepsTheFavouriteColumn() {
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "preset-fav").string());
+    const fs::path p = g_scratch / "preset-fav.csv";
+    {
+        std::ofstream f(p, std::ios::binary);
+        f << "frequency_mhz,name,group,mode,bandwidth_hz,favourite,ticked\n"
+             "156.800,Starred NFM,Somewhere,NFM,12500,1,0\n"
+             "118.700,Plain AM,,AM,10000,0,1\n"
+             "98.500,Starred WFM,Radio,WFM,150000,1,1\n"
+             "121.500,Starred AM,,AM,10000,1,0\n";
+    }
+    Access::importInto(app, p.string(), "Harbour", true);
+    waitImport(app);
+    const std::vector<cascade::core::Bookmark> list = Access::bookmarks(app);
+    CHECK(list.size() == 4u);
+    const cascade::core::Bookmark* sn = rowNamed(list, "Starred NFM");
+    const cascade::core::Bookmark* pa = rowNamed(list, "Plain AM");
+    const cascade::core::Bookmark* sw = rowNamed(list, "Starred WFM");
+    const cascade::core::Bookmark* sa = rowNamed(list, "Starred AM");
+    CHECK(sn != nullptr && pa != nullptr && sw != nullptr && sa != nullptr);
+    if (sn != nullptr && pa != nullptr && sw != nullptr && sa != nullptr) {
+        // The favourite is the FILE's; the group and the tick are the PRESET's (the monitor plays AM and NFM, so those rows are ticked).
+        CHECK(sn->favourite && sa->favourite && sw->favourite);
+        CHECK(!pa->favourite);
+        CHECK(sn->group == "Harbour" && pa->group == "Harbour" && sw->group == "Harbour" && sa->group == "Harbour");
+        CHECK(sn->scan && pa->scan && sa->scan && !sw->scan);
+    }
+    // THE ROUND TRIP: what the engine wrote out comes back with the star where it was.
+    Access::exportGroup(app, "Harbour");
+    CHECK(pumpApp(app, 5000.0, [&] { return Access::presetNote(app).rfind("Exported 4 to ", 0) == 0; }));
+    const std::vector<fs::path> files = filesIn(g_scratch / "preset-fav", ".csv");
+    CHECK(files.size() == 1u);
+    if (files.size() == 1u) {
+        AppWindow back;
+        Access::setRecordDir(back, (g_scratch / "preset-fav-back").string());
+        Access::importFile(back, files[0].string());
+        waitImport(back);
+        const std::vector<cascade::core::Bookmark> got = Access::bookmarks(back);
+        CHECK(got.size() == 4u);
+        std::size_t stars = 0;
+        for (const cascade::core::Bookmark& b : got) { stars += b.favourite ? 1u : 0u; }
+        CHECK(stars == 3u);
+    }
+}
+
 // --- THE "Import a frequency list" WINDOW AND A BARE FILE NAME (0.99.80) -----------------
 //
-// Field report, SWL 20807 (French interface): "When I type the name of the file to load, it shows an
-// error (import impossible: cannot open)". Export for SDR# and the AIRBAND preset's Export CSV write
-// into the recordings folder and show the name; typed back, a bare name was opened relative to the
-// process's working directory and was never there. Four things are held here: the bare name is looked
-// for in the recordings folder (on the worker), the reason is said in the user's language, any import
-// that comes back with no rows opens the window, and a file dropped while it is open goes where it
-// says. The key presses and the drawn window are ImGui output: tests/test_import_dialog_app.cpp.
+// Field report, SWL 20807 (French interface): "When I type the name of the file to load, it shows an error (import impossible: cannot open)".
+// Export for SDR# and the AIRBAND preset's Export CSV write into the recordings folder and show the name; typed back, a bare name was opened
+// relative to the process's working directory and was never there. Four things are held here: the bare name is looked for in the recordings
+// folder (on the window's worker), the reason is said in the user's language, any import that comes back with no rows opens the window, and a
+// file dropped while it is open goes where it says. The key presses and the drawn window are ImGui output: tests/test_import_dialog_app.cpp.
 
 // `n` rows of NFM, starting at `firstMhz`, written into `dir` under `name`.
 void writeCsvIn(const fs::path& dir, const std::string& name, int n, double firstMhz) {
@@ -886,10 +1001,6 @@ void writeCsvIn(const fs::path& dir, const std::string& name, int n, double firs
     for (int i = 0; i < n; ++i) {
         f << static_cast<long long>((firstMhz + 1.1 * i) * 1.0e6) << ",Bare " << name << " " << i << ",NFM\n";
     }
-}
-
-void waitImport(AppWindow& app) {
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
 }
 
 // A BARE NAME is looked for where Export wrote it: the recordings folder.
@@ -911,8 +1022,8 @@ void checkABareNameIsLookedForInTheRecordingsFolder() {
     CHECK(Access::bookmarks(app).size() == 5u);
 }
 
-// The picker and text input provide UTF-8, including for a bare filename retry
-// and its error. A profile/recordings directory may have non-ANSI characters too.
+// The picker and text input provide UTF-8, including for a bare filename retry and its error. A profile/recordings directory may have non-ANSI
+// characters too.
 void checkABareUtf8NameInAUtf8RecordingsFolder() {
     AppWindow app;
     const fs::path rec = g_scratch / fs::path(u8"enregistrements-頻率");
@@ -931,14 +1042,13 @@ void checkABareUtf8NameInAUtf8RecordingsFolder() {
     const std::string missing = "missing-" + name;
     Access::importFile(app, missing);
     waitImport(app);
-    CHECK(Access::exportNote(app) ==
-          "Could not import: the file \"" + recName + "/" + missing + "\" could not be opened");
+    CHECK(Access::exportNote(app) == "Could not import: the file \"" + recName + "/" + missing + "\" could not be opened");
     CHECK(Access::dialogOpen(app));
 }
 
-// ...and, since 0.99.82, a name WITH a folder part too: "sub/name.csv" is opened relative to the
-// working directory first and, when it is not there, relative to the recordings folder (0.99.80 left
-// it to the working directory alone; the shapes are in checkTheShapesAnImportPathArrivesIn).
+// ...and, since 0.99.82, a name WITH a folder part too: "sub/name.csv" is opened relative to the working directory first and, when it is not
+// there, relative to the recordings folder (0.99.80 left it to the working directory alone; the shapes are in
+// checkTheShapesAnImportPathArrivesIn).
 void checkANameWithAFolderPartIsRetriedInTheRecordingsFolder() {
     AppWindow app;
     const fs::path rec = g_scratch / "bare-sub-rec";
@@ -951,28 +1061,24 @@ void checkANameWithAFolderPartIsRetriedInTheRecordingsFolder() {
     // One that is in neither place says where it looked last, in full.
     Access::importFile(app, "sub/not-there.csv");
     waitImport(app);
-    CHECK(Access::exportNote(app) ==
-          "Could not import: the file \"" + rec.string() + "/sub/not-there.csv\" could not be opened");
+    CHECK(Access::exportNote(app) == "Could not import: the file \"" + rec.string() + "/sub/not-there.csv\" could not be opened");
     CHECK(Access::dialogOpen(app));  // it did not open: the window offers the other ways in
     // A bare name that is in neither place names where it LOOKED LAST: the recordings folder.
     AppWindow lost;
     Access::setRecordDir(lost, rec.string());
     Access::importFile(lost, "nowhere.csv");
     waitImport(lost);
-    CHECK(Access::exportNote(lost) ==
-          "Could not import: the file \"" + rec.string() + "/nowhere.csv\" could not be opened");
+    CHECK(Access::exportNote(lost) == "Could not import: the file \"" + rec.string() + "/nowhere.csv\" could not be opened");
     CHECK(Access::bookmarks(lost).empty());
 }
 
 // --- THE SHAPES AN IMPORT PATH ARRIVES IN (field report 7c93e85ca4f35c9a, 2026-10-19) -----------
 //
-// 0.99.80 answered the report's bare file name. What else reaches importBookmarkFile is whatever a
-// person pastes or a desktop hands over: a path with the Enter that ended the line, or a space, or
-// single quotes (a terminal's drag-and-drop), or double quotes and a space; a file:// address (a
-// file manager's copied path, a text/uri-list line) with its percent-encoding; a name with a folder
-// part (lists/marine.csv), which 0.99.80 left to the process's working directory alone. Each shape
-// is a file that exists and a string that names it: the rows must come in, and a path that does not
-// open must say the whole path it tried.
+// 0.99.80 answered the report's bare file name. What else reaches importBookmarkFile is whatever a person pastes or a desktop hands over: a path
+// with the Enter that ended the line, or a space, or single quotes (a terminal's drag-and-drop), or double quotes and a space; a file:// address
+// (a file manager's copied path, a text/uri-list line) with its percent-encoding; a name with a folder part (lists/marine.csv), which 0.99.80
+// left to the process's working directory alone. Each shape is a file that exists and a string that names it: the rows must come in, and a path
+// that does not open must say the whole path it tried.
 
 std::string percentEncodeUri(const std::string& s) {
     static const char* const hex = "0123456789ABCDEF";
@@ -1010,8 +1116,7 @@ void checkShape(AppWindow& app, const char* label, const std::string& typed, std
     Access::importFile(app, typed);
     waitImport(app);
     const std::size_t got = Access::bookmarks(app).size() - before;
-    std::printf("  shape %-46s -> %zu new row(s), wanted %zu%s\n", label, got, wantRows,
-                got == wantRows ? "" : "   <== FAILED");
+    std::printf("  shape %-46s -> %zu new row(s), wanted %zu%s\n", label, got, wantRows, got == wantRows ? "" : "   <== FAILED");
     if (got != wantRows) { std::printf("    the app said: %s\n", Access::exportNote(app).c_str()); }
     CHECK(got == wantRows);
 }
@@ -1057,13 +1162,11 @@ void checkTheShapesAnImportPathArrivesIn() {
     const std::u8string uniDir8 = u8"listes-頻率";
     const std::u8string uniName8 = u8"fréquences m.csv";
     writeCsvIn(rec / fs::path(uniDir8), utf8Of(uniName8), 3, next());
-    checkShape(app, "file:// address, accents/CJK, %20, CRLF",
-               fileUriOf(rec / fs::path(uniDir8) / fs::path(uniName8)) + "\r\n", 3);
+    checkShape(app, "file:// address, accents/CJK, %20, CRLF", fileUriOf(rec / fs::path(uniDir8) / fs::path(uniName8)) + "\r\n", 3);
     writeCsvIn(rec, "uri-n.csv", 3, next());
     checkShape(app, "file://localhost/ address", "file://localhost" + fileUriOf(rec / "uri-n.csv").substr(7), 3);
 
-    // A name with a folder part: the working directory first (0.99.80, unchanged), then the
-    // recordings folder, where Export writes.
+    // A name with a folder part: the working directory first (0.99.80, unchanged), then the recordings folder, where Export writes.
     writeCsvIn(rec / "lists", "marine.csv", 3, next());
     checkShape(app, "lists/marine.csv (in the recordings folder)", "lists/marine.csv", 3);
     writeCsvIn(rec / "lists", "air.csv", 3, next());
@@ -1104,28 +1207,24 @@ void checkTheShapesAnImportPathArrivesIn() {
     }
     checkShape(app, "UTF-8 BOM XML, by bare name", "bom.xml", 1);
 
-    // A path that does not open names the WHOLE path tried: in the recordings folder, for a name
-    // with a folder part (the last place looked)...
+    // A path that does not open names the WHOLE path tried: in the recordings folder, for a name with a folder part (the last place looked)...
     AppWindow lost;
     Access::setRecordDir(lost, recDir);
     Access::importFile(lost, "lists/nowhere.csv");
     waitImport(lost);
-    CHECK(Access::exportNote(lost) ==
-          "Could not import: the file \"" + recDir + "/lists/nowhere.csv\" could not be opened");
-    // ...and, with no recordings folder to look in, the working directory's path in full, not
-    // the fragment that was typed.
+    CHECK(Access::exportNote(lost) == "Could not import: the file \"" + recDir + "/lists/nowhere.csv\" could not be opened");
+    // ...and, with no recordings folder to look in, the working directory's path in full, not the fragment that was typed.
     AppWindow bare;
     Access::setRecordDir(bare, "");
     Access::importFile(bare, "lists/nowhere.csv");
     waitImport(bare);
     const std::string note = Access::exportNote(bare);
-    CHECK(note == "Could not import: the file \"" + utf8Of(fs::current_path() / "lists" / "nowhere.csv") +
-                      "\" could not be opened");
+    CHECK(note == "Could not import: the file \"" + utf8Of(fs::current_path() / "lists" / "nowhere.csv") + "\" could not be opened");
     std::printf("  a relative path with no recordings folder said: %s\n", note.c_str());
 }
 
-// A FAILED IMPORT OPENS THE WINDOW, with the sentence and the target of the import that failed;
-// one that comes back with rows closes it, and a window that was never asked for stays shut.
+// A FAILED IMPORT OPENS THE WINDOW, with the sentence and the target of the import that failed; one that comes back with rows closes it, and a
+// window that was never asked for stays shut.
 void checkAFailedImportOpensTheWindow() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "dialog-fail").string());
@@ -1149,8 +1248,7 @@ void checkAFailedImportOpensTheWindow() {
     Access::importFile(app, missing2);
     waitImport(app);
     CHECK(Access::dialogOpen(app));
-    CHECK(Access::dialogReason(app) ==
-          "Could not import: the file \"" + missing2 + "\" could not be opened");
+    CHECK(Access::dialogReason(app) == "Could not import: the file \"" + missing2 + "\" could not be opened");
     // ...and an import that comes back with rows closes it and forgets the sentence.
     Access::importFile(app, writeCsv("dialog-ok-two", 3, 120.0));
     waitImport(app);
@@ -1169,8 +1267,8 @@ void checkAFailedImportOpensTheWindow() {
     CHECK(Access::exportNote(preset).empty());  // said in the AIRBAND section, as before
 }
 
-// The Import key pressed with its box empty opens the window (the press itself is ImGui's); the
-// state it leaves is the one a failure leaves, minus the sentence.
+// The Import key pressed with its box empty opens the window (the press itself is ImGui's); the state it leaves is the one a failure leaves, minus
+// the sentence.
 void checkTheWindowOpenedByHandHasNoSentence() {
     AppWindow app;
     CHECK(!Access::dialogOpen(app));
@@ -1182,8 +1280,8 @@ void checkTheWindowOpenedByHandHasNoSentence() {
     CHECK(Access::dialogInto(app).group == "Marine" && Access::dialogInto(app).tick);
 }
 
-// A WORKER THAT THREW comes back with no path at all (a default result): the sentence that says the
-// file "could not be read" still names the file that was asked for, and the window opens for it.
+// A WORKER THAT THREW comes back with no path at all (a default result): the sentence that says the file "could not be read" still names the
+// file that was asked for, and the window opens for it.
 void checkAThrowingImportWorkerStillNamesTheFile() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "dialog-throw").string());
@@ -1196,8 +1294,8 @@ void checkAThrowingImportWorkerStillNamesTheFile() {
     CHECK(Access::bookmarks(app).empty());
 }
 
-// The AIRBAND preset's Import key with its box EMPTY (airbandImportPreset, which returned) opens the
-// window for THAT preset - the name in the field, or "Manual" when it is empty - and reads nothing.
+// The AIRBAND preset's Import key with its box EMPTY (airbandImportPreset, which returned) opens the window for THAT preset - the name in the
+// field, or "Manual" when it is empty - and reads nothing.
 void checkAnEmptyPresetImportOpensTheWindowForThePreset() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "dialog-preset-empty").string());
@@ -1219,8 +1317,8 @@ void checkAnEmptyPresetImportOpensTheWindowForThePreset() {
     CHECK(!Access::dialogOpen(typed));
 }
 
-// A FILE DROPPED WHILE THE WINDOW IS OPEN goes to the window's target (a preset's rows join the
-// preset, ticked where the monitor plays them); with no window it goes as the file says.
+// A FILE DROPPED WHILE THE WINDOW IS OPEN goes to the window's target (a preset's rows join the preset, ticked where the monitor plays them);
+// with no window it goes as the file says.
 void checkADropFollowsTheWindowsTarget() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "dialog-drop").string());
@@ -1253,11 +1351,9 @@ void checkADropFollowsTheWindowsTarget() {
     CHECK(!Access::dialogReason(failing).empty());
 }
 
-// THE REASON IN THE USER'S LANGUAGE: the core's three English reasons are mapped to sentences that
-// go through tr(); any other reason passes through as it was.
-bool faultOnFaultList(const std::string& path) {
-    return path.size() >= 14 && path.compare(path.size() - 14, 14, "fault-list.csv") == 0;
-}
+// THE REASON IN THE USER'S LANGUAGE: the core's three English reasons are mapped to sentences that go through tr(); any other reason passes
+// through as it was.
+bool faultOnFaultList(const std::string& path) { return path.size() >= 14 && path.compare(path.size() - 14, 14, "fault-list.csv") == 0; }
 
 void checkTheReasonIsSaidInWords() {
     AppWindow app;
@@ -1299,9 +1395,12 @@ void checkTheReasonIsSaidInWords() {
     CHECK(Access::bookmarks(app).empty());
 }
 
-// AN IMPORT ASKED FOR WHILE ONE IS OUT KEEPS ITS OWN PRESET: remembered with the group it
-// was pressed for, the last one asked for wins, and a plain one remembered behind a preset's
-// is plain - the first's group does not leak into it, nor the second's into the first.
+// AN IMPORT ASKED FOR WHILE ONE IS OUT KEEPS ITS OWN PRESET: remembered with the group it was pressed for, the last one asked for wins, and a
+// plain one remembered behind a preset's is plain - the first's group does not leak into it, nor the second's into the first.
+//
+// (CONVERTED: master's two kinds of import shared one job, so a plain import "remembered behind" a preset's waited for it. The plain one is the
+// engine's worker now and a preset's the window's, so they run side by side; what is held is unchanged - each ends with its own group, tick and
+// note - and the hook is called once for each, two in all.)
 void checkASecondPresetImportKeepsItsOwnGroup() {
     {
         AppWindow app;
@@ -1315,22 +1414,25 @@ void checkASecondPresetImportKeepsItsOwnGroup() {
         Access::importInto(app, b, "Beta", true);    // remembered...
         Access::importInto(app, c, "Gamma", false);  // ...and replaced, with ITS group and tick
         CHECK(Access::importPending(app));
-        CHECK(pumpApp(app, 12000.0, [&] { return disk->finished.load() == 2 && !Access::importPending(app); }));
+        CHECK(pumpApp(app, 12000.0, [&] { return disk->finished.load() == 2 && !Access::importBusy(app); }));
         CHECK(disk->calls.load() == 2);
         const std::vector<cascade::core::Bookmark> list = Access::bookmarks(app);
         CHECK(list.size() == 5u);   // a's two and c's three; b's were never read
         std::size_t alpha = 0, gamma = 0, other = 0;
         for (const cascade::core::Bookmark& b2 : list) {
-            if (b2.group == "Alpha" && b2.scan) { ++alpha; }
-            else if (b2.group == "Gamma" && !b2.scan) { ++gamma; }
-            else { ++other; }
+            if (b2.group == "Alpha" && b2.scan) {
+                ++alpha;
+            } else if (b2.group == "Gamma" && !b2.scan) {
+                ++gamma;
+            } else {
+                ++other;
+            }
         }
         CHECK(alpha == 2u && gamma == 3u && other == 0u);
-        CHECK(Access::presetNote(app) ==
-              "Preset \"Gamma\": 3 read, 3 new; the monitor can play 3 of the rows read (AM or NFM).");
+        CHECK(Access::presetNote(app) == "Preset \"Gamma\": 3 read, 3 new; the monitor can play 3 of the rows read (AM or NFM).");
     }
     {
-        // A PLAIN import out, a preset's remembered behind it: the first is plain, the second is Beta's.
+        // A PLAIN import out, a preset's pressed behind it: the first is plain, the second is Beta's.
         AppWindow app;
         Access::setRecordDir(app, (g_scratch / "preset-again-2").string());
         const std::string a = writeCsv("preset-plain", 2, 100.0);
@@ -1339,21 +1441,23 @@ void checkASecondPresetImportKeepsItsOwnGroup() {
         Access::setHook(app, slowHook(disk));
         Access::importFile(app, a);
         Access::importInto(app, b, "Beta", true);
-        CHECK(pumpApp(app, 12000.0, [&] { return disk->finished.load() == 2 && !Access::importPending(app); }));
+        CHECK(pumpApp(app, 12000.0, [&] { return disk->finished.load() == 2 && !Access::importBusy(app); }));
         const std::vector<cascade::core::Bookmark> list = Access::bookmarks(app);
         CHECK(list.size() == 4u);
         std::size_t beta = 0, plain = 0;
         for (const cascade::core::Bookmark& b2 : list) {
-            if (b2.group == "Beta" && b2.scan) { ++beta; }
-            else if (b2.group.empty() && !b2.scan) { ++plain; }
+            if (b2.group == "Beta" && b2.scan) {
+                ++beta;
+            } else if (b2.group.empty() && !b2.scan) {
+                ++plain;
+            }
         }
         CHECK(beta == 2u && plain == 2u);
         CHECK(Access::exportNote(app) == "CSV: 2 entries read, 2 added");   // the plain one's, where it asked
-        CHECK(Access::presetNote(app) ==
-              "Preset \"Beta\": 2 read, 2 new; the monitor can play 2 of the rows read (AM or NFM).");
+        CHECK(Access::presetNote(app) == "Preset \"Beta\": 2 read, 2 new; the monitor can play 2 of the rows read (AM or NFM).");
     }
     {
-        // A PRESET'S import out, a plain one remembered behind it: the second is NOT Alpha's.
+        // A PRESET'S import out, a plain one pressed behind it: the second is NOT Alpha's.
         AppWindow app;
         Access::setRecordDir(app, (g_scratch / "preset-again-3").string());
         const std::string a = writeCsv("preset-alpha", 2, 100.0);
@@ -1362,20 +1466,22 @@ void checkASecondPresetImportKeepsItsOwnGroup() {
         Access::setHook(app, slowHook(disk));
         Access::importInto(app, a, "Alpha", true);
         Access::importFile(app, b);
-        CHECK(pumpApp(app, 12000.0, [&] { return disk->finished.load() == 2 && !Access::importPending(app); }));
+        CHECK(pumpApp(app, 12000.0, [&] { return disk->finished.load() == 2 && !Access::importBusy(app); }));
         const std::vector<cascade::core::Bookmark> list = Access::bookmarks(app);
         CHECK(list.size() == 4u);
         std::size_t alpha = 0, plain = 0;
         for (const cascade::core::Bookmark& b2 : list) {
-            if (b2.group == "Alpha" && b2.scan) { ++alpha; }
-            else if (b2.group.empty() && !b2.scan) { ++plain; }
+            if (b2.group == "Alpha" && b2.scan) {
+                ++alpha;
+            } else if (b2.group.empty() && !b2.scan) {
+                ++plain;
+            }
         }
         CHECK(alpha == 2u && plain == 2u);
     }
 }
 
-// THE KEY'S OWN READING OF THE FIELD: the name trimmed, "Manual" when nothing is left, and
-// the Import key's rows going to that name.
+// THE KEY'S OWN READING OF THE FIELD: the name trimmed, "Manual" when nothing is left, and the Import key's rows going to that name.
 void checkThePresetNameAndTheImportKey() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "preset-name").string());
@@ -1390,7 +1496,7 @@ void checkThePresetNameAndTheImportKey() {
     CHECK(Access::presetName(app) == "Manual");
 
     Access::importPreset(app, "  Marine ", writeMixedCsv("preset-key"));
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     const std::vector<cascade::core::Bookmark> list = Access::bookmarks(app);
     CHECK(list.size() == 4u);
     for (const cascade::core::Bookmark& b : list) {
@@ -1398,7 +1504,7 @@ void checkThePresetNameAndTheImportKey() {
     }
     // An empty name is Manual.
     Access::importPreset(app, "", writeCsv("preset-key-manual", 2, 130.0));
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     std::size_t manual = 0;
     for (const cascade::core::Bookmark& b : Access::bookmarks(app)) { manual += (b.group == "Manual") ? 1u : 0u; }
     CHECK(manual == 2u);
@@ -1417,9 +1523,8 @@ void checkThePresetNameAndTheImportKey() {
     CHECK(Access::presetNote(app) == "Removed 0 from \"Manual\"");
 }
 
-// EXPORT CSV writes the preset's rows - and only those - as the file the importer reads,
-// tick and favourite and a comma in a name kept, on the SDR# export's worker; the note names the
-// file and the section says so; the folder key follows a file that was written.
+// EXPORT CSV writes the preset's rows - and only those - as the file the importer reads, tick and favourite and a comma in a name kept, on the
+// engine's export worker; the note names the file and the section says so; the folder key follows a file that was written.
 void checkAnExportOfAPresetWritesOnlyThatGroup() {
     AppWindow app;
     const fs::path dir = g_scratch / "preset-export";
@@ -1437,10 +1542,11 @@ void checkAnExportOfAPresetWritesOnlyThatGroup() {
     auto disk = makeDisk(300);
     Access::setHook(app, slowHook(disk));
     Access::exportGroup(app, "Harbour");
+    Access::frames(app, 2);   // (the press reaches the engine on the frame after it, and its answer the one after that)
     CHECK(Access::exportPending(app));
     CHECK(Access::presetNote(app) == "Saving...");
     Access::exportGroup(app, "Harbour");   // pressed again: one export is ever out
-    CHECK(pumpApp(app, 8000.0, [&] { return !Access::exportPending(app); }));
+    CHECK(pumpApp(app, 8000.0, [&] { return !Access::exportPending(app) && Access::presetNote(app) != "Saving..."; }));
     CHECK(disk->calls.load() == 1);
 
     const std::vector<fs::path> files = filesIn(dir, ".csv");
@@ -1462,7 +1568,7 @@ void checkAnExportOfAPresetWritesOnlyThatGroup() {
         AppWindow back;
         Access::setRecordDir(back, (g_scratch / "preset-export-back").string());
         Access::importFile(back, files[0].string());
-        CHECK(pumpApp(back, 5000.0, [&] { return !Access::importPending(back); }));
+        waitImport(back);
         const std::vector<cascade::core::Bookmark> got = Access::bookmarks(back);
         CHECK(got.size() == 2u);
         const cascade::core::Bookmark* a = rowNamed(got, "Ch 16, north");
@@ -1478,22 +1584,55 @@ void checkAnExportOfAPresetWritesOnlyThatGroup() {
     Access::addRow(app, "Tower row", 118.9e6, "AM", "Tower & Co. 1", true);
     Access::setHook(app, nullptr);
     Access::exportGroup(app, "Tower & Co. 1");
-    CHECK(pumpApp(app, 8000.0, [&] { return !Access::exportPending(app); }));
+    CHECK(pumpApp(app, 8000.0, [&] { return Access::presetNote(app).rfind("Exported 1 to ", 0) == 0; }));
     bool named = false;
-    for (const fs::path& f : filesIn(dir, ".csv")) {
-        named = named || f.filename().string().rfind("foxsdr-Tower___Co__1-", 0) == 0u;
-    }
+    for (const fs::path& f : filesIn(dir, ".csv")) { named = named || f.filename().string().rfind("foxsdr-Tower___Co__1-", 0) == 0u; }
     CHECK(named);
 }
 
-// A GROUP WITH NO ROWS EXPORTS NOTHING and says so; a folder that cannot be written says
-// that instead, and no key to open it is offered.
+// THE EXPORT KEEPS EVERY NAME WHOLE (stub campaign B19; B7 lost it: the CSV was built from the BOOKMARKS list, which cuts a name at 95 bytes and a
+// group at 159). The engine writes it from its store. (The table's cut is held here through the name; the 159-byte group cut cannot be reached from
+// this window, whose field holds a group name of 127 bytes at most - the engine's own case is tests/test_engine_api_03.cpp's.)
+void checkAnExportOfAPresetKeepsEveryNameWhole() {
+    AppWindow app;
+    const fs::path dir = g_scratch / "preset-export-long";
+    Access::setRecordDir(app, dir.string());
+    // (The group is named in the section's field, which holds 127 bytes - a limit of the window's, as it was in master; the NAME is the one the table
+    // cut, at 95 bytes, and it is far past that.)
+    const std::string longName(200, 'n');
+    const std::string longGroup(120, 'g');
+    Access::addRow(app, longName, 121.5e6, "AM", longGroup, true, true);
+    Access::addRow(app, "short", 121.6e6, "AM", longGroup, false);
+    Access::exportGroup(app, longGroup);
+    CHECK(pumpApp(app, 8000.0, [&] { return Access::presetNote(app).rfind("Exported 2 to ", 0) == 0; }));
+    const std::vector<fs::path> files = filesIn(dir, ".csv");
+    CHECK(files.size() == 1u);
+    if (files.size() == 1u) {
+        const std::string text = readAll(files[0]);
+        CHECK(text.find(longName) != std::string::npos);                   // 200 bytes, not 95
+        CHECK(text.find(std::string(96, 'n')) != std::string::npos);
+        CHECK(text.find(longGroup) != std::string::npos);
+        // ...and it reads back as the same two rows.
+        AppWindow back;
+        Access::setRecordDir(back, (g_scratch / "preset-export-long-back").string());
+        Access::importFile(back, files[0].string());
+        waitImport(back);
+        const std::vector<cascade::core::Bookmark> got = Access::bookmarks(back);
+        CHECK(got.size() == 2u);
+        const cascade::core::Bookmark* a = rowNamed(got, longName);
+        CHECK(a != nullptr);
+        if (a != nullptr) { CHECK(a->group == longGroup && a->favourite && a->scan); }
+    }
+}
+
+// A GROUP WITH NO ROWS EXPORTS NOTHING and says so; a folder that cannot be written says that instead, and no key to open it is offered.
 void checkAnExportOfNothingAndOfABlockedFolder() {
     AppWindow app;
     const fs::path dir = g_scratch / "preset-export-none";
     Access::setRecordDir(app, dir.string());
     Access::addRow(app, "Only row", 118.7e6, "AM", "Elsewhere", true);
     Access::exportGroup(app, "Nothing");
+    Access::settle(app);
     CHECK(!Access::exportPending(app));   // no worker was started
     CHECK(Access::presetNote(app) == "Nothing to export: the preset \"Nothing\" has no rows.");
     CHECK(!Access::presetFolderKey(app));
@@ -1505,8 +1644,7 @@ void checkAnExportOfNothingAndOfABlockedFolder() {
     Access::setRecordDir(blocked, blockedDir("preset-export-blocker"));
     Access::addRow(blocked, "Row", 118.7e6, "AM", "Harbour", true);
     Access::exportGroup(blocked, "Harbour");
-    CHECK(pumpApp(blocked, 5000.0, [&] { return !Access::exportPending(blocked); }));
-    CHECK(Access::presetNote(blocked).rfind("Could not write ", 0) == 0);
+    CHECK(pumpApp(blocked, 5000.0, [&] { return Access::presetNote(blocked).rfind("Could not write ", 0) == 0; }));
     CHECK(!Access::presetFolderKey(blocked));
     CHECK(Access::exportNote(blocked).empty());
     // And once the folder is there, the same window exports.
@@ -1518,9 +1656,8 @@ void checkAnExportOfNothingAndOfABlockedFolder() {
 
 // --- THE 0.99.66 REVIEW'S FIXES, through the keys' own members ---------------------------
 
-// A TYPED FREQUENCY IS THE LIST'S OWN CHANNEL: 128.050 typed into the add row is 128050000 Hz,
-// not 128050000.00000001, so a ticked row an airport or a CSV put at 128050000 and the typed one
-// are ONE channel for the monitor (it compares frequencies exactly), not two strips on one carrier.
+// A TYPED FREQUENCY IS THE LIST'S OWN CHANNEL: 128.050 typed into the add row is 128050000 Hz, not 128050000.00000001, so a ticked row an airport
+// or a CSV put at 128050000 and the typed one are ONE channel for the monitor (it compares frequencies exactly), not two strips on one carrier.
 void checkATypedFrequencyIsTheSameChannelAsTheListsOwn() {
     AppWindow app;
     Access::addRow(app, "Tower", 128050000.0, "AM", "KXYZ", true);
@@ -1546,13 +1683,14 @@ void checkATypedFrequencyIsTheSameChannelAsTheListsOwn() {
     CHECK(Access::wantedChannels(app) == 761u);   // 761 frequencies, each typed AND listed: no doubles
 }
 
-// THE HEARD-TIME FLUSH DOES NOT HAND A FREQUENCY TO THE OTHER ROW: "High" (AM) and "HighNfm"
-// (NFM) are both ticked on 120.300 MHz, which is one channel, named and moded by the first of
-// them. The monitor writes the heard seconds of a channel into its row every 20 s through
-// FreqManager::updateAt, which used to re-insert the row AFTER its peers on that frequency:
-// "High" went behind "HighNfm", airbandWanted() named the NFM row, the running monitor saw a
-// different set (it compares frequency, width and mode) and restarted on the NFM row, which was
-// credited from then on. (CI's arm64 run 37462575079: High 19.95 s, HighNfm 6.08 s.)
+// THE HEARD-TIME FLUSH DOES NOT HAND A FREQUENCY TO THE OTHER ROW: "High" (AM) and "HighNfm" (NFM) are both ticked on 120.300 MHz, which is one
+// channel, named and moded by the first of them. The monitor writes the heard seconds of a channel into its row every 20 s through
+// FreqManager::updateAt, which used to re-insert the row AFTER its peers on that frequency: "High" went behind "HighNfm", airbandWanted() named the
+// NFM row, the running monitor saw a different set (it compares frequency, width and mode) and restarted on the NFM row, which was credited from
+// then on. (CI's arm64 run 37462575079: High 19.95 s, HighNfm 6.08 s.)
+//
+// (CONVERTED: the monitor is the engine's and credits a channel's heard time to the row BY ID, so a peer on the same frequency cannot be credited
+// by mistake; the case drives the engine's own wanted set and flush, and keeps master's assertions.)
 void checkTheHeardTimeFlushKeepsTheChannelOnItsRow() {
     AppWindow app;
     Access::addRow(app, "High", 120.3e6, "AM", "Manual", true);
@@ -1590,8 +1728,8 @@ void checkTheHeardTimeFlushKeepsTheChannelOnItsRow() {
         }
     }
 
-    // And the monitor's choice is the same set, so it keeps playing what it was playing: the
-    // same rows by name, and the same frequency, width and mode for each (what airbandFrame compares).
+    // And the monitor's choice is the same set, so it keeps playing what it was playing: the same rows by name, and the same frequency, width and
+    // mode for each (what airbandFrame compares).
     std::vector<std::string> namesAfter;
     const std::vector<cascade::core::MonitorChannel> after = Access::wanted(app, namesAfter);
     CHECK(namesAfter == namesBefore);
@@ -1621,11 +1759,9 @@ void checkTheHeardTimeFlushKeepsTheChannelOnItsRow() {
     }
 }
 
-// ADD AND IMPORT DO NOT CHANGE WHAT A LISTENING MONITOR PLAYS: with the monitor on, "every
-// ticked" stays "every ticked" and another preset's rows stay unplayed - setting the group on
-// show narrowed the playing set to the preset the row went to. Not listening, they put the
-// preset on show as before, but only a preset the monitor has something to play in: an import of
-// WFM rows alone adds bookmarks and leaves the combo where it was.
+// ADD AND IMPORT DO NOT CHANGE WHAT A LISTENING MONITOR PLAYS: with the monitor on, "every ticked" stays "every ticked" and another preset's rows
+// stay unplayed - setting the group on show narrowed the playing set to the preset the row went to. Not listening, they put the preset on show as
+// before, but only a preset the monitor has something to play in: an import of WFM rows alone adds bookmarks and leaves the combo where it was.
 void checkAddAndImportKeepAListeningMonitorsChoice() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "listen-keep").string());
@@ -1650,7 +1786,7 @@ void checkAddAndImportKeepAListeningMonitorsChoice() {
 
     // Import while listening: the rows join, the note is said, the monitor's choice stands.
     Access::importPreset(app, "Marine", writeMixedCsv("listen-keep"));
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::bookmarks(app).size() == 8u);
     CHECK(Access::presetNote(app).rfind("Preset \"Marine\": 4 read, 4 new;", 0) == 0);
     CHECK(Access::airbandGroup(app) == "KXYZ");
@@ -1658,11 +1794,10 @@ void checkAddAndImportKeepAListeningMonitorsChoice() {
     // Not listening: an import that brings the monitor something to play puts its preset on show.
     Access::setListening(app, false);
     Access::importPreset(app, "Harbour", writeCsv("listen-keep-two", 2, 140.0));
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::airbandGroup(app) == "Harbour");
 
-    // ...but not one that has nothing it can play: only WFM rows, added unticked, leave the
-    // group on show exactly as it was.
+    // ...but not one that has nothing it can play: only WFM rows, added unticked, leave the group on show exactly as it was.
     const fs::path wfmOnly = g_scratch / "listen-keep-wfm.csv";
     {
         std::ofstream f(wfmOnly, std::ios::binary);
@@ -1671,10 +1806,9 @@ void checkAddAndImportKeepAListeningMonitorsChoice() {
              "101.100,Radio Two,,WFM,150000\n";
     }
     Access::importPreset(app, "Broadcast", wfmOnly.string());
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::bookmarks(app).size() == 12u);   // both WFM rows are in the list...
-    CHECK(Access::presetNote(app) ==
-          "Preset \"Broadcast\": 2 read, 2 new; the monitor can play 0 of the rows read (AM or NFM).");
+    CHECK(Access::presetNote(app) == "Preset \"Broadcast\": 2 read, 2 new; the monitor can play 0 of the rows read (AM or NFM).");
     CHECK(Access::airbandGroup(app) == "Harbour");   // ...and the combo did not move
     for (const cascade::core::Bookmark& b : Access::bookmarks(app)) {
         if (b.group == "Broadcast") { CHECK(!b.scan); }
@@ -1682,17 +1816,15 @@ void checkAddAndImportKeepAListeningMonitorsChoice() {
     // The same with nothing on show: still nothing on show.
     Access::setAirbandGroup(app, "");
     Access::importPreset(app, "Broadcast2", wfmOnly.string());
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::airbandGroup(app).empty());
 }
 
-// AN AIRPORT LOOKUP DOES NOT CHANGE WHAT A LISTENING MONITOR PLAYS (0.99.69), as Add and Import
-// do not (above). The lookup used to put the airport's list on show unconditionally, and the group
-// on show is what the monitor plays: the running monitor compares airbandWanted() every frame and
-// restarts on a different set, so a lookup made while listening to one preset replaced it with the
-// airport's rows, and one made while listening to "every ticked" narrowed it to the airport's.
-// The rows are added either way - ticked as the table says - and the note says what the monitor
-// is still playing when the new rows are not part of it.
+// AN AIRPORT LOOKUP DOES NOT CHANGE WHAT A LISTENING MONITOR PLAYS (0.99.69), as Add and Import do not (above). The lookup used to put the
+// airport's list on show unconditionally, and the group on show is what the monitor plays: the running monitor compares airbandWanted() every
+// frame and restarts on a different set, so a lookup made while listening to one preset replaced it with the airport's rows, and one made while
+// listening to "every ticked" narrowed it to the airport's. The rows are added either way - ticked as the table says - and the note says what the
+// monitor is still playing when the new rows are not part of it.
 void checkAnAirportLookupKeepsAListeningMonitorsChoice() {
     namespace cc = cascade::core;
     const std::vector<const cc::Airport*> ord = cc::findAirports(cc::airbandTable(), "KORD");
@@ -1716,9 +1848,8 @@ void checkAnAirportLookupKeepsAListeningMonitorsChoice() {
     CHECK(Access::airbandNote(app).find("added to the frequency list") != std::string::npos);
     CHECK(Access::airbandNote(app).find("keeps playing") == std::string::npos);
 
-    // Listening to ANOTHER preset: the rows are added, the monitor stays on its preset (the
-    // channels it plays are the one Tower row it had, not the airport's), and the note says
-    // so and which list to choose.
+    // Listening to ANOTHER preset: the rows are added, the monitor stays on its preset (the channels it plays are the one Tower row it had, not
+    // the airport's), and the note says so and which list to choose.
     Access::setAirbandGroup(app, "KXYZ");
     Access::setListening(app, true);
     std::vector<std::string> names;
@@ -1731,8 +1862,7 @@ void checkAnAirportLookupKeepsAListeningMonitorsChoice() {
     CHECK(Access::airbandNote(app).find(mdwGroup) != std::string::npos);
     CHECK(Access::listening(app));
 
-    // Listening to "every ticked": nothing is narrowed, and there is no "keeps playing" for a
-    // monitor that plays everything ticked.
+    // Listening to "every ticked": nothing is narrowed, and there is no "keeps playing" for a monitor that plays everything ticked.
     Access::setAirbandGroup(app, "");
     const std::size_t before = Access::wantedChannels(app);
     Access::lookupAirport(app, "KORD");   // already in the list: added 0, and the group not moved
@@ -1753,9 +1883,8 @@ void checkAnAirportLookupKeepsAListeningMonitorsChoice() {
     CHECK(Access::airbandGroup(app) == mdwGroup);
 }
 
-// REMOVE PRESET ON THE PRESET THE MONITOR IS PLAYING stops it, and says why: with its group gone
-// the monitor would otherwise be cut again from "every ticked row" of the whole list - a
-// different set from the one chosen - or stopped with no reason when none was ticked.
+// REMOVE PRESET ON THE PRESET THE MONITOR IS PLAYING stops it, and says why: with its group gone the monitor would otherwise be cut again from
+// "every ticked row" of the whole list - a different set from the one chosen - or stopped with no reason when none was ticked.
 void checkRemovingThePresetBeingListenedToStopsTheMonitor() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "listen-remove").string());
@@ -1773,8 +1902,7 @@ void checkRemovingThePresetBeingListenedToStopsTheMonitor() {
     CHECK(Access::airbandGroup(app).empty());
     CHECK(Access::bookmarks(app).size() == 1u);
 
-    // Listening to Tower, ANOTHER preset removed (one that is not even there): it plays on, and
-    // nothing is said about a stop.
+    // Listening to Tower, ANOTHER preset removed (one that is not even there): it plays on, and nothing is said about a stop.
     Access::setAirbandNote(app, "");
     Access::setAirbandGroup(app, "Tower");
     Access::setListening(app, true);
@@ -1784,8 +1912,8 @@ void checkRemovingThePresetBeingListenedToStopsTheMonitor() {
     CHECK(Access::airbandGroup(app) == "Tower");
     CHECK(Access::presetNote(app) == "Removed 0 from \"Marine\"");
 
-    // Listening to "every ticked" (no group), a preset removed: THIS key does not stop it - the
-    // frame loop cuts the blocks again from what is still ticked, as it does for any tick changed.
+    // Listening to "every ticked" (no group), a preset removed: THIS key does not stop it - the frame loop cuts the blocks again from what is still
+    // ticked, as it does for any tick changed.
     Access::addRow(app, "Ch 16", 156.8e6, "NFM", "Marine", true);
     Access::setAirbandGroup(app, "");
     Access::removePreset(app, "Marine");
@@ -1802,10 +1930,9 @@ void checkRemovingThePresetBeingListenedToStopsTheMonitor() {
     CHECK(Access::airbandGroup(app).empty());
 }
 
-// A WORKER THAT THROWS still says it in the section that asked. The note's destination is
-// kept on the window's thread when the export starts: a throw returns a default result, which
-// used to send a preset's "Could not write" to the Bookmarks section and leave this section's
-// "Saving..." up for good. And one export's destination does not follow into the next.
+// A WORKER THAT THROWS still says it in the section that asked. The note's destination is kept on the pass when the export starts: a throw
+// returns a default result, which used to send a preset's "Could not write" to the Bookmarks section and leave this section's "Saving..." up for
+// good. And one export's destination does not follow into the next.
 void checkAThrowingExportWorkerAnswersTheSectionThatAsked() {
     {
         AppWindow app;
@@ -1813,10 +1940,9 @@ void checkAThrowingExportWorkerAnswersTheSectionThatAsked() {
         Access::addRow(app, "Row", 118.7e6, "AM", "Harbour", true);
         Access::setHook(app, [] { throw std::runtime_error("the disk threw"); });
         Access::exportGroup(app, "Harbour");
-        CHECK(Access::presetNote(app) == "Saving...");
-        CHECK(pumpApp(app, 5000.0, [&] { return !Access::exportPending(app); }));
+        Access::frames(app, 2);
+        CHECK(pumpApp(app, 5000.0, [&] { return Access::presetNote(app).rfind("Could not write ", 0) == 0; }));
         CHECK(Access::presetNote(app) != "Saving...");
-        CHECK(Access::presetNote(app).rfind("Could not write ", 0) == 0);
         CHECK(!Access::presetFolderKey(app));
         CHECK(Access::exportNote(app).empty());   // not in the Bookmarks section
         // The next export, from the Bookmarks section, goes to that section.
@@ -1832,8 +1958,7 @@ void checkAThrowingExportWorkerAnswersTheSectionThatAsked() {
         Access::addBookmarks(app, 2);
         Access::setHook(app, [] { throw std::runtime_error("the disk threw"); });
         Access::exportBookmarks(app);
-        CHECK(pumpApp(app, 5000.0, [&] { return !Access::exportPending(app); }));
-        CHECK(Access::exportNote(app).rfind("Could not write ", 0) == 0);
+        CHECK(pumpApp(app, 5000.0, [&] { return Access::exportNote(app).rfind("Could not write ", 0) == 0; }));
         CHECK(Access::presetNote(app).empty());   // not in the AIRBAND section
         // The next export, a preset's, goes to the AIRBAND section.
         Access::setHook(app, nullptr);
@@ -1844,8 +1969,8 @@ void checkAThrowingExportWorkerAnswersTheSectionThatAsked() {
     }
 }
 
-// THE PRESET IMPORT SAYS WHEN SDR#'s CONVERTER SHIFT WAS NOT APPLIED, as the Bookmarks section's
-// does: an SDR# file with Shift values lands at the frequencies as written, and the note says so.
+// THE PRESET IMPORT SAYS WHEN SDR#'s CONVERTER SHIFT WAS NOT APPLIED, as the Bookmarks section's does: an SDR# file with Shift values lands at the
+// frequencies as written, and the note says so.
 void checkAPresetImportSaysShiftValuesWereNotApplied() {
     AppWindow app;
     Access::setRecordDir(app, (g_scratch / "preset-shift").string());
@@ -1862,7 +1987,7 @@ void checkAPresetImportSaysShiftValuesWereNotApplied() {
              "</ArrayOfMemoryEntry>";
     }
     Access::importPreset(app, "Marine", shifted.string());
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::bookmarks(app).size() == 2u);
     CHECK(Access::presetNote(app) ==
           "Preset \"Marine\": 2 read, 2 new; the monitor can play 2 of the rows read (AM or NFM). "
@@ -1880,7 +2005,7 @@ void checkAPresetImportSaysShiftValuesWereNotApplied() {
              "</ArrayOfMemoryEntry>";
     }
     Access::importPreset(app, "Marine", both.string());
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+    waitImport(app);
     CHECK(Access::presetNote(app) ==
           "Preset \"Marine\": 1 read, 1 new; the monitor can play 1 of the rows read (AM or NFM). "
           "Some rows of the file had no usable frequency. Converter Shift values were not applied.");
@@ -1893,9 +2018,8 @@ void checkAPresetImportSaysShiftValuesWereNotApplied() {
              "<DetectorType>AM</DetectorType><Shift>0</Shift></MemoryEntry></ArrayOfMemoryEntry>";
     }
     Access::importPreset(app, "Marine", clean.string());
-    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
-    CHECK(Access::presetNote(app) ==
-          "Preset \"Marine\": 1 read, 1 new; the monitor can play 1 of the rows read (AM or NFM).");
+    waitImport(app);
+    CHECK(Access::presetNote(app) == "Preset \"Marine\": 1 read, 1 new; the monitor can play 1 of the rows read (AM or NFM).");
     CHECK(Access::presetNote(app).find("Shift") == std::string::npos);
 }
 
@@ -1922,20 +2046,18 @@ void checkAPatchRecordingOpenNeverHoldsAFrame() {
     CHECK(s.worstGapMs < 800.0);
     CHECK(!disk->askedFromCaller.load());
     CHECK(disk->calls.load() == 1);
-    // What the synchronous open gave: the radio runs, the node took the
-    // recording's rate (the 2.4 MS/s it was given is not what the file holds), and
-    // nothing is said against it.
+    // What the synchronous open gave: the radio runs, the node took the recording's rate (the 2.4 MS/s it was given is not what the file holds),
+    // and nothing is said against it.
     CHECK(Access::radioRunning(app, id));
     CHECK(!Access::radioPending(app, id));
     CHECK(Access::nodeRate(app, id) == 250000.0);
     CHECK(Access::radioError(app, id).empty());
-    std::printf("  patch radio recording open: %d frames in 3.6 s, worst gap %.0f ms, hang reports %u\n",
-                s.frames, s.worstGapMs, w.reportsWritten());
+    std::printf("  patch radio recording open: %d frames in 3.6 s, worst gap %.0f ms, hang reports %u\n", s.frames, s.worstGapMs, w.reportsWritten());
     w.stop();
 }
 
-// A recording that is not there: the node says what it always said, once, and is not
-// retried every frame - only when its device is changed, which then works.
+// A recording that is not there: the node says what it always said, once, and is not retried every frame - only when its device is changed,
+// which then works.
 void checkAMissingPatchRecordingSaysWhatItSaid() {
     const fs::path dir = g_scratch / "patch-rec-missing";
     makeRecording(dir);
@@ -1943,8 +2065,7 @@ void checkAMissingPatchRecordingSaysWhatItSaid() {
     const std::string missing = (g_scratch / "no-such-recording.wav").string();
     const auto id = Access::addFileRadio(app, missing);
     std::string want;
-    CHECK(cascade::core::patch::openIqRecording(cascade::core::patch::makeIqFileKey(missing), 0.0,
-                                                want) == nullptr);
+    CHECK(cascade::core::patch::openIqRecording(cascade::core::patch::makeIqFileKey(missing), 0.0, want) == nullptr);
     CHECK(!want.empty());
     auto disk = makeDisk(0);
     Access::setHook(app, slowHook(disk));
@@ -1970,8 +2091,7 @@ void checkAMissingPatchRecordingSaysWhatItSaid() {
     CHECK(Access::nodeRate(app, id) == 250000.0);
 }
 
-// A node switched off while its recording opens: the answer is dropped, the file closed,
-// and no radio appears.
+// A node switched off while its recording opens: the answer is dropped, the file closed, and no radio appears.
 void checkARecordingNodeSwitchedOffWhileOpeningIsDropped() {
     const fs::path dir = g_scratch / "patch-rec-off";
     makeRecording(dir);
@@ -2017,9 +2137,7 @@ void checkExitWhileAPatchRecordingOpens() {
     }
     CHECK(destroyMs < 2000.0);
     const double until = nowMs() + 10000.0;
-    while (nowMs() < until && disk->finished.load() < 1) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
+    while (nowMs() < until && disk->finished.load() < 1) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
     CHECK(disk->finished.load() == 1);
 }
 
@@ -2033,8 +2151,7 @@ void checkTheScreenshotNeverHoldsAFrame() {
     const std::string windows = "0\t0\t800\t600\tDebug\n10\t20\t300\t200\tSource\n";
     stallCase("screenshot", app, disk, [&] {
         Access::shot(app, dir.string(), 1, testImage(), windows);
-        // F12 again while the first is still being written: skipped, said in the
-        // log, never a second worker and never a stalled frame.
+        // F12 again while the first is still being written: skipped, said in the log, never a second worker and never a stalled frame.
         Access::shot(app, dir.string(), 2, testImage(), windows);
     });
     const std::vector<fs::path> bmps = filesIn(dir, ".bmp");
@@ -2053,14 +2170,14 @@ void checkTheScreenshotNeverHoldsAFrame() {
     CHECK(pumpApp(app, 8000.0, [&] { return fs::exists(dir / "shot-3.bmp", ec); }));
 }
 
-// A picture that cannot be written (the folder is not there) is a log line and
-// nothing else: no throw reaches the frame loop and the next one still works.
+// A picture that cannot be written (the folder is not there) is a log line and nothing else: no throw reaches the frame loop and the next one
+// still works.
 void checkAFailedScreenshotIsContained() {
     AppWindow app;
     const fs::path dir = g_scratch / "shot-nowhere";
     Access::shot(app, (dir / "missing").string(), 1, testImage(), "x\n");
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    Access::poll(app);
+    Access::frame(app);
     std::error_code ec;
     fs::create_directories(dir, ec);
     Access::shot(app, dir.string(), 2, testImage(), "y\n");
@@ -2070,9 +2187,9 @@ void checkAFailedScreenshotIsContained() {
 
 // --- 3. THE EDGES --------------------------------------------------------------
 
-// APPLICATION EXIT WITH EVERY WORKER WEDGED: the window is destroyed without
-// waiting for the disk (bounded by the quit grace for each, not by the 2.5 s the
-// disk is taking), and the abandoned workers finish by themselves.
+// APPLICATION EXIT WITH EVERY WORKER WEDGED: the window is destroyed without waiting for the disk (bounded by the quit grace for each, not by the
+// 2.5 s the disk is taking), and the abandoned workers finish by themselves. (Three of the five are the engine's - the recordings list, the export
+// and the import - and two the window's - the picture and the screenshot.)
 void checkExitWhileEveryWorkerIsWedged() {
     auto disk = makeDisk(2500);
     double destroyMs = 0.0;
@@ -2088,22 +2205,36 @@ void checkExitWhileEveryWorkerIsWedged() {
         Access::exportBookmarks(*app);
         Access::shot(*app, dir.string(), 1, testImage(), "z\n");
         Access::importFile(*app, writeCsv("exit", 2, 130.0));
+        Access::frames(*app, 2);   // (the presses reach the engine on the frame after them)
         CHECK(Access::imagePending(*app));
         CHECK(Access::exportPending(*app));
         CHECK(Access::importPending(*app));
+        CHECK(disk->calls.load() == 5 || pumpApp(*app, 3000.0, [&] { return disk->calls.load() == 5; }));
         const double t0 = nowMs();
         app.reset();
         destroyMs = nowMs() - t0;
     }
-    // Five wedged workers, each given the 250 ms grace in ~AppWindow and then let
-    // go: well inside the 2.5 s the disk is taking.
+    // Five wedged workers, each given the 250 ms grace in ~AppWindow / ~Engine and then let go: well inside the 2.5 s the disk is taking.
     CHECK(destroyMs < 2000.0);
     std::printf("  exit with five workers wedged: ~AppWindow took %.0f ms\n", destroyMs);
     const double until = nowMs() + 10000.0;
-    while (nowMs() < until && disk->finished.load() < 5) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
+    while (nowMs() < until && disk->finished.load() < 5) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
     CHECK(disk->finished.load() == 5);  // the abandoned workers ran to the end by themselves
+}
+
+// While a case is being worked on: FOXSDR_TEST_ONLY=<part of its name>[,<another>] runs only the cases whose names contain one of them.
+bool selected(const char* name) {
+    const char* only = std::getenv("FOXSDR_TEST_ONLY");
+    if (only == nullptr || *only == '\0') { return true; }
+    const std::string list(only);
+    std::size_t at = 0;
+    while (at <= list.size()) {
+        std::size_t to = list.find(',', at);
+        if (to == std::string::npos) { to = list.size(); }
+        if (to > at && std::string(name).find(list.substr(at, to - at)) != std::string::npos) { return true; }
+        at = to + 1;
+    }
+    return false;
 }
 
 }  // namespace
@@ -2111,45 +2242,47 @@ void checkExitWhileEveryWorkerIsWedged() {
 int main() {
     isolate();
     ImGui::CreateContext();
-    checkTheSynchronousCallIsReported();
-    checkTheRecordingsListNeverHoldsAFrame();
-    checkASecondListingIsRemembered();
-    checkThePictureSaveNeverHoldsAFrame();
-    checkAFailedPictureSaveSaysWhatItSaid();
-    checkTheExportNeverHoldsAFrame();
-    checkAFailedExportSaysWhatItSaid();
-    checkTheImportNeverHoldsAFrame();
-    checkASecondImportIsRemembered();
-    checkAnImportSaysWhatItSaid();
-    checkAnImportIntoAPresetForcesTheGroupAndTheTick();
-    checkABareNameIsLookedForInTheRecordingsFolder();
-    checkABareUtf8NameInAUtf8RecordingsFolder();
-    checkANameWithAFolderPartIsRetriedInTheRecordingsFolder();
-    checkTheShapesAnImportPathArrivesIn();
-    checkAFailedImportOpensTheWindow();
-    checkTheWindowOpenedByHandHasNoSentence();
-    checkAThrowingImportWorkerStillNamesTheFile();
-    checkAnEmptyPresetImportOpensTheWindowForThePreset();
-    checkADropFollowsTheWindowsTarget();
-    checkTheReasonIsSaidInWords();
-    checkASecondPresetImportKeepsItsOwnGroup();
-    checkThePresetNameAndTheImportKey();
-    checkAnExportOfAPresetWritesOnlyThatGroup();
-    checkAnExportOfNothingAndOfABlockedFolder();
-    checkATypedFrequencyIsTheSameChannelAsTheListsOwn();
-    checkTheHeardTimeFlushKeepsTheChannelOnItsRow();
-    checkAddAndImportKeepAListeningMonitorsChoice();
-    checkAnAirportLookupKeepsAListeningMonitorsChoice();
-    checkRemovingThePresetBeingListenedToStopsTheMonitor();
-    checkAThrowingExportWorkerAnswersTheSectionThatAsked();
-    checkAPresetImportSaysShiftValuesWereNotApplied();
-    checkAPatchRecordingOpenNeverHoldsAFrame();
-    checkAMissingPatchRecordingSaysWhatItSaid();
-    checkARecordingNodeSwitchedOffWhileOpeningIsDropped();
-    checkExitWhileAPatchRecordingOpens();
-    checkTheScreenshotNeverHoldsAFrame();
-    checkAFailedScreenshotIsContained();
-    checkExitWhileEveryWorkerIsWedged();
+    if (selected("checkTheSynchronousCallIsReported")) { checkTheSynchronousCallIsReported(); }
+    if (selected("checkTheRecordingsListNeverHoldsAFrame")) { checkTheRecordingsListNeverHoldsAFrame(); }
+    if (selected("checkASecondListingIsRemembered")) { checkASecondListingIsRemembered(); }
+    if (selected("checkThePictureSaveNeverHoldsAFrame")) { checkThePictureSaveNeverHoldsAFrame(); }
+    if (selected("checkAFailedPictureSaveSaysWhatItSaid")) { checkAFailedPictureSaveSaysWhatItSaid(); }
+    if (selected("checkTheExportNeverHoldsAFrame")) { checkTheExportNeverHoldsAFrame(); }
+    if (selected("checkAFailedExportSaysWhatItSaid")) { checkAFailedExportSaysWhatItSaid(); }
+    if (selected("checkTheImportNeverHoldsAFrame")) { checkTheImportNeverHoldsAFrame(); }
+    if (selected("checkASecondImportIsRemembered")) { checkASecondImportIsRemembered(); }
+    if (selected("checkAnImportSaysWhatItSaid")) { checkAnImportSaysWhatItSaid(); }
+    if (selected("checkAnImportIntoAPresetForcesTheGroupAndTheTick")) { checkAnImportIntoAPresetForcesTheGroupAndTheTick(); }
+    if (selected("checkAnImportIntoAPresetKeepsTheFavouriteColumn")) { checkAnImportIntoAPresetKeepsTheFavouriteColumn(); }
+    if (selected("checkABareNameIsLookedForInTheRecordingsFolder")) { checkABareNameIsLookedForInTheRecordingsFolder(); }
+    if (selected("checkABareUtf8NameInAUtf8RecordingsFolder")) { checkABareUtf8NameInAUtf8RecordingsFolder(); }
+    if (selected("checkANameWithAFolderPartIsRetriedInTheRecordingsFolder")) { checkANameWithAFolderPartIsRetriedInTheRecordingsFolder(); }
+    if (selected("checkTheShapesAnImportPathArrivesIn")) { checkTheShapesAnImportPathArrivesIn(); }
+    if (selected("checkAFailedImportOpensTheWindow")) { checkAFailedImportOpensTheWindow(); }
+    if (selected("checkTheWindowOpenedByHandHasNoSentence")) { checkTheWindowOpenedByHandHasNoSentence(); }
+    if (selected("checkAThrowingImportWorkerStillNamesTheFile")) { checkAThrowingImportWorkerStillNamesTheFile(); }
+    if (selected("checkAnEmptyPresetImportOpensTheWindowForThePreset")) { checkAnEmptyPresetImportOpensTheWindowForThePreset(); }
+    if (selected("checkADropFollowsTheWindowsTarget")) { checkADropFollowsTheWindowsTarget(); }
+    if (selected("checkTheReasonIsSaidInWords")) { checkTheReasonIsSaidInWords(); }
+    if (selected("checkASecondPresetImportKeepsItsOwnGroup")) { checkASecondPresetImportKeepsItsOwnGroup(); }
+    if (selected("checkThePresetNameAndTheImportKey")) { checkThePresetNameAndTheImportKey(); }
+    if (selected("checkAnExportOfAPresetWritesOnlyThatGroup")) { checkAnExportOfAPresetWritesOnlyThatGroup(); }
+    if (selected("checkAnExportOfAPresetKeepsEveryNameWhole")) { checkAnExportOfAPresetKeepsEveryNameWhole(); }
+    if (selected("checkAnExportOfNothingAndOfABlockedFolder")) { checkAnExportOfNothingAndOfABlockedFolder(); }
+    if (selected("checkATypedFrequencyIsTheSameChannelAsTheListsOwn")) { checkATypedFrequencyIsTheSameChannelAsTheListsOwn(); }
+    if (selected("checkTheHeardTimeFlushKeepsTheChannelOnItsRow")) { checkTheHeardTimeFlushKeepsTheChannelOnItsRow(); }
+    if (selected("checkAddAndImportKeepAListeningMonitorsChoice")) { checkAddAndImportKeepAListeningMonitorsChoice(); }
+    if (selected("checkAnAirportLookupKeepsAListeningMonitorsChoice")) { checkAnAirportLookupKeepsAListeningMonitorsChoice(); }
+    if (selected("checkRemovingThePresetBeingListenedToStopsTheMonitor")) { checkRemovingThePresetBeingListenedToStopsTheMonitor(); }
+    if (selected("checkAThrowingExportWorkerAnswersTheSectionThatAsked")) { checkAThrowingExportWorkerAnswersTheSectionThatAsked(); }
+    if (selected("checkAPresetImportSaysShiftValuesWereNotApplied")) { checkAPresetImportSaysShiftValuesWereNotApplied(); }
+    if (selected("checkAPatchRecordingOpenNeverHoldsAFrame")) { checkAPatchRecordingOpenNeverHoldsAFrame(); }
+    if (selected("checkAMissingPatchRecordingSaysWhatItSaid")) { checkAMissingPatchRecordingSaysWhatItSaid(); }
+    if (selected("checkARecordingNodeSwitchedOffWhileOpeningIsDropped")) { checkARecordingNodeSwitchedOffWhileOpeningIsDropped(); }
+    if (selected("checkExitWhileAPatchRecordingOpens")) { checkExitWhileAPatchRecordingOpens(); }
+    if (selected("checkTheScreenshotNeverHoldsAFrame")) { checkTheScreenshotNeverHoldsAFrame(); }
+    if (selected("checkAFailedScreenshotIsContained")) { checkAFailedScreenshotIsContained(); }
+    if (selected("checkExitWhileEveryWorkerIsWedged")) { checkExitWhileEveryWorkerIsWedged(); }
     ImGui::DestroyContext();
     std::error_code ec;
     if (g_checksFailed == 0) { fs::remove_all(g_scratch, ec); }

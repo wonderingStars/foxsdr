@@ -190,7 +190,7 @@ std::int32_t Engine::applyBookmarkAddRows(const FoxCommand& c, const std::string
         if (!line.empty() && line.back() == '\r') { line.pop_back(); }
         if (line.empty()) { continue; }
         const std::vector<std::string> f = tabFields(line, 6);
-        if (f.size() < 4) { continue; }   // a row names at least its frequency, mode, width and tick
+        if (f.size() < 4) { continue; }   // a row names at least its frequency, mode, width and flags (tick, favourite)
         char* end = nullptr;
         const double hz = std::strtod(f[0].c_str(), &end);
         if (end == f[0].c_str() || !std::isfinite(hz) || !(hz > 0.0)) { continue; }
@@ -199,7 +199,12 @@ std::int32_t Engine::applyBookmarkAddRows(const FoxCommand& c, const std::string
         b.mode = f[1].empty() ? std::string("AM") : f[1];
         const double bw = std::strtod(f[2].c_str(), &end);
         b.bandwidthHz = (end != f[2].c_str() && std::isfinite(bw) && bw > 0.0) ? bw : cc::defaultBandwidthForMode(b.mode);
-        b.scan = f[3] == "1";
+        // THE FOURTH FIELD IS A WORD OF FLAGS (stub campaign B19): bit 0 ticked, bit 1 favourite. "0" and "1" are what every sender wrote before the
+        // favourite was carried, and mean what they meant; a file's favourite column therefore survives an import into a preset.
+        const long flags = std::strtol(f[3].c_str(), &end, 10);
+        const bool flagsOk = end != f[3].c_str() && flags >= 0 && flags <= 3;
+        b.scan = flagsOk && (flags & 1) != 0;
+        b.favourite = flagsOk && (flags & 2) != 0;
         if (f.size() > 4) { b.group = f[4]; }
         if (f.size() > 5) { b.name = f[5]; }
         if (typed && b.name.empty()) {

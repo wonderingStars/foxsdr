@@ -453,6 +453,13 @@ std::uint64_t Engine::apiListsFingerprint() {
         if (!tp.loaded || tp.txAudio == nullptr) { continue; }
         f.value(txPluginBitsOf(apiPluginKeys_[i]));
     }
+    // THE DISK'S WORKERS (stub campaign B19): whether an I/Q file's open or a list's export is out (the Source section's Open key and the Export keys are
+    // disabled and say so), and the last export's answer - `seq` moves on each, the rest is what the AIRBAND section words. Members: nothing allocates.
+    f.value(iqOpenPending());
+    f.value(bookmarkExportPending());
+    f.value(exportLast_.seq);
+    f.value(bookmarkImportPending());
+    f.value(importLast_.seq);
     // The status lines.
     for (const std::string* t : {&sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &tuneMismatchNote_,
                                  &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
@@ -1083,6 +1090,22 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // against; the source's own rate (sampleRateHz) differs from it after a
     // change of rate the chain refused.
     fact("bookmarks.version", std::to_string(freqMgr_.version()));
+    // THE LIST'S EXPORT IS ON A WORKER (stub campaign B19): "1" while one is being written; and the last one's answer - how many finished (seq), whether it
+    // wrote the file, whether it was a preset's CSV (the AIRBAND section words that one; the Bookmarks section's is the engine's note), the rows and the
+    // path the note names.
+    // The same for the import (stub campaign B19): the file is read on a worker, so what it found is a fact, not the op's answer. `note` is the whole
+    // sentence (the answer's message is cut at 127 bytes): "Could not import: the file ... could not be opened" for a read that found nothing.
+    fact("bookmarks.importing", bookmarkImportPending() ? "1" : "0");
+    fact("bookmarks.import.seq", std::to_string(importLast_.seq));
+    fact("bookmarks.import.ok", importLast_.ok ? "1" : "0");
+    fact("bookmarks.import.note", importLast_.note);
+    fact("bookmarks.import.path", importLast_.path, true);
+    fact("bookmarks.exporting", bookmarkExportPending() ? "1" : "0");
+    fact("bookmarks.export.seq", std::to_string(exportLast_.seq));
+    fact("bookmarks.export.ok", exportLast_.ok ? "1" : "0");
+    fact("bookmarks.export.preset", exportLast_.preset ? "1" : "0");
+    fact("bookmarks.export.count", std::to_string(exportLast_.count));
+    fact("bookmarks.export.path", exportLast_.shown, true);
     {
         char rateText[40];
         std::snprintf(rateText, sizeof(rateText), "%.17g", pipeline_.inputRateHz());
@@ -1341,6 +1364,8 @@ void Engine::buildApiListsSource(ApiListBlock& b) {
     // WHAT THE LAST SCAN SAID ABOUT UHD'S FIRMWARE IMAGES (master 0.99.85, re-expressed in the 0.99.90 merge): "1" when UHD itself
     // reported it has none, and (separately) when the scan's USB listing held a USRP. The Source section draws
     // gui::uhdImagesMissingHint(both) under the list, and the radio-setup page's images finding reads the first.
+    // AN I/Q FILE'S OPEN IS ON A WORKER (stub campaign B19): "1" while the header is being read, so the key is disabled and the line says it waits for the disk.
+    fact("source.iqOpening", iqOpenPending() ? "1" : "0");
     fact("source.uhdNoImages", soapyUhdNoImages_ ? "1" : "0");
     fact("source.usrpOnUsb", soapyUsrpOnUsb_ ? "1" : "0");
     fact("source.plutoUri", plutoUri_, true);

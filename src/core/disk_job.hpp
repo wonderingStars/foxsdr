@@ -1,5 +1,7 @@
 // disk_job.hpp - one piece of disk work, done on a worker, so that no frame ever
-// waits for a disk (0.99.64).
+// waits for a disk (0.99.64). It lives in core/ since stub campaign B19: the ENGINE has disk work of its own now (src/engine/engine_disk_work.cpp) and may
+// not include src/gui, and the window still has some (src/gui/app_window_disk_work.cpp). Namespace cascade::core; the window's files say
+// `using cascade::core::DiskJob;`.
 //
 // WHY THIS EXISTS. Three field freezes in 0.99.59 - 0.99.63 were one defect: a
 // file-system call on the thread that draws the window, made against a disk that
@@ -50,8 +52,8 @@
 // write never lands after a newer one" wants core/background_saver.hpp.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-#ifndef CASCADE_GUI_DISK_JOB_HPP
-#define CASCADE_GUI_DISK_JOB_HPP
+#ifndef CASCADE_CORE_DISK_JOB_HPP
+#define CASCADE_CORE_DISK_JOB_HPP
 
 #include <atomic>
 #include <chrono>
@@ -64,7 +66,7 @@
 
 #include "core/diag_log.hpp"
 
-namespace cascade::gui {
+namespace cascade::core {
 
 template <class Result>
 class DiskJob {
@@ -136,7 +138,7 @@ public:
         lastThrew_ = threw_ != nullptr && threw_->load();
         threw_.reset();
         if (stuckReported_) {
-            cascade::core::diagLogf("%s: finished after %.0f s", label_, tookS);
+            diagLogf("%s: finished after %.0f s", label_, tookS);
             stuckReported_ = false;
         }
         return true;
@@ -178,7 +180,7 @@ private:
             return;
         }
         stuckReported_ = true;
-        cascade::core::diagWarnf(
+        diagWarnf(
             "%s: has not finished for %.0f s - it is waiting on a worker thread, the window "
             "is not",
             label_, sinceStartS());
@@ -193,6 +195,6 @@ private:
     bool lastThrew_ = false;
 };
 
-}  // namespace cascade::gui
+}  // namespace cascade::core
 
-#endif  // CASCADE_GUI_DISK_JOB_HPP
+#endif  // CASCADE_CORE_DISK_JOB_HPP

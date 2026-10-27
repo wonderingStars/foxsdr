@@ -448,6 +448,17 @@ struct AppWindowTestAccess {
     static void setSquelch(cascade::engine::Engine& e, float db) { e.squelchDb_ = db; }
     static cascade::core::FreqManager& store(cascade::engine::Engine& e) { return e.freqMgr_; }
     static const std::string& note(cascade::engine::Engine& e) { return e.bookmarkImportNote_; }
+    // THE ENGINE'S DISK WORKERS (stub campaign B19): the I/Q file's open, the list's import and export and the recordings list are workers', and
+    // their answers are counted here (each finished one moves its count). `hook` is the slow-disk seam they call before they touch the disk.
+    static std::uint64_t exportSeq(cascade::engine::Engine& e) { return e.exportLast_.seq; }
+    static std::uint64_t importSeq(cascade::engine::Engine& e) { return e.importLast_.seq; }
+    static bool exportPending(cascade::engine::Engine& e) { return e.bookmarkExportPending(); }
+    static bool importPending(cascade::engine::Engine& e) { return e.bookmarkImportPending(); }
+    static bool recordingScanPending(cascade::engine::Engine& e) { return e.recordingScanPending(); }
+    static bool iqOpenPending(cascade::engine::Engine& e) { return e.iqOpenPending(); }
+    static bool lastExportOk(cascade::engine::Engine& e) { return e.exportLast_.ok; }
+    static std::string lastExportPath(cascade::engine::Engine& e) { return e.exportLast_.shown; }
+    static void diskHook(cascade::engine::Engine& e, std::function<void()> hook) { e.setDiskHookForTest(std::move(hook)); }
     // Group M: the folder the engine looks for plugins in (null: the default).
     static void setPluginDir(std::string (*dir)()) { cascade::engine::Engine::testHooks_.pluginDir = dir; }
     // Group M: a plugin asks to tune the receiver (the host bridge's request_tune), by its module file name.
@@ -2964,6 +2975,24 @@ testing::Outcome pumpedText(cascade::engine::Engine& eng, testing::Session& s, F
     return o;
 }
 
+// THE FILE IS A WORKER'S (stub campaign B19): the command's answer is that the write is under way, and the file and the note come a pass or more later.
+// Passes (and a millisecond between them, for the worker's own thread) until `done` holds, bounded; false if it never did. Two more passes follow a
+// success: the worker's answer is collected in the pass's workers' step, AFTER that pass's publish, so the facts and the lists show it from the next one.
+template <class Done>
+bool passesUntil(cascade::engine::Engine& eng, Done&& done, int maxMs = 10000) {
+    const auto t0 = std::chrono::steady_clock::now();
+    bool ok = done();
+    while (!ok) {
+        eng.controlPass();
+        ok = done();
+        if (!ok && std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(maxMs)) { return false; }
+        if (!ok) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    }
+    eng.controlPass();
+    eng.controlPass();
+    return true;
+}
+
 std::vector<std::filesystem::path> exportedFiles(const std::string& dir) {
     std::vector<std::filesystem::path> out;
     std::error_code ec;
@@ -3029,8 +3058,11 @@ void testBookmarkExport() {
     const std::string idsText = std::to_string(ids["futuremode"]) + " " + std::to_string(ids["plain"]) + "  " +
                                 std::to_string(ids["accents"]) + "\n" + std::to_string(ids["longgroup"]) + "," +
                                 std::to_string(ids["longname"]) + " " + std::to_string(ids["plain"]);  // one twice
+    const std::uint64_t seq0 = Access::exportSeq(d.eng);
     const testing::Outcome o = pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), idsText);
     CHECK_EQ(o.status(), FOXAPI_OK);
+    // (The answer is that the write is under way; the file and the note are the worker's, collected on a later pass - stub campaign B19.)
+    CHECK(passesUntil(d.eng, [&] { return Access::exportSeq(d.eng) > seq0; }));
     const std::vector<std::filesystem::path> files = exportedFiles(dir);
     CHECK_EQ(files.size(), 1u);
     if (files.size() != 1u) { return; }
@@ -3080,19 +3112,31 @@ void testBookmarkExport() {
     CHECK_EQ(pumpedText(d.eng, remote, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), idsText).status(), FOXAPI_DENIED);
     CHECK_EQ(exportedFiles(dir).size(), 0u);
     // One real id among strangers still exports that one.
-    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT),
-                        "7777777 " + std::to_string(ids["plain"]) + " 8888888").status(),
-             FOXAPI_OK);
+    {
+        const std::uint64_t before = Access::exportSeq(d.eng);
+        CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT),
+                            "7777777 " + std::to_string(ids["plain"]) + " 8888888").status(),
+                 FOXAPI_OK);
+        CHECK(passesUntil(d.eng, [&] { return Access::exportSeq(d.eng) > before; }));
+    }
     CHECK_EQ(exportedFiles(dir).size(), 1u);
     CHECK(fact(s, "fact.status.bookmarkNote").rfind("Exported 1 to ", 0) == 0);
 
-    // A folder that cannot be made: the note says so, the command is FAILED, and nothing was written.
+    // A folder that cannot be made: the note says so, and nothing was written. (The command is OK - the write is under way - and the failure is the worker's
+    // answer: the note, and fact.bookmarks.export.ok "0". Until stub campaign B19 the command itself was FAILED.)
     const std::filesystem::path blocker = std::filesystem::path(dir).parent_path() / "export_blocker.txt";
     {
         std::ofstream(blocker) << "a file where a folder would go";
     }
     Access::setRecordDir(d.eng, (blocker / "sub").string());
-    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), std::to_string(ids["plain"])).status(), FOXAPI_FAILED);
+    {
+        const std::uint64_t before = Access::exportSeq(d.eng);
+        CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), std::to_string(ids["plain"])).status(), FOXAPI_OK);
+        CHECK(passesUntil(d.eng, [&] { return Access::exportSeq(d.eng) > before; }));
+        CHECK(!Access::lastExportOk(d.eng));
+        CHECK_EQ(fact(s, "fact.bookmarks.export.ok"), "0");
+        CHECK_EQ(fact(s, "fact.bookmarks.exporting"), "0");
+    }
     CHECK(fact(s, "fact.status.bookmarkNote").rfind("Could not write ", 0) == 0);
     Access::setRecordDir(d.eng, dir);
     std::filesystem::remove(blocker);
@@ -3130,6 +3174,8 @@ void testBookmarkExportCost() {
     const testing::Outcome o = pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), idsText);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     CHECK_EQ(o.status(), FOXAPI_OK);
+    // (ms is the pass's own time: the file is a worker's now, and arrives after it.)
+    CHECK(passesUntil(d.eng, [&] { return !Access::exportPending(d.eng); }, 60000));
     // The ceiling tells a pass (~0.1 s) from a search per id (~5 s) in a plain build. Under ThreadSanitizer - which
     // the sanitizer build announces with CASCADE_SANITIZE_THREAD, on everything that links cascade_engine - every
     // load and store is instrumented: the pass measured 0.6-0.8 s on an idle machine (about six times the plain
@@ -7041,7 +7087,11 @@ void testPatchPlanList() {
         if (pc::Node* n = g.mutableNode(p.radio)) { n->device = pc::makeIqFileKey("Z:/no/such/recording.wav"); }
         CHECK_EQ(pumpedText(d.eng, s, setGraph(0, static_cast<long long>(versionOf(s))), pc::graphCommandText(g)).result.status, FOXAPI_OK);
         CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
-        CHECK(passUntil(d.eng, [&] { return fact(s, "fact.patch.runnable") == "0"; }));
+        // (The recording's header is read on the open worker since stub campaign B19, so the failure lands on a later pass: wait for it by time, not by a count of
+        // passes - a pass takes microseconds and a worker's thread has to start. The bound is a minute because "Z:" is a drive that is NOT THERE only on a clean
+        // machine: where it is a mapped share that is offline, the first open waits out the network's own 21 s timeout - which this case used to wait out on the
+        // pass itself, and which is exactly the slow disk the worker exists for.)
+        CHECK(passesUntil(d.eng, [&] { return fact(s, "fact.patch.runnable") == "0"; }, 60000));
         const FoxListItem failed = problemFor(s, p.radio, "13");
         CHECK_EQ(failed.id, static_cast<uint64_t>(p.radio));
         // The radio is listed as what it is: not open, faulted, and why.
@@ -7194,6 +7244,317 @@ FoxListItem deviceNamed(testing::Session& s, const std::string& key) {
 
 }  // namespace g13b
 
+// --- P: THE ENGINE'S DISK WORKERS (stub campaign B19; docs/api-0.3-additions.md 9, docs/engine-stage4.md 6.22) ---------------------------------
+//
+// The I/Q file's open, the frequency list's import and export and the patch Radio's recordings list were the pass's own calls into a disk that can be a
+// network share. They are workers' (src/engine/engine_disk_work.cpp), and a command's answer is that the work is under way; what it found is the note
+// and fact.bookmarks.*, fact.source.iqOpening, and the lists, a pass or more later. Each case drives the engine from THIS thread (controlPass until the thing
+// has happened) and binds the slow-disk seam where it needs a worker to be out for a while.
+
+std::string exportedCsvNamed(const std::string& dir, const std::string& prefix, std::vector<std::filesystem::path>* all = nullptr) {
+    std::string text;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+        const std::string n = e.path().filename().string();
+        if (n.rfind(prefix, 0) == 0 && e.path().extension() == ".csv") {
+            text = slurp(e.path());
+            if (all != nullptr) { all->push_back(e.path()); }
+        }
+    }
+    return text;
+}
+
+// P1: FOXAPP_OP_BOOKMARK_EXPORT ival[0] 1 - one preset's rows as a CSV, written from the store (every name whole), on a worker; the Bookmarks note is left alone and
+// the result is fact.bookmarks.export.*; the refusals; a second export while one is out.
+void testPresetExport() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS, "s3cret");
+    CHECK(remote.ok());
+    d.eng.controlPass();
+    const std::string dir = (std::filesystem::path(fact(s, "fact.recorder.dir")).parent_path() / "preset_export_dir").string();
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    Access::setRecordDir(d.eng, dir);
+
+    const std::string longName(200, 'n');      // the table's item holds 95
+    const std::string longGroup(180, 'g');     // ...and 159
+    const auto add = [&](const std::string& name, double hz, const char* mode, const std::string& group, bool fav, bool tick) {
+        cascade::core::Bookmark b;
+        b.name = name;
+        b.freqHz = hz;
+        b.mode = mode;
+        b.bandwidthHz = cascade::core::defaultBandwidthForMode(b.mode);
+        b.group = group;
+        b.favourite = fav;
+        b.scan = tick;
+        Access::store(d.eng).add(std::move(b));
+    };
+    add("Ch 16, \"north\"", 156.8e6, "NFM", "Harbour", true, true);
+    add(longName, 156.65e6, "AM", "Harbour", false, false);
+    add("Elsewhere", 118.7e6, "AM", "Other", true, true);
+    add("Long group row", 121.5e6, "AM", longGroup, true, false);
+    d.eng.controlPass();
+
+    std::vector<cascade::core::Bookmark> want;
+    for (const cascade::core::Bookmark& b : Access::store(d.eng).list()) {
+        if (b.group == "Harbour") { want.push_back(b); }
+    }
+    CHECK_EQ(want.size(), 2u);
+
+    // THE PRESET'S ROWS, WHOLE. The note of the Bookmarks section stays as it was; the result is the facts.
+    const std::string noteBefore = Access::note(d.eng);
+    FoxCommand c = testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT);
+    c.ival[0] = 1;
+    const std::uint64_t seq0 = Access::exportSeq(d.eng);
+    CHECK_EQ(pumpedText(d.eng, s, c, "Harbour").status(), FOXAPI_OK);
+    CHECK(passesUntil(d.eng, [&] { return Access::exportSeq(d.eng) > seq0; }));
+    std::vector<std::filesystem::path> files;
+    const std::string text = exportedCsvNamed(dir, "foxsdr-Harbour-", &files);
+    CHECK_EQ(files.size(), 1u);
+    CHECK_EQ(text, cascade::core::exportCsv(want));
+    CHECK(text.find(longName) != std::string::npos);   // not cut at 95
+    CHECK(text.find("Elsewhere") == std::string::npos);
+    CHECK_EQ(Access::note(d.eng), noteBefore);         // a preset's export does not touch the Bookmarks note
+    CHECK_EQ(fact(s, "fact.bookmarks.exporting"), "0");
+    CHECK_EQ(fact(s, "fact.bookmarks.export.seq"), std::to_string(seq0 + 1u));
+    CHECK_EQ(fact(s, "fact.bookmarks.export.ok"), "1");
+    CHECK_EQ(fact(s, "fact.bookmarks.export.preset"), "1");
+    CHECK_EQ(fact(s, "fact.bookmarks.export.count"), "2");
+    if (files.size() == 1u) { CHECK_EQ(fact(s, "fact.bookmarks.export.path"), dir + "/" + files[0].filename().string()); }
+    // The file reads back whole, with the tick and the favourite.
+    const cascade::core::ImportResult back = cascade::core::importFrequencyList(text);
+    CHECK_EQ(back.items.size(), 2u);
+    for (const cascade::core::Bookmark& b : back.items) {
+        const cascade::core::Bookmark* w = nullptr;
+        for (const cascade::core::Bookmark& x : want) { w = x.name == b.name ? &x : w; }
+        CHECK(w != nullptr);
+        if (w != nullptr) { CHECK(w->favourite == b.favourite && w->scan == b.scan && w->group == b.group && w->freqHz == b.freqHz); }
+    }
+    // A group with a name a file name cannot carry: '_' for each such byte, and a long group cut at 40.
+    {
+        const std::uint64_t before = Access::exportSeq(d.eng);
+        CHECK_EQ(pumpedText(d.eng, s, c, longGroup).status(), FOXAPI_OK);
+        CHECK(passesUntil(d.eng, [&] { return Access::exportSeq(d.eng) > before; }));
+        const std::string name = std::filesystem::path(Access::lastExportPath(d.eng)).filename().string();
+        CHECK_EQ(name.rfind("foxsdr-" + std::string(40, 'g') + "-", 0), 0u);
+    }
+
+    // THE REFUSALS. An empty name, a preset with no rows, an ival[0] nobody defined, a REMOTE session: nothing is written and no worker is started.
+    {
+        const std::uint64_t before = Access::exportSeq(d.eng);
+        CHECK_EQ(pumpedText(d.eng, s, c, "").status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(pumpedText(d.eng, s, c, "No such preset").status(), FOXAPI_NOT_FOUND);
+        FoxCommand bad = testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT);
+        bad.ival[0] = 2;
+        CHECK_EQ(pumpedText(d.eng, s, bad, "Harbour").status(), FOXAPI_OUT_OF_RANGE);
+        CHECK_EQ(pumpedText(d.eng, remote, c, "Harbour").status(), FOXAPI_DENIED);
+        passes(d.eng, 3);
+        CHECK_EQ(Access::exportSeq(d.eng), before);
+        CHECK(!Access::exportPending(d.eng));
+    }
+
+    // ONE EXPORT IS EVER OUT: a second while the first is being written is NO_CHANGE ("an export is already being written"), and the first still lands.
+    {
+        std::atomic<int> calls{0};
+        std::atomic<bool> release{false};
+        Access::diskHook(d.eng, [&] {
+            calls.fetch_add(1);
+            for (int i = 0; i < 5000 && !release.load(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+        });
+        const std::uint64_t before = Access::exportSeq(d.eng);
+        CHECK_EQ(pumpedText(d.eng, s, c, "Harbour").status(), FOXAPI_OK);
+        CHECK(Access::exportPending(d.eng));
+        CHECK_EQ(fact(s, "fact.bookmarks.exporting"), "1");
+        const testing::Outcome second = pumpedText(d.eng, s, c, "Harbour");
+        CHECK_EQ(second.status(), FOXAPI_NO_CHANGE);
+        CHECK(std::string(second.result.message).find("already being written") != std::string::npos);
+        // The pass does not wait for the worker: passes run while it is out.
+        passes(d.eng, 5);
+        CHECK(Access::exportPending(d.eng));
+        release.store(true);
+        CHECK(passesUntil(d.eng, [&] { return Access::exportSeq(d.eng) > before; }));
+        CHECK_EQ(calls.load(), 1);
+        Access::diskHook(d.eng, nullptr);
+    }
+    // A worker that THROWS still answers, and says which kind it was: the preset's, not the Bookmarks section's.
+    {
+        Access::diskHook(d.eng, [] { throw std::runtime_error("the disk threw"); });
+        const std::string note = Access::note(d.eng);
+        const std::uint64_t before = Access::exportSeq(d.eng);
+        CHECK_EQ(pumpedText(d.eng, s, c, "Harbour").status(), FOXAPI_OK);
+        CHECK(passesUntil(d.eng, [&] { return Access::exportSeq(d.eng) > before; }));
+        CHECK_EQ(fact(s, "fact.bookmarks.export.ok"), "0");
+        CHECK_EQ(fact(s, "fact.bookmarks.export.preset"), "1");
+        CHECK_EQ(Access::note(d.eng), note);   // not under the Bookmarks section
+        Access::diskHook(d.eng, nullptr);
+    }
+    std::filesystem::remove_all(dir, ec);
+    std::printf("P1: a preset's rows exported whole, on a worker; the refusals; one export out at a time\n");
+}
+
+// P2: FOXAPP_OP_BOOKMARK_IMPORT_FILE reads on a worker: the answer is OK once the read is under way; the rows, the note and fact.bookmarks.import.* come when it is
+// back; a read asked for while one is out is remembered (the last wins); a file that is not there says so in the note and the fact.
+void testImportOnAWorker() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    const std::filesystem::path dir = std::filesystem::path(fact(s, "fact.recorder.dir")).parent_path() / "import_worker_dir";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    const auto csv = [&](const char* tag, int n, double firstMhz) {
+        const std::filesystem::path p = dir / (std::string(tag) + ".csv");
+        std::ofstream f(p, std::ios::binary);
+        f << "frequency,name,mode\n";
+        for (int i = 0; i < n; ++i) { f << static_cast<long long>((firstMhz + 1.1 * i) * 1.0e6) << ",Imp " << tag << " " << i << ",NFM\n"; }
+        return p.string();
+    };
+    std::atomic<int> calls{0};
+    std::atomic<bool> release{false};
+    Access::diskHook(d.eng, [&] {
+        calls.fetch_add(1);
+        for (int i = 0; i < 5000 && !release.load(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    });
+    // Three asked for at once: the first runs, the second is remembered and replaced by the third.
+    const std::uint64_t seq0 = Access::importSeq(d.eng);
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_IMPORT_FILE), csv("a", 2, 100.0)).status(), FOXAPI_OK);
+    CHECK(Access::importPending(d.eng));
+    CHECK_EQ(fact(s, "fact.bookmarks.importing"), "1");
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_IMPORT_FILE), csv("b", 2, 120.0)).status(), FOXAPI_OK);
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_IMPORT_FILE), csv("c", 3, 140.0)).status(), FOXAPI_OK);
+    // THE PASS DOES NOT WAIT: nothing has been read, and passes go on.
+    passes(d.eng, 5);
+    CHECK_EQ(Access::store(d.eng).list().size(), 0u);
+    CHECK_EQ(Access::importSeq(d.eng), seq0);
+    release.store(true);
+    CHECK(passesUntil(d.eng, [&] { return Access::importSeq(d.eng) >= seq0 + 2u && !Access::importPending(d.eng); }));
+    CHECK_EQ(calls.load(), 2);
+    CHECK_EQ(Access::store(d.eng).list().size(), 5u);   // a's two and c's three
+    CHECK_EQ(fact(s, "fact.bookmarks.import.ok"), "1");
+    CHECK_EQ(fact(s, "fact.bookmarks.import.note"), "CSV: 3 entries read, 3 added");
+    CHECK_EQ(fact(s, "fact.bookmarks.importing"), "0");
+    CHECK_EQ(fact(s, "fact.bookmarks.import.path"), (dir / "c.csv").string());
+    Access::diskHook(d.eng, nullptr);
+
+    // A file that is not there: the op is OK (the read is under way), the note and the fact carry the sentence, the list is unchanged.
+    {
+        const std::uint64_t before = Access::importSeq(d.eng);
+        const std::string missing = (dir / "no-such-list.csv").string();
+        CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_IMPORT_FILE), missing).status(), FOXAPI_OK);
+        CHECK(passesUntil(d.eng, [&] { return Access::importSeq(d.eng) > before; }));
+        CHECK_EQ(fact(s, "fact.bookmarks.import.ok"), "0");
+        CHECK_EQ(fact(s, "fact.bookmarks.import.note"), "Could not import: the file \"" + missing + "\" could not be opened");
+        CHECK_EQ(Access::note(d.eng), fact(s, "fact.bookmarks.import.note"));
+        CHECK_EQ(Access::store(d.eng).list().size(), 5u);
+    }
+    // No path at all is refused at once.
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_IMPORT_FILE), "").status(), FOXAPI_BAD_ARGUMENT);
+    // A worker that throws names the file all the same.
+    {
+        Access::diskHook(d.eng, [] { throw std::runtime_error("the disk threw"); });
+        const std::uint64_t before = Access::importSeq(d.eng);
+        const std::string path = csv("thrown", 2, 160.0);
+        CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_IMPORT_FILE), path).status(), FOXAPI_OK);
+        CHECK(passesUntil(d.eng, [&] { return Access::importSeq(d.eng) > before; }));
+        CHECK_EQ(fact(s, "fact.bookmarks.import.note"), "Could not import: the file \"" + path + "\" could not be read");
+        CHECK_EQ(Access::store(d.eng).list().size(), 5u);
+        Access::diskHook(d.eng, nullptr);
+    }
+    std::filesystem::remove_all(dir, ec);
+    std::printf("P2: the import reads on a worker; the last asked for wins; the outcome is the facts\n");
+}
+
+// P3: FOXAPP_OP_BOOKMARK_ADD_ROWS' fourth field is a word of flags - bit 0 ticked, bit 1 favourite - and "0" and "1" mean what they always meant.
+void testAddRowsFlags() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    FoxCommand c = testing::cmd(FOXAPP_OP_BOOKMARK_ADD_ROWS);
+    c.ival[0] = 1;   // a list
+    const std::string rows = "121.5\tAM\t10000\t0\tG\tplain\n"
+                             "121.6\tAM\t10000\t1\tG\tticked\n"
+                             "121.7\tAM\t10000\t2\tG\tstarred\n"
+                             "121.8\tAM\t10000\t3\tG\tboth\n"
+                             "121.9\tAM\t10000\t7\tG\tunknown flags\n"
+                             "122.0\tAM\t10000\tx\tG\tnot a number\n";
+    CHECK_EQ(pumpedText(d.eng, s, c, rows).status(), FOXAPI_OK);
+    const auto row = [&](const char* name) -> const cascade::core::Bookmark* {
+        for (const cascade::core::Bookmark& b : Access::store(d.eng).list()) {
+            if (b.name == name) { return &b; }
+        }
+        return nullptr;
+    };
+    const cascade::core::Bookmark* plain = row("plain");
+    const cascade::core::Bookmark* ticked = row("ticked");
+    const cascade::core::Bookmark* starred = row("starred");
+    const cascade::core::Bookmark* both = row("both");
+    CHECK(plain != nullptr && ticked != nullptr && starred != nullptr && both != nullptr);
+    if (plain != nullptr && ticked != nullptr && starred != nullptr && both != nullptr) {
+        CHECK(!plain->scan && !plain->favourite);
+        CHECK(ticked->scan && !ticked->favourite);
+        CHECK(!starred->scan && starred->favourite);
+        CHECK(both->scan && both->favourite);
+    }
+    // A word that is no flag set (7, "x") is no flags: neither tick nor star.
+    const cascade::core::Bookmark* odd = row("unknown flags");
+    const cascade::core::Bookmark* nan = row("not a number");
+    CHECK(odd != nullptr && nan != nullptr);
+    if (odd != nullptr && nan != nullptr) { CHECK(!odd->scan && !odd->favourite && !nan->scan && !nan->favourite); }
+    // The table says it: a row's FAVOURITE and TICKED flags.
+    passes(d.eng, 2);
+    bool starFlag = false;
+    const int32_t n = count(s, FOXAPI_LIST_BOOKMARKS);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_BOOKMARKS, static_cast<uint32_t>(i));
+        if (std::string(it.name) == "starred") { starFlag = (it.flags & FOXAPI_ITEM_FAVOURITE) != 0u; }
+    }
+    CHECK(starFlag);
+    std::printf("P3: ADD_ROWS' fourth field is a word of flags: 0 / 1 as before, 2 a favourite, 3 both\n");
+}
+
+// P4: the patch Radio's recordings list is a worker's: the op is answered at once, the list lands a pass or more later, and a second request while one is out is
+// remembered and run when it comes back.
+void testRecordingsListOnAWorker() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    const std::filesystem::path rec = std::filesystem::path(fact(s, "fact.recorder.dir")).parent_path() / "list_worker_dir";
+    std::error_code ec;
+    std::filesystem::remove_all(rec, ec);
+    std::filesystem::create_directories(rec, ec);
+    Access::setRecordDir(d.eng, rec.string());
+    g13b::writeIqWav(rec / "one_96k.wav", 96000);
+    std::atomic<int> calls{0};
+    std::atomic<bool> release{false};
+    Access::diskHook(d.eng, [&] {
+        calls.fetch_add(1);
+        for (int i = 0; i < 5000 && !release.load(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    });
+    const int32_t before = count(s, FOXAPI_LIST_PATCH_DEVICES);
+    CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_PATCH_LIST_RECORDINGS)).status(), FOXAPI_OK);
+    CHECK(Access::recordingScanPending(d.eng));
+    CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_PATCH_LIST_RECORDINGS)).status(), FOXAPI_OK);   // asked again: remembered
+    passes(d.eng, 5);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_DEVICES), before);   // the pass has not waited, and nothing is listed yet
+    release.store(true);
+    CHECK(passesUntil(d.eng, [&] { return calls.load() == 2 && !Access::recordingScanPending(d.eng); }));
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_DEVICES), before + 1);
+    Access::diskHook(d.eng, nullptr);
+    std::filesystem::remove_all(rec, ec);
+    std::printf("P4: the recordings list is a worker's; a second request is remembered\n");
+}
+
+
 // G13b-1: the parts bin's track bit (served, and in the fingerprint), PATCH_DEVICES in the engine's own order with every
 // key whole in a LOCAL fact, a recording's rate, and FOXAPP_OP_PATCH_LIST_RECORDINGS (grants, a relisting that finds other
 // files with the same count).
@@ -7272,6 +7633,8 @@ void testPatchPartsAndDevices() {
     passes(d.eng, 3);
     CHECK_EQ(count(s, FOXAPI_LIST_PATCH_DEVICES), before);  // nothing lists them by itself
     CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_PATCH_LIST_RECORDINGS)).status(), FOXAPI_OK);
+    // (The listing is a worker's since stub campaign B19: the op is answered at once and the list lands on a later pass.)
+    CHECK(passesUntil(d.eng, [&] { return !Access::recordingScanPending(d.eng); }));
     passes(d.eng, 2);
     CHECK_EQ(count(s, FOXAPI_LIST_PATCH_DEVICES), before + 1);
     {
@@ -7289,6 +7652,7 @@ void testPatchPartsAndDevices() {
         std::filesystem::remove(rec / "one_96k.wav", ec);
         writeIqWav(rec / "two_250k.wav", 250000);
         CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_PATCH_LIST_RECORDINGS)).status(), FOXAPI_OK);
+        CHECK(passesUntil(d.eng, [&] { return !Access::recordingScanPending(d.eng); }));
         passes(d.eng, 2);
         CHECK_EQ(count(s, FOXAPI_LIST_PATCH_DEVICES), before + 1);
         CHECK_EQ(deviceNamed(s, keyOne).id, 0u);
@@ -8805,6 +9169,10 @@ int main() {
     testBookmarkStatusLines();
     testBookmarkExport();
     testBookmarkExportCost();
+    testPresetExport();
+    testImportOnAWorker();
+    testAddRowsFlags();
+    testRecordingsListOnAWorker();
     // Group 8: the decoders, presets, marks, the plugin-mute cluster and the tune grants.
     testMuteCauses();
     testPluginLists();
