@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "core/app_commands.hpp"  // FOXAPP_OP_TX_PLUGIN_ARM: the arming window's commands
 #include "core/i18n.hpp"  // FOX_TR_NOOP: txLampText is drawn through tr()
 #include "engine/tx_frequency.hpp"
 #include "foxsdr_api.h"
@@ -207,6 +208,52 @@ inline std::uint32_t txKeyCommands(const TxKeyFrame& f, TxKeyMemory& m, FoxComma
     }
     m.pageWasLive = f.pageLive;
     return n;
+}
+
+// --- a plugin's arming window: the page's commands (stub campaign B13) ----------
+//
+// THE ARMING WINDOW IS THE ENGINE'S (engine/engine_tx_plugin.cpp), held as a LEASE on this window's session: it lasts while the session beats AND keeps hearing that the
+// TRANSMIT page is on screen. This is the page's half of that, as a pure function so the frame and the tests that stand in for it say the same thing (txKeyCommands' way):
+//   - a key pressed this frame is sent alone (5 / 15 / 60 = ARM, 0 = OFF with reason 0, "you pressed OFF");
+//   - with the page on screen, "still here" (ARM -1) every frame a window is open - and for kTxPluginArmHoldS after an ARM was sent, before the fact that it opened has come back;
+//   - with the page NOT on screen and a window open, OFF with reason 1, "the TRANSMIT page was closed", until the fact shows it closed.
+// Nothing is sent when no window is open and none was asked for. A command lost (a session whose queue is full is answered BUSY) cannot leave a window open: the engine closes a
+// lease that stops hearing "still here" within Transmitter::kKeyAliveWait, whatever this function did or did not send.
+struct TxPluginArmFrame {
+    bool pageLive = false;      // the TRANSMIT page was drawn with its controls on screen this frame
+    int pressed = -2;           // -2 nothing, 0 OFF, 5 / 15 / 60 a length
+    bool armedShown = false;    // fact.tx.plugin.armed as the page drew it
+    double nowS = 0.0;          // the frame's clock, seconds
+};
+struct TxPluginArmMemory {
+    double armSentAtS = -1.0e9;  // when an ARM last went out
+};
+inline constexpr double kTxPluginArmHoldS = 3.0;
+inline constexpr std::uint32_t kTxPluginArmMaxCommands = 1;
+
+// Fills `out` (room for kTxPluginArmMaxCommands) and returns how many.
+inline std::uint32_t txPluginArmCommands(const TxPluginArmFrame& f, TxPluginArmMemory& m, FoxCommand* out) {
+    long long v0 = 0;
+    long long v1 = 0;
+    if (f.pressed >= 0) {
+        v0 = f.pressed;   // 0 is OFF, reason 0
+        if (f.pressed > 0) { m.armSentAtS = f.nowS; }
+    } else if (f.pageLive) {
+        if (!f.armedShown && f.nowS - m.armSentAtS >= kTxPluginArmHoldS) { return 0; }
+        v0 = -1;
+    } else if (f.armedShown) {
+        v0 = 0;
+        v1 = 1;           // OFF, reason 1: the page is not on screen
+    } else {
+        return 0;
+    }
+    FoxCommand c{};
+    c.structSize = sizeof(c);
+    c.op = FOXAPP_OP_TX_PLUGIN_ARM;
+    c.ival[0] = v0;
+    c.ival[1] = v1;
+    out[0] = c;
+    return 1;
 }
 
 // --- the audio meter ---------------------------------------------------------

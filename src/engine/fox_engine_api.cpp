@@ -767,6 +767,8 @@ public:
     void endKeyFromEngine(const char* why) {
         noteKeyTouch();
         rules_.endKey(why, steadyMs());
+        // THE PLUGIN'S KEY AND ITS WINDOW GO WITH IT (stub campaign B13): a stop, a transmitter changed or closed ends every key, and the plugin's is one.
+        engine_.txPluginEnd(why);
     }
 
     // (THE WEB REMOTE'S KEY IS NOT HERE ANY MORE - stage 5d. The browser's PTT used to be a private path of its own: webRemotePtt for a
@@ -779,6 +781,7 @@ public:
     void engineStopping() {
         noteKeyTouch();
         rules_.endKey("the engine is shutting down", steadyMs());
+        engine_.txPluginEnd("the engine is shutting down");
     }
 
     ApiHost::TxFacts txFacts() const {
@@ -1321,6 +1324,10 @@ private:
                 return FOXAPI_GRANT_TUNE;
             case FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN: case FOXAPP_OP_SET_TRANSMIT_ARGS:
                 return FOXAPI_GRANT_TRANSMIT;
+            // A PLUGIN MAY KEY THE TRANSMITTER (stub campaign B13): the grant, the arming window and DATA (flat) are all the transmitter's, so all need TRANSMIT - and TRANSMIT held by a
+            // REMOTE session is a PTT and nothing else (validate refuses every other TRANSMIT op to it), so none of the three is a remote session's even before they are app ops.
+            case FOXAPP_OP_PLUGIN_TX_GRANT: case FOXAPP_OP_TX_PLUGIN_ARM: case FOXAPP_OP_TX_DATA_FLAT:
+                return FOXAPI_GRANT_TRANSMIT;
             case FOXAPI_OP_SETTING_SET: case FOXAPI_OP_TELEMETRY_ENABLE: case FOXAPI_OP_SERVER_CONFIG:
             case FOXAPI_OP_UPDATE_CHECK: case FOXAPI_OP_STORE_FETCH: case FOXAPI_OP_STORE_INSTALL:
             case FOXAPI_OP_STORE_REMOVE: case FOXAPI_OP_STORE_CANCEL: case FOXAPI_OP_STORE_UPDATE_ALL:
@@ -1666,6 +1673,19 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
                 return FOXAPI_DENIED;  // no local consent to remote transmit
             }
             return FOXAPI_OK;
+        case FOXAPP_OP_TX_PLUGIN_ARM:
+            // The lengths the page offers (5, 15, 60), OFF, and "the page is live" - a window is a decision made from a short list, never a number a stray call can make up.
+            {
+                bool offered = c.ival[0] == -1 || c.ival[0] == 0;
+                for (const int m : cascade::core::TxArming::kChoicesMinutes) { offered = offered || c.ival[0] == m; }   // (compared as 64 bits: a value that wraps to 5 is not 5)
+                if (!offered) { return FOXAPI_OUT_OF_RANGE; }
+            }
+            return (c.ival[1] == 0 || c.ival[1] == 1) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPP_OP_PLUGIN_TX_GRANT:
+            if (c.text[0] == '\0') { return FOXAPI_BAD_ARGUMENT; }
+            return (c.ival[0] == 0 || c.ival[0] == 1) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPP_OP_TX_DATA_FLAT:
+            return (c.ival[0] == 0 || c.ival[0] == 1) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_TX_LATCH:
             if (c.ival[0] != 0) {
                 // A latch keeps a radio keyed with nobody touching anything;
@@ -1775,6 +1795,20 @@ void ApiHostImpl::apply(const Pending& p) {
             }
             keyOwner_.store(rules_.keyOwner(), std::memory_order_relaxed);
         }
+        finish();
+        return;
+    }
+    if (c.op == FOXAPP_OP_TX_PLUGIN_ARM) {
+        // THE ARMING WINDOW IS A SESSION'S (stub campaign B13): it is opened for the sender, kept alive by the sender and lost with the sender - so it is applied HERE, where the
+        // sender is known, and applyCommand refuses it. The key follows at the end of this pass (txPass), which reads the window the engine holds.
+        const bool remote = (p.sessionFlags & FOXAPI_SESSION_REMOTE) != 0u;
+        const FoxCommandResult a = engine_.txPluginArmOp(p.sessionId, remote, fate == SessionFate::kOpen, c);
+        r.status = a.status;
+        r.flags = a.flags;
+        r.applied[0] = a.applied[0];
+        r.applied[1] = a.applied[1];
+        std::memcpy(r.message, a.message, sizeof(r.message));
+        r.message[sizeof(r.message) - 1] = '\0';
         finish();
         return;
     }
@@ -2131,7 +2165,10 @@ void ApiHostImpl::txPass() {
     const std::int64_t now = steadyMs();
     cascade::core::Transmitter& tx = engine_.transmitter_;
     const bool faulted = engine_.pipeline_.faulted() || !engine_.testFault_.empty();
-    if (faulted && !lastPassFaulted_) { rules_.endKey("a fault stopped the engine", now); }
+    if (faulted && !lastPassFaulted_) {
+        rules_.endKey("a fault stopped the engine", now);
+        engine_.txPluginEnd("a fault stopped the engine");   // (a plugin's key and window too: stub campaign B13)
+    }
     lastPassFaulted_ = faulted;
     rules_.tick(now, sessionsView_);
     // Drive: the latch and a local PTT's hold are levels; a remote PTT's hold
@@ -2144,7 +2181,21 @@ void ApiHostImpl::txPass() {
     if (!(remoteOwner && rules_.holding())) {
         tx.releaseRemote(rules_.unkeyReason().empty() ? "the remote let go" : rules_.unkeyReason().c_str());
     }
+    // THE PLUGIN'S KEY (stub campaign B13, engine_tx_plugin.cpp): decided HERE, in master's frame order - the hands' levels above, THEN the plugin's request, THEN the tick that acts
+    // on all of them, THEN what the tick did. The engine holds the grant and the window; what it asks of the table's host is the window's LEASE, the one thing only the host knows:
+    // whether the session that opened it is still open and still beating.
+    {
+        TxPluginLease lease;
+        if (engine_.txArmOwner_ != 0) {
+            const cascade::core::TxKeyRules::Liveness l = sessionsView_.find(engine_.txArmOwner_);
+            lease.sessionPresent = l.present;
+            lease.sessionRemote = l.remote;
+            lease.beatAgeMs = now - l.lastBeatMs;
+        }
+        engine_.txPluginStep(lease);
+    }
     tx.tick();
+    engine_.txPluginAfterTick();
     if (rules_.keyed() && !tx.pttHeld() && !tx.latched() && !tx.remoteKeyed()) {
         std::string why = tx.lastAutoUnkeyReason();
         if (why.empty()) {

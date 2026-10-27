@@ -34,6 +34,7 @@
 #include "gui/plugin_store_view.hpp"
 #include "gui/plugin_window_ids.hpp"
 #include "gui/plugins_view.hpp"
+#include "gui/transmit_page.hpp"
 #include "gui/ui_census.hpp"
 
 namespace cascade::gui {
@@ -154,6 +155,19 @@ cascade::gui::FittedListCache& AppWindow::fittedLists() {
         fact("integrity", r.integrity);
         cascade::gui::FittedModule& m = c.model.modules[rows++];
         cascade::gui::fillFittedModule(m, r);
+        // THE TRANSMIT GRANT AND THE PLATE (stub campaign B13): a module that declares transmit audio has fact.plugin.<file>.tx, its bits (FOXAPP_TXBIT_*; the engine publishes the
+        // fact for no other module). The GRANT TRANSMIT key is offered to a module whose active() has been non-zero at least once - or that already holds the grant, because a
+        // permission nobody can see is one nobody can take back - and the plate says where the module stands (armed, on air, waiting for another).
+        fact("tx", c.text);
+        if (!c.text.empty()) {
+            const std::uint32_t bits = static_cast<std::uint32_t>(std::strtoul(c.text.c_str(), nullptr, 10));
+            readFactText("fact.tx.plugin.armed", c.text);
+            m.txAllowed = (bits & FOXAPP_TXBIT_GRANTED) != 0u;
+            m.txCapable = (bits & FOXAPP_TXBIT_ASKED) != 0u || m.txAllowed;
+            m.txPlate = static_cast<int>(cascade::gui::txPlateState((bits & FOXAPP_TXBIT_ASKED) != 0u, m.txAllowed, c.text == "1",
+                                                                    (bits & FOXAPP_TXBIT_ON_AIR) != 0u, (bits & FOXAPP_TXBIT_WAITING) != 0u,
+                                                                    (bits & FOXAPP_TXBIT_STOPPED) != 0u));
+        }
 
         // THE INSTALL RECORD, by file: the catalogue key it gave the module (what the catalogue's glyph, pictures and description are found by), the
         // plugin ABI the fitted build was made for, when it was fitted, and the catalogue's category. A module with no record is a hand-fitted
@@ -368,7 +382,9 @@ void AppWindow::drawFittedModulesWindow() {
                 uiSubmit(cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, act.file, 2, act.flag ? 1 : 0));
                 break;
             case cascade::gui::FittedModulesAction::Kind::SetTransmit:
-                // Not on the table yet (stub campaign B13): the model never offers the key, so there is nothing to send.
+                // THE TRANSMIT GRANT (stub campaign B13): its own LOCAL op, never a kind of PLUGIN_GRANT (which a web page may send). The engine keeps it, saves it, and a revoke
+                // unkeys in the pass that applies it; the arming window is the other half and is opened on the TRANSMIT page.
+                uiSubmit(cmd::makeText(FOXAPP_OP_PLUGIN_TX_GRANT, act.file, act.flag ? 1 : 0));
                 break;
             case cascade::gui::FittedModulesAction::Kind::Command:
                 // Queued for the plugin to take with poll_command; nothing of the plugin's runs here, on the GUI thread's frame.

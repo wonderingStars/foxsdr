@@ -82,8 +82,10 @@ sat in a file the branch had not touched but the code it calls had moved:
   * core/recorder: master's asynchronous finish (FinishRequest / finishFile) with the branch's take clock (startedNs_/endedNs_).
   * core/scanner.hpp + scanner_params.hpp: master's list mode (`list`) is in ScannerParams, the data header the window holds drafts of.
   * core/transmitter.hpp/.cpp: master's plugin key (the cap, the fault latch, one source) merged into the branch's key model; the TX thread's
-    `anyKey` now includes the plugin key (it did not: the plugin's audio was never pulled; found by test_tx_audio). NOTHING in the engine
-    calls setPluginKey yet (ledger TX-PLUGIN): a plugin cannot key a radio, which is the safe state. The engine API's TX_SET_INPUT range is
+    `anyKey` now includes the plugin key (it did not: the plugin's audio was never pulled; found by test_tx_audio). [Until stub batch B13 NOTHING in
+    the engine called setPluginKey (ledger TX-PLUGIN): a plugin could not key a radio, which was the safe state. Since B13 the engine calls it from ONE
+    place, src/engine/engine_tx_plugin.cpp (txPluginStep), behind core::pluginMayKey, and every rule that made the absence of a caller safe is a test:
+    docs/engine-stage4.md 6.22, B13 - the safety record.] The engine API's TX_SET_INPUT range is
     the hand inputs only (kTxHandInputCount): the Plugin input is never selectable.
   * net/web_server.cpp: `audioLeadMs` in the status JSON (statusJson), the usage callback; sink/audio_out.cpp: both new members.
   * engine/engine.cpp: master's native radio rows - HydraSDR and AOR enumerations and their unbound ids, the `Engine::makeDeviceSource`
@@ -375,8 +377,10 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * BROWSE FILES beside a plugin setting that names a file ................................... re-expressed, stub batch B9 (the form's key over AppWindow::pickFile, B8's;
     the chosen path is an edit like a typed one; test_plugin_pathpick_app)
   * switching auto gain off gives the radio its manual gains back ........................... re-expressed, C1 (Engine::changeAutoGain; test_autogain_app)
-  * a plugin may send transmit audio through FoxSDR, granted and armed ...................... stubbed TX-PLUGIN, in the SAFE state: Transmitter's plugin key and
-    cap are merged and tested (test_tx_audio), and NOTHING in the engine calls Transmitter::setPluginKey, so no plugin can key a radio
+  * a plugin may send transmit audio through FoxSDR, granted and armed ...................... re-expressed, stub batch B13 (SAFETY-CRITICAL; the engine's:
+    src/engine/engine_tx_plugin.cpp; ops FOXAPP_OP_PLUGIN_TX_GRANT 0x870D, FOXAPP_OP_TX_PLUGIN_ARM 0x842B and FOXAPP_OP_TX_DATA_FLAT 0x842C, all LOCAL-only and
+    none on the web profile; API 0.3 9.10; test_engine_api_txplugin, test_tx_audio_app, test_tx_audio_page_app, test_tx_audio_plate_app, test_transmit_page
+    section 10). No real transmitter was keyed in the making of it: every test keys a ledger fake.
   * POCSAG settings and messages together; automatic configuration ........................... n/a (the plugin) / PLUGIN-SETTINGS-UI
   * Language & country does not freeze while it looks for CJK fonts ........................... carried (gui/fonts, merged) (unverified)
 
@@ -479,7 +483,7 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
                           B5 removed the rest and the part: STORE-VIEW is whole]
   (PLUGIN-SETTINGS-UI and PLUGIN-ROW-KEYS - test_plugin_settings_ui, test_decoder_settings_fold_app, test_plugin_pathpick_app, test_programme_audio_app and
   test_row_keys_app - were removed by B9: both ids are whole)
-  TX-PLUGIN (3)           test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app
+  (TX-PLUGIN - test_tx_audio_app, test_tx_audio_page_app, test_tx_audio_plate_app and the part transmit_page_plugin_key - was removed by B13: whole)
   TESTER-LINK (3)         test_tester_link_app test_link_request_poll test_tester_link
   (MARKERS-SPECTRUM and DISPLAY-RANGE - test_bookmark_stacking_app and test_freq_markers_app removed by B10; test_spectrum_trace_app, test_passband_slide_app and
   test_display_menu_app removed by B11; test_display_fold_app by B1 - are whole)
@@ -489,7 +493,7 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
                           SOURCE-ROWS test_source_row_app; UPDATES test_store_update_app;
                           TESTER-USAGE test_team_message_app;
                           MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
-  parts (3)               transmit_page_plugin_key (TX-PLUGIN), excuse_cap_pickfile (IMPORT-DIALOG; removed by B8), audio_lead_plugin_wake (PLUGIN-RUN)
+  parts (3)               transmit_page_plugin_key (TX-PLUGIN; removed by B13), excuse_cap_pickfile (IMPORT-DIALOG; removed by B8), audio_lead_plugin_wake (PLUGIN-RUN)
                           [B2 removed audio_lead_plugin_wake and added nothing; B1 had added display_fold_airband_section (AIRBAND); B4 added
                           store_app_fitted (STORE-VIEW: the FITTED MODULES scenarios of test_plugin_store_app); B5 removed store_app_fitted; B1's display_fold_airband_section (AIRBAND) and the test test_airband_app were removed by B7: AIRBAND is whole]
 
@@ -704,3 +708,11 @@ test_dsp_priority, test_engine_api_hermetic): all pass except test_engine_api_tr
 halted by the PortAudio race above, before its suppression. test_engine_api_rds_real, test_engine_publish_alloc and test_plugin_status_report are not
 in the TSan selection. NOT VERIFIED: the full TSan leg (`ctest -L tsan`, 108 tests) was not re-run end to end; the suppression was never seen
 to fire (the race it names appears about one run in ten and did not recur in the 11 runs after it was added).
+
+UPDATE 2026-10-27, stub batch B13 (docs/engine-stage4.md 6.22, the safety record): a plugin may key the transmitter again (0.99.74's CASCADE_CAP_TX_AUDIO), and the key is the ENGINE's: the grant, the
+arming window and the decision are on the engine's pass (src/engine/engine_tx_plugin.cpp, called from the key drive ApiHostImpl::txPass between the hands' levels and Transmitter::tick). Three ops,
+every one LOCAL-only and off the web profile (still 38 ops): FOXAPP_OP_PLUGIN_TX_GRANT 0x870D (NOT a kind of FOXAPI_OP_PLUGIN_GRANT, which a web page may send), FOXAPP_OP_TX_PLUGIN_ARM 0x842B (a
+LEASE on the session that opened it) and FOXAPP_OP_TX_DATA_FLAT 0x842C; facts fact.tx.plugin.* and fact.plugin.<file>.tx (API 0.3 9.10). test_tx_audio_app (converted: the page is a stand-in for the
+commands the real page sends; _stepped and _free), test_tx_audio_page_app and test_tx_audio_plate_app (the real binary; unedited) are green and their placeholders, and the part
+transmit_page_plugin_key (re-pinned against the engine's drive), are gone: the red placeholders are the 20 of B12 (19 tests and 1 part) less three tests and the part: 16 (16 tests, no part). New:
+tests/test_engine_api_txplugin.cpp (the engine, a real transmitting module, a ledger radio, no window). test_i18n: 88 stale, 0 missing (the 10 keys of drawTransmitPage that returned are itemised in 6.22).

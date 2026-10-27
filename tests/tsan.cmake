@@ -86,6 +86,9 @@ set(CASCADE_TSAN_TESTS
     test_engine_api_markers
     # stub batch B12: automatic squelch (the rule on the pass) against the API threads that read its facts and the worker that delivers the samples it measures
     test_engine_api_squelch
+    # stub batch B13 (SAFETY): a plugin's key request and the arming window on the pass, against the TX thread that plays the key down, the DSP stand-in that polls the module, the module's own
+    # worker and the API threads that read the facts
+    test_engine_api_txplugin
     # the control thread against the front end's thread: the command queue (submit from
     # any thread, drain on one), the pumping engine, what the host answers from a thread
     # that is not the window's, the shutdown order

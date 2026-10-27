@@ -41,9 +41,13 @@
 
 namespace {
 
-const CascadeHostApi* g_host = nullptr;
+// THE HOST TABLE, PUBLISHED TO THE WORKER THREAD (stub campaign B13, found by the ThreadSanitizer leg): attach() runs on the host's thread and the worker below is
+// started by create(), and nothing about that order is promised to the worker - a plain pointer here was a data race on the host's own bridge (the table it points into is
+// built just before attach() is called), which ThreadSanitizer reported at the worker's first settings_get. A release store here and an acquire load there is the
+// ordering a real modem's worker needs too.
+std::atomic<const CascadeHostApi*> g_host{nullptr};
 
-void hostAttach(const CascadeHostApi* h) { g_host = h; }
+void hostAttach(const CascadeHostApi* h) { g_host.store(h, std::memory_order_release); }
 
 const CascadeHostClientApi kHostClient = {
     static_cast<uint32_t>(sizeof(CascadeHostClientApi)),
@@ -79,9 +83,10 @@ struct Instance {
 void workerMain(Instance* s) {
     while (!s->stop.load(std::memory_order_relaxed)) {
         int v = 0;
-        if (g_host != nullptr && CASCADE_HOST_HAS(g_host, settings_get)) {
+        const CascadeHostApi* host = g_host.load(std::memory_order_acquire);
+        if (host != nullptr && CASCADE_HOST_HAS(host, settings_get)) {
             char buf[16] = {};
-            const int32_t rc = g_host->settings_get(g_host->ctx, "send", buf, sizeof(buf));
+            const int32_t rc = host->settings_get(host->ctx, "send", buf, sizeof(buf));
             v = (rc >= 0 && buf[0] == '1') ? 1 : 0;
         }
         s->wantSend.store(v, std::memory_order_relaxed);

@@ -233,6 +233,8 @@ void Engine::startPluginInstances(const cascade::core::LoadedPlugin& p) {
 }
 
 void Engine::stopPluginInstances(const std::string& pluginKey) {
+    // A PLUGIN BEING STOPPED ALWAYS UNKEYS (stub campaign B13): the key goes up and the window closes before its instances are destroyed.
+    txPluginModuleGoing(pluginKey, "the plugin that held the key was stopped");
     pluginRunner_.stopPlugin(pluginKey);
     pushPluginHoldSets();
     postPluginLife();
@@ -446,7 +448,11 @@ void Engine::updatePluginLifecycle() {
     // hold sets and the one life directive for the whole pass, then the runner's half of every wake - AFTER the directive, so a plugin's
     // attach() has run before its decoder's create().
     for (const Change& c : changes) {
-        if (c.step == PluginLifeStep::Sleep) { pluginRunner_.stopPlugin(apiPluginKeys_[c.index]); }
+        if (c.step == PluginLifeStep::Sleep) {
+            // A PLUGIN GOING DORMANT ALWAYS UNKEYS (stub campaign B13; a hardening master lacked): the key goes up and the window closes in this pass, before the instances go.
+            txPluginModuleGoing(apiPluginKeys_[c.index], "the plugin that held the key went dormant");
+            pluginRunner_.stopPlugin(apiPluginKeys_[c.index]);
+        }
     }
     pushPluginHoldSets();
     postPluginLife();

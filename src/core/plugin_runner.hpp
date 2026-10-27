@@ -400,6 +400,18 @@ public:
     // The holder's descriptor name and module file name; empty when nobody holds it.
     std::string txHolderName() const;
     std::string txHolderKey() const;
+    // THE SAME STATE AS BITS, FOR THE ENGINE'S PASS (stub campaign B13): one module's TxPluginState without its name, so a settled pass reads it
+    // without allocating (the engine publishes it once a pass for every module that declares CASCADE_CAP_TX_AUDIO, and takes the runner's lock for it).
+    // 0 for a key the runner knows nothing of. Bits: kTxDeclared | kTxAsked | kTxHolder | kTxWaiting | kTxStopped, as txState() sets them.
+    static constexpr std::uint32_t kTxDeclared = 1u;
+    static constexpr std::uint32_t kTxAsked = 2u;
+    static constexpr std::uint32_t kTxHolder = 4u;
+    static constexpr std::uint32_t kTxWaiting = 8u;
+    static constexpr std::uint32_t kTxStopped = 16u;
+    std::uint32_t txBits(const std::string& pluginKey) const;
+    // The holder's module file name copied into `out` (empty when nobody holds it): txHolderKey() without a new string each time the pass asks.
+    // Returns whether anyone holds it.
+    bool txHolderKeyInto(std::string& out) const;
     // The first granted TX_AUDIO plugin in load order, holder or not: the plugin the
     // TRANSMIT page names beside the arming window. Empty when none is granted.
     std::string txFirstGrantedName() const;

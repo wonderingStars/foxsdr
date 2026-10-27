@@ -283,12 +283,19 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} abi_mismatch_fixture abi_decline_fixture)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:abi_mismatch_fixture>"
                  "$<TARGET_FILE:abi_decline_fixture>")
+    elseif(name STREQUAL "test_engine_api_txplugin")
+        # A plugin may key the transmitter (stub campaign B13): the real engine, the transmitting fixture fitted in a scratch plugins folder, and a ledger radio -
+        # no window and no real transmitter anywhere; built first.
+        add_dependencies(${name} tx_audio_fixture)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:tx_audio_fixture>")
     elseif(name STREQUAL "test_tx_audio_app")
         # A real AppWindow with the transmitting fixture fitted in a scratch plugins folder, a
         # fake transmit radio and the real runner, driven through the page's own paths; built
         # first.
         add_dependencies(${name} tx_audio_fixture)
-        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:tx_audio_fixture>")
+        # (the _stepped and _free variants the pass seam adds are handed the same fixture module)
+        set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:tx_audio_fixture>")
+        add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
     elseif(name STREQUAL "test_tx_audio_plate_app")
         # Runs the real cascade.exe (built first) with the transmitting fixture fitted and pinned to run,
         # opens its page in Fitted modules and presses GRANT TRANSMIT with the input script.
@@ -502,7 +509,9 @@ if(NOT CASCADE_SANITIZE_ENABLED OR CASCADE_SANITIZE_THREAD)
         test_scanner_draft_input test_usage_diag_window
         test_apply_command test_bias_key_app test_converter_app_paths test_decoders_mute_grants test_fitted_modules_window
         test_patch_add_radio_part test_plugin_store_window test_radio_panel_reads test_recorder_bookmarks_scanner test_scope_window
-        test_snapshot_app test_soundcard_app_paths test_source_section_window test_tuning_surface)
+        test_snapshot_app test_soundcard_app_paths test_source_section_window test_tuning_surface
+        # stub batch B13 (SAFETY): the plugin's key on the pass against the page's session, the TX thread and the DSP thread - inline 3, stepped 3, free 5 green
+        test_tx_audio_app)
     foreach(src ${CASCADE_TESTS})
         get_filename_component(_name "${src}" NAME_WE)
         file(STRINGS "${src}" _seam REGEX "^[ \t]*#[ \t]*include[ \t]*\"pass_seam[.]hpp\"")

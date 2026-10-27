@@ -993,6 +993,25 @@ void receiverOps(AppWindow& a) {
         CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_SQUELCH, -33.0))));
     }
 
+    // A PLUGIN MAY KEY THE TRANSMITTER (stub campaign B13): the three ops as applyCommand answers them. The behaviour - the grant, the window, the lease, the key - is
+    // tests/test_engine_api_txplugin.cpp's, against a real transmitting module and a ledger radio; what is held here is that applyCommand itself never arms a window (the
+    // window is a SESSION's, as a PTT is), that a grant is for a module that declares transmit audio, and the flat tick's round trip.
+    covering(FOXAPP_OP_TX_PLUGIN_ARM);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_TX_PLUGIN_ARM, 5)), FOXAPI_DENIED));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_TX_PLUGIN_ARM, 0)), FOXAPI_DENIED));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_TX_PLUGIN_ARM, -1)), FOXAPI_DENIED));
+    }
+    covering(FOXAPP_OP_TX_DATA_FLAT);
+    {
+        const FoxCommandResult off = A::apply(a, ints(FOXAPP_OP_TX_DATA_FLAT, 0));
+        CHECK(ok(off));
+        CHECK(off.applied[0] == 0.0);
+        const FoxCommandResult on = A::apply(a, ints(FOXAPP_OP_TX_DATA_FLAT, 1));
+        CHECK(ok(on));
+        CHECK(on.applied[0] == 1.0);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_TX_DATA_FLAT, 2)), FOXAPI_OUT_OF_RANGE));
+    }
     covering(FOXAPI_OP_SET_VOLUME);
     {
         const FoxCommandResult r = A::apply(a, num(FOXAPI_OP_SET_VOLUME, 0.4));
@@ -2313,7 +2332,19 @@ void pluginOps(AppWindow& a) {
         CHECK(A::settingsGranted(a, key));
         CHECK(ok(A::apply(a, text(FOXAPI_OP_PLUGIN_GRANT, key, 2, 0))));
         CHECK(!A::settingsGranted(a, key));
-        CHECK(refused(A::apply(a, text(FOXAPI_OP_PLUGIN_GRANT, key, 3, 1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPI_OP_PLUGIN_GRANT, key, 3, 1)), FOXAPI_OUT_OF_RANGE));   // (and no kind of this op is the TRANSMIT grant: it has an op of its own)
+    }
+
+    // THE TRANSMIT GRANT (stub campaign B13): an op of its own. The stage-1 fixture declares no transmit audio, and "no-such-module.dll" is no module: neither can be granted
+    // (NOT_FOUND, and nothing is written), a revoke is taken for any name, and the value and the text are judged.
+    covering(FOXAPP_OP_PLUGIN_TX_GRANT);
+    {
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_TX_GRANT, "no-such-module.dll", 1)), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_TX_GRANT, key, 1)), FOXAPI_NOT_FOUND));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_TX_GRANT, "no-such-module.dll", 0))));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_TX_GRANT, key, 0))));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_TX_GRANT, key, 2)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_TX_GRANT, "", 1)), FOXAPI_BAD_ARGUMENT));
     }
 
     covering(FOXAPI_OP_PLUGIN_COMMAND);

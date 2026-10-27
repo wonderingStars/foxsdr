@@ -64,6 +64,7 @@
 #endif
 
 #include "core/app_commands.hpp"
+#include "core/plugin_abi.h"
 #include "core/plugin_cleanup.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/plugin_run.hpp"
@@ -74,6 +75,7 @@
 #include "gui/fonts.hpp"
 #include "gui/plugin_window_ids.hpp"
 #include "gui/plugins_view.hpp"
+#include "gui/transmit_page.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "test_check.hpp"
@@ -373,8 +375,17 @@ struct AppWindowTestAccess {
                                               e.pluginRunMode(file) == cascade::core::PluginRun::Always);
             m.settingsCapable = std::find(settingsAskers.begin(), settingsAskers.end(), file) != settingsAskers.end();
             m.settingsAllowed = rawPluginUi(*a.pluginFeed_).settingsAllowed(file);
-            // (master's TRANSMIT block - txAllowed, txCapable, txPlate for a CASCADE_CAP_TX_AUDIO module - is stub batch B13's; no fixture here
-            // declares the bit, so the three stay as makeFittedModule left them, which is what the table's model holds too.)
+            // MASTER'S TRANSMIT BLOCK (0.99.74; the table's side came back in stub batch B13): the grant offered to a module whose active() has been non-zero at
+            // least once - or that already holds it - and what the plate says. No fixture here declares CASCADE_CAP_TX_AUDIO, so the three stay as makeFittedModule
+            // left them and the table's model must hold the same; the key, the plate and the grant's round trip are tests/test_tx_audio_plate_app.cpp's (the real
+            // binary, the transmitting fixture) and the bits the plate is made of are tests/test_engine_api_txplugin.cpp's.
+            if ((p.capabilities & CASCADE_CAP_TX_AUDIO) != 0u) {
+                const cascade::core::PluginRunner::TxPluginState ts = e.pluginRunner_.txState(file);
+                m.txAllowed = std::find(e.pluginTransmitAllowed_.begin(), e.pluginTransmitAllowed_.end(), file) != e.pluginTransmitAllowed_.end();
+                m.txCapable = ts.asked || m.txAllowed;
+                const bool onAir = ts.holder && e.transmitter_.pluginKeyed() && e.txKeyedKey_ == file;
+                m.txPlate = static_cast<int>(cascade::gui::txPlateState(ts.asked, m.txAllowed, e.txArming_.armed(), onAir, ts.waiting, ts.stopped));
+            }
             for (const cascade::core::HostCommand& hc : e.pluginApi_->commands(file)) {
                 m.commands.push_back(FittedModule::Command{hc.id, hc.label});
             }
@@ -606,8 +617,8 @@ bool sameModule(const FittedModule& got, const FittedModule& want, const char* w
     check(got.abiVersion == want.abiVersion, "abiVersion");
     check(got.fittedAtUnix == want.fittedAtUnix, "fittedAtUnix");
     check(got.catalogueIndex == want.catalogueIndex, "catalogueIndex");
-    // (DELIBERATE DIFFERENCE, stub batch B13: the TRANSMIT grant and plate. Master offered them to a module that declares CASCADE_CAP_TX_AUDIO; the
-    // table carries neither yet, so the model never offers the key. No fixture here declares the bit, so master's three stay at their defaults too.)
+    // (The TRANSMIT grant and plate: the table carries them since stub batch B13 - the wanted side restates master's block above. No fixture here declares the
+    // bit, so all three stay at their defaults on both sides.)
     check(got.txCapable == want.txCapable && got.txAllowed == want.txAllowed && got.txPlate == want.txPlate, "tx*");
     bool sameKeys = got.commands.size() == want.commands.size();
     for (std::size_t i = 0; sameKeys && i < got.commands.size(); ++i) {

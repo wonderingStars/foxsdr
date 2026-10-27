@@ -800,12 +800,178 @@ int main() {
     // =====================================================================
     // 10. ...AND THE PLUGIN'S KEY IS WIRED WHERE THE HAND'S TWO ARE
     //
-    //     (CARVED OUT, 2026-10-21, the 0.99.84 merge - ledger TX-PLUGIN, placeholder merge_pending_part_transmit_page_plugin_key: this section
-    //     scans the window for the wiring of a PLUGIN'S key - applyPluginTransmitKey, Transmitter::setPluginKey, pluginMayKey, txArming_.arm,
-    //     armTransmitPlugins/disarmTransmitPlugins - which the window does not have: a plugin cannot key a radio in this tree (the safe state).
-    //     Master's text of the section is in git history (git show origin/master:tests/test_transmit_page.cpp, "10. ...AND THE PLUGIN'S KEY")
-    //     and comes back with the feature, rewritten for the engine's door.)
+    //     RE-PINNED FOR THE ENGINE'S DOOR (stub campaign B13, TX-PLUGIN; the part that was carved out of this file at the 0.99.84 merge, master's text of the section
+    //     is `git show origin/master:tests/test_transmit_page.cpp`, "10. ...AND THE PLUGIN'S KEY"). Master scanned the WINDOW: the plugin's key was asked in its frame
+    //     loop, beside the PTT and the LATCH and between the page being drawn and the tick that acts on it. The key is the ENGINE's now, so the same argument is
+    //     made of the engine's key drive and of the window's ABSENCE from it:
+    //       - it is asked in the drive (ApiHostImpl::txPass), after the hands' levels and before the one tick, and what the tick did is read after it (the order
+    //         txPageKey -> setLatched/setPttHeld -> applyPluginTransmitKey -> Transmitter::tick -> afterTransmitTick was in drawUi; here it is
+    //         setLatched/setPttHeld -> txPluginStep -> tick -> txPluginAfterTick);
+    //       - the one place that decides is pluginMayKey, called once, and the one place that can write a TRUE key into the transmitter is the line under it - every other
+    //         setPluginKey in the tree is a key-UP;
+    //       - the arming window is opened in one place (TxArming::arm, inside the engine's txPluginArmOp, reached only from the table's host, which knows the sender)
+    //         and the grant list grows in one place (the engine's grant op); applyCommand refuses the window as it refuses a PTT;
+    //       - FOXAPI_OP_PLUGIN_GRANT, which a web page may send, has no transmit kind, and none of the three new ops is in the web profile;
+    //       - the window - every file of src/gui - holds nothing that could key a radio: no transmitter, no arming, no decision, no grant list.
+    //     (The behaviour is tests/test_engine_api_txplugin.cpp's and tests/test_tx_audio_app.cpp's; this is the part that reads the source.)
     // =====================================================================
+    {
+        const std::filesystem::path root = std::filesystem::path(CASCADE_SOURCE_DIR) / "src";
+        const std::string atext = readFile(root / "engine" / "fox_engine_api.cpp");
+        const std::string ptext = readFile(root / "engine" / "engine_tx_plugin.cpp");
+        const std::string etext = readFile(root / "engine" / "engine.cpp");
+        CHECK(!atext.empty() && !ptext.empty() && !etext.empty());
+
+        // --- the drive's order ---------------------------------------------------------------------------------------------------------
+        const std::size_t passAt = atext.find("void ApiHostImpl::txPass()");
+        const std::size_t passEnd = passAt == std::string::npos ? std::string::npos : atext.find("\n}\n", passAt);
+        CHECK(passAt != std::string::npos && passEnd != std::string::npos);
+        const std::string pass = (passAt != std::string::npos && passEnd != std::string::npos) ? atext.substr(passAt, passEnd - passAt) : std::string();
+        const std::vector<std::size_t> hLatch = liveHits(pass, "tx.setLatched(rules_.latched());");
+        const std::vector<std::size_t> hPtt = liveHits(pass, "tx.setPttHeld(");
+        const std::vector<std::size_t> hStep = liveHits(pass, "engine_.txPluginStep(");
+        const std::vector<std::size_t> hTick = liveHits(pass, "tx.tick();");
+        const std::vector<std::size_t> hAfter = liveHits(pass, "engine_.txPluginAfterTick();");
+        std::printf("plugin wiring in the drive: step x%zu, tick x%zu, after x%zu\n", hStep.size(), hTick.size(), hAfter.size());
+        CHECK(hLatch.size() == 1u && hPtt.size() == 1u && hStep.size() == 1u && hTick.size() == 1u && hAfter.size() == 1u);
+        if (hLatch.size() == 1u && hPtt.size() == 1u && hStep.size() == 1u && hTick.size() == 1u && hAfter.size() == 1u) {
+            // the hands' levels, THEN the plugin's request, THEN the tick that acts on both, THEN what the tick did
+            CHECK(hLatch[0] < hStep[0]);
+            CHECK(hPtt[0] < hStep[0]);
+            CHECK(hStep[0] < hTick[0]);
+            CHECK(hTick[0] < hAfter[0]);
+        }
+        // the drive is run twice a pass on purpose (the second after the internal tier, API 0.3 8.16.4): both runs are txPass, and nothing else calls the step
+        CHECK(liveHits(atext, "engine_.txPluginStep(").size() == 1u);
+        CHECK(liveHits(atext, "    txPass();").size() == 2u);
+        CHECK(liveHits(etext, "txPluginStep(").empty());
+
+        // --- the decision and the write ---------------------------------------------------------------------------------------------------
+        const std::size_t stepAt = ptext.find("void Engine::txPluginStep(");
+        const std::size_t afterAt = ptext.find("void Engine::txPluginAfterTick()");
+        const std::size_t armOpAt = ptext.find("FoxCommandResult Engine::txPluginArmOp(");
+        const std::size_t driveAt = ptext.find("// --- the drive");
+        const std::size_t grantOpAt = ptext.find("std::int32_t Engine::applyPluginTxGrantOp(");
+        CHECK(stepAt != std::string::npos && afterAt != std::string::npos && armOpAt != std::string::npos && driveAt != std::string::npos && grantOpAt != std::string::npos);
+        std::size_t setKeyTrue = 0;   // writes of a key that is not literally false, across the whole tree
+        std::size_t mayKeyCalls = 0;
+        std::size_t armCalls = 0;
+        std::size_t grantPushes = 0;
+        std::vector<std::string> windowTokens;   // forbidden in src/gui, found there
+        const std::filesystem::path guiRoot = root / "gui";
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+            if (!entry.is_regular_file()) { continue; }
+            const std::string ext = entry.path().extension().string();
+            if (ext != ".cpp" && ext != ".hpp" && ext != ".h") { continue; }
+            const std::string name = entry.path().filename().string();
+            const std::string text = readFile(entry.path());
+            const bool isTransmitterItself = name == "transmitter.cpp" || name == "transmitter.hpp";
+            const bool isRuleItself = name == "tx_audio.cpp" || name == "tx_audio.hpp";
+            const bool inGui = entry.path().string().find((guiRoot / "").string()) == 0u;
+            if (!isTransmitterItself) {
+                for (const std::size_t at : liveHits(text, "setPluginKey(")) {
+                    if (text.compare(at, std::strlen("setPluginKey(false)"), "setPluginKey(false)") == 0) { continue; }
+                    ++setKeyTrue;
+                    CHECK(name == "engine_tx_plugin.cpp");
+                    CHECK(stepAt != std::string::npos && afterAt != std::string::npos && text.compare(at, std::strlen("setPluginKey(may)"), "setPluginKey(may)") == 0);
+                    if (name == "engine_tx_plugin.cpp") { CHECK(at > stepAt && at < afterAt); }
+                }
+            }
+            if (!isRuleItself) {
+                for (const std::size_t at : liveHits(text, "pluginMayKey(")) {
+                    ++mayKeyCalls;
+                    CHECK(name == "engine_tx_plugin.cpp");
+                    if (name == "engine_tx_plugin.cpp") { CHECK(at > stepAt && at < afterAt); }
+                }
+            }
+            for (const std::size_t at : liveHits(text, "txArming_.arm(")) {
+                ++armCalls;
+                CHECK(name == "engine_tx_plugin.cpp");
+                if (name == "engine_tx_plugin.cpp") { CHECK(at > armOpAt && at < driveAt); }
+            }
+            for (const std::size_t at : liveHits(text, "pluginTransmitAllowed_.push_back(")) {
+                ++grantPushes;
+                CHECK(name == "engine_tx_plugin.cpp");
+                if (name == "engine_tx_plugin.cpp") { CHECK(at > grantOpAt); }
+            }
+            if (inGui) {
+                for (const char* forbidden : {"setPluginKey", "txArming_", "pluginMayKey", "pluginTransmitAllowed_", "transmitter_.", "txKeyedKey_", "TxAudioLink"}) {
+                    if (!liveHits(text, forbidden).empty()) { windowTokens.push_back(name + ": " + forbidden); }
+                }
+            }
+        }
+        std::printf("plugin wiring in the tree: key writes (not false) x%zu, pluginMayKey x%zu, TxArming::arm x%zu, grant push x%zu\n", setKeyTrue, mayKeyCalls, armCalls,
+                    grantPushes);
+        CHECK(setKeyTrue == 1u);    // ONE place can ask for a plugin's key to go down... or up
+        CHECK(mayKeyCalls == 1u);   // ONE place decides
+        CHECK(armCalls == 1u);      // ONE door opens the window
+        CHECK(grantPushes == 1u);   // ONE door grants
+        for (const std::string& t : windowTokens) { std::printf("  the window mentions %s\n", t.c_str()); }
+        CHECK(windowTokens.empty());   // the window can neither key a radio nor hold the grant or the window
+
+        // --- the doors' guards -----------------------------------------------------------------------------------------------------------
+        // The window is a session's: applyCommand has no sender and refuses it; the table's host applies it, for the sender it knows, from apply().
+        const std::size_t armCase = etext.find("case FOXAPP_OP_TX_PLUGIN_ARM:");
+        CHECK(armCase != std::string::npos);
+        if (armCase != std::string::npos) { CHECK(etext.substr(armCase, 400).find("refuse(FOXAPI_DENIED") != std::string::npos); }
+        CHECK(liveHits(atext, "engine_.txPluginArmOp(").size() == 1u);
+        CHECK(liveHits(etext, "txPluginArmOp(").empty());
+        // The grant's op refuses a REMOTE sender where it is applied, before it touches the list.
+        const std::size_t grantCase = etext.find("case FOXAPP_OP_PLUGIN_TX_GRANT:");
+        CHECK(grantCase != std::string::npos);
+        if (grantCase != std::string::npos) {
+            const std::string body = etext.substr(grantCase, 1600);
+            const std::size_t remoteCheck = body.find("commandFromRemote_");
+            const std::size_t apply = body.find("applyPluginTxGrantOp(");
+            CHECK(remoteCheck != std::string::npos && apply != std::string::npos && remoteCheck < apply);
+        }
+        // FOXAPI_OP_PLUGIN_GRANT is on the web profile, so it carries no transmit kind: tune (1), settings (2), and the rest "no such grant".
+        const std::size_t pg = etext.find("case FOXAPI_OP_PLUGIN_GRANT:");
+        const std::size_t pgEnd = pg == std::string::npos ? std::string::npos : etext.find("case FOXAPI_OP_PLUGIN_COMMAND:", pg);
+        CHECK(pg != std::string::npos && pgEnd != std::string::npos);
+        if (pg != std::string::npos && pgEnd != std::string::npos) {
+            const std::string body = etext.substr(pg, pgEnd - pg);
+            CHECK(body.find("no such grant") != std::string::npos);
+            CHECK(body.find("Transmit") == std::string::npos && body.find("TxGrant") == std::string::npos && body.find("TxAllowed") == std::string::npos);
+        }
+        // None of the three is on the web profile (nor the CAT one).
+        const std::size_t wp = atext.find("constexpr std::uint32_t kWebProfile[] = {");
+        const std::size_t wpEnd = wp == std::string::npos ? std::string::npos : atext.find("};", wp);
+        CHECK(wp != std::string::npos && wpEnd != std::string::npos);
+        if (wp != std::string::npos && wpEnd != std::string::npos) {
+            const std::string profile = atext.substr(wp, wpEnd - wp);
+            for (const char* op : {"FOXAPP_OP_TX_PLUGIN_ARM", "FOXAPP_OP_PLUGIN_TX_GRANT", "FOXAPP_OP_TX_DATA_FLAT"}) { CHECK(profile.find(op) == std::string::npos); }
+        }
+        // ...and all three need TRANSMIT.
+        const std::size_t gf = atext.find("static uint64_t grantFor(uint32_t op) {");
+        CHECK(gf != std::string::npos);
+        if (gf != std::string::npos) {
+            const std::string body = atext.substr(gf, 2000);
+            const std::size_t tx = body.find("case FOXAPP_OP_PLUGIN_TX_GRANT: case FOXAPP_OP_TX_PLUGIN_ARM: case FOXAPP_OP_TX_DATA_FLAT:");
+            CHECK(tx != std::string::npos);
+            if (tx != std::string::npos) { CHECK(body.substr(tx, 200).find("FOXAPI_GRANT_TRANSMIT") != std::string::npos); }
+        }
+
+        // --- the page ---------------------------------------------------------------------------------------------------------------------
+        // The input keys are the hand's (a plugin's audio is not one of them), and the plugin block reaches the engine only through the arming commands and the two ops.
+        const std::string win = readFile(root / "gui" / "app_window.cpp");
+        const std::size_t pageBody = win.find("void AppWindow::drawTransmitPage()");
+        const std::size_t pageEnd = pageBody == std::string::npos ? std::string::npos : win.find("\nvoid AppWindow::", pageBody + 1);
+        CHECK(pageBody != std::string::npos && pageEnd != std::string::npos);
+        if (pageBody != std::string::npos && pageEnd != std::string::npos) {
+            const std::string page = win.substr(pageBody, pageEnd - pageBody);
+            CHECK(page.find("kTxHandInputCount") != std::string::npos);
+            CHECK(page.find("drawTransmitPluginBlock();") != std::string::npos);
+            CHECK(page.find("setPluginKey") == std::string::npos);
+        }
+        const std::string block = readFile(root / "gui" / "app_window_transmit.cpp");
+        CHECK(!block.empty());
+        CHECK(block.find("txPluginArmCommands(") != std::string::npos);
+        CHECK(block.find("FOXAPP_OP_TX_DATA_FLAT") != std::string::npos);
+        const std::string fitted = readFile(root / "gui" / "app_window_fitted.cpp");
+        CHECK(fitted.find("FOXAPP_OP_PLUGIN_TX_GRANT") != std::string::npos);
+        CHECK(fitted.find("FOXAPI_OP_PLUGIN_GRANT, act.file, 3") == std::string::npos);
+    }
 
     return testSummary("test_transmit_page");
 }

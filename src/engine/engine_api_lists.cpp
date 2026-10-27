@@ -433,6 +433,23 @@ std::uint64_t Engine::apiListsFingerprint() {
     // AUTOMATIC SQUELCH (stub campaign B12): the switch and the floor in whole decibels (a wobble of a tenth must not rebuild the block).
     f.value(squelchAuto_);
     f.value(squelchFloorWhole());
+    // A PLUGIN MAY KEY THE TRANSMITTER (stub campaign B13): the window (open, its length, the seconds left - the block is rebuilt once a second while one is open and not
+    // otherwise), why it last closed, what the last ARM was refused for, who is on the air, DATA (flat), the grant list, and for each module that declares transmit audio the
+    // bits its plate is drawn from. Members and the cached keys: nothing here allocates.
+    f.value(txArming_.armed());
+    f.value(txArming_.minutes());
+    f.value(txArming_.armed() ? txArming_.secondsLeft(cascade::core::TxArming::Clock::now()) : 0);
+    f.text(txArming_.lastReason());
+    f.value(static_cast<int>(txArmRefusal_));
+    f.value(transmitter_.pluginKeyed());
+    f.text(txKeyedName_);
+    f.value(txDataFlat_);
+    for (const std::string& g : pluginTransmitAllowed_) { f.text(g); }
+    for (std::size_t i = 0; i < pluginHost_.plugins().size() && i < apiPluginKeys_.size(); ++i) {
+        const cascade::core::LoadedPlugin& tp = pluginHost_.plugins()[i];
+        if (!tp.loaded || tp.txAudio == nullptr) { continue; }
+        f.value(txPluginBitsOf(apiPluginKeys_[i]));
+    }
     // The status lines.
     for (const std::string* t : {&sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &tuneMismatchNote_,
                                  &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
@@ -886,6 +903,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // The Airband monitor's facts and the scanner's list mode (engine_airband.cpp).
     buildApiListsAirband(b);
     buildApiListsSquelch(b);
+    buildApiListsTxPlugin(b);
     // API 0.3 8.9, STORE_ACTIVITY: the transfer in flight and the ADD ALL run. What is read live (the progress)
     // is not here: the block keeps the repo.
     {

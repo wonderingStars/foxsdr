@@ -1915,6 +1915,14 @@ int AppWindow::run(int frames) {
             demodScopeOpenedByEnv_ = true;
             demodScopeOpen_ = true;
         }
+        // THE TRANSMIT PAGE, BOUNDED RUNS ONLY (0.99.74; stub campaign B13): the plugin controls on it (ARM FOR PLUGINS, DATA (flat)) can only be judged drawn and pressed,
+        // and transmitOpen is cleared at start-up so that no window opens itself. This is the rail switch's own action - it opens a page and keys nothing - and it is
+        // not offered outside a --frames run.
+        if (frames >= 0 && !transmitOpenedByEnv_ && std::getenv("FOXSDR_OPEN_TRANSMIT") != nullptr &&
+            std::getenv("FOXSDR_OPEN_TRANSMIT")[0] != '\0') {
+            transmitOpenedByEnv_ = true;
+            setTransmitPageOpen(true);
+        }
         // THE RADAR SCOPE, the same way but BOUNDED RUNS ONLY (0.99.42): its
         // tiles and their credit can only be judged with it on screen
         // (tests/test_patch_map_credit), and scopeMode is cleared at start-up.
@@ -3457,6 +3465,7 @@ void AppWindow::drawUi() {
     transmitPageLive_ = false;
     transmitLatchPressed_ = false;
     transmitArmRequest_ = -1;
+    transmitPluginArmRequest_ = -2;
     // ===== THE LOOK, in the one order the engine's publish allows a reader that is not the pass (the pump move's step P4) =====
     // THE SESSION'S ANSWERS FIRST (results and events: the table never shows one before the snapshot that carries its effect, so a
     // reader that takes them before the state reads a state at least as new), THE STATUS LINES next (the pass publishes the state and
@@ -3546,6 +3555,9 @@ void AppWindow::drawUi() {
     // (pumpTransmitKey), applied by the engine's next pass under API 0.2's
     // rules - a control lands one pass later (engine-stage4.md decision 2).
     submitTransmitKey();
+    // AND A PLUGIN'S ARMING WINDOW, the same way and for the same reason (stub campaign B13): the page's presses, its "I am still on screen" and its "I am not" are sent
+    // from here, once a frame, never from inside the page - a page that stopped being drawn stops drawing, and the engine must still be told.
+    submitTransmitPluginArming();
 
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
@@ -17794,7 +17806,8 @@ void AppWindow::pumpTransmitKey() {
 void AppWindow::drawTransmitPage() {
     if (!transmitPageOpen_) { return; }
     constexpr float kTxW = 560.0f;
-    constexpr float kTxH = 520.0f;
+    // 520 -> 640 (0.99.74, stub campaign B13): the ARM FOR PLUGINS block and the DATA (flat) tick.
+    constexpr float kTxH = 640.0f;
     // The opening rectangle is the call site's job - see drawDemodScopePage
     // for the frame this page was found in when it was left to ImGui.
     const ImGuiViewport* mv = ImGui::GetMainViewport();
@@ -18199,6 +18212,9 @@ void AppWindow::drawTransmitPage() {
         ImGui::PopStyleColor();
     }
     ImGui::EndDisabled();  // !have
+
+    // --- PLUGINS THAT TRANSMIT (0.99.74, CASCADE_CAP_TX_AUDIO; stub campaign B13) --------
+    drawTransmitPluginBlock();
 
     // --- THE SENTENCE --------------------------------------------------------
     //

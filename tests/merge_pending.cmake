@@ -42,10 +42,9 @@ endmacro()
 # (PLUGIN-SETTINGS-UI - the settings form of a plugin (0.99.43), BROWSE FILES beside a path setting and the folded "Plugin settings" line (0.99.74) - and
 # PLUGIN-ROW-KEYS - a row in a plugin's panel as a key (0.99.77) - are whole: back in stub batch B9, test_plugin_settings_ui, test_decoder_settings_fold_app,
 # test_plugin_pathpick_app, test_programme_audio_app and test_row_keys_app.)
-cascade_merge_pending(TX-PLUGIN        # 0.99.74 a plugin may key the transmitter once granted and armed
-    test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app)
-cascade_merge_pending_part(TX-PLUGIN transmit_page_plugin_key
-    "tests/test_transmit_page.cpp section 10: the wiring of a plugin's transmit key in the window (applyPluginTransmitKey, setPluginKey, pluginMayKey, txArming_.arm, armTransmitPlugins/disarmTransmitPlugins). Restore master's section (git show origin/master:tests/test_transmit_page.cpp) when the feature is re-expressed.")
+# (TX-PLUGIN - 0.99.74 a plugin may key the transmitter once granted and armed - is whole: back in stub batch B13, SAFETY-CRITICAL, the engine's: test_tx_audio_app,
+# converted (the page is a stand-in for the commands the real page sends), test_tx_audio_page_app and test_tx_audio_plate_app, the real binary's; and the part
+# transmit_page_plugin_key, tests/test_transmit_page.cpp section 10, re-pinned against the engine's key drive. The engine's own cases are tests/test_engine_api_txplugin.cpp.)
 # (IMPORT-DIALOG - the "Import a frequency list" window, 0.99.80, and pickFile, the BROWSE key's file dialog - is whole: back in stub batch B8,
 # test_import_dialog_app and the part excuse_cap_pickfile: tests/test_excuse_cap.cpp counts master's three native-wait call sites again.)
 cascade_merge_pending(TESTER-LINK      # 0.99.45 / 0.99.52 beta-tester portal link

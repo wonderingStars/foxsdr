@@ -2180,6 +2180,58 @@ apart, a carrier held for fourteen seconds of the pass clock, a retune / a new b
 receiver, the press that finds no level), test_apply_command (134 implemented, 134 tested), and the real-binary tests test_deck_knobs_app (the application behind a fake radio: the dials' order, size
 and spacing, the AUTO keys, the pace, the twist that turns AUTO off, AUTO following the noise, the carrier, the Airband routing) and test_theme_census (every theme, both window sizes).
 
+### 9.10 A plugin may key the transmitter (stub campaign B13, SAFETY-CRITICAL; docs/engine-stage4.md 6.22)
+
+Master's 0.99.74 let a plugin that declares `CASCADE_CAP_TX_AUDIO` send transmit audio, on the owner's written approval of 2026-10-12 (a Winlink-compatible radio link): **a hand, or a plugin the
+operator has granted and armed.** The rule is master's and is unchanged (`core/tx_audio.hpp`: `pluginMayKey`, `TxArming`; `core/transmitter.hpp`: `setPluginKey`, the cap, the fault latch, one source,
+the TX thread's dead-man). What moved is **who decides**: master's window decided once a frame, so a window that stopped stopped deciding; the engine runs without a window now, so the engine
+decides (`src/engine/engine_tx_plugin.cpp`, once a key drive - `ApiHostImpl::txPass`, between the hands' levels and `Transmitter::tick()`), from state it holds itself. **No real transmitter has
+been keyed in the making of this: every test keys a ledger fake.**
+
+**Three ops, every one LOCAL-only: grant `TRANSMIT`, not on the web profile (still 38 ops), refused to every REMOTE session at submit - three times over (the application's own ops are for
+sessions on this machine; `TRANSMIT` held by a REMOTE session is a PTT and nothing else; the closed op profile of the web server's session) - and again where each is applied.** None rides on
+`FOXAPI_OP_PLUGIN_GRANT`, which IS on the web profile: its kinds stay 1 (tune) and 2 (settings), and kind 3 is still `OUT_OF_RANGE` "no such grant".
+
+* **`FOXAPP_OP_PLUGIN_TX_GRANT` (0x870D)**: `text`: the module's file name; `ival[0]`: 1 grant / 0 revoke (`OUT_OF_RANGE` for anything else; empty text is `BAD_ARGUMENT`). A grant is for a **loaded**
+  module that declares transmit audio (`NOT_FOUND` otherwise, nothing written); a revoke is accepted for any name (a grant held for a module that has gone can still be taken back). The grant is the
+  engine's durable list (`Engine::pluginTransmitAllowed_`), pushed to the API core (`CASCADE_STATE_TX_GRANTED`) and the plugin runner, **saved** (`AppConfig::pluginTransmitAllowed`, written by
+  `Engine::fillConfig`, restored by `applyConfig`) - and worth nothing alone. A revoke unkeys, and closes the window when it was the last grant, **in the pass that applies it**.
+* **`FOXAPP_OP_TX_PLUGIN_ARM` (0x842B)**: the operator's **arming window**, which the engine holds. `ival[0]`: **5 / 15 / 60** open (or restart) it for that many minutes; **0** close it (`ival[1]`:
+  0 "you pressed OFF", 1 "the TRANSMIT page was closed"); **-1** "the TRANSMIT page is still on screen" (below). Anything else - including a 64-bit value that wraps to 5 - is `OUT_OF_RANGE`.
+  An ARM is refused with a reason in `applied[0]` (`core::TxArming::Refusal`): **1** no transmit radio is open (`NO_DEVICE`; a radio that has faulted counts as none), **2** no loaded plugin holds
+  the grant (`NOT_FOUND`); the order is the order an operator can fix them in. A good ARM clears the plugin fault latch (a plugin cut by the cap or a fault stays cut until the operator arms
+  again - this is the only place that clears it), and `applied[0]` is 0. **`applyCommand` refuses the op** (`DENIED`, as it refuses a PTT): a window is a session's, so it is applied by the
+  table's host, which knows the sender.
+  **THE WINDOW IS A LEASE ON THE SESSION THAT OPENED IT.** It lasts while that session is open on this machine (never a REMOTE one), keeps its heartbeat inside `Transmitter::kKeyAliveWait`
+  (1 s), and keeps saying the page is on screen (ARM -1 inside the same second - the page sends it every frame it is drawn while a window is open, and for 3 s after an ARM). A window that
+  crashed, froze or closed its page lets the lease go and the window closes with it - so nothing the window fails to do can leave a plugin able to key. A command lost (a session whose queue
+  is full is answered `BUSY`) cannot leave a window open either. Any LOCAL session may close a window (OFF only ever makes things safer); only the owner can refresh it.
+* **`FOXAPP_OP_TX_DATA_FLAT` (0x842C)**: the page's DATA (flat) tick; `ival[0]` 0 / 1; `applied[0]` the value after. Session-only (never saved; on by default). On, a plugin's audio goes out as NFM with the
+  pre-emphasis off, whatever mode the page shows; the microphone and the tone are never affected. It keys nothing.
+
+**THE KEY.** Rebuilt from nothing every drive (the request is `Transmitter::setPluginKey`, written in one place) and honoured only while ALL of: the plugin that would hold the transmitter has the
+grant (checked here from the durable list as well as in the runner, so neither alone can let an ungranted plugin through), the window is open, its lease is held, the control loop has ticked inside
+`kKeyAliveWait`, the plugin's own `active()` is fresh and yes, a radio is open and has not faulted, no hand has a key (PTT, LATCH or the web remote: a hand wins and takes the audio with it; the plugin
+is keyed again when the hand lets go), and no fault has been seen since the window opened. **The window closes - and the key goes up, and a plugin that goes on asking is NOT re-keyed until a person
+arms a new window - on every one of**: the page closed (OFF reason 1, or the lease lapsing), OFF, the grant withdrawn, the transmit radio closed (`TX_CLOSE`) or changed (`TX_OPEN`), a radio fault or
+the TX thread letting go on its own, the cap (one continuous plugin key is never longer than the latch's 60 s), the window's own time, a configuration loaded, the receiver stopped (`RUN 0`), a fault
+stopping the engine, the engine stopping, the window that armed it closed or silent. **And, a hardening master lacked, added on purpose: the keyed plugin going dormant (`PLUGIN_RUN`'s hysteresis),
+being stopped, unloaded (a rescan, a removal) or rebuilt (the runner's instances remade by a retune, a source change or a patch) unkeys at once and closes the window.** A rebuild that finds a window
+open but nothing keyed leaves it alone.
+
+* **`fact.tx.plugin.*`** (LOCAL only - a REMOTE session reads none of them): `armed` ("1"/"0"), `minutes`, `secondsLeft` (both "" when closed; the block is rebuilt once a second while a window is open and not
+  otherwise), `name` (the first granted module, for "ARMED: <name> may key this transmitter"), `keyed` (the plugin on the air, "" none), `refusal` ("0" none, "1" no radio, "2" no grant; answered by the radio
+  opening, the grant being given, or OFF), `reason` (why the window last closed, "" while open and after an OFF the operator pressed), `dataFlat`. **`fact.plugin.<module file>.tx`**: published for a module that declares
+  transmit audio and no other: ONE DECIMAL NUMBER of `FOXAPP_TXBIT_*` bits (declared 1, asked 2 - its `active()` has been non-zero at least once: the GRANT TRANSMIT key is offered - holder 4,
+  waiting 8, stopped 16, granted 32, on air 64). The window words the plate from them (`gui::txPlateState`); the engine words nothing.
+* **The window's half** (`src/gui/app_window_transmit.cpp`, `gui/transmit_page.hpp`'s `txPluginArmCommands`): the TRANSMIT page's ARM FOR PLUGINS 5 / 15 / 60 MIN and OFF keys, the arming line and
+  countdown, the refusal, the amber "why it closed", and DATA (flat); the Fitted modules plate's GRANT / REVOKE TRANSMIT key (`FOXAPP_OP_PLUGIN_TX_GRANT`) and the plate sentence. It holds no state that could key a
+  radio: `tests/test_transmit_page.cpp` section 10 reads the source and fails if any file of `src/gui` mentions the transmitter, the arming window, the decision or the grant list.
+
+Held by tests/test_engine_api_txplugin.cpp (the engine with a real transmitting module, a ledger radio and no window: the surface and the four locks, the refusals, quiet-unless-everything-holds, the key and what the
+module is told, the revoke within one pass, every closing reason, the cap, the hardening, the hand, the dead-man, the config, the facts), test_tx_audio_app (converted: the same claims through the
+application's window), test_tx_audio_page_app and test_tx_audio_plate_app (the real binary), test_transmit_page section 10 (the wiring), and test_apply_command (137 implemented, 137 tested).
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

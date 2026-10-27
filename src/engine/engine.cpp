@@ -92,6 +92,10 @@ Engine::Engine(EngineHost& host)
       pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
                                                 /*audioEnabled=*/true}),
       api_(std::make_unique<ApiHost>(*this, std::string())) {
+    // THE RING A TRANSMITTING PLUGIN'S AUDIO ARRIVES THROUGH (host API level 2; stub campaign B13): the runner holds the writing end, the Transmitter the reading end, and neither holds
+    // a pointer to the other. Harmless with no plugin: nothing writes, and nothing reads unless a plugin's key is the only key down.
+    transmitter_.setPluginLink(txLink_);
+    pluginRunner_.setTxLink(txLink_);
     // A directive posted wakes a front-end thread that is waiting for the pass (waitForPassCounter): the pass it waits for may be
     // waiting, in turn, for that thread to apply the directive. The lock is taken and dropped so a waiter between its check and
     // its wait cannot miss the notify.
@@ -2951,6 +2955,9 @@ bool Engine::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
     // inside that same module. Getting this order wrong is a crash in someone
     // else's DLL with no useful stack.
     lap(cascade::core::kReloadPhaseDecoders);
+    // A PLUGIN BEING UNLOADED ALWAYS UNKEYS (stub campaign B13; a hardening master lacked): the key goes up and the window closes before the decoders - and the transmit
+    // instances with them - are destroyed.
+    txPluginModuleGoing(std::string(), "the plugins were unloaded");
     pipeline_.setPluginRunner(nullptr);
     pluginRunner_.clear();
     // THE PATCH'S DECODERS, BY THE SAME RULE AND SYNCHRONOUSLY. A patch set
@@ -3826,6 +3833,7 @@ void Engine::refreshPluginRunner() {
     // moment ago could overwrite one the user has just changed.
     applyPluginTuneGrants();
     applyPluginSettingsGrants();
+    applyPluginTransmitGrants();
     // THE BASEMAP, if a plugin supplies one. The first loaded plugin declaring
     // the capability wins: two basemaps cannot both be the map, and picking
     // silently by load order is more predictable than picking by some quality
@@ -3864,6 +3872,9 @@ void Engine::refreshPluginRunner() {
     // The receiver's stream clock, which the runner writes and the
     // level-1 get_stream_info reads (CascadeStreamInfo).
     pluginRunner_.setStreamClock(pluginApi_->streamClock());
+    // A REBUILD DESTROYS THE TRANSMIT INSTANCES: a plugin that is keyed loses its key and its window here (stub campaign B13), not a block later; one that is merely armed
+    // is left as it is (its instances come back asking, and the window is still the operator's).
+    txPluginModuleGoing(std::string(), "the plugins were rebuilt");
     pipeline_.setPluginRunner(nullptr);
     if (patchRunning_) {
         // THE PATCH HAS THE DECODERS (0.99.18). While it runs the
@@ -5129,6 +5140,8 @@ void Engine::openTransmitRadio() {
         transmitter_.setSink(txSinkForTest_());
         transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
         transmitter_.setInput(cascade::core::TxInput::Tone);
+        transmitter_.setDataFlat(txDataFlat_);
+        if (txArmRefusal_ == cascade::core::TxArming::Refusal::NoRadio) { txArmRefusal_ = cascade::core::TxArming::Refusal::None; }
         return;
     }
     auto tx = std::make_unique<cascade::source::PlutoTx>();
@@ -5148,6 +5161,9 @@ void Engine::openTransmitRadio() {
     transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
     transmitter_.setInput(cascade::core::txInputFromIndex(transmitInputIndex_));
     transmitter_.setToneHz(transmitToneHz_);
+    transmitter_.setDataFlat(txDataFlat_);
+    // An ARM refusal that said "no transmitter is open" is answered by this (stub campaign B13).
+    if (txArmRefusal_ == cascade::core::TxArming::Refusal::NoRadio) { txArmRefusal_ = cascade::core::TxArming::Refusal::None; }
     followTransmitFrequency();
 }
 
@@ -5157,6 +5173,8 @@ void Engine::closeTransmitRadio() {
     // unkeys before either runs.
     transmitter_.setSink(nullptr);
     transmitError_.clear();
+    // The radio is gone, and so is the operator's authorisation to key it: a window armed over one board does not carry over to the next one opened (stub campaign B13).
+    txPluginEnd("the transmit radio was closed");
 }
 
 void Engine::followTransmitFrequency() {
@@ -7705,6 +7723,28 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // consent to check and no hold to buy, so it is refused rather than guessed at. (Kept as a refusal and not deleted so that a
             // caller that has not heard is told, not left to the "no such operation" of the default arm.)
             return refuse(FOXAPI_DENIED, "the transmit key is pressed through a session, not applied directly");
+        case FOXAPP_OP_TX_PLUGIN_ARM:
+            // REFUSED, NOT HANDLED, as a PTT is: the arming window belongs to a SESSION (its lease: ApiHostImpl::apply calls txPluginArmOp for the sender it knows), and nothing that
+            // reaches applyCommand speaks for one (stub campaign B13).
+            return refuse(FOXAPI_DENIED, "the arming window is opened through a session, not applied directly");
+        case FOXAPP_OP_TX_DATA_FLAT:
+            if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
+            if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "0 or 1"); }
+            txDataFlat_ = on;
+            transmitter_.setDataFlat(txDataFlat_);
+            res.applied[0] = txDataFlat_ ? 1.0 : 0.0;
+            return res;
+        case FOXAPP_OP_PLUGIN_TX_GRANT: {
+            // THE TRANSMIT GRANT (stub campaign B13): LOCAL sessions only. The table refuses a REMOTE sender three ways at submit; this is the fourth, where it is applied, for any
+            // path that reaches here with the remote flag set (ApiHostImpl::apply sets it around every call).
+            if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
+            if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "0 revokes, 1 grants"); }
+            std::string why;
+            const std::int32_t st = applyPluginTxGrantOp(text, on, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            res.applied[0] = on ? 1.0 : 0.0;
+            return res;
+        }
         case FOXAPI_OP_TX_SET_MODE:
             if (c.ival[0] < 0 || c.ival[0] >= cascade::dsp::kTxModeCount) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "no such transmit mode");
@@ -8438,6 +8478,11 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // attach() finds them there.
     pluginSettingsAllowed_ = cfg.pluginSettingsAllowed;
     applyPluginSettingsGrants();
+    // Host API level 2: the TRANSMIT grant, applied on the same terms. The arming window is NOT in the config and therefore not here: a freshly loaded config always leaves it
+    // CLOSED, whatever the engine was doing before (a configuration loaded mid-session closes it and unkeys too), so a restored grant is never a restored authorisation.
+    pluginTransmitAllowed_ = cfg.pluginTransmitAllowed;
+    applyPluginTransmitGrants();
+    txPluginEnd("a configuration was loaded");
     pluginSettings_ = cfg.pluginSettings;
     pluginApi_->loadSettings(pluginSettings_);
     pluginSettingsGen_ = pluginApi_->settingsGeneration();
@@ -8898,6 +8943,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
     cfg.pluginSettingsAllowed = pluginSettingsAllowed_;
+    cfg.pluginTransmitAllowed = pluginTransmitAllowed_;   // the grant is saved; the arming window never is (stub campaign B13)
     cfg.pluginSettings = pluginSettings_;
     // The old file-name list is dropped (0.99.73): applyConfig migrated it, by id, into pluginRun, and an older build that reads this file
     // sees nothing stopped rather than a stale list. AUTO is the default and is never written.
@@ -9568,6 +9614,7 @@ void Engine::startControlThread() { startControlThread(ControlThreadOptions{}); 
 
 void Engine::startControlThread(const ControlThreadOptions& options) {
     if (controlThread_.joinable()) { return; }
+    txPluginStopping_.store(false, std::memory_order_relaxed);   // a thread restarted after a stop may drive a plugin's key again (the window is closed)
     controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
     {
         std::lock_guard<std::mutex> lk(controlExitMutex_);
@@ -9626,6 +9673,10 @@ void Engine::stopControlThread() {
     // from a session's key, and every session's key is ended there too.
     transmitter_.setLatched(false);
     transmitter_.setPttHeld(false);
+    // A PLUGIN'S KEY GOES UP TOO, and a pass still running cannot ask for it again (stub campaign B13): the flag first, then the request - txPluginStep reads the flag after its own
+    // set, so either it sees the flag or this false lands after its true. The window itself is the pass's; the loop's last act closes it (ApiHost::engineStopping).
+    txPluginStopping_.store(true, std::memory_order_relaxed);
+    transmitter_.setPluginKey(false);
     transmitter_.releaseRemote("the engine's control thread is stopping");
     controlRun_.store(false);
     controlParkForTest_.store(false);

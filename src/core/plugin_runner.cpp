@@ -1275,6 +1275,36 @@ PluginRunner::TxPluginState PluginRunner::txState(const std::string& pluginKey) 
     return s;
 }
 
+std::uint32_t PluginRunner::txBits(const std::string& pluginKey) const {
+    if (pluginKey.empty()) { return 0u; }
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::uint32_t bits = 0u;
+    if (std::find(txAsked_.begin(), txAsked_.end(), pluginKey) != txAsked_.end()) { bits |= kTxAsked; }
+    for (std::size_t i = 0; i < txInstances_.size(); ++i) {
+        const TxInstance& t = txInstances_[i];
+        if (t.key != pluginKey) { continue; }
+        bits |= kTxDeclared;
+        if (t.asked) { bits |= kTxAsked; }
+        if (t.stopped) { bits |= kTxStopped; }
+        const bool holder = (i == txHolder_);
+        if (holder) { bits |= kTxHolder; }
+        const bool isGranted = std::find(txGranted_.begin(), txGranted_.end(), t.key) != txGranted_.end();
+        if (isGranted && t.active && !holder && txHolder_ != kNoTx) { bits |= kTxWaiting; }
+        break;
+    }
+    return bits;
+}
+
+bool PluginRunner::txHolderKeyInto(std::string& out) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (txHolder_ == kNoTx) {
+        out.clear();
+        return false;
+    }
+    out.assign(txInstances_[txHolder_].key);
+    return true;
+}
+
 std::vector<std::string> PluginRunner::txAskers() const {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<std::string> out = txAsked_;

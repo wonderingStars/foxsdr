@@ -81,7 +81,7 @@ const std::set<std::string>& engineWritten() {
         "nrEnabled", "nrStrength", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanSelection",
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
-        "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed",
+        "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed", "pluginTransmitAllowed",
         "pluginSettings", "pluginsStopped", "pluginRun", "pluginSites", "closedWindows", "pluginMuteOverride", "userPresets",
         // Engine::telemetryJournal and the clean-exit flag
         "telemetryEnabled", "telemetryInstallId", "telemetryFirstRun", "telemetryFirstVersion", "telemetryLaunches",
@@ -216,7 +216,7 @@ AppConfig seeded() {
     c.pluginStoreWidth = 800;
     c.pluginStoreHeight = 600;
     c.pluginRun["Radar Sweep"] = "always";   // (the engine's since stub batch B2 - how a plugin runs; asserted back below, as seeded)
-    c.pluginTransmitAllowed = {"Radar Sweep"};
+    c.pluginTransmitAllowed = {"Radar Sweep"};   // (the engine's since stub batch B13 - the TRANSMIT grant, saved with the other two; the arming window is never in the file)
     c.messagesSeen = {"msg-0099", "msg-0100"};
     c.testerToken = "0123456789abcdef0123456789abcdef";   // 32 hex: the loader discards anything else
     c.testerTokenInvalid = true;

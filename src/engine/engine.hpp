@@ -123,6 +123,15 @@ namespace cascade::engine {
 // PluginUiReport, EngineStatusText) moved to engine/engine_shell.hpp with the fence (engine extraction stage 4, step 5): a
 // name reachable only through this header is a name the interface cannot use. They are in namespace cascade::engine still.
 
+// WHAT THE TABLE'S HOST TELLS THE ENGINE ABOUT THE SESSION THAT HOLDS THE ARMING WINDOW (stub campaign B13, engine_tx_plugin.cpp): the host is the only
+// thing that knows a session's heartbeat, so the engine's plugin-key step is handed the answer once a drive (ApiHostImpl::txPass), never a session to look up.
+// A window armed by a session lasts while that session is open on this machine, keeps its heartbeat and keeps saying its TRANSMIT page is on screen.
+struct TxPluginLease {
+    bool sessionPresent = false;   // the session that armed the window is open (not closed, not detached)
+    bool sessionRemote = false;    // ...and a REMOTE session never holds a window (it cannot open one; this is the second lock)
+    std::int64_t beatAgeMs = 0;    // milliseconds since that session's last heartbeat
+};
+
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
 using PluginUiApplier = std::function<void(const cascade::core::PluginDirective&)>;
 
@@ -2373,6 +2382,10 @@ private:
     // AppConfig::pluginSettingsAllowed - the durable copy of the level-1
     // SETTINGS grant, for exactly the reason pluginTuneAllowed_ is one.
     std::vector<std::string> pluginSettingsAllowed_;
+    // AppConfig::pluginTransmitAllowed - the durable copy of the level-2 TRANSMIT grant (stub campaign B13): kept here, saved by fillConfig, restored by applyConfig,
+    // and pushed to the API core and the plugin runner (applyPluginTransmitGrants) the way the other two are. THE ENGINE'S: a grant is a decision about what may
+    // key this radio, and it is made only by FOXAPP_OP_PLUGIN_TX_GRANT, a LOCAL op that is not on the web profile. It is worth nothing alone (the arming window is the other half).
+    std::vector<std::string> pluginTransmitAllowed_;
     // AppConfig::pluginSettings - the durable copy of every plugin's own
     // settings. PluginApiCore holds the live one; applyPluginApi copies it
     // here whenever its generation moves, and currentConfig() saves this.
@@ -3035,6 +3048,59 @@ private:
     int squelchFloorWhole() const;
     // fact.squelch.auto / fact.squelch.floorDb.
     void buildApiListsSquelch(ApiListBlock& b);
+
+    // ===== A PLUGIN MAY KEY THE TRANSMITTER (stub campaign B13, engine_tx_plugin.cpp; 0.99.74's CASCADE_CAP_TX_AUDIO; docs/api-0.3-additions.md 9.10) =====
+    // SAFETY-CRITICAL. The rule is master's (core/tx_audio.hpp: pluginMayKey, TxArming) and so is the Transmitter's half (setPluginKey, the cap, the fault latch, one source);
+    // what moved is WHO DECIDES: master's window decided once a frame, so a window that stopped stopped deciding. Here the ENGINE does, once a key drive (ApiHostImpl::txPass,
+    // before Transmitter::tick), from state it holds itself:
+    //   - the GRANT (pluginTransmitAllowed_, FOXAPP_OP_PLUGIN_TX_GRANT) and the ARMING WINDOW (txArming_, FOXAPP_OP_TX_PLUGIN_ARM), both LOCAL-only and neither on the web profile;
+    //   - the window's LEASE: it belongs to the session that opened it and lives while that session is open, keeps its heartbeat and keeps saying the TRANSMIT page is on screen
+    //     (txArmLiveMs_, said by ARM -1 every frame the page is drawn). A window that crashed, froze or closed its page lets the lease go within Transmitter::kKeyAliveWait and
+    //     the window closes with it - the plugin cannot be left able to key by anything the window failed to do;
+    //   - a plugin's key request is rebuilt from nothing every drive and honoured only while the grant AND the arming are current (revoking either unkeys in the same drive).
+    // Every closing reason is the master's (page closed, radio closed, OFF, grant withdrawn, fault, cap, the window's own time, a configuration loaded) plus the engine's: the
+    // receiver stopped, the transmitter changed, the engine stopping, the window gone or silent, and (a deliberate hardening master lacked) THE KEYED PLUGIN GOING DORMANT, STOPPED,
+    // UNLOADED OR REBUILT - which unkeys AND closes the window, so a plugin woken again does not re-key until a person arms it.
+    std::shared_ptr<cascade::core::TxAudioLink> txLink_ = std::make_shared<cascade::core::TxAudioLink>();  // the ring the runner writes and the Transmitter reads
+    cascade::core::TxArming txArming_;                  // THE WINDOW. Pass thread. Session-only: no field of the config can hold one.
+    std::uint64_t txArmOwner_ = 0;                      // the lease: the session that opened it (0 none)
+    std::int64_t txArmLiveMs_ = 0;                      // ...and the steady-clock millisecond it last said the page is on screen
+    cascade::core::TxArming::Refusal txArmRefusal_ = cascade::core::TxArming::Refusal::None;   // why the last ARM was refused (published; cleared by what answers it)
+    std::uint64_t txFaultsSeen_ = 0;                    // Transmitter::faultCount() at the last drive: a change closes the window
+    std::string txKeyedKey_;                            // the module file of the plugin that is on the air ("" none)
+    std::string txKeyedName_;                           // ...and its name, for the log and the page
+    std::string txWhyNot_;                              // why the last drive withheld the key (the unkey line says it)
+    std::string txHolderScratch_;                       // the runner's holder, copied here (no new string each drive)
+    bool txPluginKeyedPrev_ = false;                    // the last drive found the plugin keyed
+    bool txRunnerKeyed_ = false;                        // the runner was last told keyed (it is told only on a change: its lock is the DSP thread's)
+    bool txPublishedArmed_ = false;                     // what the plugins were last told (CASCADE_STATE_TX_ARMED / _TRANSMITTING) - told every drive while anything is up
+    std::string txPublishedKey_;
+    bool txDataFlat_ = true;                            // DATA (flat): a plugin's audio goes out NFM flat; session-only
+    std::atomic<bool> txPluginStopping_{false};         // stopControlThread's: no plugin keys again (set before its setPluginKey(false); read by the step after its own set)
+    // The grants into the API core and the runner (the way applyPluginTuneGrants does it): after every rescan and every config load, and on each change.
+    void applyPluginTransmitGrants();
+    // FOXAPP_OP_PLUGIN_TX_GRANT. NOT_FOUND for a grant to a module that is not loaded or declares no transmit audio; a revoke is taken for any name.
+    std::int32_t applyPluginTxGrantOp(const std::string& moduleFile, bool grant, std::string& why);
+    // FOXAPP_OP_TX_PLUGIN_ARM, for the SESSION `session` (the table's host calls it from apply(), which knows the sender; applyCommand refuses the op). `remote`: the
+    // sender is a REMOTE session - refused here as well as at submit.
+    FoxCommandResult txPluginArmOp(std::uint64_t session, bool remote, bool sessionOpen, const FoxCommand& c);
+    // The window closes, saying why (the log line and the page's amber sentence). Does nothing when it is closed already.
+    void txPluginDisarm(const char* why);
+    // The key goes up NOW and the window closes (the receiver stopped, the transmitter changed, the engine stopping, a config loaded, the plugins unloaded or rebuilt):
+    // setPluginKey(false) and txPluginDisarm, from the pass or (the atomic half only) from the thread that stops it.
+    void txPluginEnd(const char* why);
+    // A module's instances are going away or going to sleep (stop, dormancy): if it is the one on the air, the key goes up and the window closes.
+    void txPluginModuleGoing(const std::string& moduleFile, const char* why);
+    // The decision, once a key drive and BEFORE Transmitter::tick() (it is master's applyPluginTransmitKey), and what the tick did (afterTransmitTick).
+    void txPluginStep(const TxPluginLease& lease);
+    void txPluginAfterTick();
+    bool txAnyGrant() const;
+    // The first granted loaded module that declares transmit audio, by name ("" none): the page's "ARMED: <name> may key ...".
+    std::string txFirstGrantName() const;
+    // fact.tx.plugin.* and fact.plugin.<file>.tx (LOCAL only). The fingerprint's half is in apiListsFingerprint.
+    void buildApiListsTxPlugin(ApiListBlock& b);
+    // One module's transmit state as the facts carry it: PluginRunner::txBits plus kTxGrantedBit / kTxOnAirBit (docs/api-0.3-additions.md 9.10).
+    std::uint32_t txPluginBitsOf(const std::string& moduleFile) const;
 
 public:
     // --- THE ENGINE'S LIFE (engine stage 3a) ---------------------------------

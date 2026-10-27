@@ -1,6 +1,28 @@
 // test_tx_audio_app.cpp - a plugin transmits, or does not, through the REAL AppWindow, the real
 // plugin runner and a REAL plugin module (tests/fixtures/tx_audio_plugin.cpp).
 //
+// CONVERTED (stub campaign B13, TX-PLUGIN; master's test unedited except as the reasons below say). It was master's own test of master's AppWindow: it reached the
+// transmitter, the arming window, the grant and the plugin runner through `a.transmitter_`, `a.txArming_`, `a.armTransmitPlugins`, `a.applyPluginTransmitKey`,
+// `a.afterTransmitTick` ... - members this branch's window does not have, because a plugin's key is the ENGINE's (src/engine/engine_tx_plugin.cpp): the grant, the arming
+// window and the decision are decided on the engine's pass, so a window that stops cannot leave a plugin able to key. The house pattern (tests/test_programme_audio_app.cpp):
+// rawEngine(a.engine_) through AppWindowTestAccess, tests/pass_seam.hpp for every call that must run on the pass thread - so the test is registered again as _stepped, and
+// the same assertions run against the pass on its own thread - and the PAGE is a stand-in that sends exactly the commands the real page sends (tx_front_end.hpp's
+// FrontEnd for the key, gui::txPluginArmCommands for the window), because there is no ImGui frame here.
+//   * frame() is the page's frame: the heartbeat, the key's commands (PTT), the arming window's commands (ARM, "still here", OFF), then ONE pass of the engine - whose key
+//     drive is what master's frame() called by hand (applyPluginTransmitKey, Transmitter::tick, afterTransmitTick); tests/test_transmit_page.cpp section 10 pins that order;
+//   * arm() / off() / grant() are the table's ops (FOXAPP_OP_TX_PLUGIN_ARM, FOXAPP_OP_PLUGIN_TX_GRANT), answered as master's were: the refusal is the result's applied[0];
+//   * the arming window and the grant are read from the engine (txArming_, pluginTransmitAllowed_), the config as the window reads it (publishConfig, currentConfig).
+// DELIBERATE DIFFERENCES, each with its reason:
+//   * quiet, step 4: master armed and closed the page with no live frame between, so a module that was asking never saw an armed, live window. Here pressing ARM IS a live
+//     frame (the lease starts live), and a module that asks at that instant may key in the pass that arms it; the page closing is the next frame. The step arms with the module
+//     NOT asking and lets it ask only after the page has closed - the same claim (a window closed by the page going is not reopened by the page returning), made without the race;
+//   * refusals: a length that is not 5, 15 or 60 is refused at SUBMIT (OUT_OF_RANGE: 0 is OFF, -1 is "the page is live"), where master's armTransmitPlugins returned BadMinutes;
+//     the case is the same and the answer is mapped to it;
+//   * closes, "the radio being CLOSED": the sentence is the engine's closeTransmitRadio, "the transmit radio was closed", as master's (the table's TX_CLOSE says "the
+//     transmitter was closed" first; tests/test_engine_api_txplugin.cpp holds that path).
+// The same claims, and the ones master could not make (the revoke within one pass, a REMOTE session never granted, the plugin dormant or unloaded while keyed, the window's
+// lease), are in tests/test_engine_api_txplugin.cpp, against the engine with no window at all.
+//
 // WHAT THIS ADDS TO tests/test_tx_audio.cpp. That file proves each rule on its own with static
 // tables. This one proves the rules are WIRED: that the application's own frame loop (the
 // decision, the transmitter's tick, the runner being told it is keyed, the window closing for
@@ -10,11 +32,9 @@
 // (actives, pulls, frames), so "it was never pulled from" is read off the module and not off
 // the application's account of itself.
 //
-// THE FRAME. drawUi runs, in this order, txPageKey -> setLatched/setPttHeld ->
-// applyPluginTransmitKey -> Transmitter::tick -> afterTransmitTick, and
-// tests/test_transmit_page.cpp reads app_window.cpp to pin that order. frame() below makes the
-// same calls in the same order, so a scenario is a sequence of real frames with the page live
-// or not, the PTT held or not, and a few milliseconds of real time between them (the DSP
+// THE FRAME. The engine's key drive runs, in this order, the hands' levels -> txPluginStep (master's applyPluginTransmitKey) -> Transmitter::tick ->
+// txPluginAfterTick (master's afterTransmitTick), and tests/test_transmit_page.cpp reads fox_engine_api.cpp to pin that order. frame() below sends what the page sends and
+// runs one pass, so a scenario is a sequence of real frames with the page live or not, the PTT held or not, and a few milliseconds of real time between them (the DSP
 // thread is the pipeline's own, fed by the signal generator, and it is what polls the module).
 //
 // THE RADIO is a ledger (FakeTxRadio): nothing here transmits.
@@ -39,6 +59,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -53,6 +74,7 @@
 #include <unistd.h>
 #endif
 
+#include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
 #include "core/package_identity.hpp"
@@ -60,7 +82,10 @@
 #include "core/plugin_host.hpp"
 #include "core/plugin_run.hpp"
 #include "gui/app_window.hpp"
+#include "gui/transmit_page.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
+#include "tx_front_end.hpp"
 
 namespace fs = std::filesystem;
 namespace cc = cascade::core;
@@ -188,85 +213,168 @@ struct Counts {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static void rescan(AppWindow& a) { a.rescanPlugins(); }
-    static void start(AppWindow& a) { a.startReceiver(); }
-    static void stop(AppWindow& a) { a.stopReceiver("test"); }
-    static void takeDown(AppWindow& a) { a.detachAndUnloadPlugins(); }
+    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
+    static void rescan(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).rescanPlugins(); }); }
+    static void start(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).startReceiver(); }); }
+    static void stop(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).stopReceiver("test"); }); }
     static void pin(AppWindow& a, const std::string& file) {
-        a.setPluginRun(file, cc::PluginRun::Always);
+        passseam::on(eng(a), [&] { eng(a).setPluginRun(file, cc::PluginRun::Always); });
     }
-    static const std::vector<cc::LoadedPlugin>& plugins(const AppWindow& a) {
-        return a.pluginHost_.plugins();
-    }
+    static const std::vector<cc::LoadedPlugin>& plugins(AppWindow& a) { return eng(a).pluginHost_.plugins(); }
     static void setFlag(AppWindow& a, bool on) {
-        a.pluginUi_.api().settingsUiSet(kPluginName, "send", on ? "1" : "0");
+        eng(a).pluginApi_->settingsUiSet(kPluginName, "send", on ? "1" : "0");
     }
     static void openRadio(AppWindow& a, std::unique_ptr<cascade::source::IqSink> sink) {
-        a.transmitter_.setSink(std::move(sink));
-        a.transmitter_.setMode(cascade::dsp::TxMode::NFM);
-        a.transmitter_.setInput(cascade::core::TxInput::Tone);
-        a.transmitter_.setDataFlat(a.transmitDataFlat_);
+        passseam::on(eng(a), [&] {
+            eng(a).transmitter_.setSink(std::move(sink));
+            eng(a).transmitter_.setMode(cascade::dsp::TxMode::NFM);
+            eng(a).transmitter_.setInput(cascade::core::TxInput::Tone);
+            eng(a).transmitter_.setDataFlat(true);
+        });
     }
-    static void closeRadio(AppWindow& a) { a.closeTransmitRadio(); }
-    static cc::TxArming::Refusal arm(AppWindow& a, int minutes) { return a.armTransmitPlugins(minutes); }
-    static void off(AppWindow& a) { a.disarmTransmitPlugins("you pressed OFF"); }
-    static bool armed(const AppWindow& a) { return a.txArming_.armed(); }
-    static std::string whyClosed(const AppWindow& a) { return a.txArming_.lastReason(); }
+    static void closeRadio(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).closeTransmitRadio(); }); }
+
+    // --- THE PAGE: a LOCAL session on the engine, and the commands the real page sends --------------------------------------------------
+    struct Desk {
+        explicit Desk(cascade::engine::Engine& e) : front(e, "the TRANSMIT page (test)") {}
+        tx_test::FrontEnd front;                 // the heartbeat, the state, the key's commands (gui::txKeyCommands)
+        cascade::gui::TxPluginArmMemory mem;     // between frames (gui::txPluginArmCommands)
+    };
+    static std::map<const AppWindow*, Desk*>& desks() {
+        static std::map<const AppWindow*, Desk*> m;
+        return m;
+    }
+    static void attach(AppWindow& a, Desk* d) { desks()[&a] = d; }
+    static void detach(AppWindow& a) { desks().erase(&a); }
+    static Desk& desk(AppWindow& a) { return *desks().at(&a); }
+    static std::string fact(AppWindow& a, const char* key) {
+        char buf[4096];
+        const int32_t n = desk(a).front.api->get_setting(desk(a).front.s, (std::string("fact.") + key).c_str(), buf, sizeof(buf));
+        return n >= 0 ? std::string(buf) : std::string();
+    }
+    // One command from the page's session, applied by the engine's passes, answered.
+    static FoxCommandResult send(AppWindow& a, const FoxCommand& c, std::int32_t* submitStatus = nullptr) {
+        Desk& d = desk(a);
+        FoxSubmitResult sr{};
+        sr.structSize = sizeof(sr);
+        const int32_t n = d.front.api->submit(d.front.s, &c, 1, &sr);
+        const int32_t st = n < 0 ? n : sr.status;
+        if (submitStatus != nullptr) { *submitStatus = st; }
+        FoxCommandResult out{};
+        out.structSize = sizeof(out);
+        out.status = st;
+        if (st != FOXAPI_OK) { return out; }
+        for (int pass = 0; pass < 30; ++pass) {
+            pumpOne(a);
+            FoxCommandResult r[16];
+            for (auto& x : r) { x.structSize = sizeof(x); }
+            const int32_t got = d.front.api->poll_results(d.front.s, r, 16);
+            for (int32_t i = 0; i < got; ++i) {
+                if (r[i].ticket == sr.ticket) { return r[i]; }
+            }
+        }
+        out.status = FOXAPI_FAILED;
+        return out;
+    }
+    // ONE PASS of the engine: its front part (the queues, the key drive, the plugins' phase, the publish) - what a frame's look is made from.
+    static void pumpOne(AppWindow& a) {
+        cascade::engine::Engine& e = eng(a);
+        passseam::pass(e, [&] {
+            e.pumpFrameBegin();
+            e.pumpRemoteControls();
+            e.pumpPlugins();
+            (void)e.pumpPublish();
+        });
+    }
+    static cc::TxArming::Refusal refusalOf(double applied0) {
+        switch (static_cast<int>(applied0)) {
+            case 1: return cc::TxArming::Refusal::NoRadio;
+            case 2: return cc::TxArming::Refusal::NoGrant;
+            case 3: return cc::TxArming::Refusal::BadMinutes;
+            default: return cc::TxArming::Refusal::None;
+        }
+    }
+    static cc::TxArming::Refusal arm(AppWindow& a, int minutes) {
+        // Only 5, 15 and 60 are keys on the page; 0 is the OFF key and -1 is "the page is live", so neither is an ARM. A length the table refuses at submit is BadMinutes.
+        if (!cc::TxArming::validMinutes(minutes) && (minutes == 0 || minutes == -1)) { return cc::TxArming::Refusal::BadMinutes; }
+        std::int32_t st = FOXAPI_OK;
+        const FoxCommandResult r = send(a, cc::cmd::makeInt(FOXAPP_OP_TX_PLUGIN_ARM, minutes, 0), &st);
+        if (st == FOXAPI_OUT_OF_RANGE || r.status == FOXAPI_OUT_OF_RANGE) { return cc::TxArming::Refusal::BadMinutes; }
+        return r.status == FOXAPI_OK ? cc::TxArming::Refusal::None : refusalOf(r.applied[0]);
+    }
+    static void off(AppWindow& a) { (void)send(a, cc::cmd::makeInt(FOXAPP_OP_TX_PLUGIN_ARM, 0, 0)); }
+    static bool armed(AppWindow& a) { return passseam::read<bool>(eng(a), [&] { return eng(a).txArming_.armed(); }); }
+    static std::string whyClosed(AppWindow& a) { return passseam::read<std::string>(eng(a), [&] { return eng(a).txArming_.lastReason(); }); }
     // A window that really was armed, but whose time is nearly up: `msLeft` milliseconds.
     static void armWithTimeLeft(AppWindow& a, int msLeft) {
-        a.txArming_.arm(5, true, true,
-                        cc::TxArming::Clock::now() - std::chrono::minutes(5) +
-                            std::chrono::milliseconds(msLeft));
+        passseam::on(eng(a), [&] {
+            eng(a).txArming_.arm(5, true, true, cc::TxArming::Clock::now() - std::chrono::minutes(5) + std::chrono::milliseconds(msLeft));
+        });
     }
     static void grant(AppWindow& a, const std::string& file, bool on) {
-        a.setPluginTransmitAllowed(file, on);
+        (void)send(a, cc::cmd::makeText(FOXAPP_OP_PLUGIN_TX_GRANT, file, on ? 1 : 0).c);
     }
     static void grantRunnerOnly(AppWindow& a, const std::string& file) {
-        a.pluginRunner_.setTxGranted({file});
+        passseam::on(eng(a), [&] { eng(a).pluginRunner_.setTxGranted({file}); });
     }
-    static bool durableGrant(const AppWindow& a, const std::string& file) {
-        for (const std::string& k : a.pluginTransmitAllowed_) {
-            if (k == file) { return true; }
-        }
-        return false;
+    static bool durableGrant(AppWindow& a, const std::string& file) {
+        return passseam::read<bool>(eng(a), [&] {
+            for (const std::string& k : eng(a).pluginTransmitAllowed_) {
+                if (k == file) { return true; }
+            }
+            return false;
+        });
     }
-    static bool refusalIsNone(const AppWindow& a) {
-        return a.txArmRefusal_ == cc::TxArming::Refusal::None;
+    static bool refusalIsNone(AppWindow& a) {
+        return passseam::read<bool>(eng(a), [&] { return eng(a).txArmRefusal_ == cc::TxArming::Refusal::None; });
     }
 
-    // ONE FRAME, in drawUi's order.
+    // ONE FRAME of the page: the heartbeat, what the page sends (the key's commands, the arming window's), then one pass of the engine.
     static void frame(AppWindow& a, bool pageLive, bool pttHeld = false) {
-        a.transmitPageLive_ = pageLive;
-        const TxPageKey key = txPageKey(a.transmitPageLive_, a.transmitter_.latched(), false, pttHeld);
-        a.transmitter_.setLatched(key.latched);
-        a.transmitter_.setPttHeld(key.pttHeld);
-        a.applyPluginTransmitKey(key);
-        a.transmitter_.tick();
-        a.afterTransmitTick();
+        Desk& d = desk(a);
+        d.front.beat();
+        cascade::gui::TxKeyFrame kf;
+        kf.pageLive = pageLive;
+        kf.pttHeld = pttHeld;
+        kf.latchedShown = (d.front.st.flags & FOXAPI_RX_TX_LATCHED) != 0u;
+        kf.latchMine = kf.latchedShown && (d.front.st.flags & FOXAPI_RX_TX_KEY_MINE) != 0u;
+        cascade::gui::TxPluginArmFrame af;
+        af.pageLive = pageLive;
+        af.armedShown = fact(a, "tx.plugin.armed") == "1";
+        af.nowS = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        FoxCommand batch[cascade::gui::kTxKeyMaxCommands + cascade::gui::kTxPluginArmMaxCommands];
+        std::uint32_t n = cascade::gui::txKeyCommands(kf, d.front.mem, batch);
+        n += cascade::gui::txPluginArmCommands(af, d.mem, batch + n);
+        if (n > 0) { d.front.api->submit(d.front.s, batch, n, nullptr); }
+        pumpOne(a);
+        d.front.drain();
+        FoxReceiverState now{};
+        now.structSize = sizeof(now);
+        if (d.front.api->read_state(d.front.s, &now) == FOXAPI_OK) { d.front.st = now; }
     }
 
-    static bool pluginKeyed(const AppWindow& a) { return a.transmitter_.pluginKeyed(); }
-    static bool transmitting(const AppWindow& a) { return a.transmitter_.transmitting(); }
-    static cascade::core::Transmitter& tx(AppWindow& a) { return a.transmitter_; }
-    static cc::PluginRunner& runner(AppWindow& a) { return a.pluginRunner_; }
-    static bool pipelineRunning(const AppWindow& a) { return a.pipeline_.running(); }
+    static bool pluginKeyed(AppWindow& a) { return eng(a).transmitter_.pluginKeyed(); }
+    static bool transmitting(AppWindow& a) { return eng(a).transmitter_.transmitting(); }
+    static cascade::core::Transmitter& tx(AppWindow& a) { return eng(a).transmitter_; }
+    static cc::PluginRunner& runner(AppWindow& a) { return eng(a).pluginRunner_; }
     static std::uint32_t stateFlags(AppWindow& a, const std::string& file) {
-        a.publishPluginApiState();
         const cc::LoadedPlugin* lp = nullptr;
-        for (const cc::LoadedPlugin& p : a.pluginHost_.plugins()) {
+        for (const cc::LoadedPlugin& p : eng(a).pluginHost_.plugins()) {
             if (p.loaded && cc::pluginKey(p) == file) { lp = &p; }
         }
         if (lp == nullptr) { return 0xFFFFFFFFu; }
-        cc::PluginApiClient& c = a.pluginUi_.api().client(file, lp->name, lp->capabilities);
+        cc::PluginApiClient& c = eng(a).pluginApi_->client(file, lp->name, lp->capabilities);
         CascadeReceiverState st{};
         st.structSize = static_cast<std::uint32_t>(sizeof(CascadeReceiverState));
-        if (a.pluginUi_.api().getState(c, &st) != CASCADE_API_OK) { return 0xFFFFFFFEu; }
+        if (eng(a).pluginApi_->getState(c, &st) != CASCADE_API_OK) { return 0xFFFFFFFEu; }
         // ONLY THE THREE TRANSMIT FLAGS: the word also says whether the receiver is running.
-        return st.flags & (CASCADE_STATE_TX_GRANTED | CASCADE_STATE_TX_ARMED |
-                           CASCADE_STATE_TRANSMITTING);
+        return st.flags & (CASCADE_STATE_TX_GRANTED | CASCADE_STATE_TX_ARMED | CASCADE_STATE_TRANSMITTING);
     }
-    static cc::AppConfig saved(AppWindow& a) { return a.currentConfig(); }
-    static void restore(AppWindow& a, const cc::AppConfig& cfg) { a.applyConfig(cfg); }
+    static cc::AppConfig saved(AppWindow& a) {
+        passseam::on(eng(a), [&] { eng(a).publishConfig(); });
+        return a.currentConfig();
+    }
+    static void restore(AppWindow& a, const cc::AppConfig& cfg) { passseam::on(eng(a), [&] { eng(a).applyConfig(cfg); }); }
 };
 
 }  // namespace cascade::gui
@@ -276,7 +384,7 @@ using cascade::gui::AppWindow;
 
 namespace {
 
-Counts countsOf(const AppWindow& app) {
+Counts countsOf(AppWindow& app) {
     Counts c;
     for (const cc::LoadedPlugin& p : Access::plugins(app)) {
         if (!p.loaded || p.name != kPluginName || p.nativeHandle == nullptr) { continue; }
@@ -332,9 +440,12 @@ struct Rig {
     FakeTxRadio* radio = nullptr;
     std::string file = std::string(kFile) + kExt;
     Counts base;  // what the module had counted before this window's first call to it
+    std::unique_ptr<Access::Desk> desk;  // the TRANSMIT page, as a LOCAL session on the engine
 
     explicit Rig(bool openRadio = true) {
         cc::DiagLog::instance().resetForTest();
+        desk = std::make_unique<Access::Desk>(Access::eng(*app));
+        Access::attach(*app, desk.get());
         Access::rescan(*app);
         bool loaded = false;
         for (const cc::LoadedPlugin& p : Access::plugins(*app)) {
@@ -359,28 +470,34 @@ struct Rig {
         // The radio is destroyed with the window; stop the receiver first so the DSP thread is
         // not inside the plugin when the module is unmapped.
         Access::stop(*app);
-        Access::tx(*app).stop();
+        Access::detach(*app);
+        desk.reset();
+        passseam::on(Access::eng(*app), [&] { Access::tx(*app).stop(); });
     }
     // The module is being asked, by the DSP thread: its active() has been called.
     bool polled() {
         const unsigned long long before = countsOf(*app).actives;
         return until(*app, true, [&] { return countsOf(*app).actives > before + 3; }, 8000);
     }
-    unsigned long long pulls() const { return countsOf(*app).pulls - base.pulls; }
+    unsigned long long pulls() { return countsOf(*app).pulls - base.pulls; }
 };
 
 // --- the scenarios ---------------------------------------------------------------
 
 void testRefusals() {
     std::printf("  refusals: ARM says why, and only the three lengths exist\n");
-    Rig noRadio(false);
-    CHECK(noRadio.polled());
-    // No radio: nothing to arm. (A grant is irrelevant: the order is radio, then grant.)
-    CHECK(Access::arm(*noRadio.app, 5) == cc::TxArming::Refusal::NoRadio);
-    CHECK(!Access::armed(*noRadio.app));
-    Access::grant(*noRadio.app, noRadio.file, true);
-    CHECK(Access::arm(*noRadio.app, 5) == cc::TxArming::Refusal::NoRadio);
-    CHECK(!Access::armed(*noRadio.app));
+    {
+        // (One window at a time - converted, stub campaign B13: the fixture module's host pointer is the process's, the last one attached, so a second live window
+        // is a worker thread of the first reading the second's host; master had the two alive together.)
+        Rig noRadio(false);
+        CHECK(noRadio.polled());
+        // No radio: nothing to arm. (A grant is irrelevant: the order is radio, then grant.)
+        CHECK(Access::arm(*noRadio.app, 5) == cc::TxArming::Refusal::NoRadio);
+        CHECK(!Access::armed(*noRadio.app));
+        Access::grant(*noRadio.app, noRadio.file, true);
+        CHECK(Access::arm(*noRadio.app, 5) == cc::TxArming::Refusal::NoRadio);
+        CHECK(!Access::armed(*noRadio.app));
+    }
 
     Rig r;
     CHECK(r.polled());
@@ -391,7 +508,7 @@ void testRefusals() {
     // Granted: any other length is refused; the three are accepted, and a good ARM clears the refusal.
     Access::grant(*r.app, r.file, true);
     CHECK(Access::refusalIsNone(*r.app));  // the grant answered it
-    for (const int bad : {0, 1, 10, 30, 61, 120, -5}) {
+    for (const int bad : {0, 1, 10, 30, 61, 120, -5, 65}) {
         CHECK(Access::arm(*r.app, bad) == cc::TxArming::Refusal::BadMinutes);
         CHECK(!Access::armed(*r.app));
     }
@@ -446,11 +563,17 @@ void testQuietUnlessEverythingHolds() {
     Access::grant(*r.app, r.file, true);  // restores the runner's copy
 
     // 4. GRANTED AND ARMED BUT THE PAGE IS NOT LIVE (closed or rolled up): the window closes on
-    //    the first such frame, and the module is not keyed.
+    //    the first such frame, and the module is not keyed. (Pressing ARM is itself the page being
+    //    on screen, so the module is NOT asking while the window is armed here, and asks only after
+    //    the page has closed - see the header.)
+    Access::setFlag(*r.app, false);
+    framesFor(*r.app, true, 300);
     CHECK(Access::arm(*r.app, 5) == cc::TxArming::Refusal::None);
+    Access::frame(*r.app, false);
     Access::frame(*r.app, false);
     CHECK(!Access::armed(*r.app));
     CHECK(Access::whyClosed(*r.app) == "the TRANSMIT page was closed");
+    Access::setFlag(*r.app, true);
     framesFor(*r.app, true, 700);  // the page is back, the module still asking...
     CHECK(!Access::armed(*r.app));                 // ...and the window stays CLOSED
     CHECK(r.pulls() == 0ull);
@@ -548,7 +671,7 @@ void closesScenario(const char* what, const std::function<void(Rig&)>& cut, bool
     const int startsBefore = r.radio != nullptr ? r.radio->starts.load() : 0;
 
     cut(r);
-    // ONE FRAME is all the key may survive it (the radio's fault is the exception: the transmit
+    // ONE PASS is all the key may survive it (the radio's fault is the exception: the transmit
     // thread has to notice it first).
     CHECK(until(*r.app, pageLiveAfter, [&] { return !Access::pluginKeyed(*r.app); }, 3000));
     CHECK(until(*r.app, pageLiveAfter, [&] { return !Access::transmitting(*r.app); }, 3000));
@@ -658,7 +781,8 @@ void testHandPrecedence() {
 
 void testConfig() {
     std::printf("  config: the grant is saved and loaded; the arming window is neither\n");
-    Rig r;
+    auto first = std::make_unique<Rig>();
+    Rig& r = *first;
     CHECK(r.polled());
     Access::grant(*r.app, r.file, true);
     CHECK(Access::arm(*r.app, 15) == cc::TxArming::Refusal::None);
@@ -690,7 +814,10 @@ void testConfig() {
     CHECK(lower.find("transmitptt") == std::string::npos);
     CHECK(lower.find("transmitlatch") == std::string::npos);
 
-    // A new window loading that file has the grant and a CLOSED window.
+    // A new window loading that file has the grant and a CLOSED window. (The first window is closed first - converted, stub campaign B13: the fixture module reads its
+    // "send" setting through a process-global host pointer, the last instance attached, so a second live window's flag would reach the first window's module; in master
+    // nothing ran the first window's frames, and here a free-running pass would.)
+    first.reset();
     {
         Rig again;
         cc::AppConfig loaded;

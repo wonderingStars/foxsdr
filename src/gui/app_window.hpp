@@ -3032,6 +3032,14 @@ private:
     int transmitArmRequest_ = -1;        // this frame: -1 none, 0 withdraw, 1 consent
     cascade::gui::TxKeyMemory transmitKey_;  // between frames (gui/transmit_page.hpp)
     std::string transmitKeyNote_;        // the last refusal of a key command, for the page
+    // A PLUGIN MAY KEY THE TRANSMITTER, THE WINDOW'S HALF (stub campaign B13; app_window_transmit.cpp). The grant, the arming window and the key are the ENGINE's (engine/
+    // engine_tx_plugin.cpp): what is here is the page that asks for them and the frame that tells the engine the page is still on screen. The window holds NO state that could
+    // key a radio: it draws fact.tx.plugin.* and sends FOXAPP_OP_TX_PLUGIN_ARM / _PLUGIN_TX_GRANT / _TX_DATA_FLAT, all LOCAL ops that are not on the web profile.
+    int transmitPluginArmRequest_ = -2;            // this frame: -2 none, 0 OFF pressed, 5 / 15 / 60 minutes (rebuilt from nothing every frame)
+    cascade::gui::TxPluginArmMemory transmitPluginArm_;   // between frames: when an ARM was last sent (gui/transmit_page.hpp)
+    bool transmitOpenedByEnv_ = false;             // FOXSDR_OPEN_TRANSMIT, bounded runs
+    void drawTransmitPluginBlock();                // the page's ARM FOR PLUGINS keys, the arming line and DATA (flat)
+    void submitTransmitPluginArming();             // once a frame, after the key's own submit
     void openUiSession();
     void closeUiSession();
     void refreshUiState();

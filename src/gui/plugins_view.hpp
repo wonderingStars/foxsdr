@@ -320,9 +320,7 @@ struct FittedModulesAction {
         // Host API level 1: FOXAPI_OP_PLUGIN_GRANT, slot 2 (the file, the flag),
         // and a press of one of the module's own command keys: FOXAPI_OP_PLUGIN_COMMAND (the file, the id).
         SetSettings,
-        // Host API level 2: AppWindow::setPluginTransmitAllowed(file, flag).
-        // FIXME(2026-10-26, stub campaign B13, TX-PLUGIN): no engine op carries it yet; the window never emits it (and the model never offers
-        // the key: txCapable stays false until the transmit grant is on the table).
+        // Host API level 2: FOXAPP_OP_PLUGIN_TX_GRANT (the file, the flag) - a LOCAL op of its own, not a kind of FOXAPI_OP_PLUGIN_GRANT (stub campaign B13).
         SetTransmit,
         Command,
         // AppWindow::resetPageWindows() (the window's own: no command). THE WAY BACK FROM A WINDOW DRAGGED

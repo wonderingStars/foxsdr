@@ -140,6 +140,22 @@
 //   core::SettingEditResult (1 TooLong, 2 NotANumber, 3 BadText, 4 StoreFull, 5 StoreError, 6 Refused) and whose message says it in English; NOT_FOUND
 //   for a module that is not loaded or declares no such field. applied[0] is 0 for an accepted edit.
 #define FOXAPP_OP_PLUGIN_SETTING_EDIT    0x870Cu /* text: "<module file>\x1F<key>\x1F<value>"; answered with the verdict in applied[0] */
+// THE TRANSMIT GRANT (stub campaign B13; see FOXAPP_OP_TX_PLUGIN_ARM, 0x842B, for the whole of the safety argument). The third of a plugin's grants, and the ONLY
+// one that is NOT a kind of FOXAPI_OP_PLUGIN_GRANT: that op is on the web profile, so the grant that lets a plugin key a radio has an op of its own, LOCAL sessions only,
+// grant TRANSMIT, never on the web profile and refused to every REMOTE session. It is worth nothing alone: the plugin keys only while the operator's arming window is open too.
+//   PLUGIN_TX_GRANT (TRANSMIT): text: the module's file name; ival[0]: 1 grant, 0 revoke. A grant is for a LOADED module that declares CASCADE_CAP_TX_AUDIO
+//   (NOT_FOUND otherwise); a revoke is accepted for any name (a grant held for a module that has gone can still be taken back). The grant is saved
+//   (AppConfig::pluginTransmitAllowed); the arming window is not, ever. A revoke unkeys, and closes the window when it was the last grant, in the same pass.
+#define FOXAPP_OP_PLUGIN_TX_GRANT        0x870Du /* text: the module file; ival[0]: 1 grant / 0 revoke */
+// fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
+// engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.
+#define FOXAPP_TXBIT_DECLARED  1u   /* the runner has a transmit-audio instance of it */
+#define FOXAPP_TXBIT_ASKED     2u   /* its active() has been non-zero at least once this session: the GRANT TRANSMIT key is offered */
+#define FOXAPP_TXBIT_HOLDER    4u   /* it holds the transmitter's audio now */
+#define FOXAPP_TXBIT_WAITING   8u   /* granted and wanting the key, but another plugin holds it */
+#define FOXAPP_TXBIT_STOPPED   16u  /* its pull() reported a permanent error: stopped for good */
+#define FOXAPP_TXBIT_GRANTED   32u  /* it holds the TRANSMIT grant */
+#define FOXAPP_TXBIT_ON_AIR    64u  /* the transmitter is keyed and this is the plugin it is keyed for */
 // The Transmit page's open flag (engine/stage3b-pre 2b, docs/engine-stage3.md
 // OPEN 1/10, SAFETY): ival[0] 0/1. Since engine stage 4 the flag gates NO key:
 // the consent the window withdraws when its page closes (gui::txKeyCommands) is
@@ -298,6 +314,20 @@
 // one, and an above-the-noise with nothing listening, change nothing. A threshold restored from the config does not. The switch is saved (AppConfig::squelchAuto) and the
 // switch and the floor are published as fact.squelch.auto / fact.squelch.floorDb.
 #define FOXAPP_OP_SET_SQUELCH_AUTO       0x842Au /* ival[0]: 0 off / 1 on; applied[0]: the switch after */
+// A PLUGIN MAY KEY THE TRANSMITTER (stub campaign B13, 0.99.74's CASCADE_CAP_TX_AUDIO; docs/api-0.3-additions.md 9.10). SAFETY-CRITICAL, and these three ops are the whole of
+// the table's surface for it. EVERY ONE IS LOCAL-ONLY: grant TRANSMIT, not in the web profile (docs/api-0.3-additions.md 8.16.3's 38 ops do not grow), refused to every REMOTE
+// session at submit (three times over: the application's ops, TRANSMIT being a web remote's PTT and nothing else, the profile) and again where it is applied. NONE OF THEM RIDES
+// ON FOXAPI_OP_PLUGIN_GRANT, which IS in the web profile: its kinds stay 1 (tune) and 2 (settings), and kind 3 is still "no such grant".
+//   TX_PLUGIN_ARM: the operator's ARMING WINDOW, which the ENGINE holds (a window crash, a frozen window or a closed page cannot leave a plugin able to key). It belongs to the SESSION
+//     that opened it (its LEASE) and lasts while that session is alive and keeps saying the TRANSMIT page is on screen.
+//       ival[0]: 5 / 15 / 60  open (or restart) the window for that many minutes; refused with a reason (applied[0] 1 no radio is open, 2 no plugin holds the grant) otherwise
+//                0            close it (ival[1]: 0 "you pressed OFF", 1 "the TRANSMIT page was closed")
+//                -1           THE PAGE IS LIVE, said again (the window sends it every frame the page is drawn while a window is open); anything else is OUT_OF_RANGE.
+//     applyCommand REFUSES it (a window is a session's, as a PTT is): only the table's host, which knows the sender, applies it.
+#define FOXAPP_OP_TX_PLUGIN_ARM          0x842Bu /* ival[0]: 5 / 15 / 60 arm, 0 close, -1 the page is live; ival[1]: 0 OFF pressed / 1 page closed */
+//   TX_DATA_FLAT: the page's DATA (flat) tick, for a plugin's audio only: on (the default) it goes out as NFM with the pre-emphasis off, whatever mode the page shows. Session-only
+//     (never saved). ival[0]: 0 / 1.
+#define FOXAPP_OP_TX_DATA_FLAT           0x842Cu /* ival[0]: 0 off / 1 on */
 // FOXAPP_OP_SOUND_CARD_FORM's ival[1], the FIELD MASK (API 0.3 8.10): which fields the command carries. 0 (and
 // ALL) is the whole form. With a mask, the fields not named keep the engine's own values.
 #define FOXAPP_SOUND_CARD_FIELD_DEVICE   1  /* text: device and host API */
