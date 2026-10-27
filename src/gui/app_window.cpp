@@ -2254,6 +2254,28 @@ int AppWindow::run(int frames) {
         cascade::gui::frame::displayChangeCount() +
         g_glfwDisplayErrors.load(std::memory_order_relaxed);
 
+    // NOTHING IS DRAWN WHILE THIS SESSION'S DISPLAY IS OFF (gui/display_power.hpp,
+    // the 2026-10-27 tester report): the frame loop keeps turning - the interface's
+    // own work, the message pump, the radio and decoders on their threads - but
+    // draws and presents nothing, and paces itself instead of the vertical sync a
+    // display that is off no longer gives.
+    cascade::gui::DisplayPause displayPause;
+    // FOXSDR_TEST_DISPLAY_OFF="<off frame>,<on frame>", bounded runs only: at those
+    // frames the window procedure is handed the notification Windows sends when
+    // the display goes off and comes back (gui/win_frame.hpp, the test seam), so
+    // tests/test_display_off_app drives the real message path. An "on frame" of 0
+    // or none leaves the display off to the end of the run.
+    long displayOffAt = -1;
+    long displayOnAt = -1;
+    if (frames >= 0) {
+        if (const char* v = std::getenv("FOXSDR_TEST_DISPLAY_OFF"); v != nullptr && *v != '\0') {
+            char* end = nullptr;
+            displayOffAt = std::strtol(v, &end, 10);
+            if (end != nullptr && *end == ',') { displayOnAt = std::strtol(end + 1, nullptr, 10); }
+            if (displayOnAt <= displayOffAt) { displayOnAt = -1; }
+        }
+    }
+
     // WHERE A SLOW FRAME SPENT ITS TIME (0.99.64, core/frame_timing.hpp). The
     // timer is the process's. The two hooks are bounded runs only, like every
     // other hook here: a stall held inside a named scope at a named frame, and the
@@ -2316,6 +2338,28 @@ int AppWindow::run(int frames) {
         }
         frameScope.to(cascade::core::FrameScope::Other);
 
+        // THE DISPLAY GOING OFF AND COMING BACK, read after the pump like the display
+        // changes below, so a notification that arrived this frame governs this
+        // frame's drawing. Coming back counts as a display change: the first presents
+        // after a display wakes are the ones a driver may hold.
+        if (static_cast<long>(rendered) == displayOffAt) {
+            cascade::gui::frame::sendDisplayPowerForTest(window, 0u);
+        } else if (static_cast<long>(rendered) == displayOnAt) {
+            cascade::gui::frame::sendDisplayPowerForTest(window, 1u);
+        }
+        const cascade::gui::DisplayPause::Edge displayEdge =
+            displayPause.update(cascade::gui::frame::displayPower(), glfwGetTime());
+        if (displayEdge == cascade::gui::DisplayPause::Edge::Paused) {
+            cascade::core::diagLogf(
+                "display: off - Windows says this session's display is off; drawing paused, the "
+                "radio and decoders keep running");
+        } else if (displayEdge == cascade::gui::DisplayPause::Edge::Resumed) {
+            cascade::core::diagLogf(
+                "display: %s - drawing resumed after %.0f s off; %ld frames not drawn",
+                cascade::gui::displayPowerName(cascade::gui::frame::displayPower()),
+                displayPause.lastOffSeconds(), displayPause.skipped());
+        }
+
         // AFTER THE PUMP, BEFORE THE FRAME. glfwPollEvents is where the window
         // procedure runs, so a WM_DISPLAYCHANGE that arrived this frame has
         // been counted by the time this reads it - and the pause is therefore
@@ -2327,7 +2371,8 @@ int AppWindow::run(int frames) {
             const unsigned changes = cascade::gui::frame::displayChangeCount() +
                                      g_glfwDisplayErrors.load(std::memory_order_relaxed);
             const bool displayChanged =
-                changes != lastDisplayChanges || frameSituations.displayChangeAt(rendered);
+                changes != lastDisplayChanges || frameSituations.displayChangeAt(rendered) ||
+                displayEdge == cascade::gui::DisplayPause::Edge::Resumed;
             if (displayChanged) {
                 lastDisplayChanges = changes;
                 cascade::core::diagLogf(
@@ -2705,17 +2750,22 @@ int AppWindow::run(int frames) {
         glViewport(0, 0, fbWidth, fbHeight);
         glClearColor(0.05f, 0.05f, 0.06f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        // Drawn only while the display is on; the frame itself (ImGui::Render
+        // above) is still ended, so the interface's state moves on.
+        if (!displayPause.paused()) { ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData()); }
 
         // The torn-off windows are rendered here, each into its own operating
         // system window and GL context. The current context has to be saved
         // and restored around it: RenderPlatformWindowsDefault leaves whichever
         // platform window it drew last current, and the next frame's
         // glClear/RenderDrawData above would then paint the main UI into it.
+        // UpdatePlatformWindows runs every frame whatever the display is doing -
+        // ImGui's NewFrame asserts that it did - but nothing is drawn into, or
+        // presented from, a torn-off window while the display is off.
         if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
             GLFWwindow* const restore = glfwGetCurrentContext();
             ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
+            if (!displayPause.paused()) { ImGui::RenderPlatformWindowsDefault(); }
             glfwMakeContextCurrent(restore);
 
             // DID THE DRIVER JUST REFUSE ONE? UpdatePlatformWindows is where a
@@ -2793,7 +2843,9 @@ int AppWindow::run(int frames) {
             // was raised by, so a request never spans two frames.
             const bool byKey = ImGui::IsKeyPressed(ImGuiKey_F12, false) || shotRequest_;
             shotRequest_ = false;
-            if (byKey || (shotAt >= 0 && static_cast<long>(rendered) == shotAt)) {
+            // Nothing was drawn while the display is off, so there is nothing to read back.
+            if (!displayPause.paused() &&
+                (byKey || (shotAt >= 0 && static_cast<long>(rendered) == shotAt))) {
                 cascade::core::HostImage img;
                 img.plugin = "self";
                 img.width = static_cast<std::uint32_t>(std::max(fbWidth, 0));
@@ -2896,8 +2948,15 @@ int AppWindow::run(int frames) {
             }
         }
 
-        frameScope.to(cascade::core::FrameScope::Present);
-        glfwSwapBuffers(window);
+        if (displayPause.paused()) {
+            // NOT PRESENTED, AND PACED BY A WAIT INSTEAD: the swap is what waited
+            // for the vertical sync, and a display that is off gives none.
+            displayPause.noteSkipped();
+            std::this_thread::sleep_for(std::chrono::milliseconds(cascade::gui::kDisplayOffFrameMs));
+        } else {
+            frameScope.to(cascade::core::FrameScope::Present);
+            glfwSwapBuffers(window);
+        }
         frameScope.to(cascade::core::FrameScope::Other);
         ++rendered;
 

@@ -886,6 +886,34 @@ grace was only bounded by the frame loop noticing it had expired, and the
 stopped while either was held was never reported. A minimised window whose loop
 keeps turning is still never reported, however long it stays minimised.
 
+**And nothing is drawn while the session's display is off.** A tester's 0.99.95
+and 0.99.96 on Intel UHD graphics, left on ADS-B untouched (2026-10-27): ten
+minutes after the start - the screen's own time-out - a 500 ms frame appeared
+every minute or two, and 29 to 91 minutes in the driver refused a second window
+(`WGL: Failed to create OpenGL context`) and the main window stopped showing
+anything new, black after a minimise and restore, while the frame loop kept
+turning and a close from the taskbar shut it down normally. His System log held
+no display-driver reset. The application had been drawing and presenting sixty
+frames a second to a display that was off. Now the main window registers for
+`GUID_SESSION_DISPLAY_STATUS` (`gui/win_frame.cpp`; the session's display, as
+Microsoft recommends for user-mode applications, so a Remote Desktop viewer is not
+paused because the laptop's own screen is off) and, while Windows says that
+display is off, the frame loop draws nothing, presents nothing and waits 33 ms a
+frame instead of the vertical sync (`gui/display_power.hpp`). The interface's own
+work and the message pump keep turning, and the radio and decoders run on their
+own threads as before. Dimmed is drawn. The log says
+`display: watching this session's display state` when the window registers,
+`display: off - Windows says this session's display is off; drawing paused, the
+radio and decoders keep running` when it goes off, and `display: on - drawing
+resumed after 1834 s off; 55020 frames not drawn` when it comes back, and the
+return is a display change for the grace above. That the pause prevents the
+driver's failure on his machine is not yet confirmed. The seam, bounded `--frames`
+runs only: `FOXSDR_TEST_DISPLAY_OFF=<off frame>,<on frame>` hands the window
+procedure the real notification through `SendMessage`. **Tested** by
+`tests/test_display_power.cpp` (the decode and the pause's edges) and
+`tests/test_display_off_app.cpp` (gui, Windows: off then on, off to the end, and
+the control).
+
 ### What a freeze's signature is built from (0.99.62)
 
 Until 0.99.62 a freeze report's `signature` was hashed from the report's kind

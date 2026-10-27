@@ -297,6 +297,13 @@ foreach(src ${CASCADE_TESTS})
         # DISPLAY that is not in them, and FOXSDR_WINDOW_PLATFORM ignored when it names no platform.
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_display_off_app")
+        # Runs the real cascade.exe (built first) and hands its window procedure the notification
+        # Windows sends when the session's display goes off and comes back
+        # (FOXSDR_TEST_DISPLAY_OFF), and reads from the log and the self-capture that nothing was
+        # drawn or presented in between.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_window_failed_app")
         # Runs the real cascade.exe (built first) with its window refused on purpose
         # (FOXSDR_TEST_WINDOW_FAIL) and the sentinel on, and reads the report the watcher writes
@@ -527,6 +534,9 @@ set_tests_properties(test_unplaced_list_app PROPERTIES TIMEOUT 600)
 # The viewport-fallback test starts the real application three times (refused mid-run, one viewport
 # from the start, and the control that keeps separate windows), 110 frames each.
 set_tests_properties(test_viewport_fallback_app PROPERTIES TIMEOUT 600)
+# The display-off test starts the real application three times (off then on, off to the end, and
+# the control), 200 frames each.
+set_tests_properties(test_display_off_app PROPERTIES TIMEOUT 600)
 # The row-keys test starts the real application twelve times (a layout run, the window open, a
 # press of HD2, of HD1 then HD2, the three that must press nothing and the control for the click's
 # geometry, an instrument's memory rows opened and pressed, and the module's page with sixteen
@@ -774,6 +784,7 @@ set(CASCADE_GUI_TESTS
     test_diagnostics
     test_display_fold_app
     test_display_menu_app
+    test_display_off_app
     test_exit_cause_app
     test_foreign_modules_app
     test_freq_markers_app
