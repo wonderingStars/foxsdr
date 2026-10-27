@@ -351,11 +351,20 @@ std::string only(const std::shared_ptr<HealthLedger>& g, const char* prefix) {
     return found;
 }
 
+// The STAGES a session reaches (`reached.*`, health::Milestone) are counted by the same call sites
+// and are held by their own test below; the tests of the failure counts compare what they are about.
+inline Counts withoutStages(Counts c) {
+    for (auto it = c.begin(); it != c.end();) {
+        it = it->first.rfind("reached.", 0) == 0 ? c.erase(it) : std::next(it);
+    }
+    return c;
+}
+
 // A count that is not what was wanted says what it WAS.
 #define EXPECT_COUNTS(ledger, ...)                                                       \
     do {                                                                                 \
         const Counts want_ = __VA_ARGS__;                                                \
-        const Counts got_ = (ledger)->counts();                                          \
+const Counts got_ = withoutStages((ledger)->counts());                                       \
         if (got_ != want_) {                                                             \
             std::printf("FAIL %s:%d counted \"%s\", wanted \"%s\"\n", __FILE__, __LINE__, \
                         health::encode(got_).c_str(), health::encode(want_).c_str());    \
@@ -493,6 +502,8 @@ struct AppWindowTestAccess {
             return !th::engine(a).soapyDevices_.empty() || !th::engine(a).nativeDevices_.empty();
         });
     }
+    static void seedWorking(AppWindow& a, unsigned seconds) { passseam::on(th::engine(a), [&] { th::engine(a).workingClock_.seedFlowingSecondsForTest(seconds); }); }
+    static void forgetWorkingTick(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).workingLastSec_ = -1.0; }); }
 
     // The update check (the window's).
     static bool check(AppWindow& a) {
@@ -624,6 +635,71 @@ void testSamplesFlowedIsCountedOnceTheRadioDelivers() {
         for (int i = 0; i < 20; ++i) { Access::poll(app); }
         EXPECT_COUNTS(g, (Counts{{"radio_open.rtlsdr", 1}, {"radio_data.rtlsdr", 1}}));
     }
+}
+
+// ---------------------------------------------------------------------------
+// HOW FAR THE SESSION GOT (health::Milestone), read off the real window.
+// ---------------------------------------------------------------------------
+void testTheWindowCountsTheStagesItReaches() {
+    // A window that is only drawn reaches `window`; nothing it has not done is counted.
+    {
+        auto g = fresh();
+        health::resetReachedForTest();
+        cascade::gui::AppWindow app;
+        for (int i = 0; i < 5; ++i) { Access::poll(app); }
+        CHECK(only(g, "reached.") == "reached.window=1");
+        // Once a session: more frames count nothing.
+        for (int i = 0; i < 50; ++i) { Access::poll(app); }
+        CHECK(only(g, "reached.") == "reached.window=1");
+    }
+    // A radio is listed -> `enumerated`; opened -> `streaming`; its samples flow for a minute and the
+    // output has been reached -> `working`. The minute is seeded (a test cannot wait for it); the
+    // second that makes it is the window's own once-a-second look at a newer spectrum frame.
+    {
+        auto g = fresh();
+        health::resetReachedForTest();
+        setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
+        cascade::gui::AppWindow app;
+        CHECK(Access::selectNative(app, kArgs));
+        Access::start(app);
+        Access::seedWorking(app, health::kWorkingSampleSeconds - 1);
+        // No output yet: a radio streaming into silence is not "working" however long it streams.
+        bool flowed = false;
+        for (int i = 0; i < 2000 && !flowed; ++i) {
+            Access::poll(app);
+            flowed = !Access::watching(app);   // radio_data: the first picture made from its samples
+            if (!flowed) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+        }
+        CHECK(flowed);
+        for (int i = 0; i < 20; ++i) {
+            Access::forgetWorkingTick(app);
+            Access::poll(app);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        const std::string before = only(g, "reached.");
+        CHECK(before.find("reached.window=1") != std::string::npos);
+        CHECK(before.find("reached.streaming=1") != std::string::npos);
+        CHECK(Access::listed(app));
+        CHECK(before.find("reached.enumerated=1") != std::string::npos);
+        // Streaming into silence is not "working" (the clock's own test holds that rule); on a machine
+        // whose speakers play, the window reaches the output by itself and the session works at once.
+        CHECK(before.find("reached.working") == std::string::npos ||
+              before.find("reached.audio=1") != std::string::npos);
+        // The output is reached (here: a browser was served the spectrum, which the web server counts
+        // itself): the next second that sees the samples flowing makes the session working.
+        health::noteReached(health::Milestone::WebSpectrum);
+        bool working = false;
+        for (int i = 0; i < 2000 && !working; ++i) {
+            Access::forgetWorkingTick(app);
+            Access::poll(app);
+            working = health::reached(health::Milestone::Working);
+            if (!working) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+        }
+        Access::stop(app);
+        CHECK(working);
+        CHECK(only(g, "reached.").find("reached.working=1") != std::string::npos);
+    }
+    health::resetReachedForTest();
 }
 
 void testTheRestoreOfTheSavedRadioIsCounted() {
@@ -1024,11 +1100,17 @@ void testTheRealApplicationCountsKeepsAndClears() {
         const std::string text = readFile(file);
         CHECK(HealthLedger::parseFileText(text, id, onDisk));
         std::printf("health: the real application left %s\n", health::encode(onDisk).c_str());
+        // THE STAGES the real application reached (health::Milestone): it started and drew a frame; the
+        // saved radio did not open, so it got no further.
+        CHECK(countOf(onDisk, "reached.launched") == 1 && countOf(onDisk, "reached.window") == 1);
+        CHECK(countOf(onDisk, "reached.streaming") == 0 && countOf(onDisk, "reached.working") == 0);
+        const Counts withStages = onDisk;
+        onDisk = withoutStages(onDisk);
         CHECK(bindOrAbsentCount(onDisk, 1));
         // The journalled record carries it too (as of that save; what is SENT is the ledger's at the next start).
         Counts journalled;
         CHECK(health::decode(pendingHealth(config), journalled));
-        CHECK(journalled == onDisk);
+        CHECK(journalled == withStages);
     }
 
     // OFF: nothing counted, nothing kept, nothing journalled, and a file an earlier opted-in run left is removed.
@@ -1076,6 +1158,7 @@ void testTheRealApplicationCountsKeepsAndClears() {
         runApp(config);
         Counts onDisk;
         CHECK(HealthLedger::parseFileText(readFile(HealthLedger::pathIn(u8(dir))), id, onDisk));
+        onDisk = withoutStages(onDisk);
         CHECK(onDisk.size() == 2 && countOf(onDisk, "upd_dl") == 2);
         std::uint32_t radio = 0;
         for (const auto& kv : onDisk) {
@@ -1096,7 +1179,7 @@ void testTheRealApplicationCountsKeepsAndClears() {
         runApp(config);
         Counts onDisk;
         CHECK(HealthLedger::parseFileText(readFile(HealthLedger::pathIn(u8(dir))), id, onDisk));
-        CHECK(bindOrAbsentCount(onDisk, 1));   // no upd_dl in it
+        CHECK(bindOrAbsentCount(withoutStages(onDisk), 1));   // no upd_dl in it
     }
 }
 
@@ -1352,12 +1435,12 @@ void testASlowFrameOfTheRealWindowEndsInTheLedgerFile() {
         CHECK(countOf(onDisk, "slow.render.5s") >= 1);
         // The 5 s stall is a freeze of its own tier, the 1.2 s one is not in the stutter tier.
         CHECK(countOf(onDisk, "slow.saves.1s") >= 1);
-        for (const auto& kv : onDisk) { CHECK(kv.first.rfind("slow.", 0) == 0); }   // and nothing else
+        for (const auto& kv : withoutStages(onDisk)) { CHECK(kv.first.rfind("slow.", 0) == 0); }   // and nothing else but the stages
         // The record the session journals carries them too (as of that save).
         Counts journalled;
         CHECK(health::decode(pendingHealth(config), journalled));
         CHECK(!journalled.empty());
-        for (const auto& kv : journalled) { CHECK(kv.first.rfind("slow.", 0) == 0); }
+        for (const auto& kv : withoutStages(journalled)) { CHECK(kv.first.rfind("slow.", 0) == 0); }
     }
 
     // A PERSON'S OWN TIME is not counted: a modal loop (dragging the window) inside the message pump
@@ -1475,11 +1558,11 @@ void testAFailureSurvivesEndTask() {
         Counts onDisk;
         bool there = false;
         for (int i = 0; i < 200 && !there; ++i) {
-            there = HealthLedger::parseFileText(readFile(file), id, onDisk) && !onDisk.empty();
+            there = HealthLedger::parseFileText(readFile(file), id, onDisk) && !withoutStages(onDisk).empty();
             if (!there) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
         }
         CHECK(there);
-        CHECK(bindOrAbsentCount(onDisk, 1));
+        CHECK(bindOrAbsentCount(withoutStages(onDisk), 1));
         // End task.
         ::TerminateProcess(c.process, 1);
         ::WaitForSingleObject(c.process, 10000);
@@ -1491,12 +1574,14 @@ void testAFailureSurvivesEndTask() {
     // The dead process saved nothing more, and the failure is still on disk...
     Counts after;
     CHECK(HealthLedger::parseFileText(readFile(file), id, after));
-    CHECK(bindOrAbsentCount(after, 1));
+    CHECK(bindOrAbsentCount(withoutStages(after), 1));
     // ...so THE NEXT START finds it as an earlier session's, and its own failure is added.
     runApp(config);
     Counts next;
     CHECK(HealthLedger::parseFileText(readFile(file), id, next));
-    CHECK(next.size() == 1 && next.begin()->second == 2);   // the dead session's, and this one's
+    const Counts nextFailures = withoutStages(next);
+    CHECK(nextFailures.size() == 1 && nextFailures.begin()->second == 2);   // the dead session's, and this one's
+    CHECK(countOf(next, "reached.launched") == 2);   // two sessions started, one of them ended from the taskbar
 }
 #endif  // _WIN32
 
@@ -1538,6 +1623,7 @@ int main() {
     Access::installHooks();
     testTheSourceListsOpenCountsFailureAndSuccess();
     testSamplesFlowedIsCountedOnceTheRadioDelivers();
+    testTheWindowCountsTheStagesItReaches();
     testTheRestoreOfTheSavedRadioIsCounted();
     testThePatchPagesRadiosAreCounted();
     testASoundCardInputIsCountedLikeARadio();

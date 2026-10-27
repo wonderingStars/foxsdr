@@ -57,6 +57,14 @@ renderer) are new words of the `recovered` family, so **this Worker is deployed 
 sends them ships**. The Worker as 0.99.95 shipped it, kept byte for byte in `test-fixtures/worker-0.99.95.js`,
 is the one `worker.test.mjs` shows dropping them. The site's `health_vocabulary.json` carries the same two words.
 
+**The stage words are the same case once more** (field-early-warning): `reached.<stage>` - `launched`,
+`window`, `enumerated`, `streaming`, `audio`, `webspectrum`, `working` - says how far a session got and
+whether it achieved a working radio, and is a new EVENT of the vocabulary (the first one in the written
+order), so **this Worker is deployed before the application that sends them ships**: the 0.99.95 Worker,
+kept in `test-fixtures/worker-0.99.95.js`, drops every one of them (the record is still taken, and a record
+of nothing else is "not reported" there). They add no column: they ride in `blob13` as `reached.launched=1,
+reached.window=1,...` and are counted by none of `double6`..`double12`.
+
 ## The columns of `foxsdr_usage`
 
 Written in `worker.js`; never renumbered, because a column that changes meaning
@@ -251,6 +259,9 @@ it".
 | opened radios that never delivered | `sum(double7) - sum(double8)` where `blob12 = '1'` |
 | sessions that had sound | `sum(double9)` where `blob12 = '1'` (a session count: `sound_ok` is once a session) |
 | builds that do not measure it | every `blob1` seen, minus those with `blob12 = '1'` |
+| sessions that measured how far they got | `blob12 = '1' AND startsWith(blob13, 'reached.launched=')` - `reached` is first in the written order, and the count of `reached.launched` is how many sessions the record describes (a failed send makes a record carry more than one) |
+| sessions that reached a stage | the same, with the stage's token in `blob13` (`position('reached.working=' IN blob13) > 0`); the count in the string is how many of the record's sessions did |
+| builds that do not measure the stages | every `blob1` seen, minus those whose rows have `reached.launched=` - **not measured, never "got nowhere"** (an old build, or Diagnostics off, sends no stage word at all) |
 | slow frames by version | `sum(double10)` and `sum(double11)` where `blob12 = '1'`, grouped by `blob1`, **keeping only the versions that measure them (0.99.65 and later)**; per 1,000 records: `1000 * sum(double10) / count()` |
 | installs with any slow frame | `count(DISTINCT index1)` where `blob12 = '1' AND double10 > 0` (a 0.99.64 row never qualifies, so this needs no version rule) |
 | installs with slow frames in one scope | `blob12 = '1' AND (startsWith(blob13, 'slow.SCOPE.') OR position(',slow.SCOPE.' IN blob13) > 0)`, with `count(DISTINCT index1)` |

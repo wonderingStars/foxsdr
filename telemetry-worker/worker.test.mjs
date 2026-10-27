@@ -615,6 +615,41 @@ test('early-warning words (recovered.devlatch, recovered.softgl) -> OLD WORKER (
   assert.equal(bad.usage[0].blobs[12], '');
 });
 
+test('milestone words (reached.*): the NEW Worker keeps them first in the canonical text and counts them nowhere else; the OLD Worker (0.99.95) drops them and reads the rest', async () => {
+  // THE SAME ORDER OF DEPLOYMENT as every word before: this Worker is deployed BEFORE the application
+  // that sends `reached.*` ships (the working-session metric and the startup funnel), or the stages are
+  // dropped with the record taken. The Worker as 0.99.95 shipped it, kept byte for byte, is the fixture.
+  const was = (await import('./test-fixtures/worker-0.99.95.js')).default;
+  const stages = 'reached.launched=1,reached.window=1,reached.enumerated=1,reached.streaming=1,reached.audio=1,reached.working=1';
+  const sent = `radio_open.rtlsdr=1,${stages},recovered.audiolead=1`;
+  const now = await post({ ...newRecord(), v: '0.99.96', stalls: 0, health: sent });
+  assert.equal(now.status, 204);
+  // Canonical order: `reached` is FIRST in the written order, whatever order the client sent.
+  assert.equal(now.usage[0].blobs[12], `${stages},radio_open.rtlsdr=1,recovered.audiolead=1`);
+  // The headline sums are the validated tokens' and the stages are in none of them: radio opens 1,
+  // recoveries 1, no failure, no slow frame.
+  assert.equal(now.usage[0].doubles[5], 0);   // radio_fail
+  assert.equal(now.usage[0].doubles[6], 1);   // radio_open
+  assert.equal(now.usage[0].doubles[8], 0);   // sound_ok (the stage `reached.audio` is not the sound_ok event)
+  assert.equal(now.usage[0].doubles[11], 1);  // recovered
+  const old = await postTo(was, { ...newRecord(), v: '0.99.96', stalls: 0, health: sent });
+  assert.equal(old.status, 204);
+  assert.equal(old.usage[0].blobs[12], 'radio_open.rtlsdr=1,recovered.audiolead=1');
+  // A record of nothing but stages is a usable record here and "not reported" there.
+  const only = `reached.launched=2,reached.window=2,reached.webspectrum=1`;
+  assert.equal((await post({ ...newRecord(), v: '0.99.96', stalls: 0, health: only })).usage[0].blobs[12], only);
+  const oldOnly = await postTo(was, { ...newRecord(), v: '0.99.96', stalls: 0, health: only });
+  assert.equal(oldOnly.usage[0].blobs[11], '');
+  assert.equal(oldOnly.usage[0].blobs[12], '');
+  // They are a word list and nothing more: no other spelling, depth, case or count is a stage.
+  const bad = await post({ ...newRecord(), v: '0.99.96', stalls: 0,
+    health: 'reached=1,reached.=1,reached.Launched=1,reached.web_spectrum=1,reached.web-spectrum=1,reached.launched.x=1,reached.working=0,reached.working=-1,reached.working=x,reached.unknown=1,launched=1,working=1' });
+  assert.equal(bad.usage[0].blobs[12], '');
+  // The count is clamped like every other (999), and the stages are bounded by the base-token cap.
+  const big = await post({ ...newRecord(), v: '0.99.96', stalls: 0, health: 'reached.launched=1000,reached.window=999' });
+  assert.equal(big.usage[0].blobs[12], 'reached.launched=999,reached.window=999');
+});
+
 test('the update channel (uch) is stored in blob15 as stable or beta and as nothing else; an OLD Worker drops it, the row otherwise unchanged', async () => {
   // THE SAME ORDER OF DEPLOYMENT: this Worker is deployed BEFORE the application that sends `uch`
   // ships, or the channel is dropped with the record taken (a 204 tells the client to forget it).

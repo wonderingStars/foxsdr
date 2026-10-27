@@ -5008,7 +5008,7 @@ with it); a shutdown that wedges for the full 27 s; the Store package; Linux.
 
 ## Field-issue early warning: learning of a bug before a user writes (field-early-warning)
 
-Four pieces, each shippable alone, that turn what the application already knows into
+Five pieces, each shippable alone, that turn what the application already knows into
 something the owner is told about:
 
 1. **New-signature alerting** (the site, `foxsdr-site`): the site's owner-alert engine
@@ -5037,6 +5037,24 @@ something the owner is told about:
    0.99.96 and copies that did not say are listed apart. The channel is the setting AT THE
    TIME THE RECORD IS SENT: the usage record describes the previous session and is sent at
    the next start, so a person who switched channels in between is counted under the new one.
+
+5. **How far a session got** (wave 2): positive proof of function, for the failure that crashes
+   nowhere (a build in which no radio can be heard). The usage record's `health` string carries,
+   for the session it describes, which *stages* it reached - `reached.launched`, `.window`,
+   `.enumerated`, `.streaming`, `.audio`, `.webspectrum`, `.working` (`core/health_events.hpp`,
+   `health::Milestone`; PRIVACY.md, *Stages reached*). A session is **working** when a radio was
+   open, sixty seconds of its samples flowed (`health::WorkingClock`, told once a second by
+   `AppWindow::healthPoll` whether the pipeline published a newer spectrum frame) and the output
+   was reached - the speakers played (`sound_ok`) or a browser was served a spectrum frame
+   (`/api/spectrum`). The stages are counted at the places that already knew: a radio opening
+   (`noteRadioOpen` -> `streaming`), the speakers playing (`noteSoundOk` -> `audio`), the web route
+   (`webspectrum`); the window adds `window` (first frame), `enumerated` (a radio is listed) and
+   `working` in its existing health poll, and `launched` is counted when the settings are read.
+   A stage is counted once a session in the ordinary ledger, so a record's `reached.launched` is
+   how many sessions it describes. **A record with no `reached` word is "not measured"** (an older
+   build, or Diagnostics off), never "got nowhere". Reporting switched on mid-session replays the
+   stages already reached (`health::replayReached`). The site draws it per version and channel at
+   `/admin/working` and `/admin/working.json` (working rate, the funnel, by driver).
 
 **Deployment order.** The Worker first (`telemetry-worker`: `npx wrangler deploy`), because it
 drops a word or a field it does not know and the old Worker answers 204, which tells the

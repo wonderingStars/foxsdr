@@ -8494,6 +8494,9 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
     // window's diagnostics, AppWindow::diagnosticsStartup.)
     telemetrySessionStart_ = host_->wallTimeS();
     telemetryModeAccrual_.reset(telemetrySessionStart_);
+    // THE FIRST STAGE of how far this session gets (core/health_events.hpp, Milestone): the settings are read and start-up is under way. Held in
+    // memory until the ledger below has been decided, like every event before it.
+    cascade::core::health::noteReached(cascade::core::health::Milestone::Launched);
     // DISPLAY STALLS. Armed only for a real identity, which an opted-out run
     // does not have - so off means nothing is counted and nothing is kept - and
     // it picks up what earlier sessions left (a session ended from the taskbar
@@ -8651,6 +8654,30 @@ void Engine::healthPoll() {
     // loads a pass.
     cascade::core::health::drainRecovered();
     recoveryWatch_.poll(recoveryReadings());
+
+    // HOW FAR THIS SESSION GOT (field-early-warning, core/health_events.hpp Milestone): the engine's pass ran (`window`: the first pass an
+    // interface is served by; master noted it at the first frame drawn), a radio was listed, and - once a second, with one spectrum-frame copy a
+    // second at most - whether the open radio's samples are flowing, which is the 60 seconds a session must have before it counts as working.
+    // `streaming` and `audio` are counted where the radio opens and the speakers play (noteRadioOpen, noteSoundOk); `webspectrum` by the web
+    // server. Each check below is one relaxed atomic load until it has fired.
+    namespace health = cascade::core::health;
+    if (!health::reached(health::Milestone::Window)) { health::noteReached(health::Milestone::Window); }
+    if (!health::reached(health::Milestone::Enumerated) && (!soapyDevices_.empty() || !nativeDevices_.empty())) {
+        health::noteReached(health::Milestone::Enumerated);
+    }
+    if (!health::reached(health::Milestone::Working)) {
+        // The steady clock: this poll is also driven by the tests without a frame.
+        const double nowSec = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (workingLastSec_ < 0.0 || nowSec - workingLastSec_ >= 1.0) {
+            workingLastSec_ = nowSec;
+            // True iff a frame newer than the probe's cursor was published since last look.
+            const bool flowing = pipeline_.getLatestFrame(workingProbe_);
+            if (workingClock_.second(health::reached(health::Milestone::Streaming), flowing,
+                                     health::reached(health::Milestone::Audio) || health::reached(health::Milestone::WebSpectrum))) {
+                health::noteReached(health::Milestone::Working);
+            }
+        }
+    }
 }
 
 cascade::core::health::RecoveryReadings Engine::recoveryReadings() {

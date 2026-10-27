@@ -135,6 +135,7 @@ function exitSplit(body) {
 // dropped, so deploy this Worker before shipping a client that sends one.
 // BEGIN HEALTH VOCABULARY
 const HEALTH_EVENTS = [
+  { "name": "reached", "qualifiers": [["launched", "window", "enumerated", "streaming", "audio", "webspectrum", "working"]] },
   { "name": "scan_none", "qualifiers": [] },
   { "name": "radio_open", "qualifiers": [["rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "pluto", "aor", "hydrasdr", "rtltcp", "soapy", "soundcard", "other"]] },
   { "name": "radio_data", "qualifiers": [["rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "pluto", "aor", "hydrasdr", "rtltcp", "soapy", "soundcard", "other"]] },

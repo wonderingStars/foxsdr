@@ -2070,6 +2070,11 @@ private:
     bool healthSoundNoted_ = false;     // the output has played this session
     // What moved in the counters healthPoll() reads for the recoveries a signal thread or a vendor call's worker meets.
     cascade::core::health::RecoveryWatch recoveryWatch_;
+    // HOW FAR THIS SESSION GOT (core/health_events.hpp, Milestone): the once-a-second look at whether the radio's samples are flowing, and the rule
+    // that makes the session "working" (field-early-warning, re-expressed here: master kept these in the window).
+    cascade::core::health::WorkingClock workingClock_;
+    cascade::core::SpectrumFrame workingProbe_;
+    double workingLastSec_ = -1.0;
     // The counters recoveryWatch_ is fed from, as they stand now (the constructor takes the watch's baseline from them; healthPoll() feeds it).
     cascade::core::health::RecoveryReadings recoveryReadings();
     // Once per pass: the output's first play, the watched radio's first samples, and the recoveries nothing else may count.

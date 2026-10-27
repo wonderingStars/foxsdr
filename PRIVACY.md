@@ -382,11 +382,22 @@ below). It never records what went wrong, on which device, or with what message.
 A recovery that can repeat by itself is counted once a session (marked), the
 others each time; a record carries at most eight different ones.
 
+**How far a session got (since 0.99.96).** A radio that cannot be heard crashes nowhere,
+so nothing used to count it. A session now says which of a few stages it reached -
+the program started, the window drew, a radio was listed, a radio was opened, the
+speakers played, a browser was served the spectrum - and whether it *worked*: a radio
+open, sixty seconds of its samples flowing, and the speakers (or a browser) reached.
+The website turns that into "what share of sessions achieved a working radio" and "where
+sessions stop", per version. Each stage is one fixed word, counted once a session; the
+record carries nothing else about it - no device, no driver, no time of day, no timing
+but the one sixty-second rule.
+
 **Events.** `<driver>`, `<api>`, `<why>`, `<class>`, `<scope>`, `<tier>` and
 `<what>` are words from the tables that follow.
 
 | Event | Counted when |
 |---|---|
+| `reached.<stage>` | Since 0.99.96. The session got as far as the stage the word names (the table below). Once a session for each stage. |
 | `scan_none` | A scan of the radios found none at all - nothing from FoxSDR's own USB listing and nothing from SoapySDR. Once a session. |
 | `radio_open.<driver>` | A radio opened: the saved radio at start-up, one chosen in the Source list, one on the patch page. |
 | `radio_data.<driver>` | An opened radio's samples reached the display (the first spectrum picture made from them). |
@@ -566,6 +577,21 @@ by itself, so a count of 1 means "this session had it".
 | `pluginwedge` | a call into a plugin never returned within its allowance (or an unload timed out inside one), and FoxSDR let go of it, switched the plugin off and wrote a freeze report naming it. Counted each time. |
 | `pluginoveruse` | a call into a plugin took longer than the allowance FoxSDR gives that kind of call, but returned. Once a session. |
 | `threadwedge` | one of FoxSDR's own worker threads (the signal processing, the radio's reader, the settings keeper, a server, a disk job) stopped answering for longer than its allowance, and the watchdog wrote a freeze report naming it. Once for each time a thread stops; it is counted again only after the thread has answered again. |
+
+**Stages reached.** One word each, in the order a session reaches them. `launched` is
+counted by every session that measures the stages, so a record's `reached.launched` is
+how many sessions it describes, and a record with no `reached` word at all comes from a
+build that did not measure them - which is not the same as a session that got nowhere.
+
+| Word | The session reached this |
+|---|---|
+| `launched` | FoxSDR started and read its settings. |
+| `window` | the window drew its first frame. |
+| `enumerated` | at least one radio was listed (a scan, or FoxSDR's own list, found one). |
+| `streaming` | a radio was opened. |
+| `audio` | the speakers played. |
+| `webspectrum` | a browser was served a spectrum picture by FoxSDR's web interface. |
+| `working` | a radio was open, sixty seconds of its samples flowed, and the speakers played or a browser was served the spectrum. |
 
 ### The "still running" beat
 

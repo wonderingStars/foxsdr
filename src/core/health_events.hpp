@@ -12,6 +12,7 @@
 // WHAT IS COUNTED IS A FIXED VOCABULARY, never text. An event is a small
 // enumerated id, optionally qualified by words from another fixed list:
 //
+//     reached.<milestone>         a session reached a stage of getting to work (below)
 //     scan_none                   a device scan found no radio at all
 //     radio_open.<driver>         a radio was opened
 //     radio_data.<driver>         an opened radio's samples reached the display
@@ -135,6 +136,38 @@ enum class Recovered : std::uint8_t {
 };
 inline constexpr std::size_t kRecoveredCount = 40;
 
+// HOW FAR A SESSION GOT (field-early-warning): the stages between "the program started" and
+// "the radio is doing its job", one fixed word each. They are the working-session metric and
+// the startup funnel the website draws (a build in which no radio can be heard crashes
+// nowhere and used to show up in no number at all): launched -> window -> enumerated ->
+// streaming -> audio, with `webspectrum` for a session that served its spectrum to a browser
+// instead of (or beside) the speakers, and `working` when a radio was open, 60 seconds of its
+// samples flowed AND the output was reached (audio or the web spectrum). Counted once a
+// session each, in the ordinary ledger, so a record's `reached.launched` is how many sessions
+// it describes and every other word's count is how many of them got that far - which is why
+// `launched` is counted at all: a record from a build that never measured the stages has NO
+// `reached` token, and "not measured" must not read as "got nowhere".
+//   launched    the program read its settings and began (the record exists)
+//   window      the window drew its first frame
+//   enumerated  at least one radio was listed (a scan or the native list found one)
+//   streaming   a radio was opened (radio_open, any driver)
+//   audio       the speakers played (sound_ok)
+//   webspectrum a browser was served a spectrum frame
+//   working     streaming + 60 s of samples + (audio or webspectrum)
+// Stage names only: no device, no driver, no timing beyond the single 60 s rule.
+enum class Milestone : std::uint8_t {
+    Launched,
+    Window,
+    Enumerated,
+    Streaming,
+    Audio,
+    WebSpectrum,
+    Working,
+};
+inline constexpr std::size_t kMilestoneCount = 7;
+// Samples seconds a session must have flowing before it is "working".
+inline constexpr unsigned kWorkingSampleSeconds = 60;
+
 // One event of the vocabulary, as documentation and the Worker see it: its
 // name, the word lists of its qualifiers in order (empty for a bare event), and
 // whether it counts at most once per session.
@@ -225,6 +258,11 @@ std::string tokenRecovered(Recovered r);
 // a watchdog's retry, a once-a-minute reopen, a ring that overflows again and
 // again). The others are counted once per occurrence.
 bool recoveredOncePerSession(Recovered r);
+
+// THE MILESTONES. Words of Milestone, in written order.
+const std::vector<std::string>& milestoneWords();
+const char* milestoneWord(Milestone m);
+std::string tokenReached(Milestone m);
 
 // ---------------------------------------------------------------------------
 // Counts, and their one-string encoding
@@ -441,6 +479,38 @@ void noteSlowFrame(int frameScope, int tier);
 void noteRecovered(Recovered r);
 void raiseRecovered(Recovered r);
 void drainRecovered();
+
+// A MILESTONE REACHED. Callable from any thread that may take the ledger's lock (the GUI thread,
+// a web worker): never from the DSP, source or audio threads. The process remembers which it has
+// reached (reachedMask), so a frame loop can ask `reached()` for the price of one atomic load
+// before it counts anything, and replayReached() puts them into a ledger armed AFTER they were
+// reached (the person switched usage reporting on mid-session, which arms a fresh ledger).
+void noteReached(Milestone m);
+bool reached(Milestone m);
+void replayReached();
+// Test seam: forget what the process has reached.
+void resetReachedForTest();
+
+// WHEN A SESSION COUNTS AS WORKING. Pure, so the rule is testable without a window: told
+// once a second (wall clock) whether a radio is open, whether its samples are flowing, and
+// whether the output has been reached, it says - exactly once - when the session has had
+// kWorkingSampleSeconds seconds of flowing samples with a radio open and the output reached.
+// The seconds are cumulative, not consecutive: a radio that is retuned or briefly stalls
+// does not start the minute over. Time with no radio open, or with the samples stopped, adds
+// nothing.
+class WorkingClock {
+public:
+    // True on the one call that makes the session working; false before and after.
+    bool second(bool radioOpen, bool samplesFlowing, bool outputReached);
+    unsigned flowingSeconds() const { return flowing_; }
+    bool working() const { return working_; }
+    // Test seam: a window test cannot wait a minute for real.
+    void seedFlowingSecondsForTest(unsigned seconds) { flowing_ = seconds; }
+
+private:
+    unsigned flowing_ = 0;
+    bool working_ = false;
+};
 
 // THE POLL FOR WHAT ONLY A COUNTER CAN SAY. Five recoveries happen inside a
 // thread this code must not count from (the pipeline's source and DSP threads,
