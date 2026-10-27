@@ -527,16 +527,21 @@ void RtlTcpSource::stopReaderLocked() {
             reader_.join();
         } else {
             // ABANDONED: the thread keeps its link and the socket pointer
-            // inside it, so the socket is leaked deliberately rather than
-            // closed under a thread still inside it. The fault condemns this
-            // source: every call refuses on a dead device.
+            // inside it, so the socket must not be closed under a thread still
+            // inside it - and is not: ownership moves to the link, which the
+            // thread holds, so the socket outlives the thread's last use of it
+            // and goes (closed) with the link when the thread lets go. (It used
+            // to be released and forgotten: a leak for the life of the process,
+            // which LeakSanitizer reported once the stranded reader had
+            // returned.) The fault condemns this source: every call refuses on
+            // a dead device.
             g_readersAbandoned.fetch_add(1, std::memory_order_relaxed);
             core::health::raiseRecovered(core::health::Recovered::ReaderLeak);
             noteFault("waiting for the sample reader to stop",
                       "the reader did not return; FoxSDR must be restarted to use this "
                       "source again");
             reader_.detach();
-            (void)transport_.release();
+            link_->stranded = std::move(transport_);
             running_.store(false, std::memory_order_relaxed);
             return;
         }
