@@ -4573,6 +4573,17 @@ private:
     // than re-derived because the sentence has to be logged exactly once.
     cascade::gui::ViewportDecision viewportDecision_ = cascade::gui::ViewportDecision::Enabled;
 
+    // PAGES BROUGHT INSIDE WHEN SEPARATE WINDOWS ARE OFF (gui/page_geometry.hpp,
+    // pageFitInside). With separate windows off, every top-level page that is not
+    // wholly inside the main window is moved and shrunk into it: all of them for a
+    // few frames after the driver refuses a window mid-session (ImGui moves a page
+    // out of its own viewport over a frame or two, and the pass must see where it
+    // finally lands), and any page on the frame it appears for the rest of the
+    // session. Called after drawUi, before ImGui::Render. pagesFitFrames_ is how
+    // many more frames check every page.
+    void fitPagesIntoMainWindow();
+    int pagesFitFrames_ = 0;
+
     // --- THE WINDOW FRAMES, ON THE METAL (0.78.0) ------------------------------
     //
     // The operating system's title bars are gone from the main window and from

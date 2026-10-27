@@ -367,6 +367,13 @@ foreach(src ${CASCADE_TESTS})
         # heard without a position are listed after the placed ones and never drawn (0.99.75).
         add_dependencies(${name} track_probe_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
+    elseif(name STREQUAL "test_viewport_fallback_app")
+        # Runs the real cascade.exe (built first) with the track fixture's map page, the plugin store
+        # and the Fitted modules window open as separate windows, has the backend refuse the next
+        # window part-way through the run (FOXSDR_TEST_VIEWPORT_REFUSE_AT), and reads from the
+        # self-capture's window list that every page is then wholly inside the main window.
+        add_dependencies(${name} track_probe_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
     elseif(name STREQUAL "test_programme_audio_app")
         add_dependencies(${name} programme_audio_fixture)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:programme_audio_fixture>")
@@ -517,6 +524,9 @@ set_tests_properties(test_decoder_settings_fold_app PROPERTIES TIMEOUT 600)
 # The unplaced-list test starts the real application three times (the heard rows, a bare NaN, and
 # "On screen only"), 80 frames each. The same bound, for the same reason, as the test above.
 set_tests_properties(test_unplaced_list_app PROPERTIES TIMEOUT 600)
+# The viewport-fallback test starts the real application three times (refused mid-run, one viewport
+# from the start, and the control that keeps separate windows), 110 frames each.
+set_tests_properties(test_viewport_fallback_app PROPERTIES TIMEOUT 600)
 # The row-keys test starts the real application twelve times (a layout run, the window open, a
 # press of HD2, of HD1 then HD2, the three that must press nothing and the control for the click's
 # geometry, an instrument's memory rows opened and pressed, and the module's page with sixteen
@@ -801,6 +811,7 @@ set(CASCADE_GUI_TESTS
     test_tx_audio_page_app
     test_tx_audio_plate_app
     test_unplaced_list_app
+    test_viewport_fallback_app
     test_viewports
     test_window_platform_app
 )

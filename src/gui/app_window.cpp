@@ -2633,6 +2633,38 @@ int AppWindow::run(int frames) {
             }
         }
 
+        // THE DRIVER REFUSING A WINDOW PART-WAY THROUGH A SESSION, BOUNDED RUNS ONLY.
+        // FOXSDR_TEST_VIEWPORT_REFUSE_AT=<frame> arms the backend's own refusal
+        // (ImGui_ImplGlfw_FailNextViewportWindowForTest, the path a real GLFW 65543
+        // takes) at that frame and, for three frames, draws a small probe window past
+        // the main window's right edge - the shape of a tooltip or popup that needs an
+        // operating system window of its own - so a window is actually asked for and
+        // refused. What follows is the application's real fallback, end to end:
+        // tests/test_viewport_fallback_app.
+        if (frames >= 0) {
+            static const long refuseAt = [] {
+                const char* v = std::getenv("FOXSDR_TEST_VIEWPORT_REFUSE_AT");
+                return (v != nullptr && v[0] != '\0') ? std::atol(v) : -1L;
+            }();
+            if (refuseAt >= 0 && static_cast<long>(rendered) == refuseAt) {
+                ImGui_ImplGlfw_FailNextViewportWindowForTest();
+            }
+            if (refuseAt >= 0 && static_cast<long>(rendered) >= refuseAt &&
+                static_cast<long>(rendered) < refuseAt + 3 &&
+                (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
+                const ImGuiViewport* mv = ImGui::GetMainViewport();
+                ImGuiWindowClass probeClass;
+                probeClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+                ImGui::SetNextWindowClass(&probeClass);
+                ImGui::SetNextWindowPos(ImVec2(mv->Pos.x + mv->Size.x + 40.0f, mv->Pos.y + 40.0f));
+                ImGui::SetNextWindowSize(ImVec2(200.0f, 80.0f));
+                ImGui::Begin("viewport refusal probe", nullptr,
+                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+                ImGui::TextUnformatted("probe");
+                ImGui::End();
+            }
+        }
+
         // THE CENSUS (gui/ui_census.hpp): walk the rail through its five banks,
         // three frames each, so every bank's sections are drawn in one run -
         // unless FOXSDR_CENSUS_HOLD_BANK asks for the bank the config chose to
@@ -2646,6 +2678,7 @@ int AppWindow::run(int frames) {
             setRailBank((rendered / 3) % cascade::gui::kRailBankCount);
         }
         drawUi();
+        fitPagesIntoMainWindow();
 
         // Collects a config write configWriter_ finished, whether it was
         // requested by maybeSaveConfig() below, by saveConfigNow(), or by the
@@ -2705,6 +2738,13 @@ int AppWindow::run(int frames) {
                 if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
                     cascade::core::diagWarnf("%s", why);
                 }
+                // ...AND THE PAGES THAT WERE THEIR OWN WINDOWS ARE BROUGHT INSIDE. ImGui
+                // keeps each one where it was beside this window, which for a page that
+                // opened past its right edge is past its right edge still - a 140 px
+                // strip with its rail off the top (the 2026-10-27 tester report). Every
+                // page is checked for the next few frames: the move into this window's
+                // viewport takes ImGui a frame or two, and the check is idempotent.
+                pagesFitFrames_ = 4;
             }
         }
 
@@ -16314,6 +16354,62 @@ void AppWindow::separateWindowAnchor(int slot, float& x, float& y) {
     const float stagger = 34.0f * static_cast<float>(slot);
     x = mv->Pos.x + mv->Size.x - 140.0f + stagger;
     y = mv->Pos.y + 60.0f + stagger;
+}
+
+// WITH SEPARATE WINDOWS OFF, NO PAGE IS LEFT WHERE IT CANNOT BE SEEN.
+//
+// The anchor above overhangs the main window on purpose, and a page that was its own window
+// keeps its place beside the main window when separate windows go off; in one viewport both
+// mean a page that is mostly outside the only window there is. Measured in the reproduction
+// of the 2026-10-27 tester report (0.99.95, "the ADS-B map closes when I try to interact with
+// it"): the map went from its own window at (1383,226) to (1142,-15) inside a 1282 x 745 main
+// window - 140 px of it showing, its rail above the top edge - and stayed there.
+//
+// So, while separate windows are off: every top-level page for pagesFitFrames_ frames after a
+// mid-session refusal, and any page on the frame it appears, is moved and shrunk into the
+// main window by pageFitInside (gui/page_geometry.hpp), which leaves a page that is already
+// wholly inside exactly where the user put it. A page is a window beginPage drew (it has a
+// pageChrome_ entry under the same name): the few plain ImGui dialogs size themselves to their
+// contents, and holding one to the page floor would undo that. Popups, tooltips and child
+// windows are ImGui's own to place; a docked window is placed by its dock node. One log line
+// per page brought in, so a field log shows the rescue beside the refusal that caused it.
+void AppWindow::fitPagesIntoMainWindow() {
+    if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
+        pagesFitFrames_ = 0;
+        return;
+    }
+    const bool everyPage = pagesFitFrames_ > 0;
+    if (pagesFitFrames_ > 0) { --pagesFitFrames_; }
+    const ImGuiViewport* mv = ImGui::GetMainViewport();
+    for (ImGuiWindow* wnd : ImGui::GetCurrentContext()->Windows) {
+        if (wnd == nullptr || !wnd->Active || wnd->DockIsActive) { continue; }
+        if ((wnd->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Popup |
+                           ImGuiWindowFlags_Tooltip)) != 0) {
+            continue;
+        }
+        if (!everyPage && !wnd->Appearing) { continue; }
+        if (pageChrome_.find(wnd->Name) == pageChrome_.end()) { continue; }
+        const ImVec2 wasPos = wnd->Pos;
+        const ImVec2 wasSize = wnd->Size;
+        float x = wasPos.x;
+        float y = wasPos.y;
+        float w = wasSize.x;
+        float h = wasSize.y;
+        if (!cascade::gui::pageFitInside(mv->Pos.x, mv->Pos.y, mv->Size.x, mv->Size.y, x, y, w,
+                                         h)) {
+            continue;
+        }
+        ImGui::SetWindowPos(wnd, ImVec2(x, y), ImGuiCond_Always);
+        ImGui::SetWindowSize(wnd, ImVec2(w, h), ImGuiCond_Always);
+        // The visible half of the title only: the part after "###" is ImGui's identity.
+        const char* cut = std::strstr(wnd->Name, "###");
+        const int nameLen = cut != nullptr ? static_cast<int>(cut - wnd->Name)
+                                           : static_cast<int>(std::strlen(wnd->Name));
+        cascade::core::diagLogf(
+            "viewports: page \"%.*s\" brought inside the main window - %.0f,%.0f %.0fx%.0f, was "
+            "%.0f,%.0f %.0fx%.0f",
+            nameLen, wnd->Name, x, y, w, h, wasPos.x, wasPos.y, wasSize.x, wasSize.y);
+    }
 }
 
 // --- THE RAIL ACROSS THE TOP OF A CABINET -------------------------------------

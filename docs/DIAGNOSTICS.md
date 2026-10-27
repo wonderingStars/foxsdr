@@ -624,6 +624,29 @@ the panel:
   restriction, not a fault, and is what 0.95.0 took an access violation
   instead of doing. `viewports: single (FOXSDR_SINGLE_VIEWPORT set)` is the
   developer switch and means the same thing on purpose.
+  **And no page is left outside the main window.** Through 0.99.96 a page that had
+  been its own window kept its place beside the main window when separate windows
+  went off, and every page opens overhanging the main window's right edge on
+  purpose - so a page drawn inside the main window was mostly outside it. A
+  tester's 0.99.95 on Intel UHD graphics, after an hour of ADS-B: "the ADS-B map
+  closes when I try to interact with it", with the refusal line seconds before
+  each time; reproduced, the map went from its own window at (1383,226)
+  1120x1166 to (1142,-15) in a 1282x745 main window - 140 px of it showing, its
+  rail above the top edge. Now `AppWindow::fitPagesIntoMainWindow` moves and
+  shrinks every page that is not wholly inside (`gui/page_geometry.hpp`,
+  `pageFitInside`: held to the main window less 24 px a side, never under the
+  240x140 drag floor, moved the least distance) - every page for four frames
+  after a refusal, and any page on the frame it opens while separate windows
+  are off - and logs one line per page it moved: `viewports: page "ADS-B Map"
+  brought inside the main window - 138,24 1120x697, was 1142,-15 1120x1166`.
+  A page already inside is left where it is and logs nothing. The seam,
+  bounded `--frames` runs only: `FOXSDR_TEST_VIEWPORT_REFUSE_AT=<frame>` has the
+  backend refuse the next window it is asked for at that frame (the path a real
+  GLFW 65543 takes) and draws a probe window past the main window's edge so one
+  is asked for. **Tested** by `tests/test_page_geometry.cpp` (the arithmetic,
+  including the tester's rectangle) and `tests/test_viewport_fallback_app.cpp`
+  (gui: the map, the plugin store and Fitted modules refused mid-run, separate
+  windows off from the start, and the control that keeps them separate).
 - **Both are rate-limited and scrubbed.** Twenty lines a second per source,
   then one `N more lines suppressed` per second, because a driver that has
   lost its device says so on every failed read and would otherwise push every
