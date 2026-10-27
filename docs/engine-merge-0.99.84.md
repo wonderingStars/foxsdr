@@ -187,8 +187,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * Windows testers can link from the tester page again ...................................... stubbed TESTER-LINK
 
 0.99.53
-  * the Store version tells you when the Store has an update ................................. stubbed UPDATES (core/store_update.* in; the window's check and
-    banner are not)
+  * the Store version tells you when the Store has an update ................................. re-expressed, stub batch B14 (src/gui/app_window_updates.cpp: a Store copy
+    asks the Store, the banner and its install key, the Updates section's Store states; test_store_update_app)
 
 0.99.54
   * close bookmark names stack instead of hiding ............................................. re-expressed, stub batch B10 (drawBookmarkMarkers' rows, the Bookmarks
@@ -313,8 +313,10 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * an airport lookup while listening changes nothing played ................................ re-expressed in part, stub batch B6 (the engine's rule: the monitor's preset is the LISTEN's,
     a row added to another preset restarts nothing; test_engine_api_airband C2); the window's lookup leaves the group on show - and so the monitor - alone while it listens, B7
     (test_airband_app, lookup while listening; the in-process mate checkAnAirportLookupKeepsAListeningMonitorsChoice of test_gui_file_jobs is B19's)
-  * a pasted report is recognised; `upload local-only` says what it means ..................... stubbed PROBLEM-REPORT (core/pasted_report is in; the page's
-    attach-diagnostics rows, the preview and the recognised-report line are not - lostlines: drawProblemReportPage)
+  * a pasted report is recognised; `upload local-only` says what it means ..................... re-expressed, stub batch B14 (src/gui/app_window_report.cpp: the recognised-report
+    line, the attach-the-diagnostics rows and the preview, `upload local-only` said in words, the no-email nudge on both pages; tests/test_problem_report_app.cpp, written RED first -
+    this item had no pending placeholder). The bundle the page attaches also carries the signature ids of the reports on the machine and the recovered words (owner-approved
+    2026-10-27: core/diag_evidence.hpp)
   * Fitted modules names the files not installed from the store ............................ re-expressed, stub batches B3 and B5 (the engine's half - `fact.plugin.origin.<file>`:
     orphan / site / removed-site - is B3's; the window's words, the row's note and the orphan's REMOVE FILE key (FOXAPP_OP_STORE_CLEAN_OLD ival[0] 1) are
     B5's: test_fitted_modules_window A, E, test_plugin_dup_app)
@@ -416,7 +418,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     FOXSDR_WINDOW_PLATFORM, the breadcrumb flag; test_window_failed_app)
 
 0.99.79
-  * a message from the FoxSDR team is shown whether or not there is an update ................ stubbed UPDATES
+  * a message from the FoxSDR team is shown whether or not there is an update ................ re-expressed, stub batch B14 (drawTeamMessages, teamMessageSeen and the
+    pruning of the Seen list in pollUpdateAsync, src/gui/app_window_updates.cpp; test_team_message_app)
 
 0.99.80
   * bookmark Import: drop zone and Browse button; by-name import; translated errors;
@@ -490,9 +493,10 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   PATCH-VIEW (2)          test_patch_canvas_nav test_patch_info_pane
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
   one each                PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
-                          SOURCE-ROWS test_source_row_app; UPDATES test_store_update_app;
-                          TESTER-USAGE test_team_message_app;
+                          SOURCE-ROWS test_source_row_app;
                           MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
+                          [UPDATES (test_store_update_app) and the placeholder TESTER-USAGE held for the team message (test_team_message_app) were removed by B14: UPDATES is
+                          whole; TESTER-USAGE's own section is B15's and has no placeholder of its own - its census test is written red first at B15]
   parts (3)               transmit_page_plugin_key (TX-PLUGIN; removed by B13), excuse_cap_pickfile (IMPORT-DIALOG; removed by B8), audio_lead_plugin_wake (PLUGIN-RUN)
                           [B2 removed audio_lead_plugin_wake and added nothing; B1 had added display_fold_airband_section (AIRBAND); B4 added
                           store_app_fitted (STORE-VIEW: the FITTED MODULES scenarios of test_plugin_store_app); B5 removed store_app_fitted; B1's display_fold_airband_section (AIRBAND) and the test test_airband_app were removed by B7: AIRBAND is whole]
@@ -716,3 +720,15 @@ LEASE on the session that opened it) and FOXAPP_OP_TX_DATA_FLAT 0x842C; facts fa
 commands the real page sends; _stepped and _free), test_tx_audio_page_app and test_tx_audio_plate_app (the real binary; unedited) are green and their placeholders, and the part
 transmit_page_plugin_key (re-pinned against the engine's drive), are gone: the red placeholders are the 20 of B12 (19 tests and 1 part) less three tests and the part: 16 (16 tests, no part). New:
 tests/test_engine_api_txplugin.cpp (the engine, a real transmitting module, a ledger radio, no window). test_i18n: 88 stale, 0 missing (the 10 keys of drawTransmitPage that returned are itemised in 6.22).
+
+UPDATE 2026-10-27, stub batch B14 (docs/engine-stage4.md 6.22): UPDATES and PROBLEM-REPORT. The update check's whole window half is back in src/gui/app_window_updates.cpp, from master's text
+of 0.99.90 (unchanged to 0.99.95): a Microsoft Store copy asks the STORE (core/store_update.hpp; an unpackaged copy never does, an unticked box asks nobody), the Store banner with its install key and
+the outcome of the install, the Updates section's Store states, a message from the FoxSDR team above the banner, "Seen" kept in the settings file, and the Seen list pruned to the ids the last
+successful answer still carries. test_store_update_app (63 checks, with a new "Not now" section) and test_team_message_app (65) are green and their placeholders are gone: the red placeholders are the
+16 of B13 less two: 14 (14 tests, no part). The page REPORT A BUG / DISLIKE and the feature page moved to src/gui/app_window_report.cpp with master's text of the rest of 0.99.69: the
+recognised-report line, "Attach the diagnostics log", "Attach the SDRplay diagnostic too" (its text is B18's; nothing fills it yet, so the row is never drawn), "Show what will be sent" and the sentence for
+`upload local-only`, the no-email nudge on both pages. That item had no pending placeholder, so its test is NEW and was written RED first (tests/test_problem_report_app.cpp: 95 checks, 24 failed against
+the page as it was; 109 checks, 0 failed after). Owner-approved addition of 2026-10-27: the diagnostics bundle (and so the attachment) carries two more header lines, `recent-faults:` (signature id and
+kind of the newest reports on the machine) and `recovered:` (what the program recovered from this session, fixed words and counts) - core/diag_evidence.*, tests/test_diag_evidence.cpp, PRIVACY.md,
+docs/DIAGNOSTICS.md. THE BREADCRUMB TRAIL JOINS POST-MERGE (it lives on master's field-early-warning branch). Where the machine cannot say, the line says so: `recovered:` reads "(not counted - usage
+reporting is off)" while the health ledger is not counting, which is how a run with usage reporting off sees it. test_i18n: 62 stale, 0 missing (the 26 keys of the five window functions returned).

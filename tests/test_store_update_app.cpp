@@ -16,7 +16,9 @@
  *   error      no banner - a failed check is shown only in the section;
  *   unpackaged the same seam, on a copy that is NOT packaged: the Store is
  *              never asked and no Store banner is drawn;
- *   unticked   a packaged copy with the box unticked asks nobody.
+ *   unticked   a packaged copy with the box unticked asks nobody;
+ *   dismissed  (stub campaign B14, an ADDITION: master's file had no section for it) "Not now" on the banner takes the banner away for good, the Updates section says
+ *              so and offers "Show it again", and that key brings the banner back.
  *
  * The press is the application's own input script, aimed from the census.
  * Isolated like every other test that starts the application: its own config,
@@ -124,6 +126,7 @@ struct Run {
     std::string install;                   // FOXSDR_FAKE_STORE_INSTALL
     bool ticked = true;                    // updateCheckEnabled
     std::string script;
+    std::string sections;                  // FOXSDR_OPEN_SECTIONS: the rail sections to hold open
 };
 
 Result once(const Run& r) {
@@ -148,6 +151,7 @@ Result once(const Run& r) {
     setEnv("FOXSDR_FAKE_PACKAGE", r.package);
     setEnv("FOXSDR_FAKE_STORE_UPDATE", r.store);
     setEnv("FOXSDR_FAKE_STORE_INSTALL", r.install);
+    setEnv("FOXSDR_OPEN_SECTIONS", r.sections);
     if (r.script.empty()) {
         setEnv("FOXSDR_INPUT_SCRIPT", "");
     } else {
@@ -329,6 +333,53 @@ void testUntickedAsksNobody() {
     CHECK(o.has("updates:store-off"));
 }
 
+// THE FRAME A BANNER WAS LAST DRAWN ON, from the census (a rectangle keeps its newest value; its x0 is the frame number): "Not now" is a press at one frame and the
+// banner has to stop being drawn from about then on, which a set of "ever seen" items cannot say.
+float lastBannerFrame(const Result& r) {
+    const auto it = r.rects.find("update:banner-frame");
+    return it == r.rects.end() ? -1.0f : it->second.x0;
+}
+
+void testNotNowStaysDismissed() {
+    std::printf("  dismissed\n");
+    Run r;
+    r.tag = "dismiss-aim";
+    r.store = "available";
+    r.sections = "Updates";
+    const Result a = once(r);
+    CHECK(a.ok);
+    CHECK(a.rects.count("update:notnow") == 1);
+    // Nothing is dismissed until it is pressed: the banner is drawn to the end of the run.
+    CHECK(!a.has("updates:dismissed"));
+    CHECK(lastBannerFrame(a) > kFrames - 5);
+    if (a.rects.count("update:notnow") != 1) { return; }
+    const Rect notNow = a.rects.at("update:notnow");
+
+    // "NOT NOW" AT FRAME 24: the banner is last drawn about then, and not again for the 45 frames after it.
+    r.tag = "dismissed";
+    r.script = press(notNow);
+    const Result d = once(r);
+    CHECK(d.ok);
+    CHECK(d.has("updates:dismissed"));
+    CHECK(d.rects.count("updates:show-again") == 1);
+    std::printf("    banner last drawn at frame %.0f of %d\n", static_cast<double>(lastBannerFrame(d)), kFrames);
+    CHECK(lastBannerFrame(d) > 0.0f);
+    CHECK(lastBannerFrame(d) < 32.0f);
+    if (d.rects.count("updates:show-again") != 1) { return; }
+
+    // "SHOW IT AGAIN" at frame 40 (the section's key): the banner comes back and is drawn to the end.
+    const Rect again = d.rects.at("updates:show-again");
+    char more[128];
+    std::snprintf(more, sizeof more, "40 screen %.0f %.0f\n42 down\n44 up\n46 screen %.0f %.0f\n", again.cx(), again.cy(), again.cx() + 400.0f,
+                  again.cy() + 300.0f);
+    r.tag = "undismissed";
+    r.script = press(notNow) + more;
+    const Result u = once(r);
+    CHECK(u.ok);
+    CHECK(u.has("updates:dismissed"));
+    CHECK(lastBannerFrame(u) > kFrames - 5);
+}
+
 }  // namespace
 
 int main() {
@@ -357,6 +408,7 @@ int main() {
     testError();
     testUnpackagedNeverAsksTheStore();
     testUntickedAsksNobody();
+    testNotNowStaysDismissed();
 
     const int rc = testSummary("test_store_update_app");
     if (rc == 0) { fs::remove_all(g_dir, ec); }

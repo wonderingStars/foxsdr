@@ -67,6 +67,8 @@
 // The MSIX question, asked in exactly two places in this file: whether the
 // startup update check runs at all, and what the Settings > Updates row says.
 #include "core/package_identity.hpp"
+#include "core/diag_evidence.hpp"
+#include "core/health_events.hpp"
 #include "gui/band_plan_style.hpp"
 #include "gui/basemap_stand_in.hpp"
 #include "gui/plugin_markers.hpp"
@@ -877,6 +879,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             diagnosticsStartup(cfg);
             updateCheckEnabled_ = cfg.updateCheckEnabled;
             updateChannel_ = cfg.updateChannel;
+            // The team messages marked Seen (0.99.79, stub campaign B14): the window's own list, saved back by diagnosticsJournal.
+            messagesSeen_ = cfg.messagesSeen;
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
             // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (0.99.65, core/damaged_file.hpp).
@@ -951,6 +955,10 @@ AppWindow::~AppWindow() {
     // its outcome by value and owns everything it touches, so a check still
     // running after a short grace is abandoned rather than waited for.
     updateCheck_.reap();
+    // The Microsoft Store's check and install request, on the same terms: the install worker in particular may be sitting inside Windows' own consent
+    // dialog, for as long as the user leaves it there.
+    storeCheck_.reap();
+    storeInstall_.reap();
 
     // THE ENGINE'S TEARDOWN (engine stage 3a): the device, sound card, audio,
     // microphone, GPS and scan workers reaped, the patch's radios and the
@@ -1635,6 +1643,17 @@ int AppWindow::run(int frames) {
     // tests use, and a build that reached the network during them would make
     // the suite depend on a server being up and on what that server happened
     // to say. The same rule the catalogue and config hooks already follow.
+    //
+    // ONE EXCEPTION, for the tests (0.99.53): FOXSDR_FAKE_STORE_UPDATE set makes the Microsoft Store's answer a canned one (core/store_update.hpp), so a --frames run can
+    // watch the whole Store path without the Store. It is deliberately NOT limited to packaged copies: an unpackaged copy with the seam set still takes the foxsdr.com
+    // path (at whatever FOXSDR_UPDATE_URL the test points it at), which is what lets tests/test_store_update_app prove an unpackaged copy never asks the Store.
+    //
+    // AND A SECOND (0.99.79): FOXSDR_FAKE_UPDATE_MANIFEST set names a FILE that is foxsdr.com's answer (core/updater.hpp), so a --frames run can watch a team message
+    // arrive and be marked Seen. A loopback stub cannot stand in for the site, because the fetch refuses anything that is not https; a file is read by checkForUpdate itself
+    // and reaches no network at all, so the run stays as hermetic as it was.
+    if (frames >= 0 && (cascade::core::storeUpdateFake() != cascade::core::StoreUpdateFake::Off || cascade::core::updateManifestFakeSet())) {
+        startUpdateCheck();
+    }
     if (frames < 0) {
         startUpdateCheck();
         // Heartbeats are interactive-only for the same reason - and this is
@@ -6480,6 +6499,9 @@ void AppWindow::drawMenuColumn() {
                       ImVec2(colSize.x - kPlatePad * 2.0f, -(footerHeight + kPlatePad)),
                       ImGuiChildFlags_None);
     ImGui::PopStyleColor();
+    // A message from the team goes ABOVE the update banner: it is what the owner chose to say to everyone right now, and it is shown whether or not there is
+    // an update (0.99.79).
+    drawTeamMessages();
     drawUpdateBanner();
 
     // ONE BANK AT A TIME. The five captions the rail always carried are now
@@ -7585,49 +7607,6 @@ void AppWindow::drawRailBankCurtain() {
 // be detected on this version" might.
 // ---------------------------------------------------------------------------
 
-void AppWindow::startUpdateCheck() {
-    if (updateStarted_ || updatePending_) { return; }
-    // THE PACKAGED BUILD STANDS DOWN, and says so once.
-    //
-    // A Store install is updated by the Store. This check exists to download
-    // and run foxsdr-setup-<ver>.exe, which inside a package would install a
-    // SECOND, unpackaged FoxSDR beside the packaged one - two products, two
-    // data locations, two update paths. So the check never starts, the reason
-    // goes in the log rather than being inferred from the absence of a
-    // request, and the Settings row below says the same thing in words.
-    //
-    // updateStarted_ is set on the packaged path too, so the line is logged
-    // once per launch and not once per re-tick of the Settings checkbox. The
-    // OffByChoice path deliberately leaves it alone, exactly as the plain
-    // `!updateCheckEnabled_` guard it replaces did.
-    const cascade::core::UpdateCheckDisposition disposition =
-        cascade::core::updateCheckDisposition(cascade::core::runningInPackage(),
-                                              updateCheckEnabled_);
-    if (disposition == cascade::core::UpdateCheckDisposition::OffByChoice) { return; }
-    if (disposition == cascade::core::UpdateCheckDisposition::AskStore) {
-        // FIXME(2026-10-21, 0.99.84 merge, ledger UPDATES): master's 0.99.53 asks the Microsoft Store here (core/store_update.hpp);
-        // the Store task and its banner are not wired into this window yet, so a packaged copy asks nobody, as before 0.99.53.
-        updateStarted_ = true;
-        cascade::core::diagLogf("%s", "update check: running from a Store package - the Store check is not wired in this tree yet");
-        return;
-    }
-    updateStarted_ = true;
-    updatePending_ = true;
-    updateError_.clear();
-    const std::string endpoint = cascade::core::updateEndpoint();
-    const std::string version = cascade::versionString();
-    // Stable ("") unless the person chose every release (0.99.88).
-    const std::string channel = cascade::core::updateChannelParam(updateChannel_);
-    // NOTHING OF `this` IS CAPTURED: the outcome comes back by value, which is
-    // what lets ~AppWindow abandon a check stalled inside WinHTTP instead of
-    // waiting out its timeouts (see core::UpdateCheckTask).
-    updateCheck_.start([endpoint, version, channel]() {
-        cascade::core::UpdateCheckOutcome o;
-        o.ok = cascade::core::checkForUpdate(endpoint, version, channel, o.info, o.error);
-        return o;
-    });
-}
-
 void AppWindow::startUpdateDownload() {
     if (updatePending_ || !update_.newer) { return; }
     updatePending_ = true;
@@ -7643,39 +7622,6 @@ void AppWindow::startUpdateDownload() {
         return cascade::core::downloadUpdate(info, updateResultPath_, updateResultError_,
                                              &updateProgress_, &updateCancel_);
     });
-}
-
-void AppWindow::pollUpdateAsync() {
-    constexpr auto kNoWait = std::chrono::seconds(0);
-
-    cascade::core::UpdateCheckOutcome checked;
-    if (updatePending_ && !updateDownloading_ && updateCheck_.poll(checked)) {
-        updatePending_ = false;
-        if (checked.ok) {
-            update_ = checked.info;
-        } else {
-            // A failed check is NOT shown. The user did not ask, and an
-            // application that interrupts listening to say it could not reach a
-            // server is worse than one that quietly tries again next launch.
-            updateError_ = checked.error;
-        }
-    }
-
-    if (updatePending_ && updateDownloading_ && updateDownloadFuture_.valid() &&
-        updateDownloadFuture_.wait_for(kNoWait) == std::future_status::ready) {
-        const bool ok = updateDownloadFuture_.get();
-        updatePending_ = false;
-        updateDownloading_ = false;
-        if (ok) {
-            updateReadyPath_ = updateResultPath_;
-        } else {
-            // A download failure IS shown: the user pressed a button and is
-            // waiting for it. The message is PluginRepo's verbatim, which for a
-            // digest mismatch names both digests - the one case where the
-            // detail matters more than the tidiness.
-            updateError_ = updateResultError_;
-        }
-    }
 }
 
 cascade::gui::ShellPauseHooks AppWindow::watchdogShellHooks() {
@@ -7772,102 +7718,6 @@ bool AppWindow::launchInstaller(const std::string& path) {
     (void)path;
     return false;
 #endif
-}
-
-void AppWindow::drawUpdateBanner() {
-    if (!updateCheckEnabled_ || updateDismissed_) { return; }
-    if (!update_.newer && updateError_.empty()) { return; }
-    if (!update_.newer) { return; }
-
-    // Amber for an ordinary update, red for one that fixes a build which could
-    // not do its job. The distinction is the server's `critical` flag, and it
-    // is the difference between a notice and a warning.
-    const ImVec4 accent = update_.critical ? kErrorRed : cascade::gui::theme::warning();
-    ImGui::PushStyleColor(ImGuiCol_Text, accent);
-    if (update_.critical) {
-        ImGui::TextWrapped(tr("Important update: FoxSDR %s"), update_.version.c_str());
-    } else {
-        ImGui::TextWrapped(tr("FoxSDR %s is available"), update_.version.c_str());
-    }
-    ImGui::PopStyleColor();
-    ImGui::TextDisabled(tr("you are running %s"), cascade::versionString());
-
-    // WHAT IT FIXES, in the author's words, for every release between the one
-    // running and the one offered. Somebody several versions behind sees all of
-    // them, which is the case that matters: the people who most need this are
-    // the furthest back.
-    for (const cascade::core::ReleaseNote& n : update_.notes) {
-        ImGui::Spacing();
-        ImGui::Text("%s%s", n.version.c_str(), n.critical ? tr("  (important)") : "");
-        for (const std::string& line : n.notes) {
-            ImGui::Bullet();
-            ImGui::TextWrapped("%s", line.c_str());
-        }
-    }
-
-    ImGui::Spacing();
-#if defined(_WIN32)
-    if (updateDownloading_) {
-        ImGui::TextColored(cascade::gui::theme::warning(), tr("Downloading..."));
-        // updateProgress_, not pluginRepo_.progress(): this transfer does not
-        // go through a PluginRepo instance, so that value is whatever the
-        // plugin browser last did — which for the common case of never having
-        // opened it is 0, for the whole download.
-        ImGui::ProgressBar(updateProgress_.load(std::memory_order_relaxed),
-                           ImVec2(-FLT_MIN, 0.0f));
-    } else if (!updateReadyPath_.empty()) {
-        // Downloaded AND verified. Running it closes this application, which
-        // the button says outright rather than surprising anyone: an installer
-        // cannot replace a binary that is still running.
-        ImGui::TextWrapped(tr("Downloaded and verified."));
-        if (ImGui::Button(trId("Install now and restart"), ImVec2(-FLT_MIN, 0.0f))) {
-            if (launchInstaller(updateReadyPath_)) {
-                requestClose();
-            } else {
-                std::string msg;
-                cascade::core::formatUtf8(msg, tr("could not start the installer at %s"),
-                              updateReadyPath_.c_str());
-                updateError_ = msg;
-            }
-        }
-        ImGui::TextDisabled("%s", updateReadyPath_.c_str());
-    } else {
-        ImGui::BeginDisabled(updatePending_);
-        if (ImGui::Button(trId("Download update"), ImVec2(-FLT_MIN, 0.0f))) { startUpdateDownload(); }
-        ImGui::EndDisabled();
-        if (update_.sizeBytes > 0) {
-            // Wrapped, not TextDisabled: the sidebar is narrow and the
-            // unwrapped line was cut off mid-word at "verified against its
-            // publis", which reads as a rendering fault rather than a promise.
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-            ImGui::TextWrapped(tr("%.1f MB, verified against its published checksum before anything runs"),
-                               static_cast<double>(update_.sizeBytes) / 1.0e6);
-            ImGui::PopStyleColor();
-        }
-    }
-#else
-    // NO LINUX INSTALLER EXISTS YET. The manifest at foxsdr.com/api/update
-    // names a Windows .exe (foxsdr-setup-<version>.exe) whether the asking
-    // client is Windows or Linux - it has no notion of a client platform, and
-    // as of this port there is nothing else on the site to offer a Linux
-    // build. Downloading that .exe here and then failing to launch it (the
-    // #if defined(_WIN32) branch above) would be a working-looking button
-    // that quietly cannot succeed. The honest behaviour is to say so and hand
-    // the person to the one place that will eventually have the right file.
-    ImGui::TextWrapped(
-        tr("There is no in-app updater for Linux yet - download it from foxsdr.com."));
-    if (ImGui::Button(trId("Open foxsdr.com"), ImVec2(-FLT_MIN, 0.0f))) {
-        shellOpen(cascade::core::kHomepageUrl);
-    }
-#endif
-    if (ImGui::SmallButton(trId("Not now"))) { updateDismissed_ = true; }
-
-    if (!updateError_.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", updateError_.c_str());
-        ImGui::PopStyleColor();
-    }
-    ImGui::Separator();
 }
 
 void AppWindow::drawSourceSection() {
@@ -18232,477 +18082,6 @@ void AppWindow::drawTransmitPage() {
     // since stage 4 (Engine::pumpPublish), not from here.
 }
 
-// --- REQUEST A FEATURE (see core/feature_request.hpp) -----------------------
-//
-// A SMALL PAGE, on purpose: a text box, an optional contact line, the one
-// sentence naming exactly what is sent, a SEND key, and a status line. Opened
-// by the STATUS column's own key (drawStatusColumn) and by nothing else -
-// never restored at start-up, matching every other torn-off page's rule.
-void AppWindow::drawFeatureRequestPage() {
-    if (!featureRequestOpen_) { return; }
-    constexpr float kW = 480.0f;
-    constexpr float kH = 420.0f;
-    float px = 0.0f;
-    float py = 0.0f;
-    float pw = kW;
-    float ph = kH;
-    {
-        // OPENS INSIDE THE MAIN WINDOW, centred - the same arithmetic the
-        // plugin store and the demod scope use, and for the same reason: a
-        // key that opens nothing visible on a maximised single monitor has
-        // told the person who pressed it nothing at all.
-        const ImGuiViewport* mv = ImGui::GetMainViewport();
-        cascade::gui::pageOpenInside(mv->Pos.x, mv->Pos.y, mv->Size.x, mv->Size.y, kW, kH, px,
-                                     py, pw, ph);
-    }
-    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(pw, ph), ImGuiCond_FirstUseEver);
-    if (!beginPage("Feature request###featurerequestwindow", tr("FEATURE REQUEST"),
-                   &featureRequestOpen_, 0, pw, ph)) {
-        endPage();
-        return;
-    }
-
-    const std::uint64_t nowEpoch = static_cast<std::uint64_t>(std::time(nullptr));
-    const cascade::core::FeatureRequestState state = featureRequestSender_.state();
-    const bool sending = (state == cascade::core::FeatureRequestState::Sending);
-
-    // --- the text --------------------------------------------------------
-    // Wrapped at the page's edge: the English question fits one line, a
-    // translation need not.
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(tr("What would you like FoxSDR to do?"));
-    ImGui::PopTextWrapPos();
-    // THE BOX GIVES WAY TO WHAT IS UNDER IT (gui::boxGivingWay). On this
-    // 420-pixel page a translation's longer sentence and the reason wrapped
-    // under SEND pushed that reason below the fold - a dead key whose reason
-    // had to be scrolled to. The box is shortened by exactly the overflow,
-    // measured on the previous frame; the English page fits, and its box is
-    // the 160 it always was.
-    const float boxH = cascade::gui::boxGivingWay(160.0f, 80.0f, ImGui::GetContentRegionAvail().y,
-                                                  featureRequestBelowBoxH_);
-    float belowTop = 0.0f;
-    {
-        // NO FIXED BUFFER: the widget edits the string itself (imgui_stdlib
-        // grows it as the person types), so nothing they write is cut by the
-        // widget - the ceiling is 100000 characters, and reaching it is said
-        // in words by validation, never done silently.
-        ImGui::BeginDisabled(sending);
-        ImGui::InputTextMultiline("##featurerequesttext", &featureRequestText_,
-                                  ImVec2(-1.0f, boxH));
-        ImGui::EndDisabled();
-        belowTop = ImGui::GetItemRectMax().y;
-    }
-    // THE SAME COUNT validateFeatureRequestText() JUDGES THE BOUNDARY
-    // AGAINST - after trimming and after dropping control characters the way
-    // the server does before IT counts them - so the number on screen never
-    // disagrees with the number that decides whether SEND is enabled.
-    const std::size_t chars = cascade::core::featureRequestTextCharCount(featureRequestText_);
-    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
-    ImGui::Text(tr("%zu / %zu characters"), chars, cascade::core::kFeatureRequestMaxChars);
-    ImGui::PopStyleColor();
-
-    // --- the optional contact line ----------------------------------------
-    ImGui::TextUnformatted(tr("Email or callsign (optional)"));
-    {
-        char buf[cascade::core::kFeatureRequestContactBufferBytes];
-        cascade::core::formatUtf8(buf, sizeof(buf), "%s", featureRequestContact_.c_str());
-        ImGui::BeginDisabled(sending);
-        ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::InputText("##featurerequestcontact", buf, sizeof(buf))) {
-            featureRequestContact_ = buf;
-        }
-        ImGui::EndDisabled();
-    }
-
-    ImGui::Separator();
-
-    // --- THE SENTENCE, exactly what leaves the machine -----------------------
-    //
-    // Built from what is actually about to be sent, never a static string
-    // that could drift from the payload beside it: the contact line only
-    // appears here when there is one to send, exactly as it only appears in
-    // the JSON when featureRequestJson() trims it to something non-empty.
-    {
-        // TWO WHOLE SENTENCES, not one assembled from fragments, so a
-        // translation can order its clauses the way its language does.
-        const bool haveContact =
-            !cascade::core::validateFeatureRequestContact(featureRequestContact_).empty()
-                ? false  // an over-length contact is not going to be sent at all
-                : cascade::core::featureRequestContactCharCount(featureRequestContact_) > 0;
-        const char* sentence =
-            haveContact
-                ? tr("Sends your message above, the contact line below it, the FoxSDR version, "
-                     "and whether this is running on Windows, Linux or Android, x64 or arm64. "
-                     "Nothing else - no identifier, no log, no settings, no frequency.")
-                : tr("Sends your message above, the FoxSDR version, and whether this is "
-                     "running on Windows, Linux or Android, x64 or arm64. Nothing else - no "
-                     "identifier, no log, no settings, no frequency.");
-        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
-        ImGui::TextWrapped("%s", sentence);
-        ImGui::PopStyleColor();
-    }
-
-    // --- whether SEND is allowed, and why not when it is not ------------------
-    const std::string textError = cascade::core::validateFeatureRequestText(featureRequestText_);
-    const std::string contactError =
-        cascade::core::validateFeatureRequestContact(featureRequestContact_);
-    const std::uint64_t blockedUntil = featureRequestSender_.blockedUntil();
-    const bool cooling = !sending && blockedUntil > nowEpoch;
-
-    // DRAWN ONLY - disabledReason is tested for emptiness and printed, never
-    // sent or logged - so it is translated as it is filled.
-    std::string disabledReason;
-    if (sending) {
-        disabledReason = tr("sending");
-    } else if (!textError.empty()) {
-        disabledReason = tr(textError.c_str());
-    } else if (!contactError.empty()) {
-        disabledReason = tr(contactError.c_str());
-    } else if (cooling) {
-        const std::uint64_t left = blockedUntil - nowEpoch;
-        cascade::core::formatUtf8(disabledReason, tr("wait %llus before sending another"),
-                      static_cast<unsigned long long>(left));
-    }
-    const bool canSend = disabledReason.empty();
-
-    ImGui::BeginDisabled(!canSend);
-    const bool pressed = ImGui::Button(trId("SEND"), ImVec2(120.0f, 0.0f));
-    ImGui::EndDisabled();
-    if (!disabledReason.empty()) {
-        // BESIDE THE SEND KEY WHEN IT FITS THE PAGE, under it and wrapped when
-        // it does not. The English reason the page opens with sits beside the
-        // key; its translations ran off the page's right edge in five
-        // languages of six, and the box above makes room for the wrapped
-        // line (see boxH). The problem-report
-        // page below always wraps its reason under the key, because there
-        // the kind's own sentence is longer than any of these.
-        //
-        // AND BESIDE IT AT A SMALLER SIZE before it is moved under the key
-        // (text_fit.hpp, sameLineFittedText): "(write at least 10
-        // characters - 0 so far)" in Russian, Ukrainian, Greek and Japanese
-        // was a few pixels too long and dropped under SEND, where it read as a
-        // line of the page rather than as the key's reason. Only a reason
-        // that does not fit even at seven tenths goes below, wrapped.
-        std::string shown = "(" + disabledReason + ")";
-        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
-        if (!cascade::gui::sameLineFittedText(shown.c_str())) {
-            ImGui::PushTextWrapPos(0.0f);
-            ImGui::TextUnformatted(shown.c_str());
-            ImGui::PopTextWrapPos();
-        }
-        ImGui::PopStyleColor();
-    }
-
-    if (pressed && canSend) {
-        cascade::core::FeatureRequestPayload payload;
-        payload.text = featureRequestText_;
-        payload.contact = featureRequestContact_;
-        payload.version = cascade::versionString();
-        payload.platform = cascade::core::featureRequestPlatform();
-        payload.arch = cascade::core::featureRequestArch();
-        // The count LOGGED is the same one the SEND key's boundary and the
-        // on-page counter already use - the server's own count, after
-        // trimming and after dropping control characters - never a raw
-        // std::string::size() that could differ from it by a stray blank
-        // line or an embedded control character.
-        featureRequestSentChars_ =
-            cascade::core::featureRequestTextCharCount(featureRequestText_);
-        featureRequestSender_.send(cascade::core::featureRequestEndpoint(), payload, nowEpoch);
-    }
-
-    // --- the status line -------------------------------------------------
-    switch (state) {
-        case cascade::core::FeatureRequestState::Idle:
-            break;
-        case cascade::core::FeatureRequestState::Sending:
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
-            ImGui::TextUnformatted(tr("Sending..."));
-            ImGui::PopStyleColor();
-            break;
-        case cascade::core::FeatureRequestState::Sent:
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
-            ImGui::TextUnformatted(tr("Thank you - your request was sent."));
-            ImGui::PopStyleColor();
-            break;
-        case cascade::core::FeatureRequestState::Failed:
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
-            ImGui::TextWrapped("%s", tr(featureRequestSender_.failureMessage().c_str()));
-            ImGui::PopStyleColor();
-            break;
-        case cascade::core::FeatureRequestState::CoolingDown: {
-            std::string msg = featureRequestSender_.failureMessage();
-            if (msg.empty()) {
-                msg = FOX_TR_NOOP("The server asked us to wait before sending another request.");
-            }
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
-            ImGui::TextWrapped("%s", tr(msg.c_str()));
-            ImGui::PopStyleColor();
-            break;
-        }
-    }
-    // Everything under the box, for next frame's boxGivingWay: from the box's
-    // foot to the foot of the last line drawn.
-    featureRequestBelowBoxH_ =
-        ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y - belowTop;
-
-    endPage();
-
-    // THE LOG LINE, exactly once per send, on the frame the transition out of
-    // Sending is first observed - never the text, never the contact, exactly
-    // as PRIVACY.md and feature_request.hpp both promise.
-    if (featureRequestLastLoggedState_ == cascade::core::FeatureRequestState::Sending &&
-        state != cascade::core::FeatureRequestState::Sending) {
-        if (state == cascade::core::FeatureRequestState::Sent) {
-            cascade::core::diagLogf("feature request: sent, %zu characters, HTTP %d",
-                                    featureRequestSentChars_, featureRequestSender_.lastStatus());
-        } else {
-            cascade::core::diagLogf("feature request: failed, %zu characters, HTTP %d - %s",
-                                    featureRequestSentChars_, featureRequestSender_.lastStatus(),
-                                    featureRequestSender_.failureMessage().c_str());
-        }
-    }
-    // Cleared on the ONE frame the SEND that just succeeded is first seen -
-    // never before, and never again while the thank-you is still showing (see
-    // featureRequestClearsTextNow for what "whenever it is Sent" did to a
-    // second request). A send still in flight, or one that failed, leaves the
-    // words on screen so the person is not asked to retype them. The contact
-    // line is deliberately NOT cleared: the contract calls for keeping it, so
-    // filing a second request does not mean typing an email address twice.
-    if (cascade::core::featureRequestClearsTextNow(featureRequestLastLoggedState_, state)) {
-        featureRequestText_.clear();
-    }
-    featureRequestLastLoggedState_ = state;
-}
-
-// --- REPORT A BUG / DISLIKE (see core/problem_report.hpp) -------------------
-//
-// The feature-request page's twin, with one thing more at the top: the choice
-// of what this is. Two radio buttons and NEITHER chosen when the page opens -
-// a default would file every hurried report as whichever came first, and the
-// site triages the two kinds apart. Everything below the choice is the same
-// page as drawFeatureRequestPage(): the same bounds and counter, the same
-// sentence naming exactly what is sent, the same SEND rules and status line,
-// the same one log line that never carries the words.
-void AppWindow::drawProblemReportPage() {
-    if (!problemReportOpen_) { return; }
-    constexpr float kW = 480.0f;
-    // TALLER THAN THE FEATURE PAGE by the kind row, its question and the
-    // wrapped reason line under SEND. At 470 (rendered check, 2026-09-23) the
-    // SEND key was cut by the page's foot and the reason it was disabled sat
-    // below the fold, so the page opened looking like a key that did nothing.
-    constexpr float kH = 540.0f;
-    float px = 0.0f;
-    float py = 0.0f;
-    float pw = kW;
-    float ph = kH;
-    {
-        const ImGuiViewport* mv = ImGui::GetMainViewport();
-        cascade::gui::pageOpenInside(mv->Pos.x, mv->Pos.y, mv->Size.x, mv->Size.y, kW, kH, px,
-                                     py, pw, ph);
-    }
-    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(pw, ph), ImGuiCond_FirstUseEver);
-    if (!beginPage("Report a bug or dislike###problemreportwindow", tr("REPORT A BUG / DISLIKE"),
-                   &problemReportOpen_, 0, pw, ph)) {
-        endPage();
-        return;
-    }
-
-    const std::uint64_t nowEpoch = static_cast<std::uint64_t>(std::time(nullptr));
-    const cascade::core::FeatureRequestState state = problemReportSender_.state();
-    const bool sending = (state == cascade::core::FeatureRequestState::Sending);
-
-    // --- what this is ------------------------------------------------------
-    ImGui::TextUnformatted(tr("What are you reporting?"));
-    ImGui::BeginDisabled(sending);
-    if (ImGui::RadioButton(trId("Something is broken (bug)"),
-                           problemReportKind_ == cascade::core::kProblemKindBug)) {
-        problemReportKind_ = cascade::core::kProblemKindBug;
-    }
-    // Beside the first choice when both fit the page, under it when a
-    // translation makes the pair too wide (gui/text_fit.hpp).
-    cascade::gui::sameLineIfFits(cascade::gui::checkWidth(trId("Something I dislike")));
-    if (ImGui::RadioButton(trId("Something I dislike"),
-                           problemReportKind_ == cascade::core::kProblemKindDislike)) {
-        problemReportKind_ = cascade::core::kProblemKindDislike;
-    }
-    ImGui::EndDisabled();
-
-    // --- the text --------------------------------------------------------
-    // Wrapped at the page's edge: "Was ist schiefgegangen, und was haben Sie
-    // in dem Moment getan?" was cut at the page's edge in German.
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(problemReportKind_ == cascade::core::kProblemKindDislike
-                               ? tr("What do you dislike, and what would you rather it did?")
-                               : tr("What went wrong, and what were you doing when it did?"));
-    ImGui::PopTextWrapPos();
-    // The box gives way to what is under it, as on the feature page: the
-    // translated sentence and the reason under SEND ran below this page's
-    // foot in Portuguese and French.
-    const float boxH = cascade::gui::boxGivingWay(160.0f, 80.0f, ImGui::GetContentRegionAvail().y,
-                                                  problemReportBelowBoxH_);
-    float belowTop = 0.0f;
-    {
-        // No fixed buffer, as in the feature-request box above.
-        ImGui::BeginDisabled(sending);
-        ImGui::InputTextMultiline("##problemreporttext", &problemReportText_,
-                                  ImVec2(-1.0f, boxH));
-        ImGui::EndDisabled();
-        belowTop = ImGui::GetItemRectMax().y;
-    }
-    const std::size_t chars = cascade::core::featureRequestTextCharCount(problemReportText_);
-    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
-    ImGui::Text(tr("%zu / %zu characters"), chars, cascade::core::kFeatureRequestMaxChars);
-    ImGui::PopStyleColor();
-
-    // --- the optional contact line ----------------------------------------
-    ImGui::TextUnformatted(tr("Email or callsign (optional)"));
-    {
-        char buf[cascade::core::kFeatureRequestContactBufferBytes];
-        cascade::core::formatUtf8(buf, sizeof(buf), "%s", problemReportContact_.c_str());
-        ImGui::BeginDisabled(sending);
-        ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::InputText("##problemreportcontact", buf, sizeof(buf))) {
-            problemReportContact_ = buf;
-        }
-        ImGui::EndDisabled();
-    }
-
-    ImGui::Separator();
-
-    // --- THE SENTENCE, exactly what leaves the machine ---------------------
-    {
-        // Two whole sentences, as on the feature-request page.
-        const bool haveContact =
-            cascade::core::validateProblemReportContact(problemReportContact_).empty() &&
-            cascade::core::featureRequestContactCharCount(problemReportContact_) > 0;
-        const char* sentence =
-            haveContact
-                ? tr("Sends whether this is a bug or a dislike, your message above, the contact "
-                     "line below it, the FoxSDR version, and whether this is running on "
-                     "Windows, Linux or Android, x64 or arm64. Nothing else - no identifier, no "
-                     "log, no crash report, no settings, no frequency.")
-                : tr("Sends whether this is a bug or a dislike, your message above, the FoxSDR "
-                     "version, and whether this is running on Windows, Linux or Android, x64 "
-                     "or arm64. Nothing else - no identifier, no log, no crash report, no "
-                     "settings, no frequency.");
-        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
-        ImGui::TextWrapped("%s", sentence);
-        ImGui::PopStyleColor();
-    }
-
-    // --- whether SEND is allowed, and why not when it is not ----------------
-    const std::string kindError = cascade::core::validateProblemReportKind(problemReportKind_);
-    const std::string textError = cascade::core::validateProblemReportText(problemReportText_);
-    const std::string contactError =
-        cascade::core::validateProblemReportContact(problemReportContact_);
-    const std::uint64_t blockedUntil = problemReportSender_.blockedUntil();
-    const bool cooling = !sending && blockedUntil > nowEpoch;
-
-    // Drawn only, as on the feature-request page: translated as it is filled.
-    std::string disabledReason;
-    if (sending) {
-        disabledReason = tr("sending");
-    } else if (!kindError.empty()) {
-        disabledReason = tr(kindError.c_str());
-    } else if (!textError.empty()) {
-        disabledReason = tr(textError.c_str());
-    } else if (!contactError.empty()) {
-        disabledReason = tr(contactError.c_str());
-    } else if (cooling) {
-        const std::uint64_t left = blockedUntil - nowEpoch;
-        cascade::core::formatUtf8(disabledReason, tr("wait %llus before sending another"),
-                      static_cast<unsigned long long>(left));
-    }
-    const bool canSend = disabledReason.empty();
-
-    ImGui::BeginDisabled(!canSend);
-    const bool pressed = ImGui::Button(trId("SEND"), ImVec2(120.0f, 0.0f));
-    ImGui::EndDisabled();
-    if (!disabledReason.empty()) {
-        // Wrapped rather than on the SEND key's line: the kind's sentence is
-        // longer than the feature page's reasons, and an unwrapped one ran
-        // off the page's right edge.
-        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
-        ImGui::TextWrapped("(%s)", disabledReason.c_str());
-        ImGui::PopStyleColor();
-    }
-
-    if (pressed && canSend) {
-        cascade::core::ProblemReportPayload payload;
-        payload.kind = problemReportKind_;
-        payload.text = problemReportText_;
-        payload.contact = problemReportContact_;
-        payload.version = cascade::versionString();
-        payload.platform = cascade::core::featureRequestPlatform();
-        payload.arch = cascade::core::featureRequestArch();
-        problemReportSentChars_ = cascade::core::featureRequestTextCharCount(problemReportText_);
-        problemReportSentKind_ = problemReportKind_;
-        problemReportSender_.sendJson(cascade::core::problemReportEndpoint(),
-                                      cascade::core::problemReportJson(payload), nowEpoch);
-    }
-
-    // --- the status line -------------------------------------------------
-    switch (state) {
-        case cascade::core::FeatureRequestState::Idle:
-            break;
-        case cascade::core::FeatureRequestState::Sending:
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
-            ImGui::TextUnformatted(tr("Sending..."));
-            ImGui::PopStyleColor();
-            break;
-        case cascade::core::FeatureRequestState::Sent:
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
-            ImGui::TextUnformatted(tr("Thank you - your report was sent."));
-            ImGui::PopStyleColor();
-            break;
-        case cascade::core::FeatureRequestState::Failed:
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
-            ImGui::TextWrapped("%s", tr(problemReportSender_.failureMessage().c_str()));
-            ImGui::PopStyleColor();
-            break;
-        case cascade::core::FeatureRequestState::CoolingDown: {
-            std::string msg = problemReportSender_.failureMessage();
-            if (msg.empty()) {
-                msg = FOX_TR_NOOP("The server asked us to wait before sending another report.");
-            }
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
-            ImGui::TextWrapped("%s", tr(msg.c_str()));
-            ImGui::PopStyleColor();
-            break;
-        }
-    }
-    problemReportBelowBoxH_ =
-        ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y - belowTop;
-
-    endPage();
-
-    // THE LOG LINE, exactly once per send - the kind the person chose, how
-    // many characters and what the server answered, never the words and
-    // never the contact, as PRIVACY.md promises.
-    if (problemReportLastLoggedState_ == cascade::core::FeatureRequestState::Sending &&
-        state != cascade::core::FeatureRequestState::Sending) {
-        if (state == cascade::core::FeatureRequestState::Sent) {
-            cascade::core::diagLogf("problem report (%s): sent, %zu characters, HTTP %d",
-                                    problemReportSentKind_.c_str(), problemReportSentChars_,
-                                    problemReportSender_.lastStatus());
-        } else {
-            cascade::core::diagLogf("problem report (%s): failed, %zu characters, HTTP %d - %s",
-                                    problemReportSentKind_.c_str(), problemReportSentChars_,
-                                    problemReportSender_.lastStatus(),
-                                    problemReportSender_.failureMessage().c_str());
-        }
-    }
-    // The same one-frame clear as the feature page (featureRequestClearsTextNow
-    // is about the sender's states, not about which body it carried). The
-    // kind and the contact stay.
-    if (cascade::core::featureRequestClearsTextNow(problemReportLastLoggedState_, state)) {
-        problemReportText_.clear();
-    }
-    problemReportLastLoggedState_ = state;
-}
-
 // --- THE DEMOD SCOPE (0.94.0) -----------------------------------------------
 //
 // The bench oscilloscope. What it is and why the arithmetic behind it lives in
@@ -20801,123 +20180,6 @@ void AppWindow::drawWebSection() {
     }
 }
 
-void AppWindow::drawUpdatesSection() {
-    // THE FOUR STATES THIS SECTION ACTUALLY HAS, and no fifth invented one.
-    // "OK" is only said once a check has completed without error - before
-    // that it is IDLE, because "up to date" and "we have not asked" are
-    // different statements and the second one must not wear the first one's
-    // clothes.
-    // A FIFTH STATE, and it is not an invented one: a copy installed from the
-    // Microsoft Store is updated by the Store, so this section has nothing to
-    // check and must not pretend it did. "STORE" rather than "OFF", because
-    // off is a choice the user made and this is not.
-    const bool packaged = cascade::core::runningInPackage();
-
-    const char* updateChip = tr("OFF");
-    ImU32 updateLamp = cascade::gui::theme::kPhosphor;
-    bool updateLit = false;
-    if (packaged) {
-        updateChip = tr("STORE");
-    } else if (updateCheckEnabled_) {
-        if (update_.newer) {
-            updateChip = update_.critical ? tr("IMPT") : tr("NEW");
-            updateLamp = update_.critical ? cascade::gui::theme::kAlarm
-                                          : cascade::gui::theme::kAmber;
-            updateLit = true;
-        } else if (updatePending_) {
-            updateChip = tr("CHECK");
-        } else if (updateStarted_ && updateError_.empty()) {
-            updateChip = tr("OK");
-        } else {
-            updateChip = tr("IDLE");
-        }
-    }
-    if (!benchSection(trId("Updates"), false, updateChip, updateLamp, updateLit)) { return; }
-    uiNotePanel("updates");
-
-    if (packaged) {
-        // No checkbox: there is nothing here for the user to decide. A tick
-        // that changed nothing would be worse than no tick at all.
-        // FIXME(2026-10-21, 0.99.84 merge, ledger UPDATES): master's Settings row has a tick here (the Store is asked); not yet wired.
-        ImGui::TextWrapped("%s", "this copy came from the Microsoft Store, which delivers its updates");
-        ImGui::TextDisabled(tr("this build: %s"), cascade::versionString());
-        ImGui::TextDisabled(tr("package: %s"), cascade::core::packageIdentity().fullName.c_str());
-        return;
-    }
-
-    if (ImGui::Checkbox(trId("Check for updates at startup"), &updateCheckEnabled_)) {
-        // Off means off immediately: a check already in flight is not waited
-        // for, and none is started again this launch.
-        if (!updateCheckEnabled_) {
-            update_ = cascade::core::UpdateInfo{};
-            updateError_.clear();
-        } else if (!updatePending_) {
-            // A RE-TICK ASKS AGAIN. This was `else if (!updateStarted_)`, and
-            // updateStarted_ - "one check per launch, no retry storm" - is
-            // never cleared, so unticking and re-ticking left the section
-            // reading "up to date" and the chip reading OK about an answer the
-            // untick had just thrown away. Re-arming is what makes the tick
-            // mean anything; the storm the flag guards against cannot come
-            // from here, because only a click reaches this line.
-            //
-            // A check already IN FLIGHT is left alone: startUpdateCheck would
-            // refuse it anyway, and it is about to deliver the very answer the
-            // re-tick is asking for.
-            updateStarted_ = false;
-            startUpdateCheck();
-        }
-    }
-    // WHICH RELEASES (0.99.88). Not for a Store copy: its updates are the
-    // Store's, which certifies every one and is the slower channel already.
-    // (A Store copy returned above on this branch; the test is master's.)
-    if (!packaged) {
-        const bool wasBeta = updateChannel_ == "beta";
-        bool beta = wasBeta;
-        if (ImGui::RadioButton(trId("Stable releases"), !beta)) { beta = false; }
-        ImGui::SameLine();
-        if (ImGui::RadioButton(trId("Every release (beta)"), beta)) { beta = true; }
-        cascade::gui::census::note("updates:channel-", beta ? "beta" : "stable");
-        if (beta != wasBeta) {
-            updateChannel_ = beta ? "beta" : "stable";
-            cascade::core::diagLogf("updates: channel set to %s", updateChannel_.c_str());
-            // A CHANGE ASKS AGAIN, as a re-tick does: the answer on screen was
-            // for the other channel.
-            if (updateCheckEnabled_ && !updatePending_) {
-                update_ = cascade::core::UpdateInfo{};
-                updateError_.clear();
-                updateStarted_ = false;
-                startUpdateCheck();
-            }
-        }
-        ImGui::TextDisabled("%s", tr("Stable is the release the FoxSDR team recommends to "
-                                        "everyone; beta is every release the day it is "
-                                        "published."));
-    }
-    ImGui::TextWrapped(
-        "%s",
-        tr("Asks foxsdr.com once per launch whether a newer version exists, and sends the version "
-           "you are running and nothing else - no identifier, no cookie. Nothing is downloaded or "
-           "installed unless you press the button. This is not the usage report below; the two "
-           "share nothing."));
-
-    ImGui::TextDisabled(tr("this build: %s"), cascade::versionString());
-    if (!updateCheckEnabled_) {
-        ImGui::TextDisabled("%s", tr("checking is off, so you will not be told about a new version"));
-    } else if (updatePending_) {
-        ImGui::TextDisabled("%s", tr("checking..."));
-    } else if (update_.newer) {
-        ImGui::TextColored(update_.critical ? kErrorRed : cascade::gui::theme::warning(),
-                           tr("%s is available"), update_.version.c_str());
-        if (updateDismissed_ && ImGui::SmallButton(trId("Show it again"))) { updateDismissed_ = false; }
-    } else if (updateStarted_ && updateError_.empty()) {
-        ImGui::TextDisabled("%s", tr("up to date"));
-    } else if (!updateError_.empty()) {
-        // Only here, never as a banner: a failed check is not the user's
-        // problem and must not interrupt them.
-        ImGui::TextDisabled(tr("last check did not complete: %s"), updateError_.c_str());
-    }
-}
-
 void AppWindow::drawUsageReportingSection() {
     // ON OR OFF, AND THERE IS NO THIRD STATE. This row carried an N/A chip and
     // the body below carried a "Not available in this build." early return,
@@ -21584,8 +20846,19 @@ std::string AppWindow::currentDiagnosticsBundle(bool freshHistory) {
     // THE SLOW-FRAME TABLE OF THIS SESSION (0.99.64, core/frame_timing.hpp): one line, `slow-frames: recorder 2/0/0, plugins-reload 0/1/0`
     // or `none`. Added after the builder rather than inside it - the report format is changed elsewhere - and not in the context block a
     // crash report is written from.
-    return cascade::core::withSlowFramesField(cascade::core::buildDiagnosticsBundle(in),
-                                              cascade::core::slowFramesText(cascade::core::slowFrameCounts()));
+    std::string bundle = cascade::core::withSlowFramesField(cascade::core::buildDiagnosticsBundle(in),
+                                                            cascade::core::slowFramesText(cascade::core::slowFrameCounts()));
+    // THE EVIDENCE LINES (owner-approved 2026-10-27, stub campaign B14, core/diag_evidence.hpp): the signature ids of the crash and freeze reports on this machine, and the
+    // words of what the program recovered from this session, so a human report lands beside the machine evidence. Ids, kinds, fixed words and counts - never content or a
+    // path. The ids come from the history already read for this bundle (a worker's answer, not a read here); the recovered words from the health ledger, which counts
+    // only while usage reporting and the Diagnostics switch are on, and says so when it is not counting. The breadcrumb trail joins after the merge with master's
+    // field-early-warning branch.
+    {
+        const std::shared_ptr<cascade::core::health::HealthLedger> ledger = cascade::core::health::globalLedger();
+        bundle = cascade::core::withEvidenceFields(std::move(bundle), cascade::core::recentFaultsText(in.history),
+                                                   cascade::core::recoveredText(ledger->counts(), ledger->priorCounts(), ledger->armed(), ledger->allowed()));
+    }
+    return bundle;
 }
 
 void AppWindow::copyDiagnosticsBundle() {
@@ -22362,6 +21635,8 @@ void AppWindow::diagnosticsJournal(cascade::core::AppConfig& cfg) {
     // has nothing to do with telemetry and shares no state with it.
     cfg.updateCheckEnabled = updateCheckEnabled_;
     cfg.updateChannel = updateChannel_;
+    // ...and so does the list of team messages marked Seen (0.99.79), for the same reason.
+    cfg.messagesSeen = messagesSeen_;
 
     // Same rationale: this is the one place the GUI's copy of the config is
     // written back, so the diagnostics switches ride along here too.

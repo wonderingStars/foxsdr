@@ -425,8 +425,8 @@ const KnownWait kKnownWaits[] = {
      "the Engine's future reaps (reapPendingDeviceOpen, reapPendingSoapyScan - moved verbatim "
      "from app_window.cpp in engine stage 3a), called from ~AppWindow: runs after "
      "watchdog_.stop(), outside the budgeted stretch"},
-    {"src/gui/app_window.cpp", "kNoWait", 0,
-     "zero by construction - a ready-poll on a std::future, not a wait"},
+    {"src/gui/app_window_updates.cpp", "kNoWait", 0,
+     "zero by construction - a ready-poll on a std::future (pollUpdateAsync's update download), not a wait; moved verbatim from app_window.cpp by stub batch B14"},
     {"src/engine/engine.cpp", "kNoWait", 0,
      "zero by construction - the same ready-polls (the device scan/open and the store's "
      "futures), moved verbatim from app_window.cpp in engine stage 3a"},

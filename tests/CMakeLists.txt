@@ -558,7 +558,7 @@ endif()
 # one of them alone must rebuild the application too, or its end-to-end half
 # drives whatever stale cascade.exe the build tree last held.
 foreach(_runs_app IN ITEMS test_bias_key_run test_crash_upload test_diag_hang test_diagnostics test_plugin_status_report
-                           test_gps_app test_shutdown_budget test_startup_state
+                           test_gps_app test_problem_report_app test_shutdown_budget test_startup_state
                            test_stop_ends_recordings test_theme_census test_ui_scale_app test_soapy_enum_proc
                            test_soapy_source)
     if(TARGET ${_runs_app})
@@ -824,6 +824,10 @@ set_tests_properties(test_engine_api_transmit test_engine_api_merge PROPERTIES T
 # Give only this test 300 s; unbuffered launch tags identify a child if it hangs.
 if(TEST test_team_message_app)
     set_tests_properties(test_team_message_app PROPERTIES TIMEOUT 300)
+endif()
+# The report-page test starts the real application 26 times, 110 frames each (stub campaign B14): the same bound.
+if(TEST test_problem_report_app)
+    set_tests_properties(test_problem_report_app PROPERTIES TIMEOUT 300)
 endif()
 # The deck-knobs test starts the real application dozens of times (as a child of
 # itself, so that a fake radio can sit behind the window; the noise-floor and Airband
@@ -1283,6 +1287,7 @@ set(CASCADE_GUI_TESTS
     test_plugin_inuse_app
     test_plugin_pathpick_app
     test_plugin_store_app
+    test_problem_report_app
     test_radio_setup_app
     test_rail_fold_app
     test_receiver_layout_app

@@ -1576,6 +1576,22 @@ whoever reads them next (`cascade: frame timing:`, below).
   format, which was being changed elsewhere when this was written, and it keeps
   the line out of the context block a crash or freeze report is written from. When
   that work lands the line can move into the builder and the test drop its union.
+- **The bundle's two evidence lines** (stub campaign B14, owner-approved 2026-10-27):
+  `recent-faults: FEDCBA9876543210 hang, 0123456789ABCDEF stall` and `recovered:
+  audio 1, ringdrop 3`, added the same way as `slow-frames` (`withEvidenceFields`,
+  `core/diag_evidence.hpp`, inventoried by `evidenceBundleFieldNames()`), at the
+  end of the header, before the log - so the attachment's size cap, which keeps the
+  whole header and cuts the log's oldest lines, never takes them. A human report
+  on the REPORT A BUG page lands beside the machine evidence: the signature ids
+  are the ones the crash and freeze reports on the machine are filed under, read
+  from the history the bundle already holds (a worker's read, never the frame's),
+  and the recovered words are the health ledger's - which counts only while usage
+  reporting and Diagnostics are on, and the line says `(not counted - ...)`
+  rather than `none` when it is not. The page rebuilds an attachment that was
+  made while the reports were still being read (`(still being read)`), so that
+  text is not the one that is sent. THE BREADCRUMB TRAIL (the last steps taken
+  before a fault) is built on master's field-early-warning branch and joins these
+  lines after the merge.
 - **A freeze report names the scope.** `currentFrameScope()` is one atomic the
   frame loop keeps current and any thread may read without a lock; the watchdog
   reads it when it files a report and writes `frame-scope: rail` in the header

@@ -55,6 +55,8 @@ struct GLFWwindow;
 #include "core/plugin_ui_data.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/updater.hpp"
+#include "core/store_update.hpp"
+#include "core/pasted_report.hpp"
 #include "core/utf8_text.hpp"
 #include "core/engine_measure.hpp"
 #include "gui/frame_log.hpp"
@@ -810,9 +812,19 @@ private:
     // whatever they opened the panel for.
     void drawUpdatesSection();
     void drawUpdateBanner();
+    // A MESSAGE FROM THE TEAM (0.99.79; stub campaign B14, src/gui/app_window_updates.cpp): a card above the update banner for each message the
+    // update service carries that this copy has not marked Seen - whether or not there is an update. Not drawn when the Updates tick is off, or for a
+    // Microsoft Store copy (which asks the Store, not foxsdr.com, and so never hears one).
+    void drawTeamMessages();
+    // Has the Seen key been pressed for the message with this id (messagesSeen_).
+    bool teamMessageSeen(const std::string& id) const;
     void startUpdateCheck();
     void startUpdateDownload();
     void pollUpdateAsync();
+    // A copy from the Microsoft Store (0.99.53, restored in stub campaign B14): the same banner and section, asking the Store instead of foxsdr.com -
+    // see core/store_update.hpp.
+    void drawStoreUpdateBanner();
+    void startStoreInstall();
 
     // Starts the downloaded installer and asks the run loop to exit. Separate
     // because an installer cannot replace a binary that is still running, so
@@ -1581,6 +1593,12 @@ private:
     // never needs to be paired with a specific request, only compared
     // against "drained and ok".
     void requestConfigSave(const cascade::core::AppConfig& cfg);
+    // A SAVE THE FRAME MAY ASK FOR AT ONCE (stub campaign B14): the window's half of the config as the last frame left it, handed to the writer now instead
+    // of after the debounce - for a press whose effect must survive a crash that comes straight after it (the Seen key of a message from the team). It is what
+    // maybeSaveConfig() asks for once the debounce has run, so it is as safe as that: saveConfigNow() is NOT, because it asks the engine to hand over its half
+    // of the config, a read of the pass's own state that is safe only before the control thread starts and after it is joined (test_engine_shell_guard holds
+    // saveConfigNow to run()). Does nothing in a run that has no settings file, or for a settings file that may not be written over.
+    void saveConfigFromFrame();
     // Collects a finished configWriter_ write, applies it to savedCfg_ on
     // success (see requestConfigSave above), and logs a failure exactly as
     // the old synchronous save() call sites did. Called once a frame; a
@@ -2373,7 +2391,34 @@ private:
     std::string problemReportKind_;
     std::string problemReportText_;
     std::string problemReportContact_;
-    cascade::core::ProblemReportSender problemReportSender_;
+    // "Attach the diagnostics log": true by default for a bug, false for a dislike (cascade::core::problemReportDefaultAttachDiagnostics), reset to that
+    // default each time the person (re)chooses a kind, but otherwise theirs to tick or untick. Never persisted, like everything else on this page.
+    bool problemReportAttachDiag_ = false;
+    // "Show what will be sent": a read-only preview of the exact scrubbed, capped text that would be attached - drawn only while this is true and the
+    // checkbox above it is ticked.
+    bool problemReportShowDiag_ = false;
+    // THE ATTACHMENT'S CACHE. Rebuilding it means a ring snapshot under a mutex, the plugin-list walk and the whole-bundle scrub pass - real work that this page
+    // (unlike Copy diagnostics, a one-off button press) would otherwise repeat every single frame the checkbox is left ticked. Rebuilt only when the log has
+    // actually grown (problemReportDiagCacheLines_ disagrees with DiagLog's own count) or at most once per second (problemReportDiagCacheEpoch_ disagrees with
+    // the page's own nowEpoch, itself whole seconds) - never invalidated just for being unticked. And once more, soon, when what it holds was built while the
+    // reports folder was still being read (problemReportDiagCachePending_, retried at problemReportDiagRetryAt_): an attachment that said "still being read"
+    // must not be the one that goes (B14).
+    std::string problemReportDiagCache_;
+    std::uint64_t problemReportDiagCacheLines_ = 0;
+    std::uint64_t problemReportDiagCacheEpoch_ = 0;
+    bool problemReportDiagCacheValid_ = false;
+    bool problemReportDiagCachePending_ = false;
+    double problemReportDiagRetryAt_ = 0.0;
+    // THE REPORT RECOGNISED IN THE TEXT BOX (0.99.69, core/pasted_report.hpp), looked for again only when the text is not the text it was last looked for in: the
+    // box holds up to 100000 characters and the page is drawn every frame, so the scan is not repeated for a text that has not changed. Empty when none was found.
+    std::optional<cascade::core::PastedReport> problemReportPasted_;
+    std::string problemReportPastedFor_;
+    bool problemReportPastedValid_ = false;
+    // The SDRplay diagnostic's text once it has finished (stub campaign B18 writes it; until then empty, and the page's "Attach the SDRplay diagnostic too" row
+    // is never drawn) and whether the page attaches it.
+    std::string sdrplayProbeReport_;
+    bool problemReportAttachProbe_ = false;
+    cascade::core::ProblemReportSendFlow problemReportSender_;
     cascade::core::FeatureRequestState problemReportLastLoggedState_ =
         cascade::core::FeatureRequestState::Idle;
     std::size_t problemReportSentChars_ = 0;
@@ -3618,6 +3663,10 @@ private:
     bool updateCheckEnabled_ = true;
     // AppConfig::updateChannel (0.99.88): "stable" or "beta".
     std::string updateChannel_ = "stable";
+    // The ids of the team messages whose Seen key was pressed, oldest first (AppConfig::messagesSeen, 0.99.79). Local only; pruned to the ids the last
+    // successful check still carried (pollUpdateAsync). "Not now" on the update banner (updateDismissed_) does not touch it, and Seen does not touch
+    // updateDismissed_.
+    std::vector<std::string> messagesSeen_;
     bool updateStarted_ = false;      // one check per launch, no retry storm
     bool updateDismissed_ = false;    // "not now" hides it until next launch
     bool updatePending_ = false;      // a check or a download is in flight
@@ -3625,6 +3674,16 @@ private:
     cascade::core::UpdateInfo update_;
     std::string updateError_;
     std::string updateReadyPath_;     // verified installer, waiting to be run
+    // --- the Microsoft Store's answer, for a packaged copy (0.99.53) --------
+    // updateStarted_ / updatePending_ / updateError_ / updateDismissed_ above mean the same things for a Store copy as for an ordinary one; these hold what
+    // only the Store can say. Both workers return BY VALUE and capture nothing of this window, so ~AppWindow abandons them rather than waiting
+    // (core::AbandonableTask) - which matters for the install request, whose worker sits inside Windows' own dialogs for as long as the user takes.
+    cascade::core::StoreUpdateCheck storeUpdate_;        // the last answer
+    bool storeInstallPending_ = false;                   // Windows is on it
+    bool storeInstallDone_ = false;                      // an outcome to show
+    cascade::core::StoreInstallOutcome storeInstallOutcome_;
+    cascade::core::AbandonableTask<cascade::core::StoreUpdateCheck> storeCheck_;
+    cascade::core::AbandonableTask<cascade::core::StoreInstallOutcome> storeInstall_;
     // The app-update transfer's own progress and cancel, NOT pluginRepo_'s.
     // The banner used to read pluginRepo_.progress(), which nothing on this
     // path ever writes — the bar sat at 0 for the whole download — and

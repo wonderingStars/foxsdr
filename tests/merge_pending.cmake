@@ -68,12 +68,11 @@ cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, on
 # test_passband_slide_app and test_display_menu_app.)
 # (PLUGIN-RUN - 0.99.73 a plugin that is not used is dormant (FOXSDR_DORMANT_AFTER_MS), run modes - is whole: the engine's half returned in stub batch B2,
 # test_plugin_inuse_app, which needs the Fitted modules window, in B5.)
-cascade_merge_pending(UPDATES          # 0.99.7x the Store's own update notice and the site banner
-    test_store_update_app)
+# (UPDATES - 0.99.53 the Store's own update notice and install key for a Microsoft Store copy, 0.99.79 a message from the FoxSDR team shown with or without an
+# update and kept Seen - is whole: back in stub batch B14, src/gui/app_window_updates.cpp: test_store_update_app and test_team_message_app, the real binary's. The
+# window half of PROBLEM-REPORT (0.99.69) had no pending placeholder; tests/test_problem_report_app.cpp is its test, written red first.)
 # (RADIO-SETUP - the page, its INSTALL DRIVER key and the UHD images finding, 0.99.69 - 0.99.89 - is whole: back in stub batch B8,
 # test_radio_setup_app.)
-cascade_merge_pending(TESTER-USAGE     # 0.99.44 - 0.99.52 the team's messages to a tester, the usage section
-    test_team_message_app)
 cascade_merge_pending(TESTER-LINK
     test_tester_link)
 cascade_merge_pending(MAP-WINDOWS      # 0.99.7x the ADS-B map's lists

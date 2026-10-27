@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "core/crash_handler.hpp"
+#include "core/diag_evidence.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/foreign_modules.hpp"
@@ -1140,8 +1141,19 @@ int main() {
         slowFrames.count[static_cast<int>(FrameScope::Recorder)][0] = 2;
         slowFrames.count[static_cast<int>(FrameScope::PluginsReload)][1] = 1;
         const std::string builderBundle = buildDiagnosticsBundle(in);
-        const std::string bundle = withSlowFramesField(builderBundle, slowFramesText(slowFrames));
+        // AND THE TWO EVIDENCE LINES (stub campaign B14, core/diag_evidence.hpp), added after the slow-frame line by the same function-after-the-builder arrangement and
+        // inventoried by evidenceBundleFieldNames() - the union below takes it too.
+        const std::string bundle =
+            withEvidenceFields(withSlowFramesField(builderBundle, slowFramesText(slowFrames)), "FEDCBA9876543210 hang, 0123456789ABCDEF stall", "audio 1, ringdrop 3");
         CHECK(!bundle.empty());
+        CHECK(bundle.find("\nrecent-faults: FEDCBA9876543210 hang, 0123456789ABCDEF stall\n") != std::string::npos);
+        CHECK(bundle.find("\nrecovered: audio 1, ringdrop 3\n") != std::string::npos);
+        // Inside the header block, before the log, and after the slow-frame line: the order the function documents.
+        CHECK(bundle.find("\nrecent-faults: ") < bundle.find("--- log ---"));
+        CHECK(bundle.find("\nslow-frames: ") < bundle.find("\nrecent-faults: "));
+        CHECK(bundle.find("\nrecent-faults: ") < bundle.find("\nrecovered: "));
+        // The builder itself knows nothing of them.
+        CHECK(builderBundle.find("recent-faults") == std::string::npos && builderBundle.find("recovered") == std::string::npos);
         // The line, by value, in the exact form the inventory parses, and inside
         // the header block - before the log, where the other lines are.
         CHECK(bundle.find("\nslow-frames: recorder 2/0/0, plugins-reload 0/1/0\n") !=
@@ -1199,7 +1211,9 @@ int main() {
         std::set<std::string> declared(bundleFieldNames().begin(), bundleFieldNames().end());
         CHECK(!declared.empty());
         for (const std::string& n : frameBundleFieldNames()) { declared.insert(n); }
+        for (const std::string& n : evidenceBundleFieldNames()) { declared.insert(n); }
         CHECK(declared.count("slow-frames") == 1);
+        CHECK(declared.count("recent-faults") == 1 && declared.count("recovered") == 1);
         std::set<std::string> emitted;
         std::size_t pos = 0;
         const std::size_t logStart = bundle.find("--- log ---");
