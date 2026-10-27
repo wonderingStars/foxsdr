@@ -288,6 +288,16 @@ Compatibility, as `worker.test.mjs` measures it:
 | 0.99.65, the longest record the client writes (832 characters) | the 0.99.64 Worker | 204 | every failure token read - a record is never longer than that Worker's own limit |
 | a bad id, GET, bad JSON, over 4096 bytes | new | 400, 405, 400, 413 | nothing (unchanged) |
 
+## The heartbeat dataset, and the uptime canary
+
+A heartbeat (`{"id": ..., "v": ..., "beat": 1}`) is written to its OWN dataset, `foxsdr_heartbeat`
+(`index1` the install id, `blob1` the version), never to `foxsdr_usage`. The website reads it for one
+thing: whether ANYTHING has arrived in the last hour (the ingestion-silence alert, `watchers.go`). The
+Uptime workflow (`.github/workflows/uptime.yml`) therefore sends one beat every fifteen minutes from the
+reserved install id `5afe5afe5afe5afe5afe5afe5afe5afe` with version `0.0.0-canary`, so the dataset is fed
+around the clock; the website leaves that id out of every usage statement (`notUsers`), and a reader of
+this dataset that counts installs must leave it out too.
+
 ## Reading the numbers
 
 Analytics Engine has no dashboard, so a dataset that is never queried is

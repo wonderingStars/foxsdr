@@ -1,0 +1,97 @@
+# A weekly SYNTHETIC report through the whole early-warning pipe.
+#
+# An early-warning system that has silently stopped looks exactly like a quiet week. So once a week
+# this posts a clearly marked, fake crash report to the real endpoint on foxsdr.com and expects it to be
+# taken. The site validates it exactly as it validates any report (method, address and size limits,
+# JSON, schema, kind, signature, sanitiser), checks the shared token, and hands it to the alert engine,
+# which sends the owner a message that says SYNTHETIC TEST on every line. If that message arrives,
+# report -> ingestion -> alert works, without anyone crashing FoxSDR.
+#
+# WHAT IT NEVER DOES: the site diverts it BEFORE its store. It is in no fault group, no crash-free or
+# working rate, no digest, no channel figure and no fault alert (site README, "Watching the watchers").
+# The report carries the reserved install id 5afe5afe5afe5afe5afe5afe5afe5afe, the signature
+# SYNTHETIC-PIPELINE-CHECK and a log line that says it is a test; nothing in it is real.
+#
+# THE OTHER DIRECTION is watched by the site: if no synthetic report has arrived for nine days the owner
+# is told. GitHub disables a scheduled workflow after 60 days without repository activity and delays or
+# skips scheduled runs, so "it never ran" is a failure that has to be noticed from the receiving end.
+#
+# ONE SECRET, and it is a shared token, not a credential for anything else: FOXSDR_SYNTHETIC_TOKEN, in
+# this repository's Actions secrets AND in the site's /etc/foxsdr-site.env under the same name. Without
+# it on the site the header is refused (403), so a stranger who learns the header name can announce
+# nothing. Create the secret with a long random value, e.g. `openssl rand -hex 24`.
+#
+# Run it by hand: Actions tab -> Synthetic -> Run workflow (GitHub only offers that for a workflow file
+# that is on the default branch).
+#
+# The job fails, loudly, when the secret is missing, when the site answers anything but 204, and when
+# the token is refused (403, "the token does not match the site's"). It retries a site that is silent
+# for a minute during a redeploy. It prints the HTTP status and nothing the server sent.
+
+name: Synthetic
+
+on:
+  schedule:
+    # Mondays 06:41 UTC: a minute that is not on the hour, when GitHub is busiest.
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Post the synthetic report
+        shell: bash
+        env:
+          SITE: https://foxsdr.com
+          FOXSDR_SYNTHETIC_TOKEN: ${{ secrets.FOXSDR_SYNTHETIC_TOKEN }}
+        run: |
+          set -u
+
+          if [ -z "${FOXSDR_SYNTHETIC_TOKEN:-}" ]; then
+            echo "::error::The FOXSDR_SYNTHETIC_TOKEN secret is not set in this repository, so the weekly synthetic check cannot run. Set it (and the same value on the site as FOXSDR_SYNTHETIC_TOKEN)."
+            exit 1
+          fi
+          echo "::add-mask::$FOXSDR_SYNTHETIC_TOKEN"
+
+          body="$(mktemp)"
+          out="$(mktemp)"
+          cat > "$body" <<'JSON'
+          {"schema":1,"kind":"crash","version":"0.0.0-synthetic","commit":"0000000","buildId":"SYNTHETIC",
+           "module":"synthetic","offset":"0x0","signature":"SYNTHETIC-PIPELINE-CHECK","os":"synthetic","arch":"none",
+           "installId":"5afe5afe5afe5afe5afe5afe5afe5afe","context":{"synthetic":"true"},
+           "log":["SYNTHETIC TEST - NOT A REAL FAULT"],"threads":[]}
+          JSON
+
+          window="${SYNTHETIC_WINDOW:-150}"
+          pause="${SYNTHETIC_PAUSE:-20}"
+          end=$((SECONDS + window))
+          while true; do
+            status="$(curl --silent --output "$out" --write-out '%{http_code}' --max-time 15 \
+              --request POST --header 'content-type: application/json' \
+              --header "X-Foxsdr-Synthetic: $FOXSDR_SYNTHETIC_TOKEN" \
+              --data-binary @"$body" "$SITE/api/crash" || true)"
+            case "$status" in
+              204)
+                echo "The synthetic report was accepted (HTTP 204). The owner's phone should show a SYNTHETIC TEST message."
+                exit 0
+                ;;
+              403)
+                echo "::error::HTTP 403: the site refused the token. FOXSDR_SYNTHETIC_TOKEN here does not match the site's (or the site has none set)."
+                exit 1
+                ;;
+              400|413)
+                echo "::error::HTTP $status: the site refused the synthetic report as malformed. The contract changed; update this workflow."
+                exit 1
+                ;;
+            esac
+            # 429, 5xx, 000 (no answer): a redeploy is silent for about a minute. Keep trying for a while.
+            if [ "$SECONDS" -ge "$end" ]; then
+              echo "::error::The synthetic report was not accepted (last answer: HTTP $status)."
+              exit 1
+            fi
+            sleep "$pause"
+          done

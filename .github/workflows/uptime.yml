@@ -5,13 +5,28 @@
 # failing run fails the workflow; whether anybody is emailed about that is
 # GitHub's notification setting - see uptime-README.md before relying on it.
 #
-# Three checks, each retried for about three minutes, because the site is
+# Four checks, each retried for about three minutes, because the site is
 # legitimately silent for about a minute when it is redeployed:
 #   1. https://foxsdr.com/healthz answers 200 with JSON {"ok": true, "version": "..."}
 #   2. https://foxsdr.com/ answers 200
 #   3. https://telemetry.foxsdr.com/ answers 400 to a POST of invalid JSON. That is
 #      the only harmless probe: the Worker parses the body first and answers
 #      "bad json" before it writes anything, so no usage row is created.
+#   4. THE CANARY BEAT (field-early-warning): the same endpoint answers 204 to a
+#      heartbeat from the RESERVED canary install id. A heartbeat goes into the
+#      Worker's own foxsdr_heartbeat dataset and nowhere else (never into the usage
+#      dataset), and the site leaves that id out of every usage statement, so this
+#      is not a user. Its purpose is the ingestion-silence alert: a field of a few
+#      dozen installs is genuinely quiet at night, so without a beat that is always
+#      there "no heartbeat for an hour" would be a false alarm every night. With one
+#      every fifteen minutes, an hour with no beat of any kind means the Worker, its
+#      dataset or the route is broken. The site (watchers.go) reads the dataset; this
+#      workflow cannot, because reading it needs the analytics token and this
+#      workflow holds no secret. The site arms the alert only once it has seen the
+#      canary, so deploying the site first is harmless.
+#      The id is a constant here and in the site (syntheticInstallID); it identifies
+#      this workflow and nothing else. The write is one small row per run, about 96 a
+#      day at this cadence.
 #
 # On failure it prints one line per failed check - which check, and the HTTP
 # status (000 means no answer at all) - and nothing the server sent.
@@ -83,10 +98,21 @@ jobs:
             fi
           }
 
+          # The canary heartbeat: a beat from the reserved id (see the header). 204 is the Worker's
+          # answer to a beat it took. Nothing the server sent is printed.
+          check_canary() {
+            local c
+            c="$(code --request POST --header 'content-type: application/json'                  --data '{"id":"5afe5afe5afe5afe5afe5afe5afe5afe","v":"0.0.0-canary","beat":1}' "$TELEMETRY")"
+            if [ "$c" != "204" ]; then
+              failure="canary heartbeat: HTTP $c (the telemetry endpoint should answer a beat 204)"
+              return 1
+            fi
+          }
+
           end=$((SECONDS + window))
           while true; do
             failures=()
-            for check in check_healthz check_home check_telemetry; do
+            for check in check_healthz check_home check_telemetry check_canary; do
               failure=""
               "$check" || failures+=("$failure")
             done

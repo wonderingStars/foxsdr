@@ -5008,7 +5008,7 @@ with it); a shutdown that wedges for the full 27 s; the Store package; Linux.
 
 ## Field-issue early warning: learning of a bug before a user writes (field-early-warning)
 
-Six pieces, each shippable alone, that turn what the application already knows into
+Seven pieces, each shippable alone, that turn what the application already knows into
 something the owner is told about:
 
 1. **New-signature alerting** (the site, `foxsdr-site`): the site's owner-alert engine
@@ -5069,6 +5069,18 @@ something the owner is told about:
    to a Microsoft Store copy or with the update check off. Tests: `tests/test_updater.cpp` (the
    parse) and `tests/test_withdrawn_app.cpp` (the real window, six runs against canned answers).
 
+7. **Watching the watchers** (wave 2): two checks the chain makes on itself, both in the site
+   (`watchers.go`, `/admin/watchers`). *Ingestion silence*: no heartbeat of any kind in the Worker's
+   `foxsdr_heartbeat` dataset for an hour pushes the owner; because a field of a few dozen installs
+   is quiet at night, the Uptime workflow (`.github/workflows/uptime.yml`) sends a **canary** beat
+   from the reserved install id every fifteen minutes, and the alert is armed only once the canary
+   has been seen. It lives on the site's own clock rather than in the outside workflow because
+   reading the dataset needs the analytics token, which a public repository's workflow cannot hold;
+   a dead site is what the workflow's `/healthz` check is for. *The weekly synthetic report*
+   (`.github/workflows/synthetic.yml`, `docs/synthetic-check.md`): a clearly marked fake crash report
+   goes through the real endpoint and the alert engine and arrives as a SYNTHETIC TEST message; the
+   site diverts it before its store, so it is in no rate, group or digest; nine days without one is
+   itself an alert. Nothing in the application changes for this.
 **Deployment order.** The Worker first (`telemetry-worker`: `npx wrangler deploy`), because it
 drops a word or a field it does not know and the old Worker answers 204, which tells the
 application to forget the count. Then the site (it reads the new columns behind a guard, so
