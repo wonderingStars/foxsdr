@@ -57,6 +57,9 @@ sat in a file the branch had not touched but the code it calls had moved:
      any target, not scanned by the fence guard), its tests are kept untouched in tests/ and replaced by a RED placeholder
      `merge_pending_<test>` (tests/merge_pending.cmake: `ctest -L merge-pending` lists what is owed, and each says which ledger id it belongs
      to), and every code stub carries `FIXME(2026-10-21, 0.99.84 merge, ledger <ID>)`.
+     [CLOSED 2026-10-27, stub batch B20: nothing is stubbed. tests/merge_pending.cmake and its two fail scripts are deleted with every hook of theirs
+     in CMakeLists.txt, tests/CMakeLists.txt and tests/tsan.cmake; `ctest -L merge-pending` lists nothing because there is no such label; src/gui_pending/
+     has no file (its last was removed by B19). The rule above is the history of how the campaign worked, not machinery that is still in the tree.]
   4. Master's tests are converted, never weakened: where one fails for a reason that is the merge's (a semantic master added) the fix is in
      the code or in the test's expectation WITH the reason written beside it.
   5. Version strings and release notes: master's.
@@ -121,8 +124,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * **re-expressed**: master's AppWindow code became an Engine member plus facts/ops for the window (or stayed the window's where it is
     pure interface), with the commit that carries it and the test that holds it. C0 = 2c5d14f (the merge), C1 = 96093f8, C2 = 168ff14,
     C3 = 00e35d2, C4 = 26203b7, C5 = the commit that follows C4 (async disk work).
-  * **stubbed**: NOT done. Each has an id; its master tests are out of the build in tests/merge_pending.cmake and replaced by a red
-    `merge_pending_<test>` (`ctest -L merge-pending`); its master source is in src/gui_pending/ where it is a whole file, and in
+  * **stubbed**: NOT done. [None is, since B19; B20 deleted the scaffolding that described it.] Each had an id; its master tests were out of the build in tests/merge_pending.cmake and replaced by a red
+    `merge_pending_<test>` (`ctest -L merge-pending`); its master source was in src/gui_pending/ where it is a whole file, and in
     docs/engine-merge-0.99.84-lostlines.txt (every code line master added to a window function that is absent from this tree, by function)
     where it is part of a function. A stub is a feature missing from the window, never a feature that is wrong.
   * **n/a**: not part of the application (a catalogue, a site, a packaging or documentation note, a plugin's own change).
@@ -221,7 +224,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     window; test_freq_markers_app, test_markers_window_app, test_engine_api_markers)
   * peak hold and average on the spectrum ................................................... re-expressed, stub batch B11 (app_window_display.cpp: the trace-mode menu, the
     held trace over the receiver's spectrum and a patch Spectrum part's, the label, the config; window state, no table surface; test_spectrum_trace_app)
-  * the receiver's waterfall fits its window ................................................ stubbed MARKERS-SPECTRUM (spectrum/waterfall views are in the tree)
+  * the receiver's waterfall fits its window ................................................ re-expressed, C7 (found stale at stub batch B20: this line still read "stubbed
+    MARKERS-SPECTRUM" after every placeholder was gone; the work was done at C7 - drawCenterPanels subtracts the two ItemSpacing gaps, section 8 trap 1's "the waterfall's
+    height" - and is held by test_receiver_layout_app, a real-binary test that was never a placeholder; the line is corrected here, nothing was changed in the code)
   * holding the left button on the waterfall no longer tunes ................................. re-expressed, stub batch B10 (drawCenterPanels' release branch asks
     gui::pressIsClick again, wfPressT_; held by test_freq_markers_app's long press)
 
@@ -477,24 +482,36 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 
 ### 6.2 Totals
 
-134 checklist items (docs/release-notes-0.99.43 to 0.99.84, one line each; an item that is split between states is counted under the
-state that decides whether the user has it):
+FINAL, 2026-10-27, stub batch B20 (STUBBED IS 0). Recounted from the lines of 6.1 by a script that reads each line's state word (the lines are the ledger; the
+header below used to be written by hand): 135 checklist lines (docs/release-notes-0.99.43 to 0.99.84, one line each; an item that is split between states is counted
+under the state that decides whether the user has it):
 
-  * carried      42   (git merged them in files the branch did not restructure: core/, dsp/, source/, sink/, net/, third_party/, a pure gui/ view,
+  * carried      41   (git merged them in files the branch did not restructure: core/, dsp/, source/, sink/, net/, third_party/, a pure gui/ view,
                        a catalogue). "Carried" is the merge's CLAIM. The gui-labelled tests showed it is not safe to read it as verified: nine
                        changes of master's that sat in functions the branch restructured were silently absent (section 9, commit C7), and
                        nothing but a running test found them. Where a test of the item runs, the line names it; the others are (unverified).
-  * re-expressed 35   (an Engine member plus facts/ops, or a window part kept as it was: C1-C7; every line names its commit and its test)
-  * stubbed      49   (NOT done: section 6.3; each has a ledger id, its master tests out of the build and replaced by a red placeholder)
+  * re-expressed 87   (an Engine member plus facts/ops, or a window part kept as it was: C1-C7 and the stub campaign, B1-B19, each line naming its
+                       commit or batch and, where one exists, the test that holds it; 58 of the lines name a campaign batch - more than the 49 that were stubbed,
+                       because a batch also amended lines that were already re-expressed)
+  * stubbed       0   (it was 49 at the merge, each with a ledger id, its master tests out of the build and replaced by a red placeholder - 54 placeholders:
+                       51 tests and 3 parts of converted tests; B1-B19 brought every one back, and B20 deleted the placeholder machinery)
   * n/a           7
 
-49 stubbed of 134 is more than the brief's scope line (about 25 features): the merge commit and the receiver-side re-expressions (PPM, rtl_tcp,
+The header this section carried until B20 read "134 items: carried 42, re-expressed 35, stubbed 49, n/a 7". Those four numbers add to 133, not 134, and the lines
+count 135: the first pass's header was a hand count that did not add up, and nothing in it was relied on. The recount found one line still marked stubbed after every
+placeholder was gone (the 0.99.57 waterfall-fits-its-window line, which had been restored at C7 and never re-marked: corrected in 6.1) and moves nothing else. The
+split 41 / 87 / 0 / 7 is of lines as they are written now; a line is only as good as the test it names, and where it names none it says (unverified).
+
+The 49 stubbed items of the merge were more than the brief's scope line (about 25 features): the merge commit and the receiver-side re-expressions (PPM, rtl_tcp,
 gain memory, usage record, audio buffer, diagnostics, sentinel, async recordings and lists, plugin rescan, bandwidth log, meter faces) were
 done to the house bar, and the window-side features that need the window ported (the rail chrome, the store and Fitted modules windows, the
 tester pages, patch presets and view keys, markers and spectrum traces, the display range, the map lists, the radio setup, the import dialog,
-the plugin settings forms, plugin run modes, window placement) were left stubbed rather than rushed. The second pass starts from 6.3.
+the plugin settings forms, plugin run modes, window placement) were left stubbed rather than rushed. They were done in the twenty batches of
+docs/engine-stage4.md 6.22 and closed in 6.23.
 
 ### 6.3 The tests that are red, and why
+
+[CLOSED 2026-10-27, stub batch B20: the label, the placeholders and tests/merge_pending.cmake no longer exist; what follows is the record of what was owed and when each id came back.]
 
 `ctest -L merge-pending`: 54 red placeholders (51 tests, 3 parts of converted tests) at the 0.99.84 merge, and NONE since stub batch B19. Each said its ledger id. In ids (tests):
 
@@ -512,7 +529,7 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   test_display_menu_app removed by B11; test_display_fold_app by B1 - are whole)
   [PATCH-VIEW (test_patch_canvas_nav, test_patch_info_pane) and PATCH-PRESETS (test_patch_presets_app) were removed by B17: both ids are whole]
   [DISK-WORK (test_gui_file_jobs, test_failure_files, test_iq_open_async, test_gui_disk_audit) was removed by B19, the last window batch: the id is whole, and NOTHING IS PENDING -
-  zero placeholders, tests/merge_pending.cmake holds only its scaffolding, which B20 deletes]
+  zero placeholders, and tests/merge_pending.cmake, which held only its scaffolding after that, was deleted by B20]
   [HEALTH-DIAG (test_slow_frames_app) and SOURCE-ROWS (test_source_row_app) were removed by B18: both ids are whole; SDRPLAY-SERVICE and the SDRplay diagnostic had no placeholder -
   tests/test_sdrplay_service_app.cpp and tests/test_sdrplay_probe_app.cpp were written red first at B18, as was tests/test_recorder_start_app.cpp for the record-start labels]
                           [MAP-WINDOWS (test_unplaced_list_app) and WINDOW-PLACEMENT (test_decoder_window_app) were removed by B16: both ids are whole; the coverage rule
@@ -803,3 +820,5 @@ and test_frame_timing gained cases; tests/test_source_section_window.cpp was edi
 DISK-WORK, B19's). test_i18n: 0 stale, 0 missing - the 24 keys returned, and the stale list is empty. 29 mutants, 29 RED.
 
 UPDATE 2026-10-27, stub batch B19 (docs/engine-stage4.md 6.22, the B19 record): DISK-WORK, the LAST window batch, and NOTHING IS PENDING. The window does no disk work, and the engine's pass does none of the work the window used to: the I/Q file's open (SELECT_SOURCE "file:"), the frequency list's import and export, the patch Radio's recordings list and the patch Radio's recording open were carried into the engine inline on the pass (the plan had them as already done) and are workers now, src/engine/engine_disk_work.cpp (+ engine_disk_state.hpp, and the patch radios' own open worker); the plugin picture's save and F12's screenshot are the window's, src/gui/app_window_disk_work.cpp (+ app_window_disk_state.hpp); DiskJob moved to src/core/disk_job.hpp; src/gui_pending/ is gone. The two B7 losses are fixed on the owner's approval: BOOKMARK_ADD_ROWS' fourth field is a word of flags (1 ticked, 2 favourite - an import into a preset keeps the file's favourite column) and BOOKMARK_EXPORT ival[0] 1 writes a preset's CSV from the engine's store (a name is no longer cut at 95 bytes). A command's answer is "under way" for the four disk ops, and the outcome is the note and twelve facts (fact.bookmarks.exporting / .export.*, .importing / .import.*, fact.source.iqOpening; docs/api-0.3-additions.md 9); this retires B8's "IMPORT_FILE is FAILED when it read nothing" (the window opens its Import window on fact.bookmarks.import.ok). test_gui_file_jobs, test_failure_files and test_iq_open_async are converted and green, test_gui_disk_audit's allowlist is rewritten (12 entries, 18 calls, a reason beside each; it found AppWindow::copyDiagnosticsBundle without the WatchdogPause the merge had dropped, restored) and holds the engine's two disk files to the same rule with no allowlist; the four placeholders are removed, so the red placeholders are ZERO (no test, no part; `ctest -L merge-pending` lists nothing) and tests/merge_pending.cmake holds only its scaffolding (B20 deletes it). New: two cases in test_gui_file_jobs for the owner-approved fixes and four in test_engine_api_03 (P1 - P4); tests that learned to wait for a worker, assertions unchanged: test_apply_command, test_recorder_bookmarks_scanner, test_patch_graph_draft_input, test_plugin_window, test_shutdown_budget (a path). test_i18n: 0 stale, 0 missing (2013 keys; no key came back or went). Registered 642 -> 642; headless 580: a full run with the red set EMPTY (the earlier runs' reds were this desk's flakes, each green on repeat); gui label 60 of 62 on the first full run (test_deck_knobs_app green solo, test_radio_setup_app environmental); 18 mutants, 18 RED, every restore sha256-checked; i18n 2013 keys, 0 stale, 0 missing in all 33 catalogues.
+
+UPDATE 2026-10-27, stub batch B20 (docs/engine-stage4.md 6.23, the closing record): THE LEDGER IS CLOSED. Stubbed: 0 (6.2 recounted: 135 lines, carried 41, re-expressed 87, n/a 7; one line that still read stubbed was corrected). tests/merge_pending.cmake, merge_pending_fail.cmake and merge_pending_part_fail.cmake are deleted with every hook of theirs; src/gui_pending/ has had no file since B19. Final gate on a clean rebuild: headless 580 of 580, gui 62 of 62 (two named flakes, 5 of 5 solo), test_i18n 0 stale / 0 missing. The WSL ThreadSanitizer leg: 125 of 131 pass with no report; test_web_pictures shows a real data race in B13's engine code (Engine::txArmOwner_ written by txPluginDisarm off the pass thread by the test's applyCommand, read by txPass on it), and test_recorder_bookmarks_scanner_free fails without a report - both are the campaign's open findings, unfixed, in 6.23; test_engine_api_transmit is the timing flake, and test_transmitter, test_plugin_audio and test_sdrplay_source are trap 7's three.

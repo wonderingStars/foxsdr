@@ -354,11 +354,6 @@ if(WIN32)
 endif()
 file(GLOB CASCADE_DSP    CONFIGURE_DEPENDS src/dsp/*.cpp)
 file(GLOB CASCADE_GUI    CONFIGURE_DEPENDS src/gui/*.cpp)
-# MASTER'S WINDOW FILES THAT ARE NOT YET RE-EXPRESSED (the 0.99.84 merge, 2026-10-21; docs/engine-merge-0.99.84.md has the ledger) live in
-# src/gui_pending/, which no target globs: each is AppWindow code that reads or writes the engine's fields directly, which the fence refuses,
-# and each comes back to src/gui/ (git mv) when its feature is ported onto the engine's table. The ledger names the feature, the release that
-# brought it and the red placeholder test (tests/merge_pending.cmake) that stays red until the file is back. test_engine_shell_guard walks
-# src/gui, so a file left here cannot be mistaken for the interface.
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
 file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
 file(GLOB CASCADE_NET    CONFIGURE_DEPENDS src/net/*.cpp)

@@ -3,9 +3,6 @@
 # exception is a test that needs a command-line argument, handled below by
 # name for test_json_dump_policy.
 file(GLOB CASCADE_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
-# THE 0.99.84 MERGE'S PENDING TESTS: master's tests of window features not yet re-expressed are left out of the build and
-# replaced by red placeholders (tests/merge_pending.cmake).
-include("${CMAKE_CURRENT_SOURCE_DIR}/merge_pending.cmake")
 
 # A REAL plugin module for test_plugin_settings_ui (CASCADE_CAP_SETTINGS_UI):
 # built as a MODULE exactly as a third-party plugin is - plugin_abi.h only,
@@ -483,9 +480,6 @@ foreach(src ${CASCADE_TESTS})
     list(APPEND CASCADE_ALL_TEST_NAMES ${name})
 endforeach()
 
-# The pending tests' red placeholders (tests/merge_pending.cmake).
-cascade_merge_pending_register()
-
 # THE WINDOW TESTS AGAINST THE ENGINE'S PASS ON ITS OWN THREAD (the pump move's step P5; tests/pass_seam.hpp). A hermetic window test is its
 # own pump: it never starts the engine's control thread and runs one frame's engine part by hand. Every test that says "one pass" through
 # the seam is registered again, with FOXSDR_TEST_PASS set, so the same test runs against the pass on the control thread:
@@ -866,7 +860,7 @@ endif()
 # time, and the deck-knobs test shows frames of 50 ms or more there. It prints each run's
 # start and duration unbuffered, so a run stopped by this bound still says which one was
 # in hand.
-if(TEST test_tx_audio_plate_app)   # (pending while TX-PLUGIN is: tests/merge_pending.cmake)
+if(TEST test_tx_audio_plate_app)
     set_tests_properties(test_tx_audio_plate_app PROPERTIES TIMEOUT 600)
 endif()
 # The exit-cause test starts the real application eleven times (a staged run per
@@ -1219,10 +1213,6 @@ if(CASCADE_SANITIZE_ENABLED)
         string(REPLACE "|" ";" entry "${entry}")
         list(GET entry 0 t)
         list(GET entry 1 why)
-        string(REGEX REPLACE "_(free|stepped)$" "" _tbase "${t}")
-        if(t IN_LIST CASCADE_MERGE_PENDING_TESTS OR _tbase IN_LIST CASCADE_MERGE_PENDING_TESTS)
-            continue()   # a test the 0.99.84 merge took out of the build (tests/merge_pending.cmake): nothing to exclude
-        endif()
         set_tests_properties(${t} PROPERTIES DISABLED TRUE LABELS "sanitize-excluded")
         message(STATUS "sanitizer: ${t} is excluded - ${why}")
     endforeach()
@@ -1347,7 +1337,7 @@ set(CASCADE_GUI_TESTS
 # and those must survive.
 get_directory_property(_cascade_registered_tests TESTS)
 foreach(t ${CASCADE_GUI_TESTS})
-    if(NOT t IN_LIST _cascade_registered_tests AND NOT t IN_LIST CASCADE_MERGE_PENDING_TESTS)
+    if(NOT t IN_LIST _cascade_registered_tests)
         message(FATAL_ERROR "CASCADE_GUI_TESTS names '${t}' but no such test is "
                 "registered - renamed or removed? Update the list above.")
     endif()
