@@ -71,6 +71,8 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"takeheader", false},   // per take: each is a recording the person made
     {"sentinelgone", true},  // the watcher is gone for the session
     {"displaywatch", true},  // start-up, once by nature
+    {"devlatch", true},      // the service can raise it again on every start; "this session had it" is the fact
+    {"softgl", true},        // a state of the whole run, counted once
     {"pluginfault", false},       // each absorbed fault switches that plugin off, so the next is another plugin's or another session's
     {"pluginquarantine", false},  // likewise: one per plugin switched off
     {"pluginwedge", false},       // each is a call that never returned (or an unload that timed out inside one)

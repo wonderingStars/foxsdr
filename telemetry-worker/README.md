@@ -51,6 +51,12 @@ The release that carries the plugin containment (docs/engine-stage4.md 6.28) add
 
 Merging master's 0.99.100 into the engine branch (docs/engine-merge-0.99.100.md) joined those five words (the four above and `recovered.threadwedge`) to master's thirty-three, so the Worker's family is thirty-eight words, in master's order and then the branch's; every one is also an issue report (core/issue_report.hpp). Deploy-before applies to the whole union: the branch's release ships after a Worker that has all thirty-eight (`worker.test.mjs`, the merged-vocabulary test).
 
+**The early-warning words are the same case again** (field-early-warning): `recovered.devlatch` (an SDRplay
+stream failure latched the source) and `recovered.softgl` (the window is drawn by the software OpenGL
+renderer) are new words of the `recovered` family, so **this Worker is deployed before the application that
+sends them ships**. The Worker as 0.99.95 shipped it, kept byte for byte in `test-fixtures/worker-0.99.95.js`,
+is the one `worker.test.mjs` shows dropping them. The site's `health_vocabulary.json` carries the same two words.
+
 ## The columns of `foxsdr_usage`
 
 Written in `worker.js`; never renumbered, because a column that changes meaning

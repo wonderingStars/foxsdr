@@ -558,6 +558,8 @@ by itself, so a count of 1 means "this session had it".
 | `takeheader` | a recording could not be finalised when it ended and keeps the header it was opened with. |
 | `sentinelgone` | the watcher that reports an ending FoxSDR cannot report itself did not start, or ended early, so such an ending this session would go unreported. Once a session. |
 | `displaywatch` | FoxSDR could not subscribe to the screen's on and off state, so drawing continues while the screen is off. Once a session. |
+| `devlatch` | the SDRplay service reported a stream failure and FoxSDR marked the radio as failed until it is started again. Once a session. |
+| `softgl` | the window is drawn by FoxSDR's own software OpenGL renderer, because the graphics driver's could not be used (or because it was asked for). Once a session. |
 | `pluginfault` | a call into a plugin faulted (an access violation, say) and FoxSDR absorbed it instead of dying with it: the plugin was switched off for the session and the program carried on. Counted each time. No plugin's name or version is in it. |
 | `pluginquarantine` | FoxSDR switched a plugin off for the rest of the session because it faulted, threw, or never returned. Counted each time. No plugin's name is in it. |
 | `pluginwedge` | a call into a plugin never returned within its allowance (or an unload timed out inside one), and FoxSDR let go of it, switched the plugin off and wrote a freeze report naming it. Counted each time. |

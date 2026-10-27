@@ -1000,6 +1000,13 @@ int AppWindow::run(int frames) {
         tellUserWindowFailed("the OpenGL driver is older than 3.0", frames, softwareTried);
         return 1;
     }
+    // THE EARLY-WARNING COUNT OF THE SOFTWARE RENDERER (health word `softgl`, once a session): the
+    // window this run draws is Mesa's llvmpipe, by the automatic fallback after the graphics driver
+    // was refused or by FOXSDR_GL=software. The ledger holds the count in memory until reporting is
+    // decided (core/health_events.hpp), so this early place is safe.
+    if (cascade::gui::softgl::loaded()) {
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::SoftGl);
+    }
     // THE INTERFACE SCALE'S "auto": the monitor this window is about to open
     // on, read BEFORE anything below is sized against it - GLFW already
     // knows a hidden window's target monitor content scale. FOXSDR_UI_SCALE

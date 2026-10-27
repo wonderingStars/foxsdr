@@ -878,6 +878,8 @@ The sites that are counted:
 | `takeheader` | `engine.cpp` `collectFinish`, a take not finalised (0.99.100) | the engine's pass |
 | `sentinelgone` | `sentinel_host_win.cpp` / `sentinel_host_posix.cpp`, the watcher not started or ended early (0.99.100) | the window's thread |
 | `displaywatch` | `win_frame.cpp`, the display-state notification not registered (0.99.100) | the window's thread |
+| `devlatch` | `SdrPlaySource`'s event callback, `DeviceFailure`: the stream-failure latch the next successful Init supersedes (field-early-warning; read from the service's thread, so only raised) |
+| `softgl` | `AppWindow::run`, right after the window's OpenGL driver is accepted and `softgl::loaded()` is true: this run is drawn by Mesa's llvmpipe (field-early-warning) | the window's thread |
 | `pluginfault` | `core/plugin_fault.cpp` `totals().faults`: a guarded call into a plugin faulted and was absorbed (see *A bad plugin does not take the program down*) | the engine's pass, from `fault::totals()` |
 | `pluginquarantine` | `fault::totals().quarantines`: a plugin was switched off for the session | the engine's pass |
 | `pluginwedge` | `fault::totals().wedges`: a guarded call never returned (the stage-2 finding of the call budget), or an unload timed out inside one | the engine's pass |

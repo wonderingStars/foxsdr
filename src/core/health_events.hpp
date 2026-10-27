@@ -121,6 +121,10 @@ enum class Recovered : std::uint8_t {
     TakeHeader,    // a recording's file could not be finalised and keeps its opening header
     SentinelGone,  // the watcher process did not start, or ended while the application ran
     DisplayWatch,  // the display on/off notification could not be registered
+    // THE EARLY-WARNING PAIR (master's field-early-warning branch, folded here from there): after master's thirty-three, before the engine branch's five, so
+    // master's words keep their places and the next merge from master stays a merge.
+    DevLatch,      // an SDRplay stream failure (the service's DeviceFailure) latched the source as faulted
+    SoftGl,        // the window is drawn by the software OpenGL renderer, not the graphics driver's
     // THE ENGINE-EXTRACTION BRANCH'S FIVE (docs/engine-stage4.md 6.27, 6.28), after master's thirty-three: the order is the vocabulary's
     // order in the Worker, PRIVACY.md and the tests, and master's words keep their places so the next merge from master stays a merge.
     PluginFault,       // a plugin's call faulted and the host absorbed it (core/plugin_fault.hpp, plugin containment P1)
@@ -129,7 +133,7 @@ enum class Recovered : std::uint8_t {
     PluginOveruse,     // a plugin call overran its budget
     ThreadWedge, // a worker thread missed its heartbeat budget and was reported by name (core/thread_beats.hpp)
 };
-inline constexpr std::size_t kRecoveredCount = 38;
+inline constexpr std::size_t kRecoveredCount = 40;
 
 // One event of the vocabulary, as documentation and the Worker see it: its
 // name, the word lists of its qualifiers in order (empty for a bare event), and

@@ -298,6 +298,9 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"TakeHeader", "src/engine/engine.cpp", 1},
         {"SentinelGone", "src/core/sentinel_host_win.cpp", 2}, {"SentinelGone", "src/core/sentinel_host_posix.cpp", 2},
         {"DisplayWatch", "src/gui/win_frame.cpp", 1},
+        // THE EARLY-WARNING PAIR (field-early-warning): the window counts the software renderer; the SDRplay source raises the stream-failure latch.
+        {"SoftGl", "src/gui/app_window.cpp", 1},
+        {"DevLatch", "src/source/sdrplay_source.cpp", 1},
         // Counted by the poll like the others it watches, but its issue report is the DSP
         // minute's, behind the share floor (0.99.102): the one direct use is that filing - master's
         // AppWindow::closeDspMinute, the engine's Engine::closeDspMinute here (the 0.99.104 merge).

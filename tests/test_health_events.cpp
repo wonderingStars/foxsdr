@@ -130,10 +130,10 @@ void testEveryTokenIsLegalAndNothingElseIs() {
     // + 1 catalogue + 4 + 3 plugin + 1 recording = 220 failure tokens (0.99.66: the
     // thirteenth driver word, hydrasdr, added one open, one data and eight fail
     // tokens; 0.99.70: the fourteenth, rtltcp, adds the same ten again); then 54
-    // slow (18 countable scopes x 3 tiers) and 38 recovered (0.99.73: audiolead; 0.99.100: viewport and the eighteen words of the 2026-10-28
+    // slow (18 countable scopes x 3 tiers) and 40 recovered (0.99.73: audiolead; the early-warning pair devlatch and softgl; 0.99.100: viewport and the eighteen words of the 2026-10-28
     // survey; then the engine-extraction branch's five: the plugin containment pluginfault, pluginquarantine, pluginwedge, pluginoveruse,
     // and the per-thread watchdog's threadwedge).
-    CHECK(all.size() == 220 + 54 + 38);
+    CHECK(all.size() == 220 + 54 + 40);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
@@ -897,7 +897,7 @@ void testRecoveredWordsAndCap() {
                                             "streamrestart", "tunerretry", "latecall", "scanlimit",
                                             "usbstuck", "ratesdefault", "gainrefused", "ppmrefused",
                                             "iqfilegone", "cataloguebad", "catstop", "filekept",
-                                            "takeheader", "sentinelgone", "displaywatch",
+                                            "takeheader", "sentinelgone", "displaywatch", "devlatch", "softgl",
                                             "pluginfault", "pluginquarantine", "pluginwedge", "pluginoveruse", "threadwedge"};
     CHECK(health::recoveredWords() == words);
     CHECK(health::kRecoveredCount == words.size());
@@ -919,7 +919,7 @@ void testRecoveredWordsAndCap() {
                                         "webroute", "sdrenum", "sdrlost", "audiolead", "viewport",
                                         "readerleak", "closeleak", "linkstranded", "streamrestart",
                                         "tunerretry", "latecall", "scanlimit", "usbstuck", "iqfilegone",
-                                        "cataloguebad", "filekept", "sentinelgone", "displaywatch", "pluginoveruse"};
+                                        "cataloguebad", "filekept", "sentinelgone", "displaywatch", "devlatch", "softgl", "pluginoveruse"};
     for (std::size_t i = 0; i < words.size(); ++i) {
         CHECK(health::recoveredOncePerSession(static_cast<health::Recovered>(i)) == (once.count(words[i]) == 1));
     }
