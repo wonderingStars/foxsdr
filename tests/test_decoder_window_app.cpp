@@ -197,6 +197,8 @@ struct RunOptions {
     bool decodeTest = false;   // CASCADE_DECODE_TEST: start the receiver, so image decoders run
     bool openBySeam = false;   // FOXSDR_OPEN_DECODER_OUTPUT
     bool openFitted = false;   // FOXSDR_OPEN_FITTED_MODULES, in a rectangle inside the main window
+    int fittedW = 1400;        // ...that rectangle's size (the smallest main window needs a smaller one)
+    int fittedH = 880;
     std::string script;        // FOXSDR_INPUT_SCRIPT, empty = none
 };
 
@@ -218,8 +220,8 @@ Result once(const std::string& tag, const RunOptions& o) {
     if (o.openFitted) {
         // The Fitted modules window opens a stagger slot past the main window's right edge when
         // nothing is saved, which in a single viewport is outside the only window there is.
-        c << ", \"fittedModulesX\": 60, \"fittedModulesY\": 50, \"fittedModulesWidth\": 1400, "
-             "\"fittedModulesHeight\": 880";
+        c << ", \"fittedModulesX\": 60, \"fittedModulesY\": 50, \"fittedModulesWidth\": " << o.fittedW
+          << ", \"fittedModulesHeight\": " << o.fittedH;
     }
     c << " }\n";
     writeFile(cfg, c.str());
@@ -545,6 +547,112 @@ int main(int argc, char** argv) {
                 CHECK(within(d2->y0, home.y0, 1.0f));
                 CHECK(within(d2->w(), home.w(), 1.0f));
                 CHECK(within(d2->h(), home.h(), 1.0f));
+            }
+        }
+    }
+
+    // --- RESET WINDOW SIZES takes a page that was DRAGGED BIGGER back to the size it opened at --------
+    //
+    // ADDED BY STUB CAMPAIGN B16 to master's test (nothing of master's is edited or loosened). The section above
+    // MOVES the window and its size never changes, so a reset that put the position back and left the size alone
+    // would pass it: the page would stay as big as the hand made it, and on a small main window bigger than the main
+    // window. Here the bottom-right corner (the page's resize zone: the grip is invisible by design, not removed) is
+    // pulled out; without the reset the page stays that big (the control), and the reset must bring size AND position
+    // back to the rectangle the page opened at.
+    {
+        RunOptions lay;
+        lay.openFitted = true;
+        lay.frames = 110;
+        const Result l = once("grow-layout", lay);
+        CHECK(l.ok);
+        const Rect* d0 = l.rect("decoder:window");
+        const Rect* resetKey = l.rect("fitted:reset");
+        CHECK(d0 != nullptr);
+        CHECK(resetKey != nullptr);
+        if (l.ok && d0 != nullptr && resetKey != nullptr) {
+            const Rect home = *d0;
+            const Rect key = *resetKey;
+            const float cx = home.x1 - 3.0f;
+            const float cy = home.y1 - 3.0f;
+            const float dx = 140.0f;
+            const float dy = 100.0f;
+
+            RunOptions grown = lay;
+            grown.script = drag(45, cx, cy, cx + dx, cy + dy);
+            const Result g = once("grow-drag", grown);
+            CHECK(g.ok);
+            const Rect* g1 = g.rect("decoder:window");
+            CHECK(g1 != nullptr);
+            if (g.ok && g1 != nullptr) {
+                std::printf("    opened %.0f x %.0f; after the corner was pulled out %.0f x %.0f\n", home.w(), home.h(),
+                            g1->w(), g1->h());
+                // THE CONTROL: the page really is that much bigger, so the size the reset run ends at is the reset's.
+                CHECK(within(g1->w(), home.w() + dx, 6.0f));
+                CHECK(within(g1->h(), home.h() + dy, 6.0f));
+                CHECK(within(g1->x0, home.x0, 1.0f));
+                CHECK(within(g1->y0, home.y0, 1.0f));
+            }
+
+            RunOptions reset = grown;
+            reset.script = grown.script + click(75, key);
+            const Result rr = once("grow-press", reset);
+            CHECK(rr.ok);
+            const Rect* g2 = rr.rect("decoder:window");
+            CHECK(g2 != nullptr);
+            if (rr.ok && g2 != nullptr) {
+                std::printf("    after RESET WINDOW SIZES %.0f x %.0f at x %.0f y %.0f\n", g2->w(), g2->h(), g2->x0, g2->y0);
+                CHECK(within(g2->w(), home.w(), 1.0f));
+                CHECK(within(g2->h(), home.h(), 1.0f));
+                CHECK(within(g2->x0, home.x0, 1.0f));
+                CHECK(within(g2->y0, home.y0, 1.0f));
+            }
+        }
+    }
+
+    // --- THE SAME RESET on the smallest main window the application allows (700 x 450) ----------------------
+    //
+    // (B16 addition, as above.) There the page opens HELD to the main window (654 x 427, the check in "small"), and a reset has to put it back to
+    // THAT, not to the 720 x 520 a roomy window gives it: a reset that handed the page its preferred size would leave it bigger than the window
+    // it is in, and the very rectangle (an oversized page with its resize zone off the window) the placement exists to avoid. The Fitted modules
+    // window is given a rectangle that fits in 700 x 450 so that its RESET key is on the window at all, and the Decoder output window opens over
+    // all of it, so the script first clicks the sliver of the Fitted window the page does not reach (bringing it to the front) and then the key.
+    {
+        RunOptions lay;
+        lay.openFitted = true;
+        lay.frames = 110;
+        lay.windowSize = "700x450";
+        lay.fittedW = 640;
+        lay.fittedH = 380;
+        const Result l = once("tiny-layout", lay);
+        CHECK(l.ok);
+        const Rect* d0 = l.rect("decoder:window");
+        const Rect* resetKey = l.rect("fitted:reset");
+        CHECK(d0 != nullptr);
+        CHECK(resetKey != nullptr);
+        if (l.ok && d0 != nullptr && resetKey != nullptr && l.haveVp) {
+            const Rect home = *d0;
+            const Rect key = *resetKey;
+            // The held size: the main window less the margin on each side, as the "small" run asks of the open.
+            CHECK(within(home.w(), l.vp.w() - 2.0f * cascade::gui::kPageInsideMargin, 1.0f));
+            CHECK(home.w() < 720.0f);
+            // A point of the Fitted window (x 60 .. 700) that the Decoder output window (to home.x1) does not cover, clear of its 4 px edge band.
+            const Rect sliver{home.x1 + 11.0f, 300.0f, home.x1 + 11.0f, 300.0f};
+            CHECK(sliver.x0 < 60.0f + static_cast<float>(lay.fittedW) - 6.0f);
+
+            RunOptions reset = lay;
+            reset.script = click(40, sliver) + click(75, key);
+            const Result rr = once("tiny-press", reset);
+            CHECK(rr.ok);
+            const Rect* d2 = rr.rect("decoder:window");
+            CHECK(d2 != nullptr);
+            if (rr.ok && d2 != nullptr) {
+                std::printf("    700 x 450: opened %.0f x %.0f; after RESET WINDOW SIZES %.0f x %.0f at x %.0f y %.0f\n", home.w(), home.h(), d2->w(),
+                            d2->h(), d2->x0, d2->y0);
+                CHECK(within(d2->w(), home.w(), 1.0f));
+                CHECK(within(d2->h(), home.h(), 1.0f));
+                CHECK(within(d2->x0, home.x0, 1.0f));
+                CHECK(within(d2->y0, home.y0, 1.0f));
+                CHECK(d2->w() < 720.0f);
             }
         }
     }

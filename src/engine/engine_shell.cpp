@@ -51,6 +51,7 @@ public:
     ~PluginFeedImpl() override { disconnect(); }
 
     const std::vector<cascade::core::HostTrack>& tracks() const override { return ui_.tracks(); }
+    const std::vector<cascade::core::HostTrack>& unplacedTracks() const override { return ui_.unplacedTracks(); }
     const std::vector<cascade::core::HostPath>& paths() const override { return ui_.paths(); }
     const std::vector<cascade::core::HostPanel>& panels() const override { return ui_.panels(); }
     const std::vector<cascade::core::HostInstrument>& instruments() const override { return ui_.instruments(); }

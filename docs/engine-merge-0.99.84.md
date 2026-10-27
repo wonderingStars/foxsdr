@@ -220,7 +220,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     gui::pressIsClick again, wfPressT_; held by test_freq_markers_app's long press)
 
 0.99.58
-  * the map's coverage line counts only what a receiver could hear ........................... stubbed MAP-WINDOWS (lostlines: drawPluginWindows, recordCoverage)
+  * the map's coverage line counts only what a receiver could hear ........................... re-expressed, stub batch B16 (drawPluginWindows feeds the accumulator through
+    recordCoverage by kind: a satellite never counts, an aircraft or vessel past 1,000 km is a mis-decode; no placeholder named it - tests/test_map_coverage_app.cpp, written red first)
   * plugin updates in the catalogue .......................................................... n/a
 
 0.99.59
@@ -356,7 +357,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     FOXAPP_OP_PLUGIN_RUN_MODE / _USE; test_plugin_rescan_skip, the part audio_lead_plugin_wake restored, test_engine_api_03 group N). The Fitted
     modules window's half - the IDLE chip, START and the KEEP RUNNING tick, the window rows and map pages of a plugin that is asleep, listed from what the
     module declares (fact.plugin.<file>.windows) - is stub batch B5's: test_plugin_inuse_app, nine scenarios in real processes, is green
-  * the DECODER OUTPUT and plugin picture windows open inside the main window; RESET WINDOW SIZES places them there ........ stubbed WINDOW-PLACEMENT
+  * the DECODER OUTPUT and plugin picture windows open inside the main window; RESET WINDOW SIZES places them there ........ re-expressed, stub batch B16
+    (AppWindow::placeInsideMainWindow, src/gui/app_window_map.cpp; test_decoder_window_app, with two reset scenarios added: a page pulled bigger, and the smallest main window)
     (placeInsideMainWindow; test_decoder_window_app). Found by the gui-labelled tests, not by the release-note pass: the ledger had not listed it.
 
 0.99.74
@@ -370,7 +372,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     of test_display_fold_app's list is carved out as the red part display_fold_airband_section: the TOOLS bank's Airband section is AIRBAND (B7)
   * each decoder's settings in a folded "Plugin settings" line ............................... re-expressed, stub batch B9 (AppWindow::drawPluginSettingsRailNode;
     the same line folds the form on a plugin's own windows and the patch inspector; test_decoder_settings_fold_app)
-  * the ADS-B map lists only the aircraft you can see; no-altitude is grey ................... stubbed MAP-WINDOWS
+  * the ADS-B map lists only the aircraft you can see; no-altitude is grey ................... re-expressed, stub batch B16 (drawTrackList in src/gui/app_window_map.cpp:
+    "On screen only", the heading's "N of M"; AppConfig::mapListOnScreenOnly is the window's half of the config again; test_unplaced_list_app)
   * third-party plugin sites in the store ................................................... re-expressed in part: the ENGINE's half since stub batch B3
     (engine_store.cpp: the sites list, each site read on the catalogue's worker, merged under the official list, kept as its own copy and loaded at start-up,
     ADD with the consent and REMOVE as FOXAPP_OP_STORE_SITE, a site's plugin fitted only with the notice acknowledged and NEVER by a REMOTE session - the
@@ -391,7 +394,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * Language & country does not freeze while it looks for CJK fonts ........................... carried (gui/fonts, merged) (unverified)
 
 0.99.75
-  * unplaced aircraft listed apart from the placed ones ...................................... stubbed MAP-WINDOWS
+  * unplaced aircraft listed apart from the placed ones ...................................... re-expressed, stub batch B16 (HostPluginFeed::unplacedTracks, the one door
+    change of the campaign: dated, END stage 7h; test_unplaced_list_app)
   * a radio's manual gain remembered and put back at its next open .......................... re-expressed, C1 (Engine::rememberManualGain / restoreManualGain;
     test_autogain_app)
   * B200 antenna/gain advice ................................................................. n/a
@@ -417,7 +421,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * Linux builds of 41 of 43 plugins ......................................................... n/a
 
 0.99.78
-  * an aircraft at the edge of range stays on the map (estimated positions) .................. stubbed MAP-WINDOWS
+  * an aircraft at the edge of range stays on the map (estimated positions) .................. re-expressed, stub batch B16 (every window caller of the staleness rule takes the
+    whole track again - trackPresentation(ht.t), flags included - and the list says "estimated" beside the id; test_unplaced_list_app gained the scenario)
   * a start-up death at the window says how it ended and which window system it used ......... re-expressed, C1 (window: lines, the failure message,
     FOXSDR_WINDOW_PLATFORM, the breadcrumb flag; test_window_failed_app)
 
@@ -498,7 +503,8 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
   one each                PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
                           SOURCE-ROWS test_source_row_app;
-                          MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
+                          [MAP-WINDOWS (test_unplaced_list_app) and WINDOW-PLACEMENT (test_decoder_window_app) were removed by B16: both ids are whole; the coverage rule
+                          (0.99.58) had no placeholder of its own - tests/test_map_coverage_app.cpp, written red first at B16]
                           [UPDATES (test_store_update_app) and the placeholder TESTER-USAGE held for the team message (test_team_message_app) were removed by B14: UPDATES is
                           whole; TESTER-USAGE's own section had no placeholder of its own - its census test, tests/test_tester_usage_app.cpp, was written red first at B15, and
                           TESTER-USAGE is whole]
@@ -749,3 +755,14 @@ app_window_tester.cpp), test_tester_link is un-pended with its token-never-logge
 three placeholders are gone: the red placeholders are the 14 of B14 less three: 11 (11 tests, no part). New: tests/test_tester_usage_app.cpp (the section's census test, written RED first: 63 checks, 35 failed
 against the window as it was) and tests/test_tester_host_only.cpp (a headless engine can never send a tester report: the sources, the process boot, the built images, the running engine against a stand-in site, and the
 running window as the control); test_airband_app gained the two Airband marks. test_i18n: 36 stale, 0 missing (the 26 keys returned). The real settings file is untouched.
+
+UPDATE 2026-10-27, stub batch B16 (docs/engine-stage4.md 6.22, the B16 record): MAP-WINDOWS and WINDOW-PLACEMENT. The ADS-B map's target list is back (src/gui/app_window_map.cpp, drawTrackList moved whole out of app_window.cpp):
+the heading's "N of M targets" and the "On screen only" tick (AppConfig::mapListOnScreenOnly, whose window member and two config lines the port had never declared - the tick would have come back OFF at every
+launch), the aircraft heard without a position listed after the placed ones and never drawn, the word "estimated" beside an aircraft the source carried forward (0.99.78), and every window caller of the staleness
+rule on the whole track again (flags included; the engine's web status too). The map's coverage line applies recordCoverage by kind again (a satellite never counts, an aircraft past 1,000 km is a mis-decode): no
+placeholder named that item, so tests/test_map_coverage_app.cpp was written red first (4 wedges, best 2,703 km before; 2 wedges, 131 km after). The Decoder output and picture windows open inside the main window
+through AppWindow::placeInsideMainWindow, and RESET WINDOW SIZES puts them back to the rectangle they opened at, held to a small main window (test_decoder_window_app, two scenarios added). THE DOOR MOVED BY ONE FEED
+ACCESSOR, by the owner's decision (plan section 9 decision 4): HostPluginFeed::unplacedTracks(), dated 2026-10-27, END stage 7h; test_engine_shell_guard feed budget 11 -> 12, call sites 66 -> 67 (shell 41, host 3
+unchanged). test_unplaced_list_app (gained the estimated scenario) and test_decoder_window_app are un-pended; the red placeholders are the 11 of B15 less two: 9 (9 tests, no part). New: test_map_coverage_app
+(gui); test_map_window section G and test_plugin_window F2b. test_i18n: 33 stale, 0 missing (the 3 keys returned: the tick's label and tooltip and "No targets on screen."). One master wording is left as it is and
+listed for the next catch-up merge: the Coverage tooltip still says a satellite's position "counts here too", which the restored rule contradicts.

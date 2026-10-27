@@ -604,7 +604,7 @@ inline void mapClampRestoredSize(int x, int y, int& w, int& h,
 //
 // The default size is capped at kMapWorkAreaShare, but the default POSITION
 // was never checked against anything, and the two only make a usable window
-// together. placeAsSeparateWindow anchors the map at the main window's top
+// together. separateWindowAnchor anchors the map at the main window's top
 // right plus 60 px, so once the default height grew to use the screen the
 // monitor offers, the bottom fell off the work area whenever the main window
 // sat low: measured on this 5120x1440 desktop with the main window at y=400,
@@ -968,8 +968,14 @@ private:
     // Per page now: `tracks` is the page's plugin's tracks only, already
     // filtered by the caller, and every selection/follow gesture lands on that
     // page's own MapView.
-    void drawTrackList(MapPage& page,
-                       const std::vector<cascade::core::HostTrack>& tracks);
+    //
+    // `heard` (0.99.75) is the same plugin's targets HEARD WITHOUT A POSITION
+    // (PluginUi::unplacedTracks, filtered the same way): listed after every placed
+    // row, dimmed, with their altitude and the words "no position yet", and
+    // counted in the heading. They are never drawn on the map and never fly it
+    // anywhere - there is nowhere to fly to. (app_window_map.cpp.)
+    void drawTrackList(MapPage& page, const std::vector<cascade::core::HostTrack>& tracks,
+                       const std::vector<cascade::core::HostTrack>& heard);
     // The compact sort control above the list: which key, and which way. It is
     // the ONLY way the list is ordered - the table itself is no longer
     // ImGui-sortable, because ImGui offers no public way to write the header's
@@ -1017,6 +1023,11 @@ private:
     // not meant to be (plugin_abi.h: a track source is polled from the GUI thread at frame rate), and the one
     // place the radar scope names the engine: the guard counts it as a read and does not list it.
     const std::vector<cascade::core::HostTrack>& hostTracks();
+    // ...and the targets the same modules HEAR AND CANNOT PLACE YET (0.99.75), the feed's ninth read (stub campaign B16; END stage 7h, with
+    // the feed). Kept apart from hostTracks() on purpose: every reader of that one draws or measures from a position, and these have none
+    // (NaN). Read by drawPluginWindows' per-page filter alone, for the target list and its heading; the map, the satellite panel, the fit,
+    // the coverage and the web page never see them.
+    const std::vector<cascade::core::HostTrack>& hostUnplacedTracks();
     // ...and the paths (a track's trail) the same modules published: the Patch page's Map part draws both (window port
     // group 13). HOST-PROCESS for the same reason hostTracks() is, and the other place the guard counts as a read and
     // does not list.
@@ -1269,20 +1280,31 @@ private:
     // page this session ride through untouched, so a geometry saved for a
     // plugin that is temporarily uninstalled is not erased by unrelated saves.
     void syncMapPagesToSaved();
-    // Starting position and size for a window that should be its OWN operating
-    // system window rather than a panel inside the main one. `slot` staggers
-    // several of them. See the definition for why the position is what decides
-    // this — ImGui has no flag for it.
-    void placeAsSeparateWindow(int slot);
-    // The size it opens at. Named rather than written twice because the same
-    // pair is what beginPage is handed as the page's default size, and a
-    // "reset window sizes" that put a window back to a DIFFERENT rectangle
-    // than the one it opens at would be a third size nobody asked for.
+    // Starting position and size for a page that opens INSIDE THE MAIN WINDOW,
+    // centred and stepped down and right by `slot` so two that open together
+    // do not hide each other (gui/page_geometry.hpp, pageOpenInsideStaggered).
+    // `wantW` x `wantH` is the size it would like; `outW` x `outH` is what it
+    // gets once held to the main window, and is what the caller hands
+    // beginPage as the page's default so a RESET WINDOW SIZES puts it back to
+    // the rectangle it opened at - position as well as size, because the
+    // placement is queued FirstUseEver every frame and beginPage's reset
+    // re-arms that. Used by the Decoder output window (slot 0) and the plugin
+    // picture windows (slot index + 1), which used to hang off the main
+    // window's right edge so as to be a separate operating system window and
+    // opened with only their 19 px margin on screen whenever the main window
+    // reached the edge of the screen (report df5aff7da93dc88c). A page dragged
+    // out of the main window still becomes its own window. (app_window_map.cpp.)
+    void placeInsideMainWindow(int slot, float wantW, float wantH, float& outW, float& outH);
+    // The size such a page opens at. Named rather than written twice because
+    // the same pair is what beginPage is handed as the page's default size,
+    // and a "reset window sizes" that put a window back to a DIFFERENT
+    // rectangle than the one it opens at would be a third size nobody asked
+    // for.
     static constexpr float kSeparatePageW = 720.0f;
     static constexpr float kSeparatePageH = 520.0f;
     // The same, at a size the caller asks for and MOVED so all of it - the
     // resize grip in the bottom-right corner included - lands on the monitor
-    // it opens on (mapPlaceDefaultRect). placeAsSeparateWindow's fixed
+    // it opens on (mapPlaceDefaultRect). kSeparatePageW x kSeparatePageH's fixed
     // 720 x 520 is too small for a catalogue and its data plate, and an
     // anchor that knows nothing about the monitor is how the map window came
     // to open with its bottom off the work area. FirstUseEver throughout, so
@@ -2254,6 +2276,9 @@ private:
     // so the per-frame filter allocates nothing in the steady state. The
     // per-plugin caps in PluginUi bound what lands here.
     std::vector<cascade::core::HostTrack> pageTracks_;
+    // The same plugin's targets heard without a position (0.99.75): listed, never drawn - see drawTrackList. Filled beside pageTracks_ and
+    // cleared with it.
+    std::vector<cascade::core::HostTrack> pageUnplaced_;
     std::vector<cascade::core::HostPath> pagePaths_;
     // The VOLUME meter's needle, carried between frames so it can fall
     // gently rather than follow every syllable - see gui/volume_meter.hpp.
@@ -2885,6 +2910,13 @@ private:
     // would be two answers to one question.
     bool mapTrails_ = true;
     bool mapTrailAltColours_ = true;
+    // The target list's "On screen only" switch: list only the aircraft inside
+    // the map as last drawn (MapView::isOnScreen) instead of every one heard.
+    // Persisted (AppConfig::mapListOnScreenOnly) and app-wide for the same
+    // reason the trail switches are: it is how this user wants lists to read,
+    // not a statement about one plugin's window. (The window's half of the
+    // config: applyConfig and currentConfig carry it, stub campaign B16.)
+    bool mapListOnScreenOnly_ = false;
     int mapTrailStyle_ = 0;  // 0 line, 1 ribbon - see AppConfig::mapTrailStyle
     // Pixels across, every map and scope - see AppConfig::aircraftIconPx.
     int aircraftIconPx_ = cascade::gui::kAircraftIconDefaultPx;

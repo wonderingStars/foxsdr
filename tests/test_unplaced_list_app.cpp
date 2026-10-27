@@ -279,6 +279,8 @@ int main(int argc, char** argv) {
     setEnv("CASCADE_DECODE_TEST", "");
     setEnv("CASCADE_PLUGIN_TEST", "");
     setEnv("TRACK_PROBE_ASSUME_OLD_HOST", "");
+    setEnv("TRACK_PROBE_ESTIMATED", "");
+    setEnv("TRACK_PROBE_COVERAGE", "");
     installFixture();
 
     // --- DEFAULT: the host set the bit, the plugin published, the list says so -----------------------
@@ -411,6 +413,33 @@ int main(int argc, char** argv) {
             const Result c = once("fitted-click", 90, false, false, false, true, one);
             CHECK(c.ok);
             if (c.ok) { CHECK(c.itemsWith("tracklist:count:").empty()); }
+        }
+    }
+
+    // --- AN AIRCRAFT AT THE EDGE OF RANGE STAYS ON THE LIST, ESTIMATED (0.99.78) -----------------------------
+    //
+    // ADDED BY STUB CAMPAIGN B16 to master's test (nothing of master's is edited): the placeholder named for this item tested the unplaced rows, and
+    // nothing here read the estimated rule. The fixture publishes two placed aircraft last fixed 100 s ago, past an aircraft's 60 s: EST, whose
+    // source flagged its position an estimate (carried forward along its course; kept up to 180 s, and the list says "estimated" beside its id), and
+    // STALE, the same age with no flag, a real fix gone quiet (dropped). The list and its heading must agree with the map's rule, flags included:
+    // PLACED and EST are rows and 2/2 is the heading; STALE is neither a row nor a count.
+    {
+        setEnv("TRACK_PROBE_ESTIMATED", "1");
+        const Result r = once("estimated", 80, false, false);
+        setEnv("TRACK_PROBE_ESTIMATED", "");
+        CHECK(r.ok);
+        if (r.ok) {
+            const std::set<std::string> count = r.itemsWith("tracklist:count:");
+            std::printf("    estimated: heading %s, rows %s%s%s, estimated word beside %s\n", Result::join(count).c_str(),
+                        r.rect("tracklist:row:PLACED") != nullptr ? "PLACED " : "", r.rect("tracklist:row:EST") != nullptr ? "EST " : "",
+                        r.rect("tracklist:row:STALE") != nullptr ? "STALE" : "", Result::join(r.itemsWith("tracklist:estimated:")).c_str());
+            CHECK(count.count("2/2") == 1u);
+            CHECK(count.count("3/3") == 0u);  // the unflagged one at 100 s is not live
+            CHECK(r.rect("tracklist:row:PLACED") != nullptr);
+            CHECK(r.rect("tracklist:row:EST") != nullptr);
+            CHECK(r.rect("tracklist:row:STALE") == nullptr);
+            // The word is beside the flagged one's id and nobody else's.
+            CHECK(r.itemsWith("tracklist:estimated:") == (std::set<std::string>{"EST"}));
         }
     }
 

@@ -19,6 +19,21 @@
 // coordinates with NO flag (HEARDBARE). TRACK_PROBE_ONLY_HEARD=1 leaves PLACED out, so the list
 // holds nothing but aircraft heard without a position.
 //
+// TRACK_PROBE_COVERAGE=1 (0.99.58, tests/test_map_coverage_app.cpp) adds the three targets the map's
+// coverage line must treat differently, around a receiver at 52.0 N, 0.0 E:
+//   NEAR   an aircraft at 52.0 N, 1.5 E (about 103 km, due east): a reception, counted
+//   FAR    an aircraft at 52.0 N, 40.0 E (about 2,740 km): past any line of sight, so a mis-decode,
+//          and not counted
+//   SAT    a satellite at 53.0 N, 0.5 E (about 115 km, north-north-east): its position is a
+//          prediction, not a reception, and not counted
+// (PLACED, 51.0 N 1.0 W, about 130 km south-west, is the fourth: the only other one counted.)
+//
+// TRACK_PROBE_ESTIMATED=1 (0.99.78, tests/test_unplaced_list_app.cpp) adds the two aircraft the staleness rule tells apart by the
+// source's FLAG, both last fixed 100 s ago (past an aircraft's 60 s):
+//   EST    flagged CASCADE_TRACK_FLAG_ESTIMATED: the source carried its last fix forward along its course, so the host keeps it
+//          (up to 180 s) and the list says "estimated" beside its id
+//   STALE  the same age and no flag: a real fix gone quiet, dropped
+//
 // Built by tests/CMakeLists.txt as a MODULE and including ONLY plugin_abi.h, as every
 // third-party plugin must.
 //
@@ -65,7 +80,8 @@ bool hostListsUnplaced() {
 }
 
 void put(CascadeTrack* out, uint32_t& n, uint32_t cap, const char* id, const char* label,
-         double lat, double lon, double altM, uint64_t ageMs, uint32_t flags) {
+         double lat, double lon, double altM, uint64_t ageMs, uint32_t flags,
+         uint32_t kind = CASCADE_TRACK_AIRCRAFT) {
     if (n >= cap) { return; }
     CascadeTrack t;
     std::memset(&t, 0, sizeof t);
@@ -77,7 +93,7 @@ void put(CascadeTrack* out, uint32_t& n, uint32_t cap, const char* id, const cha
     t.courseDeg = std::nan("");
     t.speedMps = std::nan("");
     t.ageMs = ageMs;
-    t.kind = CASCADE_TRACK_AIRCRAFT;
+    t.kind = kind;
     t.flags = flags;
     out[n++] = t;
 }
@@ -98,6 +114,15 @@ int32_t pollTracks(void*, CascadeTrack* out, uint32_t cap) {
     }
     if (envOn("TRACK_PROBE_BARE_NAN")) {
         put(out, n, cap, "HEARDBARE", "", nan, nan, nan, 1500ull, 0u);
+    }
+    if (envOn("TRACK_PROBE_ESTIMATED")) {
+        put(out, n, cap, "EST", "G-EST", 51.5, -0.5, 9000.0, 100000ull, CASCADE_TRACK_FLAG_ESTIMATED);
+        put(out, n, cap, "STALE", "G-STALE", 51.6, -0.4, 9000.0, 100000ull, 0u);
+    }
+    if (envOn("TRACK_PROBE_COVERAGE")) {
+        put(out, n, cap, "NEAR", "G-NEAR", 52.0, 1.5, 3000.0, 500ull, 0u);
+        put(out, n, cap, "FAR", "G-FAR", 52.0, 40.0, 11000.0, 500ull, 0u);
+        put(out, n, cap, "SAT", "SAT-1", 53.0, 0.5, 400000.0, 500ull, 0u, CASCADE_TRACK_SATELLITE);
     }
     return static_cast<int32_t>(n);
 }

@@ -128,6 +128,14 @@ struct AppWindowTestAccess {
     // What the window hands the engine once a frame (the track-info answers, the pictures' headers), and what a browser reads.
     static void hand(AppWindow& a) { a.handFrontEndFacts(); }
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
+    // The track list the window hands the engine, replaced by one a test built (stub campaign B16: the web status' staleness rule takes a track's flags).
+    static void handTracks(AppWindow& a, const std::vector<cascade::core::HostTrack>& polled) {
+        cascade::engine::FrontEndFacts f = rawEngine(a.engine_).frontEndFacts();
+        auto feed = std::make_shared<cascade::engine::TrackFeed>();
+        feed->polled = polled;
+        f.trackFeed = feed;
+        rawEngine(a.engine_).setFrontEndFacts(f);
+    }
     static void attachTrackInfo(AppWindow& a, const CascadeTrackInfoApi* api) { a.trackInfo_.attach(api); }
     static void sendTrackInfoText(AppWindow& a) { a.sendTrackInfoText(); }
     // The engine's image feed (stage 5e): the cycle its worker makes while a web server listens - poll, encode what changed, publish the set and the
@@ -852,6 +860,36 @@ void testWebExtras(AppWindow& a) {
 }
 
 // ======================================================================================================================
+// F2b. THE WEB STATUS KEEPS AN ESTIMATED AIRCRAFT AS LONG AS THE MAP DOES (0.99.78; stub campaign B16)
+// ======================================================================================================================
+// "THE SAME STALENESS RULE THE DESKTOP MAP APPLIES, so the two views do not disagree about what is still flying". Since 0.99.78 the rule takes the
+// track's flags: an aircraft whose source carried its position forward (CASCADE_TRACK_FLAG_ESTIMATED) is kept for 180 s, not 60. The pass applies
+// the rule to the list the window hands over; this hands it four aircraft by hand and asks what a browser would be told.
+void testWebEstimated(AppWindow& a) {
+    std::printf("  F2b: the web status applies the whole staleness rule, flags included\n");
+    const auto mk = [](const char* id, std::uint64_t ageMs, std::uint32_t flags) {
+        cascade::core::HostTrack ht;
+        ht.plugin = "Estimate probe";
+        std::snprintf(ht.t.id, CASCADE_TRACK_ID_CHARS, "%s", id);
+        ht.t.kind = CASCADE_TRACK_AIRCRAFT;
+        ht.t.latDeg = 51.0;
+        ht.t.lonDeg = -1.0;
+        ht.t.ageMs = ageMs;
+        ht.t.flags = flags;
+        return ht;
+    };
+    Access::handTracks(a, {mk("FRESH", 500u, 0u), mk("EST", 100000u, CASCADE_TRACK_FLAG_ESTIMATED), mk("QUIET", 100000u, 0u),
+                           mk("EST_OLD", 200000u, CASCADE_TRACK_FLAG_ESTIMATED)});
+    Access::look(a);
+    std::string ids;
+    for (const auto& t : Access::webStatus(a).tracks) { ids += (ids.empty() ? "" : ",") + t.id; }
+    std::printf("      fresh (0.5 s), estimated (100 s), unflagged (100 s), estimated (200 s) -> the browser is told: %s\n", ids.c_str());
+    CHECK(ids == "FRESH,EST");  // the unflagged one at 100 s and the estimate at 200 s are past their rules
+    Access::handTracks(a, {});
+    Access::look(a);
+}
+
+// ======================================================================================================================
 // F3. THE SPECTRUM'S RANGE FOLLOWS THE STATE (the pump move, step P2: the engine's onDisplayRange hook is gone)
 // ======================================================================================================================
 void testDisplayRange(AppWindow& a) {
@@ -1098,6 +1136,7 @@ int main() {
         testUseReport(a);
         testImages(a);
         testWebExtras(a);
+        testWebEstimated(a);
         testDisplayRange(a);
     }
     testTwoSources();

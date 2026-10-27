@@ -6410,7 +6410,8 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
         // stops appearing in the snapshot; ageMs is still published for the
         // ones that remain, so the web page is free to fade them on its own
         // terms - that presentation is the web UI's decision, not this one's.
-        if (!cascade::core::trackPresentation(t.t.ageMs, t.t.kind).visible) { continue; }
+        // (The WHOLE track, flags included - stub campaign B16, 0.99.78: an aircraft whose position the source carried forward stays for 180 s, here as on the map.)
+        if (!cascade::core::trackPresentation(t.t).visible) { continue; }
         cascade::net::RadioStatus::Track w;
         w.id = t.t.id;
         w.label = t.t.label;

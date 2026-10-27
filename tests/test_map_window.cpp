@@ -126,7 +126,7 @@ struct AppWindowTestAccess {
     static void drawEntry(AppWindow& a) { a.drawRxPositionEntry(); }
     static void drawMapRows(AppWindow& a) { a.drawMapPageSections(); }
     static void drawWindowRows(AppWindow& a) { a.drawPluginWindowRows(); }
-    static void drawTargetList(AppWindow& a, AppWindow::MapPage& page) { a.drawTrackList(page, a.hostTracks()); }
+    static void drawTargetList(AppWindow& a, AppWindow::MapPage& page) { a.drawTrackList(page, a.hostTracks(), a.hostUnplacedTracks()); }  // (B16: the list takes the targets heard without a position beside the placed ones)
     static void drawDetails(AppWindow& a) { a.drawTargetDetailsSection(); }
     static std::string& detailsId(AppWindow& a) { return a.detailsTrackId_; }
     static const cascade::core::HostTrack* findVisible(AppWindow& a, const std::string& id) { return a.findVisibleTrack(id); }
@@ -142,6 +142,10 @@ struct AppWindowTestAccess {
         return a.hostAltitudeNear(plugin, id, lat, lon, alt);
     }
     static CoverageMap& coverage(AppWindow& a) { return a.coverage_; }
+    // The window's half of the config (stub campaign B16: "On screen only"): what currentConfig writes and applyConfig restores.
+    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(c); }); }
+    static bool& onScreenOnly(AppWindow& a) { return a.mapListOnScreenOnly_; }
     static double& typedLat(AppWindow& a) { return a.rxLatInput_; }
     static double& typedLon(AppWindow& a) { return a.rxLonInput_; }
     static std::map<cascade::core::patch::NodeId, std::unique_ptr<MapView>>& patchViews(AppWindow& a) { return a.patchMapViews_; }
@@ -716,6 +720,33 @@ void testRows(AppWindow& a) {
     std::printf("      stopped by the operator: no page, and the rail says whose module it was\n");
 }
 
+// ======================================================================================================================
+// G. "ON SCREEN ONLY" IS THE WINDOW'S HALF OF THE CONFIG (stub campaign B16, 0.99.74)
+// ======================================================================================================================
+// A switch the window keeps but does not write comes back OFF at every launch (the saved value is silently kept as it was by the config the
+// window remembers), and one it writes but does not restore is lost the same way: both ends are checked, and the default.
+void testOnScreenOnlyIsConfig(AppWindow& a) {
+    std::printf("  G: the list's \"On screen only\" tick is written by currentConfig and restored by applyConfig\n");
+    cascade::core::AppConfig c = Access::config(a);
+    CHECK(!Access::onScreenOnly(a));
+    CHECK(!c.mapListOnScreenOnly);
+    // WRITTEN: the tick the person pressed is in the config the window writes out.
+    Access::onScreenOnly(a) = true;
+    CHECK(Access::config(a).mapListOnScreenOnly);
+    // RESTORED: a saved tick comes back, a saved untick comes back, and neither leaves the other behind.
+    c.mapListOnScreenOnly = false;
+    Access::restore(a, c);
+    CHECK(!Access::onScreenOnly(a));
+    c.mapListOnScreenOnly = true;
+    Access::restore(a, c);
+    CHECK(Access::onScreenOnly(a));
+    CHECK(Access::config(a).mapListOnScreenOnly);
+    c.mapListOnScreenOnly = false;
+    Access::restore(a, c);
+    CHECK(!Access::onScreenOnly(a));
+    CHECK(!Access::config(a).mapListOnScreenOnly);
+}
+
 }  // namespace
 
 int main() {
@@ -764,6 +795,7 @@ int main() {
         testOffers(a);
         testRegisterAndDetails(a);
         testRows(a);
+        testOnScreenOnlyIsConfig(a);
     }
     testRegisterWithoutPosition();
     testRestoredPosition();

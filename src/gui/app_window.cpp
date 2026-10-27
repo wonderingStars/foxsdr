@@ -10612,16 +10612,6 @@ void AppWindow::endPage() {
     ImGui::End();
 }
 
-void AppWindow::placeAsSeparateWindow(int slot) {
-    // FirstUseEver throughout, so this is a starting position and never fights
-    // the user afterwards.
-    float x = 0.0f;
-    float y = 0.0f;
-    separateWindowAnchor(slot, x, y);
-    ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(kSeparatePageW, kSeparatePageH), ImGuiCond_FirstUseEver);
-}
-
 void AppWindow::mapDefaultSize(float& widthPx, float& heightPx) {
     // DERIVED FROM THE MONITOR, not a constant. 720x520 was the map's opening
     // size on every display ever made, and on anything modern it shows about a
@@ -13326,6 +13316,7 @@ void AppWindow::drawScopeModeControl() {
 }
 
 const std::vector<cascade::core::HostTrack>& AppWindow::hostTracks() { return pluginFeed_->tracks(); }
+const std::vector<cascade::core::HostTrack>& AppWindow::hostUnplacedTracks() { return pluginFeed_->unplacedTracks(); }
 const std::vector<cascade::core::HostPath>& AppWindow::hostPaths() { return pluginFeed_->paths(); }
 bool AppWindow::hostAltitudeNear(const std::string& plugin, const std::string& id, double latDeg, double lonDeg,
                                  double& outAltM) {
@@ -14153,11 +14144,16 @@ void AppWindow::drawPluginWindows() {
     // an aircraft it last heard an hour ago.
     if (receiverPositionKnown()) {
         for (const cascade::core::HostTrack& ht : hostTracks()) {
-            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            if (!cascade::core::trackPresentation(ht.t).visible) {
                 continue;
             }
-            coverage_.record(initialBearingDeg(uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg),
-                             greatCircleKm(uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg));
+            // By kind (0.99.58): a satellite's predicted position is not a
+            // reception, and an aircraft past the radio horizon is a
+            // mis-decode (see coverageLimitKm). This loop is the one place the
+            // application feeds the accumulator, so it is the one place that
+            // has to apply the rule; tests/test_map_coverage_app.cpp holds it.
+            recordCoverage(coverage_, uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg,
+                           detailTrackKind(ht.t.kind));
         }
     }
 
@@ -14214,9 +14210,16 @@ void AppWindow::drawPluginWindows() {
         // per-plugin caps in PluginUi — a few dozen structs per frame, which
         // is why nothing here is measured or cached across frames.
         pageTracks_.clear();
+        pageUnplaced_.clear();
         pagePaths_.clear();
         for (const cascade::core::HostTrack& ht : hostTracks()) {
             if (ht.plugin == page.plugin) { pageTracks_.push_back(ht); }
+        }
+        // THE TARGETS THIS PAGE'S SOURCE HEARS AND CANNOT PLACE YET (0.99.75): for
+        // the list and its heading only. pageTracks_ is what the map, the satellite
+        // panel and the fit are handed, and these are never in it.
+        for (const cascade::core::HostTrack& ht : hostUnplacedTracks()) {
+            if (ht.plugin == page.plugin) { pageUnplaced_.push_back(ht); }
         }
         for (const cascade::core::HostPath& hp : hostPaths()) {
             if (hp.plugin == page.plugin) { pagePaths_.push_back(hp); }
@@ -14430,11 +14433,51 @@ void AppWindow::drawPluginWindows() {
                 // targets the staleness rule has dropped, and a count of
                 // everything reported over a map showing only what is live is a
                 // number that contradicts the picture beside it.
+                const std::size_t total = cascade::core::visibleTrackCount(pageTracks_);
+                // ...AND, WITH "On screen only" TICKED, counted the way the list
+                // beside the map is filtered: the number must be the rows below
+                // it. When the switch hid something it says so - "3 of 41
+                // targets" - because a bare "3 targets" over a receiver that has
+                // heard 41 would read as a receiver that has heard 3. The rail
+                // chip keeps the TOTAL (page.visibleCount): that is what the page
+                // holds, wherever the map happens to be looking.
                 const std::size_t shown =
-                    cascade::core::visibleTrackCount(pageTracks_);
-                // Singular and plural as two whole strings, not an "s" suffix.
-                ImGui::TextDisabled(shown == 1 ? tr("%d target") : tr("%d targets"),
-                                    static_cast<int>(shown));
+                    listedTrackCount(*page.view, pageTracks_, mapListOnScreenOnly_);
+                // The two numbers the heading prints, for a bounded run that has to read them
+                // without reading pixels (the 0.99.74 verification against a live ADS-B feed:
+                // with the tick on and the map zoomed in shown < total, with it off they are
+                // equal). One note, "<shown>/<total>", so the pair stays a pair. The name is
+                // only put together when the census is asked for (ui_census.hpp: free when off).
+                // ...AND THE TARGETS THIS PAGE'S SOURCE HEARS WITHOUT A POSITION
+                // (0.99.75), said as a second number on the same line when there are
+                // any. They are not in `total` or `shown`: neither is a marker on
+                // the map, and neither number is allowed to count what is not drawn.
+                const std::size_t heardUnplaced =
+                    cascade::core::visibleUnplacedTrackCount(pageUnplaced_);
+                if (cascade::gui::census::enabled()) {
+                    cascade::gui::census::note("tracklist:count:",
+                                               std::to_string(shown) + "/" + std::to_string(total));
+                    cascade::gui::census::note("tracklist:unplaced:",
+                                               std::to_string(heardUnplaced));
+                }
+                // The wording (and the six whole strings it chooses between) is
+                // targetCountText's, where it is tested.
+                ImGui::TextDisabled(
+                    "%s", cascade::gui::targetCountText(shown, total, heardUnplaced, tr).c_str());
+                // THE FILTER BESIDE THE COUNT IT CHANGES (0.99.74): "Could you add
+                // a filter or switch to list only the aircraft currently viewable
+                // on the screen. This way if I am zoomed in on my local little
+                // airport and watching aircraft I only see the area I am
+                // interested in" - and at an air show, where he had been turning
+                // the radio gain down to shrink the reception area. Applied to
+                // EVERY page's list: how a list reads is a preference.
+                ImGui::SameLine();
+                ImGui::Checkbox(trId("On screen only"), &mapListOnScreenOnly_);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", tr(
+                        "Lists only the aircraft inside the map you are looking at.\n"
+                        "Zoom in on an airfield or an air show and the list follows."));
+                }
 
                 // --- the coverage overlay's controls ---------------------------
                 // A second row, because the first is already the position entry and
@@ -14525,12 +14568,21 @@ void AppWindow::drawPluginWindows() {
                     // never fed and the overlay would be an empty circle the user
                     // could not explain.
                     ImGui::TextDisabled("%s", tr("set the RX position to measure coverage"));
+                    cascade::gui::census::note("map:coverage:", "unset");
                 } else if (coverage_.empty()) {
                     ImGui::TextDisabled("%s", tr("nothing heard yet"));
+                    cascade::gui::census::note("map:coverage:", "0/0");
                 } else {
                     ImGui::TextDisabled(tr("%d of %d bearings, best %.0f km"),
                                         coverage_.filledBuckets(), CoverageMap::kBuckets,
                                         coverage_.peakKm());
+                    // The two numbers the line prints, for a bounded run that has to read them without reading pixels
+                    // (tests/test_map_coverage_app.cpp): "<wedges filled>/<best km>". Only put together when the census is on.
+                    if (cascade::gui::census::enabled()) {
+                        cascade::gui::census::note("map:coverage:",
+                                                   std::to_string(coverage_.filledBuckets()) + "/" +
+                                                       std::to_string(std::lround(coverage_.peakKm())));
+                    }
                 }
 
                 // --- the GPS row ---------------------------------------------
@@ -14556,7 +14608,7 @@ void AppWindow::drawPluginWindows() {
                 const float listWidth =
                     std::min(300.0f, std::max(190.0f, mapAvail.x * 0.36f));
                 ImGui::BeginChild("##tracklist", ImVec2(listWidth, 0.0f), true);
-                drawTrackList(page, pageTracks_);
+                drawTrackList(page, pageTracks_, pageUnplaced_);
                 ImGui::EndChild();
                 ImGui::SameLine();
 
@@ -14691,17 +14743,22 @@ void AppWindow::drawPluginWindows() {
         const std::string id = im.plugin + " image###image_" + im.plugin;
         if (!pluginWindows_.shown(id)) { continue; }
         uiNotePanel("image");
-        // Its own operating system window, for the same reason as the map: a
-        // received picture is something to put beside the radio, or on another
-        // screen, not a panel inside it. Staggered per decoder so two plugins
-        // producing pictures do not land exactly on top of each other.
-        placeAsSeparateWindow(static_cast<int>(i) + 1);
+        // A page that opens INSIDE THE MAIN WINDOW, where the press that asked
+        // for it can be seen to have worked, and that can be dragged out of it
+        // to sit beside the radio or on another screen (it used to open past
+        // the main window's edge, to be its own operating system window, and
+        // on a main window that reached the screen's edge it opened with its
+        // 19 px margin on screen and nothing else). Staggered per decoder so
+        // two plugins producing pictures do not land exactly on top of each
+        // other.
+        float imageW = kSeparatePageW;
+        float imageH = kSeparatePageH;
+        placeInsideMainWindow(static_cast<int>(i) + 1, kSeparatePageW, kSeparatePageH, imageW, imageH);
         // A REAL p_open, so the frame's close key is not a lie: closing takes
         // the window out of pluginWindows_ and its row's lamp goes out.
         bool imageOpen = true;
         const std::string railName = pluginPageLegend(tr("%s IMAGE"), im.plugin);
-        const bool imageDrawn = beginPage(id.c_str(), railName.c_str(), &imageOpen, 0, kSeparatePageW,
-                                          kSeparatePageH);
+        const bool imageDrawn = beginPage(id.c_str(), railName.c_str(), &imageOpen, 0, imageW, imageH);
         // WHERE THE PICTURE WINDOW IS, every frame it is shown (the census; see tests/test_decoder_window_app.cpp for the Decoder output window's).
         if (cascade::gui::census::enabled()) {
             noteWindowRectInCensus("image:window:" + im.plugin, id.c_str());
@@ -15411,276 +15468,8 @@ void AppWindow::drawMapPageSections() {
     ImGui::PopStyleColor();
 }
 
-void AppWindow::drawTrackList(MapPage& page,
-                              const std::vector<cascade::core::HostTrack>& tracks) {
-    // `tracks` is this page's plugin's tracks only — the caller filtered them
-    // by the tag each HostTrack carries — so every row here belongs to the
-    // page it is drawn in, and a click can only ever land on this page's map.
-    // THE SAME RULE THE MAP USES, applied here too. A target the map has
-    // dropped must not still be occupying a row: the list is what makes the
-    // window need a scrollbar, and a decoder that never evicts - the shipped
-    // ADS-B one does not - grows it without limit over a session.
-    const std::size_t shown = cascade::core::visibleTrackCount(tracks);
-    if (shown == 0u) {
-        ImGui::TextDisabled("%s", tr("No targets."));
-        // Wrapped to the list's width, which is narrow: the English is cut
-        // there already, and a translation more so.
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("%s", tr("Decoded aircraft, ships and stations appear here."));
-        ImGui::PopTextWrapPos();
-        return;
-    }
-
-    // Singular and plural as two whole strings, not an "s" suffix.
-    ImGui::Text(shown == 1 ? tr("%d target") : tr("%d targets"), static_cast<int>(shown));
-    // FOLLOW is a toggle rather than a mode buried in a menu, because its
-    // effect - the map moving on its own - is confusing if you cannot see at a
-    // glance that you asked for it.
-    const bool following = !page.view->followedId().empty();
-    if (following) {
-        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped(tr("following %s"), page.view->followedId().c_str());
-        ImGui::PopStyleColor();
-        if (ImGui::SmallButton(trId("Stop following"))) { page.view->clearFollow(); }
-    }
-    ImGui::Separator();
-
-    // --- build the rows ------------------------------------------------------
-    // Reduced to numbers FIRST, sorted second, drawn third. The host's track
-    // vector is the plugins' output and is rebuilt on every poll, so sorting it
-    // in place would be undone by the next frame; and a comparator that read
-    // through to the plugin data would have to recompute a great circle per
-    // comparison instead of once per target.
-    std::vector<TrackRow> rows;
-    rows.reserve(shown);
-    for (std::size_t i = 0; i < tracks.size(); ++i) {
-        const cascade::core::HostTrack& ht = tracks[i];
-        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) { continue; }
-        TrackRow r;
-        // The LABEL is the callsign where one has been decoded and the id
-        // otherwise. An aircraft's ICAO address is known from its first frame
-        // but its callsign only arrives in a separate message type, so a list
-        // that showed callsigns alone would leave rows blank for aircraft it
-        // is tracking perfectly well.
-        r.label = (ht.t.label[0] != '\0') ? ht.t.label : ht.t.id;
-        r.id = ht.t.id;
-        r.altM = ht.t.altM;
-        r.speedMps = ht.t.speedMps;
-        r.courseDeg = ht.t.courseDeg;
-        // NaN WITHOUT A RECEIVER POSITION, which is what makes the two columns
-        // print "no RX" instead of a distance from the Gulf of Guinea. It also
-        // sorts them to the bottom, which is the right place for a column that
-        // has no values at all.
-        if (receiverPositionKnown()) {
-            r.distanceKm = greatCircleKm(uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg);
-            r.bearingDeg = initialBearingDeg(uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg);
-        }
-        r.ageMs = ht.t.ageMs;
-        r.source = i;
-        rows.push_back(std::move(r));
-    }
-
-    // --- how it is ordered ---------------------------------------------------
-    // ABOVE THE TABLE, and spelled out. The eight sort keys used to be eight
-    // column headings, and in the width this list gets they were truncated to
-    // the point of uselessness. One named key at a time is readable at any
-    // width the list can be given, and none of the eight has been dropped.
-    drawTrackSortControl();
-
-    // --- the table -----------------------------------------------------------
-    // Same idiom as the plugin panel tables above (Borders | RowBg | ScrollY),
-    // but NOT Sortable. The sort lives in the control above: ImGui has no
-    // public call to set a table's sort arrow, so a menu and clickable headings
-    // could not be kept in agreement, and a heading arrow reading "Callsign"
-    // over rows ordered by distance is the same unreadable-UI failure in a new
-    // form.
-    //
-    // AND NOT RESIZABLE, WHICH IS DELIBERATE AND COSTS SOMETHING. A resizable
-    // ImGui table puts an invisible drag handle over every inner border,
-    // TABLE_RESIZE_SEPARATOR_HALF_THICKNESS (4 px) either side of it, and that
-    // handle is submitted before the rows are - so it takes the click and the
-    // row-spanning Selectable underneath never sees it. The result was an
-    // eight-pixel band in every row, right beside the details button, where
-    // clicking a row to fly the map to that aircraft did nothing at all.
-    // Silent misses on the list's primary gesture are worse than not being able
-    // to drag the callsign/id split, especially now the split is computed from
-    // what the text actually measures rather than from two guessed weights.
-    const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                  ImGuiTableFlags_ScrollY |
-                                  ImGuiTableFlags_SizingStretchProp;
-    // THE HEIGHT IS RESERVED BEFORE THE TABLE IS DRAWN, because a ScrollY table
-    // with the default outer_size takes every pixel the pane has left and
-    // anything emitted after it lands below the fold. The "no receiver
-    // position" note under the table did exactly that: it was drawn, and it
-    // took ten wheel notches to see. One line is held back for it, and only
-    // when there is a line to hold back.
-    const float tableH = tableHeightReservingLines(ImGui::GetContentRegionAvail().y,
-                                                   ImGui::GetTextLineHeightWithSpacing(),
-                                                   receiverPositionKnown() ? 0 : 1);
-
-    // --- how wide the three columns come out ---------------------------------
-    // THE HEADINGS ARE MEASURED, NOT GUESSED. Two weights picked by eye (2.0
-    // and 1.6) were what left "Callsign" rendering as "Callsi..." in a 620 px
-    // map window - a three-pixel shortfall, and the same unreadable heading the
-    // eight-column table was replaced for. cascade::gui::trackListFit takes the
-    // real font measurements and answers with the widths and with whether they
-    // fit; the arithmetic is pure and tested against those exact pixel figures.
-    //
-    // TIGHTER CELL PADDING IS PART OF THE FIX. ImGui's default four pixels per
-    // side spends twenty-four pixels of a two-hundred-pixel list on empty
-    // margins, which is most of what was missing. Two is still a clear gap
-    // between text and border.
-    const float cellPadX = 2.0f;
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,
-                        ImVec2(cellPadX, ImGui::GetStyle().CellPadding.y));
-
-    // The width the columns will actually share. The scrollbar and the four
-    // borders are ImGui's and are not part of it; this is an estimate and is
-    // only ever used to CHOOSE A LABEL, never to set a width, so being a pixel
-    // out picks the compact button a pixel early and nothing worse.
-    const float availW = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize -
-                         4.0f;
-    // The widest thing each column must show without truncating. For the
-    // callsign that is the heading itself - callsigns are shorter than the word
-    // - and for the id it is a six-character ICAO address, which is longer than
-    // the heading "ID".
-    const float callsignTextW = ImGui::CalcTextSize(tr("Callsign")).x;
-    const float idTextW =
-        (std::max)(ImGui::CalcTextSize(tr("ID")).x, ImGui::CalcTextSize("000000").x);
-    const float framePadX2 = ImGui::GetStyle().FramePadding.x * 2.0f;
-
-    // A NARROWER BUTTON IS WHERE THE LAST PIXELS COME FROM. Below about 600 px
-    // of map window the two headings cannot both fit beside a "Details" button;
-    // they can beside an "Info" one. The label is the only thing that changes -
-    // same button, same row, same window - and it is chosen from the tested
-    // fit rather than from a width threshold somebody picked.
-    // Measured with the ### id hidden, exactly as the button will draw it.
-    const char* detailsLabel = trId("Details");
-    cascade::gui::TrackListFit fit = cascade::gui::trackListFit(
-        availW, callsignTextW, idTextW,
-        ImGui::CalcTextSize(detailsLabel, nullptr, true).x + framePadX2, cellPadX);
-    if (!fit.headingsFit) {
-        const char* compact = trId("Info");
-        const cascade::gui::TrackListFit compactFit = cascade::gui::trackListFit(
-            availW, callsignTextW, idTextW,
-            ImGui::CalcTextSize(compact, nullptr, true).x + framePadX2, cellPadX);
-        if (compactFit.headingsFit) {
-            detailsLabel = compact;
-            fit = compactFit;
-        }
-    }
-
-    if (!ImGui::BeginTable("##tracktable", 3, flags, ImVec2(0.0f, tableH))) {
-        ImGui::PopStyleVar();
-        return;
-    }
-
-    // THREE COLUMNS, AND THE THIRD IS A BUTTON. The details column's heading is
-    // deliberately blank: "Details" over a column of buttons that all say
-    // "Details" is a word printed twice.
-    //
-    // The two text columns are stretch columns weighted by the widths
-    // trackListFit returned. Weights are used rather than the widths
-    // themselves because ImGui knows the true available width and this code
-    // only estimates it - the RATIO is what the fit decided, and stretch
-    // applies it to whatever room there really is. The button column is
-    // WidthFixed, so it cannot be squeezed to nothing however narrow the pane
-    // gets: a button too small to press is worse than a truncated word.
-    ImGui::TableSetupColumn(tr("Callsign"), ImGuiTableColumnFlags_WidthStretch, fit.callsignW);
-    ImGui::TableSetupColumn(tr("ID"), ImGuiTableColumnFlags_WidthStretch, fit.idW);
-    ImGui::TableSetupColumn("##details", ImGuiTableColumnFlags_WidthFixed |
-                                             ImGuiTableColumnFlags_NoResize,
-                            fit.detailsW);
-    ImGui::TableSetupScrollFreeze(0, 1);  // headings stay put while the list scrolls
-    ImGui::TableHeadersRow();
-
-    sortTrackRows(rows, trackSortKey_, trackSortAscending_);
-
-    for (const TrackRow& r : rows) {
-        const cascade::core::HostTrack& ht = tracks[r.source];
-        const cascade::core::TrackPresentation pres =
-            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
-        ImGui::TableNextRow();
-        ImGui::PushID(static_cast<int>(r.source));
-        // Going quiet is visible in the list as well as on the map, and by the
-        // same measure: a row that has faded is a target the map is about to
-        // drop, which is the warning that makes the disappearance make sense.
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * pres.alpha);
-
-        ImGui::TableNextColumn();
-        const bool selected = (page.view->selectedId() == r.id);
-        // SPANNING ALL COLUMNS so the whole row is the click target. Clicking a
-        // row does exactly what clicking a row has always done - the sort
-        // reordered the rows, and r.source is what keeps each one pointing at
-        // its own target through that.
-        //
-        // ALLOWOVERLAP is what keeps the details button from being swallowed by
-        // the row underneath it. Without it the Selectable, submitted first and
-        // covering the whole row, takes the click and the button never fires -
-        // and with the button taking the click but the row not knowing, a press
-        // on it would ALSO fly the map somewhere. Exactly one of the two must
-        // react to any given press, and this is the flag that arranges it.
-        if (ImGui::Selectable(r.label.c_str(), selected,
-                              ImGuiSelectableFlags_SpanAllColumns |
-                                  ImGuiSelectableFlags_AllowOverlap)) {
-            // CLICK = GO TO, on THIS page's map — the row and the map it
-            // commands live in the same window, which is already open or this
-            // code would not be running. One click centres the map on it; the
-            // map only ever tightens the zoom, so clicking a flight while
-            // already zoomed in does not throw the view back out.
-            page.view->setSelected(ht.t.id);
-            page.view->goTo(ht.t.latDeg, ht.t.lonDeg);
-        }
-        // Double click starts following, which is the natural escalation of
-        // "take me there" and needs no extra control.
-        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-            page.view->setFollowed(ht.t.id);
-        }
-        // THE WHOLE BLOCK ON HOVER, the same one the map shows and the same one
-        // the details button opens - so the six values the columns used to
-        // carry are one hover away, not one click. It replaces a tooltip that
-        // showed only the registration and type code and only when a
-        // track-info plugin was installed; this one always has something to
-        // say, because the position, altitude, speed, course, range, bearing
-        // and age come from the track itself. Asking here is also what queues
-        // the registry lookup for every listed target.
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            drawTrackDetailOf(ht, &trackInfo_, receiverPositionKnown(), uiState_.rxLatDeg, uiState_.rxLonDeg);
-            ImGui::EndTooltip();
-        }
-
-        ImGui::TableNextColumn();
-        ImGui::TextDisabled("%s", r.id.c_str());
-
-        // --- the details button ----------------------------------------------
-        // Everything the six deleted columns said, on demand, in a window that
-        // has room to spell it out. The button is drawn AFTER the row-spanning
-        // Selectable and the Selectable allows overlap, so a press here opens
-        // the details and does NOT also fly the map: clicking a row to follow
-        // an aircraft and getting a dialog instead would be the regression this
-        // change most has to avoid.
-        ImGui::TableNextColumn();
-        if (ImGui::SmallButton(detailsLabel)) {
-            detailsTrackId_ = r.id;
-            detailsOpen_ = true;
-        }
-
-        ImGui::PopStyleVar();
-        ImGui::PopID();
-    }
-    ImGui::EndTable();
-    ImGui::PopStyleVar();  // CellPadding
-
-    // The one thing the list cannot say, said once under the table rather than
-    // in a cell per row. It matters MORE now than when there were distance and
-    // bearing columns to sit blank: sorting by distance with no receiver
-    // position produces an order that looks arbitrary, and this is the line
-    // that explains it.
-    if (!receiverPositionKnown()) {
-        ImGui::TextDisabled("%s", tr("Distance and bearing need the RX position above."));
-    }
-}
+// (AppWindow::drawTrackList - the map page's target list, with the rows heard without a position and "On screen only" - and
+// AppWindow::placeInsideMainWindow are in app_window_map.cpp, stub campaign B16.)
 
 void AppWindow::drawTrackSortControl() {
     // ONE KEY, NAMED IN FULL. This is what replaced eight sortable headings:
@@ -15736,7 +15525,7 @@ const cascade::core::HostTrack* AppWindow::findVisibleTrack(const std::string& i
     // staleness rule still shows count: a dropped target must read as "no
     // longer being heard", not as its last stale values.
     for (const cascade::core::HostTrack& ht : hostTracks()) {
-        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+        if (!cascade::core::trackPresentation(ht.t).visible) {
             continue;
         }
         if (id == ht.t.id) { return &ht; }
@@ -16665,11 +16454,18 @@ void AppWindow::drawDecoderStatusRows() {
 }
 
 void AppWindow::drawDecoderWindow() {
-    // ITS OWN OPERATING SYSTEM WINDOW, for the same reason the map and the
-    // decoded images have one: a decoder's output is the reason the plugin
-    // exists, and continuous text - CW, RTTY, APRS - is something to put
-    // beside the radio or on a second screen, not to read through a slot in a
-    // side panel.
+    // A PAGE OF ITS OWN, opened inside the main window and free to be dragged
+    // out of it: a decoder's output is the reason the plugin exists, and
+    // continuous text - CW, RTTY, APRS - is something to put beside the radio
+    // or on a second screen, not to read through a slot in a side panel.
+    //
+    // IT OPENS WHERE IT CAN BE SEEN. It used to open past the main window's
+    // right edge so as to be a separate operating system window, and on a
+    // main window that reached the screen's edge that was off the screen with
+    // only its 19 px margin showing: a French tester pressed the POCSAG and
+    // DMR presets and got "a partial vertical bar" (report df5aff7da93dc88c,
+    // 0.99.71, log line "preset: opened the Decoder output window for DMR
+    // Monitor" and nothing else). See placeInsideMainWindow.
     //
     // IT NEVER OPENS ITSELF. Until 0.79.1 it did, on a decoder's first line -
     // and the NOAA APT decoder says "listening" the moment it is fed, so the
@@ -16693,17 +16489,14 @@ void AppWindow::drawDecoderWindow() {
     // The window's copy of the decoder output (window port, group 8).
     const DecoderLineCache& dl = decoderLines();
 
-    placeAsSeparateWindow(9);
-    if (openForCapture) {
-        // A separate page opens BESIDE the main window, which is outside the
-        // only framebuffer a self-capture reads. Under the capture seam alone
-        // it opens inside instead; the later SetNextWindowPos wins.
-        const ImGuiViewport* mv = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(mv->Pos.x + 420.0f, mv->Pos.y + 200.0f),
-                                ImGuiCond_FirstUseEver);
-    }
-    const bool pageDrawn = beginPage("Decoder output###decoderout", tr("DECODER OUTPUT"), &decoderWindowOpen_, 0,
-                                     kSeparatePageW, kSeparatePageH);
+    // The same placement under the capture seam as for a person: the seam used
+    // to force a position inside the main window, because the page opened
+    // beside it - outside the only framebuffer a self-capture reads - and that
+    // is what hid the defect from every capture.
+    float pageW = kSeparatePageW;
+    float pageH = kSeparatePageH;
+    placeInsideMainWindow(0, kSeparatePageW, kSeparatePageH, pageW, pageH);
+    const bool pageDrawn = beginPage("Decoder output###decoderout", tr("DECODER OUTPUT"), &decoderWindowOpen_, 0, pageW, pageH);
     // WHERE THE WINDOW IS, every frame it is shown (the census), so a test can ask whether it is on the screen and how much of it is.
     noteWindowRectInCensus("decoder:window", "Decoder output###decoderout");
     if (pageDrawn) {
@@ -21045,6 +20838,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // makes a mid-session change take effect on the very next frame.
     mapTrails_ = cfg.mapTrails;
     mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
+    mapListOnScreenOnly_ = cfg.mapListOnScreenOnly;
     mapTrailStyle_ = cfg.mapTrailStyle;
     // Bookmark spectrum markers and their stacking (0.99.54): PREVIOUSLY not
     // in AppConfig at all, so bookmarkMarkers_ kept its true default at every
@@ -21226,6 +21020,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.interfaceScale = interfaceScale_;
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
+    cfg.mapListOnScreenOnly = mapListOnScreenOnly_;
     cfg.mapTrailStyle = mapTrailStyle_;
     cfg.bookmarkMarkers = bookmarkMarkers_;
     cfg.bookmarkStackNames = bookmarkStackNames_;
@@ -21596,11 +21391,11 @@ std::shared_ptr<const cascade::engine::TrackFeed> AppWindow::trackFeedNow() {
     // vector for them, which this window's poll rewrites every frame. A copy per frame of what is on the screen, not of every
     // stale target a source never evicts.
     for (const cascade::core::HostTrack& t : tracks) {
-        if (cascade::core::trackPresentation(t.t.ageMs, t.t.kind).visible) { x->polled.push_back(t); }
+        if (cascade::core::trackPresentation(t.t).visible) { x->polled.push_back(t); }
     }
     if (trackInfo_.active()) {
         for (const cascade::core::HostTrack& t : tracks) {
-            if (!cascade::core::trackPresentation(t.t.ageMs, t.t.kind).visible) { continue; }
+            if (!cascade::core::trackPresentation(t.t).visible) { continue; }
             const std::string id = t.t.id;
             const cascade::gui::TrackInfoCache::Info* d = trackInfo_.get(id, t.t.kind);
             if (d == nullptr) { continue; }

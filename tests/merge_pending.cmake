@@ -76,12 +76,12 @@ cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, on
 # window half of PROBLEM-REPORT (0.99.69) had no pending placeholder; tests/test_problem_report_app.cpp is its test, written red first.)
 # (RADIO-SETUP - the page, its INSTALL DRIVER key and the UHD images finding, 0.99.69 - 0.99.89 - is whole: back in stub batch B8,
 # test_radio_setup_app.)
-cascade_merge_pending(MAP-WINDOWS      # 0.99.7x the ADS-B map's lists
-    test_unplaced_list_app)
+# (MAP-WINDOWS - the map's coverage counts only what a receiver could hear (0.99.58), the list of only the aircraft you can see (0.99.74), the aircraft heard without a
+# position listed apart (0.99.75), an aircraft at the edge of range kept on the map (0.99.78) - and WINDOW-PLACEMENT - the Decoder output window and the plugin picture
+# windows open inside the main window, RESET WINDOW SIZES puts them back (0.99.73) - are whole: back in stub batch B16, src/gui/app_window_map.cpp: test_unplaced_list_app
+# and test_decoder_window_app, the real binary's. The coverage rule had no pending placeholder; tests/test_map_coverage_app.cpp is its test, written red first.)
 cascade_merge_pending(PATCH-VIEW       # 0.99.7x the patch page's view keys, information pane and inspector
     test_patch_canvas_nav test_patch_info_pane)
-cascade_merge_pending(WINDOW-PLACEMENT # 0.99.73 the Decoder output window and the plugin picture windows open inside the main window
-    test_decoder_window_app)
 
 # Only the names that exist as files here are kept (a name that is not a test is a typo that would be a quiet gap).
 set(_cascade_pending_kept)

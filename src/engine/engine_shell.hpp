@@ -295,9 +295,18 @@ public:
     };
     virtual ~HostPluginFeed() = default;
 
-    // The eight host accessors (references into the plugin UI's vectors, valid for the frame: the directive applies at the head of
+    // The nine host accessors (references into the plugin UI's vectors, valid for the frame: the directive applies at the head of
     // the frame only).
     virtual const std::vector<cascade::core::HostTrack>& tracks() const = 0;
+    // THE TARGETS A TRACK SOURCE HEARS AND CANNOT PLACE YET (added 2026-10-27, stub campaign B16; END: stage 7h, when the plugin UI moves
+    // with the host process and its vectors are no longer read through a feed). The ADS-B map lists an aircraft the receiver has heard and
+    // not yet positioned (its position message has not arrived: 0.99.75), after every placed row and counted on the list's heading, and never
+    // draws it. PluginUi keeps those targets in a vector of their own (PluginUi::unplacedTracks) precisely so that tracks() is only ever the
+    // placed ones - every reader of tracks() (the map, the satellite panel, the fit, the radar scope, the coverage, the web snapshot) draws
+    // or measures from a position - and this is the second read of the same object, valid for the frame like the other eight. The
+    // alternative (merging them into tracks()) would have put a NaN coordinate in front of every one of those readers. One caller:
+    // AppWindow::hostUnplacedTracks, for drawPluginWindows' per-page filter. Pure read; nothing is written through it.
+    virtual const std::vector<cascade::core::HostTrack>& unplacedTracks() const = 0;
     virtual const std::vector<cascade::core::HostPath>& paths() const = 0;
     virtual const std::vector<cascade::core::HostPanel>& panels() const = 0;
     virtual const std::vector<cascade::core::HostInstrument>& instruments() const = 0;

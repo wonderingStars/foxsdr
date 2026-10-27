@@ -398,6 +398,12 @@ foreach(src ${CASCADE_TESTS})
         # heard without a position are listed after the placed ones and never drawn (0.99.75).
         add_dependencies(${name} track_probe_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
+    elseif(name STREQUAL "test_map_coverage_app")
+        # Runs the real cascade.exe (built first) with the track fixture fitted (TRACK_PROBE_COVERAGE=1: two aircraft in line of
+        # sight, one 2,740 km away, a satellite 115 km away) and its map page opened by FOXSDR_OPEN_MAP, and reads the coverage
+        # line's numbers from the UI census: only what a receiver could hear is counted (0.99.58; stub campaign B16).
+        add_dependencies(${name} track_probe_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
     elseif(name STREQUAL "test_plugin_settings_window")
         # The REAL window and the REAL engine with the settings fixture fitted (stub campaign B9): the form's wiring frame by frame in drawUi's order.
         # (the _stepped variant the pass seam adds is handed the same fixture module)
@@ -918,6 +924,10 @@ endif()
 if(TEST test_unplaced_list_app)
     set_tests_properties(test_unplaced_list_app PROPERTIES TIMEOUT 600)
 endif()
+# The coverage test starts the real application twice (a receiver set, and none), 60 to 80 frames each. The same bound, for the same reason.
+if(TEST test_map_coverage_app)
+    set_tests_properties(test_map_coverage_app PROPERTIES TIMEOUT 300)
+endif()
 # The row-keys test starts the real application twelve times (a layout run, the window open, a
 # press of HD2, of HD1 then HD2, the three that must press nothing and the control for the click's
 # geometry, an instrument's memory rows opened and pressed, and the module's page with sixteen
@@ -1286,6 +1296,7 @@ set(CASCADE_GUI_TESTS
     test_health_app
     test_import_dialog_app
     test_main_view
+    test_map_coverage_app
     test_markers_window_app
     test_mouse_passthrough_cache
     test_passband_slide_app
