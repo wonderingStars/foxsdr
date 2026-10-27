@@ -436,6 +436,102 @@ void testNotesSurviveAndMalformedOnesAreDropped() {
     }
 }
 
+// THE KILL SWITCH (field-early-warning). The service can withdraw a release: it stops offering it,
+// lists it in `withdrawn`, and says `current_withdrawn` when the version asking is one of them. The
+// copy checks the list ITSELF - a stale or mistaken answer must not be able to talk it into a
+// version the service has pulled - and shows a gentle notice when the version it is running is on it.
+std::string withWithdrawn(const std::string& version, const std::string& withdrawnJson,
+                          const std::string& extra = std::string()) {
+    return std::string("{\"ok\":true,\"version\":\"") + version + "\"," +
+           "\"url\":\"https://foxsdr.com/download/foxsdr-setup-" + version + ".exe\"," +
+           "\"sha256\":\"" + kSha + "\",\"size\":3274221,\"newer\":true,\"notes\":[]," +
+           "\"messages\":[],\"withdrawn\":" + withdrawnJson + extra + "}";
+}
+
+void testAWithdrawnVersionIsNotOfferedWhateverTheServerSays() {
+    UpdateInfo info;
+    std::string err;
+    // The service named 0.56.0 as the update AND as withdrawn (a stale answer, a mistake): not offered.
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.56.0", "[\"0.56.0\"]"), "0.50.0", info, err));
+    CHECK(info.version == "0.56.0");
+    CHECK(info.offerWithdrawn);
+    CHECK(!info.newer);          // `newer` is false though the service said true and 0.56.0 > 0.50.0
+    CHECK(!info.critical);
+    CHECK(info.withdrawn == std::vector<std::string>({"0.56.0"}));
+    CHECK(!info.runningWithdrawn);
+    // ...and a download of it is refused outright, not only because `newer` is false.
+    std::string path;
+    UpdateInfo forced = info;
+    forced.newer = true;         // a caller that built it by hand
+    CHECK(!cascade::core::downloadUpdate(forced, path, err));
+    CHECK(path.empty());
+    CHECK(err.find("withdrawn") != std::string::npos);
+    // A version that is not on the list is offered as before.
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.56.0", "[\"0.55.0\"]"), "0.50.0", info, err));
+    CHECK(info.newer && !info.offerWithdrawn);
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.56.0", "[]"), "0.50.0", info, err));
+    CHECK(info.newer && !info.offerWithdrawn && info.withdrawn.empty() && !info.runningWithdrawn);
+    // No list at all (every answer before the switch existed) changes nothing.
+    CHECK(cascade::core::parseUpdateManifest(manifest(), "0.50.0", info, err));
+    CHECK(info.newer && !info.offerWithdrawn && !info.runningWithdrawn && info.withdrawn.empty());
+}
+
+void testTheRunningVersionBeingWithdrawnIsKnownFromTheListOrTheFlag() {
+    UpdateInfo info;
+    std::string err;
+    // The version running is on the list, and a good newer one is offered: both facts.
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.57.0", "[\"0.56.0\"]"), "0.56.0", info, err));
+    CHECK(info.runningWithdrawn);
+    CHECK(info.newer && !info.offerWithdrawn);
+    // ...or the service said so, with no list entry for it (a copy it cannot place in the list).
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.57.0", "[]", ",\"current_withdrawn\":true"), "0.56.0", info, err));
+    CHECK(info.runningWithdrawn && info.withdrawn.empty());
+    // Not on the list, not flagged: nothing.
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.57.0", "[\"0.55.0\"]"), "0.56.0", info, err));
+    CHECK(!info.runningWithdrawn);
+    // The flag has to be a JSON boolean: a string, a number and null are not "yes".
+    for (const char* extra : {",\"current_withdrawn\":\"true\"", ",\"current_withdrawn\":1", ",\"current_withdrawn\":null",
+                              ",\"current_withdrawn\":[true]", ",\"current_withdrawn\":false"}) {
+        CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.57.0", "[]", extra), "0.56.0", info, err));
+        if (info.runningWithdrawn) { std::printf("FAIL %s read as withdrawn\n", extra); }
+        CHECK(!info.runningWithdrawn);
+    }
+    // Running a version that is withdrawn with nothing newer to offer is still told.
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.56.0", "[\"0.56.0\"]"), "0.56.0", info, err));
+    CHECK(info.runningWithdrawn && info.offerWithdrawn && !info.newer);
+    // A pre-release matches only itself.
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.57.0", "[\"0.56.0-nightly.20260819.b97092e\"]"), "0.56.0", info, err));
+    CHECK(!info.runningWithdrawn);
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.57.0", "[\"0.56.0-nightly.20260819.b97092e\"]"),
+                                              "0.56.0-nightly.20260819.b97092e", info, err));
+    CHECK(info.runningWithdrawn);
+}
+
+void testAHostileOrMalformedWithdrawnListIsKeptOneEntryAtATimeAndBounded() {
+    UpdateInfo info;
+    std::string err;
+    // The list is data from a service over the network: a wrong type is no list, an entry that is not
+    // a well-formed version is dropped (and never compared), and none of it refuses the manifest.
+    for (const char* bad : {"\"0.56.0\"", "{\"0.56.0\":true}", "5", "null", "true"}) {
+        CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.56.0", bad), "0.50.0", info, err));
+        CHECK(info.withdrawn.empty() && info.newer && !info.offerWithdrawn);
+    }
+    CHECK(cascade::core::parseUpdateManifest(
+        withWithdrawn("0.56.0", "[5,null,\"\",\"..\\\\..\\\\evil\",\"1.2.3/../x\",\"0.55.0 \",[\"0.56.0\"],\"0.54.0\",\"0.56.0\"]"),
+        "0.50.0", info, err));
+    CHECK(info.withdrawn == std::vector<std::string>({"0.54.0", "0.56.0"}));
+    CHECK(info.offerWithdrawn && !info.newer);
+    // Bounded: a list longer than kMaxWithdrawn is cut, newest-first as the service writes it.
+    std::string many = "[";
+    for (int i = 0; i < 100; ++i) { many += std::string(i ? "," : "") + "\"0.1." + std::to_string(i) + "\""; }
+    many += "]";
+    CHECK(cascade::core::parseUpdateManifest(withWithdrawn("0.56.0", many), "0.50.0", info, err));
+    CHECK(info.withdrawn.size() == cascade::core::kMaxWithdrawn);
+    CHECK(!info.withdrawn.empty() && info.withdrawn.front() == "0.1.0" && info.withdrawn.back() == "0.1.31");
+    CHECK(info.newer);
+}
+
+
 void testDownloadRefusesWithoutAnUpdate() {
     // downloadUpdate is public, so it re-checks rather than trusting that its
     // caller went through parseUpdateManifest.
@@ -1014,6 +1110,9 @@ int main() {
     testWrongTypedFieldsAreRefusedNotThrown();
     testNotesSurviveAndMalformedOnesAreDropped();
     testDownloadRefusesWithoutAnUpdate();
+    testAWithdrawnVersionIsNotOfferedWhateverTheServerSays();
+    testTheRunningVersionBeingWithdrawnIsKnownFromTheListOrTheFlag();
+    testAHostileOrMalformedWithdrawnListIsKeptOneEntryAtATimeAndBounded();
     testDownloadHonoursACancelFlag();
     testACheckThatFinishesIsHandedOver();
     testAStalledCheckDoesNotHoldTeardown();

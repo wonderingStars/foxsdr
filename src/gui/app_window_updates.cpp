@@ -345,6 +345,29 @@ void AppWindow::drawUpdateBanner() {
         drawStoreUpdateBanner();
         return;
     }
+    // THE KILL SWITCH (field-early-warning): the update service has WITHDRAWN the version that is
+    // running. A gentle notice, in the warning colour and not the error one, that recommends
+    // updating - the update banner below carries the way to do it when a good build is offered,
+    // and when none is yet the notice says so and points to foxsdr.com rather than leaving the
+    // person with a warning and nothing to do. Plain English text on purpose: it is a safety
+    // notice that must not wait for 34 catalogues to be translated, and the catalogue test holds
+    // every tr() key to all of them.
+    if (update_.runningWithdrawn) {
+        cascade::gui::census::note("update:withdrawn-notice");
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("FoxSDR %s has been withdrawn: the FoxSDR team found a problem with it.",
+                           cascade::versionString());
+        ImGui::PopStyleColor();
+        if (update_.newer) {
+            ImGui::TextWrapped("We recommend updating to FoxSDR %s.", update_.version.c_str());
+        } else {
+            cascade::gui::census::note("update:withdrawn-no-replacement");
+            ImGui::TextWrapped("A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+            if (ImGui::SmallButton(trId("Open foxsdr.com"))) { shellOpen(cascade::core::kHomepageUrl); }
+            if (ImGui::SmallButton(trId("Not now"))) { updateDismissed_ = true; }
+        }
+        ImGui::Separator();
+    }
     if (!update_.newer && updateError_.empty()) { return; }
     if (!update_.newer) { return; }
     // For the census (0.99.79): the foxsdr.com banner was drawn - the Store's has had

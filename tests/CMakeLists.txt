@@ -1012,6 +1012,10 @@ endif()
 if(TEST test_tester_host_only)
     set_tests_properties(test_tester_host_only PROPERTIES TIMEOUT 300)
 endif()
+# The kill-switch test starts the real application six times, 60 frames each.
+if(TEST test_withdrawn_app)
+    set_tests_properties(test_withdrawn_app PROPERTIES TIMEOUT 300)
+endif()
 # The deck-knobs test starts the real application dozens of times (as a child of
 # itself, so that a fake radio can sit behind the window; the noise-floor and Airband
 # runs hold a few seconds of real time each): 46 s on this desktop before the Airband
@@ -1545,6 +1549,7 @@ set(CASCADE_GUI_TESTS
     test_tester_usage
     test_tester_usage_app
     test_theme_census
+    test_withdrawn_app
     test_tx_audio_page_app
     test_tx_audio_plate_app
     test_typed_band_mode_app

@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -272,6 +273,26 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
     // cache) must not be able to talk anyone into a downgrade.
     out.newer = compareVersions(out.version, currentVersion) > 0;
 
+    // THE KILL SWITCH (field-early-warning): the versions the service has withdrawn. Kept one
+    // entry at a time (only a well-formed version, so nothing odd is stored or compared), at
+    // most kMaxWithdrawn, and never a reason to refuse the manifest. A version on the list is
+    // not offered however the service words the rest, and the version running being on it - or
+    // the service saying so, `current_withdrawn` - is what makes the window recommend an update.
+    if (j.contains("withdrawn") && j["withdrawn"].is_array()) {
+        for (const json& w : j["withdrawn"]) {
+            if (out.withdrawn.size() >= kMaxWithdrawn) { break; }
+            if (!w.is_string()) { continue; }
+            const std::string v = w.get<std::string>();
+            if (wellFormedVersion(v)) { out.withdrawn.push_back(v); }
+        }
+    }
+    auto isWithdrawn = [&out](const std::string& v) {
+        return std::find(out.withdrawn.begin(), out.withdrawn.end(), v) != out.withdrawn.end();
+    };
+    out.offerWithdrawn = isWithdrawn(out.version);
+    out.runningWithdrawn = isWithdrawn(currentVersion) || boolField(j, "current_withdrawn");
+    if (out.offerWithdrawn) { out.newer = false; }
+
     if (j.contains("notes") && j["notes"].is_array()) {
         for (const json& n : j["notes"]) {
             if (!n.is_object()) { continue; }
@@ -402,6 +423,10 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
     // would otherwise start its bar wherever the first one stopped.
     if (progress != nullptr) {
         progress->store(0.0f, std::memory_order_relaxed);
+    }
+    if (info.offerWithdrawn) {
+        error = "that version has been withdrawn and is not offered";
+        return false;
     }
     if (!info.newer || info.url.empty()) {
         error = "there is no update to download";

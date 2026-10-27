@@ -32,6 +32,16 @@ read. An id for a message the service has stopped sending is forgotten at the
 next check. With the update check switched off nothing is asked and no message
 is shown, and a copy from the Microsoft Store never receives one.
 
+**The answer may also name releases the FoxSDR team has withdrawn** (since
+0.99.96), because one turned out to have a problem. A withdrawn release is not
+offered as an update, and FoxSDR will not offer one even from an out-of-date
+answer. If the version you are running is one of them, FoxSDR shows a short
+notice recommending you update - or, if no fixed version is ready yet, saying so.
+**Nothing new is sent to receive any of this**: the request is still one line
+with the version running, and the service works out the rest from that. The
+notice is shown only while the update check is switched on and never to a copy
+installed from the Microsoft Store.
+
 **Nothing is downloaded or installed unless you press the button.** When you
 do, the installer is fetched over https and its SHA-256 is checked against the
 digest the server published *before* the file is given a name anything could

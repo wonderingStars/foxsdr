@@ -5008,7 +5008,7 @@ with it); a shutdown that wedges for the full 27 s; the Store package; Linux.
 
 ## Field-issue early warning: learning of a bug before a user writes (field-early-warning)
 
-Five pieces, each shippable alone, that turn what the application already knows into
+Six pieces, each shippable alone, that turn what the application already knows into
 something the owner is told about:
 
 1. **New-signature alerting** (the site, `foxsdr-site`): the site's owner-alert engine
@@ -5055,6 +5055,19 @@ something the owner is told about:
    build, or Diagnostics off), never "got nowhere". Reporting switched on mid-session replays the
    stages already reached (`health::replayReached`). The site draws it per version and channel at
    `/admin/working` and `/admin/working.json` (working rate, the funnel, by driver).
+
+6. **The kill switch** (wave 2): the update manifest can mark a release WITHDRAWN. `/api/update`
+   (site) gains `withdrawn` (the versions the owner, or the automatic rollback, pulled) and
+   `current_withdrawn` (the version asking is one of them); `core::parseUpdateManifest` reads both
+   one entry at a time (well-formed versions only, at most `kMaxWithdrawn`), recomputes
+   `UpdateInfo::offerWithdrawn` / `runningWithdrawn` itself, forces `newer = false` for a withdrawn
+   offer whatever the service said, and `downloadUpdate` refuses one outright. The window
+   (`AppWindow::drawUpdateBanner`) shows a gentle notice, in the warning colour, when the running
+   version is withdrawn: with a good build offered it recommends updating (the banner below it is
+   unchanged); with none it says so and points at foxsdr.com. Nothing new is sent to receive it;
+   the notice is plain English (a safety notice must not wait for 34 catalogues) and is not shown
+   to a Microsoft Store copy or with the update check off. Tests: `tests/test_updater.cpp` (the
+   parse) and `tests/test_withdrawn_app.cpp` (the real window, six runs against canned answers).
 
 **Deployment order.** The Worker first (`telemetry-worker`: `npx wrangler deploy`), because it
 drops a word or a field it does not know and the old Worker answers 204, which tells the
