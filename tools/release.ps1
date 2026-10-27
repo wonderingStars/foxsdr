@@ -943,7 +943,11 @@ function Get-CiRun {
     $fields = 'databaseId,status,conclusion,workflowName,headSha,event,url,createdAt,attempt'
     $r = Invoke-Exe -File $gh -Arguments @('run', 'list', '--commit', $script:RC.Head, '-R', $script:Cfg['repo'], '--json', $fields, '--limit', '30') -NoLog
     if ($r.ExitCode -ne 0) { Stop-Release ('gh run list failed: ' + $r.Output.Trim()) }
-    $runs = @($r.StdOut | ConvertFrom-Json) | Where-Object { $_.workflowName -eq 'build' -and $_.headSha -eq $script:RC.Head }
+    # Windows PowerShell 5.1's ConvertFrom-Json emits a JSON array as ONE object, so
+    # Where-Object would test the whole array by member enumeration and pass every
+    # run: the scheduled Uptime run on the same commit was taken for the build run
+    # in 0.99.97 and waited out the 120 min timeout. ForEach-Object unrolls it.
+    $runs = @(($r.StdOut | ConvertFrom-Json) | ForEach-Object { $_ }) | Where-Object { $_.workflowName -eq 'build' -and $_.headSha -eq $script:RC.Head }
     $runs = @($runs | Sort-Object createdAt -Descending)
     if ($runs.Count -eq 0) { return $null }
     return $runs[0]
