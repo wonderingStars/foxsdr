@@ -41,6 +41,38 @@
 # branch. Until then the push trigger below starts it on any branch (not
 # master) whose push changes the sanitizer or fuzz files themselves.
 #
+# THE NIGHTLY LEG (the `schedule:` trigger below). The same file, not a second
+# one: at 02:23 UTC every night the default branch gets
+#   sanitize  the whole suite under ASan + UBSan, exactly as above;
+#   fuzz      a BOUNDED pass over the parsers that take input from outside the
+#             process - CAT lines, the web control JSON, config.json, the plugin
+#             catalogue and manifest JSON, and the web server's HTTP front door -
+#             after the whole regression corpus is replayed, 120 s per target,
+#             the job capped at 60 minutes (the manual and push runs keep 21
+#             targets at 60 s and 180 minutes);
+#   tsan      NOT run nightly. Its recorded results are 39 of 70 tests failing on
+#             the first run (docs/SANITIZERS-AND-FUZZING.md) and a failed Build
+#             step in run 40405682371 (2026-10-26, branch engine/stage4); with
+#             halt_on_error each test shows only its first report, so a nightly
+#             of it would be red every night while the next layer is peeled, and
+#             a red that is expected is a red that gets ignored - the two jobs
+#             that can be made to mean something would go with it. Run it by hand
+#             until it has been green once, then delete the `if:` on the job.
+# Three things about `schedule` that are GitHub's, not ours:
+#   - It runs ONLY from the default branch, and only once this file is on it.
+#     Until it is merged there nothing here fires on a timer; a branch can still
+#     use workflow_dispatch / the push trigger.
+#   - Notifications for a scheduled workflow go to the user who last modified
+#     the cron line (GitHub's docs, checked 2026-10-27), nobody else. No
+#     secret and no chat hook is configured, on purpose; what the run does
+#     instead is say what failed on the run's summary page and attach the
+#     crash inputs (artifact fuzz-crash-inputs). Look with
+#       gh run list --workflow sanitize.yml --event schedule
+#   - A scheduled workflow in a public repository is switched off by GitHub
+#     after 60 days with no repository activity, and a run can start late when
+#     GitHub is busy (hence a minute that is not on the hour).
+# By hand, the same thing: see "CI" in docs/SANITIZERS-AND-FUZZING.md.
+#
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 name: sanitize
 
@@ -51,6 +83,13 @@ on:
         description: "Seconds to fuzz each target (the corpus replay is separate and always runs)"
         default: "60"
         required: false
+      fuzz_targets:
+        description: "Space-separated fuzz targets to fuzz (e.g. cat_command config); empty = all of them. The corpus replay always covers all"
+        default: ""
+        required: false
+  # The nightly leg: see the header. 02:23 UTC, off the hour on purpose.
+  schedule:
+    - cron: "23 2 * * *"
   push:
     branches-ignore: [master]
     paths:
@@ -61,8 +100,10 @@ on:
       - "tools/sanitize/**"
 
 # One run per ref: a newer push replaces a run still in progress.
+# The nightly has a group of its own, so a manual run on master neither cancels
+# it nor is cancelled by it.
 concurrency:
-  group: sanitize-${{ github.ref }}
+  group: sanitize-${{ github.ref }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -156,6 +197,40 @@ jobs:
       # samples, so the tone read 773 Hz in the first run (37355910809) with no
       # sanitizer report. build.yml runs it in the plain build, where the claim is made.
 
+      # What failed, on the run's summary page, so that a red nightly can be read
+      # without opening the 500-test log: the CTest tally, each failed test, and
+      # each distinct sanitizer report line with how many tests hit it.
+      - name: Summarise the sanitize run
+        if: always()
+        run: |
+          {
+            echo "## sanitize (ASan + UBSan, GCC) - ${GITHUB_EVENT_NAME}"
+            echo
+            if [ ! -f ctest.log ]; then
+              echo "No ctest.log: the job stopped before the Test step. Read the failing step above."
+            else
+              grep -E 'tests passed, [0-9]+ tests failed out of' ctest.log || echo "CTest printed no tally (the run was cut off; see ctest.log in the artifact)."
+              echo
+              if grep -q '^The following tests FAILED:' ctest.log; then
+                echo "### Failed tests"
+                echo
+                echo '```'
+                sed -n '/^The following tests FAILED:/,$p' ctest.log | grep -E '^[[:space:]]+[0-9]+ - '
+                echo '```'
+                echo
+              fi
+              if grep -qE '^SUMMARY: [A-Za-z]*Sanitizer' ctest.log; then
+                echo "### Sanitizer reports (count of lines, first 40 distinct)"
+                echo
+                echo '```'
+                grep -E '^SUMMARY: [A-Za-z]*Sanitizer' ctest.log | sort | uniq -c | sort -rn | head -40
+                echo '```'
+                echo
+              fi
+              echo "The full log is the **sanitize-test-log** artifact. A finding becomes a test: docs/SANITIZERS-AND-FUZZING.md."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -171,6 +246,9 @@ jobs:
   # it taught. halt_on_error means each test shows only its FIRST report, so the
   # next run is expected to show the next one: read the log before believing it.
   tsan:
+    # Not in the nightly; the reason is in the header of this file. Delete this
+    # line to put it there.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
@@ -255,11 +333,20 @@ jobs:
 
   fuzz:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    # 180 for a manual or push run (all 21 targets). The nightly is capped at 60:
+    # about 8 minutes of install and build (run 40405682371, branch engine/stage4,
+    # took 8 minutes before its first target started), 6 targets x 125 s, and room.
+    timeout-minutes: ${{ github.event_name == 'schedule' && 60 || 180 }}
     env:
       CC: clang-18
       CXX: clang++-18
-      FUZZ_SECONDS: ${{ github.event.inputs.fuzz_seconds || '60' }}
+      # THE NIGHTLY'S BUDGET, in these two lines: 120 s for each of the parsers
+      # that take input from outside the process. A manual run may pass any
+      # values (gh workflow run sanitize.yml -f fuzz_seconds=120 -f
+      # 'fuzz_targets=cat_command control_request config plugin_index
+      # plugin_manifest web_http'); with neither it fuzzes all targets for 60 s.
+      FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '120' || github.event.inputs.fuzz_seconds || '60' }}
+      FUZZ_TARGETS: ${{ github.event_name == 'schedule' && 'cat_command control_request config plugin_index plugin_manifest web_http' || github.event.inputs.fuzz_targets || '' }}
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=0:print_stacktrace=1:symbolize=1:strict_string_checks=1:detect_stack_use_after_return=1:allocator_may_return_null=0
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1:symbolize=1
       LSAN_OPTIONS: print_suppressions=0:suppressions=${{ github.workspace }}/tools/sanitize/lsan.supp
@@ -294,12 +381,27 @@ jobs:
           -DCASCADE_SANITIZE=address,undefined,fuzzer -DCASCADE_FUZZ=ON
 
       # Only what the fuzz job uses: the replay program and the libFuzzer
-      # executables. The whole suite is the other job's business.
+      # executables. The whole suite is the other job's business. FUZZ_TARGETS
+      # (the nightly's list, or a manual run's) narrows what is built AND fuzzed;
+      # empty means every target. A name that is not a target is an error here,
+      # not a silent skip. The chosen list is handed to the fuzz step as
+      # FUZZ_SELECTED.
       - name: Build
         run: |
-          targets=$(ctest --test-dir build -N -R '^fuzz_corpus_' | sed -n 's/.*Test *#[0-9]*: fuzz_corpus_//p' | sed 's/^/fuzz_/' | tr '\n' ' ')
+          all=$(ctest --test-dir build -N -R '^fuzz_corpus_' | sed -n 's/.*Test *#[0-9]*: fuzz_corpus_//p' | tr '\n' ' ')
+          echo "all fuzz targets: $all"
+          test -n "$all"
+          selected=$(echo $FUZZ_TARGETS)
+          selected="${selected:-$(echo $all)}"
+          for t in $selected; do
+            case " $all" in
+              *" $t "*) ;;
+              *) echo "::error::'$t' is not a fuzz target (known: $all)"; exit 1 ;;
+            esac
+          done
+          echo "FUZZ_SELECTED=$selected" >> "$GITHUB_ENV"
+          targets=$(for t in $selected; do printf 'fuzz_%s ' "$t"; done)
           echo "fuzz targets: $targets"
-          test -n "$targets"
           cmake --build build -j"$(nproc)" --target fuzz_corpus_replay $targets
 
       # THE REGRESSION CORPUS FIRST: every seed and every input that ever found
@@ -313,21 +415,73 @@ jobs:
       # writes what it finds to work/<target>. A crash leaves the offending
       # input in artifacts/ - that file is the bug report: add it to
       # tests/fuzz/corpus/<target>/ with the fix. One target failing does not
-      # stop the rest: the status is collected and returned at the end.
+      # stop the rest: the status is collected and returned at the end. Each
+      # failing target is also written to failed-targets.txt (name, exit status)
+      # for the summary step below; the file exists, empty, once this step has
+      # started, so "no such file" there means the job never got this far.
       - name: Fuzz each target
         run: |
           mkdir -p work artifacts
+          : > failed-targets.txt
           status=0
-          for t in $(ctest --test-dir build -N -R '^fuzz_corpus_' | sed -n 's/.*Test *#[0-9]*: fuzz_corpus_//p'); do
+          for t in $FUZZ_SELECTED; do
             echo "::group::fuzz_$t (${FUZZ_SECONDS}s)"
             mkdir -p "work/$t"
             "build/tests/fuzz_$t" \
               -max_total_time="$FUZZ_SECONDS" -timeout=25 -rss_limit_mb=3072 \
               -print_final_stats=1 -artifact_prefix="artifacts/${t}-" \
-              "work/$t" "tests/fuzz/corpus/$t" || { echo "::error::fuzz_$t found a failure"; status=1; }
+              "work/$t" "tests/fuzz/corpus/$t" || { rc=$?; echo "::error::fuzz_$t found a failure"; echo "$t $rc" >> failed-targets.txt; status=1; }
             echo "::endgroup::"
           done
           exit $status
+
+      # Which target failed, with what input file, and where to get it, on the
+      # run's summary page. libFuzzer writes the input that did it to
+      # artifacts/<target>-<kind>-<sha1> (kind: crash, leak, oom, timeout,
+      # slow-unit); a leak found when the process ends is also "crash".
+      - name: Summarise the fuzz run
+        if: always()
+        run: |
+          {
+            echo "## fuzz (${GITHUB_EVENT_NAME}): ${FUZZ_SECONDS} s per target"
+            echo
+            if [ ! -f failed-targets.txt ]; then
+              echo "The job stopped before the fuzz step started (install, build or corpus replay). Read the failing step above; no target was fuzzed."
+            else
+              echo "Targets fuzzed: ${FUZZ_SELECTED}"
+              echo
+              if [ -s failed-targets.txt ]; then
+                echo "### FAILED"
+                echo
+                while read -r t rc; do
+                  echo "- **fuzz_$t** exited $rc"
+                done < failed-targets.txt
+                echo
+                if [ -n "$(find artifacts -type f)" ]; then
+                  echo "Input files libFuzzer wrote (artifact **fuzz-crash-inputs**; also inside **fuzz-findings**):"
+                  echo
+                  echo '```'
+                  (cd artifacts && find . -type f -printf '%f  %s bytes\n' | sort)
+                  echo '```'
+                else
+                  echo "libFuzzer wrote no input file: the failure was not caused by an input (it came before one ran, or from the environment). Read the log of this step, group fuzz_<target>."
+                fi
+                echo
+                echo "Reproduce: download the artifact, then run build/tests/fuzz_<target> <file> in a CASCADE_SANITIZE=address,undefined,fuzzer CASCADE_FUZZ=ON build. Then, as docs/SANITIZERS-AND-FUZZING.md says, minimise it (-minimize_crash=1), commit it under tests/fuzz/corpus/<target>/ and write the unit test that fails without the fix."
+              else
+                echo "No target failed."
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only the inputs that did it, small and findable, kept apart from the
+      # corpora in fuzz-findings below.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crash-inputs
+          path: artifacts/
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         if: always()

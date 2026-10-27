@@ -326,15 +326,81 @@ application, not the tests).
 
 `.github/workflows/sanitize.yml` (separate from `build.yml`, so it can neither slow
 nor colour the release jobs) has three jobs, in parallel on separate runners: the
-whole suite under ASan + UBSan with GCC; the thread-sanitizer selection of
-`tests/tsan.cmake` under ThreadSanitizer with Clang 18 (`tsan`); and the fuzz targets
-under Clang - the corpus replayed first, then each target for a short fixed time
-(`fuzz_seconds`, default 60). Start it on a branch from the Actions tab or with
-`gh workflow run sanitize.yml --ref <branch>`. It has run once (37355910809, on the
-tree of 17ffcbe, 13 commits before 0.99.68) and failed all three jobs: 22 of 313
-tests under ASan + UBSan, 39 of 70 under ThreadSanitizer, and the corpus replay of
-`channel_chain` (the "Fuzz each target" step never ran, so no target has been fuzzed
-yet). Each failure and its class is in the change that answered it; the second run
-will show what they were hiding.
+whole suite under ASan + UBSan with GCC (`sanitize`); the thread-sanitizer selection
+of `tests/tsan.cmake` under ThreadSanitizer with Clang 18 (`tsan`); and the fuzz
+targets under Clang (`fuzz`) - the corpus replayed first, then each target for a
+short fixed time (`fuzz_seconds`, default 60). It starts three ways: by hand
+(`workflow_dispatch`), on a push to any branch except `master` that changes the
+sanitizer or fuzz files themselves, and every night (below). By hand, from the
+Actions tab or with `gh workflow run sanitize.yml --ref <branch>`.
+
+**History of the runs** (not a statement about the tree you are reading). The first
+run (37355910809, on the tree of 17ffcbe, 13 commits before 0.99.68) failed all three
+jobs: 22 of 313 tests under ASan + UBSan, 39 of 70 under ThreadSanitizer, and the
+corpus replay of `channel_chain` (the "Fuzz each target" step never ran). Each
+failure and its class is in the change that answered it. It has run since: as of
+2026-10-27, `gh run list --workflow sanitize.yml` shows 19 more runs, every one a
+push to the branch `engine/stage4` (3 cancelled, 1 still running, 15 failed), and
+none on `master`. The newest completed one (40405682371) failed `sanitize` in the
+Test step, `tsan` in the Build step, and `fuzz` in "Fuzz each target" - where the
+targets did run (`web_http` at its end-of-run leak check, `report_feed` and
+`patch_rates` on UBSan reports, by the log; not investigated here). Read the current
+state with `gh run list`, not from this paragraph.
+
+### The nightly leg
+
+A `schedule:` trigger, `23 2 * * *` (02:23 UTC; a minute that is not on the hour,
+because GitHub documents the start of every hour as a high-load time at which a
+scheduled run can be delayed), starts the same workflow. It is the same file and the
+same jobs, not a copy:
+
+| Job | Nightly | Budget |
+|---|---|---|
+| `sanitize` | the whole suite under ASan + UBSan, exactly as run by hand | its own 240-minute cap |
+| `fuzz` | the whole regression corpus replayed (all 21 targets), then 120 s of fuzzing for each of `cat_command`, `control_request`, `config`, `plugin_index`, `plugin_manifest` and `web_http` - CAT lines, the web control JSON, `config.json`, the catalogue and manifest JSON, and the web server's HTTP front door | 6 x 120 s of fuzzing; the job is capped at 60 minutes (a manual or push run keeps 180) |
+| `tsan` | **not run** (`if: github.event_name != 'schedule'`) | - |
+
+Why `tsan` is out: with `halt_on_error` each test shows only its first report, the
+recorded results are the failures described above, and a nightly of a job that is red
+until a layer of findings has been peeled is red every night; a red that is expected
+gets ignored, and the two jobs that can be made to mean something go with it. Run it
+by hand until it has been green once, then delete the `if:` line on the job. (This is
+a judgement, not a measurement: nothing here says `tsan` is expensive.) The other
+fuzz targets (`update_manifest`, `crash_report`, `report_feed`, `freq_import` and the
+rest) are not fuzzed nightly; their corpora are still replayed every night, and a
+manual run covers them.
+
+**The same thing by hand** (a `workflow_dispatch` run is not a `schedule` run, so the
+nightly's values are passed as inputs; both are optional, and with neither a manual
+run fuzzes all 21 targets for 60 s):
+
+```
+gh workflow run sanitize.yml --ref <branch> -f fuzz_seconds=120 \
+  -f 'fuzz_targets=cat_command control_request config plugin_index plugin_manifest web_http'
+```
+
+**Three limits that are GitHub's.** `schedule` runs only from the default branch, and
+only once this file is on it: nothing here fires on a timer before the change that
+carries it is merged to `master` (there has been no scheduled run at the time of
+writing; check with `gh run list --workflow sanitize.yml --event schedule`). A
+failed scheduled run notifies only the user who last modified the cron line - no
+secret or chat hook is configured, deliberately - so the run explains itself instead:
+the `sanitize` job's summary page lists the CTest tally, each failed test and each
+distinct sanitizer report line with a count, and the `fuzz` job's summary lists each
+target that failed, its exit status and the input file libFuzzer wrote for it, which
+is also uploaded on its own as the artifact `fuzz-crash-inputs` (the larger
+`fuzz-findings`, with the grown corpora, is unchanged). And in a public repository
+GitHub switches scheduled workflows off after 60 days with no repository activity.
+
+**A nightly finding becomes a test**, by the rule above: download `fuzz-crash-inputs`,
+reproduce with `build-fuzz/tests/fuzz_<target> <file>` (libFuzzer runs a single file
+given as the argument), minimise it (`-minimize_crash=1`), commit it under
+`tests/fuzz/corpus/<target>/` with a name that says what it was, and write the unit
+test that fails without the fix before fixing it. From then on the replay step of
+every nightly - and of `build.yml` - runs it. A `sanitize` finding is already a test
+that failed: fix the code, not the test, and read the sanitizer's own report in
+`sanitize-test-log` before deciding between a defect and a test that is merely slow
+under instrumentation (see "Timing-sensitive tests" above).
+
 `CASCADE_ANALYZE` has no CI job: it needs MSVC, and `build.yml`'s Windows job is
 not edited by this work.
