@@ -439,6 +439,12 @@ struct AppWindowTestAccess {
     // hears nothing (-200 dB), so a threshold below that stands in for a signal. Group O/J: the
     // bookmark store, the record folder and the note the engine keeps.
     static void setRecordDir(cascade::engine::Engine& e, const std::string& dir) { e.recordDir_ = dir; }
+    // Both recorders' opener (stub campaign B18: fact.recorder.start): a disk that answers when the test lets it.
+    static void bindOpener(cascade::engine::Engine& e, cascade::core::Recorder::Opener o) {
+        e.iqRecorder_.bindOpener(o);
+        e.audioRecorder_.bindOpener(std::move(o));
+    }
+    static cascade::core::Recorder::Opener opener(cascade::engine::Engine& e) { return e.audioRecorder_.opener(); }
     static void setSquelch(cascade::engine::Engine& e, float db) { e.squelchDb_ = db; }
     static cascade::core::FreqManager& store(cascade::engine::Engine& e) { return e.freqMgr_; }
     static const std::string& note(cascade::engine::Engine& e) { return e.bookmarkImportNote_; }
@@ -1632,6 +1638,41 @@ bool passUntil(cascade::engine::Engine& eng, F done, int timeoutMs = 4000) {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     return false;
+}
+
+// RECORDER START (stub campaign B18, fact.recorder.start): where each take's start is - '0' none out, '1' the file is being opened on its worker, '2' the start was withdrawn and the worker
+// has not answered - the I/Q take's character first, then the audio take's. It moves the lists' listSeq when it changes (it is hashed), and a take that is recording is '0' again.
+void testRecordStartFact() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    static std::atomic<bool> release{false};
+    static cascade::core::Recorder::Opener real;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    release = false;
+    real = Access::opener(d.eng);
+    Access::bindOpener(d.eng, [](const cascade::core::Recorder::OpenRequest& req, cascade::core::Recorder::OpenedFile& out, std::string& error) {
+        for (int i = 0; i < 3000 && !release.load(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+        return real(req, out, error);
+    });
+    CHECK(passUntil(d.eng, [&] { return !fact(s, "fact.recorder.start").empty(); }));
+    CHECK_EQ(fact(s, "fact.recorder.start"), std::string("00"));
+    const uint64_t seq0 = s.state().listSeq;
+    // An audio start is out: the audio take's character, and not the I/Q take's.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 1)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return fact(s, "fact.recorder.start") == "01"; }));
+    CHECK(s.state().listSeq != seq0);  // hashed: the table moves when it does
+    // The I/Q take's too, then withdrawn: it reads 2 while its worker has not answered, and the audio take is untouched.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 1)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return fact(s, "fact.recorder.start") == "11"; }));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 0)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return fact(s, "fact.recorder.start") == "21"; }));
+    // The disk answers: the withdrawn start leaves no take, the audio one is armed, and neither is "out" any more.
+    release = true;
+    CHECK(passUntil(d.eng, [&] { return fact(s, "fact.recorder.start") == "00"; }, 8000));
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_RECORDINGS) == 1 && (item(s, FOXAPI_LIST_RECORDINGS, 0).flags & FOXAPI_ITEM_ACTIVE) != 0u; }));
+    CHECK_EQ(item(s, FOXAPI_LIST_RECORDINGS, 0).value[0], 2.0);  // the audio take
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 0)).status(), FOXAPI_OK);
 }
 
 // Scans, selects `id` and passes until the radio is open.
@@ -8739,6 +8780,7 @@ int main() {
     testNotePanel();
     // Group Z: the Airspy and HackRF drivers on fake wires beside the mock radio.
     testDeviceOpening();
+    testRecordStartFact();
     testAirspyLists();
     testConverterFacts();
     testConverterAliasAndCards();

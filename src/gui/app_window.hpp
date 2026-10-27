@@ -109,6 +109,11 @@ struct GLFWwindow;
 #include "gui/readout_hold.hpp"
 #include "engine/tune_control.hpp"
 #include "source/soundcard_source.hpp"
+// THE SDRPLAY API SERVICE CARD and THE SDRPLAY DIAGNOSTIC (stub campaign B18): the service's state and its restart worker, the driver's trouble record, and the probe's child process.
+#include "core/frame_timing.hpp"
+#include "source/sdrplay_probe.hpp"
+#include "source/sdrplay_service.hpp"
+#include "source/sdrplay_source.hpp"
 #include "engine/device_scan_plan.hpp"
 #include "engine/source_fallback.hpp"
 #include "gui/viewport_policy.hpp"
@@ -741,6 +746,9 @@ private:
     // let go (every GL delete this causes is on this thread, with the context current), and a demonstration instrument's window shown.
     void applyDirectiveBefore(const cascade::engine::PluginDirectiveFacts& d);
     void applyDirectiveAfter(const cascade::engine::PluginDirectiveFacts& d);
+    // The scope `plugins-reload` for as long as the window is applying a directive that rebuilds or releases the plugin UI - open in applyDirectiveBefore, closed when
+    // applyDirectiveAfter leaves (stub campaign B18; core/frame_timing.hpp). The engine's own part of a reload is its guard's (OwnedFrameScope).
+    std::optional<cascade::core::OwnedFrameScope> reloadScope_;
     // The publish-time facts (engine/stage3b-pre OPEN 4): no longer
     // EngineHost hooks the engine calls while publishing, but this window's
     // answers, HANDED OVER once a frame (handFrontEndFacts) - and, since the
@@ -899,6 +907,9 @@ private:
 
     // --- Recorder / Bookmarks / Scanner (P6) ----------------------------------
     void drawRecorderSection();
+    // When this window first saw each take's start still opening its file (ImGui's clock; -1 none out): the section's "Waiting for the disk" line counts from it
+    // (stub campaign B18). The engine's start has its own clock, which is not on the table; a second either way is what the line is for.
+    double recordStartSeenS_[2] = {-1.0, -1.0};
     void drawBookmarksSection();
     void drawScannerSection();
 
@@ -1768,6 +1779,8 @@ private:
         };
         std::vector<Row> rows;               // DEVICES, in the combo's order
         bool anySoapyRow = false;            // some entry is a SoapySDR row (its id begins "soapy:")
+        int soapyRows = 0;                   // how many entries are SoapySDR rows
+        int nativeRadioRows = 0;             // native rows that are a radio found: not the three fixed rows, not the Pluto's or the rtl_tcp server's (rows that ask for an address)
         bool generatorActive = false;        // entry 0 is ACTIVE: the source in use is the generator
         int row = -1;                        // fact.source.row: the combo's own row, -1 none
         std::string keepKind;                // fact.source.keep
@@ -1842,6 +1855,23 @@ private:
     };
     SourceListCache sourceCache_;
     const SourceListCache& sourceLists();
+    // WHAT THE SOURCE ROW SAYS ABOUT RADIOS (stub campaign B18, src/gui/app_window_source_row.cpp; gui/source_row_status.hpp holds the rules): whether "No radio hardware found" is
+    // shown (a completed scan, and neither list holds a radio), the radios a running patch holds, and the chip and the combo's preview that name them.
+    bool noRadioHardwareShown();
+    const std::vector<std::string>& patchHeldRadioNames();
+    std::string sourceRowChip();
+    const char* sourceRowLabel(int idx);
+    bool sourceKeepPreview();
+    const std::string& sourceComboPreview();
+    // The held radios' names, kept for the frames in which nothing moved (rebuilt when the lists did or the patch started or stopped), and the preview's buffer.
+    struct HeldRadios {
+        bool valid = false;
+        std::uint64_t listSeq = 0;
+        bool running = false;
+        std::vector<std::string> names;
+    };
+    HeldRadios heldRadios_;
+    std::string sourcePreview_;
     // A DRAFT FOR EACH BOX THAT IS TYPED IN (the scanner form's shape, window port group 7): what an edit sent
     // is not in the table until the engine's next pass, so the box keeps its own text until the engine has
     // caught up with it (the fact equals the draft) or a moment has passed (the engine took something else).
@@ -2653,7 +2683,7 @@ private:
     std::optional<cascade::core::PastedReport> problemReportPasted_;
     std::string problemReportPastedFor_;
     bool problemReportPastedValid_ = false;
-    // The SDRplay diagnostic's text once it has finished (stub campaign B18 writes it; until then empty, and the page's "Attach the SDRplay diagnostic too" row
+    // The SDRplay diagnostic's text once it has finished (drawSdrPlayProbeDialog writes it, stub campaign B18; until then empty, and the page's "Attach the SDRplay diagnostic too" row
     // is never drawn) and whether the page attaches it.
     std::string sdrplayProbeReport_;
     bool problemReportAttachProbe_ = false;
@@ -2676,8 +2706,30 @@ private:
     // other two settings rows.
     void drawKeyBindingsSection();
     // "Diagnostics" settings section: where the log is, what a report carries,
-    // and the one-click bundle.
+    // and the one-click bundle - and the SDRplay diagnostic's key (stub campaign B18).
     void drawDiagnosticsSection();
+    // --- THE SDRPLAY API SERVICE CARD'S RESTART KEY and THE SDRPLAY DIAGNOSTIC'S DIALOG (stub campaign B18, src/gui/app_window_sdrplay.cpp) -------------------------------
+    // sdrPlayService_ is what Windows last said the SDRplay API Service was doing (asked once per change of the driver's trouble, and when a restart ends); sdrPlayTroubleSeen_ is the trouble it
+    // was last asked for (the driver's own record in the process's API table). The restart itself runs on sdrPlayRestart_'s worker, never this thread; sdrPlayRestartNote_ is the key's outcome,
+    // already translated. pollSdrPlayService runs once a frame (the Polls scope); drawSdrPlayServiceKey is drawn in the Source section under the SDRplay API's advice.
+    cascade::source::SdrPlayServiceStatus sdrPlayService_;
+    cascade::source::SdrPlayServiceTrouble sdrPlayTroubleSeen_ = cascade::source::SdrPlayServiceTrouble::None;
+    cascade::source::SdrPlayServiceRestart sdrPlayRestart_;
+    std::string sdrPlayRestartNote_;
+    void pollSdrPlayService();
+    void drawSdrPlayServiceKey();
+    void finishSdrPlayServiceRestart(const cascade::source::SdrPlayRestartOutcome& outcome);
+    // The diagnostic's dialog (and, every frame whether or not it is showing, the poll of the child), and the start the dialog's Run makes. THE BIAS TEE, TWO STEPS: ticking the box only ASKS
+    // (sdrplayProbeBiasAsk_); sdrplayProbeBiasOn_ becomes true only on "Yes, switch it on", and only it reaches the child. sdrplayProbeReport_ (above, with the bug page's attach tick) is the
+    // text of the last finished diagnostic.
+    void drawSdrPlayProbeDialog();
+    void startSdrPlayProbe();
+    bool sdrplayProbeConfirmOpen_ = false;
+    bool sdrplayProbeBiasAsk_ = false;
+    bool sdrplayProbeBiasOn_ = false;
+    std::unique_ptr<cascade::source::SdrPlayProbeChild> sdrplayProbeChild_;
+    std::string sdrplayProbePath_;    // the file being written, or last written
+    std::string sdrplayProbeStatus_;  // the line under the key
     // Shown once, at the start of the run AFTER an unclean exit. A crash
     // handler can write a report but it cannot ask anything - by the time it
     // runs there is no user interface left to ask with. This is the ask.

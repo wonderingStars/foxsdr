@@ -29,6 +29,12 @@
 //     and the third must not either - the open is a worker's, so the window's
 //     frames go on, which is the whole of what moving it off the thread was for.
 //
+// CONVERTED FOR THE ENGINE'S TABLE (stub campaign B18; the 0.99.84 house pattern). A plugin reload and a recording's start, stop and poll are the ENGINE's work now, so the in-process half
+// reaches them through rawEngine on the pass thread (tests/pass_seam.hpp: inline and stepped they run right here, on the thread that begins the frames) and what it asserts is unchanged: the
+// engine's own scopes (core/frame_timing.hpp, OwnedFrameScope) open on the frame loop's thread, and the child process's half proves them where they matter - the real window's stepped run,
+// in which the control thread does the engine's part while the frame loop waits in stepPass (FrameLoan). What is NOT claimed here, and is in tests/test_frame_timing.cpp: that the free-running
+// product's control thread never writes the frame timer.
+//
 // WHAT IS NOT ASSERTED, deliberately: that an unmodified frame is never slow, or
 // how long one takes. This runs beside other agents' builds and test suites on a
 // desktop that may not be pacing frames; what is asserted is what the
@@ -67,9 +73,11 @@
 #include "core/plugin_dir_signature.hpp"
 #include "core/plugin_host.hpp"
 #include "core/recorder.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
 #include "gui/shell_open.hpp"
 #include "gui/win_frame.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -311,24 +319,37 @@ bool slowSignatureRead(const std::string& dir, PluginDirSignature& out) {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static void installHooks() { AppWindow::testHooks_.pluginDirSignature = &slowSignatureRead; }
-    static void rescan(AppWindow& a) { a.rescanPlugins(); }
-    static void rescanIfChanged(AppWindow& a) { a.rescanPluginsIfChanged(); }
+    using Engine = cascade::engine::Engine;
+    static void installHooks() { Engine::testHooks_.pluginDirSignature = &slowSignatureRead; }
+    // (THE ENGINE'S, since the window port: every read and write of it goes through the seam, tests/pass_seam.hpp.)
+    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
+    static void rescanIfChanged(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPluginsIfChanged(); }); }
     static ShellPauseHooks shellHooks(AppWindow& a) { return a.watchdogShellHooks(); }
+    // The pauses the WINDOW's watchdog took: the engine's rescan holds the host's pause (EngineHost::pauseWatchdog) when it is not on its control thread, which is the window's.
     static unsigned pauses(AppWindow& a) { return a.watchdog_.pausesTaken(); }
-    static std::size_t loaded(const AppWindow& a) { return a.pluginHost_.loadedCount(); }
+    static std::size_t loaded(AppWindow& a) {
+        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginHost_.loadedCount(); });
+    }
     static std::string bundle(AppWindow& a) { return a.currentDiagnosticsBundle(); }
     // The recorders and their start, as tests/test_record_start.cpp reaches them.
-    static void setRecordDir(AppWindow& a, std::string d) { a.recordDir_ = std::move(d); }
-    static Recorder::Opener opener(AppWindow& a) { return a.audioRecorder_.opener(); }
-    static void bindOpener(AppWindow& a, Recorder::Opener o) {
-        a.iqRecorder_.bindOpener(o);
-        a.audioRecorder_.bindOpener(std::move(o));
+    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = std::move(d); }); }
+    static Recorder::Opener opener(AppWindow& a) {
+        return passseam::read<Recorder::Opener>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecorder_.opener(); });
     }
-    static bool startAudio(AppWindow& a) { return a.startAudioRecording(); }
-    static void stopAudio(AppWindow& a) { a.stopAudioRecording(); }
-    static void poll(AppWindow& a, double nowS) { a.pollRecordStarts(nowS); }
-    static bool audioRecording(AppWindow& a) { return a.audioRecorder_.recording(); }
+    static void bindOpener(AppWindow& a, Recorder::Opener o) {
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).iqRecorder_.bindOpener(o);
+            rawEngine(a.engine_).audioRecorder_.bindOpener(std::move(o));
+        });
+    }
+    static bool startAudio(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startAudioRecording(); });
+    }
+    static void stopAudio(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopAudioRecording(); }); }
+    static void poll(AppWindow& a, double nowS) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(nowS); }); }
+    static bool audioRecording(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecorder_.recording(); });
+    }
 };
 
 }  // namespace cascade::gui
@@ -784,12 +805,17 @@ int main(int argc, char** argv) {
     isolate(argv[1]);
     Access::installHooks();
 
-    // The real window first - it needs the cleanest machine it can get.
-    testACleanRun();
-    testAScriptsSleepIsFrameStartAndIsRateLimited();
-    testEveryScopeIsEnteredWhereTheFrameSaysItIs();
-    testThePatchPage();
-    testWhatMustNotCount();
+    // The real window first - it needs the cleanest machine it can get. (Only in the inline run: the child process runs its own stepped pass whatever this process's mode is, and a
+    // second copy of it would put the real window up again for nothing - the _stepped variant of this test runs the in-process half against the control thread.)
+    if (!passseam::threaded()) {
+        testACleanRun();
+        testAScriptsSleepIsFrameStartAndIsRateLimited();
+        testEveryScopeIsEnteredWhereTheFrameSaysItIs();
+        testThePatchPage();
+        testWhatMustNotCount();
+    } else {
+        std::printf("  (the real window's half runs in the inline variant)\n");
+    }
 
     // Then the real code behind two of the scopes, in this process.
     testAPluginReloadUnderItsPauseCounts();

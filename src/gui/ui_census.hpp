@@ -66,6 +66,9 @@ inline void rect(std::string_view prefix, int index, float x0, float y0, float x
 // Writes "item <name>" lines (sorted, unique) and "rect <name> x0 y0 x1 y1"
 // lines to the file FOXSDR_UI_CENSUS names. Returns false if it could not.
 bool write();
+// TESTS ONLY: forgets every item and rectangle noted so far, so a test that draws a section in several states can read what ONE draw noted (the
+// census is otherwise a set that only grows, and a state that has gone cannot be told from one that was never reached).
+void clear();
 
 }  // namespace cascade::gui::census
 

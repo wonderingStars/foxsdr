@@ -58,10 +58,12 @@ endmacro()
 cascade_merge_pending(DISK-WORK        # 0.99.63 - 0.99.65 the window does no disk work (recorders, saves, file opens on workers)
     test_gui_file_jobs test_failure_files
     test_iq_open_async test_gui_disk_audit)
-cascade_merge_pending(HEALTH-DIAG      # 0.99.61 - 0.99.69 diagnostics context, health ledger, slow frames, previous-session bundle
-    test_slow_frames_app)
-cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, one chip one route, per-radio manual gain
-    test_source_row_app)
+# (HEALTH-DIAG - diagnostics context, health ledger, slow frames, previous-session bundle, 0.99.61 - 0.99.69 - is whole: the slow-frame record's last pending test returned in stub batch B18,
+# test_slow_frames_app, converted: the engine's own scopes (a plugin reload, a recording's start, stop and poll) are the engine's guards - core/frame_timing.hpp, OwnedFrameScope, with the
+# frame loop's loan around stepPass - and the window's part of a reload is the window's.)
+# (SOURCE-ROWS - the Source row's "No radio hardware found" gate that counts a native radio, and the chip and the combo's preview that say the patch has the radio, 0.99.50 - is
+# whole: back in stub batch B18, src/gui/app_window_source_row.cpp: test_source_row_app, converted (the scan and the patch are the engine's, written on the pass thread; the window
+# answers from the table).)
 
 # --- ADDED 2026-10-21, after the first run of the gui-labelled tests (real-binary tests; they build and run as they are, and fail only because
 # the feature they read the census of is not in the window yet). The ledger id says which feature.

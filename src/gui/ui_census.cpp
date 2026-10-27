@@ -72,4 +72,9 @@ bool write() {
     return std::fclose(f) == 0;
 }
 
+void clear() {
+    items().clear();
+    rects().clear();
+}
+
 }  // namespace cascade::gui::census

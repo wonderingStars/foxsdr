@@ -372,7 +372,9 @@ foreach(src ${CASCADE_TESTS})
         # Runs the real cascade.exe (built first) and, in process, a real plugin
         # reload against one of the probe modules above.
         add_dependencies(${name} rescan_probe_a cascade)
-        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>")
+        # (named for the variants too: it includes tests/pass_seam.hpp since stub batch B18, so it is registered again as _stepped, which runs the in-process half only)
+        set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:rescan_probe_a>")
+        add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
     elseif(name STREQUAL "test_plugin_store_app")
         # Runs the real cascade.exe (built first) against a local catalogue of three fake
         # plugins, one of them installed as a real module: the probe fixture above, copied

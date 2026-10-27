@@ -729,6 +729,114 @@ int main() {
         CHECK(!slowFrameCounts().any());
     }
 
+    // --- THE ENGINE'S OWN SCOPES (stub campaign B18) ------------------------------
+    // A plugin reload and a recording's start, stop and poll are the engine's work, on the engine's pass: the frame loop's thread in a bounded (stepped) run, where the loop waits for
+    // each part (and lends the timer for the wait: FrameLoan), and a control thread of its own in the product, which the loop does not wait for and which must never write the timer.
+    // OwnedFrameScope is the guard the engine uses: it opens its scope only where the calling thread may write, and is nothing at all elsewhere.
+    {
+        std::printf("  the engine's own scopes\n");
+        // No frame has ever begun here (a headless engine): the guard is nothing, and nothing is charged to its scope.
+        {
+            Rig r;
+            CHECK(!r.t.mayWrite());
+            CHECK(!r.t.onFrameThread());
+            {
+                OwnedFrameScope g(r.t, FrameScope::Recorder);
+                advanceMs(400);
+            }
+            r.frame(100, [&] { advanceMs(10); });
+            CHECK(!r.t.counts().any());
+        }
+        // On the frame loop's own thread it is the same as FrameScopeGuard.
+        {
+            Rig r;
+            r.frame(100, [&] {
+                CHECK(r.t.mayWrite());
+                CHECK(r.t.onFrameThread());
+                OwnedFrameScope g(r.t, FrameScope::PluginsReload);
+                CHECK(r.t.currentScope() == FrameScope::PluginsReload);
+                advanceMs(300);
+            });
+            r.t.finish();  // (the slow frame is held until the next frame has looked at the window, or the loop is over)
+            const SlowFrameCounts n = r.t.counts();
+            CHECK(n.count[static_cast<int>(FrameScope::PluginsReload)][0] == 1);
+            CHECK(n.total() == 1);
+        }
+        // ANOTHER THREAD, THE LOOP NOT WAITING (the free-running control thread): nothing is opened, the scope the loop is in is not touched, and the time that passes is the
+        // loop's own - here, in no scope.
+        {
+            Rig r;
+            r.frame(100, [&] {
+                bool mayWrite = true;
+                FrameScope seenInside = FrameScope::Recorder;
+                std::thread other([&] {
+                    mayWrite = r.t.mayWrite();
+                    OwnedFrameScope g(r.t, FrameScope::Recorder);
+                    seenInside = r.t.currentScope();
+                });
+                other.join();
+                CHECK(!mayWrite);
+                CHECK(seenInside == FrameScope::Other);
+                advanceMs(300);
+            });
+            r.t.finish();
+            const SlowFrameCounts n = r.t.counts();
+            CHECK(n.count[static_cast<int>(FrameScope::Recorder)][0] == 0);
+            CHECK(n.count[static_cast<int>(FrameScope::Other)][0] == 1);  // the slow time went where the loop was: nowhere
+        }
+        // ANOTHER THREAD WHILE THE LOOP WAITS FOR IT (stepPass): lent, so the thread's scope is the frame's, and the time the loop spends waiting is that scope's.
+        {
+            Rig r;
+            r.frame(100, [&] {
+                bool mayWrite = false;
+                {
+                    FrameLoan loan(r.t);
+                    std::thread other([&] {
+                        mayWrite = r.t.mayWrite();
+                        OwnedFrameScope g(r.t, FrameScope::Recorder);
+                        advanceMs(300);  // (the loop's thread is blocked in join: nothing else touches the clock)
+                    });
+                    other.join();
+                }
+                CHECK(mayWrite);
+                // The loan is over: the same thread, a moment later, may not write.
+                bool stillMay = true;
+                std::thread late([&] { stillMay = r.t.mayWrite(); });
+                late.join();
+                CHECK(!stillMay);
+            });
+            r.t.finish();
+            const SlowFrameCounts n = r.t.counts();
+            CHECK(n.count[static_cast<int>(FrameScope::Recorder)][0] == 1);
+            CHECK(n.total() == 1);
+        }
+        // A LOAN TAKEN BY A THREAD THAT IS NOT THE LOOP'S LENDS NOTHING (the free-running control thread calls stepPass's wait too, and must not make itself the owner).
+        {
+            Rig r;
+            r.frame(100, [&] {
+                bool mayWrite = true;
+                std::thread other([&] {
+                    FrameLoan loan(r.t);
+                    mayWrite = r.t.mayWrite();
+                });
+                other.join();
+                CHECK(!mayWrite);
+                bool stillMay = true;
+                std::thread late([&] { stillMay = r.t.mayWrite(); });
+                late.join();
+                CHECK(!stillMay);
+            });
+        }
+        // The timer forgets who the loop was when it is reset.
+        {
+            Rig r;
+            r.frame(100, [&] { advanceMs(1); });
+            CHECK(r.t.mayWrite());
+            r.t.resetForTest();
+            CHECK(!r.t.mayWrite());
+        }
+    }
+
     // --- WHAT IT COSTS, measured ------------------------------------------------
     // The real clock and the real global timer, in the shape of a frame: a frame
     // begins, a dozen guards open and close, the frame ends. The claim is "far

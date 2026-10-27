@@ -194,6 +194,12 @@ inline void reset() {
     w.openCalls = 0;
 }
 
+// A machine on which nothing was found: the Pluto's row, which is always listed and is an address to type, and nothing else.
+inline void noNativeRadios() {
+    World& w = get();
+    w.natives = {{"pluto", "ADALM-Pluto (network)", "uri=ip:192.168.2.1"}};
+}
+
 }  // namespace world
 
 namespace cascade::gui {
@@ -1014,7 +1020,8 @@ void testPartialAndNetworkBox() {
     CHECK(srcFlag(a, FOXAPI_SRC_SCANNED));
     CHECK(!srcFlag(a, FOXAPI_SRC_SCAN_PARTIAL));
     CHECK(!Access::lists(a).anySoapyRow);
-    CHECK(has(shot(a), "No radio hardware found"));
+    // (B18: the native radios the engine listed ARE hardware found, so the block is not drawn - the 0.99.49 report. It was drawn here before.)
+    CHECK(!has(shot(a), "No radio hardware found"));
     // A radio opens; the scan beside it leaves its driver out.
     selectRowId(a, "rtlsdr:serial=00000001");
     CHECK(passUntil(a, [&] { return rxFlag(a, FOXAPI_RX_DEVICE_OPEN); }));
@@ -1027,6 +1034,8 @@ void testPartialAndNetworkBox() {
     // The radio closes; the combo's next opening runs the whole scan that is owed.
     selectRowId(a, "siggen");
     CHECK(passUntil(a, [&] { return !rxFlag(a, FOXAPI_RX_DEVICE_OPEN); }));
+    // ...and the dongles are unplugged before it, so that what it finds is nothing (B18).
+    Access::onPass(a, [] { world::noNativeRadios(); });
     Access::submit(a, cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN));
     CHECK(passUntil(a, [&] { return !srcFlag(a, FOXAPI_SRC_SCAN_PARTIAL) && !srcFlag(a, FOXAPI_SRC_SCAN_PENDING); }));
     pass(a);
@@ -1073,11 +1082,15 @@ void testPartialAndNetworkBox() {
 // C. NO HARDWARE FOUND, THE DONGLES, THE SDRPLAY NOTE
 // ---------------------------------------------------------------------------------------------------------------------
 
+// STUB CAMPAIGN B18 (SOURCE-ROWS, 0.99.49): "No radio hardware found" is gated on BOTH lists, as master's was - a radio the NATIVE driver found is hardware found, whatever SoapySDR says, and the
+// Pluto and rtl_tcp rows (addresses to type) are not radios. The world's default list holds three native rows (a mock RTL-SDR, a HackRF and the Pluto), so a scenario that is about the
+// block "nothing was found" says so by leaving only the Pluto's row: that is what this edit does where a scenario draws the block, with the first assertion of B4 the case the gate fixes.
 void testNoHardware() {
     std::printf("  C1: \"No radio hardware found\" draws from the engine's SCAN_EVIDENCE - and never crosses into the runtime\n");
     Access::install();
     world::World& w = world::get();
     w.soapy.clear();
+    world::noNativeRadios();
     w.modules = {"libsoapy_a.dll", "libsoapy_b.dll"};
     w.searchPaths = {"C:/search/one", "C:/search/two"};
     w.vendors = {{"PothosSDR", "C:/Pothos", "C:/Pothos/lib", "C:/Pothos/bin"}};
@@ -1118,6 +1131,7 @@ void testNoHardware() {
 
     std::printf("  C2: one vendor module is said in the singular; none loaded and none installed says what to install\n");
     {
+        world::noNativeRadios();
         w.modules = {"only.dll"};
         w.vendors.clear();
         w.searchPaths.clear();
@@ -1145,6 +1159,7 @@ void testNoHardware() {
     {
         Access::install(false);  // the scan hooked, the diagnostics not
         world::get().soapy.clear();
+        world::noNativeRadios();
         Env env;
         AppWindow& a = env.app;
         scanAll(a);

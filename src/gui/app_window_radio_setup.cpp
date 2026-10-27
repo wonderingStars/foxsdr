@@ -103,20 +103,9 @@ rs::Inventory AppWindow::radioSetupInventory() {
     const std::uint32_t flags = uiState_.flags;
     const std::uint32_t src = uiState_.sourceFlags;
     lists.deviceOpen = (flags & FOXAPI_RX_DEVICE_OPEN) != 0u;
-    // What each radio the running patch holds was opened AS ("<device key>@<rate>", or the bare key of a recording) says whether it is
-    // hardware: the generator and an I/Q file are not.
-    if ((flags & FOXAPI_RX_PATCH_RUNNING) != 0u) {
-        for (const auto& node : patchLists().radios) {
-            if (!node.second.open) { continue; }
-            std::string key = node.second.device;
-            if (!cascade::core::patch::isIqFileKey(key)) {
-                if (const std::size_t at = key.rfind('@'); at != std::string::npos) { key.resize(at); }
-            }
-            if (!key.empty() && !cascade::core::patch::isGeneratorKey(key) && !cascade::core::patch::isIqFileKey(key)) {
-                ++lists.patchHeldRadios;
-            }
-        }
-    }
+    // The hardware radios the running patch holds: what each Radio node is set to says whether it is hardware (the generator and an I/Q file are not) - the Source row's own
+    // reading (patchHeldRadioNames, stub campaign B18). The label PATCH_RADIOS carries cannot say: this counted a generator node as a radio held before.
+    lists.patchHeldRadios = static_cast<int>(patchHeldRadioNames().size());
     lists.soapyScanned = (src & FOXAPI_SRC_SCANNED) != 0u;
     lists.soapyScanPartial = (src & FOXAPI_SRC_SCAN_PARTIAL) != 0u;
     lists.soapyScanPending = (src & FOXAPI_SRC_SCAN_PENDING) != 0u;

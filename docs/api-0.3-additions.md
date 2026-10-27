@@ -78,6 +78,7 @@ published in the same block as the lists, in the same pass.
 | `fact.patch.conv.<node>` | the converter in force for a Radio node's device, `"<mode> <LO Hz> <inverted>"` as `fact.converter.live` (8.12) | |
 | `fact.recorder.dir` | the folder recordings go to | LOCAL |
 | `fact.recorder.iq.path`, `fact.recorder.audio.path` | the current or last take's file | LOCAL |
+| `fact.recorder.start` | where each take's START is, two characters: the I/Q take's, then the audio take's - `0` none out, `1` the file is being opened on its worker, `2` the start was withdrawn and the worker has not answered yet (section 9.11) | LOCAL |
 | `fact.telemetry.enabled` | `1` when anonymous usage reporting is on, else `0` (section 8.13) | LOCAL |
 | `fact.telemetry.installId` | the random id the engine minted at consent, whole; `""` while reporting is off - the id does not exist then (section 8.13) | LOCAL |
 | `fact.diag.launches`, `fact.diag.crashes` | this installation's launch count and the runs that never wrote their clean-exit marker, decimals (section 8.13) | LOCAL |
@@ -2236,6 +2237,25 @@ open but nothing keyed leaves it alone.
 Held by tests/test_engine_api_txplugin.cpp (the engine with a real transmitting module, a ledger radio and no window: the surface and the four locks, the refusals, quiet-unless-everything-holds, the key and what the
 module is told, the revoke within one pass, every closing reason, the cap, the hardening, the hand, the dead-man, the config, the facts), test_tx_audio_app (converted: the same claims through the
 application's window), test_tx_audio_page_app and test_tx_audio_plate_app (the real binary), test_transmit_page section 10 (the wiring), and test_apply_command (137 implemented, 137 tested).
+
+### 9.11 Where a recording's start is (stub campaign B18; docs/engine-stage4.md 6.22)
+
+A recording's file is opened on a worker (`engine/record_start.hpp`), so between a press of Record and the file being there the Recorder section has something to say that neither the take flags
+(`FOXAPI_RX_RECORDING_IQ` / `_AUDIO`, which are set only once a take is armed) nor `RECORDINGS` (whose entries are takes that have a file) carry: master's window kept the start in its own
+`RecordStart` members and drew "Starting IQ - click to cancel", "Cancelling IQ start..." and a "Waiting for the disk to open the file" line from them. The ledger called the item re-expressed (C5) and
+the window the merge produced drew a bare "Record IQ" for the whole of a slow disk's wait - which no test noticed. One fact, no op, no list, no new item flag, no change to the vendored header.
+
+* **`fact.recorder.start`** (LOCAL sessions only): exactly two characters, the I/Q take's and then the audio take's. `0` no start is out (idle, recording, or finished); `1` the file is being opened
+  on its worker; `2` the start was **withdrawn** (a `RECORD_IQ` / `RECORD_AUDIO` 0 arrived while it opened: `RecordStart::cancel`, which only sets a flag) and the worker has not answered - the
+  take it would have made is closed unused when it does, and the character is `0` again. It is hashed into the publish fingerprint from raw members (the two small integers; nothing is built per
+  pass - `test_engine_publish_alloc` holds the settled publish), so a change moves `listSeq` and the window's cache of facts is read again once.
+* **The window's half** (`src/gui/app_window.cpp`, `drawRecorderSection`): a take whose start is out draws its button as "Starting IQ - click to cancel" / "Starting audio - click to cancel", pressable -
+  it sends `RECORD_IQ 0` / `RECORD_AUDIO 0`, the engine's stop, which withdraws the start and takes nothing out; a withdrawn start draws "Cancelling IQ start..." / "Cancelling audio start...",
+  disabled; and after a second the line "Waiting for the disk to open the file: <n> s" says how long, counted from the frame the window first saw the start out (ImGui's clock; the engine's own
+  start clock is not on the table). What is NOT drawn: master's "Saving..." button while a take's file is being closed (`takeFinishing`, 0.99.65) - that state is not published either.
+
+Held by tests/test_engine_api_03.cpp (`testRecordStartFact`: both takes, the order of the characters, the withdrawn state, the answer, `listSeq`) and tests/test_recorder_start_app.cpp (the real window
+drawing the real engine's start: idle, opening, waiting, cancel, settled, stop).
 
 ## 10. What stays a GAP after 0.3
 

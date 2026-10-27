@@ -148,6 +148,9 @@ std::uint64_t graphHash(const cascade::core::patch::Graph& g) {
     return f.h;
 }
 
+// WHERE A TAKE'S START IS (fact.recorder.start): 0 none out, 1 the file is being opened on its worker, 2 the start was withdrawn and the worker has not answered yet.
+int recordStartState(const cascade::gui::RecordStart& s) { return !s.pending() ? 0 : (s.cancelled() ? 2 : 1); }
+
 }  // namespace
 
 void Engine::refreshApiPluginKeys() {
@@ -530,6 +533,9 @@ std::uint64_t Engine::apiListsFingerprint() {
     // are read live, never fingerprinted).
     f.value(iqRecorder_.recording());
     f.value(audioRecorder_.recording());
+    // ...and whether a take's file is still being opened or its start has been withdrawn (fact.recorder.start, stub campaign B18): raw words, no string built.
+    f.value(recordStartState(iqStart_));
+    f.value(recordStartState(audioStart_));
     f.value(iqRecordStartS_);
     f.value(audioRecordStartS_);
     f.text(recordDir_);
@@ -1271,6 +1277,11 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // THE RECORDINGS: the two recorders' takes (current or last), then the
     // patch's files.
     fact("recorder.dir", recordDir_, true);
+    // THE OPEN OF A TAKE'S FILE IS ON A WORKER (engine/record_start.hpp), so between a press of Record and the file being there the Recorder section has a state
+    // to say that neither the take flags nor the RECORDINGS list carries: two characters, the I/Q take's and the audio take's, each '0' no start out, '1' the file
+    // is being opened, '2' the start was withdrawn and the worker has not answered yet. (Stub campaign B18; it was a field of the window's own recorder before the
+    // split.)
+    fact("recorder.start", std::string{static_cast<char>('0' + recordStartState(iqStart_)), static_cast<char>('0' + recordStartState(audioStart_))}, true);
     for (int k = 0; k < 2; ++k) {
         const cascade::core::Recorder& rec = k == 0 ? iqRecorder_ : audioRecorder_;
         const std::string path = rec.path();

@@ -36,6 +36,7 @@
 #include "core/version.hpp"
 #include "core/crash_handler.hpp"
 #include "core/breadcrumb.hpp"
+#include "core/frame_timing.hpp"
 #include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
@@ -2924,6 +2925,8 @@ bool Engine::quarantineBlockedPlugins(std::string& error) {
 }
 
 bool Engine::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
+    // A plugin reload - and a removal's unload - is the scope `plugins-reload` wherever it is reached from (0.99.64, core/frame_timing.hpp).
+    cascade::core::OwnedFrameScope reloadScope(cascade::core::FrameScope::PluginsReload);
     // WHERE THE TIME GOES, for the one caller that asks (rescanPlugins): each of the four steps below is a different kind of wait with a
     // different owner - a decoder's destroy(), the patch page's decoders and the radios' readers, the panels' and the map's and the track
     // lookup's destroy() (a basemap that joins its tile workers), and the loader unmapping the modules - and a log line that says only
@@ -3126,6 +3129,10 @@ void Engine::rescanPlugins() {
     //
     // Scope guard, because there is a `return` in the middle of this function.
     WaitWatchdogPause holdWatchdog(*this);
+    // THE WATCHDOG IS EXCUSED, THE FRAME IS NOT (0.99.64, stub campaign B18): the pause above is an application-paced one - code that is expected to finish - and a reload that holds
+    // the window for seconds is exactly the freeze the slow-frame record is for, so it is its own scope and counts (core/frame_timing.hpp). Opened only where the calling thread is the
+    // frame loop's or has been lent the timer for the wait that stands in for this call (OwnedFrameScope); the free-running product's control thread is neither.
+    cascade::core::OwnedFrameScope reloadScope(cascade::core::FrameScope::PluginsReload);
     // AND TOLD TO THE SENTINEL (core/breadcrumb.hpp), the same way: a death inside a plugin's load or unload is the most likely death this
     // application has, and the report should say it was in one. Raised for the length of the call - which is also the first load.
     cascade::core::breadcrumb::ActivityScope sentinelPluginActivity(cascade::core::breadcrumb::kReloadingPlugins);
@@ -3356,6 +3363,8 @@ void Engine::rescanPluginsIfChanged() {
     // exists for, and the rescan it replaces would have listed it under this same pause and the same cap - a slow listing here is not a new
     // freeze to report.
     WaitWatchdogPause holdWatchdog(*this);
+    // A listing that is slow is the same scope as the reload it would have been (see rescanPlugins).
+    cascade::core::OwnedFrameScope reloadScope(cascade::core::FrameScope::PluginsReload);
     if (pluginScanSigValid_) {
         // PUBLISHED AS THE STEP `check` (0.99.84, core/plugin_reload_phases.hpp): a folder slow to list is the case this pause exists for,
         // and a freeze report taken while the listing hangs should say it was the listing - not leave the scope's `reload-phase: none`
@@ -5244,6 +5253,8 @@ void Engine::loadBandPlan() {
 }
 
 void Engine::stopIqRecording() {
+    // The recording's start, stop and arming are the scope `recorder` wherever they are called from (0.99.64, core/frame_timing.hpp; stub campaign B18).
+    cascade::core::OwnedFrameScope recorderScope(cascade::core::FrameScope::Recorder);
     // A start still opening its file is withdrawn first: nothing is recording yet, so there is no tap to take out and no header to patch, and
     // nothing here waits for the disk (RecordStart::cancel only sets a flag - the file, when it arrives, is closed unused by
     // pollRecordStarts). A no-op when no open is out.
@@ -5260,6 +5271,7 @@ void Engine::stopIqRecording() {
 }
 
 void Engine::stopAudioRecording() {
+    cascade::core::OwnedFrameScope recorderScope(cascade::core::FrameScope::Recorder);
     audioStart_.cancel();  // see stopIqRecording
     audioStartQueued_ = false;
     pipeline_.setAudioRecorder(nullptr);
@@ -5325,6 +5337,7 @@ bool Engine::drainRecordFinishes(std::chrono::steady_clock::time_point deadline)
 }
 
 void Engine::pollRecordStarts(double nowS) {
+    cascade::core::OwnedFrameScope recorderScope(cascade::core::FrameScope::Recorder);
     // Both takes, the same way: collect a finished open and act on it, then say in the log - once - if one is taking long. A no-op on every
     // pass nothing was requested, so it costs nothing to call unconditionally. `nowS` is the take's start time (the elapsed-time readout's
     // origin): the pass passes its own clock.
@@ -5530,6 +5543,7 @@ void Engine::installSource(std::unique_ptr<cascade::source::IqSource> src) {
 }
 
 bool Engine::startAudioRecording() {
+    cascade::core::OwnedFrameScope recorderScope(cascade::core::FrameScope::Recorder);
     // A take that is recording, or whose file is still opening, is left exactly as it is: a second press of the button, the key or the
     // browser's Record changes nothing (RecordStart refuses a second open anyway, so two cannot race for one file name). One whose start was
     // withdrawn and has not yet come back is neither, and a Record in that gap is not a take.
@@ -5556,6 +5570,7 @@ bool Engine::startAudioRecording() {
 }
 
 bool Engine::startIqRecording() {
+    cascade::core::OwnedFrameScope recorderScope(cascade::core::FrameScope::Recorder);
     // The Record IQ key's body and the web remote's recordIq. Baseband at the DSP input rate through the pipeline's raw tap.
     // See startAudioRecording for the pending and withdrawn cases.
     if (iqRecorder_.recording() || iqStart_.pending()) { return !iqStart_.cancelled(); }
@@ -9981,6 +9996,9 @@ void Engine::stepPass(PassPart part) {
         return;
     }
     if (!controlStepped_.load() || onControlThread()) { return; }  // free-running: the pass runs by itself
+    // THE FRAME LOOP WAITS HERE FOR THE PART OF THE PASS THAT RAN ON ITS THREAD BEFORE THE SPLIT, so what the part does - a plugin reload, a recording's start - is the frame's time, and the
+    // control thread may open the frame's scopes for the length of the wait (core/frame_timing.hpp, OwnedFrameScope). A thread that is not the frame loop's takes a loan that does nothing.
+    cascade::core::FrameLoan frameLoan;
     // One requester at a time: the request slot holds one part.
     std::lock_guard<std::mutex> serial(stepRequestMutex_);
     std::unique_lock<std::mutex> lk(controlWakeMutex_);

@@ -181,11 +181,13 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     drawPatchInspectorFoldKey in src/gui/app_window_patch.cpp, over the engine's plan; test_patch_info_pane)
   * the patch canvas pans by dragging empty canvas, the wheel pans ........................... re-expressed, stub batch B17 (the pan, the wheel and Ctrl+wheel are the canvas's own,
     gui/patch_view.cpp, identical to master's and live; what was missing was the "+", "-" and "Fit" keys, drawPatchViewKeys; test_patch_canvas_nav)
-  * two fixes for radios reported wrongly (the Source row's words) ........................... re-expressed in part: the one-chip-one-route rule runs in
-    the engine and is held by test_one_chip_app (C4); the Source row's chip/preview/"No radio hardware found" is stubbed SOURCE-ROWS (test_source_row_app)
+  * two fixes for radios reported wrongly (the Source row's words) ........................... re-expressed: the one-chip-one-route rule runs in
+    the engine and is held by test_one_chip_app (C4); the Source row's chip/preview/"No radio hardware found" is re-expressed, stub batch B18
+    (src/gui/app_window_source_row.cpp; test_source_row_app, converted)
 
 0.99.51
-  * SDRplay: no more "restart the SDR API" on a slow setting ................................. carried (source/)
+  * SDRplay: no more "restart the SDR API" on a slow setting ................................. carried (source/); the diagnostic's key and dialog (0.99.51's
+    "Run SDRplay diagnostic", the window half) re-expressed, stub batch B18 (src/gui/app_window_sdrplay.cpp; test_sdrplay_probe_app, written red first)
   * Raspberry Pi 64-bit downloads ............................................................ n/a
 
 0.99.52
@@ -203,8 +205,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     bookmarkStackNames_ - test_bookmark_stacking_app)
 
 0.99.55
-  * the SDRplay API Service stopped or stuck is named and can be restarted ................... re-expressed in part: its two recovery troubles are counted by the
-    engine (C2, test_health_app); the card, the restart key and the note are stubbed SDRPLAY-SERVICE
+  * the SDRplay API Service stopped or stuck is named and can be restarted ................... re-expressed: its two recovery troubles are counted by the
+    engine (C2, test_health_app); the card, the restart key and the note are the window's, stub batch B18 (src/gui/app_window_sdrplay.cpp; test_sdrplay_service_app,
+    written red first; the saved radio is not reopened by itself after a restart - the combo lists it, the person picks it)
 
 0.99.56
   * PPM frequency correction ................................................................. re-expressed, C1 (engine_ppm.cpp; test_ppm_app, inline and stepped, break-it done)
@@ -264,7 +267,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 
 0.99.63
   * Record does not freeze while the disk creates the file; a waiting start can be cancelled . re-expressed, C5 (Engine::startAudioRecording/startIqRecording
-    prepare, RecordStart opens, pollRecordStarts arms; test_record_start)
+    prepare, RecordStart opens, pollRecordStarts arms; test_record_start); the Recorder section's "Starting ... - click to cancel" / "Cancelling ... start..." labels
+    and the waiting line re-expressed, stub batch B18 (fact.recorder.start; test_recorder_start_app, written red first); the "Saving..." button is not drawn
   * a catalogue refresh reloads nothing when nothing changed; every reload logs its steps ..... re-expressed, C4 (Engine::rescanPluginsIfChanged; test_plugin_rescan_log;
     test_plugin_rescan_skip converted by stub batch B2: re-expressed)
   * the Fitted modules window reads no plugin file's size per frame ......................... re-expressed, stub batch B5 (the size is PLUGINS value[1], measured by the
@@ -274,8 +278,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 
 0.99.64
   * FoxSDR notices when it ends without saying why ........................................... re-expressed, C1 (breadcrumb phases/activity; test_sentinel_app)
-  * a slow frame is measured and named ....................................................... re-expressed in part, C1 (the frame timer and its scopes through run()
-    and drawUi; the recorder and reload scopes are not carried - those run on the engine's pass, not the frame; test_slow_frames_app stays pending)
+  * a slow frame is measured and named ....................................................... re-expressed, C1 and stub batch B18 (the frame timer and its scopes through run()
+    and drawUi; the recorder and reload scopes are the engine's OwnedFrameScope, with the frame loop's loan around stepPass; test_slow_frames_app, converted)
   * the usage record counts what quietly did not work ........................................ re-expressed, C1/C2 (test_health_app, test_health_paths)
   * eight more file operations off the drawing thread ........................................ re-expressed in part: the recorders (C5), the bookmark list's save
     (C5), a patch speaker's file (C5); the picture save, the bookmark export, the I/Q open on a worker, the screenshot flush are stubbed DISK-WORK
@@ -504,8 +508,8 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   test_display_menu_app removed by B11; test_display_fold_app by B1 - are whole)
   [PATCH-VIEW (test_patch_canvas_nav, test_patch_info_pane) and PATCH-PRESETS (test_patch_presets_app) were removed by B17: both ids are whole]
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
-  one each                HEALTH-DIAG test_slow_frames_app;
-                          SOURCE-ROWS test_source_row_app;
+  [HEALTH-DIAG (test_slow_frames_app) and SOURCE-ROWS (test_source_row_app) were removed by B18: both ids are whole; SDRPLAY-SERVICE and the SDRplay diagnostic had no placeholder -
+  tests/test_sdrplay_service_app.cpp and tests/test_sdrplay_probe_app.cpp were written red first at B18, as was tests/test_recorder_start_app.cpp for the record-start labels]
                           [MAP-WINDOWS (test_unplaced_list_app) and WINDOW-PLACEMENT (test_decoder_window_app) were removed by B16: both ids are whole; the coverage rule
                           (0.99.58) had no placeholder of its own - tests/test_map_coverage_app.cpp, written red first at B16]
                           [UPDATES (test_store_update_app) and the placeholder TESTER-USAGE held for the team message (test_team_message_app) were removed by B14: UPDATES is
@@ -782,3 +786,13 @@ is left STOPPED until START. A text that is not a patch is parsed first and chan
 binary, gui); test_patch_presets_app is un-pended, converted (the patch is built in the page's draft and committed through the session, START is the transport's command, "running" is the published FOXAPI_RX_PATCH_RUNNING, the radios
 are read on the pass thread through rawEngine; it includes pass_seam.hpp, so it is registered again as _stepped); the red placeholders are the 9 of B16 less three: 6 (6 tests, no part). test_i18n: 24 stale, 0 missing (the 9
 keys returned: the three view-key tooltips, the pane's two help sentences, the fold key's two tooltips, "PRESETS" and its tooltip).
+
+UPDATE 2026-10-27, stub batch B18 (docs/engine-stage4.md 6.22, the B18 record): SOURCE-ROWS, the SDRplay API Service card, the SDRplay diagnostic, the record-start labels and the slow-frame record. The Source row says what master's did:
+"No radio hardware found" is gated on both lists (a native radio found counts, the Pluto's and the rtl_tcp server's rows do not), the chip reads ON PATCH and the combo "<source> - the patch has <radio>" while a patch holds a radio
+(src/gui/app_window_source_row.cpp; the radios held are read through the patch graph, which also corrects B8's RADIO SETUP count). The SDRplay API Service card's RESTART key, its busy line and its six outcome sentences, and the
+"Run SDRplay diagnostic" key with its two-step bias tee dialog and its child process, are back in src/gui/app_window_sdrplay.cpp (host glue: Windows' elevation and the process's own API table; no table surface). The recorder's start
+labels are drawn from ONE NEW FACT, fact.recorder.start (API 0.3 9.11; LOCAL; hashed; no op, no list, no flag): the table did not publish a start that was still opening. The slow-frame record gets its recorder and reload scopes
+from the ENGINE's code through OwnedFrameScope, which writes the frame timer only on the frame loop's thread or while the loop has lent it for the wait in Engine::stepPass (FrameLoan) - never from the free-running control thread.
+test_source_row_app and test_slow_frames_app are un-pended and converted (both also run as _stepped); three new tests were written red first (test_sdrplay_probe_app, test_recorder_start_app, test_sdrplay_service_app); test_engine_api_03
+and test_frame_timing gained cases; tests/test_source_section_window.cpp was edited with its reason beside the edit (it expected the old gate's wrong answer). The red placeholders are the 6 of B17 less two tests: 4 (4 tests, no part:
+DISK-WORK, B19's). test_i18n: 0 stale, 0 missing - the 24 keys returned, and the stale list is empty. 29 mutants, 29 RED.

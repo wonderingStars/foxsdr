@@ -3839,6 +3839,8 @@ void AppWindow::drawUi() {
     // top-level thing belongs at the top level, not nested in the borderless
     // root window's ID stack.
     drawDiagnosticsOffer();
+    // The SDRplay diagnostic's dialog, the same way - and the poll of its child, which runs every frame whether or not the dialog is showing (stub campaign B18).
+    drawSdrPlayProbeDialog();
     // The beta-tester link confirmation prompt, same top-level reasoning.
     drawTesterLinkPrompt();
     // The waterfall markers' right-click menu and their list window: at the
@@ -3883,6 +3885,9 @@ void AppWindow::drawUi() {
     // stands between the workers and the sink.)
     frameScope.to(cascade::core::FrameScope::Polls);
     pollUpdateAsync();
+    // ...and the SDRplay API Service: a change in why the service last failed, and a finished RESTART SDRPLAY SERVICE (0.99.55, stub campaign B18). Two atomic reads on every frame that has
+    // nothing to do.
+    pollSdrPlayService();
     // Beta tester usage reporting (SYSTEM > Beta tester), off unless a tester pastes their code; a no-op poll otherwise. See core/tester_usage.hpp. The marks the
     // table says (a take, the scanner, RF going out, the radio in use) are read here, after the state this frame read.
     testerNoteFacts();
@@ -7749,7 +7754,8 @@ void AppWindow::drawSourceSection() {
     // CHARACTERS: a byte cut would split an accented letter in half.
     // The built-in generator's chip is its own short key, never cut
     // (app_window.hpp, sourceChipText).
-    const std::string sourceChip = cascade::gui::sourceChipText(uiState_.deviceName);
+    // ...and while a patch has the radio, the chip says so rather than naming only the generator the receiver was moved to (stub campaign B18).
+    const std::string sourceChip = sourceRowChip();
     // Rust and lit while the pipeline is faulted, phosphor and lit while it
     // runs: the colour says which state and the lamp says there is one, which
     // is the rule the whole rail keeps.
@@ -7766,23 +7772,9 @@ void AppWindow::drawSourceSection() {
                      sourceFaulted || radioNotOpen || (flags & FOXAPI_RX_RUNNING) != 0u);
     if (!sourceOpen) { return; }
 
-    // Row label for a combo index; -1 (active device dropped by a Refresh)
-    // falls back to the live source name so the preview is never a lie.
-    //
-    // NATIVE ROWS COME FIRST, immediately under the generator and the IQ
-    // file, and Soapy's rows follow them. Not a cosmetic ordering: with both
-    // present the native driver is the one this product can be held
-    // responsible for, and the list is read top-down.
-    // (An entry's index in DEVICES IS its row; the cache keeps each radio's caption, "(native)" composed.)
-    const auto rowLabel = [this, &c](int idx) -> const char* {
-        if (idx == 0) { return tr("Signal generator"); }
-        if (idx == 1) { return tr("IQ file"); }
-        if (idx == kSoundCardRow) { return tr("Sound card"); }
-        if (idx >= kNativeRowBase && idx < static_cast<int>(c.rows.size())) {
-            return c.rows[static_cast<std::size_t>(idx)].caption.c_str();
-        }
-        return tr(uiState_.deviceName);
-    };
+    // Row label for a combo index (sourceRowLabel, app_window_source_row.cpp): NATIVE ROWS COME FIRST, immediately under the generator and the IQ file, and Soapy's rows follow
+    // them; -1 (active device dropped by a Refresh) falls back to the live source name so the preview is never a lie.
+    const auto rowLabel = [this](int idx) -> const char* { return sourceRowLabel(idx); };
 
     // While discovery or an open is in flight the controls are disabled and
     // the state is spelled out: the work is on a worker thread, so the window
@@ -7843,20 +7835,10 @@ void AppWindow::drawSourceSection() {
     // Not while a sound card is opening either: the card is the one being
     // brought back, and "(saved, not open)" would be the lamp's false alarm
     // in words (gui::radioNotOpenLamp).
-    const bool keepPreview = !c.keepKind.empty() && (flags & FOXAPI_RX_DEVICE_OPEN) == 0u && c.generatorActive &&
-                             !statusLines_.restoreKeepLabel.empty() && (src & FOXAPI_SRC_CARD_OPENING) == 0u;
-    // "(not open)" in the preview itself, because the combo is the one place
-    // a user looks to find out what the receiver is on, and the name alone
-    // there would claim the radio was running.
-    std::string keepPreviewLabel;
-    if (keepPreview) {
-        std::string keepBuf;
-        cascade::core::formatUtf8(keepBuf, tr("%s (saved, not open)"),
-                      statusLines_.restoreKeepLabel.c_str());
-        keepPreviewLabel = keepBuf;
-    }
-    const bool comboOpen = ImGui::BeginCombo(
-        "##source_select", keepPreview ? keepPreviewLabel.c_str() : rowLabel(c.row));
+    // "(not open)" in the preview itself, because the combo is the one place a user looks to find out what the receiver is on, and the name alone there would claim the radio
+    // was running; and while a patch has the radio, "Signal generator - the patch has <radio>" (sourceComboPreview, app_window_source_row.cpp).
+    const bool keepPreview = sourceKeepPreview();
+    const bool comboOpen = ImGui::BeginCombo("##source_select", sourceComboPreview().c_str());
     if (comboOpen) {
         // ON THE FRAME IT OPENS, not on every frame it stays open: opening
         // the dropdown IS the user asking to see devices, and the combo asks
@@ -8095,6 +8077,10 @@ void AppWindow::drawSourceSection() {
         }
     }
 
+    // ...AND THE KEY THAT RESTARTS THE SERVICE, drawn here whatever the text above says: a radio that failed to open (the red line further down) and a lost session show it too (0.99.55,
+    // stub campaign B18).
+    drawSdrPlayServiceKey();
+
     // NO HARDWARE FOUND, explained.
     //
     // This block is here because its absence was, for several releases, the
@@ -8108,8 +8094,8 @@ void AppWindow::drawSourceSection() {
     //
     // Shown only after a scan has actually completed and found nothing, so it
     // never flashes up during the first enumeration.
-    if ((src & FOXAPI_SRC_SCANNED) != 0u && (src & FOXAPI_SRC_SCAN_PARTIAL) == 0u && !soapyBusy &&
-        !c.anySoapyRow) {
+    // (noRadioHardwareShown: a completed whole scan, and neither list holds a radio - the Pluto's and the rtl_tcp server's rows are not radios found.)
+    if (noRadioHardwareShown()) {
         ImGui::Separator();
         ImGui::TextColored(cascade::gui::theme::warning(), tr("No radio hardware found"));
         ImGui::TextWrapped(
@@ -8611,6 +8597,8 @@ const AppWindow::SourceListCache& AppWindow::sourceLists() {
     c.rows.resize(static_cast<std::size_t>(rows));
     c.generatorActive = false;
     c.anySoapyRow = false;
+    c.soapyRows = 0;
+    c.nativeRadioRows = 0;
     for (int32_t i = 0; i < rows; ++i) {
         entry(it);
         if (engineApi_->read_list(uiSession_, FOXAPI_LIST_DEVICES, static_cast<uint32_t>(i), &it) <= i) {
@@ -8636,6 +8624,10 @@ const AppWindow::SourceListCache& AppWindow::sourceLists() {
             r.driver.assign(it.detail, colon != nullptr ? static_cast<std::size_t>(colon - it.detail) : std::strlen(it.detail));
         }
         c.anySoapyRow = c.anySoapyRow || r.soapy;
+        if (r.soapy) { ++c.soapyRows; }
+        // A native radio that was FOUND: past the three fixed rows (generator, I/Q file, sound card), and neither the Pluto's row nor the rtl_tcp server's - those are always listed
+        // and ask for an address (gui/source_row_status.hpp, nativeRadiosFound).
+        if (i >= kNativeRowBase && !r.soapy && !r.pluto && !r.rtltcp) { ++c.nativeRadioRows; }
         if (i == 0 && (it.flags & FOXAPI_ITEM_ACTIVE) != 0u) { c.generatorActive = true; }
         // THE CAPTION THE COMBO LETTERS: a native radio is "<name> (native)" - not decoration: with a Soapy row
         // for the same dongle two lines below it, the user has to be able to see which one they are picking.
@@ -13343,12 +13335,19 @@ void AppWindow::hostPollPlugins() {
 void AppWindow::applyPluginDirective() { pluginFeed_->applyNewestDirective(); }
 
 void AppWindow::applyDirectiveBefore(const cascade::engine::PluginDirectiveFacts& d) {
+    // A rebuild or a release is a plugin reload as far as the frame is concerned, wherever in the frame it is applied (a wake or a sleep of one plugin is not): its own scope, and it
+    // counts - the watchdog's excuse is the engine's (0.99.64, core/frame_timing.hpp).
+    if (!d.lifeOnly) { reloadScope_.emplace(cascade::core::FrameScope::PluginsReload); }
     // A RELEASE is the engine about to unmap the modules (a rescan, a removal, the shutdown). The map pages' geometry is folded into
     // the saved list first, as the beforePluginRescan hook did: a page whose plugin does not come back is pruned only after a re-sync.
     if (d.release) { syncMapPagesToSaved(); }
 }
 
 void AppWindow::applyDirectiveAfter(const cascade::engine::PluginDirectiveFacts& d) {
+    struct CloseReloadScope {
+        AppWindow& w;
+        ~CloseReloadScope() { w.reloadScope_.reset(); }
+    } closeReloadScope{*this};
     // (The feed has applied the directive to the plugin UI between the two steps: the instances destroyed, and created again over the
     // plugins the directive carries - none for a release.)
     if (d.release) {
@@ -18525,14 +18524,67 @@ void AppWindow::drawRecorderSection() {
     // install the tap AFTER the recorder accepts (the Pipeline contract), the
     // stops take it off first - the web remote's and the Record key's own path.
     namespace cmd = cascade::core::cmd;
-    if (!iqOn) {
+    // WHAT EACH BUTTON SAYS, for the census (tests/test_recorder_start_app): the label as drawn (the id's "##" tail cut off) and the key's rectangle.
+    const auto noteButton = [](const char* which, const char* label) {
+        if (!cascade::gui::census::enabled()) { return; }
+        std::string shown(label);
+        if (const std::size_t h = shown.find("##"); h != std::string::npos) { shown.resize(h); }
+        cascade::gui::census::note(std::string("recorder:") + which + ":button:", shown);
+        const ImVec2 k0 = ImGui::GetItemRectMin();
+        const ImVec2 k1 = ImGui::GetItemRectMax();
+        cascade::gui::census::rect(std::string("recorder:") + which + ":button", k0.x, k0.y, k1.x, k1.y);
+    };
+    // THE OPEN IS ON A WORKER (engine/record_start.hpp): between the press and the file being there, the button says so instead of the frame waiting for the disk
+    // - and the engine publishes where each take's start is (fact.recorder.start: the I/Q take's character, then the audio take's; '1' the file is being opened, '2'
+    // the start was withdrawn and the worker has not answered). The labels are passed in already translated (trId at the call site, where the literal is the
+    // catalogue key). After a second of waiting the line under it says how long, so a slow disk reads as a slow disk and not as a button that did nothing; a start
+    // answered at once (nearly always) never shows that line. The second counts from the frame this window first saw the start out.
+    const std::string& startFact = uiFact("fact.recorder.start");
+    const auto startOf = [&startFact](std::size_t take) { return startFact.size() > take ? startFact[take] - '0' : 0; };
+    const auto drawStarting = [&](std::size_t take, const char* which, const char* label, const char* cancelling) -> bool {
+        // (`state` is 1 or 2 here.)
+        double& seen = recordStartSeenS_[take];
+        if (seen < 0.0) { seen = ImGui::GetTime(); }
+        bool cancel = false;
+        if (startOf(take) == 2) {
+            ImGui::BeginDisabled();
+            ImGui::Button(cancelling, ImVec2(-FLT_MIN, 0.0f));
+            ImGui::EndDisabled();
+            noteButton(which, cancelling);
+            if (cascade::gui::census::enabled()) { cascade::gui::census::note(std::string("recorder:") + which + ":button:disabled"); }
+        } else {
+            cancel = ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f));
+            noteButton(which, label);
+        }
+        const double waited = ImGui::GetTime() - seen;
+        if (waited >= 1.0) {
+            ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"), waited);
+            if (cascade::gui::census::enabled()) {
+                std::string line;
+                cascade::core::formatUtf8(line, tr("Waiting for the disk to open the file: %.0f s"), waited);
+                cascade::gui::census::note(std::string("recorder:") + which + ":waiting");
+                cascade::gui::census::note(std::string("recorder:") + which + ":waiting:", line);
+            }
+        }
+        return cancel;
+    };
+    if (startOf(0) != 0) {
+        // The press on it WITHDRAWS the start (RECORD_IQ 0, the engine's stop, which cancels a start still opening its file and takes nothing out).
+        if (drawStarting(0, "iq", trId("Starting IQ - click to cancel##recIqStarting"), trId("Cancelling IQ start...##recIqCancelling"))) {
+            uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_IQ, 0));
+        }
+    } else if (!iqOn) {
+        recordStartSeenS_[0] = -1.0;
         if (ImGui::Button(trId("Record IQ"), ImVec2(-FLT_MIN, 0.0f))) {
             uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_IQ, 1));
         }
+        noteButton("iq", "Record IQ");
     } else {
+        recordStartSeenS_[0] = -1.0;
         if (ImGui::Button(trId("Stop IQ"), ImVec2(-FLT_MIN, 0.0f))) {
             uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_IQ, 0));
         }
+        noteButton("iq", "Stop IQ");
         // Elapsed is the take's own length, from the recorder's steady clock (it was the
         // difference of two frame-clock readings until group 7); samples/MB are the recorder's
         // own accepted-byte counters, so they never overclaim.
@@ -18543,7 +18595,12 @@ void AppWindow::drawRecorderSection() {
     }
 
     // Audio take: the post-chain 48 kHz output (same point audioTap uses).
-    if (!audioOn) {
+    if (startOf(1) != 0) {
+        if (drawStarting(1, "audio", trId("Starting audio - click to cancel##recAudioStarting"), trId("Cancelling audio start...##recAudioCancelling"))) {
+            uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 0));
+        }
+    } else if (!audioOn) {
+        recordStartSeenS_[1] = -1.0;
         // startAudioRecording, not the start/install pair that used to be here:
         // the Record key presses this same button (see applyKeyAction), and the
         // tap-after-start ordering the Pipeline contract requires is not
@@ -18551,10 +18608,13 @@ void AppWindow::drawRecorderSection() {
         if (ImGui::Button(trId("Record audio"), ImVec2(-FLT_MIN, 0.0f))) {
             uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 1));
         }
+        noteButton("audio", "Record audio");
     } else {
+        recordStartSeenS_[1] = -1.0;
         if (ImGui::Button(trId("Stop audio"), ImVec2(-FLT_MIN, 0.0f))) {
             uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 0));
         }
+        noteButton("audio", "Stop audio");
         const TakeNow take = readTake(statusTakeAudio_, 2.0);
         ImGui::Text(tr("Audio %.1f s | %llu samples | %.1f MB"), take.seconds,
                     static_cast<unsigned long long>(
@@ -20487,6 +20547,8 @@ void AppWindow::drawDiagnosticsSection() {
     bool dump = diagnosticsMinidump_;
     if (ImGui::Checkbox(trId("Also write a full memory dump beside a crash report"), &dump)) {
         diagnosticsMinidump_ = dump;
+        // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): the reports folder, on a click.
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
         cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
     }
     ImGui::TextDisabled(
@@ -20523,6 +20585,46 @@ void AppWindow::drawDiagnosticsSection() {
     ImGui::SameLine();
     if (ImGui::Button(trId("Open reports folder"))) { openReportsFolder(); }
     if (!diagBundleStatus_.empty()) { ImGui::TextDisabled("%s", diagBundleStatus_.c_str()); }
+
+    // THE SDRPLAY DIAGNOSTIC (0.99.50, stub campaign B18). Disabled while FoxSDR itself holds an RSP: the service gives a radio to one owner, and the probe must be it. The radio in use is the
+    // Source combo's own row (the table's fact.source.row, and the row's driver): a native SDRplay row, as master's `device_->driverKey() == "sdrplay"` was.
+    {
+        ImGui::Spacing();
+        cascade::gui::census::note("diag:sdrplay-text");
+        ImGui::TextWrapped(
+            "%s",
+            tr("For SDRplay owners: steps the RSP through every sample rate, band, LNA state "
+               "and antenna once, times every call to the SDRplay API, and writes one text "
+               "file you can attach to a bug report. It contains no serial number and no file "
+               "names."));
+        const bool probeRunning = sdrplayProbeChild_ != nullptr;
+        const SourceListCache& radios = sourceLists();
+        const bool sdrplayOpen = (uiState_.flags & FOXAPI_RX_DEVICE_OPEN) != 0u && radios.row >= kNativeRowBase &&
+                                 radios.row < static_cast<int>(radios.rows.size()) && !radios.rows[static_cast<std::size_t>(radios.row)].soapy &&
+                                 radios.rows[static_cast<std::size_t>(radios.row)].driver == "sdrplay";
+        ImGui::BeginDisabled(probeRunning || sdrplayOpen);
+        if (ImGui::Button(trId("Run SDRplay diagnostic"))) {
+            sdrplayProbeConfirmOpen_ = true;
+            sdrplayProbeBiasAsk_ = false;
+            sdrplayProbeBiasOn_ = false;
+        }
+        ImGui::EndDisabled();
+        if (cascade::gui::census::enabled()) {
+            const ImVec2 k0 = ImGui::GetItemRectMin();
+            const ImVec2 k1 = ImGui::GetItemRectMax();
+            cascade::gui::census::note("diag:sdrplay-key");
+            cascade::gui::census::note((probeRunning || sdrplayOpen) ? "diag:sdrplay-key:disabled" : "diag:sdrplay-key:enabled");
+            cascade::gui::census::rect("diag:sdrplay-key", k0.x, k0.y, k1.x, k1.y);
+        }
+        if (sdrplayOpen && !probeRunning) {
+            cascade::gui::census::note("diag:sdrplay-in-use");
+            ImGui::TextDisabled("%s", tr("FoxSDR has the SDRplay radio open - choose another source first."));
+        }
+        if (!sdrplayProbeStatus_.empty()) {
+            cascade::gui::census::note("diag:sdrplay-status:", sdrplayProbeStatus_);
+            ImGui::TextDisabled("%s", sdrplayProbeStatus_.c_str());
+        }
+    }
 
     if (ImGui::SmallButton(trId("What exactly is in a report?"))) {
         privacyNoticeOpen_ = !privacyNoticeOpen_;

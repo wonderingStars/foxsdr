@@ -232,6 +232,8 @@ void FrameTimer::resetForTest() {
     awake_ = &frameAwakeNanos;
     sink_ = nullptr;
     stallCount_ = 0;
+    frameThread_.store(0, std::memory_order_release);
+    lent_.store(false, std::memory_order_release);
     held_ = Held{};
     cur_ = FrameScope::Other;
     current_.store(static_cast<std::uint8_t>(FrameScope::Other), std::memory_order_relaxed);

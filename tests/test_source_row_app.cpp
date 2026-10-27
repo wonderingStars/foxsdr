@@ -7,14 +7,27 @@
 //     dongle the NATIVE driver found - listed in the combo right above the
 //     warning - did not count. It must be shown only when no radio of any kind
 //     was found (and the ADALM-Pluto row, which is always there and is an
-//     address box rather than a radio found, does not count as one).
+//     address box rather than a radio found, does not count as one - nor does
+//     the rtl_tcp server's row, which is the same kind of row).
 //   - While a patch runs it has the radios and the receiver is on the
 //     generator; the combo and the chip must say the patch has the radio.
 //
 // The rules themselves are pinned in tests/test_source_row_status.cpp; this
 // proves AppWindow asks them, with no window, no device and no ImGui frame -
-// the native list is the test's own (TestHooks::nativeScan) and the patch
-// radio is a generator standing in for the dongle, never started.
+// the native list is the test's own (Engine::testHooks_.nativeScan) and the
+// patch radio is a generator standing in for the dongle, never started.
+//
+// CONVERTED FOR THE ENGINE'S TABLE (stub campaign B18; the 0.99.84 house pattern). Master's test set the window's own members (the scan, the
+// patch's radios) and read the window's own answers; here the scan and the patch are the ENGINE's (rawEngine, written on the pass thread
+// through tests/pass_seam.hpp) and the window answers from what the engine published - the DEVICES list, the scan's flags, PATCH_RADIOS and
+// the patch graph (a Radio node's device is what says that a radio is hardware and the generator is not). So between a change to the engine
+// and the question put to the window there is the engine's publish and the window's look (look()): the same two steps a frame takes. What
+// each scenario asserts is unchanged, with ONE addition: the rtl_tcp server's row (0.99.70) is held not to count as a radio found - master's
+// fakeScan listed it, and the "warning is shown with no dongle" check only proved it by accident of listing it as well as the Pluto.
+//
+// Hermetic: the per-user directories point at a scratch folder, no USB enumeration runs and no real driver is ever constructed (the patch
+// radios are installed directly, a generator standing in for the dongle, never started; the engine's driver factory is a fake in case a
+// pass should look at them). No ImGui frame is rendered.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstdio>
@@ -31,7 +44,10 @@
 #endif
 
 #include "core/patch_radio.hpp"
+#include "engine/engine.hpp"
+#include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "source/siggen_source.hpp"
 #include "test_check.hpp"
 
@@ -97,47 +113,97 @@ std::vector<cascade::source::NativeDeviceInfo> fakeScan() {
 
 }  // namespace
 
+namespace pc = cascade::core::patch;
+
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static void installHooks() { AppWindow::testHooks_.nativeScan = &fakeScan; }
+    using Engine = cascade::engine::Engine;
+
+    static void installHooks() {
+        Engine::testHooks_.nativeScan = &fakeScan;
+        // (A pass that looked at the patch's radios would open them through this, never through a real driver.)
+        Engine::testHooks_.makeDevice = &engine_api_test::makeFakeRadio;
+    }
+    // One frame's engine part, in drawUi's order: the session's queue taken, the publish, the status copy, the window's read of the state. The
+    // phases of the publish alone (a CUSTOM subset: a whole pass would reconcile the patch the test is about to stand up by hand).
+    static void look(AppWindow& a) {
+        passseam::custom(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            (void)rawEngine(a.engine_).pumpPublish();
+        });
+        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.refreshUiState();
+    }
     // A completed, whole SoapySDR scan that found nothing - the tester's case:
     // no SoapySDR module for the dongle.
     static void soapyScanFoundNothing(AppWindow& a) {
-        a.scanNative();
-        a.soapyDevices_.clear();
-        a.soapyScanned_ = true;
-        a.soapyScanPartial_ = false;
-        a.soapyScanPending_ = false;
-        a.deviceOpenPending_ = false;
+        Engine& e = rawEngine(a.engine_);
+        passseam::on(e, [&] {
+            e.scanNative();
+            e.soapyDevices_.clear();
+            e.soapyScanned_ = true;
+            e.soapyScanPartial_ = false;
+            e.soapyScanPending_ = false;
+            e.deviceOpenPending_ = false;
+        });
+        look(a);
+        look(a);
     }
-    static bool warningShown(const AppWindow& a) { return a.noRadioHardwareShown(); }
-    // The patch starting with the dongle on a Radio node: what patchReconcile
-    // leaves behind once the open has landed. The source is a generator
-    // standing in for the dongle and is never started.
-    static void patchTakesDongle(AppWindow& a) {
-        a.patchRunning_ = true;
-        const cascade::core::patch::NodeId id = 7;
-        a.patchRadios_[id] = std::make_unique<cascade::core::patch::PatchRadio>(
-            id, std::make_unique<cascade::source::SigGenSource>(2.0e6),
-            "NESDR SMArt v5 (serial 00000001)");
-        a.patchRadioOpenedAs_[id] = "rtlsdr|serial=00000001@2000000";
+    static bool warningShown(AppWindow& a) {
+        look(a);
+        return a.noRadioHardwareShown();
     }
+    // A Radio node of the patch's graph, set to `device`, and the radio it runs: what the engine leaves behind once the open has landed. The
+    // source is a generator standing in for the dongle and is never started; the node's rate is the one the radio was opened at, so a pass
+    // that looked at the patch would find nothing to do.
+    static void addRadio(AppWindow& a, pc::NodeId id, const std::string& device, const std::string& label, const std::string& openedAs) {
+        Engine& e = rawEngine(a.engine_);
+        passseam::on(e, [&] {
+            e.patchRunning_ = true;
+            if (e.patchGraph_.addNodeAs(id, pc::NodeKind::Radio, "Radio") != pc::kNoNode) {
+                if (pc::Node* n = e.patchGraph_.mutableNode(id)) {
+                    n->device = device;
+                    n->rateHz = 2.0e6;
+                }
+            }
+            ++e.patchGraphVersion_;
+            e.patchRadios_[id] = std::make_unique<pc::PatchRadio>(id, std::make_unique<cascade::source::SigGenSource>(2.0e6), label);
+            e.patchRadioOpenedAs_[id] = openedAs;
+        });
+        look(a);
+        look(a);
+    }
+    // The patch starting with the dongle on a Radio node.
+    static void patchTakesDongle(AppWindow& a) { addRadio(a, 7, "rtlsdr|serial=00000001", "NESDR SMArt v5 (serial 00000001)", "rtlsdr|serial=00000001@2000000"); }
     // ...and a second Radio node on the generator, which is no radio at all.
-    static void patchAddsGenerator(AppWindow& a) {
-        const cascade::core::patch::NodeId id = 9;
-        a.patchRadios_[id] = std::make_unique<cascade::core::patch::PatchRadio>(
-            id, std::make_unique<cascade::source::SigGenSource>(2.0e6), "Signal generator");
-        a.patchRadioOpenedAs_[id] = "siggen@2000000";
-    }
+    static void patchAddsGenerator(AppWindow& a) { addRadio(a, 9, "siggen", "Signal generator", "siggen@2000000"); }
     static void patchStops(AppWindow& a) {
-        a.patchRadios_.clear();
-        a.patchRadioOpenedAs_.clear();
-        a.patchRunning_ = false;
+        Engine& e = rawEngine(a.engine_);
+        passseam::on(e, [&] {
+            e.patchRadios_.clear();
+            e.patchRadioOpenedAs_.clear();
+            e.patchGraph_ = pc::Graph{};
+            ++e.patchGraphVersion_;
+            e.patchRunning_ = false;
+        });
+        look(a);
+        look(a);
     }
-    static std::string preview(AppWindow& a) { return a.sourceComboPreview(); }
-    static std::string chip(AppWindow& a) { return a.sourceRowChip(); }
-    static std::vector<std::string> held(const AppWindow& a) { return a.patchHeldRadioNames(); }
+    static std::string preview(AppWindow& a) {
+        look(a);
+        return a.sourceComboPreview();
+    }
+    static std::string chip(AppWindow& a) {
+        look(a);
+        return a.sourceRowChip();
+    }
+    static std::vector<std::string> held(AppWindow& a) {
+        look(a);
+        return a.patchHeldRadioNames();
+    }
 };
 
 }  // namespace cascade::gui
@@ -159,7 +225,7 @@ int main() {
     CHECK(!Access::warningShown(app));
 
     // Nothing plugged in at all: the warning is still shown - and the Pluto
-    // row, which is always in the list, does not hide it.
+    // row and the rtl_tcp server's, which are always in the list, do not hide it.
     g_withDongle = false;
     Access::soapyScanFoundNothing(app);
     CHECK(Access::warningShown(app));
