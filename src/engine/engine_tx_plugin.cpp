@@ -160,8 +160,10 @@ FoxCommandResult Engine::txPluginArmOp(std::uint64_t session, bool remote, bool 
     FoxCommandResult res = resultFor(c);
     // THE FOURTH LOCK (submit refuses a REMOTE session three ways before this is reached): a remote session can never hold, refresh or open the window.
     if (remote) { return refused(res, FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
-    if (!sessionOpen) { return refused(res, FOXAPI_DETACHED, "the session closed before this command was applied"); }
     const std::int64_t minutes = c.ival[0];
+    // OFF is in the never-BUSY class (fox_engine_api.cpp kSaferArmOff) and so is applied for a session that has closed or detached since it sent it, as every safer command is: it
+    // only ever makes things safer. Anything that keeps or opens the window needs the session open.
+    if (!sessionOpen && minutes != 0) { return refused(res, FOXAPI_DETACHED, "the session closed before this command was applied"); }
     const std::int64_t nowMs = cc::TxAudioLink::nowMs();
 
     if (minutes == -1) {
@@ -314,10 +316,20 @@ void Engine::txPluginStep(const TxPluginLease& lease) {
     in.radioOk = haveSink && !sinkFaulted;
     in.handsOff = !transmitter_.pttHeld() && !transmitter_.latched() && !transmitter_.remoteKeyed();
     in.faulted = transmitter_.pluginFault();
-    const bool may = cc::pluginMayKey(in) && !txPluginStopping_.load(std::memory_order_relaxed);
+    const bool may = cc::pluginMayKey(in) && !txPluginStopping_.load(std::memory_order_seq_cst);
     transmitter_.setPluginKey(may);
-    // stopControlThread sets the flag BEFORE its own setPluginKey(false); read AFTER this set, either this sees the flag or its false lands after this true.
-    if (txPluginStopping_.load(std::memory_order_relaxed)) { transmitter_.setPluginKey(false); }
+    // THE ARGUMENT, now a valid one (the review of B13, concern 2). Two variables, each side a store then a load of the OTHER one, so it is the store-buffering shape and only
+    // sequential consistency can forbid "neither sees the other". Transmitter::pluginKey_ is relaxed (core/transmitter.cpp, byte-identical to master's and not ours to change), so
+    // the ordering is carried by two seq_cst FENCES, one on each side, with the flag seq_cst as well:
+    //   this side:  setPluginKey(may); FENCE X; load txPluginStopping_
+    //   stopControlThread:  store txPluginStopping_ = true; FENCE Y; setPluginKey(false)
+    // The fences are in the total order S, so X precedes Y or Y precedes X. Y before X: the flag's store is sequenced before Y and Y precedes X, so the load after X sees the flag
+    // (or something later) and writes false itself. X before Y: our setPluginKey(may) is sequenced before X and X precedes Y, which is sequenced before the stopper's
+    // setPluginKey(false), so the stopper's false is LATER in pluginKey_'s modification order than our write ([atomics.order]: two fences, X sequenced after the first write and
+    // Y before the second, X preceding Y in S) and is what the transmitter is left holding. Either way the key ends false; there is no third case. (The pass-thread's serialisation
+    // of the ops that reach this function, and the loop's last act ApiHost::engineStopping, still back it up: belt and braces, not the argument.)
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (txPluginStopping_.load(std::memory_order_seq_cst)) { transmitter_.setPluginKey(false); }
 
     // WHY NOT, for the log line that says why a plugin was unkeyed: the first condition that failed, in the order that tells the operator the most.
     if (may) {

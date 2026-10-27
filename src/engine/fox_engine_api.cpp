@@ -8,7 +8,7 @@
 //
 // NO ALLOCATION PER PASS ON THE STEADY PATH: each session's results and
 // events live in fixed rings sized at open (FOXAPI_MAX_PENDING +
-// FOXAPI_SAFETY_RESERVE results, 256 events), the queue is two vectors that
+// kSaferKinds results - FOXAPI_SAFETY_RESERVE and the application's two, below - 256 events), the queue is two vectors that
 // swap, and the pass's scratch (outbox, live sessions) is reserved once.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -182,9 +182,16 @@ Options parseOptions(const std::string& all) {
 }
 
 constexpr std::size_t kMaxPendingPerSession = FOXAPI_MAX_PENDING;
-constexpr int kSaferKinds = 5;
-static_assert(kSaferKinds == static_cast<int>(FOXAPI_SAFETY_RESERVE),
-              "one outstanding safer command per kind is the whole reserve");
+// The never-BUSY class: the API's five kinds (FOXAPI_SAFETY_RESERVE: TX_PTT 0, TX_LATCH 0, RUN 0, TX_CLOSE, TX_REMOTE_ARM 0) and the application's two (stub campaign B13, the
+// review's concern 3): TX_PLUGIN_ARM 0 (OFF - a flooded session must never lose the key-up of a plugin's window) and TX_PLUGIN_ARM -1 (the page is live - it must never be starved
+// of the refresh that is its lease). ARM 1 (5 / 15 / 60: opening the window) stays an ordinary command. The results ring is sized by the whole count, so a session that is
+// at the 256-pending cap still has a place for one unread result of each kind.
+constexpr int kApiSaferKinds = static_cast<int>(FOXAPI_SAFETY_RESERVE);
+constexpr int kAppSaferKinds = 2;
+constexpr int kSaferKinds = kApiSaferKinds + kAppSaferKinds;
+constexpr int kSaferArmOff = kApiSaferKinds;        // TX_PLUGIN_ARM 0
+constexpr int kSaferArmLive = kApiSaferKinds + 1;   // TX_PLUGIN_ARM -1
+static_assert(kSaferKinds == 7, "one outstanding safer command per kind is the whole reserve (the API's five and the application's two)");
 constexpr int kLocalReservedPlaces = 4;
 constexpr std::size_t kMaxEventsPerSession = 256;
 constexpr int kLoginFailuresBeforeLockout = 5;
@@ -460,7 +467,7 @@ bool profileHas(InternalKind kind, std::uint32_t op) {
 // ---------------------------------------------------------------------------
 
 struct ApiSession : FoxSession {
-    ApiSession() : results(kMaxPendingPerSession + FOXAPI_SAFETY_RESERVE), events(kMaxEventsPerSession) {}
+    ApiSession() : results(kMaxPendingPerSession + kSaferKinds), events(kMaxEventsPerSession) {}
 
     uint64_t id = 0;
     uint32_t flags = 0;
@@ -1274,7 +1281,9 @@ private:
         return true;
     }
 
-    // TX_PTT 0, TX_LATCH 0, RUN 0, TX_CLOSE, TX_REMOTE_ARM 0.
+    // TX_PTT 0, TX_LATCH 0, RUN 0, TX_CLOSE, TX_REMOTE_ARM 0 (the API's five), TX_PLUGIN_ARM 0 and -1 (the application's two; kSaferArmOff / kSaferArmLive). ARM -1 and a later ARM 0
+    // do not commute in general, but a merge only ever drops a repeat inside a TRAILING run of safer commands, and ARM -1 after ARM 0 is a no-op on a closed window
+    // (txPluginArmOp answers NO_CHANGE), so [-1, 0, -1] and [-1, 0] leave the same window.
     static int saferKind(const FoxCommand& c) {
         switch (c.op) {
             case FOXAPI_OP_TX_PTT: return c.ival[0] == 0 ? 0 : -1;
@@ -1282,6 +1291,7 @@ private:
             case FOXAPI_OP_RUN: return c.ival[0] == 0 ? 2 : -1;
             case FOXAPI_OP_TX_CLOSE: return 3;
             case FOXAPI_OP_TX_REMOTE_ARM: return c.ival[0] == 0 ? 4 : -1;
+            case FOXAPP_OP_TX_PLUGIN_ARM: return c.ival[0] == 0 ? kSaferArmOff : (c.ival[0] == -1 ? kSaferArmLive : -1);
             default: return -1;
         }
     }

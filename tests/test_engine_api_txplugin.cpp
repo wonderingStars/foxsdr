@@ -24,7 +24,10 @@
 //   H  THE HAND WINS: a PTT held while the plugin asks is the hand's transmission, not the plugin's, and the plugin is keyed again when the hand lets go;
 //   I  THE DEAD-MAN: a control side that stops ticking lets go of a plugin's key on the TX thread, and the plugin is not re-keyed;
 //   J  THE CONFIG: the grant is saved and restored; the window is neither, and a configuration loaded mid-session closes it;
-//   K  THE FACTS: what the page and the plate are drawn from, LOCAL only.
+//   K  THE FACTS: what the page and the plate are drawn from, LOCAL only;
+//   L  THE REVIEW'S HARDENINGS (docs/engine-stage4.md 6.22, the B13 review addendum): who may refresh and who may take over the window's lease (concern 5a); OFF and "the page
+//      is live" never BUSY at the 256-pending cap, and OFF applied for a session that has closed (concern 3, tested by 5b); the stop flag against a KEYED plugin, and the memory
+//      ordering of the flag and the key pinned from the source (concerns 2 and 5c).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -34,8 +37,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1110,6 +1115,289 @@ void testFacts() {
     CHECK_EQ(r.rf("tx.plugin.armed"), std::string("0"));
 }
 
+// ---- L: the review's hardenings -----------------------------------------------------------------------------------------------------------
+
+// Frames of up to `ms` in which each session beats and the named ones say the TRANSMIT page is on screen (ARM -1), the DSP stand-in and a pass after each. Results are drained so
+// that nothing but the window's own rules decide whether the window lives. Stops early when the window closes.
+void liveFor(Rig& r, testing::Session& other, bool pageSays, bool otherSays, int ms) {
+    const FoxCommand live = op(FOXAPP_OP_TX_PLUGIN_ARM, -1, 0);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < deadline && r.armed()) {
+        r.page->beat();
+        other.beat();
+        if (pageSays) { (void)api()->submit(r.page->raw(), &live, 1, nullptr); }
+        if (otherSays) { (void)api()->submit(other.raw(), &live, 1, nullptr); }
+        r.passes(1);
+        r.drain();
+        FoxCommandResult rr[16];
+        for (auto& x : rr) { x.structSize = sizeof(x); }
+        while (api()->poll_results(other.raw(), rr, 16) == 16) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    }
+}
+
+// 5a. WHO MAY REFRESH THE WINDOW, WHO MAY TAKE IT. The rule as IMPLEMENTED (Engine::txPluginArmOp), read before it was pinned: the window has ONE owner session, the one whose ARM
+// (5 / 15 / 60) last opened or restarted it. Only the owner's ARM -1 refreshes the lease (answer OK); any other session's -1 is NO_CHANGE and refreshes nothing. A SECOND local
+// session's ARM 5 / 15 / 60, with TRANSMIT, while a window is open DOES TAKE IT OVER: it restarts the window with its own length and becomes the owner (an ARM is a person
+// pressing a key on a page that is on screen), and the former owner's -1 is from then on NO_CHANGE and cannot keep the window alive. Nothing else takes it: not a -1, not an OFF.
+void testLeaseOwnership() {
+    std::printf("  L: the owner's ARM -1 keeps the lease alive; another local session's -1 does not; that session's ARM takes the window over\n");
+    Rig r;
+    testing::Session other(api(), r.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kPageGrants);
+    CHECK(other.ok());
+    CHECK(r.polled());
+    CHECK(r.grant());
+    r.press(5);
+    CHECK(r.armed());
+    CHECK_EQ(Access::armedMinutes(r.eng), 5);
+
+    // 1. The owner refreshing keeps the lease well past the second it lasts without it.
+    liveFor(r, other, /*pageSays=*/true, /*otherSays=*/false, 1800);
+    CHECK(r.armed());
+    {
+        const testing::Outcome o = r.send(op(FOXAPP_OP_TX_PLUGIN_ARM, -1, 0));
+        CHECK_EQ(o.status(), FOXAPI_OK);   // the owner's refresh says OK
+    }
+    // 2. A different local session's -1 is a no-op that says so, and the window is still the owner's.
+    {
+        other.beat();
+        const testing::Outcome o = r.send(op(FOXAPP_OP_TX_PLUGIN_ARM, -1, 0), &other);
+        CHECK(o.landed);
+        CHECK_EQ(o.status(), FOXAPI_NO_CHANGE);
+        CHECK(r.armed());
+        CHECK_EQ(Access::armedMinutes(r.eng), 5);
+    }
+    // 3. THE TAKEOVER: the other session's ARM 15 restarts the window with 15 minutes and makes it the owner.
+    {
+        other.beat();
+        const testing::Outcome o = r.send(op(FOXAPP_OP_TX_PLUGIN_ARM, 15, 0), &other);
+        CHECK_EQ(o.status(), FOXAPI_OK);
+        CHECK(r.armed());
+        CHECK_EQ(Access::armedMinutes(r.eng), 15);
+    }
+    // 4. The new owner alone refreshing keeps it alive past a second, with the former owner beating and silent...
+    liveFor(r, other, /*pageSays=*/false, /*otherSays=*/true, 1800);
+    CHECK(r.armed());
+    // ...and the FORMER owner alone refreshing cannot: its -1 is NO_CHANGE, and the lease the new owner holds runs out.
+    {
+        const testing::Outcome o = r.send(op(FOXAPP_OP_TX_PLUGIN_ARM, -1, 0));
+        CHECK_EQ(o.status(), FOXAPI_NO_CHANGE);
+    }
+    liveFor(r, other, /*pageSays=*/true, /*otherSays=*/false, 3000);
+    CHECK(!r.armed());
+    CHECK(Access::whyClosed(r.eng).find("the TRANSMIT page was closed") != std::string::npos);
+}
+
+// 5b. THE NEVER-BUSY CLASS (concern 3). A session at the 256-pending cap can still say OFF and "the page is live": both are in the class the other safer commands are in, and
+// ARM 5 / 15 / 60 (opening the window) is not. RED against a build whose class lacks them: OFF is answered BUSY and the window outlives it; the refresh is answered BUSY and the
+// lease runs out under a page that is on screen.
+void testOffAtTheCap() {
+    std::printf("  L: a session at the 256-pending cap still gets OFF and the page-live refresh through; opening the window is still refused BUSY\n");
+    Rig r;
+    CHECK(r.polled());
+    CHECK(r.grant());
+    r.press(5);
+    CHECK(r.armed());
+    r.drain();
+    // Fill the session's pending count with ordinary commands whose results are never read (nothing here polls the page's results until the end).
+    const FoxCommand filler = op(FOXAPP_OP_TX_DATA_FLAT, 1);
+    int busy = 0;
+    for (int i = 0; i < static_cast<int>(FOXAPI_MAX_PENDING) + 8; ++i) {
+        FoxSubmitResult sr{};
+        sr.structSize = sizeof(sr);
+        (void)api()->submit(r.page->raw(), &filler, 1, &sr);
+        if (sr.status == FOXAPI_BUSY) { ++busy; }
+    }
+    CHECK(busy >= 8);   // the cap is real: the newest commands past it were refused
+    {
+        FoxSubmitResult sr{};
+        sr.structSize = sizeof(sr);
+        (void)api()->submit(r.page->raw(), &filler, 1, &sr);
+        CHECK_EQ(sr.status, FOXAPI_BUSY);
+    }
+    {
+        // OPENING a window is an ordinary command: BUSY at the cap, and nothing is armed or restarted by it.
+        const FoxCommand open15 = op(FOXAPP_OP_TX_PLUGIN_ARM, 15, 0);
+        FoxSubmitResult sr{};
+        sr.structSize = sizeof(sr);
+        (void)api()->submit(r.page->raw(), &open15, 1, &sr);
+        CHECK_EQ(sr.status, FOXAPI_BUSY);
+    }
+    // THE REFRESH gets through the cap, every frame, and keeps the lease alive well past the second it lasts without it (the page's results are still unread).
+    const FoxCommand live = op(FOXAPP_OP_TX_PLUGIN_ARM, -1, 0);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1800);
+    int refused = 0;
+    int sent = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        r.page->beat();
+        FoxSubmitResult sr{};
+        sr.structSize = sizeof(sr);
+        (void)api()->submit(r.page->raw(), &live, 1, &sr);
+        ++sent;
+        if (sr.status == FOXAPI_BUSY) { ++refused; }
+        r.passes(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    }
+    CHECK(sent > 20);
+    CHECK_EQ(refused, 0);
+    CHECK(r.armed());
+    // OFF, at the cap: taken (never BUSY), applied in the very next pass, and the window closed for the reason the operator pressed.
+    const FoxCommand off = op(FOXAPP_OP_TX_PLUGIN_ARM, 0, 0);
+    FoxSubmitResult sr{};
+    sr.structSize = sizeof(sr);
+    const int32_t n = api()->submit(r.page->raw(), &off, 1, &sr);
+    CHECK(n >= 0);
+    CHECK(sr.status != FOXAPI_BUSY);
+    CHECK_EQ(sr.status, FOXAPI_OK);
+    r.page->beat();
+    r.passes(1);
+    CHECK(!r.armed());
+    CHECK_EQ(Access::whyClosed(r.eng), std::string("you pressed OFF"));
+    // Its result is there to be read, with its own ticket, applied.
+    bool found = false;
+    for (;;) {
+        FoxCommandResult rr[16];
+        for (auto& x : rr) { x.structSize = sizeof(x); }
+        const int32_t got = api()->poll_results(r.page->raw(), rr, 16);
+        for (int32_t i = 0; i < got; ++i) {
+            if (rr[i].ticket == sr.ticket) {
+                found = true;
+                CHECK_EQ(rr[i].status, FOXAPI_OK);
+            }
+        }
+        if (got < 16) { break; }
+    }
+    CHECK(found);
+}
+
+// OFF from a session that has closed since it sent it is still APPLIED (it is in the class that only makes things safer, and the table applies those for a closed session): a
+// window is closed by another session's OFF even when that session is gone by the pass. An ARM that would open or keep a window still needs its session open.
+void testOffFromAClosedSession() {
+    std::printf("  L: an OFF sent by a session that closed before the pass is applied; an ARM from one is not\n");
+    Rig r;
+    CHECK(r.polled());
+    CHECK(r.grant());
+    r.press(5);
+    CHECK(r.armed());
+    {
+        testing::Session other(api(), r.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kPageGrants);
+        CHECK(other.ok());
+        const FoxCommand arm = op(FOXAPP_OP_TX_PLUGIN_ARM, 60, 0);
+        FoxSubmitResult sr{};
+        sr.structSize = sizeof(sr);
+        CHECK_EQ(api()->submit(other.raw(), &arm, 1, &sr), 1);
+        other.close();           // gone before the pass: an ARM from it is DETACHED, not applied
+        r.page->beat();
+        r.passes(1);
+        CHECK(r.armed());
+        CHECK_EQ(Access::armedMinutes(r.eng), 5);
+    }
+    {
+        testing::Session other(api(), r.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kPageGrants);
+        CHECK(other.ok());
+        const FoxCommand off = op(FOXAPP_OP_TX_PLUGIN_ARM, 0, 0);
+        FoxSubmitResult sr{};
+        sr.structSize = sizeof(sr);
+        CHECK_EQ(api()->submit(other.raw(), &off, 1, &sr), 1);
+        other.close();           // gone before the pass: its OFF is still applied
+        r.page->beat();
+        r.passes(1);
+        CHECK(!r.armed());
+        CHECK_EQ(Access::whyClosed(r.eng), std::string("you pressed OFF"));
+    }
+}
+
+// 5c. THE STOP FLAG AGAINST A KEYED PLUGIN, and the ordering that makes the flag and the key a pair. A test can set the flag by hand around a pass and see the pass honour it; it
+// cannot reorder two CPUs' stores, so the ORDER (the seq_cst flag and the seq_cst fences on both sides, the argument written at txPluginStep) is pinned from the source.
+std::string readSource(const char* rel) {
+    std::ifstream in(fs::path(CASCADE_SOURCE_DIR) / "src" / rel, std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+bool liveCode(const std::string& text, std::size_t at) {
+    if (at == std::string::npos) { return false; }
+    const std::size_t bol = text.rfind('\n', at);
+    const std::size_t start = bol == std::string::npos ? 0 : bol + 1;
+    return text.substr(start, at - start).find("//") == std::string::npos;
+}
+std::vector<std::size_t> liveAfter(const std::string& text, const std::string& needle, std::size_t from, std::size_t to = std::string::npos) {
+    std::vector<std::size_t> v;
+    for (std::size_t at = text.find(needle, from); at != std::string::npos && at < to; at = text.find(needle, at + 1)) {
+        if (liveCode(text, at)) { v.push_back(at); }
+    }
+    return v;
+}
+
+void testStoppingWhileKeyed() {
+    std::printf("  L: the stop flag set around a KEYED plugin lets the key go in that pass and holds it down; the flag and key are ordered seq_cst\n");
+    {
+        Rig r;
+        CHECK(r.key());
+        CHECK(r.keyed());
+        const int starts = r.radio()->starts.load();
+        Access::setStopping(r.eng, true);
+        r.passes(1);                         // ONE pass with the flag up: the request is down in that pass...
+        CHECK(!r.requested());
+        CHECK(r.until([&] { return !r.keyed(); }, 3000));   // ...the TX thread plays the key down...
+        CHECK(!r.onAir());
+        CHECK(r.armed());                    // (the flag withholds the key; closing the window is the loop's last act, not this flag's)
+        const unsigned long long pulls = r.pulls();
+        r.framesFor(700);                    // ...and nothing asks again while it is up, whatever else holds
+        CHECK(!r.requested());
+        CHECK(!r.keyed());
+        CHECK(r.pulls() == pulls);
+        CHECK_EQ(r.radio()->starts.load(), starts);
+        Access::setStopping(r.eng, false);   // the flag was the only thing holding it
+        CHECK(r.until([&] { return r.keyed(); }, 5000));
+    }
+    // THE ORDER, from the source. stopControlThread: the flag (seq_cst), a seq_cst fence, THEN the key's false. txPluginStep: the key's write, a seq_cst fence, THEN the flag's load;
+    // and no relaxed access to the flag anywhere in the engine.
+    const std::string step = readSource("engine/engine_tx_plugin.cpp");
+    const std::string engine = readSource("engine/engine.cpp");
+    CHECK(!step.empty());
+    CHECK(!engine.empty());
+    const std::string fence = "std::atomic_thread_fence(std::memory_order_seq_cst)";
+    {
+        const std::size_t fn = step.find("void Engine::txPluginStep(");
+        const std::size_t end = step.find("\nvoid Engine::txPluginAfterTick(", fn);
+        CHECK(fn != std::string::npos && end != std::string::npos);
+        const std::vector<std::size_t> write = liveAfter(step, "transmitter_.setPluginKey(may);", fn, end);
+        const std::vector<std::size_t> fences = liveAfter(step, fence, fn, end);
+        const std::vector<std::size_t> loads = liveAfter(step, "txPluginStopping_.load(std::memory_order_seq_cst)", fn, end);
+        CHECK_EQ(static_cast<int>(write.size()), 1);
+        CHECK_EQ(static_cast<int>(fences.size()), 1);
+        CHECK_EQ(static_cast<int>(loads.size()), 2);   // the pre-check and the post-set check
+        if (write.size() == 1 && fences.size() == 1 && loads.size() == 2) {
+            CHECK(write[0] < fences[0]);
+            CHECK(fences[0] < loads[1]);
+        }
+    }
+    {
+        const std::size_t fn = engine.find("void Engine::stopControlThread()");
+        const std::size_t end = engine.find("\nvoid Engine::controlPass()", fn);
+        CHECK(fn != std::string::npos && end != std::string::npos);
+        const std::vector<std::size_t> store = liveAfter(engine, "txPluginStopping_.store(true, std::memory_order_seq_cst);", fn, end);
+        const std::vector<std::size_t> fences = liveAfter(engine, fence, fn, end);
+        const std::vector<std::size_t> key = liveAfter(engine, "transmitter_.setPluginKey(false);", fn, end);
+        CHECK_EQ(static_cast<int>(store.size()), 1);
+        CHECK_EQ(static_cast<int>(fences.size()), 1);
+        CHECK_EQ(static_cast<int>(key.size()), 1);
+        if (store.size() == 1 && fences.size() == 1 && key.size() == 1) {
+            CHECK(store[0] < fences[0]);
+            CHECK(fences[0] < key[0]);
+        }
+    }
+    for (const std::string* text : {&step, &engine}) {
+        for (const std::size_t at : liveAfter(*text, "txPluginStopping_", 0)) {
+            const std::size_t eol = text->find('\n', at);
+            const std::string line = text->substr(at, eol == std::string::npos ? std::string::npos : eol - at);
+            CHECK(line.find("memory_order_relaxed") == std::string::npos);
+            CHECK(line.find("memory_order_acquire") == std::string::npos && line.find("memory_order_release") == std::string::npos);
+        }
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1144,6 +1432,10 @@ int main(int argc, char** argv) {
     testDeadMan();
     testConfig();
     testFacts();
+    testLeaseOwnership();
+    testOffAtTheCap();
+    testOffFromAClosedSession();
+    testStoppingWhileKeyed();
 
     fs::remove_all(g_scratch, ec);
     return check::finish("test_engine_api_txplugin");

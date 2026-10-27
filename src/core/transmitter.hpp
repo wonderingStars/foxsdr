@@ -41,9 +41,10 @@
 //
 // 0.99.84 MERGE NOTE (2026-10-21, docs/engine-merge-0.99.84.md): master's 0.99.74 added a fourth key to this class, a plugin the
 // operator has GRANTED and ARMED (setPluginKey, core/tx_audio.hpp). The class below carries it as master wrote it (the cap, the fault
-// latch, the one-source rule), and NOTHING IN THE ENGINE CALLS setPluginKey YET: the engine's key model is the API's (the rules above),
-// the plugin's key is a principal that model does not have, and wiring it is a re-expression of its own (ledger item TX-PLUGIN), so
-// until then no plugin can key a radio. Absence of a caller is the safe state.
+// latch, the one-source rule). STUB CAMPAIGN B13 (2026-10-27, docs/engine-stage4.md 6.22) gave it a caller: the engine's txPluginStep
+// (engine/engine_tx_plugin.cpp) is the ONE place that asks for a plugin's key, once a key drive, from the engine-held grant and arming
+// window; every other call in the tree is setPluginKey(false) (tests/test_transmit_page.cpp section 10 scans for that). The code of
+// this class was not touched by that batch - only this note.
 //
 //   - THE CONFIG CANNOT KEY IT. The mode, the power, the input and the split
 //     are saved; the key is not, and there is no code path that could

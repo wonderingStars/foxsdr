@@ -2204,8 +2204,13 @@ sessions on this machine; `TRANSMIT` held by a REMOTE session is a PTT and nothi
   table's host, which knows the sender.
   **THE WINDOW IS A LEASE ON THE SESSION THAT OPENED IT.** It lasts while that session is open on this machine (never a REMOTE one), keeps its heartbeat inside `Transmitter::kKeyAliveWait`
   (1 s), and keeps saying the page is on screen (ARM -1 inside the same second - the page sends it every frame it is drawn while a window is open, and for 3 s after an ARM). A window that
-  crashed, froze or closed its page lets the lease go and the window closes with it - so nothing the window fails to do can leave a plugin able to key. A command lost (a session whose queue
-  is full is answered `BUSY`) cannot leave a window open either. Any LOCAL session may close a window (OFF only ever makes things safer); only the owner can refresh it.
+  crashed, froze or closed its page lets the lease go and the window closes with it - so nothing the window fails to do can leave a plugin able to key. A command lost cannot leave a
+  window open either. **`ARM 0` (OFF) and `ARM -1` (the page is live) are in the never-`BUSY` class** (API.md 7.2) beside the API's five - one outstanding ticket of each per session, a newer
+  one merged - so a session flooded to its 256 pending commands can neither lose the OFF nor starve the refresh; opening a window (`ARM 5 / 15 / 60`) is an ordinary command and is `BUSY` at the
+  cap, like any other (the class is seven kinds in this engine, and a session's results ring holds 256 + 7). An OFF is also applied for a session that has closed since it sent it, as every
+  command that only makes things safer is. Any LOCAL session may close a window (OFF only ever makes things safer); only the owner can refresh it - the owner being the session whose ARM 5 / 15 / 60
+  last opened or restarted the window, so a second LOCAL session's ARM with `TRANSMIT` takes the window over (a person pressing a key on a page that is on screen), and the former owner's `-1` is
+  `NO_CHANGE` from then on.
 * **`FOXAPP_OP_TX_DATA_FLAT` (0x842C)**: the page's DATA (flat) tick; `ival[0]` 0 / 1; `applied[0]` the value after. Session-only (never saved; on by default). On, a plugin's audio goes out as NFM with the
   pre-emphasis off, whatever mode the page shows; the microphone and the tone are never affected. It keys nothing.
 

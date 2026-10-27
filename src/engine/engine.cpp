@@ -9614,7 +9614,7 @@ void Engine::startControlThread() { startControlThread(ControlThreadOptions{}); 
 
 void Engine::startControlThread(const ControlThreadOptions& options) {
     if (controlThread_.joinable()) { return; }
-    txPluginStopping_.store(false, std::memory_order_relaxed);   // a thread restarted after a stop may drive a plugin's key again (the window is closed)
+    txPluginStopping_.store(false, std::memory_order_seq_cst);   // a thread restarted after a stop may drive a plugin's key again (the window is closed)
     controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
     {
         std::lock_guard<std::mutex> lk(controlExitMutex_);
@@ -9673,9 +9673,12 @@ void Engine::stopControlThread() {
     // from a session's key, and every session's key is ended there too.
     transmitter_.setLatched(false);
     transmitter_.setPttHeld(false);
-    // A PLUGIN'S KEY GOES UP TOO, and a pass still running cannot ask for it again (stub campaign B13): the flag first, then the request - txPluginStep reads the flag after its own
-    // set, so either it sees the flag or this false lands after its true. The window itself is the pass's; the loop's last act closes it (ApiHost::engineStopping).
-    txPluginStopping_.store(true, std::memory_order_relaxed);
+    // A PLUGIN'S KEY GOES UP TOO, and a pass still running cannot ask for it again (stub campaign B13): the flag first, a seq_cst fence, then the request. txPluginStep does
+    // the mirror image (its request, a seq_cst fence, then the flag), and the two fences are what make "either it sees the flag, or this false lands after its true" a
+    // theorem and not a hope - the argument is written out at that function's load of the flag (engine_tx_plugin.cpp). The window itself is the pass's; the loop's last act
+    // closes it (ApiHost::engineStopping).
+    txPluginStopping_.store(true, std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     transmitter_.setPluginKey(false);
     transmitter_.releaseRemote("the engine's control thread is stopping");
     controlRun_.store(false);
