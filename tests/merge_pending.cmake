@@ -34,8 +34,9 @@ macro(cascade_merge_pending feature)
     endforeach()
 endmacro()
 
-cascade_merge_pending(RAIL-CHROME      # 0.99.74 dials (the interface size, the rail fold, the status fold and the TOOLS bank returned in stub batch B1)
-    test_deck_knobs_app)
+# (RAIL-CHROME - the 0.99.74 dials: the interface size, the rail fold, the status fold and the TOOLS bank returned in stub batch B1, the GAIN and SQUELCH dials with their
+# AUTO keys in stub batch B12 - is whole: test_deck_knobs_app, converted (the fake radio is the engine's hook, what the run ended with is read through rawEngine), and
+# test_theme_census, the real-binary census of every theme.)
 # (STORE-VIEW - 0.99.50 / 0.99.72 / 0.99.74 plugin store and Fitted modules window on the table - is whole: the engine's half returned in stub batch
 # B3, the store window in B4, the Fitted modules window in B5: test_fitted_modules_window, test_fitted_modules_no_disk and test_plugin_dup_app.)
 # (PLUGIN-SETTINGS-UI - the settings form of a plugin (0.99.43), BROWSE FILES beside a path setting and the folded "Plugin settings" line (0.99.74) - and
@@ -80,8 +81,6 @@ cascade_merge_pending(MAP-WINDOWS      # 0.99.7x the ADS-B map's lists
     test_unplaced_list_app)
 cascade_merge_pending(PATCH-VIEW       # 0.99.7x the patch page's view keys, information pane and inspector
     test_patch_canvas_nav test_patch_info_pane)
-cascade_merge_pending(RAIL-CHROME
-    test_theme_census)
 cascade_merge_pending(WINDOW-PLACEMENT # 0.99.73 the Decoder output window and the plugin picture windows open inside the main window
     test_decoder_window_app)
 

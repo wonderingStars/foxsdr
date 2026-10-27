@@ -640,6 +640,10 @@ std::int32_t Engine::applyAirbandOp(const FoxCommand& c, const std::string& text
                 why = "the monitor is not listening";
                 return FOXAPI_NO_CHANGE;
             }
+            // Pressed by hand it is a choice of its own: AUTOMATIC squelch (which re-applies this same rule for as long as it is lit) goes off (stub campaign B12) - whether or
+            // not the rule finds a level to work from. Master turned it off on the press, and a press that lands just after AUTO rebuilt the block (every channel's level is
+            // forgotten until its next report) must not leave AUTO lit over a threshold the hand chose to take over.
+            squelchAutoOff("Airband Above the noise");
             if (!airbandAboveTheNoise(0.0f)) {
                 why = "no channel has reported a level yet";
                 return FOXAPI_NO_CHANGE;
@@ -652,6 +656,8 @@ std::int32_t Engine::applyAirbandOp(const FoxCommand& c, const std::string& text
             if (static_cast<double>(want) != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
             const bool moved = want != airbandSquelchDb_;
             airbandSquelchDb_ = want;
+            // A hand on the monitor's threshold is a manual choice too: the top bar's AUTO (one switch for the receiver's squelch and this one) goes off (stub campaign B12).
+            squelchAutoOff("Airband squelch");
             // A new threshold rebuilds the block's set (the runner's live squelch slots belong to the patch page); a value already in force
             // restarts nothing.
             if (moved && airbandListening_) { airbandTuneBlock(airbandBlock_); }

@@ -6750,6 +6750,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_SET_SQUELCH:
             squelchDb_ = static_cast<float>(c.num[0]);
             pipeline_.setSquelchDb(squelchDb_);
+            // A HAND ON THE THRESHOLD IS A MANUAL CHOICE (stub campaign B12): the top bar's dial, the Radio section's slider, the keys, a web page - they all
+            // send this op - and AUTOMATIC squelch goes off. (AUTOMATIC's own writes are not this op.)
+            squelchAutoOff("a hand set the threshold");
             res.applied[0] = squelchDb_;
             return res;
         case FOXAPI_OP_SET_VOLUME:
@@ -7359,6 +7362,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPP_OP_AIRBAND: {
             std::string why;
             const std::int32_t st = applyAirbandOp(c, text, res, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
+        // --- AUTOMATIC SQUELCH (stub campaign B12, docs/api-0.3-additions.md 9.9) -------------------------------------------------------
+        case FOXAPP_OP_SET_SQUELCH_AUTO: {
+            std::string why;
+            const std::int32_t st = applySquelchAutoOp(c, res, why);
             if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
             return res;
         }
@@ -8329,6 +8339,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     }
     squelchDb_ = cfg.squelchDb;
     pipeline_.setSquelchDb(squelchDb_);
+    squelchAutoRestore(cfg.squelchAuto);   // AUTOMATIC squelch (0.99.74; stub campaign B12): quietly - a restored setting is not a decision to log
     // THE BIAS TEE IS SEEDED HERE, not inside the device branch below, so
     // that a config whose saved radio does not open (unplugged, or still on
     // its vendor driver) does not have the setting quietly rewritten to false
@@ -8848,6 +8859,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.mode = kModeNames[modeIndex_];
     cfg.bandwidthHz = vfoBandwidthHz_;
     cfg.squelchDb = squelchDb_;
+    cfg.squelchAuto = squelchAuto_;
     cfg.volume = volume_;
     cfg.dbMin = dbMin_;
     cfg.dbMax = dbMax_;
@@ -9171,6 +9183,8 @@ void Engine::pumpPlugins() {
     // THE AIRBAND MONITOR'S STEP, for the scanner's reason and in its place: a retune made this pass is already applied when it looks (stub
     // campaign B6). Inert while nothing listens.
     airbandFrame();
+    // AUTOMATIC SQUELCH (stub campaign B12): after the monitor's step, so the channel levels its rule reads are this pass's. Inert while the switch is off.
+    squelchAutoFrame();
 }
 
 double Engine::pumpPublish() {

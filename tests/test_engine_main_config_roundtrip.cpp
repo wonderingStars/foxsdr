@@ -77,7 +77,7 @@ const std::set<std::string>& engineWritten() {
         "sourceKind", "soapyAntenna", "soapyArgs", "nativeArgs", "lookForNetworkUsrps", "biasTee", "converters",
         "airspy", "audioBufferMs", "audioBufferAutoMs", "ppmCorrection", "ppm", "autoGainByRadio",
         "manualGainByRadio", "plutoUri", "rtlTcpAddr", "iqFilePath", "soundCard", "centerHz", "mode", "bandwidthHz",
-        "squelchDb", "volume", "dbMin", "dbMax", "vfoOffsetHz", "sampleRateHz", "stereoEnabled", "deemphasisIndex",
+        "squelchDb", "squelchAuto", "volume", "dbMin", "dbMax", "vfoOffsetHz", "sampleRateHz", "stereoEnabled", "deemphasisIndex",
         "nrEnabled", "nrStrength", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanSelection",
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
@@ -130,6 +130,10 @@ AppConfig seeded() {
     c.volume = 0.0f;
     c.mode = "USB";
     c.squelchDb = -80.0f;
+    // AUTOMATIC SQUELCH is the ENGINE's since stub campaign B12 (it was seeded below as a field no half writes): a headless engine that restores it ON measures the
+    // channel and moves the threshold, which is exactly what it is for - and exactly what the squelchDb == -80 check further down must not see. So it is seeded OFF here;
+    // that the switch comes back from a config and goes into the next one is held by test_engine_api_squelch (A1: fillConfig and applyConfig, both ways).
+    c.squelchAuto = false;
     c.nrEnabled = true;
     c.nrStrength = 0.75f;
     c.notchEnabled = true;
@@ -194,7 +198,6 @@ AppConfig seeded() {
     c.crashUploadBlockedUntil = 1800000000;
     // --- fields NO half of the tree writes yet: they ride on loadedCfg_ alone ----------------------------------------
     c.radioSetupDontShow = true;
-    c.squelchAuto = true;
     c.waterfallRangeMode = "manual";
     c.patchPresets = {{"Airband", patchText(1.0f)}, {"Marine", patchText(2.0f)}};
     c.patchPresetPrevious = patchText(4.0f);   // the "previous" slot holds a patch document, not a name

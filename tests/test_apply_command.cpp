@@ -389,6 +389,7 @@ struct AppWindowTestAccess {
     static double bw(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).vfoBandwidthHz_; }); }
     static int bwIndex(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).bandwidthIndex_; }); }
     static float squelch(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).squelchDb_; }); }
+    static bool squelchAuto(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).squelchAuto_; }); }
     static float volume(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).volume_; }); }
     static bool muted(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).userMuted_; }); }
     static int deemph(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).deemphIndex_; }); }
@@ -970,6 +971,26 @@ void receiverOps(AppWindow& a) {
     {
         CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_SQUELCH, -33.0))));
         CHECK(A::squelch(a) == -33.0f);
+    }
+
+    // AUTOMATIC SQUELCH (stub campaign B12): the switch, what it answers, and the hand that turns it off. test_engine_api_squelch holds the rule.
+    covering(FOXAPP_OP_SET_SQUELCH_AUTO);
+    {
+        const FoxCommandResult on = A::apply(a, ints(FOXAPP_OP_SET_SQUELCH_AUTO, 1));
+        CHECK(ok(on));
+        CHECK(on.applied[0] == 1.0);
+        CHECK(A::squelchAuto(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_SQUELCH_AUTO, 1))));        // as it already is: nothing changes
+        CHECK(A::squelchAuto(a));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_SQUELCH_AUTO, 2)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::squelchAuto(a));
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_SQUELCH, -35.0))));          // a hand on the threshold is a manual choice
+        CHECK(!A::squelchAuto(a));
+        CHECK(A::squelch(a) == -35.0f);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_SQUELCH_AUTO, 1))));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_SQUELCH_AUTO, 0))));
+        CHECK(!A::squelchAuto(a));
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_SQUELCH, -33.0))));
     }
 
     covering(FOXAPI_OP_SET_VOLUME);

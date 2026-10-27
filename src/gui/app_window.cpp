@@ -4810,32 +4810,40 @@ static_assert(kCounterDividerX >= kFreqPlateRightX + 8.0f,
               "the counter's divider must clear the tuner plate's right edge - narrow the "
               "plate or move the divider, never let the groove cross the plate");
 
-// THE VOLUME DIAL'S OWN GEOMETRY, HOISTED OUT OF drawToolbar, because the
-// bar's scale floor is a promise about this one control and a promise checked
-// against a number typed somewhere else is not checked at all. The dial keeps
-// the 61 units it has always stood past its divider.
-constexpr float kVolumeCx = kCounterDividerX + 61.0f;  // the dial's centre, in reference units
-constexpr float kVolumeR = 26.0f;    // ...and its radius
-constexpr float kVolumeEdgePad = 6.0f;
-// The cluster ends past the dial, never inside it: kCoreW is what the meters
-// and the mute banner keep clear of, so a dial reaching past it would be a
-// dial the meters could be drawn over.
-static_assert(kVolumeCx + kVolumeR + kVolumeEdgePad <= kCoreW,
-              "the volume dial must stand inside the fixed cluster (kCoreW)");
+// THE KNOB ROW'S OWN GEOMETRY, HOISTED OUT OF drawToolbar, because the bar's
+// scale floor is a promise about these controls and a promise checked against
+// a number typed somewhere else is not checked at all. Three dials since
+// 0.99.74 - GAIN, SQUELCH, VOLUME, left to right - whose centres, radius and
+// pitch live in engine/tune_control.hpp (deckGainCx and its two neighbours) so
+// a test can pin them; this is where the cluster's right-hand end, the last
+// dial's tick arc and its edge pad, is held against kCoreW and the floor.
+constexpr float kLastDialCx =
+    kCounterDividerX + cascade::gui::kDeckKnobFirstX + 2.0f * cascade::gui::kDeckKnobPitch;
+constexpr float kKnobRowEndX =
+    kLastDialCx + cascade::gui::kDeckKnobTickR * cascade::gui::kDeckKnobR +
+    cascade::gui::kDeckKnobEdgePad;
+// The cluster ends past the last dial, never inside it: kCoreW is what the
+// meters and the mute banner keep clear of, so a dial reaching past it would
+// be a dial the meters could be drawn over.
+static_assert(kKnobRowEndX <= kCoreW,
+              "the knob row must stand inside the fixed cluster (kCoreW)");
 
 // The bar only ever shrinks, and it stops here: below this the counter's
-// digits stop being figures and the dial stops being a control (its primitive
-// draws nothing under a 6 px radius, which at this scale is a long way off).
-constexpr float kBarMinScale = 0.62f;
+// digits stop being figures and the dials stop being controls (their
+// primitive draws nothing under a 6 px radius, which at this scale is a long
+// way off). 0.62 until 0.99.74; the two extra dials made the cluster 111
+// units wider, and the floor that keeps it inside the narrowest window
+// (below) fell with it: 624 less the cabinet's 54 is 570, over 998.4.
+constexpr float kBarMinScale = 0.57f;
 
 // AND THE FLOOR IS ONLY HONEST IF THE WINDOW CANNOT GO NARROWER THAN IT NEEDS.
 // kMinWindowW is the width limit run() puts on the OS window; the cabinet eats
 // at most kCabinetInsetMaxPx of it before the bar is drawn. If someone lowers
-// that limit, or moves the dial right, this stops compiling rather than
+// that limit, or moves the dials right, this stops compiling rather than
 // quietly clipping the only volume control out of the application.
-static_assert((kVolumeCx + kVolumeR + kVolumeEdgePad) * kBarMinScale <=
+static_assert(kKnobRowEndX * kBarMinScale <=
                   static_cast<float>(kMinWindowW) - kCabinetInsetMaxPx,
-              "the top bar's floor scale must leave the volume dial inside the "
+              "the top bar's floor scale must leave the knob row inside the "
               "narrowest window run() allows");
 
 // THE COUNTER, CELL BY CELL, AND SHARED WITH drawFrequencyReadout. The bar
@@ -4856,69 +4864,8 @@ using cascade::gui::kFreqPlateH;
 using cascade::gui::kFreqPlateW;
 using cascade::gui::kFreqTubeH;
 
-// LETTER-SPACING, WHICH DEAR IMGUI HAS NOT, and which is most of what
-// separates an engraved legend from a word in a label. Stepped a UTF-8
-// character at a time, because the captions are translated (see
-// statusTrackedWidth); for ASCII that is one byte, exactly as before.
-float barTrackedWidth(ImFont* f, float px, const char* text, float track) {
-    if (f == nullptr || text == nullptr) { return 0.0f; }
-    float w = 0.0f;
-    int glyphs = 0;
-    for (const char* p = text; *p != '\0';) {
-        unsigned int cp = 0;
-        const int bytes = std::max(1, ImTextCharFromUtf8(&cp, p, nullptr));
-        w += f->CalcTextSizeA(px, FLT_MAX, 0.0f, p, p + bytes).x;
-        ++glyphs;
-        p += bytes;
-    }
-    if (glyphs > 1) { w += track * static_cast<float>(glyphs - 1); }
-    return w;
-}
-
-// A caption CUT INTO THE BRASS: the lit lower lip of the cut first, then the
-// cut itself. Dark-into-metal is this design's treatment for a caption, and
-// for a caption only - a figure goes on glass, which is why every reading on
-// this bar is amber in a well or ivory on a meter's face and none of them is
-// lettered like this.
-//
-// THE CUT IS DEEPER THAN IT WAS, AND THAT IS THE OTHER HALF OF "HARD TO SEE".
-// theme.hpp says so in its own header: dark-into-brass is about 2.3:1, "fine
-// for a label at rest and not acceptable for a number somebody is trying to
-// read at arm's length". Measured, kEngraved (#3B3529) on this deck's own
-// gradient is 2.11:1 against kBrassMid at the bottom of the ramp and 2.62:1
-// against kBrassShade at the top - the worst contrast anywhere on this window,
-// and it is carrying MASTER, TUNED - HERTZ and VOLUME, which are the three
-// words that say what the three instruments on the deck ARE. Those are labels
-// a user has to read at least once; the lamp words under MASTER, the digits in
-// the counter and the figure under the dial are all already on glass.
-//
-// So the cut is FILLED rather than repainted: the void laid into it at 0.90,
-// which is what a paint-filled engraving on a 1960s brass panel actually is,
-// and which measures 3.19:1 against kBrassMid and 3.93:1 against kBrassShade.
-// The lit lip is raised with it, from 0.55 to 0.75, because on a real cut it is
-// the highlight along the lower edge that makes the letterform, not the shadow.
-// Nothing else about the treatment changes and no other surface is touched: the
-// maker's plate at the foot of the status column keeps the shallow cut, because
-// a maker's plate is decoration and is not read for information.
-void barEngrave(ImDrawList* dl, ImVec2 at, float px, const char* text, bool centred) {
-    if (dl == nullptr || text == nullptr || text[0] == '\0') { return; }
-    ImFont* f = cascade::gui::fonts::legend();
-    const float track = px * 0.24f;
-    if (centred) { at.x -= barTrackedWidth(f, px, text, track) * 0.5f; }
-    const ImU32 lip =
-        cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassTint, 0.75f);
-    // The cut is the deck's own ink (foxsdr-ui/1 "deckInk").
-    const ImU32 cut = theme::tone(0x0D, 0x0B, 0x07, 230, theme::ink::DeckInk);
-    float x = at.x;
-    for (const char* p = text; *p != '\0';) {
-        unsigned int cp = 0;
-        const int bytes = std::max(1, ImTextCharFromUtf8(&cp, p, nullptr));
-        dl->AddText(f, px, ImVec2(x, at.y + 1.0f), lip, p, p + bytes);
-        dl->AddText(f, px, ImVec2(x, at.y), cut, p, p + bytes);
-        x += f->CalcTextSizeA(px, FLT_MAX, 0.0f, p, p + bytes).x + track;
-        p += bytes;
-    }
-}
+// barTrackedWidth and barEngrave (the engraved captions) are in gui/deck_parts.hpp, defined in app_window_deck.cpp, which draws the knob row (stub
+// campaign B12) and needs them too.
 
 }  // namespace
 
@@ -5168,7 +5115,10 @@ void AppWindow::drawToolbar() {
     if (const cascade::gui::BiasTeePanel& bk = biasKeyPanel(); bk.present) {
         const cascade::gui::FreqRect area = cascade::gui::deckBiasKeyArea();
         const ImVec2 kTL(X(area.x0), Y(area.y0));
-        const float kSize = S(cascade::gui::kDeckBiasKeySize);
+        // Never under 12 px (kDeckBiasKeyMinPx): the bar's floor scale fell with the
+        // GAIN and SQUELCH dials (0.99.74), and 20 units at 0.57 is 11.4.
+        const float kSize =
+            std::max(S(cascade::gui::kDeckBiasKeySize), cascade::gui::kDeckBiasKeyMinPx);
         const bool pressed = cascade::gui::drawBenchKey(dl, kTL, kSize, bk.shown);
         const bool keyHovered = ImGui::IsItemHovered();
         cascade::gui::drawBenchLamp(dl, ImVec2(kTL.x + kSize * 0.5f, kTL.y + kSize * 0.5f),
@@ -5220,40 +5170,22 @@ void AppWindow::drawToolbar() {
                                Y(kPlateTopY + cascade::gui::counterPlateH(layout)));
     cascade::gui::addBenchDivider(dl, X(cascade::gui::deckCounterDividerX(layout)), Y(30.0f),
                                   Y(135.0f));
-    // THE VOLUME IS A DIAL, in the handoff's 1960s brass. A slider is a
-    // perfectly good control and completely wrong on a bench receiver; this
-    // one turns, carries its own tick arc, and answers the wheel as well as
-    // the hand so it is still usable without a drag.
-    {
-        const float cx = X(cascade::gui::deckVolumeCx(layout));
-        barEngrave(dl, ImVec2(cx, Y(42.0f)), capPx, tr("VOLUME"), true);
-        cascade::gui::census::note("deck:volume");
-        cascade::gui::census::rect("deck:volume", cx - S(kVolumeR), Y(82.0f) - S(kVolumeR),
-                                   cx + S(kVolumeR), Y(82.0f) + S(kVolumeR));
-        // (The setting as the engine published it: published as the decimal the
-        // float was set to, so the cast back is the float it was.)
-        const float volume = static_cast<float>(uiState_.volume);
-        const float moved = cascade::gui::drawBrassVolumeKnob(
-            dl, ImVec2(cx, Y(82.0f)), S(kVolumeR), volume);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", tr("Volume - drag the dial, or scroll over it"));
-        }
-        if (moved >= 0.0f) {
-            uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, moved));
-        }
-        // THE SETTING, IN CREAM, AND DELIBERATELY NOT IN AMBER. This is where
-        // the hand has put the control, not something the radio measured, and
-        // the palette reserves amber for a reading. Figures, so the monospaced
-        // face: the number stops shuffling sideways as the dial turns.
-        char vtxt[16];
-        std::snprintf(vtxt, sizeof(vtxt), "%.2f", static_cast<double>(volume));
-        ImFont* vf = cascade::gui::fonts::reading();
-        const float vpx = std::max(11.0f, cascade::gui::fonts::kReadingSize * scale *
-                                              cascade::gui::theme::readingsScale());
-        const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, vtxt);
-        dl->AddText(vf, vpx, ImVec2(cx - vs.x * 0.5f, Y(118.0f)),
-                    theme::toneHex(0xD8CFB4, 255, theme::ink::DeckInk), vtxt);
-    }
+    // THE KNOB ROW: GAIN, SQUELCH, VOLUME - dials, in the handoff's 1960s brass.
+    // A slider is a perfectly good control and completely wrong on a bench
+    // receiver; these turn, carry their own tick arc, and answer the wheel as
+    // well as the hand so they are still usable without a drag.
+    //
+    // THREE SINCE 0.99.74, in the order the signal goes through the system (the
+    // tester: "I would put these knobs in the order of gain, squelch and volume
+    // just as that is the order the signal goes through the system"). The deck
+    // had only the volume dial, and the tester "find[s] myself adjusting the
+    // gain for certain things often ... without having to go to the Signal
+    // tab/Source menu. This area is also empty space"; the same was said of the
+    // squelch, adjusted "often" while using the Airband tool. Geometry:
+    // engine/tune_control.hpp (kDeckKnobR and the rest); the AUTO keys under the
+    // first two are deckAutoKey's, and the whole row is drawDeckKnobs'
+    // (app_window_deck.cpp, stub campaign B12).
+    drawDeckKnobs(dl, barTL, barBR, scale, capPx, layout);
 
     // THE TWO METERS, and BOTH ARE DRIVEN BY THE FIGURE PRINTED UNDER THEM.
     //
@@ -5276,22 +5208,34 @@ void AppWindow::drawToolbar() {
     // watchdog - so a meter under that caption would have to be fed by
     // something invented, which is the artboard's own fault repeated in our
     // code. It keeps the name of the thing it actually measures.
+    // THE TWO METERS SCALE WITH THE SAME `scale` AS THE REST OF THE DECK - the
+    // reference's own comment used to read "in bar pixels: they are pinned to
+    // the bar's right edge and do not scale", which was true while `scale`
+    // only ever meant "this window is narrower than the cluster wants"; now
+    // that it also carries the interface-scale factor (S), a 4K user asking
+    // for a bigger bench gets bigger meters with it, at exactly S = 1 the same
+    // pixels as before (scale == deckScaleOnly * 1.0f there). (Master 0.99.44;
+    // the first port left them at their reference size.)
     const float lineH = ImGui::GetTextLineHeight();
-    using cascade::gui::kMeterW;
-    constexpr float kMeterFaceH = 66.0f;
+    const float meterW = cascade::gui::kMeterW * scale;
+    const float meterFaceH = 66.0f * scale;
+    const float meterGap = cascade::gui::kMeterGap * scale;
+    const float meterRightMargin = cascade::gui::kMeterRightMargin * scale;
     // drawBenchMeter spends one text line above the face on the caption and
     // one below it on the value, so the height asked for is the face the
-    // reference measures plus both of them.
-    const float meterH = kMeterFaceH + lineH * 2.0f + 8.0f;
-    const float meter2X = barTL.x + cascade::gui::meter2XOnBar(barW);
-    const float meter1X = barTL.x + cascade::gui::meter1XOnBar(barW);
+    // reference measures plus both of them. lineH is already S-scaled (it
+    // comes from ImGui::GetTextLineHeight(), which reads the ambient,
+    // already-FontScaleMain'd font size).
+    const float meterH = meterFaceH + lineH * 2.0f + 8.0f * scale;
+    const float meter2X = barTL.x + barW - meterRightMargin - meterW;
+    const float meter1X = meter2X - meterGap - meterW;
     // DROPPED ENTIRELY ON A NARROW WINDOW rather than allowed to slide left
     // into the volume dial - the rule, and why it is as tight as it is, are
     // metersFitOnBar's in engine/tune_control.hpp, where a test holds it to the
     // bar a fresh install opens with.
     const bool showMeters = cascade::gui::deckMetersFit(barW, layout, scale);
     if (showMeters) {
-        const float my = barTL.y + 28.0f;
+        const float my = barTL.y + 28.0f * scale;
 
         // SAMPLE RATE: full scale 10 MS/s, which covers every device this
         // application has been run against without compressing the common
@@ -5302,13 +5246,13 @@ void AppWindow::drawToolbar() {
         std::snprintf(rateTxt, sizeof(rateTxt), haveRate ? "%.3f MS/s" : "--",
                       rate / 1.0e6);
         cascade::gui::census::note("deck:meter.rate");
-        cascade::gui::census::rect("deck:meter.rate", meter1X, my, meter1X + kMeterW, my + meterH);
-        cascade::gui::drawBenchMeter(dl, ImVec2(meter1X, my), kMeterW, meterH,
+        cascade::gui::census::rect("deck:meter.rate", meter1X, my, meter1X + meterW, my + meterH);
+        cascade::gui::drawBenchMeter(dl, ImVec2(meter1X, my), meterW, meterH,
                                      tr("SAMPLE RATE"), static_cast<float>(rate / 10.0e6),
                                      haveRate, rateTxt, "MS/s", meterStyleRate_, &meterPeakHoldRate_);
         // RIGHT-CLICK PICKS THIS METER'S OWN STYLE (an Italian user on 0.99.42): the two meters never share one, so this one's popup and
         // field are entirely its own - see drawMeterContextMenu's header.
-        drawMeterContextMenu(ImVec2(meter1X, my), ImVec2(meter1X + kMeterW, my + meterH), "##ratemeter_menu", meterStyleRate_);
+        drawMeterContextMenu(ImVec2(meter1X, my), ImVec2(meter1X + meterW, my + meterH), "##ratemeter_menu", meterStyleRate_);
 
         // VOLUME: what is actually coming out of the speakers (0.99.11, at
         // the owner's request - this meter used to read FRAME TIME, which is
@@ -5353,12 +5297,12 @@ void AppWindow::drawToolbar() {
         char volTxt[32];
         cascade::gui::formatVolumeText(volTxt, sizeof(volTxt), audible, haveAudio);
         cascade::gui::census::note("deck:meter.volume");
-        cascade::gui::census::rect("deck:meter.volume", meter2X, my, meter2X + kMeterW,
+        cascade::gui::census::rect("deck:meter.volume", meter2X, my, meter2X + meterW,
                                    my + meterH);
-        cascade::gui::drawBenchMeter(dl, ImVec2(meter2X, my), kMeterW, meterH,
+        cascade::gui::drawBenchMeter(dl, ImVec2(meter2X, my), meterW, meterH,
                                      tr("VOLUME"), volumeNeedle_, haveAudio, volTxt,
                                      "dB", meterStyleVolume_, &meterPeakHoldVolume_);
-        drawMeterContextMenu(ImVec2(meter2X, my), ImVec2(meter2X + kMeterW, my + meterH), "##volmeter_menu", meterStyleVolume_);
+        drawMeterContextMenu(ImVec2(meter2X, my), ImVec2(meter2X + meterW, my + meterH), "##volmeter_menu", meterStyleVolume_);
     }
 
     // Beside the frequency, because the banner is ABOUT the frequency: it
@@ -5405,12 +5349,19 @@ void AppWindow::drawToolbar() {
             if (i > 0) { ImGui::PopFont(); }
         };
         measure(0);
+        // THE MIDDLE'S RULE IS MEASURED AGAINST THE CLUSTER AS DRAWN, FOR EVERY
+        // COUNTER (0.99.74). It was only for the enlarged one (layout.scale >= 2):
+        // today's counter was drawn at full size wherever the meters were, so the
+        // unscaled rule gave the same answer. The GAIN and SQUELCH dials made the
+        // cluster 999 units, and the first-launch bar now shows the meters by
+        // drawing the deck smaller (deckScale) - an unscaled rule would call the
+        // meters absent there and offer the banner a middle they are standing in.
         cascade::gui::MuteBannerLayout mb = cascade::gui::layoutMuteBanner(
-            barW, scale, coreW, layout.scale >= 2, showMeters, sizes, 1, st.FramePadding.x,
+            barW, scale, coreW, true, showMeters, sizes, 1, st.FramePadding.x,
             st.ItemSpacing.x);
         if (mb.slot != 0) {
             for (int i = 1; i < n; ++i) { measure(i); }
-            mb = cascade::gui::layoutMuteBanner(barW, scale, coreW, layout.scale >= 2, showMeters,
+            mb = cascade::gui::layoutMuteBanner(barW, scale, coreW, true, showMeters,
                                                 sizes, n, st.FramePadding.x, st.ItemSpacing.x);
         }
         drawMuteBanner(mb, barTL, words);
@@ -17358,6 +17309,9 @@ void AppWindow::refreshStatusLists() {
     if (statusGainHave_) {
         statusGain0Name_ = it.name;
         statusGain0Db_ = it.value[3];
+        statusGain0Lo_ = it.value[0];
+        statusGain0Hi_ = it.value[1];
+        statusGain0Step_ = it.value[2];
         statusGain0Unit_ = cascade::gui::gainUnitFromWire(it.detail);
     }
     statusAntenna_.clear();
@@ -17807,6 +17761,8 @@ void AppWindow::actOnUiAnswers(bool stateRead) {
         // A PLUGIN SETTINGS EDIT'S ANSWER (stub campaign B9): the verdict of the engine's judging - a refused box snaps back from it, once a frame, after
         // the answer and not before.
         if (r.op == FOXAPP_OP_PLUGIN_SETTING_EDIT) { settingsOnAnswer(r); }
+        // THE TOP BAR'S GAIN DIAL'S ANSWER (stub campaign B12): a SET_GAIN the radio refused (it was busy) is tried again at the dial's pace.
+        if (r.op == FOXAPI_OP_SET_GAIN) { deckOnAnswer(r); }
         // THE WEB AND CAT PANELS' ANSWER (stage 5b): one is owed for every SERVER_CONFIG sent (the mirrors wait for them), and a refusal -
         // a password under eight characters, say - is lettered on the web panel in the engine's words, as the password field's own complaint was.
         if (r.op == FOXAPI_OP_SERVER_CONFIG) {

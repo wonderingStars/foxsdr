@@ -80,6 +80,8 @@
 #include "core/bias_tee_memory.hpp"
 #include "core/config.hpp"
 #include "core/patch_devices.hpp"
+#include "engine/engine.hpp"
+#include "engine/engine_shell.hpp"
 #include "gui/app_window.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
@@ -212,15 +214,19 @@ std::vector<cascade::source::NativeDeviceInfo> fakeScan() {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
+    // THE CONVERSION (stub campaign B12, docs/engine-stage4.md 6.22): the fake radio is built by the ENGINE's hooks now - the radio is the engine's since stage 4, and AppWindow has
+    // no testHooks_ of its own - and what the run ended with is read from the engine through rawEngine(), as every converted test does (docs/engine-stage4.md 4069). The reads are
+    // made AFTER AppWindow::run has returned, so the control thread is stopped and no pass can be running: a plain member read is what pass_seam.hpp's read() would do there, and
+    // this test, a process of its own with the application in a child, has no stepped variant to register.
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
     // What the run ended with, for the file the parent reads: the receiver's squelch threshold,
     // the Airband monitor's, and AUTOMATIC (one flag for both).
-    static float squelchDb(const AppWindow& a) { return a.squelchDb_; }
-    static float airbandSquelchDb(const AppWindow& a) { return a.airbandSquelchDb_; }
-    static bool squelchAuto(const AppWindow& a) { return a.squelchAuto_; }
+    static float squelchDb(AppWindow& a) { return rawEngine(a.engine_).squelchDb_; }
+    static float airbandSquelchDb(AppWindow& a) { return rawEngine(a.engine_).airbandSquelchDb_; }
+    static bool squelchAuto(AppWindow& a) { return rawEngine(a.engine_).squelchAuto_; }
 };
 
 }  // namespace cascade::gui
@@ -669,6 +675,10 @@ void gainAuto(const Rect& key, const Rect& knob) {
     CHECK(dead.ok);
     CHECK(agcCalls(dead).size() == 2 && agcCalls(dead)[1] == "agc 1");
     CHECK(gainCalls(dead).empty());
+    // THE KEY SHOWS WHAT THE RADIO IS ON (stub campaign B12: the lamp is read back from the engine's flags, not assumed from the press, and the run notes it): lit in a
+    // run that pressed it once, and still lit in the run that pressed it and then turned the dead dial.
+    CHECK(one.items.count("deck:gainauto.lit") == 1);
+    CHECK(dead.items.count("deck:gainauto.lit") == 1);
 }
 
 void gainNoAuto(const Rect& key) {
@@ -787,11 +797,13 @@ void squelchKnobAndKey(const Rect& knob, const Rect& key) {
     std::printf("    squelchDb after a half turn from -100: %.1f\n", static_cast<double>(t.saved.squelchDb));
     CHECK_NEAR(t.saved.squelchDb, -20.0, 3.0);
     CHECK(!t.saved.squelchAuto);
+    CHECK(t.items.count("deck:squelchauto.lit") == 0);   // (stub campaign B12: the lamp was never lit)
     // AUTO on by a press, saved.
     const Result a = once("sq-auto", "agc", settle() + press(key, 30), "1600x1000",
                           ", \"squelchDb\": -100");
     CHECK(a.ok);
     CHECK(a.saved.squelchAuto);
+    CHECK(a.items.count("deck:squelchauto.lit") == 1);   // (stub campaign B12: and the key shows it, read back from the engine's fact)
     // ...and off again by a second press.
     const Result b = once("sq-auto2", "agc", settle() + press(key, 30) + press(key, 50), "1600x1000",
                           ", \"squelchDb\": -100");

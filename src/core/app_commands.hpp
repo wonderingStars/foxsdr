@@ -288,6 +288,16 @@
 // applied[0] is the state after: 0 not listening, 1 listening, 2 waiting for the patch to hand the radio back. What it is doing is the facts
 // fact.airband.* and the live list AIRBAND_CHANNELS.
 #define FOXAPP_OP_AIRBAND                0x8429u /* ival[0]: 0 stop / 1 listen (text: preset) / 2 next block / 3 above the noise / 4 squelch / 5 hold / 6 tune one */
+// AUTOMATIC SQUELCH (stub campaign B12, 0.99.74; docs/api-0.3-additions.md 9.9). The AUTO key under the top bar's SQUELCH dial: while it is on, the ENGINE keeps the
+// squelch threshold 8 dB above the noise floor it measures under the channel (the quietest of the last ten seconds of the meter, a carrier that holds the gate open
+// never teaching it - core/noise_floor_tracker.hpp) or, while the Airband monitor listens, applies the monitor's "above the noise" rule to the monitor's own squelch
+// every quarter second. LOCAL sessions only and not on the web profile; grant SETTINGS.
+//   ival[0]: 0 off / 1 on. OK for what it already is (nothing changes). Turning it on forgets any floor measured before; applied[0] is the switch after.
+// A HAND ON ANY THRESHOLD IS A MANUAL CHOICE: an accepted SET_SQUELCH (the dial, the Radio section's slider, the keys, a web page), an accepted AIRBAND squelch (4) and
+// an AIRBAND above-the-noise (3) pressed while the monitor listens (whether or not the rule then finds a level) turn it OFF, whoever sent them; a refused or out-of-range
+// one, and an above-the-noise with nothing listening, change nothing. A threshold restored from the config does not. The switch is saved (AppConfig::squelchAuto) and the
+// switch and the floor are published as fact.squelch.auto / fact.squelch.floorDb.
+#define FOXAPP_OP_SET_SQUELCH_AUTO       0x842Au /* ival[0]: 0 off / 1 on; applied[0]: the switch after */
 // FOXAPP_OP_SOUND_CARD_FORM's ival[1], the FIELD MASK (API 0.3 8.10): which fields the command carries. 0 (and
 // ALL) is the whole form. With a mask, the fields not named keep the engine's own values.
 #define FOXAPP_SOUND_CARD_FIELD_DEVICE   1  /* text: device and host API */

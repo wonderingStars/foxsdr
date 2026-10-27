@@ -52,6 +52,7 @@
 #include "core/freq_manager.hpp"
 #include "core/gps_reader.hpp"
 #include "core/hang_watchdog.hpp"
+#include "core/noise_floor_tracker.hpp"
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_radio.hpp"
@@ -3009,6 +3010,31 @@ private:
     void refreshAirbandLive();
     // The monitor's facts and the scanner's list-mode facts (fact.airband.*, fact.scanner.listMode / .ticked).
     void buildApiListsAirband(ApiListBlock& b);
+
+    // AUTOMATIC SQUELCH (stub campaign B12, engine_squelch_auto.cpp; 0.99.74): the top bar's AUTO key under the SQUELCH dial, the engine's so that a headless engine,
+    // a web page and a CAT client honour it too. While squelchAuto_ is lit the pass keeps the receiver's threshold 8 dB over the noise floor measured under the
+    // channel (noiseFloor_: the quietest of the last ten seconds, a carrier that holds the gate open never teaching it) or, while the Airband monitor listens,
+    // re-applies the monitor's own "above the noise" rule. A hand on any threshold - an accepted SET_SQUELCH, the monitor's squelch or its above-the-noise key - turns
+    // it off (squelchAutoOff); a threshold restored from the config does not.
+    bool squelchAuto_ = false;
+    cascade::core::NoiseFloorTracker noiseFloor_;
+    double squelchAutoSetS_ = -1.0e9;       // when the rule last moved a threshold (it is judged four times a second)
+    double squelchAutoAbsHz_ = 0.0;         // the channel the floor was measured on: another one is another floor
+    double squelchAutoBwHz_ = 0.0;
+    int squelchAutoMode_ = -1;
+    bool squelchAutoOnAirband_ = false;     // the rule was last applied to the monitor's squelch
+    // FOXAPP_OP_SET_SQUELCH_AUTO. Returns the status; `res.applied[0]` the switch after.
+    std::int32_t applySquelchAutoOp(const FoxCommand& c, FoxCommandResult& res, std::string& why);
+    // Off, because a hand chose a threshold (`why` goes to the diagnostic log). Does nothing when it is off already.
+    void squelchAutoOff(const char* why);
+    // The switch from a config (quietly: a restored setting is not a decision to log) and the floor's history forgotten.
+    void squelchAutoRestore(bool on);
+    // Once a pass, after the monitor's: the rule.
+    void squelchAutoFrame();
+    // The floor as published, whole decibels; INT_MIN when there is none to say (switch off, the monitor listening, no measurement yet).
+    int squelchFloorWhole() const;
+    // fact.squelch.auto / fact.squelch.floorDb.
+    void buildApiListsSquelch(ApiListBlock& b);
 
 public:
     // --- THE ENGINE'S LIFE (engine stage 3a) ---------------------------------

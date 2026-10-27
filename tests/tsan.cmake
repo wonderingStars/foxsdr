@@ -84,6 +84,8 @@ set(CASCADE_TSAN_TESTS
     test_engine_api_settings
     # stub batch B10: the marker ops (commands on the pass) against the worker that saves markers.json and the API threads that read the list
     test_engine_api_markers
+    # stub batch B12: automatic squelch (the rule on the pass) against the API threads that read its facts and the worker that delivers the samples it measures
+    test_engine_api_squelch
     # the control thread against the front end's thread: the command queue (submit from
     # any thread, drain on one), the pumping engine, what the host answers from a thread
     # that is not the window's, the shutdown order

@@ -39,8 +39,8 @@
 //     a read that comes back with rows closes it (airbandPollJobs below);
 //   - the tester recorder's feature notes ("airband", "airband-listen" - master's testerUsage_.noteFeature): the window's recorder is batch B15's;
 //     the call sites are marked NOTEFEATURE;
-//   - the top bar's SQUELCH AUTO and the deck's squelch dial following the monitor: batch B12 (the slider and "Above the noise" below send the
-//     engine's actions; master also turned AUTO off from them, setSquelchAuto, which is B12's).
+//   - (the top bar's SQUELCH AUTO and the deck's squelch dial following the monitor are batch B12's, app_window_deck.cpp; the slider and "Above the noise"
+//     below send the engine's actions, and the ENGINE turns AUTO off for them - master's setSquelchAuto(false) - so there is no window code for it.)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
@@ -1251,7 +1251,7 @@ void AppWindow::drawAirbandSection() {
     }
     cascade::gui::census::rect("airband:squelch", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
                                ImGui::GetItemRectMax().y);
-    // (Master also turned the top bar's AUTO key off from a hand on this slider, one flag for the receiver's squelch and this one: batch B12.)
+    // (A hand on this slider turns the top bar's AUTO key off, one switch for the receiver's squelch and this one: the engine does it, for this op - stub campaign B12.)
     if (ImGui::IsItemDeactivatedAfterEdit()) { uiSubmit(cmd::makeNumInt(FOXAPP_OP_AIRBAND, static_cast<double>(a.squelchEdit), 4)); }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", tr("A channel is heard while its level is above this. Hover a row\n"

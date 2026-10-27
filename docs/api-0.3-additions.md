@@ -2147,6 +2147,39 @@ Held by tests/test_engine_api_markers.cpp (the list, the facts, the ops' edges, 
 test_apply_command (the ops' cases, 133 implemented, 133 tested), test_engine_api_03 (its "every list is served" loops run to list 53), and the real-binary tests test_freq_markers_app (a scripted
 right-click: the menu drops nothing; drop, remove, a new run draws it from disk; a long press tunes nothing; a patch Display part's drop in absolute hertz) and test_bookmark_stacking_app.
 
+### 9.9 Automatic squelch (stub campaign B12; docs/engine-stage4.md 6.22)
+
+Master's 0.99.74 put an AUTO key under the top bar's SQUELCH dial ("a button for AUTO or above the noise", a tester): while it is lit the threshold follows the noise. In master the window ran
+it (a tracker and a switch among the window's members, judged once a frame); it is the **engine's** now (`src/engine/engine_squelch_auto.cpp`), so a headless engine, a web page and a CAT
+client honour it, and an AUTO that a window lit does not go dead when the window is not the one asking. One op and two facts, no list, no new item flag, no change to the vendored header.
+
+* **`FOXAPP_OP_SET_SQUELCH_AUTO` (0x842A, grant SETTINGS, LOCAL sessions only, not on the web profile)**: `ival[0]`: 0 off / 1 on (`OUT_OF_RANGE` for anything else). `OK` for what it already is -
+  nothing changes. `applied[0]`: the switch after. Turning it on (or off) forgets any floor measured before. The switch is saved: `AppConfig::squelchAuto` is written by `Engine::fillConfig` and
+  restored, quietly, by `Engine::applyConfig`.
+* **THE RULE** (judged on the pass, four times a second, moved only for half a decibel or more): the receiver's threshold follows the **noise floor measured under the channel + 8 dB**
+  (`core/noise_floor_tracker.hpp`: the minimum of the last ten seconds of 100 ms block means; **a carrier never teaches the floor** - once there is an estimate, readings taken while the squelch
+  gate is open are not fed, except for the one valve: a gate open for thirty seconds without a break is the floor having risen). The channel is the one tuned: a retune, another bandwidth or
+  another mode drops the floor at once (the threshold it set stands until the new one has half a second of its own), and a stopped receiver measures nothing. **While the Airband monitor
+  listens** the rule is the monitor's own "above the noise" (`airbandAboveTheNoise`, 8 dB over the median channel level) applied to the monitor's squelch - the receiver's threshold is left where it
+  was - and when the monitor stops the tracker starts afresh.
+* **A HAND ON ANY THRESHOLD IS A MANUAL CHOICE**, whoever sent it: an accepted `SET_SQUELCH` (the dial, the Radio section's slider, the keys, a web page's slider - the one op they all send), an
+  accepted `FOXAPP_OP_AIRBAND` squelch (action 4) and an `FOXAPP_OP_AIRBAND` above-the-noise (action 3) pressed while the monitor listens turn it **off**. (Action 3 turns it off even when the rule then
+  finds no channel level to work from - `NO_CHANGE` - because a press just after AUTO rebuilt the block lands on levels that are forgotten until the next report; master turned it off on the press.) A
+  refused or out-of-range threshold, the hold (action 5) and an above-the-noise with nothing listening change nothing. A threshold restored from a config does not. The rule's own writes do not go
+  through these ops, so they never do. **The web profile is unchanged (still 38 ops):** a browser can still move the threshold, and doing so now switches AUTOMATIC off for the machine's operator
+  as well - the same rule, one switch for everyone.
+* **`fact.squelch.auto`** ("1"/"0"; LOCAL and REMOTE sessions alike - it is a switch) and **`fact.squelch.floorDb`** (the measured floor in whole decibels, "" with the switch off, while the monitor
+  listens, when the receiver is stopped or before half a second of measurement). Both are hashed into the publish fingerprint from raw members (the floor rounded to a whole decibel, so a
+  wobble of a tenth rebuilds nothing; `test_engine_publish_alloc` holds the settled publish).
+* **The window's half** (`src/gui/app_window_deck.cpp`, `gui/deck_parts.hpp`): the top bar's three dials - GAIN (the radio's first stage over its own travel and step, `SET_GAIN`, **paced** at one
+  ask a 50 ms slot with the value the hand ended on asked once more on release; `SET_DEVICE_AGC` from the AUTO key under it, dead on a radio without automatic gain), SQUELCH (`SET_SQUELCH`; while
+  the monitor listens the monitor's, `FOXAPP_OP_AIRBAND` 4 on release; `SET_SQUELCH_AUTO` from the key under it, lit from `fact.squelch.auto`) and VOLUME. It carries no AUTO rule of its own.
+
+Held by tests/test_engine_api_squelch.cpp (the op and its edges, the config both ways, who may send it, every hand that turns it off and every one that does not, the rule on two noise levels 20 dB
+apart, a carrier held for fourteen seconds of the pass clock, a retune / a new bandwidth / a stopped receiver / a switch turned on each dropping the floor, the monitor's rule and the hand-back to the
+receiver, the press that finds no level), test_apply_command (134 implemented, 134 tested), and the real-binary tests test_deck_knobs_app (the application behind a fake radio: the dials' order, size
+and spacing, the AUTO keys, the pace, the twist that turns AUTO off, AUTO following the noise, the carrier, the Airband routing) and test_theme_census (every theme, both window sizes).
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

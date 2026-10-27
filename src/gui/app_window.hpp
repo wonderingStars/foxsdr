@@ -59,6 +59,7 @@ struct GLFWwindow;
 #include "core/engine_measure.hpp"
 #include "gui/frame_log.hpp"
 #include "gui/airband_window_state.hpp"
+#include "gui/deck_parts.hpp"
 #include "gui/basemap_cache.hpp"
 // The floor a torn-off page cannot be dragged under, and the reset generation
 // that puts an already-wrong one back. ImGui-free for the same reason as the
@@ -2103,6 +2104,14 @@ private:
     // opens `popupId`, which draws drawMeterStyleMenu(style). One function so the rate meter and the volume meter cannot answer the same
     // gesture two different ways.
     void drawMeterContextMenu(const ImVec2& tl, const ImVec2& br, const char* popupId, cascade::gui::MeterStyle& style);
+    // THE TOP BAR'S KNOB ROW (stub campaign B12; app_window_deck.cpp, master 0.99.74): GAIN, SQUELCH and VOLUME, each its own dial, with a latched AUTO key under the first
+    // two. Called from drawToolbar with the bar's own measurements. It draws from the state (uiState_), the first gain stage (refreshStatusLists) and two facts (squelch.auto,
+    // airband.*), and changes things only through uiSubmit: SET_GAIN (paced, the last value the hand ended on), SET_DEVICE_AGC, SET_SQUELCH (which turns AUTOMATIC off in the
+    // engine: a hand is a manual choice), FOXAPP_OP_AIRBAND 4 while the monitor listens, FOXAPP_OP_SET_SQUELCH_AUTO and SET_VOLUME. deckOnAnswer judges the SET_GAIN's answer.
+    void drawDeckKnobs(ImDrawList* dl, const ImVec2& barTL, const ImVec2& barBR, float scale, float capPx, const cascade::gui::CounterLayout& layout);
+    void deckOnAnswer(const FoxCommandResult& r);
+    void deckAskGain();
+    cascade::gui::DeckKnobState deck_;
 
     // --- THE INTERFACE THEME (2026-09-25; gui/theme.hpp) ----------------------
     // The look chosen in Display, by its foxsdr-ui/1 key (AppConfig::uiTheme).
@@ -3116,6 +3125,7 @@ private:
     bool statusGainHave_ = false;        // the GAINS list has a stage 0
     std::string statusGain0Name_;
     double statusGain0Db_ = 0.0;
+    double statusGain0Lo_ = 0.0, statusGain0Hi_ = 0.0, statusGain0Step_ = 0.0;   // ...its travel and its step (the top bar's GAIN dial turns over them)
     cascade::source::GainUnit statusGain0Unit_ = cascade::source::GainUnit::Decibels;
     std::string statusAntenna_;          // the ANTENNAS entry that is ACTIVE; "" none
     int statusTakeIq_ = -1;

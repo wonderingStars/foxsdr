@@ -430,6 +430,9 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(airbandBlocks_.size());
     f.value(airbandChans_.size());
     f.value(scanTicked_);
+    // AUTOMATIC SQUELCH (stub campaign B12): the switch and the floor in whole decibels (a wobble of a tenth must not rebuild the block).
+    f.value(squelchAuto_);
+    f.value(squelchFloorWhole());
     // The status lines.
     for (const std::string* t : {&sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &tuneMismatchNote_,
                                  &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
@@ -882,6 +885,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     buildApiListsStore(b);
     // The Airband monitor's facts and the scanner's list mode (engine_airband.cpp).
     buildApiListsAirband(b);
+    buildApiListsSquelch(b);
     // API 0.3 8.9, STORE_ACTIVITY: the transfer in flight and the ADD ALL run. What is read live (the progress)
     // is not here: the block keeps the repo.
     {
