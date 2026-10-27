@@ -448,6 +448,38 @@ int main() {
         CHECK(parseOrEmpty(renderGroupsJson(pg, 1, 0))["groups"][0]["trail"].is_array());
     }
 
+    // --- THE UPDATE CHANNEL OF EACH REPORT (field-early-warning) -----------
+    //
+    // `context.updateChannel` is `stable` or `beta`; a group lists the channels its reports came
+    // from, so "this fault is only in the beta copies" is readable at a glance. Anything else
+    // (a spelling, a path) is not shown, and a group with none says nothing.
+    {
+        SymbolArchive archive(archiveRoot.string());
+        nlohmann::json a = makeReport("CHAN", exeName, realBuildId, anchorOffset, "0.99.96",
+                                      "2026-10-26T09:00:00Z");
+        a["context"]["updateChannel"] = "beta";
+        nlohmann::json b = makeReport("CHAN", exeName, realBuildId, anchorOffset, "0.99.96",
+                                      "2026-10-26T10:00:00Z");
+        b["context"]["updateChannel"] = "nightly";
+        nlohmann::json c = makeReport("CHAN", exeName, realBuildId, anchorOffset, "0.99.96",
+                                      "2026-10-26T11:00:00Z");
+        c["context"]["updateChannel"] = "stable";
+        std::string err;
+        const std::vector<ReaderReport> rs = parseReportFeed(feedOf({a, b, c}), err, nullptr);
+        CHECK(rs.size() == 3);
+        CHECK(at(rs, 0).updateChannel == "beta");
+        const std::vector<ReportGroup> groups = groupReports(rs, archive);
+        CHECK(groups.size() == 1);
+        CHECK(at(groups, 0).channels.size() == 2);
+        CHECK(at(at(groups, 0).channels, 0) == "beta");
+        CHECK(at(at(groups, 0).channels, 1) == "stable");
+        const std::string text = renderGroupsText(groups, 3, 0, archive);
+        CHECK(text.find("update channels: beta, stable") != std::string::npos);
+        CHECK(text.find("nightly") == std::string::npos);
+        const nlohmann::json j = parseOrEmpty(renderGroupsJson(groups, 3, 0));
+        CHECK(jat(j["groups"], 0)["channels"].is_array() && jat(j["groups"], 0)["channels"].size() == 2);
+    }
+
     // --- An archive that is not there is said plainly, not crashed on ------
     {
         SymbolArchive missing((archiveRoot / "not-here").string());

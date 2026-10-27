@@ -106,6 +106,8 @@ struct ReaderReport {
     std::string sdrModel;
     // `context.reloadPhase` (0.99.84): the plugin-reload step a freeze was captured in, or empty.
     std::string reloadPhase;
+    // `context.updateChannel` (field-early-warning): "stable" or "beta", else empty.
+    std::string updateChannel;
     // `context.trail` (field-early-warning): the last state changes before the fault, oldest
     // first, as the wire string (`<secs>:<event>[.<word>]` joined by `;`). Not trusted: the
     // grouping keeps only entries that are members of core/event_trail.hpp's closed tables.
@@ -250,6 +252,8 @@ struct ReportGroup {
     // reload step a freeze was in (empty otherwise).
     std::vector<std::string> trail;
     std::string reloadPhase;
+    // The update channels of the group's reports (`beta`, `stable`), sorted, unique.
+    std::vector<std::string> channels;
 
     // Build ids this group needed and the archive did not have. Named, so the
     // answer to "why is this unreadable" is a build id somebody can go and

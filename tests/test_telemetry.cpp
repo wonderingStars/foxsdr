@@ -180,6 +180,7 @@ void testPayloadContainsOnlyTheAgreedFields() {
     r.exits.ended = 1;
     r.exits.unknown = 1;
     r.channel = "installer";
+    r.updateChannel = "beta";
     r.firstRun = "2026-09-29";
     r.firstVersion = "0.99.46";
     r.session.seconds = 3600;
@@ -196,8 +197,8 @@ void testPayloadContainsOnlyTheAgreedFields() {
     // exactly the conversation that should happen.
     const std::set<std::string> allowed = {
         "id", "v", "os", "arch", "launches", "crashes", "exits_died", "exits_killed", "exits_ended",
-        "exits_unknown", "stalls", "health", "ch", "first", "fv", "sessionSec", "sdr", "modes",
-        "panels", "plugins"};
+        "exits_unknown", "stalls", "health", "ch", "uch", "first", "fv", "sessionSec", "sdr",
+        "modes", "panels", "plugins"};
     std::set<std::string> actual;
     for (auto it = j.begin(); it != j.end(); ++it) { actual.insert(it.key()); }
     CHECK(actual == allowed);
@@ -216,6 +217,25 @@ void testPayloadContainsOnlyTheAgreedFields() {
               j["exits_ended"].get<std::uint64_t>() + j["exits_unknown"].get<std::uint64_t>() ==
           j["crashes"].get<std::uint64_t>());
     CHECK(j["ch"] == "installer");
+    // THE UPDATE CHANNEL (field-early-warning): the Updates section's setting, `stable` or `beta`,
+    // and nothing else - the Worker keeps it in its own column and the admin page splits crash
+    // and health rates by it. Anything that is not one of the two words is sent empty, never
+    // forwarded, so the member cannot carry text from the machine.
+    CHECK(j["uch"] == "beta");
+    for (const char* ok : {"stable", "beta"}) {
+        TelemetryReport t = r;
+        t.updateChannel = ok;
+        CHECK(nlohmann::json::parse(t.toJson())["uch"] == ok);
+    }
+    for (const char* bad : {"", "Beta", "STABLE", "nightly", "beta ", "C:/Users/steve/x",
+                            "stable; tuned to 145.500 MHz", "0.99.96"}) {
+        TelemetryReport t = r;
+        t.updateChannel = bad;
+        const nlohmann::json tj = nlohmann::json::parse(t.toJson());
+        CHECK(tj.contains("uch"));
+        CHECK(tj["uch"] == "");
+        CHECK(t.toJson().find("tuned") == std::string::npos);
+    }
     CHECK(j["first"] == "2026-09-29");
     CHECK(j["fv"] == "0.99.46");
     CHECK(j["modes"]["WFM"] == 3000);
@@ -249,6 +269,7 @@ const std::map<std::string, std::string>& usageFieldLabels() {
         {"os", "Operating system"},
         {"arch", "Architecture"},
         {"ch", "How it was installed"},
+        {"uch", "Update channel"},
         {"first", "First run"},
         {"fv", "First version"},
         {"launches", "Launch count"},

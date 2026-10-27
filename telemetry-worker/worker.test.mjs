@@ -354,7 +354,7 @@ test('NEW CLIENT -> OLD WORKER: a 204, the field discarded, and the row exactly 
 
 test('the column budget: Analytics Engine allows 20 blobs and 20 doubles, and this is how many are used', async () => {
   const p = (await post({ ...oldRecord(), stalls: 0, health: HEALTH })).usage[0];
-  assert.equal(p.blobs.length, 14);      // blob14 is the unclean-exits marker (0.99.69); slow frames and recoveries live in blob13
+  assert.equal(p.blobs.length, 15);      // blob14 is the unclean-exits marker (0.99.69); blob15 the update channel (field-early-warning); slow frames and recoveries live in blob13
   assert.equal(p.doubles.length, 16);    // double13..16 are the four unclean-exit counters (0.99.69)
   assert.ok(p.blobs.length <= 20 && p.doubles.length <= 20);
   // The 16 KB blob budget: the longest record this Worker can write is far under it.
@@ -615,6 +615,41 @@ test('early-warning words (recovered.devlatch, recovered.softgl) -> OLD WORKER (
   assert.equal(bad.usage[0].blobs[12], '');
 });
 
+test('the update channel (uch) is stored in blob15 as stable or beta and as nothing else; an OLD Worker drops it, the row otherwise unchanged', async () => {
+  // THE SAME ORDER OF DEPLOYMENT: this Worker is deployed BEFORE the application that sends `uch`
+  // ships, or the channel is dropped with the record taken (a 204 tells the client to forget it).
+  // The Worker as 0.99.95 shipped it, kept byte for byte, is the fixture.
+  const was = (await import('./test-fixtures/worker-0.99.95.js')).default;
+  for (const ch of ['stable', 'beta']) {
+    const sent = { ...newRecord(), v: '0.99.96', stalls: 0, health: 'radio_open.rtlsdr=1', uch: ch };
+    const now = await post(sent);
+    assert.equal(now.status, 204);
+    assert.equal(now.usage[0].blobs.length, 15);
+    assert.equal(now.usage[0].blobs[14], ch);
+    const old = await postTo(was, sent);
+    assert.equal(old.status, 204);
+    assert.equal(old.usage[0].blobs.length, 14, 'the old Worker has no blob15');
+    // Every other column is exactly what the old Worker wrote.
+    assert.deepEqual(now.usage[0].blobs.slice(0, 14), old.usage[0].blobs);
+    assert.deepEqual(now.usage[0].doubles, old.usage[0].doubles);
+    assert.deepEqual(now.usage[0].indexes, old.usage[0].indexes);
+  }
+  // Not reported: an older client, and a client that sent nothing usable. '' means "not reported".
+  const absent = await post({ ...newRecord(), v: '0.99.95', stalls: 0 });
+  assert.equal(absent.usage[0].blobs[14], '');
+  for (const bad of ['', 'Beta', 'STABLE', 'nightly', 'beta ', ' beta', 'stable,beta', 'beta\nstable', '0.99.96',
+    'C:\\Users\\steve\\x', '192.168.0.7', 'beta; tuned to 145.500 MHz', 'x'.repeat(3000), null, 1, true, ['beta'], { a: 'beta' }]) {
+    const r = await post({ ...newRecord(), v: '0.99.96', stalls: 0, uch: bad });
+    assert.equal(r.status, 204);
+    assert.equal(r.usage[0].blobs[14], '', JSON.stringify(bad)?.slice(0, 40));
+  }
+  // A heartbeat cannot carry it: a beat is the id, the version and the marker.
+  const beat = await post({ id: ID, v: '0.99.96', beat: 1, uch: 'beta' });
+  assert.equal(beat.usage.length, 0);
+  assert.equal(beat.beats.length, 1);
+  assert.deepEqual(beat.beats[0].blobs, ['0.99.96']);
+});
+
 test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Worker wrote, and zeros in the new columns', async () => {
   for (const body of [oldRecord(), { ...record064(), stalls: 2 }, { ...record064(), stalls: 2, health: HEALTH },
     { ...record064(), health: '' }]) {
@@ -675,8 +710,9 @@ test('an older client (no split) reads as NOT REPORTED: blob14 is empty and the 
   for (const body of [oldRecord(), { ...oldRecord(), stalls: 1, health: '' },
     { ...oldRecord(), v: '0.99.67', crashes: 3, stalls: 0, health: HEALTH }]) {
     const p = (await post(body)).usage[0];
-    assert.equal(p.blobs.length, 14);
+    assert.equal(p.blobs.length, 15);
     assert.equal(p.blobs[13], '');
+    assert.equal(p.blobs[14], '');   // and no update channel either: an old client sends none
     assert.deepEqual(p.doubles.slice(12), [0, 0, 0, 0]);
   }
 });

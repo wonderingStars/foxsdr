@@ -236,6 +236,10 @@ struct DiagContext {
     // first lines of a long session are gone from it; it is the line a reader of a "died
     // in present" report uses to see what overlay was in the process.
     std::string foreignModules = "(not recorded)";
+    // THE UPDATE CHANNEL SETTING (field-early-warning, AppConfig::updateChannel): "stable" or
+    // "beta", so a report from a beta copy is read against the beta copies' own rates. Rendered
+    // as `update-channel:`; any other value, and the default, say `(not recorded)`.
+    std::string updateChannel;
     std::vector<std::string> plugins;  // "name version", loaded plugins only
     DiagAudio audio;                   // the sound path, see DiagAudio
 };

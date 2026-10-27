@@ -761,6 +761,14 @@ std::string renderDiagContext(const DiagContext& ctx) {
         block += "foreign-modules: " +
                  (!norm.empty() ? norm : (sentence ? v : std::string("(not recorded)"))) + "\n";
     }
+    // THE UPDATE CHANNEL SETTING (field-early-warning), before the plugin list for the same
+    // reason: one of two words, or `(not recorded)` for anything else, so a hand-built context
+    // cannot carry text through this line.
+    block += "update-channel: " +
+             ((ctx.updateChannel == "stable" || ctx.updateChannel == "beta")
+                  ? ctx.updateChannel
+                  : std::string("(not recorded)")) +
+             "\n";
     if (ctx.plugins.empty()) {
         block += "plugin: (none)\n";
     } else {
@@ -1062,7 +1070,10 @@ const std::vector<std::string>& bundleFieldNames() {
         "patch-radios",
         // The other software's DLLs in the process, by file name (0.99.69): see
         // DiagContext::foreignModules.
-        "foreign-modules"};
+        "foreign-modules",
+        // The Updates setting, stable or beta (field-early-warning): see
+        // DiagContext::updateChannel.
+        "update-channel"};
     return names;
 }
 

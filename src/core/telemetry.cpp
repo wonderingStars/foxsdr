@@ -278,6 +278,9 @@ std::string TelemetryReport::toJson() const {
     // with, only legal tokens leave the machine.
     j["health"] = health::sanitise(health);
     j["ch"] = channel;
+    // The update channel setting, `stable` or `beta` and nothing else: any other value leaves
+    // as "" (not reported), so the member cannot carry text from the machine.
+    j["uch"] = (updateChannel == "stable" || updateChannel == "beta") ? updateChannel : std::string();
     j["first"] = firstRun;
     j["fv"] = firstVersion;
     j["sessionSec"] = session.seconds;

@@ -527,6 +527,13 @@ void Engine::refreshDiagContext() {
     // seen at start and since. In the one builder, so a bundle and a fault report say the
     // same thing about it.
     ctx.foreignModules = foreignModules_.contextValue();
+    // The Updates setting (field-early-warning), so a report from a beta copy is read against the beta copies' own rate. One of two words; the
+    // context block says anything else is not recorded. The setting is the interface's half (core/config_halves.hpp): the engine holds the copy
+    // the interface last sent, under the half's own mutex.
+    {
+        std::lock_guard<std::mutex> halfLock(interfaceHalfMutex_);
+        ctx.updateChannel = interfaceCfg_.updateChannel;
+    }
     // The sound path: the same facts the Sinks panel's chip and the rail's
     // volume, mute and squelch controls show, none of them a frequency.
     {
@@ -8580,6 +8587,10 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
     r.os = cascade::core::osDescription();
     r.arch = cascade::core::archDescription();
     r.channel = cascade::core::installChannel();
+    {
+        std::lock_guard<std::mutex> halfLock(interfaceHalfMutex_);
+        r.updateChannel = interfaceCfg_.updateChannel;   // "stable" or "beta"; toJson sends anything else empty
+    }
     r.firstRun = telemetryFirstRun_;
     r.firstVersion = telemetryFirstVersion_;
     r.launches = telemetryLaunches_;

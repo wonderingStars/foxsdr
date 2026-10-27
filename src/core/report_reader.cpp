@@ -132,6 +132,7 @@ std::vector<ReaderReport> parseReportFeed(const std::string& jsonText, std::stri
             r.source = jstr(c, "source");
             r.sdrModel = jstr(c, "sdrModel");
             r.reloadPhase = jstr(c, "reloadPhase");
+            r.updateChannel = jstr(c, "updateChannel");
             r.trail = jstr(c, "trail");
             if (c.contains("sampleRate") && c["sampleRate"].is_number()) {
                 r.sampleRateHz = c["sampleRate"].get<double>();
@@ -566,6 +567,7 @@ std::vector<ReportGroup> groupReports(const std::vector<ReaderReport>& reports,
         std::set<std::string> versions;
         std::set<std::string> oses;
         std::set<std::string> plugins;
+        std::set<std::string> channels;
         std::set<std::string> missing;
         const ReaderReport* rep = nullptr;
     };
@@ -588,6 +590,7 @@ std::vector<ReportGroup> groupReports(const std::vector<ReaderReport>& reports,
         ++a.g.count;
         if (!r.version.empty()) { a.versions.insert(r.version); }
         if (!r.os.empty()) { a.oses.insert(r.os); }
+        if (r.updateChannel == "stable" || r.updateChannel == "beta") { a.channels.insert(r.updateChannel); }
         for (const ReaderPlugin& p : r.plugins) {
             if (!p.name.empty()) { a.plugins.insert(p.name + " " + p.version); }
         }
@@ -612,6 +615,7 @@ std::vector<ReportGroup> groupReports(const std::vector<ReaderReport>& reports,
         a.g.versions = sortedUnique(a.versions);
         a.g.osVersions = sortedUnique(a.oses);
         a.g.plugins = sortedUnique(a.plugins);
+        a.g.channels = sortedUnique(a.channels);
         if (a.rep != nullptr) {
             const ReaderReport& r = *a.rep;
             a.g.module = r.module;
@@ -755,6 +759,7 @@ std::string renderGroupsText(const std::vector<ReportGroup>& groups, int totalRe
         if (!g.missingBuildIds.empty()) {
             out += "    missing symbols for build id(s): " + joinList(g.missingBuildIds) + "\n";
         }
+        if (!g.channels.empty()) { out += "    update channels: " + joinList(g.channels) + "\n"; }
         if (!g.reloadPhase.empty()) { out += "    reload step: " + g.reloadPhase + "\n"; }
         if (!g.trail.empty()) {
             out += "    what led up to it (oldest first):\n";
@@ -814,6 +819,7 @@ std::string renderGroupsJson(const std::vector<ReportGroup>& groups, int totalRe
         e["frames"] = std::move(frames);
         e["log"] = g.log;
         e["trail"] = g.trail;
+        e["channels"] = g.channels;
         e["reloadPhase"] = g.reloadPhase;
         // installId is DELIBERATELY absent, here and in the text rendering. It
         // exists so the receiving end can rate-limit one machine; a reader that

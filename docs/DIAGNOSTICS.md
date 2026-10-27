@@ -5006,6 +5006,50 @@ exercised by any test:** a real log off or
 shutdown; a real Task Manager *End task* (the exit code was measured with `taskkill /F`, not
 with it); a shutdown that wedges for the full 27 s; the Store package; Linux.
 
+## Field-issue early warning: learning of a bug before a user writes (field-early-warning)
+
+Four pieces, each shippable alone, that turn what the application already knows into
+something the owner is told about:
+
+1. **New-signature alerting** (the site, `foxsdr-site`): the site's owner-alert engine
+   (`alerts.go`) already emailed new fault groups, regressions, bursts, WORSE versions and
+   radios failing. It now also pushes to an ntfy topic (`FOXSDR_NTFY_TOPIC`, a long random
+   name that is the only secret; `FOXSDR_NTFY_URL` defaults to `https://ntfy.sh`), adds a
+   *spike* event - a known group reported by three or more distinct installs inside 24 hours
+   in a version newer than any it was seen in before - and a daily digest (admin page and
+   `/admin/early-warning.json`, emailed through the site's existing mailer). Nothing from a
+   report's body is in a push. The site's README has the owner's steps.
+2. **Health counters** on the usage record's `health` string: most of what the application
+   counts internally was already there (the Recovered ledger incl. `ringdrop` - the
+   dsp-dropped figure - `reopen`, `vendorcall`, `enumchild`, `dspexc`, the `slow.*` tiers
+   which are the freeze watchdog's near-misses, the radio-open failures). Added:
+   `recovered.devlatch` (an SDRplay stream failure latched the source) and
+   `recovered.softgl` (this run is drawn by the software OpenGL renderer). The Worker, the
+   site's `health_vocabulary.json` and PRIVACY.md carry the same words, held together by
+   `tests/test_health_events.cpp`.
+3. **Breadcrumb trail** in crash and freeze reports (above, *The breadcrumb trail*), which
+   folds in the 0.99.84 `reload-phase` work: each reload step is also a trail entry.
+4. **Beta canary**: the usage record carries the Updates setting as `uch` (`stable` or
+   `beta`; the Worker's `blob15`) and every report's context block carries
+   `update-channel:` (sent as `context.updateChannel`), so the site can split each
+   version's crash, freeze and health rates by channel (`/admin/channels`,
+   `/admin/channels.json`). `''` is "not reported", never "stable": versions before
+   0.99.96 and copies that did not say are listed apart. The channel is the setting AT THE
+   TIME THE RECORD IS SENT: the usage record describes the previous session and is sent at
+   the next start, so a person who switched channels in between is counted under the new one.
+
+**Deployment order.** The Worker first (`telemetry-worker`: `npx wrangler deploy`), because it
+drops a word or a field it does not know and the old Worker answers 204, which tells the
+application to forget the count. Then the site (it reads the new columns behind a guard, so
+it also works before the Worker stores them), then the application release.
+
+**What is not in it, on purpose.** No new identifier, no free text, no frequency, path,
+serial number or device name anywhere; the trail and the channel are checked against closed
+tables on the way out of the machine as well as on the way in at the site. Absorbed driver
+faults need no counter: the crash handler already files them as reports (reason: `fault in
+a third-party SDR module, absorbed`), and the site's new-group and spike alerts see them
+like any other.
+
 ## Symbols — where the archive lives, and why that was a decision
 
 A captured stack is `module+offset`. Turning an offset back into a function and

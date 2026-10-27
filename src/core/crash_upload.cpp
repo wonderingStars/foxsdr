@@ -336,6 +336,10 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                 // names, so a hand-edited or damaged line cannot carry anything else out, and
                 // empty for every value that is not a list (`(not recorded)` and the rest).
                 out.foreignModules = normaliseForeignField(v);
+            } else if (k == "update-channel") {
+                // The Updates setting (field-early-warning): exactly `stable` or `beta`, else
+                // nothing - `(not recorded)`, a hand-written value, anything else.
+                out.updateChannel = (v == "stable" || v == "beta") ? v : std::string();
             } else if (k == "plugin") {
                 if (v != "(none)" && !v.empty() && out.plugins.size() < kMaxPlugins) {
                     out.plugins.push_back(v);
@@ -552,6 +556,12 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     // member, only entries made of the trail's fixed words leave the machine. Always present,
     // empty when the report had none: the inventory is exact both ways.
     ctx["trail"] = trail::sanitise(r.trail);
+    // The Updates setting, `stable` or `beta` (field-early-warning): lets the receiving end read
+    // each version's crash rate per channel. Re-checked here as the request is built, always
+    // present, empty when the report did not say.
+    ctx["updateChannel"] = (r.updateChannel == "stable" || r.updateChannel == "beta")
+                               ? r.updateChannel
+                               : std::string();
     j["context"] = std::move(ctx);
 
     nlohmann::json log = nlohmann::json::array();
@@ -654,7 +664,7 @@ const std::vector<std::string>& uploadContextFieldNames() {
                                                    "deviceOpen", "sdrModel", "uptimeSec",
                                                    "faultThreadOwn", "foreignModules",
                                                    "reloadPhase", "blamedPlugin", "blamedPluginVersion",
-                                                   "blamedPluginOrigin", "trail"};
+                                                   "blamedPluginOrigin", "trail", "updateChannel"};
     return names;
 }
 

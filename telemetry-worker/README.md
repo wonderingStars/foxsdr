@@ -74,6 +74,7 @@ corrupts every row written before.
 | `blob12` | `'1'` when this client sent failure counts (`health`), else `''` |
 | `blob13` | the counts, `token=count,token=count` from the fixed vocabulary, canonical order: failures, then `slow.<scope>.<tier>`, then `recovered.<what>`; `''` when nothing was counted - meaningful only where `blob12 = '1'` |
 | `blob14` | `'1'` when this client sent the unclean-exit split by cause (`exits_died`, `exits_killed`, `exits_ended`, `exits_unknown`), else `''` (0.99.69) |
+| `blob15` | the **update channel** setting, `stable` or `beta` (field-early-warning, from 0.99.96); `''` when the client did not send it or sent anything else. Not `blob8`: that is where the copy came from (store, installer...), this is which releases it asked to be offered (`AppConfig::updateChannel`, since 0.99.88). The site splits each version's crash, freeze and health rates by it. **Always ask with `blob15 != ''`; `''` is "not reported", never "stable".** Deploy the Worker before the application that sends `uch`: the old Worker answers 204 and drops it. |
 | `double1` | launches since install (lifetime) |
 | `double2` | unclean exits since install (lifetime) |
 | `double3` | length of the session the record describes, seconds |
@@ -91,8 +92,8 @@ corrupts every row written before.
 | `double15` | unclean exits that were the operating system closing the session - **ended** (lifetime) - only where `blob14 = '1'` |
 | `double16` | unclean exits with no evidence of how they ended - **unknown** (lifetime) - only where `blob14 = '1'` |
 
-Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob14`
-and `double1`..`double16` are used: 6 blobs and 4 doubles are free. Slow frames and
+Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob15`
+and `double1`..`double16` are used: 5 blobs and 4 doubles are free. Slow frames and
 recoveries took no blob (they ride in `blob13`) and three doubles; the unclean-exit split
 took one blob (its marker) and four doubles. (The 16 KB limit on a row's blobs is
 nowhere near: `blob13` is never more than 832 characters.)

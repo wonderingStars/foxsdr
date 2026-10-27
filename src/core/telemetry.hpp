@@ -113,6 +113,11 @@ struct TelemetryReport {
     // date and version are written once, when the install id is created, and
     // deleted with it. Empty for installs older than that - never guessed.
     std::string channel;       // "store", "installer", "appimage", "tarball", "android"
+    // THE UPDATE CHANNEL SETTING (field-early-warning, AppConfig::updateChannel since 0.99.88):
+    // "stable" or "beta". Sent as `uch`; toJson() sends anything else as "", so the member
+    // cannot carry text. It lets the server read each version's crash and health rates per
+    // channel, which is how a beta can be told from a stable release before stable is moved.
+    std::string updateChannel;
     std::string firstRun;      // "2026-09-29", UTC day only
     std::string firstVersion;  // "0.99.47"
     TelemetrySession session;

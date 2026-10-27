@@ -50,6 +50,14 @@ function scrubModel(v) {
   if (kept.length === 0) return dropped ? 'other' : '';
   return kept.join(' ');
 }
+// THE UPDATE CHANNEL (field-early-warning): the Updates section's setting, `stable` or `beta`,
+// and nothing else. Anything that is not exactly one of the two words - another spelling, a
+// number, an array, a longer string - is "not reported" ('') and the rest of the record is still
+// written. Kept apart from `ch` (blob8), which is where the copy came from (store, installer...).
+function updateChannel(v) {
+  return v === 'stable' || v === 'beta' ? v : '';
+}
+
 function num(v, max) {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), max) : 0;
@@ -377,6 +385,11 @@ export default {
         // a malformed one - so double13..double16 are meaningful only where
         // blob14 = '1'. Appended AFTER the existing columns: nothing earlier changed.
         exits === null ? '' : '1',  // blob14 '1' = the client reported unclean exits by cause
+        // field-early-warning: the update channel setting, `stable` or `beta`; '' for a client
+        // that does not send it (before 0.99.96) and for any other value. It lets the admin page
+        // split each version's crash, freeze and health rates by channel. Appended after the
+        // existing columns: nothing earlier changed meaning.
+        updateChannel(body.uch),    // blob15 update channel (stable/beta), '' = not reported
       ],
       doubles: [
         num(body.launches, 1e6),    // double1  launches since install

@@ -184,6 +184,11 @@ struct ParsedReport {
     // build's, a sentinel's) and for any value that is not made of those entries.
     std::string trail;
 
+    // The context block's `update-channel:` line (field-early-warning): "stable" or "beta", the
+    // Updates section's setting, and EMPTY for anything else - `(not recorded)`, a report from
+    // an older build, a sentinel's, a value a hand wrote.
+    std::string updateChannel;
+
     // The `--- process ---` block both writers add since 0.89.0. `uptimeSec`
     // is seconds from process start to the fault (0 when the report predates
     // the block). `faultThreadOwn` is the crash writer's "yes"/"no"/"unknown"

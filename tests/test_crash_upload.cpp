@@ -1123,6 +1123,46 @@ int main() {
         }
     }
 
+    // --- The update channel rides in the context (field-early-warning) ------
+    //
+    // The shared context block carries `update-channel:` (stable or beta, the Updates section's
+    // setting); it goes up as `context.updateChannel` so the receiving end can read each
+    // version's crash rate per channel. Only the two words are forwarded - the line is read back
+    // off a file on disk - and a report without it (every report before this build, a sentinel's)
+    // sends the key empty: the inventory is exact both ways.
+    {
+        auto withChannel = [](std::string text, const std::string& value) {
+            const std::string ctx = "--- context ---\n";
+            const std::size_t at = text.find(ctx);
+            CHECK(at != std::string::npos);
+            if (at != std::string::npos) { text.insert(at + ctx.size(), "update-channel: " + value + "\n"); }
+            return text;
+        };
+        for (const std::string& base : {crashReportText(), hangReportText()}) {
+            for (const char* ok : {"stable", "beta"}) {
+                ParsedReport r;
+                CHECK(parseReportText(withChannel(base, ok), r));
+                CHECK(r.updateChannel == ok);
+                const nlohmann::json j = parseOrEmpty(uploadJson(r, std::string()));
+                CHECK(j["context"].value("updateChannel", std::string("x")) == ok);
+            }
+            // (A trailing space is trimmed by the line parser for every key, so "beta " is "beta".)
+            for (const char* bad : {"(not recorded)", "", "Beta", "nightly", "beta x", "stable beta",
+                                    "C:/Users/someone/x", "beta; tuned to 145.500 MHz"}) {
+                ParsedReport r;
+                CHECK(parseReportText(withChannel(base, bad), r));
+                if (!r.updateChannel.empty()) { std::printf("FAIL channel \"%s\" was carried\n", bad); }
+                CHECK(r.updateChannel.empty());
+            }
+            ParsedReport plain;
+            CHECK(parseReportText(base, plain));
+            CHECK(plain.updateChannel.empty());
+            const nlohmann::json pj = parseOrEmpty(uploadJson(plain, std::string()));
+            CHECK(pj["context"].contains("updateChannel"));
+            CHECK(pj["context"].value("updateChannel", std::string("x")).empty());
+        }
+    }
+
     // --- Rubbish is refused rather than posted ------------------------------
     {
         ParsedReport r;
