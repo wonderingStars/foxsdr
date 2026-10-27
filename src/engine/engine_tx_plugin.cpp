@@ -106,7 +106,7 @@ std::int32_t Engine::applyPluginTxGrantOp(const std::string& moduleFile, bool gr
         if (!listHas(pluginTransmitAllowed_, moduleFile)) { pluginTransmitAllowed_.push_back(moduleFile); }
         pluginApi_->setTxGranted(moduleFile, true);
         // An ARM refusal that said "no plugin has been granted TRANSMIT" is answered by this.
-        if (txArmRefusal_ == cc::TxArming::Refusal::NoGrant) { txArmRefusal_ = cc::TxArming::Refusal::None; }
+        if (txArmRefusal_.load(std::memory_order_seq_cst) == cc::TxArming::Refusal::NoGrant) { txArmRefusal_.store(cc::TxArming::Refusal::None, std::memory_order_seq_cst); }
     } else {
         // Any name: a grant held for a module that has since gone is still one the operator can take back.
         const auto it = std::find(pluginTransmitAllowed_.begin(), pluginTransmitAllowed_.end(), moduleFile);
@@ -138,8 +138,10 @@ std::string Engine::txFirstGrantName() const {
 // --- the window --------------------------------------------------------------------------------------------------------------------
 
 void Engine::txPluginDisarm(const char* why) {
+    // ANY THREAD (see the lease's note in engine.hpp): the window under its lock, then the owner, an atomic store. The order is the old one; the closed window is what every
+    // reader tests first, so a reader between the two sees a closed window with a stale owner, and that is inert.
     if (txArming_.disarm(why)) { cc::diagLogf("tx: disarmed (%s)", why != nullptr ? why : "no reason given"); }
-    txArmOwner_ = 0;
+    txArmOwner_.store(0, std::memory_order_seq_cst);
 }
 
 void Engine::txPluginEnd(const char* why) {
@@ -168,18 +170,18 @@ FoxCommandResult Engine::txPluginArmOp(std::uint64_t session, bool remote, bool 
 
     if (minutes == -1) {
         // THE PAGE IS LIVE, said again. Only the session that holds the window can say it, and only while one is open: anything else is a no-op that says so.
-        if (!txArming_.armed() || txArmOwner_ != session) {
+        if (!txArming_.armed() || txArmOwner_.load(std::memory_order_seq_cst) != session) {
             res.status = FOXAPI_NO_CHANGE;
             return res;
         }
-        txArmLiveMs_ = nowMs;
+        txArmLiveMs_.store(nowMs, std::memory_order_seq_cst);
         return res;
     }
     if (minutes == 0) {
         // CLOSING IS ANY LOCAL SESSION'S: it only ever makes things safer. ival[1] says why (the two sentences the page lets the log carry).
         if (txArming_.armed()) { txPluginDisarm(c.ival[1] == 1 ? "the TRANSMIT page was closed" : "you pressed OFF"); }
         // OFF also answers a refusal the page was still lettering.
-        txArmRefusal_ = cc::TxArming::Refusal::None;
+        txArmRefusal_.store(cc::TxArming::Refusal::None, std::memory_order_seq_cst);
         res.applied[0] = 0.0;
         return res;
     }
@@ -189,7 +191,7 @@ FoxCommandResult Engine::txPluginArmOp(std::uint64_t session, bool remote, bool 
     const bool radioOpen = transmitter_.haveSink() && !(transmitter_.sink() != nullptr && transmitter_.sink()->faulted());
     const int asked = minutes > 0 && minutes < 1000 ? static_cast<int>(minutes) : -1;   // (a number the window cannot mean is BadMinutes below)
     const cc::TxArming::Refusal r = txArming_.arm(asked, radioOpen, txAnyGrant(), cc::TxArming::Clock::now());
-    txArmRefusal_ = r;
+    txArmRefusal_.store(r, std::memory_order_seq_cst);
     res.applied[0] = static_cast<double>(static_cast<int>(r));
     switch (r) {
         case cc::TxArming::Refusal::None: break;
@@ -204,8 +206,10 @@ FoxCommandResult Engine::txPluginArmOp(std::uint64_t session, bool remote, bool 
     // the only place that clears it.
     transmitter_.clearPluginFault();
     txFaultsSeen_ = transmitter_.faultCount();
-    txArmOwner_ = session;
-    txArmLiveMs_ = nowMs;
+    // The page's stamp BEFORE the owner (both seq_cst): a drive that sees the new owner sees a fresh stamp with it, never the previous window's old one. (On the pass nothing is
+    // between the two; the order only matters to a reader on another thread, and then it is the fail-safe one.)
+    txArmLiveMs_.store(nowMs, std::memory_order_seq_cst);
+    txArmOwner_.store(session, std::memory_order_seq_cst);
     cc::diagLogf("tx: armed %d min", asked);
     res.applied[0] = 0.0;
     return res;
@@ -231,7 +235,7 @@ void Engine::txPluginStep(const TxPluginLease& lease) {
     txArming_.update(now, &expired);
     if (expired) {
         cc::diagLogf("tx: disarmed (%s)", txArming_.lastReason().c_str());
-        txArmOwner_ = 0;
+        txArmOwner_.store(0, std::memory_order_seq_cst);
     }
 
     const bool haveSink = transmitter_.haveSink();
@@ -248,7 +252,7 @@ void Engine::txPluginStep(const TxPluginLease& lease) {
             leaseLost = "the window that armed this was closed";
         } else if (lease.beatAgeMs > leaseMs) {
             leaseLost = "the window stopped responding";
-        } else if (nowMs - txArmLiveMs_ > leaseMs) {
+        } else if (nowMs - txArmLiveMs_.load(std::memory_order_seq_cst) > leaseMs) {
             leaseLost = "the TRANSMIT page was closed";
         }
     }
@@ -413,7 +417,7 @@ void Engine::buildApiListsTxPlugin(ApiListBlock& b) {
     put("tx.plugin.secondsLeft", armed ? std::to_string(txArming_.secondsLeft(cc::TxArming::Clock::now())) : std::string());
     put("tx.plugin.name", armed ? txFirstGrantName() : std::string());
     put("tx.plugin.keyed", transmitter_.pluginKeyed() ? txKeyedName_ : std::string());
-    put("tx.plugin.refusal", std::to_string(static_cast<int>(txArmRefusal_)));
+    put("tx.plugin.refusal", std::to_string(static_cast<int>(txArmRefusal_.load(std::memory_order_seq_cst))));
     // Why the window last closed, when it did not close by the operator's own OFF (the page letters it in amber).
     put("tx.plugin.reason", (!armed && txArming_.lastReason() != "you pressed OFF") ? txArming_.lastReason() : std::string());
     put("tx.plugin.dataFlat", txDataFlat_ ? "1" : "0");

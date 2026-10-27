@@ -2196,8 +2196,11 @@ void ApiHostImpl::txPass() {
     // whether the session that opened it is still open and still beating.
     {
         TxPluginLease lease;
-        if (engine_.txArmOwner_ != 0) {
-            const cascade::core::TxKeyRules::Liveness l = sessionsView_.find(engine_.txArmOwner_);
+        // The owner is read ONCE (an atomic: a thread that closed the window beside the pass - a test's direct applyCommand - may zero it between a test and a use; the one
+        // value read is then either the owner or none, and a session that is gone is a lost lease, the safe answer).
+        const std::uint64_t armOwner = engine_.txArmOwner_.load(std::memory_order_seq_cst);
+        if (armOwner != 0) {
+            const cascade::core::TxKeyRules::Liveness l = sessionsView_.find(armOwner);
             lease.sessionPresent = l.present;
             lease.sessionRemote = l.remote;
             lease.beatAgeMs = now - l.lastBeatMs;

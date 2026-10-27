@@ -5150,7 +5150,7 @@ void Engine::openTransmitRadio() {
         transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
         transmitter_.setInput(cascade::core::TxInput::Tone);
         transmitter_.setDataFlat(txDataFlat_);
-        if (txArmRefusal_ == cascade::core::TxArming::Refusal::NoRadio) { txArmRefusal_ = cascade::core::TxArming::Refusal::None; }
+        if (txArmRefusal_.load(std::memory_order_seq_cst) == cascade::core::TxArming::Refusal::NoRadio) { txArmRefusal_.store(cascade::core::TxArming::Refusal::None, std::memory_order_seq_cst); }
         return;
     }
     auto tx = std::make_unique<cascade::source::PlutoTx>();
@@ -5172,7 +5172,7 @@ void Engine::openTransmitRadio() {
     transmitter_.setToneHz(transmitToneHz_);
     transmitter_.setDataFlat(txDataFlat_);
     // An ARM refusal that said "no transmitter is open" is answered by this (stub campaign B13).
-    if (txArmRefusal_ == cascade::core::TxArming::Refusal::NoRadio) { txArmRefusal_ = cascade::core::TxArming::Refusal::None; }
+    if (txArmRefusal_.load(std::memory_order_seq_cst) == cascade::core::TxArming::Refusal::NoRadio) { txArmRefusal_.store(cascade::core::TxArming::Refusal::None, std::memory_order_seq_cst); }
     followTransmitFrequency();
 }
 

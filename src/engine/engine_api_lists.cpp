@@ -443,7 +443,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(txArming_.minutes());
     f.value(txArming_.armed() ? txArming_.secondsLeft(cascade::core::TxArming::Clock::now()) : 0);
     f.text(txArming_.lastReason());
-    f.value(static_cast<int>(txArmRefusal_));
+    f.value(static_cast<int>(txArmRefusal_.load(std::memory_order_seq_cst)));
     f.value(transmitter_.pluginKeyed());
     f.text(txKeyedName_);
     f.value(txDataFlat_);

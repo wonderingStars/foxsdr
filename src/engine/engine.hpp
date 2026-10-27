@@ -3117,11 +3117,63 @@ private:
     // receiver stopped, the transmitter changed, the engine stopping, the window gone or silent, and (a deliberate hardening master lacked) THE KEYED PLUGIN GOING DORMANT, STOPPED,
     // UNLOADED OR REBUILT - which unkeys AND closes the window, so a plugin woken again does not re-key until a person arms it.
     std::shared_ptr<cascade::core::TxAudioLink> txLink_ = std::make_shared<cascade::core::TxAudioLink>();  // the ring the runner writes and the Transmitter reads
-    cascade::core::TxArming txArming_;                  // THE WINDOW. Pass thread. Session-only: no field of the config can hold one.
-    std::uint64_t txArmOwner_ = 0;                      // the lease: the session that opened it (0 none)
-    std::int64_t txArmLiveMs_ = 0;                      // ...and the steady-clock millisecond it last said the page is on screen
-    cascade::core::TxArming::Refusal txArmRefusal_ = cascade::core::TxArming::Refusal::None;   // why the last ARM was refused (published; cleared by what answers it)
-    std::uint64_t txFaultsSeen_ = 0;                    // Transmitter::faultCount() at the last drive: a change closes the window
+    // THE LEASE'S STATE AND WHICH THREAD MAY TOUCH IT (the closing ThreadSanitizer sweep of the stub campaign, B20, docs/engine-stage4.md 6.23 finding 1; fixed after it).
+    // The lease is DECIDED on the pass (txPluginStep, txPluginArmOp, txPluginAfterTick, ApiHostImpl::txPass reading the owner) and in the PRODUCT every write to it is on the pass
+    // or on a thread with no pass beside it: the config's load (applyConfig runs before startControlThread, in the window's constructor and in EngineService::restore), the
+    // plugin unload/rebuild/stop/dormancy paths (the pass), the shutdown paths (shutdownQuiesce/teardown join the control thread first), and stopControlThread (atomics only).
+    // But Engine::applyCommand is also CALLED DIRECTLY by tests (rawEngine, e.applyCommand(RUN 0) beside a free-running pass: tests/test_web_pictures.cpp), and its stop reaches
+    // txPluginEnd -> txPluginDisarm from that thread. So the three things txPluginDisarm and the readers of them share are made safe for ANY thread, and nothing else is:
+    //   - txArmOwner_, txArmLiveMs_, txArmRefusal_: std::atomic, every access seq_cst (the discipline of txPluginStopping_, commit 5415eca1: one total order for the whole
+    //     TX path's cross-thread state, nothing weaker to reason about). They are independent scalars - a reader needs no other value to interpret one - so seq_cst is chosen for
+    //     uniformity, not because anything here needs more than release/acquire.
+    //   - txArming_: TxWindow, below - core::TxArming under a mutex, because it holds a std::string (the last reason) and no atomic can.
+    // NOT made safe, on purpose: txFaultsSeen_ (written by the arm op and the drive, both the pass), txKeyedKey_/txKeyedName_/txWhyNot_ and the rest (the drive and the module-going
+    // paths, the pass). An off-pass caller of txPluginModuleGoing, or of the drive, is outside this contract.
+    // WHAT AN OFF-PASS txPluginEnd DOES NOT GIVE (and the product never needs): the key is lowered FIRST and the window closed SECOND (engine_tx_plugin.cpp), so a drive that
+    // had already decided "yes" can raise the key again between the two. The window is closed by then, so the NEXT drive finds it closed and lowers it (one pass, and the
+    // Transmitter's own dead-man and cap bound it either way). On the pass the two steps are one step.
+    class TxWindow {
+    public:
+        using Clock = cascade::core::TxArming::Clock;
+        cascade::core::TxArming::Refusal arm(int minutes, bool radioOpen, bool anyGrant, Clock::time_point now) {
+            std::lock_guard<std::mutex> lk(m_);
+            return w_.arm(minutes, radioOpen, anyGrant, now);
+        }
+        bool disarm(const char* reason) {
+            std::lock_guard<std::mutex> lk(m_);
+            return w_.disarm(reason);
+        }
+        bool update(Clock::time_point now, bool* expired = nullptr) {
+            std::lock_guard<std::mutex> lk(m_);
+            return w_.update(now, expired);
+        }
+        bool armed() const {
+            std::lock_guard<std::mutex> lk(m_);
+            return w_.armed();
+        }
+        int minutes() const {
+            std::lock_guard<std::mutex> lk(m_);
+            return w_.minutes();
+        }
+        int secondsLeft(Clock::time_point now) const {
+            std::lock_guard<std::mutex> lk(m_);
+            return w_.secondsLeft(now);
+        }
+        // BY VALUE: TxArming::lastReason hands out a reference to a string disarm() rewrites.
+        std::string lastReason() const {
+            std::lock_guard<std::mutex> lk(m_);
+            return w_.lastReason();
+        }
+
+    private:
+        mutable std::mutex m_;      // a leaf: nothing is called, logged or locked while it is held
+        cascade::core::TxArming w_;
+    };
+    TxWindow txArming_;                                 // THE WINDOW. Session-only: no field of the config can hold one.
+    std::atomic<std::uint64_t> txArmOwner_{0};          // the lease: the session that opened it (0 none)
+    std::atomic<std::int64_t> txArmLiveMs_{0};          // ...and the steady-clock millisecond it last said the page is on screen
+    std::atomic<cascade::core::TxArming::Refusal> txArmRefusal_{cascade::core::TxArming::Refusal::None};   // why the last ARM was refused (published; cleared by what answers it)
+    std::uint64_t txFaultsSeen_ = 0;                    // Transmitter::faultCount() at the last drive: a change closes the window (pass thread only)
     std::string txKeyedKey_;                            // the module file of the plugin that is on the air ("" none)
     std::string txKeyedName_;                           // ...and its name, for the log and the page
     std::string txWhyNot_;                              // why the last drive withheld the key (the unkey line says it)

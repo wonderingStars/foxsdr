@@ -162,11 +162,24 @@ struct AppWindowTestAccess {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
+    // WHAT THE WINDOW LAST SAW OF THE TWO TAKES, against what the recorders are doing now (the published flags are the recorders' own: Engine::publishReceiverState). A take's
+    // file opens on a worker and the FREE-RUNNING pass collects it - arms the recorder - whenever it next runs, which can be in the gap between this look's publish and the
+    // "is a start out" test below: the start is then no longer out, the second look is skipped, and the window's state stays one publish behind, the take drawn as not
+    // recording. Native that gap is microseconds wide and is never seen; under ThreadSanitizer (about ten times slower) it was hit in every run (stub campaign B20: five checks
+    // of this test, test_recorder_bookmarks_scanner_free, 4 of 4 runs, no race report - the window's sampling, not the engine's start).
+    static bool takeStateStale(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            const bool iq = rawEngine(a.engine_).iqRecorder_.recording();
+            const bool audio = rawEngine(a.engine_).audioRecorder_.recording();
+            return iq != ((a.uiState_.flags & FOXAPI_RX_RECORDING_IQ) != 0u) || audio != ((a.uiState_.flags & FOXAPI_RX_RECORDING_AUDIO) != 0u);
+        });
+    }
     static void look(AppWindow& a, bool scannerTick = false) {
         lookOnce(a, scannerTick);
         // The file of a take this look just asked for opens on a worker: wait for it, then look again, so the take is armed and published
-        // (the product's next pass does the same).
-        if (recordStartsOut(a)) {
+        // (the product's next pass does the same). Looked at again too when the take was armed in between (above), until the window and the recorders agree - bounded: a
+        // take that really cannot start (a refused one) is left to say so itself.
+        for (int again = 0; again < 20 && (recordStartsOut(a) || takeStateStale(a)); ++again) {
             settleRecordStarts(a);
             lookOnce(a, false);
         }
@@ -1355,6 +1368,16 @@ std::vector<std::string> clickEverything(AppWindow& app, F body, std::vector<cmd
     return out;
 }
 
+// A PATH WITH A ROOT, on the platform the test runs on. The Import key sends a rooted path to the engine at once and looks for any other on a worker first
+// (AppWindow::importBookmarkFile: std::filesystem has_root_path), so "C:/lists/frequencies.xml" - rooted on Windows, a relative path on Linux, where it is a directory
+// "C:" - sent nothing within the sweep there and these two sets were short by the import in every ThreadSanitizer run (the only Linux run this test has; B20's finding,
+// no race report). The test means "the Import key sends the typed path", so it types a path that is rooted wherever it runs.
+#if defined(_WIN32)
+constexpr const char* kRootedImportPath = "C:/lists/frequencies.xml";
+#else
+constexpr const char* kRootedImportPath = "/lists/frequencies.xml";
+#endif
+
 // What the clicks of G sent, kept for H to replay.
 struct Captured {
     std::vector<cmd::QueuedCommand> recorder, scanner, bookmarks;
@@ -1529,14 +1552,14 @@ void testDrawnAndClicked() {
 
         // One group chosen and an import path typed: the group's removal and the import appear; only that group's rows are shown.
         Access::groupSel(app) = 1;  // "Airband" (sorted first)
-        std::strcpy(Access::importPath(app), "C:/lists/frequencies.xml");
+        std::strcpy(Access::importPath(app), kRootedImportPath);
         Access::rebuild(app);
         CHECK_EQ(Access::groups(app)[0], std::string("Airband"));
         CHECK_EQ(Access::view(app).size(), 2u);
         std::string airIds;
         for (const std::uint32_t r : Access::view(app)) { airIds += std::to_string(list[r].id) + " "; }
         want = {expect("BOOKMARK_ADD", 0, 0, 0, 0, 0, 0, "Mine"),
-                expect("APP_BOOKMARK_IMPORT_FILE", 0, 0, 0, 0, 0, 0, "C:/lists/frequencies.xml"),
+                expect("APP_BOOKMARK_IMPORT_FILE", 0, 0, 0, 0, 0, 0, kRootedImportPath),
                 expect("APP_BOOKMARK_EXPORT", 0, 0, 0, 0, 0, 0, airIds),
                 expect("BOOKMARK_REMOVE_GROUP", 0, 0, 0, 0, 0, 0, "Airband")};
         for (int i = 1; i < 3; ++i) {

@@ -100,7 +100,7 @@ set(CASCADE_TSAN_TESTS
     # every op the engine applies, on the real application
     test_apply_command
     # the transmit key across the front end, the control thread and the TX thread
-    test_transmit_key_race test_transmit_liveness test_transmit_dead_man
+    test_transmit_key_race test_transmit_liveness test_transmit_dead_man test_tx_window_threads
     # the pump move's step P1 (the review's F3), re-pointed in stage 5d from the engine's pull to the web server's engine session: the engine applies the web remote's and CAT's requests in its own pass, and the key
     # rules are touched by the control thread alone - producers on the web session, two local sessions and a server whose session closes and opens again against the threaded
     # pass, the ordering, the 2 s hold, the latch's marking and the re-arm (test_transmit_key_race's case G is the same storm
