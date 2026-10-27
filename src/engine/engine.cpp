@@ -41,6 +41,7 @@
 #include "core/frame_timing.hpp"
 #include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
+#include "core/event_trail.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
 #include "core/issue_report.hpp"
@@ -4011,6 +4012,8 @@ void Engine::removeInstalledPlugin(const std::string& fileName) {
     }
     std::string err;
     if (pluginRepo_.remove(pluginDir_, fileName, err)) {
+        // The breadcrumb trail (core/event_trail.hpp): a plugin was unfitted by the person.
+        cascade::core::trail::note(cascade::core::trail::Event::PlugUnfit);
         std::string removedBuf;
         cascade::core::formatUtf8(removedBuf, tr("Removed %s"), fileName.c_str());
         installReport_ = removedBuf;
@@ -5600,6 +5603,9 @@ void Engine::finishTake(bool iq) {
     // False when there is no open file: never started, already stopped, or ended by the size limit (which closed its own file). Nothing to
     // finish, nothing to wait for.
     if (!rec.stopForFinish(req)) { return; }
+    // The breadcrumb trail (core/event_trail.hpp): a take ended - its file is handed to the finisher. Not noted when there was nothing to finish (never
+    // started, already stopped).
+    cascade::core::trail::note(cascade::core::trail::Event::RecStop);
     (iq ? iqFinish_ : audioFinish_) = cascade::core::RecordFinisher::submit(std::move(req));
 }
 
@@ -5703,6 +5709,8 @@ void Engine::finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, do
     }
     recordError_.clear();
     recordNotice_.clear();
+    // The breadcrumb trail (core/event_trail.hpp): a take began - its file opened and the recorder is armed. Neither kind is told apart: a take is a take.
+    cascade::core::trail::note(cascade::core::trail::Event::RecStart);
     if (iq) {
         iqRecordStartS_ = nowS;
         pipeline_.setIqRecorder(&iqRecorder_);
@@ -5801,6 +5809,8 @@ void Engine::stopReceiver(const char* who) {
     // seconds in, nothing recording, eight seconds before the death. An idle recorder has no tap to take out and no file to finish, so that
     // wait is not spent. The stop still waits once, inside pipeline_.stop(), for the block in progress to end - that wait is the join's.
     const bool running = pipeline_.running() || pipeline_.faulted();
+    // The breadcrumb trail (core/event_trail.hpp): the receiver is being stopped, which releases the open radio - by the driver's vocabulary word, never a name.
+    if (running) { cascade::core::trail::noteSource(false, cascade::core::health::driverWord(healthWatchKind_)); }
     const bool iq = running && (iqRecorder_.recording() || iqStart_.pending() || iqStartQueued_);
     const bool audio = running && (audioRecorder_.recording() || audioStart_.pending() || audioStartQueued_);
     // The two recording stops timed, for the log line below: the quantity the 0.99.65 report showed as 701 ms. tests/test_stop_ends_
@@ -6065,6 +6075,8 @@ void Engine::commitModeIndex(int index) {
     if (index < 0 || index >= 8) { return; }
     modeIndex_ = index;
     pipeline_.setDemodMode(kModeMap[index]);
+    // The breadcrumb trail (core/event_trail.hpp): a demodulator change, by its fixed name.
+    cascade::core::trail::noteMode(index);
     refreshDiagContext();
 }
 

@@ -5,6 +5,7 @@
 #include "core/crash_upload.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/event_trail.hpp"
 #include "core/foreign_modules.hpp"
 #include "core/frame_timing.hpp"
 #include "core/plugin_reload_phases.hpp"
@@ -266,6 +267,12 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                     out.blamedPluginVersion = cleanBlamedField(v, 24, true);
                 } else if (k == "blamed-plugin-origin") {
                     out.blamedPluginOrigin = (v == "official" || v == "site" || v == "unrecorded") ? v : std::string();
+                } else if (k == "trail") {
+                    // The breadcrumb trail (field-early-warning): kept only as the entries
+                    // that are members of core/event_trail.hpp's closed tables, the newest
+                    // thirty - the same rule as frame-scope and reload-phase, because this
+                    // line is read back off a file on disk too. `none` leaves nothing.
+                    out.trail = trail::sanitise(v);
                 }
                 continue;
             }
@@ -539,6 +546,12 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     ctx["blamedPluginOrigin"] = (r.blamedPluginOrigin == "official" || r.blamedPluginOrigin == "site" || r.blamedPluginOrigin == "unrecorded")
                                     ? r.blamedPluginOrigin
                                     : std::string();
+    // What led up to the fault (field-early-warning, core/event_trail.hpp): the last thirty
+    // state transitions as one string, `<secs>:<event>[.<word>]` joined by `;`, oldest first.
+    // Passed through the closed tables a second time on the way out, so whatever filled the
+    // member, only entries made of the trail's fixed words leave the machine. Always present,
+    // empty when the report had none: the inventory is exact both ways.
+    ctx["trail"] = trail::sanitise(r.trail);
     j["context"] = std::move(ctx);
 
     nlohmann::json log = nlohmann::json::array();
@@ -641,7 +654,7 @@ const std::vector<std::string>& uploadContextFieldNames() {
                                                    "deviceOpen", "sdrModel", "uptimeSec",
                                                    "faultThreadOwn", "foreignModules",
                                                    "reloadPhase", "blamedPlugin", "blamedPluginVersion",
-                                                   "blamedPluginOrigin"};
+                                                   "blamedPluginOrigin", "trail"};
     return names;
 }
 

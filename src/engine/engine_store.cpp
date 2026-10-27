@@ -38,6 +38,7 @@
 
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
+#include "core/event_trail.hpp"
 #include "core/i18n.hpp"
 #include "core/plugin_cleanup.hpp"
 #include "core/plugin_repo.hpp"
@@ -666,6 +667,8 @@ void Engine::pollPluginAsync() {
         // Run on the ONE failure that still changed the disk too: applyUpdate reports false with installedPath set when the new file installed
         // but the manifest could not be written.
         if (r.ok || !r.installedPath.empty()) { rescanPlugins(); }
+        // The breadcrumb trail (core/event_trail.hpp): a plugin was fitted - installed or updated - by the person's own press. No name: which plugin is the plugin list's.
+        if (r.ok) { cascade::core::trail::note(cascade::core::trail::Event::PlugFit); }
         if (r.ok) {
             std::string reportBuf;
             cascade::core::formatUtf8(reportBuf, r.isUpdate ? tr("Updated %s to %s") : tr("Installed %s to %s"), r.name.c_str(),

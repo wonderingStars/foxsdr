@@ -5553,6 +5553,49 @@ tables, one with a symbol table only — whose answers are known in advance, and
 checks the tool-absent message with `PATH` really emptied. On Linux a missing
 `addr2line` fails that test; on Windows it is a stated skip.
 
+### The breadcrumb trail: what led up to a fault (field-early-warning)
+
+A report says where the process was and what the log ring held, and the ring is a few
+hundred lines of everything: a retune storm or a chatty plugin pushes the one line that
+mattered out of it. `core/event_trail.hpp` keeps a separate, small record that only STATE
+TRANSITIONS write to - a ring of the last thirty - and both fault writers put it in their
+report's `--- process ---` block as one line, `trail:`, which the uploader sends as
+`context.trail` and the report reader prints.
+
+**An entry** is `<secs>:<event>[.<word>]`: the whole seconds before the report was
+written, and a word from a closed list, optionally qualified from that event's own list.
+The entries are joined by `;`, oldest first: `412:src-open.rtlsdr;405:mode.wfm;3:rescan.unload`.
+
+| Event | Written by | Qualifier |
+|---|---|---|
+| `src-open` | `health::noteRadioOpen`, the one function every radio (receiver, patch page, sound card) is counted through | the driver word of the failure counts |
+| `src-close` | `AppWindow::stopReceiver`, when the receiver was running | the driver word of the radio that was open |
+| `mode` | `AppWindow::commitModeIndex`, every demodulator change | `nfm wfm am dsb usb cw lsb raw` |
+| `rescan` | `PhaseClock::begin` of a PUBLISHING clock, i.e. each step of a plugin reload as it is entered (folds in the `reload-phase` work of 0.99.84) | the step, hyphens for spaces: `panels-and-map` |
+| `rec-start` | `AppWindow::finishRecordStart`, once the file opened and the recorder is armed | - |
+| `rec-stop` | `AppWindow::finishTake`, when there was an open take to finish | - |
+| `plug-fit` | the install/update result landing on the GUI thread | - |
+| `plug-unfit` | `AppWindow::removeInstalledPlugin`, the file deleted | - |
+
+**Closed vocabulary, checked three times.** The writers take enums and small indexes, never
+text; the formatter builds the line from the tables; and the uploader passes it through the
+same tables again (`trail::sanitise`), keeping only valid entries and the newest thirty. A
+hand-edited report cannot make the field carry a path, a serial number or a frequency.
+`tests/test_event_trail.cpp` holds the tables to their sources (the driver words to the
+health vocabulary, the steps to `core/plugin_reload_phases.hpp`, the modes to
+`kModeNames`) and holds each writer to its one site.
+
+**Safe on the fault path.** `note()` is two relaxed atomics on a fixed array - no lock, no
+allocation, any thread. `format()` allocates nothing and takes no lock either, so
+`crash_handler.cpp`, `crash_handler_posix.cpp` and the freeze watchdog call it from where
+they are. Entries are one 64-bit word each, so a writer lapping the reader can replace an
+entry but never tear one (the test races four writers against a reader). The ring is lossy
+on purpose.
+
+**Deliberately not in it:** the sentinel's reports (the watcher is another process and
+cannot read this one's memory - it has the breadcrumb block instead, above), startup
+transitions before the first window (the ring starts empty), and any per-frame event.
+
 ### A freeze report now carries the module table
 
 `hang_watchdog.cpp` wrote thread stacks and no `--- modules ---` block, so every

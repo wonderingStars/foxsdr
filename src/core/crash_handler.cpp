@@ -45,6 +45,7 @@
 #include "core/diag_report.hpp"
 #include "core/plugin_fault.hpp"
 #include "core/plugin_marker.hpp"
+#include "core/event_trail.hpp"
 #include "core/ubsan_exempt.hpp"
 
 #include <csignal>
@@ -896,6 +897,17 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
         const bool survived = child != nullptr || reasonStartsWith(reason, kAbsorbedFaultReasonPrefix) ||
                               reasonStartsWith(reason, kAbsorbedPluginFaultReasonPrefix);
         if (a.found && !survived) { marker::blame(a.runId); }
+    }
+    // WHAT LED UP TO IT (field-early-warning, core/event_trail.hpp): the last thirty state
+    // transitions, oldest first, as fixed words from the trail's closed tables. Formatted into a
+    // static buffer - no allocation, no lock - like everything on this path; `none` for an empty
+    // ring. It is parsed by crash_upload.cpp and sent as `context.trail`.
+    {
+        static char trailBuf[cascade::core::trail::kMaxFormatted];
+        const std::size_t n = cascade::core::trail::format(trailBuf, sizeof(trailBuf));
+        e.str("trail: ");
+        e.str(n > 0 ? trailBuf : "none");
+        e.str("\n");
     }
     // THE TWO FACTS A CHILD DEATH ACTUALLY CARRIES. In the process block rather
     // than the header because the header's field set is inventoried in

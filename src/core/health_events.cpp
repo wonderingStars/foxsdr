@@ -18,6 +18,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/event_trail.hpp"
 #include "core/frame_timing.hpp"
 #include "core/i18n.hpp"
 #include "core/issue_report.hpp"
@@ -996,7 +997,13 @@ std::shared_ptr<HealthLedger> globalLedger() {
 
 void note(const std::string& token) { globalLedger()->note(token); }
 void noteScanNone() { note(tokenScanNone()); }
-void noteRadioOpen(std::string_view k) { note(tokenRadioOpen(k)); }
+void noteRadioOpen(std::string_view k) {
+    // THE BREADCRUMB TRAIL (core/event_trail.hpp) notes every radio that opened, whether or not
+    // usage reporting is on: it lives in memory and goes nowhere unless a fault report is filed
+    // with Diagnostics on. The driver word is the vocabulary's own - never a name or a serial.
+    trail::noteSource(true, driverWord(k));
+    note(tokenRadioOpen(k));
+}
 void noteRadioData(std::string_view k) { note(tokenRadioData(k)); }
 void noteRadioFail(std::string_view k, std::string_view error) {
     note(tokenRadioFail(k, classifyRadioOpen(k, error)));

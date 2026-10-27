@@ -177,6 +177,13 @@ struct ParsedReport {
     // those words.
     std::string reloadPhase;
 
+    // The process block's `trail:` line (field-early-warning, core/event_trail.hpp): the last
+    // thirty state transitions before the fault, oldest first, `<secs>:<event>[.<word>]` joined
+    // by `;`. Kept only as entries that are members of the closed tables, the newest thirty of
+    // them (trail::sanitise) - so EMPTY for `none`, for a report without the line (an older
+    // build's, a sentinel's) and for any value that is not made of those entries.
+    std::string trail;
+
     // The `--- process ---` block both writers add since 0.89.0. `uptimeSec`
     // is seconds from process start to the fault (0 when the report predates
     // the block). `faultThreadOwn` is the crash writer's "yes"/"no"/"unknown"

@@ -15,6 +15,7 @@
 #include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/event_trail.hpp"
 #include "core/frame_timing.hpp"
 #include "core/phase_clock.hpp"
 #include "core/plugin_fault.hpp"
@@ -28,6 +29,7 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <ostream>
 #include <vector>
 
 #if defined(_WIN32)
@@ -372,6 +374,16 @@ ThreadStack captureOneLinuxThread(pid_t tid, pid_t self) {
     return ts;
 }
 #endif  // __linux__ - the block above was unguarded once and MSVC compiled it
+
+// THE BREADCRUMB TRAIL line of a freeze report's process block (field-early-warning,
+// core/event_trail.hpp): the last thirty state transitions, oldest first, as fixed words from
+// the trail's closed tables; `none` for an empty ring. The same line crash_handler.cpp writes
+// in a crash report, parsed by crash_upload.cpp and sent as `context.trail`.
+void writeTrailLine(std::ostream& out) {
+    static char trailBuf[cascade::core::trail::kMaxFormatted];
+    const std::size_t n = cascade::core::trail::format(trailBuf, sizeof(trailBuf));
+    out << "trail: " << (n > 0 ? trailBuf : "none") << "\n";
+}
 
 }  // namespace
 
@@ -1503,6 +1515,7 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     out << "uptime-sec: " << processUptimeSec() << "\n";
     // EVERY REGISTERED WORKER, one line each: the stalled one is rarely the whole story.
     writeBeatsSection(out);
+    writeTrailLine(out);
     out.flush();
 
     {
@@ -1690,6 +1703,7 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     out << "uptime-sec: " << processUptimeSec() << "\n";
     // EVERY REGISTERED WORKER, one line each: the stalled one is rarely the whole story.
     writeBeatsSection(out);
+    writeTrailLine(out);
     out.flush();
 
     {

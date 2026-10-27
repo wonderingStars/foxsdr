@@ -43,6 +43,7 @@
 #endif
 
 #include "core/config.hpp"
+#include "core/event_trail.hpp"
 #include "core/health_events.hpp"
 #include "core/patch_io.hpp"
 #include "core/plugin_host.hpp"
@@ -431,6 +432,7 @@ struct AppWindowTestAccess {
     static void poll(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).healthPoll(); }); }
     static void start(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).startReceiver(); }); }
     static void stop(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).stopReceiver("test_health_app"); }); }
+    static void setMode(AppWindow& a, int index) { passseam::on(th::engine(a), [&] { th::engine(a).setModeIndex(index); }); }
     static cascade::sink::AudioOut& audio(AppWindow& a) { return th::engine(a).pipeline_.audio(); }
 
     // The patch page's radio.
@@ -1500,6 +1502,37 @@ void testAFailureSurvivesEndTask() {
 
 }  // namespace
 
+// THE BREADCRUMB TRAIL (field-early-warning, core/event_trail.hpp): the window notes its state
+// transitions as they happen, and what a crash or freeze report would carry is the ring read back.
+// A radio that opens, a mode that changes and a receiver that stops are three of the eight kinds;
+// the other writers are pinned to their sites by tests/test_event_trail.cpp.
+void testTheTrailFollowsTheWindow() {
+    namespace trail = cascade::core::trail;
+    trail::resetForTest();
+    auto g = fresh();
+    setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
+    cascade::gui::AppWindow app;
+    CHECK(Access::selectNative(app, kArgs));
+    Access::start(app);
+    Access::setMode(app, 5);   // CW: a mode the window does not start in
+    Access::stop(app);
+    const std::string text = trail::formatNow();
+    std::printf("trail: the window noted: %s\n", text.c_str());
+    const std::size_t opened = text.find(":src-open.rtlsdr");
+    const std::size_t moded = text.rfind(":mode.cw");
+    const std::size_t closed = text.rfind(":src-close.rtlsdr");
+    CHECK(opened != std::string::npos);
+    CHECK(moded != std::string::npos);
+    CHECK(closed != std::string::npos);
+    CHECK(opened < moded && moded < closed);
+    CHECK(trail::sanitise(text) == text);
+    // A mode index outside the list changes nothing and notes nothing.
+    trail::resetForTest();
+    Access::setMode(app, 99);
+    CHECK(trail::formatNow().empty());
+    trail::resetForTest();
+}
+
 int main() {
     isolate();
     Access::installHooks();
@@ -1516,6 +1549,7 @@ int main() {
     testTheRealApplicationCountsKeepsAndClears();
     testRecoveriesAreCountedWhereTheWindowMeetsThem();
     testASlowFrameOfTheRealWindowEndsInTheLedgerFile();
+    testTheTrailFollowsTheWindow();
 #if defined(_WIN32)
     testAFailureSurvivesEndTask();
 #else
