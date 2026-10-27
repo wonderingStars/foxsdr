@@ -52,8 +52,9 @@ endmacro()
 # test_tester_link, the real binary's, its token-never-logged scan re-pointed at engine/process_boot.cpp where stage 7a put the activation. TESTER-USAGE's section had no
 # placeholder of its own: tests/test_tester_usage_app.cpp is its test, written red first, and tests/test_tester_host_only.cpp holds that the headless engine cannot send
 # a tester report.)
-cascade_merge_pending(PATCH-PRESETS    # 0.99.49 whole-patch presets
-    test_patch_presets_app)
+# (PATCH-PRESETS - whole-patch presets, 0.99.49 - is whole: back in stub batch B17, src/gui/app_window_patch_presets.cpp, the window's: test_patch_presets_app,
+# converted (the patch is built in the page's draft and committed through the session, START is the transport's command, the radios are read on the pass
+# thread through rawEngine).)
 cascade_merge_pending(DISK-WORK        # 0.99.63 - 0.99.65 the window does no disk work (recorders, saves, file opens on workers)
     test_gui_file_jobs test_failure_files
     test_iq_open_async test_gui_disk_audit)
@@ -80,8 +81,8 @@ cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, on
 # position listed apart (0.99.75), an aircraft at the edge of range kept on the map (0.99.78) - and WINDOW-PLACEMENT - the Decoder output window and the plugin picture
 # windows open inside the main window, RESET WINDOW SIZES puts them back (0.99.73) - are whole: back in stub batch B16, src/gui/app_window_map.cpp: test_unplaced_list_app
 # and test_decoder_window_app, the real binary's. The coverage rule had no pending placeholder; tests/test_map_coverage_app.cpp is its test, written red first.)
-cascade_merge_pending(PATCH-VIEW       # 0.99.7x the patch page's view keys, information pane and inspector
-    test_patch_canvas_nav test_patch_info_pane)
+# (PATCH-VIEW - the patch page's view keys, information pane and inspector drawer (0.99.49 / 0.99.50) - is whole: back in stub batch B17,
+# src/gui/app_window_patch.cpp: test_patch_canvas_nav and test_patch_info_pane, the real binary's.)
 
 # Only the names that exist as files here are kept (a name that is not a test is a typo that would be a quiet gap).
 set(_cascade_pending_kept)

@@ -163,8 +163,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * bench meter styles ....................................................................... re-expressed, C3 (test_meter_style_app green; visual check in 8)
 
 0.99.49
-  * whole-patch presets ...................................................................... stubbed PATCH-PRESETS (test_patch_presets_app; core/patch_presets
-    and the file src/gui_pending/app_window_patch_presets.cpp)
+  * whole-patch presets ...................................................................... re-expressed, stub batch B17 (src/gui/app_window_patch_presets.cpp, moved out of
+    src/gui_pending: the presets are the window's half of the config, a load is STOP and a patch DOCUMENT through the session, leaving the new patch stopped and the old one
+    in the "(previous patch)" slot; the PRESETS key in drawPatchTransport; test_patch_presets_app, converted)
   * AOR AR5700D / IQ5001 ..................................................................... re-expressed, C0 (engine enumeration, the "aor" source kind and its
     unbound-id row; no window-specific part)
 
@@ -176,8 +177,10 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     fact.store.oldCopies; tests/test_plugin_store_window.cpp A and D2c, test_plugin_store_view)
   * FUNCTION SELECT folds to a strip ......................................................... re-expressed, stub batch B1 (test_rail_fold, test_rail_fold_app,
     test_app_rail, test_window_chrome_config)
-  * the patch page's information pane at the top right ....................................... stubbed PATCH-VIEW (lostlines: drawPatchView, drawPatchFaces)
-  * the patch canvas pans by dragging empty canvas, the wheel pans ........................... stubbed PATCH-VIEW
+  * the patch page's information pane at the top right ....................................... re-expressed, stub batch B17 (drawPatchView's top band and drawer, drawPatchInfoPane and
+    drawPatchInspectorFoldKey in src/gui/app_window_patch.cpp, over the engine's plan; test_patch_info_pane)
+  * the patch canvas pans by dragging empty canvas, the wheel pans ........................... re-expressed, stub batch B17 (the pan, the wheel and Ctrl+wheel are the canvas's own,
+    gui/patch_view.cpp, identical to master's and live; what was missing was the "+", "-" and "Fit" keys, drawPatchViewKeys; test_patch_canvas_nav)
   * two fixes for radios reported wrongly (the Source row's words) ........................... re-expressed in part: the one-chip-one-route rule runs in
     the engine and is held by test_one_chip_app (C4); the Source row's chip/preview/"No radio hardware found" is stubbed SOURCE-ROWS (test_source_row_app)
 
@@ -499,9 +502,9 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   (TESTER-LINK - test_tester_link_app, test_link_request_poll, test_tester_link - was removed by B15: whole)
   (MARKERS-SPECTRUM and DISPLAY-RANGE - test_bookmark_stacking_app and test_freq_markers_app removed by B10; test_spectrum_trace_app, test_passband_slide_app and
   test_display_menu_app removed by B11; test_display_fold_app by B1 - are whole)
-  PATCH-VIEW (2)          test_patch_canvas_nav test_patch_info_pane
+  [PATCH-VIEW (test_patch_canvas_nav, test_patch_info_pane) and PATCH-PRESETS (test_patch_presets_app) were removed by B17: both ids are whole]
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
-  one each                PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
+  one each                HEALTH-DIAG test_slow_frames_app;
                           SOURCE-ROWS test_source_row_app;
                           [MAP-WINDOWS (test_unplaced_list_app) and WINDOW-PLACEMENT (test_decoder_window_app) were removed by B16: both ids are whole; the coverage rule
                           (0.99.58) had no placeholder of its own - tests/test_map_coverage_app.cpp, written red first at B16]
@@ -766,3 +769,16 @@ ACCESSOR, by the owner's decision (plan section 9 decision 4): HostPluginFeed::u
 unchanged). test_unplaced_list_app (gained the estimated scenario) and test_decoder_window_app are un-pended; the red placeholders are the 11 of B15 less two: 9 (9 tests, no part). New: test_map_coverage_app
 (gui); test_map_window section G and test_plugin_window F2b. test_i18n: 33 stale, 0 missing (the 3 keys returned: the tick's label and tooltip and "No targets on screen."). One master wording is left as it is and
 listed for the next catch-up merge: the Coverage tooltip still says a satellite's position "counts here too", which the restored rule contradicts.
+
+UPDATE 2026-10-27, stub batch B17 (docs/engine-stage4.md 6.22, the B17 record): PATCH-VIEW and PATCH-PRESETS. The patch page is laid out as master's 0.99.49 / 0.99.50 left it: the information pane in the top band's right-hand part
+(AppWindow::drawPatchInfoPane, src/gui/app_window_patch.cpp, drawn from the engine's plan - patchLists().plan - and this frame's readings), the canvas with the page's whole width unless a node is selected, the inspector
+drawer at its right with the fold key (drawPatchInspectorFoldKey; ">>" folds it to a 30 px strip and "<<" opens it; the fold is the window's own, not kept in the config, as master's) and the canvas's "+", "-" and "Fit"
+keys (drawPatchViewKeys). The pan by dragging empty canvas, the wheel pan and the Ctrl+wheel zoom were never missing: they are gui/patch_view.cpp's, identical to master's; test_patch_canvas_nav failed only on the three keys.
+The presets: src/gui_pending/app_window_patch_presets.cpp is back in src/gui (the panel and its sentences), with the four members it needed - savePatchPreset, loadPatchPreset, serialisePatchNow and replacePatch - and the
+PRESETS key beside ALL OFF in drawPatchTransport. The named presets and the previous-patch slot are the window's half of the config (applyConfig assigns the store, currentConfig writes it back: a field it did not write would be
+silently kept by loadedCfg_). A LOAD is two commands through the session, in this order: FOXAPI_OP_PATCH_RUN 0 (the patch's own STOP; the engine refuses it as already so when nothing runs, which changes nothing) and the new patch as a
+DOCUMENT (FOXAPP_PATCH_GRAPH_DOCUMENT, loadPatchDocument: its own epoch, no edit of the old patch merged into it); the engine's pass applies them in that order and its patch step closes every radio of a stopped patch, so the new patch
+is left STOPPED until START. A text that is not a patch is parsed first and changes nothing. No op, no list, no fact, no API change; the door is unmoved. test_patch_canvas_nav and test_patch_info_pane are un-pended (real
+binary, gui); test_patch_presets_app is un-pended, converted (the patch is built in the page's draft and committed through the session, START is the transport's command, "running" is the published FOXAPI_RX_PATCH_RUNNING, the radios
+are read on the pass thread through rawEngine; it includes pass_seam.hpp, so it is registered again as _stepped); the red placeholders are the 9 of B16 less three: 6 (6 tests, no part). test_i18n: 24 stale, 0 missing (the 9
+keys returned: the three view-key tooltips, the pane's two help sentences, the fold key's two tooltips, "PRESETS" and its tooltip).

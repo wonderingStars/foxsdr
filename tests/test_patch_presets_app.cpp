@@ -17,10 +17,16 @@
 //   - a text that is not a patch changes nothing;
 //   - the presets reach currentConfig() and come back through applyConfig().
 //
-// THE RADIOS ARE FAKES (AppWindow::testHooks_ constructs them wherever the
-// application would construct a driver), recording whether they were opened,
-// started and stopped. A fake whose open args name "ABSENT" refuses to open,
-// as an unplugged dongle does.
+// CONVERTED FOR THE ENGINE'S TABLE (stub campaign B17; the 0.99.84 house pattern). Master's test built the patch in the window's own
+// graph and ran its radios from the window; here the patch is the ENGINE's and the page edits a draft it commits through the session. So:
+//   - a patch is BUILT in the page's draft and committed (commitPatchDraft) as the page does, and the engine's pass takes it - one
+//     frame of the engine's part (look()) then the page's own follow (sync) - and what "the canvas" holds is the draft (serialisePatchNow);
+//   - START is the command the transport sends (FOXAPI_OP_PATCH_RUN 1) and "running" is the state the window reads (the published
+//     FOXAPI_RX_PATCH_RUNNING flag), after the frames that land it; the radios the patch holds are the ENGINE's (rawEngine, read on the
+//     pass thread through tests/pass_seam.hpp);
+//   - the fake radios are installed where the ENGINE constructs a driver (Engine::testHooks_), not the window.
+// What each scenario asserts is unchanged; where a master assertion read a state the window held the instant a key was pressed, it
+// is made after the frames that carry the key to the engine, and says so.
 //
 // Hermetic: no config file is read or written (empty config path), the
 // per-user directories point at a scratch folder, no USB enumeration runs
@@ -33,6 +39,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,10 +53,13 @@
 #include <unistd.h>
 #endif
 
+#include "core/app_commands.hpp"
 #include "core/patch_devices.hpp"
 #include "core/patch_io.hpp"
 #include "core/patch_presets.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
 
@@ -237,47 +247,92 @@ void isolate() {
 
 namespace cascade::gui {
 
-// The friend AppWindow names for this test (see AppWindow::testHooks_).
+// The friend AppWindow names for this test (see AppWindow::testHooks_ / Engine::testHooks_).
 struct AppWindowTestAccess {
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
 
-    // A patch built on the canvas as the parts bin would build it: a radio on
-    // `device` at `hz`, a channel and a demodulator wired behind it. Node ids
-    // run 1, 2, 3 in a fresh window, as they do in a parsed document.
-    static pc::NodeId buildPatch(AppWindow& a, const std::string& device, double hz) {
+    // ONE FRAME'S ENGINE PART, in drawUi's order (as tests/test_patch_graph_draft_input.cpp's look): the commands the last frame queued are
+    // applied by the pass, the page-open flag and the once-a-frame commit, the patch step, the publish, the window's read of it and of the
+    // session's answers. No view is drawn.
+    static void look(AppWindow& a) {
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).drainLocalCommands();
+            a.syncPatchPageOpen();
+            a.commitPatchDraft();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            rawEngine(a.engine_).pumpPatch();
+            (void)rawEngine(a.engine_).pumpPublish();
+        }, [&] {
+            a.syncPatchPageOpen();
+            a.commitPatchDraft();
+        });
+        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.refreshUiState();
+        a.pumpTransmitKey();
+    }
+    // A frame of the page that draws nothing: the engine's part, then the page's follow of what the engine published.
+    static void frame(AppWindow& a) {
+        look(a);
+        a.syncPatchDraft();
+        a.commitPatchDraft();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    static void frames(AppWindow& a, int n) {
+        for (int i = 0; i < n; ++i) { frame(a); }
+    }
+    // The page is up on the patch face and has read its first publish (the draft starts from the engine's graph).
+    static void openPage(AppWindow& a) {
+        a.setMainViewPatch(true);
         a.patchSeeded_ = true;  // no starter patch: this test builds its own
-        const pc::NodeId r = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq,
-                                                   0.0f, 0.0f);
-        const pc::NodeId c = a.patchGraph_.addNode(pc::NodeKind::Channel, "Tower",
-                                                   pc::PortType::Iq, 260.0f, 40.0f);
-        const pc::NodeId d = a.patchGraph_.addNode(pc::NodeKind::Demod, "AM", pc::PortType::Iq,
-                                                   520.0f, 40.0f);
-        if (pc::Node* n = a.patchGraph_.mutableNode(r)) {
+        frames(a, 3);
+    }
+
+    // A patch built on the canvas as the parts bin would build it: a radio on `device` at `hz`, a channel and a demodulator wired behind
+    // it, in the page's draft, committed and taken by the engine. Node ids are the draft's (they run 1, 2, 3 in a fresh window and on
+    // from there after deletes: a document is read back under ids of its own, see canon() below).
+    static pc::NodeId buildPatch(AppWindow& a, const std::string& device, double hz) {
+        a.patchSeeded_ = true;
+        const pc::NodeId r = a.patchDraft_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, 0.0f, 0.0f);
+        const pc::NodeId c = a.patchDraft_.addNode(pc::NodeKind::Channel, "Tower", pc::PortType::Iq, 260.0f, 40.0f);
+        const pc::NodeId d = a.patchDraft_.addNode(pc::NodeKind::Demod, "AM", pc::PortType::Iq, 520.0f, 40.0f);
+        if (pc::Node* n = a.patchDraft_.mutableNode(r)) {
             n->device = device;
             n->freqHz = hz;
             n->rateHz = 2.4e6;
             n->on = true;
         }
-        if (pc::Node* n = a.patchGraph_.mutableNode(c)) { n->freqHz = hz + 25000.0; }
-        CHECK(a.patchGraph_.connect(r, 0, c, 0) == pc::Connect::Ok);
-        CHECK(a.patchGraph_.connect(c, 0, d, 0) == pc::Connect::Ok);
+        if (pc::Node* n = a.patchDraft_.mutableNode(c)) { n->freqHz = hz + 25000.0; }
+        CHECK(a.patchDraft_.connect(r, 0, c, 0) == pc::Connect::Ok);
+        CHECK(a.patchDraft_.connect(c, 0, d, 0) == pc::Connect::Ok);
         a.patchUi_.view.pan = cascade::gui::patch::Vec2{-40.0f, 12.5f};
         a.patchUi_.view.zoom = 1.25f;
         a.patchUi_.dirty = true;
+        // To the engine: the commit goes out, the pass takes it, the answer comes back and the page follows.
+        frames(a, 4);
         return r;
     }
     static void clearPatch(AppWindow& a) {
-        while (!a.patchGraph_.nodes().empty()) {
-            a.patchGraph_.removeNode(a.patchGraph_.nodes().front().id);
-        }
+        while (!a.patchDraft_.nodes().empty()) { a.patchDraft_.removeNode(a.patchDraft_.nodes().front().id); }
+        frames(a, 4);
     }
     static std::string now(AppWindow& a) { return a.serialisePatchNow(); }
-    static std::size_t nodeCount(AppWindow& a) { return a.patchGraph_.nodes().size(); }
+    static std::size_t nodeCount(AppWindow& a) { return a.patchDraft_.nodes().size(); }
+    // The ENGINE's graph: a copy, made with the pass out of the way.
+    static std::size_t engineNodeCount(AppWindow& a) {
+        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchGraph_.nodes().size(); });
+    }
+    // How many patch DOCUMENTS the engine has loaded (fact.patch.epoch): a preset's load is one - a new patch, its own epoch, so no edit of
+    // the old patch is ever merged into it - and an ordinary edit of the canvas is not.
+    static std::uint64_t engineEpoch(AppWindow& a) {
+        return passseam::read<std::uint64_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchGraphEpoch_; });
+    }
     static pc::NodeId firstRadio(AppWindow& a) {
-        for (const pc::Node& n : a.patchGraph_.nodes()) {
+        for (const pc::Node& n : a.patchDraft_.nodes()) {
             if (n.kind == pc::NodeKind::Radio) { return n.id; }
         }
         return pc::kNoNode;
@@ -291,6 +346,7 @@ struct AppWindowTestAccess {
         const int i = a.patchPresets_.find(name);
         return i < 0 ? std::string() : a.patchPresets_.list()[static_cast<std::size_t>(i)].text;
     }
+    // LOAD, as the panel presses it: the keys' commands are queued, the frames after it carry them (callers run frames()).
     static bool load(AppWindow& a, const std::string& name) {
         const int i = a.patchPresets_.find(name);
         return i >= 0 && a.loadPatchPreset(a.patchPresets_.list()[static_cast<std::size_t>(i)].text);
@@ -300,41 +356,45 @@ struct AppWindowTestAccess {
     static std::string previous(AppWindow& a) { return a.patchPresets_.previous(); }
     static std::size_t presetCount(AppWindow& a) { return a.patchPresets_.list().size(); }
 
-    // START on the page, as the key does: pressed, applied, then one reconcile
-    // per frame until `id`'s radio runs (or answers why not), or 20 s.
+    // START as the transport's dome sends it (drawPatchTransport): the command, queued; the pass applies it on the next frame.
+    static void pressStartOnly(AppWindow& a) { a.uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, 1)); }
     static void pressStart(AppWindow& a) {
-        a.patchWasOpen_ = true;  // the page's first-frame scan is not under test
-        a.patchPressStart();
-        a.patchApplyRunning();
+        pressStartOnly(a);
+        frames(a, 2);
     }
-    // The key alone, in the frame it is pressed: patchApplyRunning has not
-    // yet acted on it.
-    static void pressStartOnly(AppWindow& a) { a.patchPressStart(); }
+    // Frames until `id`'s radio is open (or answered why not), or 20 s.
     static bool runUntilSettled(AppWindow& a, pc::NodeId id) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.patchRadios_.count(id) == 0 && a.patchRadioError_.count(id) == 0) {
-            a.patchReconcile();
+        while (!radioOpen(a, id) && radioError(a, id).empty()) {
+            frame(a);
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
-    // A few frames of the page's own order: apply the transport, reconcile.
-    static void frames(AppWindow& a, int n) {
-        for (int i = 0; i < n; ++i) {
-            a.patchApplyRunning();
-            a.patchReconcile();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    // Frames until `pred` holds, or 20 s (a radio closing is the engine's worker's, so it takes frames, not a fixed count).
+    static bool framesUntil(AppWindow& a, const std::function<bool()>& pred) {
+        const auto t0 = std::chrono::steady_clock::now();
+        while (!pred()) {
+            frame(a);
+            if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
         }
+        return true;
     }
-    static bool running(AppWindow& a) { return a.patchRunning_; }
+    // What the window reads: the published flag the transport's dome is lettered from.
+    static bool running(AppWindow& a) { return (a.uiState_.flags & FOXAPI_RX_PATCH_RUNNING) != 0u; }
     static std::size_t radiosOpen(AppWindow& a) {
-        return a.patchRadios_.size() + a.patchRadioPending_.size();
+        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).patchRadios_.size() + rawEngine(a.engine_).patchRadioPending_.size();
+        });
     }
-    static bool radioOpen(AppWindow& a, pc::NodeId id) { return a.patchRadios_.count(id) != 0; }
+    static bool radioOpen(AppWindow& a, pc::NodeId id) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchRadios_.count(id) != 0; });
+    }
     static std::string radioError(AppWindow& a, pc::NodeId id) {
-        const auto it = a.patchRadioError_.find(id);
-        return it == a.patchRadioError_.end() ? std::string() : it->second;
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] {
+            const auto it = rawEngine(a.engine_).patchRadioError_.find(id);
+            return it == rawEngine(a.engine_).patchRadioError_.end() ? std::string() : it->second;
+        });
     }
 
     static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
@@ -367,6 +427,7 @@ void testSaveThenLoad() {
     std::printf("  save then load gives back the identical graph\n");
     resetRegistry();
     cascade::gui::AppWindow app;
+    Access::openPage(app);
     Access::buildPatch(app, kDevA, 118.0e6);
     const std::string saved = Access::now(app);
     CHECK(Access::save(app, "Airband", false) == PatchPresetStatus::Saved);
@@ -377,10 +438,18 @@ void testSaveThenLoad() {
     Access::buildPatch(app, kDevB, 156.8e6);
     CHECK(Access::now(app) != saved);
 
+    const std::uint64_t epochBefore = Access::engineEpoch(app);
     CHECK(Access::load(app, "AIRBAND"));
+    // At once, in the page's own draft (what a save taken now would keep)...
     CHECK(Access::now(app) == saved);
     CHECK(Access::nodeCount(app) == 3u);
+    // ...and after the frames that carry the load to the engine and back: the engine holds the same patch, and the page still shows it.
+    Access::frames(app, 6);
+    CHECK(Access::now(app) == saved);
+    CHECK(Access::engineNodeCount(app) == 3u);
     CHECK(!Access::running(app));
+    // A NEW PATCH, not an edit of the old one: the engine took it as a document (its own epoch).
+    CHECK(Access::engineEpoch(app) == epochBefore + 1u);
 
     // Saving under the same name again asks first: refused until told.
     Access::clearPatch(app);
@@ -395,8 +464,10 @@ void testSaveThenLoad() {
     const std::string before = Access::now(app);
     const std::string prevBefore = Access::previous(app);
     CHECK(!Access::loadText(app, "this is not a patch"));
+    Access::frames(app, 4);
     CHECK(Access::now(app) == before);
     CHECK(Access::previous(app) == prevBefore);
+    CHECK(Access::engineNodeCount(app) == 3u);
 
     // The presets and the slot reach the config, and come back from it.
     const cascade::core::AppConfig cfg = Access::config(app);
@@ -417,6 +488,7 @@ void testLoadWhileRunning() {
     std::printf("  loading while running stops the patch and leaves it stopped\n");
     resetRegistry();
     cascade::gui::AppWindow app;
+    Access::openPage(app);
     // The preset to load: a patch on radio B.
     Access::buildPatch(app, kDevB, 162.0e6);
     CHECK(Access::save(app, "Marine", false) == PatchPresetStatus::Saved);
@@ -435,9 +507,13 @@ void testLoadWhileRunning() {
 
     CHECK(Access::load(app, "Marine"));
     // Stopped through the patch's own STOP: radio A stopped and closed, no
-    // patch radio left open, and the transport says STOPPED.
+    // patch radio left open, and the transport says STOPPED. (The pass
+    // applies the STOP and the new document on the next frame; the radio's
+    // close is the engine's worker's, so the frames run until it has.)
+    CHECK(Access::framesUntil(app, [&] { return Access::radiosOpen(app) == 0u && !Access::running(app); }));
     CHECK(!Access::running(app));
     CHECK(Access::radiosOpen(app) == 0u);
+    CHECK(Access::framesUntil(app, [&] { return made(first).closed; }));
     CHECK(made(first).stopped);
     CHECK(made(first).closed);
     // ...and it STAYS stopped: frames go by and nothing opens - not radio B,
@@ -454,24 +530,28 @@ void testLoadWhileRunning() {
     CHECK(madeCount() == first + 2);
     CHECK(made(first + 1).args == kArgsB);
 
-    // START pressed but not yet acted on (the same frame): a load still
-    // leaves the patch stopped with nothing open.
+    // A load of a running patch again, then START pressed but not yet acted on (the same frame): a load still leaves the patch stopped
+    // with nothing open - the START the engine had not yet applied lands first, and the STOP the load queued follows it.
     CHECK(Access::load(app, "Marine"));
+    CHECK(Access::framesUntil(app, [&] { return Access::radiosOpen(app) == 0u && !Access::running(app); }));
+    CHECK(Access::framesUntil(app, [&] { return made(first + 1).closed; }));
     CHECK(!Access::running(app));
     CHECK(Access::radiosOpen(app) == 0u);
     CHECK(made(first + 1).closed);
     Access::pressStartOnly(app);
-    CHECK(Access::running(app));
     CHECK(Access::load(app, "Marine"));
+    Access::frames(app, 8);
     CHECK(!Access::running(app));
-    Access::frames(app, 5);
     CHECK(Access::radiosOpen(app) == 0u);
+    // Not one radio was made for it: the patch was never running when the pass reached the radios.
+    CHECK(madeCount() == first + 2);
 }
 
 void testPreviousSlot() {
     std::printf("  the (previous patch) slot holds what the load replaced\n");
     resetRegistry();
     cascade::gui::AppWindow app;
+    Access::openPage(app);
     Access::buildPatch(app, kDevB, 145.5e6);
     CHECK(Access::save(app, "Two metres", false) == PatchPresetStatus::Saved);
     const std::string preset = Access::now(app);
@@ -492,12 +572,15 @@ void testPreviousSlot() {
     CHECK(Access::loadPrevious(app));
     CHECK(Access::now(app) == canon(mine));
     CHECK(Access::previous(app) == preset);
+    Access::frames(app, 6);
+    CHECK(Access::now(app) == canon(mine));
 }
 
 void testAbsentRadio() {
     std::printf("  a preset naming a radio that is not plugged in loads like the restore\n");
     resetRegistry();
     cascade::gui::AppWindow app;
+    Access::openPage(app);
     Access::buildPatch(app, kDevAbsent, 433.9e6);
     CHECK(Access::save(app, "Somewhere else", false) == PatchPresetStatus::Saved);
     const std::string text = Access::presetText(app, "Somewhere else");
@@ -506,6 +589,7 @@ void testAbsentRadio() {
 
     const std::size_t first = madeCount();
     CHECK(Access::load(app, "Somewhere else"));
+    Access::frames(app, 6);
     CHECK(Access::now(app) == text);
     CHECK(!Access::running(app));
     CHECK(madeCount() == first);  // loading opened nothing

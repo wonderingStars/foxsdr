@@ -40,6 +40,7 @@ struct GLFWwindow;
 #include "core/i18n.hpp"
 #include "core/plugin_host.hpp"
 #include "core/patch_graph.hpp"
+#include "core/patch_presets.hpp"
 #include "core/scanner_params.hpp"
 #include "core/serial_port.hpp"
 #include "core/tx_input.hpp"
@@ -3133,6 +3134,47 @@ private:
     // canvas says it changed. currentConfig() runs every frame and must
     // not serialise a document on each one.
     std::string patchText_;
+    // THE PATCH PRESETS (stub campaign B17; core/patch_presets.hpp). The named presets and the previous-patch slot are the WINDOW'S half of
+    // the config: from AppConfig at applyConfig, back into it at currentConfig, changed only by the PRESETS panel (drawPatchPresetsPage).
+    // Saving stores the patch on the canvas as patch_io writes it NOW - the page's own draft, which holds every edit, not patchText_, which
+    // catches up only at the end of the page's frame. Loading (loadPatchPreset) goes through replacePatch: a running patch is stopped
+    // through its own STOP (FOXAPI_OP_PATCH_RUN 0, applied by the pass ahead of the new document) and the new patch is left STOPPED - the
+    // user presses START - and, once the new patch is in, the one it replaced is kept in the "(previous patch)" slot, so a load is always one
+    // load away from being undone. `text` is a preset's text or the slot's own; loading the slot swaps it with the canvas. False, and
+    // nothing changed, when the text is not a patch. app_window_patch_presets.cpp.
+    cascade::core::PatchPresetStore patchPresets_;
+    cascade::core::PatchPresetStatus savePatchPreset(const std::string& name, bool overwrite);
+    bool loadPatchPreset(std::string text);
+    std::string serialisePatchNow() const;
+    // A NEW PATCH ON THE USER'S SAY (a preset): parsed first - a text that is not a patch changes nothing at all, not a running patch, not a
+    // face - then STOP through the session, the document through loadPatchDocument (the engine takes it as a new epoch, ids from 1 again),
+    // and every per-node memory of the window dropped with the graph it described: node ids start again, so anything remembered by id would
+    // attach to whichever new node took the number.
+    bool replacePatch(const std::string& text);
+    // THE PRESETS PANEL: a page of its own, opened by the PRESETS key in the patch page's control row (drawPatchTransport) and drawn only
+    // while the patch face is showing. The list (click to select, double-click or LOAD to load), SAVE AS... with a name field, RENAME and
+    // DELETE; an overwrite and a delete each ask first.
+    void drawPatchPresetsPage();
+    void drawPatchPresetsBody();
+    // The sentence the panel shows for what a save, rename, delete or load answered; `name` fills the sentences that name the preset.
+    std::string patchPresetSentence(cascade::core::PatchPresetStatus st, const std::string& name) const;
+    // Loads the selected row - a preset or the previous-patch slot - and says what happened.
+    void loadSelectedPatchPreset();
+    bool patchPresetsOpen_ = false;
+    // The selected row: a preset by its name, or the previous-patch slot.
+    std::string patchPresetSel_;
+    bool patchPresetSelPrevious_ = false;
+    // The name field SAVE AS... and RENAME open, and which of them it is for.
+    enum class PatchPresetEdit { None, SaveAs, Rename };
+    PatchPresetEdit patchPresetEdit_ = PatchPresetEdit::None;
+    char patchPresetName_[cascade::core::kMaxPatchPresetNameBytes + 1] = {};
+    bool patchPresetFocusName_ = false;
+    // A question waiting for its answer: replace the preset named patchPresetPending_, or delete it.
+    bool patchPresetAskOverwrite_ = false;
+    bool patchPresetAskDelete_ = false;
+    std::string patchPresetPending_;
+    // What the last action did, in a sentence under the list.
+    std::string patchPresetNote_;
     // What each planned channel is hearing this frame. Rebuilt per frame
     // rather than kept, because a stale level is worse than none: it reads
     // as a live measurement of a channel that may no longer exist.
@@ -3203,6 +3245,17 @@ private:
     // The controls on every node's face, drawn over the canvas after it:
     // the node IS the instrument, so what it is set to is set on it.
     void drawPatchFaces(float originX, float originY, float width, float height);
+    // THE CANVAS'S OWN "+", "-" AND "Fit" KEYS (0.99.49 beta feedback: a laptop touchpad has no middle button to pan with, and nothing on the
+    // page said how to zoom). Bottom-right of the canvas, over it. Stub campaign B17; app_window_patch.cpp.
+    void drawPatchViewKeys(float originX, float originY, float width, float height);
+    // THE PATCH PAGE'S LAYOUT (0.99.49 beta feedback; gui::patch::patchInfoPaneWidth and friends). The information pane - the patch's
+    // state, the selection's problems, the help - sits in the top band's right-hand part at a fixed height with its own scroll; the selected
+    // node's controls are in a drawer at the canvas's right that folds to a strip. patchBandRight_ is the screen x the band's rows keep short
+    // of. The pane reads the engine's plan (patchLists().plan) and this frame's readings; it changes nothing.
+    void drawPatchInfoPane(float x, float y, float w, float h);
+    void drawPatchInspectorFoldKey();
+    float patchBandRight_ = 0.0f;
+    bool patchInspectorFolded_ = false;
     // How many parts have been dropped from the bin, used only to
     // stagger the next one so a run of clicks does not stack every
     // node on the same spot.
