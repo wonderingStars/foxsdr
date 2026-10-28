@@ -108,6 +108,7 @@
 #include "gui/tuner_ink.hpp"
 #include "gui/volume_meter.hpp"
 #include "gui/waterfall_view.hpp"
+#include "gui/display_query_episode.hpp"
 #include "gui/present_grace.hpp"
 #include "gui/software_gl.hpp"
 #include "gui/win_frame.hpp"
@@ -595,6 +596,21 @@ std::atomic<int> g_lastGlfwError{0};
 
 void glfwErrorCallback(int code, const char* description) {
     g_lastGlfwError.store(code, std::memory_order_relaxed);
+    // THE DISPLAY-SETTINGS ERROR IS COUNTED AND NOTHING MORE (2026-10-28 tester log,
+    // gui/display_query_episode.hpp). The Dear ImGui backend polls every monitor every
+    // frame, and while a monitor is detached GLFW raises this on every frame for as long
+    // as that lasts - minutes, in the field - so neither the log nor stderr may be written
+    // from here, and it must not spend the fifty lines below that a later, different error
+    // (65543, a refused second context) needs. The frame loop reads the count and speaks
+    // for it once per episode. Matched on the MESSAGE as well as the code:
+    // GLFW_PLATFORM_ERROR covers most of what the Win32 backend can refuse, and only the
+    // display-settings one says the desktop is being reconfigured. Anything else keeps
+    // the watchdog armed, which is the safe direction.
+    if (code == 0x00010008 && description != nullptr &&
+        std::strstr(description, "display settings") != nullptr) {
+        g_glfwDisplayErrors.fetch_add(1u, std::memory_order_relaxed);
+        return;
+    }
     std::fprintf(stderr, "cascade: GLFW error %d: %s\n", code,
                  description ? description : "(no description)");
     // THE SAME TEXT IN THE DIAGNOSTICS LOG (0.99.78), flushed by diagLogf before it returns.
@@ -614,18 +630,6 @@ void glfwErrorCallback(int code, const char* description) {
         } else if (n == kLoggedErrors) {
             cascade::core::diagLogf("window: further GLFW errors are not logged (%u so far)", kLoggedErrors);
         }
-    }
-    // Matched on the MESSAGE as well as the code: GLFW_PLATFORM_ERROR covers
-    // most of what the Win32 backend can refuse, and only the display-settings
-    // one says the desktop is being reconfigured. Anything else keeps the
-    // watchdog armed, which is the safe direction.
-    if (code == 0x00010008 && description != nullptr &&
-        std::strstr(description, "display settings") != nullptr) {
-        g_glfwDisplayErrors.fetch_add(1u, std::memory_order_relaxed);
-        cascade::core::diagWarnf(
-            "display: GLFW could not query display settings - presentation may stall "
-            "briefly; hang reports are suppressed for the next %u ms",
-            cascade::core::HangWatchdog::kDisplayGraceMs);
     }
 }
 
@@ -2250,9 +2254,30 @@ int AppWindow::run(int frames) {
     cascade::gui::PresentGrace presentGrace(
         [this] { watchdog_.pause(); }, [this] { watchdog_.resume(); },
         cascade::core::HangWatchdog::kDisplayGraceMs / 1000.0);
-    unsigned lastDisplayChanges =
-        cascade::gui::frame::displayChangeCount() +
-        g_glfwDisplayErrors.load(std::memory_order_relaxed);
+    unsigned lastDisplayChanges = cascade::gui::frame::displayChangeCount();
+    // A RUN OF FRAMES IN WHICH THE DISPLAY COULD NOT BE QUERIED IS ONE DISPLAY CHANGE
+    // (gui/display_query_episode.hpp, the 2026-10-28 tester log): GLFW's display-settings
+    // error is counted by the error callback above, and this turns the count into one
+    // beginning - the change, with its grace and its log line - and one end, with how long
+    // it lasted. The count as it stands now is not an episode.
+    cascade::gui::DisplayQueryEpisode displayQueries(
+        g_glfwDisplayErrors.load(std::memory_order_relaxed));
+    // FOXSDR_TEST_DISPLAY_QUERY_FAIL="<first frame>,<last frame>", bounded runs only: on
+    // each of those frames the GLFW error callback is handed the display-settings error
+    // itself, as the backend's monitor poll hands it in the field, so
+    // tests/test_display_query_app drives the real path from the callback to the log.
+    long queryFailFirst = -1;
+    long queryFailLast = -1;
+    if (frames >= 0) {
+        if (const char* v = std::getenv("FOXSDR_TEST_DISPLAY_QUERY_FAIL");
+            v != nullptr && *v != '\0') {
+            char* end = nullptr;
+            queryFailFirst = std::strtol(v, &end, 10);
+            queryFailLast = queryFailFirst;
+            if (end != nullptr && *end == ',') { queryFailLast = std::strtol(end + 1, nullptr, 10); }
+            if (queryFailLast < queryFailFirst) { queryFailLast = queryFailFirst; }
+        }
+    }
 
     // NOTHING IS DRAWN WHILE THIS SESSION'S DISPLAY IS OFF (gui/display_power.hpp,
     // the 2026-10-27 tester report): the frame loop keeps turning - the interface's
@@ -2347,6 +2372,10 @@ int AppWindow::run(int frames) {
         } else if (static_cast<long>(rendered) == displayOnAt) {
             cascade::gui::frame::sendDisplayPowerForTest(window, 1u);
         }
+        if (queryFailFirst >= 0 && static_cast<long>(rendered) >= queryFailFirst &&
+            static_cast<long>(rendered) <= queryFailLast) {
+            glfwErrorCallback(0x00010008, "Win32: Failed to query display settings");
+        }
         const cascade::gui::DisplayPause::Edge displayEdge =
             displayPause.update(cascade::gui::frame::displayPower(), glfwGetTime());
         if (displayEdge == cascade::gui::DisplayPause::Edge::Paused) {
@@ -2364,14 +2393,31 @@ int AppWindow::run(int frames) {
         // procedure runs, so a WM_DISPLAYCHANGE that arrived this frame has
         // been counted by the time this reads it - and the pause is therefore
         // in force for the very first present after the change, which is the
-        // one that stalls. Both sources are summed into one number: either
-        // moving means the desktop is being reconfigured, and the counters are
-        // monotonic so a sum cannot go backwards.
+        // one that stalls. Two sources: the WM_DISPLAYCHANGE count moving, and
+        // GLFW's display-settings error BEGINNING an episode - not every frame
+        // it recurs on, or a monitor that stays detached would restart the
+        // grace every frame and leave the watchdog off for the whole of it
+        // (gui/display_query_episode.hpp). The episode's two edges each get one
+        // line, so a field log shows a flood of minutes as two lines.
         {
-            const unsigned changes = cascade::gui::frame::displayChangeCount() +
-                                     g_glfwDisplayErrors.load(std::memory_order_relaxed);
+            const unsigned changes = cascade::gui::frame::displayChangeCount();
+            const cascade::gui::DisplayQueryEpisode::Edge queries = displayQueries.update(
+                glfwGetTime(), g_glfwDisplayErrors.load(std::memory_order_relaxed));
+            if (queries.began) {
+                cascade::core::diagWarnf(
+                    "display: GLFW could not query display settings - a monitor is off, "
+                    "detached or being reconfigured; presentation may stall briefly, and hang "
+                    "reports are suppressed for the next %u ms (said once, until the queries "
+                    "answer again)",
+                    cascade::core::HangWatchdog::kDisplayGraceMs);
+            } else if (queries.ended) {
+                cascade::core::diagLogf(
+                    "display: display settings answered again - %u queries failed over %.0f s",
+                    queries.failures, queries.seconds);
+            }
             const bool displayChanged =
-                changes != lastDisplayChanges || frameSituations.displayChangeAt(rendered) ||
+                changes != lastDisplayChanges || queries.began ||
+                frameSituations.displayChangeAt(rendered) ||
                 displayEdge == cascade::gui::DisplayPause::Edge::Resumed;
             if (displayChanged) {
                 lastDisplayChanges = changes;

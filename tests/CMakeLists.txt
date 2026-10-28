@@ -309,6 +309,14 @@ foreach(src ${CASCADE_TESTS})
         # DISPLAY that is not in them, and FOXSDR_WINDOW_PLATFORM ignored when it names no platform.
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_display_query_app")
+        # Runs the real cascade.exe (built first) and hands its GLFW error callback the
+        # display-settings error (65544) on every frame of a range (FOXSDR_TEST_DISPLAY_QUERY_FAIL),
+        # as the backend's per-frame monitor poll raises it while a monitor is detached, and reads
+        # from the log that the whole range is one display change said once, settled once, and
+        # that none of it spent the session's GLFW error lines.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_display_off_app")
         # Runs the real cascade.exe (built first) and hands its window procedure the notification
         # Windows sends when the session's display goes off and comes back
@@ -558,6 +566,9 @@ set_tests_properties(test_viewport_fallback_app PROPERTIES TIMEOUT 600)
 # The display-off test starts the real application three times (off then on, off to the end, and
 # the control), 200 frames each.
 set_tests_properties(test_display_off_app PROPERTIES TIMEOUT 600)
+# The display-query test starts the real application twice (the control, and the error on every
+# frame of a range), 400 frames each.
+set_tests_properties(test_display_query_app PROPERTIES TIMEOUT 600)
 # The row-keys test starts the real application twelve times (a layout run, the window open, a
 # press of HD2, of HD1 then HD2, the three that must press nothing and the control for the click's
 # geometry, an instrument's memory rows opened and pressed, and the module's page with sixteen
@@ -811,6 +822,7 @@ set(CASCADE_GUI_TESTS
     test_display_fold_app
     test_display_menu_app
     test_display_off_app
+    test_display_query_app
     test_exit_cause_app
     test_fax_picture_app
     test_foreign_modules_app
