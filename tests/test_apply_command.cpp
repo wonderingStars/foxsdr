@@ -517,6 +517,7 @@ struct AppWindowTestAccess {
     static int rateIndex(AppWindow& a) { return rd(a, [&] { return th::engine(a).deviceRateIndex_; }); }
     static void setBiasStandIn(AppWindow& a) { wr(a, [&] { th::engine(a).biasStandIn_ = cascade::gui::BiasStandIn::Accept; }); }
     static bool biasOn(AppWindow& a) { return rd(a, [&] { return th::engine(a).biasStandInOn_; }); }
+    static int biasStandInKind(AppWindow& a) { return rd(a, [&] { return static_cast<int>(th::engine(a).biasStandIn_); }); }
     static cascade::core::ConverterSetting converter(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.converter(); }); }
     static void setSoundCardForm(AppWindow& a) { wr(a, [&] { soundCardFormHere(a); }); }
     static void setSoundCardFormIq(AppWindow& a) {
@@ -1379,6 +1380,36 @@ void sourceOps(AppWindow& a) {
         // The bounded-run seam (0.99.68): the window sends FOXSDR_HOLD_AUDIO_LOCK's milliseconds; 0 is "no seam" and is what is set here,
         // so nothing is held in this run (tests/test_stop_ends_recordings.cpp drives the real hold through the real application).
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_TEST_HOLD_AUDIO_LOCK, 0))));
+    }
+
+    covering(FOXAPP_OP_TEST_PATCH_RUNNING);
+    {
+        // Shell retirement R2: FOXSDR_PATCH_START's seam as an op. It marks the patch graph running and does NOTHING else (no radio is switched on:
+        // that is FOXAPI_OP_PATCH_RUN, which goes through patchPressStart); sent again it changes nothing.
+        A::setPatchRunning(a, false);
+        CHECK(!A::patchRunning(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TEST_PATCH_RUNNING, 0))));
+        CHECK(A::patchRunning(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TEST_PATCH_RUNNING, 0))));
+        CHECK(A::patchRunning(a));
+        A::setPatchRunning(a, false);   // (leave the window as it was found for what follows)
+    }
+
+    covering(FOXAPP_OP_TEST_BIAS_STAND_IN);
+    {
+        // Shell retirement R2: FOXSDR_FORCE_BIAS_KEY's seam as an op. ival[0] 0 none / 1 accept / 2 refuse (cascade::gui::BiasStandIn's own order, which
+        // the op and the window both spell as these numbers); anything else is refused and leaves the stand-in as it was.
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TEST_BIAS_STAND_IN, 0))));
+        CHECK(A::biasStandInKind(a) == static_cast<int>(cascade::gui::BiasStandIn::None));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TEST_BIAS_STAND_IN, 1))));
+        CHECK(A::biasStandInKind(a) == static_cast<int>(cascade::gui::BiasStandIn::Accept));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TEST_BIAS_STAND_IN, 2))));
+        CHECK(A::biasStandInKind(a) == static_cast<int>(cascade::gui::BiasStandIn::Refuse));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_TEST_BIAS_STAND_IN, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_TEST_BIAS_STAND_IN, -1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::biasStandInKind(a) == static_cast<int>(cascade::gui::BiasStandIn::Refuse));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TEST_BIAS_STAND_IN, 0))));
+        CHECK(A::biasStandInKind(a) == static_cast<int>(cascade::gui::BiasStandIn::None));
     }
 
     covering(FOXAPI_OP_SELECT_SOURCE);

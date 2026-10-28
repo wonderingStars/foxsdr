@@ -1539,8 +1539,12 @@ int AppWindow::run(int frames) {
             uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_TEST_HOLD_AUDIO_LOCK, std::atoi(hold)));
         }
         // The deck's bias tee stand-in (engine/bias_tee.hpp, biasStandInFor):
-        // bounded runs only, for the same reason as the script below.
-        engine_.seamBiasStandIn(cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true));
+        // bounded runs only, for the same reason as the script below. Sent as a command (shell retirement R2: it was the door's seamBiasStandIn); the
+        // engine's default is "none", so a run that sets nothing sends nothing.
+        if (const cascade::gui::BiasStandIn standIn = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
+            standIn != cascade::gui::BiasStandIn::None) {
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_TEST_BIAS_STAND_IN, standIn == cascade::gui::BiasStandIn::Accept ? 1 : 2));
+        }
         // The stand-in basemap (gui/basemap_stand_in.hpp), the same way: a
         // map's tiles and their attribution, with no plugin and no network.
         basemapStandIn_ =
@@ -1948,9 +1952,10 @@ int AppWindow::run(int frames) {
         // the button press a headless run cannot make.
         if (!pluginTestHook_.empty() && !pluginTestStarted_) {
             pluginTestStarted_ = true;
-            // (The engine's fields are the pass's, so a bounded run's seams reach them through runOnPass: with the pass stepped it is
-            // this call on this thread, between its parts, as before the move; free-running it is the pass's own thread that does it.)
-            engine_.seamFetchCatalogue(pluginTestHook_);
+            // (The engine's fields are the pass's: the two commands go on the window's session, in this order, and the pass applies them in it -
+            // the address, then the one fetch of it - as the seam's one runOnPass did. Shell retirement R2.)
+            uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_SET_CATALOGUE_URL, pluginTestHook_));
+            uiSubmit(cascade::core::cmd::make(FOXAPI_OP_STORE_FETCH));
             cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginTestHook_.c_str());
             pluginBrowseOpen_ = true;
         }
@@ -2022,11 +2027,21 @@ int AppWindow::run(int frames) {
         // ("rtlsdr|serial=00000001"); FOXSDR_PATCH_TOGGLE_AT lists frames at
         // which the page is opened or closed ("300,900").
         if (frames >= 0) {
+            // FOXSDR_SOURCE_DEVICE: the native radios are listed and the one named is selected, two commands in one drain (the header says why not a
+            // wait between them). The patch key is "<driver>|<args>" (core/patch_devices.hpp makeDeviceKey); the row's id is "<driver>:<args>".
+            // Only a native radio's key is taken, as the seam's walk of the native list took it: a key with no '|' or the SoapySDR driver's is ignored.
             if (!sourceDeviceByEnv_) {
                 sourceDeviceByEnv_ = true;
-                if (const char* want = std::getenv("FOXSDR_SOURCE_DEVICE");
-                    want != nullptr && *want != '\0') {
-                    engine_.seamSelectNativeDevice(want);
+                if (const char* want = std::getenv("FOXSDR_SOURCE_DEVICE"); want != nullptr && *want != '\0') {
+                    std::string id = want;
+                    const std::size_t bar = id.find('|');
+                    if (bar != std::string::npos) {
+                        id[bar] = ':';
+                        if (id.compare(0, 6, "soapy:") != 0) {
+                            uiSubmit(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
+                            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, id));
+                        }
+                    }
                 }
             }
             // A FREQUENCY LIST IN THE IMPORT BOX (0.99.19): VIEW opened on
@@ -2049,9 +2064,10 @@ int AppWindow::run(int frames) {
             // After the radio has finished opening: a device opens off the GUI
             // thread and its open re-applies the centre it had, so a tune made
             // before that lands was simply overwritten (the first capture sweep).
+            // (The radio is "still opening" from the state's own flag, FOXAPI_RX_DEVICE_OPENING.)
             bool deviceOpening = false;
             if (!pressPresetByEnvDone_ && rendered >= 30) {
-                deviceOpening = engine_.seamDeviceOpenPending();
+                deviceOpening = (uiState_.flags & FOXAPI_RX_DEVICE_OPENING) != 0u;
             }
             if (!pressPresetByEnvDone_ && rendered >= 30 && !deviceOpening) {
                 pressPresetByEnvDone_ = true;
@@ -2060,20 +2076,11 @@ int AppWindow::run(int frames) {
                 if (const char* hz = std::getenv("FOXSDR_TUNE_HZ"); hz != nullptr && *hz != '\0') {
                     const double f = std::atof(hz);
                     if (f > 0.0) {
-                        engine_.seamSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, f));
+                        uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, f));
                     }
                 }
                 if (const char* want = std::getenv("FOXSDR_PRESS_PRESET"); want != nullptr && *want != '\0') {
-                    // What the pass knows - the loaded plugins, their validated presets - is read where the pass cannot change it; the
-                    // windows a plugin with no preset opens are this window's own and are opened after.
-                    const cascade::engine::EngineShell::PresetPress press = engine_.seamPressPreset(want);
-                    const bool found = press.found;
-                    const bool openWindows = press.openWindows;
-                    const std::string& openName = press.name;
-                    const std::uint32_t openCaps = press.capabilities;
-                    if (openWindows) { openPluginWindowsFor(openName, openCaps); }
-                    cascade::core::diagLogf("capture: preset for '%s' %s", want,
-                                            found ? "pressed" : "NOT FOUND - no such plugin loaded");
+                    pressPresetByEnv(want);
                 }
             }
             if (const char* at = std::getenv("FOXSDR_PATCH_TOGGLE_AT");
@@ -2090,21 +2097,21 @@ int AppWindow::run(int frames) {
             // through the same function the keys on the page call.
             if (!patchStartedByEnv_) {
                 patchStartedByEnv_ = true;
-                if (std::getenv("FOXSDR_PATCH_START") != nullptr) { engine_.seamPatchStart(); }
+                if (std::getenv("FOXSDR_PATCH_START") != nullptr) { uiSubmit(cascade::core::cmd::make(FOXAPP_OP_TEST_PATCH_RUNNING)); }
             }
             if (const char* at = std::getenv("FOXSDR_PATCH_RUN_AT"); at != nullptr && *at != '\0') {
                 const std::string list = std::string(",") + at + ",";
                 if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
                     // The dome's own command.
-                    const bool patchWasRunning = engine_.seamPatchRunning();
-                    engine_.seamSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, patchWasRunning ? 0 : 1));
+                    const bool patchWasRunning = (uiState_.flags & FOXAPI_RX_PATCH_RUNNING) != 0u;
+                    uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, patchWasRunning ? 0 : 1));
                 }
             }
             if (const char* at = std::getenv("FOXSDR_PATCH_ALLOFF_AT");
                 at != nullptr && *at != '\0') {
                 const std::string list = std::string(",") + at + ",";
                 if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
-                    engine_.seamSubmit(cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF));
+                    uiSubmit(cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF));
                 }
             }
             // FOXSDR_PATCH_MAP_FIT_AT (0.99.40): frames at which every Map
@@ -2458,16 +2465,15 @@ int AppWindow::run(int frames) {
         if (measure_) {
             cascade::core::MeasureHooks hooks;
             hooks.startReceiver = [this] {
-                engine_.seamSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 1));
+                uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 1));
             };
             hooks.setMode = [this](const char* mode) {
-                engine_.seamSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE,
-                                                               cascade::core::cmd::foxDemodFromName(mode)));
+                uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, cascade::core::cmd::foxDemodFromName(mode)));
             };
             hooks.tuneVfoHz = [this](double offsetHz) {
                 // The centre the receiver last published (the click on the spectrum reads the same number): the source itself is
                 // the pass's, and a swap of it would race a read from this thread.
-                engine_.seamSubmit(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE, uiState_.centreHz + offsetHz, 0));
+                uiSubmit(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE, uiState_.centreHz + offsetHz, 0));
             };
             hooks.markPassStats = [this] { engine_.seamMarkPassStats(); };
             hooks.passStatsJson = [this] { return engine_.seamPassStatsJson(); };
@@ -16800,6 +16806,34 @@ void AppWindow::setTransmitPageOpen(bool open) {
 }
 
 void AppWindow::uiSubmit(const cascade::core::cmd::QueuedCommand& q) { (void)uiSubmitTicket(q); }
+
+// FOXSDR_PRESS_PRESET, A CAPTURE HOOK (bounded runs): the first preset of the plugin whose display name is `want`, pressed as the preset bar presses it, or -
+// for a plugin with none of its own - the plugin pinned to run and its windows opened as a preset would have opened them. The seam read the host's
+// plugin list on the pass; this reads the PLUGINS and PRESETS lists the table serves (pluginLists(), the first row of that name, as the seam took the first
+// plugin of it) and sends the same commands on the window's session, in order, behind the tune that went before it - so the preset still has the last word.
+// (A plugin with no preset: the seam recorded the run state "always" (Engine::recordPluginStopped(key, false)); FOXAPP_OP_PLUGIN_RUN_MODE 1 is the
+// table's spelling of the same state - setPluginRun(Always) - and starts the plugin's instances in the pass that applies it, where the seam left that to
+// the next pass's lifecycle step.)
+void AppWindow::pressPresetByEnv(const char* want) {
+    const PluginListCache& lists = pluginLists();
+    const cascade::gui::PluginRow* row = nullptr;
+    for (const cascade::gui::PluginRow& r : lists.plugins) {
+        if (r.name == want) {
+            row = &r;
+            break;
+        }
+    }
+    if (row != nullptr) {
+        if (row->ownPresets > 0u) {
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_PRESET, row->file, static_cast<std::int64_t>(row->presets.front().index)));
+        } else {
+            uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_RUN_MODE, row->file, 1));
+            const std::string name = row->name;   // (openPluginWindowsFor may move the list's rows under the reference)
+            openPluginWindowsFor(name, row->caps);
+        }
+    }
+    cascade::core::diagLogf("capture: preset for '%s' %s", want, row != nullptr ? "pressed" : "NOT FOUND - no such plugin loaded");
+}
 
 // The setters whose newest figure supersedes every older one (an absolute value a drag, a slider or a knob sends every frame it moves).
 bool AppWindow::latestWins(std::uint32_t op) {

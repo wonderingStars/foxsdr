@@ -3215,7 +3215,16 @@ private:
     bool patchSeeded_ = false;
     bool patchOpenedByEnv_ = false;
     bool patchStartedByEnv_ = false;
-    bool sourceDeviceByEnv_ = false;   // FOXSDR_SOURCE_DEVICE, bounded runs only
+    // FOXSDR_SOURCE_DEVICE (bounded runs only), sent on the first frame as TWO COMMANDS in one drain (shell retirement R2, docs/engine-stage4.md 6.25):
+    // FOXAPP_OP_SCAN_NATIVE_ONLY (scanNative() and nothing else, as the old door seam's scan was) and then FOXAPI_OP_SELECT_SOURCE with the id the key
+    // names ("<driver>:<args>", the key's first '|' turned into ':'; Engine::sourceIdForRow spells a native row's id so). The pass applies them in
+    // that order, so the second finds the row the first listed - which is what the seam did on the pass. (The survey's multi-frame machine - scan, wait
+    // for the answer, read the DEVICES list, then select - was built first and put the deck in "no radio" for the frames the waiting took, which
+    // tests/test_deck_knobs_app holds never to happen: the seam's selection was applied by the FIRST frame's pass.)
+    bool sourceDeviceByEnv_ = false;
+    // FOXSDR_PRESS_PRESET: the named plugin's first preset by its key's own command, or - for a plugin with none - the plugin pinned to run and its windows
+    // opened. Read from the PLUGINS and PRESETS lists (pluginLists()); the commands go on the window's session.
+    void pressPresetByEnv(const char* want);
     bool patchFileLoaded_ = false;
     // The patch as core/patch_io.hpp writes it, rebuilt only when the
     // canvas says it changed. currentConfig() runs every frame and must

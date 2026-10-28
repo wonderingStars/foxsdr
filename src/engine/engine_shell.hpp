@@ -392,29 +392,11 @@ public:
     void reportPluginStatus(const std::vector<cascade::core::HostImage>& images, const PluginUiReport& ui);
 
     // --- the bounded-run seams: each is an environment-driven test or capture hook, honoured in a bounded run only ---
-    // FOXSDR_FORCE_BIAS_KEY: the deck's bias tee stand-in.
-    void seamBiasStandIn(cascade::gui::BiasStandIn standIn);
-    // CASCADE_PLUGIN_TEST: point the store at a catalogue and fetch it once.
-    void seamFetchCatalogue(const std::string& url);
-    // FOXSDR_SOURCE_DEVICE: scan the native radios and select the one whose patch key is `deviceKey`, by the row's own command.
-    void seamSelectNativeDevice(const std::string& deviceKey);
-    // Whether a radio is still opening (the first capture sweep: a tune before the open lands is overwritten by it).
-    bool seamDeviceOpenPending();
-    // FOXSDR_PRESS_PRESET: the first preset of the plugin called `name`, by its key's own command, or - for a plugin with none - its
-    // windows are the window's to open (the result says so).
-    struct PresetPress {
-        bool found = false;
-        bool openWindows = false;
-        std::string name;
-        std::uint32_t capabilities = 0;
-    };
-    PresetPress seamPressPreset(const std::string& name);
-    // FOXSDR_PATCH_START / FOXSDR_PATCH_RUN_AT: the patch's run flag, set and read on the pass.
-    void seamPatchStart();
-    bool seamPatchRunning();
-    // A command from a bounded-run driver (FOXSDR_TUNE_HZ, FOXSDR_PATCH_ALLOFF_AT, the measurement's hooks).
-    void seamSubmit(const FoxCommand& command);
-    void seamSubmit(cascade::core::cmd::QueuedCommand command);
+    // (R2 of the shell retirement, 2026-10-28: the eight seams of the window's ordinary hooks are CLIENT CODE now - the window sends the
+    // table's own ops on its session: FOXAPP_OP_TEST_BIAS_STAND_IN, SET_CATALOGUE_URL + STORE_FETCH, SCAN_NATIVE_ONLY + SELECT_SOURCE read
+    // from the DEVICES list, the state's FOXAPI_RX_DEVICE_OPENING and FOXAPI_RX_PATCH_RUNNING flags, PLUGIN_PRESET / PLUGIN_RUN_MODE read
+    // from the PLUGINS and PRESETS lists, FOXAPP_OP_TEST_PATCH_RUNNING, and uiSubmit for the six commands the old seamSubmit carried.
+    // What is left is the measurement run, which R9 moves to the host.)
     // The measurement run (FOXSDR_MEASURE): one step a frame over the pipeline, the pass's figures, and the generator's install.
     bool seamMeasureTick(cascade::core::EngineMeasure& measure, const cascade::core::MeasureHooks& hooks);
     void seamMarkPassStats();

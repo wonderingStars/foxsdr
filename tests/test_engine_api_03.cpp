@@ -9113,6 +9113,88 @@ void testPluginRunsOnlyWhileUsed() {
     gn::testTheWindowGoes();
 }
 
+// SHELL RETIREMENT R2 (docs/api-0.3-additions.md 9.13, docs/engine-stage4.md 6.25): the two test ops that took the place of the door's bounded-run seams
+// seamPatchStart (FOXSDR_PATCH_START) and seamBiasStandIn (FOXSDR_FORCE_BIAS_KEY), through the table as the window sends them.
+void testShellRetirementR2Ops() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::installRadios83();
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE,
+                            FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS, "s3cret");
+    CHECK(remote.ok());
+    d.eng.controlPass();
+
+    // R2.1 TEST_PATCH_RUNNING marks the graph running and nothing else: the state's flag moves (the window's FOXSDR_PATCH_RUN_AT reads it), the radio does not.
+    const auto patchRunning = [&] { return (s.state().flags & FOXAPI_RX_PATCH_RUNNING) != 0u; };
+    const uint32_t openBefore = s.state().flags & (FOXAPI_RX_DEVICE_OPEN | FOXAPI_RX_DEVICE_OPENING);
+    CHECK(!patchRunning());
+    const testing::Outcome run = pumped(d.eng, s, testing::cmd(FOXAPP_OP_TEST_PATCH_RUNNING));
+    CHECK_EQ(run.status(), FOXAPI_OK);
+    CHECK(patchRunning());
+    CHECK_EQ(s.state().flags & (FOXAPI_RX_DEVICE_OPEN | FOXAPI_RX_DEVICE_OPENING), openBefore);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_TEST_PATCH_RUNNING)).status(), FOXAPI_OK);   // again: the same
+    CHECK(patchRunning());
+    // ...and it is the application's own: a REMOTE session is refused it (every FOXAPP_OP_* is), and nothing moves.
+    CHECK_EQ(pumped(d.eng, remote, testing::cmd(FOXAPP_OP_TEST_PATCH_RUNNING)).status(), FOXAPI_DENIED);
+
+    // ...AND IT SWITCHES NO RADIO ON, which is what separates it from FOXAPI_OP_PATCH_RUN (patchPressStart: "START with every radio switched off switches
+    // them all on", core/patch_graph.hpp switchOnForStart). A graph with its one Radio part switched off: the op marks the graph running and the Radio part
+    // is still off, the graph's version has not moved. (The 36 real-binary tests that set FOXSDR_PATCH_START run a graph with no Radio part, where the
+    // two spellings cannot be told apart; this is the check that can.)
+    {
+        using namespace g13;
+        Direct d2;
+        testing::Session a(api(), d2.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        CHECK(a.ok());
+        passes(d2.eng, 2);
+        const Starter p = starter();
+        CHECK_EQ(pumpedText(d2.eng, a, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(p.g)).result.status, FOXAPI_OK);
+        passes(d2.eng, 1);
+        pc::Graph off = graphOf(a);
+        if (pc::Node* n = off.mutableNode(p.radio)) { n->on = false; }
+        CHECK_EQ(pumpedText(d2.eng, a, setGraph(0, static_cast<long long>(versionOf(a))), pc::graphCommandText(off)).result.status, FOXAPI_OK);
+        passes(d2.eng, 1);
+        CHECK(!onOf(a, p.radio));
+        const uint64_t versionBefore = versionOf(a);
+        CHECK((a.state().flags & FOXAPI_RX_PATCH_RUNNING) == 0u);
+        CHECK_EQ(pumped(d2.eng, a, testing::cmd(FOXAPP_OP_TEST_PATCH_RUNNING)).status(), FOXAPI_OK);
+        passes(d2.eng, 2);
+        CHECK((a.state().flags & FOXAPI_RX_PATCH_RUNNING) != 0u);   // running ...
+        CHECK(!onOf(a, p.radio));                                    // ... and the radio is still off
+        CHECK_EQ(versionOf(a), versionBefore);                       // nothing in the graph moved
+    }
+
+    // R2.2 TEST_BIAS_STAND_IN: 1 accept puts the stand-in tee in front of the key, 2 refuse the one that refuses, 0 takes it away; the same stand-in
+    // the "test.biasStandIn" setting makes, by the same facts.
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("0"));
+    CHECK_EQ(pumped(d.eng, remote, testing::cmd(FOXAPP_OP_TEST_BIAS_STAND_IN, 0.0, 1)).status(), FOXAPI_DENIED);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("0"));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_TEST_BIAS_STAND_IN, 0.0, 1)).status(), FOXAPI_OK);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("1"));
+    CHECK_EQ(fact(s, "fact.biasTee.radioName"), std::string("stand-in radio (FOXSDR_FORCE_BIAS_KEY)"));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_BIAS_TEE, 0.0, 1)).status(), FOXAPI_OK);
+    CHECK((s.state().flags & FOXAPI_RX_BIAS_TEE_ON) != 0u);                                     // the accepting stand-in switched
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_BIAS_TEE, 0.0, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_TEST_BIAS_STAND_IN, 0.0, 2)).status(), FOXAPI_OK);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("1"));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_BIAS_TEE, 0.0, 1)).status(), FOXAPI_OK);
+    CHECK((s.state().flags & FOXAPI_RX_BIAS_TEE_ON) == 0u);                                     // the refusing one did not
+    CHECK(fact(s, "fact.status.sourceError").find("stand-in bias tee") != std::string::npos);
+    // A number that names none of the three is refused, and the stand-in stays as it was.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_TEST_BIAS_STAND_IN, 0.0, 3)).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_TEST_BIAS_STAND_IN, 0.0, -1)).status(), FOXAPI_OUT_OF_RANGE);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("1"));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_TEST_BIAS_STAND_IN, 0.0, 0)).status(), FOXAPI_OK);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("0"));
+}
+
 int main() {
     engine_api_test::hermetic("api03");
     // The plugins' hysteresis, shortened for group N (the engine reads it at its first lifecycle step; no other group has a window).
@@ -9229,5 +9311,7 @@ int main() {
     testDiagContextAtApplyConfig();
     // Group N: a fitted plugin runs only while it is used (stub campaign B2).
     testPluginRunsOnlyWhileUsed();
+    // Shell retirement R2: the two test ops.
+    testShellRetirementR2Ops();
     return check::finish("test_engine_api_03");
 }

@@ -7957,6 +7957,24 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // FOXSDR_HOLD_AUDIO_LOCK (bounded runs only; the window reads the variable and sends it): see holdAudioLockMs_.
             holdAudioLockMs_ = static_cast<int>(c.ival[0]);
             return res;
+        case FOXAPP_OP_TEST_PATCH_RUNNING:
+            // FOXSDR_PATCH_START (bounded runs only; the window reads the variable and sends it). THE SEAM EngineShell::seamPatchStart WAS, WORD FOR WORD:
+            // the patch graph is marked running and nothing else happens. NOT FOXAPI_OP_PATCH_RUN - that is patchPressStart, which first switches the radios
+            // ON, and the 36 tests that set FOXSDR_PATCH_START are about graphs whose radios are off. (Shell retirement R2; docs/engine-stage4.md 6.25.)
+            if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
+            patchRunning_ = true;
+            return res;
+        case FOXAPP_OP_TEST_BIAS_STAND_IN:
+            // FOXSDR_FORCE_BIAS_KEY (bounded runs only; the window sends biasStandInFor's answer). EngineShell::seamBiasStandIn's whole body: the field is set and
+            // biasStandInOn_ is left as it is (the table's "test.biasStandIn" setting also clears it; the seam never did, and neither does this).
+            if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
+            switch (c.ival[0]) {
+                case 0: biasStandIn_ = cascade::gui::BiasStandIn::None; break;
+                case 1: biasStandIn_ = cascade::gui::BiasStandIn::Accept; break;
+                case 2: biasStandIn_ = cascade::gui::BiasStandIn::Refuse; break;
+                default: return refuse(FOXAPI_OUT_OF_RANGE, "0 none, 1 accept or 2 refuse");
+            }
+            return res;
         case FOXAPP_OP_SET_PPM:
             // The Source section's PPM controls (0.99.56): ival[0] the switch, num[0] this radio's value (sanitised, 0 = none).
             changePpm(c.ival[0] != 0, c.num[0]);
