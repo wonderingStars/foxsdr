@@ -373,7 +373,7 @@ struct AppWindowTestAccess {
     }
     static cc::AppConfig saved(AppWindow& a) {
         passseam::on(eng(a), [&] { eng(a).publishConfig(); });
-        return a.currentConfig();
+        return th::currentConfig(a);
     }
     static void restore(AppWindow& a, const cc::AppConfig& cfg) { passseam::on(eng(a), [&] { eng(a).applyConfig(cfg); }); }
 };

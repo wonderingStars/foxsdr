@@ -144,7 +144,7 @@ struct AppWindowTestAccess {
     }
     static CoverageMap& coverage(AppWindow& a) { return a.coverage_; }
     // The window's half of the config (stub campaign B16: "On screen only"): what currentConfig writes and applyConfig restores.
-    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static cascade::core::AppConfig config(AppWindow& a) { return th::currentConfig(a); }
     static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { th::applyConfig(a, c); }); }
     static bool& onScreenOnly(AppWindow& a) { return a.mapListOnScreenOnly_; }
     static double& typedLat(AppWindow& a) { return a.rxLatInput_; }

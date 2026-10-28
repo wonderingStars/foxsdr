@@ -64,6 +64,8 @@ struct TestHostAccess {
     // THE WINDOW'S HALF of a start-up state (shell retirement R7): what the constructor does with the table's fact, for a test that restores a config
     // into a window it already has.
     static cascade::core::AppConfig applyWindowHalf(AppWindow& a, const cascade::core::AppConfig& startup) { return a.applyWindowHalf(startup); }
+    // The window's half of the settings as it is now, bookkeeping included (what the window's own currentConfig() put over the engine's snapshot until R8 deleted it).
+    static void buildInterfaceHalf(AppWindow& a, cascade::core::AppConfig& cfg) { a.buildInterfaceHalf(cfg, /*bookkeeping=*/true); }
 };
 
 }  // namespace cascade::gui
@@ -104,7 +106,6 @@ public:
         h.engine = &service_.engine();
         h.configPath = configPath;
         h.configLoaded = restored_.loaded;
-        h.writesForbidden = restored_.writesForbidden;
         h.lastRunUnclean = restored_.lastRunUnclean;
         h.sourceKind = restored_.sourceKind;
         h.iqFilePath = restored_.iqFilePath;
@@ -189,6 +190,15 @@ inline void applyConfig(cascade::gui::AppWindow& a, const cascade::core::AppConf
     const cascade::core::AppConfig startup = cascade::core::startupState(cfg);
     engine(a).applyConfig(startup);
     (void)cascade::gui::TestHostAccess::applyWindowHalf(a, startup);
+}
+
+// THE WHOLE SETTINGS DOCUMENT AS THE KEEPER WOULD SAVE IT RIGHT NOW (shell retirement R8): the engine's snapshot with the window's live half put over it - what the
+// window's own currentConfig() returned until R8 deleted the window's copy of the keeper. The engine's half is the snapshot as the engine last published it (the
+// tests that mean "before the engine publishes" and "after" hold the pass and publish by hand, as they always did).
+inline cascade::core::AppConfig currentConfig(cascade::gui::AppWindow& a) {
+    cascade::core::AppConfig cfg = engine(a).configSnapshot();
+    cascade::gui::TestHostAccess::buildInterfaceHalf(a, cfg);
+    return cfg;
 }
 
 // The plugin UI behind the window's port (what the window polls), and the engine's side of the port itself (its thread tripwire).

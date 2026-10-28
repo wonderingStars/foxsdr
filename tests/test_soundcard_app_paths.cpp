@@ -405,7 +405,7 @@ struct AppWindowTestAccess {
     }
     static cascade::core::AppConfig saved(AppWindow& a) {
         passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
-        return a.currentConfig();
+        return th::currentConfig(a);
     }
     static std::string kind(AppWindow& a) {
         return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceKind_; });

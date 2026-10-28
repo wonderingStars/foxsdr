@@ -319,7 +319,7 @@ struct AppWindowTestAccess {
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(th::engine(a), [&] { th::applyConfig(a, cfg); }); }
     static cascade::core::AppConfig saved(AppWindow& a) {
         passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });
-        return a.currentConfig();
+        return th::currentConfig(a);
     }
 
     static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device, double freqHz) {

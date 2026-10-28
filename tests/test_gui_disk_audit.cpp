@@ -625,6 +625,11 @@ struct Allowed {
 //   restore (EngineService::restore: src/engine/engine_service.cpp, which main.cpp runs BEFORE the window exists). The window's own start-up on
 //   the table touches no disk, so the two entries "AppWindow::AppWindow" and "AppWindow::setAsideDamagedFile" are gone: an entry that matches
 //   nothing fails this test.
+//   SHELL RETIREMENT R8 (2026-10-28): the window's copy of the settings keeper (the writer, its back-off, the debounce, the field-by-field compare) is
+//   deleted, and the window's end of run() no longer waits on the settings' last save (the engine's service does, bounded, in its stop). The keeper's
+//   file write was always a request to a worker (rule 1 above: a gui::ConfigWriter request), so it never had an allowlist row and none leaves with it;
+//   what R8 removes from this scan is the lexical reach itself - a window that does no settings I/O at all, held by test_engine_shell_guard
+//   (checkTheWindowSavesNothing) - and the rows above are the same as before it, each still matched by code in the window.
 // WHAT B19 PUT ON WORKERS, so that it is not here: the plugin picture's save and the screenshot's files (app_window_disk_work.cpp), the Airband
 // preset's read of its file (app_window_airband.cpp) and the import window's lookup of a path with no root (app_window_import_dialog.cpp) are
 // window workers; the I/Q file's open, the frequency list's import and export and the patch Radio's recordings list are the engine's

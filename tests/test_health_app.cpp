@@ -51,6 +51,7 @@
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
+#include "service_keeper_access.hpp"
 #include "pass_seam.hpp"
 #include "sink/audio_out.hpp"
 #include "source/device_source.hpp"
@@ -509,18 +510,20 @@ struct AppWindowTestAccess {
 
     // --- what the program recovered from (0.99.65) ---
     static void reopenAfterFault(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).reopenAfterDriverFault(); }); }
-    // A settings save, through the window's own writer made to refuse (a read-only profile, a full disk, a file another program holds) or
-    // to accept; waits for the worker the way the frame loop does.
+    // A settings save, through the engine service's writer (the window's own was deleted by shell retirement R8) made to refuse (a read-only profile, a full
+    // disk, a file another program holds) or to accept; waits for the worker the way the keeper's look does.
     static bool save(AppWindow& a, bool accepted) {
-        a.configWriter_.bind([accepted](const std::string&, const std::string&, std::string& error) {
+        using KA = cascade::engine::EngineServiceTestAccess;
+        cascade::engine::EngineService& s = svc::of(a);
+        KA::bindWriter(s, [accepted](const std::string&, const std::string&, std::string& error) {
             if (!accepted) { error = "the disk refused it"; }
             return accepted;
         });
-        const unsigned before = a.configWriter_.completed();
-        a.requestConfigSave(cascade::core::AppConfig{});
+        const unsigned before = KA::completed(s);
+        KA::requestSave(s, cascade::core::AppConfig{});
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.configWriter_.completed() == before) {
-            a.pollConfigWriter();
+        while (KA::completed(s) == before) {
+            KA::pollWriter(s);
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }

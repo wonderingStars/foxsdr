@@ -84,7 +84,6 @@ struct GLFWwindow;
 #include "engine/running_view.hpp"
 #include "gui/bench_rail.hpp"
 #include "engine/audio_open.hpp"
-#include "core/config_writer.hpp"
 #include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
 // opaquely rather than including imgui.h - see its own note), so a KeyBindings
@@ -545,19 +544,6 @@ inline bool mapGeometryOnScreen(int x, int y, int w, int h,
     return mapReachableMonitor(x, y, w, h, workAreas) >= 0;
 }
 
-// FIELD-WISE AppConfig COMPARISON - the whole of the save debounce's decision
-// about whether anything changed. Declared here, rather than left file-local
-// in app_window.cpp, for the reason the pure decisions above are: a field
-// MISSING from this comparison is not a compile error and not a visible bug -
-// it is a setting that reaches the file only when something else happens to
-// change in the same session, which is the subtlest way a preference can be
-// lost. tests/test_config.cpp asks it directly, one field at a time.
-//
-// Exact float compares are correct: both sides come from the same
-// currentConfig() code path, so any difference is a real user-visible change,
-// never noise.
-bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b);
-
 // The share of a monitor's work area the map window OPENS at when nothing was
 // saved. A DEFAULT ONLY: a window that exactly fills the work area looks
 // maximised, and the user then cannot see what it is covering - which is a
@@ -664,7 +650,6 @@ struct WindowHost {
     // saves to this path, debounced, and at the end), so it needs the path and is told how the restore went.
     std::string configPath;
     bool configLoaded = false;       // the file was read (a missing file is a first run: loaded); false - damaged, or hermetic: nothing to apply
-    bool writesForbidden = false;    // a damaged file that could not be kept aside: nothing may be saved over it
     bool lastRunUnclean = false;     // the file said the last run never wrote its clean-exit marker (the window's crash-report offer)
     std::string sourceKind;          // the saved source, as the file named it: the I/Q path box starts from `iqFilePath` when this is "file"
     std::string iqFilePath;
@@ -1669,7 +1654,6 @@ private:
     // the interface's half is taken from the table (withInterfaceHalfFromTable). Returns the config it applied, interface half and all. A test host
     // applies the engine's half itself and then calls this (tests/test_host.hpp: th::applyConfig).
     cascade::core::AppConfig applyWindowHalf(const cascade::core::AppConfig& startup);
-    cascade::core::AppConfig currentConfig();  // snapshot of the live state
     // THE INTERFACE'S HALF OF THE SETTINGS FILE (shell retirement R5; core/config_halves.hpp, docs/api-0.3-additions.md 9.16). This window owns part of the
     // file - its view state, the key bindings, the patch text, the update and diagnostics switches, the beta tester's record - and hands that part to the
     // engine as a document (FOXAPP_OP_INTERFACE_CONFIG) whenever it changes, so the engine's snapshot is the whole file; it reads the part it STARTS from
@@ -1691,37 +1675,10 @@ private:
     // True when the session took it; false (said in the log) when it did not - the engine then saves the half it last had, which is what a crash would
     // have left.
     bool flushInterfaceHalf();
-    void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
-    void saveConfigNow();               // clean-exit save (unconditional)
-
-    // THE ASYNC SAVE (0.97.2). Field report "hang ntdll.dll @
-    // cascade::core::ConfigStore::save" (0.96.3): both functions above used
-    // to write the file directly, on the GUI thread, inside whichever of
-    // them called them - see core/config_writer.hpp for the whole argument.
-    // requestConfigSave() is now the ONE place either of them hands bytes to
-    // configWriter_, so pollConfigWriter() has one place to apply the result
-    // to savedCfg_ from. `cfg` is remembered as lastRequestedConfig_
-    // unconditionally: because configWriter_ coalesces bursts to the LAST
-    // content asked for, whichever write is on disk once configWriter_ has
-    // fully drained (poll()/finishOrAbandon() returned with nothing left
-    // in flight or queued) is guaranteed to be this content - so savedCfg_
-    // never needs to be paired with a specific request, only compared
-    // against "drained and ok".
-    void requestConfigSave(const cascade::core::AppConfig& cfg);
-    // A SAVE THE FRAME MAY ASK FOR AT ONCE (stub campaign B14): the window's half of the config as the last frame left it, handed to the writer now instead
-    // of after the debounce - for a press whose effect must survive a crash that comes straight after it (the Seen key of a message from the team). It is what
-    // maybeSaveConfig() asks for once the debounce has run, so it is as safe as that: saveConfigNow() is NOT, because it asks the engine to hand over its half
-    // of the config, a read of the pass's own state that is safe only before the control thread starts and after it is joined (test_engine_shell_guard holds
-    // saveConfigNow to run()). Does nothing in a run that has no settings file, or for a settings file that may not be written over.
+    // A CHANGE THE FRAME WANTS IN THE FILE AT ONCE (stub campaign B14: the Seen key of a message from the team): since shell retirement R8 the window saves nothing - the
+    // engine's service keeps the file from the engine's snapshot - so this only lets the next look hand the interface's half over without waiting out the
+    // coalescing gap (sendInterfaceHalf), and the engine's keeper writes it a debounce later.
     void saveConfigFromFrame();
-    // Collects a finished configWriter_ write, applies it to savedCfg_ on
-    // success (see requestConfigSave above), and logs a failure exactly as
-    // the old synchronous save() call sites did. Called once a frame; a
-    // failed save is retried automatically because savedCfg_ stays stale,
-    // so the next frame's maybeSaveConfig() sees "still different" and
-    // restarts the debounce window on its own.
-    void pollConfigWriter();
-
     // The Source section's lamp for a saved source the generator is standing
     // in for (0.99.36): lit while one is remembered and not open. From the
     // window's engine API session (window port group 11): fact.source.keep,
@@ -2171,21 +2128,6 @@ private:
     // otherwise, and one of those two answers costs a SetupAPI walk.
     bool sourceComboWasOpen_ = false;
                               // iqPath_ is just the edit buffer)
-    cascade::core::AppConfig savedCfg_;    // what the config file holds now
-    cascade::core::AppConfig pendingCfg_;  // debounce comparator
-    double lastChangeTimeS_ = -1.0;  // glfwGetTime() of the last observed
-                                     // change; < 0 = nothing pending
-
-    // THE WRITE, OFF THIS THREAD. Field report "hang ntdll.dll @
-    // cascade::core::ConfigStore::save" (0.96.3): the debounced save above
-    // put the GUI thread inside the file write itself. See
-    // core/config_writer.hpp for the whole argument; requestConfigSave() and
-    // pollConfigWriter() are the only callers.
-    cascade::gui::ConfigWriter configWriter_;
-    // The config content behind whatever configWriter_ is currently holding
-    // (in flight or coalesced-and-queued) - see requestConfigSave()'s
-    // comment on the header for why one variable is enough.
-    cascade::core::AppConfig lastRequestedConfig_;
     // THE INTERFACE'S HALF AS THE ENGINE LAST HAD IT FROM THIS WINDOW (sendInterfaceHalf): the baseline is taken at the end of the constructor, so
     // nothing is sent until something differs from what the window started with. interfaceSentAtS_ is the clock of the last ATTEMPT (a refused one
     // too: it is what spaces the retries); interfaceSends_ counts the documents the session took.
@@ -2840,14 +2782,6 @@ private:
     // runs there is no user interface left to ask with. This is the ask.
     void drawDiagnosticsOffer();
     void copyDiagnosticsBundle();
-    // The save's back-off after failures (0.99.65). (A damaged settings file is kept aside before anything can save over it by the host's restore,
-    // EngineService::setAsideDamaged, since shell retirement R7: the window is told whether that failed - WindowHost::writesForbidden.)
-    void noteConfigWrite(bool ok, const std::string& error);
-    bool configRetryHeld(double nowS, double baseWaitS);
-    int configFailures_ = 0;
-    bool configFailureFresh_ = false;
-    double configRetryAtS_ = 0.0;
-    bool configFailureLogged_ = false;
     // The reports folder in the shell (made first, under a watchdog pause): the diagnostics offer's and the Diagnostics section's key.
     void openReportsFolder();
     // THE WHOLE BUNDLE (what Copy diagnostics puts on the clipboard and what a problem report attaches): the engine's rendered context

@@ -94,6 +94,7 @@
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
+#include "service_keeper_access.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -121,22 +122,26 @@ struct AppWindowTestAccess {
         a.pollDiskJobs();
     }
 
-    // The settings (the window's writer).
-    static void saveNow(AppWindow& a) { a.saveConfigNow(); }
-    static void maybeSave(AppWindow& a, double nowS) { a.maybeSaveConfig(nowS); }
-    static void pollConfig(AppWindow& a) { a.pollConfigWriter(); }
-    static bool configInFlight(AppWindow& a) { return a.configWriter_.inFlight(); }
-    static bool configLastOk(AppWindow& a) { return a.configWriter_.lastOk(); }
-    static std::string configLastError(AppWindow& a) { return a.configWriter_.lastError(); }
-    static unsigned configCompleted(AppWindow& a) { return a.configWriter_.completed(); }
-    static bool configDrain(AppWindow& a, std::chrono::milliseconds bound) {
-        return a.configWriter_.finishOrAbandon(bound);
+    // The settings (the writer of the engine's service - the window's own was deleted by shell retirement R8; tests/service_keeper_access.hpp). The cases drive
+    // the keeper by hand exactly as they drove the window's: the same calls, the clock handed in, the same assertions.
+    using KA = cascade::engine::EngineServiceTestAccess;
+    static void saveNow(AppWindow& a) { KA::saveNow(svc::of(a)); }
+    static void maybeSave(AppWindow& a, double nowS) { KA::maybeSave(svc::of(a), nowS); }
+    static void pollConfig(AppWindow& a) { KA::pollWriter(svc::of(a)); }
+    static bool configInFlight(AppWindow& a) { return KA::inFlight(svc::of(a)); }
+    static bool configLastOk(AppWindow& a) { return KA::lastOk(svc::of(a)); }
+    static std::string configLastError(AppWindow& a) { return KA::lastError(svc::of(a)); }
+    static unsigned configCompleted(AppWindow& a) { return KA::completed(svc::of(a)); }
+    static bool configDrain(AppWindow& a, std::chrono::milliseconds bound) { return KA::drain(svc::of(a), bound); }
+    static void bindConfigWriter(AppWindow& a, cascade::gui::ConfigWriter::Writer w) { KA::bindWriter(svc::of(a), std::move(w)); }
+    // A change the keeper sees: the engine's squelch moved between two values and the snapshot published (no case starts the control thread, so this thread is the
+    // pass). It was a plain flag of the window's (the band plan's overlay) while the window kept the file; the keeper compares what the ENGINE holds.
+    static void touchSettings(AppWindow& a) {
+        static bool on = false;
+        on = !on;
+        (void)eng(a).applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_SQUELCH, on ? -61.0 : -62.0));
+        eng(a).publishConfig();
     }
-    static void bindConfigWriter(AppWindow& a, cascade::gui::ConfigWriter::Writer w) {
-        a.configWriter_.bind(std::move(w));
-    }
-    // A change currentConfig() sees (a plain flag it writes out: the band plan's overlay, which is the window's own).
-    static void touchSettings(AppWindow& a) { a.bandPlanOverlay_ = !a.bandPlanOverlay_; }
     static void addBookmarkToView(AppWindow& a, const std::string& name, double hz) { addBookmark(a, name, hz); }
     // The lists: the ENGINE's (their saver and their red lines).
     static std::string bookmarkError(AppWindow& a) { return eng(a).bookmarkError_; }

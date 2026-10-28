@@ -223,13 +223,16 @@ public:
     // run's last stderr line reports, so a test can tell a quiet service from one that rewrites its file.
     std::uint64_t savesRequested() const { return saves_.load(); }
 
+    // THE SETTINGS THE KEEPER COMPARES, as text: the whole serialised document without the fields that move on their own (the beta tester's running report,
+    // its retry queue, the crash-upload limiter's memory, the exit marker, the session's start - core/config_halves.hpp, clearBookkeeping). Two configs the keeper
+    // would NOT save a difference between have the same text. Public since shell retirement R8 so a test can ask "does the debounce see this change?" of the
+    // production compare (tests/config_compare.hpp) instead of the window's hand-kept field list, which was deleted with the window's keeper.
+    static std::string comparable(cascade::core::AppConfig cfg);
+
     // The sentence a refused lock prints (public so a test can hold its wording without running a process).
     static std::string refusal(const cascade::core::ConfigLock& lock, const std::string& configPath);
 
 private:
-    // The settings the window compares, as text: the snapshot without the three fields that move on their
-    // own (the usage report that grows a second every second, the exit marker, the session's start).
-    static std::string comparable(cascade::core::AppConfig cfg);
     void keepOnce();
     void startKeeper();
     void stopKeeper();
@@ -246,6 +249,7 @@ private:
     void noteWrite(bool ok, const std::string& error);
     bool retryHeld(double nowS);
 
+    friend struct EngineServiceTestAccess;   // the keeper driven by hand (tests/service_keeper_access.hpp: the read-only folder, the refused write)
     ServiceOptions options_;
     // Declared so that they are destroyed in the order the window's are: the engine first, the writer
     // (which abandons a write still in flight after its short grace), the lock last - held to the end.

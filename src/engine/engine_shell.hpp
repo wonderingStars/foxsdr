@@ -277,12 +277,11 @@ public:
     EngineShell(const EngineShell&) = delete;
     EngineShell& operator=(const EngineShell&) = delete;
 
-    // --- the settings the window keeps (until R8 moves the keeper) ---
+    // --- the front end's wait ---
+    // (The settings are the engine service's since shell retirement R8: the window's keeper, and with it configSnapshot and publishConfig, are gone.)
     // (The store's URL box is seeded from the table's fact.store.url, the status lines are read as fact.status.*, the frame's kick is the heartbeat of a
     // FOXAPI_SESSION_FRAME session and the two listeners' use is fact.web.served / fact.cat.accepted: shell retirement R3 retired
     // pluginCatalogueUrl, publishStatusText, statusText, frameKick and setServerUsageHooks from this door.)
-    cascade::core::AppConfig configSnapshot() const;
-    void publishConfig();
     void setFrontEndWaitBeat(std::function<void()> beat);
     // (The Diagnostics switch reaches the control thread's watchdog inside the interface's half of the configuration - FOXAPP_OP_INTERFACE_CONFIG,
     // Engine::applyInterfaceConfig - against the directory the host named in ControlThreadOptions::diagnosticsDir: shell retirement R5 retired

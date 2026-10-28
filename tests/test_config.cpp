@@ -84,6 +84,7 @@
 #define TEST_GETPID getpid
 #endif
 
+#include "config_compare.hpp"
 #include "test_check.hpp"
 
 using cascade::core::AppConfig;
@@ -2076,12 +2077,12 @@ int main() {
         // THE SAVE DEBOUNCE HAS TO SEE IT: a combo pick calls no save of its own, so
         // configsEqual is the only thing that writes it before a clean exit.
         const AppConfig base;
-        CHECK(cascade::gui::configsEqual(base, base));
+        CHECK(cfgcmp::configsEqual(base, base));
         for (const int ms : {120, 240, 480, 960}) {
             AppConfig other = base;
             other.audioBufferMs = ms;
-            CHECK(!cascade::gui::configsEqual(base, other));
-            CHECK(!cascade::gui::configsEqual(other, base));
+            CHECK(!cfgcmp::configsEqual(base, other));
+            CHECK(!cfgcmp::configsEqual(other, base));
         }
     }
 
@@ -2134,8 +2135,8 @@ int main() {
         for (const int ms : {120, 240, 480, 960}) {
             AppConfig other = base;
             other.audioBufferAutoMs = ms;
-            CHECK(!cascade::gui::configsEqual(base, other));
-            CHECK(!cascade::gui::configsEqual(other, base));
+            CHECK(!cfgcmp::configsEqual(base, other));
+            CHECK(!cfgcmp::configsEqual(other, base));
         }
     }
 
@@ -2306,48 +2307,48 @@ int main() {
         // compare unequal, in both directions, for every pair of styles.
         {
             const AppConfig base;
-            CHECK(cascade::gui::configsEqual(base, base));  // control
+            CHECK(cfgcmp::configsEqual(base, base));  // control
             for (const char* name : {"neon", "plain", "bogus"}) {
                 AppConfig other = base;
                 other.tunerDisplayStyle = name;
-                CHECK(!cascade::gui::configsEqual(base, other));
-                CHECK(!cascade::gui::configsEqual(other, base));
+                CHECK(!cfgcmp::configsEqual(base, other));
+                CHECK(!cfgcmp::configsEqual(other, base));
             }
             // The per-radio bias tee memory, both ways: a switch on any radio
             // is a change the file has to see.
             AppConfig biasOn = base;
             biasOn.biasTee["rtlsdr|serial=00000042"] = true;
-            CHECK(!cascade::gui::configsEqual(base, biasOn));
-            CHECK(!cascade::gui::configsEqual(biasOn, base));
+            CHECK(!cfgcmp::configsEqual(base, biasOn));
+            CHECK(!cfgcmp::configsEqual(biasOn, base));
             AppConfig biasOff = biasOn;
             biasOff.biasTee["rtlsdr|serial=00000042"] = false;
-            CHECK(!cascade::gui::configsEqual(biasOn, biasOff));
+            CHECK(!cfgcmp::configsEqual(biasOn, biasOff));
             // The per-radio Auto gain memory (0.99.73), both ways, and a flip
             // of an existing entry: ticking the box calls no save of its own.
             AppConfig agcOn = base;
             agcOn.autoGainByRadio["rtlsdr|serial=00000042"] = true;
-            CHECK(!cascade::gui::configsEqual(base, agcOn));
-            CHECK(!cascade::gui::configsEqual(agcOn, base));
+            CHECK(!cfgcmp::configsEqual(base, agcOn));
+            CHECK(!cfgcmp::configsEqual(agcOn, base));
             AppConfig agcOff = agcOn;
             agcOff.autoGainByRadio["rtlsdr|serial=00000042"] = false;
-            CHECK(!cascade::gui::configsEqual(agcOn, agcOff));
-            CHECK(!cascade::gui::configsEqual(agcOff, agcOn));
+            CHECK(!cfgcmp::configsEqual(agcOn, agcOff));
+            CHECK(!cfgcmp::configsEqual(agcOff, agcOn));
             // The per-radio manual gain memory (0.99.75), every way it can change: a radio
             // appearing, a stage appearing on it, and a stage's number moving. The sliders,
             // the GAIN dial and the scope's knob call no save of their own.
             AppConfig gainOn = base;
             gainOn.manualGainByRadio["soapy|driver=uhd,serial=31E0000"] = {{"PGA", 76.0}};
-            CHECK(!cascade::gui::configsEqual(base, gainOn));
-            CHECK(!cascade::gui::configsEqual(gainOn, base));
+            CHECK(!cfgcmp::configsEqual(base, gainOn));
+            CHECK(!cfgcmp::configsEqual(gainOn, base));
             AppConfig gainMoved = gainOn;
             gainMoved.manualGainByRadio["soapy|driver=uhd,serial=31E0000"][0].second = 60.0;
-            CHECK(!cascade::gui::configsEqual(gainOn, gainMoved));
-            CHECK(!cascade::gui::configsEqual(gainMoved, gainOn));
+            CHECK(!cfgcmp::configsEqual(gainOn, gainMoved));
+            CHECK(!cfgcmp::configsEqual(gainMoved, gainOn));
             AppConfig gainStage = gainOn;
             gainStage.manualGainByRadio["soapy|driver=uhd,serial=31E0000"].push_back({"VGA", 5.0});
-            CHECK(!cascade::gui::configsEqual(gainOn, gainStage));
-            CHECK(!cascade::gui::configsEqual(gainStage, gainOn));
-            CHECK(cascade::gui::configsEqual(gainOn, gainOn));
+            CHECK(!cfgcmp::configsEqual(gainOn, gainStage));
+            CHECK(!cfgcmp::configsEqual(gainStage, gainOn));
+            CHECK(cfgcmp::configsEqual(gainOn, gainOn));
 
             // The transmitter's settings, the rail bank, the rebound keys and
             // the update-check switch: every one of them is changed by a click
@@ -2433,8 +2434,8 @@ int main() {
             for (const Change& ch : changes) {
                 AppConfig other = base;
                 ch.apply(other);
-                const bool seenAB = !cascade::gui::configsEqual(base, other);
-                const bool seenBA = !cascade::gui::configsEqual(other, base);
+                const bool seenAB = !cfgcmp::configsEqual(base, other);
+                const bool seenBA = !cfgcmp::configsEqual(other, base);
                 if (!seenAB || !seenBA) {
                     std::printf("  configsEqual cannot see %s\n", ch.name);
                 }
@@ -2446,7 +2447,7 @@ int main() {
                 AppConfig withConv = base;
                 withConv.converters["rtlsdr|serial=1"] = {cascade::core::ConverterMode::Up,
                                                           125.0e6, false};
-                CHECK(cascade::gui::configsEqual(withConv, withConv));
+                CHECK(cfgcmp::configsEqual(withConv, withConv));
                 AppConfig lo = withConv;
                 lo.converters["rtlsdr|serial=1"].loHz = 100.0e6;
                 AppConfig inv = withConv;
@@ -2454,8 +2455,8 @@ int main() {
                 AppConfig off = withConv;
                 off.converters["rtlsdr|serial=1"].mode = cascade::core::ConverterMode::Off;
                 for (const AppConfig* o : {&lo, &inv, &off}) {
-                    CHECK(!cascade::gui::configsEqual(withConv, *o));
-                    CHECK(!cascade::gui::configsEqual(*o, withConv));
+                    CHECK(!cfgcmp::configsEqual(withConv, *o));
+                    CHECK(!cfgcmp::configsEqual(*o, withConv));
                 }
             }
         }
@@ -2639,25 +2640,25 @@ int main() {
         // calls no save of its own, so configsEqual is the only thing that
         // writes it before a clean exit.
         const AppConfig base;
-        CHECK(cascade::gui::configsEqual(base, base));  // control
+        CHECK(cfgcmp::configsEqual(base, base));  // control
         for (const char* name : {"classic-xl", "night", "glass", "daylight", "field", "bogus"}) {
             AppConfig other = base;
             other.uiTheme = name;
-            CHECK(!cascade::gui::configsEqual(base, other));
-            CHECK(!cascade::gui::configsEqual(other, base));
+            CHECK(!cfgcmp::configsEqual(base, other));
+            CHECK(!cfgcmp::configsEqual(other, base));
         }
         AppConfig scaled = base;
         scaled.counterScale = 2;
-        CHECK(!cascade::gui::configsEqual(base, scaled));
-        CHECK(!cascade::gui::configsEqual(scaled, base));
+        CHECK(!cfgcmp::configsEqual(base, scaled));
+        CHECK(!cfgcmp::configsEqual(scaled, base));
         AppConfig noSwitches = base;
         noSwitches.counterSwitches = false;
-        CHECK(!cascade::gui::configsEqual(base, noSwitches));
-        CHECK(!cascade::gui::configsEqual(noSwitches, base));
+        CHECK(!cfgcmp::configsEqual(base, noSwitches));
+        CHECK(!cfgcmp::configsEqual(noSwitches, base));
         AppConfig bigReadings = base;
         bigReadings.readingsScale = 1.4f;
-        CHECK(!cascade::gui::configsEqual(base, bigReadings));
-        CHECK(!cascade::gui::configsEqual(bigReadings, base));
+        CHECK(!cfgcmp::configsEqual(base, bigReadings));
+        CHECK(!cfgcmp::configsEqual(bigReadings, base));
     }
 
     // --- language and country (documented in config.hpp) ---------------------
@@ -2698,12 +2699,12 @@ int main() {
         const AppConfig base;
         AppConfig lang = base;
         lang.language = "pl";
-        CHECK(!cascade::gui::configsEqual(base, lang));
-        CHECK(!cascade::gui::configsEqual(lang, base));
+        CHECK(!cfgcmp::configsEqual(base, lang));
+        CHECK(!cfgcmp::configsEqual(lang, base));
         AppConfig ctry = base;
         ctry.country = "PL";
-        CHECK(!cascade::gui::configsEqual(base, ctry));
-        CHECK(!cascade::gui::configsEqual(ctry, base));
+        CHECK(!cfgcmp::configsEqual(base, ctry));
+        CHECK(!cfgcmp::configsEqual(ctry, base));
     }
 
     // --- the two map trail switches (documented in config.hpp) ---------------
@@ -5203,19 +5204,19 @@ int main() {
         // no save of their own, so configsEqual is the only thing that writes the file before a
         // clean exit.
         const AppConfig base;
-        CHECK(cascade::gui::configsEqual(base, base));  // control
+        CHECK(cfgcmp::configsEqual(base, base));  // control
         AppConfig mode = base;
         mode.waterfallRangeMode = "manual";
-        CHECK(!cascade::gui::configsEqual(base, mode));
-        CHECK(!cascade::gui::configsEqual(mode, base));
+        CHECK(!cfgcmp::configsEqual(base, mode));
+        CHECK(!cfgcmp::configsEqual(mode, base));
         AppConfig floorMoved = base;
         floorMoved.dbMin = -90.0f;
-        CHECK(!cascade::gui::configsEqual(base, floorMoved));
-        CHECK(!cascade::gui::configsEqual(floorMoved, base));
+        CHECK(!cfgcmp::configsEqual(base, floorMoved));
+        CHECK(!cfgcmp::configsEqual(floorMoved, base));
         AppConfig ceilingMoved = base;
         ceilingMoved.dbMax = -10.0f;
-        CHECK(!cascade::gui::configsEqual(base, ceilingMoved));
-        CHECK(!cascade::gui::configsEqual(ceilingMoved, base));
+        CHECK(!cfgcmp::configsEqual(base, ceilingMoved));
+        CHECK(!cfgcmp::configsEqual(ceilingMoved, base));
     }
 
     const int rc = testSummary("test_config");

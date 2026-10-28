@@ -100,8 +100,6 @@ Engine& rawEngine(EngineShell& shell) { return *shell.impl_->engine; }
 
 // --- CLASS SHELL -------------------------------------------------------------------------------------------------------------
 
-cascade::core::AppConfig EngineShell::configSnapshot() const { return SHELL_ENGINE.configSnapshot(); }
-void EngineShell::publishConfig() { SHELL_ENGINE.publishConfig(); }
 void EngineShell::setFrontEndWaitBeat(std::function<void()> beat) { SHELL_ENGINE.setFrontEndWaitBeat(std::move(beat)); }
 
 void EngineShell::stepPass(PassPart part) { SHELL_ENGINE.stepPass(part); }

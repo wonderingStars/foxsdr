@@ -75,7 +75,7 @@ namespace cascade::gui {
 
 struct AppWindowTestAccess {
     using Sent = std::vector<cascade::core::cmd::QueuedCommand>;
-    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static cascade::core::AppConfig config(AppWindow& a) { return th::currentConfig(a); }
     static void restore(AppWindow& a, const cascade::core::AppConfig& c) { th::applyConfig(a, c); }
     static void tap(AppWindow& a, Sent* log) { a.uiSubmitTap_ = log; }
     static void clock(AppWindow& a) { a.uiClockS_ = &fakeClock; }

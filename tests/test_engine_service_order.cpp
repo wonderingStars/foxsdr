@@ -173,8 +173,8 @@ const std::vector<Table>& table() {
          {
              {"the engine's own start-up first", "", "engine_.initialise()",
               "SERVICE ONLY (shell retirement R7): the host's restore does it, before the window exists - a config restore needs something to restore onto"},
-             {"the writer bound", "configWriter_.bind(", "writer_.bind(",
-              "before anything can ask it to write (the window keeps its keeper's writer, unused, until the commit that deletes it)"},
+             {"the writer bound", "", "writer_.bind(",
+              "SERVICE ONLY (R8b): before anything can ask it to write. The window's own writer, with the rest of its copy of the keeper, was deleted", "configWriter_.bind("},
              {"the file loaded", "", "ConfigStore::load(",
               "SERVICE ONLY (R7): missing: defaults and loaded; damaged: defaults, not loaded, nothing applied. The window reads its half from the table"},
              {"the receiver's half applied", "", "engine_.applyConfig(",
@@ -182,9 +182,10 @@ const std::vector<Table>& table() {
              {"the usage journal's start-up", "", "engine_.telemetryStartup(",
               "SERVICE ONLY (R7): AFTER the apply - the crash count and the pending report are read from the file, not from defaults"},
              {"a damaged file kept aside", "", "setAsideDamaged(",
-              "SERVICE ONLY (R7): before anything can save over it; the window is told whether it failed (WindowHost::writesForbidden)"},
-             {"the first snapshot (the debounce's baseline)", "engine_.publishConfig()", "engine_.publishConfig()",
-              "no pass has run yet: the engine hands its half over first (the window's is its own keeper's baseline, unused, until the commit that deletes it)"},
+              "SERVICE ONLY (R7): before anything can save over it; a damaged file that cannot be kept aside forbids the SERVICE's own writer (the window keeps none since R8b)"},
+             {"the first snapshot (the debounce's baseline)", "", "engine_.publishConfig()",
+              "SERVICE ONLY (R8b): no pass has run yet: the engine hands its half over first. The window's baseline of its own keeper was deleted with the keeper",
+              "savedCfg_ = currentConfig()"},
              {"the bookmarks", "", "engine_.loadBookmarks()",
               "SERVICE ONLY (R7): under the settings' gate: a hermetic run never reads them"},
              {"the status lines", "", "engine_.publishStatusText()",
@@ -456,6 +457,18 @@ int checkProperties(const std::string& svcBlank, const std::string& mainBlank, b
         need(!stop.empty() && stop.find("publishConfig(") == std::string::npos && stop.find("configSnapshot(") == std::string::npos,
              "stop() takes no snapshot of its own (it saves through saveNow() and rewrites lastRequested_)");
         need(!stop.empty() && stop.find("lastRequested_") != std::string::npos, "the marker is a rewrite of lastRequested_");
+        // THE PLUGINS ARE RELEASED BEFORE THE CLEAN-EXIT MARKER IS WRITTEN (master 0.99.60; a merge once put them after it and test_clean_exit_marker found out): a plugin's
+        // destroy() is third-party code that can wedge, and a marker written before it already said "clean". Stated directly here, beside the chain of rows that implies it.
+        {
+            const std::size_t releaseAt = stop.find("engine_.shutdownRelease()");
+            const std::size_t markerAt = stop.find("engine_.markCleanExit()");
+            need(releaseAt != std::string::npos && markerAt != std::string::npos && releaseAt < markerAt,
+                 "RELEASE: the plugins are released BEFORE the clean-exit marker is written (a kill inside a plugin's destroy() must not read as a clean exit)");
+            const std::size_t saveAt = stop.find("saveNow()");
+            const std::size_t stopAt = stop.find("engine_.shutdownStop()");
+            need(saveAt != std::string::npos && stopAt != std::string::npos && saveAt < stopAt,
+                 "THE FINAL-STATE SAVE is taken BEFORE the pipeline stops (the snapshot reads live state; a death during the join is a death)");
+        }
         // THE KEEPER THREAD (ServiceOptions::keeperThread, shell retirement R6) IS JOINED AT THE HEAD OF stop(): before the quiesce and before any save, so that
         // everything stop() does with the writer and the keeper's memory (the final saves, the marker, the waits) is on one thread again.
         {
@@ -538,6 +551,14 @@ int checkWindowProperties(const std::string& winBlank, bool say) {
          "run() terminates GLFW only on its failure paths, before the frame loop");
     need(close.find("ui_->") == std::string::npos && close.find("leavePluginUi()") != std::string::npos && run.find("leavePluginUi()") == std::string::npos,
          "run() releases the plugin UI port but does NOT disconnect it (the engine's pass runs until the host's stop: disconnected, it is window-less and wakes asleep plugins); closeWindow() does");
+    // THE WINDOW'S COPY OF THE KEEPER IS GONE (R8b): none of its names is in the window's code, and the window names the settings file's writer nowhere.
+    for (const char* name : {"configWriter_", "savedCfg_", "pendingCfg_", "lastRequestedConfig_", "maybeSaveConfig", "saveConfigNow", "requestConfigSave",
+                             "pollConfigWriter", "configsEqual", "currentConfig(", "noteConfigWrite", "configRetryHeld", "ConfigStore::writeFile"}) {
+        if (winBlank.find(name) != std::string::npos) {
+            ++bad;
+            if (say) { std::printf("  WINDOW: app_window.cpp names %s - the settings file's keeper is the engine service's alone\n", name); }
+        }
+    }
     const std::string dtor = bodyOf(winBlank, "AppWindow::~AppWindow()");
     need(!dtor.empty() && dtor.find("leavePluginUi()") != std::string::npos, "~AppWindow disconnects the plugin UI port for the paths that never reached the prelude");
     return bad;
@@ -601,7 +622,7 @@ int checkHostMain(const std::string& hostBlank, bool say) {
              body.find("app.setMeasurement(") != std::string::npos,
          "the measurement run is read once, in a bounded run only, and handed to the window");
     // What the restore found reaches the window by main (the window reads no file): every field of WindowHost is filled from the restore, none dropped.
-    for (const char* field : {"host.configLoaded = restored.loaded;", "host.writesForbidden = restored.writesForbidden;",
+    for (const char* field : {"host.configLoaded = restored.loaded;",
                               "host.lastRunUnclean = restored.lastRunUnclean;", "host.sourceKind = restored.sourceKind;",
                               "host.iqFilePath = restored.iqFilePath;", "host.api = ", "host.handle = ", "host.engine = ", "host.configPath = "}) {
         need(body.find(field) != std::string::npos, field);
@@ -812,6 +833,10 @@ int main(int argc, char** argv) {
              [](std::string& s) { return replaceOnce(s, "    (void)flushInterfaceHalf();\n", "    (void)flushInterfaceHalf();\n    engine_.shutdownQuiesce();\n"); }},
             {"the window saves the settings itself at the end again",
              [](std::string& s) { return replaceOnce(s, "    (void)flushInterfaceHalf();\n", "    saveConfigNow();\n    (void)flushInterfaceHalf();\n"); }},
+            {"the window keeps its own copy of the settings writer again (the dead keeper)",
+             [](std::string& s) { return replaceOnce(s, "    attachPluginUi();", "    configWriter_.bind(cascade::core::ConfigStore::writeFile);\n    attachPluginUi();"); }},
+            {"the window saves the settings file itself again (a second writer beside the service's keeper)",
+             [](std::string& s) { return replaceOnce(s, "    (void)flushInterfaceHalf();\n", "    (void)flushInterfaceHalf();\n    requestConfigSave(currentConfig());\n"); }},
             {"the destructor no longer disconnects the plugin UI",
              [](std::string& s) { return replaceOnce(s, "    leavePluginUi();\n}\n\nnamespace {", "}\n\nnamespace {"); }},
         };
@@ -869,8 +894,6 @@ int main(int argc, char** argv) {
              [](std::string& s) { return replaceOnce(s, "host.iqFilePath = restored.iqFilePath;", ""); }},
             {"the last run's marker not handed to the window",
              [](std::string& s) { return replaceOnce(s, "host.lastRunUnclean = restored.lastRunUnclean;", ""); }},
-            {"the damaged file's write ban not handed to the window",
-             [](std::string& s) { return replaceOnce(s, "host.writesForbidden = restored.writesForbidden;", ""); }},
         };
         for (const HostMutant& m : hostMutants) {
             std::string mutated = hostText;

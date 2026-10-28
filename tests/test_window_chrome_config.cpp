@@ -32,6 +32,7 @@
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
 #include "gui/ui_scale.hpp"
+#include "config_compare.hpp"
 #include "test_check.hpp"
 
 namespace {
@@ -71,7 +72,7 @@ void isolate() {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static cascade::core::AppConfig config(AppWindow& a) { return th::currentConfig(a); }
     static void restore(AppWindow& a, const cascade::core::AppConfig& c) { th::applyConfig(a, c); }
     static bool rail(const AppWindow& a) { return a.railCollapsed_; }
     static bool status(const AppWindow& a) { return a.statusCollapsed_; }
@@ -167,7 +168,7 @@ int main() {
             if (i == 1) { b.statusCollapsed = true; }
             if (i == 2) { b.displayOpen = true; }
             if (i == 3) { b.interfaceScale = "200"; }
-            CHECK(!g::configsEqual(a, b));
+            CHECK(!cfgcmp::configsEqual(a, b));
         }
     }
 

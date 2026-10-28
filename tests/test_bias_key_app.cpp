@@ -396,7 +396,7 @@ struct AppWindowTestAccess {
     // What the application would save now, and a restore from it.
     static cascade::core::AppConfig config(AppWindow& a) {
         passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
-        return a.currentConfig();
+        return th::currentConfig(a);
     }
     // (Always made on a window just built, before its first pass: the engine's control thread is not started yet.)
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { th::applyConfig(a, cfg); }

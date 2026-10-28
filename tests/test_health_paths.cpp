@@ -259,11 +259,10 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         // 0.99.84 merge: the sites master had in AppWindow that are the engine's now (the output's recovery, the radio's reopen, the audio
         // buffer's raise, the SDRplay service's two troubles) are in src/engine/engine.cpp; the two that are still the window's (the
         // settings write that failed, the saved patch that lost connections) stay in app_window.cpp.
+        // SHELL RETIREMENT R8 (2026-10-28): the settings write that failed is no longer the window's - the window's copy of the keeper is deleted - so the one site of
+        // CfgSave is the engine service's (engine/engine_service.cpp), which keeps the settings saved for BOTH programs and counts a failed write once, as the window did.
         {"Audio", "src/engine/engine.cpp", 1},      {"Reopen", "src/engine/engine.cpp", 1},
-        {"CfgSave", "src/gui/app_window.cpp", 1},    {"PatchLoad", "src/gui/app_window.cpp", 1},
-        // Stage 7c: the headless service (engine/engine_service.cpp) keeps the settings saved and counts a failed write the way the window does.
-        // A word may have a site in each of two PROGRAMS that are never one process (the window application and foxsdr-engine); within one
-        // file it is still counted exactly once, and no third file counts it.
+        {"PatchLoad", "src/gui/app_window.cpp", 1},
         {"CfgSave", "src/engine/engine_service.cpp", 1},
         {"SdrEnum", "src/engine/engine.cpp", 1},     {"SdrLost", "src/engine/engine.cpp", 1},
         {"AudioLead", "src/engine/engine.cpp", 1},

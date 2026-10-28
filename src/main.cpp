@@ -107,7 +107,6 @@ int main(int argc, char** argv) {
         host.engine = &service.engine();
         host.configPath = boot.configPath;
         host.configLoaded = restored.loaded;
-        host.writesForbidden = restored.writesForbidden;
         host.lastRunUnclean = restored.lastRunUnclean;
         host.sourceKind = restored.sourceKind;
         host.iqFilePath = restored.iqFilePath;

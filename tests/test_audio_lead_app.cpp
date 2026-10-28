@@ -199,7 +199,7 @@ struct AppWindowTestAccess {
     }
     static cascade::core::AppConfig config(AppWindow& a) {
         passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });
-        return a.currentConfig();
+        return th::currentConfig(a);
     }
     static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { th::applyConfig(a, c); }); }
     static void addSpeaker(AppWindow& a, cascade::core::patch::NodeId id,

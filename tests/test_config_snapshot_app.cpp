@@ -6,20 +6,29 @@
 // of the engine. Once the engine runs on a control thread that is a race on
 // every field. Now the engine fills the receiver half when IT pumps
 // (Engine::publishConfig, from pumpAudio / pump) into a copy behind a mutex,
-// and currentConfig() only reads that copy (Engine::configSnapshot).
+// and whoever saves reads that copy (Engine::configSnapshot).
 //
-//   A  a change the engine has not published yet is not in currentConfig();
+// SINCE SHELL RETIREMENT R8 THE ONE WHO SAVES IS THE ENGINE'S SERVICE (the window's copy of the keeper, currentConfig() included, was deleted): "current"
+// below is th::currentConfig - the snapshot with the window's live half put over it - and "saved" and "the shutdown save" are the SERVICE's (its first
+// baseline, and the document its saveNow asks the writer for).
+//
+//   A  a change the engine has not published yet is not in the current config;
 //      after the engine's publish it is
 //   B  one pump (Engine::pump - the frame's phases) publishes it
-//   C  the save made at shutdown (saveConfigNow) carries the newest value,
+//   C  the save made at shutdown (the service's saveNow) carries the newest value,
 //      not the last frame's
 //   E  the STATUS LINES are handed over the same way (OPEN 3): every one of
 //      the fifteen reaches Engine::statusText(), and only once the engine
 //      publishes - with the frame's snapshot (pumpPublish) and at the end of
 //      its frame (pumpAudio)
-//   D  the window's first snapshot (constructor) is a real one: with a saved
-//      volume of 0.3 in the config file, the config the window remembers as
+//   D  the first snapshot (the host's restore) is a real one: with a saved
+//      volume of 0.3 in the config file, the config the service remembers as
 //      saved says 0.3 - not the 0.5 of a snapshot nobody filled
+//   F  THE WINDOW'S LAST HALF (R8): what the window changed in its last second
+//      is in the engine's snapshot once the window has handed it over
+//      (flushInterfaceHalf) and the engine has passed - and not before. This
+//      is the property the prelude of run() exists for; take the hand-over
+//      out and F is RED
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
@@ -42,20 +51,25 @@
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
+#include "service_keeper_access.hpp"
 #include "pass_seam.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static cascade::core::AppConfig current(AppWindow& a) { return a.currentConfig(); }
-    static cascade::core::AppConfig saved(AppWindow& a) { return a.savedCfg_; }
-    static cascade::core::AppConfig lastRequested(AppWindow& a) { return a.lastRequestedConfig_; }
+    static cascade::core::AppConfig current(AppWindow& a) { return th::currentConfig(a); }
+    // What the service's keeper remembers as saved after the restore, and the document its last save asked the writer for.
+    static cascade::core::AppConfig saved(AppWindow& a) { return cascade::engine::EngineServiceTestAccess::lastRequested(svc::of(a)); }
+    static cascade::core::AppConfig lastRequested(AppWindow& a) { return cascade::engine::EngineServiceTestAccess::lastRequested(svc::of(a)); }
+    static cascade::core::AppConfig snapshot(AppWindow& a) { return th::engine(a).configSnapshot(); }
+    // The window's last-second change and its hand-over (the prelude's flush).
+    static void setRailBank(AppWindow& a, int bank) { a.railBank_ = bank; }
+    static bool flushHalf(AppWindow& a) { return a.flushInterfaceHalf(); }
     // THE HELD FORMS: the engine's own fields and calls, made from this thread - every use is inside a PassHold (free-running
-    // the pass is parked there; inline and stepped no pass runs unless the test asks for one). saveConfigNow is the window's,
-    // but it hands the engine's half over itself (Engine::publishConfig), which the product does only with no pass running
-    // (before the control thread starts, and after shutdownQuiesce).
-    static void saveNowHeld(AppWindow& a) { a.saveConfigNow(); }
+    // the pass is parked there; inline and stepped no pass runs unless the test asks for one). The service's saveNow hands the engine's half over itself
+    // (Engine::publishConfig), which the product does only with no pass running (before the control thread starts, and after shutdownQuiesce).
+    static void saveNowHeld(AppWindow& a) { cascade::engine::EngineServiceTestAccess::saveNow(svc::of(a)); }
     static void publishHeld(AppWindow& a) { th::engine(a).publishConfig(); }
     static void pump(AppWindow& a) { passseam::whole(th::engine(a), [&] { th::engine(a).pump(); }); }
     static cascade::engine::EngineStatusText status(AppWindow& a) { return th::engine(a).statusText(); }
@@ -178,7 +192,7 @@ int main() {
         th::TestWindow app(path);
 
         // D: the first snapshot is real.
-        std::printf("D: the config remembered as saved says volume %.2f (the file: 0.30)\n",
+        std::printf("D: the config the service remembers as saved says volume %.2f (the file: 0.30)\n",
                     static_cast<double>(A::saved(app).volume));
         CHECK(A::saved(app).volume == 0.3f);
 
@@ -215,6 +229,23 @@ int main() {
         }
         std::printf("C: saved at shutdown: %.2f\n", static_cast<double>(A::lastRequested(app).volume));
         CHECK(A::lastRequested(app).volume == 0.75f);
+
+        // F: the window's last-second change is in the engine's snapshot once it has been handed over and the engine has passed - not before, and not at all
+        // without the hand-over (the control: nothing is flushed, the engine passes, the snapshot keeps the half it had).
+        {
+            const int had = A::snapshot(app).railBank;
+            A::setRailBank(app, had == 3 ? 2 : 3);
+            const int changed = had == 3 ? 2 : 3;
+            A::pump(app);
+            std::printf("F: changed in the window, NOT handed over, after a pass: railBank in the snapshot %d (it was %d, the window says %d)\n", A::snapshot(app).railBank,
+                        had, changed);
+            CHECK(A::snapshot(app).railBank == had);            // the control: the engine knows nothing of it yet
+            CHECK(A::flushHalf(app));
+            A::pump(app);
+            std::printf("   handed over, after a pass: railBank in the snapshot %d (expect %d); the current config says %d\n", A::snapshot(app).railBank, changed,
+                        A::current(app).railBank);
+            CHECK(A::snapshot(app).railBank == changed);
+        }
 
         // E: the status lines.
         auto allAre = [](const cascade::engine::EngineStatusText& t, const std::string& p) {

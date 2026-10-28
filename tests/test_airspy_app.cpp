@@ -32,6 +32,7 @@
 #include "pass_seam.hpp"
 #include "net/web_control.hpp"
 #include "source/airspy_source.hpp"
+#include "config_compare.hpp"
 #include "test_check.hpp"
 #include "web_request_seam.hpp"
 
@@ -214,7 +215,7 @@ struct AppWindowTestAccess {
     }
     static cascade::core::AppConfig config(AppWindow& a) {
         passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
-        return a.currentConfig();   // (the window's half, and the engine's handed-over copy: configSnapshot, any thread)
+        return th::currentConfig(a);   // (the window's half, and the engine's handed-over copy: configSnapshot, any thread)
     }
     // The launch's restore, as the window's constructor makes it: on a window no pass has attached a thread to yet (every caller
     // calls it first), so the test's thread is the only one in the engine.
@@ -279,7 +280,7 @@ int main() {
         CHECK(Access::gainNames(app) == std::vector<std::string>({"LINEARITY"}));
         CHECK(Access::gainValues(app).size() == 1 && Access::gainValues(app)[0] == 10.0f);
         const cascade::core::AppConfig afterMode = Access::config(app);
-        CHECK(!cascade::gui::configsEqual(before, afterMode));  // the save notices
+        CHECK(!cfgcmp::configsEqual(before, afterMode));  // the save notices
         CHECK(memOf(afterMode).mode == "linear");
 
         // --- the web remote names a Free-mode gain: Free mode, and the list

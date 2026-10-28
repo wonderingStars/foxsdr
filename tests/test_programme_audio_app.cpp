@@ -74,7 +74,7 @@ struct AppWindowTestAccess {
     }
     static cc::AppConfig config(AppWindow& a) {
         passseam::on(eng(a), [&] { eng(a).publishConfig(); });
-        return a.currentConfig();
+        return th::currentConfig(a);
     }
 };
 }

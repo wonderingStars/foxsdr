@@ -36,6 +36,7 @@
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
+#include "config_compare.hpp"
 #include "test_check.hpp"
 
 namespace {
@@ -83,7 +84,7 @@ struct AppWindowTestAccess {
     static void press(AppWindow& a) { a.toggleStatusFold(); }
     static bool folded(const AppWindow& a) { return a.statusCollapsed_; }
     static bool railFolded(const AppWindow& a) { return a.railCollapsed_; }
-    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static cascade::core::AppConfig config(AppWindow& a) { return th::currentConfig(a); }
     static void restore(AppWindow& a, const cascade::core::AppConfig& c) { th::applyConfig(a, c); }
 };
 
@@ -175,9 +176,9 @@ int main() {
         // The debounced save sees it change.
         cascade::core::AppConfig a;
         cascade::core::AppConfig b = a;
-        CHECK(g::configsEqual(a, b));
+        CHECK(cfgcmp::configsEqual(a, b));
         b.statusCollapsed = true;
-        CHECK(!g::configsEqual(a, b));
+        CHECK(!cfgcmp::configsEqual(a, b));
     }
 
     // --- the real window writes it and reads it back -----------------------------

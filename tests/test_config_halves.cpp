@@ -3,8 +3,8 @@
 //
 // THE PROPERTY. The settings file is one document with two writers, and every AppConfig field must belong to exactly one half: the engine's
 // (Engine::fillConfig, telemetryJournal, ServerHost::store) or the interface's (AppWindow::buildInterfaceHalf, diagnosticsJournal,
-// testerUsageJournal). Until R5 a field in neither was kept from the file as loaded - safe, silent, and the failure configsEqual's header warns
-// of. Engine::publishConfig no longer starts from the loaded copy, so a field the table does not name is LOST from the snapshot (the headless
+// testerUsageJournal). Until R5 a field in neither was kept from the file as loaded - safe, silent, and the failure the window's hand-kept compare
+// (configsEqual, deleted with the window's keeper by R8b) warned of. Engine::publishConfig no longer starts from the loaded copy, so a field the table does not name is LOST from the snapshot (the headless
 // round trip, tests/test_engine_main_config_roundtrip.cpp, goes red) - and THIS test goes red first, naming it.
 //
 //   1  THE TABLE IS COMPLETE: the AppConfig members, read from the text of src/core/config.hpp, and the table's names are the same set, each
@@ -12,8 +12,8 @@
 //   2  THE TABLE IS HELD AGAINST THE WRITERS: an Engine row is assigned by the engine's functions (schemaVersion, a constant nobody assigns,
 //      excepted) and never by the window's; an Interface row is assigned by the window's functions and never by the engine's; a Shared row
 //      by both - and the set written by both is exactly {dbMin, dbMax}.
-//   3  THE SELF-MOVING FIELDS are exactly the ten the window's configsEqual leaves out for moving by themselves (and none of them is in its
-//      compare), written once.
+//   3  THE SELF-MOVING FIELDS are exactly the ten the keeper's compare leaves out for moving by themselves, written once (table 4 below holds that
+//      EngineService::comparable, the production compare, does not see them and sees every other field that is written to the file).
 //   4  EACH FIELD, BY ITSELF (the member pointers, every row): copyEngineHalf / copyInterfaceHalf move it iff its owner says so;
 //      interfaceHalvesEqual sees it iff it is an Interface or Shared field that does not move; clearBookkeeping blanks it iff it moves.
 //   5  THE DOCUMENT: a populated interface half (every Interface and Shared field off its default and a value the loader keeps) goes through
@@ -38,6 +38,8 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+
+#include "engine/engine_service.hpp"
 
 #include "core/config.hpp"
 #include "core/config_halves.hpp"
@@ -430,15 +432,8 @@ int main() {
                                                 "testerUsagePending",     "testerTokenInvalid",     "crashUploadRecent",       "crashUploadWindowStart",
                                                 "crashUploadWindowCount", "crashUploadBlockedUntil"};
         CHECK(moving == expected);
-        // ...and none of them takes part in the window's own compare (configsEqual: "none of the three would ever settle if compared here").
-        const std::string windowCpp = readFile(src / "gui" / "app_window.cpp");
-        const std::string equal = bodyAt(windowCpp, "bool configsEqual(");
-        CHECK(!equal.empty());
-        for (const std::string& m : moving) {
-            const bool compared = equal.find("a." + m + " ==") != std::string::npos;
-            if (compared) { std::printf("  '%s' moves by itself and configsEqual compares it\n", m.c_str()); }
-            CHECK(!compared);
-        }
+        // ...and none of them takes part in the keeper's compare - held per field in section 4 against the production compare (EngineService::comparable),
+        // which replaced the window's hand-kept list (configsEqual) when the window's copy of the keeper was deleted.
     }
 
     // --- 4. EACH FIELD, BY ITSELF ----------------------------------------------------------------------------------------------------------
@@ -481,7 +476,19 @@ int main() {
             if (sees != (owner != ConfigOwner::Engine && !moves)) { std::printf("  interfaceHalvesEqual and '%s'\n", name); }
             CHECK(sees == (owner != ConfigOwner::Engine && !moves));
 
-            // what a keeper compares
+            // what the keeper compares (EngineService::comparable, the production compare): a self-moving field is NOT seen, every field the file keeps IS. The
+            // four legacy map-window rectangle fields are the exception that proves the rule: the file never writes them (serialize leaves them out), so there is
+            // nothing for a compare of the document to see.
+            {
+                const bool legacy = std::string(name) == "mapWindowWidth" || std::string(name) == "mapWindowHeight" || std::string(name) == "mapWindowX" ||
+                                    std::string(name) == "mapWindowY";
+                // perturb() adds a radio with NO stages to manualGainByRadio, and the writer does not write a radio with no stage left (core/config.cpp): the file has
+                // nothing of it to compare, which is the same exception for the same reason (the window's hand-kept list compared the map itself).
+                const bool unwritten = legacy || std::string(name) == "manualGainByRadio";
+                const bool keeperSees = cascade::engine::EngineService::comparable(base) != cascade::engine::EngineService::comparable(changed);
+                if (!unwritten && keeperSees != !moves) { std::printf("  the keeper's compare and '%s' (moves=%d, sees=%d)\n", name, moves ? 1 : 0, keeperSees ? 1 : 0); }
+                CHECK(unwritten || keeperSees == !moves);
+            }
             AppConfig cleared = changed;
             cascade::core::clearBookkeeping(cleared);
             const bool blanked = cleared.*p == base.*p;

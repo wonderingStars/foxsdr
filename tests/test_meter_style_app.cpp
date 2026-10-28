@@ -33,6 +33,7 @@
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
 #include "gui/meter_styles_math.hpp"
+#include "config_compare.hpp"
 #include "test_check.hpp"
 
 namespace {
@@ -81,7 +82,7 @@ struct AppWindowTestAccess {
     static void pickRate(AppWindow& a, MeterStyle st) { a.meterStyleRate_ = st; }
     static MeterStyle volumeStyle(AppWindow& a) { return a.meterStyleVolume_; }
     static MeterStyle rateStyle(AppWindow& a) { return a.meterStyleRate_; }
-    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static cascade::core::AppConfig config(AppWindow& a) { return th::currentConfig(a); }
     static void restore(AppWindow& a, const cascade::core::AppConfig& c) { th::applyConfig(a, c); }
 };
 
@@ -116,7 +117,7 @@ int main() {
         const cascade::core::AppConfig afterVolume = Access::config(app);
         CHECK(afterVolume.meterStyleVolume == "led");
         CHECK(afterVolume.meterStyleRate == "classic");  // untouched
-        CHECK(!cascade::gui::configsEqual(before, afterVolume));
+        CHECK(!cfgcmp::configsEqual(before, afterVolume));
 
         // --- THE TWO METERS NEVER SHARE ONE: picking the RATE meter's style
         //     leaves the VOLUME meter's exactly where it was left above. ------
@@ -126,7 +127,7 @@ int main() {
         const cascade::core::AppConfig afterBoth = Access::config(app);
         CHECK(afterBoth.meterStyleVolume == "led");
         CHECK(afterBoth.meterStyleRate == "peak");
-        CHECK(!cascade::gui::configsEqual(afterVolume, afterBoth));
+        CHECK(!cfgcmp::configsEqual(afterVolume, afterBoth));
 
         // Every one of the four styles is reachable and reads back as itself.
         const MeterStyle all[] = {MeterStyle::Classic, MeterStyle::Needle,

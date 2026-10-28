@@ -286,11 +286,6 @@ constexpr double kZoomPerNotch = 1.3;
 // VFO band-edge grab tolerance, pixels either side of the edge line.
 constexpr float kVfoEdgeTolPx = 6.0f;
 
-// Debounce for runtime config saves: a crash loses at most ~2 s of changes,
-// while an in-progress drag never spams the disk (the timer restarts on
-// every observed change).
-constexpr double kConfigDebounceS = 2.0;
-
 // Panel-furniture colors. The vertical tick gridlines are fainter than the
 // spectrum's 10 dB grid (alpha 18 vs 26) so the two grids stay visually
 // separable; the waterfall marker reuses the spectrum overlay's warm
@@ -491,255 +486,6 @@ void applyWindowIcon(GLFWwindow* window) {
 
 }  // namespace
 
-// Field-wise AppConfig comparison for the save debounce. DECLARED IN
-// app_window.hpp - see the comment there for why it is not file-local: a
-// field missing from this list is a setting that reaches the file only by
-// accident, and tests/test_config.cpp asks this function directly.
-bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppConfig& b) {
-    return a.sourceKind == b.sourceKind && a.soapyArgs == b.soapyArgs &&
-           a.nativeArgs == b.nativeArgs &&
-           // A tick in the Source section that calls no save of its own.
-           a.lookForNetworkUsrps == b.lookForNetworkUsrps &&
-           // The RADIO SETUP page's "Don't show this again" tick: a click that
-           // calls no save of its own.
-           a.radioSetupDontShow == b.radioSetupDontShow &&
-           // The per-radio bias tee memory: switched by the checkbox and the
-           // deck's key, neither of which saves on its own.
-           a.biasTee == b.biasTee &&
-           // The per-radio converters: set in the Source section, which calls
-           // no save of its own.
-           a.converters == b.converters &&
-           // The crystal correction's switch and per-radio values: set in the
-           // Source section, which calls no save of its own.
-           a.ppmCorrection == b.ppmCorrection && a.ppm == b.ppm &&
-           // Each Airspy's gain mode, gains and decimation: set in the Source
-           // section, which calls no save of its own.
-           a.airspy == b.airspy &&
-           // Each radio's Auto gain switch (0.99.73): ticked in the Source
-           // section, which calls no save of its own.
-           a.autoGainByRadio == b.autoGainByRadio &&
-           // Each radio's manual gain (0.99.75): moved by the Source section's
-           // sliders, the top bar's GAIN dial and the scope's knob, none of which
-           // saves on its own.
-           a.manualGainByRadio == b.manualGainByRadio &&
-           a.plutoUri == b.plutoUri && a.rtlTcpAddr == b.rtlTcpAddr &&
-           a.soapyAntenna == b.soapyAntenna &&
-           a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
-           a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
-           a.squelchDb == b.squelchDb && a.volume == b.volume &&
-           // AUTOMATIC squelch (0.99.74): the AUTO key under the SQUELCH knob
-           // saves nothing itself.
-           a.squelchAuto == b.squelchAuto &&
-           // The Sinks rail's AUDIO BUFFER (0.99.73): a combo whose pick saves
-           // nothing by itself, so the debounce has to see it here.
-           a.audioBufferMs == b.audioBufferMs && a.audioBufferAutoMs == b.audioBufferAutoMs &&
-           a.dbMin == b.dbMin && a.dbMax == b.dbMax &&
-           // Automatic or Manual (0.99.76): chosen by two radio keys in the right-click menu
-           // that save nothing themselves, so the debounce has to see the word change. The
-           // pair above is the floor and ceiling Manual uses.
-           a.waterfallRangeMode == b.waterfallRangeMode &&
-           a.splitRatio == b.splitRatio && a.vfoOffsetHz == b.vfoOffsetHz &&
-           a.sampleRateHz == b.sampleRateHz &&
-           a.stereoEnabled == b.stereoEnabled &&
-           a.deemphasisIndex == b.deemphasisIndex &&
-           a.nrEnabled == b.nrEnabled && a.nrStrength == b.nrStrength &&
-           a.notchEnabled == b.notchEnabled && a.notchFreqHz == b.notchFreqHz &&
-           a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
-           a.bandPlanOverlay == b.bandPlanOverlay &&
-           a.patch == b.patch &&
-           // The patch presets: saved, renamed, deleted and loaded from the
-           // page's PRESETS panel, none of which saves on its own.
-           a.patchPresets == b.patchPresets &&
-           a.patchPresetPrevious == b.patchPresetPrevious &&
-           // The main view (0.99.40): switched by a key that saves nothing.
-           a.mainView == b.mainView &&
-           // The rail folded to its strip (0.99.49): the key calls no save.
-           a.railCollapsed == b.railCollapsed &&
-           // The status column folded to its strip (0.99.74): same.
-           a.statusCollapsed == b.statusCollapsed &&
-           // The Display section opened or folded (0.99.74): its header calls
-           // no save, so the debounce has to see the flag change.
-           a.displayOpen == b.displayOpen &&
-           a.bandPlanSelection == b.bandPlanSelection &&
-           // Language and country: chosen in a combo on the SYSTEM bank.
-           a.language == b.language && a.country == b.country &&
-           a.bandPlanSize == b.bandPlanSize && a.bandPlanPalette == b.bandPlanPalette &&
-           // The frequency display style: picked in the Display section (the
-           // SYSTEM bank since 0.99.74, the VIEW bank before), so without
-           // it here a choice would reach the file only when something else
-           // changed in the same session.
-           a.tunerDisplayStyle == b.tunerDisplayStyle &&
-           // Each bench meter's own style: picked by right-clicking the
-           // meter, which saves nothing itself - without it here a choice
-           // would reach the file only when something else changed in the
-           // same session, the tunerDisplayStyle field's own reason for
-           // being in this function.
-           a.meterStyleVolume == b.meterStyleVolume && a.meterStyleRate == b.meterStyleRate &&
-           // The theme and the counter's own settings: each changed by a click
-           // (Display, or the counter's right-click menu) that saves nothing
-           // itself, so the debounce must see them.
-           a.uiTheme == b.uiTheme && a.counterScale == b.counterScale &&
-           a.counterSwitches == b.counterSwitches && a.readingsScale == b.readingsScale &&
-           // The interface size: changed by the Display combo or Ctrl+=/-/0,
-           // neither of which saves anything itself either.
-           a.interfaceScale == b.interfaceScale &&
-           a.mapTrails == b.mapTrails &&
-           a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
-           a.mapTrailStyle == b.mapTrailStyle &&
-           a.aircraftIconPx == b.aircraftIconPx &&
-           a.mapTrailWidthPx == b.mapTrailWidthPx &&
-           // The map list's "On screen only" tick: a click that calls no save
-           // of its own.
-           a.mapListOnScreenOnly == b.mapListOnScreenOnly &&
-           // The scope's mode and range. Both are user switches that change
-           // only on a click or a wheel notch, so they belong here: without
-           // them, leaving the application in scope mode - or on a range other
-           // than the one it opened with - would survive a restart only if
-           // something else happened to trigger a save.
-           a.scopeMode == b.scopeMode && a.scopeRangeNm == b.scopeRangeNm &&
-           // The demod scope's keys, which change only on a press - without
-           // them here a choice reached the file only if something else
-           // changed in the same session (found adding the display mode).
-           a.demodScopeSignal == b.demodScopeSignal &&
-           a.demodScopeTimebase == b.demodScopeTimebase &&
-           a.demodScopeGain == b.demodScopeGain &&
-           a.demodScopeAutoGain == b.demodScopeAutoGain &&
-           a.demodScopeDisplay == b.demodScopeDisplay &&
-           // Map page geometry takes part, which is what makes a resize save
-           // at all. The debounce restarts on every change, so a drag writes
-           // once when it stops rather than once per frame while it is
-           // happening. The legacy single-window fields ride along too: they
-           // are constant after start-up, so comparing them costs nothing and
-           // keeps the very first frame from reporting a phantom change.
-           a.mapPages == b.mapPages &&
-           a.mapWindowWidth == b.mapWindowWidth &&
-           a.mapWindowHeight == b.mapWindowHeight &&
-           a.mapWindowX == b.mapWindowX && a.mapWindowY == b.mapWindowY &&
-           a.rxPositionSet == b.rxPositionSet && a.rxLatDeg == b.rxLatDeg &&
-           a.rxLonDeg == b.rxLonDeg &&
-           // The GPS port and baud: chosen in a combo, so without them here a
-           // choice would reach the file only when something else changed.
-           a.gpsPort == b.gpsPort && a.gpsBaud == b.gpsBaud &&
-           a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
-           // The plugin sites (0.99.74): added and removed in the store's SITES panel, so
-           // without this a change would reach the file only when something else changed.
-           a.pluginSites == b.pluginSites &&
-           a.pluginBrowserOpen == b.pluginBrowserOpen &&
-           // The fitted modules window, open flag AND rectangle, because
-           // this comparison is what decides
-           // whether the file is written at all, so a field missing from it
-           // persists only when something else happens to change in the same
-           // session. Without the rectangle a resize would never be saved.
-           a.fittedModulesOpen == b.fittedModulesOpen &&
-           a.fittedModulesX == b.fittedModulesX &&
-           a.fittedModulesY == b.fittedModulesY &&
-           a.fittedModulesWidth == b.fittedModulesWidth &&
-           a.fittedModulesHeight == b.fittedModulesHeight &&
-           // ...and the plugin store's rectangle (0.99.72), for the same reason.
-           a.pluginStoreX == b.pluginStoreX &&
-           a.pluginStoreY == b.pluginStoreY &&
-           a.pluginStoreWidth == b.pluginStoreWidth &&
-           a.pluginStoreHeight == b.pluginStoreHeight &&
-           a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
-           a.pluginTuneAllowed == b.pluginTuneAllowed &&
-           // Host API level 1: without these a plugin's stored setting, or a
-           // settings grant, would reach the file only when something else
-           // happened to change in the same session.
-           a.pluginSettingsAllowed == b.pluginSettingsAllowed &&
-           // And the transmit grant (0.99.74): a grant that took effect and was not
-           // saved is a grant the next launch silently does not have.
-           a.pluginTransmitAllowed == b.pluginTransmitAllowed &&
-           a.pluginSettings == b.pluginSettings &&
-           a.pluginsStopped == b.pluginsStopped &&
-           // How each plugin runs (0.99.73): a "keep running" tick must reach the file.
-           a.pluginRun == b.pluginRun &&
-           a.pluginMuteOverride == b.pluginMuteOverride &&
-           a.userPresets == b.userPresets &&
-           // Without this a close is remembered in memory and never written:
-           // the comparison is what decides whether the file is saved at all,
-           // so a field missing from it persists only when something else
-           // happens to change in the same session.
-           a.closedWindows == b.closedWindows &&
-           a.catEnabled == b.catEnabled && a.catBindAll == b.catBindAll &&
-           a.catPort == b.catPort &&
-           a.webEnabled == b.webEnabled &&
-           a.webBindAddress == b.webBindAddress && a.webPort == b.webPort &&
-           a.webUsername == b.webUsername &&
-           a.webPasswordRecord == b.webPasswordRecord &&
-           // Telemetry: only the DURABLE fields take part. telemetryPending
-           // grows a second every second and telemetryCleanExit is pure
-           // bookkeeping, so comparing either would make the config
-           // permanently "changed" and write the file every two seconds for
-           // as long as the application is open. They ride along on whatever
-           // save the fields below trigger, and on the two unconditional
-           // saves at exit — the pre-join one that carries the finished
-           // report, and the post-join one that writes the clean-exit marker
-           // only once the pipeline has actually shut down.
-           //
-           // telemetryLaunches changing at start-up is load-bearing: it is
-           // what makes the first debounced save happen, and that save is
-           // what puts telemetryCleanExit=false on disk. Without it a crash
-           // in the first seconds would look like a clean exit.
-           a.telemetryEnabled == b.telemetryEnabled &&
-           a.telemetryInstallId == b.telemetryInstallId &&
-           a.telemetryFirstRun == b.telemetryFirstRun &&
-           a.telemetryFirstVersion == b.telemetryFirstVersion &&
-           a.telemetryLaunches == b.telemetryLaunches &&
-           a.telemetryCrashes == b.telemetryCrashes &&
-           // The classes of those unclean exits (0.99.69): the unknown that start-up
-           // counts is moved to its class a moment later, once the evidence has been
-           // read, and that move has to be written like the count it came from. The
-           // session's start is not here - it is constant for the session and rides on
-           // the forced save at the top of the frame loop.
-           a.telemetryExitsDied == b.telemetryExitsDied &&
-           a.telemetryExitsKilled == b.telemetryExitsKilled &&
-           a.telemetryExitsEnded == b.telemetryExitsEnded &&
-           a.telemetryExitsUnknown == b.telemetryExitsUnknown &&
-           // Tester usage: only the token, on telemetryInstallId's own rule -
-           // it changes on a click (pasting or removing a code) and nothing
-           // else makes this field's row of the file stale. testerUsageCurrent
-           // rewrites itself every save like telemetryPending does,
-           // testerTokenInvalid flips on a network answer rather than a
-           // click, and testerUsagePending is the retry queue - none of the
-           // three would ever settle if compared here, so all three ride
-           // along on whatever save the token (or another field) triggers,
-           // and on the two unconditional exit saves.
-           a.testerToken == b.testerToken &&
-           // Diagnostics: both are user switches that change only on a click,
-           // so they belong here - without them, turning capture off would
-           // not survive a restart unless something else happened to trigger
-           // a save.
-           a.diagnosticsEnabled == b.diagnosticsEnabled &&
-           a.diagnosticsMinidump == b.diagnosticsMinidump &&
-           // The transmitter's settings (never the key - there is no field
-           // for it), the rail bank, the rebound keys and the update-check
-           // switch. Each is changed by a press that calls no save of its
-           // own, so without them here a TX power or split set in a session
-           // that then crashed came back next launch as the OLD value.
-           // transmitOpen and demodScopeOpen stay out on purpose: both are
-           // saved and not restored (startupState clears them), so the exit
-           // save is the only write either needs.
-           a.transmitMode == b.transmitMode && a.transmitInput == b.transmitInput &&
-           a.transmitPowerDb == b.transmitPowerDb && a.transmitSplit == b.transmitSplit &&
-           a.transmitSplitHz == b.transmitSplitHz && a.transmitToneHz == b.transmitToneHz &&
-           a.transmitMonitor == b.transmitMonitor && a.transmitArgs == b.transmitArgs &&
-           a.railBank == b.railBank && a.keyBindings == b.keyBindings &&
-           a.updateCheckEnabled == b.updateCheckEnabled && a.updateChannel == b.updateChannel &&
-           // The team messages marked Seen (0.99.79): the Seen key asks for a save of its
-           // own, but the prune that follows an update check (pollUpdateAsync) does not -
-           // and a press whose save is lost to a crash must still reach the file from here.
-           a.messagesSeen == b.messagesSeen &&
-           // The bookmark spectrum markers and their stacking (0.99.54):
-           // both are switched in the Bookmarks section, which calls no
-           // save of its own - without them here bookmarkMarkers_ reset to
-           // on at every launch regardless of what the user last chose.
-           a.bookmarkMarkers == b.bookmarkMarkers &&
-           a.bookmarkStackNames == b.bookmarkStackNames &&
-           // The spectrum's trace mode, set from its right-click menu.
-           a.spectrumTraceMode == b.spectrumTraceMode &&
-           a.spectrumAverageMs == b.spectrumAverageMs;
-}
-
 namespace {
 
 // --- Plugin browser helpers (P9) ---------------------------------------------
@@ -852,21 +598,12 @@ AppWindow::AppWindow(const WindowHost& host)
     // While this window's frame waits for the engine's pass (a STEPPED run: stepPass, runPassNow) it is blocked, not hung - it beats its
     // watchdog from the wait (the gap is not a frame gap), and a pass part that really hangs is the control thread's own watchdog's to report.
     engine_.setFrontEndWaitBeat([this] { watchdog_.heartbeat(false); });
-    // THE CONFIG WRITE IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD
-    // EITHER. core/config_writer.hpp carries the field report ("hang ntdll.dll
-    // @ cascade::core::ConfigStore::save", 0.96.3) and the whole argument.
-    // Unlike audioOpen_ above, no watchdog hooks: config_writer.hpp never
-    // blocks the requesting frame, so there is nothing here to bracket.
-    configWriter_.bind(cascade::core::ConfigStore::writeFile);
-
     // --- Config restore (P5) ------------------------------------------------
     // The file was loaded by the host (EngineService::restore), which also kept a damaged one aside before anything could save over it and set
     // the start-up state (core::startupState: every open flag cleared) on the engine's half AND on the interface's half it serves back. Missing
     // file -> defaults + loaded; a corrupt/unreadable file -> defaults + not loaded: the construction defaults above are KEPT and nothing is applied.
     // Hermetic runs (empty configPath_ - every --frames/--selftest CI run) never read or write the user's settings or bookmark file.
     if (!configPath_.empty()) {
-        // A damaged file that could not be kept aside: the host's writer is forbidden, and so must be this window's own - it keeps its keeper until R8.
-        if (host.writesForbidden) { configWriter_.forbidWrites("config: not saved - the damaged settings file could not be kept aside"); }
         if (host.configLoaded) {
             // THE WINDOW'S HALF comes from the table, not from a file (shell retirement R5, R7): the engine took the config in the restore and
             // serves the half that is this window's - already through core::startupState - as the LOCAL fact fact.config.interface. The host
@@ -891,11 +628,6 @@ AppWindow::AppWindow(const WindowHost& host)
             // The team messages marked Seen (0.99.79, stub campaign B14): the window's own list, saved back by diagnosticsJournal.
             messagesSeen_ = iface.messagesSeen;
         }
-        // Baseline for the debounce: what the file holds (or would hold). The
-        // engine hands its half over first - no frame has run yet (OPEN 2).
-        engine_.publishConfig();
-        savedCfg_ = currentConfig();
-        pendingCfg_ = savedCfg_;
     }
     // WITH OR WITHOUT A CONFIG FILE (a hermetic run has none): the front
     // end's facts for the engine's publish (OPEN 4) - before any frame has
@@ -21437,20 +21169,6 @@ void AppWindow::crashUploadFinish() {
     }
 }
 
-cascade::core::AppConfig AppWindow::currentConfig() {
-    // THE RECEIVER'S HALF (engine stage 3a): the source to save, every radio,
-    // DSP, plugin and transmitter setting, and the usage report's journal -
-    // filled by the ENGINE (Engine::fillConfig, from its own frame) and handed
-    // over as a copy (engine/stage3b-pre, docs/engine-stage3.md OPEN 2): this
-    // reads the copy and nothing of the engine's live state. Every field is
-    // written by exactly one half, so the order of the halves is immaterial. Since shell retirement R5 the snapshot ALREADY carries the interface's half as
-    // the engine last had it from this window (Engine::publishConfig), and this puts the live one over it - the same values once a frame has passed, which
-    // is why the duplication is harmless while this window still owns its keeper.
-    cascade::core::AppConfig cfg = engine_.configSnapshot();
-    buildInterfaceHalf(cfg, /*bookkeeping=*/true);
-    return cfg;
-}
-
 // THE INTERFACE'S HALF OF THE CONFIGURATION, from the live state into `cfg` (core/config_halves.hpp names its fields; the test holds this function to that list).
 // `bookkeeping` is whether the fields that move by themselves are filled too - the beta tester's report so far, which is built (and its clocks accrued) only
 // when a document is about to be sent or a save is being made, never for the look that merely asks whether anything changed.
@@ -21584,125 +21302,6 @@ bool AppWindow::sendInterfaceHalf(double nowS) {
     interfaceSent_ = std::move(half);
     ++interfaceSends_;
     return true;
-}
-
-// --- THE SETTINGS SAVE BACKS OFF (0.99.65) ---------------------------------------------------------------------------------------------
-//
-// A failed settings write used to be asked for again every debounce window (two seconds) for as long as the folder stayed read-only, one
-// stderr line each time. Now each failure lengthens the wait - doubling from the debounce window to five minutes - and the first success puts
-// it back. The failure is said once per run of failures, in a sentence that names no path (the writer's own text does). The clean-exit save
-// is not held by it.
-
-namespace {
-
-constexpr double kConfigRetryCapS = 300.0;  // five minutes
-
-// What the writer's sentence (which names the file) said, as a cause.
-const char* configFailureCause(const std::string& error) {
-    if (error.find("cannot create temp file") != std::string::npos) { return "the settings folder would not take a new file"; }
-    if (error.find("atomic replace") != std::string::npos) { return "the settings file is held by another program or could not be replaced"; }
-    if (error.find("write to temp file") != std::string::npos) { return "the write failed part way"; }
-    if (error.find("cannot create directory") != std::string::npos) { return "the settings folder could not be made"; }
-    return "the write failed";
-}
-
-}  // namespace
-
-void AppWindow::noteConfigWrite(bool ok, const std::string& error) {
-    if (ok) {
-        configFailures_ = 0;
-        configFailureFresh_ = false;
-        configRetryAtS_ = 0.0;
-        configFailureLogged_ = false;  // the next failure starts a new run
-        return;
-    }
-    ++configFailures_;
-    configFailureFresh_ = true;  // the next maybeSaveConfig gives it the clock
-    if (!configFailureLogged_) {
-        configFailureLogged_ = true;
-        cascade::core::diagWarnf("config: the settings could not be saved (%s); trying again, with a longer wait each time",
-                                 configFailureCause(error));
-    }
-}
-
-bool AppWindow::configRetryHeld(double nowS, double baseWaitS) {
-    if (configFailureFresh_) {
-        configFailureFresh_ = false;
-        double wait = baseWaitS;
-        for (int i = 0; i < configFailures_ && wait < kConfigRetryCapS; ++i) { wait *= 2.0; }
-        if (wait > kConfigRetryCapS) { wait = kConfigRetryCapS; }
-        configRetryAtS_ = nowS + wait;
-    }
-    return nowS < configRetryAtS_;
-}
-
-void AppWindow::maybeSaveConfig(double nowS) {
-    // A DAMAGED SETTINGS FILE THAT COULD NOT BE KEPT ASIDE is never saved over (0.99.65, core/damaged_file.hpp): the writer was told so at
-    // start-up, and there is nothing to ask for.
-    if (configWriter_.writesForbidden()) { return; }
-    // A FAILED WRITE'S WAIT (0.99.65): each failure doubles it, from the debounce window up to five minutes; the first success puts it back.
-    // Asked every call so that a failure just noted by pollConfigWriter is given the clock it did not have.
-    const bool retryHeld = configRetryHeld(nowS, kConfigDebounceS);
-    cascade::core::AppConfig cur = currentConfig();
-    if (configsEqual(cur, savedCfg_)) {
-        lastChangeTimeS_ = -1.0;  // clean again (e.g. change was undone)
-        return;
-    }
-    if (lastChangeTimeS_ < 0.0 || !configsEqual(cur, pendingCfg_)) {
-        // First difference, or the state moved again: restart the debounce
-        // window so an in-progress drag never writes mid-gesture.
-        pendingCfg_ = cur;
-        lastChangeTimeS_ = nowS;
-        return;
-    }
-    if (!retryHeld && nowS - lastChangeTimeS_ >= kConfigDebounceS) {
-        // THE REQUEST NEVER BLOCKS (see core/config_writer.hpp) - this is the
-        // exact call the 0.96.3 field report's stack ran synchronously
-        // instead. lastChangeTimeS_ resets to -1.0 optimistically: if the
-        // write goes on to fail, savedCfg_ stays stale (pollConfigWriter()
-        // only advances it on success), so the very next frame's
-        // configsEqual(cur, savedCfg_) reads false again and this function's
-        // first branch restarts a fresh debounce window - the same "retry no
-        // sooner than the next window" behaviour the old synchronous failure
-        // path spelled out explicitly, reproduced here without a special
-        // case.
-        requestConfigSave(cur);
-        lastChangeTimeS_ = -1.0;
-    }
-}
-
-void AppWindow::saveConfigNow() {
-    // A save that must be CURRENT (shutdown, a language switch): the engine
-    // hands over its half as it is now, not as the last frame left it.
-    engine_.publishConfig();
-    requestConfigSave(currentConfig());
-}
-
-void AppWindow::requestConfigSave(const cascade::core::AppConfig& cfg) {
-    lastRequestedConfig_ = cfg;
-    configWriter_.requestAsync(configPath_, cascade::core::ConfigStore::serialize(cfg));
-}
-
-void AppWindow::pollConfigWriter() {
-    if (!configWriter_.poll()) { return; }
-    if (configWriter_.lastOk()) {
-        // Only when fully drained: a write that just finished but has
-        // another coalesced behind it is not yet the LAST requested content
-        // (poll() has already started that queued write by the time this
-        // runs) - see core/config_writer.hpp's finishOrAbandon() comment for
-        // the same reasoning applied to the shutdown drain below.
-        if (!configWriter_.inFlight()) { savedCfg_ = lastRequestedConfig_; }
-        noteConfigWrite(true, std::string());  // the wait after failures goes back to the start
-    } else {
-        std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
-        // The wait before the next attempt is lengthened, and the failure said once in the log (0.99.65): a read-only folder is not asked
-        // again every two seconds for ever.
-        noteConfigWrite(false, configWriter_.lastError());
-        // THE SETTINGS FILE COULD NOT BE WRITTEN (a read-only profile, a full disk, a file another program holds) and the window carries
-        // on with what it has: counted, once a session - the debounce asks again by itself, so a count of 1 means "this session had it".
-        // Never the message (a path). (0.99.65's back-off - the wait lengthened after failures - is noteConfigWrite's, just below.)
-        cascade::core::health::noteRecovered(cascade::core::health::Recovered::CfgSave);
-    }
 }
 
 // =============================================================================
