@@ -27,6 +27,10 @@
 //      instances (the basemap's tiles are GL textures) and the track instances on the thread that polls them, never the pass's;
 //      the module is unmapped with none alive (the module says so itself, from its static destructor).
 //   F  THE CORE'S QUEUE, alone: one slot per module, newest wins, and a request that is no longer allowed is not applied.
+//   G  A WINDOW THAT ARRIVES AFTER THE FIRST SCAN (shell retirement R4, the late attach): the engine's own instances are let go, the plugin UI's
+//      current state is replayed into the window (tracks, instruments, basemap, track-info client, the stop set), nothing is held twice, every
+//      create and destroy is on the window's thread - and the window's own release (PluginUiPort::release) leaves nothing for the engine's.
+//   G5 A WINDOW'S EXIT disconnects its port, once, as its own last act.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -566,6 +570,126 @@ void testCoreQueue() {
     CHECK_EQ(core.queueCentreRetune("b.dll", 100.0e6), CASCADE_TUNE_FAILED);
 }
 
+// ======================================================================================================================
+// G. A WINDOW THAT ARRIVES AFTER THE FIRST SCAN (shell retirement R4, the late attach; docs/engine-stage4.md 6.25, survey 2.5)
+// ======================================================================================================================
+// The window used to install its plugin UI's applier BEFORE the engine's first scan, so the scan's directive built the window's instruments. The
+// engine host's order (R7) is the other way: the engine restores, scans and builds - for nobody - and the window comes after. The engine keeps the plugin
+// UI's current state; the attach lets go of the instances the engine's own plugin UI built and posts that state to the new front end, which applies it.
+// A release is the window's own too (PluginUiPort::release): the shutdown's, before the engine's.
+void testLateAttach() {
+    std::printf("  G: a window that arrives after the first scan - the engine's own instances are let go, the current state is replayed\n");
+    using Host = cascade::gui::TestHostAccess;
+    Env env;
+    AppWindow& a = env.a();
+    const std::string key = fixtureKey();
+    const Fx fx0 = env.fx();
+    CHECK(fx0.mapped);
+    Access::poll(a);
+    CHECK_EQ(Access::ui(a).trackCount(), 3u);
+    const long held = fx0.live();                         // what a window holds of the fixture: its track source, panel and instrument instances
+    const std::size_t instruments0 = Access::ui(a).instruments().size();
+    CHECK(held >= 1);
+    CHECK(Access::basemap(a).active());
+    CHECK(Access::trackInfo(a).active());
+    CHECK_EQ(th::pluginUiPort(a).offThreadCalls(), std::uint64_t{0});
+
+    // G1 THE WINDOW'S OWN RELEASE (what run() does before the engine's shutdownRelease): every instance destroyed, the basemap and the track-info
+    // client let go, on this thread - and applying the engine's release afterwards finds nothing to do.
+    th::pluginUiPort(a).release();
+    CHECK_EQ(fx0.live(), 0);
+    CHECK_EQ(fx0.basemapLive(), 0);
+    CHECK_EQ(fx0.infoLive(), 0);
+    CHECK(!Access::basemap(a).active());
+    CHECK(!Access::trackInfo(a).active());
+    CHECK_EQ(Access::ui(a).trackCount(), 0u);
+    th::pluginUiPort(a).release();                        // idempotent
+    CHECK_EQ(fx0.live(), 0);
+
+    // G2 NOBODY ATTACHED: the port goes (the engine drives its own plugin UI again), a rescan scans and builds the instances for no window.
+    Host::dropPort(a);
+    CHECK(!th::engine(a).pluginUiAttached());
+    Access::rescan(a);
+    const Fx fx1 = env.fx();
+    CHECK(fx1.mapped);
+    CHECK_EQ(fx1.live(), held);                           // the engine's own plugin UI holds them now
+    Access::headless(a).poll();
+    CHECK_EQ(Access::headless(a).trackCount(), 3u);
+    const long destroysBefore = fx1.destroys();
+
+    // G3 THE WINDOW ARRIVES (the same call its constructor makes). The engine's instances are let go as the window's are made - not held twice - and the
+    // state it kept is the window's: the first scan's tracks, instruments, basemap and track-info client.
+    Host::attachPort(a);
+    CHECK(th::engine(a).pluginUiAttached());
+    CHECK_EQ(Access::headless(a).trackCount(), 0u);
+    CHECK_EQ(fx1.live(), held);                           // exactly one set
+    CHECK(fx1.destroys() > destroysBefore);               // the engine's were destroyed ...
+    Access::poll(a);
+    CHECK_EQ(Access::ui(a).trackCount(), 3u);             // ... and REPLAYED into the window (without the replay this is 0)
+    CHECK_EQ(Access::ui(a).instruments().size(), instruments0);
+    CHECK(Access::basemap(a).active());
+    CHECK(Access::trackInfo(a).active());
+    CHECK_EQ(fx1.basemapLive(), 1);
+    CHECK_EQ(fx1.infoLive(), 1);
+    CHECK_EQ(fx1.wrongThread(), 0);                       // every create and destroy on the thread that polls
+    CHECK_EQ(fx1.staleCalls(), 0);
+    CHECK_EQ(th::pluginUiPort(a).offThreadCalls(), std::uint64_t{0});
+
+    // G4 THE REPLAY IS THE CURRENT STATE, NOT THE LAST REBUILD: a plugin stopped while nobody was attached stays stopped for the window that
+    // arrives, and a start afterwards (a life-only directive, which rebuilds nothing) brings it up in the window.
+    th::pluginUiPort(a).release();
+    Host::dropPort(a);
+    send(a, FOXAPI_OP_DECODER_STOP, key);
+    Access::pass(a);                                      // the stop: a life-only directive, applied to the engine's own plugin UI (nobody attached)
+    CHECK_EQ(fx1.live(), 0);
+    Host::attachPort(a);
+    Access::poll(a);
+    CHECK_EQ(Access::ui(a).trackCount(), 0u);             // stopped: the window has no instance of it
+    CHECK_EQ(fx1.live(), 0);
+    send(a, FOXAPI_OP_DECODER_START, key);
+    Access::pass(a);                                      // the start: applied to the WINDOW's plugin UI, inline (no control thread runs)
+    Access::poll(a);
+    CHECK_EQ(Access::ui(a).trackCount(), 3u);             // started in the window - which needs the stop set the replay carried
+    CHECK_EQ(fx1.live(), held);
+    CHECK_EQ(fx1.wrongThread(), 0);
+    CHECK_EQ(th::pluginUiPort(a).offThreadCalls(), std::uint64_t{0});
+
+    // G6 A REPLAY NEVER CARRIES A POINTER INTO AN UNMAPPED MODULE. The plugins are released and unmapped with no rebuild after (a removal, the first half of
+    // a rescan): the engine's kept state is empty from the release on, so a window that arrives now is replayed nothing - not the plugin records of
+    // the image that is gone.
+    th::pluginUiPort(a).release();
+    Host::dropPort(a);
+    CHECK(Access::unloadPlugins(a));
+    CHECK(!env.fx().mapped);
+    Host::attachPort(a);
+    Access::poll(a);
+    CHECK_EQ(Access::ui(a).trackCount(), 0u);
+    CHECK_EQ(Access::ui(a).instruments().size(), std::size_t{0});
+    CHECK(!Access::basemap(a).active());
+    CHECK(!Access::trackInfo(a).active());
+}
+
+// G5. THE EXIT PATH: a window that goes - with or without having run - disconnects its port as its last act. The port says so (one line); it also says
+// when it is destroyed while still connected (its owner should have disconnected it), and a window never causes that line.
+void testWindowExitDisconnects() {
+    std::printf("  G5: a window's destruction disconnects its port (the engine drives its own plugin UI again), once, and the port never has to\n");
+    const int said0 = diagLines("plugin ui: the port is disconnected");
+    const int late0 = diagLines("the port was destroyed while still connected");
+    {
+        Env env;
+        CHECK(Access::controlRunning(env.a()) == false);
+        Access::startControl(env.a());
+        CHECK(waitFor([&] { return Access::passes(env.a()) > 3u; }, 3000));
+    }   // ~Env stops the control thread; ~AppWindow tears the engine down (the plugin UI released through the applier, inline) and disconnects
+    CHECK_EQ(diagLines("plugin ui: the port is disconnected") - said0, 1);
+    CHECK_EQ(diagLines("the port was destroyed while still connected") - late0, 0);
+    {
+        Env env;   // a window that never ran a frame
+    }
+    CHECK_EQ(diagLines("plugin ui: the port is disconnected") - said0, 2);
+    CHECK_EQ(diagLines("the port was destroyed while still connected") - late0, 0);
+}
+
 }  // namespace
 
 int main() {
@@ -589,6 +713,8 @@ int main() {
         return only == nullptr || (std::string(",") + only + ",").find(std::string(",") + name + ",") != std::string::npos;
     };
     if (want("F")) { timed("F", &testCoreQueue); }
+    if (want("G")) { timed("G", &testLateAttach); }
+    if (want("G5")) { timed("G5", &testWindowExitDisconnects); }
     if (want("A")) { timed("A", &testRebuildDuringPolling); }
     if (want("B")) { timed("B", &testNewestWins); }
     if (want("C")) { timed("C", &testStaleReference); }

@@ -260,6 +260,14 @@ int main() {
         CHECK(refused < retry && retry < handing && handing < again && again < loaded && loaded < tried &&
               tried < ended);
         CHECK(count(log, " window: handing over") == 1);
+        // THE PLUGIN UI'S PORT IS RELEASED ON THIS EXIT PATH (shell retirement R4): the first process's window object is destroyed - and its port
+        // disconnected, the line says so - after run() decided to hand over and BEFORE the second process is started ("started again by process" is
+        // logged once it has been), as the settings lock is released (main.cpp: the application object's scope ends first); the second process's
+        // window, refused as well, disconnects its own before the first logs that the second ended. One line per process.
+        CHECK(count(log, "plugin ui: the port is disconnected") == 2);
+        CHECK(log.find("plugin ui: the port is disconnected") > handing && log.find("plugin ui: the port is disconnected") < again);
+        CHECK(log.rfind("plugin ui: the port is disconnected") > again && log.rfind("plugin ui: the port is disconnected") < ended);
+        CHECK(!contains(log, "the port was destroyed while still connected"));
         CHECK(count(log, " window: started again by process ") == 1);
         // the second refusal is the one the person is told about, once
         CHECK(count(log, " window: error dialog suppressed for a flagged run") == 1);
@@ -284,6 +292,8 @@ int main() {
         CHECK(!contains(r.log, "handing over") && !contains(r.log, "started again by process"));
         CHECK(!contains(r.log, "software renderer loaded"));
         CHECK(contains(r.log, " window: error dialog suppressed for a flagged run"));
+        CHECK(count(r.log, "plugin ui: the port is disconnected") == 1);   // the window that could not be created disconnects its port all the same (R4)
+        CHECK(!contains(r.log, "the port was destroyed while still connected"));
         keep.push_back(dir);
     }
 
@@ -300,6 +310,8 @@ int main() {
         CHECK(!contains(r.log, "handing over") && !contains(r.log, "started again by process"));
         // the renderer is loaded BEFORE GLFW is asked for anything
         CHECK(r.log.find("software renderer loaded") < r.log.find(" window: GLFW initialised"));
+        CHECK(count(r.log, "plugin ui: the port is disconnected") == 1);
+        CHECK(!contains(r.log, "the port was destroyed while still connected"));
         keep.push_back(dir);
     }
 
@@ -320,6 +332,8 @@ int main() {
         CHECK(contains(r.log, " window: no software fallback: softgl\\opengl32.dll and libgallium_wgl.dll are not beside"));
         CHECK(!contains(r.log, "handing over") && !contains(r.log, "started again by process"));
         CHECK(contains(r.log, " window: error dialog suppressed for a flagged run"));
+        CHECK(count(r.log, "plugin ui: the port is disconnected") == 1);
+        CHECK(!contains(r.log, "the port was destroyed while still connected"));
         keep.push_back(dir);
     }
 
@@ -337,6 +351,8 @@ int main() {
         // never shown, never handed over
         CHECK(!contains(r.log, " window: window shown"));
         CHECK(!contains(r.log, "handing over"));
+        CHECK(count(r.log, "plugin ui: the port is disconnected") == 1);   // a window that was made and then refused by the backend: the port goes with it
+        CHECK(!contains(r.log, "the port was destroyed while still connected"));
         const std::vector<fs::path> reports = waitForReports(dir);
         CHECK(reports.size() == 1);
         if (reports.size() == 1) { checkWindowFailedReport(reports[0]); }

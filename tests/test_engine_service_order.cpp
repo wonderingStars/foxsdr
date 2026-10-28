@@ -199,9 +199,11 @@ const std::vector<Table>& table() {
          {
              {"NO SOUND CARD CLOSE WAITED FOR", "SoundCardSource::setCloseWaitEnabled(false)",
               "SoundCardSource::setCloseWaitEnabled(false)", "a card whose close hangs must not spend the budget the radios' destroy is inside"},
+             {"the plugin report's plugin half handed over", "handFrontEndFacts(true)", "",
+              "WINDOW ONLY (shell retirement R4): a bounded-run diagnostic that needs the window's plugin poll and picture copy; the ENGINE prints the report at "
+              "the end of shutdownQuiesce, which the service runs too and hands no half"},
              {"quiesce: servers, the pass joined, the TRANSMITTER, GPS, recordings", "engine_.shutdownQuiesce()",
               "engine_.shutdownQuiesce()", "a keyed radio cannot wait; everything the final save reads is settled"},
-             {"the plugin report", "reportPluginStatus(", "", "WINDOW ONLY: a bounded-run diagnostic that needs the window's image copy"},
              {"the crash-report sweep stopped", "crashUploadFinish()", "",
               "WINDOW ONLY: the sweep is the window's (survey O6: no UI has consented on a headless service)"},
              {"the feature-request sender cancelled", "featureRequestSender_.cancel()", "", "WINDOW ONLY: the window's sender"},

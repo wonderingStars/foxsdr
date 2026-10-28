@@ -8,6 +8,7 @@
 
 #include <utility>
 
+#include "core/diag_log.hpp"
 #include "core/plugin_directive.hpp"
 #include "engine/engine.hpp"
 #include "engine/image_feed.hpp"
@@ -31,7 +32,15 @@ PluginUiPortImpl::PluginUiPortImpl(Engine& engine, Steps steps)
     connected_ = engine_.attachPluginUi([this](const cc::PluginDirective& d) { apply(d); });
 }
 
-PluginUiPortImpl::~PluginUiPortImpl() { disconnect(); }
+PluginUiPortImpl::~PluginUiPortImpl() {
+    // THE OWNER DISCONNECTS FIRST (AppWindow::~AppWindow does, as its last act): the applier's steps reach back into the window's members, which are destroyed
+    // before this object is when the window goes, so an applier left installed for even that long is a pointer into a half-destroyed window. Said, because it is a
+    // fault in the owner and not in the engine - and disconnected all the same.
+    if (connected_) {
+        cascade::core::diagWarnf("plugin ui: the port was destroyed while still connected - its owner should disconnect it first");
+    }
+    disconnect();
+}
 
 void PluginUiPortImpl::touch() const {
     if (std::this_thread::get_id() != guiThread_) { offThread_.fetch_add(1, std::memory_order_relaxed); }
@@ -137,6 +146,9 @@ void PluginUiPortImpl::disconnect() {
     if (connected_) {
         connected_ = false;
         engine_.setPluginUiApplier({});
+        // (one line on every path that ends an interface: the run's normal end, a window that could not be created, a constructor that threw, the
+        // software-GL relaunch - the tests that drive those paths read it)
+        cascade::core::diagLogf("plugin ui: the port is disconnected - the engine drives its own plugin UI again");
     }
 }
 

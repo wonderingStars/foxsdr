@@ -135,7 +135,7 @@ struct AppWindowTestAccess {
     static std::vector<AppWindow::MapPage>& pages(AppWindow& a) { return a.mapPages_; }
     static const std::vector<cascade::core::HostTrack>& tracks(AppWindow& a) { return a.hostTracks(); }
     static const std::vector<cascade::core::HostPath>& paths(AppWindow& a) { return a.hostPaths(); }
-    static const std::vector<std::string>& trackNames(AppWindow& a) { return rawPluginUi(*a.pluginFeed_).trackPluginNames(); }
+    static const std::vector<std::string>& trackNames(AppWindow& a) { return th::pluginUi(a).trackPluginNames(); }
     static const std::vector<cascade::core::HostTrack>& pageTracks(AppWindow& a) { return a.pageTracks_; }
     static const std::vector<cascade::core::HostPath>& pagePaths(AppWindow& a) { return a.pagePaths_; }
     static bool altitudeNear(AppWindow& a, const std::string& plugin, const std::string& id, double lat, double lon,

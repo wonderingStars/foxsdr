@@ -242,8 +242,8 @@ struct AppWindowTestAccess {
         return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).pluginIsStopped(key); });
     }
     // (both are the API core's grants, under its lock: any thread)
-    static bool tuneAllowed(AppWindow& a, const std::string& key) { return rawPluginUi(*a.pluginFeed_).tuneAllowed(key); }
-    static bool settingsAllowed(AppWindow& a, const std::string& key) { return rawPluginUi(*a.pluginFeed_).settingsAllowed(key); }
+    static bool tuneAllowed(AppWindow& a, const std::string& key) { return th::pluginUi(a).tuneAllowed(key); }
+    static bool settingsAllowed(AppWindow& a, const std::string& key) { return th::pluginUi(a).settingsAllowed(key); }
     // (the core is built with the engine and never replaced; client() and the plugin-side calls take its lock)
     static cascade::core::PluginApiCore& core(AppWindow& a) { return *th::engine(a).pluginApi_; }
     static void addInventory(AppWindow& a, const cascade::core::InstalledPlugin& rec) {
@@ -372,10 +372,10 @@ struct AppWindowTestAccess {
                 break;
             }
             FittedModule m = makeFittedModule(p, e.pluginIsStopped(file), e.pluginRunner_.isFeeding(file), std::move(idleDetail),
-                                              rawPluginUi(*a.pluginFeed_).tuneAllowed(cascade::core::PluginUi::tuneKey(p)), e.pluginIsIdle(file),
+                                              th::pluginUi(a).tuneAllowed(cascade::core::PluginUi::tuneKey(p)), e.pluginIsIdle(file),
                                               e.pluginRunMode(file) == cascade::core::PluginRun::Always);
             m.settingsCapable = std::find(settingsAskers.begin(), settingsAskers.end(), file) != settingsAskers.end();
-            m.settingsAllowed = rawPluginUi(*a.pluginFeed_).settingsAllowed(file);
+            m.settingsAllowed = th::pluginUi(a).settingsAllowed(file);
             // MASTER'S TRANSMIT BLOCK (0.99.74; the table's side came back in stub batch B13): the grant offered to a module whose active() has been non-zero at
             // least once - or that already holds it - and what the plate says. No fixture here declares CASCADE_CAP_TX_AUDIO, so the three stay as makeFittedModule
             // left them and the table's model must hold the same; the key, the plate and the grant's round trip are tests/test_tx_audio_plate_app.cpp's (the real

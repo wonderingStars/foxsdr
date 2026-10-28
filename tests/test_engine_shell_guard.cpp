@@ -10,11 +10,14 @@
 // engine method, a write to engine state, an engine object passed as an argument: none of them compiles, so the ratchet's rules 1 to
 // 4 are retired with the ratchet. What is left here is what the compiler CANNOT see:
 //
-//   1. THE SURFACE (engine/engine_shell.hpp) does not grow silently. Every section is dated and says how it ends; each section's
-//      declarations are counted against a budget; every declaration is implemented and is CALLED (a stale door is found here, the way
-//      the old guard's allow lists were).
+//   1. THE SURFACE (engine/engine_shell.hpp) does not grow silently. Its section is dated and says how it ends; its declarations are
+//      counted against a budget; every declaration is implemented and is CALLED (a stale door is found here, the way the old guard's
+//      allow lists were). THE PLUGIN UI PORT (core/plugin_ui_port.hpp, shell retirement R4) is the same discipline on the other surface the
+//      window has: 14 pure virtuals and one extension id, each implemented by the engine's side and called by the window, in a header of data
+//      and pure virtuals that includes nothing the fence denies.
 //   2. WHO MAY KNOCK. The compiler lets any AppWindow member call any EngineShell method; this holds which members call which (the
-//      shell's seams from the shell's members, the host feed and the browser map's tiles from the host accessors and the tile pump).
+//      shell's seams from the shell's members), and which members reach the plugin UI through the port (the host accessors, the tile pump,
+//      the front end's hand-over, the shutdown's release).
 //      A widget that calls engine_.teardown() compiles. It fails here.
 //   3. THE FENCE ITSELF IS STILL BUILT. The interface target exists and is put behind the fence; the deny list still holds the engine,
 //      its host, its API table and its pipeline; the engine/ allow list stays small and names no denied header; no file under src/gui -
@@ -62,10 +65,14 @@ namespace {
 // comment in engine_shell.hpp that says why. They only go down on their own: stage 5f deleted the web/CAT section (there is no budget for
 // it any more), stage 7 deletes the shell's.
 // ----------------------------------------------------------------------------------------------------------------------------------
-constexpr int kShellMethodsBudget = 29;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart): 29 after shell retirement R3 (2026-10-28: -4, status, URL and kick as table facts - pluginCatalogueUrl, publishStatusText, statusText, frameKick; 33 before it); 33 after shell retirement R2 (2026-10-28: -8, the seams that became client code - seamBiasStandIn, seamFetchCatalogue, seamSelectNativeDevice, seamDeviceOpenPending, seamPressPreset, seamPatchStart, seamPatchRunning, seamSubmit; 41 before it); 40 before the frame's kick (frameKick, 6.9)
-constexpr int kHostMethodsBudget = 2;     // CLASS HOST: makePluginFeed and (stage 5f) serveWebTiles; 2 after shell retirement R3 (2026-10-28: -1, setServerUsageHooks became the table's fact.web.served and fact.cat.accepted); 3 with (2026-10-27, stub campaign B15; END: stage 7h) setServerUsageHooks: the beta-tester recorder is the WINDOW's, and the two listeners' "was used" marks are the only part of it the window cannot read from the table (a browser that never logged in has no session to count). 2 before B15. CLASS WEB / CAT is GONE (stage 5f): it was 7 at the fence, 8 after 5b (the pull and the status reads went with the servers, six FEED methods came: pushWebAudio, setWebImages, takeWebTileRequests, setWebTile, clearWebTiles, publishWebSpectrum), 1 after 5e (the page's audio and spectrum are the table's, the pictures the engine's, and the three tile methods became ONE, serveWebTiles - the basemap's tiles are the one thing only the window's GUI-thread plugin client can produce), and 0 after 5f: serveWebTiles is plugin-drawn content, so it was re-homed to CLASS HOST (+1 there) rather than deleted (deleting it would take the browser's map layer with it); docs/engine-stage4.md 6.14
-constexpr int kFeedMethodsBudget = 12;    // HostPluginFeed's virtuals (the nine host accessors and what drives them): 12 with (2026-10-27, stub campaign B16; END: stage 7h) unplacedTracks - the ADS-B map lists the aircraft the receiver has heard and not yet placed, and PluginUi keeps them in a vector apart from tracks() so that every reader of tracks() draws or measures from a position; 11 before B16
-constexpr int kCallSitesBudget = 47;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 47 after shell retirement R3 (2026-10-28: -7, the five methods' sites - pluginCatalogueUrl 2, publishStatusText 1, statusText 2, frameKick 1, setServerUsageHooks 1; 54 before it); 54 after shell retirement R2 (2026-10-28: -13, the eight seams' sites - seamBiasStandIn 1, seamFetchCatalogue 1, seamSelectNativeDevice 1, seamDeviceOpenPending 1, seamPressPreset 1, seamPatchStart 1, seamPatchRunning 1, seamSubmit 6; 67 before it); 67 with stub campaign B16 (+1: hostUnplacedTracks' unplacedTracks, the one read of the new feed accessor); 66 with stub campaign B15 (+1: installTesterUsageHooks' setServerUsageHooks, the window's one call, from its constructor's helper); 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
+constexpr int kShellMethodsBudget = 27;   // CLASS SHELL: EngineShell's own declarations (distinct names; create and the special members apart): 27 after shell retirement R4 (2026-10-28: -2, the plugin UI plane left the door - setFrontEndFacts (the face, the basemap's figures and the track feed ride the port's setFrontEnd) and reportPluginStatus (the engine prints the bounded run's report at the end of shutdownQuiesce, from the plugin half the window hands over in its last setFrontEnd); 29 before it); 29 after shell retirement R3 (2026-10-28: -4, status, URL and kick as table facts - pluginCatalogueUrl, publishStatusText, statusText, frameKick; 33 before it); 33 after shell retirement R2 (2026-10-28: -8, the seams that became client code - seamBiasStandIn, seamFetchCatalogue, seamSelectNativeDevice, seamDeviceOpenPending, seamPressPreset, seamPatchStart, seamPatchRunning, seamSubmit; 41 before it); 40 before the frame's kick (frameKick, 6.9)
+// (kHostMethodsBudget and kFeedMethodsBudget are GONE, shell retirement R4, 2026-10-28: the HOST class - makePluginFeed and serveWebTiles, 2 after R3, 3 with setServerUsageHooks (stub campaign B15, gone in R3), 2 before B15 - and HostPluginFeed's 12 virtuals (12 with unplacedTracks, stub campaign B16; 11 before it) were deleted with their knock rows: makePluginFeed became the table's get_local_extension(FOXAPI_EXT_PLUGIN_UI), serveWebTiles became PluginUiPort::serveTiles, and the 12 virtuals became PluginUiPort's 14 (minus `report`, plus setFrontEnd, serveTiles and release), counted below as the EXTENSION surface, not the door.)
+constexpr int kCallSitesBudget = 30;      // `engine_.x` in src/gui, all classes: 30 after shell retirement R4 (2026-10-28: -4, the four door methods of the plugin UI plane - makePluginFeed 1, setFrontEndFacts 1, reportPluginStatus 1, serveWebTiles 1 - whose sites are `ui_->` sites of the port now, 15 of them, counted by kPortCallSitesBudget; with them gone `pluginFeed_->x` (13 sites) is not a thing the guard counts any more: 47 before R4 was 34 engine_ + 13 pluginFeed_); 47 after shell retirement R3 (2026-10-28: -7, the five methods' sites - pluginCatalogueUrl 2, publishStatusText 1, statusText 2, frameKick 1, setServerUsageHooks 1; 54 before it); 54 after shell retirement R2 (2026-10-28: -13, the eight seams' sites - seamBiasStandIn 1, seamFetchCatalogue 1, seamSelectNativeDevice 1, seamDeviceOpenPending 1, seamPressPreset 1, seamPatchStart 1, seamPatchRunning 1, seamSubmit 6; 67 before it); 67 with stub campaign B16 (+1: hostUnplacedTracks' unplacedTracks, the one read of the new feed accessor); 66 with stub campaign B15 (+1: installTesterUsageHooks' setServerUsageHooks, the window's one call, from its constructor's helper); 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
+
+// THE PLUGIN UI PORT (core/plugin_ui_port.hpp; shell retirement R4, 2026-10-28; docs/api-0.3-additions.md 9.15) - the window's one C++ contact with the engine that is not the door and not the table's lists and facts, reached through ONE table member (get_local_extension) on the window's LOCAL session. Its surface is held like the door's: counted, implemented, called.
+constexpr int kPortMethodsBudget = 14;    // PluginUiPort's pure virtuals (the destructor apart): the seven host accessors (tracks, unplacedTracks, paths, panels, instruments, trackPluginNames, altitudeNear), poll, pollImages, applyNewestDirective, setFrontEnd, serveTiles, release, disconnect. 14 at R4: HostPluginFeed's 12 minus `report` (the plugin half of the status report rides setFrontEnd once) plus setFrontEnd (was the door's setFrontEndFacts), serveTiles (was the door's serveWebTiles) and release (the window's own shutdown release)
+constexpr int kPortCallSitesBudget = 15;  // `ui_->x` in src/gui: 15 at R4 - the 13 sites `pluginFeed_->x` had, minus `report` (run: 1) plus setFrontEnd (handFrontEndFacts: 1), serveTiles (pumpWebTiles: 1) and release (run: 1); the extension's own call, `get_local_extension`, is a table call (attachPluginUi) and is held by checkThePort
+constexpr int kExtensionIdsBudget = 1;    // FOXAPI_EXT_* in the vendored header: FOXAPI_EXT_PLUGIN_UI only. A second in-process extension is a decision (it reaches the engine's process by C++ objects), not a thing that happens
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 // WHO MAY KNOCK: for each AppWindow member, the door methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails),
@@ -78,29 +85,28 @@ struct Knock {
 const std::vector<Knock> kEngineKnocks = {
     // CLASS SHELL: construction, the config restore, the run, the teardown
     {"AppWindow::AppWindow",
-     {"initialise", "loadBookmarks", "telemetryStartup", "configReadback", "publishConfig", "setFrontEndWaitBeat", "makePluginFeed"}},
+     {"initialise", "loadBookmarks", "telemetryStartup", "configReadback", "publishConfig", "setFrontEndWaitBeat"}},
     {"AppWindow::~AppWindow", {"setFrontEndWaitBeat", "stopTransfers", "teardown"}},
     {"AppWindow::applyConfig", {"applyConfig"}},
     {"AppWindow::currentConfig", {"configSnapshot"}},
     {"AppWindow::saveConfigNow", {"publishConfig"}},
-    {"AppWindow::handFrontEndFacts", {"setFrontEndFacts"}},
     {"AppWindow::applyDiagnosticsEnabled", {"setControlWatchdogReportDir"}},
     {"AppWindow::openUiSession", {"apiHandle"}},
     {"AppWindow::run",
      {"startReceiver", "controlPass", "startControlThread", "configureHeartbeat", "markCleanExit", "shutdownQuiesce", "shutdownStop",
-      "shutdownRelease", "shutdownDrain", "reportPluginStatus", "seamMeasureTick",
+      "shutdownRelease", "shutdownDrain", "seamMeasureTick",
       "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource"}},
     // the frame is a look: the three parts of the pass (the status lines the look reads are the table's facts - refreshStatusLines - and the frame's kick is
     // the heartbeat of run()'s loop: neither is a knock on the door any more, shell retirement R3)
     {"AppWindow::drawUi", {"stepPass"}},
-    // CLASS HOST, the browser map's tiles: the window's one feed of the web page left (stage 5e: the table serves the audio and the spectrum,
-    // the engine the pictures; stage 5f: the class that held it is gone, the method is plugin-drawn content and lives with the plugin feed)
-    {"AppWindow::pumpWebTiles", {"serveWebTiles"}},
+    // (The browser map's tiles - pumpWebTiles' serveWebTiles - and the front end's facts - handFrontEndFacts' setFrontEndFacts - are the PORT's now:
+    // kPortKnocks below. Shell retirement R4 deleted their rows from this table with the HOST class.)
 };
-// The host feed (CLASS HOST): the nine host accessors and what drives them.
-const std::vector<Knock> kFeedKnocks = {
+// THE PLUGIN UI PORT (shell retirement R4; was the host feed, CLASS HOST): the host accessors and what drives them, the frame's hand-over, the
+// browser map's tiles and the shutdown's release - every `ui_->x` in src/gui.
+const std::vector<Knock> kPortKnocks = {
     {"AppWindow::hostTracks", {"tracks"}},
-    {"AppWindow::hostUnplacedTracks", {"unplacedTracks"}},   // stub campaign B16, END stage 7h
+    {"AppWindow::hostUnplacedTracks", {"unplacedTracks"}},   // stub campaign B16
     {"AppWindow::hostPaths", {"paths"}},
     {"AppWindow::hostPanels", {"panels"}},
     {"AppWindow::hostInstruments", {"instruments"}},
@@ -111,14 +117,16 @@ const std::vector<Knock> kFeedKnocks = {
     {"AppWindow::applyPluginDirective", {"applyNewestDirective"}},
     {"AppWindow::applyDirectiveAfter", {"instruments"}},
     {"AppWindow::~AppWindow", {"disconnect"}},
-    {"AppWindow::run", {"report"}},
+    {"AppWindow::run", {"release"}},                          // the window's own release of the plugin UI before the engine's (R4; R8's prelude moves it)
+    {"AppWindow::handFrontEndFacts", {"setFrontEnd"}},        // the face, the basemap's figures, the track feed; and the bounded run's plugin report half (R4)
+    {"AppWindow::pumpWebTiles", {"serveTiles"}},              // the browser map's tiles, drained and answered on the window's thread (R4; was serveWebTiles)
 };
 
 // The window's machinery: the members that drive the shell or answer for it. Rule: no ImGui input in them.
 const char* const kWindowMachinery[] = {
     "AppWindow::AppWindow",       "AppWindow::~AppWindow",       "AppWindow::applyConfig",      "AppWindow::currentConfig",
     "AppWindow::handFrontEndFacts", "AppWindow::wallTimeS",      "AppWindow::pauseWatchdog",    "AppWindow::resumeWatchdog",
-    "AppWindow::applyDirectiveBefore", "AppWindow::applyDirectiveAfter",
+    "AppWindow::applyDirectiveBefore", "AppWindow::applyDirectiveAfter", "AppWindow::attachPluginUi",
 };
 const char* const kImGuiInput[] = {
     "Button(", "SmallButton(", "InvisibleButton(", "ArrowButton(", "Checkbox(", "RadioButton(",
@@ -131,6 +139,8 @@ const char* const kImGuiInput[] = {
 // The headers the fence must always deny (a deny list that quietly lost one of these would be the fence with a hole).
 const char* const kMustDeny[] = {"engine/engine.hpp",       "engine/engine_host.hpp", "engine/fox_engine_api.hpp", "engine/pass_stats.hpp",
                                  "core/pipeline.hpp",        "core/plugin_ui.hpp",     "core/plugin_api.hpp",       "core/plugin_runner.hpp",
+                                 // the engine's side of the plugin UI port (R4): the window sees core/plugin_ui_port.hpp, never this
+                                 "engine/plugin_ui_port.hpp",
                                  "core/recorder.hpp",        "core/transmitter.hpp",   "core/gps_reader.hpp",       "core/scanner.hpp",
                                  // src/net, denied whole by stage 5f (the servers are the engine's)
                                  "net/web_server.hpp",       "net/cat_server.hpp",     "net/web_session.hpp",       "net/status_compose.hpp"};
@@ -198,6 +208,18 @@ std::vector<std::string> codeLines(const std::string& text) {
             code += c;
         }
         out.push_back(code);
+    }
+    return out;
+}
+
+// The lines of a file as they are, CR dropped (the vendored header is C: its comments stay, a #define is found at the start of its line).
+std::vector<std::string> codeLinesRaw(const std::string& text) {
+    std::vector<std::string> out;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+        out.push_back(line);
     }
     return out;
 }
@@ -324,52 +346,55 @@ std::vector<Decl> declarationsIn(const std::vector<std::string>& lines) {
 }
 
 struct Surface {
-    std::vector<Decl> shell, host, feed;
+    std::vector<Decl> shell, port;
     bool sectionsDated = true;
     std::string whyNot;
+    std::string portText;  // core/plugin_ui_port.hpp, whole
 };
 
 Surface readSurface(const fs::path& root) {
     Surface s;
     const std::string text = readFile(root / "src" / "engine" / "engine_shell.hpp");
     CHECK(!text.empty());
-    // The class bodies, by their opening lines.
+    // The class body, by its opening line.
     const std::size_t shellAt = text.find("class EngineShell {");
-    const std::size_t feedAt = text.find("class HostPluginFeed {");
-    CHECK(shellAt != std::string::npos && feedAt != std::string::npos);
+    CHECK(shellAt != std::string::npos);
     const std::size_t shellEnd = text.find("\nprivate:", shellAt);
     CHECK(shellEnd != std::string::npos);
-    // The markers inside EngineShell (comments, so found in the raw text).
+    // The marker inside EngineShell (a comment, so found in the raw text).
     const std::size_t mShell = text.find("CLASS SHELL (added", shellAt);
-    const std::size_t mHost = text.find("CLASS HOST (added", shellAt);
-    CHECK(mShell != std::string::npos && mHost != std::string::npos);
-    CHECK(mShell < mHost && mHost < shellEnd);
-    // THE WEB / CAT CLASS IS GONE (stage 5f): its marker may not come back without this file changing with it. The words survive in
-    // comments (the retired class is told of), so what is looked for is the MARKER form, "CLASS WEB / CAT (added".
+    CHECK(mShell != std::string::npos);
+    CHECK(mShell < shellEnd);
+    // THE HOST CLASS IS GONE (shell retirement R4): its marker may not come back without this file changing with it, any more than the WEB / CAT
+    // class's (stage 5f) may. The words survive in comments (the retired classes are told of), so what is looked for is the MARKER form.
     const bool webClassGone = text.find("CLASS WEB / CAT (added") == std::string::npos;
     if (!webClassGone) { std::printf("FAIL: engine_shell.hpp has a CLASS WEB / CAT marker again - the class was deleted by stage 5f\n"); }
     CHECK(webClassGone);
-    // each marker carries a DATE and an END
-    const auto dated = [&](std::size_t at, const char* name) {
-        const std::size_t eol = text.find("\n", text.find("\n", at) + 1);
-        const std::string head = text.substr(at, eol - at);
-        const bool ok = std::regex_search(head, std::regex("added 20[0-9][0-9]-[01][0-9]-[0-3][0-9]")) && head.find("END:") != std::string::npos;
-        if (!ok) {
-            s.sectionsDated = false;
-            s.whyNot += std::string(" ") + name;
-        }
-    };
-    dated(mShell, "SHELL");
-    dated(mHost, "HOST");
+    const bool hostClassGone = text.find("CLASS HOST (added") == std::string::npos && text.find("class HostPluginFeed") == std::string::npos;
+    if (!hostClassGone) {
+        std::printf("FAIL: engine_shell.hpp has a CLASS HOST marker or a HostPluginFeed again - the class was deleted by shell retirement R4: the plugin UI is "
+                    "the port's (core/plugin_ui_port.hpp)\n");
+    }
+    CHECK(hostClassGone);
+    // the marker carries a DATE and an END
+    const std::size_t eol = text.find("\n", text.find("\n", mShell) + 1);
+    const std::string head = text.substr(mShell, eol - mShell);
+    if (!(std::regex_search(head, std::regex("added 20[0-9][0-9]-[01][0-9]-[0-3][0-9]")) && head.find("END:") != std::string::npos)) {
+        s.sectionsDated = false;
+        s.whyNot += " SHELL";
+    }
     const auto lineStart = [&](std::size_t at) { return text.rfind('\n', at) == std::string::npos ? std::size_t(0) : text.rfind('\n', at) + 1; };
-    const auto slice = [&](std::size_t a, std::size_t b) {
-        std::vector<std::string> lines = codeLines(text.substr(a, b - a));
-        return declarationsIn(lines);
-    };
-    s.shell = slice(shellAt + std::strlen("class EngineShell {"), lineStart(mHost));  // the shell section: the class head to the HOST marker's line
-    s.host = slice(lineStart(mHost), shellEnd);
-    const std::size_t feedEnd = text.find("\n};", feedAt);
-    s.feed = slice(feedAt + std::strlen("class HostPluginFeed {"), feedEnd);
+    (void)lineStart;
+    s.shell = declarationsIn(codeLines(text.substr(shellAt + std::strlen("class EngineShell {"), shellEnd - (shellAt + std::strlen("class EngineShell {")))));
+
+    // THE PORT: core/plugin_ui_port.hpp's class body.
+    s.portText = readFile(root / "src" / "core" / "plugin_ui_port.hpp");
+    CHECK(!s.portText.empty());
+    const std::size_t portAt = s.portText.find("class PluginUiPort {");
+    CHECK(portAt != std::string::npos);
+    const std::size_t portEnd = s.portText.find("\n};", portAt);
+    CHECK(portEnd != std::string::npos);
+    s.port = declarationsIn(codeLines(s.portText.substr(portAt + std::strlen("class PluginUiPort {"), portEnd - (portAt + std::strlen("class PluginUiPort {")))));
     return s;
 }
 
@@ -378,7 +403,7 @@ Surface readSurface(const fs::path& root) {
 std::set<std::string> namesOf(const std::vector<Decl>& v, bool skipCtors) {
     std::set<std::string> out;
     for (const Decl& d : v) {
-        if (skipCtors && (d.name == "EngineShell" || d.name == "~EngineShell" || d.name == "create" || d.name == "~HostPluginFeed")) { continue; }
+        if (skipCtors && (d.name == "EngineShell" || d.name == "~EngineShell" || d.name == "create" || d.name == "~PluginUiPort")) { continue; }
         out.insert(d.name);
     }
     return out;
@@ -390,7 +415,7 @@ struct Call {
     std::string file;
     int line = 0;
     std::string member;  // the definition it sits in
-    std::string object;  // engine_ or pluginFeed_
+    std::string object;  // engine_ or ui_
     std::string method;
 };
 
@@ -405,13 +430,14 @@ std::vector<Call> callsIn(const fs::path& root) {
             ++n;
             const std::string d = definitionAt(l);
             if (!d.empty()) { member = d; }
-            for (const char* obj : {"engine_", "pluginFeed_"}) {
+            for (const char* obj : {"engine_", "ui_"}) {
                 const std::string needle = obj;
                 for (std::size_t at = l.find(needle); at != std::string::npos; at = l.find(needle, at + 1)) {
                     if (at > 0 && (isIdent(l[at - 1]) || l[at - 1] == '.')) { continue; }
                     std::size_t i = at + needle.size();
                     if (i >= l.size()) { continue; }
                     if (l[i] == '.') {
+                        if (needle == "ui_") { continue; }   // (`ui_.reset()` and the like are the window's own unique_ptr, not a call through the port)
                         ++i;
                     } else if (l[i] == '-' && i + 1 < l.size() && l[i + 1] == '>') {
                         i += 2;
@@ -490,34 +516,29 @@ std::vector<std::string> includesOf(const std::string& text) {
 
 void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call>& calls) {
     const auto sh = namesOf(s.shell, true);
-    const auto ho = namesOf(s.host, true);
-    const auto fe = namesOf(s.feed, true);
-    std::printf("  the door's surface: shell %zu methods (budget %d), host %zu (%d), the feed's %zu virtuals (%d); no web/CAT class\n",
-                sh.size(), kShellMethodsBudget, ho.size(), kHostMethodsBudget, fe.size(), kFeedMethodsBudget);
-    if (static_cast<int>(sh.size()) > kShellMethodsBudget || static_cast<int>(ho.size()) > kHostMethodsBudget ||
-        static_cast<int>(fe.size()) > kFeedMethodsBudget) {
-        std::printf("FAIL: engine_shell.hpp grew past a class budget - a new door is a decision: say which class it is, give it its "
+    const auto po = namesOf(s.port, true);
+    std::printf("  the door's surface: shell %zu methods (budget %d); no host or web/CAT class; the plugin UI port's %zu virtuals (budget %d)\n", sh.size(),
+                kShellMethodsBudget, po.size(), kPortMethodsBudget);
+    if (static_cast<int>(sh.size()) > kShellMethodsBudget || static_cast<int>(po.size()) > kPortMethodsBudget) {
+        std::printf("FAIL: engine_shell.hpp or core/plugin_ui_port.hpp grew past a budget - a new door is a decision: say which class it is, give it its "
                     "dated comment and its end, and move the budget in this file in the same change (or port the read the house way "
                     "instead of widening the door)\n");
     }
     CHECK(static_cast<int>(sh.size()) <= kShellMethodsBudget);
-    CHECK(static_cast<int>(ho.size()) <= kHostMethodsBudget);
-    CHECK(static_cast<int>(fe.size()) <= kFeedMethodsBudget);
-    // The scan saw the real header.
-    CHECK(sh.size() >= 25);
-    CHECK(ho.size() >= 1);   // (this only proves the scan found the section at all - the exact count is held below)
-    CHECK(ho.count("serveWebTiles") == 1 && ho.count("makePluginFeed") == 1);   // the two HOST methods are the ones named, not two others
-    CHECK(fe.size() >= 8);
+    CHECK(static_cast<int>(po.size()) <= kPortMethodsBudget);
+    // The scan saw the real headers.
+    CHECK(sh.size() >= 20);
+    CHECK(po.size() >= 8);
     // ...and a class that only ever shrinks: a budget above what is there is a stale budget.
     CHECK(static_cast<int>(sh.size()) == kShellMethodsBudget);
-    CHECK(static_cast<int>(ho.size()) == kHostMethodsBudget);
-    CHECK(static_cast<int>(fe.size()) == kFeedMethodsBudget);
+    CHECK(static_cast<int>(po.size()) == kPortMethodsBudget);
     if (!s.sectionsDated) {
         std::printf("FAIL: engine_shell.hpp's section marker lacks 'added YYYY-MM-DD' or 'END:' for:%s\n", s.whyNot.c_str());
     }
     CHECK(s.sectionsDated);
 
-    // Every declaration is implemented in engine_shell.cpp (EngineShell::x for the door; the feed's virtuals by name).
+    // Every declaration is implemented in engine_shell.cpp (EngineShell::x for the door), and every port virtual is a PURE one implemented by
+    // the engine's side, src/engine/plugin_ui_port.cpp (PluginUiPortImpl::x).
     const std::string impl = readFile(root / "src" / "engine" / "engine_shell.cpp");
     CHECK(!impl.empty());
     for (const std::string& n : sh) {
@@ -525,17 +546,21 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
         if (!ok) { std::printf("FAIL: EngineShell::%s is declared in engine_shell.hpp and defined nowhere in engine_shell.cpp\n", n.c_str()); }
         CHECK(ok);
     }
-    for (const std::string& n : ho) { CHECK(impl.find("EngineShell::" + n + "(") != std::string::npos); }
-    for (const std::string& n : fe) {
-        const bool ok = impl.find(n + "(") != std::string::npos;
-        if (!ok) { std::printf("FAIL: HostPluginFeed::%s is declared and not implemented in engine_shell.cpp\n", n.c_str()); }
+    const std::string portImpl = readFile(root / "src" / "engine" / "plugin_ui_port.cpp");
+    CHECK(!portImpl.empty());
+    for (const Decl& d : s.port) {
+        if (d.name == "~PluginUiPort") { continue; }
+        if (!d.pure) { std::printf("FAIL: PluginUiPort::%s is not pure - the port's header is data and pure virtuals\n", d.name.c_str()); }
+        CHECK(d.pure);
+        const bool ok = portImpl.find("PluginUiPortImpl::" + d.name + "(") != std::string::npos;
+        if (!ok) { std::printf("FAIL: PluginUiPort::%s is declared and not implemented in engine/plugin_ui_port.cpp\n", d.name.c_str()); }
         CHECK(ok);
     }
 
     // Every declaration is CALLED from src/gui (a method nobody calls is a door nobody needs: retire it). create / apiTable are static
-    // (EngineShell::x), the rest go through engine_ / pluginFeed_.
-    std::set<std::string> engineCalled, feedCalled;
-    for (const Call& c : calls) { (c.object == "engine_" ? engineCalled : feedCalled).insert(c.method); }
+    // (EngineShell::x), the rest go through engine_ / ui_.
+    std::set<std::string> engineCalled, portCalled;
+    for (const Call& c : calls) { (c.object == "engine_" ? engineCalled : portCalled).insert(c.method); }
     std::string guiText;
     for (const fs::path& p : guiFiles(root, false)) { guiText += readFile(p); }
     for (const fs::path& p : guiFiles(root, true)) {
@@ -544,39 +569,39 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
     const auto called = [&](const std::string& n) {
         return engineCalled.count(n) != 0 || guiText.find("EngineShell::" + n + "(") != std::string::npos;
     };
-    for (const std::set<std::string>* group : {&sh, &ho}) {
-        for (const std::string& n : *group) {
-            if (!called(n)) {
-                std::printf("FAIL: EngineShell::%s is declared and no member of the window calls it - retire the door (its last caller is gone)\n",
-                            n.c_str());
-            }
-            CHECK(called(n));
+    for (const std::string& n : sh) {
+        if (!called(n)) {
+            std::printf("FAIL: EngineShell::%s is declared and no member of the window calls it - retire the door (its last caller is gone)\n", n.c_str());
         }
+        CHECK(called(n));
     }
-    for (const std::string& n : fe) {
-        if (feedCalled.count(n) == 0) {
-            std::printf("FAIL: HostPluginFeed::%s is declared and the window never calls it - retire it\n", n.c_str());
+    for (const std::string& n : po) {
+        if (portCalled.count(n) == 0) {
+            std::printf("FAIL: PluginUiPort::%s is declared and the window never calls it - retire it\n", n.c_str());
         }
-        CHECK(feedCalled.count(n) != 0);
+        CHECK(portCalled.count(n) != 0);
     }
     // ...and the window calls nothing the door does not declare (the compiler says so too; this names the class when it is a typo of one).
-    std::set<std::string> all = sh;
-    all.insert(ho.begin(), ho.end());
     for (const Call& c : calls) {
-        if (c.object == "engine_" && all.count(c.method) == 0) {
+        if (c.object == "engine_" && sh.count(c.method) == 0) {
             std::printf("FAIL: %s:%d calls engine_.%s, which engine_shell.hpp does not declare\n", c.file.c_str(), c.line, c.method.c_str());
             CHECK(false);
         }
+        if (c.object == "ui_" && po.count(c.method) == 0) {
+            std::printf("FAIL: %s:%d calls ui_->%s, which core/plugin_ui_port.hpp does not declare\n", c.file.c_str(), c.line, c.method.c_str());
+            CHECK(false);
+        }
     }
+    (void)root;
 }
 
 void checkWhoMayKnock(const std::vector<Call>& calls) {
     std::set<std::string> matched;
-    int sites = 0, bad = 0;
+    int sites = 0, portSites = 0, bad = 0;
     std::set<std::string> members;
     for (const Call& c : calls) {
-        ++sites;
-        const std::vector<Knock>& table = (c.object == "engine_") ? kEngineKnocks : kFeedKnocks;
+        if (c.object == "engine_") { ++sites; } else { ++portSites; }
+        const std::vector<Knock>& table = (c.object == "engine_") ? kEngineKnocks : kPortKnocks;
         bool ok = false;
         for (const Knock& k : table) {
             if (c.member != k.member) { continue; }
@@ -590,16 +615,17 @@ void checkWhoMayKnock(const std::vector<Call>& calls) {
         members.insert(c.member);
         if (!ok) {
             ++bad;
-            std::printf("FAIL: %s:%d: %s calls %s%s%s, which the fence does not let it - only the shell's members drive the door, the "
-                        "browser map's tile pump serves tiles, the host accessors go through the feed (kEngineKnocks / kFeedKnocks)\n",
+            std::printf("FAIL: %s:%d: %s calls %s%s%s, which the fence does not let it - only the shell's members drive the door, the plugin UI's "
+                        "accessors, the frame's hand-over, the tile pump and the shutdown go through the port (kEngineKnocks / kPortKnocks)\n",
                         c.file.c_str(), c.line, c.member.c_str(), c.object.c_str(), c.object == "engine_" ? "." : "->", c.method.c_str());
         }
     }
-    std::printf("  who knocks: %d call sites in %zu window members, %d outside the table (budget %d sites)\n", sites, members.size(), bad,
-                kCallSitesBudget);
+    std::printf("  who knocks: %d door call sites and %d port call sites in %zu window members, %d outside the table (budgets %d and %d sites)\n", sites,
+                portSites, members.size(), bad, kCallSitesBudget, kPortCallSitesBudget);
     CHECK(bad == 0);
-    CHECK(sites <= kCallSitesBudget);
-    CHECK(sites >= 40);  // the scan saw the real files
+    CHECK(sites == kCallSitesBudget);
+    CHECK(portSites == kPortCallSitesBudget);
+    CHECK(sites >= 25);  // the scan saw the real files
     // Every table entry is matched by a call.
     for (const Knock& k : kEngineKnocks) {
         for (const char* m : k.methods) {
@@ -608,10 +634,10 @@ void checkWhoMayKnock(const std::vector<Call>& calls) {
             CHECK(ok);
         }
     }
-    for (const Knock& k : kFeedKnocks) {
+    for (const Knock& k : kPortKnocks) {
         for (const char* m : k.methods) {
-            const bool ok = matched.count("pluginFeed_|" + std::string(k.member) + "|" + m) != 0;
-            if (!ok) { std::printf("FAIL: kFeedKnocks {%s, %s} matches no call - remove it\n", k.member, m); }
+            const bool ok = matched.count("ui_|" + std::string(k.member) + "|" + m) != 0;
+            if (!ok) { std::printf("FAIL: kPortKnocks {%s, %s} matches no call - remove it\n", k.member, m); }
             CHECK(ok);
         }
     }
@@ -982,7 +1008,7 @@ void checkRetiredHooks(const fs::path& root) {
 // this holds, as text:
 //   * no engine source names a PluginUi except through headlessUi_, and that only as the member's declaration and as the one line that
 //     applies a directive to the engine's own plugin UI where there is no window (Engine::deliverPluginDirective);
-//   * engine_shell.cpp is the only other file that names PluginUi, and the window names none (the feed holds it);
+//   * engine/plugin_ui_port.cpp (the port's engine side) is the only other file that names PluginUi, and the window names none (the port holds it);
 //   * the basemap cache and the track-info cache are attached and detached in applyDirectiveAfter and, for the bounded run's stand-in, in
 //     run() - nowhere else, so every GL delete they cause is on the window's thread;
 //   * the newest directive is applied at the head of the frame (drawUi) before the frame touches the engine or draws a thing, and at the head
@@ -1017,7 +1043,9 @@ void checkPluginUiOwnership(const fs::path& root) {
     int basemapAttach = 0, basemapDetach = 0, infoAttach = 0, infoDetach = 0, uiNamed = 0, linkNamed = 0;
     for (const fs::path& p : guiFiles(root, true)) {
         for (const std::string& l : codeLines(readFile(p))) {
-            if (l.find("PluginUi") != std::string::npos && l.find("HostPluginFeed") == std::string::npos) { ++uiNamed; }
+            // (the WORD PluginUi: the machinery the interface may not name. PluginUiPort, PluginUiAttach and PluginUiFrontEnd are the port's own names.)
+            static const std::regex pluginUiWord(R"(\bPluginUi\b)");
+            if (std::regex_search(l, pluginUiWord)) { ++uiNamed; }
             if (l.find("PluginDirectiveLink") != std::string::npos || l.find("pluginDirectives()") != std::string::npos) { ++linkNamed; }
             if (p.filename() != "app_window.cpp") { continue; }
             if (l.find("basemap_.attach(") != std::string::npos) { ++basemapAttach; }
@@ -1026,7 +1054,7 @@ void checkPluginUiOwnership(const fs::path& root) {
             if (l.find("trackInfo_.detach(") != std::string::npos) { ++infoDetach; }
         }
     }
-    std::printf("  the plugin UI is the window's, behind the feed: basemap attach %d detach %d, track-info attach %d detach %d, PluginUi named %d, "
+    std::printf("  the plugin UI is the window's, behind the port: basemap attach %d detach %d, track-info attach %d detach %d, PluginUi named %d, "
                 "the link named %d (expect 2 1 1 1 0 0)\n",
                 basemapAttach, basemapDetach, infoAttach, infoDetach, uiNamed, linkNamed);
     CHECK(basemapAttach == 2);
@@ -1048,18 +1076,18 @@ void checkPluginUiOwnership(const fs::path& root) {
         const std::size_t poll = text.find("void AppWindow::hostPollPlugins() {");
         CHECK(poll != std::string::npos);
         const std::size_t applyInPoll = text.find("applyPluginDirective();", poll);
-        const std::size_t pollCall = text.find("pluginFeed_->poll();", poll);
+        const std::size_t pollCall = text.find("ui_->poll();", poll);
         const bool pollOk = applyInPoll != std::string::npos && pollCall != std::string::npos && applyInPoll < pollCall && pollCall - poll < 1500;
         if (!pollOk) { std::printf("FAIL: hostPollPlugins does not apply the plugin directive before it polls\n"); }
         CHECK(pollOk);
         // the feed applies the window's step BEFORE the plugin UI's rebuild and its step AFTER it (a release folds the map pages while
         // the instances still stand)
-        const std::string impl = readFile(root / "src" / "engine" / "engine_shell.cpp");
+        const std::string impl = readFile(root / "src" / "engine" / "plugin_ui_port.cpp");
         const std::size_t before = impl.find("steps_.before(f);");
         const std::size_t apply = impl.find("ui_.apply(d);");
         const std::size_t after = impl.find("steps_.after(f);");
         const bool order = before != std::string::npos && apply != std::string::npos && after != std::string::npos && before < apply && apply < after;
-        if (!order) { std::printf("FAIL: the feed does not run the window's step, the plugin UI's apply, the window's second step in that order\n"); }
+        if (!order) { std::printf("FAIL: the port does not run the window's step, the plugin UI's apply, the window's second step in that order\n"); }
         CHECK(order);
     }
     CHECK(bad == 0);
@@ -1134,6 +1162,143 @@ void checkDataHeaderSplit(const fs::path& root) {
         const bool rtClean = rt.find("#include \"net/") == std::string::npos && rt.find("#include \"core/demod_names.hpp\"") != std::string::npos;
         if (!rtClean) { std::printf("FAIL: engine/receiver_tables.hpp must take the mode names from core/demod_names.hpp and include nothing of net/\n"); }
         CHECK(rtClean);
+    }
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------------
+// THE PLUGIN UI PORT (shell retirement R4, 2026-10-28; docs/api-0.3-additions.md 9.15). The window's contact with the plugin UI is ONE table member
+// (get_local_extension, FOXAPI_EXT_PLUGIN_UI) and the C++ interface it returns. What the compiler cannot hold about it, held as text:
+//   * the port's header is data and pure virtuals: it includes the standard library, the plugin ABI, the data headers and the vendored header and
+//     nothing the fence denies (the interface includes it; the sibling-hole check above covers the engine/ allow list, this covers the new header);
+//   * there is ONE extension id in the vendored header, and the table member and its capability bit exist;
+//   * the window asks for the port once, in its constructor, with its own session (opened first) and before the engine's start-up scan - and a
+//     failed ask leaves it the null port, not a null pointer;
+//   * THE EXIT PATHS. ~AppWindow ends the engine's use of the window's applier as its last act, after the engine's teardown (which releases the
+//     plugin UI through that applier, inline, with the control thread joined); run() releases the plugin UI through the port on the window's own
+//     thread before the engine's shutdownRelease; and the port's destructor disconnects, so a constructor that throws, a window that could not be
+//     created and the software-GL relaunch (the window object is destroyed before the second process starts, main.cpp) all end disconnected;
+//   * THE ENGINE'S HALF. attachPluginUi replays the kept state and lets go of the engine's own instances; deliverPluginDirective records the
+//     state before it posts; get_local_extension refuses a REMOTE session and an engine-internal one; setFrontEnd COPIES the track feed.
+// ----------------------------------------------------------------------------------------------------------------------------------
+std::string bodyAfter(const std::string& text, const std::string& head) {
+    const std::size_t at = text.find(head);
+    if (at == std::string::npos) { return {}; }
+    const std::size_t end = text.find("\n}\n", at);
+    return end == std::string::npos ? std::string() : text.substr(at, end - at);
+}
+
+void checkThePort(const fs::path& root, const std::set<std::string>& deny, const Surface& surface) {
+    // 1. the header is data and pure virtuals, and includes nothing denied
+    int badInc = 0;
+    for (const std::string& inc : includesOf(surface.portText)) {
+        const bool ok = inc == "foxsdr_api.h" || inc == "core/host_image.hpp" || inc == "core/plugin_abi.h" || inc == "core/plugin_ui_data.hpp";
+        if (!ok || deny.count(inc) != 0) {
+            ++badInc;
+            std::printf("FAIL: core/plugin_ui_port.hpp includes \"%s\" - the port's header takes the plugin ABI, the data headers and the vendored header only\n",
+                        inc.c_str());
+        }
+    }
+    CHECK(badInc == 0);
+    CHECK(deny.count("core/plugin_ui_port.hpp") == 0);       // the interface MAY include it: that is what it is for
+    CHECK(deny.count("engine/plugin_ui_port.hpp") != 0);     // ...and may not include the engine's side
+    for (const Decl& d : surface.port) {
+        if (d.name != "~PluginUiPort" && !d.pure) { CHECK(false); }
+    }
+
+    // 2. one extension id, the member and its bit
+    const std::string api = readFile(root / "third_party" / "foxsdr_api" / "foxsdr_api.h");
+    CHECK(!api.empty());
+    int ids = 0;
+    for (const std::string& l : codeLinesRaw(api)) {
+        if (l.rfind("#define FOXAPI_EXT_", 0) == 0) { ++ids; }
+    }
+    std::printf("  extension ids in the vendored header: %d (budget %d); get_local_extension and bit 29 %s\n", ids, kExtensionIdsBudget,
+                api.find("get_local_extension)(") != std::string::npos ? "present" : "ABSENT");
+    CHECK(ids == kExtensionIdsBudget);
+    CHECK(api.find("#define FOXAPI_CAP_LOCAL_EXT     (1ull << 29)") != std::string::npos);
+    CHECK(api.find("int32_t (FOXAPI_CALL *get_local_extension)(FoxEngine *engine, uint32_t extension, const FoxLocalExtensionArgs *args,") != std::string::npos);
+
+    // 3. the window's ask
+    const std::string text = readFile(root / "src" / "gui" / "app_window.cpp");
+    const std::string ctor = bodyAfter(text, "AppWindow::AppWindow(std::string configPath, bool announceConfig)");
+    CHECK(!ctor.empty());
+    {
+        const std::size_t session = ctor.find("openUiSession();");
+        const std::size_t attach = ctor.find("attachPluginUi();");
+        const std::size_t init = ctor.find("engine_.initialise();");
+        const bool ok = session != std::string::npos && attach != std::string::npos && init != std::string::npos && session < attach && attach < init &&
+                        ctor.find("attachPluginUi();", attach + 1) == std::string::npos;
+        if (!ok) { std::printf("FAIL: the constructor does not open its session, attach the plugin UI port once, and only then start the engine up\n"); }
+        CHECK(ok);
+    }
+    {
+        const std::string fn = bodyAfter(text, "void AppWindow::attachPluginUi() {");
+        CHECK(!fn.empty());
+        const bool ok = fn.find("get_local_extension(") != std::string::npos && fn.find("FOXAPI_EXT_PLUGIN_UI") != std::string::npos &&
+                        fn.find("attach.session = uiSession_;") != std::string::npos && fn.find("makeNullPluginUiPort()") != std::string::npos &&
+                        text.find("get_local_extension(") == text.find("get_local_extension(", text.find("void AppWindow::attachPluginUi() {"));
+        if (!ok) { std::printf("FAIL: attachPluginUi does not ask the table for FOXAPI_EXT_PLUGIN_UI with the window's session (once, in the window), or leaves no null port on a refusal\n"); }
+        CHECK(ok);
+    }
+
+    // 4. the exit paths
+    {
+        const std::string dtor = bodyAfter(text, "AppWindow::~AppWindow() {");
+        CHECK(!dtor.empty());
+        const std::size_t teardown = dtor.find("engine_.teardown();");
+        const std::size_t disconnect = dtor.find("ui_->disconnect();");
+        const bool last = teardown != std::string::npos && disconnect != std::string::npos && teardown < disconnect &&
+                          dtor.find_first_not_of(" \n", dtor.find(';', disconnect) + 1) == std::string::npos;
+        if (!last) { std::printf("FAIL: ~AppWindow does not disconnect the plugin UI port as its last act, after the engine's teardown (the exit paths: a window that could not be created, a thrown constructor's sibling, the software-GL relaunch)\n"); }
+        CHECK(last);
+        const std::size_t run = text.find("int AppWindow::run(int frames) {");
+        CHECK(run != std::string::npos);
+        const std::size_t stop = text.find("engine_.shutdownStop();", run);
+        const std::size_t release = text.find("ui_->release();", run);
+        const std::size_t engineRelease = text.find("engine_.shutdownRelease();", run);
+        const bool ordered = stop != std::string::npos && release != std::string::npos && engineRelease != std::string::npos && stop < release &&
+                             release < engineRelease && text.find("ui_->release();", release + 1) == std::string::npos;
+        if (!ordered) { std::printf("FAIL: run() does not release the plugin UI through the port, once, between the pipeline's stop and the engine's own release\n"); }
+        CHECK(ordered);
+        // the bounded run's plugin report half is handed over before the first teardown phase, and only when it was asked for
+        const std::size_t hand = text.find("if (pluginStatusReport) { handFrontEndFacts(true); }", run);
+        const std::size_t quiesce = text.find("engine_.shutdownQuiesce();", run);
+        const bool handOk = hand != std::string::npos && quiesce != std::string::npos && hand < quiesce;
+        if (!handOk) { std::printf("FAIL: run() does not hand the plugin status report's half over before the engine's first teardown phase\n"); }
+        CHECK(handOk);
+    }
+
+    // 5. the engine's half
+    {
+        const std::string eng = readFile(root / "src" / "engine" / "engine.cpp");
+        const std::string attach = bodyAfter(eng, "bool Engine::attachPluginUi(PluginUiApplier applier) {");
+        CHECK(!attach.empty());
+        const bool replay = attach.find("pluginUiState_") != std::string::npos && attach.find("headlessUi_.apply(gone)") != std::string::npos &&
+                            attach.find("pluginLink_.post(") != std::string::npos && attach.find("replay->release = false;") != std::string::npos;
+        if (!replay) { std::printf("FAIL: Engine::attachPluginUi does not release the engine's own instances and post the kept state (the late attach's replay)\n"); }
+        CHECK(replay);
+        const std::string deliver = bodyAfter(eng, "bool Engine::deliverPluginDirective(cascade::core::PluginDirective d) {");
+        CHECK(!deliver.empty());
+        const std::size_t record = deliver.find("recordPluginUiStateLocked(d);");
+        const std::size_t post = deliver.find("pluginLink_.post(");
+        if (record == std::string::npos || post == std::string::npos || record > post) {
+            std::printf("FAIL: deliverPluginDirective does not record the plugin UI's state before it posts (a late front end would miss it)\n");
+        }
+        CHECK(record != std::string::npos && post != std::string::npos && record < post);
+        const std::string apiCpp = readFile(root / "src" / "engine" / "fox_engine_api.cpp");
+        const std::string ext = bodyAfter(apiCpp, "int32_t localExtension(uint32_t extension, const FoxLocalExtensionArgs* args, void** out) {");
+        CHECK(!ext.empty());
+        const bool refuses = ext.find("FOXAPI_SESSION_REMOTE") != std::string::npos && ext.find("session->internal != InternalKind::None") != std::string::npos &&
+                             ext.find("FOXAPI_DENIED") != std::string::npos && ext.find("FOXAPI_SESSION_LOCAL") != std::string::npos;
+        if (!refuses) { std::printf("FAIL: get_local_extension does not refuse a REMOTE or engine-internal session\n"); }
+        CHECK(refuses);
+        const std::string port = readFile(root / "src" / "engine" / "plugin_ui_port.cpp");
+        const std::string front = bodyAfter(port, "void PluginUiPortImpl::setFrontEnd(const cc::PluginUiFrontEnd& f) {");
+        CHECK(!front.empty());
+        const bool copies = front.find("std::make_shared<const TrackFeed>(f.trackFeed)") != std::string::npos && front.find("(&f.") == std::string::npos &&
+                            front.find("[](") == std::string::npos;
+        if (!copies) { std::printf("FAIL: PluginUiPortImpl::setFrontEnd does not COPY the window's track feed (a pointer to the caller's object is a race with the pass)\n"); }
+        CHECK(copies);
     }
 }
 
@@ -1258,6 +1423,7 @@ int main(int argc, char** argv) {
     checkRetiredHooks(root);
     checkPluginUiOwnership(root);
     checkDataHeaderSplit(root);
+    checkThePort(root, deny, surface);
     checkTheTestHost(root, argc > 1);
     return testSummary("test_engine_shell_guard");
 }

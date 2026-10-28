@@ -229,7 +229,14 @@ struct AppWindowTestAccess {
     // ---- the window's plugin UI: the one thing the GUI thread does with it --------------------------------------------------
     static void poll(AppWindow& a) { a.hostPollPlugins(); }                     // head-of-poll apply, then the poll
     static void applyOnly(AppWindow& a) { a.applyPluginDirective(); }
-    static cascade::core::PluginUi& ui(AppWindow& a) { return rawPluginUi(*a.pluginFeed_); }
+    static cascade::core::PluginUi& ui(AppWindow& a) { return th::pluginUi(a); }
+    // THE ENGINE'S OWN PLUGIN UI (the one a window-less engine builds; shell retirement R4's late attach lets it go) and the two steps that make one: a
+    // pass with no control thread, and a rescan (release, unmap, scan, load, rebuild) driven from this thread.
+    static cascade::core::PluginUi& headless(AppWindow& a) { return th::engine(a).headlessUi_; }
+    static void pass(AppWindow& a) { th::engine(a).controlPass(); }
+    static void rescan(AppWindow& a) { th::engine(a).rescanPlugins(); }
+    // The unload alone (the release first, then every module unmapped), with no scan after it: what a rescan or a removal does in its first half.
+    static bool unloadPlugins(AppWindow& a) { return th::engine(a).detachAndUnloadPlugins(); }
     static const std::vector<cascade::core::HostTrack>& tracks(AppWindow& a) { return a.hostTracks(); }
     static BasemapCache& basemap(AppWindow& a) { return a.basemap_; }
     static TrackInfoCache& trackInfo(AppWindow& a) { return a.trackInfo_; }

@@ -370,6 +370,14 @@ int main() {
         }
         std::printf("  F: key-rule entries from a thread other than the pass's: %llu\n",
                     static_cast<unsigned long long>(A::offPassKeyTouches(app)));
+        // H (shell retirement R4): the window's frames - setFrontEnd every frame, the plugin poll - beside a free-running pass, on the thread that attached the
+        // plugin UI's port: not one port call from any other thread. (The pass reads what setFrontEnd handed over under the engine's own lock, never the
+        // window's object: this run under ThreadSanitizer is the leg that sees a track feed shared instead of copied.)
+        {
+            std::printf("  H: %llu frames' port calls from a thread other than the one that attached: %llu\n", static_cast<unsigned long long>(frames),
+                        static_cast<unsigned long long>(th::pluginUiPort(app).offThreadCalls()));
+            CHECK(th::pluginUiPort(app).offThreadCalls() == 0u);
+        }
     }   // the window's teardown stops the control thread (shutdownQuiesce), with every other thread already joined
 
     ImGui::DestroyContext();

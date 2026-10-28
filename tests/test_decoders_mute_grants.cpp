@@ -311,10 +311,10 @@ struct AppWindowTestAccess {
     // (the plugin UI is the window's since the pump move's step P3, the API core the engine's; the bridge a plugin calls
     // through reaches the window's PluginUi. The grants and a plugin's request_tune are the API core's, under its lock:
     // any thread - a plugin calls request_tune from its own)
-    static bool tuneAllowed(AppWindow& a, const std::string& key) { return rawPluginUi(*a.pluginFeed_).tuneAllowed(key); }
-    static bool settingsAllowed(AppWindow& a, const std::string& key) { return rawPluginUi(*a.pluginFeed_).settingsAllowed(key); }
+    static bool tuneAllowed(AppWindow& a, const std::string& key) { return th::pluginUi(a).tuneAllowed(key); }
+    static bool settingsAllowed(AppWindow& a, const std::string& key) { return th::pluginUi(a).settingsAllowed(key); }
     static std::int32_t askToTune(AppWindow& a, const std::string& key) {
-        return rawPluginUi(*a.pluginFeed_).tuneRequestFromPlugin(key, 100.0e6);
+        return th::pluginUi(a).tuneRequestFromPlugin(key, 100.0e6);
     }
     static std::size_t engineLog(AppWindow& a) { return onPass<std::size_t>(a, [&] { return th::engine(a).decoderLog_.size(); }); }
     static bool enginePopupOpen(AppWindow& a) { return onPass<bool>(a, [&] { return th::engine(a).mutePopup_.open; }); }

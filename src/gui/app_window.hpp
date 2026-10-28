@@ -56,6 +56,7 @@ struct GLFWwindow;
 #include "gui/patch_scope_math.hpp"
 #include "gui/input_script.hpp"
 #include "core/plugin_ui_data.hpp"
+#include "core/plugin_ui_port.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/updater.hpp"
 #include "core/store_update.hpp"
@@ -722,12 +723,17 @@ private:
     std::unique_ptr<cascade::engine::EngineShell> engineHolder_;
     cascade::engine::EngineShell& engine_;
     // THE PLUGIN UI IS THIS WINDOW'S (the pump move's step P3): the track sources, panels and instruments polled in the frame
-    // (hostPollPlugins) and drawn all frame long, built over the API core the ENGINE owns and held behind the HOST feed
-    // (engine_shell.hpp: HostPluginFeed - the window names neither the PluginUi nor the directive link). Only this thread touches it.
-    // The engine does not rebuild or clear it: it posts a directive and this window applies the newest at the head of its frame
-    // (applyPluginDirective), which is also its acknowledgement of an unload - see Engine::detachAndUnloadPlugins. Declared right after
-    // the engine so the engine is built first and outlives it.
-    std::unique_ptr<cascade::engine::HostPluginFeed> pluginFeed_;
+    // (hostPollPlugins) and drawn all frame long, built over the API core the ENGINE owns and held behind the PLUGIN UI PORT
+    // (core/plugin_ui_port.hpp - the window names neither the PluginUi nor the directive link), which it reaches through the table's one
+    // in-process extension, get_local_extension(FOXAPI_EXT_PLUGIN_UI) on its LOCAL session (attachPluginUi; shell retirement R4). Only this
+    // thread touches it. The engine does not rebuild or clear it: it posts a directive and this window applies the newest at the head of its
+    // frame (applyPluginDirective), which is also its acknowledgement of an unload - see Engine::detachAndUnloadPlugins. Declared right after
+    // the engine so the engine is built first and outlives it: the port's destructor ends the engine's use of this window's applier.
+    std::unique_ptr<cascade::core::PluginUiPort> ui_;
+    // The attach (the constructor's, and a test's: a window that arrives after the engine's first scan is replayed the plugin UI's state).
+    void attachPluginUi();
+    // The frame's hand-over (handFrontEndFacts): one object, refilled each frame and passed by reference - the engine's side copies what it keeps.
+    cascade::core::PluginUiFrontEnd frontEnd_;
 
     // --- WHAT THE ENGINE ASKS OF THIS WINDOW (engine/engine_shell.hpp: ShellHooks) ---------
     // Each answers exactly as the line the moved code used to run here did,
@@ -750,8 +756,8 @@ private:
     // What one directive does HERE, in the two steps the feed runs around the plugin UI's own rebuild: BEFORE it, a release folds the map
     // pages' geometry into the saved list while the instances still stand; AFTER it, the basemap and the track-info client are attached or
     // let go (every GL delete this causes is on this thread, with the context current), and a demonstration instrument's window shown.
-    void applyDirectiveBefore(const cascade::engine::PluginDirectiveFacts& d);
-    void applyDirectiveAfter(const cascade::engine::PluginDirectiveFacts& d);
+    void applyDirectiveBefore(const cascade::core::PluginDirectiveFacts& d);
+    void applyDirectiveAfter(const cascade::core::PluginDirectiveFacts& d);
     // The scope `plugins-reload` for as long as the window is applying a directive that rebuilds or releases the plugin UI - open in applyDirectiveBefore, closed when
     // applyDirectiveAfter leaves (stub campaign B18; core/frame_timing.hpp). The engine's own part of a reload is its guard's (OwnedFrameScope).
     std::optional<cascade::core::OwnedFrameScope> reloadScope_;
@@ -759,14 +765,17 @@ private:
     // EngineHost hooks the engine calls while publishing, but this window's
     // answers, HANDED OVER once a frame (handFrontEndFacts) - and, since the
     // pump move's step P2, the track-info plugin's answers for the web status
-    // and the track list (trackFeedNow; the receiver plugins' pictures are the engine's own since stage 5e), the bounded run's report switch
+    // and the track list (fillTrackFeed; the receiver plugins' pictures are the engine's own since stage 5e), the bounded run's report switch
     // and the frame count it names. (Whether the web server listens is not one of them any more: the server is the engine's, and the
     // state this window reads carries the bit - webListening.)
     bool webListening() const;
     std::string tunerDisplayStyle() const;
-    cascade::engine::BasemapFacts basemapFacts() const;
-    void handFrontEndFacts();
-    std::shared_ptr<const cascade::engine::TrackFeed> trackFeedNow();
+    cascade::core::BasemapFacts basemapFacts() const;
+    // `withPluginStatus`: the one hand-over at the end of a bounded run that asked for CASCADE_PLUGIN_STATUS also carries what the plugin poll and the
+    // picture buffer hold, for the engine to print (PluginUiFrontEnd::pluginStatusReport).
+    void handFrontEndFacts(bool withPluginStatus = false);
+    // The track list the web page shows, into `out` (cleared first); false when there is none to show.
+    bool fillTrackFeed(cascade::core::TrackFeed& out);
     // The track-info plugin's status lines, polled on THIS thread (the cache is GUI-thread state) and sent to the engine, one
     // FOXAPP_OP_TRACK_INFO_LINE each - at the head of the frame, so they land in the pass that frame's drain applies.
     void sendTrackInfoText();
@@ -3491,6 +3500,8 @@ private:
     //   - the page going away (closed, rolled up) lets go of all three.
     const FoxEngineApi* engineApi_ = nullptr;
     FoxSession* uiSession_ = nullptr;
+    // The engine the session is on (the handle the table's engine-level calls take: get_local_extension). Set where the session is opened.
+    FoxEngine* uiEngine_ = nullptr;
     FoxReceiverState uiState_{};     // read once a frame, after the publish
     bool transmitLatchPressed_ = false;  // this frame
     int transmitArmRequest_ = -1;        // this frame: -1 none, 0 withdraw, 1 consent

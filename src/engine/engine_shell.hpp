@@ -16,18 +16,19 @@
 //              tear down in the engine's three ordered phases, and the environment-driven seams a test or a capture drives
 //              the run with. Their end: the shell leaves src/gui when the host process is split from the interface (stage 7,
 //              the headless foxsdr-engine and its own front-end binary).
-//   HOST       plugin-drawn content: the plugin UI's tracks, paths, panels and instruments, polled and drawn on the window's
-//              thread (HostPluginFeed), and the basemap plugin's tiles the browser's map asks the engine's web server for
-//              (serveWebTiles). Their end: a feed over the engine API's table (a plugin UI and its basemap client are a front end's,
-//              so they move with the host process).
+//   (There was a third class, HOST, until shell retirement R4 (2026-10-28): plugin-drawn content - the plugin UI's tracks, paths, panels and
+//   instruments, polled and drawn on the window's thread (HostPluginFeed), and the basemap plugin's tiles the browser's map asks the engine's web
+//   server for (serveWebTiles). It is the PLUGIN UI PORT now (core/plugin_ui_port.hpp), which the window reaches through the table's one
+//   in-process extension, get_local_extension(FOXAPI_EXT_PLUGIN_UI) - docs/api-0.3-additions.md 9.15. The facts only the window knows
+//   (setFrontEndFacts) and the bounded run's plugin status report (reportPluginStatus) went with it: they ride the port's setFrontEnd.)
 //
-//   (There was a fourth class, WEB / CAT, until stage 5f. The browser's and the CAT client's servers are the ENGINE'S since stage 5b
+//   (There was another class, WEB / CAT, until stage 5f. The browser's and the CAT client's servers are the ENGINE'S since stage 5b
 //   (engine/server_host.hpp); the window configures them (FOXAPI_OP_SERVER_CONFIG) and reads them (the SERVERS list and the facts).
 //   Their CONTROL is sessions of the table since 5c and 5d, and since 5e so are their READS: the page's spectrum and audio come
 //   from the table on the web server's own session and the receiver plugins' pictures are polled and served by the engine. The class's
 //   last method was the basemap's tiles, which only a GUI-thread plugin client can produce: it is plugin-drawn content, so it lives
-//   with the plugin feed (HOST) and the class itself is gone. The track list the page shows is not a door method: it is FrontEndFacts'
-//   TrackFeed. docs/engine-stage4.md 6.14.)
+//   with the plugin feed (then HOST, now the plugin UI port) and the class itself is gone. The track list the page shows is not a door
+//   method: it is the port's TrackFeed. docs/engine-stage4.md 6.14.)
 //
 // THE SURFACE DOES NOT GROW SILENTLY. tests/test_engine_shell_guard.cpp counts the declarations of each section and holds the
 // budgets; a method added here takes a dated comment naming its class and its end, and the budget moves in the same change
@@ -134,18 +135,14 @@ struct ControlThreadOptions {
 //   Back   the workers (device scans and opens, the retune coalescer, downloads) and the audio sink's health, the config copy
 enum class PassPart { Front, Mute, Back };
 
-// THE TRACK FEED, THE BASEMAP'S FIGURES, THE BOUNDED-RUN STATUS REPORT'S PLUGIN HALF, THE TILE VOCABULARY AND WHAT ONE DIRECTIVE SAYS TO THE
-// WINDOW moved to core/plugin_ui_port.hpp with the plugin UI plane (shell retirement R4, 2026-10-28): they are the port's data, which the
+// THE TRACK FEED, THE BASEMAP'S FIGURES AND THE BOUNDED-RUN STATUS REPORT'S PLUGIN HALF moved to core/plugin_ui_port.hpp with the plugin UI plane
+// (shell retirement R4, 2026-10-28), beside the tile vocabulary and what one directive says to the window: they are the port's data, which the
 // interface includes. They are in namespace cascade::core there, and named back here for the engine's code (R10 deletes this header and names them
 // where they are used).
 using cascade::core::TrackFeedInfo;
 using cascade::core::TrackFeed;
 using cascade::core::BasemapFacts;
 using cascade::core::PluginUiReport;
-using cascade::core::WebTileAnswer;
-using cascade::core::WebTileRequest;
-using cascade::core::WebTileSource;
-using cascade::core::PluginDirectiveFacts;
 
 // THE PLUGIN HALF OF THE BOUNDED-RUN STATUS REPORT AND THE PICTURES IT PRINTS (FrontEndFacts::pluginStatus; Engine::reportPluginStatus prints it).
 struct PluginStatusFacts {
@@ -155,8 +152,8 @@ struct PluginStatusFacts {
 
 // WHAT THE FRONT END HANDS OVER FOR THE PUBLISH (engine/stage3b-pre, docs/engine-stage3.md OPEN 4): the facts only the window knows -
 // the counter's face (the web page mirrors it), the basemap plugin's figures, the track feed -
-// handed to the engine once a frame (EngineShell::setFrontEndFacts) instead of the engine calling the window for them while it
-// publishes.
+// handed to the engine once a frame (PluginUiPort::setFrontEnd, which copies the window's PluginUiFrontEnd into this) instead of the engine
+// calling the window for them while it publishes.
 struct FrontEndFacts {
     // (webListening was here until stage 5b: the web server is the engine's, and the receiver state's WEB_LISTENING bit is its host's answer.)
     // A front end that has handed nothing over (the headless engine) shows
@@ -237,56 +234,6 @@ public:
 };
 
 // ==================================================================================================================================
-// CLASS HOST - plugin-drawn content (added 2026-10-21, stage 4 step 5; END: a feed over the table when the plugin UI moves with the
-// host process). The plugin UI is the window's (pump move step P3): its instances are polled and drawn on the window's thread, over
-// the API core the engine owns. This is the one object the window holds for it. It owns the PluginUi and the directive link's
-// front-end side; the window names neither.
-// ==================================================================================================================================
-
-class HostPluginFeed {
-public:
-    // The window's two steps around the plugin UI's own: BEFORE it rebuilds (a release folds the map pages' geometry into the saved
-    // list while the instances still stand) and AFTER (attach the basemap and the track-info client, show a demonstration instrument).
-    struct Steps {
-        std::function<void(const PluginDirectiveFacts&)> before;
-        std::function<void(const PluginDirectiveFacts&)> after;
-    };
-    virtual ~HostPluginFeed() = default;
-
-    // The nine host accessors (references into the plugin UI's vectors, valid for the frame: the directive applies at the head of
-    // the frame only).
-    virtual const std::vector<cascade::core::HostTrack>& tracks() const = 0;
-    // THE TARGETS A TRACK SOURCE HEARS AND CANNOT PLACE YET (added 2026-10-27, stub campaign B16; END: stage 7h, when the plugin UI moves
-    // with the host process and its vectors are no longer read through a feed). The ADS-B map lists an aircraft the receiver has heard and
-    // not yet positioned (its position message has not arrived: 0.99.75), after every placed row and counted on the list's heading, and never
-    // draws it. PluginUi keeps those targets in a vector of their own (PluginUi::unplacedTracks) precisely so that tracks() is only ever the
-    // placed ones - every reader of tracks() (the map, the satellite panel, the fit, the radar scope, the coverage, the web snapshot) draws
-    // or measures from a position - and this is the second read of the same object, valid for the frame like the other eight. The
-    // alternative (merging them into tracks()) would have put a NaN coordinate in front of every one of those readers. One caller:
-    // AppWindow::hostUnplacedTracks, for drawPluginWindows' per-page filter. Pure read; nothing is written through it.
-    virtual const std::vector<cascade::core::HostTrack>& unplacedTracks() const = 0;
-    virtual const std::vector<cascade::core::HostPath>& paths() const = 0;
-    virtual const std::vector<cascade::core::HostPanel>& panels() const = 0;
-    virtual const std::vector<cascade::core::HostInstrument>& instruments() const = 0;
-    virtual const std::vector<std::string>& trackPluginNames() const = 0;
-    virtual bool altitudeNear(const std::string& plugin, const std::string& id, double latDeg, double lonDeg,
-                              double& outAltM) = 0;
-    // Polls the plugins (the frame's one poll, after the head-of-frame directive).
-    virtual void poll() = 0;
-    // The receiver plugins' decoded pictures, brought up to date in `out` from the engine's one picture accumulator (ImageFeed::copyTo;
-    // stage 5e: the engine polls the decoders and serves the pictures to the web page, this is the window's READ of them for its own image
-    // windows - a poll made on the caller's thread, once a frame, exactly as before).
-    virtual void pollImages(std::vector<cascade::core::HostImage>& out) = 0;
-    // Applies the newest directive, if one is waiting, on this thread and acknowledges it to the engine (the head of the frame).
-    virtual void applyNewestDirective() = 0;
-    // What the bounded-run status report prints of the plugin UI.
-    virtual PluginUiReport report() const = 0;
-    // The engine no longer applies a directive through this feed (the window is about to go): after this the engine drives its own
-    // plugin UI again.
-    virtual void disconnect() = 0;
-};
-
-// ==================================================================================================================================
 // THE SHELL
 // ==================================================================================================================================
 
@@ -319,7 +266,6 @@ public:
     ConfigReadback configReadback() const;
     cascade::core::AppConfig configSnapshot() const;
     void publishConfig();
-    void setFrontEndFacts(FrontEndFacts facts);
     void setFrontEndWaitBeat(std::function<void()> beat);
     void setControlWatchdogReportDir(const std::string& dir);
     // The engine API's table and the handle of the engine the window's LOCAL session opens on.
@@ -343,8 +289,8 @@ public:
     void shutdownStop();
     void shutdownRelease();
     void shutdownDrain(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
-    // The enforcement diagnostic, printed once after the first phase when the run asked (a bounded run's CASCADE_PLUGIN_STATUS).
-    void reportPluginStatus(const std::vector<cascade::core::HostImage>& images, const PluginUiReport& ui);
+    // (The enforcement diagnostic - a bounded run's CASCADE_PLUGIN_STATUS - is printed by the engine at the end of shutdownQuiesce, from what the
+    // window handed over in its last setFrontEnd; shell retirement R4 retired reportPluginStatus from this door.)
 
     // --- the bounded-run seams: each is an environment-driven test or capture hook, honoured in a bounded run only ---
     // (R2 of the shell retirement, 2026-10-28: the eight seams of the window's ordinary hooks are CLIENT CODE now - the window sends the
@@ -358,36 +304,12 @@ public:
     std::string seamPassStatsJson() const;
     void seamInstallSource(std::unique_ptr<cascade::source::IqSource> source);
 
-    // ---------------------------------------------------------------------------------------------------------------------------
-    // CLASS HOST (added 2026-10-21, stage 4 step 5; END: a feed over the table). The window's plugin UI, built over the engine's API
-    // core and wired to the engine's directive link; and (2026-10-22, stage 5f) the basemap plugin's tiles for the browser's map.
-    // ---------------------------------------------------------------------------------------------------------------------------
-    std::unique_ptr<HostPluginFeed> makePluginFeed(HostPluginFeed::Steps steps);
-
-    // THE BROWSER MAP'S TILES (moved here from the retired CLASS WEB / CAT, 2026-10-22, stage 5f; END: the basemap client over the table -
-    // then the engine asks the plugin itself). The servers are the engine's, their control and their reads are sessions of the table and
-    // the pictures are the engine's own; what is left is the basemap's TILES, which only the window's GUI-thread plugin client (basemap_)
-    // can produce, so the window hands them over.
-    //
-    // ONE CALL A FRAME. `clearFirst` drops every stored tile and pending request (the basemap plugin changed or went away: tiles of the old
-    // source must not be served under the new one). `serve` false (no basemap, or no web server listening) stops there. Otherwise the tiles
-    // the page asked for since the last call are drained and the first `maxTiles` are asked of `source` and published; the rest are dropped
-    // (the page asks again). Headless there is no caller: the status's basemap is not active (BasemapFacts' default) so the page asks for no
-    // tile, and one asked for anyway is answered 202 "pending" - the route records the want (bounded) and nothing drains it.
-    void serveWebTiles(bool clearFirst, bool serve, std::size_t maxTiles, const WebTileSource& source);
-
-    // (THE BETA TESTER'S USAGE MARKS FOR THE TWO LISTENERS - setServerUsageHooks, added by stub campaign B15 - are gone, shell retirement R3: the servers keep two
-    // counters, the table serves them as fact.web.served and fact.cat.accepted, and the window's recorder notes "browser" / "cat" when one has moved.)
-
 private:
     EngineShell();
     struct Impl;
     std::unique_ptr<Impl> impl_;
     friend Engine& rawEngine(EngineShell& shell);
 };
-
-// The plugin UI inside a feed, for the same two (core/plugin_ui.hpp defines it): the tests drive grants and injected tracks through it.
-cascade::core::PluginUi& rawPluginUi(HostPluginFeed& feed);
 
 // The Engine behind a shell, for the code that is entitled to it: the tests (through AppWindowTestAccess) and engine_shell.cpp. It
 // returns an INCOMPLETE type to any translation unit that has not included engine/engine.hpp - which the interface cannot - so

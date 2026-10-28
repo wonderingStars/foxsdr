@@ -445,6 +445,18 @@ void testCapabilityWord() {
         {FOXAPI_CAP_FACTS, "FACTS", true, fact(s, "fact.patch.version").size() > 0u},
         {FOXAPI_CAP_LONG_TEXT, "LONG_TEXT", true, FOXAPI_HAS(api(), submit_text)},
         {FOXAPI_CAP_NODE_SPECTRUM, "NODE_SPECTRUM", true, FOXAPI_HAS(api(), read_node_spectrum)},
+        // (shell retirement R4, API 0.3 9.15) the in-process extension point: the member is there, the plugin UI's extension is understood (a LOCAL
+        // session's arguments that are too short for it are BAD_ARGUMENT, not UNSUPPORTED) and an extension that does not exist is UNSUPPORTED.
+        {FOXAPI_CAP_LOCAL_EXT, "LOCAL_EXT", true,
+         FOXAPI_HAS(api(), get_local_extension) && [&] {
+             FoxLocalExtensionArgs a{};
+             a.structSize = static_cast<uint32_t>(sizeof(a));
+             a.session = s.s;
+             void* out = nullptr;
+             const int32_t shortArgs = api()->get_local_extension(r.e.apiHandle(), FOXAPI_EXT_PLUGIN_UI, &a, &out);
+             const int32_t unknown = api()->get_local_extension(r.e.apiHandle(), 99u, &a, &out);
+             return shortArgs == FOXAPI_BAD_ARGUMENT && unknown == FOXAPI_UNSUPPORTED && out == nullptr;
+         }()},
     };
     std::uint64_t listed = 0;
     for (const Row& row : rows) {
@@ -457,14 +469,14 @@ void testCapabilityWord() {
         CHECK(row.probe);
     }
     // Every bit the header defines is in the table (a new bit with no row fails here), and the retired one stays clear.
-    for (int bit = 0; bit <= 28; ++bit) {
+    for (int bit = 0; bit <= 29; ++bit) {
         if (bit == 14) {
             CHECK((caps & (1ull << bit)) == 0u);
             continue;
         }
         CHECK((listed & (1ull << bit)) != 0u);
     }
-    CHECK_EQ(caps >> 29, 0ull);
+    CHECK_EQ(caps >> 30, 0ull);
 }
 
 // ===================================================================================================================================

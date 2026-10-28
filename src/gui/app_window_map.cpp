@@ -14,7 +14,7 @@
 // Where each part is, for a bounded run that cannot read pixels, the UI census says: "tracklist:count:<shown>/<total>", "tracklist:unplaced:<n>",
 // "tracklist:row:<id>" and "tracklist:heardrow:<id>" (tests/test_unplaced_list_app.cpp).
 //
-// THE UNPLACED TARGETS COME FROM THE FEED (PluginUi::unplacedTracks, through AppWindow::hostUnplacedTracks and HostPluginFeed::unplacedTracks - the one
+// THE UNPLACED TARGETS COME FROM THE FEED (PluginUi::unplacedTracks, through AppWindow::hostUnplacedTracks and PluginUiPort::unplacedTracks - the one
 // door change of this batch, dated and ending at stage 7h; tests/test_engine_shell_guard.cpp holds the budget). The feed's vectors are valid for the frame
 // only (the directive applies at the head of the frame), and drawPluginWindows copies this page's share into pageTracks_ / pageUnplaced_ in the same frame
 // it hands them here.

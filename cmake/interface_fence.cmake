@@ -51,13 +51,13 @@ endfunction()
 
 # The engine and what it is made of: the interface asks it through engine/engine_shell.hpp and the engine API's table, nothing else.
 cascade_interface_deny(core/pipeline.hpp "the DSP pipeline is the engine's (read its state through the table)")
-cascade_interface_deny(core/plugin_ui.hpp "the plugin UI machinery is the host feed's (engine_shell.hpp: HostPluginFeed); the data is core/plugin_ui_data.hpp")
+cascade_interface_deny(core/plugin_ui.hpp "the plugin UI machinery is the engine side of the plugin UI port (core/plugin_ui_port.hpp: PluginUiPort); the data is core/plugin_ui_data.hpp")
 cascade_interface_deny(core/plugin_api.hpp "the plugin host API core is the engine's")
-cascade_interface_deny(core/plugin_directive.hpp "the engine-to-front-end directive is the feed's (engine_shell.hpp: PluginDirectiveFacts)")
+cascade_interface_deny(core/plugin_directive.hpp "the engine-to-front-end directive is the port's (core/plugin_ui_port.hpp: PluginDirectiveFacts)")
 
 # The objects the engine OWNS (stage 4, group 14 onwards: the window holds none of them and reads what they publish through the table). Their
 # headers declare the machinery, not data; the data the window draws is in the data headers (core/plugin_ui_data.hpp, core/receiver_snapshot.hpp ...).
-cascade_interface_deny(core/plugin_runner.hpp "the receiver plugins' runner is the engine's (the pictures come through the host feed)")
+cascade_interface_deny(core/plugin_runner.hpp "the receiver plugins' runner is the engine's (the pictures come through the plugin UI port)")
 cascade_interface_deny(core/recorder.hpp "the IQ and audio recorders are the engine's (FOXAPI_OP_*_RECORD, the RECORDER facts)")
 cascade_interface_deny(core/transmitter.hpp "the transmitter is the engine's (the Transmit page keys it through its API session)")
 cascade_interface_deny(core/retune_coalescer.hpp "the retune coalescer is the engine's")

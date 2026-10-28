@@ -10,8 +10,6 @@
 #include <utility>
 
 #include "core/patch_radio.hpp"
-#include "core/plugin_directive.hpp"
-#include "core/plugin_ui.hpp"
 #include "core/telemetry.hpp"
 #include "core/version.hpp"
 #include "engine/engine.hpp"
@@ -35,73 +33,6 @@ private:
     ShellHooks& hooks_;
 };
 
-// The plugin UI the window holds, over the API core the engine owns, and the front-end side of the engine's directive link.
-class PluginFeedImpl final : public HostPluginFeed {
-public:
-    PluginFeedImpl(Engine& engine, Steps steps, std::function<void(std::vector<cascade::core::HostImage>&)> pollImages)
-        : engine_(engine),
-          steps_(std::move(steps)),
-          pollImages_(std::move(pollImages)),
-          ui_(engine.pluginApiShared()),
-          directives_(engine.pluginDirectives()) {
-        // THE PLUGIN UI'S APPLIER, before the scan the start-up runs: the engine applies a directive through it inline while it runs on
-        // the front end's thread, and posts it for the frame's head to apply while its control thread does (Engine::setPluginUiApplier).
-        engine_.setPluginUiApplier([this](const cascade::core::PluginDirective& d) { apply(d); });
-    }
-    ~PluginFeedImpl() override { disconnect(); }
-
-    const std::vector<cascade::core::HostTrack>& tracks() const override { return ui_.tracks(); }
-    const std::vector<cascade::core::HostTrack>& unplacedTracks() const override { return ui_.unplacedTracks(); }
-    const std::vector<cascade::core::HostPath>& paths() const override { return ui_.paths(); }
-    const std::vector<cascade::core::HostPanel>& panels() const override { return ui_.panels(); }
-    const std::vector<cascade::core::HostInstrument>& instruments() const override { return ui_.instruments(); }
-    const std::vector<std::string>& trackPluginNames() const override { return ui_.trackPluginNames(); }
-    bool altitudeNear(const std::string& plugin, const std::string& id, double latDeg, double lonDeg,
-                      double& outAltM) override {
-        return ui_.altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
-    }
-    void poll() override { ui_.poll(); }
-    void pollImages(std::vector<cascade::core::HostImage>& out) override { pollImages_(out); }
-    void applyNewestDirective() override {
-        (void)directives_.applyNewest([this](const cascade::core::PluginDirective& d) { apply(d); });
-    }
-    PluginUiReport report() const override {
-        PluginUiReport r;
-        r.tracks = ui_.tracks();
-        r.paths = ui_.paths().size();
-        r.panels = ui_.panels();
-        return r;
-    }
-    // (the tests', through rawPluginUi)
-    cascade::core::PluginUi& ui() { return ui_; }
-    void disconnect() override {
-        if (connected_) {
-            connected_ = false;
-            engine_.setPluginUiApplier({});
-        }
-    }
-
-private:
-    // What one directive does: the window's step before, the plugin UI rebuilt or emptied, the window's step after.
-    void apply(const cascade::core::PluginDirective& d) {
-        PluginDirectiveFacts f;
-        f.release = d.release;
-        f.lifeOnly = d.lifeOnly;
-        f.basemap = d.basemap;
-        f.trackInfo = d.trackInfo;
-        if (steps_.before) { steps_.before(f); }
-        ui_.apply(d);
-        if (steps_.after) { steps_.after(f); }
-    }
-
-    Engine& engine_;
-    Steps steps_;
-    std::function<void(std::vector<cascade::core::HostImage>&)> pollImages_;
-    cascade::core::PluginUi ui_;
-    cascade::core::PluginDirectiveLink& directives_;
-    bool connected_ = true;
-};
-
 }  // namespace
 
 struct EngineShell::Impl {
@@ -121,7 +52,6 @@ std::unique_ptr<EngineShell> EngineShell::create(ShellHooks& hooks) {
 }
 
 Engine& rawEngine(EngineShell& shell) { return *shell.impl_->engine; }
-cascade::core::PluginUi& rawPluginUi(HostPluginFeed& feed) { return static_cast<PluginFeedImpl&>(feed).ui(); }
 
 // (the member functions below read the engine through this)
 #define SHELL_ENGINE (*impl_->engine)
@@ -145,7 +75,6 @@ EngineShell::ConfigReadback EngineShell::configReadback() const {
 
 cascade::core::AppConfig EngineShell::configSnapshot() const { return SHELL_ENGINE.configSnapshot(); }
 void EngineShell::publishConfig() { SHELL_ENGINE.publishConfig(); }
-void EngineShell::setFrontEndFacts(FrontEndFacts facts) { SHELL_ENGINE.setFrontEndFacts(std::move(facts)); }
 void EngineShell::setFrontEndWaitBeat(std::function<void()> beat) { SHELL_ENGINE.setFrontEndWaitBeat(std::move(beat)); }
 void EngineShell::setControlWatchdogReportDir(const std::string& dir) { SHELL_ENGINE.setControlWatchdogReportDir(dir); }
 const FoxEngineApi* EngineShell::apiTable() { return engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR); }
@@ -168,9 +97,6 @@ void EngineShell::shutdownQuiesce() { SHELL_ENGINE.shutdownQuiesce(); }
 void EngineShell::shutdownStop() { SHELL_ENGINE.shutdownStop(); }
 void EngineShell::shutdownRelease() { SHELL_ENGINE.shutdownRelease(); }
 void EngineShell::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) { SHELL_ENGINE.shutdownDrain(drainDeadline); }
-void EngineShell::reportPluginStatus(const std::vector<cascade::core::HostImage>& images, const PluginUiReport& ui) {
-    SHELL_ENGINE.reportPluginStatus(images, ui);
-}
 
 // --- the bounded-run seams. (The engine's fields are the pass's, so a seam reaches them through runOnPass: with the pass stepped it is
 // the call on the calling thread, between its parts, as before the pump move; free-running it is the pass's own thread that does it.) --
@@ -195,40 +121,6 @@ void EngineShell::seamInstallSource(std::unique_ptr<cascade::source::IqSource> s
         e.followInputRate();
     });
     (void)e.runPassNow();
-}
-
-// --- CLASS HOST --------------------------------------------------------------------------------------------------------------
-
-std::unique_ptr<HostPluginFeed> EngineShell::makePluginFeed(HostPluginFeed::Steps steps) {
-    Engine& e = SHELL_ENGINE;
-    // THE PICTURES THE WINDOW DRAWS ARE READ FROM THE ENGINE'S ONE ACCUMULATOR (stage 5e: a decoder offers a picture once, so only one
-    // thing may poll the runner - the engine's image feed, which also encodes them for the web page).
-    return std::make_unique<PluginFeedImpl>(
-        e, std::move(steps), [&e](std::vector<cascade::core::HostImage>& out) { e.servers().images().copyTo(out); });
-}
-
-// --- CLASS WEB / CAT ---------------------------------------------------------------------------------------------------------
-
-// The basemap's tiles, the one thing the window still serves the page (stage 5e). The web server's tile store is thread-safe; this is the
-// window's frame draining the wants and publishing the answers, with the bound the frame has always had.
-void EngineShell::serveWebTiles(bool clearFirst, bool serve, std::size_t maxTiles, const WebTileSource& source) {
-    cascade::net::WebServer& web = SHELL_ENGINE.servers().webServer();
-    if (clearFirst) { web.clearTiles(); }
-    if (!serve) { return; }
-    const std::vector<cascade::net::WebServer::TileRequest> wants = web.takePendingTileRequests();
-    std::size_t served = 0;
-    for (const cascade::net::WebServer::TileRequest& r : wants) {
-        if (served >= maxTiles) { break; }
-        std::vector<std::uint8_t> bmp;
-        switch (source(WebTileRequest{r.z, r.x, r.y}, bmp)) {
-            case WebTileAnswer::Pending:
-                continue;  // asking is what started the plugin fetching; the page's retry lands after it has had time to finish
-            case WebTileAnswer::Missing: bmp.clear(); break;  // published empty: "the plugin said the tile will never exist"
-            case WebTileAnswer::Ready: break;
-        }
-        web.setTile(r.z, r.x, r.y, std::move(bmp));
-        ++served;
-    }
 }
 
 #undef SHELL_ENGINE

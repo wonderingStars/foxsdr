@@ -626,7 +626,7 @@ struct AppWindowTestAccess {
             p.running = lp->loaded && !eng.pluginIsStopped(key);
             if (lp->hostClient != nullptr) {
                 p.haveTuneGrant = true;
-                p.tuneGranted = rawPluginUi(*a.pluginFeed_).tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
+                p.tuneGranted = th::pluginUi(a).tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
             }
         }
         // THE TICK BELONGS TO ONE PLUGIN, the one whose page is open.

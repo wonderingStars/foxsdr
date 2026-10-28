@@ -9437,8 +9437,17 @@ void testShellRetirementR4Extension() {
         CHECK_EQ(call(&a, &out), FOXAPI_OK);                              // the engine can be attached to again
         std::unique_ptr<cc::PluginUiPort> port(static_cast<cc::PluginUiPort*>(out));
         CHECK(port != nullptr);
-        port.reset();                                                     // the destructor disconnects
+        const auto saidCount = [] {
+            std::size_t n = 0;
+            for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (l.find("the port was destroyed while still connected") != std::string::npos) { ++n; }
+            }
+            return n;
+        };
+        const std::size_t said0 = saidCount();
+        port.reset();                                                     // the destructor disconnects - and SAYS its owner should have
         CHECK(!d.eng.pluginUiAttached());
+        CHECK_EQ(saidCount(), said0 + 1u);
     }
     // A REFUSED attach leaves the first port attached (the failed object's destructor must not disconnect it).
     {
@@ -9449,6 +9458,7 @@ void testShellRetirementR4Extension() {
         void* again = nullptr;
         CHECK_EQ(call(&a, &again), FOXAPI_BUSY);
         CHECK(d.eng.pluginUiAttached());
+        first->disconnect();
     }
     CHECK(!d.eng.pluginUiAttached());
 
@@ -9507,6 +9517,7 @@ void testShellRetirementR4Extension() {
         port->setFrontEnd(none);
         CHECK(d.eng.trackFeed() == nullptr);
         CHECK_EQ(d.eng.frontEndFacts().tunerDisplayStyle, ce::FrontEndFacts{}.tunerDisplayStyle);
+        port->disconnect();
     }
     CHECK(!d.eng.pluginUiAttached());
 
@@ -9534,7 +9545,7 @@ void testShellRetirementR4Extension() {
         }
         d2.eng.shutdownQuiesce();
         CHECK(d2.eng.frontEndFacts().pluginStatus == nullptr);            // taken: a second phase prints no second report
-        port.reset();
+        port->disconnect();
     }
 }
 

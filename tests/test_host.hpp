@@ -33,6 +33,7 @@
 
 #include "engine/engine.hpp"
 #include "engine/engine_shell.hpp"
+#include "engine/plugin_ui_port.hpp"
 #include "gui/app_window.hpp"
 
 namespace cascade::gui {
@@ -40,6 +41,12 @@ namespace cascade::gui {
 // The window's friend for this header and nothing else (src/gui/app_window.hpp: `friend struct TestHostAccess;`).
 struct TestHostAccess {
     static cascade::engine::Engine& engine(AppWindow& a) { return cascade::engine::rawEngine(a.engine_); }
+    // THE PLUGIN UI PORT behind a window (shell retirement R4): what rawPluginUi(*a.pluginFeed_) was, and the two steps a late-attach test needs - the
+    // window lets go of its port (the destructor disconnects it, the engine drives its own plugin UI again), and asks for one again (the same call the
+    // constructor makes: a window that arrives after the engine's scan).
+    static cascade::core::PluginUiPort& port(AppWindow& a) { return *a.ui_; }
+    static void dropPort(AppWindow& a) { a.ui_.reset(); }
+    static void attachPort(AppWindow& a) { a.attachPluginUi(); }
 };
 
 }  // namespace cascade::gui
@@ -53,5 +60,11 @@ public:
 };
 
 inline cascade::engine::Engine& engine(cascade::gui::AppWindow& a) { return cascade::gui::TestHostAccess::engine(a); }
+
+// The plugin UI behind the window's port (what the window polls), and the engine's side of the port itself (its thread tripwire).
+inline cascade::core::PluginUi& pluginUi(cascade::gui::AppWindow& a) { return cascade::engine::rawPluginUi(cascade::gui::TestHostAccess::port(a)); }
+inline cascade::engine::PluginUiPortImpl& pluginUiPort(cascade::gui::AppWindow& a) {
+    return cascade::engine::rawPluginUiPort(cascade::gui::TestHostAccess::port(a));
+}
 
 }  // namespace th

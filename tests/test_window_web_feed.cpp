@@ -13,7 +13,8 @@
 //       the audio (the list's value[2]) is one while it listens; switched off from the panel, the page's audio route is gone.
 //   F3  THE PANELS' MIRRORS FOLLOW THE TABLE and wait for the answers the window is owed: after Apply the staged edits are not overwritten
 //       by the old configuration while the SERVER_CONFIG is on its way (serverAsksPending_), and are taken from the facts once it landed.
-//   F5  THE BASEMAP'S TILES ARE THE ONE FEED THE WINDOW STILL GIVES THE PAGE (EngineShell::serveWebTiles): a tile asked for with no basemap is
+//   F5  THE BASEMAP'S TILES ARE THE ONE FEED THE WINDOW STILL GIVES THE PAGE (PluginUiPort::serveTiles since shell retirement R4, on the window's
+//       thread - the port counts a call from any other): a tile asked for with no basemap is
 //       answered "pending" and the want is recorded; the window's pump clears on the basemap's change, drains the wants and publishes what its
 //       plugin client (here the bounded-run stand-in) has - a BMP the page then gets - and no more than sixteen a frame, the rest left for the
 //       page's retry.
@@ -283,6 +284,14 @@ int main() {
         }
         CHECK(ready == 16);
         CHECK(pending == 4);
+        // ON THE WINDOW'S THREAD (shell retirement R4): the plugin client the source closure asks is GL-class, so the port counts a serveTiles from any other
+        // thread; the pump above ran on this one. (Break-it: pumpWebTiles run on a worker - this count is the thing that goes red.)
+        CHECK(th::pluginUiPort(app).offThreadCalls() == 0u);
+        {
+            std::thread other([&] { Access::pumpTiles(app); });
+            other.join();
+            CHECK(th::pluginUiPort(app).offThreadCalls() == 1u);   // the tripwire itself: one serveTiles from a thread that did not attach
+        }
         std::printf("F5: a tile asked for with no basemap is pending; with the stand-in attached the pump published it (a 256x256 BMP); of 20 asked for, one frame served %d and left %d for the page's retry\n",
                     ready, pending);
     }
