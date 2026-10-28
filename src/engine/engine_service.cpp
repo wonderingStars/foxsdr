@@ -20,6 +20,7 @@
 #include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
+#include "engine/receiver_tables.hpp"
 #include "source/soundcard_source.hpp"
 
 namespace cascade::engine {
@@ -44,7 +45,10 @@ constexpr std::chrono::milliseconds kKeeperPeriod{100};
 
 }  // namespace
 
-EngineService::EngineService(ServiceOptions options) : options_(std::move(options)) {}
+EngineService::EngineService(ServiceOptions options) : options_(std::move(options)) {
+    // Before anything can scan: the engine is built and restored for a front end that is not here yet (ServiceOptions::frontEndFollows).
+    if (options_.frontEndFollows) { engine_.expectFrontEnd(true); }
+}
 
 EngineService::~EngineService() { stopKeeper(); }
 
@@ -166,6 +170,9 @@ EngineService::Restored EngineService::restore() {
             const cascade::core::AppConfig startup = cascade::core::startupState(cfg);
             engine_.applyConfig(startup);
             diagnosticsEnabled_ = cfg.diagnosticsEnabled;
+            out.lastRunUnclean = !cfg.telemetryCleanExit;
+            out.sourceKind = cfg.sourceKind;
+            out.iqFilePath = cfg.iqFilePath;
             {
                 std::string configDir;
                 const std::size_t cut = options_.configPath.find_last_of("/\\");
@@ -173,12 +180,14 @@ EngineService::Restored EngineService::restore() {
                 engine_.telemetryStartup(cfg, configDir);
             }
             out.loaded = true;
+            out.readback = engine_.configReadback();
         } else {
             std::fprintf(stderr, "%s: %s\n", options_.label.c_str(), err.c_str());
             // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (core/damaged_file.hpp).
             setAsideDamaged();
             out.damaged = true;
             out.error = err;
+            out.writesForbidden = writer_.writesForbidden();
         }
         // Baseline for the debounce: what the file holds (or would hold).
         engine_.publishConfig();
@@ -202,6 +211,14 @@ EngineService::Restored EngineService::restore() {
     }
     engine_.publishStatusText();
     return out;
+}
+
+void EngineService::announce(const Restored& restored) {
+    if (restored.loaded) {
+        std::printf("config applied: mode=%s center=%.0f\n", cascade::gui::kModeNames[restored.readback.modeIndex], restored.readback.centreHz);
+    } else {
+        std::printf("config applied: defaults (%s)\n", restored.error.c_str());
+    }
 }
 
 // A damaged settings file is kept, not overwritten (0.99.65): the window's setAsideDamagedFile, for the one

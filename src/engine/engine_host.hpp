@@ -45,8 +45,9 @@ public:
     // (The FRAME CLOCK left with the pump move's step P4: the engine runs on its own steady clock, Engine::clockS(), because the
     // pass is not the frame any more and a clock that stands still when the window does - a drag of its title bar, a modal loop -
     // froze the scanner's dwell, the bookmark save's debounce, the audio watchdog and the radio reopen's hold-off with it.)
-    // The wall-clock the usage report measures a session with (glfwGetTime()
-    // in the window).
+    // The wall-clock the usage report measures a session with. One clock for every host of the process (engine_host.cpp, processEpoch): the window
+    // application's host replaces the service's after the restore stamped the session's start (Engine::setHost; R7b), and a host that replaces another
+    // must not override this either (the shell's adapter does not), so the stamp and the reads that follow it are on one clock.
     virtual double wallTimeS() const;
 
     // --- THE HANG WATCHDOG ------------------------------------------------------

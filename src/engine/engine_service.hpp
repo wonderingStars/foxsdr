@@ -2,12 +2,19 @@
 //
 // THE ENGINE'S LIFE WITHOUT A WINDOW (engine extraction stage 7c): who restores the settings, starts the
 // receiver, keeps the settings saved while it runs, and stops it in order - for the headless binary
-// (src/engine_main.cpp). The window application does all of this inside AppWindow (its constructor, run()
+// (src/engine_main.cpp). The window application did all of this inside AppWindow (its constructor, run()
 // and the teardown at the end of run()); this is the same life with the window's own parts left out, and
 // "the same" is a contract, not a hope: the window's order has been broken once already (the 0.99.84
 // merge lost whole statements from the teardown and found them only by running tests), so the order of
 // each phase here is held against the order of the window's by tests/test_engine_service_order.cpp, which
 // reads both files and keeps them in ONE table.
+//
+// FROM SHELL RETIREMENT R7b (2026-10-28) THE WINDOW APPLICATION IS A SECOND HOST OF THIS CLASS: src/main.cpp
+// builds the service with the window's options (best-effort lock, label "cascade", the engine of a run with
+// no settings file left as built, a front end that follows), takes the lock, and calls restore() BEFORE the
+// window exists; the window is constructed on the restored engine (AppWindow(WindowHost)). start() and stop()
+// are still the window's own in run() until R8, so main calls neither; the keeper (the debounced save) is
+// the window's until R8 too.
 //
 // THE PHASES, in the order a run takes them (engine_service.cpp has each one's statements and the window's
 // line numbers they come from):
@@ -124,6 +131,11 @@ struct ServiceOptions {
     // The two stall lines (and nothing else) go to stdout, where the window application writes them, instead of stderr, where
     // foxsdr-engine's tests read them.
     bool diagToStdout = false;
+    // A FRONT END WILL ATTACH ITS PLUGIN UI after restore() (shell retirement R7: the window application, whose main.cpp restores first and constructs the
+    // window on the restored engine). The engine then behaves, through the restore, as the engine a window built did when the window attached before the
+    // scan - AUTO plugins left asleep, the plugin UI's directives kept for the attach to replay and built for nobody (Engine::expectFrontEnd). False:
+    // the headless engine, whose window-less host treats AUTO as pinned and drives its own plugin UI.
+    bool frontEndFollows = false;
 };
 
 class EngineService {
@@ -154,8 +166,26 @@ public:
         bool loaded = false;    // the file was read (a missing file is a first run: defaults, loaded)
         bool damaged = false;   // the file failed to load: kept aside (or left alone, writes forbidden)
         std::string error;      // the loader's sentence when damaged; a refused built-in source when hermetic
+        // --- WHAT A WINDOW HOST NEEDS OF THE RESTORE (shell retirement R7) -------------------------------------------------------------------
+        // The window application (R7b) no longer reads the settings file: the engine took it (above), the interface's half comes back as fact.config.interface, and
+        // what is left is what only the file said and neither the table nor the engine's snapshot carries.
+        // Loaded: the clean-exit marker of the LAST run was false - the window's trigger to offer a crash report (AppWindow::diagnosticsStartup). The
+        // engine counts the same observation as a crash; it does not publish it, and the snapshot's marker is this run's (false while it runs).
+        bool lastRunUnclean = false;
+        // Damaged and the file could not be kept aside: nothing may be saved over it, by anyone. The service's own writer is told; a host that
+        // keeps a writer of its own (the window, until R8 gives the keeper to the service) must tell that one.
+        bool writesForbidden = false;
+        // Loaded: the saved source as the file named it - what the window's I/Q file path box shows whenever the saved source was a file,
+        // opened or not (the engine's snapshot names what is open, which for a file that would not open is the keep-aside's business).
+        std::string sourceKind;
+        std::string iqFilePath;
+        // Loaded: what CASCADE_CONFIG_TEST prints (Engine::configReadback, taken once the restore is applied).
+        ConfigReadback readback;
     };
     Restored restore();
+    // The CASCADE_CONFIG_TEST line, "config applied: mode=... center=..." or "config applied: defaults (<why>)", to stdout, from what restore()
+    // returned (the window printed it from its constructor until R7; main and the test host call this now, when the run asked for it).
+    static void announce(const Restored& restored);
 
     // 2b. THE PROVISION (stage 7e): the web and CAT flags of the command line, submitted as FOXAPI_OP_SERVER_CONFIG on a
     // LOCAL ADMIN session and settled (engine/provision.hpp) - after the restore, so what the flags say replaces what

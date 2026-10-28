@@ -584,8 +584,9 @@ private:
     cascade::core::PluginUse pluginUseOfKeyed(const cascade::core::LoadedPlugin& p, const std::string& key, const std::string& id,
                                               const std::string& playingKey, std::size_t browserSessions) const;
     void updatePluginLifecycle();
-    // Whether a front end (a window) has installed its plugin UI applier. False: nothing could ever report a window.
-    bool frontEndPresent() const { return frontEnd_.load(std::memory_order_acquire); }
+    // Whether a front end (a window) has installed its plugin UI applier - or is KNOWN TO BE COMING (expectFrontEnd). False: nothing could ever
+    // report a window, so the lifecycle treats AUTO as pinned.
+    bool frontEndPresent() const { return frontEnd_.load(std::memory_order_acquire) || frontEndExpected_.load(std::memory_order_acquire); }
     // The basemap and track-info plugins chosen (first loaded, not stopped), or null.
     void chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const CascadeTrackInfoApi*& trackInfo) const;
     // Records a stop or a start WITHOUT rebuilding: updates the durable state
@@ -2533,6 +2534,10 @@ private:
     std::int64_t pluginDormantAfterMs_ = -1;
     // Set by setPluginUiApplier: a window-less engine treats AUTO as pinned.
     std::atomic<bool> frontEnd_{false};
+    // Set by expectFrontEnd (shell retirement R7): the host that built this engine will attach a window after its restore. Until it does, the engine
+    // behaves as the window's engine always did - AUTO is a window's to ask for, the plugin UI's directives are kept and not built for nobody - and the
+    // first attach consumes it.
+    std::atomic<bool> frontEndExpected_{false};
     // apiPluginKeys_'s ids (core::pluginRunId of each key), the pass's lookup keys for the run maps above.
     std::vector<std::string> apiPluginIds_;
     // AppConfig::pluginMuteOverride. Held here for the same reason: the value
@@ -3354,10 +3359,20 @@ public:
     // newest directive, which the new front end applies at its next applyNewestDirective, so the first scan's instruments, tracks and basemap
     // are not lost to a window that came after it. Returns false, installing nothing, while another front end is attached (one at a time).
     // CALL IT ON THE THREAD THAT RAN THE SCAN and before the control thread runs (the headless instances are destroyed on the calling thread,
-    // which is where the ABI created them): the engine host's start-up order, a window constructed before start().
+    // which is where the ABI created them): the engine host's start-up order, a window constructed before start(). A host that said so BEFORE its
+    // restore (expectFrontEnd) has no headless instances to let go of: the scan kept its directives and built nothing for nobody.
     bool attachPluginUi(PluginUiApplier applier);
     // Whether a front end is attached now (its applier is installed).
     bool pluginUiAttached() const { return frontEnd_.load(std::memory_order_acquire); }
+    // A HOST THAT RESTORES BEFORE ITS WINDOW EXISTS (shell retirement R7: main.cpp, the test host) says so BEFORE the restore: a front end will attach its
+    // plugin UI when the restore is done. Until the first attach the engine is exactly the engine a window built: (1) the plugin lifecycle is the
+    // window's - an AUTO plugin nobody uses is given no instance by the scan, where a window-less host treats AUTO as pinned and starts every fitted
+    // plugin (the decoders would run for the dormancy's 30 s at every launch, and every one would be created and destroyed for nothing); (2) the plugin
+    // UI's directives are KEPT for the front end (attachPluginUi replays them) and not applied to the engine's own instances, so a GUI-class plugin that
+    // runs at launch is created ONCE, by the window, as it was when the window attached before the scan - not once for nobody, destroyed, and once more.
+    // The first attach (attachPluginUi or setPluginUiApplier) consumes the expectation: a window that goes later leaves a window-less engine, as before.
+    // False (the default): the headless engine.
+    void expectFrontEnd(bool on) { frontEndExpected_.store(on, std::memory_order_release); }
     cascade::core::PluginDirectiveLink& pluginDirectives() { return pluginLink_; }
     // The engine-owned API core the window builds its PluginUi over.
     const std::shared_ptr<cascade::core::PluginApiCore>& pluginApiShared() const { return pluginApi_; }

@@ -19,6 +19,9 @@
 //   8  LABEL on the lines the service writes; PLUGIN STATUS report once, only when asked; BREADCRUMB phases in their places, only when asked;
 //   9  THE ENGINE'S OWN SURFACE the host needs: configReadback() public; setHost / resetHost (the pointer's contract: never while the control thread
 //      runs; calls follow it; a host that is gone is never called after a reset or by the destructor).
+//  10  WHAT THE WINDOW HOST NEEDS OF THE RESTORE (R7: the window no longer reads the file): restore() returns the last run's marker, the saved source as
+//      the file named it, the read-back and whether writes are forbidden; announce() prints the CASCADE_CONFIG_TEST line; a service destroyed lets
+//      the settings lock go (src/main.cpp relies on it across the software-GL relaunch).
 //
 // Break-it (docs/engine-stage4.md 6.25): the lock default Strict -> BestEffort: 1 and test_engine_main_second_instance_refused RED; the hermetic default
 // Headless -> Window: 2 RED; comparable() without the mask: 6 RED; the keeper thread not joined before the quiesce: 5 under TSan / the order table.
@@ -213,6 +216,7 @@ int main() {
         CHECK(o.shutdownStallMs == 0);
         CHECK(o.label == "foxsdr-engine");
         CHECK(!o.pluginStatusReport);
+        CHECK(!o.frontEndFollows);   // (R7: the headless engine's window-less host treats AUTO as pinned and drives its own plugin UI)
         CHECK(!o.breadcrumbs);
         CHECK(!o.diagToStdout);
     }
@@ -562,6 +566,107 @@ int main() {
                 std::ofstream bad(dir / "config.json", std::ios::binary);
                 bad << "this is not json";
             }
+        }
+    }
+
+    // --- 10. WHAT A WINDOW HOST NEEDS OF THE RESTORE (shell retirement R7) -------------------------------------------------------------------
+    // The window no longer reads the settings file: the host's restore returns the four things only the file said and no table fact carries, and
+    // announce() prints the CASCADE_CONFIG_TEST line the window used to print from its constructor.
+    {
+        const auto restoreOf = [&](const char* tag, const std::function<void(AppConfig&)>& edit, std::string& out) {
+            const fs::path cfg = seedConfig(home / tag, "config.json", edit);
+            ServiceOptions o;
+            o.configPath = cfg.string();
+            o.hermetic = ServiceHermetic::Window;
+            o.label = "cascade";
+            EngineService svc(o);
+            std::string s;
+            CHECK(svc.acquireConfig(s));
+            const EngineService::Restored r = svc.restore();
+            Capture capOut(1, root / (std::string(tag) + ".out"));
+            EngineService::announce(r);
+            out = capOut.text();
+            capOut.restore();
+            return r;
+        };
+        std::string out;
+        // THE LAST RUN'S MARKER: a run that never wrote it is "unclean" - the window's trigger to offer a report - and the saved source is what the
+        // FILE named (the window's I/Q path box starts from it, whether or not the file opened).
+        const EngineService::Restored unclean = restoreOf("r7-unclean", [](AppConfig& c) {
+            c.telemetryCleanExit = false;
+            c.sourceKind = "file";
+            c.iqFilePath = "C:/nowhere/capture.iq";
+            c.mode = "CW";
+        }, out);
+        CHECK(unclean.loaded && !unclean.damaged && !unclean.writesForbidden);
+        CHECK(unclean.lastRunUnclean);
+        CHECK(unclean.sourceKind == "file");
+        CHECK(unclean.iqFilePath == "C:/nowhere/capture.iq");
+        CHECK(std::string(cascade::gui::kModeNames[unclean.readback.modeIndex]) == "CW");
+        CHECK(out.rfind("config applied: mode=CW center=", 0) == 0);     // the CASCADE_CONFIG_TEST line, byte for byte what the window printed
+        CHECK(!out.empty() && out.back() == '\n');
+        const EngineService::Restored clean = restoreOf("r7-clean", [](AppConfig& c) { c.telemetryCleanExit = true; }, out);
+        CHECK(clean.loaded && !clean.lastRunUnclean);
+        // A FIRST RUN (no file): loaded, defaults, and not "unclean" (the default marker is clean).
+        {
+            ServiceOptions o;
+            o.configPath = (home / "r7-first" / "config.json").string();
+            o.hermetic = ServiceHermetic::Window;
+            EngineService svc(o);
+            std::string s;
+            CHECK(svc.acquireConfig(s));
+            const EngineService::Restored r = svc.restore();
+            CHECK(r.loaded && !r.damaged && !r.lastRunUnclean && !r.writesForbidden);
+        }
+        // A DAMAGED file: not loaded, kept aside (so nothing is forbidden), the sentence in `error`, and the announce line says defaults.
+        {
+            const fs::path dir = home / "r7-damaged";
+            fs::create_directories(dir);
+            {
+                std::ofstream bad(dir / "config.json", std::ios::binary);
+                bad << "this is not json";
+            }
+            ServiceOptions o;
+            o.configPath = (dir / "config.json").string();
+            o.hermetic = ServiceHermetic::Window;
+            o.label = "cascade";
+            Capture capErr(2, root / "r7-damaged.err");
+            EngineService svc(o);
+            std::string s;
+            CHECK(svc.acquireConfig(s));
+            const EngineService::Restored r = svc.restore();
+            const std::string err = capErr.text();
+            capErr.restore();
+            CHECK(r.damaged && !r.loaded && !r.error.empty() && !r.lastRunUnclean && !r.writesForbidden);
+            CHECK(err.find("cascade: ") == 0 || err.find("cascade: ") != std::string::npos);     // the load error, as the window printed it
+            Capture capOut(1, root / "r7-damaged.out");
+            EngineService::announce(r);
+            const std::string said = capOut.text();
+            capOut.restore();
+            CHECK(said.rfind("config applied: defaults (", 0) == 0);
+        }
+        // THE LOCK GOES WITH THE SERVICE (src/main.cpp relies on it: the service is destroyed before the software-GL relaunch, whose second process takes
+        // the lock for its own run): a best-effort service that holds it, destroyed, leaves it free for a strict one.
+        {
+            const fs::path cfg = seedConfig(home / "r7-lock", "config.json");
+            ServiceOptions o;
+            o.configPath = cfg.string();
+            o.lock = ServiceLock::BestEffort;
+            o.label = "cascade";
+            std::string s;
+            {
+                EngineService window(o);
+                CHECK(window.acquireConfig(s));
+                ServiceOptions strict;
+                strict.configPath = cfg.string();
+                EngineService second(strict);
+                CHECK(!second.acquireConfig(s));                  // held: a second program is refused beside the window application
+                CHECK(s.find("the FoxSDR window application") != std::string::npos);
+            }
+            ServiceOptions strict;
+            strict.configPath = cfg.string();
+            EngineService after(strict);
+            CHECK(after.acquireConfig(s));                        // the window's service is gone: the lock is free
         }
     }
 

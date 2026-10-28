@@ -3105,6 +3105,7 @@ void Engine::setPluginUiApplier(PluginUiApplier applier) {
         pluginApplier_ = std::make_shared<const PluginUiApplier>(std::move(applier));
         pluginGuiThread_.store(std::this_thread::get_id());
         frontEnd_.store(true, std::memory_order_release);
+        frontEndExpected_.store(false, std::memory_order_release);   // (the front end that was expected is here)
     } else {
         pluginApplier_.reset();
         pluginGuiThread_.store(std::thread::id{});
@@ -3143,6 +3144,7 @@ bool Engine::attachPluginUi(PluginUiApplier applier) {
         pluginApplier_ = std::make_shared<const PluginUiApplier>(std::move(applier));
         pluginGuiThread_.store(std::this_thread::get_id());
         frontEnd_.store(true, std::memory_order_release);
+        frontEndExpected_.store(false, std::memory_order_release);   // (the front end that was expected is here: expectFrontEnd)
         if (pluginUiState_.has_value()) {
             replay = *pluginUiState_;
             replay->release = false;
@@ -3174,10 +3176,16 @@ bool Engine::deliverPluginDirective(cascade::core::PluginDirective d) {
     // whichever thread posts), the front end's own thread, or no control thread (the pass IS the front end's frame).
     const bool inlineHere = applier == nullptr || std::this_thread::get_id() == pluginGuiThread_.load() ||
                             !controlThreadRunning();
+    // A FRONT END IS COMING AND NOT HERE (expectFrontEnd, shell retirement R7): the state was kept above and attachPluginUi replays it, so the directive is
+    // acknowledged and builds nothing - no instance is created for nobody, then destroyed, then created again by the window. A release is acknowledged
+    // the same way: nothing was built, so there is nothing borrowed from the modules to let go of.
+    const bool held = applier == nullptr && frontEndExpected_.load(std::memory_order_acquire);
     const std::uint64_t epoch = pluginLink_.post(std::move(d));
     if (inlineHere) {
         if (applier != nullptr) {
             pluginLink_.applyNewest(*applier);
+        } else if (held) {
+            pluginLink_.applyNewest([](const cascade::core::PluginDirective&) {});
         } else {
             pluginLink_.applyNewest([this](const cascade::core::PluginDirective& x) { headlessUi_.apply(x); });
         }
