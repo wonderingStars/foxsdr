@@ -35,6 +35,11 @@ computer fell behind): deploy this Worker before it ships (the release preflight
 asks for `-WorkerDeployed`), or the count that says whether the deeper buffer ever
 fires is dropped. The Worker as 0.99.67 shipped it, kept in
 `test-fixtures/worker-0.99.67.js`, is the one `worker.test.mjs` shows dropping it.
+And again for **0.99.100**, which adds `recovered.viewport` (the graphics driver
+refused FoxSDR a second OpenGL window part-way through a session, and every page was
+kept inside the main window from then on - the "map vanished" reports of 2026-10 from
+two Intel UHD machines, which no crash or freeze report could ever carry because the
+program keeps running): deploy this Worker before 0.99.100 ships.
 
 ## The columns of `foxsdr_usage`
 

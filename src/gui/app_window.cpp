@@ -2834,6 +2834,13 @@ int AppWindow::run(int frames) {
                 if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
                     cascade::core::diagWarnf("%s", why);
                 }
+                // ...AND COUNTED (0.99.100, `recovered.viewport`, core/health_events.hpp). The
+                // program carries on, so no crash, freeze or sentinel report ever says this
+                // happened: two Intel UHD machines had it through October 2026 and the
+                // website saw nothing. Once a session by nature - viewports stay off - and
+                // reached once, because the flag above is cleared and this block is inside
+                // the ViewportsEnable test. The window's thread, so noteRecovered may lock.
+                cascade::core::health::noteRecovered(cascade::core::health::Recovered::Viewport);
                 // ...AND THE PAGES THAT WERE THEIR OWN WINDOWS ARE BROUGHT INSIDE. ImGui
                 // keeps each one where it was beside this window, which for a page that
                 // opened past its right edge is past its right edge still - a 140 px

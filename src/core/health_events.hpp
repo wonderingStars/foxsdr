@@ -98,8 +98,10 @@ enum class Recovered : std::uint8_t {
     SdrEnum,     // the SDRplay service's enumeration was abandoned
     SdrLost,     // the SDRplay API session was lost and shut for the session
     AudioLead,   // the audio buffer was deepened because this computer fell behind (0.99.73)
+    Viewport,    // the driver refused a second OpenGL context mid-session; every page is kept
+                 // inside the main window for the rest of the session (0.99.100)
 };
-inline constexpr std::size_t kRecoveredCount = 14;
+inline constexpr std::size_t kRecoveredCount = 15;
 
 // One event of the vocabulary, as documentation and the Worker see it: its
 // name, the word lists of its qualifiers in order (empty for a bare event), and

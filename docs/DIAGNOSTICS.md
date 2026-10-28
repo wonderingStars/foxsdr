@@ -850,6 +850,7 @@ The sites that are counted:
 | `sdrenum` | `AppWindow::pollSdrPlayService`, the SDRplay scan worker let go | the window's thread |
 | `sdrlost` | `AppWindow::pollSdrPlayService`, the SDRplay API session lost | the window's thread |
 | `audiolead` | `AppWindow::closeAudioMinute`, the once-a-minute close that deepened the audio buffer (0.99.73; see *The DSP thread asks for priority, and the audio buffer deepens itself*) | the window's thread |
+| `viewport` | `AppWindow::run`, the frame that read the backend's count of a refused second OpenGL context (`ImGui_ImplGlfw_ViewportWindowCreationFailures`, GLFW 65543) and turned separate windows off for the session (0.99.100; the 2026-10 "map vanished" reports, which no crash or freeze report could carry) | the window's thread |
 
 **Surveyed and deliberately not counted**, so the next reader does not re-do the
 survey: the person's own actions that look like recoveries (re-picking a stopped

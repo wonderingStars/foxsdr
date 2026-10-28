@@ -53,6 +53,7 @@
 #include <unistd.h>
 #endif
 
+#include "core/health_events.hpp"
 #include "gui/page_geometry.hpp"
 #include "test_check.hpp"
 
@@ -195,6 +196,19 @@ std::string readFile(const fs::path& p) {
     return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
 }
 
+// The health ledger's file for every run of this test (its config files all live in g_dir).
+fs::path ledgerPath() { return g_dir / cascade::core::health::HealthLedger::kFileName; }
+
+// What the ledger counted under `recovered.`, as its file holds it ("token=count" lines).
+std::string recoveredCounts() {
+    std::string out;
+    std::istringstream lines(readFile(ledgerPath()));
+    for (std::string l; std::getline(lines, l);) {
+        if (l.rfind("recovered.", 0) == 0) { out += (out.empty() ? "" : ",") + l; }
+    }
+    return out;
+}
+
 Result once(const std::string& tag, bool single, int refuseAt) {
     Result r;
     const fs::path cfg = g_dir / (tag + ".json");
@@ -203,9 +217,14 @@ Result once(const std::string& tag, bool single, int refuseAt) {
     std::error_code ec;
     fs::remove_all(diag, ec);
     fs::remove_all(shots, ec);
+    // The health ledger (core/health_events.hpp) lives beside the config file, so one run's
+    // counts would be read by the next: each run starts without one.
+    fs::remove(ledgerPath(), ec);
     fs::create_directories(diag, ec);
     fs::create_directories(shots, ec);
-    writeFile(cfg, "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, "
+    // Usage reporting and diagnostics ON (their addresses are the discard port, set in main):
+    // the refusal is a counted health event, and the ledger counts only while both are on.
+    writeFile(cfg, "{ \"telemetryEnabled\": true, \"diagnosticsEnabled\": true, \"updateCheckEnabled\": false, "
                    "\"sourceKind\": \"siggen\", \"uiTheme\": \"today\", \"interfaceScale\": \"100\", "
                    "\"mainView\": \"receiver\", \"bandPlanOverlay\": false, "
                    "\"pluginCatalogueUrl\": \"http://127.0.0.1:9/catalogue.json\" }\n");
@@ -309,6 +328,10 @@ int main(int argc, char** argv) {
             std::printf("    refused: this machine starts with separate windows off - nothing to refuse\n");
         } else if (r.ok) {
             CHECK(r.log.find("could not create a second OpenGL context") != std::string::npos);
+            // ...AND IT WAS COUNTED, once, as the health event `recovered.viewport` (0.99.100):
+            // the one way this ever reaches the website, since the program carries on.
+            std::printf("    refused ledger: %s\n", recoveredCounts().c_str());
+            CHECK(recoveredCounts() == "recovered.viewport=1");
             // THE SETUP, or the check below proves nothing: at frame 50 the pages are their own
             // windows, and the map - the page of the field report - is past the main window's
             // edge. (The plugin store opens over the main window by its own placement,
@@ -356,6 +379,8 @@ int main(int argc, char** argv) {
         } else if (r.ok) {
             CHECK(r.log.find("could not create a second OpenGL context") == std::string::npos);
             CHECK(r.log.find("brought inside the main window") == std::string::npos);
+            // ...and nothing was counted: the control run met no refusal.
+            CHECK(recoveredCounts().empty());
             bool anyOutside = false;
             for (const Page& p : kPages) {
                 const Rect* pg = r.after.page(p.id);

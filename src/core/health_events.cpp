@@ -48,6 +48,7 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"sdrenum", true},      // the service stays wedged
     {"sdrlost", true},      // the session stays lost
     {"audiolead", true},    // the lead steps up at most three times, and "this session had it" is the fact
+    {"viewport", true},     // separate windows stay off for the session: "this session had it" is the fact
 };
 
 // The frame timer's own names for the scopes, but for `user-wait`.
