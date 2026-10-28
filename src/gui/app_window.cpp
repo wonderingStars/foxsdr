@@ -21446,6 +21446,62 @@ std::string pluginPageLegend(const char* format, const std::string& name) {
     return cascade::core::upperLegend(s, cascade::i18n::current());
 }
 
+// A PICTURE FITTED TO A REGION, DRAWN, MEASURED AND CLICKABLE (field request, SWL F20806,
+// 2026-10-28). The image window and the radiofax recorder's own window both show a plugin's decoded
+// picture and both let a click on it reach the plugin (SET LEFT EDGE), so the one block lives here:
+// the picture is scaled by ONE factor to fit `avail` with its aspect kept - a weather chart
+// stretched to the pane is a misread chart - drawn at the cursor, recorded in the census as
+// `censusName`, and, when the plugin takes image input, covered by an invisible button (`buttonId`,
+// under `scopeId`, so two windows' buttons can never share an identity) that owns the gesture: a
+// press elsewhere, or a release outside the picture, must never select a programme. A click inside
+// the picture is returned in NATIVE pixels; the caller delivers it to the plugin.
+struct FittedPicture {
+    bool pressed = false;         // the picture was clicked, at (x, y) in the image's own pixels
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+};
+
+FittedPicture drawFittedPicture(const cascade::core::HostImage& im, unsigned int tex,
+                                const ImVec2& avail, const std::string& censusName,
+                                const char* scopeId, const char* buttonId) {
+    FittedPicture out;
+    if (im.width == 0 || im.height == 0) { return out; }
+    const float sx = avail.x / static_cast<float>(im.width);
+    const float sy = avail.y / static_cast<float>(im.height);
+    const float s = (sx < sy ? sx : sy);
+    if (tex == 0u || !(s > 0.0f)) { return out; }
+    const ImVec2 pictureMin = ImGui::GetCursorScreenPos();
+    const ImVec2 pictureSize(static_cast<float>(im.width) * s,
+                             static_cast<float>(im.height) * s);
+    ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)), pictureSize);
+    if (cascade::gui::census::enabled()) {
+        cascade::gui::census::rect(censusName, pictureMin.x, pictureMin.y,
+            pictureMin.x + pictureSize.x, pictureMin.y + pictureSize.y);
+    }
+    if (im.interactive) {
+        // Own the gesture with an ImGui item: a press elsewhere or
+        // a release outside this image must never select a programme.
+        ImGui::SetCursorScreenPos(pictureMin);
+        ImGui::PushID(scopeId);
+        if (ImGui::InvisibleButton(buttonId, pictureSize)) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const float x = (mouse.x - pictureMin.x) / s;
+            const float y = (mouse.y - pictureMin.y) / s;
+            if (x >= 0 && y >= 0 && x < static_cast<float>(im.width) &&
+                y < static_cast<float>(im.height)) {
+                out.pressed = true;
+                out.x = static_cast<std::uint32_t>(x);
+                out.y = static_cast<std::uint32_t>(y);
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        }
+        ImGui::PopID();
+    }
+    return out;
+}
+
 }  // namespace
 
 void AppWindow::drawPluginWindows() {
@@ -22124,44 +22180,13 @@ void AppWindow::drawPluginWindows() {
                 ImGui::EndDisabled();
 
                 // Fit to the window, preserving aspect: a weather image
-                // stretched to the pane is a misread image.
-                const ImVec2 avail = ImGui::GetContentRegionAvail();
-                const float sx = avail.x / static_cast<float>(im.width);
-                const float sy = avail.y / static_cast<float>(im.height);
-                const float s = (sx < sy ? sx : sy);
-                if (imageTex_[i] != 0u && s > 0.0f) {
-                    const ImVec2 pictureMin = ImGui::GetCursorScreenPos();
-                    const ImVec2 pictureSize(static_cast<float>(im.width) * s,
-                                             static_cast<float>(im.height) * s);
-                    ImGui::Image(static_cast<ImTextureID>(
-                                     static_cast<std::uintptr_t>(imageTex_[i])),
-                                 pictureSize);
-                    if (cascade::gui::census::enabled()) {
-                        cascade::gui::census::rect("image:picture:" + im.plugin,
-                            pictureMin.x, pictureMin.y, pictureMin.x + pictureSize.x,
-                            pictureMin.y + pictureSize.y);
-                    }
-                    if (im.interactive) {
-                        // Own the gesture with an ImGui item: a press elsewhere or
-                        // a release outside this image must never select a programme.
-                        ImGui::SetCursorScreenPos(pictureMin);
-                        ImGui::PushID(im.plugin.c_str());
-                        if (ImGui::InvisibleButton("##image-input", pictureSize)) {
-                            const ImVec2 mouse = ImGui::GetIO().MousePos;
-                            const float x = (mouse.x - pictureMin.x) / s;
-                            const float y = (mouse.y - pictureMin.y) / s;
-                            if (x >= 0 && y >= 0 && x < static_cast<float>(im.width) &&
-                                y < static_cast<float>(im.height)) {
-                                pluginRunner_.imagePress(im.plugin,
-                                    static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
-                            }
-                        }
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                        }
-                        ImGui::PopID();
-                    }
-                }
+                // stretched to the pane is a misread image. The fit, the draw,
+                // the census rect and the click are drawFittedPicture's, shared
+                // with the radiofax recorder's window.
+                const FittedPicture fit = drawFittedPicture(
+                    im, imageTex_[i], ImGui::GetContentRegionAvail(),
+                    "image:picture:" + im.plugin, im.plugin.c_str(), "##image-input");
+                if (fit.pressed) { pluginRunner_.imagePress(im.plugin, fit.x, fit.y); }
             }
             // ONLY IN THE WINDOW THAT SAVED IT. A note about a file written
             // from this picture has nothing to say about any other one.
@@ -22266,6 +22291,8 @@ void AppWindow::drawPluginWindows() {
             // ran earlier this frame, image windows are drawn first). The
             // revision check means a half-swapped slot after a rescan hands
             // the face nothing rather than another plugin's picture.
+            const cascade::core::HostImage* chartImage = nullptr;
+            unsigned int chartTexId = 0u;
             if (in.kind == CASCADE_INSTRUMENT_FAX) {
                 for (std::size_t ci = 0;
                      ci < pluginImages_.size() && ci < imageTex_.size() && ci < imageTexRev_.size();
@@ -22276,6 +22303,8 @@ void AppWindow::drawPluginWindows() {
                         cue.chartTex = static_cast<ImTextureID>(
                             static_cast<std::uintptr_t>(imageTex_[ci]));
                         cue.chartComplete = chart.complete;
+                        chartImage = &chart;
+                        chartTexId = imageTex_[ci];
                         break;
                     }
                 }
@@ -22284,15 +22313,55 @@ void AppWindow::drawPluginWindows() {
             const bool hasMemory = !in.headings.empty();
             const ImVec2 tl = ImGui::GetCursorScreenPos();
             const ImVec2 avail = ImGui::GetContentRegionAvail();
+            // THE CHART BESIDE ITS KEYS (field request, SWL F20806, 2026-10-28): with a
+            // chart to show, the window is three parts - the face compacted across the top,
+            // then the picture on the left and the memory rows (SLANT -10 ppm, SLANT +10 ppm,
+            // SET LEFT EDGE) on the right - so the keys sit beside the picture they correct
+            // and nobody jumps between this window and the image window. The paper strip
+            // on the face (0.99.83) was the earlier step and stays. No chart: as before.
+            const bool chartBesideKeys = chartImage != nullptr;
             // The face takes the window when there is no memory to show, and
             // otherwise the upper part, leaving the memory at least a few rows.
-            const float faceH = hasMemory ? std::max(160.0f, std::min(avail.y * 0.6f, 360.0f))
-                                          : avail.y;
+            const float faceH = chartBesideKeys
+                ? std::max(160.0f, std::min(avail.y * 0.35f, 220.0f))
+                : (hasMemory ? std::max(160.0f, std::min(avail.y * 0.6f, 360.0f)) : avail.y);
             const ImVec2 br(tl.x + avail.x, tl.y + faceH);
             const float used =
                 cascade::gui::drawInstrumentFace(ImGui::GetWindowDrawList(), tl, br, in, cue);
             ImGui::Dummy(ImVec2(avail.x, std::max(used, 1.0f)));
-            if (hasMemory) {
+            if (chartBesideKeys) {
+                ImGui::Spacing();
+                const ImVec2 lower = ImGui::GetContentRegionAvail();
+                // The picture's region has a FIXED width so the keys column starts at the same
+                // place whatever the fitted picture's size; with no memory it takes the lot.
+                // The memory keeps at least 300 px: at the window's first-use width the
+                // keys' labels ("SET LEFT EDGE") were being cut mid-word, and a key that
+                // cannot be read is no key. The picture grows with the window from there.
+                constexpr float kMemoryMinW = 300.0f;
+                const float pictureW =
+                    hasMemory ? std::max(120.0f, std::min(avail.x * 0.58f, avail.x - kMemoryMinW))
+                              : lower.x;
+                const ImGuiWindowFlags quiet =
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+                if (ImGui::BeginChild("##recorder-picture", ImVec2(pictureW, lower.y),
+                                      ImGuiChildFlags_None, quiet)) {
+                    // Its own button identity, under this window's id, so it cannot meet the
+                    // image window's "##image-input" (that one is scoped by plugin name).
+                    const FittedPicture fit = drawFittedPicture(
+                        *chartImage, chartTexId, ImGui::GetContentRegionAvail(),
+                        "instrument:picture:" + in.plugin, id.c_str(), "##recorder-image-input");
+                    if (fit.pressed) { pluginRunner_.imagePress(in.plugin, fit.x, fit.y); }
+                }
+                ImGui::EndChild();
+                if (hasMemory) {
+                    ImGui::SameLine();
+                    if (ImGui::BeginChild("##recorder-memory", ImVec2(0.0f, lower.y))) {
+                        drawPluginRows(pluginUi_, pluginKeyForDisplayName(in.plugin), in.plugin,
+                                       ":memory", in.headings, in.rows);
+                    }
+                    ImGui::EndChild();
+                }
+            } else if (hasMemory) {
                 ImGui::Spacing();
                 // The memory rows are the panel contract's, so a row may be a key here too (the
                 // census calls them "<plugin>:memory", so they are not taken for the panel's).

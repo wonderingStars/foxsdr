@@ -106,6 +106,18 @@ set_target_properties(row_keys_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rowkeys/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rowkeys/$<CONFIG>")
 
+# A REAL PLUGIN MODULE THAT IS A RADIOFAX MACHINE, for test_fax_picture_app: an image decoder that
+# has received a complete 400 x 100 picture, a fax instrument (the recorder) with a memory holding
+# one pressable key row, and an image input that writes every click it is handed (and every key
+# press) to a file. The recorder draws the picture inside itself and forwards a click on it. Its
+# own directory.
+add_library(fax_picture_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/fax_picture_plugin.cpp")
+target_include_directories(fax_picture_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(fax_picture_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_faxpicture/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_faxpicture/$<CONFIG>")
+
 # A REAL PLUGIN MODULE THAT DECLARES THE WRONG ABI, for test_health_paths: the
 # plugin host loads it as any plugin and refuses it, which is the "abi" word of
 # the anonymous failure count (core/health_events.hpp). Its own directory.
@@ -397,6 +409,15 @@ foreach(src ${CASCADE_TESTS})
         # sixteen keys on its page.
         add_dependencies(${name} row_keys_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:row_keys_fixture>")
+    elseif(name STREQUAL "test_fax_picture_app")
+        # Runs the real cascade.exe (built first) with the fax-picture fixture fitted and pinned to run,
+        # opens its recorder (a fax instrument) from the DECODE bank's row, and reads from the UI census
+        # that the decoded picture is drawn inside the recorder, fitted with its aspect kept, with the
+        # memory's key row beside it; and from the fixture's own log that a click on that picture
+        # reaches CascadeImageInputApi::press in native pixels and a click on the key row reaches
+        # poll_command, with the separate picture window never opened.
+        add_dependencies(${name} fax_picture_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:fax_picture_fixture>")
     elseif(name STREQUAL "test_plugin_inuse_app")
         # Runs the real cascade.exe (built first) with the same two modules fitted, and the preset
         # probe beside them, and reads from the modules' own event logs WHEN the host creates and
@@ -543,6 +564,11 @@ set_tests_properties(test_display_off_app PROPERTIES TIMEOUT 600)
 # keys), 60 to 160 frames each with a half-second sleep in most: 28 s on this desktop. The same
 # bound, for the same reason, as the tests above.
 set_tests_properties(test_row_keys_app PROPERTIES TIMEOUT 600)
+# The fax-picture test starts the real application five times (a layout run, the recorder open, a
+# click on the picture, the control that ends before the click's release, and a click on the key
+# row), 60 to 120 frames each with a half-second sleep in most. The same bound, for the same
+# reason, as the tests above.
+set_tests_properties(test_fax_picture_app PROPERTIES TIMEOUT 600)
 set_tests_properties(test_programme_audio_app PROPERTIES TIMEOUT 120)
 # The in-use test starts the real application about twenty times (the scenarios in its header: a
 # layout run and a scripted run each, three of them paced at 16 ms a frame for a few seconds so an
@@ -786,6 +812,7 @@ set(CASCADE_GUI_TESTS
     test_display_menu_app
     test_display_off_app
     test_exit_cause_app
+    test_fax_picture_app
     test_foreign_modules_app
     test_freq_markers_app
     test_gps_app
