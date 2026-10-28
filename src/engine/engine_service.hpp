@@ -42,10 +42,15 @@
 // Engine-clean: no gui/, imgui, GLFW or OpenGL.
 #pragma once
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 #include <string>
+#include <thread>
 
+#include "core/breadcrumb.hpp"
 #include "core/config.hpp"
 #include "core/config_lock.hpp"
 #include "core/config_writer.hpp"
@@ -54,6 +59,24 @@
 
 namespace cascade::engine {
 
+// HOW THE SERVICE TREATS THE SETTINGS FILE'S LOCK (ServiceOptions::lock).
+//   Strict       a held file REFUSES the run (acquireConfig answers false with the sentence): the headless engine, which shares the
+//                file with the window by design and must never run beside it.
+//   BestEffort   a held file is carried on from: the window application, which has always been allowed to start beside another (a
+//                second window, an engine) and says so in its log (src/main.cpp, stage 7c; docs/engine-stage4.md 6.17).
+enum class ServiceLock { Strict, BestEffort };
+
+// WHAT A SERVICE WITH NO SETTINGS FILE IS (ServiceOptions::hermetic).
+//   Headless     the built-in signal generator chosen explicitly and MUTED (a service has no business playing the demo tones at a sound
+//                card): foxsdr-engine with no --config.
+//   Window       the engine left exactly as it was built - volume 0.5, the generator as the source list's first row - which is what the
+//                window application's hermetic runs (every --frames run and every test that builds a window) have always started from.
+enum class ServiceHermetic { Headless, Window };
+
+// EVERY OPTION'S DEFAULT IS WHAT THE HEADLESS BINARY HAS ALWAYS DONE (shell retirement R6): a default-constructed ServiceOptions is
+// foxsdr-engine, byte for byte, and each default is pinned by a test on a default-constructed service (tests/test_engine_service_options.cpp)
+// beside the 13 test_engine_main_* files that run the real binary. The window application will be a SECOND HOST of this class (R7, R8): it
+// sets the options below to what it does today, and nothing about the engine's life is then written twice.
 struct ServiceOptions {
     // The settings file this run owns, or empty: HERMETIC (nothing read, written or locked).
     std::string configPath;
@@ -62,9 +85,45 @@ struct ServiceOptions {
     std::string diagnosticsDir;
     // TEST SEAM, bounded runs only (engine_main reads FOXSDR_ENGINE_UNLOAD_STALL_MS beside --seconds, as the
     // window reads CASCADE_DIAG_UNLOAD_STALL_MS beside --frames): wedge the stop for this many ms right
-    // after the plugins are unloaded and before the clean-exit marker, and say so on stderr - the place a
+    // after the plugins are unloaded and before the clean-exit marker, and say so (on stderr; stdout with diagToStdout) - the place a
     // plugin's destroy() runs, where tests/test_clean_exit_marker.cpp holds the window's marker.
     int unloadStallMs = 0;
+
+    // --- shell retirement R6: what the window application needs of the same life ---------------------------------------------------------
+    // The lock beside the settings file: refuse the run when it is held (Strict, the headless engine) or carry on without it (BestEffort, the
+    // window; the line it logs is the one main.cpp has always logged).
+    ServiceLock lock = ServiceLock::Strict;
+    // The engine of a run with no settings file (see ServiceHermetic).
+    ServiceHermetic hermetic = ServiceHermetic::Headless;
+    // start() starts the receiver (the RUN command). False for a window's bounded run, which stays stopped so CI keeps its timing and spawns
+    // no DSP threads it does not need (the one exception, CASCADE_DECODE_TEST, is the host's to say).
+    bool receive = true;
+    // start() runs the control thread STEPPED (the interface's frame runs each part of the pass: a bounded window run) and makes no first pass
+    // of its own - the first frame's front part is the first pass. False: free-running, with the first pass made here so the first read is real.
+    bool stepped = false;
+    // start() arms the usage heartbeat, right after the receiver is started and before anything else, as the window's run() does for an
+    // interactive run. False: a service on the desktop's install id would double-count one machine, and every bounded run stays hermetic.
+    bool heartbeat = false;
+    // The settings are kept by a thread of the service's own (keep() every ~100 ms, a look at the snapshot a few times a second), started at the
+    // end of start() and joined at the HEAD of stop(), instead of by the caller's wait loop. True for a host with no loop of its own to call keep()
+    // from (the window: its frame loop has gone to the engine's side). False: the caller calls keep() as foxsdr-engine's wait loop does.
+    bool keeperThread = false;
+    // TEST SEAM, bounded runs only (the window's CASCADE_DIAG_SHUTDOWN_STALL_MS): wedge the stop for this many ms between the final-state save
+    // and the receiver's stop - the stretch where the bounded driver waits are spent - and say so.
+    int shutdownStallMs = 0;
+    // Who the run says it is: the lock's role ("cascade" for the window application, "foxsdr-engine"), and the prefix of the lines the service
+    // writes to the user ("<label>: ..."). Tests grep them (tests/test_clean_exit_marker.cpp, test_engine_main_clean_exit_marker.cpp).
+    std::string label = "foxsdr-engine";
+    // A bounded run that asked for the enforcement diagnostic (CASCADE_PLUGIN_STATUS): stop() makes sure the engine prints it at the end of
+    // its first phase even when no interface handed over a plugin half (the window hands its own over first). False: no report.
+    bool pluginStatusReport = false;
+    // stop() sets the process's breadcrumb phase (core/breadcrumb.hpp) at the stages it owns - the receiver's stop, the plugins' unload, the
+    // marker - for a host whose sentinel watches them. The window keeps ShutdownBegun and ShutdownClosingWindow, which bracket the service's three.
+    // False: foxsdr-engine, which has never set one.
+    bool breadcrumbs = false;
+    // The two stall lines (and nothing else) go to stdout, where the window application writes them, instead of stderr, where
+    // foxsdr-engine's tests read them.
+    bool diagToStdout = false;
 };
 
 class EngineService {
@@ -82,10 +141,13 @@ public:
     // gives the control thread's watchdog. What the stop's budget guard (engine/shutdown_guard.hpp) is handed.
     std::string reportDir() const { return diagnosticsEnabled_ ? options_.diagnosticsDir : std::string(); }
 
-    // 1. THE LOCK. False when another program holds the settings file (the window application, or another
-    // foxsdr-engine), or the lock cannot be asked for: `sentence` is then the whole refusal, ready to print.
-    // A hermetic service holds nothing and always answers true. Call before restore().
+    // 1. THE LOCK. Strict (the default): false when another program holds the settings file (the window application, or another
+    // foxsdr-engine), or the lock cannot be asked for: `sentence` is then the whole refusal, ready to print. BestEffort: true whatever
+    // happened (what could not be taken is logged, as the window has always logged it) and `sentence` untouched. A hermetic service holds
+    // nothing and always answers true. Call before restore(). releaseConfig lets the lock go before the service is destroyed - the window's
+    // software-GL relaunch does so before the second process starts, so it can take it (src/main.cpp).
     bool acquireConfig(std::string& sentence);
+    void releaseConfig() { lock_.release(); }
 
     // 2. THE RESTORE.
     struct Restored {
@@ -110,15 +172,17 @@ public:
     bool start(std::string& why);
 
     // 4. THE KEEP: call it regularly (every few tens of ms) from the thread that waits for the end of the
-    // run. Cheap when nothing changed; never blocks (the write is on the writer's own worker).
+    // run. Cheap when nothing changed; never blocks (the write is on the writer's own worker). With ServiceOptions::keeperThread a thread of the
+    // service's own does this, and a call from anywhere else does nothing; keeperRunning is whether that thread is running.
     void keep();
+    bool keeperRunning() const { return keeper_.joinable(); }
 
     // 5. THE STOP. Once; a second call does nothing.
     void stop();
 
     // Writes asked of the writer so far (the forced first save, each debounced one, the final two): what a
     // run's last stderr line reports, so a test can tell a quiet service from one that rewrites its file.
-    std::uint64_t savesRequested() const { return saves_; }
+    std::uint64_t savesRequested() const { return saves_.load(); }
 
     // The sentence a refused lock prints (public so a test can hold its wording without running a process).
     static std::string refusal(const cascade::core::ConfigLock& lock, const std::string& configPath);
@@ -127,6 +191,13 @@ private:
     // The settings the window compares, as text: the snapshot without the three fields that move on their
     // own (the usage report that grows a second every second, the exit marker, the session's start).
     static std::string comparable(cascade::core::AppConfig cfg);
+    void keepOnce();
+    void startKeeper();
+    void stopKeeper();
+    // A bounded run's deliberate wedge: says so as "<label>: --diag-<seam> wedging <what> for <ms> ms" (stderr, or stdout with diagToStdout), then waits.
+    void wedge(const char* seam, const char* what, int ms) const;
+    // Sets the breadcrumb phase when the host asked for them (ServiceOptions::breadcrumbs).
+    void phase(cascade::core::breadcrumb::Phase p) const;
     double nowS() const;
     void setAsideDamaged();
     void saveNow();
@@ -154,12 +225,17 @@ private:
     cascade::core::AppConfig lastRequested_;
     double lastChangeS_ = -1.0;
     double lastLookS_ = -1.0;   // the keeper looks a few times a second, not on every wake of the waiting thread
-    std::uint64_t saves_ = 0;
+    std::atomic<std::uint64_t> saves_{0};   // (the keeper thread counts them, the host reads them)
     // The back-off after a failed write: doubles from the debounce window to five minutes.
     int failures_ = 0;
     bool failureFresh_ = false;
     double retryAtS_ = 0.0;
     bool failureLogged_ = false;
+    // The keeper thread (ServiceOptions::keeperThread): started at the end of start(), joined at the head of stop() and by the destructor.
+    std::thread keeper_;
+    std::mutex keeperMutex_;
+    std::condition_variable keeperCv_;
+    bool keeperStop_ = false;
 };
 
 }  // namespace cascade::engine

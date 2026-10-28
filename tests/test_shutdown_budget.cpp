@@ -1065,6 +1065,11 @@ const KnownWait kKnownWaits[] = {
      "engine's answer, the password's PBKDF2 hash on the server host's worker, the listeners started or refused. The main thread "
      "spends it BEFORE the receiver starts, passes run by hand; a run that is refused stops AFTER provision() has returned. Never "
      "spent on a shutdown path: no stop has begun while it is waited on, and the teardown never calls provision()"},
+    // SHELL RETIREMENT R6 (src/engine/engine_service.cpp): the keeper THREAD's wait between looks.
+    {"src/engine/engine_service.cpp", "kKeeperPeriod", 0,
+     "EngineService::startKeeper() - the wait of the service's own keeper thread (ServiceOptions::keeperThread) between two looks at the settings, on that thread. "
+     "stop() joins the thread AT ITS HEAD and wakes it with a notify, so the wait ends at once and the join costs one look (a poll of the writer and a compare: "
+     "nothing in it blocks) - before beginShutdown's budget has anything to spend it on; the teardown never waits for the period"},
     {"src/engine/engine.hpp", "kPassWaitNet", 0,
      "Engine::waitForPassCounter() - the safety net on a front-end thread's wait for the pass (stepPass, runPassNow): the wait ends on the "
      "pass's own notification, and this is how often it looks again in case one was missed. NOT on the shutdown path: stopControlThread "

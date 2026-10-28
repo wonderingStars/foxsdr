@@ -496,6 +496,9 @@ public:
     // network or a thread.
     bool due(double now) const;
 
+    // Whether configure() armed it (a real url and a real install id): what a host that is asked to arm it can be held to.
+    bool configured() const { return configured_; }
+
     // Exactly what goes on the wire, exposed so the payload test can hold
     // the privacy promise to it.
     static std::string beatJson(const std::string& id, const std::string& v);

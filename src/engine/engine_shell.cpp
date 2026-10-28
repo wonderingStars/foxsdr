@@ -65,13 +65,7 @@ void EngineShell::telemetryStartup(const cascade::core::AppConfig& cfg, const st
 }
 void EngineShell::applyConfig(const cascade::core::AppConfig& cfg) { SHELL_ENGINE.applyConfig(cfg); }
 
-EngineShell::ConfigReadback EngineShell::configReadback() const {
-    Engine& e = SHELL_ENGINE;
-    ConfigReadback r;
-    r.modeIndex = e.modeIndex_;
-    r.centreHz = e.pipeline_.activeSource().centerFrequencyHz();
-    return r;
-}
+EngineShell::ConfigReadback EngineShell::configReadback() const { return SHELL_ENGINE.configReadback(); }
 
 cascade::core::AppConfig EngineShell::configSnapshot() const { return SHELL_ENGINE.configSnapshot(); }
 void EngineShell::publishConfig() { SHELL_ENGINE.publishConfig(); }
@@ -84,10 +78,7 @@ void EngineShell::controlPass() { SHELL_ENGINE.controlPass(); }
 void EngineShell::startControlThread(const ControlThreadOptions& options) { SHELL_ENGINE.startControlThread(options); }
 void EngineShell::stepPass(PassPart part) { SHELL_ENGINE.stepPass(part); }
 
-void EngineShell::configureHeartbeat() {
-    Engine& e = SHELL_ENGINE;
-    e.telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), e.telemetryInstallId_, cascade::versionString());
-}
+void EngineShell::configureHeartbeat() { SHELL_ENGINE.configureHeartbeat(); }
 void EngineShell::markCleanExit() { SHELL_ENGINE.telemetryCleanExit_ = true; }
 
 void EngineShell::stopTransfers() { SHELL_ENGINE.stopTransfers(); }

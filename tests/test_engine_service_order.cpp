@@ -184,8 +184,9 @@ const std::vector<Table>& table() {
          {
              {"the receiver started", "engine_.startReceiver()", "FOXAPI_OP_RUN",
               "the service's RUN command is Engine::startReceiver and a test fault cleared (engine.cpp, FOXAPI_OP_RUN)"},
-             {"the update check and the usage heartbeat", "configureHeartbeat()", "",
-              "WINDOW ONLY: interactive window runs only; a service on the desktop's install id would double-count one machine"},
+             {"the usage heartbeat", "engine_.configureHeartbeat()", "engine_.configureHeartbeat()",
+              "interactive runs only: ServiceOptions::heartbeat, off for the headless service (a service on the desktop's install id would double-count one "
+              "machine) - and right after the receiver in both (shell retirement R6; the window's update check, which is its own, sits between and is not a row)"},
              {"the diagnostics decided", "applyDiagnosticsEnabled(diagnosticsEnabled_)", "diagnosticsEnabled_ ? options_.diagnosticsDir",
               "the hang watchdog's report directory follows the stored switch"},
              {"THE FORCED FIRST SAVE (the unclean-exit marker reaches the disk)", "saveConfigNow()", "saveNow()",
@@ -210,14 +211,21 @@ const std::vector<Table>& table() {
              {"the problem-report sender cancelled", "problemReportSender_.cancel()", "", "WINDOW ONLY: the window's sender"},
              {"THE FINAL-STATE SAVE (the clean-exit flag still false)", "saveConfigNow()", "saveNow()",
               "before the pipeline stops so the snapshot reads live state; a death during the join is a death"},
-             {"the shutdown wedge", "if (shutdownStallMs > 0)", "",
-              "WINDOW ONLY: the bounded-run seam for the --diag-shutdown-stall test; the service has the unload one only"},
+             {"the shutdown wedge", "if (shutdownStallMs > 0)", "if (options_.shutdownStallMs > 0)",
+              "the bounded-run seam for the --diag-shutdown-stall test (ServiceOptions::shutdownStallMs, shell retirement R6): between the final-state save and "
+              "the receiver's stop"},
+             {"the sentinel's step: stopping the receiver", "Phase::ShutdownStoppingReceiver", "Phase::ShutdownStoppingReceiver",
+              "set where the stop begins (ServiceOptions::breadcrumbs): a freeze in the stop is 'stopped in step 7' to the watcher"},
              {"stop: the bookmark flush, the pipeline joined", "engine_.shutdownStop()", "engine_.shutdownStop()",
               "where the bounded driver waits are spent"},
+             {"the sentinel's step: unloading the plugins", "Phase::ShutdownUnloadingPlugins", "Phase::ShutdownUnloadingPlugins",
+              "set where the plugins come down (the window's own release of its plugin UI, which has no row, is inside this step)"},
              {"RELEASE: the plugins destroyed BEFORE the marker", "engine_.shutdownRelease()", "engine_.shutdownRelease()",
               "a plugin's destroy() is third-party code that can wedge; a marker written before it reads a kill inside it as clean"},
              {"the unload wedge", "if (unloadStallMs > 0)", "if (options_.unloadStallMs > 0)",
               "the place a plugin's destroy() runs, where the marker's own test stages its kill"},
+             {"the sentinel's step: writing the marker", "Phase::ShutdownWritingMarker", "Phase::ShutdownWritingMarker",
+              "set where the marker stage begins; the window's ShutdownClosingWindow follows the drain and stays the window's"},
              {"THE MARKER", "engine_.markCleanExit()", "engine_.markCleanExit()", "after the last of the third-party code"},
              {"the marker's rewrite of the LAST REQUESTED snapshot", "marked.telemetryCleanExit = true",
               "marked.telemetryCleanExit = true", "not a fresh snapshot: half torn down, its clocks are dead"},
@@ -366,6 +374,18 @@ int checkProperties(const std::string& svcBlank, const std::string& mainBlank, b
         need(!stop.empty() && stop.find("publishConfig(") == std::string::npos && stop.find("configSnapshot(") == std::string::npos,
              "stop() takes no snapshot of its own (it saves through saveNow() and rewrites lastRequested_)");
         need(!stop.empty() && stop.find("lastRequested_") != std::string::npos, "the marker is a rewrite of lastRequested_");
+        // THE KEEPER THREAD (ServiceOptions::keeperThread, shell retirement R6) IS JOINED AT THE HEAD OF stop(): before the quiesce and before any save, so that
+        // everything stop() does with the writer and the keeper's memory (the final saves, the marker, the waits) is on one thread again.
+        {
+            const std::size_t joinAt = stop.find("stopKeeper()");
+            const std::size_t quiesceAt = stop.find("engine_.shutdownQuiesce()");
+            const std::size_t saveAt = stop.find("saveNow()");
+            need(joinAt != std::string::npos && quiesceAt != std::string::npos && saveAt != std::string::npos && joinAt < quiesceAt && joinAt < saveAt,
+                 "the keeper thread is joined at the head of stop(), before the quiesce and the final-state save");
+            const std::string destructor = bodyOf(svcBlank, "EngineService::~EngineService()");
+            need(!destructor.empty() && destructor.find("stopKeeper()") != std::string::npos,
+                 "the destructor joins the keeper thread of a service that was never stopped");
+        }
         // The marker is not on any path that runs before the release: nothing in start() or keep() writes it.
         const std::string start = bodyOf(svcBlank, "bool EngineService::start(");
         need(start.find("telemetryCleanExit") == std::string::npos && keep.find("telemetryCleanExit") == std::string::npos,
@@ -455,7 +475,29 @@ int main(int argc, char** argv) {
         {"the marker written BEFORE the plugins are released",
          [](std::string& s) { return swapStatements(s, "engine_.shutdownRelease();", "engine_.markCleanExit();"); }},
         {"the final-state save AFTER the pipeline is stopped",
-         [](std::string& s) { return replaceOnce(s, "if (persistent()) { saveNow(); }\n\n    engine_.shutdownStop();", "engine_.shutdownStop();\n    if (persistent()) { saveNow(); }"); }},
+         [](std::string& s) {
+             return replaceOnce(s, "if (persistent()) { saveNow(); }\n\n    // The deliberate wedge in the place the real one lives", "// The deliberate wedge in the place the real one lives") &&
+                    replaceOnce(s, "engine_.shutdownStop();", "engine_.shutdownStop();\n    if (persistent()) { saveNow(); }");
+         }},
+        {"the shutdown wedge moved BEFORE the final-state save",
+         [](std::string& s) {
+             const std::string wedgeLine = "if (options_.shutdownStallMs > 0) { wedge(\"shutdown-stall\", \"the teardown\", options_.shutdownStallMs); }";
+             return replaceOnce(s, wedgeLine, "") && replaceOnce(s, "engine_.shutdownQuiesce();", "engine_.shutdownQuiesce();\n    " + wedgeLine);
+         }},
+        {"the keeper thread joined AFTER the quiesce (R6)",
+         [](std::string& s) {
+             return replaceOnce(s, "stopKeeper();\n\n    cascade::source::SoundCardSource::setCloseWaitEnabled(false);", "cascade::source::SoundCardSource::setCloseWaitEnabled(false);") &&
+                    replaceOnce(s, "engine_.shutdownQuiesce();", "engine_.shutdownQuiesce();\n    stopKeeper();");
+         }},
+        {"the sentinel's unload step set AFTER the plugins are released",
+         [](std::string& s) { return swapStatements(s, "phase(cascade::core::breadcrumb::Phase::ShutdownUnloadingPlugins);", "engine_.shutdownRelease();"); }},
+        {"the usage heartbeat armed AFTER the forced first save",
+         [](std::string& s) {
+             const std::string hb = "if (options_.heartbeat) { engine_.configureHeartbeat(); }";
+             return replaceOnce(s, hb, "") &&
+                    replaceOnce(s, "if (persistent()) { saveNow(); }\n\n    cascade::engine::ControlThreadOptions opt;",
+                                "if (persistent()) { saveNow(); }\n    " + hb + "\n\n    cascade::engine::ControlThreadOptions opt;");
+         }},
         {"the clean-exit flag rewritten from a FRESH snapshot (a second publish)",
          [](std::string& s) { return replaceOnce(s, "cascade::core::AppConfig marked = lastRequested_;", "engine_.publishConfig(); cascade::core::AppConfig marked = engine_.configSnapshot();"); }},
         {"the forced first save AFTER the control thread starts",

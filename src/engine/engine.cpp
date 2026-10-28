@@ -10203,4 +10203,34 @@ void Engine::resumeWaitWatchdog() {
 
 void Engine::pump() { controlPass(); }
 
+// --- WHAT A HOST OF THE ENGINE NEEDS OF IT (shell retirement R6; engine.hpp) -------------------------------------------------------------------
+
+ConfigReadback Engine::configReadback() {
+    ConfigReadback r;
+    r.modeIndex = modeIndex_;
+    r.centreHz = pipeline_.activeSource().centerFrequencyHz();
+    return r;
+}
+
+void Engine::configureHeartbeat() {
+    telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_, cascade::versionString());
+}
+
+void Engine::requestPluginStatusReport() {
+    std::lock_guard<std::mutex> lk(frontEndFactsMutex_);
+    if (frontEndFacts_.pluginStatus == nullptr) { frontEndFacts_.pluginStatus = std::make_shared<const PluginStatusFacts>(); }
+}
+
+bool Engine::setHost(EngineHost& host) {
+    if (controlThreadRunning()) { return false; }   // the control thread reads host_, and it is a plain pointer (see host_)
+    host_ = &host;
+    return true;
+}
+
+bool Engine::resetHost() {
+    if (controlThreadRunning()) { return false; }
+    host_ = &ownHost_;
+    return true;
+}
+
 }  // namespace cascade::engine

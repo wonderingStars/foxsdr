@@ -175,7 +175,17 @@ private:
     // a reference cannot be reseated. Everywhere else this reads exactly as
     // the reference did (host_->x instead of host_.x); the pointer is never
     // null after construction (the constructor takes it from a reference
-    // parameter) and is only ever repointed at ownHost_, never cleared.
+    // parameter) and is never cleared.
+    //
+    // RESEATED BY setHost / resetHost (shell retirement R6), which is a SECOND reason for it to be a pointer and one this comment did not give
+    // until the survey asked whether it was sound. It is: host_ is read in eight places (wallTimeS x3, pauseWatchdog, resumeWatchdog,
+    // onCatalogueFetchStarting, onCatalogueResult, onAddAllFinished), every one on the control thread or on the thread that owns the engine's
+    // front side (the constructor's thread: initialise's rescan, telemetryStartup, a publishConfig), and the pointer is a plain one - so it is
+    // reseated only while NO control thread runs (setHost answers false otherwise and changes nothing), by the thread that owns the front
+    // side, which is also the only other thread that reads it. The thread that starts later is created after the write, the one that was
+    // joined has finished before it. A host must be reset (resetHost) before it is destroyed unless the engine is destroyed first: the
+    // destructor's fallback repoints a never-torn-down engine at its own host before its teardown runs, but a call made after a TORN-DOWN
+    // engine's host has died (a save that publishes after the stop) would reach a dead object.
     EngineHost* host_;
 
     // NO DEFAULT MEMBER INITIALISERS, on purpose: GCC refuses them on a
@@ -3395,6 +3405,23 @@ public:
     // written before them reads a session killed inside them as a clean one), and the service writes its marker by rewriting the LAST
     // REQUESTED snapshot, not by publishing a fresh one (engine_service.cpp, stop()). tests/test_engine_service_order.cpp holds the order.
     void markCleanExit() { telemetryCleanExit_ = true; }
+
+    // --- what a HOST of the engine needs of it (shell retirement R6): the window application becomes a second host of EngineService (R7, R8), and the
+    // service is not the shell's friend. Each was the shell's inline body and is the engine's own now; the shell forwards. ---
+    // THE CONFIG TEST'S READ-BACK: the demod mode the pipeline mirrors hold and the centre the active source reports (see ConfigReadback).
+    ConfigReadback configReadback();   // (not const: Pipeline::activeSource() is not)
+    // THE USAGE HEARTBEAT, armed (the endpoint, this run's install id and the version are the engine's to name). An interactive host arms it after the
+    // receiver starts; configure() refuses an empty id, so a run that opted out arms nothing. heartbeatConfigured: whether it armed.
+    void configureHeartbeat();
+    bool heartbeatConfigured() const { return telemetryHeartbeat_.configured(); }
+    // A BOUNDED RUN'S PLUGIN STATUS REPORT (CASCADE_PLUGIN_STATUS), asked for by a host that has no interface to hand over a plugin half: the report is
+    // printed once, at the end of the first teardown phase, with an empty plugin half. A host whose interface DID hand one over (the window: its last
+    // setFrontEnd) is left alone.
+    void requestPluginStatusReport();
+    // WHO THIS ENGINE ASKS, reseated (see host_). False, and nothing changes, while the control thread runs. resetHost puts the engine's own host
+    // back (the same condition); a host that is to die before the engine does must be reset first.
+    bool setHost(EngineHost& host);
+    bool resetHost();
     // THE TWO BOUNDED-RUN PLUGIN DIAGNOSTICS (window port group 14, part e; engine_diagnostics.cpp). Test machinery that
     // prints what the engine decided to stdout; they read nothing but the engine's own state and were the window's until
     // then. A front end calls reportPluginStatus once, right after shutdownQuiesce (the state a bounded run finished in,

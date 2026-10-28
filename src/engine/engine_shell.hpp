@@ -178,6 +178,14 @@ struct FrontEndFacts {
     std::shared_ptr<const PluginStatusFacts> pluginStatus;
 };
 
+// THE CONFIG TEST'S READ-BACK (CASCADE_CONFIG_TEST's one printed line; shell retirement R6 made it Engine::configReadback, public): the demod mode the
+// pipeline mirrors hold (an index into the engine's mode table) and the centre the active source reports - values read back from the engine, not an
+// echo of the file.
+struct ConfigReadback {
+    int modeIndex = 0;
+    double centreHz = 0.0;
+};
+
 // The status sentences the panels letter (Engine::StatusText is this) - see Engine::publishStatusText.
 struct EngineStatusText {
     std::string sourceError;
@@ -265,10 +273,7 @@ public:
     // FOXAPI_SESSION_FRAME session and the two listeners' use is fact.web.served / fact.cat.accepted: shell retirement R3 retired
     // pluginCatalogueUrl, publishStatusText, statusText, frameKick and setServerUsageHooks from this door.)
     // The CASCADE_CONFIG_TEST printout's read-back: the demod mode the pipeline mirrors hold and the centre the source reports.
-    struct ConfigReadback {
-        int modeIndex = 0;
-        double centreHz = 0.0;
-    };
+    using ConfigReadback = cascade::engine::ConfigReadback;
     ConfigReadback configReadback() const;
     cascade::core::AppConfig configSnapshot() const;
     void publishConfig();

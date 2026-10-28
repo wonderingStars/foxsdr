@@ -94,6 +94,9 @@ set(CASCADE_TSAN_TESTS
     # that is not the window's, the shutdown order
     test_command_queue_threads test_engine_control_thread test_engine_host_threads
     test_engine_shutdown
+    # shell retirement R6: the engine service's keeper THREAD (a thread of the service's own that keeps the settings saved, started at the end of start() and
+    # joined at the head of stop()) against the caller's calls of keep() and the control thread's publish
+    test_engine_service_options
     # the one receiver snapshot: a seqlock and a lock-free hand-over slot, readers
     # against a publishing writer
     test_receiver_snapshot test_snapshot_stress
