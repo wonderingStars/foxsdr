@@ -59,7 +59,7 @@ struct AppWindowTestAccess {
     static void flush(AppWindow& a) { a.flushScannerDraft(); }
     // The launch's restore, on a window no pass has attached a thread to yet (makeApp seeds before the first frame): the test's
     // thread is the only one in the engine.
-    static void seed(AppWindow& a) { a.applyConfig(cascade::core::AppConfig{}); }
+    static void seed(AppWindow& a) { th::applyConfig(a, cascade::core::AppConfig{}); }
     // EVERY READ OF THE ENGINE from the test's thread (the pump move's P6) is made on the pass's thread with the pass out of the way
     // (passseam::read): free-running, the pass - which runs the scanner - runs beside the test.
     static double rd(AppWindow& a, const std::function<double()>& readIt) { return passseam::read<double>(th::engine(a), readIt); }

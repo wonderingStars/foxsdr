@@ -24,8 +24,9 @@
 //      no lock: the next engine on the file starts and runs (the lock is the operating system's, not the file's
 //      existence);
 //   E. THE HOST'S HALF, from the text of src/main.cpp (a real window cannot be opened by a test): the window application
-//      takes the lock as role "cascade", only in a real session (frames < 0, a config path), BEFORE the window object
-//      exists, and its failure to get it is a log line and never an exit; and the real `cascade --frames 3` on a
+//      takes the lock through its engine's service (best effort, role "cascade" - shell retirement R7: the service is
+//      main's, the lock is the service's), only in a real session (frames < 0; the service holds nothing without a
+//      config path), BEFORE the window object exists, and its failure to get it is a log line and never an exit; and the real `cascade --frames 3` on a
 //      CASCADE_CONFIG_TEST file - a bounded run - takes none and leaves no ".lock" beside it (a test stays hermetic).
 //
 // Break-it (docs/engine-stage4.md 6.17): EngineService::acquireConfig returns true without taking the lock -> B and C
@@ -229,14 +230,23 @@ int main() {
         std::string mainText = emt::readFile(src / "main.cpp");
         CHECK(!mainText.empty());
         // The text with comments blanked would be better; the lines below are ones a comment cannot be mistaken for.
-        const std::size_t lockAt = mainText.find("configLock.acquire(boot.configPath, \"cascade\")");
+        // SINCE SHELL RETIREMENT R7 the lock is the engine's SERVICE's (EngineService::acquireConfig, role = the service's label, "cascade" for the window
+        // application, policy BestEffort: carries on and logs the line main.cpp has always logged), and main builds the service before the window exists, so
+        // it is released after the window is gone (the service is declared first) and, being a member of the service, before the software-GL relaunch.
+        const std::size_t policyAt = mainText.find("options.lock = cascade::engine::ServiceLock::BestEffort;");
+        const std::size_t labelAt = mainText.find("options.label = \"cascade\";");
+        const std::size_t declAt = mainText.find("cascade::engine::EngineService service(");
+        const std::size_t lockAt = mainText.find("service.acquireConfig(");
         const std::size_t windowAt = mainText.find("cascade::gui::AppWindow app(");
-        const std::size_t declAt = mainText.find("cascade::core::ConfigLock configLock;");
-        CHECK(lockAt != std::string::npos && windowAt != std::string::npos && declAt != std::string::npos);
-        CHECK(declAt < lockAt && lockAt < windowAt);  // before the window exists, declared before it so released after it
-        const std::size_t gate = mainText.rfind("if (boot.frames < 0 && !boot.configPath.empty())", lockAt);
-        CHECK(gate != std::string::npos && lockAt - gate < 200);  // only a real session with a settings file
-        // Never a refusal: nothing between the attempt and the window object returns or exits.
+        CHECK(policyAt != std::string::npos && labelAt != std::string::npos && declAt != std::string::npos && lockAt != std::string::npos &&
+              windowAt != std::string::npos);
+        if (lockAt == std::string::npos || windowAt == std::string::npos || declAt == std::string::npos) { return testSummary("test_engine_main_second_instance_refused"); }
+        CHECK(policyAt < declAt && labelAt < declAt);   // the policy and the role are chosen before the service is built
+        CHECK(declAt < lockAt && lockAt < windowAt);    // before the window exists, the service declared before it so released after it
+        const std::size_t gate = mainText.rfind("if (boot.frames < 0)", lockAt);
+        CHECK(gate != std::string::npos && lockAt - gate < 100);  // only a real session (the service itself holds nothing when it has no settings file)
+        // Never a refusal: the answer is not read, and nothing between the attempt and the window object returns or exits.
+        CHECK(lockAt >= 6 && mainText.substr(lockAt - 6, 6) == "(void)");
         const std::string between = mainText.substr(lockAt, windowAt - lockAt);
         CHECK(between.find("return") == std::string::npos);
         CHECK(between.find("exit(") == std::string::npos);

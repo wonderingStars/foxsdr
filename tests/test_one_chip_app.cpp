@@ -235,7 +235,7 @@ struct AppWindowTestAccess {
             th::engine(a).patchStopAll(true);
         });
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(th::engine(a), [&] { a.applyConfig(cfg); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(th::engine(a), [&] { th::applyConfig(a, cfg); }); }
     static std::string sourceError(AppWindow& a) {
         return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceError_; });
     }

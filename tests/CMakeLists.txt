@@ -768,7 +768,7 @@ endforeach()
 # the engine posts and the window applies, and the unload handshake. Copied into a plugin directory of the test's own.
 add_library(fixture_pump3_plugin SHARED fixture_pump3_plugin.cpp)
 target_include_directories(fixture_pump3_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
-foreach(_t IN ITEMS test_plugin_ui_threaded test_plugin_unload_handshake test_pump_live_traffic)
+foreach(_t IN ITEMS test_plugin_ui_threaded test_plugin_unload_handshake test_pump_live_traffic test_engine_service_window)
     if(TARGET ${_t})
         add_dependencies(${_t} fixture_pump3_plugin)
         target_compile_definitions(${_t} PRIVATE

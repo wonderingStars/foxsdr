@@ -180,7 +180,7 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
         cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { a.applyConfig(c); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { th::applyConfig(a, c); }); }
     // The retry's clock, in seconds: set before the restore (the failure's stamp) and before every poll.
     static void clock(AppWindow& a, double t) { passseam::on(th::engine(a), [&] { th::engine(a).savedRadioRetryClockS_ = t; }); }
     static void poll(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).pollSavedRadioRetry(); }); }

@@ -399,7 +399,7 @@ struct AppWindowTestAccess {
         return a.currentConfig();
     }
     // (Always made on a window just built, before its first pass: the engine's control thread is not started yet.)
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { th::applyConfig(a, cfg); }
     static void seedMemory(AppWindow& a, const std::string& key, bool on) {
         passseam::on(th::engine(a), [&] { th::engine(a).biasTeePanel_.remembered[key] = on; });
     }

@@ -82,7 +82,7 @@ struct AppWindowTestAccess {
     static MeterStyle volumeStyle(AppWindow& a) { return a.meterStyleVolume_; }
     static MeterStyle rateStyle(AppWindow& a) { return a.meterStyleRate_; }
     static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { a.applyConfig(c); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { th::applyConfig(a, c); }
 };
 
 }  // namespace cascade::gui

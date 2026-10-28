@@ -423,7 +423,7 @@ struct AppWindowTestAccess {
         });
         return row >= 0 && waitOpen(a);
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(th::engine(a), [&] { a.applyConfig(cfg); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(th::engine(a), [&] { th::applyConfig(a, cfg); }); }
     static bool watching(AppWindow& a) {
         return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).healthWatching_; });
     }

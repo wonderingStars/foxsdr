@@ -338,7 +338,7 @@ struct AppWindowTestAccess {
 
     // The window's applyConfig (its engine half is Engine::applyConfig), with the pass out of the way.
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) {
-        passseam::on(th::engine(a), [&] { a.applyConfig(cfg); });
+        passseam::on(th::engine(a), [&] { th::applyConfig(a, cfg); });
     }
     static void reopen(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).reopenAfterDriverFault(); }); }
     static void changeConverter(AppWindow& a, const ConverterSetting& s) {

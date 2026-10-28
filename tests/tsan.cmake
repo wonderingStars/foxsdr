@@ -135,6 +135,10 @@ set(CASCADE_TSAN_TESTS
     # rebuild, a Doppler corrector, a rescan releasing the basemap and the track-info client); and the handshake's timings (a
     # window inside the plugin, a window not framing, a stop mid-wait, the watchdog pause, no window at all)
     test_plugin_directive test_plugin_ui_threaded test_plugin_unload_handshake
+    # SHELL RETIREMENT R7: the window as a GUEST of the engine the host built - the shell's view installing and letting go of the host (Engine::setHost,
+    # resetHost) beside a control thread that is started and stopped around it, the detach of a window that goes while the engine runs, the replay
+    # of the plugin UI at the late attach
+    test_engine_service_window
     # the pump move's steps P4 and P5 (the pass on a thread of its own, driven and looked at): the wake, the floor, the stepped mode, runPassNow
     # and the work posted to the pass against the engine's thread (test_pass_control); a real window's frame - the look, the submits, the key -
     # against a free-running pass, three session threads and a snapshot reader (test_window_threaded_look); the order the look reads in against a

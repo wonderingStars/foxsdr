@@ -399,7 +399,7 @@ struct AppWindowTestAccess {
     }
 
     static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { th::applyConfig(a, cfg); }
 };
 
 }  // namespace cascade::gui

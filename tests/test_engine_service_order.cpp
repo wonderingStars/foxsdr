@@ -9,8 +9,11 @@
 // stops trusting. It reads BOTH files, with comments blanked, and holds each phase's statements - the window's and
 // the service's - against one table, row by row:
 //
-//   RESTORE  AppWindow::AppWindow (the constructor)          against  EngineService::restore
-//   APPLY    AppWindow::applyConfig                           against  EngineService::restore (the start-up state first)
+//   RESTORE  AppWindow::AppWindow (the constructor)          against  EngineService::restore   (shell retirement R7: the window no longer
+//                                                             restores - the host's restore is the service's; the rows that moved are
+//                                                             SERVICE ONLY, and the window's constructor must not have them)
+//   APPLY    AppWindow::applyWindowHalf                       against  EngineService::restore (the start-up state first; the window applies
+//                                                             only ITS half, from the table, so the engine's two statements are SERVICE ONLY)
 //   START    AppWindow::run, receiver to control thread      against  EngineService::start
 //   STOP     AppWindow::run, close-wait to drain             against  EngineService::stop
 //
@@ -19,6 +22,10 @@
 // plugin report, the crash-report sweep's stop, the feature-request senders, the diagnostics wedge, the update
 // check and the usage heartbeat) are rows too, marked WINDOW ONLY with the reason: they must be present in the
 // window (so the table cannot go stale unnoticed) and absent from the service (so one cannot creep in unlisted).
+//
+// SINCE R7 THERE IS A THIRD FILE IN THE ORDER: src/main.cpp, the window application's HOST. It builds the service, takes the lock (a real session
+// only), restores, and only then constructs the window; it does not start or stop the engine (the window does, until R8) - held as properties below,
+// with their own mutants (the restore after the window's constructor; the lock after the restore; the window before the service).
 //
 // And the properties the order exists for, beyond the order itself: the marker is written once and only after the
 // plugins are released; it is the last REQUESTED snapshot that is rewritten, so no fresh snapshot is published after
@@ -153,21 +160,22 @@ const std::vector<Table>& table() {
     static const std::vector<Table> t = {
         {"RESTORE",
          {
-             {"the engine's own start-up first", "engine_.initialise()", "engine_.initialise()",
-              "a config restore needs something to restore onto"},
-             {"the writer bound", "configWriter_.bind(", "writer_.bind(", "before anything can ask it to write"},
-             {"the file loaded", "ConfigStore::load(", "ConfigStore::load(",
-              "missing: defaults and loaded; damaged: defaults, not loaded, nothing applied"},
-             {"the receiver's half applied", "applyConfig(cfg)", "engine_.applyConfig(",
-              "the window's applyConfig runs the start-up state and Engine::applyConfig (APPLY below)"},
-             {"the usage journal's start-up", "engine_.telemetryStartup(", "engine_.telemetryStartup(",
-              "AFTER the apply: the crash count and the pending report are read from the file, not from defaults"},
-             {"a damaged file kept aside", "setAsideDamagedFile(", "setAsideDamaged(",
-              "before anything can save over it"},
+             {"the engine's own start-up first", "", "engine_.initialise()",
+              "SERVICE ONLY (shell retirement R7): the host's restore does it, before the window exists - a config restore needs something to restore onto"},
+             {"the writer bound", "configWriter_.bind(", "writer_.bind(",
+              "before anything can ask it to write (the window keeps its keeper, and its writer, until R8)"},
+             {"the file loaded", "", "ConfigStore::load(",
+              "SERVICE ONLY (R7): missing: defaults and loaded; damaged: defaults, not loaded, nothing applied. The window reads its half from the table"},
+             {"the receiver's half applied", "", "engine_.applyConfig(",
+              "SERVICE ONLY (R7): the start-up state and Engine::applyConfig (APPLY below)"},
+             {"the usage journal's start-up", "", "engine_.telemetryStartup(",
+              "SERVICE ONLY (R7): AFTER the apply - the crash count and the pending report are read from the file, not from defaults"},
+             {"a damaged file kept aside", "", "setAsideDamaged(",
+              "SERVICE ONLY (R7): before anything can save over it; the window is told whether it failed (WindowHost::writesForbidden)"},
              {"the first snapshot (the debounce's baseline)", "engine_.publishConfig()", "engine_.publishConfig()",
-              "no pass has run yet: the engine hands its half over first"},
-             {"the bookmarks", "engine_.loadBookmarks()", "engine_.loadBookmarks()",
-              "under the settings' gate: a hermetic run never reads them"},
+              "no pass has run yet: the engine hands its half over first (the window's is its own keeper's baseline until R8)"},
+             {"the bookmarks", "", "engine_.loadBookmarks()",
+              "SERVICE ONLY (R7): under the settings' gate: a hermetic run never reads them"},
              {"the status lines", "", "engine_.publishStatusText()",
               "SERVICE ONLY (shell retirement R3): with or without a settings file, so the first read says what the restore said. The window no longer forces "
               "the publish: its first pass publishes the lines and its first look reads them as fact.status.* (a stepped run's first frame runs the pass's front "
@@ -175,10 +183,11 @@ const std::vector<Table>& table() {
          }},
         {"APPLY",
          {
-             {"the start-up state", "startupState(", "startupState(",
-              "the file records what was showing at the last exit; the application starts on the bench whatever that was"},
-             {"the receiver's half", "engine_.applyConfig(", "engine_.applyConfig(",
-              "everything below it reads the start-up state, never the file as saved"},
+             {"the start-up state", "", "startupState(",
+              "SERVICE ONLY (R7): the file records what was showing at the last exit; the application starts on the bench whatever that was - applied "
+              "ONCE, by the host's restore, to the engine's half and (as fact.config.interface) to the window's"},
+             {"the receiver's half", "", "engine_.applyConfig(",
+              "SERVICE ONLY (R7): everything below it reads the start-up state, never the file as saved. The window applies its own half only"},
          }},
         {"START",
          {
@@ -250,8 +259,8 @@ struct Regions {
 
 Regions cut(const std::string& winBlank, const std::string& svcBlank) {
     Regions r;
-    r.winRestore = bodyOf(winBlank, "AppWindow::AppWindow(std::string configPath, bool announceConfig)");
-    r.winApply = bodyOf(winBlank, "void AppWindow::applyConfig(");
+    r.winRestore = bodyOf(winBlank, "AppWindow::AppWindow(const WindowHost& host)");
+    r.winApply = bodyOf(winBlank, "AppWindow::applyWindowHalf(");
     const std::string run = bodyOf(winBlank, "int AppWindow::run(int frames)");
     r.winStart = between(run, "engine_.startReceiver()", "engine_.startControlThread(");
     r.winStop = between(run, "SoundCardSource::setCloseWaitEnabled(false)", "engine_.shutdownDrain(drainDeadline)");
@@ -414,6 +423,70 @@ int checkProperties(const std::string& svcBlank, const std::string& mainBlank, b
     return bad;
 }
 
+// THE WINDOW APPLICATION'S HOST (src/main.cpp; shell retirement R7): the service is built, the lock is taken (a real session only), the settings are restored
+// into the engine, THEN the window is constructed on it, THEN it runs - and the host does not start or stop the engine (the window does, until R8) nor
+// touch it in between. Held from the text of main(), with comments and strings blanked.
+int checkHostMain(const std::string& hostBlank, bool say) {
+    int bad = 0;
+    const auto need = [&](bool cond, const char* what) {
+        if (!cond) {
+            ++bad;
+            if (say) { std::printf("  HOST: %s\n", what); }
+        }
+    };
+    const std::string body = bodyOf(hostBlank, "int main(");
+    need(!body.empty(), "main() found in src/main.cpp");
+    std::size_t last = 0;
+    bool inOrder = true;
+    for (const char* call : {"EngineService service(", "service.acquireConfig(", "service.restore()", "AppWindow app(host)", "app.run("}) {
+        const std::size_t at = body.find(call);
+        need(at != std::string::npos, call);
+        if (at != std::string::npos) {
+            if (at < last) { inOrder = false; }
+            last = at;
+        }
+    }
+    need(inOrder, "main builds the service, takes the lock, restores, constructs the window and runs it - in that order");
+    need(countOf(body, "service.restore()") == 1 && countOf(body, "AppWindow app(") == 1, "main restores once and constructs one window");
+    // The lock is a real session's only: a bounded run takes none.
+    {
+        const std::size_t lockAt = body.find("service.acquireConfig(");
+        const std::size_t gate = body.rfind("boot.frames < 0", lockAt == std::string::npos ? 0 : lockAt);
+        need(lockAt != std::string::npos && gate != std::string::npos && lockAt - gate < 60, "the lock is taken only when boot.frames < 0 (a bounded run takes none)");
+    }
+    // R7 leaves the engine's start and stop to the window (R8 moves them): main starts nothing, stops nothing, and talks to the engine only to hand it over.
+    need(body.find("service.start(") == std::string::npos && body.find("service.stop(") == std::string::npos,
+         "main does not start or stop the service (the window does, until R8)");
+    need(body.find("service.keep(") == std::string::npos && body.find("shutdown") == std::string::npos, "main does not keep or shut the engine down");
+    need(body.find("BestEffort") != std::string::npos && body.find("ServiceHermetic::Window") != std::string::npos &&
+             body.find("options.label = ") != std::string::npos,
+         "main builds the WINDOW application's service: best-effort lock, hermetic Window, label cascade");
+    // The engine is told, BEFORE the restore, that a window will attach after it: otherwise the window-less restore starts every fitted plugin (AUTO is
+    // pinned without a front end) and builds the plugin UI for nobody (Engine::expectFrontEnd). No real-binary test sees the transient - the plugins are
+    // asleep again by the end of a bounded run - so the text holds it.
+    {
+        const std::size_t followsAt = body.find("options.frontEndFollows = true;");
+        const std::size_t svcAt = body.find("EngineService service(");
+        need(followsAt != std::string::npos && svcAt != std::string::npos && followsAt < svcAt,
+             "main sets options.frontEndFollows = true before it builds the service (the restore's scan is the window's engine's scan)");
+    }
+    // What the restore found reaches the window by main (the window reads no file): every field of WindowHost is filled from the restore, none dropped.
+    for (const char* field : {"host.configLoaded = restored.loaded;", "host.writesForbidden = restored.writesForbidden;",
+                              "host.lastRunUnclean = restored.lastRunUnclean;", "host.sourceKind = restored.sourceKind;",
+                              "host.iqFilePath = restored.iqFilePath;", "host.api = ", "host.handle = ", "host.engine = ", "host.configPath = "}) {
+        need(body.find(field) != std::string::npos, field);
+    }
+    // The service is built inside the window's scope and before the window: destroyed after it, and before the software-GL relaunch.
+    {
+        const std::size_t svcAt = body.find("EngineService service(");
+        const std::size_t winAt = body.find("AppWindow app(");
+        const std::size_t relaunchAt = body.find("relaunchAndWait(");
+        need(svcAt != std::string::npos && winAt != std::string::npos && relaunchAt != std::string::npos && svcAt < winAt && winAt < relaunchAt,
+             "the service is built before the window and the relaunch comes after both");
+    }
+    return bad;
+}
+
 fs::path findRoot(int argc, char** argv) {
     if (argc > 1) { return argv[1]; }
 #ifdef CASCADE_SOURCE_DIR
@@ -456,11 +529,13 @@ int main(int argc, char** argv) {
     const std::string winText = readFile(root / "src" / "gui" / "app_window.cpp");
     const std::string svcText = readFile(root / "src" / "engine" / "engine_service.cpp");
     const std::string mainText = readFile(root / "src" / "engine_main.cpp");
-    CHECK(!winText.empty() && !svcText.empty() && !mainText.empty());
-    if (winText.empty() || svcText.empty() || mainText.empty()) { return testSummary("test_engine_service_order"); }
+    const std::string hostText = readFile(root / "src" / "main.cpp");
+    CHECK(!winText.empty() && !svcText.empty() && !mainText.empty() && !hostText.empty());
+    if (winText.empty() || svcText.empty() || mainText.empty() || hostText.empty()) { return testSummary("test_engine_service_order"); }
     const std::string win = blanked(winText);
     const std::string svc = blanked(svcText);
     const std::string mn = blanked(mainText);
+    const std::string host = blanked(hostText);
 
     // --- the table, the window's column and the service's, row by row -----------------------------------------------
     int rows = 0;
@@ -468,6 +543,7 @@ int main(int argc, char** argv) {
     std::printf("  %d rows in %zu phases\n", rows, table().size());
     CHECK(checkTable(win, svc, true) == 0);
     CHECK(checkProperties(svc, mn, true) == 0);
+    CHECK(checkHostMain(host, true) == 0);
 
     // --- the checker is not blind: each mutant of the service's text must come back RED ------------------------------
     struct Mutant { const char* name; bool (*make)(std::string&); };
@@ -523,6 +599,47 @@ int main(int argc, char** argv) {
         const int bad = checkTable(win, blanked(mutated), false) + checkProperties(blanked(mutated), mn, false);
         std::printf("  mutant '%s': %d finding(s)\n", m.name, bad);
         CHECK(bad > 0);
+    }
+    // The window application's host (src/main.cpp), mutated: each must come back RED.
+    {
+        struct HostMutant { const char* name; bool (*make)(std::string&); };
+        const HostMutant hostMutants[] = {
+            {"the service restored AFTER the window is constructed (the survey's break-it)",
+             [](std::string& s) {
+                 return swapStatements(s, "const cascade::engine::EngineService::Restored restored = service.restore();", "cascade::gui::AppWindow app(host);");
+             }},
+            {"the lock taken AFTER the restore",
+             [](std::string& s) {
+                 return swapStatements(s, "if (boot.frames < 0) { (void)service.acquireConfig(lockSentence); }",
+                                       "const cascade::engine::EngineService::Restored restored = service.restore();");
+             }},
+            {"the lock taken in a bounded run too",
+             [](std::string& s) { return replaceOnce(s, "if (boot.frames < 0) { (void)service.acquireConfig(lockSentence); }", "(void)service.acquireConfig(lockSentence);"); }},
+            {"the service started by main (the window starts the engine until R8)",
+             [](std::string& s) { return replaceOnce(s, "exitCode = app.run(boot.frames);", "std::string why; (void)service.start(why);\n        exitCode = app.run(boot.frames);"); }},
+            {"the service stopped by main (the window stops the engine until R8)",
+             [](std::string& s) { return replaceOnce(s, "softglRelaunch = app.relaunchWithSoftwareGl();", "softglRelaunch = app.relaunchWithSoftwareGl();\n        service.stop();"); }},
+            {"the saved I/Q path not handed to the window",
+             [](std::string& s) { return replaceOnce(s, "host.iqFilePath = restored.iqFilePath;", ""); }},
+            {"the last run's marker not handed to the window",
+             [](std::string& s) { return replaceOnce(s, "host.lastRunUnclean = restored.lastRunUnclean;", ""); }},
+            {"the damaged file's write ban not handed to the window",
+             [](std::string& s) { return replaceOnce(s, "host.writesForbidden = restored.writesForbidden;", ""); }},
+            {"the engine not told a front end follows (a window-less restore: every fitted plugin started, the plugin UI built for nobody)",
+             [](std::string& s) { return replaceOnce(s, "options.frontEndFollows = true;", "options.frontEndFollows = false;"); }},
+            {"the lock taken with the headless engine's strict policy",
+             [](std::string& s) { return replaceOnce(s, "options.lock = cascade::engine::ServiceLock::BestEffort;", ""); }},
+        };
+        for (const HostMutant& m : hostMutants) {
+            std::string mutated = hostText;
+            const bool made = m.make(mutated);
+            if (!made) { std::printf("  host mutant '%s' could not be made (its anchor text is gone from main.cpp): the test needs updating\n", m.name); }
+            CHECK(made);
+            if (!made) { continue; }
+            const int bad = checkHostMain(blanked(mutated), false);
+            std::printf("  host mutant '%s': %d finding(s)\n", m.name, bad);
+            CHECK(bad > 0);
+        }
     }
     // The main's order, mutated: the lock taken after the restore.
     {

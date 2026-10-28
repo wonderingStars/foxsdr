@@ -223,6 +223,33 @@ struct AppWindowTestAccess {
         }
         for (const std::string& k : keys) { e.setPluginRun(k, cascade::core::PluginRun::Always); }
     }
+    // The same pin, on an engine that has no window yet (shell retirement R7: the host's restore has scanned; the window comes after).
+    static void pinPlugins(Engine& e) {
+        std::vector<std::string> keys;
+        for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
+            if (p.loaded) { keys.push_back(cascade::core::pluginKey(p)); }
+        }
+        for (const std::string& k : keys) { e.setPluginRun(k, cascade::core::PluginRun::Always); }
+    }
+    // WHO THE ENGINE ASKS (shell retirement R7: Engine::setHost / resetHost, the window's shell installing and letting go of its adapter): whether it is
+    // the engine's own host, and the three questions asked of whichever host it holds, from this thread.
+    static bool hostIsOwn(Engine& e) { return e.host_ == &e.ownHost_; }
+    static void hostPause(Engine& e) { e.host_->pauseWatchdog(); }
+    static void hostResume(Engine& e) { e.host_->resumeWatchdog(); }
+    static double hostWall(Engine& e) { return e.host_->wallTimeS(); }
+    static void startControlOn(Engine& e) {
+        cascade::engine::ControlThreadOptions o;
+        o.period = std::chrono::milliseconds(2);
+        e.startControlThread(o);
+    }
+    // THE WINDOW'S START-UP STATE, as the constructor leaves it after the host's restore (shell retirement R7, tests/test_engine_service_window.cpp F): the
+    // last run's marker and the crash-report offer it opens, the I/Q path box, a field of the interface's half read back from the table.
+    static bool lastRunUnclean(AppWindow& a) { return a.lastRunUnclean_; }
+    static bool diagOfferOpen(AppWindow& a) { return a.diagOfferOpen_; }
+    static std::string iqPath(AppWindow& a) { return std::string(a.iqPath_); }
+    static int railBank(AppWindow& a) { return a.railBank_; }
+    static int counterScale(AppWindow& a) { return a.counterScale_; }
+    static bool transmitPageOpen(AppWindow& a) { return a.transmitPageOpen_; }
     static Engine& engine(AppWindow& a) { return th::engine(a); }
     static void submit(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) { a.uiSubmit(q); }
 

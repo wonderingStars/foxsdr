@@ -72,7 +72,7 @@ namespace cascade::gui {
 
 struct AppWindowTestAccess {
     static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { a.applyConfig(c); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { th::applyConfig(a, c); }
     static bool rail(const AppWindow& a) { return a.railCollapsed_; }
     static bool status(const AppWindow& a) { return a.statusCollapsed_; }
     static bool display(const AppWindow& a) { return a.displayOpen_; }

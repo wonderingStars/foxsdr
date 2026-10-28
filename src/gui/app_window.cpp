@@ -804,8 +804,8 @@ const char* scannerStateName(std::uint32_t state) {
 
 }  // namespace
 
-AppWindow::AppWindow(std::string configPath, bool announceConfig)
-    : engineHolder_(cascade::engine::EngineShell::create(static_cast<cascade::engine::ShellHooks&>(*this))),
+AppWindow::AppWindow(const WindowHost& host)
+    : engineHolder_(cascade::engine::EngineShell::view(*host.engine, static_cast<cascade::engine::ShellHooks&>(*this))),
       engine_(*engineHolder_),
       spectrum_(std::make_unique<SpectrumView>()),
       waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)),
@@ -819,26 +819,33 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
       fittedDeck_(std::make_unique<FittedModulesDeck>()),
       fittedCache_(std::make_unique<FittedListCache>()),
       storeCache_(std::make_unique<StoreListCache>()) {
-    configPath_ = std::move(configPath);
-    configAnnounce_ = announceConfig;
-    // THE RECEIVER'S START-UP (engine stage 3a): the recording folder, the
-    // demo signal, the pipeline mirrors, the band plan, the plugin scan, the
-    // catalogue URL's default, the audio and microphone gates and the output
-    // device list - Engine::initialise, in the order this constructor always
-    // did them. The window's own start-up follows it.
+    configPath_ = host.configPath;
+    // THE ENGINE IS THE HOST'S (shell retirement R7; docs/engine-stage4.md 6.25). The host process built it, started it up and restored the settings
+    // into it - Engine::initialise (the recording folder, the demo signal, the band plan, the plugin scan, the output device list), the settings
+    // file's load and the receiver's half of it, the usage journal's start-up, the bookmarks, the status sentences: EngineService::restore, which
+    // main.cpp and the test host call BEFORE this window exists. What this constructor does is the window's own start-up on an engine that is
+    // already running its restore: the shell above installed the window as the engine's host (Engine::setHost, before any control thread), and
+    // what follows is a client's attach - a session on the table, the plugin UI's port, and the window's half of the settings read from the
+    // table.
+    //
     // THE WINDOW'S ENGINE API SESSION (stage 4): a LOCAL session with every
     // grant, on this process's own engine - the one the Transmit page keys
     // through, and (R4) the one the plugin UI's extension is asked for with:
     // get_local_extension takes the interface's own LOCAL session, so it is
-    // opened before the port is attached.
+    // opened before the port is attached. The table and the engine's handle
+    // are the host's to hand over (AppWindow(WindowHost)), not the door's.
+    engineApi_ = host.api;
+    uiEngine_ = host.handle;
     openUiSession();
-    // THE PLUGIN UI'S PORT, before the scan the start-up runs: the engine applies a directive through it inline while it runs
-    // on this thread, and posts it for the frame's head to apply while its control thread does (Engine::attachPluginUi). A
-    // window that arrived AFTER the scan would be replayed the plugin UI's state by the same call (the late attach).
+    // THE PLUGIN UI'S PORT, AFTER THE SCAN since R7: the restore ran Engine::initialise - the plugin scan - on the host's thread before this window
+    // existed, so the engine has already built its first plugin directive and applied it to the instances of its own plugin UI. This attach is
+    // the LATE ATTACH of R4 (Engine::attachPluginUi): it lets go of the engine's own instances and REPLAYS the current directive to this window's
+    // port, which the window applies at the head of its first frame (applyNewestDirective). Until R7 the window attached before the scan and saw the
+    // first directive as it was made; the replay is what stands in for that now, and tests/test_plugin_ui_threaded.cpp G and
+    // tests/test_engine_service_window.cpp hold it for the start-up path itself.
     attachPluginUi();
-    engine_.initialise();
-    // (The store's URL box is seeded from the table's fact.store.url at the first look - refreshStatusLines - after the restore below has had its say
-    // and the pass has published it: a fact answers nothing before the first publish. Shell retirement R3.)
+    // (The store's URL box is seeded from the table's fact.store.url at the first look - refreshStatusLines - after the restore the host made has had its
+    // say and the pass has published it: a fact answers nothing before the first publish. Shell retirement R3.)
     // (THE WEB AND CAT SERVERS ARE THE ENGINE'S since stage 5b: it installs their providers itself, and starts them when the restored
     // config says so; their control and their reads are sessions of the table (5c-5e). This window configures them from its panels
     // and hands the web page what only it makes: the track feed and the basemap's tiles.)
@@ -853,31 +860,29 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     configWriter_.bind(cascade::core::ConfigStore::writeFile);
 
     // --- Config restore (P5) ------------------------------------------------
-    // Load semantics per ConfigStore: missing file -> defaults + true; a
-    // corrupt/unreadable file -> defaults + false. On false the construction
-    // defaults above are KEPT (nothing applied) and the reason goes to
-    // stderr plus, under the test hook, the diagnostic line.
+    // The file was loaded by the host (EngineService::restore), which also kept a damaged one aside before anything could save over it and set
+    // the start-up state (core::startupState: every open flag cleared) on the engine's half AND on the interface's half it serves back. Missing
+    // file -> defaults + loaded; a corrupt/unreadable file -> defaults + not loaded: the construction defaults above are KEPT and nothing is applied.
+    // Hermetic runs (empty configPath_ - every --frames/--selftest CI run) never read or write the user's settings or bookmark file.
     if (!configPath_.empty()) {
-        cascade::core::AppConfig cfg;
-        std::string err;
-        const bool loaded = cascade::core::ConfigStore::load(configPath_, cfg, err);
-        if (loaded) {
-            applyConfig(cfg);
-            // THE INTERFACE'S HALF comes from the table, not from the file this constructor loaded (shell retirement R5): the engine took the config in
-            // applyConfig above and serves its half as fact.config.interface. `iface` is the file's config with that half in place of the file's own
-            // - the engine's fields (the usage record's, the clean-exit marker) are still the file's.
-            const cascade::core::AppConfig iface = withInterfaceHalfFromTable(cfg);
-            // AFTER applyConfig, so the crash count and the pending report are
-            // read from the file rather than from freshly defaulted members.
-            // Sends nothing unless the user previously opted in.
+        // A damaged file that could not be kept aside: the host's writer is forbidden, and so must be this window's own - it keeps its keeper until R8.
+        if (host.writesForbidden) { configWriter_.forbidWrites("config: not saved - the damaged settings file could not be kept aside"); }
+        if (host.configLoaded) {
+            // THE WINDOW'S HALF comes from the table, not from a file (shell retirement R5, R7): the engine took the config in the restore and
+            // serves the half that is this window's - already through core::startupState - as the LOCAL fact fact.config.interface. The host
+            // hands over the two fields of the ENGINE'S half this window shows and no table fact carries (the saved source, whose I/Q file path the
+            // path box starts from; the page that is open - none, startupState cleared it), and the clean-exit marker the last run left.
+            cascade::core::AppConfig fromHost;
+            fromHost.sourceKind = host.sourceKind;
+            fromHost.iqFilePath = host.iqFilePath;
+            cascade::core::AppConfig iface = applyWindowHalf(fromHost);
+            // THE LAST RUN'S MARKER is the engine's (the restore counted it a crash when it was false); the window offers a report on the same
+            // observation (diagnosticsStartup), which the host carries over because no fact does.
+            iface.telemetryCleanExit = !host.lastRunUnclean;
+            // The crash count and the pending report were read from the file by the restore, after the apply (so not from freshly defaulted
+            // members). Sends nothing unless the user previously opted in.
             diagnosticsEnabled_ = iface.diagnosticsEnabled;
             diagnosticsMinidump_ = iface.diagnosticsMinidump;
-            {
-                std::string configDir;
-                const std::size_t cut = configPath_.find_last_of("/\\");
-                if (cut != std::string::npos) { configDir = configPath_.substr(0, cut); }
-                engine_.telemetryStartup(cfg, configDir);
-            }
             diagnosticsStartup(iface);
             // The beta tester's code and the report the last session left, folded into the retry queue. Sends nothing here: the poll does, off the constructor.
             testerUsageStartup(iface);
@@ -885,38 +890,12 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             updateChannel_ = iface.updateChannel;
             // The team messages marked Seen (0.99.79, stub campaign B14): the window's own list, saved back by diagnosticsJournal.
             messagesSeen_ = iface.messagesSeen;
-        } else {
-            std::fprintf(stderr, "cascade: %s\n", err.c_str());
-            // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (0.99.65, core/damaged_file.hpp).
-            setAsideDamagedFile("settings", configPath_);
-        }
-        if (configAnnounce_) {
-            // ONE diagnostic line, printed only under CASCADE_CONFIG_TEST
-            // (normal runs stay byte-identical). Values are READBACK — the
-            // demod mode the pipeline mirrors actually hold and the center
-            // the active source reports — not an echo of the file.
-            if (loaded) {
-                const cascade::engine::EngineShell::ConfigReadback readback = engine_.configReadback();
-                std::printf("config applied: mode=%s center=%.0f\n",
-                            kModeNames[readback.modeIndex], readback.centreHz);
-            } else {
-                std::printf("config applied: defaults (%s)\n", err.c_str());
-            }
         }
         // Baseline for the debounce: what the file holds (or would hold). The
         // engine hands its half over first - no frame has run yet (OPEN 2).
         engine_.publishConfig();
         savedCfg_ = currentConfig();
         pendingCfg_ = savedCfg_;
-
-        // Bookmarks ride the same persistence gate as the config: hermetic
-        // runs (empty configPath_ — every --frames/--selftest CI run) never
-        // read or write the user's bookmark file. Load semantics per
-        // FreqManager: a missing file is a clean first run (true, empty
-        // list); a damaged file surfaces its reason in red in the Bookmarks
-        // section, exactly like Source errors — no stdout/stderr, so the
-        // config-test diagnostic contract stays byte-identical.
-        engine_.loadBookmarks();
     }
     // WITH OR WITHOUT A CONFIG FILE (a hermetic run has none): the front
     // end's facts for the engine's publish (OPEN 4) - before any frame has
@@ -17065,7 +17044,8 @@ void AppWindow::refreshStatusLines() {
 // --- THE WINDOW'S ENGINE API SESSION (engine stage 4) --------------------------
 
 void AppWindow::openUiSession() {
-    engineApi_ = cascade::engine::EngineShell::apiTable();
+    // (engineApi_ and uiEngine_ are the host's: AppWindow(WindowHost) set them before the first call, and a reopen - a test's - is on the same
+    // table and handle. Shell retirement R7 retired the door's apiTable and apiHandle.)
     FoxSessionParams p{};
     p.structSize = sizeof(p);
     // FRAME: this window's heartbeat, once a frame, is the kick of the free-running pass (run()'s loop; API 0.3 9.14).
@@ -17074,7 +17054,6 @@ void AppWindow::openUiSession() {
                FOXAPI_GRANT_ADMIN | FOXAPI_GRANT_AUDIO | FOXAPI_GRANT_IQ;
     p.clientName = "FoxSDR standard interface";
     p.clientVersion = cascade::versionString();
-    uiEngine_ = engine_.apiHandle();
     if (engineApi_ == nullptr || engineApi_->open_session(uiEngine_, &p, &uiSession_) != FOXAPI_OK) {
         uiSession_ = nullptr;
         cascade::core::diagWarnf("ui: no engine API session - the transmit key is unavailable");
@@ -21357,30 +21336,32 @@ void AppWindow::copyDiagnosticsBundle() {
     cascade::core::diagLogf("diagnostics bundle produced (%zu bytes)", bundle.size());
 }
 
-void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
+cascade::core::AppConfig AppWindow::applyWindowHalf(const cascade::core::AppConfig& startup) {
     // WHAT THE WINDOW STARTS FROM IS NOT THE FILE AS SAVED. The file records
     // what was showing at the last exit - the scope, the store, the fitted
     // modules window, each map page - and the application starts on the
     // bench alone whatever that was (the user's instruction, 0.79.1). So the
     // saved config passes through core::startupState first, which clears
     // every open flag and the scope mode and touches nothing else: every
-    // rectangle, every setting, every position survives. Everything below
-    // reads `cfg`, the start-up state, never `saved`.
-    const cascade::core::AppConfig fromFile = cascade::core::startupState(saved);
-    // THE RECEIVER'S HALF FIRST, ALL OF IT (engine stage 3a): the device scan's
-    // rule, the DSP settings, the band plan, the transmitter's settings, the
-    // receiver position, the plugins' grants/settings/stops/presets and their
-    // rebuild, the mode, the converters, the source restore and the VFO -
-    // Engine::applyConfig, in the order they always ran. What follows is the
-    // window's own state, which nothing in the engine's half reads, so
-    // restoring it afterwards rather than interleaved changes nothing
-    // (docs/engine-stage3.md lists the one reorder that is visible from
-    // outside: the web and CAT listeners now start after the VFO restore).
-    engine_.applyConfig(fromFile);
-    // THE INTERFACE'S HALF IS READ FROM THE TABLE (shell retirement R5): the engine took the whole config above and serves the half that is this
+    // rectangle, every setting, every position survives. Since shell
+    // retirement R7 the engine does that, once, in the host's restore
+    // (EngineService::restore: startupState, then Engine::applyConfig) and
+    // serves the window's half back already cleared; `startup` is the
+    // start-up state of the fields of the ENGINE'S half this window reads,
+    // and a test host passes a whole one. Everything below reads `cfg`.
+    //
+    // THE RECEIVER'S HALF - the device scan's rule, the DSP settings, the
+    // band plan, the transmitter's settings, the receiver position, the
+    // plugins' grants/settings/stops/presets and their rebuild, the mode, the
+    // converters, the source restore and the VFO, Engine::applyConfig - is the
+    // engine's, applied by whoever hosts it BEFORE this runs (it was this
+    // function's first act until R7). What follows is the window's own state,
+    // which nothing in the engine's half reads.
+    //
+    // THE INTERFACE'S HALF IS READ FROM THE TABLE (shell retirement R5): the engine took the whole config and serves the half that is this
     // window's - already through core::startupState - as the LOCAL fact fact.config.interface, read at the call because this runs before the engine's
-    // first publish. Everything below reads `cfg`: the file's engine fields (the source, the plugins ...) with that half in place of the file's own.
-    const cascade::core::AppConfig cfg = withInterfaceHalfFromTable(fromFile);
+    // first publish. Everything below reads `cfg`: the engine's fields the window shows (the saved source) with that half in place of the config's own.
+    const cascade::core::AppConfig cfg = withInterfaceHalfFromTable(startup);
     // The Transmit page is the window's own (restored closed on a launch:
     // startupState clears it, as it clears every page).
     transmitPageOpen_ = cfg.transmitOpen;
@@ -21580,6 +21561,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // (The web server's and the CAT listener's half of the config - webEnabled, webBindAddress, webPort, webUsername, webPasswordRecord,
     // catEnabled, catBindAll, catPort - is the ENGINE's since stage 5b: Engine::applyConfig restores it and starts what it switches on, on a
     // worker. The panels' mirrors are taken from the table's facts once it has published them.)
+    return cfg;
 }
 
 bool AppWindow::crashUploadStart() {
@@ -21734,13 +21716,13 @@ cascade::core::AppConfig AppWindow::withInterfaceHalfFromTable(const cascade::co
     std::string document;
     if (!readFactText("fact.config.interface", document) || document.empty()) {
         // No session, or a table that does not serve it: the window goes on with the half the file gave it, which is what it always did.
-        cascade::core::diagWarnf("config: the engine did not serve the interface's half of the settings; using the file's");
+        cascade::core::diagWarnf("config: the engine did not serve the interface's half of the settings; using the config it was given");
         return fromFile;
     }
     cascade::core::AppConfig parsed;
     std::string error;
     if (!cascade::core::parseInterfaceHalf(document, parsed, error)) {
-        cascade::core::diagWarnf("config: the interface's half of the settings could not be read (%s); using the file's", error.c_str());
+        cascade::core::diagWarnf("config: the interface's half of the settings could not be read (%s); using the config it was given", error.c_str());
         return fromFile;
     }
     cascade::core::AppConfig merged = fromFile;
@@ -21782,33 +21764,6 @@ bool AppWindow::sendInterfaceHalf(double nowS) {
     interfaceSent_ = std::move(half);
     ++interfaceSends_;
     return true;
-}
-
-// --- A DAMAGED SETTINGS FILE IS KEPT, NOT OVERWRITTEN (0.99.65, core/damaged_file.hpp) -----------------------------------------------------
-//
-// A settings file that failed to load was left on disk and then saved over by the first change (or the clean exit), so whatever could have
-// been recovered from it was gone. It is renamed aside before anything is saved (the three newest are kept); if the rename is refused the file
-// stays exactly as it is and this session's saver writes nothing. (The bookmark list's is the engine's: Engine::loadBookmarks.)
-
-void AppWindow::setAsideDamagedFile(const char* which, const std::string& path) {
-    const cascade::core::SetAsideResult r = cascade::core::setDamagedFileAside(path);
-    const unsigned long long bytes = static_cast<unsigned long long>(r.bytes);
-    switch (r.outcome) {
-        case cascade::core::SetAsideResult::Outcome::NothingToKeep:
-            return;  // a first run, an empty file, or a folder: nothing to lose, nothing said
-        case cascade::core::SetAsideResult::Outcome::KeptAside:
-            // WHICH FILE AND HOW BIG, and no path: a log line never names one.
-            cascade::core::diagLogf(
-                "%s: a damaged file (%llu bytes) was kept aside beside the live one; the next save writes a new file", which, bytes);
-            return;
-        case cascade::core::SetAsideResult::Outcome::CouldNotKeep:
-            break;
-    }
-    // THE RENAME WAS REFUSED (held by another program, a read-only folder): the damaged file stays exactly as it is, and this file's saver
-    // writes nothing for the rest of the session.
-    configWriter_.forbidWrites("config: not saved - the damaged settings file could not be kept aside");
-    cascade::core::diagWarnf(
-        "%s: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it in this session", which, bytes);
 }
 
 // --- THE SETTINGS SAVE BACKS OFF (0.99.65) ---------------------------------------------------------------------------------------------

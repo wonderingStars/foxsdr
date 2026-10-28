@@ -65,9 +65,9 @@ namespace {
 // comment in engine_shell.hpp that says why. They only go down on their own: stage 5f deleted the web/CAT section (there is no budget for
 // it any more), stage 7 deletes the shell's.
 // ----------------------------------------------------------------------------------------------------------------------------------
-constexpr int kShellMethodsBudget = 26;   // CLASS SHELL: EngineShell's own declarations (distinct names; create and the special members apart): 26 after shell retirement R5 (2026-10-28: -1, setControlWatchdogReportDir - the Diagnostics switch is a field of the interface's half of the settings, which crosses the table as FOXAPP_OP_INTERFACE_CONFIG, and the control thread's hang-report directory is derived from it by the engine; 27 before it); 27 after shell retirement R4 (2026-10-28: -2, the plugin UI plane left the door - setFrontEndFacts (the face, the basemap's figures and the track feed ride the port's setFrontEnd) and reportPluginStatus (the engine prints the bounded run's report at the end of shutdownQuiesce, from the plugin half the window hands over in its last setFrontEnd); 29 before it); 29 after shell retirement R3 (2026-10-28: -4, status, URL and kick as table facts - pluginCatalogueUrl, publishStatusText, statusText, frameKick; 33 before it); 33 after shell retirement R2 (2026-10-28: -8, the seams that became client code - seamBiasStandIn, seamFetchCatalogue, seamSelectNativeDevice, seamDeviceOpenPending, seamPressPreset, seamPatchStart, seamPatchRunning, seamSubmit; 41 before it); 40 before the frame's kick (frameKick, 6.9)
+constexpr int kShellMethodsBudget = 19;   // CLASS SHELL: EngineShell's own declarations (distinct names; view and the special members apart): 19 after shell retirement R7 (2026-10-28: -7, the construction flip - initialise, loadBookmarks, telemetryStartup, applyConfig and configReadback are the host's restore (EngineService::restore: main.cpp, or the test host, builds the engine's service and restores BEFORE the window exists), apiTable and apiHandle are main's to pass (WindowHost::api, handle); the shell's create(hooks) became view(engine, hooks), a non-owning view that installs the window as the engine's host through Engine::setHost; 26 before it); 26 after shell retirement R5 (2026-10-28: -1, setControlWatchdogReportDir - the Diagnostics switch is a field of the interface's half of the settings, which crosses the table as FOXAPP_OP_INTERFACE_CONFIG, and the control thread's hang-report directory is derived from it by the engine; 27 before it); 27 after shell retirement R4 (2026-10-28: -2, the plugin UI plane left the door - setFrontEndFacts (the face, the basemap's figures and the track feed ride the port's setFrontEnd) and reportPluginStatus (the engine prints the bounded run's report at the end of shutdownQuiesce, from the plugin half the window hands over in its last setFrontEnd); 29 before it); 29 after shell retirement R3 (2026-10-28: -4, status, URL and kick as table facts - pluginCatalogueUrl, publishStatusText, statusText, frameKick; 33 before it); 33 after shell retirement R2 (2026-10-28: -8, the seams that became client code - seamBiasStandIn, seamFetchCatalogue, seamSelectNativeDevice, seamDeviceOpenPending, seamPressPreset, seamPatchStart, seamPatchRunning, seamSubmit; 41 before it); 40 before the frame's kick (frameKick, 6.9)
 // (kHostMethodsBudget and kFeedMethodsBudget are GONE, shell retirement R4, 2026-10-28: the HOST class - makePluginFeed and serveWebTiles, 2 after R3, 3 with setServerUsageHooks (stub campaign B15, gone in R3), 2 before B15 - and HostPluginFeed's 12 virtuals (12 with unplacedTracks, stub campaign B16; 11 before it) were deleted with their knock rows: makePluginFeed became the table's get_local_extension(FOXAPI_EXT_PLUGIN_UI), serveWebTiles became PluginUiPort::serveTiles, and the 12 virtuals became PluginUiPort's 14 (minus `report`, plus setFrontEnd, serveTiles and release), counted below as the EXTENSION surface, not the door.)
-constexpr int kCallSitesBudget = 29;      // `engine_.x` in src/gui, all classes: 29 after shell retirement R5 (2026-10-28: -1, applyDiagnosticsEnabled's setControlWatchdogReportDir; 30 before it); 30 after shell retirement R4 (2026-10-28: -4, the four door methods of the plugin UI plane - makePluginFeed 1, setFrontEndFacts 1, reportPluginStatus 1, serveWebTiles 1 - whose sites are `ui_->` sites of the port now, 15 of them, counted by kPortCallSitesBudget; with them gone `pluginFeed_->x` (13 sites) is not a thing the guard counts any more: 47 before R4 was 34 engine_ + 13 pluginFeed_); 47 after shell retirement R3 (2026-10-28: -7, the five methods' sites - pluginCatalogueUrl 2, publishStatusText 1, statusText 2, frameKick 1, setServerUsageHooks 1; 54 before it); 54 after shell retirement R2 (2026-10-28: -13, the eight seams' sites - seamBiasStandIn 1, seamFetchCatalogue 1, seamSelectNativeDevice 1, seamDeviceOpenPending 1, seamPressPreset 1, seamPatchStart 1, seamPatchRunning 1, seamSubmit 6; 67 before it); 67 with stub campaign B16 (+1: hostUnplacedTracks' unplacedTracks, the one read of the new feed accessor); 66 with stub campaign B15 (+1: installTesterUsageHooks' setServerUsageHooks, the window's one call, from its constructor's helper); 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
+constexpr int kCallSitesBudget = 23;      // `engine_.x` in src/gui, all classes: 23 after shell retirement R7 (2026-10-28: -6, the constructor's initialise, loadBookmarks, telemetryStartup and configReadback (4), applyConfig's applyConfig (1) and openUiSession's apiHandle (1); 29 before it); 29 after shell retirement R5 (2026-10-28: -1, applyDiagnosticsEnabled's setControlWatchdogReportDir; 30 before it); 30 after shell retirement R4 (2026-10-28: -4, the four door methods of the plugin UI plane - makePluginFeed 1, setFrontEndFacts 1, reportPluginStatus 1, serveWebTiles 1 - whose sites are `ui_->` sites of the port now, 15 of them, counted by kPortCallSitesBudget; with them gone `pluginFeed_->x` (13 sites) is not a thing the guard counts any more: 47 before R4 was 34 engine_ + 13 pluginFeed_); 47 after shell retirement R3 (2026-10-28: -7, the five methods' sites - pluginCatalogueUrl 2, publishStatusText 1, statusText 2, frameKick 1, setServerUsageHooks 1; 54 before it); 54 after shell retirement R2 (2026-10-28: -13, the eight seams' sites - seamBiasStandIn 1, seamFetchCatalogue 1, seamSelectNativeDevice 1, seamDeviceOpenPending 1, seamPressPreset 1, seamPatchStart 1, seamPatchRunning 1, seamSubmit 6; 67 before it); 67 with stub campaign B16 (+1: hostUnplacedTracks' unplacedTracks, the one read of the new feed accessor); 66 with stub campaign B15 (+1: installTesterUsageHooks' setServerUsageHooks, the window's one call, from its constructor's helper); 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
 
 // THE PLUGIN UI PORT (core/plugin_ui_port.hpp; shell retirement R4, 2026-10-28; docs/api-0.3-additions.md 9.15) - the window's one C++ contact with the engine that is not the door and not the table's lists and facts, reached through ONE table member (get_local_extension) on the window's LOCAL session. Its surface is held like the door's: counted, implemented, called.
 constexpr int kPortMethodsBudget = 14;    // PluginUiPort's pure virtuals (the destructor apart): the seven host accessors (tracks, unplacedTracks, paths, panels, instruments, trackPluginNames, altitudeNear), poll, pollImages, applyNewestDirective, setFrontEnd, serveTiles, release, disconnect. 14 at R4: HostPluginFeed's 12 minus `report` (the plugin half of the status report rides setFrontEnd once) plus setFrontEnd (was the door's setFrontEndFacts), serveTiles (was the door's serveWebTiles) and release (the window's own shutdown release)
@@ -84,13 +84,10 @@ struct Knock {
 };
 const std::vector<Knock> kEngineKnocks = {
     // CLASS SHELL: construction, the config restore, the run, the teardown
-    {"AppWindow::AppWindow",
-     {"initialise", "loadBookmarks", "telemetryStartup", "configReadback", "publishConfig", "setFrontEndWaitBeat"}},
+    {"AppWindow::AppWindow", {"publishConfig", "setFrontEndWaitBeat"}},   // (R7: the restore - initialise, loadBookmarks, telemetryStartup, applyConfig, configReadback - is the host's)
     {"AppWindow::~AppWindow", {"setFrontEndWaitBeat", "stopTransfers", "teardown"}},
-    {"AppWindow::applyConfig", {"applyConfig"}},
     {"AppWindow::currentConfig", {"configSnapshot"}},
     {"AppWindow::saveConfigNow", {"publishConfig"}},
-    {"AppWindow::openUiSession", {"apiHandle"}},
     {"AppWindow::run",
      {"startReceiver", "controlPass", "startControlThread", "configureHeartbeat", "markCleanExit", "shutdownQuiesce", "shutdownStop",
       "shutdownRelease", "shutdownDrain", "seamMeasureTick",
@@ -123,7 +120,7 @@ const std::vector<Knock> kPortKnocks = {
 
 // The window's machinery: the members that drive the shell or answer for it. Rule: no ImGui input in them.
 const char* const kWindowMachinery[] = {
-    "AppWindow::AppWindow",       "AppWindow::~AppWindow",       "AppWindow::applyConfig",      "AppWindow::currentConfig",
+    "AppWindow::AppWindow",       "AppWindow::~AppWindow",       "AppWindow::applyWindowHalf",  "AppWindow::currentConfig",
     "AppWindow::handFrontEndFacts", "AppWindow::wallTimeS",      "AppWindow::pauseWatchdog",    "AppWindow::resumeWatchdog",
     "AppWindow::applyDirectiveBefore", "AppWindow::applyDirectiveAfter", "AppWindow::attachPluginUi",
 };
@@ -402,7 +399,7 @@ Surface readSurface(const fs::path& root) {
 std::set<std::string> namesOf(const std::vector<Decl>& v, bool skipCtors) {
     std::set<std::string> out;
     for (const Decl& d : v) {
-        if (skipCtors && (d.name == "EngineShell" || d.name == "~EngineShell" || d.name == "create" || d.name == "~PluginUiPort")) { continue; }
+        if (skipCtors && (d.name == "EngineShell" || d.name == "~EngineShell" || d.name == "create" || d.name == "view" || d.name == "~PluginUiPort")) { continue; }
         out.insert(d.name);
     }
     return out;
@@ -526,7 +523,7 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
     CHECK(static_cast<int>(sh.size()) <= kShellMethodsBudget);
     CHECK(static_cast<int>(po.size()) <= kPortMethodsBudget);
     // The scan saw the real headers.
-    CHECK(sh.size() >= 20);
+    CHECK(sh.size() >= 15);
     CHECK(po.size() >= 8);
     // ...and a class that only ever shrinks: a budget above what is there is a stale budget.
     CHECK(static_cast<int>(sh.size()) == kShellMethodsBudget);
@@ -624,7 +621,7 @@ void checkWhoMayKnock(const std::vector<Call>& calls) {
     CHECK(bad == 0);
     CHECK(sites == kCallSitesBudget);
     CHECK(portSites == kPortCallSitesBudget);
-    CHECK(sites >= 25);  // the scan saw the real files
+    CHECK(sites >= 20);  // the scan saw the real files
     // Every table entry is matched by a call.
     for (const Knock& k : kEngineKnocks) {
         for (const char* m : k.methods) {
@@ -1237,15 +1234,23 @@ void checkThePort(const fs::path& root, const std::set<std::string>& deny, const
 
     // 3. the window's ask
     const std::string text = readFile(root / "src" / "gui" / "app_window.cpp");
-    const std::string ctor = bodyAfter(text, "AppWindow::AppWindow(std::string configPath, bool announceConfig)");
-    CHECK(!ctor.empty());
+    const std::string ctorRaw = bodyAfter(text, "AppWindow::AppWindow(const WindowHost& host)");
+    CHECK(!ctorRaw.empty());
+    std::string ctor;   // the constructor's CODE: its comments (which name initialise and the file's load to say they moved) and strings blanked
+    for (const std::string& l : codeLines(ctorRaw)) { ctor += l + "\n"; }
     {
+        // SINCE R7 THE ENGINE IS RESTORED BEFORE THE WINDOW EXISTS (the host's EngineService::restore, main.cpp / the test host), so the constructor opens
+        // its session on the table the host passed, attaches the plugin UI port ONCE - a LATE attach: the scan has run, the engine replays its current
+        // directive - and starts nothing up: it names no initialise, no file load, no receiver restore.
         const std::size_t session = ctor.find("openUiSession();");
         const std::size_t attach = ctor.find("attachPluginUi();");
-        const std::size_t init = ctor.find("engine_.initialise();");
-        const bool ok = session != std::string::npos && attach != std::string::npos && init != std::string::npos && session < attach && attach < init &&
-                        ctor.find("attachPluginUi();", attach + 1) == std::string::npos;
-        if (!ok) { std::printf("FAIL: the constructor does not open its session, attach the plugin UI port once, and only then start the engine up\n"); }
+        const bool tableFromHost = ctor.find("engineApi_ = host.api;") != std::string::npos && ctor.find("uiEngine_ = host.handle;") != std::string::npos &&
+                                   ctor.find("engineApi_ = host.api;") < session;
+        const bool ok = session != std::string::npos && attach != std::string::npos && session < attach && tableFromHost &&
+                        ctor.find("attachPluginUi();", attach + 1) == std::string::npos && ctor.find("initialise") == std::string::npos &&
+                        ctor.find("ConfigStore::load(") == std::string::npos && ctor.find("telemetryStartup") == std::string::npos &&
+                        ctor.find("loadBookmarks") == std::string::npos;
+        if (!ok) { std::printf("FAIL: the constructor does not open its session on the host's table, attach the plugin UI port once (a late attach), and leave the engine's start-up and the settings file to the host\n"); }
         CHECK(ok);
     }
     {

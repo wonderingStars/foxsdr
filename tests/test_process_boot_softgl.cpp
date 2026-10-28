@@ -180,9 +180,16 @@ int main() {
     CHECK(mainSrc.substr(relaunchFlag, watcherOff - relaunchFlag).find("}\n") != std::string::npos);
     CHECK(count(mainSrc, "relaunchAndWait(") == 1);
     CHECK(mainSrc.find("ProcessKind::Host") != std::string::npos);
-    // The settings lock goes before the second process starts (it takes it for its own run).
-    const std::size_t lockOff = mainSrc.find("configLock.release()");
-    CHECK(lockOff != std::string::npos && watcherOff < lockOff && lockOff < relaunch);
+    // The settings lock goes before the second process starts (it takes it for its own run). SINCE SHELL RETIREMENT R7 the lock is the ENGINE SERVICE's
+    // (EngineService::acquireConfig, a member of the service - the engine's service main builds for the window): the service is declared in the window's
+    // scope BEFORE the window, so it is destroyed, and the lock with it, when that scope closes - which the check above puts before the relaunch. Main holds
+    // no lock object of its own outside that scope, and releases nothing by hand (there is nothing left to release).
+    const std::size_t serviceOff = mainSrc.find("cascade::engine::EngineService service(");
+    const std::size_t lockOff = mainSrc.find("service.acquireConfig(");
+    CHECK(serviceOff != std::string::npos && lockOff != std::string::npos);
+    CHECK(serviceOff < lockOff && lockOff < windowScope);   // the service, then its lock, then the window: all inside the scope that closes before the relaunch
+    CHECK(serviceOff < windowScope && windowScope < relaunchFlag);
+    CHECK(mainSrc.find("ConfigLock") == std::string::npos && mainSrc.find("releaseConfig") == std::string::npos);
 
 #if defined(_WIN32)
     // --- 4. Run for real: the boot as each kind, with the mark in the environment ------------------------------

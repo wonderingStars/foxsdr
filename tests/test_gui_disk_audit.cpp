@@ -263,7 +263,6 @@ const std::vector<Wrapper>& wrappers() {
         // taken by an exclusive create. Neither belongs on the thread that draws the window.
         {"readTextFile(", "src/core/file_read.cpp", "reads a whole file (a developer hook's script or patch)"},
         {"setDamagedFileAside(", "src/core/damaged_file.cpp", "renames a damaged file aside and prunes older copies"},
-        {"setAsideDamagedFile(", "src/gui/app_window.cpp", "keeps a damaged file aside (start-up only)"},
         {"reserveUnique(", "src/core/unique_file.cpp", "creates a file under the first free name"},
         {"createUnique(", "src/core/unique_file.cpp", "creates a file under the first free name"},
         // 0.99.74: the BROWSE key of a PATH settings field. pickFile shows a MODAL file dialog
@@ -621,6 +620,11 @@ struct Allowed {
 //   The constructor's reads of bookmarks.json and markers.json (the engine loads them, and keeps a damaged one aside: Engine::loadBookmarks).
 //   AppWindow::setAsideDamagedFile moved files (app_window_disk_work.cpp of master's tree is gone); the two SDRplay diagnostic functions moved to
 //   app_window_sdrplay.cpp (stub batch B18).
+//   SHELL RETIREMENT R7 (2026-10-28): the constructor reads NO file any more - the settings file's load, the damaged file's rename aside
+//   (AppWindow::setAsideDamagedFile, deleted with its allowlist entry and its call-list row) and the usage journal's start-up are the host's
+//   restore (EngineService::restore: src/engine/engine_service.cpp, which main.cpp runs BEFORE the window exists). The window's own start-up on
+//   the table touches no disk, so the two entries "AppWindow::AppWindow" and "AppWindow::setAsideDamagedFile" are gone: an entry that matches
+//   nothing fails this test.
 // WHAT B19 PUT ON WORKERS, so that it is not here: the plugin picture's save and the screenshot's files (app_window_disk_work.cpp), the Airband
 // preset's read of its file (app_window_airband.cpp) and the import window's lookup of a path with no root (app_window_import_dialog.cpp) are
 // window workers; the I/Q file's open, the frequency list's import and export and the patch Radio's recordings list are the engine's
@@ -628,15 +632,6 @@ struct Allowed {
 const std::vector<Allowed>& allowed() {
     static const std::vector<Allowed> v = {
         // ---- START-UP: before the first frame, with the watchdog not yet running ------
-        {"app_window.cpp", "AppWindow::AppWindow", "helper", Pause::Startup, "",
-         "The constructor reads config.json once, before the first frame and before run() starts the watchdog, and keeps a damaged one aside "
-         "(setAsideDamagedFile). A slow profile delays the window's first appearance, as it always has; no frame stops. (Until the engine split "
-         "it read bookmarks.json and markers.json here as well: the engine loads those, and a window that opens before its settings are known "
-         "is a different change.)"},
-        {"app_window.cpp", "AppWindow::setAsideDamagedFile", "helper", Pause::Startup, "",
-         "0.99.65: renames a damaged config.json aside (and removes older copies) where the constructor's load of it failed - at start-up, before "
-         "the first frame and before the watchdog starts, beside the read it follows. Called from nowhere else; it adds nothing to a frame. (The "
-         "bookmark list's and the markers' are the engine's: Engine::loadBookmarks.)"},
 
         // ---- DEVELOPER AND TRANSLATOR HOOKS: an environment variable, read once -------
         {"app_window.cpp", "AppWindow::run", "helper,stream", Pause::NotNeeded, "",

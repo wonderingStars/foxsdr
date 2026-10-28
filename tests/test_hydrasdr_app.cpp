@@ -197,7 +197,7 @@ struct AppWindowTestAccess {
         passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });
         return a.currentConfig();
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { a.applyConfig(c); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { th::applyConfig(a, c); }); }
 };
 
 }  // namespace cascade::gui

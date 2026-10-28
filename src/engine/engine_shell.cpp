@@ -4,50 +4,92 @@
 // lines, the window used to run on the engine directly - moved here verbatim, so the engine sees exactly the calls it saw before the
 // fence, in the same order. Part of the cascade_shell target (the interface links it; the headless engine does not).
 //
+// SINCE SHELL RETIREMENT R7 the shell does not own the engine: the host process builds it (an EngineService - main.cpp, or the test host)
+// and the shell is a VIEW of it that installs the window's host (the hang watchdog's pause and resume) with Engine::setHost and puts the
+// engine's own back when it goes.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine_shell.hpp"
 
+#include <atomic>
+#include <cstdio>
+#include <stdexcept>
 #include <utility>
 
+#include "core/diag_log.hpp"
 #include "core/patch_radio.hpp"
 #include "core/telemetry.hpp"
 #include "core/version.hpp"
 #include "engine/engine.hpp"
 #include "engine/engine_host.hpp"
-#include "engine/fox_engine_api.hpp"
 
 namespace cascade::engine {
 
 namespace {
 
 // The engine's own EngineHost, answering from the front end's ShellHooks. The interface cannot include engine_host.hpp (it names the web
-// server and the plugin UI's machinery), so the three calls the engine still makes of its front end are adapted here.
+// server and the plugin UI's machinery), so the two calls of the engine's three that are the window's to answer are adapted here.
+//
+// WHAT IT DOES NOT ANSWER IS THE CLOCK (shell retirement R7). wallTimeS stays EngineHost's own: the engine's usage journal stamped the
+// session's start on the service's host in its restore, before any window existed, and every EngineHost measures from one process-wide
+// origin (engine_host.cpp), so the reads that follow the install continue the stamp's clock. Forwarding glfwGetTime() here would have been
+// a second clock for the same session.
+//
+// THE WINDOW MAY GO BEFORE THE ENGINE LETS THE ADAPTER GO, and the adapter is then detached rather than dangling: the hooks pointer is atomic
+// and nulled by the shell's destructor, and an adapter the engine would not give up (its control thread is running: resetHost answers false)
+// is LEAKED on purpose, loudly, so that a pause or a resume the engine makes later finds a host that does nothing instead of a dead window.
 class ShellHostAdapter final : public EngineHost {
 public:
-    explicit ShellHostAdapter(ShellHooks& hooks) : hooks_(hooks) {}
-    double wallTimeS() const override { return hooks_.wallTimeS(); }
-    void pauseWatchdog() override { hooks_.pauseWatchdog(); }
-    void resumeWatchdog() override { hooks_.resumeWatchdog(); }
+    explicit ShellHostAdapter(ShellHooks& hooks) : hooks_(&hooks) {}
+    void pauseWatchdog() override {
+        if (ShellHooks* const h = hooks_.load(std::memory_order_acquire)) { h->pauseWatchdog(); }
+    }
+    void resumeWatchdog() override {
+        if (ShellHooks* const h = hooks_.load(std::memory_order_acquire)) { h->resumeWatchdog(); }
+    }
+    void detach() { hooks_.store(nullptr, std::memory_order_release); }
 
 private:
-    ShellHooks& hooks_;
+    std::atomic<ShellHooks*> hooks_;
 };
 
 }  // namespace
 
 struct EngineShell::Impl {
-    explicit Impl(ShellHooks& hooks) : host(hooks), engine(std::make_unique<Engine>(static_cast<EngineHost&>(host))) {}
-    // Declared first, destroyed last: the engine asks it until its last call.
-    ShellHostAdapter host;
-    std::unique_ptr<Engine> engine;
+    Impl(Engine& e, ShellHooks& hooks) : engine(&e), host(new ShellHostAdapter(hooks)) {
+        if (!engine->setHost(*host)) {
+            delete host;   // never installed: nothing holds it
+            host = nullptr;
+            const char* const sentence =
+                "engine: the window could not become the engine's host - its control thread is already running (Engine::setHost refused). The "
+                "engine is built and restored by the host process, and the window attaches before the control thread starts";
+            cascade::core::diagWarnf("%s", sentence);
+            throw std::runtime_error(sentence);
+        }
+    }
+    ~Impl() {
+        if (host == nullptr) { return; }
+        if (engine->resetHost()) {
+            delete host;
+            return;
+        }
+        // The engine would not give the host up: its control thread is running. Nothing may call into this window from here on, and the adapter
+        // must stay alive for as long as the engine can ask it.
+        host->detach();
+        cascade::core::diagWarnf("engine: the window went while the control thread was still running; its host was detached and is kept");
+        std::fprintf(stderr, "engine: the window went while the control thread was still running; its host is left detached\n");
+        host = nullptr;   // (leaked: the engine still holds it)
+    }
+    Engine* engine;
+    ShellHostAdapter* host;
 };
 
 EngineShell::EngineShell() = default;
 EngineShell::~EngineShell() = default;
 
-std::unique_ptr<EngineShell> EngineShell::create(ShellHooks& hooks) {
+std::unique_ptr<EngineShell> EngineShell::view(Engine& engine, ShellHooks& hooks) {
     std::unique_ptr<EngineShell> shell(new EngineShell());
-    shell->impl_ = std::make_unique<Impl>(hooks);
+    shell->impl_ = std::make_unique<Impl>(engine, hooks);
     return shell;
 }
 
@@ -58,20 +100,9 @@ Engine& rawEngine(EngineShell& shell) { return *shell.impl_->engine; }
 
 // --- CLASS SHELL -------------------------------------------------------------------------------------------------------------
 
-void EngineShell::initialise() { SHELL_ENGINE.initialise(); }
-void EngineShell::loadBookmarks() { SHELL_ENGINE.loadBookmarks(); }
-void EngineShell::telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir) {
-    SHELL_ENGINE.telemetryStartup(cfg, configDir);
-}
-void EngineShell::applyConfig(const cascade::core::AppConfig& cfg) { SHELL_ENGINE.applyConfig(cfg); }
-
-EngineShell::ConfigReadback EngineShell::configReadback() const { return SHELL_ENGINE.configReadback(); }
-
 cascade::core::AppConfig EngineShell::configSnapshot() const { return SHELL_ENGINE.configSnapshot(); }
 void EngineShell::publishConfig() { SHELL_ENGINE.publishConfig(); }
 void EngineShell::setFrontEndWaitBeat(std::function<void()> beat) { SHELL_ENGINE.setFrontEndWaitBeat(std::move(beat)); }
-const FoxEngineApi* EngineShell::apiTable() { return engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR); }
-FoxEngine* EngineShell::apiHandle() { return SHELL_ENGINE.apiHandle(); }
 
 void EngineShell::startReceiver() { SHELL_ENGINE.startReceiver(); }
 void EngineShell::controlPass() { SHELL_ENGINE.controlPass(); }

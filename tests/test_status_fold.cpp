@@ -84,7 +84,7 @@ struct AppWindowTestAccess {
     static bool folded(const AppWindow& a) { return a.statusCollapsed_; }
     static bool railFolded(const AppWindow& a) { return a.railCollapsed_; }
     static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { a.applyConfig(c); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { th::applyConfig(a, c); }
 };
 
 }  // namespace cascade::gui

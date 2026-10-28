@@ -235,12 +235,14 @@ struct EngineStatusText {
 // WHAT THE ENGINE ASKS OF ITS FRONT END (replaces the interface's use of EngineHost, which names the web server and the plugin UI)
 // ==================================================================================================================================
 
-// The clocks and the watchdog - three calls, thread-safe by construction (engine/stage3b-pre OPEN 4). The shell adapts these to the
-// engine's own EngineHost; the window implements them.
+// The clocks and the watchdog - three calls, thread-safe by construction (engine/stage3b-pre OPEN 4). The shell adapts the two watchdog calls to the
+// engine's own EngineHost; the window implements all three. (wallTimeS is NOT asked of the window by the engine since shell retirement R7: the engine
+// started on its own host's clock, in the service's restore, and a host that replaced it with glfwGetTime would have put the usage report's session
+// start and its reads on two clocks. The window's own tester session still reads it. It goes with the class, R9.)
 class ShellHooks {
 public:
     virtual ~ShellHooks() = default;
-    // The wall-clock the usage report measures a session with (glfwGetTime() in the window).
+    // The wall-clock the window's own usage report measures a session with (glfwGetTime()).
     virtual double wallTimeS() const = 0;
     // Paused across deliberate blocking work on the calling thread (a plugin rescan, a bounded device open).
     virtual void pauseWatchdog() = 0;
@@ -254,36 +256,39 @@ public:
 class EngineShell {
 public:
     // ---------------------------------------------------------------------------------------------------------------------------
-    // CLASS SHELL (added 2026-10-21, stage 4 step 5; END: stage 7, the host process split from the interface). The composition
-    // root and the bounded-run driver. AppWindow::AppWindow, ~AppWindow, run and applyConfig are the callers.
+    // CLASS SHELL (added 2026-10-21, stage 4 step 5; END: stage 7, the host process split from the interface). The bounded-run
+    // driver and the engine's start and stop. AppWindow::AppWindow, ~AppWindow and run are the callers.
+    // (THE COMPOSITION ROOT is not here any more: shell retirement R7, 2026-10-28, moved the construction of the engine to the host
+    // process. main - or the test host - builds an EngineService, restores the settings and hands the window the engine's API table, its
+    // handle and the engine itself; the shell is a VIEW of that engine now, not its owner. The restore - initialise, the settings
+    // file's load and the receiver's half of it, the usage journal's start-up, the bookmarks, the CASCADE_CONFIG_TEST read-back - is the
+    // service's, and the table's api and handle are main's to pass: initialise, loadBookmarks, telemetryStartup, applyConfig,
+    // configReadback, apiTable and apiHandle left this door.)
     // ---------------------------------------------------------------------------------------------------------------------------
 
-    // Builds the engine this shell fronts. `hooks` must outlive the shell.
-    static std::unique_ptr<EngineShell> create(ShellHooks& hooks);
+    // A view of the engine the host built, for the window `hooks` fronts (`hooks` must outlive the shell, and so must `engine`).
+    // It installs the window's answers to the engine's three questions of its front end (the hang watchdog's pause and resume) with
+    // Engine::setHost, and the destructor puts the engine's own host back (Engine::resetHost): a window can come and go over an engine
+    // that stays. NOTHING in the engine is built or destroyed by a shell. Throws std::runtime_error, with the sentence, when the engine
+    // refuses the host (its control thread is already running - setHost answers false then and changes nothing): a window that cannot
+    // become the engine's host must not carry on as if it were one.
+    static std::unique_ptr<EngineShell> view(Engine& engine, ShellHooks& hooks);
     ~EngineShell();
     EngineShell(const EngineShell&) = delete;
     EngineShell& operator=(const EngineShell&) = delete;
 
-    // --- construction and restore (the constructor, applyConfig) ---
-    void initialise();
-    void loadBookmarks();
-    void telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir);
-    void applyConfig(const cascade::core::AppConfig& cfg);
+    // --- the settings the window keeps (until R8 moves the keeper) ---
     // (The store's URL box is seeded from the table's fact.store.url, the status lines are read as fact.status.*, the frame's kick is the heartbeat of a
     // FOXAPI_SESSION_FRAME session and the two listeners' use is fact.web.served / fact.cat.accepted: shell retirement R3 retired
     // pluginCatalogueUrl, publishStatusText, statusText, frameKick and setServerUsageHooks from this door.)
-    // The CASCADE_CONFIG_TEST printout's read-back: the demod mode the pipeline mirrors hold and the centre the source reports.
-    using ConfigReadback = cascade::engine::ConfigReadback;
-    ConfigReadback configReadback() const;
     cascade::core::AppConfig configSnapshot() const;
     void publishConfig();
     void setFrontEndWaitBeat(std::function<void()> beat);
     // (The Diagnostics switch reaches the control thread's watchdog inside the interface's half of the configuration - FOXAPP_OP_INTERFACE_CONFIG,
     // Engine::applyInterfaceConfig - against the directory the host named in ControlThreadOptions::diagnosticsDir: shell retirement R5 retired
     // setControlWatchdogReportDir from this door.)
-    // The engine API's table and the handle of the engine the window's LOCAL session opens on.
-    static const FoxEngineApi* apiTable();
-    FoxEngine* apiHandle();
+    // (The engine API's table and the handle its LOCAL session opens on are main's to pass - AppWindow(WindowHost) - and not the door's: shell
+    // retirement R7 retired apiTable and apiHandle.)
 
     // --- the run ---
     void startReceiver();

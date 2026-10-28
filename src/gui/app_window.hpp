@@ -647,23 +647,40 @@ inline void mapPlaceDefaultRect(float& x, float& y, float& w, float& h,
     if (y < r.y) { y = r.y; }
 }
 
+// WHAT THE HOST PROCESS HANDS THE WINDOW (shell retirement R7, 2026-10-28; docs/engine-stage4.md 6.25). The window no longer builds the engine: the
+// host - main.cpp, or the test host - builds an EngineService, takes the settings lock, restores the settings into the engine, and constructs the
+// window on the restored engine. The window is a client of it from its first line: it opens its own session on the table the host passes and
+// reads its half of the settings back from the table (fact.config.interface).
+struct WindowHost {
+    // THE TABLE AND THE HANDLE of the engine the window's LOCAL session opens on (engineApi(...) and Engine::apiHandle(), named by the host: the
+    // window cannot include either).
+    const FoxEngineApi* api = nullptr;
+    FoxEngine* handle = nullptr;
+    // THE ENGINE ITSELF, for the shell's view of it (the start, the stop and the pieces of the door that remain). Transitional: R8 moves the start
+    // and the stop to the service and R9 the bounded-run hooks, and with them this member.
+    cascade::engine::Engine* engine = nullptr;
+    // THE SETTINGS FILE the host restored from; empty is hermetic - nothing read, written or kept. The window still owns the KEEPER until R8 (it
+    // saves to this path, debounced, and at the end), so it needs the path and is told how the restore went.
+    std::string configPath;
+    bool configLoaded = false;       // the file was read (a missing file is a first run: loaded); false - damaged, or hermetic: nothing to apply
+    bool writesForbidden = false;    // a damaged file that could not be kept aside: nothing may be saved over it
+    bool lastRunUnclean = false;     // the file said the last run never wrote its clean-exit marker (the window's crash-report offer)
+    std::string sourceKind;          // the saved source, as the file named it: the I/Q path box starts from `iqFilePath` when this is "file"
+    std::string iqFilePath;
+};
+
 // Owns the GLFW window, the ImGui context and the top-level panel layout.
 // All GLFW/ImGui usage stays behind this interface so main() (and any future
 // headless harness) never needs GUI headers.
 class AppWindow : private cascade::engine::ShellHooks {
 public:
-    // Constructs the render pipeline with the demo SigGen signal already
-    // configured, so the first Play click shows spectrum content immediately.
-    //
-    // configPath: where the persistent AppConfig is loaded from at
-    // construction and saved to (debounced during run(), and on clean exit).
-    // An EMPTY path disables persistence entirely — nothing is read or
-    // written — which is the hermetic mode the --frames/--selftest CI
-    // contract requires, and the default so a bare AppWindow can never touch
-    // the user's real config by accident. announceConfig prints the one-line
-    // "config applied: ..." diagnostic to stdout after the startup load (the
-    // CASCADE_CONFIG_TEST hook; normal runs keep stdout byte-identical).
-    explicit AppWindow(std::string configPath = {}, bool announceConfig = false);
+    // The window's start-up on an engine the host has built and restored: its API session, the plugin UI's port (a late attach - the scan has
+    // run), its half of the settings from the table, and the shell's view of the engine (which installs the window as its host, so this must
+    // run before the engine's control thread starts: it throws std::runtime_error when the engine refuses the host). Nothing here builds,
+    // starts or restores the engine - that is EngineService's (engine/engine_service.hpp) - and nothing reads the settings file. An EMPTY
+    // `configPath` is the hermetic mode the --frames/--selftest CI contract requires: nothing is read or written. The CASCADE_CONFIG_TEST line
+    // ("config applied: ...") is the host's to print (EngineService::announce).
+    explicit AppWindow(const WindowHost& host);
 
     // Out-of-line: the unique_ptr members delete forward-declared types.
     // Also finalizes any recording still in flight (uninstall the pipeline
@@ -717,9 +734,10 @@ private:
     // behind this window. Defined in the tests only; no src/ file names it. Goes with rawEngine (R10).
     friend struct TestHostAccess;
     // THE ENGINE (engine extraction stage 3a, docs/engine-stage3.md), BEHIND THE FENCE (stage 4, step 5): the receiver's state and
-    // machinery are owned by an Engine this window holds - but the window holds it as an EngineShell, the narrow door declared in
-    // engine/engine_shell.hpp, and the interface target cannot include engine.hpp at all. Declared FIRST, so it is built before and
-    // destroyed after everything the window keeps.
+    // machinery are an Engine the HOST owns (shell retirement R7: an EngineService, built by main.cpp or the test host and restored before this
+    // window exists) - the window holds a VIEW of it, an EngineShell, the narrow door declared in engine/engine_shell.hpp, and the interface target
+    // cannot include engine.hpp at all. The view installs this window as the engine's host (Engine::setHost) and puts the engine's own back when
+    // it is destroyed. Declared FIRST, so it is built before and destroyed after everything the window keeps.
     std::unique_ptr<cascade::engine::EngineShell> engineHolder_;
     cascade::engine::EngineShell& engine_;
     // THE PLUGIN UI IS THIS WINDOW'S (the pump move's step P3): the track sources, panels and instruments polled in the frame
@@ -1630,10 +1648,11 @@ private:
     void radioSetupPollDriverInstall();
 
     // --- Config persistence (P5) ---------------------------------------------
-    // Pushes every AppConfig field into the pipeline/panel mirrors; source
-    // restore failures (file gone, device unplugged) fall back to the
-    // generator silently except for lastError surfaced via sourceError_.
-    void applyConfig(const cascade::core::AppConfig& cfg);
+    // THE WINDOW'S HALF OF THE START-UP STATE into its own members (shell retirement R7; was applyConfig, which also applied the engine's half - that is
+    // the host's restore now). `startup` is a config with the start-up state's (core::startupState) fields of the ENGINE's half that this window reads;
+    // the interface's half is taken from the table (withInterfaceHalfFromTable). Returns the config it applied, interface half and all. A test host
+    // applies the engine's half itself and then calls this (tests/test_host.hpp: th::applyConfig).
+    cascade::core::AppConfig applyWindowHalf(const cascade::core::AppConfig& startup);
     cascade::core::AppConfig currentConfig();  // snapshot of the live state
     // THE INTERFACE'S HALF OF THE SETTINGS FILE (shell retirement R5; core/config_halves.hpp, docs/api-0.3-additions.md 9.16). This window owns part of the
     // file - its view state, the key bindings, the patch text, the update and diagnostics switches, the beta tester's record - and hands that part to the
@@ -2121,7 +2140,6 @@ private:
 
     // --- Config persistence state (P5) ----------------------------------------
     std::string configPath_;       // empty = persistence disabled (hermetic)
-    bool configAnnounce_ = false;  // print "config applied: ..." (test hook)
 
     // The source combo was open on the previous frame. The native
     // enumeration and the lazy Soapy scan run on the frame it OPENS, not on
@@ -2798,8 +2816,8 @@ private:
     // runs there is no user interface left to ask with. This is the ask.
     void drawDiagnosticsOffer();
     void copyDiagnosticsBundle();
-    // A damaged settings file is kept aside before anything can save over it; and the save's back-off after failures (0.99.65).
-    void setAsideDamagedFile(const char* which, const std::string& path);
+    // The save's back-off after failures (0.99.65). (A damaged settings file is kept aside before anything can save over it by the host's restore,
+    // EngineService::setAsideDamaged, since shell retirement R7: the window is told whether that failed - WindowHost::writesForbidden.)
     void noteConfigWrite(bool ok, const std::string& error);
     bool configRetryHeld(double nowS, double baseWaitS);
     int configFailures_ = 0;

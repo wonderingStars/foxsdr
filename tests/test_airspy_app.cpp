@@ -218,7 +218,7 @@ struct AppWindowTestAccess {
     }
     // The launch's restore, as the window's constructor makes it: on a window no pass has attached a thread to yet (every caller
     // calls it first), so the test's thread is the only one in the engine.
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { a.applyConfig(c); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { th::applyConfig(a, c); }
     // The Source panel's Airspy gain slider's own call (engine/stage3b-pre
     // M2, 2026-09-28): queued, exactly as ImGui::SliderFloat's edit does in
     // drawAirspyControls, then drained by the same pollSourceAsync poll a

@@ -1440,8 +1440,8 @@ struct AppConfig {
 //
 // A pure function over the config, rather than a rule buried in the window,
 // so a test can hand it a config with everything open and check that nothing
-// comes out open and nothing else changed. AppWindow::applyConfig is its one
-// caller; the fields themselves are still saved, so the file remains a record
+// comes out open and nothing else changed. EngineService::restore is its one
+// caller (AppWindow::applyConfig was, until shell retirement R7: the host restores now); the fields themselves are still saved, so the file remains a record
 // of the last session for anyone reading it.
 AppConfig startupState(AppConfig cfg);
 

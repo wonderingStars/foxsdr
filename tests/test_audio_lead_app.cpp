@@ -201,7 +201,7 @@ struct AppWindowTestAccess {
         passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });
         return a.currentConfig();
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { a.applyConfig(c); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { th::applyConfig(a, c); }); }
     static void addSpeaker(AppWindow& a, cascade::core::patch::NodeId id,
                            std::shared_ptr<cascade::core::patch::AudioDest> d) {
         passseam::on(th::engine(a), [&] { th::engine(a).patchDests_.emplace_back(id, std::move(d)); });
