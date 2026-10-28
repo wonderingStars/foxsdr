@@ -445,13 +445,15 @@ cascade::core::TesterUsageReport AppWindow::buildTesterUsageReport(double sessio
     return cascade::core::finalizeTesterUsageReport(std::move(r), std::time(nullptr));
 }
 
-void AppWindow::testerUsageJournal(cascade::core::AppConfig& cfg) {
+void AppWindow::testerUsageJournal(cascade::core::AppConfig& cfg, bool bookkeeping) {
     cfg.testerToken = testerToken_;
     cfg.testerTokenInvalid = testerTokenInvalid_;
     cfg.testerAppToken = testerAppToken_;
     cfg.testerAppTokenName = testerAppTokenName_;
     cfg.testerUsagePending = testerUsageQueue_.items();
     cfg.testerUsageCurrent.clear();
+    // The report so far moves by itself (every second of the session is in it): built only when someone is about to keep it (shell retirement R5).
+    if (!bookkeeping) { return; }
     if (activeTesterToken().empty()) {
         // Opted out: nothing here is collected, so there is nothing to write
         // beyond the token fields above (which record the removal itself).

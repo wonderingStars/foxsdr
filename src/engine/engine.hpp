@@ -2328,6 +2328,17 @@ private:
     // sites, the per-radio gain memory ...) - goes back into the file as it was read instead of as a default. Every field a half DOES
     // write is overwritten by it. Written by applyConfig (the control thread's own call), read by publishConfig on the same thread.
     cascade::core::AppConfig loadedCfg_;
+    // THE INTERFACE'S HALF (shell retirement R5): what the interface owns of the settings file, kept as a whole AppConfig of which only the
+    // Interface and Shared fields (core/config_halves.hpp) mean anything. It starts as the config applyConfig was given - the half as loaded -
+    // and is replaced by every FOXAPP_OP_INTERFACE_CONFIG; publishConfig puts it over the snapshot after fillConfig. `interfaceSpoke_` is
+    // whether any interface has sent one: the Shared fields (dbMin, dbMax) are the engine's own until then. Under its own mutex: the op
+    // writes it on the control thread, the table's fact reads it from whichever thread asks.
+    mutable std::mutex interfaceHalfMutex_;
+    cascade::core::AppConfig interfaceCfg_;
+    bool interfaceSpoke_ = false;
+    // ControlThreadOptions::diagnosticsDir, set by startControlThread: where the control watchdog's reports may go when the half says the
+    // Diagnostics switch is on. Read and written on the control thread's own calls (the op and the start).
+    std::string controlDiagDir_;
     // (servers_, the web server's and the CAT listener's host, is declared LAST - after api_ - so it is destroyed first.)
     // TESTS ONLY (an engine created through the table with testHooks=1): the
     // fault test.fault stands in for (published as FAULTED until RUN 1), and
@@ -3279,6 +3290,16 @@ public:
     // is read across threads once the engine has one of its own.
     void publishConfig();
     cascade::core::AppConfig configSnapshot() const;
+    // THE INTERFACE'S HALF OF THE CONFIGURATION (shell retirement R5; core/config_halves.hpp, docs/api-0.3-additions.md 9.16). An interface
+    // owns part of the settings file (its view state, the key bindings, the update and diagnostics switches ...) and hands it to the engine
+    // as a DOCUMENT, FOXAPP_OP_INTERFACE_CONFIG; the engine stores it and puts it into every snapshot (publishConfig), so the snapshot is the
+    // whole file and whoever saves it saves the interface's half with it. interfaceConfigDocument: ANY thread - the half of the start-up
+    // state (core::startupState, applied to the half held NOW: every open flag cleared) as a document, the table's LOCAL fact
+    // fact.config.interface, read AT THE CALL because the window reads it in its constructor, before the first publish. applyInterfaceConfig:
+    // the control thread (the op's handler); false with `error` for a document that is not JSON, and then nothing changes. The Diagnostics
+    // switch in it moves the control watchdog's report directory between "off" and ControlThreadOptions::diagnosticsDir.
+    std::string interfaceConfigDocument() const;
+    bool applyInterfaceConfig(const std::string& document, std::string& error);
     // THE STATUS LINES, HANDED OVER (engine/stage3b-pre, docs/engine-stage3.md
     // OPEN 3, strings first): every sentence the engine writes for a panel to
     // letter - an error under the Source controls, a GPS refusal, the

@@ -76,7 +76,6 @@ EngineShell::ConfigReadback EngineShell::configReadback() const {
 cascade::core::AppConfig EngineShell::configSnapshot() const { return SHELL_ENGINE.configSnapshot(); }
 void EngineShell::publishConfig() { SHELL_ENGINE.publishConfig(); }
 void EngineShell::setFrontEndWaitBeat(std::function<void()> beat) { SHELL_ENGINE.setFrontEndWaitBeat(std::move(beat)); }
-void EngineShell::setControlWatchdogReportDir(const std::string& dir) { SHELL_ENGINE.setControlWatchdogReportDir(dir); }
 const FoxEngineApi* EngineShell::apiTable() { return engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR); }
 FoxEngine* EngineShell::apiHandle() { return SHELL_ENGINE.apiHandle(); }
 

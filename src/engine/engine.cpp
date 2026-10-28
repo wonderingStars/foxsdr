@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine.hpp"
 
+#include "core/config_halves.hpp"
 #include "core/patch_draft.hpp"
 #include "core/serial_port.hpp"
 #include "engine/add_all_plan.hpp"
@@ -8016,6 +8017,15 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
             patchRunning_ = true;
             return res;
+        case FOXAPP_OP_INTERFACE_CONFIG: {
+            // THE INTERFACE'S HALF OF THE SETTINGS FILE (shell retirement R5; API 0.3 9.16): a document, long text, replacing the half held. The
+            // snapshot carries it from the next publish, so whoever saves the snapshot saves it. Refused to a REMOTE session like every application op;
+            // a document that is not JSON is BAD_ARGUMENT and changes nothing.
+            if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
+            std::string why;
+            if (!applyInterfaceConfig(text, why)) { return refuse(FOXAPI_BAD_ARGUMENT, "the interface's half of the configuration is not a JSON document"); }
+            return res;
+        }
         case FOXAPP_OP_TEST_BIAS_STAND_IN:
             // FOXSDR_FORCE_BIAS_KEY (bounded runs only; the window sends biasStandInFor's answer). EngineShell::seamBiasStandIn's whole body: the field is set and
             // biasStandInOn_ is left as it is (the table's "test.biasStandIn" setting also clears it; the seam never did, and neither does this).
@@ -8407,6 +8417,12 @@ void Engine::exitCauseFinish(const cascade::core::ExitVerdict& v) {
 // start-up state (core::startupState), not the file as saved.
 void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     loadedCfg_ = cfg;  // see loadedCfg_ in engine.hpp
+    {
+        // The interface's half, as loaded: what the snapshot carries for it until an interface sends its own (shell retirement R5).
+        std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
+        interfaceCfg_ = cfg;
+        interfaceSpoke_ = false;
+    }
     servers_.load(cfg);  // the web server's and the CAT listener's half (stage 5a)
     // The device scan's UHD rule (gui::soapyDriversWithNoHardware): the switch,
     // and the Soapy args the file named whether or not that radio opens this
@@ -9707,11 +9723,49 @@ Engine::StatusText Engine::statusText() const {
     return statusText_;
 }
 
+// THE SNAPSHOT IS THE WHOLE FILE, FIELD BY FIELD FROM THE HALF THAT OWNS IT (shell retirement R5; core/config_halves.hpp). It used to start
+// from the config as loaded, so a field no half wrote was kept silently; it now starts from defaults, takes the engine's fields as loaded
+// (fillConfig then writes the live ones over them), and puts the interface's half over that - the half as loaded until an interface sends its
+// own. A field the table does not name would be LOST here, which is why tests/test_config_halves.cpp fails when AppConfig grows one.
 void Engine::publishConfig() {
-    cascade::core::AppConfig c = loadedCfg_;
+    cascade::core::AppConfig c;
+    cascade::core::copyEngineHalf(loadedCfg_, c);
     fillConfig(c);
+    {
+        std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
+        cascade::core::copyInterfaceHalf(interfaceCfg_, c, /*includeShared=*/interfaceSpoke_);
+    }
     std::lock_guard<std::mutex> lk(configSnapMutex_);
     configSnap_ = std::move(c);
+}
+
+std::string Engine::interfaceConfigDocument() const {
+    cascade::core::AppConfig half;
+    {
+        std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
+        half = interfaceCfg_;
+    }
+    // What an interface STARTS from is the start-up state of its half (every open flag cleared, the application starts on the bench), whichever
+    // half is held - a document read after the interface has sent its live one must not reopen the pages it had open.
+    return cascade::core::serializeInterfaceHalf(cascade::core::startupState(std::move(half)));
+}
+
+bool Engine::applyInterfaceConfig(const std::string& document, std::string& error) {
+    cascade::core::AppConfig parsed;
+    if (!cascade::core::parseInterfaceHalf(document, parsed, error)) { return false; }
+    bool diagnosticsMoved = false;
+    {
+        std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
+        diagnosticsMoved = interfaceCfg_.diagnosticsEnabled != parsed.diagnosticsEnabled;
+        cascade::core::copyInterfaceHalf(parsed, interfaceCfg_);
+        interfaceSpoke_ = true;
+    }
+    // "OFF MEANS OFF" reaches the control thread's own hang watchdog through the half: when the switch moved, its reports go to the directory the host
+    // allowed (ControlThreadOptions::diagnosticsDir) or nowhere. A host that named none (a bounded run) keeps whatever it started with.
+    if (diagnosticsMoved && !controlDiagDir_.empty()) {
+        setControlWatchdogReportDir(parsed.diagnosticsEnabled ? controlDiagDir_ : std::string());
+    }
+    return true;
 }
 
 cascade::core::AppConfig Engine::configSnapshot() const {
@@ -9730,6 +9784,7 @@ void Engine::startControlThread() { startControlThread(ControlThreadOptions{}); 
 void Engine::startControlThread(const ControlThreadOptions& options) {
     if (controlThread_.joinable()) { return; }
     txPluginStopping_.store(false, std::memory_order_seq_cst);   // a thread restarted after a stop may drive a plugin's key again (the window is closed)
+    controlDiagDir_ = options.diagnosticsDir;
     controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
     {
         std::lock_guard<std::mutex> lk(controlExitMutex_);

@@ -57,6 +57,7 @@
 #include "core/app_commands.hpp"
 #include "core/patch_draft.hpp"
 #include "core/config.hpp"
+#include "core/config_halves.hpp"
 #include "engine/soundcard_panel.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
@@ -387,6 +388,13 @@ struct AppWindowTestAccess {
         if (q.c.op == FOXAPI_OP_RECORD_IQ || q.c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
         if (isDiskOp(q.c, q.longText)) { settleDiskJobs(a); }
         return r;
+    }
+    // The engine's config snapshot as it is NOW: published on the pass's own turn (rd), then copied out (shell retirement R5).
+    static cascade::core::AppConfig snapshotNow(AppWindow& a) {
+        return rd(a, [&] {
+            th::engine(a).publishConfig();
+            return th::engine(a).configSnapshot();
+        });
     }
     // (Engine::submitCommand is the front end's own call from any thread: the queue has its own lock, and it wakes the pass.)
     static void submit(AppWindow& a, const FoxCommand& c) { th::engine(a).submitCommand(c); }
@@ -1410,6 +1418,20 @@ void sourceOps(AppWindow& a) {
         CHECK(A::biasStandInKind(a) == static_cast<int>(cascade::gui::BiasStandIn::Refuse));
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_TEST_BIAS_STAND_IN, 0))));
         CHECK(A::biasStandInKind(a) == static_cast<int>(cascade::gui::BiasStandIn::None));
+    }
+
+    covering(FOXAPP_OP_INTERFACE_CONFIG);
+    {
+        // Shell retirement R5: the interface's half of the settings file, as a document in the long text. It replaces the half the engine holds (the
+        // table's fact.config.interface serves it back; the snapshot carries it); a document that is not JSON is refused and changes nothing.
+        cascade::core::AppConfig half;
+        half.railBank = 2;
+        half.language = "it";
+        CHECK(ok(A::apply(a, cmd::makeText(FOXAPP_OP_INTERFACE_CONFIG, cascade::core::serializeInterfaceHalf(half)))));
+        CHECK(A::snapshotNow(a).railBank == 2);
+        CHECK(A::snapshotNow(a).language == "it");
+        CHECK(refused(A::apply(a, cmd::makeText(FOXAPP_OP_INTERFACE_CONFIG, "this is not a document")), FOXAPI_BAD_ARGUMENT));
+        CHECK(A::snapshotNow(a).railBank == 2);
     }
 
     covering(FOXAPI_OP_SELECT_SOURCE);

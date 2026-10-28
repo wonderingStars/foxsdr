@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
+#include "core/config_halves.hpp"
 #include "core/file_read.hpp"
 #include "core/patch_draft.hpp"
 #include "core/patch_io.hpp"
@@ -862,24 +863,28 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         const bool loaded = cascade::core::ConfigStore::load(configPath_, cfg, err);
         if (loaded) {
             applyConfig(cfg);
+            // THE INTERFACE'S HALF comes from the table, not from the file this constructor loaded (shell retirement R5): the engine took the config in
+            // applyConfig above and serves its half as fact.config.interface. `iface` is the file's config with that half in place of the file's own
+            // - the engine's fields (the usage record's, the clean-exit marker) are still the file's.
+            const cascade::core::AppConfig iface = withInterfaceHalfFromTable(cfg);
             // AFTER applyConfig, so the crash count and the pending report are
             // read from the file rather than from freshly defaulted members.
             // Sends nothing unless the user previously opted in.
-            diagnosticsEnabled_ = cfg.diagnosticsEnabled;
-            diagnosticsMinidump_ = cfg.diagnosticsMinidump;
+            diagnosticsEnabled_ = iface.diagnosticsEnabled;
+            diagnosticsMinidump_ = iface.diagnosticsMinidump;
             {
                 std::string configDir;
                 const std::size_t cut = configPath_.find_last_of("/\\");
                 if (cut != std::string::npos) { configDir = configPath_.substr(0, cut); }
                 engine_.telemetryStartup(cfg, configDir);
             }
-            diagnosticsStartup(cfg);
+            diagnosticsStartup(iface);
             // The beta tester's code and the report the last session left, folded into the retry queue. Sends nothing here: the poll does, off the constructor.
-            testerUsageStartup(cfg);
-            updateCheckEnabled_ = cfg.updateCheckEnabled;
-            updateChannel_ = cfg.updateChannel;
+            testerUsageStartup(iface);
+            updateCheckEnabled_ = iface.updateCheckEnabled;
+            updateChannel_ = iface.updateChannel;
             // The team messages marked Seen (0.99.79, stub campaign B14): the window's own list, saved back by diagnosticsJournal.
-            messagesSeen_ = cfg.messagesSeen;
+            messagesSeen_ = iface.messagesSeen;
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
             // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (0.99.65, core/damaged_file.hpp).
@@ -921,6 +926,10 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // pass's front part before its look; a free-running run makes the first
     // publish in run() before the loop.)
     handFrontEndFacts();
+    // THE BASELINE OF THE INTERFACE'S HALF: what the window starts with is what the engine has (it served the half the window restored from), so
+    // nothing is sent until something differs (sendInterfaceHalf; shell retirement R5).
+    buildInterfaceHalf(interfaceSent_, /*bookkeeping=*/false);
+    interfaceSentKnown_ = true;
 }
 
 AppWindow::~AppWindow() {
@@ -1738,6 +1747,9 @@ int AppWindow::run(int frames) {
         // The control thread's own hang watchdog is armed exactly as this window's is (a bounded run keeps its empty directory, so
         // writes nothing, and applyDiagnosticsEnabled moves both together).
         opt.watchdogReportDir = diagnosticsEnabled_ ? diagCrashDir_ : std::string();
+        // ...and where it goes when the interface's half later switches Diagnostics on (Engine::applyInterfaceConfig): the directory this run may
+        // write into, empty for one that may not (shell retirement R5; setControlWatchdogReportDir is not a door method any more).
+        opt.diagnosticsDir = diagCrashDir_;
         // A free-running pass published nothing yet when the first frame looks: the first one is made here, as the table's own
         // create() makes it, so the window's first read is a real state. (A stepped run has none: its first frame's own front part
         // is the first pass, as the first frame's pump always was.)
@@ -2240,6 +2252,10 @@ int AppWindow::run(int frames) {
         // ~2 s after the last change, so a crash loses almost nothing.
         // Hermetic runs (empty configPath_) never touch the disk.
         if (!configPath_.empty()) { maybeSaveConfig(glfwGetTime()); }
+
+        // THE INTERFACE'S HALF TO THE ENGINE, when it changed (shell retirement R5): with or without a settings file, because the Diagnostics switch
+        // in it is what moves the engine's hang watchdog.
+        (void)sendInterfaceHalf(glfwGetTime());
 
         // After every widget, so the hovered and active items are this frame's.
         frameScope.to(cascade::core::FrameScope::Other);
@@ -21015,8 +21031,9 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
     // The early read of the previous session's log (and nothing at all when off).
     if (diagnosticsEnabled_) { startDiagHistoryRead(); }
     // THE ENGINE'S OWN WATCHDOG (the pump move's step P5) is a second hang detector with a report directory of its own: "off means
-    // off" has to reach it, or a session switched off would keep writing the pass's hang reports.
-    engine_.setControlWatchdogReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    // off" has to reach it, or a session switched off would keep writing the pass's hang reports. Since shell retirement R5 it does so as part
+    // of the interface's half: the switch is a field of the document sendInterfaceHalf hands the engine (at once, uncoalesced, for this field),
+    // and the engine moves the watchdog between "off" and the directory run() named in ControlThreadOptions::diagnosticsDir.
 }
 
 void AppWindow::drawDiagnosticsSection() {
@@ -21349,7 +21366,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // every open flag and the scope mode and touches nothing else: every
     // rectangle, every setting, every position survives. Everything below
     // reads `cfg`, the start-up state, never `saved`.
-    const cascade::core::AppConfig cfg = cascade::core::startupState(saved);
+    const cascade::core::AppConfig fromFile = cascade::core::startupState(saved);
     // THE RECEIVER'S HALF FIRST, ALL OF IT (engine stage 3a): the device scan's
     // rule, the DSP settings, the band plan, the transmitter's settings, the
     // receiver position, the plugins' grants/settings/stops/presets and their
@@ -21359,7 +21376,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // restoring it afterwards rather than interleaved changes nothing
     // (docs/engine-stage3.md lists the one reorder that is visible from
     // outside: the web and CAT listeners now start after the VFO restore).
-    engine_.applyConfig(cfg);
+    engine_.applyConfig(fromFile);
+    // THE INTERFACE'S HALF IS READ FROM THE TABLE (shell retirement R5): the engine took the whole config above and serves the half that is this
+    // window's - already through core::startupState - as the LOCAL fact fact.config.interface, read at the call because this runs before the engine's
+    // first publish. Everything below reads `cfg`: the file's engine fields (the source, the plugins ...) with that half in place of the file's own.
+    const cascade::core::AppConfig cfg = withInterfaceHalfFromTable(fromFile);
     // The Transmit page is the window's own (restored closed on a launch:
     // startupState clears it, as it clears every page).
     transmitPageOpen_ = cfg.transmitOpen;
@@ -21620,8 +21641,18 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     // filled by the ENGINE (Engine::fillConfig, from its own frame) and handed
     // over as a copy (engine/stage3b-pre, docs/engine-stage3.md OPEN 2): this
     // reads the copy and nothing of the engine's live state. Every field is
-    // written by exactly one half, so the order of the halves is immaterial.
+    // written by exactly one half, so the order of the halves is immaterial. Since shell retirement R5 the snapshot ALREADY carries the interface's half as
+    // the engine last had it from this window (Engine::publishConfig), and this puts the live one over it - the same values once a frame has passed, which
+    // is why the duplication is harmless while this window still owns its keeper.
     cascade::core::AppConfig cfg = engine_.configSnapshot();
+    buildInterfaceHalf(cfg, /*bookkeeping=*/true);
+    return cfg;
+}
+
+// THE INTERFACE'S HALF OF THE CONFIGURATION, from the live state into `cfg` (core/config_halves.hpp names its fields; the test holds this function to that list).
+// `bookkeeping` is whether the fields that move by themselves are filled too - the beta tester's report so far, which is built (and its clocks accrued) only
+// when a document is about to be sent or a save is being made, never for the look that merely asks whether anything changed.
+void AppWindow::buildInterfaceHalf(cascade::core::AppConfig& cfg, bool bookkeeping) {
     cfg.patch = patchText_;
     // The named presets and the previous-patch slot (stub campaign B17): changed only by the PRESETS panel.
     cfg.patchPresets = patchPresets_.list();
@@ -21696,8 +21727,61 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.pluginStoreY = storeWinY_;
     cfg.pluginStoreWidth = storeWinW_;
     cfg.pluginStoreHeight = storeWinH_;
-    diagnosticsJournal(cfg);
-    return cfg;
+    diagnosticsJournal(cfg, bookkeeping);
+}
+
+cascade::core::AppConfig AppWindow::withInterfaceHalfFromTable(const cascade::core::AppConfig& fromFile) {
+    std::string document;
+    if (!readFactText("fact.config.interface", document) || document.empty()) {
+        // No session, or a table that does not serve it: the window goes on with the half the file gave it, which is what it always did.
+        cascade::core::diagWarnf("config: the engine did not serve the interface's half of the settings; using the file's");
+        return fromFile;
+    }
+    cascade::core::AppConfig parsed;
+    std::string error;
+    if (!cascade::core::parseInterfaceHalf(document, parsed, error)) {
+        cascade::core::diagWarnf("config: the interface's half of the settings could not be read (%s); using the file's", error.c_str());
+        return fromFile;
+    }
+    cascade::core::AppConfig merged = fromFile;
+    cascade::core::copyInterfaceHalf(parsed, merged);
+    return merged;
+}
+
+bool AppWindow::sendInterfaceHalf(double nowS) {
+    if (uiSession_ == nullptr || !interfaceSentKnown_) { return false; }
+    // THE LOOK: is there anything to say? A compare of the fields that mean something (the self-moving ones - the tester's running report, the
+    // retry queues, the crash-upload limiter's memory - are left out: a document sent because they moved would be a document sent every look).
+    cascade::core::AppConfig half;
+    buildInterfaceHalf(half, /*bookkeeping=*/false);
+    if (cascade::core::interfaceHalvesEqual(half, interfaceSent_)) { return false; }
+    // AT MOST ONE DOCUMENT PER kInterfaceSendGapS (a window drag changes a rectangle every frame, and the session's queue is bounded) - except that
+    // the Diagnostics switch is not made to wait: "off means off" is a promise about what is written from now on.
+    const bool urgent = half.diagnosticsEnabled != interfaceSent_.diagnosticsEnabled;
+    if (!urgent && interfaceSentAtS_ >= 0.0 && nowS - interfaceSentAtS_ < kInterfaceSendGapS) { return false; }
+    interfaceSentAtS_ = nowS;   // (the clock of the attempt: a refused one is not retried every look)
+    buildInterfaceHalf(half, /*bookkeeping=*/true);   // the document carries the self-moving fields too: they ride along on every real change
+    const cascade::core::cmd::QueuedCommand q =
+        cascade::core::cmd::makeText(FOXAPP_OP_INTERFACE_CONFIG, cascade::core::serializeInterfaceHalf(half));
+    // (Not through uiSubmit, so not in uiSubmitTap_: that tap is the record of the commands the window's CONTROLS sent, which the tests that hold it
+    // against a list of their own must not find a document in; interfaceSends_ counts these.)
+    FoxSubmitResult sr{};
+    sr.structSize = sizeof(sr);
+    const int32_t n = q.longText.empty()
+                          ? engineApi_->submit(uiSession_, &q.c, 1, &sr)
+                          : engineApi_->submit_text(uiSession_, &q.c, q.longText.data(), static_cast<uint32_t>(q.longText.size()), &sr);
+    if (n >= 0 && sr.status == FOXAPI_BUSY) { return false; }   // the session is full: the half stays unsent and is offered again, quietly
+    if (n < 0 || (sr.status != FOXAPI_OK && sr.status != FOXAPI_NO_CHANGE)) {
+        if (!interfaceSendWarned_) {
+            interfaceSendWarned_ = true;
+            cascade::core::diagWarnf("config: the interface's half of the settings was not taken by the engine (%d/%d); asking again later",
+                                     static_cast<int>(n), static_cast<int>(sr.status));
+        }
+        return false;
+    }
+    interfaceSent_ = std::move(half);
+    ++interfaceSends_;
+    return true;
 }
 
 // --- A DAMAGED SETTINGS FILE IS KEPT, NOT OVERWRITTEN (0.99.65, core/damaged_file.hpp) -----------------------------------------------------
@@ -22095,7 +22179,7 @@ void AppWindow::diagnosticsStartup(const cascade::core::AppConfig& cfg) {
         cfg.crashUploadBlockedUntil);
 }
 
-void AppWindow::diagnosticsJournal(cascade::core::AppConfig& cfg) {
+void AppWindow::diagnosticsJournal(cascade::core::AppConfig& cfg, bool bookkeeping) {
     // The update setting rides along here because this is the one place the
     // GUI's copy of the config is written back before the file is saved. It
     // has nothing to do with telemetry and shares no state with it.
@@ -22104,7 +22188,7 @@ void AppWindow::diagnosticsJournal(cascade::core::AppConfig& cfg) {
     // ...and so does the list of team messages marked Seen (0.99.79), for the same reason.
     cfg.messagesSeen = messagesSeen_;
     // ...and the beta tester's code, the retry queue and this session's report so far (nothing but the token fields when no code is set).
-    testerUsageJournal(cfg);
+    testerUsageJournal(cfg, bookkeeping);
 
     // Same rationale: this is the one place the GUI's copy of the config is
     // written back, so the diagnostics switches ride along here too.

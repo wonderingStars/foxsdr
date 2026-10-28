@@ -125,6 +125,12 @@ struct ControlThreadOptions {
     // off (the fallback is always `period`); kickGap 0 turns the drop off (the floor alone bounds the kicks).
     std::chrono::milliseconds kickGrace{24};
     std::chrono::milliseconds kickGap{8};
+    // WHERE A HANG REPORT MAY GO AT ALL (shell retirement R5): the directory this run is allowed to write reports into, whatever the
+    // Diagnostics switch says now - empty for a run that may not touch the disk (a bounded one). `watchdogReportDir` above is where the
+    // watchdog STARTS; this is where it goes when the interface's half later says the switch is on (Engine::applyInterfaceConfig), so the
+    // switch reaches the control thread's watchdog as part of the half and not as a call of its own. Empty (the default) leaves the
+    // watchdog wherever `watchdogReportDir` put it and makes the half's switch a no-op for it.
+    std::string diagnosticsDir;
 };
 
 // THE THREE PARTS OF A PASS (pump move P4/P5). A free-running pass runs them in this order as one; a stepped one runs each when
@@ -267,7 +273,9 @@ public:
     cascade::core::AppConfig configSnapshot() const;
     void publishConfig();
     void setFrontEndWaitBeat(std::function<void()> beat);
-    void setControlWatchdogReportDir(const std::string& dir);
+    // (The Diagnostics switch reaches the control thread's watchdog inside the interface's half of the configuration - FOXAPP_OP_INTERFACE_CONFIG,
+    // Engine::applyInterfaceConfig - against the directory the host named in ControlThreadOptions::diagnosticsDir: shell retirement R5 retired
+    // setControlWatchdogReportDir from this door.)
     // The engine API's table and the handle of the engine the window's LOCAL session opens on.
     static const FoxEngineApi* apiTable();
     FoxEngine* apiHandle();

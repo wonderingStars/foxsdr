@@ -913,6 +913,13 @@ public:
             const bool web = key[5] == 'w';  // ("fact.web.served" or "fact.cat.accepted")
             v = std::to_string(web ? engine_.servers().webCounters().served.load(std::memory_order_relaxed)
                                    : engine_.servers().catCounters().accepted.load(std::memory_order_relaxed));
+        } else if (std::strcmp(key, "fact.config.interface") == 0) {
+            // THE INTERFACE'S HALF OF THE SETTINGS FILE, as a document (API 0.3 9.16; core/config_halves.hpp): the half the engine holds, with every open flag
+            // cleared (the start-up state). Read AT THE CALL, not from the list block, because the window reads it in its constructor - before the first
+            // publish, and a pass run just to make one would add a pass to every stepped run's count. LOCAL: it carries the beta tester's token, and a
+            // transport has no business reading it.
+            if ((s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
+            v = engine_.interfaceConfigDocument();
         } else if (std::strncmp(key, "fact.", 5) == 0) {
             // API 0.3's read-only facts, from the list block the pumping
             // thread built (docs/api-0.3-additions.md).

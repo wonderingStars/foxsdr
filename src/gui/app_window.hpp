@@ -785,7 +785,7 @@ private:
     // window's, and run beside the engine's half exactly where it runs. (The browser's spectrum frame was copied here once a frame until
     // stage 5e; the page reads it from the table on its own session now, so a window that is not framing no longer freezes it.)
     void diagnosticsStartup(const cascade::core::AppConfig& cfg);
-    void diagnosticsJournal(cascade::core::AppConfig& cfg);
+    void diagnosticsJournal(cascade::core::AppConfig& cfg, bool bookkeeping = true);
     // The engine's constants under the names this window's code has always used them by. (The engine's nested types the window once
     // aliased here - LocalCommand, DeviceOpenResult, SoundCardOpenResult, ConverterHeldAir, PatchRadioOpen, PluginNotice,
     // PendingUserPresetEdit, CatalogFetchResult, PluginInstallResult, AddAllRun - had no user left in src/gui; the fence cannot see
@@ -1635,6 +1635,19 @@ private:
     // generator silently except for lastError surfaced via sourceError_.
     void applyConfig(const cascade::core::AppConfig& cfg);
     cascade::core::AppConfig currentConfig();  // snapshot of the live state
+    // THE INTERFACE'S HALF OF THE SETTINGS FILE (shell retirement R5; core/config_halves.hpp, docs/api-0.3-additions.md 9.16). This window owns part of the
+    // file - its view state, the key bindings, the patch text, the update and diagnostics switches, the beta tester's record - and hands that part to the
+    // engine as a document (FOXAPP_OP_INTERFACE_CONFIG) whenever it changes, so the engine's snapshot is the whole file; it reads the part it STARTS from
+    // from the engine (fact.config.interface) instead of from the file it loaded. buildInterfaceHalf: the live state into `cfg` (`bookkeeping` false
+    // leaves the beta tester's running report out, which is built only for a document that is about to be sent). withInterfaceHalfFromTable: `fromFile`
+    // with its interface half replaced by the table's - the file's own when the table cannot be read. sendInterfaceHalf: once a look, after the frame -
+    // sends when the half differs from the one last sent (a compare that leaves the self-moving fields out), at most one document per
+    // kInterfaceSendGapS, except that a change of the Diagnostics switch is sent at once ("off means off" must not wait); a document the session would
+    // not take (BUSY) is asked for again at the next look that is allowed to. True when a document went.
+    void buildInterfaceHalf(cascade::core::AppConfig& cfg, bool bookkeeping);
+    cascade::core::AppConfig withInterfaceHalfFromTable(const cascade::core::AppConfig& fromFile);
+    bool sendInterfaceHalf(double nowS);
+    static constexpr double kInterfaceSendGapS = 0.25;
     void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
     void saveConfigNow();               // clean-exit save (unconditional)
 
@@ -2131,6 +2144,14 @@ private:
     // (in flight or coalesced-and-queued) - see requestConfigSave()'s
     // comment on the header for why one variable is enough.
     cascade::core::AppConfig lastRequestedConfig_;
+    // THE INTERFACE'S HALF AS THE ENGINE LAST HAD IT FROM THIS WINDOW (sendInterfaceHalf): the baseline is taken at the end of the constructor, so
+    // nothing is sent until something differs from what the window started with. interfaceSentAtS_ is the clock of the last ATTEMPT (a refused one
+    // too: it is what spaces the retries); interfaceSends_ counts the documents the session took.
+    cascade::core::AppConfig interfaceSent_;
+    bool interfaceSentKnown_ = false;
+    double interfaceSentAtS_ = -1.0;
+    std::uint64_t interfaceSends_ = 0;
+    bool interfaceSendWarned_ = false;
 
     char bookmarkName_[128] = "";  // editable name for the next "Add current"
     // THE GROUP THE NEXT "Add current" JOINS (2026-10, a tester's request: an airport's tower, ground and approach kept together under its name).
@@ -2441,7 +2462,7 @@ private:
     // nothing gets a clean slate.
     void setTesterToken(const std::string& token, bool startFreshSession);
     void testerUsageStartup(const cascade::core::AppConfig& cfg);
-    void testerUsageJournal(cascade::core::AppConfig& cfg);
+    void testerUsageJournal(cascade::core::AppConfig& cfg, bool bookkeeping = true);
     // Called from within testerUsageJournal, the same cadence
     // telemetryAccrueMode runs at: banks running time against whichever
     // plugins are currently being fed.

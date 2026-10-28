@@ -156,6 +156,7 @@
 #include "airspy_fake_usb.hpp"
 #include "check.hpp"
 #include "core/app_commands.hpp"
+#include "core/config_halves.hpp"
 #include "core/freq_converter.hpp"
 #include "core/freq_import.hpp"
 #include "core/freq_manager.hpp"
@@ -344,6 +345,10 @@ struct AppWindowTestAccess {
         }
         e.addAllFailed_ = false;
     }
+    // Shell retirement R5: where the control thread's hang watchdog would write its reports now (empty: nowhere), and a move of it made by something
+    // other than the interface's half.
+    static std::string watchdogDir(cascade::engine::Engine& e) { return e.controlWatchdog_.reportDir(); }
+    static void setWatchdogDir(cascade::engine::Engine& e, const std::string& dir) { e.controlWatchdog_.setReportDir(dir); }
     static void installFakeRadio() {
         cascade::engine::Engine::testHooks_.makeDevice = &engine_api_test::makeFakeRadio;
         cascade::engine::Engine::testHooks_.nativeScan = &engine_api_test::fakeNativeScan;
@@ -9331,6 +9336,206 @@ void testShellRetirementR3Facts() {
     }
 }
 
+// SHELL RETIREMENT R5 (docs/api-0.3-additions.md 9.16, docs/engine-stage4.md 6.25): the interface's half of the settings file crosses the table as a document -
+// FOXAPP_OP_INTERFACE_CONFIG in, the LOCAL fact fact.config.interface out - and the engine puts it into every snapshot.
+void testShellRetirementR5InterfaceHalf() {
+    namespace cc = cascade::core;
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE,
+                            FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS | FOXAPI_GRANT_ADMIN, "s3cret");
+    CHECK(remote.ok());
+    d.eng.controlPass();
+
+    // (the document is longer than fact()'s 8 KiB: a buffer of the op's own limit)
+    const auto document = [&](testing::Session& who, int32_t* status = nullptr) {
+        std::vector<char> buf(1u << 20);
+        const int32_t n = api()->get_setting(who.raw(), "fact.config.interface", buf.data(), buf.size());
+        if (status != nullptr) { *status = n; }
+        return n >= 0 ? std::string(buf.data(), static_cast<std::size_t>(n)) : std::string();
+    };
+    const auto half = [&](const std::string& doc) {
+        cc::AppConfig parsed;
+        std::string error;
+        CHECK(cc::parseInterfaceHalf(doc, parsed, error));
+        return parsed;
+    };
+
+    // R5.1 THE FACT IS LOCAL: a REMOTE session is refused it (it carries the beta tester's token), a LOCAL one reads a document - the default half on an engine
+    // that was never given a config - and the read moves no list.
+    int32_t st = 0;
+    (void)document(remote, &st);
+    CHECK_EQ(st, FOXAPI_DENIED);
+    const uint64_t seq = s.state().listSeq;
+    const std::string first = document(s, &st);
+    CHECK(st > 0);
+    CHECK(!first.empty());
+    CHECK(half(first).railBank == cc::AppConfig{}.railBank);
+    d.eng.controlPass();
+    CHECK_EQ(s.state().listSeq, seq);
+
+    // R5.2 THE HALF AS LOADED, with the start-up state applied: an engine given a config serves the interface's half of it with every open flag cleared (the
+    // application starts on the bench) and everything else as it was - the engine's own fields not at all.
+    cc::AppConfig cfg;
+    cfg.railBank = 3;
+    cfg.language = "de";
+    cfg.keyBindings = {"tune.up=Ctrl+Up"};
+    cfg.scopeMode = true;
+    cfg.demodScopeOpen = true;
+    cfg.pluginBrowserOpen = true;
+    cfg.fittedModulesOpen = true;
+    cfg.fittedModulesX = 40;      // (the reader keeps a rectangle only if it has a size)
+    cfg.fittedModulesWidth = 700;
+    cfg.fittedModulesHeight = 500;
+    cfg.diagnosticsEnabled = false;
+    cfg.updateChannel = "beta";
+    cfg.dbMin = -90.0f;
+    cfg.dbMax = -10.0f;
+    cfg.volume = 0.0f;           // the engine's: a hermetic engine plays nothing it restores
+    cfg.webPasswordRecord = "pbkdf2$secret-of-the-engine";
+    cc::AppConfig::MapPage page;
+    page.plugin = "Radar Sweep";
+    page.x = 120;
+    page.y = 80;
+    page.width = 900;
+    page.height = 640;
+    page.open = true;
+    cfg.mapPages = {page};
+    d.eng.applyConfig(cfg);
+    const std::string loaded = document(s, &st);
+    CHECK(st > 0);
+    const cc::AppConfig h1 = half(loaded);
+    CHECK_EQ(h1.railBank, 3);
+    CHECK_EQ(h1.language, std::string("de"));
+    CHECK(h1.keyBindings == cfg.keyBindings);
+    CHECK_EQ(h1.updateChannel, std::string("beta"));
+    CHECK(!h1.diagnosticsEnabled);
+    CHECK_EQ(h1.fittedModulesX, 40);
+    CHECK(!h1.scopeMode && !h1.demodScopeOpen && !h1.pluginBrowserOpen && !h1.fittedModulesOpen);   // the open flags, cleared
+    CHECK(h1.mapPages.size() == 1u && !h1.mapPages[0].open && h1.mapPages[0].x == 120);            // the rectangle kept, the flag cleared
+    CHECK_EQ(h1.dbMin, -90.0f);
+    CHECK(loaded.find("pbkdf2$secret-of-the-engine") == std::string::npos);                       // the engine's half does not cross
+
+    // R5.3 THE SNAPSHOT CARRIES IT: the whole file, field by field from the half that owns it. The interface's half is the one loaded (open flags and all:
+    // the file keeps what was showing); the engine's is its own.
+    d.eng.controlPass();
+    cc::AppConfig snap = d.eng.configSnapshot();
+    CHECK_EQ(snap.railBank, 3);
+    CHECK_EQ(snap.language, std::string("de"));
+    CHECK(snap.scopeMode && snap.demodScopeOpen);                // as loaded
+    CHECK(snap.mapPages.size() == 1u && snap.mapPages[0].open);
+    CHECK_EQ(snap.volume, 0.0f);                                 // the engine's
+    CHECK_EQ(snap.dbMin, -90.0f);
+
+    // R5.4 THE OP. Refused to a REMOTE session; a document that is not JSON is BAD_ARGUMENT and changes nothing; a real one replaces the half.
+    cc::AppConfig mine = h1;
+    mine.railBank = 1;
+    mine.language = "fr";
+    mine.scopeMode = true;               // live state: open, and the file keeps it
+    mine.bandPlanSize = "large";
+    mine.testerUsageCurrent = "{\"u\":7}";   // a self-moving field rides along
+    mine.dbMin = -70.0f;
+    mine.dbMax = -20.0f;
+    mine.diagnosticsEnabled = true;
+    const std::string mineDoc = cc::serializeInterfaceHalf(mine);
+    CHECK(mineDoc.size() > 255u);        // (long text: the slot holds the first 255 bytes, the whole rides beside it)
+    CHECK_EQ(pumpedText(d.eng, remote, testing::cmd(FOXAPP_OP_INTERFACE_CONFIG), mineDoc).status(), FOXAPI_DENIED);
+    d.eng.controlPass();
+    CHECK_EQ(d.eng.configSnapshot().railBank, 3);
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_INTERFACE_CONFIG), "this is not a document").status(), FOXAPI_BAD_ARGUMENT);
+    d.eng.controlPass();
+    CHECK_EQ(d.eng.configSnapshot().railBank, 3);
+    CHECK_EQ(half(document(s)).railBank, 3);
+
+    // Shared fields first: before any interface has spoken a display-range change is the ENGINE's to save (a headless engine's remote client), after it the
+    // interface's (the user's own floor and ceiling, whichever window is in force).
+    {
+        FoxCommand range = testing::cmd(FOXAPI_OP_SET_DISPLAY_RANGE);
+        range.num[0] = -80.0;
+        range.num[1] = -30.0;
+        CHECK_EQ(pumped(d.eng, s, range).status(), FOXAPI_OK);
+        d.eng.controlPass();
+        CHECK_EQ(d.eng.configSnapshot().dbMin, -80.0f);          // the engine's, while no interface has sent its half
+        CHECK_EQ(d.eng.configSnapshot().dbMax, -30.0f);
+    }
+    const testing::Outcome sent = pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_INTERFACE_CONFIG), mineDoc);
+    CHECK_EQ(sent.status(), FOXAPI_OK);
+    d.eng.controlPass();
+    snap = d.eng.configSnapshot();
+    CHECK_EQ(snap.railBank, 1);
+    CHECK_EQ(snap.language, std::string("fr"));
+    CHECK_EQ(snap.bandPlanSize, std::string("large"));
+    CHECK(snap.scopeMode);                                       // what the interface said it is showing: the file keeps it
+    CHECK_EQ(snap.testerUsageCurrent, std::string("{\"u\":7}"));
+    CHECK_EQ(snap.dbMin, -70.0f);                                // the interface's now
+    CHECK_EQ(snap.dbMax, -20.0f);
+    CHECK_EQ(snap.volume, 0.0f);                                 // the engine's half is untouched
+    {
+        FoxCommand range = testing::cmd(FOXAPI_OP_SET_DISPLAY_RANGE);
+        range.num[0] = -60.0;
+        range.num[1] = -40.0;
+        CHECK_EQ(pumped(d.eng, s, range).status(), FOXAPI_OK);
+        d.eng.controlPass();
+        CHECK_EQ(d.eng.configSnapshot().dbMin, -70.0f);          // the interface has spoken: a later range change is not what the file keeps
+    }
+    // ...and the fact now serves the half AS HELD, still with the start-up state applied: the page the interface had open is not reopened by a reader.
+    {
+        const cc::AppConfig again = half(document(s));
+        CHECK_EQ(again.railBank, 1);
+        CHECK_EQ(again.language, std::string("fr"));
+        CHECK(!again.scopeMode);
+    }
+    // The same document again changes nothing (and is not an error).
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_INTERFACE_CONFIG), mineDoc).status(), FOXAPI_OK);
+
+    // R5.5 THE DIAGNOSTICS SWITCH MOVES THE CONTROL WATCHDOG'S DIRECTORY, inside the half: between "off" and the directory the host named in
+    // ControlThreadOptions::diagnosticsDir. (This is what applyDiagnosticsEnabled's call to setControlWatchdogReportDir was; the window sends the half now.)
+    {
+        Direct w;
+        testing::Session ws(api(), w.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        CHECK(ws.ok());
+        const std::string dir = (std::filesystem::temp_directory_path() / "foxsdr-r5-hang-reports").string();
+        cascade::engine::ControlThreadOptions opt;
+        opt.stepped = true;
+        opt.watchdogReportDir = std::string();          // diagnostics were off when it started
+        opt.diagnosticsDir = dir;
+        w.eng.startControlThread(opt);
+        w.eng.stopControlThread();                      // (the options are remembered; the test pumps by hand)
+        CHECK(Access::watchdogDir(w.eng).empty());
+        const auto sendDiag = [&](bool on) {
+            cc::AppConfig c;
+            c.diagnosticsEnabled = on;
+            return pumpedText(w.eng, ws, testing::cmd(FOXAPP_OP_INTERFACE_CONFIG), cc::serializeInterfaceHalf(c)).status();
+        };
+        CHECK_EQ(sendDiag(false), FOXAPI_OK);           // default is ON: this moves it, to off
+        CHECK(Access::watchdogDir(w.eng).empty());
+        CHECK_EQ(sendDiag(true), FOXAPI_OK);
+        CHECK_EQ(Access::watchdogDir(w.eng), dir);      // on: the directory the host allowed
+        Access::setWatchdogDir(w.eng, "elsewhere");     // ... something else moved it ...
+        CHECK_EQ(sendDiag(true), FOXAPI_OK);            // ... and a document that does not change the switch leaves it where it is
+        CHECK_EQ(Access::watchdogDir(w.eng), std::string("elsewhere"));
+        CHECK_EQ(sendDiag(false), FOXAPI_OK);
+        CHECK(Access::watchdogDir(w.eng).empty());      // off means off
+    }
+    // ...and a host that named no directory (a bounded run) is not moved by the switch at all.
+    {
+        Direct w;
+        testing::Session ws(api(), w.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        cascade::engine::ControlThreadOptions opt;
+        opt.stepped = true;
+        opt.watchdogReportDir = "kept";
+        w.eng.startControlThread(opt);
+        w.eng.stopControlThread();
+        CHECK_EQ(Access::watchdogDir(w.eng), std::string("kept"));
+        cc::AppConfig c;
+        c.diagnosticsEnabled = false;
+        CHECK_EQ(pumpedText(w.eng, ws, testing::cmd(FOXAPP_OP_INTERFACE_CONFIG), cc::serializeInterfaceHalf(c)).status(), FOXAPI_OK);
+        CHECK_EQ(Access::watchdogDir(w.eng), std::string("kept"));
+    }
+}
+
 // SHELL RETIREMENT R4 (docs/api-0.3-additions.md 9.15, docs/engine-stage4.md 6.25): the plugin UI plane is reached through ONE table member,
 // get_local_extension(FOXAPI_EXT_PLUGIN_UI), for a LOCAL interface session and nobody else.
 void testShellRetirementR4Extension() {
@@ -9670,5 +9875,7 @@ int main() {
     testShellRetirementR3Facts();
     // Shell retirement R4: the plugin UI plane's table member.
     testShellRetirementR4Extension();
+    // Shell retirement R5: the interface's half of the settings file crosses as a document.
+    testShellRetirementR5InterfaceHalf();
     return check::finish("test_engine_api_03");
 }

@@ -279,15 +279,25 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             return false;
     }
 
+    return parse(text, path, out, error);
+}
+
+// THE DOCUMENT HALF OF load() (shell retirement R5): everything load() does once it holds the text, so that a half of the
+// configuration can cross the table as a document and be read by exactly the rules the file is. `label` is what the messages
+// call the document - load() passes the path, so every sentence it ever produced is unchanged.
+bool ConfigStore::parse(const std::string& text, const std::string& label, AppConfig& out, std::string& error) {
+    out = AppConfig{};
+    error.clear();
+
     // allow_exceptions=false: a corrupt file is an expected condition here,
     // not an exceptional one; parse errors surface as a discarded value.
     const json j = json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded()) {
-        error = "config: \"" + path + "\" is not valid JSON";
+        error = "config: \"" + label + "\" is not valid JSON";
         return false;
     }
     if (!j.is_object()) {
-        error = "config: root of \"" + path + "\" is not a JSON object";
+        error = "config: root of \"" + label + "\" is not a JSON object";
         return false;
     }
 
@@ -299,7 +309,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         const auto it = j.find("schemaVersion");
         if (it != j.end() && (!it->is_number_integer() || it->get<int>() != 1)) {
             out = AppConfig{};
-            error = "config: \"" + path +
+            error = "config: \"" + label +
                     "\" has an unsupported schemaVersion (expected 1)";
             return false;
         }

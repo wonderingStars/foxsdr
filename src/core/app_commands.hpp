@@ -348,6 +348,15 @@
 //     bias tee in front of the deck's key (engine/bias_tee.hpp) while no real radio with one is open.
 #define FOXAPP_OP_TEST_PATCH_RUNNING     0x842Du /* no arguments (FOXSDR_PATCH_START, bounded runs only): the patch graph is marked running, no radio is switched on */
 #define FOXAPP_OP_TEST_BIAS_STAND_IN     0x842Eu /* ival[0]: 0 none / 1 accept / 2 refuse (FOXSDR_FORCE_BIAS_KEY, bounded runs only) */
+// THE INTERFACE'S HALF OF THE SETTINGS FILE (shell retirement R5; API 0.3 9.16; core/config_halves.hpp). The settings file has two halves, and an interface
+// owns one of them (its view state, the key bindings, the patch text, the update and diagnostics switches ...). It hands that half to the engine as a
+// DOCUMENT - the text ConfigStore::serialize writes, cut to the keys of the half - and the engine stores it and puts it into every snapshot, so whoever
+// saves the snapshot saves the interface's half with it. The engine hands the half it started with back as the LOCAL fact fact.config.interface (read at
+// the call, the start-up state of the half: every open flag cleared). Like every FOXAPP_OP_* it is refused to a REMOTE session.
+//   INTERFACE_CONFIG (SETTINGS): long text, the document. It REPLACES the half held (every field of the half is in the document; one that is missing
+//     reads as its default, as in the file). A document that is not JSON is BAD_ARGUMENT and changes nothing. The Diagnostics switch in it moves the
+//     control thread's hang-report directory (ControlThreadOptions::diagnosticsDir).
+#define FOXAPP_OP_INTERFACE_CONFIG       0x842Fu /* long text: the interface's half of the settings file, as a document (LOCAL only) */
 // FOXAPP_OP_SOUND_CARD_FORM's ival[1], the FIELD MASK (API 0.3 8.10): which fields the command carries. 0 (and
 // ALL) is the whole form. With a mask, the fields not named keep the engine's own values.
 #define FOXAPP_SOUND_CARD_FIELD_DEVICE   1  /* text: device and host API */

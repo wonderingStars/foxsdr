@@ -538,7 +538,10 @@ if(NOT CASCADE_SANITIZE_ENABLED OR CASCADE_SANITIZE_THREAD)
         test_tx_audio_app
         # the 0.99.97 merge: the saved radio's retry is the ENGINE's (the pass's) and the blueprints' placement is the window's against the engine's graph
         # - both were master's single-thread window tests; converted, they run on the pass's own thread too (and, under TSan, on both)
-        test_saved_radio_retry_app test_patch_blueprints_app)
+        test_saved_radio_retry_app test_patch_blueprints_app
+        # shell retirement R5: the window's half of the settings sent to the engine and read back through the table - the window's looks against the pass's
+        # own thread (the engine is touched only through its thread-safe accessors)
+        test_interface_half_app)
     foreach(src ${CASCADE_TESTS})
         get_filename_component(_name "${src}" NAME_WE)
         file(STRINGS "${src}" _seam REGEX "^[ \t]*#[ \t]*include[ \t]*\"pass_seam[.]hpp\"")

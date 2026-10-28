@@ -350,6 +350,7 @@ struct AppConfig {
         int channel = 0;              // real: 0 = left, 1 = right
         bool swapIq = false;          // iq: right is I
         double centreHz = 0.0;        // iq: what the external receiver is tuned to
+        bool operator==(const SoundCard&) const = default;   // (core/config_halves.cpp compares every field it owns)
     };
     SoundCard soundCard;
     double centerHz = 100000000.0;
@@ -1457,6 +1458,11 @@ public:
     // fully assigned: defaults first, then whatever the file legitimately
     // overrides — so a false return still leaves a usable config.
     static bool load(const std::string& path, AppConfig& out, std::string& error);
+
+    // load() minus the file: the same rules over a document already in hand (shell retirement R5: a half of the configuration crosses
+    // the table as the text serialize() makes, and is read back by this). `label` names the document in the messages; load() passes
+    // the path, so its sentences are unchanged. `out` is always fully assigned, as load()'s is.
+    static bool parse(const std::string& text, const std::string& label, AppConfig& out, std::string& error);
 
     // Atomic write (temp file + rename over target, see header comment).
     // On failure returns false with `error` set and the previous target
