@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <cstddef>
 #include <cstdio>
@@ -697,7 +698,22 @@ public:
     //
     // Returns the process exit code: 0 on clean shutdown, 1 when GLFW or the
     // ImGui backends fail to initialize (the reason is printed to stderr).
+    //
+    // SINCE SHELL RETIREMENT R8 THE ENGINE IS NOT THIS WINDOW'S TO START OR STOP: the host (main.cpp, or the test host's runWindow) starts the
+    // engine's service before run() and stops it after, then calls closeWindow(). run() is the window's own life: the GL window and the frame
+    // loop, and - when the loop ends - the window's part of the shutdown, which has to be done while the engine is still running: the crash-report
+    // sweep and the senders stopped, the last half of the settings handed to the engine and acknowledged (so the engine's final save holds it),
+    // and the plugin UI released and disconnected on this thread with the GL context current. Then it returns.
     int run(int frames = -1);
+
+    // The second half of the window's end, after the host has STOPPED the engine: the GL textures, ImGui and GLFW torn down, the hang watchdog
+    // stopped LAST (so a wedge anywhere in the engine's stop is reported against the shutdown budget), and the lines a clean end prints ("teardown N
+    // ms", "rendered N frames", ...). A no-op when run() never made a window (it failed, or handed the run to the software renderer). Idempotent.
+    void closeWindow();
+
+    // The bounded measurement run (FOXSDR_MEASURE, core/engine_measure.hpp) the host read from the environment: it decides the engine's pass (a
+    // measurement times the product's own free-running arrangement), so the host reads it once and hands it over. Null: none.
+    void setMeasurement(std::unique_ptr<cascade::core::EngineMeasure> measure) { measure_ = std::move(measure); }
 
     // True when run() returned because the graphics driver could not be used
     // and this run is to be handed to a second process on the software
@@ -1667,6 +1683,14 @@ private:
     cascade::core::AppConfig withInterfaceHalfFromTable(const cascade::core::AppConfig& fromFile);
     bool sendInterfaceHalf(double nowS);
     static constexpr double kInterfaceSendGapS = 0.25;
+    // THE LAST HALF, handed over at the end of the frame loop (shell retirement R8): the engine's final-state save is a snapshot of what the engine
+    // holds, so what this window changed in its last second - which no look has sent yet, the self-moving fields included - has to be IN the engine
+    // before the host stops it. Sent whole whatever the coalescing gap says. It does not wait for the answer: the frames are over, so in a stepped run
+    // nothing would run the pass that takes it - the service's stop makes one whole pass before it joins the control thread (ServiceOptions::finalPass,
+    // set for the window application), which applies everything this window submitted last; a free-running run's submit wakes the pass at once.
+    // True when the session took it; false (said in the log) when it did not - the engine then saves the half it last had, which is what a crash would
+    // have left.
+    bool flushInterfaceHalf();
     void maybeSaveConfig(double nowS);  // debounced: ~2 s after the LAST change
     void saveConfigNow();               // clean-exit save (unconditional)
 
@@ -2885,6 +2909,18 @@ private:
     GLFWwindow* mainWindow_ = nullptr;
     // run() handed this run to a second process on the software renderer.
     bool relaunchWithSoftwareGl_ = false;
+    // THE TWO HALVES OF THE WINDOW'S END (shell retirement R8): run() brings the window up and leaves the GL context, ImGui and GLFW standing when its
+    // loop ends - the engine is stopped by the host while they still are - and closeWindow() takes them down. `glUp_` is whether there is anything for
+    // closeWindow to take down (set once the backends are up; cleared by closeWindow, which is then idempotent); `renderedFrames_` and
+    // `teardownStart_` are what run() knows and closeWindow prints (the frames the loop drew, and the moment the shutdown began, so "teardown N ms"
+    // measures the whole of it - the engine's stop included - as it always has).
+    bool glUp_ = false;
+    int renderedFrames_ = 0;
+    std::chrono::steady_clock::time_point teardownStart_{};
+    // The window's own release of its end of the plugin UI port: disconnect, once (the port's own disconnect is idempotent). run()'s prelude calls it
+    // after the port's release; ~AppWindow calls it for every path that never reached the prelude (a window that could not be created, a
+    // constructor that threw, a test window that never ran).
+    void leavePluginUi();
 
     // WHETHER A TORN-OFF PAGE GETS AN OPERATING SYSTEM WINDOW, and why not
     // when it does not. Decided once at startup from FOXSDR_SINGLE_VIEWPORT

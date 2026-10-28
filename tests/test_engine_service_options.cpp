@@ -22,6 +22,8 @@
 //  10  WHAT THE WINDOW HOST NEEDS OF THE RESTORE (R7: the window no longer reads the file): restore() returns the last run's marker, the saved source as
 //      the file named it, the read-back and whether writes are forbidden; announce() prints the CASCADE_CONFIG_TEST line; a service destroyed lets
 //      the settings lock go (src/main.cpp relies on it across the software-GL relaunch).
+//  11  THE FINAL PASS (R8): a STEPPED service has no pass of its own, so what an interface submits last is applied only if stop() makes one: finalPass
+//      does, before the quiesce and the final-state save, and the default (the headless binary) does not.
 //
 // Break-it (docs/engine-stage4.md 6.25): the lock default Strict -> BestEffort: 1 and test_engine_main_second_instance_refused RED; the hermetic default
 // Headless -> Window: 2 RED; comparable() without the mask: 6 RED; the keeper thread not joined before the quiesce: 5 under TSan / the order table.
@@ -189,9 +191,44 @@ public:
     std::atomic<bool> gone{false};
 };
 
+// --- 11. THE FINAL PASS (shell retirement R8) ---------------------------------------------------------------------------------------------
+// Its own function: main()'s frame already holds an EngineService per section, each the size of the engine, and one more overran the stack (0xC00000FD).
+void testFinalPass(const fs::path& home) {
+    // A stepped service's control thread runs a pass only when someone steps it, and when the interface's frames are over nobody does: a command submitted as
+    // they ended (the window's last half of the settings) would be dropped by the quiesce. finalPass makes ONE whole pass at the head of stop(); the headless
+    // default makes none (and has no interface to submit anything).
+    for (const bool pass : {false, true}) {
+        const fs::path cfg = seedConfig(home / (pass ? "final-pass" : "no-final-pass"), "config.json");
+        ServiceOptions o;
+        o.configPath = cfg.string();
+        o.stepped = true;
+        o.receive = false;
+        o.finalPass = pass;
+        EngineService svc(o);
+        std::string s;
+        CHECK(svc.acquireConfig(s));
+        CHECK(svc.restore().loaded);
+        std::string why;
+        CHECK(svc.start(why));
+        CHECK(svc.engine().passesEnded() == 0u);                       // stepped: nothing has passed
+        svc.engine().submitCommand(cmd::makeNum(FOXAPI_OP_SET_SQUELCH, -66.0));
+        svc.stop();
+        std::printf("  11: stepped service, finalPass %d: squelch in the final file %.1f, passes %llu\n", pass ? 1 : 0, readConfig(cfg).value("squelchDb", 9999.0),
+                    static_cast<unsigned long long>(svc.engine().passesEnded()));
+        CHECK(readConfig(cfg)["telemetryCleanExit"] == true);
+        if (pass) {
+            CHECK(readConfig(cfg).value("squelchDb", 9999.0) == -66.0);   // applied by the final pass, so the final-state save holds it
+            CHECK(svc.engine().passesEnded() >= 1u);
+        } else {
+            CHECK(readConfig(cfg).value("squelchDb", 9999.0) != -66.0);   // dropped: the control run that makes the first one's value the pass's doing
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);   // a crash must leave what the test had said
     std::printf("test_engine_service_options\n");
     const fs::path root = emt::scratch("engine-options");
     const fs::path home = root / "home";
@@ -219,6 +256,7 @@ int main() {
         CHECK(!o.frontEndFollows);   // (R7: the headless engine's window-less host treats AUTO as pinned and drives its own plugin UI)
         CHECK(!o.breadcrumbs);
         CHECK(!o.diagToStdout);
+        CHECK(!o.finalPass);   // (R8: only the window application's stop makes the pass that takes its last half of the settings)
     }
 
     // --- 1. LOCK --------------------------------------------------------------------------------------------------------------------------
@@ -720,6 +758,8 @@ int main() {
         CHECK(gone->callsAfterGone.load() == 0);
         delete gone;
     }
+
+    testFinalPass(home);   // (11: its own function - an EngineService is a local the size of the engine, and main's frame is already full)
 
     return testSummary("test_engine_service_options");
 }

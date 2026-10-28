@@ -65,9 +65,9 @@ namespace {
 // comment in engine_shell.hpp that says why. They only go down on their own: stage 5f deleted the web/CAT section (there is no budget for
 // it any more), stage 7 deletes the shell's.
 // ----------------------------------------------------------------------------------------------------------------------------------
-constexpr int kShellMethodsBudget = 19;   // CLASS SHELL: EngineShell's own declarations (distinct names; view and the special members apart): 19 after shell retirement R7 (2026-10-28: -7, the construction flip - initialise, loadBookmarks, telemetryStartup, applyConfig and configReadback are the host's restore (EngineService::restore: main.cpp, or the test host, builds the engine's service and restores BEFORE the window exists), apiTable and apiHandle are main's to pass (WindowHost::api, handle); the shell's create(hooks) became view(engine, hooks), a non-owning view that installs the window as the engine's host through Engine::setHost; 26 before it); 26 after shell retirement R5 (2026-10-28: -1, setControlWatchdogReportDir - the Diagnostics switch is a field of the interface's half of the settings, which crosses the table as FOXAPP_OP_INTERFACE_CONFIG, and the control thread's hang-report directory is derived from it by the engine; 27 before it); 27 after shell retirement R4 (2026-10-28: -2, the plugin UI plane left the door - setFrontEndFacts (the face, the basemap's figures and the track feed ride the port's setFrontEnd) and reportPluginStatus (the engine prints the bounded run's report at the end of shutdownQuiesce, from the plugin half the window hands over in its last setFrontEnd); 29 before it); 29 after shell retirement R3 (2026-10-28: -4, status, URL and kick as table facts - pluginCatalogueUrl, publishStatusText, statusText, frameKick; 33 before it); 33 after shell retirement R2 (2026-10-28: -8, the seams that became client code - seamBiasStandIn, seamFetchCatalogue, seamSelectNativeDevice, seamDeviceOpenPending, seamPressPreset, seamPatchStart, seamPatchRunning, seamSubmit; 41 before it); 40 before the frame's kick (frameKick, 6.9)
+constexpr int kShellMethodsBudget = 8;    // CLASS SHELL: EngineShell's own declarations (distinct names; view and the special members apart): 8 after shell retirement R8a (2026-10-28: -11, the engine's START and STOP left for EngineService, which main.cpp - or the test host - calls: startReceiver, controlPass, startControlThread, configureHeartbeat, markCleanExit, stopTransfers, teardown, shutdownQuiesce, shutdownStop, shutdownRelease, shutdownDrain; the window keeper's two - configSnapshot, publishConfig - are compiled and unused until R8b deletes them, 8 -> 6; 19 before it); 19 after shell retirement R7 (2026-10-28: -7, the construction flip - initialise, loadBookmarks, telemetryStartup, applyConfig and configReadback are the host's restore (EngineService::restore: main.cpp, or the test host, builds the engine's service and restores BEFORE the window exists), apiTable and apiHandle are main's to pass (WindowHost::api, handle); the shell's create(hooks) became view(engine, hooks), a non-owning view that installs the window as the engine's host through Engine::setHost; 26 before it); 26 after shell retirement R5 (2026-10-28: -1, setControlWatchdogReportDir - the Diagnostics switch is a field of the interface's half of the settings, which crosses the table as FOXAPP_OP_INTERFACE_CONFIG, and the control thread's hang-report directory is derived from it by the engine; 27 before it); 27 after shell retirement R4 (2026-10-28: -2, the plugin UI plane left the door - setFrontEndFacts (the face, the basemap's figures and the track feed ride the port's setFrontEnd) and reportPluginStatus (the engine prints the bounded run's report at the end of shutdownQuiesce, from the plugin half the window hands over in its last setFrontEnd); 29 before it); 29 after shell retirement R3 (2026-10-28: -4, status, URL and kick as table facts - pluginCatalogueUrl, publishStatusText, statusText, frameKick; 33 before it); 33 after shell retirement R2 (2026-10-28: -8, the seams that became client code - seamBiasStandIn, seamFetchCatalogue, seamSelectNativeDevice, seamDeviceOpenPending, seamPressPreset, seamPatchStart, seamPatchRunning, seamSubmit; 41 before it); 40 before the frame's kick (frameKick, 6.9)
 // (kHostMethodsBudget and kFeedMethodsBudget are GONE, shell retirement R4, 2026-10-28: the HOST class - makePluginFeed and serveWebTiles, 2 after R3, 3 with setServerUsageHooks (stub campaign B15, gone in R3), 2 before B15 - and HostPluginFeed's 12 virtuals (12 with unplacedTracks, stub campaign B16; 11 before it) were deleted with their knock rows: makePluginFeed became the table's get_local_extension(FOXAPI_EXT_PLUGIN_UI), serveWebTiles became PluginUiPort::serveTiles, and the 12 virtuals became PluginUiPort's 14 (minus `report`, plus setFrontEnd, serveTiles and release), counted below as the EXTENSION surface, not the door.)
-constexpr int kCallSitesBudget = 23;      // `engine_.x` in src/gui, all classes: 23 after shell retirement R7 (2026-10-28: -6, the constructor's initialise, loadBookmarks, telemetryStartup and configReadback (4), applyConfig's applyConfig (1) and openUiSession's apiHandle (1); 29 before it); 29 after shell retirement R5 (2026-10-28: -1, applyDiagnosticsEnabled's setControlWatchdogReportDir; 30 before it); 30 after shell retirement R4 (2026-10-28: -4, the four door methods of the plugin UI plane - makePluginFeed 1, setFrontEndFacts 1, reportPluginStatus 1, serveWebTiles 1 - whose sites are `ui_->` sites of the port now, 15 of them, counted by kPortCallSitesBudget; with them gone `pluginFeed_->x` (13 sites) is not a thing the guard counts any more: 47 before R4 was 34 engine_ + 13 pluginFeed_); 47 after shell retirement R3 (2026-10-28: -7, the five methods' sites - pluginCatalogueUrl 2, publishStatusText 1, statusText 2, frameKick 1, setServerUsageHooks 1; 54 before it); 54 after shell retirement R2 (2026-10-28: -13, the eight seams' sites - seamBiasStandIn 1, seamFetchCatalogue 1, seamSelectNativeDevice 1, seamDeviceOpenPending 1, seamPressPreset 1, seamPatchStart 1, seamPatchRunning 1, seamSubmit 6; 67 before it); 67 with stub campaign B16 (+1: hostUnplacedTracks' unplacedTracks, the one read of the new feed accessor); 66 with stub campaign B15 (+1: installTesterUsageHooks' setServerUsageHooks, the window's one call, from its constructor's helper); 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
+constexpr int kCallSitesBudget = 12;      // `engine_.x` in src/gui, all classes: 12 after shell retirement R8a (2026-10-28: -11 - run's nine (startReceiver, controlPass, startControlThread, configureHeartbeat, markCleanExit, shutdownQuiesce, shutdownStop, shutdownRelease, shutdownDrain) and ~AppWindow's two (stopTransfers, teardown); the three sites of the unused window keeper - currentConfig's configSnapshot, saveConfigNow's publishConfig, the constructor's publishConfig - go with it in R8b, 12 -> 9; 23 before it); 23 after shell retirement R7 (2026-10-28: -6, the constructor's initialise, loadBookmarks, telemetryStartup and configReadback (4), applyConfig's applyConfig (1) and openUiSession's apiHandle (1); 29 before it); 29 after shell retirement R5 (2026-10-28: -1, applyDiagnosticsEnabled's setControlWatchdogReportDir; 30 before it); 30 after shell retirement R4 (2026-10-28: -4, the four door methods of the plugin UI plane - makePluginFeed 1, setFrontEndFacts 1, reportPluginStatus 1, serveWebTiles 1 - whose sites are `ui_->` sites of the port now, 15 of them, counted by kPortCallSitesBudget; with them gone `pluginFeed_->x` (13 sites) is not a thing the guard counts any more: 47 before R4 was 34 engine_ + 13 pluginFeed_); 47 after shell retirement R3 (2026-10-28: -7, the five methods' sites - pluginCatalogueUrl 2, publishStatusText 1, statusText 2, frameKick 1, setServerUsageHooks 1; 54 before it); 54 after shell retirement R2 (2026-10-28: -13, the eight seams' sites - seamBiasStandIn 1, seamFetchCatalogue 1, seamSelectNativeDevice 1, seamDeviceOpenPending 1, seamPressPreset 1, seamPatchStart 1, seamPatchRunning 1, seamSubmit 6; 67 before it); 67 with stub campaign B16 (+1: hostUnplacedTracks' unplacedTracks, the one read of the new feed accessor); 66 with stub campaign B15 (+1: installTesterUsageHooks' setServerUsageHooks, the window's one call, from its constructor's helper); 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
 
 // THE PLUGIN UI PORT (core/plugin_ui_port.hpp; shell retirement R4, 2026-10-28; docs/api-0.3-additions.md 9.15) - the window's one C++ contact with the engine that is not the door and not the table's lists and facts, reached through ONE table member (get_local_extension) on the window's LOCAL session. Its surface is held like the door's: counted, implemented, called.
 constexpr int kPortMethodsBudget = 14;    // PluginUiPort's pure virtuals (the destructor apart): the seven host accessors (tracks, unplacedTracks, paths, panels, instruments, trackPluginNames, altitudeNear), poll, pollImages, applyNewestDirective, setFrontEnd, serveTiles, release, disconnect. 14 at R4: HostPluginFeed's 12 minus `report` (the plugin half of the status report rides setFrontEnd once) plus setFrontEnd (was the door's setFrontEndFacts), serveTiles (was the door's serveWebTiles) and release (the window's own shutdown release)
@@ -85,13 +85,11 @@ struct Knock {
 const std::vector<Knock> kEngineKnocks = {
     // CLASS SHELL: construction, the config restore, the run, the teardown
     {"AppWindow::AppWindow", {"publishConfig", "setFrontEndWaitBeat"}},   // (R7: the restore - initialise, loadBookmarks, telemetryStartup, applyConfig, configReadback - is the host's)
-    {"AppWindow::~AppWindow", {"setFrontEndWaitBeat", "stopTransfers", "teardown"}},
+    {"AppWindow::~AppWindow", {"setFrontEndWaitBeat"}},   // (R8: stopTransfers and teardown are the host's service's, and ~Engine's net)
     {"AppWindow::currentConfig", {"configSnapshot"}},
     {"AppWindow::saveConfigNow", {"publishConfig"}},
     {"AppWindow::run",
-     {"startReceiver", "controlPass", "startControlThread", "configureHeartbeat", "markCleanExit", "shutdownQuiesce", "shutdownStop",
-      "shutdownRelease", "shutdownDrain", "seamMeasureTick",
-      "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource"}},
+     {"seamMeasureTick", "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource"}},   // (R8: the start and the four shutdown phases are the service's)
     // the frame is a look: the three parts of the pass (the status lines the look reads are the table's facts - refreshStatusLines - and the frame's kick is
     // the heartbeat of run()'s loop: neither is a knock on the door any more, shell retirement R3)
     {"AppWindow::drawUi", {"stepPass"}},
@@ -112,8 +110,8 @@ const std::vector<Knock> kPortKnocks = {
     {"AppWindow::hostPollImages", {"pollImages"}},
     {"AppWindow::applyPluginDirective", {"applyNewestDirective"}},
     {"AppWindow::applyDirectiveAfter", {"instruments"}},
-    {"AppWindow::~AppWindow", {"disconnect"}},
-    {"AppWindow::run", {"release"}},                          // the window's own release of the plugin UI before the engine's (R4; R8's prelude moves it)
+    {"AppWindow::leavePluginUi", {"disconnect"}},             // the one disconnect: the prelude's and ~AppWindow's net (R8; was ~AppWindow's own)
+    {"AppWindow::run", {"release"}},                          // the window's own release of the plugin UI before the engine's - R8's prelude, before run() returns
     {"AppWindow::handFrontEndFacts", {"setFrontEnd"}},        // the face, the basemap's figures, the track feed; and the bounded run's plugin report half (R4)
     {"AppWindow::pumpWebTiles", {"serveTiles"}},              // the browser map's tiles, drained and answered on the window's thread (R4; was serveWebTiles)
 };
@@ -523,7 +521,7 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
     CHECK(static_cast<int>(sh.size()) <= kShellMethodsBudget);
     CHECK(static_cast<int>(po.size()) <= kPortMethodsBudget);
     // The scan saw the real headers.
-    CHECK(sh.size() >= 15);
+    CHECK(sh.size() >= 6);
     CHECK(po.size() >= 8);
     // ...and a class that only ever shrinks: a budget above what is there is a stale budget.
     CHECK(static_cast<int>(sh.size()) == kShellMethodsBudget);
@@ -621,7 +619,7 @@ void checkWhoMayKnock(const std::vector<Call>& calls) {
     CHECK(bad == 0);
     CHECK(sites == kCallSitesBudget);
     CHECK(portSites == kPortCallSitesBudget);
-    CHECK(sites >= 20);  // the scan saw the real files
+    CHECK(sites >= 9);  // the scan saw the real files
     // Every table entry is matched by a call.
     for (const Knock& k : kEngineKnocks) {
         for (const char* m : k.methods) {
@@ -767,8 +765,9 @@ void checkMachineryHasNoInput(const fs::path& root) {
 // THE FRAME IS A LOOK (the pump move's steps P4 and P5): the engine's pass runs on its own thread, so the window runs no engine phase,
 // drains no queue, applies no command and takes no GPS fix; it looks at what the pass published, draws, and submits. What this holds, as
 // text over src/gui:
-//   * stepPass appears exactly three times, all in drawUi, as Front, Mute and Back, in that order, and the engine's pass is started in
-//     run() exactly once (startControlThread) after the one controlPass() that makes a free-running run's first publish;
+//   * stepPass appears exactly three times, all in drawUi, as Front, Mute and Back, in that order, and the window does NOT start the engine's
+//     pass (shell retirement R8): the service's start makes a free-running run's first publish (controlPass) and starts the thread
+//     (startControlThread), main.cpp calls it before run(), and the window's run() names neither;
 //   * THE LOOK'S ORDER (survey 1.6 B and C): in drawUi the session's answers are polled (pollUiAnswers), then the status lines
 //     are read (refreshStatusLines: the table's fact.status.* since shell retirement R3), then the state is read (refreshUiState), then
 //     the answers are acted on (actOnUiAnswers) - and the Front part of the pass comes before all of it, the Mute part after it, and
@@ -787,12 +786,12 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
         if (c.method == "controlPass") { ++controlPassCalls; }
         if (c.method == "startControlThread") { ++startCalls; }
     }
-    std::printf("  the frame is a look: stepPass %d (expect 3), controlPass %d (expect 1), startControlThread %d (expect 1)\n", stepCalls,
+    std::printf("  the frame is a look: stepPass %d (expect 3), controlPass %d (expect 0), startControlThread %d (expect 0)\n", stepCalls,
                 controlPassCalls, startCalls);
     CHECK(stepCalls == 3);
     CHECK(kickCalls == 0);   // THE FRAME KICKS THE PASS through the table now (6.9, R3): the heartbeat in run()'s loop - checked below
-    CHECK(controlPassCalls == 1);
-    CHECK(startCalls == 1);
+    CHECK(controlPassCalls == 0);   // THE ENGINE'S PASS IS THE SERVICE'S TO START (shell retirement R8): the window starts nothing - checked below
+    CHECK(startCalls == 0);
     const std::string text = readFile(root / "src" / "gui" / "app_window.cpp");
     const std::size_t draw = text.find("void AppWindow::drawUi() {");
     CHECK(draw != std::string::npos);
@@ -835,30 +834,36 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
         if (!noCall) { std::printf("FAIL: applyDiagnosticsEnabled calls the engine - the switch reaches its watchdog inside the interface's half\n"); }
         CHECK(window);
         CHECK(noCall);
+        // (R8: the directory the control thread's watchdog moves to when the half later switches Diagnostics on is named by the SERVICE when it starts
+        // the thread - from the options main.cpp built - and the frame loop sends the half once a frame.)
+        const std::string service = readFile(root / "src" / "engine" / "engine_service.cpp");
+        const std::size_t dirAt = service.find("opt.diagnosticsDir = options_.diagnosticsDir;");
+        const std::size_t threadAt = service.find("engine_.startControlThread(opt);");
         const std::size_t runAt = text.find("int AppWindow::run(int frames) {");
-        const std::size_t dirAt = runAt == std::string::npos ? std::string::npos : text.find("opt.diagnosticsDir = diagCrashDir_;", runAt);
-        const std::size_t threadAt = runAt == std::string::npos ? std::string::npos : text.find("engine_.startControlThread(opt);", runAt);
-        const std::size_t keepAt = runAt == std::string::npos ? std::string::npos : text.find("maybeSaveConfig(glfwGetTime());", runAt);
-        const std::size_t sendAt = keepAt == std::string::npos ? std::string::npos : text.find("(void)sendInterfaceHalf(glfwGetTime());", keepAt);
+        const std::size_t sendAt = runAt == std::string::npos ? std::string::npos : text.find("(void)sendInterfaceHalf(glfwGetTime());", runAt);
         const bool sent = dirAt != std::string::npos && threadAt != std::string::npos && dirAt < threadAt && sendAt != std::string::npos &&
                           text.find("sendInterfaceHalf(glfwGetTime())") == sendAt + 6 && text.find("sendInterfaceHalf(glfwGetTime())", sendAt + 7) == std::string::npos;
         if (!sent) {
-            std::printf("FAIL: run() does not name the diagnostics directory before it starts the pass, or does not send the interface's half once a frame, "
-                        "after the settings keeper\n");
+            std::printf("FAIL: the service does not name the diagnostics directory before it starts the pass, or run() does not send the interface's half once a frame\n");
         }
         CHECK(sent);
     }
-    // run(): the first publish, then the thread - and the thread starts before the frame loop
+    // run() starts nothing (R8). The first publish, then the thread, then the keeper are the service's start, in that order; main.cpp calls the start
+    // after the window's constructor and before run() (tests/test_engine_service_order.cpp holds that order).
     const std::size_t run = text.find("int AppWindow::run(int frames) {");
     CHECK(run != std::string::npos);
-    const std::size_t firstPass = text.find("engine_.controlPass();", run);
-    const std::size_t startThread = text.find("engine_.startControlThread(opt);", run);
     // (0.99.67: the loop also ends when the console the program started on asks for the close - core/console_close.hpp.)
     const std::size_t loop = text.find("while (!glfwWindowShouldClose(window) && !closeRequested_ && !cascade::core::consoleCloseRequested()) {", run);
-    const bool startOk = firstPass != std::string::npos && startThread != std::string::npos && loop != std::string::npos &&
-                         firstPass < startThread && startThread < loop;
-    if (!startOk) { std::printf("FAIL: run() does not start the engine's pass (first publish, then the thread) before the frame loop\n"); }
-    CHECK(startOk);
+    {
+        const std::string service = readFile(root / "src" / "engine" / "engine_service.cpp");
+        const std::size_t startAt = service.find("bool EngineService::start(");
+        const std::size_t firstPass = service.find("engine_.controlPass();", startAt);
+        const std::size_t startThread = service.find("engine_.startControlThread(opt);", startAt);
+        const bool startOk = startAt != std::string::npos && firstPass != std::string::npos && startThread != std::string::npos && loop != std::string::npos &&
+                             firstPass < startThread && text.find("engine_.controlPass(") == std::string::npos && text.find("engine_.startControlThread(") == std::string::npos;
+        if (!startOk) { std::printf("FAIL: the service's start does not make the first publish and then start the thread, or the window still starts the engine's pass\n"); }
+        CHECK(startOk);
+    }
     // THE FRAME KICKS THE PASS as the first act of its loop (6.9): after the frame log's and the cap's start stamps, before the events are polled
     // and the frame is drawn (the pass takes ~0.1 ms to publish, and the look is little later than the top of the frame: a later kick loses
     // that race and the look reads a publish a whole frame old - measured in 6.9). Since shell retirement R3 the kick is the window's HEARTBEAT,
@@ -882,44 +887,41 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
     }
 }
 
-// THE CONFIG SAVE IS THE SHELL'S, NOT THE FRAME'S (the pump move's step P4; the survey's 1.6 D). saveConfigNow asks the engine to hand over
-// its half of the config (publishConfig -> fillConfig, which reads receiver fields) - a read of the pass's own state, safe only when no
-// pass is running: before the control thread starts and after it is joined. So it is called from run() exactly twice, the first before
-// startControlThread and the second after shutdownQuiesce (which joins it), and from nowhere else.
-void checkConfigSaveIsTheShells(const fs::path& root) {
-    int calls = 0, callsOutsideRun = 0;
+// THE WINDOW SAVES NOTHING (shell retirement R8; was: the config save is the shell's, not the frame's). The settings file is kept by the engine's service
+// - a thread of its own, from the snapshot the engine holds - and the window's only contact with it is the interface's half it hands over (sendInterfaceHalf
+// each look, flushInterfaceHalf as the frame loop ends). The window's own keeper (savedCfg_, configWriter_, maybeSaveConfig, saveConfigNow, requestConfigSave,
+// pollConfigWriter, configsEqual) is the dead copy the survey calls it; R8a leaves it compiled and unused, R8b deletes it. This holds the "unused": run() and
+// every file of src/gui other than the keeper's own definitions name none of the keeper's entry points.
+void checkTheWindowSavesNothing(const fs::path& root) {
+    int calls = 0;
     for (const fs::path& p : guiFiles(root, false)) {
         const std::string text = readFile(p);
-        std::size_t at = 0;
-        while ((at = text.find("saveConfigNow();", at)) != std::string::npos) {
-            const std::size_t lineStart = text.rfind('\n', at) == std::string::npos ? 0 : text.rfind('\n', at) + 1;
-            const std::string line = text.substr(lineStart, text.find('\n', at) - lineStart);
-            const bool comment = line.find("//") != std::string::npos && line.find("//") < line.find("saveConfigNow();");
-            const bool definition = line.find("void AppWindow::saveConfigNow") != std::string::npos;
-            if (!comment && !definition) {
-                ++calls;
-                const std::size_t run = text.find("int AppWindow::run(int frames) {");
-                const std::size_t runEnd = run == std::string::npos ? std::string::npos : text.find("\n}\n", run);
-                if (run == std::string::npos || at < run || at > runEnd) { ++callsOutsideRun; }
+        for (const char* needle : {"saveConfigNow();", "maybeSaveConfig(glfwGetTime())", "pollConfigWriter();", "requestConfigSave("}) {
+            std::size_t at = 0;
+            while ((at = text.find(needle, at)) != std::string::npos) {
+                const std::size_t lineStart = text.rfind('\n', at) == std::string::npos ? 0 : text.rfind('\n', at) + 1;
+                const std::string line = text.substr(lineStart, text.find('\n', at) - lineStart);
+                const bool comment = line.find("//") != std::string::npos && line.find("//") < line.find(needle);
+                const bool definition = line.find("void AppWindow::") != std::string::npos;
+                // (the keeper's own members call one another: the compiled-and-unused copy)
+                const bool keeperItself = p.filename() == "app_window.cpp" && (line.find("requestConfigSave(currentConfig())") != std::string::npos ||
+                                                                              line.find("requestConfigSave(cur)") != std::string::npos ||
+                                                                              line.find("requestConfigSave(marked)") != std::string::npos);
+                if (!comment && !definition && !keeperItself) { ++calls; }
+                at += 1;
             }
-            at += 1;
         }
     }
-    std::printf("  saveConfigNow: %d call(s) (expect 2, both in run()), %d outside run()\n", calls, callsOutsideRun);
-    CHECK(calls == 2);
-    CHECK(callsOutsideRun == 0);
+    std::printf("  the window saves nothing: %d call(s) of the keeper's entry points (expect 0)\n", calls);
+    CHECK(calls == 0);
     const std::string text = readFile(root / "src" / "gui" / "app_window.cpp");
     const std::size_t run = text.find("int AppWindow::run(int frames) {");
-    const std::size_t first = text.find("if (!configPath_.empty()) { saveConfigNow(); }", run);
-    const std::size_t start = text.find("engine_.startControlThread(opt);", run);
-    const std::size_t quiesce = text.find("engine_.shutdownQuiesce();", run);
-    const std::size_t second = text.find("if (!configPath_.empty()) { saveConfigNow(); }", quiesce);
-    const bool ordered = first != std::string::npos && start != std::string::npos && quiesce != std::string::npos && second != std::string::npos &&
-                         first < start && start < quiesce && quiesce < second;
-    if (!ordered) {
-        std::printf("FAIL: run()'s two config saves are not around the control thread's life (first save, start thread, ..., shutdownQuiesce, second save)\n");
-    }
-    CHECK(ordered);
+    const std::size_t runEnd = run == std::string::npos ? std::string::npos : text.find("\n}\n", run);
+    CHECK(run != std::string::npos && runEnd != std::string::npos);
+    const std::string body = (run == std::string::npos || runEnd == std::string::npos) ? std::string() : text.substr(run, runEnd - run);
+    const std::size_t flush = body.find("(void)flushInterfaceHalf();");
+    const std::size_t release = body.find("ui_->release();");
+    CHECK(flush != std::string::npos && release != std::string::npos && flush < release);   // the last half goes before the plugin UI is released
 }
 
 // THE OPS THAT NAME A ROW BY ITS POSITION (the pump move's step P4; the survey's 1.6 J). A command that carries an INDEX into a list the
@@ -1265,28 +1267,38 @@ void checkThePort(const fs::path& root, const std::set<std::string>& deny, const
 
     // 4. the exit paths
     {
+        // SINCE R8 the plugin UI's disconnect is ONE function, leavePluginUi, which run()'s prelude calls right after the port's release and ~AppWindow calls
+        // as its last act - the net for every path that never reached the prelude (a window that could not be created, a constructor's sibling that threw, the
+        // software-GL relaunch, a test window that never ran). The engine's own teardown is the host's service's and ~Engine's (not the window's).
         const std::string dtor = bodyAfter(text, "AppWindow::~AppWindow() {");
         CHECK(!dtor.empty());
-        const std::size_t teardown = dtor.find("engine_.teardown();");
-        const std::size_t disconnect = dtor.find("ui_->disconnect();");
-        const bool last = teardown != std::string::npos && disconnect != std::string::npos && teardown < disconnect &&
-                          dtor.find_first_not_of(" \n", dtor.find(';', disconnect) + 1) == std::string::npos;
-        if (!last) { std::printf("FAIL: ~AppWindow does not disconnect the plugin UI port as its last act, after the engine's teardown (the exit paths: a window that could not be created, a thrown constructor's sibling, the software-GL relaunch)\n"); }
+        const std::size_t leave = dtor.find("leavePluginUi();");
+        const bool last = leave != std::string::npos && dtor.find("engine_.teardown();") == std::string::npos &&
+                          dtor.find_first_not_of(" \n", dtor.find(';', leave) + 1) == std::string::npos;
+        if (!last) { std::printf("FAIL: ~AppWindow does not disconnect the plugin UI port (leavePluginUi) as its last act, and must not take the engine down (the host's service does)\n"); }
         CHECK(last);
+        const std::string leaveFn = bodyAfter(text, "void AppWindow::leavePluginUi() {");
+        CHECK(!leaveFn.empty() && leaveFn.find("ui_->disconnect();") != std::string::npos);
         const std::size_t run = text.find("int AppWindow::run(int frames) {");
         CHECK(run != std::string::npos);
-        const std::size_t stop = text.find("engine_.shutdownStop();", run);
+        // run()'s prelude: the last half of the settings handed over, THEN the plugin UI released through the port (once) - all before run() returns, that is
+        // before the host stops the engine (main.cpp's order, held by tests/test_engine_service_order.cpp). The port is let go of by closeWindow(), AFTER the
+        // engine's stop: disconnected earlier, the engine's pass (still running) would be window-less and wake the asleep AUTO plugins.
+        const std::size_t flush = text.find("(void)flushInterfaceHalf();", run);
         const std::size_t release = text.find("ui_->release();", run);
-        const std::size_t engineRelease = text.find("engine_.shutdownRelease();", run);
-        const bool ordered = stop != std::string::npos && release != std::string::npos && engineRelease != std::string::npos && stop < release &&
-                             release < engineRelease && text.find("ui_->release();", release + 1) == std::string::npos;
-        if (!ordered) { std::printf("FAIL: run() does not release the plugin UI through the port, once, between the pipeline's stop and the engine's own release\n"); }
+        const std::size_t runEnd = text.find("\n}\n", run);
+        const std::size_t closeAt = text.find("void AppWindow::closeWindow() {", run);
+        const std::size_t leaveAt = closeAt == std::string::npos ? std::string::npos : text.find("leavePluginUi();", closeAt);
+        const std::size_t glAt = closeAt == std::string::npos ? std::string::npos : text.find("ImGui_ImplOpenGL3_Shutdown();", closeAt);
+        const bool ordered = flush != std::string::npos && release != std::string::npos && flush < release && release < runEnd &&
+                             text.find("leavePluginUi();", run) == leaveAt && leaveAt != std::string::npos && glAt != std::string::npos && leaveAt < glAt &&
+                             text.find("ui_->release();", release + 1) == std::string::npos;
+        if (!ordered) { std::printf("FAIL: run() does not hand over the last half and release the plugin UI through the port once before it returns, or closeWindow() does not let go of the port before the GL teardown\n"); }
         CHECK(ordered);
-        // the bounded run's plugin report half is handed over before the first teardown phase, and only when it was asked for
+        // the bounded run's plugin report half is handed over before the plugin UI is released (the port still has its tracks, paths and panels), only when asked
         const std::size_t hand = text.find("if (pluginStatusReport) { handFrontEndFacts(true); }", run);
-        const std::size_t quiesce = text.find("engine_.shutdownQuiesce();", run);
-        const bool handOk = hand != std::string::npos && quiesce != std::string::npos && hand < quiesce;
-        if (!handOk) { std::printf("FAIL: run() does not hand the plugin status report's half over before the engine's first teardown phase\n"); }
+        const bool handOk = hand != std::string::npos && release != std::string::npos && hand < release;
+        if (!handOk) { std::printf("FAIL: run() does not hand the plugin status report's half over before it releases the plugin UI (and so before the engine's first teardown phase)\n"); }
         CHECK(handOk);
     }
 
@@ -1440,7 +1452,7 @@ int main(int argc, char** argv) {
     checkTheFence(root, deny, allowedEngine);
     checkMachineryHasNoInput(root);
     checkTheFrameIsALook(root, calls);
-    checkConfigSaveIsTheShells(root);
+    checkTheWindowSavesNothing(root);
     checkIndexOps(root);
     checkRetiredHooks(root);
     checkPluginUiOwnership(root);

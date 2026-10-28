@@ -174,6 +174,15 @@ int main() {
     ParkedThreads parked;
     parked.spawn(3);
 
+    // ISOLATION (shell retirement R8, 2026-10-28): THIS TEST'S CHILDREN MAY NOT SHARE A SETTINGS FILE WITH ANYONE. A gate run sets CASCADE_CONFIG_TEST to one
+    // scratch file for the whole ctest run (so the real settings are never touched), and every bounded child that inherits it reads and WRITES that one file -
+    // across tests running side by side under -j. The blocks below that flip the Diagnostics switch off mid-session (--diag-toggle off) saved
+    // "diagnosticsEnabled": false into it, and test_shutdown_budget_free, which starts its children with the same variable and needs diagnostics ON to get its hang
+    // reports, then failed on exactly four lines (":1950", ":1956", ":1960", ":1961") in every full run and passed alone. The blocks that need a settings file
+    // bring their own (toggleon, the unclean-exit block); the rest run hermetic, as they do wherever the variable is not set. test_shutdown_budget gives its
+    // children a file of their own for the same reason.
+    ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", nullptr);
+
     // Every block from here through "No report directory means no file, and
     // no crash" below asserts that a stall produces an actual hang REPORT.
     // HangWatchdog::captureAllThreads() now has a real body on both
@@ -830,13 +839,19 @@ int main() {
     // join. (Reading a source file to hold a promise is the same device
     // tests/test_crash_upload.cpp uses against PRIVACY.md.)
     {
+        // SINCE SHELL RETIREMENT R8 THE MARKER AND THE JOIN ARE THE SERVICE'S (src/engine/engine_service.cpp, EngineService::stop), and the GL teardown is the
+        // window's closeWindow() that the host calls AFTER the service's stop (src/main.cpp): the three-way order is held across the three files.
         const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
-        const std::string text = readFile(src);
+        const std::string wtext = readFile(src);
+        CHECK(!wtext.empty());
+        const std::string text = readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine_service.cpp");
         CHECK(!text.empty());
+        const std::string hostText = readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "main.cpp");
+        CHECK(!hostText.empty());
 
         const std::size_t marker = text.find("engine_.markCleanExit();");
         // The join is the ENGINE's (Engine::shutdownStop, engine/stage3b-pre
-        // OPEN 9): run() calls it here, and the engine's phase holds the
+        // OPEN 9): the service calls it here, and the engine's phase holds the
         // pipeline_.stop() itself - both halves are checked.
         const std::size_t join = text.find("engine_.shutdownStop();");
         {
@@ -849,7 +864,12 @@ int main() {
         // The GL teardown, which must come AFTER the marker write: a save
         // performed past glfwTerminate() re-derives the pending usage report
         // with glfwGetTime() == 0.0 and reports a zero-second session.
-        const std::size_t glTeardown = text.find("ImGui_ImplOpenGL3_Shutdown();");
+        const std::size_t closeAt = wtext.find("void AppWindow::closeWindow() {");
+        const std::size_t glTeardown = closeAt == std::string::npos ? std::string::npos : wtext.find("ImGui_ImplOpenGL3_Shutdown();", closeAt);
+        // ...and the host calls the service's stop before the window's close: the service's writes are all before the GL teardown by construction.
+        const std::size_t hostStop = hostText.find("service.stop();");
+        const std::size_t hostClose = hostText.find("app.closeWindow();");
+        CHECK(hostStop != std::string::npos && hostClose != std::string::npos && hostStop < hostClose);
         std::printf("clean-exit ordering: join@%zu marker@%zu glTeardown@%zu\n", join, marker,
                     glTeardown);
         CHECK(marker != std::string::npos);

@@ -217,6 +217,10 @@ inline void attach(Block* b) noexcept {
 inline void setPhase(Phase p) noexcept {
     Block* b = g_block.load(std::memory_order_relaxed);
     if (b == nullptr) { return; }
+    // ONCE THE WINDOW HAS FAILED THE PROCESS'S STAGE IS FIXED (shell retirement R8): the host still stops the engine's service on that path (the receiver this
+    // process started, the clean-exit marker), and the service sets the shutdown steps as it goes; the report of a window that could not be created says "phase
+    // creating the window", not a shutdown step it never reached (test_window_failed_app).
+    if ((detail::at(b->flags).load(std::memory_order_relaxed) & kFlagWindowFailed) != 0u) { return; }
     if (detail::at(b->phase).load(std::memory_order_relaxed) == static_cast<std::uint32_t>(p)) {
         return;
     }
@@ -287,6 +291,13 @@ inline void setFrameScope(std::uint32_t scopePlusOne) noexcept {
 inline void beat() noexcept {
     Block* b = g_block.load(std::memory_order_relaxed);
     if (b == nullptr) { return; }
+    // A BEAT BEFORE THE WINDOW IS SHOWN IS NOT A FRAME (shell retirement R8, 2026-10-28). The engine's control thread beats this too (its watchdog is a
+    // HangWatchdog like the window's), and since R8 it starts before the GL window exists - main.cpp starts the service, then runs the window - so its beats
+    // arrive while the phase is still Starting, BuildingApp or CreatingWindow. Counted, they used up the "second heartbeat" before AwaitingFirstFrame was
+    // entered and the phase never reached Running (a death an hour in was "before the first frame"; test_sentinel_app and test_exit_cause_app found it), and
+    // they kept the silence clock at zero through a window that never appeared (the start-up hang the sentinel exists to name). Ignored until the window
+    // is up, the count and the clock are what they were when the engine started after it.
+    if (detail::at(b->phase).load(std::memory_order_relaxed) < static_cast<std::uint32_t>(Phase::AwaitingFirstFrame)) { return; }
     detail::at(b->beatMs).store(nowMs(), std::memory_order_relaxed);
     auto frames = detail::at(b->frames);
     const std::uint64_t n = frames.load(std::memory_order_relaxed) + 1;

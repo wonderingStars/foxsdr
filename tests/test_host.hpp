@@ -11,8 +11,10 @@
 //
 //   th::Host             WHAT main.cpp IS, for a test: an EngineService (hermetic when the window has no settings path, persistent on a scratch
 //                        path when it has one), its restore, and the CASCADE_CONFIG_TEST line when asked. It owns the Engine. It does NOT start the
-//                        service (a window's run() starts the engine until R8, and most tests drive the pass themselves through the pass seam) and
-//                        takes no lock (a test window never did). Everything a test builds is in main's order: service, restore, window.
+//                        service on its own (most tests drive the pass themselves through the pass seam; th::run below is main's start, run, stop and
+//                        closeWindow for the one in-process test that runs a window) and takes no lock (a test window never did). Its options are
+//                        the window application's, from the SAME function main.cpp calls (engine/window_service_options.hpp) - R8. Everything a test
+//                        builds is in main's order: service, restore, window.
 //   th::TestWindow       an AppWindow, built the way `AppWindow app;` / `AppWindow app(path[, announce])` always built one - and built the way
 //                        main builds it since R7: the HOST FIRST (base-from-member: the Host is a base that is constructed before the window and
 //                        destroyed after it), then the window on the restored engine. It is a distinct type so that every test window is made in
@@ -36,6 +38,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <utility>
 
@@ -44,6 +47,7 @@
 #include "engine/engine_shell.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/plugin_ui_port.hpp"
+#include "engine/window_service_options.hpp"
 #include "gui/app_window.hpp"
 
 namespace cascade::gui {
@@ -73,8 +77,10 @@ class Host {
 public:
     // `restoreNow` false is for the one test that must build the OLD order - a window attached BEFORE the restore's scan - to compare the new one with
     // (tests/test_engine_service_window.cpp D): it calls restore() itself, later.
-    explicit Host(const std::string& configPath, bool announceConfig = false, bool restoreNow = true)
-        : service_(options(configPath)), announce_(announceConfig) {
+    // `frames` is the --frames of the run the host is for (0: a bounded run, the default of every test window; negative: a real session's options, which
+    // a test never wants): it decides the service's options exactly as main's --frames does (engine/window_service_options.hpp).
+    explicit Host(const std::string& configPath, bool announceConfig = false, bool restoreNow = true, int frames = 0)
+        : service_(options(configPath, frames)), announce_(announceConfig) {
         if (restoreNow) { (void)restore(); }
     }
     Host(const Host&) = delete;
@@ -106,14 +112,11 @@ public:
     }
 
 private:
-    static cascade::engine::ServiceOptions options(const std::string& configPath) {
-        cascade::engine::ServiceOptions o;
-        o.configPath = configPath;
-        o.lock = cascade::engine::ServiceLock::BestEffort;
-        o.hermetic = cascade::engine::ServiceHermetic::Window;
-        o.label = "cascade";
-        o.frontEndFollows = true;   // main's options: the window attaches after the restore
-        return o;
+    static cascade::engine::ServiceOptions options(const std::string& configPath, int frames) {
+        cascade::engine::WindowServiceRun run;
+        run.configPath = configPath;
+        run.frames = frames;
+        return cascade::engine::windowServiceOptions(run);   // main's options: the same function
     }
     cascade::engine::EngineService service_;
     bool announce_ = false;
@@ -122,24 +125,59 @@ private:
 
 // The base-from-member holder: the Host is a base of TestWindow listed BEFORE AppWindow, so it is constructed first and destroyed last - main's order.
 struct HostHolder {
-    explicit HostHolder(const std::string& configPath, bool announceConfig) : host(configPath, announceConfig) {}
+    explicit HostHolder(const std::string& configPath, bool announceConfig, int frames) : host(configPath, announceConfig, true, frames) {}
     Host host;
 };
 
+// WHAT THE OLD ~AppWindow DID TO THE ENGINE, for a test (shell retirement R8): the window no longer takes the engine down - the host stops it before the
+// window goes, and the host's service tears it down when it is destroyed - but a test window is destroyed with its engine's control thread often still
+// running (the pass seam starts it), and the engine's window host (the shell's adapter) cannot be given back while it does. So a test window takes its
+// engine down first, in the order the window's destructor always did: the transfers cancelled, then the teardown. Idempotent (Engine::teardown is).
+inline void takeEngineDown(cascade::engine::Engine& engine) {
+    engine.stopTransfers();
+    engine.teardown();
+}
+
 class TestWindow : private HostHolder, public cascade::gui::AppWindow {
 public:
-    explicit TestWindow(std::string configPath = {}, bool announceConfig = false)
-        : HostHolder(configPath, announceConfig), cascade::gui::AppWindow(HostHolder::host.windowHost(configPath)) {}
+    explicit TestWindow(std::string configPath = {}, bool announceConfig = false, int frames = 0)
+        : HostHolder(configPath, announceConfig, frames), cascade::gui::AppWindow(HostHolder::host.windowHost(configPath)), frames_(frames) {}
+    ~TestWindow() { takeEngineDown(HostHolder::host.engine()); }
 
     Host& host() { return HostHolder::host; }
+    int frames() const { return frames_; }
+
+private:
+    int frames_ = 0;
 };
 
 // A window on a Host the TEST owns (tests/test_engine_service_window.cpp): what a test that has to act on the engine BEFORE its window exists - start the
 // control thread, count what the restore's scan built - needs. The Host is built first, restored by its constructor, and outlives the window.
 class BareWindow : public cascade::gui::AppWindow {
 public:
-    explicit BareWindow(Host& host, const std::string& configPath = {}) : cascade::gui::AppWindow(host.windowHost(configPath)) {}
+    explicit BareWindow(Host& host, const std::string& configPath = {}) : cascade::gui::AppWindow(host.windowHost(configPath)), host_(&host) {}
+    ~BareWindow() { takeEngineDown(host_->engine()); }
+
+private:
+    Host* host_ = nullptr;
 };
+
+// MAIN'S START, RUN, STOP AND CLOSE FOR A TEST WINDOW (src/main.cpp; shell retirement R8): the service started after the window's constructor and
+// before run(), the window run, the service stopped with the window still on screen, then the window's GL context closed. The one in-process test
+// that runs a window (tests/test_deck_knobs_app.cpp) goes through here, so it runs the PRODUCTION lifecycle (EngineService::start and stop) and not an
+// arrangement of its own. The window must have been built for this many frames (TestWindow's third argument): the service's options depend on it.
+inline int run(TestWindow& window) {
+    std::string why;
+    int rc = 1;
+    if (window.host().service().start(why)) {
+        rc = window.run(window.frames());
+    } else {
+        std::fprintf(stderr, "cascade: %s\n", why.c_str());
+    }
+    window.host().service().stop();
+    window.closeWindow();
+    return rc;
+}
 
 // THE ENGINE behind a window: the Host's own, which the window's shell views (rawEngine(a.engine_) is the same reference, for a TestWindow and a
 // BareWindow alike; tests/test_engine_service_window.cpp holds that it is the Host's).

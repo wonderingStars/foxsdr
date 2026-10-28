@@ -258,8 +258,8 @@ int childMain(const std::string& radio, int frames) {
     }
     cascade::gui::AppWindowTestAccess::installHooks();
     const char* cfg = std::getenv("CASCADE_CONFIG_TEST");
-    th::TestWindow app(cfg != nullptr ? cfg : "", true);
-    const int rc = app.run(frames);
+    th::TestWindow app(cfg != nullptr ? cfg : "", true, frames);
+    const int rc = th::run(app);   // main's start, run, stop and close (shell retirement R8): the window no longer starts or stops the engine
     // What the run ended with, in the file the parent reads (the thresholds are not in the
     // saved config except the receiver's, and the Airband monitor's is not saved at all).
     if (const char* sf = std::getenv("FAKE_STATE_FILE"); sf != nullptr && sf[0] != '\0') {

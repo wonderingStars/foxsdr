@@ -291,22 +291,11 @@ public:
     // retirement R7 retired apiTable and apiHandle.)
 
     // --- the run ---
-    void startReceiver();
-    void controlPass();
-    void startControlThread(const ControlThreadOptions& options);
     void stepPass(PassPart part);
-    // The usage heartbeat, armed in an interactive run only (the endpoint, the install id and the version are the engine's to name).
-    void configureHeartbeat();
-    // The clean-exit marker, set after the pipeline join.
-    void markCleanExit();
-
-    // --- the teardown, in the engine's three ordered phases between the window's own steps ---
-    void stopTransfers();
-    void teardown();
-    void shutdownQuiesce();
-    void shutdownStop();
-    void shutdownRelease();
-    void shutdownDrain(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
+    // (SHELL RETIREMENT R8, 2026-10-28: the engine's START and STOP left this door for EngineService, which main.cpp - or the test host - calls: the receiver
+    // started, the control thread's first pass and the thread, the usage heartbeat (startReceiver, controlPass, startControlThread, configureHeartbeat), the
+    // clean-exit marker (markCleanExit), the engine's transfers and teardown (stopTransfers, teardown) and its four shutdown phases (shutdownQuiesce,
+    // shutdownStop, shutdownRelease, shutdownDrain). The window's own part of its end is the prelude of run() and closeWindow().)
     // (The enforcement diagnostic - a bounded run's CASCADE_PLUGIN_STATUS - is printed by the engine at the end of shutdownQuiesce, from what the
     // window handed over in its last setFrontEnd; shell retirement R4 retired reportPluginStatus from this door.)
 

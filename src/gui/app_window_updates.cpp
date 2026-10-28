@@ -195,10 +195,11 @@ void AppWindow::pollUpdateAsync() {
 }
 
 void AppWindow::saveConfigFromFrame() {
-    // (See the declaration for why this is not saveConfigNow.) The damaged-file rule is maybeSaveConfig's own: a settings file that could not be kept aside is never
-    // saved over.
-    if (configPath_.empty() || configWriter_.writesForbidden()) { return; }
-    requestConfigSave(currentConfig());
+    // A CHANGE THAT IS TO REACH THE FILE AT ONCE (the Seen list). Since shell retirement R8 the window does not write the file: it hands its half to the
+    // engine, whose keeper saves what the engine holds, and a change made now is in that half the moment it is sent. The frame sends it after the draw
+    // (sendInterfaceHalf), so all this has to do is see that the coalescing gap does not hold it back - the clock of the last attempt is let go. (The
+    // damaged-file rule is the engine's keeper's: a settings file that could not be kept aside is never saved over, by anyone.)
+    interfaceSentAtS_ = -1.0;
 }
 
 bool AppWindow::teamMessageSeen(const std::string& id) const {

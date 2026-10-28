@@ -233,8 +233,15 @@ int main() {
         // SINCE SHELL RETIREMENT R7 the lock is the engine's SERVICE's (EngineService::acquireConfig, role = the service's label, "cascade" for the window
         // application, policy BestEffort: carries on and logs the line main.cpp has always logged), and main builds the service before the window exists, so
         // it is released after the window is gone (the service is declared first) and, being a member of the service, before the software-GL relaunch.
-        const std::size_t policyAt = mainText.find("options.lock = cascade::engine::ServiceLock::BestEffort;");
-        const std::size_t labelAt = mainText.find("options.label = \"cascade\";");
+        // SINCE SHELL RETIREMENT R8 the policy and the role are chosen by the window application's options (engine/window_service_options.cpp), which main.cpp
+        // builds with windowServiceOptions() before it builds the service.
+        const std::string factoryText = emt::readFile(src / "engine" / "window_service_options.cpp");
+        CHECK(!factoryText.empty());
+        const std::size_t factoryPolicy = factoryText.find("o.lock = ServiceLock::BestEffort;");
+        const std::size_t factoryLabel = factoryText.find("o.label = \"cascade\";");
+        CHECK(factoryPolicy != std::string::npos && factoryLabel != std::string::npos);
+        const std::size_t policyAt = mainText.find("cascade::engine::windowServiceOptions(");
+        const std::size_t labelAt = policyAt;
         const std::size_t declAt = mainText.find("cascade::engine::EngineService service(");
         const std::size_t lockAt = mainText.find("service.acquireConfig(");
         const std::size_t windowAt = mainText.find("cascade::gui::AppWindow app(");

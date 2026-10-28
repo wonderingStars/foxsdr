@@ -25,12 +25,18 @@
 //      afterwards. Every EngineHost measures from the process's first, so the stamp and the reads that follow it are one clock (a host that restarted
 //      the clock at its own construction would put the session's length and its mode seconds on two).
 //
+//   G  THE WINDOW GOES AFTER THE ENGINE HAS BEEN STOPPED (shell retirement R8: the product's order - main stops the service with the window alive and destroys
+//      the window after): its session is closed on an engine with no pass left while a key is held; a harmless release, the key let go of once, by the stop.
+//   H  THE LAST HALF OF THE SETTINGS REACHES THE FILE: the window's last-second change, handed over by the prelude's flush and applied by the service's final
+//      pass, is in the file the stop writes - for the stepped pass and the free-running one; the control run without the flush keeps the loaded value.
+//
 // Break-it (docs/engine-stage4.md 6.25): the shell's view does not check setHost's answer: B RED (no throw); the destructor does not detach: C RED
 // (the engine's pause reaches the dead hooks); Engine::attachPluginUi without its replay: D RED (the window has no instance); the clock per host: E RED.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
 #include <chrono>
+#include <complex>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -47,6 +53,7 @@
 #include "engine/engine_host.hpp"
 #include "engine/engine_shell.hpp"
 #include "engine_api_fake_radio.hpp"
+#include "source/tx_sink.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
 #include "pump3_support.hpp"
@@ -326,6 +333,152 @@ void testRestoredIntoTheWindow() {
     }
 }
 
+// ======================================================================================================================
+// G. THE WINDOW GOES AFTER THE ENGINE HAS BEEN STOPPED - the product's order (shell retirement R8)
+// ======================================================================================================================
+// main.cpp stops the service with the window still alive and destroys the window after: the window's session is closed on an engine whose control
+// thread is joined, with a key held at that moment (the survey's 2.4). A close on a stopped engine must be a harmless release - no crash, no second
+// unkey, no pass to hang for, and the window's shell gives the engine its own host back (resetHost succeeds because the thread is gone) without the
+// "went while the control thread was still running" line of C.
+class KeySink final : public cascade::source::IqSink {
+public:
+    bool start() override {
+        running_ = true;
+        ++starts;
+        return true;
+    }
+    void stop() override {
+        if (running_.exchange(false)) { ++stops; }
+    }
+    void finish() override { stop(); }
+    bool running() const override { return running_; }
+    double sampleRateHz() const override { return 2.5e6; }
+    bool setSampleRateHz(double) override { return true; }
+    double centerFrequencyHz() const override { return 146.52e6; }
+    bool setCenterFrequencyHz(double) override { return true; }
+    bool frequencyRangeHz(double& lo, double& hi) const override {
+        lo = 70.0e6;
+        hi = 6.0e9;
+        return true;
+    }
+    bool sampleRateRangeHz(double& lo, double& hi) const override {
+        lo = 2.083e6;
+        hi = 61.44e6;
+        return true;
+    }
+    bool gainRangeDb(double& lo, double& hi) const override {
+        lo = -89.75;
+        hi = 0.0;
+        return true;
+    }
+    double gainDb() const override { return 0.0; }
+    bool setGainDb(double) override { return true; }
+    std::size_t write(const std::complex<float>*, std::size_t n) override { return running_ ? n : 0; }
+    bool faulted() const override { return false; }
+    const char* name() const override { return "key sink"; }
+    const char* lastError() const override { return ""; }
+    std::atomic<int> starts{0};
+    std::atomic<int> stops{0};
+
+private:
+    std::atomic<bool> running_{false};
+};
+
+void testWindowGoesAfterTheStop() {
+    std::printf("  G: the service stopped with a key held, THEN the window destroyed - a harmless release, the engine's own host back\n");
+    th::Host h("");
+    Engine& e = h.engine();
+    auto sinkOwner = std::make_unique<KeySink>();
+    KeySink* sink = sinkOwner.get();
+    const int wentRunning0 = diagLines("the window went while the control thread was still running");
+    {
+        th::BareWindow w(h);
+        Access::installSink(w, std::move(sinkOwner));
+        std::string why;
+        CHECK(h.service().start(why));              // main's start: after the window's constructor
+        CHECK(e.controlThreadRunning());
+        const auto t0 = std::chrono::steady_clock::now();
+        while (!sink->running() && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(3)) {
+            Access::frame(w, true);                 // the window's frames, each re-asserting the PTT on its own session
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(sink->running());                     // THE KEY IS HELD
+        h.service().stop();                         // main's stop, with the window alive
+        CHECK(!e.controlThreadRunning());
+        CHECK(!sink->running());                    // the stop let go of it (the transmitter first of all)
+        CHECK_EQ(sink->stops.load(), 1);
+        CHECK(e.pluginUiAttached());                // (the window's port is still connected: the prelude was not run by this test)
+    }                                               // ... and the window goes: its session is closed on an engine with no pass left
+    CHECK_EQ(sink->stops.load(), 1);                // the key was not let go of a second time, by anyone
+    CHECK(Access::hostIsOwn(e));                    // the engine's own host is back ...
+    CHECK_EQ(diagLines("the window went while the control thread was still running") - wentRunning0, 0);   // ... without the detach of C
+    CHECK(!e.pluginUiAttached());                   // and the port is gone
+}
+
+// ======================================================================================================================
+// H. THE LAST HALF OF THE SETTINGS REACHES THE FILE (shell retirement R8)
+// ======================================================================================================================
+// The window's change in its last second is in no snapshot the engine holds until the window hands it over; the prelude's flush does, and the service's
+// final pass applies it before the final-state save. Held end to end on a real file in the product's order (start, frames, flush, stop), for the STEPPED
+// pass (a bounded run: nothing would run the pass that takes the half, so the service makes one) and the FREE-RUNNING one (the product: the submit wakes
+// it). The control run flushes nothing and the file keeps the value it was loaded with - so the value in the other file is the flush's doing.
+int savedRailBank(const std::string& path, bool* cleanExit) {
+    cascade::core::AppConfig c;
+    std::string err;
+    if (!cascade::core::ConfigStore::load(path, c, err)) { return -1; }
+    if (cleanExit != nullptr) { *cleanExit = c.telemetryCleanExit; }
+    return c.railBank;
+}
+
+void lastHalfRun(const char* name, bool free, bool flush, int* savedBank, bool* clean) {
+    namespace fs = std::filesystem;
+    const fs::path dir = g_scratch / "lasthalf";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    const std::string path = (dir / name).string();
+    fs::remove(path, ec);
+    {
+        cascade::core::AppConfig c;
+        c.volume = 0.0f;
+        c.railBank = 1;                                      // what the file says; the window starts there
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << cascade::core::ConfigStore::serialize(c);
+    }
+    pump3::setEnv("FOXSDR_PASS", free ? "free" : "");
+    {
+        th::Host h(path);                                    // frames = 0: a bounded run's options - stepped unless FOXSDR_PASS=free
+        th::BareWindow w(h, path);
+        CHECK_EQ(Access::railBank(w), 1);
+        std::string why;
+        CHECK(h.service().start(why));
+        for (int i = 0; i < 5; ++i) {
+            Access::frame(w);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        Access::setRailBank(w, 3);                           // the last second's change: no look has sent it
+        if (flush) { CHECK(Access::flushHalf(w)); }          // the prelude's hand-over
+        h.service().stop();
+    }
+    pump3::setEnv("FOXSDR_PASS", "");
+    *savedBank = savedRailBank(path, clean);
+}
+
+void testLastHalfReachesTheFile() {
+    std::printf("  H: the window's last-second change is in the file the service's stop writes (stepped and free-running); without the hand-over it is not\n");
+    for (const bool free : {false, true}) {
+        int bank = -2;
+        bool clean = false;
+        lastHalfRun(free ? "free.json" : "stepped.json", free, /*flush=*/true, &bank, &clean);
+        std::printf("      %s pass, flushed: railBank in the file %d (expect 3), clean-exit marker %d\n", free ? "free-running" : "stepped", bank, clean ? 1 : 0);
+        CHECK_EQ(bank, 3);
+        CHECK(clean);
+        lastHalfRun(free ? "free-control.json" : "stepped-control.json", free, /*flush=*/false, &bank, &clean);
+        std::printf("      %s pass, NOT flushed: railBank in the file %d (expect 1, the loaded value)\n", free ? "free-running" : "stepped", bank);
+        CHECK_EQ(bank, 1);
+        CHECK(clean);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -339,6 +492,8 @@ int main() {
     testViewDetachesWhenTheEngineWillNotLetGo();
     testOneClock();
     testRestoredIntoTheWindow();
+    testWindowGoesAfterTheStop();
+    testLastHalfReachesTheFile();
     testStartupPathReplays(fixturePath);
     return testSummary("test_engine_service_window");
 }

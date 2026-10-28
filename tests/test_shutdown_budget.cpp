@@ -1069,7 +1069,15 @@ const KnownWait kKnownWaits[] = {
     {"src/engine/engine_service.cpp", "kKeeperPeriod", 0,
      "EngineService::startKeeper() - the wait of the service's own keeper thread (ServiceOptions::keeperThread) between two looks at the settings, on that thread. "
      "stop() joins the thread AT ITS HEAD and wakes it with a notify, so the wait ends at once and the join costs one look (a poll of the writer and a compare: "
-     "nothing in it blocks) - before beginShutdown's budget has anything to spend it on; the teardown never waits for the period"},
+     "nothing in it blocks) - which since R8 is inside the window's budgeted stretch (the host stops the service after run() has begun the shutdown clock) and costs "
+     "nothing in it: the teardown never waits for the period"},
+    // SHELL RETIREMENT R8 (src/engine/engine_service.cpp): the final pass's bound.
+    {"src/engine/engine_service.cpp", "kFinalPassBound", 0,
+     "EngineService::stop() with ServiceOptions::finalPass (the window application's): ONE whole pass, made right after the keeper thread is joined and before anything "
+     "is quiesced, so what the interface submitted last (its last half of the settings) is applied before the final-state save. The wait is Engine::runPassNow's, "
+     "which beats the window's watchdog for as long as it waits (Engine::setFrontEndWaitBeat - the same beat a stepped frame's wait makes) and is bounded by this "
+     "constant on a free-running pass; a stepped pass is the three parts of one pass, a few milliseconds. A pass that really hangs is the control thread's own "
+     "watchdog's to report. So the wait is not a stall of the window's frame clock: it adds nothing to the budget the arithmetic below sums"},
     {"src/engine/engine.hpp", "kPassWaitNet", 0,
      "Engine::waitForPassCounter() - the safety net on a front-end thread's wait for the pass (stepPass, runPassNow): the wait ends on the "
      "pass's own notification, and this is how often it looks again in case one was missed. NOT on the shutdown path: stopControlThread "
@@ -1348,6 +1356,15 @@ AppRun runAppOnce(const fs::path& dir, int shutdownStallMs) {
     fs::remove_all(dir, ec);
     fs::create_directories(dir, ec);
     ::SetEnvironmentVariableA("FOXSDR_DIAG_DIR", dir.string().c_str());
+    // ISOLATION (shell retirement R8, 2026-10-28): THE CHILD GETS A SETTINGS FILE OF ITS OWN, fresh for every run. A gate run sets CASCADE_CONFIG_TEST to one
+    // scratch file for the whole ctest run, and a child that inherited it read whatever an earlier test left there - test_diag_hang_free left
+    // "diagnosticsEnabled": false in it, and with diagnostics off the watchdog files no hang report, so the four checks that need one (":1950", ":1956", ":1960",
+    // ":1961") failed in every full run and passed alone. The file lives in the run's own directory (cleared above), so what the previous run saved is not read
+    // by the next either; the child still takes the product's whole save path, which is what the teardown budget is a budget of.
+    char outerConfig[4096] = {};
+    const DWORD outerLen = ::GetEnvironmentVariableA("CASCADE_CONFIG_TEST", outerConfig, static_cast<DWORD>(sizeof(outerConfig)));
+    const bool hadOuterConfig = outerLen > 0 && outerLen < sizeof(outerConfig);
+    ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", (dir / "settings.json").string().c_str());
     if (shutdownStallMs > 0) {
         ::SetEnvironmentVariableA("CASCADE_DIAG_SHUTDOWN_STALL_MS",
                                   std::to_string(shutdownStallMs).c_str());
@@ -1363,6 +1380,7 @@ AppRun runAppOnce(const fs::path& dir, int shutdownStallMs) {
     r.wallMs = static_cast<unsigned long long>(::GetTickCount64() - t0);
     ::SetEnvironmentVariableA("FOXSDR_DIAG_DIR", nullptr);
     ::SetEnvironmentVariableA("CASCADE_DIAG_SHUTDOWN_STALL_MS", nullptr);
+    ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", hadOuterConfig ? outerConfig : nullptr);
     // AFTER the child is gone: anything this counts belongs to somebody else.
     r.census = contentionCensus();
 
@@ -1685,10 +1703,18 @@ int main() {
     // that keeps a wedged shutdown reportable, which no timing test can see.
     // (Reading a source file to hold a promise is the same device
     // tests/test_diag_hang.cpp uses for the clean-exit ordering.)
+    //
+    // SINCE SHELL RETIREMENT R8 THE TEARDOWN IS IN THREE FILES, in this order in time: the window's run() ends with its own prelude (the shutdown clock
+    // started by watchdog_.beginShutdown()); the HOST (src/main.cpp) stops the engine's service (src/engine/engine_service.cpp: the quiesce, the final save,
+    // the pipeline's stop, the plugins' release, the marker, the drain); and then the host closes the window (AppWindow::closeWindow: the GL teardown and
+    // watchdog_.stop(), LAST). The watchdog's budget covers the whole of it only if that order holds, so it is held here from the text of all three.
     {
         const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
         const std::string text = readFile(src);
         CHECK(!text.empty());
+        const std::string stext = readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine_service.cpp");
+        const std::string htext = readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "main.cpp");
+        CHECK(!stext.empty() && !htext.empty());
 
         const std::size_t begin = text.find("watchdog_.beginShutdown();");
         const std::size_t heartbeat = text.find("watchdog_.heartbeat(");
@@ -1710,12 +1736,20 @@ int main() {
         // teardown work must come after.
         CHECK(haveAnchors && heartbeat < begin);
         CHECK(haveAnchors && begin < stop);
+        // THE WATCHDOG IS STOPPED IN closeWindow() AND NOWHERE ELSE, and closeWindow() is the host's LAST call on the window's end, after the service's stop.
+        const std::size_t closeAt = text.find("void AppWindow::closeWindow() {");
+        CHECK(closeAt != std::string::npos && haveAnchors && closeAt < stop && text.find("watchdog_.stop();", stop + 1) == std::string::npos);
+        const std::size_t hostStop = htext.find("service.stop();");
+        const std::size_t hostClose = htext.find("app.closeWindow();");
+        CHECK(isLiveCode(htext, hostStop) && isLiveCode(htext, hostClose));
+        CHECK(hostStop != std::string::npos && hostClose != std::string::npos && hostStop < hostClose);
 
         // The pipeline's stop is the engine's since engine/stage3b-pre OPEN 9
-        // (Engine::shutdownStop); run() calls that phase here, and the phase
+        // (Engine::shutdownStop); the service calls that phase, and the phase
         // must hold the stop - checked below against engine.cpp.
+        const std::size_t stopAt = stext.find("void EngineService::stop() {");
         const std::size_t pipelineStop =
-            haveAnchors ? text.find("engine_.shutdownStop();", begin) : std::string::npos;
+            stopAt != std::string::npos ? stext.find("engine_.shutdownStop();", stopAt) : std::string::npos;
         const std::string etext =
             readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp");
         const auto phaseHolds = [&etext](const char* phase, const char* step) {
@@ -1728,41 +1762,34 @@ int main() {
         CHECK(phaseHolds("void Engine::shutdownRelease() {", "patchStopAll(false);"));
         CHECK(phaseHolds("void Engine::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) {", "drainRecordFinishes(drainDeadline);"));
         CHECK(phaseHolds("void Engine::shutdownQuiesce() {", "transmitter_.stop();"));
-        // ...and run() calls the three phases, in their order, the first of
-        // them before the final save (which must read the settled state) and
-        // all of them inside the budgeted stretch.
-        const std::size_t quiesce =
-            haveAnchors ? text.find("engine_.shutdownQuiesce();", begin) : std::string::npos;
-        const std::size_t release =
-            haveAnchors ? text.find("engine_.shutdownRelease();", begin) : std::string::npos;
-        const std::size_t finalSave =
-            haveAnchors ? text.find("saveConfigNow(); }", begin) : std::string::npos;
+        // ...and the service's stop calls the three phases, in their order, the first of
+        // them before the final save (which must read the settled state); the whole of it
+        // runs between the window's beginShutdown and the window's watchdog stop (the host's order).
+        const std::size_t quiesce = stopAt != std::string::npos ? stext.find("engine_.shutdownQuiesce();", stopAt) : std::string::npos;
+        const std::size_t release = stopAt != std::string::npos ? stext.find("engine_.shutdownRelease();", stopAt) : std::string::npos;
+        const std::size_t finalSave = quiesce != std::string::npos ? stext.find("saveNow(); }", quiesce) : std::string::npos;
         std::printf("teardown phases: quiesce@%zu final save@%zu stop@%zu release@%zu\n", quiesce, finalSave,
                     pipelineStop, release);
-        CHECK(quiesce != std::string::npos && isLiveCode(text, quiesce));
+        CHECK(quiesce != std::string::npos && isLiveCode(stext, quiesce));
         CHECK(quiesce != std::string::npos && finalSave != std::string::npos && quiesce < finalSave);
         CHECK(quiesce != std::string::npos && pipelineStop != std::string::npos && quiesce < pipelineStop);
         CHECK(pipelineStop != std::string::npos && release != std::string::npos && pipelineStop < release);
-        CHECK(release != std::string::npos && release < stop);
         // THE PLUGINS COME DOWN BEFORE THE CLEAN-EXIT MARKER (master 0.99.60; tests/test_clean_exit_marker kills the real binary inside the stage),
         // and the drain of the lists' and takes' last writes comes after the marker's save is waited for.
-        const std::size_t marker = haveAnchors ? text.find("engine_.markCleanExit();", begin) : std::string::npos;
-        const std::size_t drain = haveAnchors ? text.find("engine_.shutdownDrain(drainDeadline);", begin) : std::string::npos;
+        const std::size_t marker = stopAt != std::string::npos ? stext.find("engine_.markCleanExit();", stopAt) : std::string::npos;
+        const std::size_t drain = stopAt != std::string::npos ? stext.find("engine_.shutdownDrain(drainDeadline);", stopAt) : std::string::npos;
         CHECK(release != std::string::npos && marker != std::string::npos && release < marker);
-        CHECK(marker != std::string::npos && drain != std::string::npos && marker < drain && drain < stop);
-        const std::size_t glfwTerm =
-            haveAnchors ? text.find("glfwTerminate();", begin) : std::string::npos;
-        std::printf("teardown wiring: beginShutdown@%zu pipeline_.stop@%zu glfwTerminate@%zu "
+        CHECK(marker != std::string::npos && drain != std::string::npos && marker < drain);
+        const std::size_t glfwTerm = closeAt != std::string::npos ? text.find("glfwTerminate();", closeAt) : std::string::npos;
+        std::printf("teardown wiring: beginShutdown@%zu pipeline_.stop (service)@%zu glfwTerminate@%zu "
                     "watchdog_.stop@%zu\n",
                     begin, pipelineStop, glfwTerm, stop);
-        // The two bounded guards and the GL teardown are inside the budgeted
-        // stretch...
-        CHECK(pipelineStop != std::string::npos && pipelineStop < stop);
-        CHECK(glfwTerm != std::string::npos && glfwTerm < stop);
+        // The GL teardown is inside the budgeted stretch...
+        CHECK(glfwTerm != std::string::npos && haveAnchors && glfwTerm < stop);
         // ...and the watchdog is still stopped LAST, which is what keeps a
-        // shutdown that wedges reportable at all.
-        CHECK(pipelineStop != std::string::npos && glfwTerm != std::string::npos &&
-              pipelineStop < glfwTerm);
+        // shutdown that wedges reportable at all: the pipeline's stop is in the
+        // service, which the host runs before it closes the window.
+        CHECK(pipelineStop != std::string::npos && hostStop != std::string::npos && hostClose != std::string::npos && hostStop < hostClose);
 
         // AND NOTHING PAUSES IT ACROSS THE TEARDOWN. WatchdogPause was the
         // other available fix and it is the wrong one: it would silence the
@@ -1773,25 +1800,21 @@ int main() {
 
         // THE SOUND CARD'S CLOSE WAIT IS OFF FOR THE WHOLE TEARDOWN. kCloseWaitMs
         // is classified above as costing the shutdown nothing, and that is
-        // true only because run() switches it off straight after
-        // beginShutdown() - before the patch's radios (which can be sound
+        // true only because the service's stop switches it off at its head -
+        // before the patch's radios (which can be sound
         // cards) are destroyed inside the budget by patchStopAll(false). If
         // the call went, each such radio could spend a second of the budget
         // on a close that has hung, and the arithmetic above would still say
         // zero. (The second review's X1: deleting the call went unseen.)
         const std::string closeWaitOff = "SoundCardSource::setCloseWaitEnabled(false);";
-        const std::size_t off = haveAnchors ? text.find(closeWaitOff, begin) : std::string::npos;
-        const std::size_t patchStop =
-            haveAnchors ? text.find("engine_.shutdownRelease();", begin) : std::string::npos;
+        const std::size_t off = stopAt != std::string::npos ? stext.find(closeWaitOff, stopAt) : std::string::npos;
         std::printf("teardown wiring: sound card close wait off@%zu patchStopAll(false)@%zu\n", off,
-                    patchStop);
-        CHECK(off != std::string::npos && isLiveCode(text, off));
-        CHECK(off != std::string::npos && patchStop != std::string::npos && off < patchStop);
-        CHECK(off != std::string::npos && stop != std::string::npos && off < stop);
-        // ...and nothing switches it back on before the watchdog stops.
-        const std::size_t on =
-            haveAnchors ? text.find("SoundCardSource::setCloseWaitEnabled(true", begin) : std::string::npos;
-        CHECK(on == std::string::npos || (stop != std::string::npos && on > stop));
+                    release);
+        CHECK(off != std::string::npos && isLiveCode(stext, off));
+        CHECK(off != std::string::npos && release != std::string::npos && off < release);
+        // ...and nothing switches it back on.
+        const std::size_t on = stext.find("SoundCardSource::setCloseWaitEnabled(true");
+        CHECK(on == std::string::npos);
     }
 
 #if defined(_WIN32)

@@ -248,6 +248,15 @@ struct AppWindowTestAccess {
     static bool diagOfferOpen(AppWindow& a) { return a.diagOfferOpen_; }
     static std::string iqPath(AppWindow& a) { return std::string(a.iqPath_); }
     static int railBank(AppWindow& a) { return a.railBank_; }
+    // The window's last-second change and its hand-over at the end of the frame loop (shell retirement R8; tests/test_engine_service_window.cpp H): a field of
+    // the interface's half set directly, and the prelude's flush of the half to the engine.
+    static void setRailBank(AppWindow& a, int bank) { a.railBank_ = bank; }
+    static bool flushHalf(AppWindow& a) { return a.flushInterfaceHalf(); }
+    // The prelude's other two steps, for a test that ends a window by hand: the plugin UI released and let go.
+    static void releaseAndLeavePluginUi(AppWindow& a) {
+        a.ui_->release();
+        a.leavePluginUi();
+    }
     static int counterScale(AppWindow& a) { return a.counterScale_; }
     static bool transmitPageOpen(AppWindow& a) { return a.transmitPageOpen_; }
     static Engine& engine(AppWindow& a) { return th::engine(a); }

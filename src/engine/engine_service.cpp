@@ -42,6 +42,9 @@ constexpr std::chrono::milliseconds kProvisionBound{60000};
 // How often the keeper THREAD (ServiceOptions::keeperThread) looks at the settings: its wait between looks, ended at once by stop() (a notify), so the
 // join at the head of stop() costs one look at most and a look never blocks.
 constexpr std::chrono::milliseconds kKeeperPeriod{100};
+// The longest stop() waits for the pass ServiceOptions::finalPass asks for: a pass is a few milliseconds, and a stop that cannot get one in half a
+// second goes on (what the interface submitted last is then lost, which is what a crash would have lost).
+constexpr std::chrono::milliseconds kFinalPassBound{500};
 
 }  // namespace
 
@@ -291,6 +294,9 @@ bool EngineService::provision(const ProvisionRequest& request, const Secret* pas
 //                  pass made here so the first read is a real state                            [:1439-1458]
 // ---------------------------------------------------------------------------------------------------
 bool EngineService::start(std::string& why) {
+    // The test seam of FOXSDR_HOLD_AUDIO_LOCK (ServiceOptions::holdAudioLockMs), FIRST: before the receiver starts and before any pass, as the window's submit was
+    // applied by the first pass it made before it started the thread.
+    if (options_.holdAudioLockMs > 0) { (void)engine_.applyCommand(cmd::makeInt(FOXAPP_OP_TEST_HOLD_AUDIO_LOCK, options_.holdAudioLockMs)); }
     if (options_.receive) {
         const FoxCommandResult started = engine_.applyCommand(cmd::makeInt(FOXAPI_OP_RUN, 1));
         if (started.status != FOXAPI_OK || (started.flags & FOXAPI_RESULT_REFUSED) != 0u) {
@@ -315,6 +321,11 @@ bool EngineService::start(std::string& why) {
     opt.diagnosticsDir = options_.diagnosticsDir;   // where the interface's half moves the control watchdog to when it switches Diagnostics on (shell retirement R5)
     if (!options_.stepped) { engine_.controlPass(); }   // a stepped run's first frame runs the pass's front part: that IS the first pass
     engine_.startControlThread(opt);
+    // WHICH PASS THIS RUN HAS, in the log (the window's run() wrote it when it started the thread; tests/test_stop_ends_recordings.cpp reads it back to
+    // prove the arrangement under test is the product's).
+    cascade::core::diagLogf("engine pass: %s on its own thread (period %d ms, floor %d ms)",
+                            options_.stepped ? "STEPPED by the frame" : "free-running", static_cast<int>(opt.period.count()),
+                            static_cast<int>(opt.floor.count()));
     if (options_.keeperThread && persistent()) { startKeeper(); }
     return true;
 }
@@ -508,6 +519,10 @@ void EngineService::stop() {
 
     // THE KEEPER THREAD, if there is one, first of all: from here the writer and the keeper's memory are this thread's alone.
     stopKeeper();
+
+    // ONE WHOLE PASS (ServiceOptions::finalPass), while the control thread still runs and nothing has been quiesced: what an interface submitted last
+    // - the window's last half of the settings - is applied by it, and the final-state save below holds it. Bounded.
+    if (options_.finalPass) { (void)engine_.runPassNow(kFinalPassBound); }
 
     cascade::source::SoundCardSource::setCloseWaitEnabled(false);
 

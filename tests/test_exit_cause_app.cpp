@@ -492,7 +492,13 @@ int main() {
             CHECK(app.started);
             CHECK(waitForLog(app, "frame loop starting (bounded)", 60000));
             if (i > 0) { CHECK(waitForLog(app, "previous session ended: ", 60000)); }
-            sleepMs(2000);  // frames, real ones: the loop is past its first frames
+            // Frames, real ones: the loop is past its first frames - AND THE MOVE OF THE COUNT HAS REACHED THE FILE: the line above is logged when the
+            // evidence is read and the count moves, the file follows about two seconds later (the debounce), and the process is then ended without a
+            // clean exit. Since shell retirement R8 the debounce is the engine's keeper thread's, which looks four times a second at most (up to 0.35 s
+            // between a change and the look that starts its two seconds), where the window's own looked once a frame - so a kill at exactly two seconds
+            // after the line, which won the race by the width of the log poll, now loses it. Three seconds holds the property (the class is written without
+            // a clean exit) and no longer rests on a margin of milliseconds.
+            sleepMs(3000);
             ::TerminateProcess(app.process, killCodes[i]);
             CHECK(waitExit(app, 30000) == killCodes[i]);
             ++reportsSoFar;

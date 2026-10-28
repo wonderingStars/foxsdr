@@ -9,12 +9,12 @@
 // each phase here is held against the order of the window's by tests/test_engine_service_order.cpp, which
 // reads both files and keeps them in ONE table.
 //
-// FROM SHELL RETIREMENT R7b (2026-10-28) THE WINDOW APPLICATION IS A SECOND HOST OF THIS CLASS: src/main.cpp
-// builds the service with the window's options (best-effort lock, label "cascade", the engine of a run with
-// no settings file left as built, a front end that follows), takes the lock, and calls restore() BEFORE the
-// window exists; the window is constructed on the restored engine (AppWindow(WindowHost)). start() and stop()
-// are still the window's own in run() until R8, so main calls neither; the keeper (the debounced save) is
-// the window's until R8 too.
+// FROM SHELL RETIREMENT R7b (2026-10-28) THE WINDOW APPLICATION IS A SECOND HOST OF THIS CLASS, and since R8 (2026-10-28) it is a COMPLETE one: src/main.cpp
+// builds the service with the window application's options (engine/window_service_options.hpp), takes the lock, calls restore() BEFORE the window exists,
+// constructs the window on the restored engine, calls start() (after the window's plugin UI has attached, before its GL window exists), runs the window,
+// calls stop() with the window still on screen, and only then lets the window close its own GL context. The window no longer starts or stops the engine, and
+// the window's copy of the keeper (the debounced save) is gone: the keeper is this class's, and for a host with no loop of its own a thread of its own
+// (ServiceOptions::keeperThread).
 //
 // THE PHASES, in the order a run takes them (engine_service.cpp has each one's statements and the window's
 // line numbers they come from):
@@ -118,6 +118,10 @@ struct ServiceOptions {
     // TEST SEAM, bounded runs only (the window's CASCADE_DIAG_SHUTDOWN_STALL_MS): wedge the stop for this many ms between the final-state save
     // and the receiver's stop - the stretch where the bounded driver waits are spent - and say so.
     int shutdownStallMs = 0;
+    // TEST SEAM, bounded runs only (the window's FOXSDR_HOLD_AUDIO_LOCK, docs/engine-stage4.md 6.25 R8): start() sends FOXAPP_OP_TEST_HOLD_AUDIO_LOCK with this many
+    // milliseconds, before the receiver starts and before the first pass, so the hold is in force before ANY other command can reach the engine. The window used to
+    // submit it from run(); the engine runs, and its web server answers, from before the window exists now, and a browser's stop could arrive first.
+    int holdAudioLockMs = 0;
     // Who the run says it is: the lock's role ("cascade" for the window application, "foxsdr-engine"), and the prefix of the lines the service
     // writes to the user ("<label>: ..."). Tests grep them (tests/test_clean_exit_marker.cpp, test_engine_main_clean_exit_marker.cpp).
     std::string label = "foxsdr-engine";
@@ -136,6 +140,11 @@ struct ServiceOptions {
     // scan - AUTO plugins left asleep, the plugin UI's directives kept for the attach to replay and built for nobody (Engine::expectFrontEnd). False:
     // the headless engine, whose window-less host treats AUTO as pinned and drives its own plugin UI.
     bool frontEndFollows = false;
+    // stop() makes ONE WHOLE PASS before it does anything else (after the keeper thread is joined): everything an interface submitted last - the window's
+    // last half of the settings, handed over as the frame loop ended - is applied by it, so the final-state save holds it. A stepped run's pass only runs
+    // when someone steps it and the frames are over, so nothing else would; a free-running one is woken by the submit but not waited for. False:
+    // foxsdr-engine, which has no interface to hand anything over and has never made one.
+    bool finalPass = false;
 };
 
 class EngineService {

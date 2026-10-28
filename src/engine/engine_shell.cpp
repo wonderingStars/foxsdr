@@ -104,20 +104,7 @@ cascade::core::AppConfig EngineShell::configSnapshot() const { return SHELL_ENGI
 void EngineShell::publishConfig() { SHELL_ENGINE.publishConfig(); }
 void EngineShell::setFrontEndWaitBeat(std::function<void()> beat) { SHELL_ENGINE.setFrontEndWaitBeat(std::move(beat)); }
 
-void EngineShell::startReceiver() { SHELL_ENGINE.startReceiver(); }
-void EngineShell::controlPass() { SHELL_ENGINE.controlPass(); }
-void EngineShell::startControlThread(const ControlThreadOptions& options) { SHELL_ENGINE.startControlThread(options); }
 void EngineShell::stepPass(PassPart part) { SHELL_ENGINE.stepPass(part); }
-
-void EngineShell::configureHeartbeat() { SHELL_ENGINE.configureHeartbeat(); }
-void EngineShell::markCleanExit() { SHELL_ENGINE.telemetryCleanExit_ = true; }
-
-void EngineShell::stopTransfers() { SHELL_ENGINE.stopTransfers(); }
-void EngineShell::teardown() { SHELL_ENGINE.teardown(); }
-void EngineShell::shutdownQuiesce() { SHELL_ENGINE.shutdownQuiesce(); }
-void EngineShell::shutdownStop() { SHELL_ENGINE.shutdownStop(); }
-void EngineShell::shutdownRelease() { SHELL_ENGINE.shutdownRelease(); }
-void EngineShell::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) { SHELL_ENGINE.shutdownDrain(drainDeadline); }
 
 // --- the bounded-run seams. (The engine's fields are the pass's, so a seam reaches them through runOnPass: with the pass stepped it is
 // the call on the calling thread, between its parts, as before the pump move; free-running it is the pass's own thread that does it.) --

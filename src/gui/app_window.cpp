@@ -912,19 +912,19 @@ AppWindow::AppWindow(const WindowHost& host)
 }
 
 AppWindow::~AppWindow() {
-    // (The servers are not stopped here any more: they are the engine's, which stops them first of all in shutdownQuiesce - the run's end -
-    // or, on a path that never ran, in teardown below. Nothing they call reads this window.)
-    // The window's session: closing it releases any key it holds, at the
-    // start of the engine's next pass (the engine's teardown stops the
-    // transmitter in any case).
+    // THE ENGINE OUTLIVES THIS WINDOW AND IS NOT TAKEN DOWN BY IT (shell retirement R8). The host stopped it before it let this window go (main.cpp:
+    // service.stop(), then closeWindow()), and the host's service takes the rest of it down - the workers reaped, the catalogue fetches and plugin
+    // downloads cancelled (Engine::stopTransfers), the plugin system brought down in its stated order (Engine::teardown) - when it is destroyed, after
+    // this window, exactly as ~Engine does for any front end that did not (the test host stops its engine itself, tests/test_host.hpp). So this
+    // destructor does the window's own: the servers are not stopped here (they are the engine's, which stops them first of all in
+    // shutdownQuiesce); nothing they call reads this window.
+    //
+    // The window's session: closing it releases any key it holds, at the start of the engine's next pass - and where the engine has been stopped
+    // already (the product's order) there is no next pass: closing a session on an engine whose control thread is joined is a harmless release
+    // (tests/test_engine_service_window.cpp, G).
     closeUiSession();
     // The engine no longer calls into this window while it waits for a pass.
     engine_.setFrontEndWaitBeat({});
-
-    // A catalogue fetch or a plugin download may still be in flight: the
-    // engine cancels its own (Engine::stopTransfers says why), first, as
-    // this destructor always did.
-    engine_.stopTransfers();
 
     // The app-update download is the same problem and needs its own flag:
     // it runs through the STATIC fetch helper, which has no PluginRepo
@@ -948,13 +948,9 @@ AppWindow::~AppWindow() {
     storeCheck_.reap();
     storeInstall_.reap();
 
-    // THE ENGINE'S TEARDOWN (engine stage 3a): the device, sound card, audio,
-    // microphone, GPS and scan workers reaped, the patch's radios and the
-    // plugin system brought down in their stated order, the recorders
-    // stopped - Engine::teardown, in the order this destructor always did it.
-    engine_.teardown();
-    // The engine no longer applies a directive through this window (the plugin UI below is about to be destroyed with it).
-    ui_->disconnect();
+    // The engine no longer applies a directive through this window (the plugin UI below is about to be destroyed with it): the net for the paths
+    // that never reached run()'s own disconnect.
+    leavePluginUi();
 }
 
 namespace {
@@ -1436,6 +1432,7 @@ int AppWindow::run(int frames) {
     cascade::gui::frame::install(window);
     glfwShowWindow(window);
     cascade::core::diagLogf("window: window shown; the Dear ImGui backends are up");
+    glUp_ = true;   // from here closeWindow() has the GL context, ImGui and GLFW to take down (shell retirement R8)
     // The window is up. Everything from here to the end of the first frame - the receiver, the watchdog, the config save, the first draw -
     // is still start-up to the sentinel; the second heartbeat (HangWatchdog::heartbeat) ends it.
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::AwaitingFirstFrame);
@@ -1453,21 +1450,9 @@ int AppWindow::run(int frames) {
     // single view had here (config applied before the view existed) cannot
     // recur by construction.
 
-    // Interactive runs start receiving immediately. A radio that opens with
-    // dead black panels and no hint that a button must be pressed reads as
-    // broken — it was the single biggest first-run complaint. Bounded
-    // --frames runs stay stopped so CI keeps its old timing and never spawns
-    // DSP threads it does not need.
-    //
-    // CASCADE_DECODE_TEST is the one exception, and it exists because the
-    // decoder runner cannot be verified any other way: a decoder that is never
-    // fed a sample looks exactly like a decoder that is fed and finds nothing.
-    // Bounded-run only, opt-in, and off by default, so the app_smoke timing
-    // contract is untouched.
-    const char* decodeHook = (frames >= 0) ? std::getenv("CASCADE_DECODE_TEST") : nullptr;
-    if (frames < 0 || (decodeHook != nullptr && *decodeHook != '\0')) {
-        engine_.startReceiver();
-    }
+    // (The receiver is NOT started here any more: interactive runs start receiving immediately, and CASCADE_DECODE_TEST's bounded run does, but both
+    // are the engine's service's start, which the host - main.cpp - made before this function was called; shell retirement R8. The engine has been
+    // running since before the first frame, as it was when this window started it itself.)
 
     // Bounded-run plugin-catalogue hook (see app_window.hpp). Read HERE, not
     // in the constructor, because only run() knows whether this is a bounded
@@ -1479,15 +1464,9 @@ int AppWindow::run(int frames) {
     // The enforcement diagnostic's switch (CASCADE_PLUGIN_STATUS), read below in a bounded run only; the report itself is
     // the engine's (Engine::reportPluginStatus), printed at the end of the teardown's first phase.
     bool pluginStatusReport = false;
-    // The deliberate SHUTDOWN wedge, and the only way to hold the shutdown
-    // budget against the real teardown of the real binary. --diag-stall proves
-    // the frame-loop half; there is no equivalent for the teardown, because
-    // the teardown is not a place a test can reach — it has no frame counter,
-    // no UI, and by then the window is going away. Bounded runs only, exactly
-    // like the plugin hooks above: an interactive session can never be wedged
-    // by a stray environment variable.
-    int shutdownStallMs = 0;
-    int unloadStallMs = 0;
+    // (The deliberate SHUTDOWN and UNLOAD wedges - CASCADE_DIAG_SHUTDOWN_STALL_MS and CASCADE_DIAG_UNLOAD_STALL_MS, the only way to hold the shutdown
+    // budget against the real teardown of the real binary - are the engine's service's options now, read by engine/window_service_options.cpp in a
+    // bounded run only: the stretches they wedge are the service's stop, shell retirement R8.)
     // The freeze --diag-stall stages, classified as the DISPLAY's rather than as a hang (HangWatchdog::setForceDisplayStallForTest). A display
     // driver's frames cannot be staged from a test, and without this the count of display stalls - the watchdog's sink, the ledger, the config
     // journal, the next start - could not be exercised end to end against the real binary. Bounded runs only, like every hook here.
@@ -1516,11 +1495,9 @@ int AppWindow::run(int frames) {
         if (const char* fm = std::getenv("CASCADE_FOREIGN_MODULE_TEST"); fm != nullptr && *fm != '\0') {
             foreignModuleTestPath_ = fm;
         }
-        // TEST SEAM (0.99.68): a held audio mutex at the next control request's stop, see Engine::holdAudioLockMs_. Sent as a command: the
-        // engine's fields are the pass's.
-        if (const char* hold = std::getenv("FOXSDR_HOLD_AUDIO_LOCK"); hold != nullptr && *hold != '\0') {
-            uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_TEST_HOLD_AUDIO_LOCK, std::atoi(hold)));
-        }
+        // (TEST SEAM, 0.99.68: FOXSDR_HOLD_AUDIO_LOCK, a held audio mutex at the next control request's stop - see Engine::holdAudioLockMs_ - is the engine's
+        // service's option now, ServiceOptions::holdAudioLockMs, in force from its start: the engine runs and its web server answers before this window
+        // exists, so a browser's stop could have arrived before this function's submit. Shell retirement R8.)
         // The deck's bias tee stand-in (engine/bias_tee.hpp, biasStandInFor):
         // bounded runs only, for the same reason as the script below. Sent as a command (shell retirement R2: it was the door's seamBiasStandIn); the
         // engine's default is "none", so a run that sets nothing sends nothing.
@@ -1559,24 +1536,13 @@ int AppWindow::run(int frames) {
                 std::fprintf(stderr, "cascade: input script %s could not be read\n", script);
             }
         }
-        const char* shutdownStall = std::getenv("CASCADE_DIAG_SHUTDOWN_STALL_MS");
-        if (shutdownStall != nullptr && *shutdownStall != '\0') {
-            shutdownStallMs = std::atoi(shutdownStall);
-            if (shutdownStallMs < 0) { shutdownStallMs = 0; }
-        }
-        const char* unloadStall = std::getenv("CASCADE_DIAG_UNLOAD_STALL_MS");
-        if (unloadStall != nullptr && *unloadStall != '\0') {
-            unloadStallMs = std::atoi(unloadStall);
-            if (unloadStallMs < 0) { unloadStallMs = 0; }
-        }
         // The enforcement diagnostic (Engine::reportPluginStatus). Same rules: only
         // in a bounded run, and silent unless asked for, so the
         // byte-identical-stdout contract of a plain --frames run is untouched.
         const char* status = std::getenv("CASCADE_PLUGIN_STATUS");
         pluginStatusReport = (status != nullptr && *status != '\0');
-        // The engine measurement (core/engine_measure.hpp, driven by
-        // tools/measure_engine.ps1). Bounded runs only, like the hooks above.
-        measure_ = cascade::core::EngineMeasure::fromEnvironment();
+        // (The engine measurement - core/engine_measure.hpp, driven by tools/measure_engine.ps1 - is read by the host, once, and handed over with
+        // setMeasurement: it decides the engine's pass, which the host starts. Bounded runs only, like the hooks above.)
     }
     // A PATH settings field and the "Import a frequency list" window draw their BROWSE key only where there is a file dialog to open (the
     // system's on Windows; zenity or kdialog on Linux) - or the test seam above to stand in for one.
@@ -1648,14 +1614,10 @@ int AppWindow::run(int frames) {
     }
     if (frames < 0) {
         startUpdateCheck();
-        // Heartbeats are interactive-only for the same reason - and this is
-        // measured, not hypothetical: 0.65.0 armed them in telemetryStartup,
-        // so every app-level ctest run minted a fresh isolated config (whose
-        // default is reporting on), got a brand-new install id, and fired its
-        // first-poll beat at the LIVE endpoint. One machine running one copy
-        // read as four "running right now". configure() still refuses an
-        // empty id, so an opted-out interactive run arms nothing here either.
-        engine_.configureHeartbeat();
+        // (The usage heartbeat is interactive-only for the same reason - and this is measured, not hypothetical: 0.65.0 armed it in telemetryStartup,
+        // so every app-level ctest run minted a fresh isolated config, got a brand-new install id, and fired its first-poll beat at the LIVE endpoint.
+        // It is the engine's: ServiceOptions::heartbeat, set by engine/window_service_options.cpp for a real session only, armed by the service's
+        // start right after the receiver. Shell retirement R8.)
     }
 
     // DIAGNOSTICS, armed here rather than in the constructor: the context has
@@ -1688,56 +1650,14 @@ int AppWindow::run(int frames) {
     cascade::core::diagLogf("frame loop starting (%s)",
                             frames >= 0 ? "bounded" : "interactive");
 
-    // THE UNCLEAN-EXIT MARKER, FORCED TO DISK ONCE, HERE.
-    //
-    // telemetryCleanExit=false on disk is what tells the NEXT start that this
-    // run never shut down - it is the crash counter and, now, the trigger for
-    // offering a report. It only reaches the file when the config is saved,
-    // and the save is debounced behind a CHANGE. The launch counter was meant
-    // to supply that first change, but the debounce baseline (savedCfg_) is
-    // taken after the counter has already been incremented, so the two agree
-    // and nothing is written. A session that crashed before the user touched
-    // anything therefore looked, on the next start, exactly like a clean exit.
-    //
-    // Found on the running application: launched it, killed it, read the
-    // config back and it still said true. One save at the top of the frame
-    // loop closes the window; the file is written once per launch either way,
-    // at exit, so this costs a write that was already going to happen.
-    if (!configPath_.empty()) { saveConfigNow(); }
-
-    // THE ENGINE'S PASS STARTS ON ITS OWN THREAD (the pump move's step P5), after everything the window does to the engine from
-    // this thread before the loop - the receiver started, the bounded-run stand-ins, the config's first save - and stops in
-    // shutdownQuiesce, before anything the teardown does to it. From here the window is the engine's INTERFACE: it looks at what
-    // the pass publishes, draws, and submits; it does not pump (tests/test_engine_shell_guard.cpp holds that).
-    //
-    // WHICH PASS: free-running - at the period, woken by every submit - is the product. A BOUNDED run (--frames N) is STEPPED
-    // unless FOXSDR_PASS=free asks otherwise (adopted decision 3): the pass runs only when this window's frame says, at the places
-    // the pump ran in the frame, so N frames is N frames and every test and picture that holds one stays reproducible. The
-    // engine measurement is the one bounded run that is free-running by nature: it times the product's own arrangement. An
-    // interactive run is never stepped, whatever the environment says.
-    {
-        const char* passEnv = std::getenv("FOXSDR_PASS");
-        const bool wantFree = passEnv != nullptr && std::string(passEnv) == "free";
-        const bool stepped = frames >= 0 && !wantFree && !measure_;
-        cascade::engine::ControlThreadOptions opt;
-        opt.period = std::chrono::milliseconds(16);
-        opt.floor = std::chrono::milliseconds(2);
-        opt.stepped = stepped;
-        // The control thread's own hang watchdog is armed exactly as this window's is (a bounded run keeps its empty directory, so
-        // writes nothing, and applyDiagnosticsEnabled moves both together).
-        opt.watchdogReportDir = diagnosticsEnabled_ ? diagCrashDir_ : std::string();
-        // ...and where it goes when the interface's half later switches Diagnostics on (Engine::applyInterfaceConfig): the directory this run may
-        // write into, empty for one that may not (shell retirement R5; setControlWatchdogReportDir is not a door method any more).
-        opt.diagnosticsDir = diagCrashDir_;
-        // A free-running pass published nothing yet when the first frame looks: the first one is made here, as the table's own
-        // create() makes it, so the window's first read is a real state. (A stepped run has none: its first frame's own front part
-        // is the first pass, as the first frame's pump always was.)
-        if (!stepped) { engine_.controlPass(); }
-        engine_.startControlThread(opt);
-        cascade::core::diagLogf("engine pass: %s on its own thread (period %d ms, floor %d ms)",
-                                stepped ? "STEPPED by the frame" : "free-running",
-                                static_cast<int>(opt.period.count()), static_cast<int>(opt.floor.count()));
-    }
+    // (THE UNCLEAN-EXIT MARKER, FORCED TO DISK ONCE, and THE ENGINE'S PASS ON ITS OWN THREAD are the service's start, which the host made before this
+    // function was called - shell retirement R8: EngineService::start, in this order after the receiver and the heartbeat: the forced first save
+    // (telemetryCleanExit=false reaches the file once per launch, so a session that crashed before the user touched anything does not look, on the
+    // next start, like a clean exit - found on the running application: launched, killed, config read back, still "true"), the first pass of a
+    // free-running run, the control thread, the keeper. From here the window is the engine's INTERFACE: it looks at what the pass publishes, draws,
+    // and submits; it does not pump (tests/test_engine_shell_guard.cpp holds that). WHICH PASS - free-running in the product, STEPPED by this window's
+    // frames in a bounded run unless FOXSDR_PASS=free or a measurement asks otherwise (adopted decision 3) - is the host's to say
+    // (engine/window_service_options.cpp); the window's stepPass calls below do nothing in a free-running one.)
 
     // THE FRAMES THIS APPLICATION IS NOT EXPECTED TO PRESENT. See
     // gui/present_grace.hpp and false-positive rule 2d in
@@ -2218,22 +2138,14 @@ int AppWindow::run(int frames) {
         drawUi();
         fitPagesIntoMainWindow();
 
-        // Collects a config write configWriter_ finished, whether it was
-        // requested by maybeSaveConfig() below, by saveConfigNow(), or by the
-        // teardown - see requestConfigSave()/pollConfigWriter() in
-        // core/config_writer.hpp's callers. A no-op every frame nothing was
-        // ever requested (hermetic runs, or a session that never changed a
-        // setting), so it costs nothing to call unconditionally.
+        // (The settings are not saved from here any more - shell retirement R8: the window used to collect a finished write and ask for the
+        // debounced save, ~2 s after the last change, once a frame; the engine's service keeps the file now, on a thread of its own, from the engine's
+        // snapshot, and the only thing this window does about it is the next statement.)
         frameScope.to(cascade::core::FrameScope::Saves);
-        pollConfigWriter();
-
-        // Debounced runtime persistence: the config file follows the session
-        // ~2 s after the last change, so a crash loses almost nothing.
-        // Hermetic runs (empty configPath_) never touch the disk.
-        if (!configPath_.empty()) { maybeSaveConfig(glfwGetTime()); }
 
         // THE INTERFACE'S HALF TO THE ENGINE, when it changed (shell retirement R5): with or without a settings file, because the Diagnostics switch
-        // in it is what moves the engine's hang watchdog.
+        // in it is what moves the engine's hang watchdog - and, since R8, because the engine's keeper saves what the engine holds: this is how a
+        // change of this window reaches the file.
         (void)sendInterfaceHalf(glfwGetTime());
 
         // After every widget, so the hovered and active items are this frame's.
@@ -2529,199 +2441,115 @@ int AppWindow::run(int frames) {
         frameLog_.reset();
     }
 
-    // THE TEARDOWN GETS ITS OWN BUDGET, AND STAYS WATCHED.
+    renderedFrames_ = rendered;
+
+    // THE WINDOW'S PART OF THE SHUTDOWN, AND IT IS A PRELUDE (shell retirement R8; docs/engine-stage4.md 6.25, the survey's 2.4). The engine is not
+    // this function's to stop: the host (main.cpp) stops its service when run() returns - the engine's first phase, the final-state save, the
+    // pipeline's stop, the plugins' release, the clean-exit marker, the last save waited for within its bound, the drain - and only then calls
+    // closeWindow() for the GL context. What can only be done HERE, by this thread, while the engine is still running and the GL context is still
+    // current, is done before returning, in this order, and each statement is where it is for a reason the engine's order depends on:
     //
-    // Everything below runs with no heartbeat on purpose, so a shutdown that
-    // wedges is reported like any other hang — the worst freeze this product
-    // ever shipped was 120 s inside a CAT client shutdown. What it cannot do
-    // is run against the FRAME threshold: pipeline_.stop() alone may
-    // deliberately spend 1.5 s on the driver lock, 1.5 s on the abandonable
-    // vendor call inside it, and 3 s on the source thread — 6 s against the
-    // 5 s the frame loop is judged by, and the newest field report is the
-    // watchdog filing a hang against its own clean shutdown 478 ms after the
-    // second of those guards returned.
+    //   1. the grace released, the sentinel's first shutdown step set, the hang watchdog's shutdown clock started;
+    //   2. the plugin status report's plugin half handed over (a bounded run that asked), while the port still has the tracks, paths and panels;
+    //   3. the crash-report sweep stopped and the two senders cancelled - BEFORE the half below, so the sweep's dedup and rate-limit memory is in it,
+    //      and before anything else on this path, so a transfer in flight is cancelled rather than waited out (measured against the real binary in
+    //      tests/test_crash_upload.cpp: "a hanging endpoint does not delay shutdown");
+    //   4. THE LAST HALF OF THE SETTINGS handed to the engine - BEFORE the engine's final-state save, which saves what the engine holds (a change
+    //      made less than a second before closing must be in the file); the service's stop makes one whole pass first, which applies it;
+    //   5. the plugin UI released through the port on this thread, with the GL context current (the map pages' geometry folded into the saved list,
+    //      every instance destroyed, the basemap's tiles and the track-info client let go), and then DISCONNECTED: the engine drives its own plugin
+    //      UI again and applies the release it posts before it unmaps inline. This is the only point at which the whole object graph is alive and
+    //      the context current (a basemap plugin's tiles are GL textures). The GUI-class instances' destroy() is third-party code that can wedge:
+    //      a wedge here leaves the clean-exit marker FALSE (the engine writes it later, after the last of the third-party code), as a wedge in the
+    //      engine's own release always did, and the file as the keeper last wrote it (up to ~2 s of settings short of the final-state save) - the
+    //      owner-adopted delta D4 of the survey: these instances are destroyed before the pipeline stops and not after.
     //
-    // DO NOT MAINTAIN THAT SUM BY HAND. It was 4.5 s across two waits until
-    // the vendor call was bounded, and the test written to catch exactly this
-    // drift was itself blinded by it, because it scanned for two constants by
-    // name. tests/test_shutdown_budget.cpp now DISCOVERS every
-    // constexpr chrono wait under src/ and fails on one it has never been
-    // told the cost of, so the next wait added here cannot pass quietly.
-    //
-    // beginShutdown() restarts the stall clock — the teardown is measured
-    // from here, not from whatever was left of the last frame — and raises
-    // the threshold to one sized against those bounded waits. It pauses
-    // nothing and disarms nothing: a shutdown that genuinely wedges still
-    // crosses the budget and is still captured with every thread's stack.
-    // ...AND THE TEARDOWN IS NOT EXCUSED BY A MINIMISED WINDOW. If the last
-    // frame ran with the presentation pause held - the user minimised the
-    // window and then quit it from the taskbar - that pause must be released
-    // before the shutdown budget starts, or the teardown would run unwatched
-    // and the 120 s CAT freeze this whole mechanism exists for would be
-    // invisible again.
+    // Nothing here stops the watchdog: that is closeWindow's last act, so everything the host does between - the whole of the engine's stop - is
+    // judged against the shutdown budget beginShutdown() sets, and a shutdown that genuinely wedges is still reported.
     presentGrace.release();
 
     // THE SENTINEL'S SHUTDOWN STEPS (core/breadcrumb.hpp), set where each stage of this teardown begins: a freeze in any of them is "the
-    // shutdown stopped in step N" to the watcher, judged against the same long budget the watchdog uses.
+    // shutdown stopped in step N" to the watcher, judged against the same long budget the watchdog uses. (The service sets the three that are the
+    // engine's - stopping the receiver, unloading the plugins, writing the marker; closeWindow sets the window's last.)
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownBegun);
+    // THE TEARDOWN GETS ITS OWN BUDGET, AND STAYS WATCHED. Everything from here to closeWindow runs with no heartbeat on purpose, so a shutdown that
+    // wedges is reported like any other hang - the worst freeze this product ever shipped was 120 s inside a CAT client shutdown. What it cannot do
+    // is run against the FRAME threshold: pipeline_.stop() alone may deliberately spend 1.5 s on the driver lock, 1.5 s on the abandonable vendor
+    // call inside it, and 3 s on the source thread - 6 s against the 5 s the frame loop is judged by. beginShutdown() restarts the stall clock and
+    // raises the threshold to one sized against those bounded waits (tests/test_shutdown_budget.cpp DISCOVERS every constexpr chrono wait under src/
+    // and fails on one it has never been told the cost of; do not maintain that sum by hand). It pauses nothing and disarms nothing. AND THE
+    // TEARDOWN IS NOT EXCUSED BY A MINIMISED WINDOW: the presentation pause is released just above, before the budget starts.
     watchdog_.beginShutdown();
-    const auto teardownStart = std::chrono::steady_clock::now();
-    // NO SOUND CARD CLOSE IS WAITED FOR FROM HERE ON: each is handed to its
-    // own thread and left there (a card is released by the process exiting),
-    // so a card whose close hangs cannot spend this budget - the patch's
-    // radios below are destroyed inside it (source/soundcard_source.hpp,
-    // "CLOSING").
-    cascade::source::SoundCardSource::setCloseWaitEnabled(false);
+    teardownStart_ = std::chrono::steady_clock::now();
 
-    // THE ENGINE'S FIRST TEARDOWN PHASE (engine/stage3b-pre, docs/
-    // engine-stage3.md OPEN 9): the TRANSMITTER FIRST - a keyed radio cannot
-    // wait - then the GPS reader and its last poll, then both recordings
-    // finalised; everything the final save below must see settled, in that
-    // order, spelled out with its reasons in Engine::shutdownQuiesce. (Stage
-    // 3b joins the control thread after this phase, so the transmitter is
-    // always stopped before that join - OPEN 7 (d).)
-    // A bounded run that asked for the plugin status report hands the engine the plugin half of it first (PluginUiFrontEnd::pluginStatusReport): the
-    // engine prints the whole report as the last act of its first phase, where this window used to call reportPluginStatus.
     if (pluginStatusReport) { handFrontEndFacts(true); }
-    engine_.shutdownQuiesce();
 
-    // The enforcement diagnostic was printed by the engine, at the END of the phase above, so it reports the state the run actually finished in
-    // - including any retirement that a catalogue fetch during the run brought into force. (What only this window holds, the plugin UI's tracks,
-    // paths and panels and the buffer of pictures its plugin windows polled into, was handed over just before - handFrontEndFacts(true).)
-
-    // Final-state save, unconditional: cheap, and it guarantees the on-disk
-    // config matches the final session state even when the debounce never
-    // fired (e.g. a change made less than 2 s before closing the window).
-    // Runs before pipeline_.stop() so the snapshot reads live state.
-    //
-    // telemetryCleanExit_ is deliberately still FALSE here. The clean-exit
-    // marker is written by a second save AFTER pipeline_.stop() below —
-    // because a death during the pipeline join is a death. Setting it before
-    // the join, as this path did until 0.66.0, made the field's worst shipped
-    // freeze class (a shutdown that wedges in that join) count as a clean
-    // exit and offer no report.
-    // BEFORE the save, so the sweep's dedup and rate-limit memory reaches the
-    // file - and before anything else on this path, so a transfer in flight is
-    // cancelled rather than waited out. This is the line that makes "a hanging
-    // endpoint does not delay shutdown" true; it is measured against the real
-    // binary in tests/test_crash_upload.cpp.
+    // BEFORE the half, so the sweep's dedup and rate-limit memory reaches the file - and before anything else on this path, so a transfer in flight
+    // is cancelled rather than waited out. This is the line that makes "a hanging endpoint does not delay shutdown" true.
     crashUploadFinish();
-    // Same reason, same shape: a feature request typed and sent moments
-    // before the window closed must not delay it either. Nothing is
-    // persisted from the outcome - unlike crashUploadFinish() there is no
-    // policy state to journal back to the config, because there is no sweep
-    // and nothing to retry (see core/feature_request.hpp).
+    // Same reason, same shape: a feature request typed and sent moments before the window closed must not delay it either. Nothing is persisted from
+    // the outcome - unlike crashUploadFinish() there is no policy state to journal back to the config, because there is no sweep and nothing to retry
+    // (see core/feature_request.hpp).
     featureRequestSender_.cancel();
     problemReportSender_.cancel();
-    if (!configPath_.empty()) { saveConfigNow(); }
+
+    (void)flushInterfaceHalf();
     cascade::core::diagLogf("frame loop ended after %d frames; shutting down", rendered);
 
-    // The deliberate shutdown wedge, in the place the real one lives: the
-    // stretch around pipeline_.stop(), where the bounded driver waits are
-    // spent and where the 120 s CAT freeze happened. Bounded runs only (see
-    // where shutdownStallMs is read). Printed, so a test can prove the hook
-    // ran rather than inferring it from an absent report.
-    if (shutdownStallMs > 0) {
-        std::printf("cascade: --diag-shutdown-stall wedging the teardown for %d ms\n",
-                    shutdownStallMs);
-        std::fflush(stdout);
-        std::this_thread::sleep_for(std::chrono::milliseconds(shutdownStallMs));
-    }
-
-    // THE ENGINE'S SECOND PHASE (OPEN 9): the bookmark list flushed, then the
-    // pipeline stopped and joined - the stretch where the bounded driver waits
-    // are spent and the 120 s CAT freeze happened (Engine::shutdownStop).
-    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownStoppingReceiver);
-    engine_.shutdownStop();
-
-    // THE PLUGINS COME DOWN HERE, ON THE NORMAL PATH, BEFORE THE CLEAN-EXIT MARKER (master 0.99.60; the branch's first merge put them after it and
-    // test_clean_exit_marker found out). A plugin's destroy() is third-party code: a worker join, a vendor close, a flush. One that never returns
-    // leaves the window on screen and not responding; the user ends it from the taskbar (TerminateProcess, nothing runs); and a marker written
-    // before it already said "clean" - reported on 0.99.59 with Radar Sweep running: the next start recorded no crash. This is also the last
-    // moment at which the whole object graph is alive and the GL context is current (a basemap plugin's tiles are GL textures). The pipeline is
-    // stopped and joined above, so no DSP thread can be inside a plugin; the final-state save has been queued, so nothing reads the stop list or
-    // the tune grants any more. The patch's radios stop first (0.99.17: each has a reader thread that may be inside a plugin decoder, and each
-    // speaker's file is finalised when its radio's sets go), then the plugins are destroyed before the host services they call on their way out
-    // and their modules unmapped last (Engine::shutdownRelease). ~AppWindow's teardown() is the net for the paths that never reach here.
-    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownUnloadingPlugins);
-    // THE WINDOW'S OWN RELEASE OF THE PLUGIN UI, on this thread with the GL context current, first (shell retirement R4): the map pages' geometry
-    // folded into the saved list, every instance destroyed, the basemap's tiles and the track-info client let go. The release the engine posts
-    // before it unmaps (shutdownRelease, next) then finds nothing left to release - applied twice, the steps are idempotent.
+    // THE WINDOW'S OWN RELEASE OF THE PLUGIN UI, on this thread with the GL context current (shell retirement R4, R8): the map pages' geometry
+    // folded into the saved list, every instance destroyed, the basemap's tiles and the track-info client let go - then the port disconnected, so
+    // the release the engine posts before it unmaps (Engine::shutdownRelease, in the host's stop) is applied inline by the engine itself and finds
+    // nothing left to release: applied twice, the steps are idempotent.
     ui_->release();
-    engine_.shutdownRelease();
+    return 0;
+}
 
-    // The deliberate wedge in THIS stage - the one the plugins' own code runs in. Bounded runs only (see where unloadStallMs is read). Printed so
-    // a test can prove the process is inside it before it kills it.
-    if (unloadStallMs > 0) {
-        std::printf("cascade: --diag-unload-stall wedging the plugin unload for %d ms\n", unloadStallMs);
-        std::fflush(stdout);
-        std::this_thread::sleep_for(std::chrono::milliseconds(unloadStallMs));
+void AppWindow::leavePluginUi() {
+    // The engine no longer applies a directive through this window (the plugin UI is about to be destroyed with it).
+    if (ui_ != nullptr) { ui_->disconnect(); }
+}
+
+// THE LAST HALF OF THE SETTINGS, to the engine (see the declaration). The engine takes a command on its pass, and a stepped run's pass only runs when
+// the window steps it - and the frames are over - so this does not wait for the answer: the service's stop makes one whole pass before it joins the
+// control thread (ServiceOptions::finalPass, which the window application sets), and a command submitted here is applied by it (a free-running run's
+// submit has woken the pass already). The one thing that can go wrong is a full queue, said in the log.
+bool AppWindow::flushInterfaceHalf() {
+    if (uiSession_ == nullptr || !interfaceSentKnown_) { return false; }
+    cascade::core::AppConfig half;
+    buildInterfaceHalf(half, /*bookkeeping=*/true);   // the document with the self-moving fields: the tester's report so far, the sweep's memory
+    const cascade::core::cmd::QueuedCommand q =
+        cascade::core::cmd::makeText(FOXAPP_OP_INTERFACE_CONFIG, cascade::core::serializeInterfaceHalf(half));
+    FoxSubmitResult sr{};
+    sr.structSize = sizeof(sr);
+    const int32_t n = q.longText.empty()
+                          ? engineApi_->submit(uiSession_, &q.c, 1, &sr)
+                          : engineApi_->submit_text(uiSession_, &q.c, q.longText.data(), static_cast<uint32_t>(q.longText.size()), &sr);
+    if (n < 0 || (sr.status != FOXAPI_OK && sr.status != FOXAPI_NO_CHANGE)) {
+        cascade::core::diagWarnf("config: the last half of the settings was not taken by the engine (%d/%d); the file keeps the half the engine last had",
+                                 static_cast<int>(n), static_cast<int>(sr.status));
+        return false;
     }
+    ++interfaceSends_;
+    return true;
+}
 
-    // THE CLEAN-EXIT MARKER, after the last of the third-party code. The pipeline join - DSP threads, the CAT server, the USB device stack - and
-    // the plugins' own destroy() above are the two places a shutdown has wedged or can wedge, so the marker must not be on disk before both
-    // have completed; a death in either leaves telemetryCleanExit=false and is counted.
-    //
-    // It rewrites THE SNAPSHOT THE SAVE ABOVE JUST WROTE with one field
-    // changed, rather than calling saveConfigNow() again, and that shape is
-    // the point. A second currentConfig() would re-derive every value at a
-    // moment when the session is half torn down: it rebuilds the pending
-    // usage report through telemetryJournal, whose clock is glfwGetTime()
-    // (0.0 once GLFW is terminated - every session would then report zero
-    // seconds), and it re-reads live source state through a pipeline that has
-    // just been stopped. Neither can happen to a snapshot taken while
-    // everything was still alive. Residual, stated plainly: a death in the
-    // GL/GLFW teardown below still counts as a clean exit - the watchdog,
-    // stopped last as ever, is what covers that stretch.
-    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownWritingMarker);
-    engine_.markCleanExit();
-    if (!configPath_.empty()) {
-        // Built on lastRequestedConfig_, not savedCfg_: the final-state save
-        // just above (still async - see core/config_writer.hpp) may not have
-        // been collected yet, so savedCfg_ can still be one save behind.
-        // lastRequestedConfig_ is not - it is set the instant a save is
-        // REQUESTED, which is exactly the "what did we just ask to be
-        // written" this rewrite needs, and nothing has requested another
-        // save between that call and this one.
-        cascade::core::AppConfig marked = lastRequestedConfig_;
-        marked.telemetryCleanExit = true;
-        requestConfigSave(marked);
-    }
-
-    // THE LAST SAVE MUST BE GIVEN A REAL CHANCE TO LAND, OR BE SEEN NOT TO -
-    // see core/config_writer.hpp. Everything above this point only QUEUED
-    // bytes; this is the one place that WAITS, bounded and charged in the
-    // shutdown budget (HangWatchdog::kShutdownBoundedWaitsMs,
-    // tests/test_shutdown_budget.cpp). Past the bound the write is
-    // ABANDONED rather than joined - the same choice AudioOpen::reap() makes
-    // for a wedged device open at quit - and logged, so a config that never
-    // reached disk is a line in the log instead of a silent gap.
-    // THE ONE DEADLINE THE LAST WRITES SHARE: taken before the settings' drain, so what that drain leaves of it is what the takes' files still
-    // being closed on workers get (Engine::shutdownRelease) - the shutdown budget is charged kSaveBound once, here.
-    const auto drainDeadline = std::chrono::steady_clock::now() + cascade::gui::ConfigWriter::kSaveBound;
-    if (!configPath_.empty()) {
-        if (configWriter_.finishOrAbandon(cascade::gui::ConfigWriter::kSaveBound)) {
-            if (configWriter_.lastOk()) {
-                savedCfg_ = lastRequestedConfig_;
-            } else {
-                std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
-            }
-        } else {
-            cascade::core::diagLogf(
-                "config: final save abandoned - the disk did not answer within %lld ms",
-                static_cast<long long>(cascade::gui::ConfigWriter::kSaveBound.count()));
-        }
-    }
-
-    // THE TWO LISTS' LAST SAVES AND THE TWO TAKES' FILES are drained against the SAME deadline, taken above and not one of their own: they run
-    // on workers of their own, started before the pipeline join, so by now all of the writes have had the same time (Engine::shutdownDrain).
-    engine_.shutdownDrain(drainDeadline);
+// THE SECOND HALF OF THE WINDOW'S END (shell retirement R8): the host has STOPPED the engine - with this window on screen and its hang watchdog armed
+// - and now the window takes down what only it can: the GL textures, ImGui, GLFW, and then the watchdog itself.
+void AppWindow::closeWindow() {
+    if (!glUp_) { return; }
+    glUp_ = false;
+    // THE ENGINE LETS GO OF THIS WINDOW'S PLUGIN UI HERE, not in the prelude: between the prelude and the host's stop the engine's pass is still running, and an
+    // engine with no front end attached is a WINDOW-LESS one - it treats every AUTO plugin as pinned and wakes the asleep ones (Engine::updatePluginLifecycle),
+    // starting third-party decoders in the middle of a shutdown (test_plugin_status_report found it: "always=0 idle=0" where the report said three asleep). The port
+    // stays connected through the engine's stop - its release, posted before it unmaps, is applied inline by the port's own steps on this thread, idempotently -
+    // and is let go of now, with the GL context still current for the basemap's step.
+    leavePluginUi();
     // THE MARKER STAGE IS OVER, saved or abandoned, and the plugins are down: from here a normal exit is a clean one to the sentinel.
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownClosingWindow);
 
     // The waterfall owns a GL texture whose deletion requires the creating
     // context to be current. AppWindow outlives that context (main() destroys
-    // it after run() returns), so the view is destroyed explicitly here, not
+    // it after closeWindow() returns), so the view is destroyed explicitly here, not
     // left to ~AppWindow. The patch's picture textures, for the same reason.
     releasePatchPictureTextures();
     // The aircraft icons are GL textures too, made on first draw.
@@ -2731,38 +2559,31 @@ int AppWindow::run(int frames) {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-    glfwDestroyWindow(window);
+    glfwDestroyWindow(mainWindow_);
+    mainWindow_ = nullptr;
     glfwTerminate();
 
-    // THE WATCHDOG IS STOPPED LAST, ON PURPOSE. Everything above - the config
-    // save, the pipeline join, the GL teardown - runs with no heartbeat, so a
-    // shutdown that wedges is reported like any other hang. That is not an
-    // oversight to be tidied away: the worst freeze this product ever shipped
-    // was 120 s inside a CAT client shutdown, and stopping the watchdog before
-    // the teardown would make that exact bug invisible again. Everything above
-    // is judged against the shutdown budget beginShutdown() set, so a report
-    // from here means the close really did wedge - not that a bounded driver
-    // wait spent what it is allowed to spend.
+    // THE WATCHDOG IS STOPPED LAST, ON PURPOSE. Everything the host did before this call - the config save, the pipeline join, the plugins' release
+    // - and everything above runs with no heartbeat, so a shutdown that wedges is reported like any other hang. That is not an oversight to be
+    // tidied away: the worst freeze this product ever shipped was 120 s inside a CAT client shutdown, and stopping the watchdog before the teardown
+    // would make that exact bug invisible again. Everything is judged against the shutdown budget beginShutdown() set, so a report from here means
+    // the close really did wedge - not that a bounded driver wait spent what it is allowed to spend. (It is stopped HERE and not at the end of
+    // run() since R8 for exactly this: run() now ends before the engine's stop.)
     watchdog_.stop();
 
-    // HOW LONG THE TEARDOWN ACTUALLY TOOK, printed rather than assumed - the
-    // same discipline as the worst frame gap above, and for the same reason.
-    // The budget it is judged against was derived from constants in two other
-    // files; this is the measurement that says what the real path costs, and
-    // tests/test_shutdown_budget.cpp reads it back and requires a healthy
-    // close to sit far under the budget. A teardown that grows into it goes
-    // red here instead of arriving as a false hang report on a user's
-    // machine, which is exactly how this defect reached the field.
+    // HOW LONG THE TEARDOWN ACTUALLY TOOK, printed rather than assumed - the same discipline as the worst frame gap below, and for the same reason.
+    // The budget it is judged against was derived from constants in other files; this is the measurement that says what the real path costs (the
+    // window's part, the engine's stop and the GL teardown, from the moment the frame loop ended), and tests/test_shutdown_budget.cpp reads it back
+    // and requires a healthy close to sit far under the budget. A teardown that grows into it goes red here instead of arriving as a false hang
+    // report on a user's machine, which is exactly how this defect reached the field.
     std::printf("cascade: teardown %.1f ms\n",
-                std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - teardownStart)
-                    .count());
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - teardownStart_).count());
 
     // Printed on every clean exit: this is what makes the exact-count half of
-    // the --frames contract externally observable — app_smoke matches
+    // the --frames contract externally observable - app_smoke matches
     // "rendered 3 frames" via PASS_REGULAR_EXPRESSION, so an off-by-one in the
     // frame bound goes red instead of shipping silently.
-    std::printf("cascade: rendered %d frames\n", rendered);
+    std::printf("cascade: rendered %d frames\n", renderedFrames_);
     if (cascade::gui::census::enabled()) {
         std::printf("cascade: ui census %s\n",
                     cascade::gui::census::write() ? "written" : "NOT WRITTEN");
@@ -2788,12 +2609,11 @@ int AppWindow::run(int frames) {
     // And how many times the application took a WatchdogPause, for the same
     // reason: a false-positive mitigation that no shipped call site uses is a
     // sentence in a header, not a protection. tests/test_diag_hang.cpp reads
-    // this line back and requires at least one — the plugin scan.
+    // this line back and requires at least one - the plugin scan.
     std::printf("cascade: watchdog pauses %u\n", watchdog_.pausesTaken());
     // The same, for the slow frames the session counted: the line tests/test_slow_frames_app.cpp reads back.
-    std::printf("cascade: frame timing: %s\n", frameTimer.summaryText().c_str());
+    std::printf("cascade: frame timing: %s\n", cascade::core::frameTimer().summaryText().c_str());
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::Finished);
-    return 0;
 }
 
 void AppWindow::setDiagnosticsDir(std::string crashDir) {
