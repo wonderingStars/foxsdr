@@ -2306,6 +2306,26 @@ the window the merge produced drew a bare "Record IQ" for the whole of a slow di
 Held by tests/test_engine_api_03.cpp (`testRecordStartFact`: both takes, the order of the characters, the withdrawn state, the answer, `listSeq`) and tests/test_recorder_start_app.cpp (the real window
 drawing the real engine's start: idle, opening, waiting, cancel, settled, stop).
 
+### 9.12 The 0.99.97 merge's additions: bookmark groups and a preset's rate (docs/engine-merge-0.99.97.md)
+
+Master's 0.99.93 (groups of the user's own in the Bookmarks section) and 0.99.94 - 0.99.96 (the patch's blueprints) need two things of the table that it did not have. One op, one list field.
+
+* **`FOXAPP_OP_BOOKMARK_GROUP` (0x860B, SETTINGS, LOCAL sessions only like every extension op)**: `ival[0]` is the action, as `FOXAPP_OP_AIRBAND`'s is. The engine trims blanks off every group name it is given, so a sender that does not is not
+  trusted to.
+  * **0 add current in a group**: `text` (or `long text`) `"<group>\x1F<name>"`. Added as `FOXAPI_OP_BOOKMARK_ADD` adds the tuned station (its mode, the requested bandwidth, the frequency as the name when the name is empty), with the
+    group set; an empty group is none. `applied[0]`: the new bookmark's id. `BAD_ARGUMENT` for a text with no `\x1F`.
+  * **1 move one bookmark**: `ival[1]`: its id; `text`: the group it goes to, "" for none. `NOT_FOUND` for an id the list does not hold; a bookmark already in that group changes nothing and writes nothing.
+  * **2 rename a group**: `text` `"<from>\x1F<to>"`: every bookmark of `<from>` goes to `<to>` - a rename when `<to>` is new, a merge when the list already has it. `applied[0]`: how many moved; the bookmarks' note (`fact`/status
+    line the section shows) says `Renamed "<from>" to "<to>" (<n>)`. `BAD_ARGUMENT` for an empty `<from>` or `<to>` (a group is emptied with action 1 and ""), `<from>` == `<to>` changes nothing, `NOT_FOUND` when no bookmark is in
+    `<from>`. A preset the Airband monitor is playing keeps playing under its new name (`fact.airband.preset` follows): master's window had no such rule, and a rename of the playing preset's group would have turned "this preset" into
+    "every ticked row" at the next block.
+  * Anything else in `ival[0]` is `OUT_OF_RANGE`.
+* **`PRESETS` `value[3]`** (0.3, this merge): the preset's own sample rate in Hz, 0 when it names none (the 0.2 entry used `value[0..2]`). The patch's blueprints tune a radio's rate from it. It is the engine's `validatedPresets` rate,
+  so the list, the window's copy and the plugin's preset table cannot disagree. No fact, no flag.
+
+Held by tests/test_apply_command.cpp (`covering(FOXAPP_OP_BOOKMARK_GROUP)`: all three actions, every refusal, the monitor's preset following a rename), tests/test_bookmark_groups_app.cpp (master's scripted-pointer run of the real window,
+unchanged: the group box, the row menu, the rename), and tests/test_patch_blueprints_app.cpp (the rate read from `value[3]` through the real window).
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

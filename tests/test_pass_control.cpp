@@ -28,7 +28,9 @@
 //      fires first, every frame); K2 the frames stop and the timer takes over within the grace, then holds the period; K3 the 2 ms floor holds
 //      against kicks as fast as a thread can make them (and the control: floor off is a flood); K4 the kick gap drops what a pass cannot
 //      use; K5 a kick is not a submit (no lag stamped), a kicked pass drains the remote controls, and a headless / stepped / absent
-//      engine is untouched
+//      engine is untouched; K6 (the 0.99.97 merge, master's "nothing is drawn while the display is off", gui/display_power.hpp) the frames
+//      slow to the display-off cadence - one kick every kDisplayOffFrameMs, drawing and presenting nothing - and the pass still free-runs at
+//      about the timer's rate: the kick is welcome, never needed
 //   I  THE PASS'S OWN FIGURES (the measurement run's, P7): the log-linear histogram's arithmetic, pinned; and the engine's submit-to-publish
 //      lag and pass durations - every wake a submit made is served by a pass whose publish is timed from it, the window the harness marks
 //      is the window the JSON reports, and a build with no wake has no lag (the break-it: no stamp in wakeControl -> 0 served)
@@ -59,6 +61,7 @@
 #include "engine/engine.hpp"
 #include "engine/engine_host.hpp"
 #include "engine/pass_stats.hpp"
+#include "gui/display_power.hpp"
 #include "test_check.hpp"
 
 using cascade::engine::ControlThreadOptions;
@@ -674,6 +677,70 @@ void testKickFallback() {
     CHECK(d.kickedPasses == 0u);
 }
 
+// K6 (the 0.99.97 merge, master's 81346188): THE FRAME LOOP WHILE THE DISPLAY IS OFF. The window keeps turning its loop but draws and presents
+// nothing, and paces itself with a wait of cascade::gui::kDisplayOffFrameMs (33 ms) in place of the vertical sync - so the pass's kick,
+// which is the first act of every iteration (docs/engine-stage4.md 6.9), still arrives, but at ~30 a second and not ~60. The kick contract
+// is "a pass a frame, plus the timer as the no-frames floor"; this is the in-between the contract has to survive: kicks FARTHER APART THAN THE
+// GRACE (24 ms), which the pass must answer with its own timer, so that a display that is off costs the pass nothing: the radio, the decoders,
+// the web and CAT sessions all live on the pass, and none of them may slow because nobody is looking.
+//   - the pass keeps its rate: ~60 a second, the same as with frames and the same as headless (A2/K2), not the ~30 of one a kick;
+//   - no pass starves: the longest gap between two starts is the grace plus a margin, never a kick interval (33 ms) plus one;
+//   - the timer is doing the work between kicks (most passes are the timer's), and a kick that lands is still served (it is not dropped as a
+//     flood: 33 ms is far past the 8 ms gap), so a window that drew again at once after the display came back would find the frame's pass.
+// Break-it (recorded in docs/engine-stage4.md 6.24): with the grace extended to the kick interval's size (an unbounded wait after each kick,
+// the kind of change that "pauses rendering" could be mistaken for) the rate halves and the longest gap passes the kick interval - this case
+// goes red on both.
+void testKickAtDisplayOffCadence() {
+    std::printf("  K6: the frames slow to the display-off cadence (%d ms): the pass still free-runs on its timer between the kicks\n",
+                cascade::gui::kDisplayOffFrameMs);
+    const int framesMs = 2000;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        Engine e;
+        e.initialise();
+        A::passStarting(&recordPassStart);
+        e.startControlThread(kickOpts(16, 2, 24, 8));
+        CHECK(e.runPassNow());
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        (void)takeStarts();
+        const Engine::PassStats before = e.passStats();
+        std::size_t nKicks = 0;
+        std::vector<Clock::time_point> kickTimes;
+        {
+            Kicker k(e, static_cast<double>(cascade::gui::kDisplayOffFrameMs));
+            std::this_thread::sleep_for(std::chrono::milliseconds(framesMs));
+            k.stop();
+            nKicks = k.times.size();
+            kickTimes = k.times;
+        }
+        const Engine::PassStats d = statsDiff(e.passStats(), before);
+        e.stopControlThread();
+        A::passStarting(nullptr);
+        const std::vector<Clock::time_point> starts = takeStarts();
+        const double perSecond = static_cast<double>(d.passes) / (framesMs / 1000.0);
+        double longestKick = 0.0;
+        for (std::size_t i = 1; i < kickTimes.size(); ++i) { longestKick = std::max(longestKick, msBetween(kickTimes[i - 1], kickTimes[i])); }
+        double longestStartGap = 0.0;
+        for (std::size_t i = 1; i < starts.size(); ++i) { longestStartGap = std::max(longestStartGap, msBetween(starts[i - 1], starts[i])); }
+        std::printf("      %zu kicks, %llu passes (%.1f a second), %llu started by a kick, %llu by the timer, %llu kicks dropped; the kicker's longest gap %.2f ms, "
+                    "the longest gap between two pass starts %.2f ms\n",
+                    nKicks, static_cast<unsigned long long>(d.passes), perSecond, static_cast<unsigned long long>(d.kickedPasses),
+                    static_cast<unsigned long long>(d.timedPasses), static_cast<unsigned long long>(d.kicksDropped), longestKick, longestStartGap);
+        // THE RERUN GUARD (K1's): a kicker that itself stalled says nothing about the pacing; a desk that stalls the pass thread past the margin
+        // below says nothing either. Run again, loudly, up to three times; a run that was on time is never excused.
+        if ((longestKick > 60.0 || longestStartGap > 60.0) && attempt < 2) {
+            std::printf("      RERUN: the desk stalled a thread (kick gap %.2f ms, start gap %.2f ms); this attempt says nothing\n", longestKick, longestStartGap);
+            continue;
+        }
+        CHECK(nKicks >= 50u);                                   // (2 s at 33 ms)
+        CHECK(perSecond >= 50.0 && perSecond <= 70.0);          // ~60 a second: the timer's rate, not one a kick (~30)
+        CHECK(longestStartGap <= 24.0 + 12.0);                  // the grace and a margin - never a kick interval plus one
+        CHECK(d.timedPasses * 10u >= d.passes * 4u);            // the timer is doing the work between the kicks ...
+        CHECK(d.kickedPasses >= nKicks * 9u / 10u);             // ... and a kick that lands is still a pass (33 ms is not a flood)
+        CHECK(d.kicksDropped * 10u <= nKicks);                  // none dropped as a flood, bar a kick that landed beside a timer pass
+        break;
+    }
+}
+
 // K3: the floor holds against kicks as fast as a thread can make them.
 std::uint64_t kickFloodPasses(int floorMs, int floodMs, std::vector<double>* gapsOut = nullptr) {
     Engine e;
@@ -1247,6 +1314,7 @@ int main() {
         if (has("K3")) { testKickFloor(); }
         if (has("K4")) { testKickGap(); }
         if (has("K5")) { testKickIsOnlyAKick(); }
+        if (has("K6")) { testKickAtDisplayOffCadence(); }
         std::error_code ec0;
         std::filesystem::remove_all(g_scratch, ec0);
         return testSummary("test_pass_control (filtered)");
@@ -1263,6 +1331,7 @@ int main() {
     testKickFloor();
     testKickGap();
     testKickIsOnlyAKick();
+    testKickAtDisplayOffCadence();
     testFloor();
     testRunPassNow();
     testStepped();

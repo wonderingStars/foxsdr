@@ -46,6 +46,8 @@
 // worse than one with the old set.
 #pragma once
 
+#include "gui/display_power.hpp"
+
 struct GLFWwindow;
 
 namespace cascade::gui::frame {
@@ -160,6 +162,19 @@ unsigned displayChangeCount();
 // the same reason. Zero before install(), and on every platform but Windows,
 // where the window manager moves the window and the pump never waits for it.
 unsigned modalLoopCount();
+
+// WHETHER THIS SESSION'S DISPLAY IS ON, OFF OR DIMMED (gui/display_power.hpp), as
+// Windows last said through GUID_SESSION_DISPLAY_STATUS. install() registers the
+// window for it, and Windows answers with the state at the time of registering;
+// the window procedure records each change and passes the message on. Unknown
+// before install(), until Windows has said, and on every platform but Windows.
+DisplayPower displayPower();
+
+// THE TEST SEAM: delivers a GUID_SESSION_DISPLAY_STATUS notification carrying
+// `value` (0 off, 1 on, 2 dimmed) to `window`'s own window procedure, exactly as
+// Windows sends one - so a bounded run exercises the real message path without
+// a monitor to switch off. Does nothing before install() or off Windows.
+void sendDisplayPowerForTest(GLFWwindow* window, unsigned value);
 
 // The operating system's handle for `window` - its HWND on Windows, as a
 // pointer so <windows.h> stays out of this header - or null (every other

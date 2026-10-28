@@ -95,6 +95,7 @@
 #include "engine/pass_stats.hpp"
 #include "engine/running_view.hpp"
 #include "engine/source_fallback.hpp"
+#include "engine/saved_radio_retry.hpp"
 #include "engine/tune_control.hpp"
 #include "source/airspy_source.hpp"
 #include "source/airspyhf_source.hpp"
@@ -506,7 +507,7 @@ private:
     void openRtlTcpAt(const std::string& args);
     void openRtlTcpFromBox();
     void tuneToBookmark(const cascade::core::Bookmark& b);
-    std::uint64_t addBookmarkHere(const std::string& name);  // the new bookmark's id
+    std::uint64_t addBookmarkHere(const std::string& name, const std::string& group = std::string());  // the new bookmark's id
     cascade::core::Scanner::Params scannerParams() const;   // (the list mode's list too: scanTicked_)
     bool selectSourceById(const std::string& id);
     // HOW MANY LOADED MODULES ARE DECODERS AT ALL - the denominator under the
@@ -1183,6 +1184,20 @@ private:
     // gone is tried once, not in a loop.
     double soapyReopenAttemptSec_ = -1.0;
 
+    // --- Trying a busy saved radio again (0.99.92; engine/saved_radio_retry.hpp) ---
+    // Tries made so far (0..4), when the last failure happened in retryClockS() seconds, and whether that failure was BUSY - the only class that
+    // is retried. Armed by applyConfig's restore failure; cleared when the user chooses another source or a try fails any other way. ALL OF IT IS
+    // THE PASS'S: the restore (before the control thread starts, or on the pass), finishDeviceOpen, selectSource, openIqFile and
+    // launchSoundCardOpen are all the pass's, like the rest of the open machinery. (Master kept these in the window, stamped in the interface's
+    // clock; the engine has its own, clockS(), and the headless engine retries a busy saved radio exactly as the window's does.)
+    int savedRadioRetryAttempts_ = 0;
+    double savedRadioRetryLastFailSec_ = -1.0;
+    bool savedRadioRetryBusy_ = false;
+    // TESTS ONLY (tests/test_saved_radio_retry_app.cpp): when it is not negative the retry reads THIS as the time, so a test places the stamps and
+    // the polls at exact seconds, as master's test did with ImGui's clock. Never set in the product.
+    double savedRadioRetryClockS_ = -1.0;
+    double retryClockS() const { return savedRadioRetryClockS_ >= 0.0 ? savedRadioRetryClockS_ : clockS(); }
+
     // --- Off-thread SoapySDR discovery and open --------------------------
     // SoapySDR::Device::enumerate()/make() do USB bus discovery and, for a
     // B200, an FPGA/firmware load: seconds of blocking work. Run inline they
@@ -1260,6 +1275,10 @@ private:
     // save does not write the generator in its place.
     cascade::gui::RememberedSource closedRadio;
     std::string closedLabel;
+    // THIS OPEN IS ONE OF pollSavedRadioRetry's TRIES at the radio the start-up restore found busy (0.99.92). It travels INSIDE the result so
+    // that finishDeviceOpen, which sees only the answer, knows whether a failure should arm the next try; an answer the user has moved on from
+    // drops it with the rest.
+    bool savedRadioRetry = false;
     };
     std::future<std::vector<cascade::source::SoapyDeviceInfo>> soapyScanFuture_;
     std::future<DeviceOpenResult> deviceOpenFuture_;
@@ -1397,6 +1416,14 @@ private:
     // the result. A reopen that fails leaves the ordinary failed-open state
     // and message, and nothing tries again.
     void pollSoapyRecovery();
+    // THE SAVED RADIO THAT WAS ONLY BUSY, TRIED AGAIN (0.99.92); called once per pass beside pollSoapyRecovery. A start-up restore that fails
+    // because the radio is held by another program (typically the previous FoxSDR, still letting go of the dongle after the in-app updater) arms
+    // savedRadioRetryBusy_; when savedRadioRetryDue says so (2, 4, 8 and 16 s after the last failure) the saved radio is opened again through the
+    // ordinary asynchronous path, flagged savedRadioRetry. Every pass with nothing armed takes the first return.
+    void pollSavedRadioRetry();
+    // Stops the retries: the user chose something else, so the saved radio is no longer what the session is waiting for. restoreKeep_ itself is
+    // left for the exit save to read.
+    void cancelSavedRadioRetry() { savedRadioRetryBusy_ = false; }
     // The reopen itself, once pollSoapyRecovery has judged it due: reads the
     // rate, gains, running state and AIR centre off the dead radio (device_),
     // closes it and launches the open. Split from the gate so the carry-across
@@ -2977,6 +3004,8 @@ private:
     std::int32_t applyScannerListOp(const FoxCommand& c, std::string& why);
     // FOXAPP_OP_BOOKMARK_TICK and FOXAPP_OP_BOOKMARK_ADD_ROWS (engine_airband.cpp).
     std::int32_t applyBookmarkTick(const FoxCommand& c, std::string& why);
+    // FOXAPP_OP_BOOKMARK_GROUP (master 0.99.93; engine_airband.cpp, beside the tick and the typed rows): add current in a group, move one, rename a group.
+    std::int32_t applyBookmarkGroup(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
     std::int32_t applyBookmarkAddRows(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
 
     // --- THE AIRBAND MONITOR (stub campaign B6, 0.99.60 - 0.99.71; engine_airband.cpp) ----------------------------------

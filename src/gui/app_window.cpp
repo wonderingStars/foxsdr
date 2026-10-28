@@ -115,6 +115,7 @@
 #include "gui/tuner_ink.hpp"
 #include "gui/volume_meter.hpp"
 #include "gui/waterfall_view.hpp"
+#include "gui/display_power.hpp"
 #include "gui/present_grace.hpp"
 #include "gui/software_gl.hpp"
 #include "gui/win_frame.hpp"
@@ -1762,6 +1763,26 @@ int AppWindow::run(int frames) {
         cascade::gui::frame::displayChangeCount() +
         g_glfwDisplayErrors.load(std::memory_order_relaxed);
 
+    // NOTHING IS DRAWN WHILE THIS SESSION'S DISPLAY IS OFF (gui/display_power.hpp, the 2026-10-27 tester report): the frame loop keeps
+    // turning - the interface's own work, the message pump, the radio and decoders on their threads - but draws and presents nothing, and
+    // paces itself instead of the vertical sync a display that is off no longer gives. THE ENGINE'S PASS IS NOT PART OF THIS: the frame's
+    // kick (docs/engine-stage4.md 6.9) is the first act of every iteration, drawn or not, and the pass's own timer is the floor beneath it
+    // (K2 and K6 in tests/test_pass_control.cpp) - a paused display costs the pass nothing, and 6.24 records why that is the right reading.
+    cascade::gui::DisplayPause displayPause;
+    // FOXSDR_TEST_DISPLAY_OFF="<off frame>,<on frame>", bounded runs only: at those frames the window procedure is handed the notification
+    // Windows sends when the display goes off and comes back (gui/win_frame.hpp, the test seam), so tests/test_display_off_app drives the
+    // real message path. An "on frame" of 0 or none leaves the display off to the end of the run.
+    long displayOffAt = -1;
+    long displayOnAt = -1;
+    if (frames >= 0) {
+        if (const char* v = std::getenv("FOXSDR_TEST_DISPLAY_OFF"); v != nullptr && *v != '\0') {
+            char* end = nullptr;
+            displayOffAt = std::strtol(v, &end, 10);
+            if (end != nullptr && *end == ',') { displayOnAt = std::strtol(end + 1, nullptr, 10); }
+            if (displayOnAt <= displayOffAt) { displayOnAt = -1; }
+        }
+    }
+
     // WHERE A SLOW FRAME SPENT ITS TIME (0.99.64, core/frame_timing.hpp). The timer is the process's. The two hooks are bounded runs only,
     // like every other hook here: a stall held inside a named scope at a named frame, and the three things the operating system does that
     // a test cannot make it do (hide the window, change the display, run a modal loop inside the message pump).
@@ -1819,6 +1840,27 @@ int AppWindow::run(int frames) {
         }
         frameScope.to(cascade::core::FrameScope::Other);
 
+        // THE DISPLAY GOING OFF AND COMING BACK, read after the pump like the display changes below, so a notification that arrived this
+        // frame governs this frame's drawing. Coming back counts as a display change: the first presents after a display wakes are the ones
+        // a driver may hold.
+        if (static_cast<long>(rendered) == displayOffAt) {
+            cascade::gui::frame::sendDisplayPowerForTest(window, 0u);
+        } else if (static_cast<long>(rendered) == displayOnAt) {
+            cascade::gui::frame::sendDisplayPowerForTest(window, 1u);
+        }
+        const cascade::gui::DisplayPause::Edge displayEdge =
+            displayPause.update(cascade::gui::frame::displayPower(), glfwGetTime());
+        if (displayEdge == cascade::gui::DisplayPause::Edge::Paused) {
+            cascade::core::diagLogf(
+                "display: off - Windows says this session's display is off; drawing paused, the "
+                "radio and decoders keep running");
+        } else if (displayEdge == cascade::gui::DisplayPause::Edge::Resumed) {
+            cascade::core::diagLogf(
+                "display: %s - drawing resumed after %.0f s off; %ld frames not drawn",
+                cascade::gui::displayPowerName(cascade::gui::frame::displayPower()),
+                displayPause.lastOffSeconds(), displayPause.skipped());
+        }
+
         // AFTER THE PUMP, BEFORE THE FRAME. glfwPollEvents is where the window
         // procedure runs, so a WM_DISPLAYCHANGE that arrived this frame has
         // been counted by the time this reads it - and the pause is therefore
@@ -1829,7 +1871,8 @@ int AppWindow::run(int frames) {
         {
             const unsigned changes = cascade::gui::frame::displayChangeCount() +
                                      g_glfwDisplayErrors.load(std::memory_order_relaxed);
-            const bool displayChanged = changes != lastDisplayChanges || frameSituations.displayChangeAt(rendered);
+            const bool displayChanged = changes != lastDisplayChanges || frameSituations.displayChangeAt(rendered) ||
+                                        displayEdge == cascade::gui::DisplayPause::Edge::Resumed;
             if (displayChanged) {
                 lastDisplayChanges = changes;
                 cascade::core::diagLogf(
@@ -2132,6 +2175,35 @@ int AppWindow::run(int frames) {
             }
         }
 
+        // THE DRIVER REFUSING A WINDOW PART-WAY THROUGH A SESSION, BOUNDED RUNS ONLY. FOXSDR_TEST_VIEWPORT_REFUSE_AT=<frame> arms the
+        // backend's own refusal (ImGui_ImplGlfw_FailNextViewportWindowForTest, the path a real GLFW 65543 takes) at that frame and, for three
+        // frames, draws a small probe window past the main window's right edge - the shape of a tooltip or popup that needs an operating
+        // system window of its own - so a window is actually asked for and refused. What follows is the application's real fallback, end to
+        // end: tests/test_viewport_fallback_app.
+        if (frames >= 0) {
+            static const long refuseAt = [] {
+                const char* v = std::getenv("FOXSDR_TEST_VIEWPORT_REFUSE_AT");
+                return (v != nullptr && v[0] != '\0') ? std::atol(v) : -1L;
+            }();
+            if (refuseAt >= 0 && static_cast<long>(rendered) == refuseAt) {
+                ImGui_ImplGlfw_FailNextViewportWindowForTest();
+            }
+            if (refuseAt >= 0 && static_cast<long>(rendered) >= refuseAt &&
+                static_cast<long>(rendered) < refuseAt + 3 &&
+                (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
+                const ImGuiViewport* mv = ImGui::GetMainViewport();
+                ImGuiWindowClass probeClass;
+                probeClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+                ImGui::SetNextWindowClass(&probeClass);
+                ImGui::SetNextWindowPos(ImVec2(mv->Pos.x + mv->Size.x + 40.0f, mv->Pos.y + 40.0f));
+                ImGui::SetNextWindowSize(ImVec2(200.0f, 80.0f));
+                ImGui::Begin("viewport refusal probe", nullptr,
+                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+                ImGui::TextUnformatted("probe");
+                ImGui::End();
+            }
+        }
+
         // THE CENSUS (gui/ui_census.hpp): walk the rail through its five banks,
         // three frames each, so every bank's sections are drawn in one run -
         // unless FOXSDR_CENSUS_HOLD_BANK asks for the bank the config chose to
@@ -2147,6 +2219,7 @@ int AppWindow::run(int frames) {
             setRailBank((rendered / 3) % cascade::gui::kRailBankCount);
         }
         drawUi();
+        fitPagesIntoMainWindow();
 
         // Collects a config write configWriter_ finished, whether it was
         // requested by maybeSaveConfig() below, by saveConfigNow(), or by the
@@ -2173,17 +2246,20 @@ int AppWindow::run(int frames) {
         glViewport(0, 0, fbWidth, fbHeight);
         glClearColor(0.05f, 0.05f, 0.06f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        // Drawn only while the display is on; the frame itself (ImGui::Render above) is still ended, so the interface's state moves on.
+        if (!displayPause.paused()) { ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData()); }
 
         // The torn-off windows are rendered here, each into its own operating
         // system window and GL context. The current context has to be saved
         // and restored around it: RenderPlatformWindowsDefault leaves whichever
         // platform window it drew last current, and the next frame's
-        // glClear/RenderDrawData above would then paint the main UI into it.
+        // glClear/RenderDrawData above would then paint the main UI into it. UpdatePlatformWindows runs every frame whatever the display is
+        // doing - ImGui's NewFrame asserts that it did - but nothing is drawn into, or presented from, a torn-off window while the display
+        // is off.
         if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
             GLFWwindow* const restore = glfwGetCurrentContext();
             ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
+            if (!displayPause.paused()) { ImGui::RenderPlatformWindowsDefault(); }
             glfwMakeContextCurrent(restore);
 
             // DID THE DRIVER JUST REFUSE ONE? UpdatePlatformWindows is where a
@@ -2206,6 +2282,11 @@ int AppWindow::run(int frames) {
                 if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
                     cascade::core::diagWarnf("%s", why);
                 }
+                // ...AND THE PAGES THAT WERE THEIR OWN WINDOWS ARE BROUGHT INSIDE. ImGui keeps each one where it was beside this window, which
+                // for a page that opened past its right edge is past its right edge still - a 140 px strip with its rail off the top (the
+                // 2026-10-27 tester report). Every page is checked for the next few frames: the move into this window's viewport takes ImGui
+                // a frame or two, and the check is idempotent.
+                pagesFitFrames_ = 4;
             }
         }
 
@@ -2254,7 +2335,9 @@ int AppWindow::run(int frames) {
             // was raised by, so a request never spans two frames.
             const bool byKey = ImGui::IsKeyPressed(ImGuiKey_F12, false) || shotRequest_;
             shotRequest_ = false;
-            if (byKey || (shotAt >= 0 && static_cast<long>(rendered) == shotAt)) {
+            // Nothing was drawn while the display is off, so there is nothing to read back.
+            if (!displayPause.paused() &&
+                (byKey || (shotAt >= 0 && static_cast<long>(rendered) == shotAt))) {
                 cascade::core::HostImage img;
                 img.plugin = "self";
                 img.width = static_cast<std::uint32_t>(std::max(fbWidth, 0));
@@ -2355,8 +2438,14 @@ int AppWindow::run(int frames) {
             }
         }
 
-        frameScope.to(cascade::core::FrameScope::Present);
-        glfwSwapBuffers(window);
+        if (displayPause.paused()) {
+            // NOT PRESENTED, AND PACED BY A WAIT INSTEAD: the swap is what waited for the vertical sync, and a display that is off gives none.
+            displayPause.noteSkipped();
+            std::this_thread::sleep_for(std::chrono::milliseconds(cascade::gui::kDisplayOffFrameMs));
+        } else {
+            frameScope.to(cascade::core::FrameScope::Present);
+            glfwSwapBuffers(window);
+        }
         frameScope.to(cascade::core::FrameScope::Other);
         if (frameLog_) { frameLog_->frameEnd(); }
         if (frameCap_) { frameCap_->waitForNext(); }
@@ -7670,11 +7759,15 @@ cascade::gui::ShellPauseHooks AppWindow::watchdogShellHooks() {
 }
 
 bool AppWindow::shellOpen(const std::string& target) {
-    return cascade::gui::runShellOpen(watchdogShellHooks(), [&target]() -> bool {
+    return cascade::gui::runShellOpenResponsive(watchdogShellHooks(), [&target]() -> bool {
 #if defined(_WIN32)
-        const HINSTANCE rc =
-            ::ShellExecuteA(nullptr, "open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        return reinterpret_cast<std::intptr_t>(rc) > 32;
+        SHELLEXECUTEINFOA sei{};
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_NOASYNC;
+        sei.lpVerb = "open";
+        sei.lpFile = target.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+        return ::ShellExecuteExA(&sei) != FALSE;
 #else
         // See gui/shell_open.hpp for why this is a double-forked xdg-open
         // rather than system()/popen(), and why the logic lives in a free
@@ -7716,18 +7809,29 @@ bool AppWindow::launchInstaller(const std::string& path) {
     // cascade::gui::AppWindow::launchInstaller" is the watchdog reporting that
     // wait as a hang, five seconds into a consent prompt on a Windows 11
     // machine 28 s after launch. core/hang_watchdog.hpp's rule 2b names this
-    // exact case ("a native modal dialog ... MUST take one too"); see
-    // gui/shell_open.hpp for why a pause and not a helper thread.
-    const bool started = cascade::gui::runShellOpen(watchdogShellHooks(), [&path]() -> bool {
+    // exact case ("a native modal dialog ... MUST take one too").
+    //
+    // AND OFF THE GUI THREAD (0.99.91). That wait takes no messages, so five
+    // seconds in Windows greyed the window "(Not Responding)" behind the prompt,
+    // and since 0.99.87 the watchdog took Windows' verdict as the end of the
+    // pause: field report "freeze: the frame was in user-wait", 0.99.89, stalled
+    // in exactly this call. runShellOpenResponsive makes it on a thread of its
+    // own and keeps this one taking sent messages until it answers
+    // (gui/shell_open.cpp).
+    const bool started = cascade::gui::runShellOpenResponsive(watchdogShellHooks(), [&path]() -> bool {
         // ShellExecute rather than CreateProcess: the installer asks for
         // elevation through its manifest, and only the shell will show that
-        // prompt. The return is the documented "> 32 means it started"
-        // convention.
+        // prompt. ShellExecuteEx returns whether activation succeeded.
         const std::wstring wide = cascade::gui::installerPathWide(path);
         if (wide.empty()) { return false; }
-        const HINSTANCE rc = ::ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr,
-                                             SW_SHOWNORMAL);
-        return reinterpret_cast<std::intptr_t>(rc) > 32;
+        SHELLEXECUTEINFOW sei{};
+        sei.cbSize = sizeof(sei);
+        // The worker exits after this call; finish any asynchronous shell activation first.
+        sei.fMask = SEE_MASK_NOASYNC;
+        sei.lpVerb = L"open";
+        sei.lpFile = wide.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+        return ::ShellExecuteExW(&sei) != FALSE;
     });
     // An installer that could not be started is COUNTED, anonymously (0.99.64, core/health_events.hpp) - the user pressed the button and
     // nothing ran.
@@ -10080,6 +10184,66 @@ void AppWindow::separateWindowAnchor(int slot, float& x, float& y) {
     const float stagger = 34.0f * static_cast<float>(slot);
     x = mv->Pos.x + mv->Size.x - 140.0f + stagger;
     y = mv->Pos.y + 60.0f + stagger;
+}
+
+// WITH SEPARATE WINDOWS OFF, NO PAGE IS LEFT WHERE IT CANNOT BE SEEN.
+//
+// The anchor above overhangs the main window on purpose, and a page that was its own window
+// keeps its place beside the main window when separate windows go off; in one viewport both
+// mean a page that is mostly outside the only window there is. Measured in the reproduction
+// of the 2026-10-27 tester report (0.99.95, "the ADS-B map closes when I try to interact with
+// it"): the map went from its own window at (1383,226) to (1142,-15) inside a 1282 x 745 main
+// window - 140 px of it showing, its rail above the top edge - and stayed there.
+//
+// So, while separate windows are off: every top-level page for pagesFitFrames_ frames after a
+// mid-session refusal, and any page on the frame it appears, is moved and shrunk into the
+// main window by pageFitInside (gui/page_geometry.hpp), which leaves a page that is already
+// wholly inside exactly where the user put it. A page is a window beginPage drew (it has a
+// pageChrome_ entry under the same name): the few plain ImGui dialogs size themselves to their
+// contents, and holding one to the page floor would undo that. Popups, tooltips and child
+// windows are ImGui's own to place; a docked window is placed by its dock node. One log line
+// per page brought in, so a field log shows the rescue beside the refusal that caused it.
+//
+// (Merged from master's 0.99.97, c4eb9cd9. THIS IS NOT placeInsideMainWindow'S TWIN: that one (app_window_map.cpp, stub campaign B16)
+// decides where a Decoder output or picture window OPENS, with pageOpenInsideStaggered; this one RESCUES whatever page a refusal left
+// outside, with pageFitInside. Both stay; see docs/engine-merge-0.99.97.md.)
+void AppWindow::fitPagesIntoMainWindow() {
+    if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
+        pagesFitFrames_ = 0;
+        return;
+    }
+    const bool everyPage = pagesFitFrames_ > 0;
+    if (pagesFitFrames_ > 0) { --pagesFitFrames_; }
+    const ImGuiViewport* mv = ImGui::GetMainViewport();
+    for (ImGuiWindow* wnd : ImGui::GetCurrentContext()->Windows) {
+        if (wnd == nullptr || !wnd->Active || wnd->DockIsActive) { continue; }
+        if ((wnd->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Popup |
+                           ImGuiWindowFlags_Tooltip)) != 0) {
+            continue;
+        }
+        if (!everyPage && !wnd->Appearing) { continue; }
+        if (pageChrome_.find(wnd->Name) == pageChrome_.end()) { continue; }
+        const ImVec2 wasPos = wnd->Pos;
+        const ImVec2 wasSize = wnd->Size;
+        float x = wasPos.x;
+        float y = wasPos.y;
+        float w = wasSize.x;
+        float h = wasSize.y;
+        if (!cascade::gui::pageFitInside(mv->Pos.x, mv->Pos.y, mv->Size.x, mv->Size.y, x, y, w,
+                                         h)) {
+            continue;
+        }
+        ImGui::SetWindowPos(wnd, ImVec2(x, y), ImGuiCond_Always);
+        ImGui::SetWindowSize(wnd, ImVec2(w, h), ImGuiCond_Always);
+        // The visible half of the title only: the part after "###" is ImGui's identity.
+        const char* cut = std::strstr(wnd->Name, "###");
+        const int nameLen = cut != nullptr ? static_cast<int>(cut - wnd->Name)
+                                           : static_cast<int>(std::strlen(wnd->Name));
+        cascade::core::diagLogf(
+            "viewports: page \"%.*s\" brought inside the main window - %.0f,%.0f %.0fx%.0f, was "
+            "%.0f,%.0f %.0fx%.0f",
+            nameLen, wnd->Name, x, y, w, h, wasPos.x, wasPos.y, wasSize.x, wasSize.y);
+    }
 }
 
 // --- THE RAIL ACROSS THE TOP OF A CABINET -------------------------------------
@@ -12889,6 +13053,9 @@ void AppWindow::drawPatchView() {
             }
         }
 
+        // The blueprints list: a whole workflow per plugin, on its own row.
+        drawPatchBlueprints();
+
         // THE BAND IS AS TALL AS ITS ROWS, and the pane beside them exactly
         // that tall - never under its floor, so a page with no decoder row
         // still has a pane that reads as one.
@@ -12950,6 +13117,8 @@ void AppWindow::drawPatchView() {
             // To the engine before the compile below, as the part always was.
             commitPatchDraft();
         }
+        // A blueprint picked from the list, placed now for the same reason.
+        placePendingPatchBlueprint(canvasW, avail.y);
 
         // THE PLAN is the engine's (Engine::compilePatchPlan, once a pass); the
         // marks on the canvas and the words in the inspector are one answer, a
@@ -13183,6 +13352,48 @@ void AppWindow::drawPatchView() {
                         ImGui::PopStyleColor();
                         break;
                 }
+
+                // ITS SIZE (2026-10-27, owner: "allow the users to make the map
+                // larger in the patch also the other components so the user can
+                // enlarge or reduce them"). The corner grip always could; these
+                // keys do it without having to find a corner, and say the grip
+                // is there.
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::TextUnformatted(tr("Size"));
+                {
+                    // Smaller and Larger side by side, Default size under them
+                    // at full width: three to a row cut "Default size" short in
+                    // the drawer's width, and in longer languages the others.
+                    const float gap = ImGui::GetStyle().ItemSpacing.x;
+                    const float keyW = (ImGui::GetContentRegionAvail().x - gap) / 2.0f;
+                    // Where each key is, for a scripted press.
+                    const auto where = [](const char* name) {
+                        const ImVec2 k0 = ImGui::GetItemRectMin();
+                        const ImVec2 k1 = ImGui::GetItemRectMax();
+                        cascade::gui::census::rect(name, k0.x, k0.y, k1.x, k1.y);
+                    };
+                    if (ImGui::Button(trId("Smaller###patchsizedown"), ImVec2(keyW, 0.0f))) {
+                        cascade::gui::patch::scaleNodeSize(*sel, 0.8f);
+                        patchUi_.dirty = true;
+                    }
+                    where("patchsize:smaller");
+                    ImGui::SameLine();
+                    if (ImGui::Button(trId("Larger###patchsizeup"), ImVec2(keyW, 0.0f))) {
+                        cascade::gui::patch::scaleNodeSize(*sel, 1.25f);
+                        patchUi_.dirty = true;
+                    }
+                    where("patchsize:larger");
+                    if (ImGui::Button(trId("Default size###patchsizereset"), ImVec2(-FLT_MIN, 0.0f))) {
+                        cascade::gui::patch::resetNodeSize(*sel);
+                        patchUi_.dirty = true;
+                    }
+                    where("patchsize:default");
+                }
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
+                                                         cascade::gui::theme::kInkMuted));
+                ImGui::TextWrapped("%s", tr("Or drag the brass corner at the part's bottom right."));
+                ImGui::PopStyleColor();
 
                 // (The node's problems are in the information pane, where they are read.)
                 ImGui::Spacing();
@@ -18959,6 +19170,21 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
 
 // --- Bookmarks (P6) --------------------------------------------------------------
 
+namespace {
+
+// A group name as typed, less the blanks around it: "  LUGANO " and "LUGANO" are one group, and a name of blanks alone is no group. (Master's, 97ea658c;
+// the engine trims the same way - applyBookmarkGroup - so a sender that does not is not trusted to.)
+std::string trimmedGroupName(const char* typed) {
+    std::string s(typed != nullptr ? typed : "");
+    const auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    while (!s.empty() && blank(s.back())) { s.pop_back(); }
+    std::size_t lead = 0;
+    while (lead < s.size() && blank(s[lead])) { ++lead; }
+    return s.substr(lead);
+}
+
+}  // namespace
+
 // THE VIEW (window port, group 7): the rows are the window's ONE copy of BOOKMARKS (tuningLists:
 // copied when fact.bookmarks.version moves, which is the STORE's change and not listSeq's - a decoder
 // printing a line moves that), and the group names the combo offers are derived from that copy, so they
@@ -18980,6 +19206,15 @@ void AppWindow::rebuildBookmarkView() {
         bookmarkGroupSel_ = 0;
         for (std::size_t g = 0; g < bookmarkGroups_.size() && !was.empty(); ++g) {
             if (bookmarkGroups_[g] == was) { bookmarkGroupSel_ = static_cast<int>(g) + 1; }
+        }
+        // ...and a group that was just RENAMED is the one selected under its new name (see bookmarkRenameWant_).
+        if (!bookmarkRenameWant_.empty()) {
+            for (std::size_t g = 0; g < bookmarkGroups_.size(); ++g) {
+                if (bookmarkGroups_[g] == bookmarkRenameWant_) {
+                    bookmarkGroupSel_ = static_cast<int>(g) + 1;
+                    bookmarkRenameWant_.clear();
+                }
+            }
         }
     }
     if (!listChanged && bookmarkViewGroupSel_ == bookmarkGroupSel_ && bookmarkViewFavOnly_ == bookmarkFavOnly_ &&
@@ -19043,7 +19278,60 @@ void AppWindow::drawBookmarksSection() {
     // requested bandwidth, under this name - or, with none, the frequency.
     namespace cmd = cascade::core::cmd;
     if (ImGui::Button(trId("Add current"))) {
-        uiSubmit(cmd::makeText(FOXAPI_OP_BOOKMARK_ADD, bookmarkName_));
+        // Under the group box's name when it has one (FOXAPP_OP_BOOKMARK_GROUP, action 0: the engine adds it as BOOKMARK_ADD does, into that
+        // group); with none, the ordinary BOOKMARK_ADD, as before the groups.
+        const std::string group = trimmedGroupName(bookmarkGroup_);
+        if (group.empty()) {
+            uiSubmit(cmd::makeText(FOXAPI_OP_BOOKMARK_ADD, bookmarkName_));
+        } else {
+            uiSubmit(cmd::makeText(FOXAPP_OP_BOOKMARK_GROUP, group + '\x1F' + bookmarkName_, 0));
+        }
+    }
+    cascade::gui::census::rect("bookmarks:add", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+
+    // --- the group the next Add current joins (2026-10) ----------------------
+    // A tester keeps an airport's tower, ground and approach together under
+    // its name ("MILANO MALPENSA", "MILANO LINATE", "LUGANO"): until now a
+    // group could only arrive with an imported file or an airport lookup. Typed
+    // here once, the name stays until it is changed - Add current does not
+    // clear it - so a run of frequencies lands in one group. The arrow beside
+    // it lists the groups the list already has, and picking one types it.
+    // Empty is ungrouped, as every bookmark was before.
+    rebuildBookmarkView();  // bookmarkGroups_ current for the arrow (a key compare when nothing changed)
+    {
+        const float pickW = ImGui::GetFrameHeight();
+        ImGui::SetNextItemWidth(bookmarkGroups_.empty() ? -1.0f : -(pickW + bmSpacing));
+        cascade::gui::inputTextWithFittedHint("##bm_group_new", tr("group (optional)"), bookmarkGroup_,
+                                              sizeof(bookmarkGroup_));
+        cascade::gui::census::rect("bookmarks:group", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", tr("New bookmarks join this group - type a new name, or pick one the\n"
+                                       "list already has from the arrow. Empty means no group. Right-click\n"
+                                       "a row below to move it to another group."));
+        }
+        if (!bookmarkGroups_.empty()) {
+            ImGui::SameLine();
+            if (ImGui::BeginCombo("##bm_group_pick", "",
+                                  ImGuiComboFlags_NoPreview | ImGuiComboFlags_HeightLarge)) {
+                ImGuiListClipper clip;
+                clip.Begin(static_cast<int>(bookmarkGroups_.size()));
+                while (clip.Step()) {
+                    for (int g = clip.DisplayStart; g < clip.DisplayEnd; ++g) {
+                        const std::string& name = bookmarkGroups_[static_cast<std::size_t>(g)];
+                        ImGui::PushID(g);
+                        if (ImGui::Selectable(name.c_str(), name == bookmarkGroup_)) {
+                            cascade::core::formatUtf8(bookmarkGroup_, sizeof(bookmarkGroup_), "%s", name.c_str());
+                        }
+                        ImGui::PopID();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            cascade::gui::census::rect("bookmarks:grouppick", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                       ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        }
     }
 
     // --- a frequency list from elsewhere (0.99.19) -------------------------
@@ -19115,11 +19403,16 @@ void AppWindow::drawBookmarksSection() {
                                           bookmarkGroupSel_ == g + 1)) {
                         bookmarkGroupSel_ = g + 1;
                     }
+                    cascade::gui::census::rect("bookmarks:groupsel:", g, ImGui::GetItemRectMin().x,
+                                               ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                               ImGui::GetItemRectMax().y);
                     ImGui::PopID();
                 }
             }
             ImGui::EndCombo();
         }
+        cascade::gui::census::rect("bookmarks:groupsel", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
     }
     ImGui::Checkbox(trId("Favourites only"), &bookmarkFavOnly_);
     cascade::gui::sameLineIfFits(cascade::gui::checkWidth(trId("On the spectrum")));
@@ -19146,6 +19439,7 @@ void AppWindow::drawBookmarksSection() {
     ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
     ImGui::Text(tr("%zu shown of %zu"), bookmarkView_.size(), bookmarkCount);
     ImGui::PopStyleColor();
+    cascade::gui::census::note("bookmarks:rows:", static_cast<int>(bookmarkView_.size()));
     if (!bookmarkView_.empty()) {
         ImGui::SameLine();
         // THE ONES SHOWN go out, so a search or a group picks what is shared.
@@ -19178,8 +19472,51 @@ void AppWindow::drawBookmarksSection() {
             uiSubmit(cmd::makeText(FOXAPI_OP_BOOKMARK_REMOVE_GROUP,
                                    bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)]));
             bookmarkGroupSel_ = 0;
+            bookmarkRenameOpen_ = false;
+        }
+        // RENAME (2026-10): the field opens under the row seeded with the
+        // group's name; Enter or the key applies it. Into a name the list
+        // already has, the two groups become one. Empty is refused here - the
+        // rows' own menu has "No group" for that - and the same name is a no-op.
+        cascade::gui::sameLineIfFits(cascade::gui::buttonWidth(trId("Rename this group")));
+        if (ImGui::SmallButton(trId("Rename this group"))) {
+            bookmarkRenameOpen_ = !bookmarkRenameOpen_;
+            if (bookmarkRenameOpen_ && bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size())) {
+                cascade::core::formatUtf8(bookmarkRenameName_, sizeof(bookmarkRenameName_), "%s",
+                                          bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)].c_str());
+            }
+        }
+        cascade::gui::census::rect("bookmarks:rename", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+    } else {
+        bookmarkRenameOpen_ = false;
+    }
+    if (bookmarkRenameOpen_) {
+        const float renW = cascade::gui::buttonWidth(trId("Rename"));
+        ImGui::SetNextItemWidth(-(renW + bmSpacing));
+        const bool entered = cascade::gui::inputTextWithFittedHint("##bm_rename", tr("new group name"),
+                                                                    bookmarkRenameName_, sizeof(bookmarkRenameName_),
+                                                                    ImGuiInputTextFlags_EnterReturnsTrue);
+        cascade::gui::census::rect("bookmarks:renamefield", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        ImGui::SameLine();
+        const bool renameKey = ImGui::Button(trId("Rename"));
+        cascade::gui::census::rect("bookmarks:renamekey", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+        if ((renameKey || entered) && bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size())) {
+            const std::string from = bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)];
+            const std::string to = trimmedGroupName(bookmarkRenameName_);
+            if (!to.empty() && to != from) {
+                // FOXAPP_OP_BOOKMARK_GROUP, action 2: the engine renames (or merges), saves and says "Renamed ..." in the note above. The filter
+                // follows the group to its new name when the list shows it (bookmarkRenameWant_).
+                uiSubmit(cmd::makeText(FOXAPP_OP_BOOKMARK_GROUP, from + '\x1F' + to, 2));
+                bookmarkRenameWant_ = to;
+                bookmarkRenameWantUntil_ = frameCounter_ + 300;
+                bookmarkRenameOpen_ = false;
+            }
         }
     }
+    if (!bookmarkRenameWant_.empty() && frameCounter_ > bookmarkRenameWantUntil_) { bookmarkRenameWant_.clear(); }
 
     // Rows: favourite star, click-to-tune, per-row delete - through a
     // clipper, so only the rows on screen are ever laid out. The delete is
@@ -19188,6 +19525,8 @@ void AppWindow::drawBookmarksSection() {
     int deleteIdx = -1;
     int starIdx = -1;
     int tickIdx = -1;
+    int moveIdx = -1;        // a row's right-click menu moved it to moveGroup
+    std::string moveGroup;
     const float delW = ImGui::GetFrameHeight();
     const float rows = std::min(12.0f, static_cast<float>(bookmarkView_.size()));
     if (!bookmarkView_.empty() &&
@@ -19233,6 +19572,70 @@ void AppWindow::drawBookmarksSection() {
                     uiSubmit(cmd::makeInt(FOXAPI_OP_BOOKMARK_TUNE, static_cast<std::int64_t>(b.id)));
                     testerUsage_->noteFeature("bookmarks");
                 }
+                cascade::gui::census::rect("bookmarks:row:", r, ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                           ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+                // THE ROW'S MENU is a right-click (2026-10): the group it
+                // belongs to, changed to any the list has, to none, or to a
+                // name typed here. The move itself is deferred past the loop
+                // like the delete, so the command is never made from a row this
+                // frame still iterates (FOXAPP_OP_BOOKMARK_GROUP, action 1: by id).
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                    bookmarkRowGroup_[0] = '\0';
+                    ImGui::OpenPopup("##bm_row_menu");
+                }
+                if (ImGui::BeginPopup("##bm_row_menu")) {
+                    ImGui::TextDisabled("%s", b.name.c_str());
+                    ImGui::Separator();
+                    ImGui::TextUnformatted(tr("Move to group"));
+                    bool move = false;
+                    std::string target;
+                    const float menuW = std::max(200.0f, ImGui::CalcTextSize(label).x);
+                    if (ImGui::Selectable(trId("No group"), b.group.empty(), ImGuiSelectableFlags_None,
+                                          ImVec2(menuW, 0.0f))) {
+                        move = true;
+                    }
+                    cascade::gui::census::rect("bookmarks:menu:nogroup", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+                    if (!bookmarkGroups_.empty()) {
+                        const float listRows = std::min(8.0f, static_cast<float>(bookmarkGroups_.size()));
+                        if (ImGui::BeginChild("##bm_row_groups",
+                                              ImVec2(menuW, listRows * ImGui::GetTextLineHeightWithSpacing() + 2.0f),
+                                              ImGuiChildFlags_None)) {
+                            ImGuiListClipper groupClip;
+                            groupClip.Begin(static_cast<int>(bookmarkGroups_.size()));
+                            while (groupClip.Step()) {
+                                for (int g = groupClip.DisplayStart; g < groupClip.DisplayEnd; ++g) {
+                                    const std::string& name = bookmarkGroups_[static_cast<std::size_t>(g)];
+                                    ImGui::PushID(g);
+                                    if (ImGui::Selectable(name.c_str(), name == b.group)) {
+                                        move = true;
+                                        target = name;
+                                    }
+                                    cascade::gui::census::rect("bookmarks:menu:group:", g, ImGui::GetItemRectMin().x,
+                                                               ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                                               ImGui::GetItemRectMax().y);
+                                    ImGui::PopID();
+                                }
+                            }
+                        }
+                        ImGui::EndChild();
+                    }
+                    ImGui::SetNextItemWidth(menuW);
+                    if (cascade::gui::inputTextWithFittedHint("##bm_row_newgroup", tr("new group name"),
+                                                              bookmarkRowGroup_, sizeof(bookmarkRowGroup_),
+                                                              ImGuiInputTextFlags_EnterReturnsTrue)) {
+                        target = trimmedGroupName(bookmarkRowGroup_);
+                        move = !target.empty();
+                    }
+                    cascade::gui::census::rect("bookmarks:menu:newgroup", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+                    if (move) {
+                        moveIdx = i;
+                        moveGroup = target;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
+                }
                 ImGui::SameLine();
                 if (ImGui::Button("x", ImVec2(delW, 0.0f))) { deleteIdx = i; }
                 ImGui::PopID();
@@ -19250,6 +19653,11 @@ void AppWindow::drawBookmarksSection() {
     if (tickIdx >= 0 && tickIdx < static_cast<int>(list.size())) {
         const cascade::gui::BookmarkRow& b = list[static_cast<std::size_t>(tickIdx)];
         uiSubmit(cmd::makeInt(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(b.id), b.ticked ? 0 : 1));
+    }
+    if (moveIdx >= 0 && moveIdx < static_cast<int>(list.size()) &&
+        list[static_cast<std::size_t>(moveIdx)].group != moveGroup) {
+        uiSubmit(cmd::makeText(FOXAPP_OP_BOOKMARK_GROUP, moveGroup, 1,
+                               static_cast<std::int64_t>(list[static_cast<std::size_t>(moveIdx)].id)));
     }
     if (deleteIdx >= 0 && deleteIdx < static_cast<int>(list.size())) {
         uiSubmit(cmd::makeInt(FOXAPI_OP_BOOKMARK_REMOVE,

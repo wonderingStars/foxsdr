@@ -1,7 +1,8 @@
 // patch_strip.hpp - one channel of a patch: mix it to DC, narrow it, decimate
 // it, and demodulate it.
 //
-//     mix to DC  ->  low-pass and decimate  ->  AM envelope or FM discriminator
+//     mix to DC  ->  low-pass and decimate  ->  AM envelope, FM discriminator,
+//                                               or the receiver's DSB/USB/LSB/CW/RAW
 //
 // One of these per Channel node. It is pure DSP with no threads, no audio
 // device and no graph, so tests/test_patch_strip.cpp can drive it with signals
@@ -51,13 +52,54 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "dsp/deemphasis.hpp"
+#include "dsp/demod.hpp"
 
 namespace cascade::core::patch {
 
-enum class Demod : std::uint8_t { Am, Fm };
+// THE SIDEBAND MODES (2026-10-26): DSB, USB, LSB, CW and RAW are the
+// receiver's own demodulator (dsp::Demodulator - the Weaver sideband chain,
+// the 700 Hz CW sidetone), run on each block of this strip's decimated
+// channel rather than written a second time here. AM and FM keep the strip's
+// own per-sample arithmetic, which the airband monitor's normalisation and
+// de-emphasis are built into.
+enum class Demod : std::uint8_t { Am, Fm, Dsb, Usb, Lsb, Cw, Raw };
+
+inline bool usesDemodulator(Demod m) { return m != Demod::Am && m != Demod::Fm; }
+
+// The host's mode list - kModeNames: NFM, WFM, AM, DSB, USB, CW, LSB, RAW, the
+// order a Demod node's combo and its saved index use - onto a strip's
+// demodulator. Anything else (a newer file's index) takes AM: a wrong
+// demodulator is silence, not a worse version of the right one.
+inline Demod demodForModeIndex(int mode) {
+    switch (mode) {
+        case 0:
+        case 1: return Demod::Fm;
+        case 2: return Demod::Am;
+        case 3: return Demod::Dsb;
+        case 4: return Demod::Usb;
+        case 5: return Demod::Cw;
+        case 6: return Demod::Lsb;
+        case 7: return Demod::Raw;
+        default: return Demod::Am;
+    }
+}
+
+inline cascade::dsp::DemodMode dspModeFor(Demod m) {
+    switch (m) {
+        case Demod::Dsb: return cascade::dsp::DemodMode::DSB;
+        case Demod::Usb: return cascade::dsp::DemodMode::USB;
+        case Demod::Lsb: return cascade::dsp::DemodMode::LSB;
+        case Demod::Cw: return cascade::dsp::DemodMode::CW;
+        case Demod::Raw: return cascade::dsp::DemodMode::RAW;
+        case Demod::Fm: return cascade::dsp::DemodMode::NFM;
+        case Demod::Am: break;
+    }
+    return cascade::dsp::DemodMode::AM;
+}
 
 // Taps per unit of decimation. Eight is the workbench's figure and it is a
 // transition width, not a guess: fewer and the skirt is wide enough to let a
@@ -99,6 +141,16 @@ public:
         // The de-emphasis pole is a function of the output rate: a reconfigure
         // keeps the time constant and places the pole for the new rate.
         deemph_.setRate(r);
+        // The sideband demodulator, made HERE and not on first use: process()
+        // runs on the audio thread, and designing its filter there would be
+        // an allocation in the middle of a block. Its own de-emphasis is off
+        // - it is never asked for FM.
+        side_.reset();
+        if (r > 0.0) {
+            side_ = std::make_unique<cascade::dsp::Demodulator>(r);
+            side_->setDeemphasisUs(0.0);
+        }
+        sideMode_ = Demod::Am;   // "not set yet": the first sideband block sets it
         reset();
     }
 
@@ -138,6 +190,7 @@ public:
         deemph_.reset();
         chanHistory_.assign(chanTaps_.size(), std::complex<float>(0.0f, 0.0f));
         chanPos_ = 0;
+        if (side_) { side_->reset(); }
     }
 
     double outRateHz() const {
@@ -170,6 +223,16 @@ public:
                  std::vector<float>& out,
                  std::vector<std::complex<float>>* iqOut = nullptr) {
         if (in == nullptr || taps_.empty()) { return; }
+        // A sideband mode gathers this call's decimated channel and hands it
+        // to the receiver's demodulator in one block after the loop.
+        const bool side = usesDemodulator(mode) && side_ != nullptr;
+        if (side) {
+            block_.clear();
+            if (sideMode_ != mode) {
+                side_->setMode(dspModeFor(mode));   // a clean start, as a mode change is
+                sideMode_ = mode;
+            }
+        }
 
         for (std::size_t i = 0; i < n; ++i) {
             // --- mix to DC ---------------------------------------------------
@@ -215,7 +278,17 @@ public:
             }
 
             if (iqOut != nullptr) { iqOut->push_back(acc); }
-            out.push_back(demodulate(acc, mode));
+            if (side) {
+                block_.push_back(acc);
+            } else {
+                out.push_back(demodulate(acc, mode));
+            }
+        }
+
+        if (side && !block_.empty()) {
+            sideOut_.resize(block_.size());
+            side_->process(block_.data(), block_.size(), sideOut_.data());
+            for (const float v : sideOut_) { out.push_back(dcBlock(v)); }
         }
     }
 
@@ -237,22 +310,7 @@ private:
             havePrev_ = true;
         }
 
-        // A one-pole DC blocker. AM's envelope is all positive and would
-        // otherwise carry a large offset into the audio; FM's discriminator
-        // sits off zero whenever the channel is not exactly centred.
-        //
-        // THE CORNER IS DERIVED FROM THE OUTPUT RATE, not written as a
-        // constant. At a fixed coefficient the settling time changes with the
-        // rate, and an earlier version of this arithmetic elsewhere in the
-        // product took 42 ms to settle against a 1.3 ms preamble - it removed
-        // the offset long after the thing being decoded had gone past.
-        const double fc = 80.0;
-        const double r = outRateHz();
-        const float a = (r > 0.0) ? static_cast<float>(
-                                        1.0 - std::exp(-2.0 * 3.14159265358979323846 * fc / r))
-                                  : 0.0f;
-        dcState_ += a * (v - dcState_);
-        float y = v - dcState_;
+        float y = dcBlock(v);
 
         // FM DE-EMPHASIS (0.99.69, when asked): after the DC blocker, which is
         // linear, so the two commute; before the squelch gates a copy and the
@@ -282,6 +340,28 @@ private:
             y = std::clamp(y, -2.0f, 2.0f);
         }
         return y;
+    }
+
+    // A one-pole DC blocker. AM's envelope is all positive and would
+    // otherwise carry a large offset into the audio; FM's discriminator sits
+    // off zero whenever the channel is not exactly centred; and the sideband
+    // modes' DSB and RAW are the channel's real part, which carries any
+    // carrier left at DC. (USB, LSB and CW start at 300 Hz and pass through
+    // it untouched.)
+    //
+    // THE CORNER IS DERIVED FROM THE OUTPUT RATE, not written as a constant.
+    // At a fixed coefficient the settling time changes with the rate, and an
+    // earlier version of this arithmetic elsewhere in the product took 42 ms
+    // to settle against a 1.3 ms preamble - it removed the offset long after
+    // the thing being decoded had gone past.
+    float dcBlock(float v) {
+        const double fc = 80.0;
+        const double r = outRateHz();
+        const float a = (r > 0.0) ? static_cast<float>(
+                                        1.0 - std::exp(-2.0 * 3.14159265358979323846 * fc / r))
+                                  : 0.0f;
+        dcState_ += a * (v - dcState_);
+        return v - dcState_;
     }
 
     // The channel filter's taps, at the OUTPUT rate. Off (no taps) when no
@@ -383,6 +463,14 @@ private:
     float carrier_ = 0.0f;
     float attackC_ = 0.0f;
     float releaseC_ = 0.0f;
+
+    // The sideband modes' demodulator (see Demod), made by configure(), and
+    // the mode it is set to. The two blocks grow to the largest call once
+    // and are reused, as dsp::Demodulator's own working buffers are.
+    std::unique_ptr<cascade::dsp::Demodulator> side_;
+    Demod sideMode_ = Demod::Am;
+    std::vector<std::complex<float>> block_;
+    std::vector<float> sideOut_;
 };
 
 }  // namespace cascade::core::patch

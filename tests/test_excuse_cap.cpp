@@ -556,10 +556,21 @@ int main() {
         // THREE call sites, each a native wait a person paces: shellOpen (the shell),
         // launchInstaller (the elevation prompt) and, since 0.99.74, pickFile (the
         // BROWSE key's modal file dialog). A fourth is a new reason to read this list.
-        // (Master's text again, stub campaign B8, 2026-10-26: the 0.99.84 merge carved this count to 2 - placeholder
-        // merge_pending_part_excuse_cap_pickfile - while the window had no pickFile, the BROWSE key's modal file dialog (0.99.74). The window
-        // has it again, in app_window.cpp where this scan reads, and the number is master's 3.)
-        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 3u);
+        // (Master's 0.99.91 text, merged 2026-10-27 over the branch's B8 note: the window has pickFile again, in app_window.cpp where this
+        // scan reads, so the plain count is master's 1 and the responsive count master's 2.)
+        // Since 0.99.91 the two that call ShellExecute go through runShellOpenResponsive:
+        // ShellExecute waits for SmartScreen or an elevation prompt WITHOUT taking
+        // messages, so made on this thread it greyed the window "(Not Responding)" and
+        // the watchdog filed a freeze (gui/shell_open.cpp). The file dialog runs its own
+        // message loop and stays on the GUI thread, which owns the dialog it parents.
+        CHECK(countOf(win, "runShellOpenResponsive(watchdogShellHooks(),") == 2u);
+        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 1u);
+        // ...and every ShellExecute in the GUI is made through the responsive kind: the
+        // radio setup's INSTALL DRIVER (0.99.88, "runas") is the third.
+        const std::string radio = liveCode(readFile(src / "gui" / "app_window_radio_setup.cpp"));
+        CHECK(countOf(radio, "runShellOpenResponsive(watchdogShellHooks(),") == 1u);
+        CHECK(countOf(radio, "runShellOpen(watchdogShellHooks(),") == 0u);
+        CHECK(countOf(win, "ShellExecute") + countOf(radio, "ShellExecute") == 3u);
         // The application-paced sites are still plain pauses: the audio and microphone opens (the ENGINE's since the extraction -
         // WaitWatchdogPause, src/engine) and the display grace (the window's).
         std::size_t plainPauses = countOf(win, "watchdog_.pause()");

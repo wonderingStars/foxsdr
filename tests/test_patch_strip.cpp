@@ -11,7 +11,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/patch_strip.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <complex>
 #include <vector>
 
@@ -97,6 +99,27 @@ double followsTone(const std::vector<float>& v, double toneHz, double rate) {
         sv += static_cast<double>(v[i]) * static_cast<double>(v[i]);
     }
     return (ss > 0.0 && sv > 0.0) ? std::fabs(sc) / std::sqrt(ss * sv) : 0.0;
+}
+
+// The fraction of the tail's power that is at `toneHz`, from 0 to 1, WHATEVER
+// ITS PHASE. followsTone above correlates with a sine only, which suits an FM
+// discriminator fed a sine deviation but reads near zero for a tone that comes
+// out in cosine phase - and a sideband demodulator's output phase is the
+// signal's, not ours.
+double toneShare(const std::vector<float>& v, double toneHz, double rate) {
+    if (v.size() < 8) { return 0.0; }
+    const std::size_t from = v.size() / 2;
+    double sc = 0.0;
+    double cc = 0.0;
+    double sv = 0.0;
+    for (std::size_t i = from; i < v.size(); ++i) {
+        const double w = 2.0 * kPi * toneHz * static_cast<double>(i) / rate;
+        sc += static_cast<double>(v[i]) * std::sin(w);
+        cc += static_cast<double>(v[i]) * std::cos(w);
+        sv += static_cast<double>(v[i]) * static_cast<double>(v[i]);
+    }
+    const double n = static_cast<double>(v.size() - from);
+    return (sv > 0.0) ? 2.0 * (sc * sc + cc * cc) / (n * sv) : 0.0;
 }
 
 std::vector<float> run(double stripOffset, const std::vector<std::complex<float>>& in, Demod m) {
@@ -416,6 +439,79 @@ int main() {
         std::vector<float> audio2;
         t.process(in.data(), in.size(), Demod::Am, audio2);
         CHECK(audio2 == audio);
+    }
+
+    // [12] THE SIDEBAND MODES (2026-10-26: a blueprint for an SSB or CW
+    // plugin placed a Demod set to USB and the strip played it as FM). A
+    // suppressed-carrier signal is a tone ABOVE the dial frequency for upper
+    // sideband and BELOW it for lower; the demodulator must give the tone's
+    // own pitch back for the right sideband and reject the other one. The
+    // strip sits on the dial frequency, +30 kHz from the radio's centre.
+    {
+        constexpr double dial = 30000.0;
+        constexpr double tone = 1000.0;
+        constexpr double outRate = kInRate / kDecim;
+        const auto above = carrier(dial + tone, 0.5, 96000);   // an upper-sideband tone
+        const auto below = carrier(dial - tone, 0.5, 96000);   // a lower-sideband tone
+
+        const std::vector<float> usb = run(dial, above, Demod::Usb);
+        const std::vector<float> usbWrong = run(dial, below, Demod::Usb);
+        const std::vector<float> lsb = run(dial, below, Demod::Lsb);
+        const std::vector<float> lsbWrong = run(dial, above, Demod::Lsb);
+        std::printf("  USB: wanted rms %.4f follows %.3f, opposite rms %.5f; "
+                    "LSB: wanted rms %.4f follows %.3f, opposite rms %.5f\n",
+                    tailRms(usb), toneShare(usb, tone, outRate), tailRms(usbWrong),
+                    tailRms(lsb), toneShare(lsb, tone, outRate), tailRms(lsbWrong));
+        // The wanted sideband comes out as the tone itself...
+        CHECK(toneShare(usb, tone, outRate) > 0.9);
+        CHECK(toneShare(lsb, tone, outRate) > 0.9);
+        CHECK(tailRms(usb) > 0.05);
+        CHECK(tailRms(lsb) > 0.05);
+        // ...and the opposite one is down by more than 40 dB (100x in level).
+        CHECK(tailRms(usbWrong) < tailRms(usb) / 100.0);
+        CHECK(tailRms(lsbWrong) < tailRms(lsb) / 100.0);
+
+        // CW: an unmodulated carrier ON the dial frequency beats at the
+        // receiver's 700 Hz sidetone.
+        const std::vector<float> cw = run(dial, carrier(dial, 0.5, 96000), Demod::Cw);
+        std::printf("  CW: carrier on the dial follows 700 Hz %.3f, rms %.4f\n",
+                    toneShare(cw, 700.0, outRate), tailRms(cw));
+        CHECK(toneShare(cw, 700.0, outRate) > 0.9);
+        CHECK(tailRms(cw) > 0.05);
+
+        // DSB: a double-sideband tone (carrier suppressed, both sidebands)
+        // comes out at the tone's pitch, where AM's envelope detector would
+        // give twice it.
+        std::vector<std::complex<float>> dsbSig(96000);
+        for (std::size_t i = 0; i < dsbSig.size(); ++i) {
+            const double t = static_cast<double>(i) / kInRate;
+            const double m = std::cos(2.0 * kPi * tone * t);
+            const double ph = 2.0 * kPi * dial * t;
+            dsbSig[i] = std::complex<float>(static_cast<float>(m * std::cos(ph)),
+                                            static_cast<float>(m * std::sin(ph)));
+        }
+        const std::vector<float> dsb = run(dial, dsbSig, Demod::Dsb);
+        CHECK(toneShare(dsb, tone, outRate) > 0.9);
+
+        // Blocks do not matter in a sideband mode either.
+        Strip whole;
+        whole.configure(dial, kInRate, kDecim);
+        std::vector<float> a;
+        whole.process(above.data(), above.size(), Demod::Usb, a);
+        Strip split;
+        split.configure(dial, kInRate, kDecim);
+        std::vector<float> b;
+        for (std::size_t at = 0; at < above.size();) {
+            const std::size_t n = std::min<std::size_t>(above.size() - at, 1237);
+            split.process(above.data() + at, n, Demod::Usb, b);
+            at += n;
+        }
+        CHECK(a.size() == b.size());
+        double worst = 0.0;
+        for (std::size_t i = 0; i < std::min(a.size(), b.size()); ++i) {
+            worst = std::max(worst, static_cast<double>(std::fabs(a[i] - b[i])));
+        }
+        CHECK(worst < 1e-5);
     }
 
     return testSummary("test_patch_strip");

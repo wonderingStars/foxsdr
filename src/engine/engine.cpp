@@ -1425,11 +1425,28 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
     if (!r.dev) {
         const std::string why = r.error.empty() ? "device open failed" : r.error;
         sourceError_ = why;
+        // THE REASON CLASS, for the log line below and for the retry (0.99.92): read off the driver's own words here, before the sentence is
+        // wrapped.
+        const cascade::core::health::RadioReason whyReason = cascade::core::health::classifyRadioOpen(r.kind, why);
+        const std::string whyClass = cascade::core::health::radioReasonWord(whyReason);
+        // A TRY AT THE SAVED RADIO (pollSavedRadioRetry) THAT FAILED: busy again keeps the retries going on their schedule; anything else ends
+        // them, and the ordinary message stands - waiting does not cure an unplugged dongle. It is the SAME incident as the start-up failure
+        // already counted, so a busy-again try adds nothing to the anonymous count; a different reason is a new fact and is counted.
+        const bool retryBusyAgain = r.savedRadioRetry && whyReason == cascade::core::health::RadioReason::Busy;
+        if (r.savedRadioRetry) {
+            savedRadioRetryBusy_ = retryBusyAgain;
+            savedRadioRetryLastFailSec_ = retryClockS();
+            if (retryBusyAgain && savedRadioRetryAttempts_ >= 4) {
+                cascade::core::diagWarnf(
+                    "source: the saved radio is still in use by another program after 4 more "
+                    "tries - giving up");
+            }
+        }
         // A RADIO THAT WOULD NOT OPEN, COUNTED ANONYMOUSLY (0.99.64,
         // core/health_events.hpp): the driver kind and one of eight reason
         // classes read off what the driver said - and nothing of what it said.
         // Not for a result the user had already moved on from (returned above).
-        cascade::core::health::noteRadioFail(r.kind, why);
+        if (!retryBusyAgain) { cascade::core::health::noteRadioFail(r.kind, why); }
         if (r.recovery) {
             // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was
             // closed before the attempt, the generator is what is installed,
@@ -1470,8 +1487,8 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
                 sourceError_ = cascade::gui::radioNotOpenedSentence(wanted, why);
             }
             cascade::core::diagWarnf(
-                "source: %s (%s) did not open - the receiver is on the signal generator%s",
-                model.c_str(), r.kind.c_str(),
+                "source: %s (%s) did not open (%s) - the receiver is on the signal generator%s",
+                model.c_str(), r.kind.c_str(), whyClass.c_str(),
                 restoreKeep_.valid() ? "; the saved radio is kept for the next start" : "");
         }
         // ...and the combo settles on whatever IS installed - unless a saved
@@ -1548,6 +1565,16 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
     // not take, and the saved radio is still the best thing to try next time.)
     restoreKeep_ = cascade::gui::RememberedSource{};
     restoreKeepLabel_.clear();
+    if (r.savedRadioRetry) {
+        // THE SAVED RADIO CAME FREE (0.99.92): said once, with the model and never the args, like every other source line.
+        cascade::core::diagLogf("source: the saved radio came free - %s opened on attempt %d",
+                                (r.kind == "soapy"
+                                     ? cascade::core::sanitiseDevice(r.args)
+                                     : modelFromNativeLabel(nativeLabelFor(r.kind, r.args)))
+                                    .c_str(),
+                                savedRadioRetryAttempts_);
+    }
+    savedRadioRetryBusy_ = false;
     ++sourceGen_;  // this install is itself a source change
     installSource(std::move(r.dev));
     sourceKind_ = r.kind;
@@ -1774,6 +1801,53 @@ void Engine::pollSoapyRecovery() {
     reopenAfterDriverFault();
 }
 
+void Engine::pollSavedRadioRetry() {
+    // Two loads on every pass that matters: nothing armed (every bounded run, and every session whose saved radio opened or failed any way
+    // but BUSY) takes the first return.
+    if (!savedRadioRetryBusy_) { return; }
+    // A RADIO KIND ONLY: the remembered source can also be an I/Q file or a sound card, which are not what this waits for.
+    if (!restoreKeep_.valid() || restoreKeep_.kind == "file" || restoreKeep_.kind == "soundcard" || restoreKeep_.kind == "siggen") { return; }
+    const double now = retryClockS();
+    if (!cascade::gui::savedRadioRetryDue(restoreKeep_.valid(), savedRadioRetryBusy_, savedRadioRetryAttempts_, device_ != nullptr,
+                                          deviceOpenPending_, soapyScanPending_, now, savedRadioRetryLastFailSec_)) {
+        return;
+    }
+    // Stamped BEFORE anything can fail, as pollSoapyRecovery does: the delay is counted from this try, and a try that never reaches the worker
+    // is not repeated on the next pass.
+    ++savedRadioRetryAttempts_;
+    savedRadioRetryLastFailSec_ = now;
+    cascade::core::diagLogf("source: trying the saved radio again (attempt %d of 4)", savedRadioRetryAttempts_);
+
+    // THE REQUEST THE SOURCE LIST WOULD HAVE MADE for this radio (selectSource), and the restore's own prefer-native rule: a config that says
+    // SoapySDR for a dongle this product drives itself opens natively, falling back to the Soapy args only if the native driver refuses the tuner.
+    DeviceOpenResult req;
+    req.kind = restoreKeep_.kind;
+    req.args = (req.kind == "soapy") ? restoreKeep_.soapyArgs : restoreKeep_.nativeArgs;
+    if (req.kind == "soapy") {
+        if (const std::optional<cascade::source::NativeDeviceInfo> nat = cascade::gui::preferNativeFor("soapy", req.args, nativeDevices_)) {
+            req.fallbackSoapyArgs = req.args;
+            req.kind = nat->driver;
+            req.args = nat->args;
+        }
+    }
+    req.requestRateHz = restoreKeep_.sampleRateHz > 0.0 ? restoreKeep_.sampleRateHz : kSoapyRateHz[kSoapyRateDefaultIndex];
+    // The combo row of this radio when this machine still lists it, as the restore finds it; -1 otherwise (the preview then names the live source).
+    req.row = -1;
+    if (req.kind != "soapy") {
+        for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+            if (nativeDevices_[i].args == req.args) { req.row = kNativeRowBase + static_cast<int>(i); }
+        }
+    } else {
+        for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+            if (soapyDevices_[i].args == req.args) { req.row = soapyRowBase() + static_cast<int>(i); }
+        }
+    }
+    // The generator has been running since start-up and carries the saved frequency (applyConfig set it), so it is what the radio is told.
+    req.keepCenterHz = carriedAirCentre();
+    req.savedRadioRetry = true;
+    launchDeviceOpen(std::move(req), restoreKeepLabel_);
+}
+
 void Engine::reopenAfterDriverFault() {
     // What pollSoapyRecovery decided is due. Everything below reads the dead
     // radio through device_ - the same object as soapyView_ whenever that
@@ -1969,6 +2043,9 @@ void Engine::selectSource(int idx, std::optional<double> carryAirHz) {
     // click did nothing.
     if (deviceOpenPending_) { return; }
     sourceError_.clear();
+    // THE USER CHOSE A SOURCE, so a saved radio that was only busy is no longer what the session is waiting for (0.99.92). restoreKeep_ stays
+    // for the exit save; a failed pick must not be followed by a retry of the radio they left.
+    cancelSavedRadioRetry();
 
     if (idx == 0) {
         // A DELIBERATE CHOICE OF THE GENERATOR STILL OVERWRITES THE SAVED
@@ -3958,10 +4035,16 @@ void Engine::rebuildPatchCatalogue() {
     patchApis_.clear();
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
-        // A plugin the user has STOPPED stays out of the patch too: a stop is
-        // a decision about the plugin, not about one place it runs.
+        // A PLUGIN THE USER HAS STOPPED IS STILL A PART (owner, 2026-10-26:
+        // "make so the plugin doesn't have to be on to get the components").
+        // Until then a stop took the plugin out of the patch as well, so the
+        // parts bin and the blueprints list offered nothing for it until it
+        // was switched on in DECODE first. A patch decoder is built and fed
+        // by the patch's own runner (patch_runner.hpp), never by
+        // pluginRunner_, so a stop now governs only the receiver's copy of
+        // the plugin, and a patch node that names it runs either way.
+        // (Master's 0.99.94, 5584212c, applied to the Engine, which holds the catalogue since stage 4.)
         const std::string key = cascade::core::pluginKey(p);
-        if (pluginIsStopped(key)) { continue; }
         // One entry per decoder table, so a module with both an audio and an
         // I/Q decoder is two parts - with the same key and different inputs.
         if (p.decoder != nullptr) {
@@ -5619,9 +5702,10 @@ void Engine::tuneToBookmark(const cascade::core::Bookmark& b) {
     if (vfoBandwidthHz_ != bwBefore) { logBandwidthChange("bookmark"); }
 }
 
-std::uint64_t Engine::addBookmarkHere(const std::string& name) {
+std::uint64_t Engine::addBookmarkHere(const std::string& name, const std::string& group) {
     cascade::core::Bookmark b;
     b.name = name;
+    b.group = group;   // "" = ungrouped, as every bookmark was before master's 0.99.93
     if (b.name.empty()) {
         // A nameless row would render blank; default to the frequency.
         char def[32];
@@ -7324,6 +7408,12 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
             return res;
         }
+        case FOXAPP_OP_BOOKMARK_GROUP: {
+            std::string why;
+            const std::int32_t st = applyBookmarkGroup(c, text, res, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
         // --- the waterfall's markers (stub campaign B10, docs/api-0.3-additions.md 9.8) ---------------------------------------------
         case FOXAPP_OP_MARKER_DROP:
         case FOXAPP_OP_MARKER_REMOVE:
@@ -8650,6 +8740,12 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             // nothing of the message - which quotes the device arguments back.
             // The most common failure there is, and the first thing this run does.
             cascade::core::health::noteRadioFail(kind, sourceError_);
+            // WHY, AS ONE WORD (0.99.92): the same reason class the count above files it under, and the only part of the driver's message that
+            // may go in the log - the message itself quotes the device arguments back (below). Taken HERE, before the sentence at the end of this
+            // branch wraps sourceError_ in the radio's name. The 0.99.91 field report had to be read off the anonymous counts to learn that the
+            // saved radio was merely busy; the log said only that it "did not reopen".
+            const std::string whyClass = cascade::core::health::radioFailWhy(kind, sourceError_);
+            const bool failedBusy = cascade::core::health::classifyRadioOpen(kind, sourceError_) == cascade::core::health::RadioReason::Busy;
             // openDeviceSync already set sourceError_. A radio that was there last
             // session and is not there now is the single most common support
             // question this product gets - but the driver's own message quotes
@@ -8666,9 +8762,9 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
                                          : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (triedModel.empty() || triedModel == args) { triedModel = kind; }
             cascade::core::diagWarnf(
-                "source: the saved radio (%s, %s) did not reopen - the receiver is on the signal "
-                "generator and the radio stays saved",
-                triedModel.c_str(), kind.c_str());
+                "source: the saved radio (%s, %s) did not reopen (%s) - the receiver is on the "
+                "signal generator and the radio stays saved",
+                triedModel.c_str(), kind.c_str(), whyClass.c_str());
 
             // ...AND THE CONFIG GOES ON NAMING IT. The session runs on the
             // generator above, which is right - it has to run on something -
@@ -8694,6 +8790,17 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
                                                   : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (label.empty() || label == args) { label = kind; }
             restoreKeepLabel_ = label;
+            // A RADIO THAT WAS ONLY BUSY IS TRIED AGAIN once the engine is running (0.99.92, engine/saved_radio_retry.hpp): the previous FoxSDR,
+            // still letting go of the dongle after the in-app updater, is the case that was found. Armed for BUSY alone; the stamp is the retry
+            // clock's now, so the first try is 2 s after this failure.
+            if (failedBusy && restoreKeep_.valid()) {
+                savedRadioRetryBusy_ = true;
+                savedRadioRetryAttempts_ = 0;
+                savedRadioRetryLastFailSec_ = retryClockS();
+                cascade::core::diagLogf(
+                    "source: the saved radio is in use by another program - trying it again in "
+                    "2, 4, 8 and 16 s");
+            }
             // Which radio, why, and where the receiver is - the driver's own
             // reason is kept verbatim inside the sentence (0.99.36).
             sourceError_ = cascade::gui::radioNotOpenedSentence(label, sourceError_);
@@ -9391,6 +9498,9 @@ void Engine::pumpWorkers() {
     // faulted gets (0.90.1). After the poll above, so a reopen that just
     // resolved is seen before this asks whether another is due.
     pollSoapyRecovery();
+    // ...and the saved radio that was only busy at start-up (0.99.92): tried again at 2, 4, 8 and 16 s after each failure. One bool read on
+    // every pass with nothing armed.
+    pollSavedRadioRetry();
     // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
     pollPendingRetune();
     // Same contract for the catalogue fetch / plugin download.

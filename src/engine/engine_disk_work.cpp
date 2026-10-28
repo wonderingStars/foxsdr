@@ -88,6 +88,9 @@ void Engine::openIqFile(const std::string& path) {
     // ONE OPEN AT A TIME: a second press while the header is still being read (the key is disabled, but a browser and a key binding are not the
     // key) changes nothing.
     if (d.iqOpen.pending()) { return; }
+    // The user chose a file: a saved radio that was only busy at start-up is no longer what the session is waiting for (pollSavedRadioRetry,
+    // 0.99.92).
+    cancelSavedRadioRetry();
     // THE DISK IS NOT TOUCHED HERE. This made an IqFileSource and called open() on it - an ifstream on the path the user typed and the RIFF
     // header walked with reads - on the pass, and a recording on a network share or a sleeping drive held every command, every answer and every
     // publish for as long as the disk took (see core/disk_job.hpp). The worker owns the path and the factory by value and hands back the opened

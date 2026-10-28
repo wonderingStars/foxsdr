@@ -19,6 +19,7 @@
 //     would pin the window at its default and no drag would ever hold.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <cmath>
 #include <cstdint>
 
 #include "gui/page_geometry.hpp"
@@ -33,6 +34,7 @@ int main() {
     using cascade::gui::kPageInsideStagger;
     using cascade::gui::pageOpenInside;
     using cascade::gui::pageOpenInsideStaggered;
+    using cascade::gui::pageFitInside;
 
     // --- 1. Under the floor clamps up, on both axes. ------------------------
     {
@@ -314,6 +316,64 @@ int main() {
         CHECK(h == kPageMinH);
         CHECK(pageGripSize(22.0f) > 22.0f);
         CHECK(pageGripSize(22.0f) >= 28.0f);   // at least ImGui's own grip at the page font
+    }
+
+    // --- pageFitInside - a torn-off page folded into the main window when the
+    // driver refuses a second window (the 2026-10-27 tester report). -----------
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+        float w = 0.0f;
+        float h = 0.0f;
+        // A page already inside is left exactly where it is - including one that
+        // touches all four edges, the boundary a < / <= slip would move.
+        x = 100.0f; y = 80.0f; w = 700.0f; h = 500.0f;
+        CHECK(!pageFitInside(0.0f, 0.0f, 1282.0f, 745.0f, x, y, w, h));
+        CHECK(x == 100.0f && y == 80.0f && w == 700.0f && h == 500.0f);
+        x = 0.0f; y = 0.0f; w = 1282.0f; h = 745.0f;
+        CHECK(!pageFitInside(0.0f, 0.0f, 1282.0f, 745.0f, x, y, w, h));
+        CHECK(x == 0.0f && y == 0.0f && w == 1282.0f && h == 745.0f);
+
+        // THE TESTER'S MAP, measured in the reproduction: (1142,-15) 1120x1166 in a
+        // 1282x745 main window. Narrow enough to keep its width; too tall, so it is
+        // held to the window less the margin; moved left the least distance that
+        // shows all of it, and its rail is below the top edge again.
+        x = 1142.0f; y = -15.0f; w = 1120.0f; h = 1166.0f;
+        CHECK(pageFitInside(0.0f, 0.0f, 1282.0f, 745.0f, x, y, w, h));
+        CHECK(w == 1120.0f);
+        CHECK(h == 745.0f - 2.0f * kPageInsideMargin);
+        CHECK(x == 1282.0f - kPageInsideMargin - 1120.0f);
+        CHECK(y == kPageInsideMargin);
+        CHECK(x >= 0.0f && y >= 0.0f && x + w <= 1282.0f && y + h <= 745.0f);
+
+        // Over ONE edge only: it moves on that axis alone, to just inside the margin.
+        x = 1500.0f; y = 100.0f; w = 400.0f; h = 300.0f;
+        CHECK(pageFitInside(0.0f, 0.0f, 1600.0f, 1000.0f, x, y, w, h));
+        CHECK(x == 1600.0f - kPageInsideMargin - 400.0f);
+        CHECK(y == 100.0f);
+        CHECK(w == 400.0f && h == 300.0f);
+        x = -100.0f; y = 50.0f; w = 400.0f; h = 300.0f;
+        CHECK(pageFitInside(0.0f, 0.0f, 1600.0f, 1000.0f, x, y, w, h));
+        CHECK(x == kPageInsideMargin);
+        CHECK(y == 50.0f);
+
+        // A viewport that is not at the origin (a second monitor's coordinates).
+        x = 3600.0f; y = 50.0f; w = 600.0f; h = 400.0f;
+        CHECK(pageFitInside(2560.0f, 100.0f, 1000.0f, 700.0f, x, y, w, h));
+        CHECK(x == 2560.0f + 1000.0f - kPageInsideMargin - 600.0f);
+        CHECK(y == 100.0f + kPageInsideMargin);
+
+        // A main window smaller than the drag floor: the floor holds, and the page
+        // is pinned to the viewport's corner rather than pushed off its left/top.
+        x = 500.0f; y = 500.0f; w = 720.0f; h = 520.0f;
+        CHECK(pageFitInside(10.0f, 20.0f, 120.0f, 80.0f, x, y, w, h));
+        CHECK(w == kPageMinW && h == kPageMinH);
+        CHECK(x == 10.0f && y == 20.0f);
+
+        // A NaN position is never "inside", and comes out finite and inside.
+        x = std::nanf(""); y = std::nanf(""); w = 400.0f; h = 300.0f;
+        CHECK(pageFitInside(0.0f, 0.0f, 1600.0f, 1000.0f, x, y, w, h));
+        CHECK(x >= 0.0f && y >= 0.0f && x + w <= 1600.0f && y + h <= 1000.0f);
     }
 
     return testSummary("test_page_geometry");

@@ -231,6 +231,7 @@ struct AppWindowTestAccess {
     static const std::vector<std::string>& groups(AppWindow& a) { return a.bookmarkGroups_; }
     static int& groupSel(AppWindow& a) { return a.bookmarkGroupSel_; }
     static bool& favOnly(AppWindow& a) { return a.bookmarkFavOnly_; }
+    static bool& renameOpen(AppWindow& a) { return a.bookmarkRenameOpen_; }   // (the 0.99.97 merge: master's "Rename this group" field)
     static char* filter(AppWindow& a) { return a.bookmarkFilter_; }
     static char* importPath(AppWindow& a) { return a.bookmarkImportPath_; }
     static char* nameField(AppWindow& a) { return a.bookmarkName_; }
@@ -1540,6 +1541,11 @@ void testDrawnAndClicked() {
         const auto restore = [&] {
             Access::favOnly(app) = false;
             Access::markersOn(app) = true;
+            // THE 0.99.97 MERGE: "Rename this group" (master 0.99.93) is a key that OPENS a field under the group row, which moves every row below it by a
+            // line. Like a checkbox or a combo it "changed what the next widget is" (clickEverything's `after`), so the sweep puts it back after each click and
+            // the rows it found are still the rows. Nothing else of the sweep changed: the new widgets (the group box and its arrow, the rename key) are found
+            // and clicked, and send nothing the sweep expects.
+            Access::renameOpen(app) = false;
         };
         std::optional<Access::PassHold> hold(std::in_place, app);
         auto got = clickEverything(app, body, &g_cap.bookmarks, restore);

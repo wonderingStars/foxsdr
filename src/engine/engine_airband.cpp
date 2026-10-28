@@ -174,6 +174,85 @@ std::int32_t Engine::applyBookmarkTick(const FoxCommand& c, std::string& why) {
     return FOXAPI_OK;
 }
 
+namespace {
+// A group name as typed, less the blanks around it: "  LUGANO " and "LUGANO" are one group, and a name of blanks alone is no group (master's
+// trimmedGroupName, 97ea658c, which the window did before the engine owned the list).
+std::string trimmedGroupName(const std::string& typed) {
+    const auto blank = [](char ch) { return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; };
+    std::size_t lo = 0;
+    std::size_t hi = typed.size();
+    while (hi > lo && blank(typed[hi - 1])) { --hi; }
+    while (lo < hi && blank(typed[lo])) { ++lo; }
+    return typed.substr(lo, hi - lo);
+}
+}  // namespace
+
+std::int32_t Engine::applyBookmarkGroup(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why) {
+    const auto split = [&text](std::string& a, std::string& b) {
+        const std::size_t at = text.find('\x1F');
+        if (at == std::string::npos) { return false; }
+        a = text.substr(0, at);
+        b = text.substr(at + 1);
+        return true;
+    };
+    switch (c.ival[0]) {
+        case 0: {   // ADD CURRENT IN A GROUP
+            std::string group;
+            std::string name;
+            if (!split(group, name)) {
+                why = "text is \"<group>\\x1F<name>\"";
+                return FOXAPI_BAD_ARGUMENT;
+            }
+            res.applied[0] = static_cast<double>(addBookmarkHere(name, trimmedGroupName(group)));
+            return FOXAPI_OK;
+        }
+        case 1: {   // MOVE ONE BOOKMARK
+            // BY ID, re-found in the LIVE list, as every row op is.
+            const std::size_t i = freqMgr_.indexOfId(static_cast<std::uint64_t>(c.ival[1]));
+            if (i >= freqMgr_.list().size()) {
+                why = "no such bookmark";
+                return FOXAPI_NOT_FOUND;
+            }
+            const std::string to = trimmedGroupName(text);
+            if (freqMgr_.list()[i].group == to) { return FOXAPI_OK; }   // already there: nothing changes, nothing is written
+            cc::Bookmark b = freqMgr_.list()[i];
+            b.group = to;
+            freqMgr_.updateAt(i, b);   // (the frequency is the same: the row stays where it is)
+            saveBookmarks();
+            return FOXAPI_OK;
+        }
+        case 2: {   // RENAME A GROUP
+            std::string from;
+            std::string rawTo;
+            if (!split(from, rawTo)) {
+                why = "text is \"<from>\\x1F<to>\"";
+                return FOXAPI_BAD_ARGUMENT;
+            }
+            const std::string to = trimmedGroupName(rawTo);
+            if (from.empty() || to.empty()) {
+                why = "a group needs a name (the row menu's \"No group\" is how a group is emptied)";
+                return FOXAPI_BAD_ARGUMENT;
+            }
+            if (from == to) { return FOXAPI_OK; }   // the same name is a no-op
+            const std::size_t n = freqMgr_.renameGroup(from, to);
+            if (n == 0) {
+                why = "no bookmark is in that group";
+                return FOXAPI_NOT_FOUND;
+            }
+            // THE PRESET THE MONITOR IS PLAYING KEEPS PLAYING under its new name (airbandRows cuts the plan by group name): a rename must not turn
+            // "this preset" into "every ticked row" at the next block. Master's window had the same hazard; the engine closes it.
+            if (airbandGroup_ == from) { airbandGroup_ = to; }
+            bookmarkImportNote_ = cc::formatText(tr("Renamed \"%s\" to \"%s\" (%zu)"), from.c_str(), to.c_str(), n);
+            saveBookmarks();
+            res.applied[0] = static_cast<double>(n);
+            return FOXAPI_OK;
+        }
+        default:
+            why = "ival[0] is 0 (add current in a group), 1 (move one) or 2 (rename a group)";
+            return FOXAPI_OUT_OF_RANGE;
+    }
+}
+
 std::int32_t Engine::applyBookmarkAddRows(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why) {
     if (c.ival[0] != 0 && c.ival[0] != 1) {
         why = "ival[0] is 0 (rows typed in) or 1 (a list)";

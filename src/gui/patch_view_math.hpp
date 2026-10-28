@@ -128,7 +128,11 @@ inline bool pointInHeader(const Node& n, Vec2 p) {
 // has taught the user to pull. A square rather than an edge strip, because the
 // edges are where the PORTS are, and a resize that starts when the user meant
 // to draw a wire is the worse of the two mistakes.
-inline constexpr float kResizeGrip = 12.0f;
+// 16, not the 12 it was until 2026-10-27: at the zoom a fitted workflow is
+// drawn at, 12 units was a target of seven or eight pixels, drawn as three
+// hairlines - the grip the owner asked for (parts that can be made larger)
+// already existed and could not be seen.
+inline constexpr float kResizeGrip = 16.0f;
 
 inline bool pointInResizeGrip(const Node& n, Vec2 p) {
     const Vec2 s = nodeSize(n);
@@ -162,25 +166,49 @@ inline bool pointInCloseKey(const Node& n, Vec2 p) {
 // The node's FACE - the dark well under the title where its readings and its
 // controls live. One definition, used by the drawing and by the controls laid
 // over it, so the two cannot drift apart.
+//
+// IT STOPS ABOVE THE GRIP (2026-10-27). The face's controls are real widgets
+// laid over the canvas and take a press before the canvas sees it. Ending 6
+// units from the bottom, the face reached into the grip's upper half, so a
+// widget laid out to the face's foot - the Map's chart comes within 4 units
+// of it - would take a press meant for the grip. Now no face can.
 inline Rect faceRect(const Node& n) {
     const Vec2 s = nodeSize(n);
-    return Rect{n.x + 6.0f, n.y + kHeaderHeight - 2.0f, n.x + s.x - 6.0f, n.y + s.y - 6.0f};
+    return Rect{n.x + 6.0f, n.y + kHeaderHeight - 2.0f, n.x + s.x - 6.0f,
+                n.y + s.y - kResizeGrip};
 }
 
+// THE CEILING a part may be sized to (2026-10-27, with the Larger key): a
+// map or a scope opened out to fill a big monitor at 1:1, and no further - a
+// key pressed thirty times must not make a part the canvas can never show.
+inline constexpr float kMaxNodeW = 2400.0f;
+inline constexpr float kMaxNodeH = 1600.0f;
+static_assert(kMaxNodeW <= cascade::core::patch::kMaxLoadedNodeSize && kMaxNodeH <= cascade::core::patch::kMaxLoadedNodeSize,
+              "a part sized in the window must survive the engine's loader (core/patch_io.hpp) unclamped");
+
 // The size a node takes when its grip is dragged to `corner` (world units).
-// Held to the same floors nodeSize() applies, and written back into the node
-// as the size it now IS, so the saved patch and the drawn one never disagree.
-// ...and to the same CEILING the loader holds a saved size to
-// (kMaxLoadedNodeSize): the engine's copy of the graph is read by that loader
-// every time the page commits it (docs/engine-stage3.md OPEN 6), so a node
-// dragged larger would be one size here and another there.
+// Held to the same floors nodeSize() applies and to the ceiling above, and
+// written back into the node as the size it now IS, so the saved patch and the
+// drawn one never disagree.
+// (The branch's own ceiling, kMaxLoadedNodeSize, the loader's: the engine's copy of the graph is read by that loader every time the page
+// commits it - docs/engine-stage3.md OPEN 6 - so a node dragged larger than it would be one size here and another there. Master's
+// ceiling above is lower on both axes, so it implies the loader's; the static_asserts below hold the relation.)
 inline void resizeNodeTo(Node& n, Vec2 corner) {
     const float ports = nodeHeight(n.inputs.size(), n.outputs.size());
-    n.w = std::min(std::max(corner.x - n.x, cascade::core::patch::kMinNodeW),
-                   cascade::core::patch::kMaxLoadedNodeSize);
-    n.h = std::min(std::max({corner.y - n.y, cascade::core::patch::kMinNodeH, ports}),
-                   cascade::core::patch::kMaxLoadedNodeSize);
+    n.w = std::clamp(corner.x - n.x, cascade::core::patch::kMinNodeW, kMaxNodeW);
+    n.h = std::clamp(corner.y - n.y, std::max(cascade::core::patch::kMinNodeH, ports),
+                     std::max(kMaxNodeH, ports));
 }
+
+// The inspector's Larger and Smaller keys: the node scaled by `factor` about
+// its top-left corner, through resizeNodeTo's floors and ceiling.
+inline void scaleNodeSize(Node& n, float factor) {
+    const Vec2 s = nodeSize(n);
+    resizeNodeTo(n, Vec2{n.x + s.x * factor, n.y + s.y * factor});
+}
+
+// The inspector's Default size key: the size a new node of its kind opens at.
+inline void resetNodeSize(Node& n) { cascade::core::patch::defaultNodeSize(n.kind, n.w, n.h); }
 
 // --- the view -----------------------------------------------------------------
 

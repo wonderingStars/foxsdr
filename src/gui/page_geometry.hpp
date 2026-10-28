@@ -113,6 +113,45 @@ inline void pageOpenInsideStaggered(float vpX, float vpY, float vpW, float vpH, 
     if (!(y >= vpY)) { y = vpY; }
 }
 
+// A PAGE THAT WAS ITS OWN WINDOW, FOLDED INTO THE MAIN ONE.
+//
+// When the graphics driver refuses a second window part-way through a session
+// (GLFW 65543, "WGL: Failed to create OpenGL context"), separate windows go off
+// for the rest of it and every torn-off page is drawn inside the main window -
+// at the position it had beside it, now read relative to the main window. A map
+// that had opened past the main window's right edge landed at (1142,-15) in a
+// 1282 x 745 main window: 140 px of it showing, its rail above the top edge, so
+// it could neither be seen nor dragged back. A tester saw exactly that as "the
+// ADS-B map closes when I try to interact with it" (2026-10-27). A page OPENED
+// while separate windows are off meets the same edge, because every page opens
+// overhanging the main window's right edge on purpose (separateWindowAnchor).
+//
+// A page already wholly inside the viewport is left where it is and the answer
+// is false: this is a rescue, not a layout. Otherwise it is held to the
+// viewport less kPageInsideMargin on each side (never under the drag floor) and
+// moved the LEAST distance that puts all of it inside that margin, so it stays
+// against the edge it was nearest instead of jumping to the centre. When even
+// the floor is wider or taller than that, the viewport's own corner wins, as it
+// does in pageOpenInside.
+inline bool pageFitInside(float vpX, float vpY, float vpW, float vpH, float& x, float& y,
+                          float& w, float& h) {
+    if (x >= vpX && y >= vpY && x + w <= vpX + vpW && y + h <= vpY + vpH) { return false; }
+    const float maxW = vpW - kPageInsideMargin * 2.0f;
+    const float maxH = vpH - kPageInsideMargin * 2.0f;
+    if (!(w <= maxW)) { w = maxW; }  // NaN-safe, as above
+    if (!(h <= maxH)) { h = maxH; }
+    clampPageSize(w, h);
+    const float hiX = vpX + vpW - kPageInsideMargin - w;
+    const float hiY = vpY + vpH - kPageInsideMargin - h;
+    if (!(x <= hiX)) { x = hiX; }
+    if (!(y <= hiY)) { y = hiY; }
+    if (!(x >= vpX + kPageInsideMargin)) { x = vpX + kPageInsideMargin; }
+    if (!(y >= vpY + kPageInsideMargin)) { y = vpY + kPageInsideMargin; }
+    if (!(w <= maxW)) { x = vpX; }
+    if (!(h <= maxH)) { y = vpY; }
+    return true;
+}
+
 // WHETHER THIS PAGE STILL OWES THE USER A RE-PLACEMENT, and the counter that
 // makes it happen exactly once.
 //

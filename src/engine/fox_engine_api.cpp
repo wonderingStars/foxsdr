@@ -2606,6 +2606,7 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.value[0] = pr.freqHz;
                 it.value[1] = pr.demodMode;
                 it.value[2] = pr.bandwidthHz;
+                it.value[3] = pr.rateHz;   // 0.3 (9.9): the preset's own sample rate, for the patch's blueprints; 0 = none named
                 if (pr.deviceCentre) { it.flags |= FOXAPI_ITEM_DEVICE_CENTRE; }  // 0.3 (8.7)
             }
             break;

@@ -323,6 +323,13 @@ foreach(src ${CASCADE_TESTS})
         # DISPLAY that is not in them, and FOXSDR_WINDOW_PLATFORM ignored when it names no platform.
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_display_off_app")
+        # Runs the real cascade.exe (built first) and hands its window procedure the notification
+        # Windows sends when the session's display goes off and comes back
+        # (FOXSDR_TEST_DISPLAY_OFF), and reads from the log and the self-capture that nothing was
+        # drawn or presented in between.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_window_failed_app")
         # Runs the real cascade.exe (built first) with its window refused on purpose
         # (FOXSDR_TEST_WINDOW_FAIL) and the sentinel on, and reads the report the watcher writes
@@ -413,6 +420,20 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} programme_audio_fixture)
         # (the _stepped variant the pass seam adds - the test is the engine's since stub batch B9 - is handed the same fixture module)
         set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:programme_audio_fixture>")
+        add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
+    elseif(name STREQUAL "test_viewport_fallback_app")
+        # Runs the real cascade.exe (built first) with the track fixture's map page, the plugin store
+        # and the Fitted modules window open as separate windows, has the backend refuse the next
+        # window part-way through the run (FOXSDR_TEST_VIEWPORT_REFUSE_AT), and reads from the
+        # self-capture's window list that every page is then wholly inside the main window.
+        add_dependencies(${name} track_probe_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
+    elseif(name STREQUAL "test_patch_blueprints_app")
+        # Fits the preset probe (text and picture decoder, one preset) in a real AppWindow, stops
+        # it, places its blueprints and runs one on the signal generator - built first.
+        add_dependencies(${name} preset_probe_fixture)
+        # (the _stepped and _free variants the pass seam adds - the test is converted for the engine extraction, 0.99.97 merge - are handed the same module)
+        set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:preset_probe_fixture>")
         add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
     elseif(name STREQUAL "test_row_keys_app")
         # Runs the real cascade.exe (built first) with the row-keys fixture fitted and pinned to run,
@@ -514,7 +535,10 @@ if(NOT CASCADE_SANITIZE_ENABLED OR CASCADE_SANITIZE_THREAD)
         test_patch_add_radio_part test_plugin_store_window test_radio_panel_reads test_recorder_bookmarks_scanner test_scope_window
         test_snapshot_app test_soundcard_app_paths test_source_section_window test_tuning_surface
         # stub batch B13 (SAFETY): the plugin's key on the pass against the page's session, the TX thread and the DSP thread - inline 3, stepped 3, free 5 green
-        test_tx_audio_app)
+        test_tx_audio_app
+        # the 0.99.97 merge: the saved radio's retry is the ENGINE's (the pass's) and the blueprints' placement is the window's against the engine's graph
+        # - both were master's single-thread window tests; converted, they run on the pass's own thread too (and, under TSan, on both)
+        test_saved_radio_retry_app test_patch_blueprints_app)
     foreach(src ${CASCADE_TESTS})
         get_filename_component(_name "${src}" NAME_WE)
         file(STRINGS "${src}" _seam REGEX "^[ \t]*#[ \t]*include[ \t]*\"pass_seam[.]hpp\"")
@@ -927,6 +951,16 @@ endif()
 if(TEST test_map_coverage_app)
     set_tests_properties(test_map_coverage_app PROPERTIES TIMEOUT 300)
 endif()
+# The viewport-fallback test starts the real application three times (refused mid-run, one viewport
+# from the start, and the control that keeps separate windows), 110 frames each.
+if(TEST test_viewport_fallback_app)
+    set_tests_properties(test_viewport_fallback_app PROPERTIES TIMEOUT 600)
+endif()
+# The display-off test starts the real application three times (off then on, off to the end, and
+# the control), 200 frames each.
+if(TEST test_display_off_app)
+    set_tests_properties(test_display_off_app PROPERTIES TIMEOUT 600)
+endif()
 # The row-keys test starts the real application twelve times (a layout run, the window open, a
 # press of HD2, of HD1 then HD2, the three that must press nothing and the control for the click's
 # geometry, an instrument's memory rows opened and pressed, and the module's page with sixteen
@@ -1271,6 +1305,7 @@ set(CASCADE_GUI_TESTS
     app_smoke
     test_airband_app
     test_bias_key_run
+    test_bookmark_groups_app
     test_bookmark_stacking_app
     test_bookmark_tick_app
     test_clean_exit_marker
@@ -1284,6 +1319,7 @@ set(CASCADE_GUI_TESTS
     test_display_fold_app
     test_display_menu_app
     test_display_restart_app
+    test_display_off_app
     test_exit_cause_app
     test_foreign_modules_app
     test_freq_markers_app
@@ -1328,6 +1364,7 @@ set(CASCADE_GUI_TESTS
     test_typed_band_mode_app
     test_ui_scale_app
     test_unplaced_list_app
+    test_viewport_fallback_app
     test_viewports
     test_window_platform_app
 )

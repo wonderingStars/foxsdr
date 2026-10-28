@@ -551,6 +551,24 @@ int main() {
         const auto am = buildStripSet(compile(g, kRate, kCentre), g, kRate, ch);
         CHECK(am->channels[0].mode == Demod::Am);
 
+        // EVERY MODE THE DEMOD NODE OFFERS (2026-10-26). The node's list is
+        // the host's kModeNames - NFM, WFM, AM, DSB, USB, CW, LSB, RAW - and
+        // until then everything past the two FM modes was built as AM, so a
+        // USB node fed an SSB decoder an envelope. An index past the list
+        // (a newer file) still takes AM.
+        const Demod want[] = {Demod::Fm,  Demod::Fm, Demod::Am,  Demod::Dsb,
+                              Demod::Usb, Demod::Cw, Demod::Lsb, Demod::Raw};
+        for (int m = 0; m < 8; ++m) {
+            g.mutableNode(dm)->mode = m;
+            const auto s = buildStripSet(compile(g, kRate, kCentre), g, kRate, ch);
+            CHECK(s->channels[0].mode == want[m]);
+        }
+        for (const int odd : {-1, 8, 99}) {
+            g.mutableNode(dm)->mode = odd;
+            const auto s = buildStripSet(compile(g, kRate, kCentre), g, kRate, ch);
+            CHECK(s->channels[0].mode == Demod::Am);
+        }
+
         // And with no demodulator at all.
         Graph bare;
         const NodeId r2 = bare.addNode(NodeKind::Radio, "R", PortType::Iq);

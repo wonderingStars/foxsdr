@@ -41,6 +41,19 @@
 // the true thing instead: the application is deliberately blocked, and a report
 // about it would be noise.
 //
+// BUT A THREAD THAT IS WAITED FOR (0.99.91, runShellOpenResponsive). The pause
+// alone stopped being enough: ShellExecute waits for SmartScreen or an
+// elevation prompt without taking messages, Windows calls the window hung five
+// seconds in and greys it "(Not Responding)", and since 0.99.87 the watchdog
+// takes that verdict as the end of the user-paced excuse (field report,
+// 0.99.89: "freeze: the frame was in user-wait" in launchInstaller). The call
+// now runs on a worker thread that the GUI thread WAITS for, taking sent
+// messages and nothing else, so none of the three objections above applies:
+// the answer still comes back to the button, no frame is rendered, and the
+// shell's prompts are not parented to anything (every call passes a NULL
+// window). gui/shell_open.cpp has the rest. The file dialog keeps the plain
+// bracket: it runs its own message loop on the thread that owns its parent.
+//
 // WHY A SEAM RATHER THAN A PAUSE AT EACH CALL SITE. There are four shell calls
 // in app_window.cpp - the installer, the reports folder in both places it is
 // offered, and the privacy-policy link - and every one of them is inside an
@@ -116,6 +129,11 @@ inline bool runShellOpen(const ShellPauseHooks& hooks, const std::function<bool(
     if (!call) { return false; }
     return call();
 }
+
+// runShellOpen, with `call` made on a thread of its own while this one keeps taking messages
+// (0.99.91). For a ShellExecute: see shell_open.cpp for why. Same bracket, same answer, and an
+// exception the call throws is thrown here. Off Windows it is runShellOpen.
+bool runShellOpenResponsive(const ShellPauseHooks& hooks, const std::function<bool()>& call);
 
 #if defined(_WIN32)
 // The downloaded installer's path as ShellExecuteW wants it, WIDENED THE WAY IT

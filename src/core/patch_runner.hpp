@@ -439,11 +439,11 @@ inline std::shared_ptr<StripSet> buildStripSet(const Plan& plan, const Graph& g,
             if (w.from != cp.node) { continue; }
             const Node* dst = g.find(w.to);
             if (dst != nullptr && dst->kind == NodeKind::Demod) {
-                // Mode indices are the host's; odd ones here are the FM
-                // family. Anything unrecognised stays AM rather than
-                // guessing - a wrong demodulator is silence, not a worse
-                // version of the right one.
-                rc.mode = (dst->mode == 0 || dst->mode == 1) ? Demod::Fm : Demod::Am;
+                // Mode indices are the host's (kModeNames), every one of them
+                // (2026-10-26: DSB, USB, CW, LSB and RAW used to be built as
+                // AM, so a USB node fed an SSB decoder an envelope). Anything
+                // unrecognised stays AM - see demodForModeIndex.
+                rc.mode = demodForModeIndex(dst->mode);
                 // Its squelch, at the demodulator's own setting from the start;
                 // later changes arrive live through Runner::setSquelchDb.
                 if (rc.strip.outRateHz() > 0.0) {

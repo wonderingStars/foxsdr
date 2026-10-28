@@ -604,6 +604,9 @@ struct AppWindowTestAccess {
     static bool airbandListening(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandListening_; }); }
     static bool airbandPending(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandStartPending_; }); }
     static std::string airbandNote(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandNote_; }); }
+    static std::string bookmarkNote(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).bookmarkImportNote_; }); }
+    static std::string airbandGroup(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandGroup_; }); }
+    static void setAirbandGroup(AppWindow& a, const std::string& g) { wr(a, [&] { rawEngine(a.engine_).airbandGroup_ = g; }); }
     static float airbandSquelch(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandSquelchDb_; }); }
     static double airbandHold(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandHoldS_; }); }
     static double scanResume(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanResumeMs_; }); }
@@ -2119,6 +2122,66 @@ void airbandOps(AppWindow& a) {
         CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_ADD_ROWS, "", 1)), FOXAPI_BAD_ARGUMENT));
         CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_ADD_ROWS, "121500000\tNFM\t12500\t1\tManual\t", 5)), FOXAPI_OUT_OF_RANGE));
         CHECK(A::bookmarks(a).size() == before + 2u);
+    }
+
+    // BOOKMARK GROUPS OF THE USER'S OWN (the 0.99.97 merge; master 0.99.93; docs/api-0.3-additions.md 9.12): add current in a group, move one, rename a group.
+    covering(FOXAPP_OP_BOOKMARK_GROUP);
+    {
+        const char sep = '\x1F';
+        // 0 ADD CURRENT IN A GROUP: the tuned station, in the group typed (blanks trimmed), the id answered.
+        FoxCommandResult r = A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("  MILANO MALPENSA ") + sep + "TWR", 0));
+        CHECK(ok(r));
+        CHECK(r.applied[0] > 0.0);
+        const cascade::core::Bookmark twr = rowNamed(a, "TWR");
+        CHECK(twr.id == static_cast<std::uint64_t>(r.applied[0]));
+        CHECK(twr.group == "MILANO MALPENSA");   // the blanks around the typed name are not part of it
+        // An empty group is none, an empty name is the frequency (BOOKMARK_ADD's rule), and a text with no separator is refused.
+        r = A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("") + sep + "Loose row", 0));
+        CHECK(ok(r));
+        CHECK(rowNamed(a, "Loose row").group.empty());
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, "no separator", 0)), FOXAPI_BAD_ARGUMENT));
+        r = A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("Second") + sep + "GND", 0));
+        CHECK(ok(r));
+        const std::uint64_t gnd = static_cast<std::uint64_t>(r.applied[0]);
+        // 1 MOVE ONE: by id, to a group, to a typed name (trimmed), to none; the same group again changes nothing; an unknown id is NOT_FOUND.
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, "MILANO MALPENSA", 1, static_cast<std::int64_t>(gnd)))));
+        CHECK(rowNamed(a, "GND").group == "MILANO MALPENSA");
+        CHECK(rowNamed(a, "GND").id == gnd);   // a moved row keeps its identity
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, "  LUGANO ", 1, static_cast<std::int64_t>(gnd)))));
+        CHECK(rowNamed(a, "GND").group == "LUGANO");
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, "LUGANO", 1, static_cast<std::int64_t>(gnd)))));   // already there
+        CHECK(rowNamed(a, "GND").group == "LUGANO");
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, "", 1, static_cast<std::int64_t>(gnd)))));
+        CHECK(rowNamed(a, "GND").group.empty());
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, "X", 1, 999999)), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, "X", 1, 0)), FOXAPI_NOT_FOUND));
+        // 2 RENAME A GROUP: every row of it moves, the other rows do not; into a name the list has, the two become one.
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, "LUGANO", 1, static_cast<std::int64_t>(gnd)))));
+        r = A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("MILANO MALPENSA") + sep + " LIMC ", 2));
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 1.0);   // the TWR row; GND is in LUGANO
+        CHECK(rowNamed(a, "TWR").group == "LIMC");
+        CHECK(rowNamed(a, "GND").group == "LUGANO");
+        CHECK(rowNamed(a, "Loose row").group.empty());
+        r = A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("LUGANO") + sep + "LIMC", 2));   // a merge
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 1.0);
+        CHECK(rowNamed(a, "GND").group == "LIMC" && rowNamed(a, "TWR").group == "LIMC");
+        CHECK(A::bookmarkNote(a).find("Renamed \"LUGANO\" to \"LIMC\" (1)") != std::string::npos);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("LIMC") + sep + "LIMC", 2))));   // the same name: a no-op
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("LIMC") + sep + "   ", 2)), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("") + sep + "X", 2)), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("NO SUCH GROUP") + sep + "X", 2)), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, "x", 3)), FOXAPI_OUT_OF_RANGE));
+        // THE PRESET THE MONITOR PLAYS KEEPS PLAYING under its new name: a rename of its group moves airbandGroup_ with it (and a rename of another
+        // group leaves it alone).
+        A::setAirbandGroup(a, "LIMC");
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("Other") + sep + "Other row", 0))));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("Other") + sep + "Elsewhere", 2))));
+        CHECK(A::airbandGroup(a) == "LIMC");   // another group's rename leaves the playing preset alone
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_GROUP, std::string("LIMC") + sep + "LIML", 2))));
+        CHECK(A::airbandGroup(a) == "LIML");
+        A::setAirbandGroup(a, "");
     }
 
     covering(FOXAPP_OP_SCANNER_LIST);

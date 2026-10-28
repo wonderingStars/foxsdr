@@ -3,7 +3,10 @@
 #include "gui/win_frame.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 
 #include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
@@ -36,12 +39,36 @@ std::atomic<unsigned> g_displayChanges{0};
 // How many modal window loops have started (0.99.64). See modalLoopCount().
 std::atomic<unsigned> g_modalLoops{0};
 
+// The session's display as Windows last reported it. See displayPower().
+std::atomic<DisplayPower> g_displayPower{DisplayPower::Unknown};
+
 #ifdef _WIN32
 HWND g_hwnd = nullptr;
 WNDPROC g_previous = nullptr;
 
+// GUID_SESSION_DISPLAY_STATUS, spelled out from Microsoft's "Power Setting GUIDs"
+// page (2B84C20E-AD23-4DDF-93DB-05FFBD7EFCA5) rather than taken from WinNT.h's
+// DEFINE_GUID, whose definition only exists in a translation unit that includes
+// <initguid.h> first.
+const GUID kSessionDisplayStatus = {
+    0x2B84C20E, 0xAD23, 0x4DDF, {0x93, 0xDB, 0x05, 0xFF, 0xBD, 0x7E, 0xFC, 0xA5}};
+
 LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_POWERBROADCAST:
+        // THE SESSION'S DISPLAY WENT OFF, ON OR DIM (gui/display_power.hpp), recorded
+        // and passed on. A setting this window did not register for, a malformed
+        // one, or any other power event is left exactly as it was.
+        if (wParam == PBT_POWERSETTINGCHANGE && lParam != 0) {
+            const auto* s = reinterpret_cast<const POWERBROADCAST_SETTING*>(lParam);
+            if (IsEqualGUID(s->PowerSetting, kSessionDisplayStatus) &&
+                s->DataLength >= sizeof(DWORD)) {
+                DWORD v = 0;
+                std::memcpy(&v, s->Data, sizeof v);
+                g_displayPower.store(displayPowerFromData(v), std::memory_order_relaxed);
+            }
+        }
+        break;
     case WM_DISPLAYCHANGE:
         // COUNTED AND PASSED ON. See displayChangeCount() in the header: the
         // frames immediately after a display change can legitimately stall
@@ -252,6 +279,19 @@ bool install(GLFWwindow* window) {
     g_hwnd = hwnd;
     g_previous = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&frameProc)));
+    // TOLD WHEN THIS SESSION'S DISPLAY GOES OFF (gui/display_power.hpp), after the
+    // procedure above is in place so the state Windows reports on registering
+    // reaches it. The registration lives as long as the window; a failure is
+    // logged and costs only the pause - the application draws as it always did.
+    if (RegisterPowerSettingNotification(hwnd, &kSessionDisplayStatus,
+                                         DEVICE_NOTIFY_WINDOW_HANDLE) != nullptr) {
+        cascade::core::diagLogf("display: watching this session's display state");
+    } else {
+        cascade::core::diagLogf(
+            "display: could not watch this session's display state (error %lu) - drawing "
+            "continues while the screen is off",
+            GetLastError());
+    }
     // Recompute the frame NOW, through the system's own WM_NCCALCSIZE for
     // the new style, rather than on the next move or resize.
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
@@ -310,6 +350,29 @@ CaptionLayout captionLayout() { return g_layout; }
 unsigned displayChangeCount() { return g_displayChanges.load(std::memory_order_relaxed); }
 
 unsigned modalLoopCount() { return g_modalLoops.load(std::memory_order_relaxed); }
+
+DisplayPower displayPower() { return g_displayPower.load(std::memory_order_relaxed); }
+
+void sendDisplayPowerForTest(GLFWwindow* window, unsigned value) {
+#ifdef _WIN32
+    if (window == nullptr || g_hwnd == nullptr) { return; }
+    HWND hwnd = glfwGetWin32Window(window);
+    if (hwnd != g_hwnd) { return; }
+    // POWERBROADCAST_SETTING ends in a one-byte Data array; the DWORD it carries
+    // runs past it, so the block is sized for the header plus the DWORD.
+    std::vector<unsigned char> block(offsetof(POWERBROADCAST_SETTING, Data) + sizeof(DWORD));
+    auto* s = reinterpret_cast<POWERBROADCAST_SETTING*>(block.data());
+    s->PowerSetting = kSessionDisplayStatus;
+    s->DataLength = sizeof(DWORD);
+    const DWORD v = value;
+    std::memcpy(s->Data, &v, sizeof v);
+    SendMessageW(hwnd, WM_POWERBROADCAST, PBT_POWERSETTINGCHANGE,
+                 reinterpret_cast<LPARAM>(block.data()));
+#else
+    (void)window;
+    (void)value;
+#endif
+}
 
 void* nativeHandle(GLFWwindow* window) {
 #ifdef _WIN32

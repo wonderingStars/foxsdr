@@ -78,6 +78,16 @@
 //   A start with nothing ticked is NO_CHANGE. List mode is session-only. While a list scan runs it follows the ticks: a row ticked or unticked
 //   restarts it from the first row, nothing ticked stops it. SCANNER_RUN (a range scan, from the desk or a browser) leaves list mode.
 #define FOXAPP_OP_BOOKMARK_TICK          0x8604u /* ival[0]: the bookmark's id; ival[1]: 0 untick / 1 tick */
+// BOOKMARK GROUPS OF THE USER'S OWN (master 0.99.93, 97ea658c; merged 2026-10-27; docs/api-0.3-additions.md 9.9), LOCAL sessions only, SETTINGS. One op, three
+// actions, the way FOXAPP_OP_AIRBAND is one op: ival[0] is the action. The group names are trimmed of blanks by the ENGINE (a name of blanks alone is no group).
+//   0 ADD CURRENT IN A GROUP: text (or long text) "<group>\x1F<name>" (an empty group is no group; an empty name is the frequency, as BOOKMARK_ADD names one).
+//     Added as BOOKMARK_ADD adds it - the tuned station, the live mode and the requested bandwidth. applied[0]: the new bookmark's id. BAD_ARGUMENT for a text with no \x1F.
+//   1 MOVE ONE BOOKMARK: ival[1]: its id; text: the group it goes to ("" = no group). NOT_FOUND for an id the list does not hold. A bookmark already in that group
+//     changes nothing and writes nothing.
+//   2 RENAME A GROUP: text "<from>\x1F<to>": every bookmark of <from> goes to <to> - a rename when <to> is new, a merge when the list already has it. applied[0]: how many
+//     moved; the note says "Renamed ...". BAD_ARGUMENT for an empty <to> (the rows' own "No group" is how a group is emptied); <from> == <to> changes nothing; NOT_FOUND
+//     when no bookmark is in <from>. A preset the Airband monitor is playing keeps playing under its new name.
+#define FOXAPP_OP_BOOKMARK_GROUP         0x860Bu /* ival[0]: 0 add current in a group / 1 move one (ival[1]: id) / 2 rename a group; text per action (see above) */
 #define FOXAPP_OP_BOOKMARK_ADD_ROWS      0x8605u /* long text: "<Hz>\t<mode>\t<bw Hz>\t<flags: 1 tick, 2 favourite>\t<group>\t<name>" lines; ival[0]: 0 typed rows / 1 a list */
 #define FOXAPP_OP_SCANNER_LIST           0x860Au /* ival[0]: 0 range mode / 1 list mode / 2 start a list scan */
 // THE WATERFALL'S MARKERS (stub campaign B10, 0.99.57; docs/api-0.3-additions.md 9.8), all LOCAL sessions only and none of them on the web profile. A marker is

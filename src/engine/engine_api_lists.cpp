@@ -991,7 +991,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             if (!p.loaded) { continue; }
             for (const cascade::gui::IndexedPreset& ip : validatedPresets(p)) {
                 v->push_back({ip.preset.label, p.name, ip.preset.frequencyHz, ip.preset.bandwidthHz,
-                              ip.preset.demodMode, ip.index, (ip.preset.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u});
+                              ip.preset.demodMode, ip.index, (ip.preset.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u,
+                              ip.preset.sampleRateHz > 0.0 ? ip.preset.sampleRateHz : 0.0});
             }
         }
         b.presets = std::move(v);

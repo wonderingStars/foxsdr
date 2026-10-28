@@ -436,8 +436,14 @@ int main() {
         const NodeId big = g.addNode(NodeKind::Display, "D", PortType::Iq, 10.0f, 20.0f);
         cascade::core::patch::Node& b = *g.mutableNode(big);
         resizeNodeTo(b, V(10.0f + 9000.0f, 20.0f + 7000.0f));
-        CHECK(b.w == cascade::core::patch::kMaxLoadedNodeSize);
-        CHECK(b.h == cascade::core::patch::kMaxLoadedNodeSize);
+        // 0.99.97 MERGE (2026-10-27): master's 0.99.96 gave a part a ceiling of its own (kMaxNodeW x kMaxNodeH, 2400 x 1600, for the Larger key),
+        // LOWER than the loader's on both axes, so a drag now stops there and not at kMaxLoadedNodeSize. This check said "== the loader's
+        // ceiling"; what it holds is "never past the loader's", which is still checked (<=) and is now also a static_assert in
+        // gui/patch_view_math.hpp; the equality names the ceiling that is in force. Master's own test (S4c) holds the drag to kMaxNodeW/H too.
+        CHECK(b.w <= cascade::core::patch::kMaxLoadedNodeSize);
+        CHECK(b.h <= cascade::core::patch::kMaxLoadedNodeSize);
+        CHECK(b.w == cascade::gui::patch::kMaxNodeW);
+        CHECK(b.h == cascade::gui::patch::kMaxNodeH);
     }
 
     // [S4] The grip is the bottom-right corner and nowhere else - in
@@ -485,6 +491,56 @@ int main() {
         CHECK(f.y1 < n.y + nodeHeight(n));
         CHECK(f.x1 - f.x0 > 400.0f);
         CHECK(!pointInResizeGrip(n, V(f.x0 + 10.0f, f.y0 + 10.0f)));   // a face click is not a resize
+        // THE FACE NEVER COVERS THE GRIP (2026-10-27, owner: "allow the users
+        // to make the map larger in the patch also the other components").
+        // A face's controls are real widgets laid over the canvas, and they
+        // take the click before the canvas sees it; the face used to reach into
+        // the grip's upper half (the Map's chart to within 4 units of its foot).
+        // So no point of the grip is on the face.
+        for (const NodeKind k : {NodeKind::Map, NodeKind::Display, NodeKind::Sink,
+                                 NodeKind::Radio, NodeKind::Decoder}) {
+            Graph gk;
+            const NodeId kid = gk.addNode(k, "x", PortType::Iq, 30.0f, 40.0f);
+            const auto& kn = *gk.find(kid);
+            const auto kf = faceRect(kn);
+            const Vec2 ks = nodeSize(kn);
+            const float gx0 = kn.x + ks.x - kResizeGrip;
+            const float gy0 = kn.y + ks.y - kResizeGrip;
+            // The grip square and the face rectangle do not intersect.
+            CHECK(!(gx0 < kf.x1 && gy0 < kf.y1));
+            CHECK(pointInResizeGrip(kn, V(gx0 + 1.0f, gy0 + 1.0f)));
+        }
+    }
+
+    // [S4c] SIZE KEYS (2026-10-27): Larger and Smaller scale a part about its
+    // top-left corner, never past the floors nor the ceiling, and Default
+    // size puts it back to its kind's own size.
+    {
+        using cascade::gui::patch::kMaxNodeH;
+        using cascade::gui::patch::kMaxNodeW;
+        using cascade::gui::patch::resetNodeSize;
+        using cascade::gui::patch::scaleNodeSize;
+        Graph g;
+        const NodeId id = g.addNode(NodeKind::Map, "Map", PortType::Track, 100.0f, 50.0f);
+        cascade::core::patch::Node& n = *g.mutableNode(id);
+        const float w0 = n.w;
+        const float h0 = n.h;
+        scaleNodeSize(n, 1.25f);
+        CHECK_NEAR(n.w, w0 * 1.25f, 0.01);
+        CHECK_NEAR(n.h, h0 * 1.25f, 0.01);
+        CHECK(n.x == 100.0f && n.y == 50.0f);   // the corner stays put
+        for (int i = 0; i < 40; ++i) { scaleNodeSize(n, 1.25f); }
+        CHECK(n.w == kMaxNodeW);
+        CHECK(n.h == kMaxNodeH);
+        for (int i = 0; i < 80; ++i) { scaleNodeSize(n, 0.8f); }
+        CHECK(n.w == cascade::core::patch::kMinNodeW);
+        CHECK(n.h >= cascade::core::patch::kMinNodeH);
+        resetNodeSize(n);
+        CHECK(n.w == w0 && n.h == h0);
+        // A drag is held to the same ceiling.
+        resizeNodeTo(n, V(n.x + 99999.0f, n.y + 99999.0f));
+        CHECK(n.w == kMaxNodeW);
+        CHECK(n.h == kMaxNodeH);
     }
 
     // [S5] A node with no size - a plain struct, or a file from before sizes

@@ -316,21 +316,27 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
                         1.4f * dv.zoom);
         }
 
-        // THE GRIP: three short diagonals in the bottom-right corner, where
-        // pointInResizeGrip() looks for it.
-        if (dv.zoom >= 0.5f) {
-            for (int k = 1; k <= 3; ++k) {
-                const float d = 3.5f * static_cast<float>(k) * dv.zoom;
-                dl->AddLine(ImVec2{b.x - d - 2.0f * dv.zoom, b.y - 2.0f * dv.zoom},
-                            ImVec2{b.x - 2.0f * dv.zoom, b.y - d - 2.0f * dv.zoom},
-                            theme::kBrassTint, 1.0f);
-            }
+        // THE GRIP: a filled brass corner where pointInResizeGrip() looks for
+        // it, lit while the pointer is on it or it is being dragged. It was
+        // three hairlines until 2026-10-27, partly painted over by the face's
+        // well, and the owner
+        // asked for parts that could be made larger - which they already
+        // could be, by a grip nobody could see.
+        if (dv.zoom >= 0.35f) {
+            const bool hot = ui.resizeNode == n.id ||
+                             pointInResizeGrip(n, screenToWorld(dv, vv(io.MousePos)));
+            const float in = 2.0f * dv.zoom;
+            const float gs = (kResizeGrip - 4.0f) * dv.zoom;
+            dl->AddTriangleFilled(ImVec2{b.x - in, b.y - in - gs}, ImVec2{b.x - in, b.y - in},
+                                  ImVec2{b.x - in - gs, b.y - in},
+                                  hot ? theme::kIvory : theme::kBrassTint);
         }
 
         // The well under it: the node's live face. Empty when nothing has been
         // measured or decoded - a figure nobody computed is worse than none.
+        // Its bottom is faceRect()'s, above the grip.
         const ImVec2 wa{a.x + 6.0f * dv.zoom, a.y + (kHeaderHeight - 2.0f) * dv.zoom};
-        const ImVec2 wb{b.x - 6.0f * dv.zoom, b.y - 6.0f * dv.zoom};
+        const ImVec2 wb{b.x - 6.0f * dv.zoom, b.y - kResizeGrip * dv.zoom};
         if (wb.x > wa.x && wb.y > wa.y) {
             dl->AddRectFilled(wa, wb, theme::kWell, theme::kKeyRounding);
 
@@ -474,6 +480,19 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
             }
         } else {
             ui.resizeNode = kNoNode;
+        }
+    }
+
+    // THE RESIZE CURSOR (2026-10-27): the desktop's own sign that a corner can
+    // be pulled, while one is being dragged and while the pointer rests on the
+    // grip of the part that is on top there.
+    if (ui.resizeNode != kNoNode) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
+    } else if (hovered && !ui.panning && !ui.wiring && ui.dragNode == kNoNode) {
+        const NodeId over = nodeAt(g, mouseWorld);
+        const Node* on = over != kNoNode ? g.find(over) : nullptr;
+        if (on != nullptr && pointInResizeGrip(*on, mouseWorld)) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
         }
     }
 

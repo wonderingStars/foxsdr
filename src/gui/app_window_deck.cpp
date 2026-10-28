@@ -37,6 +37,7 @@
 #include <imgui_internal.h>   // ImTextCharFromUtf8
 
 #include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "engine/tune_control.hpp"
 #include "gui/deck_parts.hpp"
 #include "gui/fonts.hpp"
@@ -241,6 +242,10 @@ void AppWindow::drawDeckKnobs(ImDrawList* dl, const ImVec2& barTL, const ImVec2&
         const bool agcSupported = (uiState_.flags & FOXAPI_RX_AGC_SUPPORTED) != 0u;
         const bool haveGain = deviceOpen && statusGainHave_;
         const bool gainLive = haveGain && !agcOn;
+        // NO RADIO, AND NONE ON ITS WAY (master 0.99.92, 62d9d2f3; the carried-forward item of stub batch B12): while an open is in flight (the
+        // start-up restore's, a Source-list pick, a retry of a busy saved radio) the dial is dead for a moment and must not say there is no radio.
+        // The two flags are the table's: FOXAPI_RX_DEVICE_OPEN is `device_ != nullptr` and FOXAPI_RX_DEVICE_OPENING `deviceOpenPending_`.
+        const bool noRadio = !deviceOpen && (uiState_.flags & FOXAPI_RX_DEVICE_OPENING) == 0u;
         float loDb = kFallbackGainMinDb;
         float hiDb = kFallbackGainMaxDb;
         if (haveGain && statusGain0Hi_ > statusGain0Lo_) {
@@ -264,6 +269,9 @@ void AppWindow::drawDeckKnobs(ImDrawList* dl, const ImVec2& barTL, const ImVec2&
         if (d.gainReadHold > 0) { --d.gainReadHold; }
         const float frac = hiDb > loDb ? std::clamp((shownDb - loDb) / (hiDb - loDb), 0.0f, 1.0f) : 0.0f;
         census::note("deck:gain");
+        // A DIAL WITH NO RADIO BEHIND IT, noted so a test can hold that it says why (0.99.92): the 0.99.91 field report was "the Gain button no
+        // longer works" - there was no radio open, the saved one having been busy at start-up.
+        if (noRadio) { census::note("deck:gain:noradio"); }
         census::rect("deck:gain", cxs[0] - knobR, knobCy - knobR, cxs[0] + knobR, knobCy + knobR);
         const float moved = drawBrassKnob(dl, ImVec2(cxs[0], knobCy), knobR, frac, "##deckgain", gainLive);
         const bool handOn = ImGui::IsItemActive();
@@ -272,6 +280,16 @@ void AppWindow::drawDeckKnobs(ImDrawList* dl, const ImVec2& barTL, const ImVec2&
             if (haveGain) {
                 tip += "\n";
                 tip += statusGain0Name_;
+            } else if (noRadio) {
+                // WHY IT IS DEAD, NOT JUST THAT IT IS: no radio is open. When a saved radio did not open, the source error is the whole sentence
+                // ("<radio> did not open: <reason> ..."), the same words the Source section shows under its combo - read here from the published
+                // status copy (statusLines_.sourceError) and the table's "a saved radio is remembered" (fact.source.keep), not from engine fields.
+                tip += "\n";
+                if (!sourceLists().keepKind.empty() && !statusLines_.sourceError.empty()) {
+                    tip += cascade::core::formatText(tr("No radio is open: %s"), statusLines_.sourceError.c_str());
+                } else {
+                    tip += tr("No radio is open - choose one in the Source section");
+                }
             }
             ImGui::SetTooltip("%s", tip.c_str());
         }
@@ -306,7 +324,9 @@ void AppWindow::drawDeckKnobs(ImDrawList* dl, const ImVec2& barTL, const ImVec2&
         reading(0, gainTxt.c_str());
         const bool agcOk = deviceOpen && agcSupported;
         if (deckAutoKey(dl, ImVec2(cxs[0] - autoKeyW * 0.5f, autoKeyTop), ImVec2(cxs[0] + autoKeyW * 0.5f, autoKeyTop + autoKeyH), agcOn, agcOk,
-                        agcOk ? tr("Automatic gain - the radio sets its own gain") : tr("This radio has no automatic gain"), "deck:gainauto")) {
+                        agcOk ? tr("Automatic gain - the radio sets its own gain")
+                              : noRadio ? tr("No radio is open") : tr("This radio has no automatic gain"),
+                        "deck:gainauto")) {
             // A step of the gain dial still waiting for its turn would only fight the switch. The engine asks the radio, mirrors an accepted change, remembers it for this radio
             // and, on a refusal, leaves the key where it was and puts the driver's words in the Source section's error line.
             d.gainDirty = false;

@@ -158,6 +158,14 @@ public:
     // Removes every entry whose group is `group`. Returns how many.
     std::size_t removeGroup(const std::string& group);
 
+    // Moves every entry whose group is `from` into `to` - a rename when `to` is
+    // new, a merge when it already exists, an ungrouping when it is "" (the
+    // Bookmarks section's "Rename this group", 2026-10, a tester's request for
+    // groups of their own). Order is untouched: the group is not what the list
+    // is sorted by. Returns how many moved; `from == to` moves nothing and does
+    // not bump version().
+    std::size_t renameGroup(const std::string& from, const std::string& to);
+
     // Index range [first, last) of entries with lo <= freqHz <= hi - a binary
     // search, so drawing the ones on screen costs nothing for the rest.
     std::pair<std::size_t, std::size_t> range(double loHz, double hiHz) const;

@@ -624,6 +624,29 @@ the panel:
   restriction, not a fault, and is what 0.95.0 took an access violation
   instead of doing. `viewports: single (FOXSDR_SINGLE_VIEWPORT set)` is the
   developer switch and means the same thing on purpose.
+  **And no page is left outside the main window.** Through 0.99.96 a page that had
+  been its own window kept its place beside the main window when separate windows
+  went off, and every page opens overhanging the main window's right edge on
+  purpose - so a page drawn inside the main window was mostly outside it. A
+  tester's 0.99.95 on Intel UHD graphics, after an hour of ADS-B: "the ADS-B map
+  closes when I try to interact with it", with the refusal line seconds before
+  each time; reproduced, the map went from its own window at (1383,226)
+  1120x1166 to (1142,-15) in a 1282x745 main window - 140 px of it showing, its
+  rail above the top edge. Now `AppWindow::fitPagesIntoMainWindow` moves and
+  shrinks every page that is not wholly inside (`gui/page_geometry.hpp`,
+  `pageFitInside`: held to the main window less 24 px a side, never under the
+  240x140 drag floor, moved the least distance) - every page for four frames
+  after a refusal, and any page on the frame it opens while separate windows
+  are off - and logs one line per page it moved: `viewports: page "ADS-B Map"
+  brought inside the main window - 138,24 1120x697, was 1142,-15 1120x1166`.
+  A page already inside is left where it is and logs nothing. The seam,
+  bounded `--frames` runs only: `FOXSDR_TEST_VIEWPORT_REFUSE_AT=<frame>` has the
+  backend refuse the next window it is asked for at that frame (the path a real
+  GLFW 65543 takes) and draws a probe window past the main window's edge so one
+  is asked for. **Tested** by `tests/test_page_geometry.cpp` (the arithmetic,
+  including the tester's rectangle) and `tests/test_viewport_fallback_app.cpp`
+  (gui: the map, the plugin store and Fitted modules refused mid-run, separate
+  windows off from the start, and the control that keeps them separate).
 - **Both are rate-limited and scrubbed.** Twenty lines a second per source,
   then one `N more lines suppressed` per second, because a driver that has
   lost its device says so on every failed read and would otherwise push every
@@ -863,6 +886,34 @@ grace was only bounded by the frame loop noticing it had expired, and the
 stopped while either was held was never reported. A minimised window whose loop
 keeps turning is still never reported, however long it stays minimised.
 
+**And nothing is drawn while the session's display is off.** A tester's 0.99.95
+and 0.99.96 on Intel UHD graphics, left on ADS-B untouched (2026-10-27): ten
+minutes after the start - the screen's own time-out - a 500 ms frame appeared
+every minute or two, and 29 to 91 minutes in the driver refused a second window
+(`WGL: Failed to create OpenGL context`) and the main window stopped showing
+anything new, black after a minimise and restore, while the frame loop kept
+turning and a close from the taskbar shut it down normally. His System log held
+no display-driver reset. The application had been drawing and presenting sixty
+frames a second to a display that was off. Now the main window registers for
+`GUID_SESSION_DISPLAY_STATUS` (`gui/win_frame.cpp`; the session's display, as
+Microsoft recommends for user-mode applications, so a Remote Desktop viewer is not
+paused because the laptop's own screen is off) and, while Windows says that
+display is off, the frame loop draws nothing, presents nothing and waits 33 ms a
+frame instead of the vertical sync (`gui/display_power.hpp`). The interface's own
+work and the message pump keep turning, and the radio and decoders run on their
+own threads as before. Dimmed is drawn. The log says
+`display: watching this session's display state` when the window registers,
+`display: off - Windows says this session's display is off; drawing paused, the
+radio and decoders keep running` when it goes off, and `display: on - drawing
+resumed after 1834 s off; 55020 frames not drawn` when it comes back, and the
+return is a display change for the grace above. That the pause prevents the
+driver's failure on his machine is not yet confirmed. The seam, bounded `--frames`
+runs only: `FOXSDR_TEST_DISPLAY_OFF=<off frame>,<on frame>` hands the window
+procedure the real notification through `SendMessage`. **Tested** by
+`tests/test_display_power.cpp` (the decode and the pause's edges) and
+`tests/test_display_off_app.cpp` (gui, Windows: off then on, off to the end, and
+the control).
+
 ### What a freeze's signature is built from (0.99.62)
 
 Until 0.99.62 a freeze report's `signature` was hashed from the report's kind
@@ -957,6 +1008,39 @@ modal dialog must. Since 0.99.61 it is the one **user-paced** pause
 that is not capped, because what it waits for is a person; see rule 2b in *The
 5-second threshold* below. `cascade --frames N` prints the number of pauses a
 run took, so these are visible as a count and not only as a sentence.
+
+**And, since 0.99.91, on a thread of their own** (`gui::runShellOpenResponsive`,
+`gui/shell_open.cpp`). Field report, 0.99.89, 2026-10-25: `freeze: the frame was
+in user-wait`, the GUI thread in `launchInstaller` → `ShellExecuteW` →
+`windows.storage.dll` → a plain kernel wait in `ntdll`, 40 s after a STOP, with
+`aswhook.dll` (Avast) in the process. The install key had handed the downloaded
+0.99.90 installer to the shell, and the shell was waiting on SmartScreen, the
+antivirus or the elevation prompt **without taking messages**. The 0.99.87 rule
+above - the user-paced excuse ends when Windows calls the window hung - assumed
+a person is always waited for in a message loop; `ShellExecute` is the one wait
+in this application for which that is not so. So five seconds in, Windows
+greyed a healthy window "(Not Responding)" behind the prompt, and the watchdog
+filed a freeze. (It is very likely how the two 35ED0AF2 users came to close
+theirs from Windows' dialog.) Every `ShellExecute` - the installer, the reports
+folder and privacy link (`shellOpen`), RADIO SETUP's INSTALL DRIVER - now runs on
+a worker thread that initialises COM as the STA the documentation asks for, while
+the GUI thread waits for it in `MsgWaitForMultipleObjectsEx(QS_SENDMESSAGE)` plus
+a `PeekMessage(PM_NOREMOVE)` at least every 100 ms: sent messages are answered,
+Windows never calls the window hung, nothing posted is removed (input and paint
+wait for the frame loop, as they did while the call held the thread), and the
+call's answer or exception comes back to the button. The same bracket is taken on
+the GUI thread, so the frame timer's `user-wait` scope and the uncapped pause are
+as before. The file dialog keeps the plain bracket: it runs its own message loop
+on the thread that owns its parent. If the event or the thread cannot be made,
+the call is made inline as before 0.99.91. Measured by
+`tests/test_hung_window_excuse.cpp` cases 5 and 6 (a real window, a real
+watchdog, a call that sleeps past Windows' verdict: inline, the window reads hung
+and one report is written; off-thread, neither, and a `SendMessage` from another
+thread is answered) and `tests/test_shell_open.cpp` (bracket on the calling
+thread, the call on another, the answer and an exception passed back, posted
+messages and `WM_QUIT` left in the queue, the STA, two real `ShellExecuteEx`
+calls). **Not verified:** a real UAC or SmartScreen prompt behind the new path -
+the test's wait is a `Sleep` - and whether 35ED0AF2 stops recurring.
 
 **On Linux** (this port, 2026-09-15) `AppWindow::shellOpen()` no longer just
 returns `false`: it hands the target to `xdg-open` via `fork`+`execvp` — never
@@ -3235,6 +3319,35 @@ never saw it because the scan runs in a child.
   again`. The reopen reaches the driver's own object: SoapySDR's factory hands
   back a device still in its table for the same args (`lib/Factory.cpp`), so
   no vendor find runs and nothing on the bus is probed.
+- `source: the saved radio (<model>, <driver>) did not reopen (<why>) - the receiver
+  is on the signal generator and the radio stays saved` and `source: <model>
+  (<driver>) did not open (<why>) - the receiver is on the signal generator`
+  — the start-up restore's failure and the Source list's (or a retry's), since
+  0.99.92 with the **reason class** in brackets: one of `busy`, `driver`, `bind`,
+  `absent`, `timeout`, `vendor`, `rate`, `other` - the same word the anonymous
+  failure count files the failure under (`radio_fail.<driver>.<why>`,
+  `core::health::radioFailWhy`). It is the class only, never the driver's own
+  message, which quotes the device arguments (the serial number) back. The 0.99.91
+  field report ("the Gain button no longer works") was a saved RTL-SDR that was
+  `busy` at start-up - the previous process, relaunched by the in-app updater's
+  installer, had not yet let go of the dongle - and had to be read off the
+  anonymous counts because the log said only "did not reopen".
+- `source: the saved radio is in use by another program - trying it again in 2, 4,
+  8 and 16 s`, then `source: trying the saved radio again (attempt N of 4)` and
+  either `source: the saved radio came free - <model> opened on attempt N` or the
+  ordinary `did not open (<why>)` line again — the **retry of a busy saved
+  radio** (`AppWindow::pollSavedRadioRetry`, `gui::savedRadioRetryDue`, 0.99.92).
+  Only a start-up restore that failed as `busy` arms it; the tries go through the
+  ordinary asynchronous open 2, 4, 8 and 16 s after the failure before each (30 s
+  in all, the first one 2 s into the frame loop), never while an open or a scan is
+  in flight, and stop at the first success, at the first failure that is not `busy`
+  (an unplugged dongle is not cured by waiting), at the fourth failure
+  (`source: the saved radio is still in use by another program after 4 more tries -
+  giving up`; the radio stays saved for the next start) or when the user chooses
+  another source. A busy-again try is not counted a second time in
+  `radio_fail.<driver>.busy`. While no radio is open the deck's GAIN dial and its
+  AUTO key say so in their tooltips (and name the saved radio's reason when there
+  is one).
 
 A hang report captures every thread because *a deadlock is only legible as a
 pair.* "The GUI thread is blocked" names no bug; "the GUI thread waits on the

@@ -40,6 +40,7 @@ struct GLFWwindow;
 #include "core/freq_manager.hpp"
 #include "core/i18n.hpp"
 #include "core/plugin_host.hpp"
+#include "core/patch_blueprints.hpp"
 #include "core/patch_graph.hpp"
 #include "core/patch_presets.hpp"
 #include "core/scanner_params.hpp"
@@ -2120,6 +2121,20 @@ private:
     cascade::core::AppConfig lastRequestedConfig_;
 
     char bookmarkName_[128] = "";  // editable name for the next "Add current"
+    // THE GROUP THE NEXT "Add current" JOINS (2026-10, a tester's request: an airport's tower, ground and approach kept together under its name).
+    // Typed once and left - the field is not cleared by Add, so a run of frequencies lands in one group; empty means ungrouped, as every bookmark
+    // was before.
+    char bookmarkGroup_[96] = "";
+    // "Rename this group": the inline field is open, and what it holds.
+    bool bookmarkRenameOpen_ = false;
+    char bookmarkRenameName_[96] = "";
+    // A row's right-click menu: the "new group" field it offers.
+    char bookmarkRowGroup_[96] = "";
+    // AFTER A RENAME the group filter follows the group to its new name (master did it in the same frame, from its own list; the window's copy of
+    // BOOKMARKS moves a publish later, so the choice is remembered here and made when the renamed group appears in the list; it lapses after
+    // bookmarkRenameWantUntil_ frames so a refused rename cannot hold a later group of that name).
+    std::string bookmarkRenameWant_;
+    int bookmarkRenameWantUntil_ = 0;
     // --- A large imported list (0.99.19) ----------------------------------------
     // The list can be tens of thousands of entries, so nothing here walks it
     // per frame: the view is a cached index rebuilt only when the list or the
@@ -2823,6 +2838,14 @@ private:
     // than re-derived because the sentence has to be logged exactly once.
     cascade::gui::ViewportDecision viewportDecision_ = cascade::gui::ViewportDecision::Enabled;
 
+    // PAGES BROUGHT INSIDE WHEN SEPARATE WINDOWS ARE OFF (gui/page_geometry.hpp, pageFitInside). With separate windows off, every top-level
+    // page that is not wholly inside the main window is moved and shrunk into it: all of them for a few frames after the driver refuses a
+    // window mid-session (ImGui moves a page out of its own viewport over a frame or two, and the pass must see where it finally lands),
+    // and any page on the frame it appears for the rest of the session. Called after drawUi, before ImGui::Render. pagesFitFrames_ is how
+    // many more frames check every page.
+    void fitPagesIntoMainWindow();
+    int pagesFitFrames_ = 0;
+
     // --- THE WINDOW FRAMES, ON THE METAL (0.78.0) ------------------------------
     //
     // The operating system's title bars are gone from the main window and from
@@ -3314,6 +3337,19 @@ private:
     // node's controls are in a drawer at the canvas's right that folds to a strip. patchBandRight_ is the screen x the band's rows keep short
     // of. The pane reads the engine's plan (patchLists().plan) and this frame's readings; it changes nothing.
     void drawPatchInfoPane(float x, float y, float w, float h);
+    // THE BLUEPRINTS LIST (owner, 2026-10-26: "select in the list adsb and it places a full work flow for that app on the patch panel"; master 0.99.94
+    // and 0.99.96, app_window_patch_blueprints.cpp). One pick places a whole wired workflow for one plugin, tuned by the plugin's own preset;
+    // core/patch_blueprints.hpp decides what is built, this draws the list on the parts band and says what happened. ON THE TABLE: the parts are the
+    // PATCH_PARTS copy (patchLists().parts), the presets are PRESETS (value[3], the preset's sample rate, is the 0.99.97 merge's addition), the
+    // towers are BOOKMARKS' groups and the receiver's position, and the workflow is placed on the page's own draft and committed as every edit is.
+    void drawPatchBlueprints();
+    // Every blueprint the parts bin's catalogue makes, with each plugin's presets read out of the table now - asked only while the list is open.
+    std::vector<cascade::core::patch::Blueprint> patchBlueprints();
+    // A pick is REMEMBERED HERE and placed once the canvas has a size, as a press of a part is, so the view can be moved to show what landed.
+    void placePendingPatchBlueprint(float canvasW, float canvasH);
+    std::optional<cascade::core::patch::Blueprint> patchBlueprintPending_;
+    // What the last pick did, in a sentence beside the list.
+    std::string patchBlueprintNote_;
     void drawPatchInspectorFoldKey();
     float patchBandRight_ = 0.0f;
     bool patchInspectorFolded_ = false;

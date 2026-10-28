@@ -361,6 +361,7 @@ struct ApiListBlock {
         double freqHz = 0.0, bandwidthHz = 0.0;
         std::uint32_t demodMode = 0, index = 0;
         bool deviceCentre = false;   // API 0.3 8.7: moves the radio's centre, not the VFO
+        double rateHz = 0.0;         // API 0.3 9.9 (the 0.99.97 merge): the preset's own sample rate, 0 when it names none - PRESETS value[3]
     };
     std::shared_ptr<const std::vector<Preset>> presets;  // plugin presets: rebuilt only when the plugins change
     std::uint64_t presetsFingerprint = 0;

@@ -472,6 +472,15 @@ public:
     // stall is measured like any other, from the first poll that saw it.
     // The same verdict ends rule 2's modal-loop excuse.
     //
+    // THAT PREMISE WAS FALSE FOR ShellExecute (0.99.89 field report, "freeze: the
+    // frame was in user-wait" in AppWindow::launchInstaller): it waits for
+    // SmartScreen or an elevation prompt in a plain kernel wait, taking no
+    // messages, so Windows called a healthy window hung and this rule reported
+    // it. Since 0.99.91 every ShellExecute is made on a worker thread while the
+    // GUI thread waits taking sent messages (gui::runShellOpenResponsive,
+    // gui/shell_open.cpp), which makes the premise true by construction; the
+    // file dialog, which runs its own message loop, needed nothing.
+    //
     // RULE 2c (a stalled thread inside win32u.dll "is pumping") is excused for
     // as long as the thread stays there, and win32u.dll is the user-mode end of
     // every win32k and graphics-kernel system call, not only of the message
