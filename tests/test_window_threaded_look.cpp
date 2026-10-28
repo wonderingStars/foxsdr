@@ -67,16 +67,16 @@ struct AppWindowTestAccess {
     }
     // THE FRAME'S ENGINE-FACING HALF, in drawUi's order (free-running: the two stepPass calls are no-ops).
     static void frame(AppWindow& a) {
-        th::engine(a).frameKick();   // (run(): the frame's first act is to kick the pass, 6.9)
-        a.applyPluginDirective();
+        // (run(): the frame's first act is the window's heartbeat, which on its FOXAPI_SESSION_FRAME session is also the kick of the pass, 6.9 / R3)
         if (a.uiSession_ != nullptr) { a.engineApi_->heartbeat(a.uiSession_); }
+        a.applyPluginDirective();
         a.sendTrackInfoText();
         a.handFrontEndFacts();
         th::engine(a).stepPass(PassPart::Front);
         a.syncPatchPageOpen();
         a.commitPatchDraft();
         a.pollUiAnswers();
-        a.statusLines_ = th::engine(a).statusText();
+        a.refreshStatusLines();
         a.refreshUiState();
         a.actOnUiAnswers();
         // (no publishWebSpectrum since stage 5e: the page reads the table's spectrum itself)

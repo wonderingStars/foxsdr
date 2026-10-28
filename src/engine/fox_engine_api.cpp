@@ -550,6 +550,9 @@ public:
         const bool remote = (p->flags & FOXAPI_SESSION_REMOTE) != 0u;
         const bool local = (p->flags & FOXAPI_SESSION_LOCAL) != 0u;
         if (remote == local) { return FOXAPI_BAD_ARGUMENT; }
+        // THE FRAME FLAG IS A LOCAL INTERFACE'S (API 0.3 9.14): its heartbeat is also the kick of the free-running pass. A transport has no
+        // frames, and a client that could wake the pass at will is a flood the gap and the floor would have to bound.
+        if (remote && (p->flags & FOXAPI_SESSION_FRAME) != 0u) { return FOXAPI_BAD_ARGUMENT; }
         uint64_t grants = p->grants | FOXAPI_GRANT_VIEW;
         std::string token;
         if (remote) {
@@ -751,6 +754,10 @@ public:
         // heartbeat, and nobody else's, is the front-end stamp the thread
         // watches (core/transmitter.hpp).
         if (s->id == keyOwner_.load(std::memory_order_relaxed)) { engine_.transmitter_.frontEndAlive(); }
+        // THE FRAME'S KICK (docs/engine-stage4.md 6.9; API 0.3 9.14): a session that opened with FOXAPI_SESSION_FRAME beats once a frame, as
+        // the first thing the frame does, and that beat wakes the free-running pass - the gap, the floor and the grace are the engine's
+        // (Engine::frameKick), so what an interface may do with the flag is exactly what the window's loop did with the call it used to make.
+        if ((s->flags & FOXAPI_SESSION_FRAME) != 0u) { engine_.frameKick(); }
         return FOXAPI_OK;
     }
 
@@ -858,6 +865,15 @@ public:
         } else if (opt_.testHooks && std::strcmp(key, "test.keyState") == 0) {
             std::lock_guard<std::mutex> lk(keyStateMutex_);
             v = keyState_;
+        } else if (std::strcmp(key, "fact.web.served") == 0 || std::strcmp(key, "fact.cat.accepted") == 0) {
+            // THE TWO LISTENERS' USE, as counters (API 0.3 9.14). Read at the call from the servers' own atomics, not from the list block: a
+            // request served moves them, and a block rebuilt per request would be a rebuild per page poll. They count what the servers' usage
+            // callbacks used to be told: a request answered with anything but 404 or 401 (web), a client accepted (CAT). LOCAL: the use of a
+            // listener is the machine's owner's, and a transport has no business reading it.
+            if ((s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
+            const bool web = key[5] == 'w';  // ("fact.web.served" or "fact.cat.accepted")
+            v = std::to_string(web ? engine_.servers().webCounters().served.load(std::memory_order_relaxed)
+                                   : engine_.servers().catCounters().accepted.load(std::memory_order_relaxed));
         } else if (std::strncmp(key, "fact.", 5) == 0) {
             // API 0.3's read-only facts, from the list block the pumping
             // thread built (docs/api-0.3-additions.md).

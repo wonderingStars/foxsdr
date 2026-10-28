@@ -62,10 +62,10 @@ namespace {
 // comment in engine_shell.hpp that says why. They only go down on their own: stage 5f deleted the web/CAT section (there is no budget for
 // it any more), stage 7 deletes the shell's.
 // ----------------------------------------------------------------------------------------------------------------------------------
-constexpr int kShellMethodsBudget = 33;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart): 33 after shell retirement R2 (2026-10-28: -8, the seams that became client code - seamBiasStandIn, seamFetchCatalogue, seamSelectNativeDevice, seamDeviceOpenPending, seamPressPreset, seamPatchStart, seamPatchRunning, seamSubmit; 41 before it); 40 before the frame's kick (frameKick, 6.9)
-constexpr int kHostMethodsBudget = 3;     // CLASS HOST: makePluginFeed, and (stage 5f) serveWebTiles, and (2026-10-27, stub campaign B15; END: stage 7h) setServerUsageHooks: the beta-tester recorder is the WINDOW's, and the two listeners' "was used" marks are the only part of it the window cannot read from the table (a browser that never logged in has no session to count). 2 before B15. CLASS WEB / CAT is GONE (stage 5f): it was 7 at the fence, 8 after 5b (the pull and the status reads went with the servers, six FEED methods came: pushWebAudio, setWebImages, takeWebTileRequests, setWebTile, clearWebTiles, publishWebSpectrum), 1 after 5e (the page's audio and spectrum are the table's, the pictures the engine's, and the three tile methods became ONE, serveWebTiles - the basemap's tiles are the one thing only the window's GUI-thread plugin client can produce), and 0 after 5f: serveWebTiles is plugin-drawn content, so it was re-homed to CLASS HOST (+1 there) rather than deleted (deleting it would take the browser's map layer with it); docs/engine-stage4.md 6.14
+constexpr int kShellMethodsBudget = 29;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart): 29 after shell retirement R3 (2026-10-28: -4, status, URL and kick as table facts - pluginCatalogueUrl, publishStatusText, statusText, frameKick; 33 before it); 33 after shell retirement R2 (2026-10-28: -8, the seams that became client code - seamBiasStandIn, seamFetchCatalogue, seamSelectNativeDevice, seamDeviceOpenPending, seamPressPreset, seamPatchStart, seamPatchRunning, seamSubmit; 41 before it); 40 before the frame's kick (frameKick, 6.9)
+constexpr int kHostMethodsBudget = 2;     // CLASS HOST: makePluginFeed and (stage 5f) serveWebTiles; 2 after shell retirement R3 (2026-10-28: -1, setServerUsageHooks became the table's fact.web.served and fact.cat.accepted); 3 with (2026-10-27, stub campaign B15; END: stage 7h) setServerUsageHooks: the beta-tester recorder is the WINDOW's, and the two listeners' "was used" marks are the only part of it the window cannot read from the table (a browser that never logged in has no session to count). 2 before B15. CLASS WEB / CAT is GONE (stage 5f): it was 7 at the fence, 8 after 5b (the pull and the status reads went with the servers, six FEED methods came: pushWebAudio, setWebImages, takeWebTileRequests, setWebTile, clearWebTiles, publishWebSpectrum), 1 after 5e (the page's audio and spectrum are the table's, the pictures the engine's, and the three tile methods became ONE, serveWebTiles - the basemap's tiles are the one thing only the window's GUI-thread plugin client can produce), and 0 after 5f: serveWebTiles is plugin-drawn content, so it was re-homed to CLASS HOST (+1 there) rather than deleted (deleting it would take the browser's map layer with it); docs/engine-stage4.md 6.14
 constexpr int kFeedMethodsBudget = 12;    // HostPluginFeed's virtuals (the nine host accessors and what drives them): 12 with (2026-10-27, stub campaign B16; END: stage 7h) unplacedTracks - the ADS-B map lists the aircraft the receiver has heard and not yet placed, and PluginUi keeps them in a vector apart from tracks() so that every reader of tracks() draws or measures from a position; 11 before B16
-constexpr int kCallSitesBudget = 54;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 54 after shell retirement R2 (2026-10-28: -13, the eight seams' sites - seamBiasStandIn 1, seamFetchCatalogue 1, seamSelectNativeDevice 1, seamDeviceOpenPending 1, seamPressPreset 1, seamPatchStart 1, seamPatchRunning 1, seamSubmit 6; 67 before it); 67 with stub campaign B16 (+1: hostUnplacedTracks' unplacedTracks, the one read of the new feed accessor); 66 with stub campaign B15 (+1: installTesterUsageHooks' setServerUsageHooks, the window's one call, from its constructor's helper); 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
+constexpr int kCallSitesBudget = 47;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 47 after shell retirement R3 (2026-10-28: -7, the five methods' sites - pluginCatalogueUrl 2, publishStatusText 1, statusText 2, frameKick 1, setServerUsageHooks 1; 54 before it); 54 after shell retirement R2 (2026-10-28: -13, the eight seams' sites - seamBiasStandIn 1, seamFetchCatalogue 1, seamSelectNativeDevice 1, seamDeviceOpenPending 1, seamPressPreset 1, seamPatchStart 1, seamPatchRunning 1, seamSubmit 6; 67 before it); 67 with stub campaign B16 (+1: hostUnplacedTracks' unplacedTracks, the one read of the new feed accessor); 66 with stub campaign B15 (+1: installTesterUsageHooks' setServerUsageHooks, the window's one call, from its constructor's helper); 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 // WHO MAY KNOCK: for each AppWindow member, the door methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails),
@@ -78,10 +78,9 @@ struct Knock {
 const std::vector<Knock> kEngineKnocks = {
     // CLASS SHELL: construction, the config restore, the run, the teardown
     {"AppWindow::AppWindow",
-     {"initialise", "loadBookmarks", "telemetryStartup", "pluginCatalogueUrl", "configReadback", "publishConfig", "publishStatusText",
-      "statusText", "setFrontEndWaitBeat", "makePluginFeed"}},
+     {"initialise", "loadBookmarks", "telemetryStartup", "configReadback", "publishConfig", "setFrontEndWaitBeat", "makePluginFeed"}},
     {"AppWindow::~AppWindow", {"setFrontEndWaitBeat", "stopTransfers", "teardown"}},
-    {"AppWindow::applyConfig", {"applyConfig", "pluginCatalogueUrl"}},
+    {"AppWindow::applyConfig", {"applyConfig"}},
     {"AppWindow::currentConfig", {"configSnapshot"}},
     {"AppWindow::saveConfigNow", {"publishConfig"}},
     {"AppWindow::handFrontEndFacts", {"setFrontEndFacts"}},
@@ -90,14 +89,13 @@ const std::vector<Knock> kEngineKnocks = {
     {"AppWindow::run",
      {"startReceiver", "controlPass", "startControlThread", "configureHeartbeat", "markCleanExit", "shutdownQuiesce", "shutdownStop",
       "shutdownRelease", "shutdownDrain", "reportPluginStatus", "seamMeasureTick",
-      "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource", "frameKick"}},
-    // the frame is a look: the three parts of the pass, and the status lines the look copies
-    {"AppWindow::drawUi", {"stepPass", "statusText"}},
+      "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource"}},
+    // the frame is a look: the three parts of the pass (the status lines the look reads are the table's facts - refreshStatusLines - and the frame's kick is
+    // the heartbeat of run()'s loop: neither is a knock on the door any more, shell retirement R3)
+    {"AppWindow::drawUi", {"stepPass"}},
     // CLASS HOST, the browser map's tiles: the window's one feed of the web page left (stage 5e: the table serves the audio and the spectrum,
     // the engine the pictures; stage 5f: the class that held it is gone, the method is plugin-drawn content and lives with the plugin feed)
     {"AppWindow::pumpWebTiles", {"serveWebTiles"}},
-    // CLASS HOST, the tester recorder's two hooks on the listeners (stub campaign B15): the window hands them over once, from its constructor
-    {"AppWindow::installTesterUsageHooks", {"setServerUsageHooks"}},
 };
 // The host feed (CLASS HOST): the nine host accessors and what drives them.
 const std::vector<Knock> kFeedKnocks = {
@@ -750,8 +748,11 @@ void checkMachineryHasNoInput(const fs::path& root) {
 //   * stepPass appears exactly three times, all in drawUi, as Front, Mute and Back, in that order, and the engine's pass is started in
 //     run() exactly once (startControlThread) after the one controlPass() that makes a free-running run's first publish;
 //   * THE LOOK'S ORDER (survey 1.6 B and C): in drawUi the session's answers are polled (pollUiAnswers), then the status lines
-//     are copied, then the state is read (refreshUiState), then the answers are acted on (actOnUiAnswers) - and the Front part of
-//     the pass comes before all of it, the Mute part after it, and the Back part after everything else the frame does;
+//     are read (refreshStatusLines: the table's fact.status.* since shell retirement R3), then the state is read (refreshUiState), then
+//     the answers are acted on (actOnUiAnswers) - and the Front part of the pass comes before all of it, the Mute part after it, and
+//     the Back part after everything else the frame does;
+//   * THE FRAME'S KICK is the window's heartbeat (shell retirement R3): `engineApi_->heartbeat(uiSession_)` is called exactly once in the
+//     window, as the first act of run()'s frame loop, never from drawUi, and the session it beats on is opened with FOXAPI_SESSION_FRAME;
 //   * the transmit key is SUBMITTED at the end of the frame (submitTransmitKey), after the page has drawn what it holds.
 // (The ratchet also held that no member names a pump phase or the command path: the door does not declare them, so naming one does not
 // compile.)
@@ -759,7 +760,7 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
     int stepCalls = 0, controlPassCalls = 0, startCalls = 0, kickCalls = 0;
     for (const Call& c : calls) {
         if (c.object != "engine_") { continue; }
-        if (c.method == "frameKick") { ++kickCalls; }
+        if (c.method == "frameKick") { ++kickCalls; }   // (the door no longer has it: the frame's kick is the heartbeat of a FRAME session)
         if (c.method == "stepPass") { ++stepCalls; }
         if (c.method == "controlPass") { ++controlPassCalls; }
         if (c.method == "startControlThread") { ++startCalls; }
@@ -767,7 +768,7 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
     std::printf("  the frame is a look: stepPass %d (expect 3), controlPass %d (expect 1), startControlThread %d (expect 1)\n", stepCalls,
                 controlPassCalls, startCalls);
     CHECK(stepCalls == 3);
-    CHECK(kickCalls == 1);   // THE FRAME KICKS THE PASS, once (6.9): from run(), the first act of the frame loop - checked below
+    CHECK(kickCalls == 0);   // THE FRAME KICKS THE PASS through the table now (6.9, R3): the heartbeat in run()'s loop - checked below
     CHECK(controlPassCalls == 1);
     CHECK(startCalls == 1);
     const std::string text = readFile(root / "src" / "gui" / "app_window.cpp");
@@ -779,7 +780,7 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
     const auto at = [&](const char* needle) { return body.find(needle); };
     const std::size_t front = at("engine_.stepPass(cascade::engine::PassPart::Front);");
     const std::size_t poll = at("pollUiAnswers();");
-    const std::size_t status = at("statusLines_ = engine_.statusText();");
+    const std::size_t status = at("refreshStatusLines();");
     const std::size_t look = at("refreshUiState();");
     const std::size_t act = at("actOnUiAnswers();");
     const std::size_t mute = at("engine_.stepPass(cascade::engine::PassPart::Mute);");
@@ -793,7 +794,7 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
         const bool order = front < poll && poll < status && status < look && look < act && act < mute && mute < key && key < back;
         if (!order) {
             std::printf("FAIL: drawUi's look is out of order - the pass's front part, then the session's answers polled, the status lines "
-                        "copied, the state read and the answers acted on, then the mute part, the transmit key, the back part\n");
+                        "read, the state read and the answers acted on, then the mute part, the transmit key, the back part\n");
         }
         CHECK(order);
     }
@@ -820,15 +821,24 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
     CHECK(startOk);
     // THE FRAME KICKS THE PASS as the first act of its loop (6.9): after the frame log's and the cap's start stamps, before the events are polled
     // and the frame is drawn (the pass takes ~0.1 ms to publish, and the look is little later than the top of the frame: a later kick loses
-    // that race and the look reads a publish a whole frame old - measured in 6.9). Exactly once, and never from drawUi.
+    // that race and the look reads a publish a whole frame old - measured in 6.9). Since shell retirement R3 the kick is the window's HEARTBEAT,
+    // on a session opened FOXAPI_SESSION_FRAME: `engineApi_->heartbeat(uiSession_)` appears once in the window, at that place, and not in drawUi;
+    // and openUiSession is where the flag is asked for (a heartbeat on a session without it kicks nothing).
     {
         const std::size_t capStart = text.find("frameCap_->frameStart();", loop);
-        const std::size_t kick = text.find("engine_.frameKick();", loop);
+        const std::size_t kick = text.find("engineApi_->heartbeat(uiSession_);", loop);
         const std::size_t poll = text.find("glfwPollEvents();", loop);
         const bool kickOk = capStart != std::string::npos && kick != std::string::npos && poll != std::string::npos && loop < capStart &&
-                            capStart < kick && kick < poll && text.find("engine_.frameKick();", kick + 1) == std::string::npos;
-        if (!kickOk) { std::printf("FAIL: run() does not kick the pass exactly once, as the first act of the frame loop (after the start stamps, before glfwPollEvents)\n"); }
+                            capStart < kick && kick < poll && text.find("engineApi_->heartbeat(", kick + 1) == std::string::npos &&
+                            text.find("engineApi_->heartbeat(") == kick && body.find("heartbeat(") == std::string::npos;
+        if (!kickOk) { std::printf("FAIL: run() does not beat the FRAME session exactly once, as the first act of the frame loop (after the start stamps, before glfwPollEvents), or drawUi beats it\n"); }
         CHECK(kickOk);
+        const std::size_t open = text.find("void AppWindow::openUiSession() {");
+        const std::size_t openEnd = open == std::string::npos ? std::string::npos : text.find("\n}\n", open);
+        const bool flagged = open != std::string::npos && openEnd != std::string::npos &&
+                             text.find("p.flags = FOXAPI_SESSION_LOCAL | FOXAPI_SESSION_FRAME;", open) < openEnd;
+        if (!flagged) { std::printf("FAIL: openUiSession does not open the window's session with FOXAPI_SESSION_FRAME - its heartbeat would kick nothing\n"); }
+        CHECK(flagged);
     }
 }
 

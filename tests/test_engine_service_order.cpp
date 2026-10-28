@@ -135,7 +135,7 @@ std::size_t countOf(const std::string& s, const std::string& needle) {
 }
 
 // One row of the table: the statement as the window writes it, and as the service writes it. An empty column means
-// "this file has no such statement" (WINDOW ONLY rows have an empty service column and say why).
+// "this file has no such statement" (WINDOW ONLY rows have an empty service column, SERVICE ONLY rows an empty window column, and say why).
 struct Row {
     const char* what;
     const char* window;
@@ -168,8 +168,10 @@ const std::vector<Table>& table() {
               "no pass has run yet: the engine hands its half over first"},
              {"the bookmarks", "engine_.loadBookmarks()", "engine_.loadBookmarks()",
               "under the settings' gate: a hermetic run never reads them"},
-             {"the status lines", "engine_.publishStatusText()", "engine_.publishStatusText()",
-              "with or without a settings file: the first read says what the restore said"},
+             {"the status lines", "", "engine_.publishStatusText()",
+              "SERVICE ONLY (shell retirement R3): with or without a settings file, so the first read says what the restore said. The window no longer forces "
+              "the publish: its first pass publishes the lines and its first look reads them as fact.status.* (a stepped run's first frame runs the pass's front "
+              "part before the look; a free-running run makes the first publish in run() before the loop)"},
          }},
         {"APPLY",
          {
@@ -280,18 +282,24 @@ int checkTable(const std::string& winBlank, const std::string& svcBlank, bool sa
         for (const Row& row : t.rows) {
             const std::string w = row.window;
             const std::string s = row.service;
-            // THE WINDOW's column.
-            const std::size_t wAt = win.find(w);
-            if (wAt == std::string::npos) {
-                fail("  %s: the window no longer has '%s' where the table says: the table or the window moved\n", t.phase, row.window);
-            } else if (countOf(win, w) != 1) {
-                fail("  %s: '%s' appears more than once in the window's region\n", t.phase, row.window);
-            } else {
-                if (wAt < lastWin) {
-                    ++bad;
-                    if (say) { std::printf("  %s: in the WINDOW '%s' comes before '%s' - the table's order is the contract\n", t.phase, row.what, lastWhat); }
+            // THE WINDOW's column. A SERVICE ONLY row has none: the window must not have grown the service's statement unlisted.
+            if (w.empty()) {
+                if (!s.empty() && win.find(s) != std::string::npos) {
+                    fail("  %s: '%s' is SERVICE ONLY in the table but the window has it\n", t.phase, row.service);
                 }
-                lastWin = wAt;
+            } else {
+                const std::size_t wAt = win.find(w);
+                if (wAt == std::string::npos) {
+                    fail("  %s: the window no longer has '%s' where the table says: the table or the window moved\n", t.phase, row.window);
+                } else if (countOf(win, w) != 1) {
+                    fail("  %s: '%s' appears more than once in the window's region\n", t.phase, row.window);
+                } else {
+                    if (wAt < lastWin) {
+                        ++bad;
+                        if (say) { std::printf("  %s: in the WINDOW '%s' comes before '%s' - the table's order is the contract\n", t.phase, row.what, lastWhat); }
+                    }
+                    lastWin = wAt;
+                }
             }
             // THE SERVICE's column.
             if (s.empty()) {

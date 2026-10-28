@@ -8,9 +8,10 @@
 // able to send a tester report, so every part that holds a code, queues a report or sends one is HERE - in host glue, which the foxsdr-engine binary does not build. What the
 // recorder notes comes from two places: the window's own events (a control pressed, a page opened: the noteFeature calls beside each of them, as in master) and facts the table
 // already publishes (testerNoteFacts: a take in progress, the scanner running, RF going out, the kind of radio in use). Two marks only the listeners' own threads can make -
-// "a browser was served", "a CAT client connected" - come through installTesterUsageHooks, which hands the window's closures to the engine's servers by the one door
-// (EngineShell::setServerUsageHooks). Nothing in src/engine or src/net names the recorder, and tests/test_tester_host_only.cpp holds that, and holds that a foxsdr-engine
-// carrying a code in its settings sends nothing.
+// "a browser was served", "a CAT client connected" - are two COUNTERS the servers keep and the table serves (fact.web.served, fact.cat.accepted: a request answered with
+// anything but 404 or 401, a client accepted); testerNoteListeners notes the mark when a counter has moved since it last looked. (Until shell retirement R3 they were two
+// closures of the window's that the servers called from their own threads, handed over by a method of the C++ door.) Nothing in src/engine or src/net names the recorder,
+// and tests/test_tester_host_only.cpp holds that, and holds that a foxsdr-engine carrying a code in its settings sends nothing.
 //
 // THE PROCESS BOOT IS NOT THIS FILE'S (engine/process_boot.cpp, STEP 5): the foxsdr:// activation, the instance claim and the link-request file's WRITE are the host
 // process's, once, before the window exists; this file only polls that file (on a worker: gui/link_request_poll.hpp) and puts the question to the tester.
@@ -257,16 +258,27 @@ void AppWindow::drawTesterUsageSection() {
 
 // --- Beta tester usage --------------------------------------------------------
 
-// THE TWO LISTENERS' MARKS (the window's closures on the engine's servers, by the one door). Called once, from the constructor, before the settings file can start
-// a listener. The closures hold the recorder itself, not this window: a server's last request can come after the window's members are gone.
-void AppWindow::installTesterUsageHooks() {
-    const std::shared_ptr<cascade::core::TesterUsageRecorder> recorder = testerUsage_;
-    const bool installed = engine_.setServerUsageHooks([recorder]() { recorder->noteFeature("browser"); },
-                                                       [recorder]() { recorder->noteFeature("cat"); });
-    if (!installed) {
-        // Said once, in the log, without a word of what any of it would have recorded.
-        cascade::core::diagWarnf("tester usage: a listener was already running, so browser and CAT use is not recorded this session");
-    }
+// THE TWO LISTENERS' MARKS (shell retirement R3): "a browser was served" and "a CAT client connected" are the servers' own counters, read through the table. A counter that
+// has moved since the last read is a mark; the recorder ignores a mark while no code is set (noteFeature), and while it is not armed the baseline follows the counters, so a
+// code pasted mid-session does not credit what was served before it. The counters start at zero with the engine, so a request served before the first read still counts.
+// Read once a frame (testerNoteFacts) and again whenever the session's report is saved (testerUsageJournal), so a request served after the last frame is not lost to the
+// final save. Two reads of an atomic each; nothing else is touched.
+void AppWindow::testerNoteListeners() {
+    if (uiSession_ == nullptr) { return; }
+    const auto count = [&](const char* key, std::uint64_t& seen) -> bool {
+        char buf[32];
+        const int32_t n = engineApi_->get_setting(uiSession_, key, buf, sizeof(buf));
+        if (n < 0) { return false; }
+        const std::uint64_t now = std::strtoull(buf, nullptr, 10);
+        const bool moved = now > seen;
+        seen = now;
+        return moved;
+    };
+    const bool web = count("fact.web.served", testerWebServed_);
+    const bool cat = count("fact.cat.accepted", testerCatAccepted_);
+    if (!testerUsage_->armed()) { return; }
+    if (web) { testerUsage_->noteFeature("browser"); }
+    if (cat) { testerUsage_->noteFeature("cat"); }
 }
 
 // THE MARKS THE TABLE SAYS (once a frame, after the state is read). Master noted each of these where the engine did the work - the recorder's start, the scanner's start,
@@ -280,6 +292,7 @@ void AppWindow::installTesterUsageHooks() {
 //   <kind>, native-drivers   a radio is open: its kind (the part of the DEVICES id before the first colon - "rtlsdr", "soapy", "hackrf"...), and "native-drivers" when it
 //                       is one of this product's own drivers (not SoapySDR, not the sound card); the IQ file is not a radio and earns nothing
 void AppWindow::testerNoteFacts() {
+    testerNoteListeners();
     // Disarmed, the radio kind is forgotten, so the first armed frame reads it afresh (a code pasted mid-session counts the radio in use).
     if (!testerUsage_->armed()) {
         testerFactsSeq_ = ~std::uint64_t{0};
@@ -445,6 +458,7 @@ void AppWindow::testerUsageJournal(cascade::core::AppConfig& cfg) {
         return;
     }
     testerUsageAccrue();
+    testerNoteListeners();   // (a request served since the last frame is in this save)
     const double now = wallTimeS();
     const double sessionSeconds = now > testerSessionStart_ ? now - testerSessionStart_ : 0.0;
     cfg.testerUsageCurrent = buildTesterUsageReport(sessionSeconds).toJson();

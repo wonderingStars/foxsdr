@@ -134,7 +134,6 @@ void EngineShell::telemetryStartup(const cascade::core::AppConfig& cfg, const st
     SHELL_ENGINE.telemetryStartup(cfg, configDir);
 }
 void EngineShell::applyConfig(const cascade::core::AppConfig& cfg) { SHELL_ENGINE.applyConfig(cfg); }
-std::string EngineShell::pluginCatalogueUrl() const { return SHELL_ENGINE.pluginCatalogueUrl_; }
 
 EngineShell::ConfigReadback EngineShell::configReadback() const {
     Engine& e = SHELL_ENGINE;
@@ -146,8 +145,6 @@ EngineShell::ConfigReadback EngineShell::configReadback() const {
 
 cascade::core::AppConfig EngineShell::configSnapshot() const { return SHELL_ENGINE.configSnapshot(); }
 void EngineShell::publishConfig() { SHELL_ENGINE.publishConfig(); }
-void EngineShell::publishStatusText() { SHELL_ENGINE.publishStatusText(); }
-EngineStatusText EngineShell::statusText() const { return SHELL_ENGINE.statusText(); }
 void EngineShell::setFrontEndFacts(FrontEndFacts facts) { SHELL_ENGINE.setFrontEndFacts(std::move(facts)); }
 void EngineShell::setFrontEndWaitBeat(std::function<void()> beat) { SHELL_ENGINE.setFrontEndWaitBeat(std::move(beat)); }
 void EngineShell::setControlWatchdogReportDir(const std::string& dir) { SHELL_ENGINE.setControlWatchdogReportDir(dir); }
@@ -158,7 +155,6 @@ void EngineShell::startReceiver() { SHELL_ENGINE.startReceiver(); }
 void EngineShell::controlPass() { SHELL_ENGINE.controlPass(); }
 void EngineShell::startControlThread(const ControlThreadOptions& options) { SHELL_ENGINE.startControlThread(options); }
 void EngineShell::stepPass(PassPart part) { SHELL_ENGINE.stepPass(part); }
-void EngineShell::frameKick() { SHELL_ENGINE.frameKick(); }
 
 void EngineShell::configureHeartbeat() {
     Engine& e = SHELL_ENGINE;
@@ -233,17 +229,6 @@ void EngineShell::serveWebTiles(bool clearFirst, bool serve, std::size_t maxTile
         web.setTile(r.z, r.x, r.y, std::move(bmp));
         ++served;
     }
-}
-
-// The tester recorder's two hooks, handed to the servers that are the engine's (B15). Nothing here chooses what a hook does: it is the window's
-// closure, stored by the server and called from the server's own threads. Refused whole when either listener runs (the servers take the callback only
-// while stopped), so a half-installed pair is never the answer.
-bool EngineShell::setServerUsageHooks(std::function<void()> web, std::function<void()> cat) {
-    ServerHost& servers = SHELL_ENGINE.servers();
-    if (servers.webServer().running() || servers.catServer().running()) { return false; }
-    const bool webTaken = servers.webServer().setUsageCallback(std::move(web));
-    servers.catServer().setUsageCallback(std::move(cat));
-    return webTaken;
 }
 
 #undef SHELL_ENGINE

@@ -140,6 +140,11 @@ public:
         mutable std::atomic<int> clients{0};          // web: browser sessions; CAT: connected clients
         mutable std::atomic<int> audioListeners{0};   // web only
         mutable std::atomic<std::uint64_t> commands{0};
+        // USE, as a monotone count the listener's own threads keep (shell retirement R3; the table's fact.web.served and fact.cat.accepted):
+        // web - requests answered with anything but 404 or 401; CAT - clients accepted. Incremented by the usage callback the host installs on
+        // each server in its constructor, from whichever thread served; never reset. They move with traffic and so do not rebuild the lists.
+        mutable std::atomic<std::uint64_t> served{0};
+        mutable std::atomic<std::uint64_t> accepted{0};
         std::function<void(const Counters&)> sampler;  // set once, by the host's constructor, before any thread exists
         void sample() const {
             if (sampler) { sampler(*this); }

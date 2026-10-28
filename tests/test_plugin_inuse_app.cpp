@@ -838,6 +838,33 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --- A PRESS ON A PLUGIN WITH NO PRESET PINS IT TOO (shell retirement R3, the pin R2 left open) ----------
+    //
+    // FOXSDR_PRESS_PRESET on a plugin that has no preset of its own (the text probe) does what a preset's press does for the run state: it pins the
+    // plugin to run, FOXAPP_OP_PLUGIN_RUN_MODE 1, which is what the config saves against its id. R2 replaced the seam that did it
+    // (recordPluginStopped(key, false)) with that command, and the mutant that removed the command left every real-binary test green - this is the
+    // check that is red without it. What tells it from the plugin merely being woken by the windows the press opens: the entry in the saved config
+    // (a wake writes none), and the plugin staying up, paced past the dormant interval, with nothing else asking for it.
+    {
+        installPlugins(kTextFile, kImageFile);
+        RunOptions press;
+        press.frames = 110;
+        press.press = "Rescan Probe a";
+        press.dormantAfterMs = "200";
+        press.script = pace(35, 105);
+        const Result p = once("nopreset-press", press);
+        CHECK(p.ok);
+        if (p.ok) {
+            std::printf("    no-preset press: create %d; pinned in the config: %s\n", p.count("a", "create"),
+                        p.config.find("\"" + kTextFile + "\": \"always\"") != std::string::npos ? "yes" : "no");
+            CHECK(p.logHas("capture: preset for 'Rescan Probe a' pressed"));
+            CHECK(p.config.find("\"" + kTextFile + "\": \"always\"") != std::string::npos);
+            CHECK(p.count("a", "create") == 1);
+            CHECK(!p.logHas("dormant after"));
+            CHECK(p.count("a", "destroy") == 1);  // only the application ending
+        }
+    }
+
     // --- THE OLD STOP LIST is migrated, by ID -----------------------------------------------------------
     {
         // The plugin is fitted as a DIFFERENT VERSION of the file the old list names.

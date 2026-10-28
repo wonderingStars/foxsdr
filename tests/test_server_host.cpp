@@ -35,6 +35,10 @@
 //       pass's now (and every reader's), so it must not queue behind the block.
 //   H15 NO WINDOW, NO TILES (stage 5e): the basemap's tiles are the one feed only the window's plugin client can give; a headless engine's status
 //       says the basemap is not active, and a tile asked for anyway is answered "pending" (202) - never a picture, never an error.
+//   H16 THE LISTENERS' USE AS FACTS (shell retirement R3, 2026-10-28; docs/api-0.3-additions.md 9.14): fact.web.served counts the requests the web server answers
+//       with anything but 404 or 401 and fact.cat.accepted the clients CAT accepts - the two marks the beta-tester record's "browser" and "CAT" are read from. A
+//       404 moves neither, a 401 (an unauthenticated request, a wrong login) moves neither, a request answered moves the first by exactly one, a client accepted
+//       the second by exactly one; a REMOTE session is refused both. (tests/test_tester_host_only.cpp holds the window half through the real binary.)
 //   H10 NEVER IN THE PASS: with a browser holding a request open (so the web server's stop must wait for it), the SERVER_CONFIG that
 //       disables the server is applied by the free-running pass and the pass goes on at its rate while the WORKER is inside the stop. The
 //       gap between two passes stays a small fraction of the second a stalled pass unkeys the transmitter at.
@@ -994,6 +998,101 @@ void testTheWebSessionThroughTheRealChain() {
                 "server, the one web session and the pass; 17 cookies = 1 engine session; stop = 0; restart = 1\n");
 }
 
+void testListenersUseAsFacts() {
+    Rig r("testHooks=1;servers=1");
+    const int webPort = freePort();
+    int catPort = freePort();
+    while (catPort == webPort) { catPort = freePort(); }
+    CHECK(r.config(webConfig(webPort)).status == FOXAPI_OK);
+    CHECK(r.config(catConfig(catPort)).status == FOXAPI_OK);
+    const auto served = [&] { return r.fact("fact.web.served"); };
+    const auto accepted = [&] { return r.fact("fact.cat.accepted"); };
+    CHECK_EQ(served(), std::string("0"));
+    CHECK_EQ(accepted(), std::string("0"));
+    // A REMOTE session is refused both (a transport has no business with the machine owner's use of a listener).
+    {
+        FoxSessionParams p{};
+        p.structSize = sizeof(p);
+        p.flags = FOXAPI_SESSION_REMOTE;
+        p.grants = FOXAPI_GRANT_VIEW;
+        p.token = "s3cret";
+        p.clientName = "a client";
+        FoxSession* remote = nullptr;
+        const int32_t opened = api()->open_session(r.e.apiHandle(), &p, &remote);
+        if (opened == FOXAPI_OK) {
+            char buf[32];
+            CHECK_EQ(api()->get_setting(remote, "fact.web.served", buf, sizeof(buf)), FOXAPI_DENIED);
+            CHECK_EQ(api()->get_setting(remote, "fact.cat.accepted", buf, sizeof(buf)), FOXAPI_DENIED);
+            api()->close_session(remote);
+        } else {
+            std::printf("      (a REMOTE session needs a token this engine does not know: %d; the refusal is held by test_engine_api_03)\n", opened);
+        }
+    }
+
+    httplib::Client cli("127.0.0.1", webPort);
+    cli.set_connection_timeout(2, 0);
+    cli.set_read_timeout(5, 0);
+    // THE CONTROL: a 404 is not a use.
+    const auto missing = cli.Get("/no-such-route-at-all");
+    CHECK(missing && missing->status == 404);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    CHECK_EQ(served(), std::string("0"));
+    // A page answered is one.
+    const auto page = cli.Get("/");
+    CHECK(page && page->status == 200);
+    CHECK(waitUntil(3000, [&] { return served() == "1"; }));
+    CHECK_EQ(served(), std::string("1"));
+    const auto status = cli.Get("/api/status");
+    CHECK(status && status->status == 200);
+    CHECK(waitUntil(3000, [&] { return served() == "2"; }));
+    // The counter is a measurement: it moved without moving the lists (listSeq is the state's), so an interface that keeps copies of the lists copies nothing for it.
+    const std::uint64_t listSeq = r.state().listSeq;
+    for (int i = 0; i < 5; ++i) { (void)cli.Get("/api/status"); }
+    CHECK(waitUntil(3000, [&] { return served() == "7"; }));
+    r.pump(2);
+    CHECK_EQ(r.state().listSeq, listSeq);
+
+    // A 401 is not a use: with a password, an unauthenticated request and a wrong login are refused and move nothing; the right login is answered and does.
+    const std::string secret = "correct horse battery";
+    CHECK(r.config("{\"web\":{\"password\":\"" + secret + "\"}}", /*settle=*/false).status == FOXAPI_OK);
+    CHECK(waitUntil(60000, [&] {
+        r.pump(1);
+        return r.fact("fact.web.hasPassword") == "1" && r.fact("fact.web.passwordPending") == "0";
+    }));
+    CHECK(r.e.servers().waitIdle(std::chrono::seconds(30)));
+    r.pump(2);
+    const std::string before = served();       // (the count the password's restart left: the hooks stay installed across a restart, nothing was reset)
+    CHECK_EQ(before, std::string("7"));
+    httplib::Client cli2("127.0.0.1", webPort);
+    cli2.set_connection_timeout(2, 0);
+    cli2.set_read_timeout(5, 0);
+    const auto closed = cli2.Get("/api/status");
+    CHECK(closed && closed->status == 401);
+    const auto wrong = cli2.Post("/api/login", "{\"username\":\"admin\",\"password\":\"not the password\"}", "application/json");
+    CHECK(wrong && wrong->status == 401);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    CHECK_EQ(served(), before);
+    const auto right = cli2.Post("/api/login", "{\"username\":\"admin\",\"password\":\"" + secret + "\"}", "application/json");
+    CHECK(right && right->status == 200);
+    CHECK(waitUntil(3000, [&] { return served() == "8"; }));
+
+    // CAT: a client accepted is a use, once each; the commands it sends are not further uses.
+    SockT c1 = connectTo(catPort, 2000);
+    CHECK(c1 != INVALID_SOCKET);
+    CHECK(waitUntil(3000, [&] { return accepted() == "1"; }));
+    CHECK(sendRaw(c1, "f\n"));
+    (void)readLines(c1, 1);
+    closeSock(c1);
+    SockT c2 = connectTo(catPort, 2000);
+    CHECK(c2 != INVALID_SOCKET);
+    CHECK(waitUntil(3000, [&] { return accepted() == "2"; }));
+    closeSock(c2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    CHECK_EQ(accepted(), std::string("2"));
+    CHECK_EQ(served(), std::string("8"));      // and the two counters are the two listeners' own
+    std::printf("H16: fact.web.served counted 8 answered requests and not the 404 or the two 401s, fact.cat.accepted counted 2 clients; no list moved for them\n");
+}
+
 int main(int argc, char** argv) {
     // (An argument of the form H<n> runs that case alone - the break-it checks use it; the CTest entry passes none.)
     std::string only;
@@ -1015,5 +1114,6 @@ int main(int argc, char** argv) {
     if (want("H13")) { testAudioThroughTheWholeChain(); }
     if (want("H14")) { testThePassWithAListenerAndTheAudioLockHeld(); }
     if (want("H15")) { testNoWindowNoTiles(); }
+    if (want("H16")) { testListenersUseAsFacts(); }
     return testSummary("test_server_host");
 }

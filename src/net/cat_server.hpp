@@ -98,8 +98,9 @@ public:
     // accepted connection opens its session through it (see CatSession).
     void setSessionOpener(CatSessionOpener fn);
 
-    // Fired once per accepted client, from the acceptor thread - see
-    // core::TesterUsageRecorder, which is what the GUI hands this for. Must
+    // Fired once per accepted client, from the acceptor thread. The engine's
+    // ServerHost installs a counter here (fact.cat.accepted; shell retirement
+    // R3) - what the beta-tester usage record's "CAT" mark is read from. Must
     // be set before start(); must be safe to call from any thread and must
     // never block (it runs ahead of the client's own thread being spawned).
     void setUsageCallback(std::function<void()> fn);

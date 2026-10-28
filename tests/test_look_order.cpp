@@ -5,6 +5,10 @@
 // events FIRST, the status lines next, THEN the state, the spectrum and the lists keyed on its sequence, and only then are the answers
 // ACTED ON - against that state. Two properties, each with its control (the opposite order, which the test can see fail):
 //
+//   (Since shell retirement R3 the window's status lines are the table's fact.status.* - refreshStatusLines - and not Engine::statusText's copy. A and B hold
+//   what the ENGINE publishes and what the window ACTS on; D holds that the window's lines ARE the engine's, key for key, and E the store's URL box; the
+//   window's own order of the two reads is held as text by the guard. A below is still true of Engine::statusText, which the diagnostics report reads.)
+//
 //   A  THE STATUS LINES ARE NEVER FROM A LATER PASS THAN THE STATE. The pass publishes the state and then the lines
 //      (Engine::pumpPublish); a reader that takes the lines and then the state therefore sees lines at most one pass OLD. A hook in the
 //      gap between the two publishes holds the pass there; a reader thread checks, in the gap, that the lines it read are not newer
@@ -51,10 +55,57 @@ struct AppWindowTestAccess {
     static Engine& engine(AppWindow& a) { return th::engine(a); }
     static void betweenPublishes(void (*f)()) { Engine::testHooks_.betweenPublishes = f; }
     static void poll(AppWindow& a) { a.pollUiAnswers(); }
+    // The window's own two reads, in drawUi's order: the status lines (the table's facts since shell retirement R3), then the state.
     static void look(AppWindow& a) {
-        a.statusLines_ = th::engine(a).statusText();
+        a.refreshStatusLines();
         a.refreshUiState();
     }
+    static const cascade::engine::EngineStatusText& lines(AppWindow& a) { return a.statusLines_; }
+    // R3: the engine's 22 sentences set, one distinct text per key (the key is in the text), the ADD ALL run failed or not, the fault sentence longer than the
+    // window's first 512-byte read; and cleared again. Set with no pass running (the caller steps the pass itself).
+    static void say(AppWindow& a, bool addAllFailed) {
+        Engine& e = th::engine(a);
+        e.sourceError_ = "text of sourceError";
+        e.gpsRefusal_ = "text of gpsRefusal";
+        e.catalogError_ = "text of catalogError";
+        e.bandPlanError_ = "text of bandPlanError";
+        e.tuneMismatchNote_ = "text of tuneMismatchNote";
+        e.transmitError_ = "text of transmitError";
+        e.soundCardMissing_ = "text of soundCardMissing";
+        e.sdrPlayApiDetail_ = "text of sdrPlayApiDetail";
+        e.sdrPlayAdvice_ = "text of sdrPlayAdvice";
+        e.recordNotice_ = "text of recordNotice";
+        e.recordError_ = "text of recordError";
+        e.presetNote_ = "text of presetNote";
+        e.pluginEnforceError_ = "text of pluginEnforceError";
+        e.restoreKeepLabel_ = "text of restoreKeepLabel";
+        e.audioHealthNote_ = "text of audioHealth";
+        e.bookmarkImportNote_ = "text of bookmarkNote";
+        e.bookmarkError_ = "text of bookmarkError";
+        e.installReport_ = "text of installReport";
+        e.installError_ = "text of installError";
+        e.catalogStatus_ = "text of catalogStatus";
+        e.addAllSummary_ = "text of addAllSummary";
+        e.addAllFailed_ = addAllFailed;
+        e.testFault_ = std::string("text of deviceFault ") + std::string(900, 'f');
+    }
+    static void hush(AppWindow& a) {
+        Engine& e = th::engine(a);
+        for (std::string* t : {&e.sourceError_, &e.gpsRefusal_, &e.catalogError_, &e.bandPlanError_, &e.tuneMismatchNote_, &e.transmitError_,
+                               &e.soundCardMissing_, &e.sdrPlayApiDetail_, &e.sdrPlayAdvice_, &e.recordNotice_, &e.recordError_, &e.presetNote_,
+                               &e.pluginEnforceError_, &e.restoreKeepLabel_, &e.audioHealthNote_, &e.bookmarkImportNote_, &e.bookmarkError_,
+                               &e.installReport_, &e.installError_, &e.catalogStatus_, &e.addAllSummary_, &e.testFault_}) {
+            t->clear();
+        }
+        e.addAllFailed_ = false;
+    }
+    static void pass(AppWindow& a) { th::engine(a).controlPass(); }
+    static std::string url(AppWindow& a) { return a.pluginUrlBuf_; }
+    static void typeUrl(AppWindow& a, const std::string& v) { std::snprintf(a.pluginUrlBuf_, sizeof(a.pluginUrlBuf_), "%s", v.c_str()); }
+    static bool seeded(AppWindow& a) { return a.pluginUrlSeeded_; }
+    static void unseed(AppWindow& a) { a.pluginUrlSeeded_ = false; }   // (what AppWindow::applyConfig does)
+    static std::string engineUrl(AppWindow& a) { return th::engine(a).pluginCatalogueUrl_; }
+    static void setEngineUrl(AppWindow& a, const std::string& v) { th::engine(a).pluginCatalogueUrl_ = v; }
     static void act(AppWindow& a) { a.actOnUiAnswers(); }
     static void submit(AppWindow& a, const FoxCommand& c) { a.uiSubmit(c); }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
@@ -287,6 +338,89 @@ void testBusyHoldsAnswersBack() {
     A::tap(app, nullptr);
 }
 
+// ---- D -------------------------------------------------------------------------------------------------------------------------
+// THE WINDOW'S STATUS LINES ARE THE ENGINE'S, KEY FOR KEY (shell retirement R3). The window read Engine::statusText()'s copy; it reads fact.status.<key> now,
+// through refreshStatusLines, and a key read into the wrong field, a key missing, or a flag lost would put a sentence on the wrong panel. The engine's 22
+// sentences are each set to a text that names its key; after the pass has published them the window's lines equal the copy field by field, the fault sentence
+// (900 bytes, past the first 512-byte read) whole, and ADD ALL's level follows the engine's flag. Said no more, they are empty in the window the next look.
+void testWindowLinesAreTheEngines() {
+    std::printf("  D: the window's status lines (fact.status.*) are the engine's, key for key\n");
+    th::TestWindow app;
+    // BEFORE THE FIRST PUBLISH a fact answers nothing: the lines are empty and the look says so.
+    A::look(app);
+    CHECK(A::lines(app).sourceError.empty() && A::lines(app).deviceFault.empty() && !A::lines(app).addAllFailed);
+    for (const bool failed : {false, true}) {
+        A::say(app, failed);
+        A::pass(app);
+        A::look(app);
+        const cascade::engine::EngineStatusText copy = th::engine(app).statusText();
+        const cascade::engine::EngineStatusText& w = A::lines(app);
+        const auto same = [&](const char* key, const std::string& window, const std::string& engine) {
+            const bool ok = window == engine && window.rfind(std::string("text of ") + key, 0) == 0;
+            if (!ok) { std::printf("      FAIL %s: window '%.40s', engine '%.40s'\n", key, window.c_str(), engine.c_str()); }
+            CHECK(ok);
+        };
+        same("sourceError", w.sourceError, copy.sourceError);
+        same("gpsRefusal", w.gpsRefusal, copy.gpsRefusal);
+        same("catalogError", w.catalogError, copy.catalogError);
+        same("bandPlanError", w.bandPlanError, copy.bandPlanError);
+        same("tuneMismatchNote", w.tuneMismatchNote, copy.tuneMismatchNote);
+        same("transmitError", w.transmitError, copy.transmitError);
+        same("soundCardMissing", w.soundCardMissing, copy.soundCardMissing);
+        same("sdrPlayApiDetail", w.sdrPlayApiDetail, copy.sdrPlayApiDetail);
+        same("sdrPlayAdvice", w.sdrPlayAdvice, copy.sdrPlayAdvice);
+        same("recordNotice", w.recordNotice, copy.recordNotice);
+        same("recordError", w.recordError, copy.recordError);
+        same("presetNote", w.presetNote, copy.presetNote);
+        same("pluginEnforceError", w.pluginEnforceError, copy.pluginEnforceError);
+        same("restoreKeepLabel", w.restoreKeepLabel, copy.restoreKeepLabel);
+        same("audioHealth", w.audioHealth, copy.audioHealth);
+        same("bookmarkNote", w.bookmarkNote, copy.bookmarkNote);
+        same("bookmarkError", w.bookmarkError, copy.bookmarkError);
+        same("installReport", w.installReport, copy.installReport);
+        same("installError", w.installError, copy.installError);
+        same("catalogStatus", w.catalogStatus, copy.catalogStatus);
+        same("addAllSummary", w.addAllSummary, copy.addAllSummary);
+        same("deviceFault", w.deviceFault, copy.deviceFault);
+        CHECK(w.deviceFault.size() > 800u);
+        CHECK((w.addAllFailed) == (failed));
+        CHECK((copy.addAllFailed) == (failed));
+    }
+    A::hush(app);
+    A::pass(app);
+    A::look(app);
+    CHECK(A::lines(app).sourceError.empty() && A::lines(app).deviceFault.empty() && A::lines(app).addAllSummary.empty() && !A::lines(app).addAllFailed);
+}
+
+// ---- E -------------------------------------------------------------------------------------------------------------------------
+// THE STORE'S URL BOX IS SEEDED AT THE FIRST LOOK THAT FINDS THE FACT (shell retirement R3; it was read from the engine in the constructor and again in
+// applyConfig). Before the first publish there is no fact and the box is empty and not yet seeded; the first look after the pass has published seeds it from
+// fact.store.url; what the person types after that is theirs - a later look, and a later change of the engine's URL, do not overwrite it; applyConfig (which clears
+// the flag) puts the engine's URL in the box again at the next look.
+void testUrlBoxIsSeededOnce() {
+    std::printf("  E: the store's URL box is seeded from fact.store.url at the first look that finds it, once\n");
+    th::TestWindow app;
+    CHECK(!A::seeded(app));
+    CHECK(A::url(app).empty());
+    A::look(app);                                  // no publish yet: the fact is not there
+    CHECK(!A::seeded(app));
+    CHECK(A::url(app).empty());
+    A::pass(app);
+    A::look(app);
+    CHECK(A::seeded(app));
+    CHECK(!A::url(app).empty());
+    CHECK((A::url(app)) == (A::engineUrl(app)));      // the engine's default index
+    A::typeUrl(app, "typed by the person");
+    A::setEngineUrl(app, "https://example.test/other/index.json");
+    A::pass(app);
+    A::look(app);
+    CHECK((A::url(app)) == (std::string("typed by the person")));   // seeded once: the box is theirs now
+    A::unseed(app);                                // applyConfig's act
+    A::look(app);                                  // the engine has published its URL already (the last pass): the next look puts it in the box
+    CHECK((A::url(app)) == (std::string("https://example.test/other/index.json")));
+    CHECK(A::seeded(app));
+}
+
 }  // namespace
 
 int main() {
@@ -314,6 +448,8 @@ int main() {
     testStatusThenState();
     testAnswersAfterTheState();
     testBusyHoldsAnswersBack();
+    testWindowLinesAreTheEngines();
+    testUrlBoxIsSeededOnce();
 
     ImGui::DestroyContext();
     std::error_code ec;

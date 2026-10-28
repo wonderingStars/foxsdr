@@ -30,7 +30,9 @@
 //      use; K5 a kick is not a submit (no lag stamped), a kicked pass drains the remote controls, and a headless / stepped / absent
 //      engine is untouched; K6 (the 0.99.97 merge, master's "nothing is drawn while the display is off", gui/display_power.hpp) the frames
 //      slow to the display-off cadence - one kick every kDisplayOffFrameMs, drawing and presenting nothing - and the pass still free-runs at
-//      about the timer's rate: the kick is welcome, never needed
+//      about the timer's rate: the kick is welcome, never needed; K7 (shell retirement R3, 2026-10-28) the window's kick is no longer a call on the
+//      engine but the HEARTBEAT of a session opened FOXAPI_SESSION_FRAME: K1's and K6's cadences driven through that heartbeat give the same numbers,
+//      a heartbeat on a session without the flag kicks nothing, a stepped engine ignores it, and the flag is refused to a REMOTE session
 //   I  THE PASS'S OWN FIGURES (the measurement run's, P7): the log-linear histogram's arithmetic, pinned; and the engine's submit-to-publish
 //      lag and pass durations - every wake a submit made is served by a pass whose publish is timed from it, the window the harness marks
 //      is the window the JSON reports, and a build with no wake has no lag (the break-it: no stamp in wakeControl -> 0 served)
@@ -43,6 +45,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -60,6 +63,7 @@
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "engine/engine_host.hpp"
+#include "engine/fox_engine_api.hpp"
 #include "engine/pass_stats.hpp"
 #include "gui/display_power.hpp"
 #include "test_check.hpp"
@@ -500,9 +504,11 @@ struct Kicker {
     std::atomic<bool> go{true};
     std::vector<Clock::time_point> times;   // the kicker's alone until stop() has joined it
     std::thread t;
-    Kicker(Engine& eng, double intervalMs) : e(eng) {
+    Kicker(Engine& eng, double intervalMs) : Kicker(eng, intervalMs, [&eng] { eng.frameKick(); }) {}
+    // `beat` is what a frame does to kick (K7: the heartbeat of a FRAME session; every other case: Engine::frameKick itself).
+    Kicker(Engine& eng, double intervalMs, std::function<void()> beat) : e(eng) {
         times.reserve(200000);
-        t = std::thread([this, intervalMs] {
+        t = std::thread([this, intervalMs, beat = std::move(beat)] {
             auto next = Clock::now();
             while (go.load()) {
                 if (intervalMs > 0.0) {
@@ -511,7 +517,7 @@ struct Kicker {
                     if (!go.load()) { break; }
                 }
                 if (times.size() < times.capacity()) { times.push_back(Clock::now()); }
-                e.frameKick();
+                beat();
             }
         });
     }
@@ -738,6 +744,185 @@ void testKickAtDisplayOffCadence() {
         CHECK(d.kickedPasses >= nKicks * 9u / 10u);             // ... and a kick that lands is still a pass (33 ms is not a flood)
         CHECK(d.kicksDropped * 10u <= nKicks);                  // none dropped as a flood, bar a kick that landed beside a timer pass
         break;
+    }
+}
+
+// K7 (shell retirement R3, 2026-10-28): THE FRAME'S KICK IS THE HEARTBEAT OF A FRAME SESSION. The window used to call Engine::frameKick as the first act of its
+// loop (a method of the C++ door); now it beats the session it opened with FOXAPI_SESSION_FRAME on the same spot, and the table's heartbeat() is what kicks. The
+// kick's rules are the engine's and did not move, so what this holds is that THE SAME CADENCES GIVE THE SAME NUMBERS through the session:
+//   - the 60 Hz of K1 (grace 24, gap 8): a pass a kick, started by the kick, none by the timer (the timer's one already-due pass allowed), ~60 a second;
+//   - the 33 ms of K6 (the display off): the timer still free-runs between the kicks, ~60 a second, no gap past the grace and a margin, the kicks served;
+//   - a heartbeat on a session WITHOUT the flag is a heartbeat and nothing more: not one kick, in a second of flat-out beating;
+//   - a STEPPED engine ignores the flagged beat as it ignored frameKick (the stepPass calls are its passes);
+//   - the flag is refused to a REMOTE session (BAD_ARGUMENT): a transport has no frames.
+// Break-its (docs/engine-stage4.md 6.25): the heartbeat not kicking on a flagged session -> the 60 Hz and 33 ms cases go red on their pass counts and the
+// control's twin below stays green; the flag ignored (every heartbeat kicks) -> the control goes red.
+struct FrameRun {
+    Engine::PassStats d;
+    std::size_t nKicks = 0;
+    double perSecond = 0.0;
+    double longestKick = 0.0;
+    double longestStartGap = 0.0;
+    std::vector<double> lags;
+};
+
+FoxSession* openSession(const FoxEngineApi* api, Engine& e, std::uint32_t flags) {
+    FoxSessionParams p{};
+    p.structSize = sizeof(p);
+    p.flags = flags;
+    p.grants = FOXAPI_GRANT_VIEW;
+    p.clientName = "pass control K7";
+    FoxSession* s = nullptr;
+    return api->open_session(e.apiHandle(), &p, &s) == FOXAPI_OK ? s : nullptr;
+}
+
+FrameRun runFrames(const FoxEngineApi* api, double intervalMs, int framesMs, int graceMs) {
+    Engine e;
+    e.initialise();
+    FoxSession* frame = openSession(api, e, FOXAPI_SESSION_LOCAL | FOXAPI_SESSION_FRAME);
+    CHECK(frame != nullptr);
+    FrameRun r;
+    A::passStarting(&recordPassStart);   // (set before the thread exists and cleared after it is joined: the hook is a plain pointer the loop reads)
+    e.startControlThread(kickOpts(16, 2, graceMs, 8));
+    CHECK(e.runPassNow());
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    (void)takeStarts();
+    const Engine::PassStats before = e.passStats();
+    std::vector<Clock::time_point> kickTimes;
+    {
+        Kicker k(e, intervalMs, [api, frame] { (void)api->heartbeat(frame); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(framesMs));
+        k.stop();
+        r.nKicks = k.times.size();
+        kickTimes = k.times;
+    }
+    r.d = statsDiff(e.passStats(), before);
+    e.stopControlThread();
+    A::passStarting(nullptr);
+    const std::vector<Clock::time_point> starts = takeStarts();
+    api->close_session(frame);
+    r.perSecond = static_cast<double>(r.d.passes) / (framesMs / 1000.0);
+    for (std::size_t i = 1; i < kickTimes.size(); ++i) { r.longestKick = std::max(r.longestKick, msBetween(kickTimes[i - 1], kickTimes[i])); }
+    for (std::size_t i = 1; i < starts.size(); ++i) { r.longestStartGap = std::max(r.longestStartGap, msBetween(starts[i - 1], starts[i])); }
+    r.lags = kickToStart(kickTimes, starts);
+    return r;
+}
+
+void testKickIsTheFrameSessionsHeartbeat() {
+    std::printf("  K7: the frame's kick is the heartbeat of a FOXAPI_SESSION_FRAME session: K1's and K6's cadences give the same numbers; no flag, no kick\n");
+    const FoxEngineApi* api = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+    CHECK(api != nullptr);
+    if (api == nullptr) { return; }
+    // The refusal first: the flag on a REMOTE session is BAD_ARGUMENT, on a LOCAL one it opens.
+    {
+        Engine e;
+        e.initialise();
+        FoxSessionParams p{};
+        p.structSize = sizeof(p);
+        p.grants = FOXAPI_GRANT_VIEW;
+        p.clientName = "pass control K7";
+        FoxSession* s = nullptr;
+        p.flags = FOXAPI_SESSION_REMOTE | FOXAPI_SESSION_FRAME;
+        CHECK((api->open_session(e.apiHandle(), &p, &s)) == (FOXAPI_BAD_ARGUMENT));
+        CHECK(s == nullptr);
+        p.flags = FOXAPI_SESSION_LOCAL | FOXAPI_SESSION_FRAME;
+        CHECK((api->open_session(e.apiHandle(), &p, &s)) == (FOXAPI_OK));
+        CHECK(s != nullptr);
+        if (s != nullptr) {
+            CHECK((api->heartbeat(s)) == (FOXAPI_OK));   // no control thread: nothing to wake, and no harm in asking
+            api->close_session(s);
+        }
+    }
+    // K1 through the session: 60 Hz, grace 24.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const FrameRun r = runFrames(api, 1000.0 / 60.0, 2000, 24);
+        std::printf("      60 Hz, grace 24 ms: %zu beats, %llu passes (%.1f a second), %llu started by a kick, %llu by the timer, %llu kicks dropped; the beater's longest gap %.2f ms\n",
+                    r.nKicks, static_cast<unsigned long long>(r.d.passes), r.perSecond, static_cast<unsigned long long>(r.d.kickedPasses),
+                    static_cast<unsigned long long>(r.d.timedPasses), static_cast<unsigned long long>(r.d.kicksDropped), r.longestKick);
+        if (r.longestKick > 24.0 && attempt < 2) {
+            std::printf("      RERUN: the beater stalled past the grace (%.2f ms), so the timer was entitled to fire; this attempt says nothing\n", r.longestKick);
+            continue;
+        }
+        CHECK(r.longestKick <= 24.0);
+        CHECK(r.nKicks >= 100u);
+        CHECK(r.d.kicks >= r.nKicks * 95u / 100u);
+        CHECK(r.d.kickedPasses >= r.nKicks * 95u / 100u);
+        CHECK(r.d.timedPasses * 20u <= r.d.passes);
+        CHECK(r.d.timedPasses <= 2u);
+        CHECK(r.d.passes <= r.nKicks + 6u);
+        CHECK(r.perSecond >= 55.0 && r.perSecond <= 65.0);
+        CHECK(r.lags.size() >= r.nKicks * 9u / 10u);
+        if (!r.lags.empty()) {
+            std::printf("      beat to the start of its pass, %zu beats: median %.3f ms, p90 %.3f ms, max %.3f ms\n", r.lags.size(), median(r.lags),
+                        r.lags[r.lags.size() * 9 / 10], r.lags.back());
+            CHECK(median(r.lags) < 1.0);
+        }
+        break;
+    }
+    // K6 through the session: the display-off cadence.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const FrameRun r = runFrames(api, static_cast<double>(cascade::gui::kDisplayOffFrameMs), 2000, 24);
+        std::printf("      %d ms (display off): %zu beats, %llu passes (%.1f a second), %llu started by a kick, %llu by the timer, %llu kicks dropped; the beater's longest gap %.2f ms, "
+                    "the longest gap between two pass starts %.2f ms\n",
+                    cascade::gui::kDisplayOffFrameMs, r.nKicks, static_cast<unsigned long long>(r.d.passes), r.perSecond,
+                    static_cast<unsigned long long>(r.d.kickedPasses), static_cast<unsigned long long>(r.d.timedPasses),
+                    static_cast<unsigned long long>(r.d.kicksDropped), r.longestKick, r.longestStartGap);
+        if ((r.longestKick > 60.0 || r.longestStartGap > 60.0) && attempt < 2) {
+            std::printf("      RERUN: the desk stalled a thread (beat gap %.2f ms, start gap %.2f ms); this attempt says nothing\n", r.longestKick, r.longestStartGap);
+            continue;
+        }
+        CHECK(r.nKicks >= 50u);
+        CHECK(r.perSecond >= 50.0 && r.perSecond <= 70.0);
+        CHECK(r.longestStartGap <= 24.0 + 12.0);
+        CHECK(r.d.timedPasses * 10u >= r.d.passes * 4u);
+        CHECK(r.d.kickedPasses >= r.nKicks * 9u / 10u);
+        CHECK(r.d.kicksDropped * 10u <= r.nKicks);
+        break;
+    }
+    // THE CONTROL: a session WITHOUT the flag, beating flat out for a second, kicks nothing - the passes are the timer's, ~60 a second.
+    {
+        Engine ce;
+        ce.initialise();
+        FoxSession* plain = openSession(api, ce, FOXAPI_SESSION_LOCAL);
+        CHECK(plain != nullptr);
+        A::passStarting(&recordPassStart);
+        ce.startControlThread(kickOpts(16, 2, 24, 8));
+        CHECK(ce.runPassNow());
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        (void)takeStarts();
+        const Engine::PassStats before = ce.passStats();
+        {
+            Kicker k(ce, 0.0, [api, plain] { (void)api->heartbeat(plain); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            k.stop();
+            std::printf("      a session without the flag, %zu heartbeats flat out in 1 s: ", k.times.size());
+        }
+        const Engine::PassStats d = statsDiff(ce.passStats(), before);
+        ce.stopControlThread();
+        A::passStarting(nullptr);
+        (void)takeStarts();
+        api->close_session(plain);
+        std::printf("%llu kicks, %llu passes (the timer's)\n", static_cast<unsigned long long>(d.kicks), static_cast<unsigned long long>(d.passes));
+        CHECK((d.kicks) == (0u));
+        CHECK((d.kicksDropped) == (0u));
+        CHECK(d.passes >= 40u && d.passes <= 80u);
+    }
+    // A STEPPED engine: the flagged beat is ignored as frameKick was (the window's three stepPass calls are its passes).
+    {
+        Engine se;
+        se.initialise();
+        FoxSession* fr = openSession(api, se, FOXAPI_SESSION_LOCAL | FOXAPI_SESSION_FRAME);
+        CHECK(fr != nullptr);
+        ControlThreadOptions o = kickOpts(16, 2, 24, 8);
+        o.stepped = true;
+        se.startControlThread(o);
+        const Engine::PassStats before = se.passStats();
+        for (int i = 0; i < 200; ++i) { (void)api->heartbeat(fr); }
+        const Engine::PassStats d = statsDiff(se.passStats(), before);
+        se.stopControlThread();
+        api->close_session(fr);
+        std::printf("      a stepped engine, 200 flagged heartbeats: %llu kicks\n", static_cast<unsigned long long>(d.kicks));
+        CHECK((d.kicks) == (0u));
     }
 }
 
@@ -1315,6 +1500,7 @@ int main() {
         if (has("K4")) { testKickGap(); }
         if (has("K5")) { testKickIsOnlyAKick(); }
         if (has("K6")) { testKickAtDisplayOffCadence(); }
+        if (has("K7")) { testKickIsTheFrameSessionsHeartbeat(); }
         std::error_code ec0;
         std::filesystem::remove_all(g_scratch, ec0);
         return testSummary("test_pass_control (filtered)");
@@ -1332,6 +1518,7 @@ int main() {
     testKickGap();
     testKickIsOnlyAKick();
     testKickAtDisplayOffCadence();
+    testKickIsTheFrameSessionsHeartbeat();
     testFloor();
     testRunPassNow();
     testStepped();

@@ -2365,11 +2365,17 @@ private:
     // THE RECORDER IS THE WINDOW'S (stub campaign B15; stage-7 survey section 8, owner decision O8): a headless engine must never be able to send a tester
     // report, so the recorder, the sender, the queue and the token live here, in host glue, fed from facts the table already publishes (testerNoteFacts) and
     // from the window's own events (the noteFeature marks beside each control). It is shared, not a member by value, because the two listeners call it
-    // from threads of their own (installTesterUsageHooks) and a server's last request may come after this window's members are gone: the closures keep
-    // it alive for as long as a server holds them.
+    // from threads of their own and a server's last request may come after this window's members are gone: the closures keep it alive for as long as a
+    // server holds them. (Until shell retirement R3 the two listeners called it - "browser", "cat" - from the closures installTesterUsageHooks handed the
+    // engine; now the window reads the servers' two counters through the table, testerNoteListeners, and nothing calls the recorder from another thread. The
+    // shared_ptr is left as it was: no behaviour reason to change it in this batch.)
     std::shared_ptr<cascade::core::TesterUsageRecorder> testerUsage_ = std::make_shared<cascade::core::TesterUsageRecorder>();
-    // Hands the recorder's two marks ("browser", "cat") to the engine's listeners, once, from the constructor (EngineShell::setServerUsageHooks).
-    void installTesterUsageHooks();
+    // The recorder's two listener marks ("browser", "cat"), noted when the table's fact.web.served / fact.cat.accepted counters have moved since the last read
+    // (once a frame in testerNoteFacts, and at every save of the session's report). Disarmed, the baseline follows the counters, so a code pasted mid-session does
+    // not credit the requests served before it.
+    void testerNoteListeners();
+    std::uint64_t testerWebServed_ = 0;      // fact.web.served as last read
+    std::uint64_t testerCatAccepted_ = 0;    // fact.cat.accepted as last read
     // The marks that need no control of their own because the table says them: a take in progress, the scanner, RF going out, the radio kind in use. Once
     // a frame, after the state is read; a no-op while no code is set.
     void testerNoteFacts();
@@ -3049,10 +3055,16 @@ private:
     // and every hermetic --frames run - opens on it; applyConfig sets it from
     // AppConfig::mainView and currentConfig writes it back.
     bool patchOpen_ = true;
-    // The engine's status lines as it last handed them over (Engine::
-    // statusText, OPEN 3): refreshed once a frame, after the frame's publish;
-    // every panel letters from this, never from the engine's fields.
+    // The engine's status lines as the last look read them (the table's
+    // fact.status.<line>; before shell retirement R3 Engine::statusText's copy,
+    // OPEN 3): refreshed once a frame by refreshStatusLines, after the frame's
+    // publish and before the state is read; every panel letters from this,
+    // never from the engine's fields.
     cascade::engine::EngineStatusText statusLines_;
+    // The look's status read: the 22 sentences from fact.status.*, the ADD ALL
+    // run's level from the STATUS_LINES list, and - once, at the first look that
+    // finds fact.store.url - the store's URL box.
+    void refreshStatusLines();
     cascade::gui::patch::Interaction patchUi_;
     // THE PAGE'S DRAFT OF THE GRAPH (engine/stage3b-pre, docs/engine-stage3.md
     // OPEN 6, Design A; on the window's session since window port group 13, API
@@ -3648,8 +3660,10 @@ private:
     // The Sinks rail's note about what AUTOMATIC last did to the buffer (translated), from fact.audio.leadNote; "" when nothing.
     std::string audioLeadNotice() const;
     // A fact's text into `out` (cleared first, "" when the engine has none), whole:
-    // what uiFact caches, for a reader that keeps its own string.
-    void readFactText(const char* key, std::string& out);
+    // what uiFact caches, for a reader that keeps its own string. True when the
+    // engine HAS the fact (even an empty one), false when it answers NOT_FOUND
+    // (before its first publish) or DENIED.
+    bool readFactText(const char* key, std::string& out);
     // THE LANGUAGE SECTION'S NOTE ABOUT THE BAND PLAN (gui/rail_reads.hpp): what
     // a country picked there asked the engine for, and when.
     cascade::gui::BandPlanAsk bandPlanAsk_;
@@ -4076,6 +4090,10 @@ private:
     std::unique_ptr<StoreListCache> storeCache_;
     StoreListCache& storeLists(bool full);
     char pluginUrlBuf_[512] = "";    // edit buffer for the catalogue URL
+    // Whether pluginUrlBuf_ has been seeded from fact.store.url (the first look that finds the fact; applyConfig clears it, the plugin test hook sets it). The
+    // seed's text is read into pluginUrlSeed_, a string that keeps its room.
+    bool pluginUrlSeeded_ = false;
+    std::string pluginUrlSeed_;
     // --- measurement (tools/measure_engine.ps1) ------------------------------
     // All three null in every ordinary run; each is created only by its debug
     // switch. FOXSDR_MEASURE (measure_) is honoured in a bounded --frames run

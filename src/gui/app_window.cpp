@@ -818,8 +818,6 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
       fittedDeck_(std::make_unique<FittedModulesDeck>()),
       fittedCache_(std::make_unique<FittedListCache>()),
       storeCache_(std::make_unique<StoreListCache>()) {
-    // THE TESTER RECORDER'S TWO MARKS ON THE ENGINE'S LISTENERS (stub campaign B15), before anything can start one: the settings file is restored below.
-    installTesterUsageHooks();
     configPath_ = std::move(configPath);
     configAnnounce_ = announceConfig;
     // THE RECEIVER'S START-UP (engine stage 3a): the recording folder, the
@@ -841,9 +839,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // grant, on this process's own engine - the one the Transmit page keys
     // through.
     openUiSession();
-    // The store's URL box starts at the engine's default (a config restore
-    // below overwrites both).
-    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl().c_str());
+    // (The store's URL box is seeded from the table's fact.store.url at the first look - refreshStatusLines - after the restore below has had its say
+    // and the pass has published it: a fact answers nothing before the first publish. Shell retirement R3.)
     // (THE WEB AND CAT SERVERS ARE THE ENGINE'S since stage 5b: it installs their providers itself, and starts them when the restored
     // config says so; their control and their reads are sessions of the table (5c-5e). This window configures them from its panels
     // and hands the web page what only it makes: the track feed and the basemap's tiles.)
@@ -919,12 +916,13 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
         // config-test diagnostic contract stays byte-identical.
         engine_.loadBookmarks();
     }
-    // WITH OR WITHOUT A CONFIG FILE (a hermetic run has none): the status
-    // lines, so the first frame letters what the restore said (OPEN 3), and
-    // the front end's facts for the engine's publish (OPEN 4) - before any
-    // frame has run.
-    engine_.publishStatusText();
-    statusLines_ = engine_.statusText();
+    // WITH OR WITHOUT A CONFIG FILE (a hermetic run has none): the front
+    // end's facts for the engine's publish (OPEN 4) - before any frame has
+    // run. (The status lines are not forced here any more: the first pass
+    // publishes them with what the restore said, and the first look reads them
+    // as facts - shell retirement R3. A stepped run's first frame runs the
+    // pass's front part before its look; a free-running run makes the first
+    // publish in run() before the loop.)
     handFrontEndFacts();
 }
 
@@ -1810,14 +1808,17 @@ int AppWindow::run(int frames) {
         if (frameLog_) { frameLog_->frameStart(); }
         if (frameCap_) { frameCap_->frameStart(); }
 
-        // THE FRAME KICKS THE PASS (docs/engine-stage4.md 6.9), as the first thing it does. Why here: the pass is a thread of its own and
+        // THE FRAME KICKS THE PASS (docs/engine-stage4.md 6.9), as the first thing it does - since shell retirement R3 by the window's HEARTBEAT, on a
+        // session opened with FOXAPI_SESSION_FRAME (openUiSession): the beat that keeps the key's session alive is also the frame's wake of the pass, and
+        // it moved here from drawUi's head for that reason. The kick's rules (the gap, the floor, the grace, "nothing happens unless the free-running
+        // loop is there") are the engine's own and are what they were. Why here: the pass is a thread of its own and
         // takes ~0.1 ms from the event to its publish, and the look is only a little later in the frame than the top of it, so the kick has to
         // be as early as there is. Measured, the age of the newest publish at the look: a kick given just before the look (at the Front part
         // in drawUi) loses the race every time - 16.9 ms, a whole frame old; the pass on its own timer 7.9 ms on average, anywhere in
         // 0-16 ms; the kick here 4.5 ms on average, under 1 ms in three frames of four and the previous frame's publish in the fourth.
         // It is also an event signal from the thread that has just come out of its own wait, a whole frame before the next timed wake the
         // pass thread no longer makes. A no-op in a stepped run (the stepPass calls are the passes) and when a pass began a moment ago.
-        engine_.frameKick();
+        if (uiSession_ != nullptr) { engineApi_->heartbeat(uiSession_); }
 
         // THE FRAME'S CLOCK STARTS HERE and stops at the bottom of the body; the guard is the scope the frame is in until it says otherwise
         // (to()), and everything not inside a scope is `other`.
@@ -1957,6 +1958,7 @@ int AppWindow::run(int frames) {
             uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_SET_CATALOGUE_URL, pluginTestHook_));
             uiSubmit(cascade::core::cmd::make(FOXAPI_OP_STORE_FETCH));
             cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginTestHook_.c_str());
+            pluginUrlSeeded_ = true;   // (the box shows the address the hook sent; the first look must not put the fact's older answer over it)
             pluginBrowseOpen_ = true;
         }
         // VERIFICATION ONLY, same house rule as FOXSDR_OPEN_SERIAL_PORTS and
@@ -3532,10 +3534,9 @@ void AppWindow::drawUi() {
     // happens here, at the head of the frame, and not part-way through it. (hostPollPlugins applies it too, for a caller that polls
     // without a frame; with nothing pending this is one lock and a counter.)
     applyPluginDirective();
-    // THE WINDOW'S HEARTBEAT, first thing in the frame: what keeps any key
-    // its session holds (a frame loop that stops, stops it - the engine's
-    // keep-alive and the TX thread's own dead-man both release the key).
-    if (uiSession_ != nullptr) { engineApi_->heartbeat(uiSession_); }
+    // (THE WINDOW'S HEARTBEAT - what keeps any key its session holds, so that a frame loop that stops, stops it: the engine's keep-alive and the TX
+    // thread's own dead-man both release the key - is the FIRST ACT OF run()'s frame loop since shell retirement R3: the same beat is the frame's kick
+    // of the pass, on a FOXAPI_SESSION_FRAME session, and it is once a frame there, not once a drawUi.)
     // The track-info plugin's status lines, polled here (its cache is this thread's) and sent as commands, so the drain just
     // below applies them in this frame's pass (the pump move's step P2: the pass used to ask for them through a host hook).
     sendTrackInfoText();
@@ -3588,10 +3589,12 @@ void AppWindow::drawUi() {
     // then the lines, so lines read before the state are never from a later pass than it), THEN THE STATE, the spectrum and the lists
     // keyed on its sequence (refreshUiState), and only then are the answers acted on - against that state.
     pollUiAnswers();
-    // THE STATUS LINES this frame's panels letter, as the engine handed
-    // them over (engine/stage3b-pre, docs/engine-stage3.md OPEN 3): one copy
-    // a frame, never the engine's own fields.
-    statusLines_ = engine_.statusText();
+    // THE STATUS LINES this frame's panels letter, as the table's facts
+    // (fact.status.<line>, the same sentences the engine handed over as a
+    // copy before shell retirement R3; engine/stage3b-pre, OPEN 3): one read
+    // a frame, never the engine's own fields. The first look also seeds the
+    // store's URL box.
+    refreshStatusLines();
     // THE STATE, ONCE A FRAME, through the session (the key's flags are
     // per-session: TX_KEY_MINE, TX_LATCH_RELEASE_FIRST).
     refreshUiState();
@@ -16940,9 +16943,9 @@ const std::string& AppWindow::uiFact(const char* key) {
 // the engine has none): what uiFact reads, for a reader that holds its own copy
 // and so builds no map node - the rail's cache (railLists) re-reads three of them
 // whenever listSeq moves, which a running decoder makes it do every pass.
-void AppWindow::readFactText(const char* key, std::string& out) {
+bool AppWindow::readFactText(const char* key, std::string& out) {
     out.clear();
-    if (uiSession_ == nullptr) { return; }
+    if (uiSession_ == nullptr) { return false; }
     char buf[512];
     int32_t n = engineApi_->get_setting(uiSession_, key, buf, sizeof(buf));
     if (n >= static_cast<int32_t>(sizeof(buf))) {
@@ -16952,6 +16955,66 @@ void AppWindow::readFactText(const char* key, std::string& out) {
     } else if (n >= 0) {
         out.assign(buf, static_cast<std::size_t>(n));
     }
+    return n >= 0;
+}
+
+// THE STATUS LINES, FROM THE TABLE (shell retirement R3; they were Engine::statusText()'s copy, handed over by the shell). The 22 sentences the panels letter are
+// fact.status.<key>, whole - the same strings the engine published for the copy (both read the same fields; see Engine::buildApiLists) - read afresh at every look
+// into strings that keep their room, and not through uiFact's cache: that is keyed on the state's listSeq, which this look has not read yet (the lines are read BEFORE
+// the state, the look's order), and a cache one look behind would show a line a frame late. A fact answers NOT_FOUND until the first publish, which reads as "no line".
+//
+// THE ADD-ALL FLAG is the one thing a fact does not carry: addAllFailed is the LEVEL of the addAllSummary line, which the STATUS_LINES list gives (3 error, 1 info).
+// The list is walked only when the summary has text.
+//
+// THE STORE'S URL BOX is seeded here, once: from fact.store.url at the first look that finds the fact (and again after applyConfig, which clears the flag). Before
+// the first publish the fact is absent, and the box stays empty until it is there; a run that has seeded it never has it overwritten by a later look (the box is the
+// person's to edit).
+//
+// WHAT THIS DOES NOT KEEP of the copy it replaces: the copy was ONE consistent snapshot behind a mutex and published AFTER the state, so a reader that took the lines
+// first never held lines from a later pass than its state. The facts are published with the lists, BEFORE the state, in the same pass; read first, they are at most
+// one pass AHEAD of the state they are read with and only in the instant between the pass's two publishes, and 22 reads can straddle a publish (two lines from two
+// passes). Both are a frame's cosmetic lag between a sentence and the flag it explains, as every other fact the window reads has (docs/engine-stage4.md 6.25, R3).
+void AppWindow::refreshStatusLines() {
+    cascade::engine::EngineStatusText& t = statusLines_;
+    readFactText("fact.status.sourceError", t.sourceError);
+    readFactText("fact.status.gpsRefusal", t.gpsRefusal);
+    readFactText("fact.status.catalogError", t.catalogError);
+    readFactText("fact.status.bandPlanError", t.bandPlanError);
+    readFactText("fact.status.tuneMismatchNote", t.tuneMismatchNote);
+    readFactText("fact.status.transmitError", t.transmitError);
+    readFactText("fact.status.soundCardMissing", t.soundCardMissing);
+    readFactText("fact.status.sdrPlayApiDetail", t.sdrPlayApiDetail);
+    readFactText("fact.status.sdrPlayAdvice", t.sdrPlayAdvice);
+    readFactText("fact.status.recordNotice", t.recordNotice);
+    readFactText("fact.status.recordError", t.recordError);
+    readFactText("fact.status.presetNote", t.presetNote);
+    readFactText("fact.status.pluginEnforceError", t.pluginEnforceError);
+    readFactText("fact.status.restoreKeepLabel", t.restoreKeepLabel);
+    readFactText("fact.status.audioHealth", t.audioHealth);
+    readFactText("fact.status.bookmarkNote", t.bookmarkNote);
+    readFactText("fact.status.bookmarkError", t.bookmarkError);
+    readFactText("fact.status.installReport", t.installReport);
+    readFactText("fact.status.installError", t.installError);
+    readFactText("fact.status.catalogStatus", t.catalogStatus);
+    readFactText("fact.status.addAllSummary", t.addAllSummary);
+    readFactText("fact.status.deviceFault", t.deviceFault);
+    t.addAllFailed = false;
+    if (!t.addAllSummary.empty() && uiSession_ != nullptr) {
+        const int32_t n = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_STATUS_LINES, 0, nullptr));
+        for (int32_t i = 0; i < n; ++i) {
+            FoxListItem it{};
+            it.structSize = sizeof(it);
+            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i), &it) <= i) { break; }
+            if (std::strcmp(it.name, "addAllSummary") == 0) {
+                t.addAllFailed = it.value[0] >= 3.0;
+                break;
+            }
+        }
+    }
+    if (!pluginUrlSeeded_ && readFactText("fact.store.url", pluginUrlSeed_)) {
+        cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginUrlSeed_.c_str());
+        pluginUrlSeeded_ = true;
+    }
 }
 
 // --- THE WINDOW'S ENGINE API SESSION (engine stage 4) --------------------------
@@ -16960,7 +17023,8 @@ void AppWindow::openUiSession() {
     engineApi_ = cascade::engine::EngineShell::apiTable();
     FoxSessionParams p{};
     p.structSize = sizeof(p);
-    p.flags = FOXAPI_SESSION_LOCAL;
+    // FRAME: this window's heartbeat, once a frame, is the kick of the free-running pass (run()'s loop; API 0.3 9.14).
+    p.flags = FOXAPI_SESSION_LOCAL | FOXAPI_SESSION_FRAME;
     p.grants = FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS | FOXAPI_GRANT_TRANSMIT |
                FOXAPI_GRANT_ADMIN | FOXAPI_GRANT_AUDIO | FOXAPI_GRANT_IQ;
     p.clientName = "FoxSDR standard interface";
@@ -21444,8 +21508,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     gpsBaud_ = cfg.gpsBaud;
     cascade::core::formatUtf8(gpsPortInput_, sizeof(gpsPortInput_), "%s", gpsPort_.c_str());
     // The store's URL box shows the restored URL (Engine::applyConfig says
-    // why restoring it starts no fetch).
-    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl().c_str());
+    // why restoring it starts no fetch): read from the table, at the next look
+    // that finds the fact (refreshStatusLines) - shell retirement R3.
+    pluginUrlSeeded_ = false;
     pluginBrowseOpen_ = cfg.pluginBrowserOpen;
     // The fitted modules window: its rectangle is restored, its open flag
     // arrives cleared for the same reason. Opening it later starts no scan,

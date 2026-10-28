@@ -307,6 +307,42 @@ inline void reset() {
 // G11 WORLD END>>
 namespace cascade::gui {
 struct AppWindowTestAccess {
+    // Shell retirement R3: the 22 status sentences, each set to a text of its own that names its key (so a key read into the wrong field is seen), the fault
+    // sentence long enough to need the second read of a fact (more than the window's 512-byte first buffer), and the ADD ALL run failed or not.
+    static void sayStatusLines(cascade::engine::Engine& e, bool addAllFailed) {
+        e.sourceError_ = "text of sourceError";
+        e.gpsRefusal_ = "text of gpsRefusal";
+        e.catalogError_ = "text of catalogError";
+        e.bandPlanError_ = "text of bandPlanError";
+        e.tuneMismatchNote_ = "text of tuneMismatchNote";
+        e.transmitError_ = "text of transmitError";
+        e.soundCardMissing_ = "text of soundCardMissing";
+        e.sdrPlayApiDetail_ = "text of sdrPlayApiDetail";
+        e.sdrPlayAdvice_ = "text of sdrPlayAdvice";
+        e.recordNotice_ = "text of recordNotice";
+        e.recordError_ = "text of recordError";
+        e.presetNote_ = "text of presetNote";
+        e.pluginEnforceError_ = "text of pluginEnforceError";
+        e.restoreKeepLabel_ = "text of restoreKeepLabel";
+        e.audioHealthNote_ = "text of audioHealth";
+        e.bookmarkImportNote_ = "text of bookmarkNote";
+        e.bookmarkError_ = "text of bookmarkError";
+        e.installReport_ = "text of installReport";
+        e.installError_ = "text of installError";
+        e.catalogStatus_ = "text of catalogStatus";
+        e.addAllSummary_ = "text of addAllSummary";
+        e.addAllFailed_ = addAllFailed;
+        e.testFault_ = std::string("text of deviceFault ") + std::string(900, 'f');
+    }
+    static void clearStatusLines(cascade::engine::Engine& e) {
+        for (std::string* t : {&e.sourceError_, &e.gpsRefusal_, &e.catalogError_, &e.bandPlanError_, &e.tuneMismatchNote_, &e.transmitError_,
+                               &e.soundCardMissing_, &e.sdrPlayApiDetail_, &e.sdrPlayAdvice_, &e.recordNotice_, &e.recordError_, &e.presetNote_,
+                               &e.pluginEnforceError_, &e.restoreKeepLabel_, &e.audioHealthNote_, &e.bookmarkImportNote_, &e.bookmarkError_,
+                               &e.installReport_, &e.installError_, &e.catalogStatus_, &e.addAllSummary_, &e.testFault_}) {
+            t->clear();
+        }
+        e.addAllFailed_ = false;
+    }
     static void installFakeRadio() {
         cascade::engine::Engine::testHooks_.makeDevice = &engine_api_test::makeFakeRadio;
         cascade::engine::Engine::testHooks_.nativeScan = &engine_api_test::fakeNativeScan;
@@ -9195,6 +9231,105 @@ void testShellRetirementR2Ops() {
     CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("0"));
 }
 
+// SHELL RETIREMENT R3 (docs/api-0.3-additions.md 9.14, docs/engine-stage4.md 6.25): what the window used to be handed by methods of the door - the status
+// sentences, the store's URL, the frame's kick, the listeners' use - and reads from the table now.
+void testShellRetirementR3Facts() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+    CHECK(remote.ok());
+    d.eng.controlPass();
+
+    // R3.1 THE 22 STATUS SENTENCES ARE FACTS, one for one: each fact.status.<key> is the field Engine::statusText() carries under the same name (the copy the
+    // window read before R3), and a key read into the wrong field would be seen, because each sentence names its key. The fault sentence is longer than the
+    // window's first 512-byte read (the second read of a fact is the whole of it).
+    static const char* const kKeys[] = {"sourceError", "gpsRefusal", "catalogError", "bandPlanError", "tuneMismatchNote", "transmitError",
+                                        "soundCardMissing", "sdrPlayApiDetail", "sdrPlayAdvice", "recordNotice", "recordError", "presetNote",
+                                        "pluginEnforceError", "restoreKeepLabel", "audioHealth", "bookmarkNote", "bookmarkError", "installReport",
+                                        "installError", "catalogStatus", "addAllSummary", "deviceFault"};
+    CHECK_EQ(sizeof(kKeys) / sizeof(kKeys[0]), std::size_t{22});
+    for (const char* k : kKeys) { CHECK_EQ(fact(s, (std::string("fact.status.") + k).c_str()), std::string()); }   // none to begin with
+    Access::sayStatusLines(d.eng, /*addAllFailed=*/false);
+    d.eng.controlPass();
+    const cascade::engine::Engine::StatusText copy = d.eng.statusText();
+    const std::string said[] = {copy.sourceError, copy.gpsRefusal, copy.catalogError, copy.bandPlanError, copy.tuneMismatchNote, copy.transmitError,
+                                copy.soundCardMissing, copy.sdrPlayApiDetail, copy.sdrPlayAdvice, copy.recordNotice, copy.recordError, copy.presetNote,
+                                copy.pluginEnforceError, copy.restoreKeepLabel, copy.audioHealth, copy.bookmarkNote, copy.bookmarkError,
+                                copy.installReport, copy.installError, copy.catalogStatus, copy.addAllSummary, copy.deviceFault};
+    for (std::size_t i = 0; i < 22; ++i) {
+        const std::string key = std::string("fact.status.") + kKeys[i];
+        const std::string f = fact(s, key.c_str());
+        CHECK_EQ(f, said[i]);                                                    // the fact IS the copy's field ...
+        CHECK(f.rfind(std::string("text of ") + kKeys[i], 0) == 0);              // ... and the sentence is the one set under that key
+    }
+    CHECK(copy.deviceFault.size() > 800u);
+    CHECK(!copy.addAllFailed);
+    // ADD ALL's level is the STATUS_LINES entry's value[0]: 1 for a run that did well, 3 for one with failures (the window's addAllFailed).
+    const auto addAllLevel = [&]() -> double {
+        const int32_t n = count(s, FOXAPI_LIST_STATUS_LINES);
+        for (int32_t i = 0; i < n; ++i) {
+            const FoxListItem it = item(s, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i));
+            if (std::string(it.name) == "addAllSummary") { return it.value[0]; }
+        }
+        return -1.0;
+    };
+    CHECK_EQ(addAllLevel(), 1.0);
+    Access::sayStatusLines(d.eng, /*addAllFailed=*/true);
+    d.eng.controlPass();
+    CHECK_EQ(addAllLevel(), 3.0);
+    CHECK(d.eng.statusText().addAllFailed);
+    // ...and when they are said no more the facts are empty and the list has no entry (the window clears its copy with them).
+    Access::clearStatusLines(d.eng);
+    d.eng.controlPass();
+    for (const char* k : kKeys) { CHECK_EQ(fact(s, (std::string("fact.status.") + k).c_str()), std::string()); }
+    CHECK_EQ(addAllLevel(), -1.0);
+
+    // R3.2 THE STORE'S URL is a fact (it was the shell's pluginCatalogueUrl): LOCAL, so a REMOTE session is refused it, and it follows the engine's own.
+    int32_t st = 0;
+    const std::string url = fact(s, "fact.store.url", &st);
+    CHECK(st >= 0);
+    CHECK(!url.empty());                                               // the default index
+    (void)fact(remote, "fact.store.url", &st);
+    CHECK_EQ(st, FOXAPI_DENIED);
+
+    // R3.3 THE LISTENERS' USE: two counters, read at the call (they do not move listSeq), LOCAL only. Nothing has been served by a hermetic engine, so both are 0.
+    CHECK_EQ(fact(s, "fact.web.served", &st), std::string("0"));
+    CHECK(st >= 0);
+    CHECK_EQ(fact(s, "fact.cat.accepted", &st), std::string("0"));
+    CHECK(st >= 0);
+    (void)fact(remote, "fact.web.served", &st);
+    CHECK_EQ(st, FOXAPI_DENIED);
+    (void)fact(remote, "fact.cat.accepted", &st);
+    CHECK_EQ(st, FOXAPI_DENIED);
+    const uint64_t seq = s.state().listSeq;
+    d.eng.servers().webCounters().served.fetch_add(3);
+    d.eng.servers().catCounters().accepted.fetch_add(2);
+    CHECK_EQ(fact(s, "fact.web.served"), std::string("3"));            // read at the call: no pass between the increment and the read
+    CHECK_EQ(fact(s, "fact.cat.accepted"), std::string("2"));
+    d.eng.controlPass();
+    CHECK_EQ(s.state().listSeq, seq);                                  // and a counter that moved rebuilt no list
+
+    // R3.4 THE FRAME FLAG: a LOCAL session may carry it; a REMOTE one is refused with BAD_ARGUMENT whatever else it says (the heartbeat's kick itself is
+    // held by tests/test_pass_control.cpp K7, which needs a control thread).
+    {
+        FoxSessionParams p{};
+        p.structSize = sizeof(p);
+        p.grants = FOXAPI_GRANT_VIEW;
+        p.clientName = "R3 flag";
+        FoxSession* out = nullptr;
+        p.flags = FOXAPI_SESSION_LOCAL | FOXAPI_SESSION_FRAME;
+        CHECK_EQ(api()->open_session(d.eng.apiHandle(), &p, &out), FOXAPI_OK);
+        if (out != nullptr) { api()->close_session(out); }
+        out = nullptr;
+        p.flags = FOXAPI_SESSION_REMOTE | FOXAPI_SESSION_FRAME;
+        p.token = "s3cret";
+        CHECK_EQ(api()->open_session(d.eng.apiHandle(), &p, &out), FOXAPI_BAD_ARGUMENT);
+        CHECK(out == nullptr);
+    }
+}
+
 int main() {
     engine_api_test::hermetic("api03");
     // The plugins' hysteresis, shortened for group N (the engine reads it at its first lifecycle step; no other group has a window).
@@ -9313,5 +9448,6 @@ int main() {
     testPluginRunsOnlyWhileUsed();
     // Shell retirement R2: the two test ops.
     testShellRetirementR2Ops();
+    testShellRetirementR3Facts();
     return check::finish("test_engine_api_03");
 }

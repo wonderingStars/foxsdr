@@ -179,6 +179,12 @@ ServerHost::ServerHost() {
         c.clients.store(catServer_.clientCount(), std::memory_order_relaxed);
         c.commands.store(catServer_.commandCount(), std::memory_order_relaxed);
     };
+    // THE LISTENERS' USE, counted (shell retirement R3). The servers call this from their own threads - a request answered with anything but 404 or
+    // 401, a client accepted - and what it does is one relaxed increment: nothing here names a recorder or anything that could send, and the window
+    // that wants to note "browser" / "CAT" reads the two counters through the table (fact.web.served, fact.cat.accepted). The servers take the
+    // callback only while stopped, and these are stopped here; they stay installed across the listeners' restarts.
+    (void)webServer_.setUsageCallback([this] { webCounters_.served.fetch_add(1, std::memory_order_relaxed); });
+    catServer_.setUsageCallback([this] { catCounters_.accepted.fetch_add(1, std::memory_order_relaxed); });
     // THE PICTURES (stage 5e): the feed polls the decoders through the provider attach() is given, encodes on its worker while the web server
     // listens, and hands the served set to the server.
     ImageFeed::Hooks h;

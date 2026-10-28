@@ -698,17 +698,25 @@ int main() {
         const std::size_t pageBody = text.find("void AppWindow::drawTransmitPage()");
         const std::size_t pageEnd =
             pageBody == std::string::npos ? std::string::npos : text.find("\nvoid AppWindow::", pageBody + 1);
+        // (Shell retirement R3: the window's heartbeat moved from the head of drawUi to the first act of run()'s frame loop, where it is also the frame's kick of the
+        // pass. It is still once a frame and still before the page is drawn and the key submitted; what changed is that it is the loop's, not drawUi's.)
+        const std::size_t runAt = text.find("int AppWindow::run(int frames) {");
         const std::size_t heartbeat = text.find("if (uiSession_ != nullptr) { engineApi_->heartbeat(uiSession_); }");
+        const std::size_t frameDrawn = runAt == std::string::npos ? std::string::npos : text.find("        drawUi();", runAt);
         const bool anchors = pumpCalls.size() == 1u && drawUi != std::string::npos && drawUiEnd != std::string::npos &&
                              pluginWindows != std::string::npos && pageBody != std::string::npos &&
-                             pageEnd != std::string::npos && heartbeat != std::string::npos;
+                             pageEnd != std::string::npos && heartbeat != std::string::npos && runAt != std::string::npos &&
+                             frameDrawn != std::string::npos;
         CHECK(anchors);
         if (anchors) {
             CHECK(drawUi < pluginWindows);
             CHECK(pluginWindows < pumpCalls[0]);
             CHECK(pumpCalls[0] < drawUiEnd);
-            // The heartbeat is the frame's first act, inside drawUi.
-            CHECK(drawUi < heartbeat && heartbeat < pluginWindows);
+            // The heartbeat is the frame's first act: in run()'s loop, once, before the frame is drawn (drawUi, whose pages and key submit come after it)
+            // and not inside drawUi.
+            CHECK(runAt < heartbeat && heartbeat < frameDrawn);
+            CHECK(heartbeat < drawUi);
+            CHECK(text.find("engineApi_->heartbeat(", text.find("engineApi_->heartbeat(", heartbeat) + 1) == std::string::npos);   // (the one statement, once)
             CHECK(!(pumpCalls[0] > pageBody && pumpCalls[0] < pageEnd));
             // The page is live only AFTER beginPage has said it is drawing.
             const std::string page = text.substr(pageBody, pageEnd - pageBody);

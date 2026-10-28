@@ -219,6 +219,12 @@ extern "C" {
 /* FoxSessionParams::flags */
 #define FOXAPI_SESSION_LOCAL   0x00000001u /* in-process, on this machine: may LATCH the key */
 #define FOXAPI_SESSION_REMOTE  0x00000002u /* over a transport: can never latch */
+/* A LOCAL session whose heartbeat() is also the interface's FRAME: the engine's free-running pass is woken by it, once a frame, as the
+ * pass's own timer would wake it a moment later (0.3, section 9.14). An interface that draws frames sets it and calls heartbeat() as the
+ * first thing every frame does; one that does not, or that is not drawing, leaves it clear and the pass runs on its timer alone. Refused
+ * (BAD_ARGUMENT) on a REMOTE session: a transport has no frames, and a client that could wake the pass at will could make it run flat out
+ * (the engine bounds the rate all the same). */
+#define FOXAPI_SESSION_FRAME   0x00000004u
 
 /* ---------------------------------------------------------------------------
  * Demodulators. The SAME values as CASCADE_DEMOD_* in the plugin ABI.

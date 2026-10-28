@@ -3123,8 +3123,8 @@ public:
     // Fired once per request served, from the post-routing handler
     // (installRoutes) - the one point every request passes through whatever
     // route it hit. Called on whichever worker thread httplib served the
-    // request on; the callback the GUI supplies (TesterUsageRecorder::
-    // noteFeature) is mutex-guarded for exactly this reason. Set only while
+    // request on; the callback the engine's ServerHost supplies is one relaxed
+    // counter increment (fact.web.served), safe from any thread. Set only while
     // not running, the same rule every other provider here follows.
     bool setUsageCallback(std::function<void()> fn) {
         if (running()) { return false; }

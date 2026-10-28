@@ -6,8 +6,10 @@
 // engine does not call it" is the kind of sentence that stays true until the day it does not:
 //
 //   1. THE SOURCES. No file of the engine (src/engine, src/engine_main.cpp) or of the servers (src/net) names the recorder, the sender, the lookup, the exchange or the
-//      poll of the link-request file; `setUsageCallback` - the servers' own seam for the recorder's two marks - is called from exactly one place, the door
-//      (EngineShell::setServerUsageHooks), and that door is called from exactly one place, the window. (Comments and string literals are blanked first.)
+//      poll of the link-request file; `setUsageCallback` - the servers' own seam for the usage marks - is called from exactly one place, the engine's ServerHost,
+//      twice, and what each call hands over is a COUNTER (fact.web.served, fact.cat.accepted): data the window reads through the table and notes "browser" and "CAT"
+//      from when one moves, not a sender and not a recorder. The door method that used to hand the window's closures to the servers (setServerUsageHooks) is gone.
+//      (Comments and string literals are blanked first.)
 //   2. THE PROCESS BOOT. The link-request file is written in one place (STEP 5), after the Host-only kind gate; the engine's own main names no part of the link flow.
 //   3. THE BUILT IMAGES. cascade_engine is a static library and a binary takes only the objects it references, so the engine binary links the token's shape and the
 //      retry queue's rules (the settings file is validated with them) and not the session half of the record or the portal's network half (tester_usage_session.cpp,
@@ -17,7 +19,7 @@
 //      address both pointed at a stand-in on loopback: it ends cleanly, the stand-in is never asked anything, and the file's tester fields come back as they went in.
 //   5. THE RUNNING WINDOW, as the control: the same file, run through cascade, sends the left report to the stand-in and empties the queue - so a stand-in that
 //      heard nothing in 4 is a stand-in that would have heard it - and, with the web server and the CAT listener on, a browser request and a CAT client are marks in
-//      the report (the window's hooks reached the engine's servers through the door).
+//      the report (the window read the servers' counters through the table, and a request answered 404 or 401 moves neither: the 404 below is the control).
 //
 // HERMETIC: every per-user folder is a scratch tree, the settings files are scratch paths named on the command line or in CASCADE_CONFIG_TEST, every other
 // FOXSDR_*_URL points at a closed local port, and the real profile is never named.
@@ -185,50 +187,52 @@ void testSources(const fs::path& root) {
         }
     }
 
-    // 1b. setUsageCallback: the servers define it, the door calls it - twice, once a server, inside setServerUsageHooks - and nobody else does.
+    // 1b. setUsageCallback: the servers define it, ServerHost calls it - twice, once a server, in its constructor - and nobody else does. What it hands over is a
+    //     counter increment (data the table serves as fact.web.served and fact.cat.accepted), not a recorder: 1a holds that no recorder is named anywhere engine-side.
     const std::set<std::string> definers = {"src/net/web_server.cpp", "src/net/web_server.hpp", "src/net/cat_server.cpp", "src/net/cat_server.hpp"};
-    int doorCalls = 0;
+    int hostCalls = 0;
     for (const std::vector<Source>* group : {&engine, &net, &gui, &core}) {
         for (const Source& s : *group) {
             const int n = countWord(s.code, "setUsageCallback");
             if (n == 0) { continue; }
             if (definers.count(s.rel) != 0) { continue; }
-            if (s.rel == "src/engine/engine_shell.cpp") {
-                doorCalls += n;
+            if (s.rel == "src/engine/server_host.cpp") {
+                hostCalls += n;
                 continue;
             }
             std::printf("    FAIL %s calls setUsageCallback (%d)\n", s.rel.c_str(), n);
             CHECK(false);
         }
     }
-    CHECK(doorCalls == 2);
+    CHECK(hostCalls == 2);
     for (const Source& s : engine) {
-        if (s.rel != "src/engine/engine_shell.cpp") { continue; }
-        const std::string body = bodyAt(s.code, "bool EngineShell::setServerUsageHooks(");
+        if (s.rel != "src/engine/server_host.cpp") { continue; }
+        const std::string body = bodyAt(s.code, "ServerHost::ServerHost()");
         CHECK(!body.empty());
         CHECK(countWord(body, "setUsageCallback") == 2);
+        // ...and each of the two callbacks is an increment of its counter.
+        CHECK(body.find("served.fetch_add(") != std::string::npos);
+        CHECK(body.find("accepted.fetch_add(") != std::string::npos);
     }
 
-    // 1c. The door has exactly one caller outside its own two files: the window's tester file, from one function.
-    int doorCallers = 0;
+    // 1c. The door no longer has the method that handed the window's closures to the servers: nothing in src/ names it (the window reads the counters through the table).
+    int doorMentions = 0;
     for (const std::vector<Source>* group : {&engine, &net, &gui, &core}) {
         for (const Source& s : *group) {
-            const int n = countWord(s.code, "setServerUsageHooks");
-            if (n == 0 || s.rel == "src/engine/engine_shell.hpp" || s.rel == "src/engine/engine_shell.cpp") { continue; }
-            if (s.rel == "src/gui/app_window_tester.cpp") {
-                doorCallers += n;
-                continue;
-            }
-            std::printf("    FAIL %s calls the tester hooks' door (%d)\n", s.rel.c_str(), n);
-            CHECK(false);
+            const int n = countWord(s.code, "setServerUsageHooks") + countWord(s.code, "installTesterUsageHooks");
+            if (n == 0) { continue; }
+            std::printf("    FAIL %s names the retired tester hooks' door (%d)\n", s.rel.c_str(), n);
+            doorMentions += n;
         }
     }
-    CHECK(doorCallers == 1);
+    CHECK(doorMentions == 0);
+    // ...and the window's reader of the two counters is in the tester file, and reads the table: both facts, by their keys.
     for (const Source& s : gui) {
         if (s.rel != "src/gui/app_window_tester.cpp") { continue; }
-        const std::string body = bodyAt(s.code, "void AppWindow::installTesterUsageHooks(");
+        const std::string raw = emt::readFile(root / s.rel);
+        const std::string body = bodyAt(s.code, "void AppWindow::testerNoteListeners(");
         CHECK(!body.empty());
-        CHECK(countWord(body, "setServerUsageHooks") == 1);
+        CHECK(raw.find("\"fact.web.served\"") != std::string::npos && raw.find("\"fact.cat.accepted\"") != std::string::npos);
     }
 
     // 1d. The core files that hold the means of sending are in no engine-side include: a header that declares them (core/tester_usage.hpp, core/tester_link.hpp)
@@ -525,6 +529,65 @@ void testWindowSendsAndMarks() {
     CHECK(features.count("left-by-the-last-session") == 0);  // the left report was sent as it was, not folded into this one
 }
 
+// THE CONTROL OF THE ABOVE (shell retirement R3): the same window, the same listeners, and a client that is only ever REFUSED - a request for a route the page
+// does not have (404), and no CAT client at all. The two marks are the servers' counters now (fact.web.served, fact.cat.accepted), and what the web counter does not
+// count is a request answered 404 or 401: so this report must NOT name "browser" or "cat", and must name "spectrum" (the report was written and this window drew).
+// A counter that counted every request, or a window that marked on the listeners being up, is red here and not in the run above, where a page is answered.
+void testWindowIgnoresRefusals() {
+    std::printf("  the running window, the control: a refused request and no CAT client are no marks\n");
+    closedPorts();
+    emt::setEnv("FOXSDR_TESTER_USAGE_URL", "http://127.0.0.1:9/api/tester-usage");
+    const int webPort = freePort();
+    int catPort = freePort();
+    while (catPort == webPort) { catPort = freePort(); }
+    const fs::path cfg = g_home / "refused" / "config.json";
+    writeSettings(cfg, webPort, catPort);
+    const fs::path script = g_home / "refused" / "hold.script";
+    std::ofstream(script, std::ios::binary | std::ios::trunc) << "6 sleep 5000\n10 sleep 5000\n14 sleep 5000\n";
+    emt::setEnv("CASCADE_CONFIG_TEST", cfg.string());
+    emt::setEnv("FOXSDR_INPUT_SCRIPT", script.string());
+    emt::setEnv("FOXSDR_INSTANCE_SCOPE", "tho-r-" + std::to_string(::GetCurrentProcessId()));
+    emt::setEnv("FOXSDR_SINGLE_VIEWPORT", "1");
+    emt::setEnv("FOXSDR_FAKE_PACKAGE", "none");
+    std::atomic<bool> stop{false};
+    std::atomic<int> answered404{0};
+    std::thread client([&] {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(40);
+        while (!stop.load() && std::chrono::steady_clock::now() < until) {
+            httplib::Client web("127.0.0.1", webPort);
+            web.set_connection_timeout(1, 0);
+            web.set_read_timeout(2, 0);
+            if (auto res = web.Get("/no-such-route-at-all")) {
+                if (res->status == 404) { ++answered404; }
+                if (answered404.load() >= 5) { break; }
+                continue;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+    });
+    const emt::RunResult r = emt::run(emt::appExe("cascade"), {"--frames", "40"}, g_home / "refused", g_home / "refused-out", "run", 180000);
+    stop = true;
+    client.join();
+    CHECK(r.started);
+    CHECK(!r.timedOut);
+    CHECK(r.exitCode == 0);
+    CHECK(emt::contains(r.out, "rendered 40 frames"));
+    std::printf("    the page answered 404 to %d request(s)\n", answered404.load());
+    CHECK(answered404.load() >= 1);   // (a run in which the refused request never reached the server says nothing)
+    const json after = readSettings(cfg);
+    CHECK(after.is_object());
+    const json current = json::parse(after.value("testerUsageCurrent", std::string()), nullptr, false);
+    CHECK(current.is_object());
+    std::set<std::string> features;
+    if (current.is_object() && current.contains("features")) {
+        for (const auto& f : current["features"]) { features.insert(f.get<std::string>()); }
+    }
+    for (const std::string& f : features) { std::printf("    this session used: %s\n", f.c_str()); }
+    CHECK(features.count("spectrum") == 1);
+    CHECK(features.count("browser") == 0);
+    CHECK(features.count("cat") == 0);
+}
+
 // A code the site no longer knows: the first send is refused 401, and that is the end of sending for the session - the code is kept (marked, to be fixed in the
 // section), nothing is dropped from the queue, and the second queued report is NOT tried. (An "invalid token keeps sending" mutation is a loop against the site.)
 void testWindowStopsOnAnInvalidCode() {
@@ -612,6 +675,7 @@ int main(int argc, char** argv) {
     testImages();
     testEngineSendsNothing();
     testWindowSendsAndMarks();
+    testWindowIgnoresRefusals();
     testWindowStopsOnAnInvalidCode();
     testWindowBacksOffOnARetry();
 
