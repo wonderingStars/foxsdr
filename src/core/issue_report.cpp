@@ -68,11 +68,58 @@ constexpr const char* kSentences[health::kRecoveredCount] = {
     // Viewport
     "the graphics driver refused a second window for a page torn off the main one, and every "
     "page is kept inside the main window for the rest of the session",
+    // ReaderLeak
+    "a radio driver's reader did not stop when asked and was let go; the radio is left to the "
+    "operating system until FoxSDR is restarted",
+    // CloseLeak
+    "a sound device did not close in time and the close was left to finish on its own",
+    // LinkStranded
+    "the SDRplay driver was still delivering samples after it was told to stop, and its link was "
+    "left behind rather than torn down under it",
+    // StreamRestart
+    "the Airspy's sample stream halted and was restarted by itself",
+    // TunerRetry
+    "the RTL-SDR's tuner refused a command and accepted it on a retry",
+    // LateCall
+    "a radio driver took seconds to answer a request, and other changes were held until it did",
+    // ScanLimit
+    "the search for radios ran out of time: some drivers were skipped, or the bus was walked "
+    "inside the application instead of in its helper",
+    // UsbStuck
+    "a USB device did not answer its probe and was left out of the list of radios",
+    // RatesDefault
+    "a radio's firmware did not list its sample rates and a built-in default list was used instead",
+    // GainRefused
+    "the radio refused the remembered automatic gain and stays on manual gain",
+    // PpmRefused
+    "the radio refused its frequency correction, which is therefore not applied",
+    // IqFileGone
+    "the saved recording did not reopen at start-up and the signal generator runs instead",
+    // CatalogueBad
+    "a kept plugin catalogue was unreadable and was ignored until the next fetch",
+    // CatStop
+    "the CAT control server could not stop all of its connections in time and gave up waiting",
+    // FileKept
+    "a damaged settings, bookmarks or markers file could not be set aside, so nothing is saved "
+    "over it this session",
+    // TakeHeader
+    "a recording could not be finalised when it ended and keeps the header it was opened with",
+    // SentinelGone
+    "the watcher that reports an ending FoxSDR cannot report itself did not start, or ended "
+    "early, so such an ending this session would go unreported",
+    // DisplayWatch
+    "FoxSDR could not subscribe to the screen's on and off state, so drawing continues while "
+    "the screen is off",
 };
+static_assert(sizeof(kSentences) / sizeof(kSentences[0]) == health::kRecoveredCount,
+              "every recovered-from word has an issue sentence");
 
 // One bit per word: set when its report has been filed this process. Atomic, so two
 // threads meeting the same word at once file one report between them.
-std::atomic<std::uint32_t> g_filed{0};
+static_assert(health::kRecoveredCount <= 64, "one bit per word");
+std::atomic<std::uint64_t> g_filed{0};
+// The words met while capture was off: filed by filePendingIssueReports once it is on.
+std::atomic<std::uint64_t> g_pending{0};
 // The sequence field of the file name, so two words filed in one second are two files.
 std::atomic<unsigned> g_seq{0};
 
@@ -166,10 +213,14 @@ std::string fileIssueReport(Recovered word) {
     const std::size_t i = static_cast<std::size_t>(word);
     if (i >= health::kRecoveredCount) { return std::string(); }
     // Consent and a directory, both, or nothing is written - the crash handler's own
-    // answer, so the Settings switch means the same thing for every report.
+    // answer, so the Settings switch means the same thing for every report. A word met
+    // before capture is armed (start-up, before the settings are read) waits for it.
+    const std::uint64_t bit = 1ull << i;
     const std::string dir = activeCrashDir();
-    if (dir.empty()) { return std::string(); }
-    const std::uint32_t bit = 1u << i;
+    if (dir.empty()) {
+        g_pending.fetch_or(bit, std::memory_order_acq_rel);
+        return std::string();
+    }
     if ((g_filed.fetch_or(bit, std::memory_order_acq_rel) & bit) != 0) { return std::string(); }
 
     const std::string path = dir + "/issue-" + stamp() + "-" + std::to_string(processId()) + "-" +
@@ -184,6 +235,17 @@ std::string fileIssueReport(Recovered word) {
     return path;
 }
 
-void resetIssueReportsForTest() { g_filed.store(0u, std::memory_order_release); }
+void filePendingIssueReports() {
+    if (activeCrashDir().empty()) { return; }
+    const std::uint64_t bits = g_pending.exchange(0ull, std::memory_order_acq_rel);
+    for (std::size_t i = 0; i < health::kRecoveredCount; ++i) {
+        if ((bits & (1ull << i)) != 0) { fileIssueReport(static_cast<Recovered>(i)); }
+    }
+}
+
+void resetIssueReportsForTest() {
+    g_filed.store(0ull, std::memory_order_release);
+    g_pending.store(0ull, std::memory_order_release);
+}
 
 }  // namespace cascade::core::issue

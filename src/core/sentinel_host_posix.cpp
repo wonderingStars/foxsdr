@@ -60,6 +60,7 @@
 #include <vector>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 
 namespace cascade::core {
 
@@ -87,6 +88,7 @@ Host g;
 void sayStartFailed(const char* what, int error) {
     if (g.failedLogged) { return; }
     g.failedLogged = true;
+    health::noteRecovered(health::Recovered::SentinelGone);
     diagWarnf("sentinel: not started (%s, error %d); an ending this session that the application "
               "cannot report itself will not be written up",
               what, error);
@@ -261,6 +263,7 @@ void sentinelPoll() {
     int status = 0;
     if (g.pid <= 0 || g.endedLogged || !processEnded(&status)) { return; }
     g.endedLogged = true;
+    health::noteRecovered(health::Recovered::SentinelGone);
     g.pid = 0;
     if (WIFEXITED(status)) {
         diagWarnf("sentinel: the watcher ended while the application was still running (exit "

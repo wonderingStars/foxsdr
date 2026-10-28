@@ -9,6 +9,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/plugin_api.hpp"
+#include "core/health_events.hpp"
 #include "dsp/spectrum.hpp"
 
 namespace cascade::core::patch {
@@ -112,6 +113,7 @@ void PatchRadio::stop() {
         // ABANDONED, not waited on: the thread holds its own reference to the
         // source and the runner, so when the driver finally lets it go it
         // finds live memory, sees run == false and returns.
+        cascade::core::health::raiseRecovered(cascade::core::health::Recovered::ReaderLeak);
         cascade::core::diagWarnf(
             "patch: radio '%s' did not stop within %d ms - its reader is left to finish "
             "on its own",

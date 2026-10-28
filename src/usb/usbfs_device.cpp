@@ -73,6 +73,7 @@
 #include "usb/usbfs_device.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 
 #if !defined(__linux__)
 #error "usbfs_device.cpp is Linux-only; CMakeLists.txt must not compile it elsewhere"
@@ -263,12 +264,14 @@ std::vector<SysfsUsbNode> readSysfsUsbNodes(const std::string& sysfsDevicesDir,
         paths, [](const std::string& path) { return readSysfsNode(path); }, wedgedNodes(),
         budget);
     for (const std::string& path : walk.wedged) {
+        core::health::noteRecovered(core::health::Recovered::UsbStuck);
         core::diagLogf(
             "usb: reading %s did not return within %lld ms - that device is left out of "
             "the list until the read does",
             path.c_str(), static_cast<long long>(budget.stall.count()));
     }
     if (!walk.complete && walk.wedged.empty()) {
+        core::health::noteRecovered(core::health::Recovered::UsbStuck);
         core::diagLogf("usb: listing %s stopped at its %lld ms limit - some devices may be "
                        "missing from this scan",
                        sysfsDevicesDir.c_str(), static_cast<long long>(budget.total.count()));

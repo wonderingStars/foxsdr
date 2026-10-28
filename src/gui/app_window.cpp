@@ -109,6 +109,7 @@
 #include "gui/volume_meter.hpp"
 #include "gui/waterfall_view.hpp"
 #include "gui/display_query_episode.hpp"
+#include "core/issue_report.hpp"
 #include "gui/present_grace.hpp"
 #include "gui/software_gl.hpp"
 #include "gui/win_frame.hpp"
@@ -1870,6 +1871,11 @@ int AppWindow::run(int frames) {
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     } else if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
         cascade::core::diagLogf("%s", why);
+        // The same fault as the mid-session refusal, met at start-up: counted and
+        // reported under the same word (never for the developer switch).
+        if (viewportDecision_ == cascade::gui::ViewportDecision::ProbeFailed) {
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::Viewport);
+        }
     }
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     // DEAR IMGUI'S "PROGRAMMER ERROR" BOX STAYS OUT OF SHIPPED BUILDS (0.99.77). A US tester
@@ -12698,6 +12704,7 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
             } else {
                 cascade::core::diagWarnf(
                     "source: auto gain remembered on but the radio refused it");
+                cascade::core::health::noteRecovered(cascade::core::health::Recovered::GainRefused);
             }
         }
     }
@@ -15315,6 +15322,7 @@ void AppWindow::loadCachedCatalogue() {
         // NEVER A FILE NAME OR PATH IN THE LOG: the reason is PluginRepo's, in
         // words, and names the kept file only as "the kept catalogue".
         cascade::core::diagWarnf("plugin store: kept catalogue ignored - %s", error.c_str());
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::CatalogueBad);
     }
 }
 
@@ -15354,6 +15362,7 @@ void AppWindow::loadCachedSites() {
             // The reason is PluginRepo's, in words, and names the file only as "the kept
             // catalogue": never an address or a path in the log.
             cascade::core::diagWarnf("plugin store: a site's kept catalogue ignored - %s", error.c_str());
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::CatalogueBad);
         }
         siteStatus_.push_back(std::move(st));
     }
@@ -32364,6 +32373,7 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
         // log file opened - once at start-up, and on a press of the switch.
         cascade::core::WatchdogPause holdWatchdog(watchdog_);
         cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+        cascade::core::issue::filePendingIssueReports();
         // Guarded on diagCrashDir_ for the same reason as in run(): a run that was
         // never allowed to write (a bounded CI run) must not start writing because
         // a switch was flipped.
@@ -32438,6 +32448,7 @@ void AppWindow::drawDiagnosticsSection() {
         // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): the reports folder, on a click.
         cascade::core::WatchdogPause holdWatchdog(watchdog_);
         cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+        cascade::core::issue::filePendingIssueReports();
     }
     ImGui::TextDisabled(
         "%s",
@@ -33298,6 +33309,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             // full text stays in sourceError_, which is shown on screen to the
             // person who already knows what they opened.
             cascade::core::diagWarnf("source: the saved I/Q file did not reopen");
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::IqFileGone);
 
             // ...AND THE CONFIG GOES ON NAMING IT, exactly as it does for a
             // radio that did not reopen (see the device branch below). A

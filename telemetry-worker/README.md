@@ -39,7 +39,11 @@ And again for **0.99.100**, which adds `recovered.viewport` (the graphics driver
 refused FoxSDR a second OpenGL window part-way through a session, and every page was
 kept inside the main window from then on - the "map vanished" reports of 2026-10 from
 two Intel UHD machines, which no crash or freeze report could ever carry because the
-program keeps running): deploy this Worker before 0.99.100 ships.
+program keeps running) and eighteen more words for the handled faults a survey of
+2026-10-28 found - `readerleak`, `closeleak`, `linkstranded`, `streamrestart`,
+`tunerretry`, `latecall`, `scanlimit`, `usbstuck`, `ratesdefault`, `gainrefused`,
+`ppmrefused`, `iqfilegone`, `cataloguebad`, `catstop`, `filekept`, `takeheader`,
+`sentinelgone`, `displaywatch`: deploy this Worker before 0.99.100 ships.
 
 ## The columns of `foxsdr_usage`
 

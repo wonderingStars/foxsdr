@@ -65,6 +65,7 @@
 #include "gui/app_window_disk_state.hpp"
 #include "gui/background_saver.hpp"
 #include "gui/disk_job.hpp"
+#include "core/health_events.hpp"
 
 namespace cascade::gui {
 
@@ -271,6 +272,7 @@ namespace {
 void collectFinish(std::shared_ptr<cascade::core::RecordFinisher::Ticket>& slot, const char* what) {
     if (!slot || !slot->done.load()) { return; }
     if (!slot->ok.load()) {
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::TakeHeader);
         cascade::core::diagWarnf(
             "recorder: the %s take's file could not be finalised - it keeps the header it was "
             "opened with",
@@ -869,6 +871,7 @@ void AppWindow::setAsideDamagedFile(const char* which, const std::string& path) 
     } else if (name == "markers") {
         markerSaver_.forbidWrites("markers: not saved - the damaged file could not be kept aside");
     }
+    cascade::core::health::noteRecovered(cascade::core::health::Recovered::FileKept);
     cascade::core::diagWarnf(
         "%s: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it "
         "in this session",

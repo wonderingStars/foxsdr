@@ -2,6 +2,7 @@
 #include "source/soapy_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "source/soapy_log_bridge.hpp"
 #include "source/sdrplay_source.hpp"
@@ -482,6 +483,8 @@ void SoapySource::reapLateCallLocked() noexcept {
         noteVendorFault(late->what);
         return;
     }
+    // Answered, late: the fault the person met was the wait (other changes held).
+    core::health::raiseRecovered(core::health::Recovered::LateCall);
     try {
         if (late->kind == LateCall::Kind::Retune) {
             if (j.threw) {

@@ -31,6 +31,7 @@
 #include "core/utf8_text.hpp"
 #include "gui/bench_rail.hpp"
 #include "gui/theme.hpp"
+#include "core/health_events.hpp"
 
 namespace cascade::gui {
 
@@ -88,6 +89,7 @@ void AppWindow::applyPpmForSource() {
             ppmError_ = raw.lastError();
             cascade::core::diagWarnf("source: the %s refused its frequency correction (%s)",
                                      sourceKind_.c_str(), ppmError_.c_str());
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::PpmRefused);
         }
         return;
     }
@@ -152,6 +154,7 @@ void AppWindow::changePpm(bool on, double ppm) {
             ppmError_ = raw.lastError();
             cascade::core::diagWarnf("source: the %s refused its frequency correction (%s)",
                                      sourceKind_.c_str(), ppmError_.c_str());
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::PpmRefused);
         }
         return;
     }

@@ -5,6 +5,7 @@
 #include "source/rtl_tcp_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/ppm_correction.hpp"
 #include "source/rtl2832u.hpp"
 #include "source/tuner_r82xx.hpp"
@@ -530,6 +531,7 @@ void RtlTcpSource::stopReaderLocked() {
             // closed under a thread still inside it. The fault condemns this
             // source: every call refuses on a dead device.
             g_readersAbandoned.fetch_add(1, std::memory_order_relaxed);
+            core::health::raiseRecovered(core::health::Recovered::ReaderLeak);
             noteFault("waiting for the sample reader to stop",
                       "the reader did not return; FoxSDR must be restarted to use this "
                       "source again");

@@ -50,6 +50,27 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"sdrlost", true},      // the session stays lost
     {"audiolead", true},    // the lead steps up at most three times, and "this session had it" is the fact
     {"viewport", true},     // separate windows stay off for the session: "this session had it" is the fact
+    // The 2026-10-28 survey's words (0.99.100). Once a session where the fault repeats by
+    // itself or condemns something for the session; once an occurrence where each is a
+    // separate event the person met.
+    {"readerleak", true},    // the radio is condemned for the session
+    {"closeleak", true},     // a wedged host API wedges every close
+    {"linkstranded", true},  // the link stays stranded
+    {"streamrestart", true}, // a pipe that halts halts again
+    {"tunerretry", true},    // a marginal bus stays marginal
+    {"latecall", true},      // a slow driver stays slow
+    {"scanlimit", true},     // every rescan can run out of time again
+    {"usbstuck", true},      // the wedged node stays wedged
+    {"ratesdefault", false}, // per open: each is a radio the person opened
+    {"gainrefused", false},  // per open
+    {"ppmrefused", false},   // per open or change
+    {"iqfilegone", true},    // start-up, once by nature
+    {"cataloguebad", true},  // start-up, once by nature
+    {"catstop", false},      // per stop
+    {"filekept", true},      // start-up, once by nature
+    {"takeheader", false},   // per take: each is a recording the person made
+    {"sentinelgone", true},  // the watcher is gone for the session
+    {"displaywatch", true},  // start-up, once by nature
 };
 
 // The frame timer's own names for the scopes, but for `user-wait`.
@@ -1029,19 +1050,21 @@ void noteRecovered(Recovered r) {
 namespace {
 // The words raised and not yet counted: one bit each. Lock-free, so a thread that
 // must not take a lock can still say "this happened".
-std::atomic<std::uint32_t> g_raisedRecovered{0};
+// Sixty-four bits: the vocabulary passed thirty-two words in 0.99.100.
+static_assert(kRecoveredCount <= 64, "raiseRecovered holds one bit per word");
+std::atomic<std::uint64_t> g_raisedRecovered{0};
 }  // namespace
 
 void raiseRecovered(Recovered r) {
     const std::size_t i = static_cast<std::size_t>(r);
-    if (i < kRecoveredCount) { g_raisedRecovered.fetch_or(1u << i, std::memory_order_relaxed); }
+    if (i < kRecoveredCount) { g_raisedRecovered.fetch_or(1ull << i, std::memory_order_relaxed); }
 }
 
 void drainRecovered() {
-    const std::uint32_t bits = g_raisedRecovered.exchange(0u, std::memory_order_relaxed);
+    const std::uint64_t bits = g_raisedRecovered.exchange(0ull, std::memory_order_relaxed);
     if (bits == 0) { return; }
     for (std::size_t i = 0; i < kRecoveredCount; ++i) {
-        if ((bits & (1u << i)) != 0) { noteRecovered(static_cast<Recovered>(i)); }
+        if ((bits & (1ull << i)) != 0) { noteRecovered(static_cast<Recovered>(i)); }
     }
 }
 

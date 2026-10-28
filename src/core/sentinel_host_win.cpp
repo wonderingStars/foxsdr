@@ -33,6 +33,7 @@
 #include <windows.h>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 
 namespace cascade::core {
 
@@ -107,6 +108,7 @@ bool ensureBlock() {
 void sayStartFailed(const char* what, unsigned long error) {
     if (g.failedLogged) { return; }
     g.failedLogged = true;
+    health::noteRecovered(health::Recovered::SentinelGone);
     diagWarnf("sentinel: not started (%s, error %lu); an ending this session that the application "
               "cannot report itself will not be written up",
               what, error);
@@ -259,6 +261,7 @@ void sentinelPoll() {
     DWORD code = 0;
     ::GetExitCodeProcess(g.proc, &code);
     g.endedLogged = true;
+    health::noteRecovered(health::Recovered::SentinelGone);
     dropProcessHandle();
     diagWarnf("sentinel: the watcher ended while the application was still running (exit code "
               "0x%08lX); an ending this session that the application cannot report itself will "

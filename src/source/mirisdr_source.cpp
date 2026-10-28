@@ -6,6 +6,7 @@
 #include "source/mirisdr_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/sdrplay_source.hpp"
@@ -590,6 +591,7 @@ void MiriSdrSource::stopStreamingLocked() {
             // same reason (nulling it would be a data race with the zombie's
             // very next readBulk). This source never touches the radio again.
             g_readersAbandoned.fetch_add(1, std::memory_order_relaxed);
+            core::health::raiseRecovered(core::health::Recovered::ReaderLeak);
             noteTransportFault("waiting for the sample reader to stop",
                                "the reader did not return; the radio is left to the operating "
                                "system and FoxSDR must be restarted to use it again");

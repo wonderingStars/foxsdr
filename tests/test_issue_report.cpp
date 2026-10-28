@@ -141,6 +141,32 @@ int main() {
         CHECK(activeCrashDir().empty());
         CHECK(issue::fileIssueReport(Recovered::Viewport).empty());
         CHECK(issueFiles(dir).empty());
+        // ...and flushing what waits writes nothing either while capture is off.
+        issue::filePendingIssueReports();
+        CHECK(issueFiles(dir).empty());
+    }
+
+    // --- A WORD MET BEFORE CAPTURE WAS ARMED IS FILED ONCE IT IS (start-up words) -----------
+    {
+        CrashHandlerConfig on;
+        on.crashDir = dir.string();
+        on.enabled = true;
+        on.exitAfterReport = false;
+        installCrashHandlers(on);
+        CHECK(!activeCrashDir().empty());
+        CHECK(issueFiles(dir).empty());
+        issue::filePendingIssueReports();   // the Viewport met above, while off
+        const std::vector<fs::path> pending = issueFiles(dir);
+        CHECK(pending.size() == 1);
+        if (pending.size() == 1) {
+            const std::string text = readFile(pending[0]);
+            CHECK(text.find("\nreason: " + issue::issueReason(Recovered::Viewport) + "\n") != std::string::npos);
+        }
+        // Filed once: a second flush, or the word again, writes nothing more.
+        issue::filePendingIssueReports();
+        CHECK(issue::fileIssueReport(Recovered::Viewport).empty());
+        CHECK(issueFiles(dir).size() == 1);
+        for (const fs::path& p : pending) { fs::remove(p, ec); }
     }
     issue::resetIssueReportsForTest();
 

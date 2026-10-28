@@ -7,6 +7,7 @@
 #include "source/airspy_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "source/hydrasdr_protocol.hpp"
 
@@ -360,6 +361,7 @@ bool AirspySource::readSampleRatesLocked() {
         // firmware's own order. Said out loud, because a receiver quietly
         // offering rates it was never told about is a lie the spectrum would
         // not reveal.
+        core::health::raiseRecovered(core::health::Recovered::RatesDefault);
         core::diagWarnf(
             "%s: the firmware did not answer GET_SAMPLERATES; falling back to libairspy's "
             "own default list (10 and 2.5 MS/s), which is right for an R2 and may not be for "
@@ -959,6 +961,7 @@ void AirspySource::stopStreamingLocked() {
             // same reason (nulling it would be a data race with the zombie's
             // very next readBulk). This source never touches the radio again.
             g_readersAbandoned.fetch_add(1, std::memory_order_relaxed);
+            core::health::raiseRecovered(core::health::Recovered::ReaderLeak);
             noteTransportFault("waiting for the sample reader to stop",
                                "the reader did not return; the radio is left to the operating "
                                "system and FoxSDR must be restarted to use it again");
@@ -1090,6 +1093,7 @@ void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
             }
             ++rearms;
             lastRearm = std::chrono::steady_clock::now();
+            core::health::raiseRecovered(core::health::Recovered::StreamRestart);
             core::diagWarnf(
                 "%s: %s; restarting the stream the way libairspy starts it - receiver off, "
                 "clear the halt, receiver on (attempt %d of %d)",

@@ -65,7 +65,13 @@ std::string renderIssueReport(health::Recovered word);
 // was already filed this session, or the file could not be written. Never throws.
 std::string fileIssueReport(health::Recovered word);
 
-// Forgets which words were filed, so a test can file the same word again.
+// Files the reports of the words met BEFORE capture was armed - at start-up, before the
+// settings are read (a watcher that did not start, a display notification refused). Called
+// where the Diagnostics switch is applied (main.cpp, and the Settings page); a no-op when
+// nothing is pending or capture is still off.
+void filePendingIssueReports();
+
+// Forgets which words were filed or are pending, so a test can file the same word again.
 void resetIssueReportsForTest();
 
 }  // namespace cascade::core::issue

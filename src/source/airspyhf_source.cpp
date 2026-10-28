@@ -7,6 +7,7 @@
 #include "source/airspyhf_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 
 #include <algorithm>
@@ -323,6 +324,7 @@ bool AirspyHfSource::readRatesLocked() {
     if (count == 0 || count > airspyhf::kMaxSampleRateCount) {
         // The reference's own fallback (airspyhf.c:1016-1026): one rate,
         // zero-IF. A firmware that cannot list its rates still streams.
+        core::health::raiseRecovered(core::health::Recovered::RatesDefault);
         core::diagWarnf(
             "airspyhf: the receiver did not list its sample rates (answered %u); assuming %u S/s",
             static_cast<unsigned>(count), static_cast<unsigned>(airspyhf::kDefaultSampleRateHz));
@@ -900,6 +902,7 @@ void AirspyHfSource::stopStreamingLocked() {
             // same reason (nulling it would be a data race with the zombie's
             // very next readBulk). This source never touches the radio again.
             g_readersAbandoned.fetch_add(1, std::memory_order_relaxed);
+            core::health::raiseRecovered(core::health::Recovered::ReaderLeak);
             noteTransportFault("waiting for the sample reader to stop",
                                "the reader did not return; the radio is left to the operating "
                                "system and FoxSDR must be restarted to use it again");

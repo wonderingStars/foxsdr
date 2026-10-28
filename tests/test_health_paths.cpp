@@ -259,9 +259,34 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"Audio", "src/gui/app_window.cpp", 1},      {"Reopen", "src/gui/app_window.cpp", 1},
         {"CfgSave", "src/gui/app_window.cpp", 1},    {"PatchLoad", "src/gui/app_window.cpp", 1},
         {"SdrEnum", "src/gui/app_window.cpp", 1},    {"SdrLost", "src/gui/app_window.cpp", 1},
-        {"AudioLead", "src/gui/app_window.cpp", 1}, {"Viewport", "src/gui/app_window.cpp", 1},
+        {"AudioLead", "src/gui/app_window.cpp", 1}, {"Viewport", "src/gui/app_window.cpp", 2},
         {"EnumChild", "src/source/soapy_enum_proc.cpp", 1},
         {"PluginApi", "src/core/plugin_ui.cpp", 1},  {"WebRoute", "src/net/web_server.cpp", 1},
+        // THE 2026-10-28 SURVEY'S WORDS (0.99.100). A word may be counted in several files
+        // when one fault has one site per driver; every file is listed, with its count.
+        {"ReaderLeak", "src/source/airspy_source.cpp", 1}, {"ReaderLeak", "src/source/airspyhf_source.cpp", 1},
+        {"ReaderLeak", "src/source/aor_source.cpp", 1},    {"ReaderLeak", "src/source/hackrf_source.cpp", 1},
+        {"ReaderLeak", "src/source/mirisdr_source.cpp", 1}, {"ReaderLeak", "src/source/rx888_source.cpp", 1},
+        {"ReaderLeak", "src/source/pluto_source.cpp", 1},  {"ReaderLeak", "src/source/rtl_tcp_source.cpp", 1},
+        {"ReaderLeak", "src/source/rtlsdr_source.cpp", 1}, {"ReaderLeak", "src/source/pluto_tx.cpp", 1},
+        {"ReaderLeak", "src/core/patch_radio.cpp", 1},
+        {"CloseLeak", "src/source/soundcard_source.cpp", 1}, {"CloseLeak", "src/sink/pa_init.cpp", 1},
+        {"LinkStranded", "src/source/sdrplay_source.cpp", 1},
+        {"StreamRestart", "src/source/airspy_source.cpp", 1},
+        {"TunerRetry", "src/source/rtl2832u.cpp", 1},
+        {"LateCall", "src/source/soapy_source.cpp", 1},    {"LateCall", "src/source/sdrplay_source.cpp", 1},
+        {"ScanLimit", "src/source/soapy_enum_proc.cpp", 4},
+        {"UsbStuck", "src/usb/usbfs_device.cpp", 2},
+        {"RatesDefault", "src/source/airspy_source.cpp", 1}, {"RatesDefault", "src/source/airspyhf_source.cpp", 1},
+        {"GainRefused", "src/gui/app_window.cpp", 1},
+        {"PpmRefused", "src/gui/app_window_ppm.cpp", 2},
+        {"IqFileGone", "src/gui/app_window.cpp", 1},
+        {"CatalogueBad", "src/gui/app_window.cpp", 2},
+        {"CatStop", "src/net/cat_server.cpp", 1},
+        {"FileKept", "src/gui/app_window_disk_work.cpp", 1},
+        {"TakeHeader", "src/gui/app_window_disk_work.cpp", 1},
+        {"SentinelGone", "src/core/sentinel_host_win.cpp", 2}, {"SentinelGone", "src/core/sentinel_host_posix.cpp", 2},
+        {"DisplayWatch", "src/gui/win_frame.cpp", 1},
     };
     // The four counters a poll reads: named in the window's poll, where the readings are made.
     const std::string window = readFile(root / "src" / "gui" / "app_window.cpp");
@@ -274,7 +299,9 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         CHECK(window.find(reading) != std::string::npos);
     }
     const std::set<std::string> watched = {"SrcThread", "VendorCall", "RingDrop", "DspExc"};
-    CHECK(sites.size() + watched.size() == health::kRecoveredCount);
+    std::set<std::string> listedWords;
+    for (const Site& s : sites) { listedWords.insert(s.word); }
+    CHECK(listedWords.size() + watched.size() == health::kRecoveredCount);
     // scan the whole tree for uses outside the vocabulary's own files
     std::map<std::string, std::map<std::string, int>> found;   // word -> file -> count
     for (const auto& e : fs::recursive_directory_iterator(root / "src")) {
@@ -295,7 +322,6 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         const auto it = found.find(s.word);
         CHECK(it != found.end());
         if (it == found.end()) { std::printf("FAIL Recovered::%s is counted nowhere\n", s.word); continue; }
-        CHECK(it->second.size() == 1);
         const auto f = it->second.find(s.file);
         CHECK(f != it->second.end() && f->second == s.count);
         if (f == it->second.end() || f->second != s.count) {
@@ -304,15 +330,26 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
             std::printf(" (expected %s x%d)\n", s.file, s.count);
         }
     }
-    // ...and nothing else is counted that the table does not know (the watched four have no direct use at all).
+    // ...and nothing else is counted that the table does not know (the watched four have no
+    // direct use at all), and no file counts a word the table does not list for it.
     std::size_t known = 0;
     for (const auto& kv : found) {
         const bool listed = std::any_of(sites.begin(), sites.end(), [&](const Site& s) { return kv.first == s.word; });
         if (!listed) { std::printf("FAIL Recovered::%s is used outside the survey's table\n", kv.first.c_str()); }
         CHECK(listed);
         known += listed ? 1 : 0;
+        for (const auto& fileCount : kv.second) {
+            const bool listedHere = std::any_of(sites.begin(), sites.end(), [&](const Site& s) {
+                return kv.first == s.word && fileCount.first == s.file;
+            });
+            if (!listedHere) {
+                std::printf("FAIL Recovered::%s is used in %s, which the table does not list for it\n",
+                            kv.first.c_str(), fileCount.first.c_str());
+            }
+            CHECK(listedHere);
+        }
     }
-    CHECK(known == sites.size());
+    CHECK(known == listedWords.size());
 }
 
 // ---------------------------------------------------------------------------

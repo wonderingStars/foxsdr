@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 
 namespace cascade::source {
 
@@ -160,6 +161,7 @@ bool Rtl2832u::i2cTransfer(bool out, std::uint8_t slave, std::uint8_t* data, std
                 lastError_ = errorBefore;
                 failed_ = failedBefore;
                 if (i2cRecovered_++ == 0) {
+                    core::health::raiseRecovered(core::health::Recovered::TunerRetry);
                     // Once per open: which attempt succeeded is the evidence
                     // that separates a marginal bus from a dying one.
                     core::diagLogf("source: the tuner refused an I2C %s and accepted it on "

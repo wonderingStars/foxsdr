@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "net/cat_server.hpp"
+#include "core/health_events.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -297,6 +298,7 @@ void CatServer::stop() {
             // Bounded degradation, and a visible one: an unbounded wait here
             // would turn any future failure to wake a connection thread into
             // an indefinite hang of whoever called stop().
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::CatStop);
             std::fprintf(stderr,
                          "cat: %d connection thread(s) still running after %d ms; "
                          "giving up waiting\n",

@@ -44,6 +44,7 @@
 #include "core/console_owner.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
+#include "core/issue_report.hpp"
 #include "core/diag_report.hpp"
 #include "core/exit_record.hpp"
 #include "core/sentinel.hpp"
@@ -1080,6 +1081,8 @@ int main(int argc, char** argv) {
     // applies the user's - a dump is process memory and is never armed on a
     // guess.
     cascade::core::setCrashCaptureEnabled(wanted, false);
+    // ...and the issue reports of faults met before this (core/issue_report.hpp).
+    cascade::core::issue::filePendingIssueReports();
     cascade::core::DiagLog::instance().configure(
         wanted ? cascade::core::diagLogDir() : std::string(), wanted);
     cascade::core::diagLogf("FoxSDR %s (%s) starting", cascade::versionString(),

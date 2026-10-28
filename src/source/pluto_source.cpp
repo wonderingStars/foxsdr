@@ -6,6 +6,7 @@
 #include "source/pluto_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 
 #include <algorithm>
@@ -764,6 +765,7 @@ void PlutoSource::stopStreamingLocked() {
             // the same reason. This source never streams again - the fault
             // condemns it, and start() refuses on a dead device.
             g_readersAbandoned.fetch_add(1, std::memory_order_relaxed);
+            core::health::raiseRecovered(core::health::Recovered::ReaderLeak);
             noteFault("waiting for the sample reader to stop",
                       "the reader did not return; the connection is left to the operating "
                       "system and FoxSDR must be restarted to use this board again");
