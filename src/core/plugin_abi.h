@@ -265,7 +265,8 @@ extern "C" {
 #define CASCADE_CAP_RECEIVER_LOCATOR 0x00002000u /* may read receiverLocator - see below */
 #define CASCADE_CAP_TX_AUDIO 0x00004000u /* host API level 2: transmit audio under an operator-armed grant - see below */
 #define CASCADE_CAP_IMAGE_INPUT 0x00008000u /* optional input for a plugin's primary image */
-#define CASCADE_CAP_ALL_KNOWN 0x0000FFFFu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_TRACK_PHOTO 0x00010000u /* a target's photo, on the track-info handle */
+#define CASCADE_CAP_ALL_KNOWN 0x0001FFFFu /* OR of every bit THIS host knows */
 
 /*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
@@ -334,6 +335,11 @@ extern "C" {
  * contract, and CASCADE_STATE_TX_GRANTED / _TX_ARMED / _TRANSMITTING for what
  * the plugin is told. A plugin declaring it with no decoder capability for it to
  * ride on is refused at load, with that reason.
+ *
+ * CASCADE_CAP_TRACK_PHOTO (0x10000, FoxSDR 0.99.98) adds a photograph to the
+ * details of a target the user opened, with the photographer credited and the
+ * photo's own page one click away. It rides on the CASCADE_CAP_TRACK_INFO
+ * instance and is refused without it. See CascadeTrackPhotoApi below.
  */
 
 /*
@@ -2312,6 +2318,94 @@ typedef struct CascadeTrackInfoApi {
     void (*destroy)(void *handle);
 } CascadeTrackInfoApi;
 
+/* ---------------------------------------------------------------------------
+ * CASCADE_CAP_TRACK_PHOTO (FoxSDR 0.99.98) - a photograph of the target, for
+ * the details the user opened.
+ *
+ * A COMPANION TO CASCADE_CAP_TRACK_INFO, not a facility of its own: the table
+ * has no create or destroy, and every call is made on the SAME handle the
+ * track-info table's create() returned, so one plugin instance answers both
+ * "who is it" and "what does it look like". A plugin declaring this bit
+ * without CASCADE_CAP_TRACK_INFO is refused at load. Additive, like every bit
+ * since ABI 3: a host that predates it ignores the bit and still uses the
+ * plugin's track info.
+ *
+ * ASKED ONLY FOR WHAT THE USER OPENED. The host calls get_photo for a target
+ * whose details are on screen - the details window, the rail's Target details
+ * section - and never for every target on the map or from a hover. A photo
+ * service is one more third party told what this receiver hears, and free
+ * photo APIs are rationed; one request per target someone chose to look at is
+ * what both can bear.
+ *
+ * THE PICTURE IS SHOWN, NOT KEPT. Photo services commonly allow display and
+ * forbid storage (Planespotters.net's terms forbid writing an image to storage
+ * or keeping it after it stops being displayed). The contract is shaped so a
+ * plugin can keep terms like those:
+ *   - get_photo answers PENDING while the plugin fetches. READY lends pixels
+ *     the host copies into a texture at once and returns with release_photo,
+ *     after which the plugin should free them;
+ *   - the host keeps its copy only while that target's details stay on
+ *     screen, and asks again - so the plugin fetches again - if they are
+ *     opened again;
+ *   - forget_photo(id) says the host has stopped showing `id`: drop anything
+ *     fetched, or still being fetched, for it.
+ *
+ * CREDIT AND LINK ARE REQUIRED. A READY answer carries a non-empty `credit`,
+ * drawn under the picture (e.g. "Photo: A. Smith / Planespotters.net"), and
+ * an https `link` to the photo's own page, which the host opens UNCHANGED
+ * when the picture is clicked. The host treats a READY answer lacking either
+ * as MISSING: it will not show someone's photograph without saying whose it
+ * is and where it came from.
+ *
+ * get_photo MUST NOT BLOCK, for the reason get_info must not.
+ */
+
+/* Pixels and strings are OWNED BY THE PLUGIN and borrowed by the host between
+ * get_photo and release_photo, exactly as a tile's are. */
+typedef struct CascadeTrackPhoto {
+    /* sizeof(CascadeTrackPhoto) as the HOST compiled it; filled before the
+     * call. */
+    uint32_t structSize;
+
+    uint32_t width;  /* 1..CASCADE_TRACK_PHOTO_MAX_DIM */
+    uint32_t height; /* 1..CASCADE_TRACK_PHOTO_MAX_DIM */
+    uint32_t format; /* CASCADE_IMAGE_RGB24 - the only format for now */
+    uint32_t stride; /* bytes per row; >= width * 3 */
+    const uint8_t *pixels;
+
+    const char *credit; /* "Photo: A. Smith / Planespotters.net" - required */
+    const char *link;   /* "https://..." - the photo's own page; required */
+} CascadeTrackPhoto;
+
+/* A thumbnail, not a poster: the host draws it inside a details panel. */
+#define CASCADE_TRACK_PHOTO_MAX_DIM 1024u
+
+#define CASCADE_PHOTO_READY 1
+#define CASCADE_PHOTO_PENDING 0   /* being fetched; ask again on a later frame */
+#define CASCADE_PHOTO_MISSING (-1) /* no photo of this target from this source */
+
+typedef struct CascadeTrackPhotoApi {
+    /* sizeof(CascadeTrackPhotoApi) as the PLUGIN compiled it. Checked. */
+    uint32_t structSize;
+
+    /*
+     * Offers a photo of track `id` of kind `kind` (CASCADE_TRACK_*), on the
+     * track-info handle. Returns CASCADE_PHOTO_READY with `out` filled,
+     * CASCADE_PHOTO_PENDING while it is being fetched, or
+     * CASCADE_PHOTO_MISSING when there is none. MUST NOT BLOCK. On READY the
+     * host owns a borrow of the pixels and strings until release_photo.
+     */
+    int32_t (*get_photo)(void *handle, const char *id, uint32_t kind,
+                         CascadeTrackPhoto *out);
+
+    /* Returns a borrow taken by get_photo. Called once per READY. */
+    void (*release_photo)(void *handle, const CascadeTrackPhoto *photo);
+
+    /* The host has stopped showing `id`. Never called while a borrow for
+     * `id` is outstanding. */
+    void (*forget_photo)(void *handle, const char *id);
+} CascadeTrackPhotoApi;
+
 typedef struct CascadeHostClientApi {
     uint32_t structSize;
 
@@ -2546,6 +2640,12 @@ static inline const CascadeTrackInfoApi *cascade_plugin_track_info(
     const CascadePluginDesc *desc) {
     return (const CascadeTrackInfoApi *)cascade_plugin_capability(desc,
                                                                   CASCADE_CAP_TRACK_INFO);
+}
+
+static inline const CascadeTrackPhotoApi *cascade_plugin_track_photo(
+    const CascadePluginDesc *desc) {
+    return (const CascadeTrackPhotoApi *)cascade_plugin_capability(desc,
+                                                                   CASCADE_CAP_TRACK_PHOTO);
 }
 
 static inline const CascadePresetApi *cascade_plugin_preset(

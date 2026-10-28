@@ -197,7 +197,7 @@ void Engine::restorePluginRun(const cascade::core::AppConfig& cfg) {
 }
 
 void Engine::chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const CascadeTrackInfoApi*& trackInfo, std::string* basemapPlugin,
-                                       std::string* trackInfoPlugin) const {
+                                       std::string* trackInfoPlugin, const CascadeTrackPhotoApi** trackPhoto) const {
     // THE BASEMAP, if a plugin supplies one. The first loaded plugin declaring the capability wins: two basemaps cannot both be the map, and
     // picking silently by load order is more predictable than picking by some quality the user cannot see. A STOPPED plugin is skipped, and
     // that is the whole of what "stopped" means for a basemap: the map falls back to its built-in coastlines rather than keeping tiles from
@@ -205,6 +205,7 @@ void Engine::chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const 
     // first-wins rule and for the same reason.
     basemap = nullptr;
     trackInfo = nullptr;
+    if (trackPhoto != nullptr) { *trackPhoto = nullptr; }
     for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
         if (lp.loaded && lp.basemap != nullptr && !pluginIsStopped(cascade::core::pluginKey(lp))) {
             basemap = lp.basemap;
@@ -216,6 +217,8 @@ void Engine::chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const 
         if (lp.loaded && lp.trackInfo != nullptr && !pluginIsStopped(cascade::core::pluginKey(lp))) {
             trackInfo = lp.trackInfo;
             if (trackInfoPlugin != nullptr) { *trackInfoPlugin = cascade::core::pluginKey(lp); }
+            // Its photos (0.99.98) come from the SAME plugin or from none: they are asked on that plugin's track-info instance.
+            if (trackPhoto != nullptr) { *trackPhoto = lp.trackPhoto; }
             break;
         }
     }
@@ -232,7 +235,7 @@ void Engine::postPluginLife() {
     d.plugins = pluginHost_.plugins();
     d.stopped = stoppedPluginIds();
     d.dormant = pluginDormantIds_;
-    chooseBasemapAndTrackInfo(d.basemap, d.trackInfo, &d.basemapPlugin, &d.trackInfoPlugin);
+    chooseBasemapAndTrackInfo(d.basemap, d.trackInfo, &d.basemapPlugin, &d.trackInfoPlugin, &d.trackPhoto);
     if (!deliverPluginDirective(std::move(d))) {
         // Not an error (nothing is being unmapped), but a wake whose GUI half is late: the decoder below is created without waiting.
         cascade::core::diagLogf(

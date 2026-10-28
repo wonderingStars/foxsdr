@@ -140,6 +140,23 @@ inline void releaseInfo(Slot* s, const CascadeTrackInfoApi* api, void* handle, c
     (void)fault::call(s, Entry::ReleaseInfo, [&] { api->release_info(handle, info); });
 }
 
+// The photo table (CASCADE_CAP_TRACK_PHOTO, 0.99.98) rides on the track-info instance, so its three calls are guarded under the track-info client's
+// own entries (get-info for the ask, release-info for the hand-back and the forget): the same instance, the same slot, the same budgets.
+inline std::int32_t getPhoto(Slot* s, const CascadeTrackPhotoApi* api, void* handle, const char* id, std::uint32_t kind,
+                             CascadeTrackPhoto* out) noexcept {
+    std::int32_t r = CASCADE_PHOTO_MISSING;
+    const Outcome o = fault::call(s, Entry::GetInfo, [&] { r = api->get_photo(handle, id, kind, out); });
+    return o == Outcome::Ran ? r : CASCADE_PHOTO_MISSING;
+}
+
+inline void releasePhoto(Slot* s, const CascadeTrackPhotoApi* api, void* handle, const CascadeTrackPhoto* photo) noexcept {
+    (void)fault::call(s, Entry::ReleaseInfo, [&] { api->release_photo(handle, photo); });
+}
+
+inline void forgetPhoto(Slot* s, const CascadeTrackPhotoApi* api, void* handle, const char* id) noexcept {
+    (void)fault::call(s, Entry::ReleaseInfo, [&] { api->forget_photo(handle, id); });
+}
+
 // ---- the small ones ----------------------------------------------------------------------------------------------------------------
 
 inline void attach(Slot* s, const CascadeHostClientApi* api, const CascadeHostApi* host) noexcept {

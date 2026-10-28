@@ -22,6 +22,7 @@
 
 #include "core/plugin_abi.h"
 #include "core/plugin_fault.hpp"
+#include "gui/track_photo_cache.hpp"
 
 namespace cascade::gui {
 
@@ -46,11 +47,16 @@ public:
     // Points the cache at a plugin's table, creating one instance. nullptr
     // detaches and drops every cached answer - a different plugin's answers
     // must not be served as this one's.
-    // `pluginKey`: the module file the table belongs to (see BasemapCache::attach).
-    void attach(const CascadeTrackInfoApi* api, const std::string& pluginKey = std::string());
+    // `pluginKey`: the module file the table belongs to (see BasemapCache::attach). `photo` is the SAME plugin's
+    // CASCADE_CAP_TRACK_PHOTO table, or null; its calls go to this instance.
+    void attach(const CascadeTrackInfoApi* api, const std::string& pluginKey = std::string(), const CascadeTrackPhotoApi* photo = nullptr);
     void detach();
 
     bool active() const { return api_ != nullptr && handle_ != nullptr; }
+
+    // The photos of targets whose details are open (0.99.98). Inactive when
+    // the plugin offers none.
+    TrackPhotoCache& photos() { return photos_; }
 
     // What is known about track `id`, or nullptr while nothing is (never
     // asked, or the plugin is still looking it up). Asking is what starts the
@@ -75,8 +81,10 @@ public:
 
 private:
     const CascadeTrackInfoApi* api_ = nullptr;
+    const CascadeTrackPhotoApi* photoApi_ = nullptr;
     void* handle_ = nullptr;
     cascade::core::fault::Slot* slot_ = nullptr;
+    TrackPhotoCache photos_;
 
     std::unordered_map<std::string, Info> cache_;
     std::unordered_map<std::string, std::uint64_t> age_;

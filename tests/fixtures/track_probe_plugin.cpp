@@ -17,7 +17,8 @@
 // makes it behave as if it never looked (it publishes them whatever the host says), and
 // TRACK_PROBE_BARE_NAN=1 adds one more that an old or careless plugin would send: NaN
 // coordinates with NO flag (HEARDBARE). TRACK_PROBE_ONLY_HEARD=1 leaves PLACED out, so the list
-// holds nothing but aircraft heard without a position.
+// holds nothing but aircraft heard without a position. TRACK_PROBE_PLACED_ID=<hex> renames PLACED
+// (tests/test_track_photo_app, 0.99.98).
 //
 // TRACK_PROBE_COVERAGE=1 (0.99.58, tests/test_map_coverage_app.cpp) adds the three targets the map's
 // coverage line must treat differently, around a receiver at 52.0 N, 0.0 E:
@@ -104,7 +105,11 @@ int32_t pollTracks(void*, CascadeTrack* out, uint32_t cap) {
     const double nan = std::nan("");
     uint32_t n = 0;
     if (!envOn("TRACK_PROBE_ONLY_HEARD")) {
-        put(out, n, cap, "PLACED", "G-PLACE", 51.0, -1.0, 3000.0, 500ull, 0u);
+        // TRACK_PROBE_PLACED_ID (0.99.98) gives the placed aircraft a real ICAO address, for the
+        // registry and photo lookups of tests/test_track_photo_app.
+        const char* placedId = std::getenv("TRACK_PROBE_PLACED_ID");
+        put(out, n, cap, (placedId != nullptr && placedId[0] != '\0') ? placedId : "PLACED",
+            "G-PLACE", 51.0, -1.0, 3000.0, 500ull, 0u);
     }
     if (hostListsUnplaced()) {
         put(out, n, cap, "HEARD1", "G-HEARD", nan, nan, 10668.0, 1000ull,

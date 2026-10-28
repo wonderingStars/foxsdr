@@ -18,8 +18,8 @@ constexpr std::size_t kPollBufBytes = 4096;
 
 TrackInfoCache::~TrackInfoCache() { detach(); }
 
-void TrackInfoCache::attach(const CascadeTrackInfoApi* api, const std::string& pluginKey) {
-    if (api == api_) {
+void TrackInfoCache::attach(const CascadeTrackInfoApi* api, const std::string& pluginKey, const CascadeTrackPhotoApi* photo) {
+    if (api == api_ && photo == photoApi_) {
         return;
     }
     detach();
@@ -35,12 +35,17 @@ void TrackInfoCache::attach(const CascadeTrackInfoApi* api, const std::string& p
         return;
     }
     api_ = api;
+    photoApi_ = photo;
     handle_ = h;
     slot_ = slot;
+    photos_.attach(photo, h, slot);
     pollBuf_.assign(kPollBufBytes, '\0');
 }
 
 void TrackInfoCache::detach() {
+    // The photos first: they are asked on the instance destroyed below.
+    photos_.detach();
+    photoApi_ = nullptr;
     if (api_ != nullptr && handle_ != nullptr) {
         cascade::core::calls::destroy(slot_, api_, handle_);
     }

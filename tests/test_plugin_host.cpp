@@ -626,7 +626,7 @@ void testRejectionMessages() {
     const CascadeDecoderApi dec = validDecoder();
     // Up to the LAST enumerator, so a new rejection added without a message
     // fails here instead of reaching a user as "unknown rejection".
-    for (int i = 0; i <= static_cast<int>(PluginRejection::MissingIqDecoderFunction); ++i) {
+    for (int i = 0; i <= static_cast<int>(PluginRejection::TrackPhotoNeedsTrackInfo); ++i) {
         const char* m = cascade::core::pluginRejectionMessage(static_cast<PluginRejection>(i));
         CHECK(m != nullptr && m[0] != '\0');
         CHECK(std::strcmp(m, "unknown rejection") != 0);
@@ -2449,6 +2449,60 @@ int main() {
         entries[1].table = &input;
         d.capabilities = CASCADE_CAP_IMAGE_INPUT;
         CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::ImageInputNeedsDecoder);
+    }
+    // Target photos (0.99.98) ride on the track-info instance: accepted beside
+    // it, refused without it, and checked for the same three faults as every
+    // other table.
+    {
+        const CascadeTrackInfoApi ti = uicaps::validTrackInfo();
+        CascadeTrackPhotoApi photo{};
+        photo.structSize = static_cast<uint32_t>(sizeof(CascadeTrackPhotoApi));
+        photo.get_photo = [](void*, const char*, uint32_t, CascadeTrackPhoto*) -> int32_t {
+            return CASCADE_PHOTO_MISSING;
+        };
+        photo.release_photo = [](void*, const CascadeTrackPhoto*) {};
+        photo.forget_photo = [](void*, const char*) {};
+        const CascadeCapabilityEntry entries[] = {
+            {CASCADE_CAP_TRACK_INFO, static_cast<uint32_t>(sizeof(ti)), &ti},
+            {CASCADE_CAP_TRACK_PHOTO, static_cast<uint32_t>(sizeof(photo)), &photo},
+        };
+        CascadePluginDesc d =
+            uicaps::descWith(CASCADE_CAP_TRACK_INFO | CASCADE_CAP_TRACK_PHOTO, entries, 2);
+        CHECK(cascade_plugin_track_photo(&d) != nullptr);
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::None);
+
+        CascadeTrackPhotoApi bad = photo;
+        bad.forget_photo = nullptr;
+        CascadeCapabilityEntry withBad[] = {entries[0], entries[1]};
+        withBad[1].table = &bad;
+        d = uicaps::descWith(CASCADE_CAP_TRACK_INFO | CASCADE_CAP_TRACK_PHOTO, withBad, 2);
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::MissingTrackPhotoFunction);
+        bad = photo;
+        bad.get_photo = nullptr;
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::MissingTrackPhotoFunction);
+        bad = photo;
+        bad.release_photo = nullptr;
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::MissingTrackPhotoFunction);
+        bad = photo;
+        bad.structSize = static_cast<uint32_t>(sizeof(CascadeTrackPhotoApi)) + 8u;
+        CHECK(cascade::core::validatePluginDesc(&d) ==
+              PluginRejection::TrackPhotoStructSizeMismatch);
+
+        // Declared, no table supplied.
+        d = uicaps::descWith(CASCADE_CAP_TRACK_INFO | CASCADE_CAP_TRACK_PHOTO, entries, 1);
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::MissingTrackPhotoApi);
+
+        // Photos alone: no instance to ask them on.
+        d = uicaps::descWith(CASCADE_CAP_TRACK_PHOTO, &entries[1], 1);
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::TrackPhotoNeedsTrackInfo);
+
+        // A table supplied but its bit not declared is ignored, not used.
+        d = uicaps::descWith(CASCADE_CAP_TRACK_INFO, entries, 2);
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::None);
+
+        const std::string why = cascade::core::pluginRejectionMessage(
+            PluginRejection::TrackPhotoNeedsTrackInfo);
+        CHECK(contains(why, "CASCADE_CAP_TRACK_INFO"));
     }
     return testSummary("test_plugin_host");
 }

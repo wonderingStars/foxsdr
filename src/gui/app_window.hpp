@@ -1643,6 +1643,8 @@ private:
     bool pickFile(const cascade::core::FilePickRequest& request, std::string& path);
     bool filePickOffered_ = false;                  // there is a dialog to open (the system's, or the seam)
     std::optional<std::string> filePickSeam_;       // FOXSDR_FILE_PICK, read by run() in a bounded run only
+    // FOXSDR_SHELL_OPEN_LOG, read in a bounded run only: shellOpen appends its target to this file instead of opening it. Unset (nullopt) opens for real.
+    std::optional<std::string> shellOpenLog_;
 
     // --- RADIO SETUP (core/radio_setup.hpp, app_window_radio_setup.cpp; 0.99.69, the INSTALL DRIVER key 0.99.88; stub campaign B8) ----------
     //

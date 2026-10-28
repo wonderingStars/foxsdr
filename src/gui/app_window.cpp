@@ -1329,6 +1329,13 @@ int AppWindow::run(int frames) {
         // press, the commit, the import, the plugin seeing settings_seq move - can. Bounded runs only: an interactive session can never have its
         // file dialog replaced by a stray variable.
         if (const char* pickSeam = std::getenv("FOXSDR_FILE_PICK"); pickSeam != nullptr) { filePickSeam_ = std::string(pickSeam); }
+        // WHAT WOULD HAVE BEEN OPENED, WITHOUT OPENING IT (0.99.98, AppWindow::shellOpen):
+        // FOXSDR_SHELL_OPEN_LOG=<path> appends each target there instead of handing it
+        // to the shell, so a test can click a link (a target photo's page) without a
+        // browser starting on the desktop it runs on. Bounded runs only.
+        if (const char* openLog = std::getenv("FOXSDR_SHELL_OPEN_LOG"); openLog != nullptr && *openLog != '\0') {
+            shellOpenLog_ = std::string(openLog);
+        }
         // A DLL to map on frame 90, standing in for another program's injected hook (foreignModuleTestPath_ in the header). Bounded
         // runs only, like every hook here.
         if (const char* fm = std::getenv("CASCADE_FOREIGN_MODULE_TEST"); fm != nullptr && *fm != '\0') {
@@ -3761,6 +3768,9 @@ void AppWindow::drawUi() {
         basemap_.endFrame();
     }
     basemapUsedThisFrame_ = false;
+    // Target photos are kept only while their details are drawn (0.99.98,
+    // gui/track_photo_cache.hpp): after every surface that shows one.
+    trackInfo_.photos().endFrame();
 
     // (The scanner's frame driver ran near the top, after the command drain:
     // see the call there for why it moved in stage 1.)
@@ -7574,6 +7584,11 @@ cascade::gui::ShellPauseHooks AppWindow::watchdogShellHooks() {
 }
 
 bool AppWindow::shellOpen(const std::string& target) {
+    if (shellOpenLog_.has_value()) {
+        std::ofstream log(*shellOpenLog_, std::ios::app | std::ios::binary);
+        log << target << "\n";
+        return static_cast<bool>(log);
+    }
     return cascade::gui::runShellOpenResponsive(watchdogShellHooks(), [&target]() -> bool {
 #if defined(_WIN32)
         SHELLEXECUTEINFOA sei{};
@@ -13555,7 +13570,7 @@ void AppWindow::applyDirectiveAfter(const cascade::core::PluginDirectiveFacts& d
     const CascadeBasemapApi* basemap = d.basemap;
     if (basemap == nullptr && basemapStandIn_) { basemap = cascade::gui::standInBasemap(); }
     basemap_.attach(basemap, d.basemapPlugin);
-    trackInfo_.attach(d.trackInfo, d.trackInfoPlugin);
+    trackInfo_.attach(d.trackInfo, d.trackInfoPlugin, d.trackPhoto);
     // DEMONSTRATION instruments open their windows by themselves: the one deliberate exception to "nothing opens but by your hand"
     // (0.79.1), safe because a demonstration exists only when a developer set FOXSDR_DEMO_INSTRUMENT for this launch. The window that
     // rebuilt them shows them - the engine used to ask for it through a hook. (Not for a wake or a sleep of one plugin: nothing was
@@ -15885,6 +15900,8 @@ void AppWindow::drawTargetDetailsSection() {
     }
 
     drawTrackDetailOf(*found, &trackInfo_, receiverPositionKnown(), uiState_.rxLatDeg, uiState_.rxLonDeg);
+    // Its photo, where the plugin offers one (0.99.98).
+    cascade::gui::drawTrackPhoto(*found, &trackInfo_, ImGui::GetContentRegionAvail().x, [this](const std::string& link) { shellOpen(link); });
     ImGui::Separator();
     // The same two gestures the details window offers, so acting on what was
     // just read never requires finding the row it came from. Both land on the
@@ -15961,6 +15978,7 @@ void AppWindow::drawTargetDetailsWindow() {
             ImGui::TextDisabled("%s", tr("No longer being reported."));
         } else {
             drawTrackDetailOf(*found, &trackInfo_, receiverPositionKnown(), uiState_.rxLatDeg, uiState_.rxLonDeg);
+            cascade::gui::drawTrackPhoto(*found, &trackInfo_, ImGui::GetContentRegionAvail().x, [this](const std::string& link) { shellOpen(link); });
             ImGui::Separator();
             // The same two gestures the row offers, as named buttons: the
             // details window is reachable from a row, and a user who got here
@@ -15991,6 +16009,11 @@ void AppWindow::drawTargetDetailsWindow() {
         }
         ImGui::Separator();
         if (ImGui::Button(trId("Close"))) { detailsOpen_ = false; }
+        if (cascade::gui::census::enabled()) {
+            cascade::gui::census::rect("details:close", ImGui::GetItemRectMin().x,
+                                       ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                       ImGui::GetItemRectMax().y);
+        }
     }
     endPage();
     // Cleared only once the window is actually shut, so the id survives being

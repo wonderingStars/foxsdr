@@ -3268,6 +3268,7 @@ void Engine::recordPluginUiStateLocked(const cascade::core::PluginDirective& d) 
         pluginUiState_->dormant = d.dormant;
         pluginUiState_->basemap = d.basemap;
         pluginUiState_->trackInfo = d.trackInfo;
+        pluginUiState_->trackPhoto = d.trackPhoto;
     }
 }
 
@@ -4143,7 +4144,8 @@ void Engine::refreshPluginRunner() {
     const CascadeTrackInfoApi* wantTrackInfo = nullptr;
     std::string wantBasemapPlugin;
     std::string wantTrackInfoPlugin;
-    chooseBasemapAndTrackInfo(wantBasemap, wantTrackInfo, &wantBasemapPlugin, &wantTrackInfoPlugin);
+    const CascadeTrackPhotoApi* wantTrackPhoto = nullptr;
+    chooseBasemapAndTrackInfo(wantBasemap, wantTrackInfo, &wantBasemapPlugin, &wantTrackInfoPlugin, &wantTrackPhoto);
     // THE DIRECTIVE: what the plugin UI is to be built over, as values. The interface rebuilds its track sources, panels and
     // instruments, attaches the host table (the ABI's attach(), before any capability's create()) and the basemap and the
     // track-info client from it, on its own thread. Where that thread is not this one the wait is bounded and is NOT an error
@@ -4157,6 +4159,7 @@ void Engine::refreshPluginRunner() {
         d.services = std::move(svc);
         d.basemap = wantBasemap;
         d.trackInfo = wantTrackInfo;
+        d.trackPhoto = wantTrackPhoto;
         d.basemapPlugin = std::move(wantBasemapPlugin);
         d.trackInfoPlugin = std::move(wantTrackInfoPlugin);
         if (!deliverPluginDirective(std::move(d))) {

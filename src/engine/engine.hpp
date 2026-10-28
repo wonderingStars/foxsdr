@@ -595,7 +595,7 @@ private:
     bool frontEndPresent() const { return frontEnd_.load(std::memory_order_acquire) || frontEndExpected_.load(std::memory_order_acquire); }
     // The basemap and track-info plugins chosen (first loaded, not stopped), or null.
     void chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const CascadeTrackInfoApi*& trackInfo, std::string* basemapPlugin = nullptr,
-                                   std::string* trackInfoPlugin = nullptr) const;
+                                   std::string* trackInfoPlugin = nullptr, const CascadeTrackPhotoApi** trackPhoto = nullptr) const;
     // Records a stop or a start WITHOUT rebuilding: updates the durable state
     // and pushes it into the runner and the UI half, so the next rebuild sees
     // it. Split from the button's action below because applyPluginPreset has

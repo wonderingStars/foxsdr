@@ -455,6 +455,8 @@ LoadedPlugin loadOne(const fs::path& p, const PluginHost::LoadGate& gate) {
                             ? static_cast<const CascadeTrackInfoApi*>(
                                   findCapabilityTable(desc, CASCADE_CAP_TRACK_INFO))
                             : nullptr;
+        rec.trackPhoto = (desc->capabilities & CASCADE_CAP_TRACK_PHOTO) != 0u
+                             ? cascade_plugin_track_photo(desc) : nullptr;
         rec.audioOut = (desc->capabilities & CASCADE_CAP_AUDIO_OUT) != 0u
                            ? static_cast<const CascadeAudioOutApi*>(
                                  findCapabilityTable(desc, CASCADE_CAP_AUDIO_OUT))
@@ -959,6 +961,23 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         ++usable;
     }
 
+    // Photos ride on the track-info instance (0.99.98), so like image input
+    // they are not counted toward `usable` and are refused on their own.
+    if ((desc->capabilities & CASCADE_CAP_TRACK_PHOTO) != 0u) {
+        const auto* ph = cascade_plugin_track_photo(desc);
+        if (ph == nullptr) { return PluginRejection::MissingTrackPhotoApi; }
+        if (ph->structSize != static_cast<uint32_t>(sizeof(CascadeTrackPhotoApi))) {
+            return PluginRejection::TrackPhotoStructSizeMismatch;
+        }
+        if (ph->get_photo == nullptr || ph->release_photo == nullptr ||
+            ph->forget_photo == nullptr) {
+            return PluginRejection::MissingTrackPhotoFunction;
+        }
+        if ((desc->capabilities & CASCADE_CAP_TRACK_INFO) == 0u) {
+            return PluginRejection::TrackPhotoNeedsTrackInfo;
+        }
+    }
+
     // Every bit it declared is one this host has never heard of. Loading it
     // would put a plugin in the list that can never do anything, so say what
     // is actually wrong instead: it was built for a host newer than this one.
@@ -1001,6 +1020,14 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "image input table has no press callback";
         case PluginRejection::ImageInputNeedsDecoder:
             return "image input requires an image decoder";
+        case PluginRejection::MissingTrackPhotoApi:
+            return "declares CASCADE_CAP_TRACK_PHOTO but supplies no table";
+        case PluginRejection::TrackPhotoStructSizeMismatch:
+            return "track-photo table size does not match this host's";
+        case PluginRejection::MissingTrackPhotoFunction:
+            return "track-photo table has a null function pointer";
+        case PluginRejection::TrackPhotoNeedsTrackInfo:
+            return "track photos require CASCADE_CAP_TRACK_INFO, whose instance they use";
         case PluginRejection::ImageDecoderStructSizeMismatch:
             return "image decoder table size does not match this host's";
         case PluginRejection::ImageDecoderBadInputKind:
@@ -1484,6 +1511,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         r.settingsUi = nullptr;
         r.basemap = nullptr;
         r.trackInfo = nullptr;
+        r.trackPhoto = nullptr;
         r.audioOut = nullptr;
         r.audioProcessor = nullptr;
         r.txAudio = nullptr;

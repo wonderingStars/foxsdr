@@ -49,6 +49,8 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
         {CASCADE_CAP_PRESET, p.preset},
         {CASCADE_CAP_BASEMAP, p.basemap},
         {CASCADE_CAP_TRACK_INFO, p.trackInfo},
+        // Target photos (0.99.98), on the track-info instance.
+        {CASCADE_CAP_TRACK_PHOTO, p.trackPhoto},
         // The audio-out table rides on another capability's instance and has
         // no create() of its own, which is exactly why it still needs a line
         // here: the record carries the pointer like any other, and without it
