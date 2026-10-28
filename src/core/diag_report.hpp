@@ -452,6 +452,9 @@ const std::vector<std::string>& bundleFieldNames();
 // because the bundle reuses the same bytes) or free-form program addresses.
 const std::vector<std::string>& crashReportFieldNames();
 const std::vector<std::string>& hangReportFieldNames();
+// The header core/issue_report.cpp writes before "--- context ---" (0.99.100), held both
+// ways by tests/test_issue_report.cpp.
+const std::vector<std::string>& issueReportFieldNames();
 
 }  // namespace cascade::core
 

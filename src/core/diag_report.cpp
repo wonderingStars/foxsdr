@@ -1033,6 +1033,15 @@ const std::vector<std::string>& hangReportFieldNames() {
     return names;
 }
 
+const std::vector<std::string>& issueReportFieldNames() {
+    // The header core/issue_report.cpp renderIssueReport() emits before
+    // "--- context ---": the kind, one fixed reason (a recovered-from word and its
+    // sentence) and the signature of the word. No code, no address, no thread:
+    // nothing faulted. tests/test_issue_report.cpp compares the set both ways.
+    static const std::vector<std::string> names = {"kind", "reason", "signature"};
+    return names;
+}
+
 std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
     std::string out;
     out.reserve(8192);

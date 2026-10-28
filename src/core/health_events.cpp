@@ -20,6 +20,7 @@
 
 #include "core/frame_timing.hpp"
 #include "core/i18n.hpp"
+#include "core/issue_report.hpp"
 #include "core/telemetry.hpp"
 
 namespace cascade::core::health {
@@ -1017,6 +1018,10 @@ void noteSlowFrame(int frameScope, int tier) {
 }
 
 void noteRecovered(Recovered r) {
+    // ...AND REPORTED (0.99.100, core/issue_report.hpp): once a session per word, under
+    // the Diagnostics switch rather than usage reporting, so the feed hears of a fault
+    // the person met whether or not this count is ever sent.
+    issue::fileIssueReport(r);
     const std::string token = tokenRecovered(r);
     if (!token.empty()) { note(token); }
 }
@@ -1053,15 +1058,19 @@ void RecoveryWatch::poll(const RecoveryReadings& now) {
     auto g = globalLedger();
     if (const std::uint32_t n = moved(now.sourceThreadsAbandoned, last_.sourceThreadsAbandoned)) {
         g->note(tokenRecovered(Recovered::SrcThread), n);
+        issue::fileIssueReport(Recovered::SrcThread);
     }
     if (const std::uint32_t n = moved(now.vendorCallsAbandoned, last_.vendorCallsAbandoned)) {
         g->note(tokenRecovered(Recovered::VendorCall), n);
+        issue::fileIssueReport(Recovered::VendorCall);
     }
     if (const std::uint32_t n = moved(now.ringDroppedSamples, last_.ringDroppedSamples)) {
         g->note(tokenRecovered(Recovered::RingDrop), n);
+        issue::fileIssueReport(Recovered::RingDrop);
     }
     if (const std::uint32_t n = moved(now.dspThreadExceptions, last_.dspThreadExceptions)) {
         g->note(tokenRecovered(Recovered::DspExc), n);
+        issue::fileIssueReport(Recovered::DspExc);
     }
     last_ = now;
 }

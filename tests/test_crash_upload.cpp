@@ -691,6 +691,43 @@ static void sentinelSweepBlock() {
     fs::remove_all(dir, ec);
 }
 
+// AN ISSUE REPORT IS SENT (0.99.100): an issue-*.txt in the folder is opened by the sweep,
+// parsed as the third kind, and posted with kind "issue" - the one thing the feature needs
+// from this file.
+static void issueSweepBlock() {
+    const fs::path dir = scratchDir("issue");
+    writeFile(dir / "issue-20261028-210000-4242-1.txt",
+              "kind: issue\n"
+              "reason: issue: viewport - the graphics driver refused a second window\n"
+              "signature: 0123456789ABCDEF\n--- context ---\nversion: 0.99.100\n"
+              "commit: abc123def456\nos: Windows 10.0.22631\narch: x64\n"
+              "--- process ---\nuptime-sec: 180\n--- log (last 1 of 1 lines) ---\n"
+              "window: GLFW error 65543: WGL: Failed to create OpenGL context\n");
+    StubServer srv;
+    CHECK(srv.start(StubServer::Mode::Accept204));
+    SweepParams p;
+    p.crashDir = dir.string();
+    p.url = srv.url();
+    p.enabled = true;
+    p.installId = "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5";
+    p.nowEpoch = 1'700'000'000ull;
+    auto cancel = std::make_shared<UploadCancel>();
+    const SweepOutcome out = sweepCrashDir(p, cancel);
+    CHECK(out.considered == 1);
+    CHECK(out.sent == 1);
+    const std::vector<std::string> bodies = srv.bodies();
+    CHECK(bodies.size() == 1);
+    if (bodies.size() == 1) {
+        const nlohmann::json j = nlohmann::json::parse(bodies[0], nullptr, false);
+        CHECK(!j.is_discarded());
+        CHECK(j.value("kind", std::string()) == "issue");
+        CHECK(j.value("signature", std::string()) == "0123456789ABCDEF");
+        CHECK(j.value("reason", std::string()).rfind("issue: viewport", 0) == 0);
+        CHECK(j.value("module", std::string("x")).empty());
+        CHECK(j.value("log", nlohmann::json::array()).size() == 1);
+    }
+}
+
 int main() {
     // --- The report parses back into the fields the wire contract needs -----
     {
@@ -918,6 +955,19 @@ int main() {
         CHECK(!parseReportText("", r));
         CHECK(!parseReportText("this is not a report\n", r));
         CHECK(!parseReportText("kind: something-else\nsignature: X\n", r));
+        // AN ISSUE REPORT (0.99.100, core/issue_report.hpp) is the third kind, and it
+        // parses with its reason and its log and no stack.
+        ParsedReport issue;
+        CHECK(parseReportText("kind: issue\n"
+                              "reason: issue: viewport - the graphics driver refused a second window\n"
+                              "signature: 0123456789ABCDEF\n--- context ---\nversion: 0.99.100\n"
+                              "--- log (last 1 of 1 lines) ---\nwindow: GLFW error 65543\n",
+                              issue));
+        CHECK(issue.kind == "issue");
+        CHECK(issue.signature == "0123456789ABCDEF");
+        CHECK(issue.reason.rfind("issue: viewport - ", 0) == 0);
+        CHECK(issue.threads.empty() && issue.module.empty());
+        CHECK(issue.log.size() == 1);
         // A report truncated by a handler that died mid-write still has the
         // identifying half, and that half is worth sending.
         ParsedReport half;
@@ -1997,6 +2047,7 @@ int main() {
     }
 
     sentinelSweepBlock();
+    issueSweepBlock();
 
     return testSummary("test_crash_upload");
 }

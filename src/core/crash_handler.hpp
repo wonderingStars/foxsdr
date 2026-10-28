@@ -174,6 +174,13 @@ constexpr const char* kAbsorbedFaultReasonPrefix = "fault in a third-party SDR m
 // these, for deaths of its children that it carried on from.
 constexpr const char* kChildDeathReasonPrefix = "SDR device enumeration child process died";
 
+// THE START OF THE `reason:` LINE OF AN ISSUE REPORT (core/issue_report.hpp, 0.99.100): a
+// fault the program met and carried on from, filed once a session per recovered-from word so
+// that it reaches the feed. The third kind of report written by a process that SURVIVED, and
+// like the two above it is never the record of a death: exit_cause.cpp's
+// reportReasonIsSurvivedFault and the site's reliabilityReasonSurvived both key on it.
+constexpr const char* kIssueReasonPrefix = "issue: ";
+
 // Compile-time prefix test, for the static_assert above's one user.
 constexpr bool reasonStartsWith(const char* reason, const char* prefix) noexcept {
     for (; *prefix != '\0'; ++prefix, ++reason) {
