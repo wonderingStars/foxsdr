@@ -83,6 +83,7 @@
 #include "engine/engine.hpp"
 #include "engine/engine_shell.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
 
@@ -215,7 +216,7 @@ namespace cascade::gui {
 
 struct AppWindowTestAccess {
     // THE CONVERSION (stub campaign B12, docs/engine-stage4.md 6.22): the fake radio is built by the ENGINE's hooks now - the radio is the engine's since stage 4, and AppWindow has
-    // no testHooks_ of its own - and what the run ended with is read from the engine through rawEngine(), as every converted test does (docs/engine-stage4.md 4069). The reads are
+    // no testHooks_ of its own - and what the run ended with is read from the engine through th::engine(), as every converted test does (docs/engine-stage4.md 4069). The reads are
     // made AFTER AppWindow::run has returned, so the control thread is stopped and no pass can be running: a plain member read is what pass_seam.hpp's read() would do there, and
     // this test, a process of its own with the application in a child, has no stepped variant to register.
     static void installHooks() {
@@ -224,9 +225,9 @@ struct AppWindowTestAccess {
     }
     // What the run ended with, for the file the parent reads: the receiver's squelch threshold,
     // the Airband monitor's, and AUTOMATIC (one flag for both).
-    static float squelchDb(AppWindow& a) { return rawEngine(a.engine_).squelchDb_; }
-    static float airbandSquelchDb(AppWindow& a) { return rawEngine(a.engine_).airbandSquelchDb_; }
-    static bool squelchAuto(AppWindow& a) { return rawEngine(a.engine_).squelchAuto_; }
+    static float squelchDb(AppWindow& a) { return th::engine(a).squelchDb_; }
+    static float airbandSquelchDb(AppWindow& a) { return th::engine(a).airbandSquelchDb_; }
+    static bool squelchAuto(AppWindow& a) { return th::engine(a).squelchAuto_; }
 };
 
 }  // namespace cascade::gui
@@ -257,7 +258,7 @@ int childMain(const std::string& radio, int frames) {
     }
     cascade::gui::AppWindowTestAccess::installHooks();
     const char* cfg = std::getenv("CASCADE_CONFIG_TEST");
-    cascade::gui::AppWindow app(cfg != nullptr ? cfg : "", true);
+    th::TestWindow app(cfg != nullptr ? cfg : "", true);
     const int rc = app.run(frames);
     // What the run ended with, in the file the parent reads (the thresholds are not in the
     // saved config except the receiver's, and the Airband monitor's is not saved at all).

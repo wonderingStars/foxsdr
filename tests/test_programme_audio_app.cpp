@@ -4,7 +4,7 @@
 // CONVERTED (stub campaign B9, PLUGIN-ROW-KEYS' pending list; master's test unedited except as the reasons below say). It was master's own test of
 // master's AppWindow: it reached the pipeline, the plugin host, the mute decision and the preset through `a.pipeline_`, `a.pluginHost_`,
 // `a.applyPluginPreset` and the rest - fields this branch's window does not have, because the engine owns them (the window's only door is the table).
-// The house pattern (tests/test_audio_lead_app.cpp): rawEngine(a.engine_) through AppWindowTestAccess, and tests/pass_seam.hpp for every call that must
+// The house pattern (tests/test_audio_lead_app.cpp): th::engine(a) through AppWindowTestAccess, and tests/pass_seam.hpp for every call that must
 // run on the pass thread - so the test is registered again as _stepped, and the same assertions run against the pass on its own thread.
 //   * rescanPlugins, startReceiver, stopReceiver, updateAudioMute, setPluginMutes, applyPluginPreset and pluginMutes are Engine members now;
 //   * the saved overrides are read as the window reads them: the engine hands its half of the config over (publishConfig), the window's copy is
@@ -19,6 +19,7 @@
 #include "core/package_identity.hpp"
 #include "core/plugin_run.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
 #include <chrono>
@@ -39,7 +40,7 @@ namespace fs = std::filesystem;
 namespace cc = cascade::core;
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
+    static cascade::engine::Engine& eng(AppWindow& a) { return th::engine(a); }
     static void scan(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).rescanPlugins(); }); }
     static void start(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).startReceiver(); }); }
     static void stop(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).stopReceiver("test"); }); }
@@ -142,7 +143,7 @@ int main(int argc, char** argv) {
     fs::copy_file(fs::path(argv[1]), pluginDir / (std::string("programme-audio-1.0.0") + ext),
                   fs::copy_options::overwrite_existing);
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::scan(app);
         const cc::LoadedPlugin* plugin = nullptr;
         for (const auto& p : Access::plugins(app)) {

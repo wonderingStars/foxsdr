@@ -39,6 +39,7 @@
 #include "core/ppm_correction.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
@@ -242,29 +243,29 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
     static void setPpm(AppWindow& a, bool on, const std::string& key, double v) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).ppmCorrectionOn_ = on;
-            rawEngine(a.engine_).ppmValues_[key] = v;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).ppmCorrectionOn_ = on;
+            th::engine(a).ppmValues_[key] = v;
         });
     }
     static void setOn(AppWindow& a, bool on) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).ppmCorrectionOn_ = on; });
+        passseam::on(th::engine(a), [&] { th::engine(a).ppmCorrectionOn_ = on; });
     }
     // The Source section's switch and value, as the window sends them (FOXAPP_OP_SET_PPM), applied by the engine at once.
     static void change(AppWindow& a, bool on, double v) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).changePpm(on, v); });
+        passseam::on(th::engine(a), [&] { th::engine(a).changePpm(on, v); });
     }
     static double stored(AppWindow& a, const std::string& key) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] {
-            const auto& m = rawEngine(a.engine_).ppmValues_;
+        return passseam::read<double>(th::engine(a), [&] {
+            const auto& m = th::engine(a).ppmValues_;
             const auto it = m.find(key);
             return it == m.end() ? 0.0 : it->second;
         });
     }
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
+        while (passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceOpenPending_; })) {
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -272,61 +273,61 @@ struct AppWindowTestAccess {
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
         int row = -1;
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).scanNative();
-            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
-                if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).scanNative();
+            for (std::size_t i = 0; i < th::engine(a).nativeDevices_.size(); ++i) {
+                if (th::engine(a).nativeDevices_[i].args == args) {
                     row = AppWindow::kNativeRowBase + static_cast<int>(i);
                     break;
                 }
             }
-            if (row >= 0) { rawEngine(a.engine_).selectSource(row); }
+            if (row >= 0) { th::engine(a).selectSource(row); }
         });
         return row >= 0 && waitOpen(a);
     }
-    static void selectGenerator(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(0); }); }
-    static void tune(AppWindow& a, double hz) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).applyRetuneNow(hz); }); }
+    static void selectGenerator(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(0); }); }
+    static void tune(AppWindow& a, double hz) { passseam::on(th::engine(a), [&] { th::engine(a).applyRetuneNow(hz); }); }
     static void setVfo(AppWindow& a, double hz) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pipeline_.setVfoOffsetHz(hz); });
+        passseam::on(th::engine(a), [&] { th::engine(a).pipeline_.setVfoOffsetHz(hz); });
     }
     static double airCentre(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.activeSource().centerFrequencyHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).pipeline_.activeSource().centerFrequencyHz(); });
     }
     static double counter(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).currentAbsoluteHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).currentAbsoluteHz(); });
     }
     static double softwarePpm(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.softwarePpm(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).pipeline_.softwarePpm(); });
     }
     static std::string tuneNote(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).tuneMismatchNote_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).tuneMismatchNote_; });
     }
-    static void clearNote(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).tuneMismatchNote_.clear(); }); }
+    static void clearNote(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).tuneMismatchNote_.clear(); }); }
     // THE RECEIVER CARD'S LINE, as the window makes it: from the facts the engine publishes (fact.ppm.*), read through the window's own
     // session - with no frame, the engine publishes and the window looks first.
     static std::string card(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishReceiverState(); });
         a.refreshUiState();
         return a.ppmCardLine();
     }
     static std::string diag(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).ppmDiagText(); });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).ppmDiagText(); });
     }
     static cc::PpmMethod method(AppWindow& a) {
-        return passseam::read<cc::PpmMethod>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).ppmMethodNow(); });
+        return passseam::read<cc::PpmMethod>(th::engine(a), [&] { return th::engine(a).ppmMethodNow(); });
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(th::engine(a), [&] { a.applyConfig(cfg); }); }
     static cascade::core::AppConfig saved(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });
         return a.currentConfig();
     }
 
     static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device, double freqHz) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = true;  // no starter patch: this test builds its own
-        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
-            const pc::NodeId id = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) {
+        return passseam::read<pc::NodeId>(th::engine(a), [&] {
+            const pc::NodeId id = th::engine(a).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            if (pc::Node* n = th::engine(a).patchGraph_.mutableNode(id)) {
                 n->device = device;
                 n->freqHz = freqHz;
                 n->centreChosen = true;
@@ -337,32 +338,32 @@ struct AppWindowTestAccess {
         });
     }
     static bool runPatchUntilOpen(AppWindow& a, cascade::core::patch::NodeId id) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = true;
-            rawEngine(a.engine_).patchWasOpen_ = true;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = true;
+            th::engine(a).patchWasOpen_ = true;
         });
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchRadios_.count(id) == 0; })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); });
+        while (passseam::read<bool>(th::engine(a), [&] { return th::engine(a).patchRadios_.count(id) == 0; })) {
+            passseam::custom(th::engine(a), [&] { th::engine(a).patchReconcile(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        for (int i = 0; i < 5; ++i) { passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); }); }
+        for (int i = 0; i < 5; ++i) { passseam::custom(th::engine(a), [&] { th::engine(a).patchReconcile(); }); }
         return true;
     }
     static void reconcile(AppWindow& a, int frames) {
-        for (int i = 0; i < frames; ++i) { passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); }); }
+        for (int i = 0; i < frames; ++i) { passseam::custom(th::engine(a), [&] { th::engine(a).patchReconcile(); }); }
     }
     static double patchAir(AppWindow& a, cascade::core::patch::NodeId id) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] {
-            const auto it = rawEngine(a.engine_).patchRadios_.find(id);
-            return it == rawEngine(a.engine_).patchRadios_.end() ? std::nan("") : it->second->centreHz();
+        return passseam::read<double>(th::engine(a), [&] {
+            const auto it = th::engine(a).patchRadios_.find(id);
+            return it == th::engine(a).patchRadios_.end() ? std::nan("") : it->second->centreHz();
         });
     }
     static void stopPatch(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = false;
-            rawEngine(a.engine_).patchStopAll(true);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = false;
+            th::engine(a).patchStopAll(true);
         });
         waitOpen(a);
     }
@@ -392,7 +393,7 @@ void testOffIsUnchanged() {
     std::vector<double> plainRtl;
     for (int pass = 0; pass < 2; ++pass) {
         resetRegistry();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         if (pass == 1) {
             // Values remembered for both radios, the switch OFF.
             Access::setPpm(app, false, kHackKey, 50.0);
@@ -422,7 +423,7 @@ void testOffIsUnchanged() {
 void testRetuneFallback() {
     std::printf("  a radio without its own correction is corrected by retuning, and live\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::setPpm(app, true, kHackKey, 50.0);
     const std::size_t h = openOver(app, kHackArgs, 100.0e6);
     CHECK(Access::method(app) == cc::PpmMethod::Retune);
@@ -480,7 +481,7 @@ void testTuneElsewhereStillFires() {
     std::printf("  a real coerced tune is still reported with the correction on\n");
     resetRegistry();
     g_reg.clampAtTop = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::setPpm(app, true, kHackKey, 50.0);
     const std::size_t h = openOver(app, kHackArgs, 100.0e6);
     Access::clearNote(app);
@@ -492,7 +493,7 @@ void testTuneElsewhereStillFires() {
 void testInRadio() {
     std::printf("  a radio with its own correction is sent it before its first tune\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::setPpm(app, true, kRtlKey, 2.6);
     const std::size_t r = openOver(app, kRtlArgs, 433.92e6);
     CHECK(Access::method(app) == cc::PpmMethod::InRadio);
@@ -525,7 +526,7 @@ void testInRadio() {
 void testReappliedOnEveryOpen() {
     std::printf("  each radio gets its own value on every open, and no other's\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::setPpm(app, true, kHackKey, 50.0);
     Access::setPpm(app, true, kRtlKey, 2.6);
     const std::size_t h1 = openOver(app, kHackArgs, 145.0e6);
@@ -556,7 +557,7 @@ void testReappliedOnEveryOpen() {
 void testStartupRestore() {
     std::printf("  the startup restore tells the saved radio the corrected frequency once\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     cascade::core::AppConfig cfg;
     cfg.sourceKind = "hackrf";
     cfg.nativeArgs = kHackArgs;
@@ -577,7 +578,7 @@ void testStartupRestore() {
 
     // The same config with the switch off: the plain frequency, as ever.
     resetRegistry();
-    cascade::gui::AppWindow app2;
+    th::TestWindow app2;
     cfg.ppmCorrection = false;
     const std::size_t idx2 = madeCount();
     Access::restore(app2, cfg);
@@ -588,7 +589,7 @@ void testStartupRestore() {
 void testRspPreTune() {
     std::printf("  an RSP's pre-Init tune is the corrected one, and nothing follows it\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::setPpm(app, true, kRspKey, 50.0);
     const std::size_t r = openOver(app, kRspArgs, 145.0e6);
     CHECK(made(r).kind == "sdrplay");
@@ -607,7 +608,7 @@ void testRspPreTune() {
 void testPatchRadios() {
     std::printf("  the patch page's radios take the same value by the same rule\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::setPpm(app, true, kHackKey, 50.0);
     Access::setPpm(app, true, kRtlKey, 2.6);
 

@@ -30,6 +30,7 @@
 
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/ui_scale.hpp"
 #include "test_check.hpp"
 
@@ -93,7 +94,7 @@ int main() {
 
     // A fresh window opens everything as a fresh install does.
     {
-        g::AppWindow app;
+        th::TestWindow app;
         CHECK(!Access::rail(app));
         CHECK(!Access::status(app));
         CHECK(!Access::display(app));
@@ -110,7 +111,7 @@ int main() {
     file.displayOpen = true;
     file.interfaceScale = "175";
     {
-        g::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, file);
         CHECK(Access::rail(app));
         CHECK(Access::status(app));
@@ -130,7 +131,7 @@ int main() {
     // value and is moved the other way, one at a time, so a field written from the wrong member
     // cannot hide behind another.
     {
-        g::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, file);
 
         Access::toggleRail(app);

@@ -50,6 +50,7 @@
 #include "core/telemetry.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "sink/audio_out.hpp"
 #include "source/device_source.hpp"
@@ -384,16 +385,16 @@ struct AppWindowTestAccess {
     }
     // The Source section's Open on the Sound card row, settled as the frame loop settles it.
     static bool openCard(AppWindow& a, const cascade::source::SoundCardSettings& s) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).sourceSel_ = AppWindow::kSoundCardRow;
-            rawEngine(a.engine_).soundCard_ = s;
-            rawEngine(a.engine_).launchSoundCardOpen(false, s);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).sourceSel_ = AppWindow::kSoundCardRow;
+            th::engine(a).soundCard_ = s;
+            th::engine(a).launchSoundCardOpen(false, s);
         });
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).soundCardOpenPending_ || rawEngine(a.engine_).soundCardScanPending_;
+        while (passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).soundCardOpenPending_ || th::engine(a).soundCardScanPending_;
         })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSoundCard(); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSoundCard(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -401,8 +402,8 @@ struct AppWindowTestAccess {
     }
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
+        while (passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceOpenPending_; })) {
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -410,34 +411,34 @@ struct AppWindowTestAccess {
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
         int row = -1;
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).scanNative();
-            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
-                if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).scanNative();
+            for (std::size_t i = 0; i < th::engine(a).nativeDevices_.size(); ++i) {
+                if (th::engine(a).nativeDevices_[i].args == args) {
                     row = AppWindow::kNativeRowBase + static_cast<int>(i);
                     break;
                 }
             }
-            if (row >= 0) { rawEngine(a.engine_).selectSource(row); }
+            if (row >= 0) { th::engine(a).selectSource(row); }
         });
         return row >= 0 && waitOpen(a);
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(th::engine(a), [&] { a.applyConfig(cfg); }); }
     static bool watching(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).healthWatching_; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).healthWatching_; });
     }
-    static void poll(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).healthPoll(); }); }
-    static void start(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).startReceiver(); }); }
-    static void stop(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopReceiver("test_health_app"); }); }
-    static cascade::sink::AudioOut& audio(AppWindow& a) { return rawEngine(a.engine_).pipeline_.audio(); }
+    static void poll(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).healthPoll(); }); }
+    static void start(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).startReceiver(); }); }
+    static void stop(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).stopReceiver("test_health_app"); }); }
+    static cascade::sink::AudioOut& audio(AppWindow& a) { return th::engine(a).pipeline_.audio(); }
 
     // The patch page's radio.
     static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = true;
-        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
-            const pc::NodeId id = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) {
+        return passseam::read<pc::NodeId>(th::engine(a), [&] {
+            const pc::NodeId id = th::engine(a).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            if (pc::Node* n = th::engine(a).patchGraph_.mutableNode(id)) {
                 n->device = device;
                 n->freqHz = 100.0e6;
                 n->rateHz = 2.4e6;
@@ -448,45 +449,45 @@ struct AppWindowTestAccess {
     }
     // One reconcile per frame until the radio runs or its open has failed.
     static bool patchUntilSettled(AppWindow& a, cascade::core::patch::NodeId id) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = true;
-            rawEngine(a.engine_).patchWasOpen_ = true;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = true;
+            th::engine(a).patchWasOpen_ = true;
         });
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).patchRadios_.count(id) == 0 && rawEngine(a.engine_).patchRadioError_.count(id) == 0;
+        while (passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).patchRadios_.count(id) == 0 && th::engine(a).patchRadioError_.count(id) == 0;
         })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).patchReconcile(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static void stopPatch(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = false;
-            rawEngine(a.engine_).patchStopAll(true);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = false;
+            th::engine(a).patchStopAll(true);
         });
         waitOpen(a);
     }
 
     // The scan (both halves, as the Source list's Refresh asks).
     static bool scanBoth(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).scanNative();
-            rawEngine(a.engine_).scanSoapy();
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).scanNative();
+            th::engine(a).scanSoapy();
         });
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).soapyScanPending_; })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
+        while (passseam::read<bool>(th::engine(a), [&] { return th::engine(a).soapyScanPending_; })) {
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(90)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         return true;
     }
     static bool listed(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return !rawEngine(a.engine_).soapyDevices_.empty() || !rawEngine(a.engine_).nativeDevices_.empty();
+        return passseam::read<bool>(th::engine(a), [&] {
+            return !th::engine(a).soapyDevices_.empty() || !th::engine(a).nativeDevices_.empty();
         });
     }
 
@@ -504,10 +505,10 @@ struct AppWindowTestAccess {
     }
     static bool launch(AppWindow& a, const std::string& path) { return a.launchInstaller(path); }
 
-    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
+    static void rescan(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPlugins(); }); }
 
     // --- what the program recovered from (0.99.65) ---
-    static void reopenAfterFault(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).reopenAfterDriverFault(); }); }
+    static void reopenAfterFault(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).reopenAfterDriverFault(); }); }
     // A settings save, through the window's own writer made to refuse (a read-only profile, a full disk, a file another program holds) or
     // to accept; waits for the worker the way the frame loop does.
     static bool save(AppWindow& a, bool accepted) {
@@ -527,23 +528,23 @@ struct AppWindowTestAccess {
     }
     // The audio watchdog's reopen (or the user's own pick), with the open made to succeed or fail.
     static void audioOpen(AppWindow& a, bool byWatchdog, bool opens) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).audioOpen_.bind([opens](int) { return opens; }, [] {}, [] {});
-            (void)rawEngine(a.engine_).requestAudioOpen(-1, byWatchdog);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).audioOpen_.bind([opens](int) { return opens; }, [] {}, [] {});
+            (void)th::engine(a).requestAudioOpen(-1, byWatchdog);
         });
     }
     static int audioRecoveries(AppWindow& a) {
-        return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecoveries_; });
+        return passseam::read<int>(th::engine(a), [&] { return th::engine(a).audioRecoveries_; });
     }
-    static void sdrPlayPoll(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSdrPlayTrouble(); }); }
+    static void sdrPlayPoll(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).pollSdrPlayTrouble(); }); }
     static std::uint64_t ringDropped(AppWindow& a) {
-        return passseam::read<std::uint64_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.ringDroppedSamples(); });
+        return passseam::read<std::uint64_t>(th::engine(a), [&] { return th::engine(a).pipeline_.ringDroppedSamples(); });
     }
     // A minute of audio closes (the once-a-minute poll's own body, without the clock), and the Sinks rail's AUDIO BUFFER setting.
     static void closeAudioMinute(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).closeAudioMinute(rawEngine(a.engine_).pipeline_.audio().ringFrames()); });
+        passseam::on(th::engine(a), [&] { th::engine(a).closeAudioMinute(th::engine(a).pipeline_.audio().ringFrames()); });
     }
-    static void setAudioBuffer(AppWindow& a, int ms) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setAudioBufferMs(ms); }); }
+    static void setAudioBuffer(AppWindow& a, int ms) { passseam::on(th::engine(a), [&] { th::engine(a).setAudioBufferMs(ms); }); }
 };
 
 }  // namespace cascade::gui
@@ -562,7 +563,7 @@ void testTheSourceListsOpenCountsFailureAndSuccess() {
         auto g = fresh();
         g_script.realRtl = true;
         setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kArgs));
         const std::string fail = only(g, "radio_fail.");
         std::printf("health: the real RTL-SDR driver, serial not there: %s\n", fail.c_str());
@@ -575,7 +576,7 @@ void testTheSourceListsOpenCountsFailureAndSuccess() {
     {
         auto g = fresh();
         setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kArgs));
         EXPECT_COUNTS(g, (Counts{{"radio_open.rtlsdr", 1}}));
         CHECK(Access::watching(app));
@@ -588,7 +589,7 @@ void testSamplesFlowedIsCountedOnceTheRadioDelivers() {
     {
         auto g = fresh();
         setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kArgs));
         CHECK(Access::watching(app));
         for (int i = 0; i < 80; ++i) {
@@ -602,7 +603,7 @@ void testSamplesFlowedIsCountedOnceTheRadioDelivers() {
     {
         auto g = fresh();
         setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kArgs));
         Access::start(app);
         bool seen = false;
@@ -630,7 +631,7 @@ void testTheRestoreOfTheSavedRadioIsCounted() {
         auto g = fresh();
         g_script.realRtl = true;
         setNative({});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, cfg);
         const std::string fail = only(g, "radio_fail.");
         std::printf("health: the saved radio, serial not there: %s\n", fail.c_str());
@@ -642,7 +643,7 @@ void testTheRestoreOfTheSavedRadioIsCounted() {
     {
         auto g = fresh();
         setNative({});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, cfg);
         EXPECT_COUNTS(g, (Counts{{"radio_open.rtlsdr", 1}}));
         CHECK(Access::watching(app));
@@ -655,7 +656,7 @@ void testThePatchPagesRadiosAreCounted() {
         auto g = fresh();
         g_script.realRtl = true;
         setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const auto id = Access::addRadioNode(app, device);
         CHECK(Access::patchUntilSettled(app, id));
         const std::string fail = only(g, "radio_fail.");
@@ -668,7 +669,7 @@ void testThePatchPagesRadiosAreCounted() {
     {
         auto g = fresh();
         setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const auto id = Access::addRadioNode(app, device);
         CHECK(Access::patchUntilSettled(app, id));
         EXPECT_COUNTS(g, (Counts{{"radio_open.rtlsdr", 1}}));
@@ -699,7 +700,7 @@ void testASoundCardInputIsCountedLikeARadio() {
             g_cards.devices = {d};
         }
         g_cards.refuse = true;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::openCard(app, s));
         EXPECT_COUNTS(g, (Counts{{"radio_fail.soundcard.other", 1}}));
         // The card's name is never in a count.
@@ -713,7 +714,7 @@ void testASoundCardInputIsCountedLikeARadio() {
             g_cards.devices.clear();
         }
         g_cards.refuse = false;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::openCard(app, s));
         EXPECT_COUNTS(g, (Counts{{"radio_fail.soundcard.absent", 1}}));
     }
@@ -725,7 +726,7 @@ void testASoundCardInputIsCountedLikeARadio() {
             g_cards.devices = {d};
         }
         g_cards.refuse = false;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::openCard(app, s));
         EXPECT_COUNTS(g, (Counts{{"radio_open.soundcard", 1}}));
     }
@@ -739,7 +740,7 @@ void testAScanThatFindsNoRadioIsCountedOnceASession() {
     {
         auto g = fresh();
         setNative({});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::scanBoth(app));
         const bool anything = Access::listed(app);
         std::printf("health: the whole-bus scan listed %s\n", anything ? "something" : "nothing");
@@ -757,7 +758,7 @@ void testAScanThatFindsNoRadioIsCountedOnceASession() {
     {
         auto g = fresh();
         setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::scanBoth(app));
         CHECK(only(g, "scan_none").empty());
     }
@@ -769,7 +770,7 @@ void testAScanThatFindsNoRadioIsCountedOnceASession() {
 // ---------------------------------------------------------------------------
 void testSoundOkIsCountedWhenTheOutputHasPlayed() {
     auto g = fresh();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     cascade::sink::AudioOut& out = Access::audio(app);
     if (!out.open(-1, 48000.0, 1)) {
         std::printf("SKIP the speakers that played: no output device on this machine\n");
@@ -826,7 +827,7 @@ void testSoundOkIsCountedWhenTheOutputHasPlayed() {
 // ---------------------------------------------------------------------------
 void testAnUpdateCheckThatFailsIsCounted() {
     auto g = fresh();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::check(app));
     EXPECT_COUNTS(g, (Counts{{"upd_check", 1}}));
     g->reset();
@@ -835,7 +836,7 @@ void testAnUpdateCheckThatFailsIsCounted() {
 void testAnInstallerThatCannotBeStartedIsCounted() {
 #if defined(_WIN32)
     auto g = fresh();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     // The path the Install key was given is not a path the shell is asked to run:
     // nothing starts, and that is a failure the user caused by pressing the key.
     CHECK(!Access::launch(app, std::string()));
@@ -852,7 +853,7 @@ void testAnInstallerThatCannotBeStartedIsCounted() {
 // ---------------------------------------------------------------------------
 void testPluginsBlockedBeforeLoadAreCounted() {
     auto g = fresh();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const fs::path dir = cascade::core::PluginHost::defaultPluginDir();
     std::error_code ec;
     fs::remove_all(dir, ec);
@@ -1106,7 +1107,7 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
     {
         auto g = fresh();
         setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kArgs));
         CHECK(countOf(g->counts(), "recovered.reopen") == 0);    // opening a radio is not a recovery
         Access::reopenAfterFault(app);
@@ -1119,7 +1120,7 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
     // `cfgsave` - SEAM: the window's own writer made to refuse. A save that works counts nothing.
     {
         auto g = fresh();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::save(app, true));
         CHECK(countOf(g->counts(), "recovered.cfgsave") == 0);
         CHECK(Access::save(app, false));
@@ -1131,7 +1132,7 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
     // reopen that fails, are not "stopped and came back".
     {
         auto g = fresh();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::audioOpen(app, /*byWatchdog=*/false, /*opens=*/true);
         CHECK(countOf(g->counts(), "recovered.audio") == 0);
         Access::audioOpen(app, /*byWatchdog=*/true, /*opens=*/false);
@@ -1163,7 +1164,7 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
             }
         };
         auto g = fresh();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         cascade::sink::AudioOut& out = Access::audio(app);
         out.close();
         Access::closeAudioMinute(app);                           // a quiet minute
@@ -1193,7 +1194,7 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
     // wire to connect() and drops what it refuses) - the very path the start-up restore takes.
     {
         auto g = fresh();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         cascade::core::AppConfig cfg;
         cfg.patch = std::string(cascade::core::patch::kPatchMagic) + " 1\n" +
                     "node 1 0 0 0 0 Radio\nnode 2 3 1 200 0 ACARS\nwire 1 0 2 0\n";
@@ -1211,7 +1212,7 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
     // (trouble 1) is a radio failure, counted as one, and is not a recovery.
     {
         auto g = fresh();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const auto& api = cascade::source::processSdrPlayApi();
         api.serviceTrouble.store(1);
         Access::sdrPlayPoll(app);
@@ -1233,7 +1234,7 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
     {
         auto g = fresh();
         setNative({{"flood", "Flood", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::poll(app);                                       // the first look is the baseline
         CHECK(Access::selectNative(app, kArgs));
         Access::start(app);
@@ -1257,7 +1258,7 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
         g_hung.entered = false;
         g_hung.release = false;
         setNative({{"hung", "Hung", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::poll(app);                                       // the baseline
         CHECK(Access::selectNative(app, kArgs));
         Access::start(app);

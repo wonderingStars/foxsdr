@@ -56,6 +56,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/fonts.hpp"
 #include "gui/ui_census.hpp"
 #include "imgui.h"
@@ -160,13 +161,13 @@ struct AppWindowTestAccess {
         Engine::testHooks_.soapyScan = &engine_api_test::noSoapyRadios;
     }
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     static void draw(AppWindow& a) {
@@ -343,7 +344,7 @@ int main() {
 #endif
 
     {
-        AppWindow app;
+        th::TestWindow app;
         const bool launcherSet = Access::setLauncher(app);
         CHECK(launcherSet);
         std::vector<cascade::core::cmd::QueuedCommand> sent;

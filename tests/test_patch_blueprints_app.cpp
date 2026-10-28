@@ -45,6 +45,7 @@
 #include "core/patch_devices.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/patch_view_math.hpp"
 #include "gui/ui_scale.hpp"
@@ -91,20 +92,20 @@ struct AppWindowTestAccess {
     static void installHooks() { cascade::engine::Engine::testHooks_.nativeScan = &fakeScan; }
     // THE ENGINE'S PART OF A FRAME, in drawUi's order, and the window's read of it (tests/test_patch_graph_draft_input.cpp's look).
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).drainLocalCommands();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).drainLocalCommands();
             a.syncPatchPageOpen();
             a.commitPatchDraft();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            rawEngine(a.engine_).pumpPatch();
-            (void)rawEngine(a.engine_).pumpPublish();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            th::engine(a).pumpPatch();
+            (void)th::engine(a).pumpPublish();
         }, [&] {
             a.syncPatchPageOpen();
             a.commitPatchDraft();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
         a.pumpTransmitKey();
     }
@@ -117,28 +118,28 @@ struct AppWindowTestAccess {
             a.commitPatchDraft();
         }
     }
-    static void scan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
+    static void scan(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPlugins(); }); }
     // The loaded plugins' names and keys (copies, made on the pass).
     static std::vector<std::pair<std::string, std::string>> plugins(AppWindow& a) {
-        return passseam::read<std::vector<std::pair<std::string, std::string>>>(rawEngine(a.engine_), [&] {
+        return passseam::read<std::vector<std::pair<std::string, std::string>>>(th::engine(a), [&] {
             std::vector<std::pair<std::string, std::string>> out;
-            for (const auto& p : rawEngine(a.engine_).pluginHost_.plugins()) {
+            for (const auto& p : th::engine(a).pluginHost_.plugins()) {
                 if (p.loaded) { out.emplace_back(p.name, cc::pluginKey(p)); }
             }
             return out;
         });
     }
     static void stopPlugin(AppWindow& a, const std::string& key) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordPluginStopped(key, true); });
+        passseam::on(th::engine(a), [&] { th::engine(a).recordPluginStopped(key, true); });
     }
     static bool stopped(AppWindow& a, const std::string& key) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginIsStopped(key); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).pluginIsStopped(key); });
     }
     // The ENGINE'S catalogue, rebuilt (as the page's own first look does).
     static std::vector<pc::DecoderInfo> catalogue(AppWindow& a) {
-        return passseam::read<std::vector<pc::DecoderInfo>>(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).rebuildPatchCatalogue();
-            return rawEngine(a.engine_).patchCatalogue_;
+        return passseam::read<std::vector<pc::DecoderInfo>>(th::engine(a), [&] {
+            th::engine(a).rebuildPatchCatalogue();
+            return th::engine(a).patchCatalogue_;
         });
     }
     // THE WINDOW'S list, from the table: a frame first, so its copies of PATCH_PARTS and PRESETS are the pass's.
@@ -154,7 +155,7 @@ struct AppWindowTestAccess {
     }
     // The ENGINE'S graph (a copy), as the pass holds it after the page's commits.
     static pc::Graph graph(AppWindow& a) {
-        return passseam::read<pc::Graph>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchGraph_; });
+        return passseam::read<pc::Graph>(th::engine(a), [&] { return th::engine(a).patchGraph_; });
     }
     // The page's draft, which the test edits where master edited the window's graph.
     static pc::Graph& draft(AppWindow& a) { return a.patchDraft_; }
@@ -184,10 +185,10 @@ struct AppWindowTestAccess {
     static bool running(AppWindow& a) { return (a.uiState_.flags & FOXAPI_RX_PATCH_RUNNING) != 0u; }
     static std::size_t refused(AppWindow& a) { return a.patchLists().refused.size(); }
     static void setPosition(AppWindow& a, double lat, double lon) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).rxSet_ = true;
-            rawEngine(a.engine_).rxLat_ = lat;
-            rawEngine(a.engine_).rxLon_ = lon;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).rxSet_ = true;
+            th::engine(a).rxLat_ = lat;
+            th::engine(a).rxLon_ = lon;
         });
         frames(a, 2);
     }
@@ -240,7 +241,7 @@ int main(int argc, char** argv) {
     Access::installHooks();
 
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::scan(app);
         std::string key;
         for (const auto& p : Access::plugins(app)) {

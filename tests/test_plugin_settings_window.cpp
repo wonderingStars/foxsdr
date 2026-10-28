@@ -35,6 +35,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/fonts.hpp"
 #include "gui/plugin_settings_form.hpp"
 #include "imgui.h"
@@ -72,7 +73,7 @@ struct AppWindowTestAccess {
         Engine::testHooks_.soapyScan = &engine_api_test::noSoapyRadios;
         Engine::testHooks_.pluginDir = &pluginDir;
     }
-    static Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
+    static Engine& eng(AppWindow& a) { return th::engine(a); }
     // THE FRAME'S LOOK, in drawUi's order: the pass's front part, the session's answers taken, the state read, the answers acted on. `runPass` false is a
     // frame in which the engine's pass did not run (a pass that is busy: the command waits at the door and no answer comes) - the window still looks.
     static void look(AppWindow& a, bool runPass = true) {
@@ -384,7 +385,7 @@ int main(int argc, char** argv) {
                                std::filesystem::copy_options::overwrite_existing, ec);
     CHECK(!ec);
     {
-        auto app = std::make_unique<AppWindow>();
+        auto app = std::make_unique<th::TestWindow>();
         AppWindow& a = *app;
         for (int i = 0; i < 4; ++i) { Access::look(a); Access::after(a); }
         testTable(a);

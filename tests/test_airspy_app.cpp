@@ -28,6 +28,7 @@
 #include "engine/airspy_panel.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "net/web_control.hpp"
 #include "source/airspy_source.hpp"
@@ -127,20 +128,20 @@ struct AppWindowTestAccess {
     // The scan and the pick in one go, as the Source list's row does; the open's wait as a frame's: inline and stepped the wait runs
     // the poll a frame's workers run, free-running the pass runs its own and the wait watches.
     static bool selectAirspy(AppWindow& a) {
-        const bool picked = passseam::read<bool>(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).scanNative();
-            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
-                if (rawEngine(a.engine_).nativeDevices_[i].args != kArgs) { continue; }
-                rawEngine(a.engine_).selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
+        const bool picked = passseam::read<bool>(th::engine(a), [&] {
+            th::engine(a).scanNative();
+            for (std::size_t i = 0; i < th::engine(a).nativeDevices_.size(); ++i) {
+                if (th::engine(a).nativeDevices_[i].args != kArgs) { continue; }
+                th::engine(a).selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
                 return true;
             }
             return false;
         });
         if (!picked) { return false; }
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] {
-            if (passseam::mode() != passseam::Mode::Free) { rawEngine(a.engine_).pollSourceAsync(); }
-            return rawEngine(a.engine_).deviceOpenPending_;
+        while (passseam::read<bool>(th::engine(a), [&] {
+            if (passseam::mode() != passseam::Mode::Free) { th::engine(a).pollSourceAsync(); }
+            return th::engine(a).deviceOpenPending_;
         })) {
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -150,13 +151,13 @@ struct AppWindowTestAccess {
     // The radio itself (kept in this test ONLY for verification): read and driven on the pass's thread too, which streams from it.
     template <class R>
     static R onRadio(AppWindow& a, const std::function<R(cascade::source::AirspySource&)>& use) {
-        return passseam::read<R>(rawEngine(a.engine_), [&]() -> R {
-            cascade::source::AirspySource* r = asAirspy(rawEngine(a.engine_).device_);
+        return passseam::read<R>(th::engine(a), [&]() -> R {
+            cascade::source::AirspySource* r = asAirspy(th::engine(a).device_);
             return r != nullptr ? use(*r) : R{};
         });
     }
     static bool haveRadio(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return asAirspy(rawEngine(a.engine_).device_) != nullptr; });
+        return passseam::read<bool>(th::engine(a), [&] { return asAirspy(th::engine(a).device_) != nullptr; });
     }
     static cascade::source::AirspySource::GainMode radioGainMode(AppWindow& a) {
         return onRadio<cascade::source::AirspySource::GainMode>(a, [](cascade::source::AirspySource& r) { return r.gainMode(); });
@@ -179,40 +180,40 @@ struct AppWindowTestAccess {
     static std::vector<unsigned> radioDecimationChoices(AppWindow& a) {
         return onRadio<std::vector<unsigned>>(a, [](cascade::source::AirspySource& r) { return r.decimationChoices(); });
     }
-    static void selectGenerator(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(0); }); }
+    static void selectGenerator(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(0); }); }
     static std::vector<std::string> gainNames(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceGainNames_; });
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] { return th::engine(a).deviceGainNames_; });
     }
     static std::vector<float> gainValues(AppWindow& a) {
-        return passseam::read<std::vector<float>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceGainsDb_; });
+        return passseam::read<std::vector<float>>(th::engine(a), [&] { return th::engine(a).deviceGainsDb_; });
     }
     static std::vector<double> rates(AppWindow& a) {
-        return passseam::read<std::vector<double>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceRatesHz_; });
+        return passseam::read<std::vector<double>>(th::engine(a), [&] { return th::engine(a).deviceRatesHz_; });
     }
     static std::vector<std::string> rateLabels(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceRateLabels_; });
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] { return th::engine(a).deviceRateLabels_; });
     }
     static double chainRate(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.inputRateHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).pipeline_.inputRateHz(); });
     }
     static std::string sourceError(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceError_; });
     }
     static bool decimate(AppWindow& a, unsigned d) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyDecimation(d); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).chooseAirspyDecimation(d); });
     }
     static bool mode(AppWindow& a, cascade::source::AirspySource::GainMode m) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyGainMode(m); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).chooseAirspyGainMode(m); });
     }
     static bool agc(AppWindow& a, bool lna, bool on) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyAgc(lna, on); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).chooseAirspyAgc(lna, on); });
     }
-    static bool agcMirror(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceAgc_; }); }
+    static bool agcMirror(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceAgc_; }); }
     static void control(AppWindow& a, const cascade::net::ControlRequest& r) {
-        passseam::on(rawEngine(a.engine_), [&] { web_test::applyRequestDirect(rawEngine(a.engine_), r); });
+        passseam::on(th::engine(a), [&] { web_test::applyRequestDirect(th::engine(a), r); });
     }
     static cascade::core::AppConfig config(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
+        passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
         return a.currentConfig();   // (the window's half, and the engine's handed-over copy: configSnapshot, any thread)
     }
     // The launch's restore, as the window's constructor makes it: on a window no pass has attached a thread to yet (every caller
@@ -223,30 +224,30 @@ struct AppWindowTestAccess {
     // drawAirspyControls, then drained by the same pollSourceAsync poll a
     // real frame would run.
     static void sliderSetGain(AppWindow& a, const std::string& name, double db) {
-        rawEngine(a.engine_).submitCommand(
+        th::engine(a).submitCommand(
             cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, name, 0, 0, db));
-        passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).drainLocalCommands(); });
+        passseam::custom(th::engine(a), [&] { th::engine(a).drainLocalCommands(); });
     }
     // The op the branch used by mistake (FOXAPP_OP_SET_GAIN_NO_READBACK, the
     // radar scope's knob): kept here only so this test can show what it
     // would have done, for contrast with the fix.
     static void sliderSetGainNoReadback(AppWindow& a, const std::string& name, double db) {
-        rawEngine(a.engine_).submitCommand(
+        th::engine(a).submitCommand(
             cascade::core::cmd::makeText(FOXAPP_OP_SET_GAIN_NO_READBACK, name, 0, 0, db));
-        passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).drainLocalCommands(); });
+        passseam::custom(th::engine(a), [&] { th::engine(a).drainLocalCommands(); });
     }
     // engine/stage3b-pre Airspy round (OPEN 2/3): the panel's commands, and
     // the published state drawAirspyControls now reads instead of the raw
     // device pointer above (`radio`, kept in this test ONLY for verification -
     // the application itself no longer holds onto it).
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) {
-        return passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(c); });
+        return passseam::read<FoxCommandResult>(th::engine(a), [&] { return th::engine(a).applyCommand(c); });
     }
     static cascade::core::AppStateExt publishedAirspy(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).publishReceiverState(); });
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).publishReceiverState(); });
         // (The published snapshot is a sequence lock: read from any thread.)
         cascade::core::PublishedState s;
-        if (!rawEngine(a.engine_).receiverSnapshot_->read(s)) { s = rawEngine(a.engine_).receiverSnapshot_->readFull()->state; }
+        if (!th::engine(a).receiverSnapshot_->read(s)) { s = th::engine(a).receiverSnapshot_->readFull()->state; }
         return s.app;
     }
 };
@@ -263,7 +264,7 @@ int main() {
 
     cascade::core::AppConfig saved;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectAirspy(app));
         // --- as it opens: Free mode, its three stages, the board's rates -------
         CHECK(Access::gainNames(app) == std::vector<std::string>({"LNA", "MIXER", "VGA"}));
@@ -358,7 +359,7 @@ int main() {
 
     // --- a later launch: the same radio comes back as it was left ------------
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, saved);
         CHECK(Access::selectAirspy(app));
         const bool have = Access::haveRadio(app);
@@ -386,7 +387,7 @@ int main() {
     //     round-trip; this proves the command wrapper and the publish agree
     //     with the radio, without disturbing that round-trip's own state. ---
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectAirspy(app));
         namespace cmd = cascade::core::cmd;
         CHECK(Access::radioSetRate(app, 2.5e6));
@@ -450,7 +451,7 @@ int main() {
         s.linearity = 15;
         s.decimation = 8;
         cfg.airspy[kKey] = s;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, cfg);
         bool have = Access::haveRadio(app);
         CHECK(have);

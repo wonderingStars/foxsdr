@@ -55,6 +55,7 @@
 #include "core/app_commands.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "net/web_control.hpp"
 #include "source/device_source.hpp"
@@ -379,8 +380,8 @@ struct AppWindowTestAccess {
     }
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
+        while (passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceOpenPending_; })) {
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -388,70 +389,70 @@ struct AppWindowTestAccess {
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
         int row = -1;
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).scanNative();
-            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
-                if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).scanNative();
+            for (std::size_t i = 0; i < th::engine(a).nativeDevices_.size(); ++i) {
+                if (th::engine(a).nativeDevices_[i].args == args) {
                     row = AppWindow::kNativeRowBase + static_cast<int>(i);
                     break;
                 }
             }
-            if (row >= 0) { rawEngine(a.engine_).selectSource(row); }
+            if (row >= 0) { th::engine(a).selectSource(row); }
         });
         return row >= 0 && waitOpen(a);
     }
     static bool selectSoapy(AppWindow& a, const std::string& args) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).soapyDevices_.clear();
-            rawEngine(a.engine_).soapyDevices_.push_back({"B200", args});
-            rawEngine(a.engine_).selectSource(rawEngine(a.engine_).soapyRowBase());
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).soapyDevices_.clear();
+            th::engine(a).soapyDevices_.push_back({"B200", args});
+            th::engine(a).selectSource(th::engine(a).soapyRowBase());
         });
         return waitOpen(a);
     }
-    static void reopen(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).reopenAfterDriverFault(); }); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); }); }
+    static void reopen(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).reopenAfterDriverFault(); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(th::engine(a), [&] { a.applyConfig(cfg); }); }
     static cascade::core::AppConfig saved(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });
         return a.currentConfig();
     }
 
     // The engine's state: the box, whether it is offered, and the memory (COPIES, made on the pass).
-    static bool agc(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceAgc_; }); }
+    static bool agc(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceAgc_; }); }
     static bool agcSupported(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceAgcSupported_; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceAgcSupported_; });
     }
     static std::map<std::string, bool> memory(AppWindow& a) {
-        return passseam::read<std::map<std::string, bool>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).autoGainMemory_; });
+        return passseam::read<std::map<std::string, bool>>(th::engine(a), [&] { return th::engine(a).autoGainMemory_; });
     }
     static void remember(AppWindow& a, const std::string& key, bool on) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).autoGainMemory_[key] = on; });
+        passseam::on(th::engine(a), [&] { th::engine(a).autoGainMemory_[key] = on; });
     }
     // The box's own path (the SET_DEVICE_AGC op's handler).
     static bool toggle(AppWindow& a, bool want) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).changeAutoGain(want); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).changeAutoGain(want); });
     }
 
     // The gain mirrors (what the Source section's sliders and the top bar's GAIN dial show), and the user's hand on a slider: the radio is
     // asked and the mirror takes the READBACK, as the slider's own code does.
     static std::vector<std::string> gainNames(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceGainNames_; });
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] { return th::engine(a).deviceGainNames_; });
     }
     static std::vector<float> gainMirror(AppWindow& a) {
-        return passseam::read<std::vector<float>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceGainsDb_; });
+        return passseam::read<std::vector<float>>(th::engine(a), [&] { return th::engine(a).deviceGainsDb_; });
     }
     // THE HAND ON A SLIDER THAT REMEMBERS NOTHING: the radio is asked and the mirror takes the readback (no manual memory is written).
     static bool setManual(AppWindow& a, std::size_t i, double db) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            cascade::engine::Engine& e = rawEngine(a.engine_);
+        return passseam::read<bool>(th::engine(a), [&] {
+            cascade::engine::Engine& e = th::engine(a);
             if (e.device_ == nullptr || i >= e.deviceGainNames_.size()) { return false; }
             if (!e.device_->setGainDb(e.deviceGainNames_[i], db)) { return false; }
             e.deviceGainsDb_[i] = static_cast<float>(e.device_->gainDb(e.deviceGainNames_[i]));
             return true;
         });
     }
-    static void clearError(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).sourceError_.clear(); }); }
+    static void clearError(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).sourceError_.clear(); }); }
     static std::string error(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceError_; });
     }
 
     // THE MANUAL GAIN MEMORY (0.99.75). `userGain` is the path the Source section's sliders and the top bar's GAIN dial both take to the
@@ -459,14 +460,14 @@ struct AppWindowTestAccess {
     // browser's gain control, the same command by name.
     using GainList = std::vector<std::pair<std::string, double>>;
     static std::map<std::string, GainList> manualMemory(AppWindow& a) {
-        return passseam::read<std::map<std::string, GainList>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).manualGainMemory_; });
+        return passseam::read<std::map<std::string, GainList>>(th::engine(a), [&] { return th::engine(a).manualGainMemory_; });
     }
     static void rememberManual(AppWindow& a, const std::string& key, GainList g) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).manualGainMemory_[key] = std::move(g); });
+        passseam::on(th::engine(a), [&] { th::engine(a).manualGainMemory_[key] = std::move(g); });
     }
     static bool userGain(AppWindow& a, std::size_t stage, double db) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            cascade::engine::Engine& e = rawEngine(a.engine_);
+        return passseam::read<bool>(th::engine(a), [&] {
+            cascade::engine::Engine& e = th::engine(a);
             if (e.device_ == nullptr || stage >= e.deviceGainNames_.size()) { return false; }
             const cascade::core::cmd::QueuedCommand q =
                 cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, e.deviceGainNames_[stage], 0, 0, db);
@@ -475,9 +476,9 @@ struct AppWindowTestAccess {
         });
     }
     static void controlGain(AppWindow& a, const std::string& name, double db) {
-        passseam::on(rawEngine(a.engine_), [&] {
+        passseam::on(th::engine(a), [&] {
             const cascade::core::cmd::QueuedCommand q = cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, name, 0, 0, db);
-            (void)rawEngine(a.engine_).applyCommand(q.c, q.longText);
+            (void)th::engine(a).applyCommand(q.c, q.longText);
         });
     }
 };
@@ -508,7 +509,7 @@ std::size_t openNative(cascade::gui::AppWindow& app, const std::string& args) {
 void testNothingRemembered() {
     std::printf("  nothing remembered: the radio opens on manual gain, as before\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::size_t r = openNative(app, kRtlA);
     // The probe's manual-gain call and nothing else.
     CHECK(callsAre(made(r), {false}));
@@ -521,7 +522,7 @@ void testNothingRemembered() {
 void testRememberedOnRestores() {
     std::printf("  remembered ON on a radio with auto gain: put back once, box on\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::remember(app, kKeyA, true);
     const std::size_t r = openNative(app, kRtlA);
     // The probe (manual), then exactly one switch ON.
@@ -536,7 +537,7 @@ void testRememberedOnRestores() {
 void testRememberedOnUnsupported() {
     std::printf("  remembered ON on a radio WITHOUT auto gain: not asked, box off, one line\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::remember(app, kKeyHack, true);
     const std::size_t r = openNative(app, kHack);
     CHECK(made(r).agcCalls.empty());  // setAutoGain was never called at all
@@ -551,7 +552,7 @@ void testRememberedOnRefused() {
     std::printf("  remembered ON on a radio that refuses it: tried once, box off, one line\n");
     resetRegistry();
     g_reg.refuseAgcOn = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::remember(app, kKeyA, true);
     const std::size_t r = openNative(app, kRtlA);
     CHECK(callsAre(made(r), {false, true}));
@@ -564,7 +565,7 @@ void testRememberedOnRefused() {
 void testRememberedOffStaysManual() {
     std::printf("  remembered OFF: manual gain, nothing asked, no line, entry kept\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::remember(app, kKeyA, false);
     const std::size_t r = openNative(app, kRtlA);
     CHECK(callsAre(made(r), {false}));
@@ -576,7 +577,7 @@ void testRememberedOffStaysManual() {
 void testPerRadio() {
     std::printf("  the memory is per radio: another radio is untouched, nothing is erased\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::remember(app, kKeyA, true);
     // Radio B has no entry: manual gain, and A's entry survives its open.
     const std::size_t b = openNative(app, kRtlB);
@@ -599,7 +600,7 @@ void testToggleWritesMemoryAndSavedConfig() {
     std::printf("  ticking the box writes the memory and the saved config; a refusal writes "
                 "nothing\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::size_t r = openNative(app, kRtlA);
     CHECK(Access::memory(app).empty());
 
@@ -647,7 +648,7 @@ void testRestart() {
 
     // Session 1: the user ticks Auto gain on radio A and closes the program.
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         openNative(app, kRtlA);
         CHECK(Access::toggle(app, true));
         const cascade::core::AppConfig cfg = Access::saved(app);
@@ -659,7 +660,7 @@ void testRestart() {
         cascade::core::AppConfig cfg;
         CHECK(cascade::core::ConfigStore::load(path, cfg, err));
         CHECK(entry(cfg.autoGainByRadio, kKeyA) == 1);
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const std::size_t idx = madeCount();
         Access::restore(app, cfg);
         CHECK(madeCount() == idx + 1);
@@ -675,7 +676,7 @@ void testRestart() {
         cascade::core::AppConfig cfg;
         CHECK(cascade::core::ConfigStore::load(path, cfg, err));
         CHECK(entry(cfg.autoGainByRadio, kKeyA) == 0);
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const std::size_t idx = madeCount();
         Access::restore(app, cfg);
         CHECK(madeCount() == idx + 1);
@@ -690,7 +691,7 @@ void testRecoveryReopen() {
     resetRegistry();
     // AUTO GAIN ON when the driver faults: the reopen puts it back, once.
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectSoapy(app, kSoapyArgs));
         CHECK(Access::toggle(app, true));
         CHECK(entry(Access::memory(app), kKeySoapy) == 1);
@@ -707,7 +708,7 @@ void testRecoveryReopen() {
     }
     // AUTO GAIN OFF when the driver faults, whatever the memory says: stays off.
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectSoapy(app, kSoapyArgs));
         CHECK(!Access::agc(app));
         Access::remember(app, kKeySoapy, true);
@@ -768,7 +769,7 @@ void testGainsComeBackAfterAgcOff(bool soapy) {
     resetRegistry();
     g_reg.stages = true;
     g_reg.dropOnAgcOff = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::size_t r = openStaged(app, soapy);
     CHECK(!Access::agc(app));
     // The hand on the sliders.
@@ -817,7 +818,7 @@ void testGainsComeBackAfterRememberedAgcOff() {
     resetRegistry();
     g_reg.stages = true;
     g_reg.dropOnAgcOff = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::remember(app, kKeyA, true);
     const std::size_t r = openStaged(app, false);
     CHECK(Access::agc(app));
@@ -836,7 +837,7 @@ void testAgcOnShowsWhatTheRadioReports() {
     g_reg.stages = true;
     g_reg.dropOnAgcOff = true;
     g_reg.agcReportsOwn = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::size_t r = openStaged(app, true);
     CHECK(Access::setManual(app, 0, 33.0));
     CHECK(Access::setManual(app, 1, 21.0));
@@ -864,7 +865,7 @@ void testBoxKeepsWhatTheRadioAccepted() {
     resetRegistry();
     g_reg.stages = true;
     g_reg.autoGainGetterStale = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::size_t r = openStaged(app, true);
     (void)r;
     CHECK(Access::toggle(app, true));
@@ -879,7 +880,7 @@ void testGainStepRefusedIsDroppedSilently() {
     resetRegistry();
     g_reg.stages = true;
     g_reg.dropOnAgcOff = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::size_t r = openStaged(app, true);
     CHECK(Access::setManual(app, 0, 33.0));
     CHECK(Access::setManual(app, 1, 21.0));
@@ -901,7 +902,7 @@ void testAgcRefusedTouchesNoGain() {
     g_reg.stages = true;
     g_reg.dropOnAgcOff = true;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const std::size_t r = openStaged(app, true);
         CHECK(Access::setManual(app, 0, 33.0));
         CHECK(Access::setManual(app, 1, 21.0));
@@ -916,7 +917,7 @@ void testAgcRefusedTouchesNoGain() {
     // A radio that lists no stages: the switch works and nothing is restored or logged.
     resetRegistry();
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const std::size_t r = openNative(app, kRtlA);
         CHECK(Access::gainNames(app).empty());
         CHECK(Access::toggle(app, true));
@@ -986,7 +987,7 @@ void testManualNothingRemembered() {
     std::printf("  manual gain: nothing remembered, so the open's own push is all there is and nothing is written\n");
     resetRegistry();
     g_reg.stages = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::size_t r = openStaged(app, true);
     // THE B200'S WAY: a mid-dial 30 dB into every stage, and nothing else.
     CHECK(holds(app, r, 30.0, 30.0));
@@ -1002,7 +1003,7 @@ void testManualUserGainIsRemembered() {
                 "refusal or auto gain writes nothing\n");
     resetRegistry();
     g_reg.stages = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::size_t r = openStaged(app, true);
     CHECK(Access::manualMemory(app).empty());
 
@@ -1044,7 +1045,7 @@ void testManualBrowserGainIsRemembered() {
     std::printf("  manual gain: a gain a browser sets is remembered like one the hand sets\n");
     resetRegistry();
     g_reg.stages = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::size_t r = openStaged(app, true);
     Access::controlGain(app, "PGA", 60.0);
     CHECK(holds(app, r, 30.0, 60.0));
@@ -1060,7 +1061,7 @@ void testManualRestoredAtOpen(bool soapy) {
                 soapy ? "Soapy, the B200's way" : "native");
     resetRegistry();
     g_reg.stages = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const std::string key = soapy ? kKeySoapy : kKeyA;
     Access::rememberManual(app, key, {{"LNA", 33.0}, {"PGA", 76.0}});
     const std::size_t r = openStaged(app, soapy);
@@ -1087,7 +1088,7 @@ void testManualClampedAndFiltered() {
     std::printf("  manual gain: clamped into the stage's range, and only for stages the radio still reports\n");
     resetRegistry();
     g_reg.stages = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     // GHOST is a stage this radio does not list; -5 is below the LNA's 0 and 200 above the PGA's 76.
     Access::rememberManual(app, kKeySoapy, {{"GHOST", 12.0}, {"LNA", -5.0}, {"PGA", 200.0}});
     const std::size_t r = openStaged(app, true);
@@ -1110,7 +1111,7 @@ void testManualRefusedStageSkipped() {
     resetRegistry();
     g_reg.stages = true;
     g_reg.refusePga = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::rememberManual(app, kKeyA, {{"LNA", 20.0}, {"PGA", 70.0}});
     const std::size_t r = openStaged(app, false);
     // The LNA is back; the PGA stayed where its driver left it (12) and the mirror says so.
@@ -1128,7 +1129,7 @@ void testManualNotOnARecoveryReopen() {
                 "not the memory\n");
     resetRegistry();
     g_reg.stages = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::rememberManual(app, kKeySoapy, {{"PGA", 70.0}});
     const std::size_t first = openStaged(app, true);
     CHECK(holds(app, first, 30.0, 70.0));
@@ -1153,7 +1154,7 @@ void testManualBeforeTheRememberedAutoGain() {
     resetRegistry();
     g_reg.stages = true;
     g_reg.dropOnAgcOff = true;
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::rememberManual(app, kKeyA, {{"LNA", 33.0}, {"PGA", 76.0}});
     Access::remember(app, kKeyA, true);
     const std::size_t r = openStaged(app, false);
@@ -1177,7 +1178,7 @@ void testManualRestart() {
     const std::string path = (g_scratch / "restart-manual.json").string();
     std::string err;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         openStaged(app, false);
         CHECK(Access::userGain(app, 0, 33.0));
         CHECK(Access::userGain(app, 1, 70.0));
@@ -1191,7 +1192,7 @@ void testManualRestart() {
         CHECK(cascade::core::ConfigStore::load(path, cfg, err));
         CHECK(cfg.manualGainByRadio.count(kKeyA) == 1 &&
               cfg.manualGainByRadio.at(kKeyA) == (ManualList{{"LNA", 33.0}, {"PGA", 70.0}}));
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const std::size_t idx = madeCount();
         Access::restore(app, cfg);
         CHECK(madeCount() == idx + 1);
@@ -1207,7 +1208,7 @@ void testManualCaps() {
     resetRegistry();
     g_reg.stages = true;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         // 63 other radios and the one about to be opened: the memory is full at 64.
         for (int i = 0; i < 63; ++i) {
             Access::rememberManual(app, cc::biasTeeRadioKey("rtlsdr", "serial=F" + std::to_string(1000 + i)),
@@ -1229,7 +1230,7 @@ void testManualCaps() {
     resetRegistry();
     g_reg.manyStages = true;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const std::size_t r = openNative(app, kRtlA);
         (void)r;
         CHECK(Access::gainNames(app).size() == 20u);

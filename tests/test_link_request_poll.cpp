@@ -69,6 +69,7 @@
 
 #include "core/hang_watchdog.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/link_request_poll.hpp"
 #include "test_check.hpp"
 
@@ -216,7 +217,7 @@ void checkDeadConfigDirectoryDoesNotFreezeTheFrameLoop() {
     const fs::path cfg = g_scratch / "dead" / "config.json";
     std::error_code ec;
     fs::create_directories(cfg.parent_path(), ec);
-    AppWindow app(cfg.string());
+    th::TestWindow app(cfg.string());
     Access::pointConfigAt(app, deadShareConfig());
 
     const fs::path reports = g_scratch / "reports";
@@ -618,7 +619,7 @@ void checkAppWindowPollNeverHoldsAFrame() {
     const fs::path cfg = g_scratch / "inject" / "config.json";
     std::error_code ec;
     fs::create_directories(cfg.parent_path(), ec);
-    AppWindow app(cfg.string());
+    th::TestWindow app(cfg.string());
 
     SlowDisk disk;
     disk.blockMs.store(2500);

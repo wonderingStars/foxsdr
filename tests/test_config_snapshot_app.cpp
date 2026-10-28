@@ -41,6 +41,7 @@
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
@@ -55,14 +56,14 @@ struct AppWindowTestAccess {
     // but it hands the engine's half over itself (Engine::publishConfig), which the product does only with no pass running
     // (before the control thread starts, and after shutdownQuiesce).
     static void saveNowHeld(AppWindow& a) { a.saveConfigNow(); }
-    static void publishHeld(AppWindow& a) { rawEngine(a.engine_).publishConfig(); }
-    static void pump(AppWindow& a) { passseam::whole(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pump(); }); }
-    static cascade::engine::EngineStatusText status(AppWindow& a) { return rawEngine(a.engine_).statusText(); }
-    static void pumpPublish(AppWindow& a) { passseam::custom(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).pumpPublish(); }); }
-    static void pumpAudio(AppWindow& a) { passseam::workers(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pumpAudio(); }); }
+    static void publishHeld(AppWindow& a) { th::engine(a).publishConfig(); }
+    static void pump(AppWindow& a) { passseam::whole(th::engine(a), [&] { th::engine(a).pump(); }); }
+    static cascade::engine::EngineStatusText status(AppWindow& a) { return th::engine(a).statusText(); }
+    static void pumpPublish(AppWindow& a) { passseam::custom(th::engine(a), [&] { (void)th::engine(a).pumpPublish(); }); }
+    static void pumpAudio(AppWindow& a) { passseam::workers(th::engine(a), [&] { th::engine(a).pumpAudio(); }); }
     // Every status line, set as the engine's own code sets it.
     static void setAllStatusHeld(AppWindow& a, const std::string& p) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         e.sourceError_ = p + "1";
         e.gpsRefusal_ = p + "2";
         e.catalogError_ = p + "3";
@@ -86,7 +87,7 @@ struct AppWindowTestAccess {
         e.addAllSummary_ = p + "21";       // ADD ALL summary, the twentieth and the twenty-first
     }
     static FoxCommandResult volumeHeld(AppWindow& a, double v) {
-        return rawEngine(a.engine_).applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, v));
+        return th::engine(a).applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, v));
     }
     // THE PASS HELD, free-running only: a piece of work posted to the pass (Engine::postToPass) that waits until the hold is
     // let go. Once it has STARTED no other pass can start until it ends, so between the constructor and the destructor the
@@ -97,10 +98,10 @@ struct AppWindowTestAccess {
     public:
         explicit PassHold(AppWindow& a) {
             if (passseam::mode() != passseam::Mode::Free) { return; }
-            passseam::attach(rawEngine(a.engine_));
+            passseam::attach(th::engine(a));
             s_ = std::make_shared<State>();
             std::shared_ptr<State> s = s_;
-            rawEngine(a.engine_).postToPass([s] {
+            th::engine(a).postToPass([s] {
                 std::unique_lock<std::mutex> lk(s->m);
                 s->running = true;
                 s->cv.notify_all();
@@ -174,7 +175,7 @@ int main() {
         CHECK(cascade::core::ConfigStore::save(path, seed, err));
     }
     {
-        AppWindow app(path);
+        th::TestWindow app(path);
 
         // D: the first snapshot is real.
         std::printf("D: the config remembered as saved says volume %.2f (the file: 0.30)\n",

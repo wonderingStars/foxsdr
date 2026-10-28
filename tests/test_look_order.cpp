@@ -37,6 +37,7 @@
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
@@ -47,11 +48,11 @@ namespace cmd = cascade::core::cmd;
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
+    static Engine& engine(AppWindow& a) { return th::engine(a); }
     static void betweenPublishes(void (*f)()) { Engine::testHooks_.betweenPublishes = f; }
     static void poll(AppWindow& a) { a.pollUiAnswers(); }
     static void look(AppWindow& a) {
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     static void act(AppWindow& a) { a.actOnUiAnswers(); }
@@ -67,7 +68,7 @@ struct AppWindowTestAccess {
         o.period = std::chrono::milliseconds(periodMs);
         o.floor = std::chrono::milliseconds(0);
         o.watchdogThresholdMs = 20000;
-        rawEngine(a.engine_).startControlThread(o);
+        th::engine(a).startControlThread(o);
     }
     static cascade::core::PublishedState published(Engine& e) {
         cascade::core::PublishedState ps;
@@ -201,7 +202,7 @@ struct AnswerRun {
 };
 
 AnswerRun answerRun(bool answersFirst) {
-    AppWindow app;
+    th::TestWindow app;
     A::start(app, 1);
     AnswerRun out;
     std::function<void(const FoxCommandResult&)> tap = [&](const FoxCommandResult& r) {
@@ -254,7 +255,7 @@ void testAnswersAfterTheState() {
 // the buffer (not acted on, not lost), and the next look that did read acts on them, against a state that shows them.
 void testBusyHoldsAnswersBack() {
     std::printf("  C: a BUSY state read holds the answers back until a look that read\n");
-    AppWindow app;
+    th::TestWindow app;
     A::start(app, 1);
     long acted = 0;
     long olderThanAnswer = 0;

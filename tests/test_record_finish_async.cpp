@@ -69,6 +69,7 @@
 #include "core/recorder.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/siggen_source.hpp"
 #include "test_check.hpp"
@@ -86,45 +87,45 @@ namespace cascade::gui {
 struct AppWindowTestAccess {
     // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp); what is returned is a COPY made on the pass, except the
     // recorders and the speaker's destination, which the test drives directly with the pass stepped or out of the way.
-    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = std::move(d); }); }
+    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(th::engine(a), [&] { th::engine(a).recordDir_ = std::move(d); }); }
     // The file opener of both takes (the seam for a disk that fails: tests/failing_disk.hpp).
     static void bindOpener(AppWindow& a, Recorder::Opener o) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).iqRecorder_.bindOpener(o);
-            rawEngine(a.engine_).audioRecorder_.bindOpener(std::move(o));
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).iqRecorder_.bindOpener(o);
+            th::engine(a).audioRecorder_.bindOpener(std::move(o));
         });
     }
     static bool startAudio(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startAudioRecording(); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).startAudioRecording(); });
     }
     static bool startIq(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startIqRecording(); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).startIqRecording(); });
     }
-    static void stopAudio(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopAudioRecording(); }); }
-    static void stopIq(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopIqRecording(); }); }
-    static void poll(AppWindow& a, double nowS) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(nowS); }); }
-    static bool audioRecording(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecorder_.recording(); }); }
-    static bool iqRecording(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).iqRecorder_.recording(); }); }
+    static void stopAudio(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).stopAudioRecording(); }); }
+    static void stopIq(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).stopIqRecording(); }); }
+    static void poll(AppWindow& a, double nowS) { passseam::on(th::engine(a), [&] { th::engine(a).pollRecordStarts(nowS); }); }
+    static bool audioRecording(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).audioRecorder_.recording(); }); }
+    static bool iqRecording(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).iqRecorder_.recording(); }); }
     static bool finishing(AppWindow& a, bool iq) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).takeFinishing(iq); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).takeFinishing(iq); });
     }
     static bool drainFinishes(AppWindow& a, std::chrono::steady_clock::time_point d) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).drainRecordFinishes(d); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).drainRecordFinishes(d); });
     }
-    static std::string recordError(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordError_; }); }
-    static std::string recordNotice(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordNotice_; }); }
-    static Recorder& audioRec(AppWindow& a) { return rawEngine(a.engine_).audioRecorder_; }
-    static Recorder& iqRec(AppWindow& a) { return rawEngine(a.engine_).iqRecorder_; }
+    static std::string recordError(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).recordError_; }); }
+    static std::string recordNotice(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).recordNotice_; }); }
+    static Recorder& audioRec(AppWindow& a) { return th::engine(a).audioRecorder_; }
+    static Recorder& iqRec(AppWindow& a) { return th::engine(a).iqRecorder_; }
     // The source changing ends an I/Q take (installSource -> endTakes).
     static void sourceChanged(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).endTakes(true, false, "the source changed", false); });
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).endTakes(true, false, "the source changed", false); });
     }
 
     // A patch with a radio running on the generator and a speaker (a WAV file).
     static pc::NodeId buildSpeakerPatch(AppWindow& a) {
         a.patchSeeded_ = true;
-        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
-            cascade::engine::Engine& e = rawEngine(a.engine_);
+        return passseam::read<pc::NodeId>(th::engine(a), [&] {
+            cascade::engine::Engine& e = th::engine(a);
             const pc::NodeId r = e.patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq);
             const pc::NodeId c = e.patchGraph_.addNode(pc::NodeKind::Channel, "Tone", pc::PortType::Iq);
             const pc::NodeId d = e.patchGraph_.addNode(pc::NodeKind::Demod, "AM", pc::PortType::Iq);
@@ -144,14 +145,14 @@ struct AppWindowTestAccess {
             return s;
         });
     }
-    static void publish(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchPublishSets(); }); }
+    static void publish(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).patchPublishSets(); }); }
     static std::shared_ptr<pc::AudioDest> destOf(AppWindow& a, pc::NodeId sink) {
-        return passseam::read<std::shared_ptr<pc::AudioDest>>(rawEngine(a.engine_), [&] { return pc::destFor(rawEngine(a.engine_).patchDests_, sink); });
+        return passseam::read<std::shared_ptr<pc::AudioDest>>(th::engine(a), [&] { return pc::destFor(th::engine(a).patchDests_, sink); });
     }
     // The page closing, as patchStopAll does it for the speakers: radios stop and are destroyed, then the outputs go.
     static void retireSpeakers(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            cascade::engine::Engine& e = rawEngine(a.engine_);
+        passseam::on(th::engine(a), [&] {
+            cascade::engine::Engine& e = th::engine(a);
             for (auto& [id, radio] : e.patchRadios_) {
                 (void)id;
                 radio->stop();
@@ -424,7 +425,7 @@ void stopCase(const char* what, const std::string& dir, std::uint64_t expected, 
 
 void checkTheStopKeysNeverHoldAFrame() {
     {
-        AppWindow app;
+        th::TestWindow app;
         takeAudio(app, "stop-audio", 48000);
         const std::uint64_t bytes = Access::audioRec(app).bytesWritten();
         CHECK(bytes == 96000u);
@@ -432,14 +433,14 @@ void checkTheStopKeysNeverHoldAFrame() {
         CHECK(!Access::finishing(app, false));
     }
     {
-        AppWindow app;
+        th::TestWindow app;
         takeIq(app, "stop-iq", 20000);
         const std::uint64_t bytes = Access::iqRec(app).bytesWritten();
         CHECK(Access::iqRec(app).samplesWritten() == 20000u);
         stopCase("Stop IQ", dirFor("stop-iq"), bytes, [&] { Access::stopIq(app); });
     }
     {
-        AppWindow app;
+        th::TestWindow app;
         takeIq(app, "source-changed", 20000);
         const std::uint64_t bytes = Access::iqRec(app).bytesWritten();
         stopCase("source change ends the I/Q take", dirFor("source-changed"), bytes,
@@ -449,7 +450,7 @@ void checkTheStopKeysNeverHoldAFrame() {
 }
 
 void checkRetiringASpeakerNeverHoldsAFrame() {
-    AppWindow app;
+    th::TestWindow app;
     Access::setRecordDir(app, dirFor("speaker"));
     const pc::NodeId sink = Access::buildSpeakerPatch(app);
     Access::publish(app);
@@ -465,7 +466,7 @@ void checkRetiringASpeakerNeverHoldsAFrame() {
 void checkARecordBehindAFinishIsRemembered() {
     resetHook(1200);
     Recorder::setFinishHookForTest(&slowFinish);
-    AppWindow app;
+    th::TestWindow app;
     const std::string dir = dirFor("queued");
     takeAudio(app, "queued", 24000);
     const std::uint64_t first = Access::audioRec(app).bytesWritten();
@@ -517,7 +518,7 @@ void checkARecordBehindAFinishIsRemembered() {
 void checkAStopWithdrawsTheRememberedRecord() {
     resetHook(1200);
     Recorder::setFinishHookForTest(&slowFinish);
-    AppWindow app;
+    th::TestWindow app;
     const std::string dir = dirFor("withdrawn");
     takeIq(app, "withdrawn", 8000);
     Access::stopIq(app);
@@ -542,7 +543,7 @@ void checkQuitDrainsWithinTheDeadline() {
     {
         resetHook(2500);
         Recorder::setFinishHookForTest(&slowFinish);
-        AppWindow app;
+        th::TestWindow app;
         takeAudio(app, "quit-late", 24000);
         const std::uint64_t bytes = Access::audioRec(app).bytesWritten();
         Access::stopAudio(app);
@@ -571,7 +572,7 @@ void checkQuitDrainsWithinTheDeadline() {
     // the file is whole at once.
     {
         resetHook(150);
-        AppWindow app;
+        th::TestWindow app;
         takeIq(app, "quit-ok", 16000);
         const std::uint64_t bytes = Access::iqRec(app).bytesWritten();
         Access::stopIq(app);
@@ -594,7 +595,7 @@ void checkQuitDrainsWithinTheDeadline() {
     }
     // Nothing out: a zero deadline returns at once.
     {
-        AppWindow app;
+        th::TestWindow app;
         const double t0 = nowMs();
         CHECK(Access::drainFinishes(app, std::chrono::steady_clock::now()));
         CHECK(nowMs() - t0 < 200.0);
@@ -615,7 +616,7 @@ void checkAFailingFinishSaysWhatTheSynchronousStopSaid() {
     // only sleeps (tests/failing_disk.hpp - a descriptor is never closed behind a stream on POSIX).
     g_hookPullFile.store(true);
     Recorder::setFinishHookForTest(&slowFinish);
-    AppWindow app;
+    th::TestWindow app;
 #if defined(__linux__)
     Access::bindOpener(app, [](const Recorder::OpenRequest& req, Recorder::OpenedFile& out,
                                std::string& err) { return failing_disk::open(req, out, err); });

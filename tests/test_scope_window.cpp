@@ -60,6 +60,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/demod_scope.hpp"
 #include "gui/demod_scope_face.hpp"
@@ -112,19 +113,19 @@ struct AppWindowTestAccess {
 
     // ---- one frame's engine part, in drawUi's order -----------------------------------------------------------------
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
-        passseam::workers(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpWorkers();
-            rawEngine(a.engine_).pumpAudio();
+        passseam::workers(th::engine(a), [&] {
+            th::engine(a).pumpWorkers();
+            th::engine(a).pumpAudio();
         });
     }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.uiSubmit(q); }
@@ -154,17 +155,17 @@ struct AppWindowTestAccess {
     // directly: a ScopeTap is a member of the pipeline for the engine's whole life, its capacity is fixed at construction, and
     // its snapshot() is the lock-free cross-thread reader it was built to be - core/scope_tap.hpp. The figures beside them
     // are the pass's, read with the pass out of the way: passseam::read, the pump move's P6.)
-    static const cascade::core::ScopeTap<float>& ringAudio(AppWindow& a) { return rawEngine(a.engine_).pipeline_.scopeAudio(); }
-    static const cascade::core::ScopeTap<std::complex<float>>& ringIq(AppWindow& a) { return rawEngine(a.engine_).pipeline_.scopeIq(); }
-    static const cascade::core::ScopeTap<float>& ringMpx(AppWindow& a) { return rawEngine(a.engine_).pipeline_.scopeMpx(); }
+    static const cascade::core::ScopeTap<float>& ringAudio(AppWindow& a) { return th::engine(a).pipeline_.scopeAudio(); }
+    static const cascade::core::ScopeTap<std::complex<float>>& ringIq(AppWindow& a) { return th::engine(a).pipeline_.scopeIq(); }
+    static const cascade::core::ScopeTap<float>& ringMpx(AppWindow& a) { return th::engine(a).pipeline_.scopeMpx(); }
     static double pipelineChannelRate(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.channelRateHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).pipeline_.channelRateHz(); });
     }
     static bool pipelineWfm(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.demodMode() == cascade::dsp::DemodMode::WFM; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).pipeline_.demodMode() == cascade::dsp::DemodMode::WFM; });
     }
     static void setPlaying(AppWindow& a, const std::string& name) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pluginRunner_.setPlayingForTest(name, 0, 0); });
+        passseam::on(th::engine(a), [&] { th::engine(a).pluginRunner_.setPlayingForTest(name, 0, 0); });
     }
     static const FoxEngineApi* engineApi(AppWindow& a) { return a.engineApi_; }
     static void setEngineApi(AppWindow& a, const FoxEngineApi* t) { a.engineApi_ = t; }
@@ -182,11 +183,11 @@ struct AppWindowTestAccess {
 
     // ---- the engine, for what a hermetic window cannot make and for comparison ---------------------------------------------
     // (Made on the pass's thread with the pass out of the way; the Held form from this thread while a PassHold parks the pass.)
-    static void setGain0(AppWindow& a, float db) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).deviceGainsDb_[0] = db; }); }
+    static void setGain0(AppWindow& a, float db) { passseam::on(th::engine(a), [&] { th::engine(a).deviceGainsDb_[0] = db; }); }
     static float engineGainHeld(AppWindow& a) {
-        return rawEngine(a.engine_).deviceGainsDb_.empty() ? -1.0f : rawEngine(a.engine_).deviceGainsDb_[0];
+        return th::engine(a).deviceGainsDb_.empty() ? -1.0f : th::engine(a).deviceGainsDb_[0];
     }
-    static float engineGain(AppWindow& a) { return passseam::read<float>(rawEngine(a.engine_), [&] { return engineGainHeld(a); }); }
+    static float engineGain(AppWindow& a) { return passseam::read<float>(th::engine(a), [&] { return engineGainHeld(a); }); }
     // THE PASS HELD OUT OF THE WAY for a block of the test's own steps. Inline and stepped no pass runs between them anyway;
     // free-running a second thread parks the pass inside passseam::on (Engine::runOnPass: work run at the pass's head) from
     // the constructor to the destructor - so what the window submits in that block is applied by a pass that starts after
@@ -195,9 +196,9 @@ struct AppWindowTestAccess {
     public:
         explicit PassHold(AppWindow& a) : a_(a) {
             if (passseam::mode() != passseam::Mode::Free) { return; }
-            passseam::attach(rawEngine(a_.engine_));
+            passseam::attach(th::engine(a_));
             holder_ = std::thread([this] {
-                passseam::on(rawEngine(a_.engine_), [this] {
+                passseam::on(th::engine(a_), [this] {
                     std::unique_lock<std::mutex> lk(m_);
                     held_ = true;
                     cv_.notify_all();
@@ -248,7 +249,7 @@ std::filesystem::path g_scratch;
 
 // A window with the hooks laid out and its state read.
 struct Env {
-    AppWindow app;
+    th::TestWindow app;
     Env() {
         Access::look(app);
         Access::look(app);

@@ -66,6 +66,7 @@
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "imgui.h"
 #include "net/cat_protocol.hpp"
 #include "net/status_compose.hpp"
@@ -225,51 +226,51 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.soapyScan = &fakeSoapyScan;
         cascade::engine::Engine::testHooks_.pluginDir = &pluginDirHook;
     }
-    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return rawEngine(a.engine_).applyCommand(c, {}); }
+    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return th::engine(a).applyCommand(c, {}); }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
-        return rawEngine(a.engine_).applyCommand(q.c, q.longText);
+        return th::engine(a).applyCommand(q.c, q.longText);
     }
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
-            rawEngine(a.engine_).pollSourceAsync();
-            return !rawEngine(a.engine_).deviceOpenPending_;
+            th::engine(a).pollSourceAsync();
+            return !th::engine(a).deviceOpenPending_;
         });
     }
     static bool waitSoapy(AppWindow& a) {
         return waitFor([&a] {
-            rawEngine(a.engine_).pollSourceAsync();
-            return !rawEngine(a.engine_).soapyScanPending_;
+            th::engine(a).pollSourceAsync();
+            return !th::engine(a).soapyScanPending_;
         });
     }
-    static bool running(AppWindow& a) { return rawEngine(a.engine_).pipeline_.running(); }
+    static bool running(AppWindow& a) { return th::engine(a).pipeline_.running(); }
     // A RADIO'S RETUNE IS PACED (the retune coalescer): the command queues it
     // and the frame loop lands it with pollPendingRetune, every frame. The
     // drive has no frame loop, so it does the same until the centre is there.
     static bool settleRetune(AppWindow& a, double hz) {
         return waitFor([&a, hz] {
-            rawEngine(a.engine_).pollPendingRetune();
-            return rawEngine(a.engine_).pipeline_.activeSource().centerFrequencyHz() == hz;
+            th::engine(a).pollPendingRetune();
+            return th::engine(a).pipeline_.activeSource().centerFrequencyHz() == hz;
         });
     }
-    static cascade::core::PluginApiCore& api(AppWindow& a) { return *rawEngine(a.engine_).pluginApi_; }
+    static cascade::core::PluginApiCore& api(AppWindow& a) { return *th::engine(a).pluginApi_; }
 
     // State no command sets: the strings a reader passes through verbatim.
-    static void fixRecordDir(AppWindow& a) { rawEngine(a.engine_).recordDir_ = "/golden/recordings"; }
+    static void fixRecordDir(AppWindow& a) { th::engine(a).recordDir_ = "/golden/recordings"; }
     static void setStrings(AppWindow& a) {
-        rawEngine(a.engine_).sourceError_ = "golden: the source said no";
-        rawEngine(a.engine_).recordError_ = "golden: the disk is full";
-        rawEngine(a.engine_).recordNotice_ = "golden: the take ended on purpose";
-        rawEngine(a.engine_).catalogStatus_ = "golden: 3 plugins";
-        rawEngine(a.engine_).catalogError_ = "golden: catalogue error";
-        rawEngine(a.engine_).installReport_ = "golden: installed";
-        rawEngine(a.engine_).installError_ = "golden: install failed";
+        th::engine(a).sourceError_ = "golden: the source said no";
+        th::engine(a).recordError_ = "golden: the disk is full";
+        th::engine(a).recordNotice_ = "golden: the take ended on purpose";
+        th::engine(a).catalogStatus_ = "golden: 3 plugins";
+        th::engine(a).catalogError_ = "golden: catalogue error";
+        th::engine(a).installReport_ = "golden: installed";
+        th::engine(a).installError_ = "golden: install failed";
         a.tunerStyle_ = cascade::gui::TunerStyle::Neon;
         cascade::core::DecodedLine d;
         d.plugin = "Golden decoder";
         d.text = "a decoded line";
-        rawEngine(a.engine_).decoderLog_.push_back(d);
+        th::engine(a).decoderLog_.push_back(d);
     }
-    static void setTransmitPageOpen(AppWindow& a, bool on) { rawEngine(a.engine_).transmitOpen_ = on; }
+    static void setTransmitPageOpen(AppWindow& a, bool on) { th::engine(a).transmitOpen_ = on; }
 
     // ===== THE PATH UNDER TEST ================================================
     // Stage 2: the one publish, and exactly what the web server's and CAT's
@@ -283,13 +284,13 @@ struct AppWindowTestAccess {
     // preceded by that hand-over, exactly as in the frame.
     static void publish(AppWindow& a) {
         a.handFrontEndFacts();
-        rawEngine(a.engine_).publishReceiverState();
+        th::engine(a).publishReceiverState();
     }
-    static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
+    static cascade::net::RadioStatus webStatus(AppWindow& a) { return th::engine(a).webStatusNow(); }
     // CAT's six figures as a CAT connection gets them since stage 5c: the read_state of a session of its own (opened as the server opens
     // one, closed after the read) turned into the figures by net::catRadioFromRx. Not Engine::catStatusNow any more - that is gone.
     static cascade::net::CatRadio catStatus(AppWindow& a) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         const FoxEngineApi* table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
         FoxSession* s = e.api().openInternalSession(cascade::engine::InternalKind::Cat, "golden");
         cascade::net::CatRadio out;
@@ -304,7 +305,7 @@ struct AppWindowTestAccess {
     // Engine stage 2's cost, measured on the real window (report only).
     static double publishNs(AppWindow& a, int n) {
         const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < n; ++i) { rawEngine(a.engine_).publishReceiverState(); }
+        for (int i = 0; i < n; ++i) { th::engine(a).publishReceiverState(); }
         const auto t1 = std::chrono::steady_clock::now();
         return std::chrono::duration<double, std::nano>(t1 - t0).count() / n;
     }
@@ -647,7 +648,7 @@ int main() {
     A::installHooks();
     ImGui::CreateContext();
     {
-        AppWindow app;
+        th::TestWindow app;
         drive(app);
         // After every record, so it cannot move a counter the golden holds.
         std::printf("  window publish (the whole of publishReceiverState): %.0f ns/frame\n",

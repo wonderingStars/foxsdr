@@ -57,6 +57,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/fonts.hpp"
 #include "gui/ui_census.hpp"
 #include "imgui.h"
@@ -155,16 +156,16 @@ struct AppWindowTestAccess {
         Engine::testHooks_.soapyScan = &engine_api_test::noSoapyRadios;
     }
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
         // ...and the workers' collect, the way a frame ends (a radio's open is on a worker and lands here): a custom subset of the pass's phases, so that no audio is opened.
-        passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pumpWorkers(); });
+        passseam::custom(th::engine(a), [&] { th::engine(a).pumpWorkers(); });
     }
     // The Diagnostics section, and the probe's own dialog as the frame's Dialogs scope draws it (drawUi). The dialog's absence from the window is what the
     // first RED run of this test is against: before stub campaign B18 there is neither the key nor the dialog.
@@ -332,7 +333,7 @@ int main(int argc, char** argv) {
     CHECK(cascade::gui::fonts::load());
 
     {
-        AppWindow app;
+        th::TestWindow app;
 
         // --- idle -----------------------------------------------------------------------------------------------------------------------------------
         std::printf("  idle\n");

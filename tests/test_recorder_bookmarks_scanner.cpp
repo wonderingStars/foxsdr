@@ -66,6 +66,7 @@
 #include "core/scanner.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/section_reads.hpp"
@@ -124,41 +125,41 @@ struct AppWindowTestAccess {
     // A RECORDING'S FILE OPENS ON A WORKER (0.99.63): a take just asked for is armed on the pass that collects the file. Waits (bounded) until no
     // start is out, polling as the pass does, so a test that asked for a take then reads it "recording".
     static bool recordStartsOut(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).iqStart_.pending() || rawEngine(a.engine_).audioStart_.pending() || rawEngine(a.engine_).iqStartQueued_ ||
-                   rawEngine(a.engine_).audioStartQueued_;
+        return passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).iqStart_.pending() || th::engine(a).audioStart_.pending() || th::engine(a).iqStartQueued_ ||
+                   th::engine(a).audioStartQueued_;
         });
     }
     static void settleRecordStarts(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         while (recordStartsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(rawEngine(a.engine_).clockS()); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollRecordStarts(th::engine(a).clockS()); });
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 
     static void lookOnce(AppWindow& a, bool scannerTick) {
-        passseam::custom(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            if (scannerTick) { rawEngine(a.engine_).scannerFrame(); }
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::custom(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            if (scannerTick) { th::engine(a).scannerFrame(); }
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     // THE DISK'S WORKERS (stub campaign B19): a frequency list's import and export, an I/Q file's open and the patch Radio's recordings list are workers'. A
     // command the look just applied has started one; its outcome - the rows, the note - is collected on a pass of its own, so the look waits (bounded) for it
     // and looks again, as the product's next pass does.
     static bool diskJobsOut(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).iqOpenPending() || rawEngine(a.engine_).bookmarkImportPending() || rawEngine(a.engine_).bookmarkExportPending() ||
-                   rawEngine(a.engine_).recordingScanPending();
+        return passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).iqOpenPending() || th::engine(a).bookmarkImportPending() || th::engine(a).bookmarkExportPending() ||
+                   th::engine(a).recordingScanPending();
         });
     }
     static void settleDiskJobs(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         while (diskJobsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollDiskJobs(); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollDiskJobs(); });
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
@@ -168,9 +169,9 @@ struct AppWindowTestAccess {
     // recording. Native that gap is microseconds wide and is never seen; under ThreadSanitizer (about ten times slower) it was hit in every run (stub campaign B20: five checks
     // of this test, test_recorder_bookmarks_scanner_free, 4 of 4 runs, no race report - the window's sampling, not the engine's start).
     static bool takeStateStale(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            const bool iq = rawEngine(a.engine_).iqRecorder_.recording();
-            const bool audio = rawEngine(a.engine_).audioRecorder_.recording();
+        return passseam::read<bool>(th::engine(a), [&] {
+            const bool iq = th::engine(a).iqRecorder_.recording();
+            const bool audio = th::engine(a).audioRecorder_.recording();
             return iq != ((a.uiState_.flags & FOXAPI_RX_RECORDING_IQ) != 0u) || audio != ((a.uiState_.flags & FOXAPI_RX_RECORDING_AUDIO) != 0u);
         });
     }
@@ -260,59 +261,59 @@ struct AppWindowTestAccess {
     // recorders fed there (a Recorder's writes must never overlap the pass's start or stop of it) - or, the Held forms, from this
     // thread while a PassHold parks the pass.
     static void storeDo(AppWindow& a, const std::function<void(cascade::core::FreqManager&)>& fn) {
-        passseam::on(rawEngine(a.engine_), [&] { fn(rawEngine(a.engine_).freqMgr_); });
+        passseam::on(th::engine(a), [&] { fn(th::engine(a).freqMgr_); });
     }
     static std::vector<cascade::core::Bookmark> storeList(AppWindow& a) {
         return passseam::read<std::vector<cascade::core::Bookmark>>(
-            rawEngine(a.engine_), [&]() -> std::vector<cascade::core::Bookmark> { return rawEngine(a.engine_).freqMgr_.list(); });
+            th::engine(a), [&]() -> std::vector<cascade::core::Bookmark> { return th::engine(a).freqMgr_.list(); });
     }
     // The scanner's list mode (stub campaign B6): the engine's own switch.
-    static bool scanTicked(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanTicked_; }); }
-    static std::size_t storeSizeHeld(AppWindow& a) { return rawEngine(a.engine_).freqMgr_.list().size(); }
+    static bool scanTicked(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).scanTicked_; }); }
+    static std::size_t storeSizeHeld(AppWindow& a) { return th::engine(a).freqMgr_.list().size(); }
     static void writeAudio(AppWindow& a, const float* s, std::size_t n) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).audioRecorder_.writeAudio(s, n); });
+        passseam::on(th::engine(a), [&] { th::engine(a).audioRecorder_.writeAudio(s, n); });
     }
     static void writeIq(AppWindow& a, const std::complex<float>* s, std::size_t n) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).iqRecorder_.writeIq(s, n); });
+        passseam::on(th::engine(a), [&] { th::engine(a).iqRecorder_.writeIq(s, n); });
     }
-    static void setSquelch(AppWindow& a, float db) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).squelchDb_ = db; }); }
+    static void setSquelch(AppWindow& a, float db) { passseam::on(th::engine(a), [&] { th::engine(a).squelchDb_ = db; }); }
     // Where the scanner is, and then the squelch set - one step on the pass (free-running, a pass between the two would step the
     // scanner off the frequency the test names).
     static double scannerHzThenSquelch(AppWindow& a, float db) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] {
-            const double hz = rawEngine(a.engine_).scanner_.currentHz();
-            rawEngine(a.engine_).squelchDb_ = db;
+        return passseam::read<double>(th::engine(a), [&] {
+            const double hz = th::engine(a).scanner_.currentHz();
+            th::engine(a).squelchDb_ = db;
             return hz;
         });
     }
     static void muteBy(AppWindow& a, std::vector<std::string> names) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).mutedBy_ = std::move(names); });
+        passseam::on(th::engine(a), [&] { th::engine(a).mutedBy_ = std::move(names); });
     }
-    static void muteByHeld(AppWindow& a, std::vector<std::string> names) { rawEngine(a.engine_).mutedBy_ = std::move(names); }
+    static void muteByHeld(AppWindow& a, std::vector<std::string> names) { th::engine(a).mutedBy_ = std::move(names); }
     // A change of the lists that touches nothing these tests read. A decoder line used to be it (it moved
     // listSeq once a line); since API 0.3 8.7 (D3) a line moves no list counter, so the preset note - a
     // status line the Decoders section letters - changes instead, and moves listSeq all the same.
     static void aLineAppears(AppWindow& a) {
         static unsigned n = 0;
         const std::string line = "note " + std::to_string(++n);
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).presetNote_ = line; });
+        passseam::on(th::engine(a), [&] { th::engine(a).presetNote_ = line; });
     }
-    static std::string recordDir(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordDir_; }); }
+    static std::string recordDir(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).recordDir_; }); }
     static cascade::core::Scanner::Params engineParams(AppWindow& a) {
-        return passseam::read<cascade::core::Scanner::Params>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scannerParams(); });
+        return passseam::read<cascade::core::Scanner::Params>(th::engine(a), [&] { return th::engine(a).scannerParams(); });
     }
-    static double engineStartMhz(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanStartMhz_; }); }
-    static double engineStopMhz(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanStopMhz_; }); }
-    static double engineStepKhz(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanStepKhz_; }); }
-    static double engineDwell(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanDwellMs_; }); }
-    static double engineHold(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanHoldMs_; }); }
-    static double engineResume(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanResumeMs_; }); }
-    static double engineListen(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanListenMs_; }); }
-    static double scannerHzHeld(AppWindow& a) { return rawEngine(a.engine_).scanner_.currentHz(); }
-    static double scannerHz(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return scannerHzHeld(a); }); }
-    static bool scannerActiveHeld(AppWindow& a) { return rawEngine(a.engine_).scanner_.active(); }
-    static bool scannerActive(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return scannerActiveHeld(a); }); }
-    static double tuned(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).currentAbsoluteHz(); }); }
+    static double engineStartMhz(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).scanStartMhz_; }); }
+    static double engineStopMhz(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).scanStopMhz_; }); }
+    static double engineStepKhz(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).scanStepKhz_; }); }
+    static double engineDwell(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).scanDwellMs_; }); }
+    static double engineHold(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).scanHoldMs_; }); }
+    static double engineResume(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).scanResumeMs_; }); }
+    static double engineListen(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).scanListenMs_; }); }
+    static double scannerHzHeld(AppWindow& a) { return th::engine(a).scanner_.currentHz(); }
+    static double scannerHz(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return scannerHzHeld(a); }); }
+    static bool scannerActiveHeld(AppWindow& a) { return th::engine(a).scanner_.active(); }
+    static bool scannerActive(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return scannerActiveHeld(a); }); }
+    static double tuned(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).currentAbsoluteHz(); }); }
     // THE PASS HELD OUT OF THE WAY for a block of the test's own steps. Inline and stepped no pass runs between them anyway;
     // free-running a second thread parks the pass inside passseam::on (Engine::runOnPass: work run at the pass's head, after
     // its command queues and before its scanner tick and its publish) from the constructor to the destructor - so what the
@@ -322,9 +323,9 @@ struct AppWindowTestAccess {
     public:
         explicit PassHold(AppWindow& a) : a_(a) {
             if (passseam::mode() != passseam::Mode::Free) { return; }
-            passseam::attach(rawEngine(a_.engine_));
+            passseam::attach(th::engine(a_));
             holder_ = std::thread([this] {
-                passseam::on(rawEngine(a_.engine_), [this] {
+                passseam::on(th::engine(a_), [this] {
                     std::unique_lock<std::mutex> lk(m_);
                     held_ = true;
                     cv_.notify_all();
@@ -359,7 +360,7 @@ struct AppWindowTestAccess {
     // run since the look: nothing to read again, and nothing is.)
     static void relook(AppWindow& a) {
         if (passseam::mode() != passseam::Mode::Free) { return; }
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     // A look made under a PassHold: inline and stepped exactly look(); free-running the pass is parked, so the publish is made
@@ -369,8 +370,8 @@ struct AppWindowTestAccess {
             look(a);
             return;
         }
-        (void)rawEngine(a.engine_).publishReceiverState();
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        (void)th::engine(a).publishReceiverState();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     // The allocations one get_setting of a fact makes inside the table.
@@ -625,7 +626,7 @@ void testPureRules() {
 
     std::printf("  A4: the commands the scanner form sends are the ones it always sent (every combination)\n");
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::look(app);
         Access::Sent sent;
         Access::tap(app, &sent);
@@ -680,7 +681,7 @@ void testPureRules() {
 
     std::printf("  A5: START carries the range the engine stores; the form shows the engine's values\n");
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::look(app);
         // The engine's stored range and timings, set through the table as the web remote sets them.
         FoxCommand range = cmd::make(FOXAPP_OP_SCANNER_RANGE);
@@ -722,7 +723,7 @@ void testPureRules() {
 
 void testCopyIsMadeWhenTheStoreChanges() {
     std::printf("  B: the one copy of BOOKMARKS follows the store's version, not listSeq; each row whole\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     const auto& c = Access::cache(app);
     (void)Access::tuning(app);
@@ -838,7 +839,7 @@ void testCopyIsMadeWhenTheStoreChanges() {
 
 void testViewAndGroupsAreDerivedFromTheCopy() {
     std::printf("  C: the view and the groups follow the copy; a chosen group stays chosen by name\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     std::vector<cc::Bookmark> big = bigList(10000, 20261014);
     Access::storeDo(app, [&](cc::FreqManager& s) { s.addMany(std::move(big)); });
@@ -932,7 +933,7 @@ void testViewAndGroupsAreDerivedFromTheCopy() {
 
 void testScannerFollowsTheEngine() {
     std::printf("  D: the scanner's readout and form follow the engine through all four states\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     const auto drawn = [&] { return drawnText([&] { Access::drawScanner(app); }); };
 
@@ -1035,7 +1036,7 @@ void testScannerFollowsTheEngine() {
 
 void testRecorderIsLive() {
     std::printf("  E: the recorder's bytes and seconds are live; the samples are the recorder's count\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     const auto drawn = [&] { return drawnText([&] { Access::drawRecorder(app); }); };
     std::string t = drawn();
@@ -1138,7 +1139,7 @@ void testRecorderIsLive() {
 
 void testNothingAllocatesOnceSettled() {
     std::printf("  F: a settled window's reads allocate nothing\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     std::vector<cc::Bookmark> some = bigList(2000, 4);
     Access::storeDo(app, [&](cc::FreqManager& s) { s.addMany(std::move(some)); });
@@ -1176,7 +1177,7 @@ void testNothingAllocatesOnceSettled() {
 
 void testTheBookmarkLinesAreDrawn() {
     std::printf("  J: the Bookmarks section letters the engine's two status lines\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     Access::note(app) = "Exported 3 to somewhere/foxsdr-frequencies.xml";
     Access::errorLine(app).clear();
@@ -1209,7 +1210,7 @@ void testTheBookmarkLinesAreDrawn() {
 // the dropped path as the SAME COMMAND the Import key sends, on the window's session (AppWindow::submitPendingDrop), and the pass applies it.
 void testADroppedFileIsImportedThroughTheSession() {
     std::printf("  K: a file dropped on the window is imported through the session\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     const std::filesystem::path csv = g_scratch / "dropped.csv";
     {
@@ -1433,7 +1434,7 @@ void testDrawnAndClicked() {
     std::printf("  G: the members drawn in real frames; every widget clicked\n");
     // --- idle: three frames of everything send only the first sightings, then nothing ---
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::look(app);
         Access::Sent sent;
         Access::tap(app, &sent);
@@ -1467,7 +1468,7 @@ void testDrawnAndClicked() {
 
     // --- the recorder ---
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::look(app);
         const auto body = [&] { Access::drawRecorder(app); };
         std::printf("    recorder, idle:\n");
@@ -1493,7 +1494,7 @@ void testDrawnAndClicked() {
 
     // --- the scanner ---
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::look(app);
         const auto body = [&] { Access::drawScanner(app); };
         std::printf("    scanner, idle:\n");
@@ -1517,7 +1518,7 @@ void testDrawnAndClicked() {
 
     // --- the bookmarks: three rows (two groups), a name typed for Add current, an import path ---
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::look(app);
         const std::vector<std::uint64_t> id = seedThree(app);
         const std::vector<cc::Bookmark> list = Access::storeList(app);  // (a copy: nothing below changes the store - the clicks are dropped)
@@ -1602,7 +1603,7 @@ void testTheCommandsReachTheEngine() {
         for (const cmd::QueuedCommand& q : commands) {
             if (!done.insert(describe(q)).second) { continue; }
             ++distinct;
-            AppWindow app;
+            th::TestWindow app;
             Access::look(app);
             const std::vector<std::uint64_t> id = seedThree(app);
             const std::size_t n0 = Access::storeList(app).size();

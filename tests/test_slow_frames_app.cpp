@@ -30,7 +30,7 @@
 //     frames go on, which is the whole of what moving it off the thread was for.
 //
 // CONVERTED FOR THE ENGINE'S TABLE (stub campaign B18; the 0.99.84 house pattern). A plugin reload and a recording's start, stop and poll are the ENGINE's work now, so the in-process half
-// reaches them through rawEngine on the pass thread (tests/pass_seam.hpp: inline and stepped they run right here, on the thread that begins the frames) and what it asserts is unchanged: the
+// reaches them through th::engine on the pass thread (tests/pass_seam.hpp: inline and stepped they run right here, on the thread that begins the frames) and what it asserts is unchanged: the
 // engine's own scopes (core/frame_timing.hpp, OwnedFrameScope) open on the frame loop's thread, and the child process's half proves them where they matter - the real window's stepped run,
 // in which the control thread does the engine's part while the frame loop waits in stepPass (FrameLoan). What is NOT claimed here, and is in tests/test_frame_timing.cpp: that the free-running
 // product's control thread never writes the frame timer.
@@ -75,6 +75,7 @@
 #include "core/recorder.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/shell_open.hpp"
 #include "gui/win_frame.hpp"
 #include "pass_seam.hpp"
@@ -322,33 +323,33 @@ struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
     static void installHooks() { Engine::testHooks_.pluginDirSignature = &slowSignatureRead; }
     // (THE ENGINE'S, since the window port: every read and write of it goes through the seam, tests/pass_seam.hpp.)
-    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
-    static void rescanIfChanged(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPluginsIfChanged(); }); }
+    static void rescan(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPlugins(); }); }
+    static void rescanIfChanged(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPluginsIfChanged(); }); }
     static ShellPauseHooks shellHooks(AppWindow& a) { return a.watchdogShellHooks(); }
     // The pauses the WINDOW's watchdog took: the engine's rescan holds the host's pause (EngineHost::pauseWatchdog) when it is not on its control thread, which is the window's.
     static unsigned pauses(AppWindow& a) { return a.watchdog_.pausesTaken(); }
     static std::size_t loaded(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginHost_.loadedCount(); });
+        return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).pluginHost_.loadedCount(); });
     }
     static std::string bundle(AppWindow& a) { return a.currentDiagnosticsBundle(); }
     // The recorders and their start, as tests/test_record_start.cpp reaches them.
-    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = std::move(d); }); }
+    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(th::engine(a), [&] { th::engine(a).recordDir_ = std::move(d); }); }
     static Recorder::Opener opener(AppWindow& a) {
-        return passseam::read<Recorder::Opener>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecorder_.opener(); });
+        return passseam::read<Recorder::Opener>(th::engine(a), [&] { return th::engine(a).audioRecorder_.opener(); });
     }
     static void bindOpener(AppWindow& a, Recorder::Opener o) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).iqRecorder_.bindOpener(o);
-            rawEngine(a.engine_).audioRecorder_.bindOpener(std::move(o));
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).iqRecorder_.bindOpener(o);
+            th::engine(a).audioRecorder_.bindOpener(std::move(o));
         });
     }
     static bool startAudio(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startAudioRecording(); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).startAudioRecording(); });
     }
-    static void stopAudio(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopAudioRecording(); }); }
-    static void poll(AppWindow& a, double nowS) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(nowS); }); }
+    static void stopAudio(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).stopAudioRecording(); }); }
+    static void poll(AppWindow& a, double nowS) { passseam::on(th::engine(a), [&] { th::engine(a).pollRecordStarts(nowS); }); }
     static bool audioRecording(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecorder_.recording(); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).audioRecorder_.recording(); });
     }
 };
 
@@ -565,7 +566,7 @@ void testWhatMustNotCount() {
 
 void testAPluginReloadUnderItsPauseCounts() {
     std::printf("a plugin reload, slowed in its own path, under its watchdog pause\n");
-    cascade::gui::AppWindow app;  // its own start-up scan maps the probe module
+    th::TestWindow app;  // its own start-up scan maps the probe module
     CHECK(Access::loaded(app) == 1u);
 
     FrameTimer& t = frameTimer();
@@ -619,7 +620,7 @@ void testAPluginReloadUnderItsPauseCounts() {
 
 void testAShellCallIsAPersonsTimeNotAFrames() {
     std::printf("a shell call through the real watchdog bracket: a person's time\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     FrameTimer& t = frameTimer();
     t.resetForTest();
     g_lines.clear();
@@ -658,7 +659,7 @@ void testAShellCallIsAPersonsTimeNotAFrames() {
 
 void testASlowDiskIsNotASlowFrame() {
     std::printf("a recording's file on a slow disk: the frames go on\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     const fs::path recDir = g_dir / "recordings";
     std::error_code ec;
     fs::create_directories(recDir, ec);
@@ -734,7 +735,7 @@ void testASlowDiskIsNotASlowFrame() {
 
 void testTheBundleCarriesTheTable() {
     std::printf("the bundle's slow-frames line, from the real window\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     FrameTimer& t = frameTimer();
     t.resetForTest();
 

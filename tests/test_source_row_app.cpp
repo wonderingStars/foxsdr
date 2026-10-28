@@ -18,7 +18,7 @@
 // patch radio is a generator standing in for the dongle, never started.
 //
 // CONVERTED FOR THE ENGINE'S TABLE (stub campaign B18; the 0.99.84 house pattern). Master's test set the window's own members (the scan, the
-// patch's radios) and read the window's own answers; here the scan and the patch are the ENGINE's (rawEngine, written on the pass thread
+// patch's radios) and read the window's own answers; here the scan and the patch are the ENGINE's (th::engine, written on the pass thread
 // through tests/pass_seam.hpp) and the window answers from what the engine published - the DEVICES list, the scan's flags, PATCH_RADIOS and
 // the patch graph (a Radio node's device is what says that a radio is hardware and the generator is not). So between a change to the engine
 // and the question put to the window there is the engine's publish and the window's look (look()): the same two steps a frame takes. What
@@ -47,6 +47,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/siggen_source.hpp"
 #include "test_check.hpp"
@@ -128,19 +129,19 @@ struct AppWindowTestAccess {
     // One frame's engine part, in drawUi's order: the session's queue taken, the publish, the status copy, the window's read of the state. The
     // phases of the publish alone (a CUSTOM subset: a whole pass would reconcile the patch the test is about to stand up by hand).
     static void look(AppWindow& a) {
-        passseam::custom(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::custom(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     // A completed, whole SoapySDR scan that found nothing - the tester's case:
     // no SoapySDR module for the dongle.
     static void soapyScanFoundNothing(AppWindow& a) {
-        Engine& e = rawEngine(a.engine_);
+        Engine& e = th::engine(a);
         passseam::on(e, [&] {
             e.scanNative();
             e.soapyDevices_.clear();
@@ -160,7 +161,7 @@ struct AppWindowTestAccess {
     // source is a generator standing in for the dongle and is never started; the node's rate is the one the radio was opened at, so a pass
     // that looked at the patch would find nothing to do.
     static void addRadio(AppWindow& a, pc::NodeId id, const std::string& device, const std::string& label, const std::string& openedAs) {
-        Engine& e = rawEngine(a.engine_);
+        Engine& e = th::engine(a);
         passseam::on(e, [&] {
             e.patchRunning_ = true;
             if (e.patchGraph_.addNodeAs(id, pc::NodeKind::Radio, "Radio") != pc::kNoNode) {
@@ -181,7 +182,7 @@ struct AppWindowTestAccess {
     // ...and a second Radio node on the generator, which is no radio at all.
     static void patchAddsGenerator(AppWindow& a) { addRadio(a, 9, "siggen", "Signal generator", "siggen@2000000"); }
     static void patchStops(AppWindow& a) {
-        Engine& e = rawEngine(a.engine_);
+        Engine& e = th::engine(a);
         passseam::on(e, [&] {
             e.patchRadios_.clear();
             e.patchRadioOpenedAs_.clear();
@@ -215,7 +216,7 @@ int main() {
     isolate();
     Access::installHooks();
 
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
 
     // --- 1. A NATIVE DONGLE IS HARDWARE FOUND ------------------------------
     // The tester's desk: SoapySDR found nothing, the native RTL-SDR driver

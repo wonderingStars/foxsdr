@@ -48,6 +48,7 @@
 #include "core/tester_link.hpp"
 #include "core/tester_usage.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -295,13 +296,13 @@ namespace {
 
 void testHiddenWithNoToken() {
     std::printf("  hidden with no token, no migration in flight, no --link-tester\n");
-    AppWindow app;
+    th::TestWindow app;
     CHECK(!Access::sectionVisible(app));
 }
 
 void testVisibleWithAppToken() {
     std::printf("  visible with a confirmed app token\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::setAppToken(app, std::string(40, 'a'), "Ada");
     CHECK(Access::sectionVisible(app));
 }
@@ -312,7 +313,7 @@ void testVisibleWithAppToken() {
 // was still armed under it.
 void testVisibleWithLegacyPortalTokenAloneAfterFailedMigration() {
     std::printf("  visible with a legacy portal token alone, exactly as reporting still is\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::setPortalToken(app, std::string(32, 'p'));
     CHECK(Access::activeToken(app) == std::string(32, 'p'));  // still the reporting identity
     CHECK(Access::sectionVisible(app));
@@ -325,7 +326,7 @@ void testVisibleWithLegacyPortalTokenAloneAfterFailedMigration() {
 
 void testVisibleViaLinkTesterReveal() {
     std::printf("  --link-tester reveals the section with nothing else held\n");
-    AppWindow app;
+    th::TestWindow app;
     CHECK(!Access::sectionVisible(app));
     Access::setLinkReveal(app, true);
     CHECK(Access::sectionVisible(app));
@@ -393,7 +394,7 @@ void testReplacingALegacyTokenProvenDifferentTesterDiscards() {
 
 void testNotNowWritesNothing() {
     std::printf("  \"Not now\" writes nothing - no app token, no queue change\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::setPortalToken(app, std::string(32, 'p'));
     Access::queuePush(app, std::string(32, 'p'));
     const auto p = Access::computePending(std::string(40, 'a'), "Ada", false, true, std::nullopt);
@@ -409,7 +410,7 @@ void testNotNowWritesNothing() {
 
 void testPressLinkOverUnknownLegacyTokenDropsTheQueue() {
     std::printf("  pressing Link over a legacy token of unknown relationship drops its queue\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::setPortalToken(app, std::string(32, 'p'));
     Access::queuePush(app, std::string(32, 'p'));
     const std::string newTok(40, 'g');
@@ -424,7 +425,7 @@ void testPressLinkOverUnknownLegacyTokenDropsTheQueue() {
 
 void testPressLinkOverProvenSameTesterKeepsTheQueue() {
     std::printf("  pressing Link over a legacy token PROVEN the same tester keeps its queue\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::setPortalToken(app, std::string(32, 'p'));
     Access::queuePush(app, std::string(32, 'p'));
     Access::queuePush(app, std::string(32, 'p'));
@@ -463,7 +464,7 @@ void testALinkArrivingWhilePendingIsQueuedNotDropped(SiteStandIn::Mode mode) {
     std::error_code ec;
     fs::create_directories(dir, ec);
     const fs::path cfgPath = dir / "config.json";
-    AppWindow app(cfgPath.string());  // non-hermetic: testerLinkPoll's file check runs
+    th::TestWindow app(cfgPath.string());  // non-hermetic: testerLinkPoll's file check runs
 
     // A decision is already pending (the tester has not yet pressed
     // Link/Not now on an earlier resolve).

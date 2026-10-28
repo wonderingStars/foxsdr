@@ -77,6 +77,7 @@
 #include "core/hang_watchdog.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "core/background_saver.hpp"
 #include "test_check.hpp"
@@ -94,60 +95,60 @@ struct AppWindowTestAccess {
     // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp); what is returned is a COPY made on the pass. The two
     // lists and their savers are the ENGINE's since the extraction (Engine::flushBookmarkSave / flushMarkerSave).
     static void bindBookmarkWriter(AppWindow& a, ConfigWriter::Writer w) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).bookmarkSaver_.bind(std::move(w)); });
+        passseam::on(th::engine(a), [&] { th::engine(a).bookmarkSaver_.bind(std::move(w)); });
     }
     static void bindMarkerWriter(AppWindow& a, ConfigWriter::Writer w) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).markerSaver_.bind(std::move(w)); });
+        passseam::on(th::engine(a), [&] { th::engine(a).markerSaver_.bind(std::move(w)); });
     }
     static void setPaths(AppWindow& a, const std::string& bookmarks, const std::string& markers) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).bookmarkPath_ = bookmarks;
-            rawEngine(a.engine_).markerPath_ = markers;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).bookmarkPath_ = bookmarks;
+            th::engine(a).markerPath_ = markers;
         });
     }
     // What the "Add current" button does after the list changed.
     static void addBookmark(AppWindow& a, const std::string& name, double hz) {
-        passseam::on(rawEngine(a.engine_), [&] {
+        passseam::on(th::engine(a), [&] {
             cascade::core::Bookmark b;
             b.name = name;
             b.freqHz = hz;
             b.mode = "NFM";
-            rawEngine(a.engine_).freqMgr_.add(std::move(b));
-            rawEngine(a.engine_).saveBookmarks();
+            th::engine(a).freqMgr_.add(std::move(b));
+            th::engine(a).saveBookmarks();
         });
     }
-    static void addMarker(AppWindow& a, double hz) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).freqMarkers_.add(hz, 1700000000); }); }
+    static void addMarker(AppWindow& a, double hz) { passseam::on(th::engine(a), [&] { th::engine(a).freqMarkers_.add(hz, 1700000000); }); }
     // What a pass calls, once a pass.
     static void flush(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).flushBookmarkSave(false);
-            rawEngine(a.engine_).flushMarkerSave(false);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).flushBookmarkSave(false);
+            th::engine(a).flushMarkerSave(false);
         });
     }
     // What the teardown calls before the drain: the final request.
     static void flushNow(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).flushBookmarkSave(true);
-            rawEngine(a.engine_).flushMarkerSave(true);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).flushBookmarkSave(true);
+            th::engine(a).flushMarkerSave(true);
         });
     }
     // The exit drain, as shutdownRelease calls it.
     static bool drain(AppWindow& a, int boundMs) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).drainListSaves(std::chrono::steady_clock::now() + std::chrono::milliseconds(boundMs));
+        return passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).drainListSaves(std::chrono::steady_clock::now() + std::chrono::milliseconds(boundMs));
         });
     }
-    static std::string bookmarkText(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).freqMgr_.serialize(); }); }
-    static std::string markerText(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).freqMarkers_.serialize(); }); }
-    static std::string bookmarkError(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).bookmarkError_; }); }
-    static std::string markerError(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).markerError_; }); }
+    static std::string bookmarkText(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).freqMgr_.serialize(); }); }
+    static std::string markerText(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).freqMarkers_.serialize(); }); }
+    static std::string bookmarkError(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).bookmarkError_; }); }
+    static std::string markerError(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).markerError_; }); }
     // The engine's clock, put at `s` seconds (clockS() == s from here on) and read back.
     static void setClock(AppWindow& a, double s) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).clockOrigin_ = std::chrono::steady_clock::now() - std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(s));
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).clockOrigin_ = std::chrono::steady_clock::now() - std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(s));
         });
     }
-    static double clockNow(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).clockS(); }); }
+    static double clockNow(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).clockS(); }); }
 };
 
 }  // namespace cascade::gui
@@ -457,7 +458,7 @@ void checkTheDrainLandsOrAbandons() {
 // the watchdog must write nothing, and the saves must still arrive - a fix that
 // merely dropped them would pass everything but the last of these.
 void checkAppWindowSavesNeverHoldAFrame() {
-    AppWindow app;
+    th::TestWindow app;
     const fs::path dir = g_scratch / "app-slow";
     const std::string bm = (dir / "bookmarks.json").string();
     const std::string mk = (dir / "markers.json").string();
@@ -508,7 +509,7 @@ void checkNoEditIsLost() {
 
     // --- two quick edits end as the second, one write at a time, in order -----
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::setPaths(app, bm, mk);
         auto disk = makeDisk(600);
         Access::bindBookmarkWriter(app, slowWriter(disk, &FreqManager::writeFile));
@@ -540,7 +541,7 @@ void checkNoEditIsLost() {
     {
         std::error_code ec;
         fs::remove_all(dir, ec);
-        AppWindow app;
+        th::TestWindow app;
         Access::setPaths(app, bm, mk);
         auto bmDisk = makeDisk(400);
         auto mkDisk = makeDisk(400);
@@ -567,7 +568,7 @@ void checkNoEditIsLost() {
     {
         std::error_code ec;
         fs::remove_all(dir, ec);
-        AppWindow app;
+        th::TestWindow app;
         Access::setPaths(app, bm, mk);
         auto disk = makeDisk(500);
         Access::bindBookmarkWriter(app, slowWriter(disk, &FreqManager::writeFile));
@@ -590,7 +591,7 @@ void checkNoEditIsLost() {
     {
         std::error_code ec;
         fs::remove_all(dir, ec);
-        AppWindow app;
+        th::TestWindow app;
         Access::setPaths(app, bm, mk);
         auto disk = makeDisk(2200);
         Access::bindBookmarkWriter(app, slowWriter(disk, &FreqManager::writeFile));
@@ -628,7 +629,7 @@ void checkAFailedSaveIsReportedAsItAlwaysWas() {
     CHECK(!inlineMk.save(badMk, inlineMkErr));
     CHECK(inlineMkErr.rfind("markers: cannot create directory", 0) == 0);
 
-    AppWindow app;
+    th::TestWindow app;
     auto bmDisk = makeDisk(300);
     auto mkDisk = makeDisk(300);
     Access::bindBookmarkWriter(app, slowWriter(bmDisk, &FreqManager::writeFile));
@@ -671,7 +672,7 @@ void checkExitWhileASaveIsWedged() {
     double destroyMs = 0.0;
     std::string bookmarkTextAtExit;
     {
-        auto app = std::make_unique<AppWindow>();
+        auto app = std::make_unique<th::TestWindow>();
         Access::setPaths(*app, bm, mk);
         Access::bindBookmarkWriter(*app, slowWriter(bmDisk, &FreqManager::writeFile));
         Access::bindMarkerWriter(*app, slowWriter(mkDisk, &FreqMarkers::writeFile));

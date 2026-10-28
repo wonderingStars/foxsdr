@@ -36,6 +36,7 @@
 #include "core/diag_report.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
 
@@ -76,29 +77,29 @@ struct AppWindowTestAccess {
     // pass rendered it (at most a second old): a test that changes what the block describes asks the engine to render it, as its pass
     // does when the inputs move - Engine::refreshDiagContext - and then takes the bundle from the window.
     static std::string bundle(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).refreshDiagContext(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).refreshDiagContext(); });
         return a.currentDiagnosticsBundle();
     }
-    static void setVolume(AppWindow& a, float v) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).volume_ = v; }); }
-    static void setUserMuted(AppWindow& a, bool m) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).userMuted_ = m; }); }
+    static void setVolume(AppWindow& a, float v) { passseam::on(th::engine(a), [&] { th::engine(a).volume_ = v; }); }
+    static void setUserMuted(AppWindow& a, bool m) { passseam::on(th::engine(a), [&] { th::engine(a).userMuted_ = m; }); }
     static void setSquelch(AppWindow& a, float db) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).squelchDb_ = db;
-            rawEngine(a.engine_).pipeline_.setSquelchDb(db);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).squelchDb_ = db;
+            th::engine(a).pipeline_.setSquelchDb(db);
         });
     }
     static void setPluginMute(AppWindow& a, const std::vector<std::string>& names) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).mutedBy_ = names;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).mutedBy_ = names;
             // Diagnostics report effective suppression, rather than a stored
             // subject while a decoded programme plays over the quiet carrier.
-            rawEngine(a.engine_).pipeline_.setDemodAudioMuted(!names.empty());
+            th::engine(a).pipeline_.setDemodAudioMuted(!names.empty());
         });
     }
-    static void setPpmOn(AppWindow& a, bool on) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).ppmCorrectionOn_ = on; }); }
+    static void setPpmOn(AppWindow& a, bool on) { passseam::on(th::engine(a), [&] { th::engine(a).ppmCorrectionOn_ = on; }); }
     // The context the engine's render writes - the one a crash report would carry - read back before anything else overwrites it.
     static std::string refreshedContext(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).refreshDiagContext(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).refreshDiagContext(); });
         return cascade::core::diagContextBlock();
     }
 };
@@ -125,7 +126,7 @@ bool startsWith(const std::string& s, const char* prefix) { return s.rfind(prefi
 
 int main() {
     isolate();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
 
     // --- The output: some real state, never absent --------------------------
     {

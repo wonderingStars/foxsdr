@@ -49,6 +49,7 @@
 #include "airspy_fake_usb.hpp"
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "engine/bias_tee.hpp"
 #include "hackrf_fake_usb.hpp"
@@ -256,20 +257,20 @@ struct AppWindowTestAccess {
     // run (pollSourceAsync), free-running the pass runs its own workers and the wait only watches.
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        const auto pending = [&] { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; }); };
+        const auto pending = [&] { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceOpenPending_; }); };
         while (pending()) {
-            if (passseam::mode() != passseam::Mode::Free) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); }); }
+            if (passseam::mode() != passseam::Mode::Free) { passseam::on(th::engine(a), [&] { th::engine(a).pollSourceAsync(); }); }
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
-        const bool found = passseam::read<bool>(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).scanNative();
-            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
-                if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
-                    rawEngine(a.engine_).selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
+        const bool found = passseam::read<bool>(th::engine(a), [&] {
+            th::engine(a).scanNative();
+            for (std::size_t i = 0; i < th::engine(a).nativeDevices_.size(); ++i) {
+                if (th::engine(a).nativeDevices_[i].args == args) {
+                    th::engine(a).selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
                     return true;
                 }
             }
@@ -281,15 +282,15 @@ struct AppWindowTestAccess {
         // The native rows first, so the SoapySDR row's number is the one it
         // keeps: a row picked before the scan is renumbered by it, and the
         // next native pick would land on the "same" row and do nothing.
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).scanNative();
-            rawEngine(a.engine_).soapyDevices_.clear();
-            rawEngine(a.engine_).soapyDevices_.push_back({label, args});
-            rawEngine(a.engine_).selectSource(rawEngine(a.engine_).soapyRowBase());
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).scanNative();
+            th::engine(a).soapyDevices_.clear();
+            th::engine(a).soapyDevices_.push_back({label, args});
+            th::engine(a).selectSource(th::engine(a).soapyRowBase());
         });
         return waitOpen(a);
     }
-    static void selectGenerator(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(0); }); }
+    static void selectGenerator(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(0); }); }
 
     // THE WINDOW READS ITS ENGINE API SESSION (window port, group 4), so without
     // a frame what it draws from is the last frame's. A frame's own order is run
@@ -297,13 +298,13 @@ struct AppWindowTestAccess {
     // window looks (look); the window submits, the engine's pass applies and
     // publishes, the answers are drained (pass) as pumpTransmitKey does.
     static void look(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishReceiverState(); });
         a.refreshUiState();
     }
     static void pass(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            (void)th::engine(a).pumpPublish();
         });
         FoxCommandResult r[16];
         for (;;) {
@@ -322,8 +323,8 @@ struct AppWindowTestAccess {
     }
     // THE CHECKBOX, as the Source panel draws it: shown and ticked from
     // biasTeePanel_ (the stand-in never reaches it).
-    static bool boxShown(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).biasTeePanel_.present; }); }
-    static bool boxTicked(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).biasTeePanel_.shown; }); }
+    static bool boxShown(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).biasTeePanel_.present; }); }
+    static bool boxTicked(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).biasTeePanel_.shown; }); }
     // A press of the key, and the two answers - the members the deck and the
     // dialog call.
     // A press and an answer SUBMIT a command (on the window's session since
@@ -354,18 +355,18 @@ struct AppWindowTestAccess {
     // What the dialog would do if it were drawn now: the question still stands.
     static void clearQueued(AppWindow& a) { a.biasKeyAskQueued_ = false; }
     // A tick or untick of the Source panel's checkbox.
-    static void tick(AppWindow& a, bool want) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).switchBiasTee(want); }); }
+    static void tick(AppWindow& a, bool want) { passseam::on(th::engine(a), [&] { th::engine(a).switchBiasTee(want); }); }
     // (Copies, made with the pass out of the way: a reference into the engine would be read beside the pass.)
     static std::string sourceError(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceError_; });
     }
-    static std::string kind(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceKind_; }); }
-    static std::string args(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceArgs_; }); }
-    static void clearSourceError(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).sourceError_.clear(); }); }
+    static std::string kind(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceKind_; }); }
+    static std::string args(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).deviceArgs_; }); }
+    static void clearSourceError(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).sourceError_.clear(); }); }
     // The HackRF fake refuses the bias-T request (true) or nothing (false). Its failure list is read by the driver inside a
     // transfer, on the pass's thread, so it is changed there.
     static void failBiasRequests(AppWindow& a, bool fail) {
-        passseam::on(rawEngine(a.engine_), [&] {
+        passseam::on(th::engine(a), [&] {
             if (fail) {
                 hack()->failingRequests.push_back(kAntennaEnable);
             } else {
@@ -375,32 +376,32 @@ struct AppWindowTestAccess {
     }
     // The HackRF driver the application opened, for its readback.
     static bool driverBiasT(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            auto* h = dynamic_cast<cascade::source::HackRfSource*>(rawEngine(a.engine_).device_);
+        return passseam::read<bool>(th::engine(a), [&] {
+            auto* h = dynamic_cast<cascade::source::HackRfSource*>(th::engine(a).device_);
             return h != nullptr && h->biasT();
         });
     }
     // The open radio's bias tee as its OWN driver reports it, any family
     // (false when there is no radio or it has none).
     static bool radioBiasT(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).device_ != nullptr && withBiasTee(rawEngine(a.engine_).device_, [](auto& d) { return d.biasT(); });
+        return passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).device_ != nullptr && withBiasTee(th::engine(a).device_, [](auto& d) { return d.biasT(); });
         });
     }
     static std::string radioName(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).device_ != nullptr ? std::string(rawEngine(a.engine_).device_->name()) : std::string("(none)");
+        return passseam::read<std::string>(th::engine(a), [&] {
+            return th::engine(a).device_ != nullptr ? std::string(th::engine(a).device_->name()) : std::string("(none)");
         });
     }
     // What the application would save now, and a restore from it.
     static cascade::core::AppConfig config(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
+        passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
         return a.currentConfig();
     }
     // (Always made on a window just built, before its first pass: the engine's control thread is not started yet.)
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
     static void seedMemory(AppWindow& a, const std::string& key, bool on) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).biasTeePanel_.remembered[key] = on; });
+        passseam::on(th::engine(a), [&] { th::engine(a).biasTeePanel_.remembered[key] = on; });
     }
     // Whether the dialog, drawn now, would PROMISE that the radio comes back
     // on at its next open (the restore sentence) - the fact it draws from.
@@ -410,10 +411,10 @@ struct AppWindowTestAccess {
     }
     // ...and the engine's own rule for it, which the fact must agree with.
     static bool enginePromisesRestore(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).biasKeyMayRememberNow(); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).biasKeyMayRememberNow(); });
     }
     static std::size_t memorySize(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).biasTeePanel_.remembered.size(); });
+        return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).biasTeePanel_.remembered.size(); });
     }
 };
 
@@ -425,7 +426,7 @@ namespace {
 
 void testNoKeyWithoutABiasTee() {
     std::printf("  [1] the key is drawn only for a radio with a bias tee\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     // The generator at start.
     std::printf("      generator: shown %d\n", Access::keyShown(app));
     CHECK(!Access::keyShown(app));
@@ -455,7 +456,7 @@ void testNoKeyWithoutABiasTee() {
 
 void testOnAsksOffDoesNot() {
     std::printf("  [2] on needs the dialog's yes; off is immediate; the yes is remembered\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::selectNative(app, kHackArgs));
     CHECK(hack() != nullptr);
     hack()->clearControls();
@@ -513,7 +514,7 @@ void testOnAsksOffDoesNot() {
 
 void testKeyAndBoxAreOneState() {
     std::printf("  [3] the key and the checkbox are one state\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::selectNative(app, kHackArgs));
     // A tick of the box lights the key...
     Access::tick(app, true);
@@ -530,7 +531,7 @@ void testKeyAndBoxAreOneState() {
 
 void testRefusalChangesNothing() {
     std::printf("  [4] a refused change leaves the key, the box and the radio where they were\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::selectNative(app, kHackArgs));
     // The radio refuses every bias-T request from here on.
     Access::failBiasRequests(app, true);
@@ -552,7 +553,7 @@ void testRefusalChangesNothing() {
     // power is still on the port. A FRESH radio: on a HackRF a failed control
     // transfer is a radio that stopped answering, and the driver treats the
     // one above as dead from then on (the error says so).
-    cascade::gui::AppWindow app2;
+    th::TestWindow app2;
     CHECK(Access::selectNative(app2, kHackArgs));
     Access::tick(app2, true);
     CHECK(Access::keyLit(app2));
@@ -579,7 +580,7 @@ void testRefusalChangesNothing() {
 // Airspy, Airspy HF+, SDRplay, Mirics and RX888 then opened with.
 void testOnIsRememberedForThatRadioOnly() {
     std::printf("  [7] an on remembered for one radio powers no other radio at its open\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::selectNative(app, kHackArgs));
     Access::press(app);
     Access::clearQueued(app);
@@ -609,7 +610,7 @@ void testRememberedAcrossALaunch() {
     std::printf("  [8] the saved memory: A comes up on at a later launch, B and the Airspy do not\n");
     cascade::core::AppConfig saved;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kHackArgs));
         Access::press(app);
         Access::clearQueued(app);
@@ -618,7 +619,7 @@ void testRememberedAcrossALaunch() {
         saved = Access::config(app);
     }
     for (const std::string& args : {kHackArgs, kHackArgsB, kAirspyArgs}) {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, saved);
         CHECK(Access::selectNative(app, args));
         const bool want = args == kHackArgs;
@@ -633,7 +634,7 @@ void testPositionNamedRadioIsNeverRemembered() {
     std::printf("  [9] a radio named by position is never remembered: it opens off every time\n");
     cascade::core::AppConfig saved;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kHackIndexArgs));
         Access::press(app);
         Access::clearQueued(app);
@@ -649,7 +650,7 @@ void testPositionNamedRadioIsNeverRemembered() {
         CHECK(!Access::radioBiasT(app));
         saved = Access::config(app);
     }
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::restore(app, saved);
     CHECK(Access::selectNative(app, kHackIndexArgs));
     CHECK(!Access::radioBiasT(app));
@@ -679,7 +680,7 @@ void testOldGlobalSettingIgnored() {
     std::string err;
     CHECK(cascade::core::ConfigStore::load(p.string(), cfg, err));
     for (const std::string& args : {kHackArgs, kAirspyArgs}) {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, cfg);
         CHECK(Access::selectNative(app, args));
         std::printf("      %s under the old setting: bias tee %d\n", args.c_str(),
@@ -692,7 +693,7 @@ void testCheckboxSharesTheRule() {
     std::printf("  [11] the checkbox remembers exactly as the key does\n");
     cascade::core::AppConfig saved;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kHackArgs));
         Access::tick(app, true);
         CHECK(Access::radioBiasT(app));
@@ -701,21 +702,21 @@ void testCheckboxSharesTheRule() {
         saved = Access::config(app);
     }
     for (const std::string& args : {kHackArgs, kHackArgsB, kAirspyArgs}) {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, saved);
         CHECK(Access::selectNative(app, args));
         CHECK(Access::radioBiasT(app) == (args == kHackArgs));
     }
     // And an untick forgets: A opens off afterwards.
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, saved);
         CHECK(Access::selectNative(app, kHackArgs));
         CHECK(Access::radioBiasT(app));
         Access::tick(app, false);
         saved = Access::config(app);
     }
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::restore(app, saved);
     CHECK(Access::selectNative(app, kHackArgs));
     CHECK(!Access::radioBiasT(app));
@@ -726,7 +727,7 @@ void testCheckboxSharesTheRule() {
 void testDialogPromisesOnlyWhatIsKept() {
     std::printf("  [13] the dialog's restore promise is true: kept radio yes, full memory no\n");
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kHackArgs));
         CHECK(Access::promisesRestore(app));  // serial-named, room in the memory
         CHECK(Access::selectNative(app, kHackIndexArgs));
@@ -734,7 +735,7 @@ void testDialogPromisesOnlyWhatIsKept() {
     }
     // THE MEMORY IS FULL (64 other radios): an "on" for a NEW radio would not
     // be kept, so the dialog must not promise it.
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     for (int i = 0; i < 64; ++i) {
         Access::seedMemory(app, "airspy|serial=" + std::to_string(5000 + i), false);
     }
@@ -757,7 +758,7 @@ void testDialogPromisesOnlyWhatIsKept() {
 // F3: no key over a radio that has stopped answering.
 void testNoKeyOverADeadRadio() {
     std::printf("  [12] a radio that stopped answering has no key\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::selectNative(app, kHackArgs));
     CHECK(Access::keyShown(app));
     // A failed control transfer is a HackRF that stopped answering.
@@ -773,7 +774,7 @@ void testNoKeyOverADeadRadio() {
 
 void testQuestionThatNoLongerApplies() {
     std::printf("  [5] a dialog whose radio went away switches nothing\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::selectNative(app, kHackArgs));
     Access::press(app);
     CHECK(Access::asking(app));
@@ -821,7 +822,7 @@ void testQuestionThatNoLongerApplies() {
 // refuses a command that names another radio than the open one.
 void testStaleViewNeverSwitchesTheOtherRadio() {
     std::printf("  [14] a yes (or a press) decided on a stale view of radio A switches nothing on radio B\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::selectNative(app, kHackArgs));
     CHECK(Access::keyShown(app));
     Access::press(app);  // asks about A, a serial-named HackRF
@@ -838,7 +839,7 @@ void testStaleViewNeverSwitchesTheOtherRadio() {
 
     // ...and the same for a press that needs no question: A was confirmed this
     // session (a serial-named radio), B opens under the window's stale view.
-    cascade::gui::AppWindow app2;
+    th::TestWindow app2;
     CHECK(Access::selectNative(app2, kHackArgs));
     Access::press(app2);
     Access::clearQueued(app2);
@@ -861,7 +862,7 @@ void testStaleViewNeverSwitchesTheOtherRadio() {
 
 void testPositionNamedRadioIsAlwaysAsked() {
     std::printf("  [6] a radio named by position (index=0) is asked every time\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::selectNative(app, kHackIndexArgs));
     CHECK(Access::keyShown(app));
     Access::press(app);

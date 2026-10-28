@@ -55,6 +55,7 @@
 #include "core/telemetry.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "sink/audio_out.hpp"
 #include "test_check.hpp"
@@ -166,44 +167,44 @@ namespace cascade::gui {
 
 struct AppWindowTestAccess {
     // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp), as tests/test_converter_app_paths.cpp does.
-    static cascade::sink::AudioOut& audio(AppWindow& a) { return rawEngine(a.engine_).pipeline_.audio(); }
+    static cascade::sink::AudioOut& audio(AppWindow& a) { return th::engine(a).pipeline_.audio(); }
     static void closeMinute(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).closeAudioMinute(rawEngine(a.engine_).pipeline_.audio().ringFrames()); });
+        passseam::on(th::engine(a), [&] { th::engine(a).closeAudioMinute(th::engine(a).pipeline_.audio().ringFrames()); });
     }
-    static void setBuffer(AppWindow& a, int ms) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setAudioBufferMs(ms); }); }
+    static void setBuffer(AppWindow& a, int ms) { passseam::on(th::engine(a), [&] { th::engine(a).setAudioBufferMs(ms); }); }
     static cascade::core::PluginUse use(AppWindow& a, const cascade::core::LoadedPlugin& p, const std::string& playingKey = {}) {
-        return passseam::read<cascade::core::PluginUse>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginUseOf(p, playingKey, 0); });
+        return passseam::read<cascade::core::PluginUse>(th::engine(a), [&] { return th::engine(a).pluginUseOf(p, playingKey, 0); });
     }
-    static void lifecycle(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).updatePluginLifecycle(); }); }
-    static void startReceiver(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pipeline_.start(); }); }
-    static void tune(AppWindow& a, double hz) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).tuneAbsoluteHz(hz); }); }
+    static void lifecycle(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).updatePluginLifecycle(); }); }
+    static void startReceiver(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).pipeline_.start(); }); }
+    static void tune(AppWindow& a, double hz) { passseam::on(th::engine(a), [&] { th::engine(a).tuneAbsoluteHz(hz); }); }
     static double tunedHz(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).currentAbsoluteHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).currentAbsoluteHz(); });
     }
     static int leadNow(AppWindow& a) {
-        return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioLeadNowMs(); });
+        return passseam::read<int>(th::engine(a), [&] { return th::engine(a).audioLeadNowMs(); });
     }
     // The Sinks rail's note, as the window makes it: from the fact the engine publishes (fact.audio.leadNote), read through the window's
     // own session - with no frame, the engine publishes and the window looks first.
     static std::string notice(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishReceiverState(); });
         a.refreshUiState();
         (void)a.railLists();
         return a.audioLeadNotice();
     }
     // The status the browser is served (/api/status) is composed from the published state: this is the number in it.
     static int statusLeadMs(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
-        return rawEngine(a.engine_).snapshot()->readFull()->state.app.audioLeadMs;
+        passseam::on(th::engine(a), [&] { th::engine(a).publishReceiverState(); });
+        return th::engine(a).snapshot()->readFull()->state.app.audioLeadMs;
     }
     static cascade::core::AppConfig config(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });
         return a.currentConfig();
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(c); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { a.applyConfig(c); }); }
     static void addSpeaker(AppWindow& a, cascade::core::patch::NodeId id,
                            std::shared_ptr<cascade::core::patch::AudioDest> d) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchDests_.emplace_back(id, std::move(d)); });
+        passseam::on(th::engine(a), [&] { th::engine(a).patchDests_.emplace_back(id, std::move(d)); });
     }
 };
 
@@ -277,7 +278,7 @@ int main() {
     // (RESTORED from master, stub campaign B2: the plugin run modes are the ENGINE's now - Engine::pluginUseOf / updatePluginLifecycle -
     // and the block reaches them through the seam, on the pass's own thread. The block itself is master's, line for line.)
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         cascade::core::LoadedPlugin p;
         p.path = "audio-probe.dll";
         CascadeAudioOutApi audioApi{};
@@ -303,7 +304,7 @@ int main() {
     ledger->arm(ledgerFile, installId, false);
 
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         cascade::sink::AudioOut& out = Access::audio(app);
         out.close();   // no device thread may read the ring while the test makes callbacks
 
@@ -519,7 +520,7 @@ int main() {
     {
         cascade::core::AppConfig cfg;
         cfg.audioBufferMs = 480;
-        cascade::gui::AppWindow second;
+        th::TestWindow second;
         Access::audio(second).close();
         Access::restore(second, cfg);
         CHECK(Access::leadNow(second) == 480);
@@ -544,7 +545,7 @@ int main() {
     {
         cascade::core::AppConfig remembered;
         remembered.audioBufferAutoMs = 480;
-        cascade::gui::AppWindow third;
+        th::TestWindow third;
         Access::audio(third).close();
         CHECK(Access::leadNow(third) == 120);                      // before the file is applied: the default
         const int raisedLinesBefore = logLinesWith("audio: buffer raised");
@@ -585,7 +586,7 @@ int main() {
         cascade::core::AppConfig fixedAndRemembered;
         fixedAndRemembered.audioBufferMs = 240;
         fixedAndRemembered.audioBufferAutoMs = 960;
-        cascade::gui::AppWindow fixed;
+        th::TestWindow fixed;
         Access::audio(fixed).close();
         Access::restore(fixed, fixedAndRemembered);
         CHECK(Access::leadNow(fixed) == 240);
@@ -603,7 +604,7 @@ int main() {
         for (const int bad : {1, 100, 300, 5000, -480}) {
             cascade::core::AppConfig junk;
             junk.audioBufferAutoMs = bad;
-            cascade::gui::AppWindow w;
+            th::TestWindow w;
             Access::audio(w).close();
             Access::restore(w, junk);
             CHECK(Access::leadNow(w) == 120);
@@ -611,7 +612,7 @@ int main() {
         }
         cascade::core::AppConfig floorOnly;
         floorOnly.audioBufferAutoMs = 120;
-        cascade::gui::AppWindow w2;
+        th::TestWindow w2;
         Access::audio(w2).close();
         Access::restore(w2, floorOnly);
         CHECK(Access::leadNow(w2) == 120);                         // 120 is the start already
@@ -622,7 +623,7 @@ int main() {
         // CHOOSING AUTOMATIC BY HAND resets it to 120 and FORGETS the memory - the person's own choice.
         cascade::core::AppConfig remembered;
         remembered.audioBufferAutoMs = 480;
-        cascade::gui::AppWindow hand;
+        th::TestWindow hand;
         Access::audio(hand).close();
         Access::restore(hand, remembered);
         CHECK(Access::leadNow(hand) == 480);
@@ -639,7 +640,7 @@ int main() {
     // stream is closed so the test can drive the same callback code directly;
     // the setting thread must leave the ring for that callback to consume.
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         cascade::sink::AudioOut& out = Access::audio(app);
         out.close();
         Access::setBuffer(app, 960);

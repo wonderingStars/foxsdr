@@ -44,6 +44,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pump3_support.hpp"
 #include "test_check.hpp"
 
@@ -60,9 +61,9 @@ std::string g_unmapLog;
 
 // A fresh window with the fixture loaded, the GUI side of the plugin system built (inline, by the constructor's scan).
 struct Env {
-    std::unique_ptr<AppWindow> app;
+    std::unique_ptr<th::TestWindow> app;
     Env() {
-        app = std::make_unique<AppWindow>();
+        app = std::make_unique<th::TestWindow>();
         Access::pinPlugins(*app);
         Access::poll(*app);  // the frame's first poll
     }

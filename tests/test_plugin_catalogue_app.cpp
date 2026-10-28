@@ -5,7 +5,7 @@
 //
 // CONVERTED (stub campaign B3, 0.99.84 house pattern): master ran all of this in the window (AppWindow::startCatalogFetch / pollPluginAsync /
 // loadCachedCatalogue / requestScreenshots / addPluginSite ...); it is the ENGINE's now (src/engine/engine_store.cpp). Every touch of it goes
-// through rawEngine and the pass seam (tests/pass_seam.hpp: the same test runs inline and with the pass on its own thread). What differs in the
+// through th::engine and the pass seam (tests/pass_seam.hpp: the same test runs inline and with the pass on its own thread). What differs in the
 // way it is checked, and why - the assertions the engine still answers are untouched:
 //   - removing a site deletes its kept copy on a WORKER (the pass never waits on a disk): the helper waits for the pass to collect it before
 //     the disk is looked at;
@@ -73,6 +73,7 @@
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
 
@@ -89,7 +90,7 @@ struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
     using PictureState = Engine::PictureState;
     using PictureStatus = Engine::PictureStatus;
-    static Engine& eng(const AppWindow& a) { return rawEngine(const_cast<AppWindow&>(a).engine_); }
+    static Engine& eng(const AppWindow& a) { return th::engine(const_cast<AppWindow&>(a)); }
     // Runs `f` on the pass's own thread (or here, inline) and returns what it returns.
     template <class R, class F>
     static R rd(const AppWindow& a, F f) {
@@ -357,7 +358,7 @@ void testCatalogueKept() {
     // A GOOD READ WRITES THE COPY, exactly as read, with the time.
     std::int64_t keptTime = 0;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::catalogue(app).empty());
         CHECK(!Access::fromCache(app));
         CHECK(!Access::readThisSession(app));
@@ -378,7 +379,7 @@ void testCatalogueKept() {
     // A NEW WINDOW OPENS WITH IT, fetches nothing, and does not take it for a read of this session.
     {
         DiagLog::instance().resetForTest();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::catalogue(app).size() == 2u);
         CHECK(Access::fromCache(app));
         CHECK(Access::readTime(app) == keptTime);
@@ -416,7 +417,7 @@ void testCatalogueKept() {
     // WITH NOTHING ON SCREEN a failed refresh brings the kept copy back, with its time.
     {
         clearPluginsFolder();
-        cascade::gui::AppWindow app;  // no kept copy: starts empty
+        th::TestWindow app;  // no kept copy: starts empty
         CHECK(Access::catalogue(app).empty());
         std::string err;
         CHECK(PluginRepo::saveCatalogueCache(g_dir.string(), c1, 1760001234, err));
@@ -431,7 +432,7 @@ void testCatalogueKept() {
     // AN EARLIER READ OF THIS SESSION IS NOT REPLACED BY THE KEPT COPY when a refresh fails.
     {
         clearPluginsFolder();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         writeAll(g_localCatalogue, catalogueText(3));
         CHECK(Access::fetchCatalogue(app, g_localCatalogue.string()));
         CHECK(Access::catalogue(app).size() == 3u);
@@ -453,7 +454,7 @@ void testCatalogueKept() {
         writeAll(g_dir / "catalogue.json", "{ not json");
         writeAll(g_dir / "catalogue.json.time", "1760000000\n");
         DiagLog::instance().resetForTest();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::catalogue(app).empty());
         CHECK(!Access::fromCache(app));
         CHECK(Access::readTime(app) == 0);
@@ -541,7 +542,7 @@ void testPictures() {
     gate->bodies[b1.url] = body3;
     serve(gate);
 
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::setCatalogue(app, {entryWith("A", {a1, a2}), entryWith("B", {b1})});
 
     // NEVER REQUESTED is None - the grid asks for nothing, and nothing is fetched.
@@ -718,7 +719,7 @@ void testPluginSites() {
 
     // READ: the site's plugins join the official ones, carry their source, and the official p2 wins.
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::setSites(app, {urlA});
         CHECK(Access::fetchCatalogue(app, g_localCatalogue.string()));
         const auto& cat = Access::catalogue(app);
@@ -802,7 +803,7 @@ void testPluginSites() {
     // A NEW WINDOW loads the kept copy of each site (no request), under the official kept copy.
     {
         DiagLog::instance().resetForTest();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::catalogue(app).size() == 2u);  // the official kept copy only: no sites yet
         Access::setSites(app, {urlA});
         Access::loadCachedSites(app);
@@ -823,7 +824,7 @@ void testPluginSites() {
     // THE OFFICIAL CATALOGUE FAILING does not stop the sites: they are read anyway and merged under what stood
     // in the official catalogue's place.
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::setSites(app, {urlA});
         CHECK(Access::fetchCatalogue(app, g_localCatalogue.string()));
         CHECK(Access::catalogue(app).size() == 3u);
@@ -844,7 +845,7 @@ void testPluginSites() {
     {
         clearPluginsFolder();
         writeAll(g_localCatalogue, catalogueText(2));
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::fetchCatalogue(app, g_localCatalogue.string()));
         std::string why;
         // Refused: not a site address, a repeat, the official address, a transfer in flight.
@@ -908,7 +909,7 @@ void testPluginSites() {
     // that contacts an address). One picture on the site's host is queued; the one elsewhere is not.
     {
         clearPluginsFolder();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         PluginCatalogEntry e;
         e.id = "pic";
         e.name = "Pic";
@@ -936,7 +937,7 @@ void testPluginSites() {
     // AT MOST EIGHT.
     {
         clearPluginsFolder();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         std::vector<std::string> many;
         for (int i = 0; i < 8; ++i) { many.push_back("https://s" + std::to_string(i) + ".example/i.json"); }
         Access::setSites(app, many);

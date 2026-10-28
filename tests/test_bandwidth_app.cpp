@@ -42,6 +42,7 @@
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/device_source.hpp"
 #include "source/iq_source.hpp"
@@ -128,24 +129,24 @@ struct AppWindowTestAccess {
     // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp). The Bandwidth list's pick is a command from the
     // window (FOXAPP_OP_SET_BANDWIDTH_STEP) that the engine applies with Engine::setBandwidthIndex - the call this test makes.
     static void installHooks() { cascade::engine::Engine::testHooks_.nativeScan = &noDevices; }
-    static void setMode(AppWindow& a, int i) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setModeIndex(i); }); }
-    static void setBandwidth(AppWindow& a, int i) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setBandwidthIndex(i); }); }
-    static void logBandwidth(AppWindow& a, const char* how) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).logBandwidthChange(how); }); }
+    static void setMode(AppWindow& a, int i) { passseam::on(th::engine(a), [&] { th::engine(a).setModeIndex(i); }); }
+    static void setBandwidth(AppWindow& a, int i) { passseam::on(th::engine(a), [&] { th::engine(a).setBandwidthIndex(i); }); }
+    static void logBandwidth(AppWindow& a, const char* how) { passseam::on(th::engine(a), [&] { th::engine(a).logBandwidthChange(how); }); }
     static double bandwidth(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).vfoBandwidthHz_; });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).vfoBandwidthHz_; });
     }
     static void run(AppWindow& a, std::unique_ptr<cascade::source::IqSource> src) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).installSource(std::move(src));
-            rawEngine(a.engine_).followInputRate();  // what every source change in the application does
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).installSource(std::move(src));
+            th::engine(a).followInputRate();  // what every source change in the application does
             // The application starts with the VFO 300 kHz off centre (where the generator's signals are); the tones below are measured
             // on it, so it is put on the centre first.
-            rawEngine(a.engine_).pipeline_.setVfoOffsetHz(0.0);
-            rawEngine(a.engine_).pipeline_.start();
+            th::engine(a).pipeline_.setVfoOffsetHz(0.0);
+            th::engine(a).pipeline_.start();
         });
     }
-    static void stop(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pipeline_.stop(); }); }
-    static cascade::core::Pipeline& pipeline(AppWindow& a) { return rawEngine(a.engine_).pipeline_; }
+    static void stop(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).pipeline_.stop(); }); }
+    static cascade::core::Pipeline& pipeline(AppWindow& a) { return th::engine(a).pipeline_; }
 };
 
 }  // namespace cascade::gui
@@ -198,7 +199,7 @@ int main() {
     isolate();
     Access::installHooks();
 
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
 
     // --- The log --------------------------------------------------------------
     Access::setMode(app, kModeAm);

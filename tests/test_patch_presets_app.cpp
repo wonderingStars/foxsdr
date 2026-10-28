@@ -22,7 +22,7 @@
 //   - a patch is BUILT in the page's draft and committed (commitPatchDraft) as the page does, and the engine's pass takes it - one
 //     frame of the engine's part (look()) then the page's own follow (sync) - and what "the canvas" holds is the draft (serialisePatchNow);
 //   - START is the command the transport sends (FOXAPI_OP_PATCH_RUN 1) and "running" is the state the window reads (the published
-//     FOXAPI_RX_PATCH_RUNNING flag), after the frames that land it; the radios the patch holds are the ENGINE's (rawEngine, read on the
+//     FOXAPI_RX_PATCH_RUNNING flag), after the frames that land it; the radios the patch holds are the ENGINE's (th::engine, read on the
 //     pass thread through tests/pass_seam.hpp);
 //   - the fake radios are installed where the ENGINE constructs a driver (Engine::testHooks_), not the window.
 // What each scenario asserts is unchanged; where a master assertion read a state the window held the instant a key was pressed, it
@@ -59,6 +59,7 @@
 #include "core/patch_presets.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
@@ -258,20 +259,20 @@ struct AppWindowTestAccess {
     // applied by the pass, the page-open flag and the once-a-frame commit, the patch step, the publish, the window's read of it and of the
     // session's answers. No view is drawn.
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).drainLocalCommands();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).drainLocalCommands();
             a.syncPatchPageOpen();
             a.commitPatchDraft();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            rawEngine(a.engine_).pumpPatch();
-            (void)rawEngine(a.engine_).pumpPublish();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            th::engine(a).pumpPatch();
+            (void)th::engine(a).pumpPublish();
         }, [&] {
             a.syncPatchPageOpen();
             a.commitPatchDraft();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
         a.pumpTransmitKey();
     }
@@ -324,12 +325,12 @@ struct AppWindowTestAccess {
     static std::size_t nodeCount(AppWindow& a) { return a.patchDraft_.nodes().size(); }
     // The ENGINE's graph: a copy, made with the pass out of the way.
     static std::size_t engineNodeCount(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchGraph_.nodes().size(); });
+        return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).patchGraph_.nodes().size(); });
     }
     // How many patch DOCUMENTS the engine has loaded (fact.patch.epoch): a preset's load is one - a new patch, its own epoch, so no edit of
     // the old patch is ever merged into it - and an ordinary edit of the canvas is not.
     static std::uint64_t engineEpoch(AppWindow& a) {
-        return passseam::read<std::uint64_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchGraphEpoch_; });
+        return passseam::read<std::uint64_t>(th::engine(a), [&] { return th::engine(a).patchGraphEpoch_; });
     }
     static pc::NodeId firstRadio(AppWindow& a) {
         for (const pc::Node& n : a.patchDraft_.nodes()) {
@@ -383,17 +384,17 @@ struct AppWindowTestAccess {
     // What the window reads: the published flag the transport's dome is lettered from.
     static bool running(AppWindow& a) { return (a.uiState_.flags & FOXAPI_RX_PATCH_RUNNING) != 0u; }
     static std::size_t radiosOpen(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).patchRadios_.size() + rawEngine(a.engine_).patchRadioPending_.size();
+        return passseam::read<std::size_t>(th::engine(a), [&] {
+            return th::engine(a).patchRadios_.size() + th::engine(a).patchRadioPending_.size();
         });
     }
     static bool radioOpen(AppWindow& a, pc::NodeId id) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchRadios_.count(id) != 0; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).patchRadios_.count(id) != 0; });
     }
     static std::string radioError(AppWindow& a, pc::NodeId id) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] {
-            const auto it = rawEngine(a.engine_).patchRadioError_.find(id);
-            return it == rawEngine(a.engine_).patchRadioError_.end() ? std::string() : it->second;
+        return passseam::read<std::string>(th::engine(a), [&] {
+            const auto it = th::engine(a).patchRadioError_.find(id);
+            return it == th::engine(a).patchRadioError_.end() ? std::string() : it->second;
         });
     }
 
@@ -426,7 +427,7 @@ const std::string kDevAbsent = pc::makeDeviceKey("rtlsdr", kArgsAbsent);
 void testSaveThenLoad() {
     std::printf("  save then load gives back the identical graph\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::openPage(app);
     Access::buildPatch(app, kDevA, 118.0e6);
     const std::string saved = Access::now(app);
@@ -473,7 +474,7 @@ void testSaveThenLoad() {
     const cascade::core::AppConfig cfg = Access::config(app);
     CHECK(cfg.patchPresets.size() == 1u);
     CHECK(cfg.patchPresetPrevious == Access::previous(app));
-    cascade::gui::AppWindow again;
+    th::TestWindow again;
     Access::restore(again, cfg);
     CHECK(Access::presetText(again, "Airband") == Access::presetText(app, "Airband"));
     CHECK(Access::previous(again) == Access::previous(app));
@@ -487,7 +488,7 @@ void testSaveThenLoad() {
 void testLoadWhileRunning() {
     std::printf("  loading while running stops the patch and leaves it stopped\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::openPage(app);
     // The preset to load: a patch on radio B.
     Access::buildPatch(app, kDevB, 162.0e6);
@@ -550,7 +551,7 @@ void testLoadWhileRunning() {
 void testPreviousSlot() {
     std::printf("  the (previous patch) slot holds what the load replaced\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::openPage(app);
     Access::buildPatch(app, kDevB, 145.5e6);
     CHECK(Access::save(app, "Two metres", false) == PatchPresetStatus::Saved);
@@ -579,7 +580,7 @@ void testPreviousSlot() {
 void testAbsentRadio() {
     std::printf("  a preset naming a radio that is not plugged in loads like the restore\n");
     resetRegistry();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::openPage(app);
     Access::buildPatch(app, kDevAbsent, 433.9e6);
     CHECK(Access::save(app, "Somewhere else", false) == PatchPresetStatus::Saved);
@@ -595,7 +596,7 @@ void testAbsentRadio() {
     CHECK(madeCount() == first);  // loading opened nothing
 
     // The same document through the start-up restore: the same patch.
-    cascade::gui::AppWindow restored;
+    th::TestWindow restored;
     cascade::core::AppConfig cfg;
     cfg.patch = text;
     Access::restore(restored, cfg);

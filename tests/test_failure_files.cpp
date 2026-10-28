@@ -93,6 +93,7 @@
 #include "core/app_commands.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -104,7 +105,7 @@ using cascade::core::FreqMarkers;
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
+    static cascade::engine::Engine& eng(AppWindow& a) { return th::engine(a); }
 
     // One frame's worth of the engine's part (the commands the last frame queued, the publish, the workers) and the window's look at it and its
     // own once-a-frame polls: what carries a key's press to the engine and the workers' answers back.
@@ -943,7 +944,7 @@ void checkADamagedFileIsKeptAside(const Kind& k) {
     writeText(live, cut);
     const int keptBefore = logCount("was kept aside");
     {
-        AppWindow w((app / "config.json").string());
+        th::TestWindow w((app / "config.json").string());
         // The red line the lists already show is still up (nothing new on screen).
         if (k.which != "settings") { CHECK(k.errorUp(w)); }
         k.save(w);
@@ -987,7 +988,7 @@ void checkARefusedRenameLeavesTheDamagedFileAlone(const Kind& k) {
             std::printf("  %s, rename refused: NOT REACHED\n", k.which.c_str());
             return;
         }
-        AppWindow w((app / "config.json").string());
+        th::TestWindow w((app / "config.json").string());
         // LET GO, so that it is OUR POLICY and not the held file that keeps the save away: a write
         // that were tried would now succeed.
         lock.release();
@@ -1017,7 +1018,7 @@ void checkOnlyTheThreeNewestCopiesAreKept(const Kind& k) {
     for (int i = 0; i < 4; ++i) {
         damaged.push_back(cutMidToken(k.whole) + "#" + std::to_string(i));
         writeText(live, damaged.back());
-        AppWindow w((app / "config.json").string());  // each start finds a damaged file
+        th::TestWindow w((app / "config.json").string());  // each start finds a damaged file
     }
     const std::vector<std::string> bad = badCopiesOf(app, k.leaf);
     CHECK(bad.size() == 3u);
@@ -1036,7 +1037,7 @@ void checkAFirstRunAndAnEmptyFileKeepNothing(const Kind& k) {
     {
         const fs::path app = appDataFor(k.which + "-first");
         {
-            AppWindow w((app / "config.json").string());
+            th::TestWindow w((app / "config.json").string());
             k.save(w);
         }
         CHECK(badCopiesOf(app, k.leaf).empty());
@@ -1048,7 +1049,7 @@ void checkAFirstRunAndAnEmptyFileKeepNothing(const Kind& k) {
         const int keptBefore = logCount("was kept aside");
         const int refusedBefore = logCount("could not be kept aside");
         {
-            AppWindow w((app / "config.json").string());
+            th::TestWindow w((app / "config.json").string());
             k.save(w);
         }
         CHECK(badCopiesOf(app, k.leaf).empty());
@@ -1104,7 +1105,7 @@ void checkAReadOnlySettingsFolder() {
     {
         // AT START-UP: the window comes up on what the file holds; nothing is written.
         const double t0 = nowMs();
-        AppWindow w(cfgPath.string());
+        th::TestWindow w(cfgPath.string());
         CHECK(nowMs() - t0 < 30000.0);
         Access::bindConfigWriter(w, [&attempts](const std::string& p, const std::string& t, std::string& e) {
             attempts.note();
@@ -1337,7 +1338,7 @@ std::string stampWithDashes(std::time_t t) {
 
 void checkTwoPictureSavesInOneSecondAreTwoFiles() {
     for (int attempt = 0; attempt < 4; ++attempt) {
-        AppWindow app;
+        th::TestWindow app;
         const fs::path dir = g_scratch / ("pictures-" + std::to_string(attempt));
         Access::setRecordDir(app, dir.string());
         const std::time_t second = alignToTheSecond();
@@ -1372,7 +1373,7 @@ void checkTwoPictureSavesInOneSecondAreTwoFiles() {
 
 void checkTwoExportsInOneSecondAreTwoFiles() {
     for (int attempt = 0; attempt < 4; ++attempt) {
-        AppWindow app;
+        th::TestWindow app;
         const fs::path dir = g_scratch / ("exports-" + std::to_string(attempt));
         Access::setRecordDir(app, dir.string());
         Access::addBookmarkToView(app, "One", 100.0e6);
@@ -1401,7 +1402,7 @@ void checkTwoExportsInOneSecondAreTwoFiles() {
 }
 
 void checkTheExportWhenTheWriteFails() {
-    AppWindow app;
+    th::TestWindow app;
     Access::addBookmarkToView(app, "One", 100.0e6);
     Access::addBookmarkToView(app, "Two", 101.0e6);
     // A write that fails part way.
@@ -1450,7 +1451,7 @@ void checkTheExportWhenTheWriteFails() {
 // picture that failed to write was left on disk under the name a good one would have had, and the
 // screenshot's log line carried the folder's path inside the writer's own sentence.
 void checkThePictureSaveAndTheScreenshotWhenTheWriteFails() {
-    AppWindow app;
+    th::TestWindow app;
     const fs::path dir = g_scratch / "image-fail";
     Access::setRecordDir(app, dir.string());
     // THE PICTURE: reported on screen, in its own words - and nothing is left on disk.

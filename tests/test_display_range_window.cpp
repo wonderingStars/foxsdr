@@ -34,6 +34,7 @@
 #include "core/display_range.hpp"
 #include "core/trace_hold.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "test_check.hpp"
 
 namespace {
@@ -120,7 +121,7 @@ int main() {
 
     // A FRESH WINDOW: Normal, a second of average, the standard window, Automatic.
     {
-        g::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::trace(app) == cc::TraceMode::Normal);
         CHECK(Access::averageMs(app) == cc::kTraceAverageDefaultMs);
         CHECK(!Access::range(app).manual());
@@ -137,7 +138,7 @@ int main() {
     file.dbMin = -60.0f;
     file.dbMax = -20.0f;
     {
-        g::AppWindow app;
+        th::TestWindow app;
         Access::Sent log;
         Access::tap(app, &log);
         Access::restore(app, file);
@@ -161,7 +162,7 @@ int main() {
     {
         cc::AppConfig autoFile = file;
         autoFile.waterfallRangeMode = "auto";
-        g::AppWindow app;
+        th::TestWindow app;
         Access::Sent log;
         Access::tap(app, &log);
         Access::restore(app, autoFile);
@@ -181,7 +182,7 @@ int main() {
         old.waterfallRangeMode = "";
         old.dbMin = -95.0f;
         old.dbMax = -20.0f;
-        g::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, old);
         CHECK(Access::range(app).manual());
         CHECK(Access::range(app).inForce() == (cc::DbPair{-95.0f, -20.0f}));
@@ -189,7 +190,7 @@ int main() {
 
     // SAVE: a change made AFTER the restore is what the config says, one at a time, so a field written from the wrong member cannot hide behind another.
     {
-        g::AppWindow app;
+        th::TestWindow app;
         Access::Sent log;
         Access::tap(app, &log);
         Access::restore(app, file);
@@ -259,7 +260,7 @@ int main() {
     // SOMEBODY ELSE'S RANGE. The window restores Automatic and asks the engine for the standard window; until the state shows it, a state that does not carry it is the engine
     // not having caught up, not somebody's change.
     {
-        g::AppWindow app;
+        th::TestWindow app;
         Access::Sent log;
         Access::tap(app, &log);
         Access::clock(app);

@@ -52,6 +52,7 @@
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
 
@@ -62,7 +63,7 @@ namespace cascade::gui {
 // The friend AppWindow names for the test files that drive its private rescan.
 struct AppWindowTestAccess {
     // THE ENGINE'S RESCAN, on the pass's own thread (tests/pass_seam.hpp).
-    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
+    static void rescan(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPlugins(); }); }
 };
 
 }  // namespace cascade::gui
@@ -141,7 +142,7 @@ bool inOrder(const std::string& hay, const std::vector<std::string>& needles) {
 
 void testARescanSaysWhereItsTimeWent() {
     std::printf("a rescan writes one line naming its steps\n");
-    cascade::gui::AppWindow app;  // its own start-up scan has already run
+    th::TestWindow app;  // its own start-up scan has already run
 
     DiagLog::instance().resetForTest();
     Access::rescan(app);

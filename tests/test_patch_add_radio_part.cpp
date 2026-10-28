@@ -44,6 +44,7 @@
 #include "core/app_commands.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
 
@@ -102,16 +103,16 @@ struct AppWindowTestAccess {
     static void installHooks() { cascade::engine::Engine::testHooks_.nativeScan = &fakeScan; }
     // One frame's engine part, in drawUi's order (see the header comment), and the page's own steps that follow it.
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).drainLocalCommands();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).drainLocalCommands();
             a.commitPatchDraft();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            rawEngine(a.engine_).pumpPatch();
-            (void)rawEngine(a.engine_).pumpPublish();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            th::engine(a).pumpPatch();
+            (void)th::engine(a).pumpPublish();
         }, [&] { a.commitPatchDraft(); });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
         a.pumpTransmitKey();
     }
@@ -135,13 +136,13 @@ struct AppWindowTestAccess {
             fn();
             return;
         }
-        passseam::attach(rawEngine(a.engine_));
+        passseam::attach(th::engine(a));
         std::mutex m;
         std::condition_variable cv;
         bool held = false;
         bool release = false;
         std::thread holder([&] {
-            passseam::on(rawEngine(a.engine_), [&] {
+            passseam::on(th::engine(a), [&] {
                 std::unique_lock<std::mutex> lk(m);
                 held = true;
                 cv.notify_all();
@@ -166,10 +167,10 @@ struct AppWindowTestAccess {
         return a.patchAddRadioPart("Radio", pc::PortType::Iq, x, y);
     }
     static std::size_t nativeCount(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).nativeDevices_.size(); });
+        return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).nativeDevices_.size(); });
     }
     // The same, made INSIDE withPassHeld (the pass is parked: a read through runOnPass would wait for the pass it holds).
-    static std::size_t nativeCountHeld(AppWindow& a) { return rawEngine(a.engine_).nativeDevices_.size(); }
+    static std::size_t nativeCountHeld(AppWindow& a) { return th::engine(a).nativeDevices_.size(); }
     // Group 13 part b: the table's device list as the window reads it, the recording the engine has listed and the radio the
     // receiver has lent to the patch (put there behind the engine's back).
     static std::vector<std::string> deviceKeys(AppWindow& a) {
@@ -179,22 +180,22 @@ struct AppWindowTestAccess {
     }
     static std::string receiverRadio(AppWindow& a) { return a.patchLists().receiverRadio; }
     static void listRecording(AppWindow& a, const std::string& path, double rateHz) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRecordings_.push_back({path, "rec.wav", pc::makeIqFileKey(path), rateHz});
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRecordings_.push_back({path, "rec.wav", pc::makeIqFileKey(path), rateHz});
         });
     }
     static void lend(AppWindow& a, const std::string& kind, const std::string& args) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchMainKeep_.valid = true;
-            rawEngine(a.engine_).patchMainKeep_.kind = kind;
-            rawEngine(a.engine_).patchMainKeep_.args = args;
-            rawEngine(a.engine_).patchMainKeep_.label = "Lent radio";
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchMainKeep_.valid = true;
+            th::engine(a).patchMainKeep_.kind = kind;
+            th::engine(a).patchMainKeep_.args = args;
+            th::engine(a).patchMainKeep_.label = "Lent radio";
         });
     }
     // A COPY of the engine graph's node, made with the pass out of the way (null: no such node).
     static std::unique_ptr<const pc::Node> find(AppWindow& a, pc::NodeId id) {
-        return passseam::read<std::unique_ptr<const pc::Node>>(rawEngine(a.engine_), [&]() -> std::unique_ptr<const pc::Node> {
-            const pc::Node* n = rawEngine(a.engine_).patchGraph_.find(id);
+        return passseam::read<std::unique_ptr<const pc::Node>>(th::engine(a), [&]() -> std::unique_ptr<const pc::Node> {
+            const pc::Node* n = th::engine(a).patchGraph_.find(id);
             return n != nullptr ? std::make_unique<const pc::Node>(*n) : nullptr;
         });
     }
@@ -206,10 +207,10 @@ struct AppWindowTestAccess {
     static pc::NodeId addRadioPartQueued(AppWindow& a, float x, float y) {
         pc::NodeId made = pc::kNoNode;
         withPassHeld(a, [&] {
-            rawEngine(a.engine_).submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
+            th::engine(a).submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
             const std::string dev = a.patchDefaultDeviceKey();
-            made = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, x, y);
-            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(made)) { n->device = dev; }
+            made = th::engine(a).patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, x, y);
+            if (pc::Node* n = th::engine(a).patchGraph_.mutableNode(made)) { n->device = dev; }
         });
         return made;
     }
@@ -229,7 +230,7 @@ int main() {
     //     real radio on the desk, because the scan has not run yet when
     //     patchDefaultDeviceKey() is read on the next line. ---------------
     {
-        cascade::gui::AppWindow a;
+        th::TestWindow a;
         CHECK(Access::nativeCount(a) == 0);  // nothing scanned yet
         const pc::NodeId made = Access::addRadioPartQueued(a, 40.0f, 40.0f);
         const auto n = Access::find(a, made);
@@ -242,7 +243,7 @@ int main() {
 
     // --- GREEN: the fixed method, the scan and the read as two passes -----
     {
-        cascade::gui::AppWindow a;
+        th::TestWindow a;
         CHECK(Access::nativeCount(a) == 0);
         Access::frame(a);  // the page is up: the first publish is read and the draft starts from it
         pc::NodeId made = pc::kNoNode;
@@ -274,7 +275,7 @@ int main() {
     //     one - patchDefaultDeviceKey's existing rule, exercised through the
     //     same fixed path.
     {
-        cascade::gui::AppWindow a;
+        th::TestWindow a;
         Access::frame(a);
         // BOTH presses before the scan is answered: the second must not choose the radio the first is about to take.
         const pc::NodeId first = Access::addRadioPart(a, 40.0f, 40.0f);
@@ -296,7 +297,7 @@ int main() {
     //     Radio has - never a recording, however many are listed - falling back to the generator when none is free.
     {
         g_radios = 3;
-        cascade::gui::AppWindow a;
+        th::TestWindow a;
         Access::frame(a);
         Access::listRecording(a, "C:/rec/sample.wav", 96000.0);
         const pc::NodeId n1 = Access::addRadioPart(a, 40.0f, 40.0f);
@@ -328,7 +329,7 @@ int main() {
     //     the list, even when the list does not hold it (a SoapySDR radio is only listed after a scan).
     {
         g_radios = 1;
-        cascade::gui::AppWindow a;
+        th::TestWindow a;
         Access::lend(a, "airspy", "serial=LENT");
         Access::frame(a);
         Access::frame(a);

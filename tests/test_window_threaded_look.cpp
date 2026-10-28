@@ -44,6 +44,7 @@
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
@@ -55,33 +56,33 @@ namespace cmd = cascade::core::cmd;
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
+    static Engine& engine(AppWindow& a) { return th::engine(a); }
     static void start(AppWindow& a, int periodMs, int floorMs) {
         cascade::engine::ControlThreadOptions o;
         o.period = std::chrono::milliseconds(periodMs);
         o.floor = std::chrono::milliseconds(floorMs);
         o.kickGap = std::chrono::milliseconds(0);   // every frame's kick reaches the loop, beside its 1 ms passes (the race is the point)
         o.watchdogThresholdMs = 20000;
-        rawEngine(a.engine_).startControlThread(o);
+        th::engine(a).startControlThread(o);
     }
     // THE FRAME'S ENGINE-FACING HALF, in drawUi's order (free-running: the two stepPass calls are no-ops).
     static void frame(AppWindow& a) {
-        rawEngine(a.engine_).frameKick();   // (run(): the frame's first act is to kick the pass, 6.9)
+        th::engine(a).frameKick();   // (run(): the frame's first act is to kick the pass, 6.9)
         a.applyPluginDirective();
         if (a.uiSession_ != nullptr) { a.engineApi_->heartbeat(a.uiSession_); }
         a.sendTrackInfoText();
         a.handFrontEndFacts();
-        rawEngine(a.engine_).stepPass(PassPart::Front);
+        th::engine(a).stepPass(PassPart::Front);
         a.syncPatchPageOpen();
         a.commitPatchDraft();
         a.pollUiAnswers();
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
         a.actOnUiAnswers();
         // (no publishWebSpectrum since stage 5e: the page reads the table's spectrum itself)
-        rawEngine(a.engine_).stepPass(PassPart::Mute);
+        th::engine(a).stepPass(PassPart::Mute);
         a.submitTransmitKey();
-        rawEngine(a.engine_).stepPass(PassPart::Back);
+        th::engine(a).stepPass(PassPart::Back);
     }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
     static const AppWindow::TuningListCache& tuning(AppWindow& a) { return a.tuningLists(); }
@@ -89,12 +90,12 @@ struct AppWindowTestAccess {
     static double tunedOffset(AppWindow& a) { return a.tunedVfoOffsetHz(); }
     static void dragCentre(AppWindow& a, double absHz) { a.dragVfoCentre(absHz); }
     static void submit(AppWindow& a, const FoxCommand& c) { a.uiSubmit(c); }
-    static std::uint64_t passes(AppWindow& a) { return rawEngine(a.engine_).controlPasses_.load(); }
-    static void park(AppWindow& a, bool on) { rawEngine(a.engine_).controlParkForTest_.store(on); }
+    static std::uint64_t passes(AppWindow& a) { return th::engine(a).controlPasses_.load(); }
+    static void park(AppWindow& a, bool on) { th::engine(a).controlParkForTest_.store(on); }
     static std::uint64_t busyDrops(AppWindow& a) { return a.uiBusyDrops_; }
     static std::size_t held(AppWindow& a) { return a.uiHeld_.size(); }
-    static std::uint64_t offPassKeyTouches(AppWindow& a) { return rawEngine(a.engine_).api().offPassKeyTouches(); }
-    static std::shared_ptr<cascade::core::ReceiverSnapshot> snapshot(AppWindow& a) { return rawEngine(a.engine_).receiverSnapshot_; }
+    static std::uint64_t offPassKeyTouches(AppWindow& a) { return th::engine(a).api().offPassKeyTouches(); }
+    static std::shared_ptr<cascade::core::ReceiverSnapshot> snapshot(AppWindow& a) { return th::engine(a).receiverSnapshot_; }
 };
 }  // namespace cascade::gui
 using A = cascade::gui::AppWindowTestAccess;
@@ -140,7 +141,7 @@ int main() {
     CHECK(cascade::gui::fonts::load());
 
     {
-        AppWindow app;
+        th::TestWindow app;
         Engine& e = A::engine(app);
         A::start(app, 1, 0);
         CHECK(e.controlThreadRunning());

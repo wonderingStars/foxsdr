@@ -59,6 +59,7 @@
 
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "iiod_fake_server.hpp"
 #include "net/web_policy.hpp"
@@ -168,33 +169,33 @@ struct AppWindowTestAccess {
     // A command applied as the engine applies one: on the pass's thread, with the pass out of the way when it free-runs
     // (passseam::read - the key rules are the pass's alone, and an apply from this thread would run beside it).
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
-        return passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(c, lt); });
+        return passseam::read<FoxCommandResult>(th::engine(a), [&] { return th::engine(a).applyCommand(c, lt); });
     }
     static FoxCommandResult apply(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
-        return passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
+        return passseam::read<FoxCommandResult>(th::engine(a), [&] { return th::engine(a).applyCommand(q.c, q.longText); });
     }
     // The engine itself, for what is any thread's: the API handle a desk session opens on.
-    static cascade::engine::Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
+    static cascade::engine::Engine& engine(AppWindow& a) { return th::engine(a); }
     // What the publish carries of the key: the key rules' own fields, read on the pass's thread (passseam::read).
     static cascade::engine::ApiHost::TxFacts txFacts(AppWindow& a) {
-        return passseam::read<cascade::engine::ApiHost::TxFacts>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).api().txFacts(); });
+        return passseam::read<cascade::engine::ApiHost::TxFacts>(th::engine(a), [&] { return th::engine(a).api().txFacts(); });
     }
     // The engine's pass as far as the key needs it - the queues applied (the local and the API's, then the remote controls' phase: the web
     // server's session, drained in the internal tier), the state published - without the audio half, which reads the window's ImGui clock
     // (no ImGui context in this test).
     static void pass(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpRemoteControls();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpRemoteControls();
+            (void)th::engine(a).pumpPublish();
         });
     }
     // Any thread: Transmitter::remoteHoldRemainingMs reads only atomics, haveSink takes the transmitter's own mutex, and
     // transmitter_ is a member the engine never replaces.
     static std::int64_t remoteHoldMs(AppWindow& a) {
-        return rawEngine(a.engine_).transmitter_.remoteHoldRemainingMs();
+        return th::engine(a).transmitter_.remoteHoldRemainingMs();
     }
-    static bool haveTx(AppWindow& a) { return rawEngine(a.engine_).transmitter_.haveSink(); }
+    static bool haveTx(AppWindow& a) { return th::engine(a).transmitter_.haveSink(); }
     // The settings panel switching the web server off: the staged edit and its Apply, which SUBMITS a SERVER_CONFIG on the window's session
     // (stage 5b: the server is the engine's; a pass applies the command and the host's worker stops the server - nothing happens inside the
     // click itself).
@@ -203,9 +204,9 @@ struct AppWindowTestAccess {
         a.applyWebSettings();
     }
     // The engine's own web server (ServerHost owns it since stage 5b).
-    static WebServer& webServer(AppWindow& a) { return rawEngine(a.engine_).servers().webServer(); }
+    static WebServer& webServer(AppWindow& a) { return th::engine(a).servers().webServer(); }
     // The host's worker has made the servers match the configuration (a stop or a start has returned).
-    static bool serversSettled(AppWindow& a) { return rawEngine(a.engine_).servers().waitIdle(std::chrono::seconds(15)); }
+    static bool serversSettled(AppWindow& a) { return th::engine(a).servers().waitIdle(std::chrono::seconds(15)); }
 
     // THE PASS HELD, free-running only (the idiom of test_tuning_surface.cpp): a piece of work posted to the pass
     // (Engine::postToPass) that waits until the hold is let go. A pass runs posted work at the head of its front part, after it
@@ -225,9 +226,9 @@ struct AppWindowTestAccess {
     }
     static void holdPass(AppWindow& a) {
         if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
-        passseam::attach(rawEngine(a.engine_));
+        passseam::attach(th::engine(a));
         auto h = std::make_shared<Hold>();
-        rawEngine(a.engine_).postToPass([h] {
+        th::engine(a).postToPass([h] {
             std::unique_lock<std::mutex> lk(h->m);
             h->running = true;
             h->cv.notify_all();
@@ -291,7 +292,7 @@ int main() {
     std::printf("test_remote_key_release\n");
     isolate();
 
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     cascade::engine::Engine& engine = Access::engine(app);
 
     // --- open a transmitter, so there is a real sink to key ----------------

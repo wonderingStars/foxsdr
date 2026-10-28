@@ -59,6 +59,7 @@
 #include "core/config.hpp"
 #include "engine/soundcard_panel.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "iiod_fake_server.hpp"
 #include "imgui.h"
@@ -318,10 +319,10 @@ struct AppWindowTestAccess {
     template <class F>
     static auto rd(AppWindow& a, F f) -> std::decay_t<decltype(f())> {
         using R = std::decay_t<decltype(f())>;
-        return passseam::read<R>(rawEngine(a.engine_), std::function<R()>(f));
+        return passseam::read<R>(th::engine(a), std::function<R()>(f));
     }
     template <class F>
-    static void wr(AppWindow& a, F f) { passseam::on(rawEngine(a.engine_), std::function<void()>(f)); }
+    static void wr(AppWindow& a, F f) { passseam::on(th::engine(a), std::function<void()>(f)); }
     template <class F>
     static void exclusive(AppWindow& a, F f) { wr(a, f); }
     // A WAIT FOR WORK THE PASS COMPLETES ITSELF (an open, a scan, a fetch): inline and stepped the test polls it as the pass's workers
@@ -329,7 +330,7 @@ struct AppWindowTestAccess {
     // inside an exclusive() block, where the pass is the thread waiting and so polls it itself.
     template <class Poll, class Done>
     static bool waitPolled(AppWindow& a, Poll poll, Done done) {
-        const bool byPass = passseam::mode() == passseam::Mode::Free && !rawEngine(a.engine_).onControlThread();  // (the CALLER's thread)
+        const bool byPass = passseam::mode() == passseam::Mode::Free && !th::engine(a).onControlThread();  // (the CALLER's thread)
         return waitFor([&] {
             return rd(a, [&] {
                 if (!byPass) { poll(); }
@@ -341,15 +342,15 @@ struct AppWindowTestAccess {
     // A RECORDING'S FILE OPENS ON A WORKER (0.99.63): a take just asked for is armed on the pass that collects the file. Waits (bounded) until no
     // start is out, polling as the pass does, so a test that asked for a take then reads it "recording".
     static bool recordStartsOut(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).iqStart_.pending() || rawEngine(a.engine_).audioStart_.pending() || rawEngine(a.engine_).iqStartQueued_ ||
-                   rawEngine(a.engine_).audioStartQueued_;
+        return passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).iqStart_.pending() || th::engine(a).audioStart_.pending() || th::engine(a).iqStartQueued_ ||
+                   th::engine(a).audioStartQueued_;
         });
     }
     static void settleRecordStarts(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         while (recordStartsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(rawEngine(a.engine_).clockS()); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollRecordStarts(th::engine(a).clockS()); });
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
@@ -358,15 +359,15 @@ struct AppWindowTestAccess {
     // list are workers' - a command's answer is that the work is under way, and what it found lands on a pass that collects it. A case that asked for one reads
     // "the file is open / the rows are in / the list is made", so it waits (bounded) until none is out, polling as the pass does.
     static bool diskJobsOut(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).iqOpenPending() || rawEngine(a.engine_).bookmarkImportPending() || rawEngine(a.engine_).bookmarkExportPending() ||
-                   rawEngine(a.engine_).recordingScanPending();
+        return passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).iqOpenPending() || th::engine(a).bookmarkImportPending() || th::engine(a).bookmarkExportPending() ||
+                   th::engine(a).recordingScanPending();
         });
     }
     static void settleDiskJobs(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         while (diskJobsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollDiskJobs(); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollDiskJobs(); });
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
@@ -376,125 +377,125 @@ struct AppWindowTestAccess {
     }
 
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
-        const FoxCommandResult r = rd(a, [&] { return rawEngine(a.engine_).applyCommand(c, lt); });
+        const FoxCommandResult r = rd(a, [&] { return th::engine(a).applyCommand(c, lt); });
         if (c.op == FOXAPI_OP_RECORD_IQ || c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
         if (isDiskOp(c, lt)) { settleDiskJobs(a); }
         return r;
     }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
-        const FoxCommandResult r = rd(a, [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
+        const FoxCommandResult r = rd(a, [&] { return th::engine(a).applyCommand(q.c, q.longText); });
         if (q.c.op == FOXAPI_OP_RECORD_IQ || q.c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
         if (isDiskOp(q.c, q.longText)) { settleDiskJobs(a); }
         return r;
     }
     // (Engine::submitCommand is the front end's own call from any thread: the queue has its own lock, and it wakes the pass.)
-    static void submit(AppWindow& a, const FoxCommand& c) { rawEngine(a.engine_).submitCommand(c); }
-    static void submit(AppWindow& a, const cmd::QueuedCommand& q) { rawEngine(a.engine_).submitCommand(q); }
+    static void submit(AppWindow& a, const FoxCommand& c) { th::engine(a).submitCommand(c); }
+    static void submit(AppWindow& a, const cmd::QueuedCommand& q) { th::engine(a).submitCommand(q); }
     static void drain(AppWindow& a) {
-        if (rawEngine(a.engine_).onControlThread()) {  // (inside an exclusive() block, free-running: the pass is this thread)
-            rawEngine(a.engine_).drainLocalCommands();
+        if (th::engine(a).onControlThread()) {  // (inside an exclusive() block, free-running: the pass is this thread)
+            th::engine(a).drainLocalCommands();
             return;
         }
-        passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).drainLocalCommands(); });
+        passseam::custom(th::engine(a), [&] { th::engine(a).drainLocalCommands(); });
     }
-    static std::size_t queued(AppWindow& a) { return rawEngine(a.engine_).localCommandsQueuedForTest(); }  // (under the queue's own lock)
+    static std::size_t queued(AppWindow& a) { return th::engine(a).localCommandsQueuedForTest(); }  // (under the queue's own lock)
 
     // The receiver.
-    static bool running(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.running(); }); }
-    static double centre(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.activeSource().centerFrequencyHz(); }); }
-    static double tuned(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).currentAbsoluteHz(); }); }
-    static double vfo(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.vfoOffsetHz(); }); }
-    static float vfoKhz(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).vfoOffsetKhz_; }); }
-    static double inputRate(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.inputRateHz(); }); }
-    static double channelRate(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.channelRateHz(); }); }
-    static int modeIndex(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).modeIndex_; }); }
-    static cascade::dsp::DemodMode demod(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.demodMode(); }); }
-    static double bw(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).vfoBandwidthHz_; }); }
-    static int bwIndex(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).bandwidthIndex_; }); }
-    static float squelch(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).squelchDb_; }); }
-    static bool squelchAuto(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).squelchAuto_; }); }
-    static float volume(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).volume_; }); }
-    static bool muted(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).userMuted_; }); }
-    static int deemph(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).deemphIndex_; }); }
-    static double deemphUs(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.deemphasisUs(); }); }
+    static bool running(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.running(); }); }
+    static double centre(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.activeSource().centerFrequencyHz(); }); }
+    static double tuned(AppWindow& a) { return rd(a, [&] { return th::engine(a).currentAbsoluteHz(); }); }
+    static double vfo(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.vfoOffsetHz(); }); }
+    static float vfoKhz(AppWindow& a) { return rd(a, [&] { return th::engine(a).vfoOffsetKhz_; }); }
+    static double inputRate(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.inputRateHz(); }); }
+    static double channelRate(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.channelRateHz(); }); }
+    static int modeIndex(AppWindow& a) { return rd(a, [&] { return th::engine(a).modeIndex_; }); }
+    static cascade::dsp::DemodMode demod(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.demodMode(); }); }
+    static double bw(AppWindow& a) { return rd(a, [&] { return th::engine(a).vfoBandwidthHz_; }); }
+    static int bwIndex(AppWindow& a) { return rd(a, [&] { return th::engine(a).bandwidthIndex_; }); }
+    static float squelch(AppWindow& a) { return rd(a, [&] { return th::engine(a).squelchDb_; }); }
+    static bool squelchAuto(AppWindow& a) { return rd(a, [&] { return th::engine(a).squelchAuto_; }); }
+    static float volume(AppWindow& a) { return rd(a, [&] { return th::engine(a).volume_; }); }
+    static bool muted(AppWindow& a) { return rd(a, [&] { return th::engine(a).userMuted_; }); }
+    static int deemph(AppWindow& a) { return rd(a, [&] { return th::engine(a).deemphIndex_; }); }
+    static double deemphUs(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.deemphasisUs(); }); }
     static bool stereo(AppWindow& a) {
-        return rd(a, [&] { return rawEngine(a.engine_).stereoEnabled_ && rawEngine(a.engine_).pipeline_.stereoEnabled(); });
+        return rd(a, [&] { return th::engine(a).stereoEnabled_ && th::engine(a).pipeline_.stereoEnabled(); });
     }
     static bool stereoOff(AppWindow& a) {
-        return rd(a, [&] { return !rawEngine(a.engine_).stereoEnabled_ && !rawEngine(a.engine_).pipeline_.stereoEnabled(); });
+        return rd(a, [&] { return !th::engine(a).stereoEnabled_ && !th::engine(a).pipeline_.stereoEnabled(); });
     }
-    static bool nr(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).nrEnabled_; }); }
-    static bool nrPipe(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.noiseReductionEnabled(); }); }
-    static float nrStrength(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).nrStrength_; }); }
-    static float nrStrengthPipe(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.noiseReductionStrength(); }); }
+    static bool nr(AppWindow& a) { return rd(a, [&] { return th::engine(a).nrEnabled_; }); }
+    static bool nrPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseReductionEnabled(); }); }
+    static float nrStrength(AppWindow& a) { return rd(a, [&] { return th::engine(a).nrStrength_; }); }
+    static float nrStrengthPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseReductionStrength(); }); }
     static bool notch(AppWindow& a) {
-        return rd(a, [&] { return rawEngine(a.engine_).notchEnabled_ && rawEngine(a.engine_).pipeline_.notchEnabled(); });
+        return rd(a, [&] { return th::engine(a).notchEnabled_ && th::engine(a).pipeline_.notchEnabled(); });
     }
     static bool notchOff(AppWindow& a) {
-        return rd(a, [&] { return !rawEngine(a.engine_).notchEnabled_ && !rawEngine(a.engine_).pipeline_.notchEnabled(); });
+        return rd(a, [&] { return !th::engine(a).notchEnabled_ && !th::engine(a).pipeline_.notchEnabled(); });
     }
-    static float notchHz(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).notchFreqHz_; }); }
-    static double notchHzPipe(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.notchFrequencyHz(); }); }
-    static float notchQ(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).notchQ_; }); }
-    static double notchQPipe(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.notchQ(); }); }
+    static float notchHz(AppWindow& a) { return rd(a, [&] { return th::engine(a).notchFreqHz_; }); }
+    static double notchHzPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.notchFrequencyHz(); }); }
+    static float notchQ(AppWindow& a) { return rd(a, [&] { return th::engine(a).notchQ_; }); }
+    static double notchQPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.notchQ(); }); }
     static bool autoNotch(AppWindow& a) {
-        return rd(a, [&] { return rawEngine(a.engine_).autoNotch_ && rawEngine(a.engine_).pipeline_.autoNotchEnabled(); });
+        return rd(a, [&] { return th::engine(a).autoNotch_ && th::engine(a).pipeline_.autoNotchEnabled(); });
     }
-    static float dbMin(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).dbMin_; }); }
-    static float dbMax(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).dbMax_; }); }
-    static std::string bandPlan(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).bandPlanSelection_; }); }
+    static float dbMin(AppWindow& a) { return rd(a, [&] { return th::engine(a).dbMin_; }); }
+    static float dbMax(AppWindow& a) { return rd(a, [&] { return th::engine(a).dbMax_; }); }
+    static std::string bandPlan(AppWindow& a) { return rd(a, [&] { return th::engine(a).bandPlanSelection_; }); }
 
     // The recorder.
-    static void setRecordDir(AppWindow& a, const std::string& d) { wr(a, [&] { rawEngine(a.engine_).recordDir_ = d; }); }
-    static bool recIq(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).iqRecorder_.recording(); }); }
-    static bool recAudio(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).audioRecorder_.recording(); }); }
+    static void setRecordDir(AppWindow& a, const std::string& d) { wr(a, [&] { th::engine(a).recordDir_ = d; }); }
+    static bool recIq(AppWindow& a) { return rd(a, [&] { return th::engine(a).iqRecorder_.recording(); }); }
+    static bool recAudio(AppWindow& a) { return rd(a, [&] { return th::engine(a).audioRecorder_.recording(); }); }
 
     // The source.
-    static std::size_t nativeCount(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).nativeDevices_.size(); }); }
-    static void clearNative(AppWindow& a) { wr(a, [&] { rawEngine(a.engine_).nativeDevices_.clear(); }); }
-    static std::size_t soapyCount(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).soapyDevices_.size(); }); }
+    static std::size_t nativeCount(AppWindow& a) { return rd(a, [&] { return th::engine(a).nativeDevices_.size(); }); }
+    static void clearNative(AppWindow& a) { wr(a, [&] { th::engine(a).nativeDevices_.clear(); }); }
+    static std::size_t soapyCount(AppWindow& a) { return rd(a, [&] { return th::engine(a).soapyDevices_.size(); }); }
     static void clearSoapy(AppWindow& a) {
         wr(a, [&] {
-            rawEngine(a.engine_).soapyDevices_.clear();
-            rawEngine(a.engine_).soapyScanned_ = false;
-            rawEngine(a.engine_).soapyScanPartial_ = false;
+            th::engine(a).soapyDevices_.clear();
+            th::engine(a).soapyScanned_ = false;
+            th::engine(a).soapyScanPartial_ = false;
         });
     }
     static void markSoapyScanned(AppWindow& a) {
         wr(a, [&] {
-            rawEngine(a.engine_).soapyScanned_ = true;
-            rawEngine(a.engine_).soapyScanPartial_ = false;
+            th::engine(a).soapyScanned_ = true;
+            th::engine(a).soapyScanPartial_ = false;
         });
     }
-    static bool soapyPending(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).soapyScanPending_; }); }
+    static bool soapyPending(AppWindow& a) { return rd(a, [&] { return th::engine(a).soapyScanPending_; }); }
     static bool waitSoapy(AppWindow& a) {
-        return waitPolled(a, [&] { rawEngine(a.engine_).pollSourceAsync(); }, [&] { return !rawEngine(a.engine_).soapyScanPending_; });
+        return waitPolled(a, [&] { th::engine(a).pollSourceAsync(); }, [&] { return !th::engine(a).soapyScanPending_; });
     }
     // The patch page's device-list wish (engine/stage3b-pre B2).
-    static bool patchListsWanted(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).patchListsWanted_; }); }
-    static void setPatchListsWanted(AppWindow& a, bool v) { wr(a, [&] { rawEngine(a.engine_).patchListsWanted_ = v; }); }
-    static bool patchScanWanted(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).patchScanWanted_; }); }
-    static void setDeviceOpenPending(AppWindow& a, bool v) { wr(a, [&] { rawEngine(a.engine_).deviceOpenPending_ = v; }); }
-    static void patchReconcile(AppWindow& a) { wr(a, [&] { rawEngine(a.engine_).patchReconcile(); }); }
-    static void setPatchScanWanted(AppWindow& a, bool v) { wr(a, [&] { rawEngine(a.engine_).patchScanWanted_ = v; }); }
-    static bool networkUsrps(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).lookForNetworkUsrps_; }); }
+    static bool patchListsWanted(AppWindow& a) { return rd(a, [&] { return th::engine(a).patchListsWanted_; }); }
+    static void setPatchListsWanted(AppWindow& a, bool v) { wr(a, [&] { th::engine(a).patchListsWanted_ = v; }); }
+    static bool patchScanWanted(AppWindow& a) { return rd(a, [&] { return th::engine(a).patchScanWanted_; }); }
+    static void setDeviceOpenPending(AppWindow& a, bool v) { wr(a, [&] { th::engine(a).deviceOpenPending_ = v; }); }
+    static void patchReconcile(AppWindow& a) { wr(a, [&] { th::engine(a).patchReconcile(); }); }
+    static void setPatchScanWanted(AppWindow& a, bool v) { wr(a, [&] { th::engine(a).patchScanWanted_ = v; }); }
+    static bool networkUsrps(AppWindow& a) { return rd(a, [&] { return th::engine(a).lookForNetworkUsrps_; }); }
     static bool waitOpen(AppWindow& a) {
-        return waitPolled(a, [&] { rawEngine(a.engine_).pollSourceAsync(); }, [&] { return !rawEngine(a.engine_).deviceOpenPending_; });
+        return waitPolled(a, [&] { th::engine(a).pollSourceAsync(); }, [&] { return !th::engine(a).deviceOpenPending_; });
     }
     static bool waitCard(AppWindow& a) {
-        return waitPolled(a, [&] { rawEngine(a.engine_).pollSoundCard(); },
-                          [&] { return !rawEngine(a.engine_).soundCardOpenPending_ && !rawEngine(a.engine_).soundCardScanPending_; });
+        return waitPolled(a, [&] { th::engine(a).pollSoundCard(); },
+                          [&] { return !th::engine(a).soundCardOpenPending_ && !th::engine(a).soundCardScanPending_; });
     }
-    static std::string kind(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).sourceKind_; }); }
-    static int sourceSel(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).sourceSel_; }); }
-    static bool haveDevice(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).device_ != nullptr; }); }
-    static std::string sourceError(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).sourceError_; }); }
-    static void clearSourceError(AppWindow& a) { wr(a, [&] { rawEngine(a.engine_).sourceError_.clear(); }); }
-    static void setSourceError(AppWindow& a, const std::string& s) { wr(a, [&] { rawEngine(a.engine_).sourceError_ = s; }); }
+    static std::string kind(AppWindow& a) { return rd(a, [&] { return th::engine(a).sourceKind_; }); }
+    static int sourceSel(AppWindow& a) { return rd(a, [&] { return th::engine(a).sourceSel_; }); }
+    static bool haveDevice(AppWindow& a) { return rd(a, [&] { return th::engine(a).device_ != nullptr; }); }
+    static std::string sourceError(AppWindow& a) { return rd(a, [&] { return th::engine(a).sourceError_; }); }
+    static void clearSourceError(AppWindow& a) { wr(a, [&] { th::engine(a).sourceError_.clear(); }); }
+    static void setSourceError(AppWindow& a, const std::string& s) { wr(a, [&] { th::engine(a).sourceError_ = s; }); }
     static float gain(AppWindow& a, const char* name) {
         return rd(a, [&] {
-            for (std::size_t i = 0; i < rawEngine(a.engine_).deviceGainNames_.size() && i < rawEngine(a.engine_).deviceGainsDb_.size(); ++i) {
-                if (rawEngine(a.engine_).deviceGainNames_[i] == name) { return rawEngine(a.engine_).deviceGainsDb_[i]; }
+            for (std::size_t i = 0; i < th::engine(a).deviceGainNames_.size() && i < th::engine(a).deviceGainsDb_.size(); ++i) {
+                if (th::engine(a).deviceGainNames_[i] == name) { return th::engine(a).deviceGainsDb_[i]; }
             }
             return -999.0f;
         });
@@ -503,38 +504,38 @@ struct AppWindowTestAccess {
     // must report the failure, not crash the harness in the run that has
     // something to say.
     static double radioGain(AppWindow& a, const char* name) {
-        return rd(a, [&] { return rawEngine(a.engine_).device_ != nullptr ? rawEngine(a.engine_).device_->gainDb(name) : -999.0; });
+        return rd(a, [&] { return th::engine(a).device_ != nullptr ? th::engine(a).device_->gainDb(name) : -999.0; });
     }
     static bool agc(AppWindow& a) {
-        return rd(a, [&] { return rawEngine(a.engine_).device_ != nullptr && rawEngine(a.engine_).deviceAgc_ && rawEngine(a.engine_).device_->autoGain(); });
+        return rd(a, [&] { return th::engine(a).device_ != nullptr && th::engine(a).deviceAgc_ && th::engine(a).device_->autoGain(); });
     }
     static bool agcOff(AppWindow& a) {
-        return rd(a, [&] { return rawEngine(a.engine_).device_ != nullptr && !rawEngine(a.engine_).deviceAgc_ && !rawEngine(a.engine_).device_->autoGain(); });
+        return rd(a, [&] { return th::engine(a).device_ != nullptr && !th::engine(a).deviceAgc_ && !th::engine(a).device_->autoGain(); });
     }
-    static std::string antenna(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).deviceAntenna_; }); }
-    static double rate(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.activeSource().sampleRateHz(); }); }
-    static int rateIndex(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).deviceRateIndex_; }); }
-    static void setBiasStandIn(AppWindow& a) { wr(a, [&] { rawEngine(a.engine_).biasStandIn_ = cascade::gui::BiasStandIn::Accept; }); }
-    static bool biasOn(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).biasStandInOn_; }); }
-    static cascade::core::ConverterSetting converter(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pipeline_.converter(); }); }
+    static std::string antenna(AppWindow& a) { return rd(a, [&] { return th::engine(a).deviceAntenna_; }); }
+    static double rate(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.activeSource().sampleRateHz(); }); }
+    static int rateIndex(AppWindow& a) { return rd(a, [&] { return th::engine(a).deviceRateIndex_; }); }
+    static void setBiasStandIn(AppWindow& a) { wr(a, [&] { th::engine(a).biasStandIn_ = cascade::gui::BiasStandIn::Accept; }); }
+    static bool biasOn(AppWindow& a) { return rd(a, [&] { return th::engine(a).biasStandInOn_; }); }
+    static cascade::core::ConverterSetting converter(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.converter(); }); }
     static void setSoundCardForm(AppWindow& a) { wr(a, [&] { soundCardFormHere(a); }); }
     static void setSoundCardFormIq(AppWindow& a) {
         wr(a, [&] {
             soundCardFormHere(a);
-            rawEngine(a.engine_).soundCard_.format = cascade::source::SoundCardFormat::IqStereo;
-            rawEngine(a.engine_).soundCard_.iqCentreHz = 7.0e6;
+            th::engine(a).soundCard_.format = cascade::source::SoundCardFormat::IqStereo;
+            th::engine(a).soundCard_.iqCentreHz = 7.0e6;
         });
     }
     static void soundCardFormHere(AppWindow& a) {
-        rawEngine(a.engine_).soundCard_ = cascade::source::SoundCardSettings{};
-        rawEngine(a.engine_).soundCard_.device = "Fake Card";
-        rawEngine(a.engine_).soundCard_.hostApi = "Fake API";
-        rawEngine(a.engine_).soundCard_.cardRateHz = 48000.0;
+        th::engine(a).soundCard_ = cascade::source::SoundCardSettings{};
+        th::engine(a).soundCard_.device = "Fake Card";
+        th::engine(a).soundCard_.hostApi = "Fake API";
+        th::engine(a).soundCard_.cardRateHz = 48000.0;
     }
-    static double liveIqCentre(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).soundCardLive_.iqCentreHz; }); }
+    static double liveIqCentre(AppWindow& a) { return rd(a, [&] { return th::engine(a).soundCardLive_.iqCentreHz; }); }
 
     // Bookmarks and scanner.
-    static std::vector<cascade::core::Bookmark> bookmarks(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).freqMgr_.list(); }); }
+    static std::vector<cascade::core::Bookmark> bookmarks(AppWindow& a) { return rd(a, [&] { return th::engine(a).freqMgr_.list(); }); }
     static std::uint64_t addBookmark(AppWindow& a, const std::string& name, double hz, const char* mode,
                                      double bwHz, const std::string& group = {}) {
         cascade::core::Bookmark b;
@@ -544,76 +545,76 @@ struct AppWindowTestAccess {
         b.bandwidthHz = bwHz;
         b.group = group;
         return rd(a, [&] {
-            const int at = rawEngine(a.engine_).freqMgr_.add(b);
-            return rawEngine(a.engine_).freqMgr_.list()[static_cast<std::size_t>(at)].id;
+            const int at = th::engine(a).freqMgr_.add(b);
+            return th::engine(a).freqMgr_.list()[static_cast<std::size_t>(at)].id;
         });
     }
-    static std::string importNote(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).bookmarkImportNote_; }); }
-    static std::string recordDir(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).recordDir_; }); }
+    static std::string importNote(AppWindow& a) { return rd(a, [&] { return th::engine(a).bookmarkImportNote_; }); }
+    static std::string recordDir(AppWindow& a) { return rd(a, [&] { return th::engine(a).recordDir_; }); }
     // The engine/stage3b-pre 2c status-line commands.
-    static void setGpsRefusal(AppWindow& a, const std::string& s) { wr(a, [&] { rawEngine(a.engine_).gpsRefusal_ = s; }); }
-    static std::string gpsRefusal(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).gpsRefusal_; }); }
-    static void setSoundCardMissing(AppWindow& a, const std::string& s) { wr(a, [&] { rawEngine(a.engine_).soundCardMissing_ = s; }); }
-    static std::string soundCardMissing(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).soundCardMissing_; }); }
+    static void setGpsRefusal(AppWindow& a, const std::string& s) { wr(a, [&] { th::engine(a).gpsRefusal_ = s; }); }
+    static std::string gpsRefusal(AppWindow& a) { return rd(a, [&] { return th::engine(a).gpsRefusal_; }); }
+    static void setSoundCardMissing(AppWindow& a, const std::string& s) { wr(a, [&] { th::engine(a).soundCardMissing_ = s; }); }
+    static std::string soundCardMissing(AppWindow& a) { return rd(a, [&] { return th::engine(a).soundCardMissing_; }); }
     static void pushDecoderLogLine(AppWindow& a) {
-        wr(a, [&] { rawEngine(a.engine_).decoderLog_.push_back(cascade::core::DecodedLine{"test", "line"}); });
+        wr(a, [&] { th::engine(a).decoderLog_.push_back(cascade::core::DecodedLine{"test", "line"}); });
     }
-    static std::size_t decoderLogSize(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).decoderLog_.size(); }); }
-    static std::uint64_t decoderLinesTotal(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).decoderLinesTotal_; }); }
-    static cascade::core::DecodedLine decoderLogBack(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).decoderLog_.back(); }); }
-    static void setSoapyScanDeferredLogged(AppWindow& a, bool v) { wr(a, [&] { rawEngine(a.engine_).soapyScanDeferredLogged_ = v; }); }
-    static bool soapyScanDeferredLogged(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).soapyScanDeferredLogged_; }); }
-    static void setMutePopupQueued(AppWindow& a, bool v) { wr(a, [&] { rawEngine(a.engine_).mutePopupQueued_ = v; }); }
-    static bool mutePopupQueued(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).mutePopupQueued_; }); }
-    static bool muteKeptRunning(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).muteKeptRunning_; }); }
+    static std::size_t decoderLogSize(AppWindow& a) { return rd(a, [&] { return th::engine(a).decoderLog_.size(); }); }
+    static std::uint64_t decoderLinesTotal(AppWindow& a) { return rd(a, [&] { return th::engine(a).decoderLinesTotal_; }); }
+    static cascade::core::DecodedLine decoderLogBack(AppWindow& a) { return rd(a, [&] { return th::engine(a).decoderLog_.back(); }); }
+    static void setSoapyScanDeferredLogged(AppWindow& a, bool v) { wr(a, [&] { th::engine(a).soapyScanDeferredLogged_ = v; }); }
+    static bool soapyScanDeferredLogged(AppWindow& a) { return rd(a, [&] { return th::engine(a).soapyScanDeferredLogged_; }); }
+    static void setMutePopupQueued(AppWindow& a, bool v) { wr(a, [&] { th::engine(a).mutePopupQueued_ = v; }); }
+    static bool mutePopupQueued(AppWindow& a) { return rd(a, [&] { return th::engine(a).mutePopupQueued_; }); }
+    static bool muteKeptRunning(AppWindow& a) { return rd(a, [&] { return th::engine(a).muteKeptRunning_; }); }
     static void setMutePopupSubject(AppWindow& a, const std::string& name, const std::string& key) {
         wr(a, [&] {
-            rawEngine(a.engine_).mutePopup_.open = true;
-            rawEngine(a.engine_).mutePopup_.names = {name};
-            rawEngine(a.engine_).mutePopup_.keys = {key};
+            th::engine(a).mutePopup_.open = true;
+            th::engine(a).mutePopup_.names = {name};
+            th::engine(a).mutePopup_.keys = {key};
         });
     }
-    static bool mutePopupOpen(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).mutePopup_.open; }); }
-    static std::size_t mutePopupKeyCount(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).mutePopup_.keys.size(); }); }
+    static bool mutePopupOpen(AppWindow& a) { return rd(a, [&] { return th::engine(a).mutePopup_.open; }); }
+    static std::size_t mutePopupKeyCount(AppWindow& a) { return rd(a, [&] { return th::engine(a).mutePopup_.keys.size(); }); }
     // The web remote's side: the snapshot a browser reads (and the row map it
     // leaves), and a request applied directly (web_request_seam.hpp: the product's translator, each command through applyCommand).
-    static void publishWeb(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); }); }
+    static void publishWeb(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).publishReceiverState(); }); }
     // The row a browser sees a bookmark on: read off the PUBLISHED snapshot
     // (what /api/status serves - the web provider's own call), never off the
     // row map under test.
     static int webRowOf(AppWindow& a, const std::string& name) {
-        const cascade::net::RadioStatus status = rawEngine(a.engine_).webStatusNow();
+        const cascade::net::RadioStatus status = th::engine(a).webStatusNow();
         const auto& rows = status.bookmarks;
         for (std::size_t r = 0; r < rows.size(); ++r) {
             if (rows[r].name == name) { return static_cast<int>(r); }
         }
         return -1;
     }
-    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { wr(a, [&] { web_test::applyRequestDirect(rawEngine(a.engine_), r); }); }
-    static bool scanning(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanner_.active(); }); }
-    static double scanStartMhz(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanStartMhz_; }); }
-    static double scanStopMhz(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanStopMhz_; }); }
-    static double scanStepKhz(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanStepKhz_; }); }
-    static double scanDwell(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanDwellMs_; }); }
-    static double scanListen(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanListenMs_; }); }
-    static double scanHold(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanHoldMs_; }); }
+    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { wr(a, [&] { web_test::applyRequestDirect(th::engine(a), r); }); }
+    static bool scanning(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanner_.active(); }); }
+    static double scanStartMhz(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanStartMhz_; }); }
+    static double scanStopMhz(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanStopMhz_; }); }
+    static double scanStepKhz(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanStepKhz_; }); }
+    static double scanDwell(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanDwellMs_; }); }
+    static double scanListen(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanListenMs_; }); }
+    static double scanHold(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanHoldMs_; }); }
     // The Airband monitor and the scanner's list mode (stub campaign B6).
-    static bool scanTicked(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanTicked_; }); }
+    static bool scanTicked(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanTicked_; }); }
     // The waterfall's markers (stub campaign B10): the engine's list, a copy.
-    static std::vector<cascade::core::FreqMarker> markers(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).freqMarkers_.list(); }); }
-    static bool airbandListening(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandListening_; }); }
-    static bool airbandPending(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandStartPending_; }); }
-    static std::string airbandNote(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandNote_; }); }
-    static std::string bookmarkNote(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).bookmarkImportNote_; }); }
-    static std::string airbandGroup(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandGroup_; }); }
-    static void setAirbandGroup(AppWindow& a, const std::string& g) { wr(a, [&] { rawEngine(a.engine_).airbandGroup_ = g; }); }
-    static float airbandSquelch(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandSquelchDb_; }); }
-    static double airbandHold(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandHoldS_; }); }
-    static double scanResume(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanResumeMs_; }); }
+    static std::vector<cascade::core::FreqMarker> markers(AppWindow& a) { return rd(a, [&] { return th::engine(a).freqMarkers_.list(); }); }
+    static bool airbandListening(AppWindow& a) { return rd(a, [&] { return th::engine(a).airbandListening_; }); }
+    static bool airbandPending(AppWindow& a) { return rd(a, [&] { return th::engine(a).airbandStartPending_; }); }
+    static std::string airbandNote(AppWindow& a) { return rd(a, [&] { return th::engine(a).airbandNote_; }); }
+    static std::string bookmarkNote(AppWindow& a) { return rd(a, [&] { return th::engine(a).bookmarkImportNote_; }); }
+    static std::string airbandGroup(AppWindow& a) { return rd(a, [&] { return th::engine(a).airbandGroup_; }); }
+    static void setAirbandGroup(AppWindow& a, const std::string& g) { wr(a, [&] { th::engine(a).airbandGroup_ = g; }); }
+    static float airbandSquelch(AppWindow& a) { return rd(a, [&] { return th::engine(a).airbandSquelchDb_; }); }
+    static double airbandHold(AppWindow& a) { return rd(a, [&] { return th::engine(a).airbandHoldS_; }); }
+    static double scanResume(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanResumeMs_; }); }
 
     // Plugins and the store.
     static const cascade::core::LoadedPlugin* fixtureHere(AppWindow& a) {  // (with the pass out of the way only)
-        for (const cascade::core::LoadedPlugin& p : rawEngine(a.engine_).pluginHost_.plugins()) {
+        for (const cascade::core::LoadedPlugin& p : th::engine(a).pluginHost_.plugins()) {
             if (p.loaded && p.name == "Stage One Fixture") { return &p; }
         }
         return nullptr;
@@ -625,16 +626,16 @@ struct AppWindowTestAccess {
             return p != nullptr ? cascade::core::pluginKey(*p) : std::string();
         });
     }
-    static bool stopped(AppWindow& a, const std::string& key) { return rd(a, [&] { return rawEngine(a.engine_).pluginIsStopped(key); }); }
+    static bool stopped(AppWindow& a, const std::string& key) { return rd(a, [&] { return th::engine(a).pluginIsStopped(key); }); }
     static bool mutes(AppWindow& a) {
         return rd(a, [&] {
             const cascade::core::LoadedPlugin* p = fixtureHere(a);
-            return p != nullptr && rawEngine(a.engine_).pluginMutes(*p);
+            return p != nullptr && th::engine(a).pluginMutes(*p);
         });
     }
     static bool tuneGranted(AppWindow& a, const std::string& key) {
         return rd(a, [&] {
-            for (const std::string& k : rawEngine(a.engine_).pluginTuneAllowed_) {
+            for (const std::string& k : th::engine(a).pluginTuneAllowed_) {
                 if (k == key) { return true; }
             }
             return false;
@@ -642,33 +643,33 @@ struct AppWindowTestAccess {
     }
     static bool settingsGranted(AppWindow& a, const std::string& key) {
         return rd(a, [&] {
-            for (const std::string& k : rawEngine(a.engine_).pluginSettingsAllowed_) {
+            for (const std::string& k : th::engine(a).pluginSettingsAllowed_) {
                 if (k == key) { return true; }
             }
             return false;
         });
     }
-    static std::size_t userPresetCount(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).userPresets_.size(); }); }
-    static std::string presetNote(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).presetNote_; }); }
-    static void setCatalogueUrl(AppWindow& a, const std::string& u) { wr(a, [&] { rawEngine(a.engine_).pluginCatalogueUrl_ = u; }); }
-    static std::string catalogueUrl(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pluginCatalogueUrl_; }); }
-    static bool telemetryEnabled(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).telemetryEnabled_; }); }
-    static std::string telemetryInstallId(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).telemetryInstallId_; }); }
-    static std::vector<std::string> telemetryPanels(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).telemetryPanels_; }); }
-    static cascade::source::SoundCardSettings soundCardForm(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).soundCard_; }); }
+    static std::size_t userPresetCount(AppWindow& a) { return rd(a, [&] { return th::engine(a).userPresets_.size(); }); }
+    static std::string presetNote(AppWindow& a) { return rd(a, [&] { return th::engine(a).presetNote_; }); }
+    static void setCatalogueUrl(AppWindow& a, const std::string& u) { wr(a, [&] { th::engine(a).pluginCatalogueUrl_ = u; }); }
+    static std::string catalogueUrl(AppWindow& a) { return rd(a, [&] { return th::engine(a).pluginCatalogueUrl_; }); }
+    static bool telemetryEnabled(AppWindow& a) { return rd(a, [&] { return th::engine(a).telemetryEnabled_; }); }
+    static std::string telemetryInstallId(AppWindow& a) { return rd(a, [&] { return th::engine(a).telemetryInstallId_; }); }
+    static std::vector<std::string> telemetryPanels(AppWindow& a) { return rd(a, [&] { return th::engine(a).telemetryPanels_; }); }
+    static cascade::source::SoundCardSettings soundCardForm(AppWindow& a) { return rd(a, [&] { return th::engine(a).soundCard_; }); }
     // (a picture on its way and a clean-up on a worker are transfers too: stub campaign B3)
     static bool storeBusyHere(AppWindow& a) {
-        return rawEngine(a.engine_).catalogPending_ || rawEngine(a.engine_).installPending_ || rawEngine(a.engine_).screenshotPending_ ||
-               rawEngine(a.engine_).cleanupPending_;
+        return th::engine(a).catalogPending_ || th::engine(a).installPending_ || th::engine(a).screenshotPending_ ||
+               th::engine(a).cleanupPending_;
     }
-    static std::vector<std::string> storeSites(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pluginSites_; }); }
-    static std::string siteError(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).siteError_; }); }
+    static std::vector<std::string> storeSites(AppWindow& a) { return rd(a, [&] { return th::engine(a).pluginSites_; }); }
+    static std::string siteError(AppWindow& a) { return rd(a, [&] { return th::engine(a).siteError_; }); }
     static bool storeBusy(AppWindow& a) { return rd(a, [&] { return storeBusyHere(a); }); }
     static bool waitStore(AppWindow& a) {
-        return waitPolled(a, [&] { rawEngine(a.engine_).pollPluginAsync(); }, [&] { return !storeBusyHere(a); });
+        return waitPolled(a, [&] { th::engine(a).pollPluginAsync(); }, [&] { return !storeBusyHere(a); });
     }
-    static std::string installError(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).installError_; }); }
-    static void clearInstallError(AppWindow& a) { wr(a, [&] { rawEngine(a.engine_).installError_.clear(); }); }
+    static std::string installError(AppWindow& a) { return rd(a, [&] { return th::engine(a).installError_; }); }
+    static void clearInstallError(AppWindow& a) { wr(a, [&] { th::engine(a).installError_.clear(); }); }
     static void injectCatalogue(AppWindow& a) {
         cascade::core::PluginCatalogEntry e;
         e.id = "stage1-catalogue-only";
@@ -686,55 +687,55 @@ struct AppWindowTestAccess {
         e.platforms.push_back(pf);
         e.compatible = true;
         wr(a, [&] {
-            rawEngine(a.engine_).catalog_.clear();
-            rawEngine(a.engine_).catalog_.push_back(e);
+            th::engine(a).catalog_.clear();
+            th::engine(a).catalog_.push_back(e);
         });
     }
-    static bool addAllActive(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).addAllRun_.active; }); }
-    static void stopAddAll(AppWindow& a) { wr(a, [&] { rawEngine(a.engine_).addAllRun_ = cascade::engine::Engine::AddAllRun{}; }); }
-    static std::string pluginDirNow(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pluginDir_; }); }
+    static bool addAllActive(AppWindow& a) { return rd(a, [&] { return th::engine(a).addAllRun_.active; }); }
+    static void stopAddAll(AppWindow& a) { wr(a, [&] { th::engine(a).addAllRun_ = cascade::engine::Engine::AddAllRun{}; }); }
+    static std::string pluginDirNow(AppWindow& a) { return rd(a, [&] { return th::engine(a).pluginDir_; }); }
 
     // The patch page, the transmitter, audio, position, GPS.
-    static bool patchRunning(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).patchRunning_; }); }
-    static void setTransmitOpen(AppWindow& a, bool on) { wr(a, [&] { rawEngine(a.engine_).transmitOpen_ = on; }); }
-    static bool transmitOpen(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitOpen_; }); }
+    static bool patchRunning(AppWindow& a) { return rd(a, [&] { return th::engine(a).patchRunning_; }); }
+    static void setTransmitOpen(AppWindow& a, bool on) { wr(a, [&] { th::engine(a).transmitOpen_ = on; }); }
+    static bool transmitOpen(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitOpen_; }); }
     // (Only for what is thread-safe by construction: the API host's handle a session is opened on.)
-    static cascade::engine::Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
-    static std::uint64_t serialPortsScans(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).serialPortsScans_; }); }
+    static cascade::engine::Engine& engine(AppWindow& a) { return th::engine(a); }
+    static std::uint64_t serialPortsScans(AppWindow& a) { return rd(a, [&] { return th::engine(a).serialPortsScans_; }); }
     // The engine's pass as far as the key needs it - the queue applied, the
     // state published - without the audio half, which reads the window's
     // ImGui clock (no ImGui context in this test).
     static void pass(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            (void)th::engine(a).pumpPublish();
         });
     }
-    static bool haveTx(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitter_.haveSink(); }); }
-    static std::int64_t remoteHoldMs(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitter_.remoteHoldRemainingMs(); }); }
-    static std::uint64_t txOwner(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).api().txFacts().owner; }); }
-    static int txMode(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitModeIndex_; }); }
-    static bool txSplit(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitSplit_; }); }
-    static double txSplitHz(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitSplitHz_; }); }
-    static double txPower(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitPowerDb_; }); }
-    static int txInput(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitInputIndex_; }); }
-    static double txTone(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitToneHz_; }); }
-    static bool txMonitor(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitMonitor_; }); }
-    static std::string txArgs(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitArgs_; }); }
-    static std::string plutoUri(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).plutoUri_; }); }
-    static std::string rtlTcpAddr(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).rtlTcpAddr_; }); }
-    static int audioBufferMs(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).audioBufferMs_; }); }
-    static bool ppmOn(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).ppmCorrectionOn_; }); }
-    static std::size_t ppmValueCount(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).ppmValues_.size(); }); }
+    static bool haveTx(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitter_.haveSink(); }); }
+    static std::int64_t remoteHoldMs(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitter_.remoteHoldRemainingMs(); }); }
+    static std::uint64_t txOwner(AppWindow& a) { return rd(a, [&] { return th::engine(a).api().txFacts().owner; }); }
+    static int txMode(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitModeIndex_; }); }
+    static bool txSplit(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitSplit_; }); }
+    static double txSplitHz(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitSplitHz_; }); }
+    static double txPower(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitPowerDb_; }); }
+    static int txInput(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitInputIndex_; }); }
+    static double txTone(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitToneHz_; }); }
+    static bool txMonitor(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitMonitor_; }); }
+    static std::string txArgs(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitArgs_; }); }
+    static std::string plutoUri(AppWindow& a) { return rd(a, [&] { return th::engine(a).plutoUri_; }); }
+    static std::string rtlTcpAddr(AppWindow& a) { return rd(a, [&] { return th::engine(a).rtlTcpAddr_; }); }
+    static int audioBufferMs(AppWindow& a) { return rd(a, [&] { return th::engine(a).audioBufferMs_; }); }
+    static bool ppmOn(AppWindow& a) { return rd(a, [&] { return th::engine(a).ppmCorrectionOn_; }); }
+    static std::size_t ppmValueCount(AppWindow& a) { return rd(a, [&] { return th::engine(a).ppmValues_.size(); }); }
     static double ppmValueFor(AppWindow& a, const std::string& key) {
-        return rd(a, [&] { const auto& m = rawEngine(a.engine_).ppmValues_; const auto it = m.find(key); return it == m.end() ? 0.0 : it->second; });
+        return rd(a, [&] { const auto& m = th::engine(a).ppmValues_; const auto it = m.find(key); return it == m.end() ? 0.0 : it->second; });
     }
     // The patch decoders' pictures the engine keeps (API 0.3 8.12, part 3), and the graph they are pruned against.
     static cascade::core::patch::NodeId addPatchNode(AppWindow& a) {
-        return rd(a, [&] { return rawEngine(a.engine_).patchGraph_.addNode(cascade::core::patch::NodeKind::Decoder, "prune probe"); });
+        return rd(a, [&] { return th::engine(a).patchGraph_.addNode(cascade::core::patch::NodeKind::Decoder, "prune probe"); });
     }
     static void removePatchNode(AppWindow& a, cascade::core::patch::NodeId id) {
-        wr(a, [&] { (void)rawEngine(a.engine_).patchGraph_.removeNode(id); });
+        wr(a, [&] { (void)th::engine(a).patchGraph_.removeNode(id); });
     }
     static void putPatchImage(AppWindow& a, cascade::core::patch::NodeId id) {
         cascade::core::HostImage h;
@@ -743,45 +744,45 @@ struct AppWindowTestAccess {
         h.height = 1;
         h.format = CASCADE_IMAGE_GRAY8;
         h.pixels = {1, 2};
-        wr(a, [&] { rawEngine(a.engine_).takePatchImage(id, std::move(h)); });
+        wr(a, [&] { th::engine(a).takePatchImage(id, std::move(h)); });
     }
     static bool hasPatchImage(AppWindow& a, cascade::core::patch::NodeId id) {
-        return rd(a, [&] { return rawEngine(a.engine_).patchImages_.count(id) != 0; });
+        return rd(a, [&] { return th::engine(a).patchImages_.count(id) != 0; });
     }
-    static void syncPatchImages(AppWindow& a) { wr(a, [&] { rawEngine(a.engine_).syncPatchImages(); }); }
+    static void syncPatchImages(AppWindow& a) { wr(a, [&] { th::engine(a).syncPatchImages(); }); }
     // FOXAPP_OP_PATCH_SET_GRAPH (docs/engine-stage3.md OPEN 6).
-    static cascade::core::patch::Graph patchGraph(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).patchGraph_; }); }
+    static cascade::core::patch::Graph patchGraph(AppWindow& a) { return rd(a, [&] { return th::engine(a).patchGraph_; }); }
     template <class F>
-    static void changePatchGraph(AppWindow& a, F change) { wr(a, [&] { change(rawEngine(a.engine_).patchGraph_); }); }
-    static std::uint64_t patchGraphEpoch(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).patchGraphEpoch_; }); }
-    static std::uint64_t patchGraphVersion(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).patchGraphVersion_; }); }
-    static bool patchPageOpen(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).patchPageOpen_; }); }
-    static std::size_t patchRecordingCount(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).patchRecordings_.size(); }); }
-    static double patchRecordingRate(AppWindow& a, std::size_t i) { return rd(a, [&] { return rawEngine(a.engine_).patchRecordings_[i].rateHz; }); }
-    static bool patchWasOpen(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).patchWasOpen_; }); }
-    static void setPatchRunning(AppWindow& a, bool v) { wr(a, [&] { rawEngine(a.engine_).patchRunning_ = v; }); }
-    static void pumpPatch(AppWindow& a) { passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pumpPatch(); }); }
-    static void setSoundCardsListed(AppWindow& a, bool on) { wr(a, [&] { rawEngine(a.engine_).soundCardListed_ = on; }); }
-    static bool soundCardScanPending(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).soundCardScanPending_; }); }
-    static double txFrequency(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitter_.frequencyHz(); }); }
+    static void changePatchGraph(AppWindow& a, F change) { wr(a, [&] { change(th::engine(a).patchGraph_); }); }
+    static std::uint64_t patchGraphEpoch(AppWindow& a) { return rd(a, [&] { return th::engine(a).patchGraphEpoch_; }); }
+    static std::uint64_t patchGraphVersion(AppWindow& a) { return rd(a, [&] { return th::engine(a).patchGraphVersion_; }); }
+    static bool patchPageOpen(AppWindow& a) { return rd(a, [&] { return th::engine(a).patchPageOpen_; }); }
+    static std::size_t patchRecordingCount(AppWindow& a) { return rd(a, [&] { return th::engine(a).patchRecordings_.size(); }); }
+    static double patchRecordingRate(AppWindow& a, std::size_t i) { return rd(a, [&] { return th::engine(a).patchRecordings_[i].rateHz; }); }
+    static bool patchWasOpen(AppWindow& a) { return rd(a, [&] { return th::engine(a).patchWasOpen_; }); }
+    static void setPatchRunning(AppWindow& a, bool v) { wr(a, [&] { th::engine(a).patchRunning_ = v; }); }
+    static void pumpPatch(AppWindow& a) { passseam::custom(th::engine(a), [&] { th::engine(a).pumpPatch(); }); }
+    static void setSoundCardsListed(AppWindow& a, bool on) { wr(a, [&] { th::engine(a).soundCardListed_ = on; }); }
+    static bool soundCardScanPending(AppWindow& a) { return rd(a, [&] { return th::engine(a).soundCardScanPending_; }); }
+    static double txFrequency(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitter_.frequencyHz(); }); }
     static void addAudioDevice(AppWindow& a, int paIndex, const char* name) {
-        wr(a, [&] { rawEngine(a.engine_).devices_.push_back({paIndex, name, false}); });
+        wr(a, [&] { th::engine(a).devices_.push_back({paIndex, name, false}); });
     }
-    static int audioDeviceIndex(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).deviceIndex_; }); }
+    static int audioDeviceIndex(AppWindow& a) { return rd(a, [&] { return th::engine(a).deviceIndex_; }); }
     static bool positionSet(AppWindow& a, double lat, double lon) {
-        return rd(a, [&] { return rawEngine(a.engine_).rxSet_ && rawEngine(a.engine_).rxLat_ == lat && rawEngine(a.engine_).rxLon_ == lon; });
+        return rd(a, [&] { return th::engine(a).rxSet_ && th::engine(a).rxLat_ == lat && th::engine(a).rxLon_ == lon; });
     }
-    static bool gpsListening(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).gpsReader_.listening(); }); }
+    static bool gpsListening(AppWindow& a) { return rd(a, [&] { return th::engine(a).gpsReader_.listening(); }); }
     // Window port group 14, part b (FOXAPP_STATUS_GPS_RESULT): a read that ended in failure, and one that is running.
-    static int gpsState(AppWindow& a) { return rd(a, [&] { return static_cast<int>(rawEngine(a.engine_).gpsReader_.status().state); }); }
+    static int gpsState(AppWindow& a) { return rd(a, [&] { return static_cast<int>(th::engine(a).gpsReader_.status().state); }); }
     static bool gpsFail(AppWindow& a) {
         wr(a, [&] {
-            rawEngine(a.engine_).gpsReader_.setOpenerForTest(
+            th::engine(a).gpsReader_.setOpenerForTest(
                 [](const std::string&, int, std::string& error) -> std::unique_ptr<cascade::core::ByteSource> {
                     error = "could not be opened: test";
                     return nullptr;
                 });
-            rawEngine(a.engine_).gpsReader_.start({"BAD1", 9600, 5.0});
+            th::engine(a).gpsReader_.start({"BAD1", 9600, 5.0});
         });
         for (int i = 0; i < 2000 && gpsState(a) != 3; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
         return gpsState(a) == 3;
@@ -794,11 +795,11 @@ struct AppWindowTestAccess {
     };
     static bool gpsListen(AppWindow& a) {
         return rd(a, [&] {
-            rawEngine(a.engine_).gpsReader_.start(std::make_unique<Silent>(), {"SILENT", 9600, 30.0});
-            return static_cast<int>(rawEngine(a.engine_).gpsReader_.status().state) == 1;
+            th::engine(a).gpsReader_.start(std::make_unique<Silent>(), {"SILENT", 9600, 30.0});
+            return static_cast<int>(th::engine(a).gpsReader_.status().state) == 1;
         });
     }
-    static void gpsStop(AppWindow& a) { wr(a, [&] { rawEngine(a.engine_).gpsReader_.stop(); }); }
+    static void gpsStop(AppWindow& a) { wr(a, [&] { th::engine(a).gpsReader_.stop(); }); }
 };
 
 }  // namespace cascade::gui
@@ -3292,7 +3293,7 @@ int main() {
     A::installHooks();
     ImGui::CreateContext();
     {
-        AppWindow app;
+        th::TestWindow app;
         receiverOps(app);
         displayOps(app);
         sourceOps(app);

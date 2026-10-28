@@ -64,6 +64,7 @@
 #include "core/plugin_repo.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
 
@@ -94,7 +95,7 @@ struct AppWindowTestAccess {
     // pollPluginAsync() collects it and decides what to do about the plugins.
     // (THE ENGINE'S, since the window port: every read and write of it goes through the seam, tests/pass_seam.hpp - on the pass's own thread.)
     static bool fetchCatalogue(AppWindow& a, const std::string& url) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         passseam::on(e, [&] {
             e.pluginCatalogueUrl_ = url;
             e.startCatalogFetch();
@@ -110,23 +111,23 @@ struct AppWindowTestAccess {
         }
         return false;
     }
-    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
+    static void rescan(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPlugins(); }); }
     // The "keep running" tick: the plugin is pinned to ALWAYS and its decoder created alone (FOXAPP_OP_PLUGIN_RUN_MODE is the same call).
     static void keepRunning(AppWindow& a, const std::string& file) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setPluginRun(file, cascade::core::PluginRun::Always); });
+        passseam::on(th::engine(a), [&] { th::engine(a).setPluginRun(file, cascade::core::PluginRun::Always); });
     }
-    static void forgetSignature(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pluginScanSigValid_ = false; }); }
+    static void forgetSignature(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).pluginScanSigValid_ = false; }); }
     // What a removal does before its rescan: every instance destroyed, every
     // module unmapped - and nothing loaded again until a scan says so.
-    static void takeDown(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).detachAndUnloadPlugins(); }); }
+    static void takeDown(AppWindow& a) { passseam::on(th::engine(a), [&] { (void)th::engine(a).detachAndUnloadPlugins(); }); }
     static bool signatureTrusted(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginScanSigValid_; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).pluginScanSigValid_; });
     }
     static std::size_t loadedCount(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginHost_.loadedCount(); });
+        return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).pluginHost_.loadedCount(); });
     }
     static std::size_t blockedCount(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginBlocked_.size(); });
+        return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).pluginBlocked_.size(); });
     }
 };
 
@@ -439,7 +440,7 @@ void testTheWindow() {
     writeFloorManifest("");
     writeCatalogue("");
 
-    cascade::gui::AppWindow app;  // its own start-up scan maps probe a
+    th::TestWindow app;  // its own start-up scan maps probe a
     Tally t0 = tally();
     show("after the start-up scan (a full scan)", t0);
     CHECK(Access::loadedCount(app) == 1u);

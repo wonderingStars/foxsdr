@@ -30,6 +30,7 @@
 
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "test_check.hpp"
 
 namespace {
@@ -146,7 +147,7 @@ int main() {
     // --- the real window writes it and reads it back -----------------------------
     cascade::core::AppConfig saved;
     {
-        g::AppWindow app;
+        th::TestWindow app;
         CHECK(!Access::folded(app));
         CHECK(!Access::config(app).railCollapsed);
         Access::press(app);
@@ -155,7 +156,7 @@ int main() {
         CHECK(saved.railCollapsed);
     }
     {
-        g::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, saved);
         CHECK(Access::folded(app));  // the next launch comes back folded
         Access::press(app);

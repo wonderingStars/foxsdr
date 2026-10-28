@@ -66,6 +66,7 @@
 #include "core/app_commands.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "net/web_control.hpp"
 #include "source/device_source.hpp"
@@ -215,30 +216,30 @@ struct AppWindowTestAccess {
     }
     // What the engine does once before the first pass - and nothing after it (Engine::refreshDiagContext renders the block; the pass's
     // own check - pumpDiagContext - is gated and hashed, and is what the cost test below does not measure).
-    static void firstRefresh(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).refreshDiagContext(); }); }
+    static void firstRefresh(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).refreshDiagContext(); }); }
 
     // --- the engine's own state, read on the pass (COPIES) ---
     static std::string source(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceKind_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceKind_; });
     }
     static bool deviceOpen(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).device_ != nullptr; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).device_ != nullptr; });
     }
     static std::string model(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceModel_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).deviceModel_; });
     }
     static double rate(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.activeSource().sampleRateHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).pipeline_.activeSource().sampleRateHz(); });
     }
     static int modeIndex(AppWindow& a) {
-        return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).modeIndex_; });
+        return passseam::read<int>(th::engine(a), [&] { return th::engine(a).modeIndex_; });
     }
     static std::vector<std::string> patchKinds(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] {
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] {
             std::vector<std::string> kinds;
-            for (const auto& [id, radio] : rawEngine(a.engine_).patchRadios_) {
+            for (const auto& [id, radio] : th::engine(a).patchRadios_) {
                 (void)radio;
-                const cascade::core::patch::Node* n = rawEngine(a.engine_).patchGraph_.find(id);
+                const cascade::core::patch::Node* n = th::engine(a).patchGraph_.find(id);
                 const std::string key = n != nullptr ? n->device : std::string("?");
                 const std::size_t bar = key.find('|');
                 kinds.push_back(bar == std::string::npos ? key : key.substr(0, bar));
@@ -251,8 +252,8 @@ struct AppWindowTestAccess {
     // --- events ---
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
+        while (passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceOpenPending_; })) {
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -260,46 +261,46 @@ struct AppWindowTestAccess {
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
         int row = -1;
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).scanNative();
-            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
-                if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).scanNative();
+            for (std::size_t i = 0; i < th::engine(a).nativeDevices_.size(); ++i) {
+                if (th::engine(a).nativeDevices_[i].args == args) {
                     row = AppWindow::kNativeRowBase + static_cast<int>(i);
                     break;
                 }
             }
-            if (row >= 0) { rawEngine(a.engine_).selectSource(row); }
+            if (row >= 0) { th::engine(a).selectSource(row); }
         });
         return row >= 0 && waitOpen(a);
     }
-    static void selectGenerator(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(0); }); }
+    static void selectGenerator(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(0); }); }
     // THE BROWSER'S ROUTES are commands now (FOXAPI_OP_SET_SAMPLE_RATE / FOXAPI_OP_SET_MODE), applied by the engine.
     static void setRateByRemote(AppWindow& a, double hz) {
-        passseam::on(rawEngine(a.engine_), [&] {
+        passseam::on(th::engine(a), [&] {
             const FoxCommand c = cascade::core::cmd::makeNum(FOXAPI_OP_SET_SAMPLE_RATE, hz);
-            (void)rawEngine(a.engine_).applyCommand(c, std::string());
+            (void)th::engine(a).applyCommand(c, std::string());
         });
     }
-    static void setModeByButton(AppWindow& a, int index) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setModeIndex(index); }); }
+    static void setModeByButton(AppWindow& a, int index) { passseam::on(th::engine(a), [&] { th::engine(a).setModeIndex(index); }); }
     static void setModeByRemote(AppWindow& a, cascade::dsp::DemodMode m) {
         // FOXAPI_DEMOD_* is the mode keys' order, 1-based (the engine's kModeMap order); AM is the only mode this test asks for.
         const std::int64_t code = m == cascade::dsp::DemodMode::AM ? FOXAPI_DEMOD_AM : FOXAPI_DEMOD_NFM;
-        passseam::on(rawEngine(a.engine_), [&] {
+        passseam::on(th::engine(a), [&] {
             const FoxCommand c = cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, code);
-            (void)rawEngine(a.engine_).applyCommand(c, std::string());
+            (void)th::engine(a).applyCommand(c, std::string());
         });
     }
-    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
+    static void rescan(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPlugins(); }); }
     static void tuneBookmark(AppWindow& a, const cascade::core::Bookmark& b) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).tuneToBookmark(b); });
+        passseam::on(th::engine(a), [&] { th::engine(a).tuneToBookmark(b); });
     }
 
     static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = true;
-        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
-            const pc::NodeId id = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) {
+        return passseam::read<pc::NodeId>(th::engine(a), [&] {
+            const pc::NodeId id = th::engine(a).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            if (pc::Node* n = th::engine(a).patchGraph_.mutableNode(id)) {
                 n->device = device;
                 n->freqHz = 100.0e6;
                 n->centreChosen = true;
@@ -310,28 +311,28 @@ struct AppWindowTestAccess {
         });
     }
     static bool runPatchUntilOpen(AppWindow& a, cascade::core::patch::NodeId id) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = true;
-            rawEngine(a.engine_).patchWasOpen_ = true;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = true;
+            th::engine(a).patchWasOpen_ = true;
         });
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchRadios_.count(id) == 0; })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); });
+        while (passseam::read<bool>(th::engine(a), [&] { return th::engine(a).patchRadios_.count(id) == 0; })) {
+            passseam::custom(th::engine(a), [&] { th::engine(a).patchReconcile(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static void switchNodeOff(AppWindow& a, cascade::core::patch::NodeId id) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            if (cascade::core::patch::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) { n->on = false; }
-            rawEngine(a.engine_).patchReconcile();
+        passseam::on(th::engine(a), [&] {
+            if (cascade::core::patch::Node* n = th::engine(a).patchGraph_.mutableNode(id)) { n->on = false; }
+            th::engine(a).patchReconcile();
         });
     }
     static void stopPatch(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = false;
-            rawEngine(a.engine_).patchStopAll(true);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = false;
+            th::engine(a).patchStopAll(true);
         });
         waitOpen(a);
     }
@@ -433,7 +434,7 @@ void testEvents() {
         g_reg.native = {{"rtlsdr", "Generic RTL2832U A", kRtlArgs},
                         {"hackrf", "HackRF One", kHackArgs}};
     }
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     // run() renders the block once before the first frame. That is all the
     // window has done; everything below is an event.
     Access::firstRefresh(app);
@@ -530,7 +531,7 @@ void testCost() {
     // refresh that starts doing real work (a directory walk, a device call), not to
     // grade the machine it runs on.
     std::printf("the refresh is cheap enough to run every frame\n");
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::firstRefresh(app);
     constexpr int kCalls = 5000;
     const auto t0 = std::chrono::steady_clock::now();

@@ -43,6 +43,7 @@
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
 
@@ -133,7 +134,7 @@ struct AppWindowTestAccess {
     // What a scan of `dir` found superseded.
     static void scanned(AppWindow& a, const fs::path& dir, const std::vector<cascade::core::SupersededPlugin>& found) {
         g_dir = dir;
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         passseam::on(e, [&] {
             e.pluginDir_ = dir.string();
             e.pluginOldCopies_ = found;
@@ -141,7 +142,7 @@ struct AppWindowTestAccess {
     }
     // One poll of the pass's own collect, until the worker that deletes has been collected (the way a pass does it).
     static bool waitCleanup(AppWindow& a) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         for (int i = 0; i < 6000; ++i) {
             bool pending = true;
             passseam::on(e, [&] {
@@ -155,24 +156,24 @@ struct AppWindowTestAccess {
     }
     // The store's CLEAN UP key, once its one confirmation is accepted: the op the window sends. Waits for the worker.
     static void confirmCleanup(AppWindow& a) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         passseam::on(e, [&] { (void)e.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_STORE_CLEAN_OLD, 0)); });
         CHECK(waitCleanup(a));
     }
     // An update's own clean-up, as the install's landing makes it: the copies THAT file superseded. Waits for the worker, then returns what
     // the store's line says.
     static std::string afterUpdate(AppWindow& a, const fs::path& installed) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         passseam::on(e, [&] { e.cleanUpAfterUpdate(installed.string()); });
         CHECK(waitCleanup(a));
         return report(a);
     }
     static std::string report(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginCleanupReport_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).pluginCleanupReport_; });
     }
     // The table's two facts, built the way a publish builds them.
     static std::string fact(AppWindow& a, const char* key) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         return passseam::read<std::string>(e, [&] {
             cascade::engine::ApiListBlock b;
             e.buildApiListsStore(b);
@@ -182,17 +183,17 @@ struct AppWindowTestAccess {
     }
     // The Fitted modules window's REMOVE FILE, once confirmed: the op the window sends.
     static void removeOrphan(AppWindow& a, const std::string& file) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         passseam::on(e, [&] {
             const cascade::core::cmd::QueuedCommand q = cascade::core::cmd::makeText(FOXAPP_OP_STORE_CLEAN_OLD, file, 1);
             (void)e.applyCommand(q.c, q.longText);
         });
     }
     static std::string installError(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).installError_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).installError_; });
     }
     static std::string installReport(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).installReport_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).installReport_; });
     }
 };
 
@@ -204,7 +205,7 @@ int main() {
     std::printf("test_plugin_cleanup_app\n");
     isolate();
     Access::installHooks();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
 
     // --- the table lists them, and the clean-up says what it did -----------------------------------------------------
     {

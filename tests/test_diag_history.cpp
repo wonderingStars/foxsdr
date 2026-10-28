@@ -47,6 +47,7 @@
 #include "core/diag_report.hpp"
 #include "core/problem_report.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -722,7 +723,7 @@ void testThroughTheWindow() {
 
     // --- OFF: nothing is read, nothing is added ---
     {
-        cascade::gui::AppWindow off;
+        th::TestWindow off;
         off.setDiagnosticsDir(crashDir.string());
         Access::apply(off, false);
         const std::string b = Access::bundle(off, true);
@@ -732,7 +733,7 @@ void testThroughTheWindow() {
         CHECK(Access::reads(off) == 0u);
         // ...and a run that may not touch the disk (no crash dir) is the same
         // with the switch ON.
-        cascade::gui::AppWindow tool;
+        th::TestWindow tool;
         Access::apply(tool, true);
         const std::string t = Access::bundle(tool, true);
         CHECK(!has(t, "previous session"));
@@ -744,7 +745,7 @@ void testThroughTheWindow() {
     // run() then applies the switch. The seeded foxsdr.log already holds session C
     // (this session) from seedLogs; configure() opens it for append.
     {
-        cascade::gui::AppWindow on;
+        th::TestWindow on;
         on.setDiagnosticsDir(crashDir.string());
         Access::apply(on, true);  // what run() does first
         const std::string b = Access::bundle(on, true);
@@ -777,7 +778,7 @@ void testThroughTheWindow() {
     // --- A window whose switch went ON part-way through the session cannot tell
     // this session from the one before it, and says so rather than guessing.
     {
-        cascade::gui::AppWindow late;
+        th::TestWindow late;
         late.setDiagnosticsDir(crashDir.string());
         Access::apply(late, false);  // the start of the session: off
         Access::apply(late, true);   // ...switched on later

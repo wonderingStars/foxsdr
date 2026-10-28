@@ -53,6 +53,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/map_view.hpp"
@@ -82,7 +83,7 @@ struct AppWindowTestAccess {
     // product has for a plugin the user keeps running. What the test holds is unchanged: what a RUNNING plugin's targets, panels,
     // pictures and rows are, as the window shows them. (How a plugin comes to run: tests/test_engine_api_03.cpp group N.)
     static void pinPlugins(AppWindow& a) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         passseam::on(e, [&] {
             std::vector<std::string> keys;
             for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
@@ -101,19 +102,19 @@ struct AppWindowTestAccess {
 
     // ---- one frame's engine part, in drawUi's order ----------------------------------------------------------------------
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
-        passseam::workers(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpWorkers();
-            rawEngine(a.engine_).pumpAudio();
+        passseam::workers(th::engine(a), [&] {
+            th::engine(a).pumpWorkers();
+            th::engine(a).pumpAudio();
         });
     }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.uiSubmit(q); }
@@ -144,7 +145,7 @@ struct AppWindowTestAccess {
     static CoverageMap& coverage(AppWindow& a) { return a.coverage_; }
     // The window's half of the config (stub campaign B16: "On screen only"): what currentConfig writes and applyConfig restores.
     static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(c); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { a.applyConfig(c); }); }
     static bool& onScreenOnly(AppWindow& a) { return a.mapListOnScreenOnly_; }
     static double& typedLat(AppWindow& a) { return a.rxLatInput_; }
     static double& typedLon(AppWindow& a) { return a.rxLonInput_; }
@@ -158,11 +159,11 @@ struct AppWindowTestAccess {
     }
     // The engine's own fields, for what the engine says and the window must agree with: read (and written) on the pass's
     // thread with the pass out of the way (passseam::read / on), never from this thread beside a free-running pass.
-    static bool engineHasPosition(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).rxSet_; }); }
-    static double engineLat(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).rxLat_; }); }
-    static double engineLon(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).rxLon_; }); }
+    static bool engineHasPosition(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).rxSet_; }); }
+    static double engineLat(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).rxLat_; }); }
+    static double engineLon(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).rxLon_; }); }
     static void engineSetPosition(AppWindow& a, double lat, double lon) {
-        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyReceiverPosition(lat, lon); });
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).applyReceiverPosition(lat, lon); });
     }
 };
 
@@ -302,9 +303,9 @@ bool clickItem(AppWindow& a, F body, const char* label, bool switchRow = false) 
 
 // The window, built over the plugin directory as it is now.
 struct Env {
-    std::unique_ptr<AppWindow> app;
+    std::unique_ptr<th::TestWindow> app;
     Env() {
-        app = std::make_unique<AppWindow>();
+        app = std::make_unique<th::TestWindow>();
         Access::pinPlugins(*app);
         passes(*app, 3);
     }
@@ -648,7 +649,7 @@ void testRestoredPosition() {
         f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"rxPositionSet\": true, "
              "\"rxLatDeg\": 51.47, \"rxLonDeg\": -0.45 }\n";
     }
-    AppWindow a(cfg.string(), false);
+    th::TestWindow a(cfg.string(), false);
     CHECK(Access::engineHasPosition(a));  // the engine restored it
     CHECK_NEAR(Access::engineLat(a), 51.47, 1e-12);
     // A page and a Patch Map part, as a restored layout holds them, made before anything has looked at the engine.

@@ -34,18 +34,19 @@
 
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
     static cascade::engine::ShellHooks& host(AppWindow& a) { return a; }
-    static double clockS(AppWindow& a) { return rawEngine(a.engine_).clockS(); }
-    static void handFacts(AppWindow& a, const cascade::engine::FrontEndFacts& f) { rawEngine(a.engine_).setFrontEndFacts(f); }
+    static double clockS(AppWindow& a) { return th::engine(a).clockS(); }
+    static void handFacts(AppWindow& a, const cascade::engine::FrontEndFacts& f) { th::engine(a).setFrontEndFacts(f); }
     static cascade::core::PublishedState published(AppWindow& a) {
-        (void)rawEngine(a.engine_).publishReceiverState();
+        (void)th::engine(a).publishReceiverState();
         cascade::core::PublishedState s;
-        if (!rawEngine(a.engine_).receiverSnapshot_->read(s)) { s = rawEngine(a.engine_).receiverSnapshot_->readFull()->state; }
+        if (!th::engine(a).receiverSnapshot_->read(s)) { s = th::engine(a).receiverSnapshot_->readFull()->state; }
         return s;
     }
 };
@@ -97,7 +98,7 @@ int main() {
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
     {
-        AppWindow app;
+        th::TestWindow app;
         cascade::engine::ShellHooks& host = A::host(app);
 
         // A: the engine's clock moves with no frame; ImGui's does not.

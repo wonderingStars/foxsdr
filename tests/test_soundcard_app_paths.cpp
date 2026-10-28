@@ -51,6 +51,7 @@
 #include "core/freq_converter.hpp"
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "engine/source_fallback.hpp"
 #include "source/soundcard_source.hpp"
@@ -278,25 +279,25 @@ struct AppWindowTestAccess {
     // the workers itself; free-running the pass polls them (pumpWorkers) and custom() is a whole pass.
     static bool settle(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).soundCardOpenPending_ || rawEngine(a.engine_).soundCardScanPending_;
+        while (passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).soundCardOpenPending_ || th::engine(a).soundCardScanPending_;
         })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSoundCard(); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSoundCard(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool listCards(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).scanSoundCards(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).scanSoundCards(); });
         return settle(a);
     }
     // The Source section's Open with these settings on the Sound card row.
     static void startOpen(AppWindow& a, const SoundCardSettings& s) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).sourceSel_ = AppWindow::kSoundCardRow;
-            rawEngine(a.engine_).soundCard_ = s;
-            rawEngine(a.engine_).launchSoundCardOpen(false, s);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).sourceSel_ = AppWindow::kSoundCardRow;
+            th::engine(a).soundCard_ = s;
+            th::engine(a).launchSoundCardOpen(false, s);
         });
     }
     static bool open(AppWindow& a, const SoundCardSettings& s) {
@@ -304,13 +305,13 @@ struct AppWindowTestAccess {
         return settle(a);
     }
     static bool pending(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).soundCardOpenPending_; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).soundCardOpenPending_; });
     }
     // What the sound card panel sends while its row is shown and the cards
     // are not listed (OPEN 2: a command, not a direct scanSoundCards call).
     static FoxCommandResult wantCards(AppWindow& a) {
-        return passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).applyCommand(cascade::core::cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED));
+        return passseam::read<FoxCommandResult>(th::engine(a), [&] {
+            return th::engine(a).applyCommand(cascade::core::cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED));
         });
     }
     // The first ask, whether it left a scan running, and a second ask - with NO PASS BETWEEN THEM, as inline (one
@@ -322,41 +323,41 @@ struct AppWindowTestAccess {
         FoxCommandResult second{};
     };
     static TwoAsks wantCardsTwiceWhileScanning(AppWindow& a) {
-        return passseam::read<TwoAsks>(rawEngine(a.engine_), [&] {
+        return passseam::read<TwoAsks>(th::engine(a), [&] {
             TwoAsks t;
-            t.first = rawEngine(a.engine_).applyCommand(cascade::core::cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED));
-            t.pendingAfterFirst = rawEngine(a.engine_).soundCardScanPending_;
-            t.second = rawEngine(a.engine_).applyCommand(cascade::core::cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED));
+            t.first = th::engine(a).applyCommand(cascade::core::cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED));
+            t.pendingAfterFirst = th::engine(a).soundCardScanPending_;
+            t.second = th::engine(a).applyCommand(cascade::core::cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED));
             return t;
         });
     }
     static bool cardsListed(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).soundCardListed_; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).soundCardListed_; });
     }
     static bool cardScanPending(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).soundCardScanPending_; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).soundCardScanPending_; });
     }
     // The Source section's controls, edited and not Opened.
     static void setSection(AppWindow& a, const SoundCardSettings& s) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).soundCard_ = s; });
+        passseam::on(th::engine(a), [&] { th::engine(a).soundCard_ = s; });
     }
     static SoundCardSettings section(AppWindow& a) {
-        return passseam::read<SoundCardSettings>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).soundCard_; });
+        return passseam::read<SoundCardSettings>(th::engine(a), [&] { return th::engine(a).soundCard_; });
     }
     static SoundCardSettings liveCard(AppWindow& a) {
-        return passseam::read<SoundCardSettings>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).soundCardLive_; });
+        return passseam::read<SoundCardSettings>(th::engine(a), [&] { return th::engine(a).soundCardLive_; });
     }
     static std::string err(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceError_; });
     }
     static std::string keepKind(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).restoreKeep_.kind; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).restoreKeep_.kind; });
     }
     static std::string keepLabel(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).restoreKeepLabel_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).restoreKeepLabel_; });
     }
     static double rateNow(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.activeSource().sampleRateHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).pipeline_.activeSource().sampleRateHz(); });
     }
     // THE SOURCE SECTION AND THE SOUND CARD READ THE WINDOW'S ENGINE API SESSION (window port group 11, API 0.3 8.10):
     // the "Receives X to Y." line is fact.soundcard.span, the lamp is fact.source.keep with the open flags, so a call
@@ -364,13 +365,13 @@ struct AppWindowTestAccess {
     // lists and facts (the engine's own pumpWorkers is what collects a card's listing and open, as here), the window
     // copies the status lines and reads its state. The assertions are unchanged: they only see what a frame sees.
     static void lookFull(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     // The "Receives X to Y." line under the Source section's controls.
@@ -382,48 +383,48 @@ struct AppWindowTestAccess {
     // reconcile, as the first frame of a running patch), and hands it back
     // on STOP. The page's first-frame scan is not under test.
     static void startPatch(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = true;
-            rawEngine(a.engine_).patchWasOpen_ = true;
-            rawEngine(a.engine_).patchReconcile();
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = true;
+            th::engine(a).patchWasOpen_ = true;
+            th::engine(a).patchReconcile();
         });
     }
     static bool lent(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchMainKeep_.valid; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).patchMainKeep_.valid; });
     }
     static bool stopPatch(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = false;
-            rawEngine(a.engine_).patchStopAll(true);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = false;
+            th::engine(a).patchStopAll(true);
         });
         return settle(a);
     }
     // The window's applyConfig (its engine half is Engine::applyConfig), with the pass out of the way.
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) {
-        passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); });
+        passseam::on(th::engine(a), [&] { a.applyConfig(cfg); });
     }
     static cascade::core::AppConfig saved(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
+        passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
         return a.currentConfig();
     }
     static std::string kind(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceKind_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceKind_; });
     }
 
     // The Source combo.
-    static int sel(AppWindow& a) { return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceSel_; }); }
-    static void setSel(AppWindow& a, int row) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).sourceSel_ = row; }); }
+    static int sel(AppWindow& a) { return passseam::read<int>(th::engine(a), [&] { return th::engine(a).sourceSel_; }); }
+    static void setSel(AppWindow& a, int row) { passseam::on(th::engine(a), [&] { th::engine(a).sourceSel_ = row; }); }
     static void setSoapy(AppWindow& a, std::vector<cascade::source::SoapyDeviceInfo> v) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).soapyDevices_ = std::move(v); });
+        passseam::on(th::engine(a), [&] { th::engine(a).soapyDevices_ = std::move(v); });
     }
     static int soapyRowBase(AppWindow& a) {
-        return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).soapyRowBase(); });
+        return passseam::read<int>(th::engine(a), [&] { return th::engine(a).soapyRowBase(); });
     }
     static std::vector<SourceRowKey> rowKeys(AppWindow& a) {
-        return passseam::read<std::vector<SourceRowKey>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceRowKeys(); });
+        return passseam::read<std::vector<SourceRowKey>>(th::engine(a), [&] { return th::engine(a).sourceRowKeys(); });
     }
-    static void scanNative(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).scanNative(); }); }
-    static void pick(AppWindow& a, int row) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(row); }); }
+    static void scanNative(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).scanNative(); }); }
+    static void pick(AppWindow& a, int row) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(row); }); }
 
     // The lamp.
     static bool lamp(AppWindow& a) {
@@ -434,49 +435,49 @@ struct AppWindowTestAccess {
     // The installed card. The receiver is stopped, so no source thread reads it; the pass may still replace it (a worker's
     // open landing), so it is reached on the pass, never from the test's thread beside it.
     static bool cardDead(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            auto* dev = dynamic_cast<cascade::source::DeviceSource*>(&rawEngine(a.engine_).pipeline_.rawSource());
+        return passseam::read<bool>(th::engine(a), [&] {
+            auto* dev = dynamic_cast<cascade::source::DeviceSource*>(&th::engine(a).pipeline_.rawSource());
             return dev != nullptr && dev->deviceDead();
         });
     }
     // What the receiver's source thread does, done for the test: the
     // card is started (a stopped source reads nothing) and then read.
-    static void startCard(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).pipeline_.rawSource().start(); }); }
+    static void startCard(AppWindow& a) { passseam::on(th::engine(a), [&] { (void)th::engine(a).pipeline_.rawSource().start(); }); }
     static void readOnce(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
+        passseam::on(th::engine(a), [&] {
             std::complex<float> buf[256];
-            (void)rawEngine(a.engine_).pipeline_.rawSource().read(buf, 256);
+            (void)th::engine(a).pipeline_.rawSource().read(buf, 256);
         });
     }
 
     // The converter.
     static void setConverter(AppWindow& a, const std::string& key, const ConverterSetting& s) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).converters_[key] = s; });
+        passseam::on(th::engine(a), [&] { th::engine(a).converters_[key] = s; });
     }
     static ConverterSetting stored(AppWindow& a, const std::string& key) {
-        return passseam::read<ConverterSetting>(rawEngine(a.engine_), [&] {
-            const auto it = rawEngine(a.engine_).converters_.find(key);
-            return it == rawEngine(a.engine_).converters_.end() ? ConverterSetting{} : it->second;
+        return passseam::read<ConverterSetting>(th::engine(a), [&] {
+            const auto it = th::engine(a).converters_.find(key);
+            return it == th::engine(a).converters_.end() ? ConverterSetting{} : it->second;
         });
     }
     static void changeConverter(AppWindow& a, const ConverterSetting& s) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).changeConverter(s); });
+        passseam::on(th::engine(a), [&] { th::engine(a).changeConverter(s); });
     }
     static ConverterSetting live(AppWindow& a) {
-        return passseam::read<ConverterSetting>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.converter(); });
+        return passseam::read<ConverterSetting>(th::engine(a), [&] { return th::engine(a).pipeline_.converter(); });
     }
     static std::string keyNow(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).converterRadioKeyNow(); });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).converterRadioKeyNow(); });
     }
     // The converter a patch radio with this key is given.
     static ConverterSetting forKey(AppWindow& a, const std::string& key) {
-        return passseam::read<ConverterSetting>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).converterForKey(key); });
+        return passseam::read<ConverterSetting>(th::engine(a), [&] { return th::engine(a).converterForKey(key); });
     }
     // The Converter rows' reads are the window's, from its engine API session
     // (window port, group 4): with no frame, the engine publishes and the
     // window looks first.
     static void look(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishReceiverState(); });
         a.refreshUiState();
     }
     static std::vector<ConverterMode> offered(AppWindow& a) {
@@ -488,32 +489,32 @@ struct AppWindowTestAccess {
         return a.converterUnusableNote();
     }
     static double airCentre(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.activeSource().centerFrequencyHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).pipeline_.activeSource().centerFrequencyHz(); });
     }
     static double radioNow(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.rawSource().centerFrequencyHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).pipeline_.rawSource().centerFrequencyHz(); });
     }
     static double counter(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).currentAbsoluteHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).currentAbsoluteHz(); });
     }
     static void setVfo(AppWindow& a, double hz) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pipeline_.setVfoOffsetHz(hz); });
+        passseam::on(th::engine(a), [&] { th::engine(a).pipeline_.setVfoOffsetHz(hz); });
     }
-    static void setBandwidth(AppWindow& a, double hz) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).vfoBandwidthHz_ = hz; }); }
+    static void setBandwidth(AppWindow& a, double hz) { passseam::on(th::engine(a), [&] { th::engine(a).vfoBandwidthHz_ = hz; }); }
     static std::string tuneNote(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).tuneMismatchNote_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).tuneMismatchNote_; });
     }
     // A tune by the counter, a bookmark or a preset (retuneSourceHz).
     static void retune(AppWindow& a, double centreHz) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).retuneSourceHz(centreHz, false); });
+        passseam::on(th::engine(a), [&] { th::engine(a).retuneSourceHz(centreHz, false); });
     }
     // The I/Q centre box, as drawSoundCardControls applies it to a running
     // I/Q card.
     static void typeIqCentre(AppWindow& a, double hz) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).soundCard_.iqCentreHz = hz;
-            rawEngine(a.engine_).soundCardLive_.iqCentreHz = hz;
-            rawEngine(a.engine_).applyRetuneNow(hz, false);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).soundCard_.iqCentreHz = hz;
+            th::engine(a).soundCardLive_.iqCentreHz = hz;
+            th::engine(a).applyRetuneNow(hz, false);
         });
     }
 };
@@ -560,7 +561,7 @@ void expectNoCardNameLogged(const char* phrase) {
 void testSoundCardsWantedIsACommand() {
     std::printf("  the sound card list is asked for by a command, once\n");
     resetCards();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(!Access::cardsListed(app));
     const Access::TwoAsks asks = Access::wantCardsTwiceWhileScanning(app);
     CHECK(asks.first.status == FOXAPI_OK);
@@ -579,7 +580,7 @@ void testRowKeysHaveTheSoundCardRow() {
     std::printf("  the row keys are index-aligned with the combo, sound card row included\n");
     resetCards();
     setNative({kRtlA, kPluto});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::scanNative(app);
     Access::setSoapy(app, {{"B200", "driver=uhd,serial=31"}});
     const std::vector<cascade::gui::SourceRowKey> keys = Access::rowKeys(app);
@@ -598,7 +599,7 @@ void testSoundCardRowSurvivesARescan() {
     std::printf("  a native re-scan keeps the Sound card row selected\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::scanNative(app);
     Access::setSel(app, Access::kSoundCardRow);
     // The combo opening re-scans; with no radio plugged in the sound card row
@@ -618,7 +619,7 @@ void testOtherSelectionsFollowTheirRow() {
     std::printf("  a re-scan moves a Soapy or Pluto selection with its row, never onto another\n");
     resetCards();
     setNative({kRtlA});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     Access::scanNative(app);
     Access::setSoapy(app, {{"B200", "driver=uhd,serial=31"}});
     // The last Soapy row, selected (a Soapy radio chosen and not yet open).
@@ -655,7 +656,7 @@ void testLampQuietWhileTheCardOpens() {
     std::printf("  the not-open lamp stays dark while a sound card is still opening\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
 
     // The startup restore of a saved card, its open still in flight.
@@ -699,7 +700,7 @@ void testPickingADeadCardReopensIt() {
     std::printf("  picking the Sound card row of a card that has died opens it again\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     CHECK(Access::kind(app) == "soundcard");
@@ -736,7 +737,7 @@ void testConverterKeptPerCard() {
     std::printf("  a converter is kept per card and applied when the card is installed\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     CHECK(Access::keyNow(app) == cardKey(kCardA));
@@ -760,7 +761,7 @@ void testConverterAppliedOnRestore() {
     std::printf("  the startup restore of a card applies that card's converter\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     cascade::core::AppConfig cfg;
     cfg.sourceKind = "soundcard";
     cfg.soundCard.device = kCardA;
@@ -779,7 +780,7 @@ void testIqCardHasNoConverter() {
     std::printf("  an I/Q card's typed centre is the translation: no converter is applied or offered\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     Access::setConverter(app, cardKey(kCardA), up(125.0e6));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::IqStereo, 96000.0, 7.1e6)));
@@ -825,7 +826,7 @@ void testRealCardTakesADownConverterOnly() {
     std::printf("  a real-mode card offers Off and Down only; a stored Up reads as Off, with a note\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     const std::vector<ConverterMode> offered = Access::offered(app);
@@ -857,7 +858,7 @@ void testRealCardTunesThroughTheConverterOnce() {
     std::printf("  a tune on a real-mode card through a down-converter moves the VFO, translated once\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     Access::setBandwidth(app, 3000.0);
@@ -901,7 +902,7 @@ void testConfigNamesTheCardThatRan() {
     resetCards();
     setNative({});
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::listCards(app));
         CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
         // Card B, I/Q, 96 kHz picked in the section - and Open never pressed.
@@ -937,7 +938,7 @@ void testConfigNamesTheCardThatRan() {
     // A startup restore that could not open the saved card keeps naming it,
     // whatever the section is edited to afterwards.
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::listCards(app));
         g_cards.refuse = true;
         cascade::core::AppConfig cfg;
@@ -963,7 +964,7 @@ void testLentCardIsSaved() {
     std::printf("  a card lent to the patch page is saved as it ran; the radio slots keep theirs\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     Access::setSection(app, card(kCardB, SoundCardFormat::IqStereo, 96000.0, 7.0e6));
@@ -1006,7 +1007,7 @@ void testReceivesLineThroughTheConverter() {
     std::printf("  the Receives line is the air range, through the section card's converter\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     std::printf("    no converter: \"%s\"\n", Access::receives(app).c_str());
@@ -1039,7 +1040,7 @@ void testSameSettingsTriedOnce() {
     {
         resetCards();
         setNative({});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::listCards(app));
         CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
         const int before = g_cards.attempts.load();
@@ -1058,7 +1059,7 @@ void testSameSettingsTriedOnce() {
     {
         resetCards();
         setNative({});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::listCards(app));
         CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
         CHECK(killCard(app));
@@ -1077,7 +1078,7 @@ void testSameSettingsTriedOnce() {
     {
         resetCards();
         setNative({});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::listCards(app));
         CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
         g_cards.refuse = true;
@@ -1098,7 +1099,7 @@ void testAlsaConverterSurvivesRenumbering() {
     setAlsaCards(kUsbHw1);
     cascade::core::AppConfig saved;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::listCards(app));
         CHECK(Access::open(app, card(kUsbHw1, SoundCardFormat::RealMono, 48000.0, 0.0, kAlsa)));
         Access::changeConverter(app, down(10.0e6));
@@ -1108,7 +1109,7 @@ void testAlsaConverterSurvivesRenumbering() {
     // The next boot: the same card is hw:2,0.
     setAlsaCards(kUsbHw2);
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, saved);
         CHECK(Access::settle(app));
         CHECK(Access::kind(app) == "soundcard");
@@ -1130,7 +1131,7 @@ void testAlsaConverterSurvivesRenumbering() {
         cascade::core::AppConfig old = saved;
         old.converters.clear();
         old.converters[cardKey(kUsbHw1, kAlsa)] = down(7.0e6);
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, old);
         CHECK(Access::settle(app));
         CHECK(Access::kind(app) == "soundcard");
@@ -1149,7 +1150,7 @@ void testAlsaDeadCardAsksForARestart() {
     resetCards();
     setNative({});
     setAlsaCards(kUsbHw1);
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kUsbHw1, SoundCardFormat::RealMono, 48000.0, 0.0, kAlsa)));
     // A HEALTHY ALSA card re-Opened with new settings is simply reopened.
@@ -1187,7 +1188,7 @@ void testReleasedAndBothRefused() {
     std::printf("  a released card whose new and old settings are both refused\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     g_cards.refuse = true;
@@ -1221,7 +1222,7 @@ void testGeneratorPickedDuringRelease() {
     for (const bool refused : {false, true}) {
         resetCards();
         setNative({});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::listCards(app));
         CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
         g_cards.holdOpen = true;
@@ -1251,7 +1252,7 @@ void testFailedOtherCardKeepsTheSection() {
     std::printf("  a refused Open of another card puts the section back on the running one\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     g_cards.refuse = true;
@@ -1272,7 +1273,7 @@ void testConverterKeyFollowsTheRunningCard() {
     std::printf("  the converter key is the running card's, not the section's\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     Access::setSection(app, card(kCardB, SoundCardFormat::RealMono, 48000.0));
@@ -1289,7 +1290,7 @@ void testDeadRepickIgnoresSectionEdits() {
     std::printf("  a dead card picked again reopens as it ran, not as the section was edited\n");
     resetCards();
     setNative({});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::listCards(app));
     CHECK(Access::open(app, card(kCardA, SoundCardFormat::RealMono, 48000.0)));
     Access::setSection(app, card(kCardB, SoundCardFormat::IqStereo, 96000.0, 7.0e6));

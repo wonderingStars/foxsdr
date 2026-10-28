@@ -48,6 +48,7 @@
 #include "core/config.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/sdrplay_source.hpp"
@@ -165,25 +166,25 @@ struct AppWindowTestAccess {
     static void installHooks() { cascade::engine::Engine::testHooks_.nativeScan = &fakeScan; }
 
     static void setSoapyRows(AppWindow& a, std::vector<cascade::source::SoapyDeviceInfo> rows) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).soapyDevices_ = std::move(rows);
-            rawEngine(a.engine_).soapyScanned_ = true;
-            rawEngine(a.engine_).soapyScanPending_ = false;
-            rawEngine(a.engine_).deviceOpenPending_ = false;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).soapyDevices_ = std::move(rows);
+            th::engine(a).soapyScanned_ = true;
+            th::engine(a).soapyScanPending_ = false;
+            th::engine(a).deviceOpenPending_ = false;
         });
     }
     static std::vector<std::string> soapyArgsOf(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] {
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] {
             std::vector<std::string> out;
-            for (const auto& d : rawEngine(a.engine_).soapyDevices_) { out.push_back(d.args); }
+            for (const auto& d : th::engine(a).soapyDevices_) { out.push_back(d.args); }
             return out;
         });
     }
-    static void scan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).scanNative(); }); }
+    static void scan(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).scanNative(); }); }
     static std::vector<std::string> patchChoiceKeys(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] {
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] {
             std::vector<std::string> out;
-            for (const auto& c : rawEngine(a.engine_).patchDeviceChoices()) { out.push_back(c.key); }
+            for (const auto& c : th::engine(a).patchDeviceChoices()) { out.push_back(c.key); }
             return out;
         });
     }
@@ -191,9 +192,9 @@ struct AppWindowTestAccess {
     static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = true;
-        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
-            const pc::NodeId id = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) {
+        return passseam::read<pc::NodeId>(th::engine(a), [&] {
+            const pc::NodeId id = th::engine(a).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            if (pc::Node* n = th::engine(a).patchGraph_.mutableNode(id)) {
                 n->device = device;
                 n->freqHz = 100.0e6;
                 n->centreChosen = true;
@@ -205,41 +206,41 @@ struct AppWindowTestAccess {
     }
     // Reconciles until the node has either a running radio or an answer that it would not open. True when one of those happened in time.
     static bool runPatchUntilAnswered(AppWindow& a, cascade::core::patch::NodeId id) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = true;
-            rawEngine(a.engine_).patchWasOpen_ = true;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = true;
+            th::engine(a).patchWasOpen_ = true;
         });
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).patchRadios_.count(id) == 0 && rawEngine(a.engine_).patchRadioError_.count(id) == 0;
+        while (passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).patchRadios_.count(id) == 0 && th::engine(a).patchRadioError_.count(id) == 0;
         })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).patchReconcile(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(30)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool radioRunning(AppWindow& a, cascade::core::patch::NodeId id) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchRadios_.count(id) != 0; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).patchRadios_.count(id) != 0; });
     }
     static std::string nodeError(AppWindow& a, cascade::core::patch::NodeId id) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] {
-            const auto it = rawEngine(a.engine_).patchRadioError_.find(id);
-            return it == rawEngine(a.engine_).patchRadioError_.end() ? std::string() : it->second;
+        return passseam::read<std::string>(th::engine(a), [&] {
+            const auto it = th::engine(a).patchRadioError_.find(id);
+            return it == th::engine(a).patchRadioError_.end() ? std::string() : it->second;
         });
     }
     static void stopPatch(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).patchRunning_ = false;
-            rawEngine(a.engine_).patchStopAll(true);
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).patchRunning_ = false;
+            th::engine(a).patchStopAll(true);
         });
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(th::engine(a), [&] { a.applyConfig(cfg); }); }
     static std::string sourceError(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceError_; });
     }
     static bool deviceOpen(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).device_ != nullptr; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).device_ != nullptr; });
     }
 };
 
@@ -276,7 +277,7 @@ int main() {
     };
     using Args = std::vector<std::string>;
 
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
 
     // =========================================================================
     // THE LISTS: a row that can only fail is not offered (Source list AND patch
@@ -341,7 +342,7 @@ int main() {
         Access::stopPatch(app);
     }
     {
-        cascade::gui::AppWindow lostApp;
+        th::TestWindow lostApp;
         cascade::source::setSdrPlayApiStateForTest(state(true, true, false));
         const int before = g_makesSdrplay.load();
         const auto id = Access::addRadioNode(lostApp, "soapy|driver=sdrplay,serial=1811003EFB");
@@ -358,7 +359,7 @@ int main() {
     // THE STARTUP RESTORE: a saved SoapySDR Mirics-family radio
     // =========================================================================
     {
-        cascade::gui::AppWindow restoreApp;
+        th::TestWindow restoreApp;
         cascade::source::setSdrPlayApiStateForTest(state(true, true, false));
         const int before = g_makesSdrplay.load();
         cascade::core::AppConfig cfg;
@@ -372,7 +373,7 @@ int main() {
     {
         // The same saved radio through SoapyMiri, the session lost: refused,
         // and SoapyMiri is never asked either.
-        cascade::gui::AppWindow restoreApp;
+        th::TestWindow restoreApp;
         cascade::source::setSdrPlayApiStateForTest(state(true, true, false));
         const int before = g_makesMiri.load();
         cascade::core::AppConfig cfg;

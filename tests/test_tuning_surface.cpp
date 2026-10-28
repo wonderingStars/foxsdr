@@ -63,6 +63,7 @@
 #include "core/plugin_ui.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/key_bindings.hpp"
@@ -117,7 +118,7 @@ struct AppWindowTestAccess {
     // The window looks, as a frame does: the engine publishes, the window reads (the state,
     // then the spectrum).
     static void look(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishReceiverState(); });
         a.refreshUiState();
     }
     static void refresh(AppWindow& a) { a.refreshUiState(); }
@@ -125,21 +126,21 @@ struct AppWindowTestAccess {
     // status copy, the window's read of the state, the key when one is down (drawUi
     // dispatches the keyboard right after the read), the answers drained.
     static void frame(AppWindow& a, const KeyAction* key = nullptr) {
-        passseam::custom(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).drainLocalCommands();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::custom(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).drainLocalCommands();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
         if (key != nullptr) { a.applyKeyAction(*key); }
         a.pumpTransmitKey();
     }
     // The pass as far as a submit needs it, and what the session answered, in order.
     static std::vector<Answer> answers(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            (void)th::engine(a).pumpPublish();
         });
         std::vector<Answer> out;
         for (;;) {
@@ -182,7 +183,7 @@ struct AppWindowTestAccess {
         return a.engineApi_->read_spectrum(a.uiSession_, since, info, out, cap);
     }
     static void publish(AppWindow& a, const std::vector<float>& bins, double centreHz, double spanHz) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).api().publishSpectrumForTest(bins.data(), bins.size(), centreHz, spanHz); });
+        passseam::on(th::engine(a), [&] { th::engine(a).api().publishSpectrumForTest(bins.data(), bins.size(), centreHz, spanHz); });
     }
     static const AppWindow::TuneLocal& local(AppWindow& a) { return a.tuneLocal_; }
     static void clock(AppWindow& a, double (*f)()) { a.uiClockS_ = f != nullptr ? f : &AppWindow::steadyNowS; }
@@ -206,7 +207,7 @@ struct AppWindowTestAccess {
     static void aLineAppears(AppWindow& a) {
         static unsigned n = 0;
         const std::string note = "note " + std::to_string(++n);
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).presetNote_ = note; });
+        passseam::on(th::engine(a), [&] { th::engine(a).presetNote_ = note; });
     }
     // The allocations one get_setting of a fact makes inside the table.
     static long factAllocations(AppWindow& a, const char* key) {
@@ -223,9 +224,9 @@ struct AppWindowTestAccess {
         double tuned, sourceRate, bandwidth, channelRate, centre, offset, inputRate;
         int mode;
     };
-    static Old oldReads(AppWindow& a) { return passseam::read<Old>(rawEngine(a.engine_), [&] { return oldReadsOnPass(a); }); }
+    static Old oldReads(AppWindow& a) { return passseam::read<Old>(th::engine(a), [&] { return oldReadsOnPass(a); }); }
     static Old oldReadsOnPass(AppWindow& a) {
-        Engine& e = rawEngine(a.engine_);
+        Engine& e = th::engine(a);
         Old o{};
         o.running = e.pipeline_.running();
         o.faulted = e.pipeline_.faulted() || !e.testFault_.empty();
@@ -247,20 +248,20 @@ struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
     // Every engine field these read or write is the pass's: each goes through passseam::on/read (on the pass's own thread, with the
     // pass out of the way, when it free-runs; right here otherwise).
-    static void setVolume(AppWindow& a, float v) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).volume_ = v; }); }
-    static void setSquelch(AppWindow& a, float v) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).squelchDb_ = v; }); }
-    static void setFault(AppWindow& a, const std::string& why) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).testFault_ = why; }); }
+    static void setVolume(AppWindow& a, float v) { passseam::on(th::engine(a), [&] { th::engine(a).volume_ = v; }); }
+    static void setSquelch(AppWindow& a, float v) { passseam::on(th::engine(a), [&] { th::engine(a).squelchDb_ = v; }); }
+    static void setFault(AppWindow& a, const std::string& why) { passseam::on(th::engine(a), [&] { th::engine(a).testFault_ = why; }); }
     static bool setChainRate(AppWindow& a, double hz) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.setInputRateHz(hz); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).pipeline_.setInputRateHz(hz); });
     }
     static double engineOffset(AppWindow& a) {
-        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.vfoOffsetHz(); });
+        return passseam::read<double>(th::engine(a), [&] { return th::engine(a).pipeline_.vfoOffsetHz(); });
     }
-    static double engineBandwidth(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).vfoBandwidthHz_; }); }
-    static void command(AppWindow& a, const FoxCommand& c) { passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyCommand(c); }); }
-    static void setSourceError(AppWindow& a, const std::string& s) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).sourceError_ = s; }); }
-    static void pumpMute(AppWindow& a) { passseam::mute(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pumpAudioMute(); }); }
-    static void muteBy(AppWindow& a, const std::string& name, double hz) { passseam::on(rawEngine(a.engine_), [&] { muteByOnPass(a, name, hz); }); }
+    static double engineBandwidth(AppWindow& a) { return passseam::read<double>(th::engine(a), [&] { return th::engine(a).vfoBandwidthHz_; }); }
+    static void command(AppWindow& a, const FoxCommand& c) { passseam::on(th::engine(a), [&] { (void)th::engine(a).applyCommand(c); }); }
+    static void setSourceError(AppWindow& a, const std::string& s) { passseam::on(th::engine(a), [&] { th::engine(a).sourceError_ = s; }); }
+    static void pumpMute(AppWindow& a) { passseam::mute(th::engine(a), [&] { th::engine(a).pumpAudioMute(); }); }
+    static void muteBy(AppWindow& a, const std::string& name, double hz) { passseam::on(th::engine(a), [&] { muteByOnPass(a, name, hz); }); }
     static void muteByOnPass(AppWindow& a, const std::string& name, double hz) {
         cascade::core::MutePlugin m;
         m.name = name;
@@ -271,19 +272,19 @@ struct AppWindowTestAccess {
         ps.frequencyHz = hz;
         ps.label = name;
         m.presets.push_back(ps);
-        rawEngine(a.engine_).muteStates_.clear();
-        rawEngine(a.engine_).muteStates_.push_back(std::move(m));
+        th::engine(a).muteStates_.clear();
+        th::engine(a).muteStates_.push_back(std::move(m));
     }
-    static void noMuteBy(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).muteStates_.clear(); }); }
+    static void noMuteBy(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).muteStates_.clear(); }); }
     // The bookmark store, which the pass reads (the save, the lists): a change made in it, a COPY of its list, and its search.
     static void storeDo(AppWindow& a, const std::function<void(cascade::core::FreqManager&)>& change) {
-        passseam::on(rawEngine(a.engine_), [&] { change(rawEngine(a.engine_).freqMgr_); });
+        passseam::on(th::engine(a), [&] { change(th::engine(a).freqMgr_); });
     }
     static std::vector<cascade::core::Bookmark> storeList(AppWindow& a) {
-        return passseam::read<std::vector<cascade::core::Bookmark>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).freqMgr_.list(); });
+        return passseam::read<std::vector<cascade::core::Bookmark>>(th::engine(a), [&] { return th::engine(a).freqMgr_.list(); });
     }
     static std::pair<std::size_t, std::size_t> storeRange(AppWindow& a, double lo, double hi) {
-        return passseam::read<std::pair<std::size_t, std::size_t>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).freqMgr_.range(lo, hi); });
+        return passseam::read<std::pair<std::size_t, std::size_t>>(th::engine(a), [&] { return th::engine(a).freqMgr_.range(lo, hi); });
     }
 
     // THE PASS HELD, free-running only: a piece of work posted to the pass (Engine::postToPass) that waits until the hold is let go.
@@ -305,9 +306,9 @@ struct AppWindowTestAccess {
     }
     static void holdPass(AppWindow& a) {
         if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
-        passseam::attach(rawEngine(a.engine_));
+        passseam::attach(th::engine(a));
         auto h = std::make_shared<Hold>();
-        rawEngine(a.engine_).postToPass([h] {
+        th::engine(a).postToPass([h] {
             std::unique_lock<std::mutex> lk(h->m);
             h->running = true;
             h->cv.notify_all();
@@ -422,7 +423,7 @@ void testPureRules() {
 
     std::printf("  A2: the typed frequency's range is the table's\n");
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::look(app);
         (void)Access::answers(app);
         const double inf = std::numeric_limits<double>::infinity();
@@ -444,7 +445,7 @@ void testPureRules() {
 
     std::printf("  A3: the mute lamps are the pipeline's\n");
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::look(app);
         const auto agree = [&](const char* what) {
             Access::pumpMute(app);   // the pass decides the mute, after the publish...
@@ -517,7 +518,7 @@ void testPureRules() {
 
 void testSpectrumFollowsTheSequences() {
     std::printf("  B: the spectrum buffer follows the published sequences\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     CHECK_EQ(Access::rows(app), 0u);
     CHECK(Access::bins(app).empty());
@@ -628,7 +629,7 @@ void testSpectrumFollowsTheSequences() {
 
 void testMarkersAreCopiedWhenTheStoreChanges() {
     std::printf("  C: the markers are copied when the store changes, not when listSeq moves\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     const auto& c = Access::tuning(app);
     CHECK(c.markers.empty());
@@ -739,7 +740,7 @@ void testMarkersAreCopiedWhenTheStoreChanges() {
 
 void testTheDragsLocalCopyIsWhatTheEngineDoes() {
     std::printf("  D: the drag's local copy is what the engine does with the command, and holds one pass\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     (void)Access::answers(app);
     int checked = 0;
@@ -892,7 +893,7 @@ void testTheDragsLocalCopyIsWhatTheEngineDoes() {
 
 void testTheTypedEntry() {
     std::printf("  E: the typed entry\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     (void)Access::answers(app);
     Access::Sent sent;
@@ -998,7 +999,7 @@ void testTheTypedEntry() {
 
 void testTheKeys() {
     std::printf("  F: the keys\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     (void)Access::answers(app);
     Access::Sent sent;
@@ -1195,7 +1196,7 @@ void testTheKeys() {
 
 void testReplacedReadsAgree() {
     std::printf("  G: every read the port replaced agrees with the read it replaced\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     long compared = 0;
     const auto compare = [&](const char* what) {
@@ -1244,7 +1245,7 @@ void testReplacedReadsAgree() {
 
 void testNothingAllocatesOnceSettled() {
     std::printf("  H: a settled frame's reads allocate nothing\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::look(app);
     (void)Access::tuning(app);
     const long before = t_allocs;
@@ -1303,7 +1304,7 @@ void testNothingAllocatesOnceSettled() {
 
 void testDrawn() {
     std::printf("  I: the members drawn in real frames\n");
-    AppWindow app;
+    th::TestWindow app;
     Access::Sent sent;
     Access::tap(app, &sent);
     // Before the first read (the zero state), then after it.

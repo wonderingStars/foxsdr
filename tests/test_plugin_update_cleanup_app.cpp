@@ -2,7 +2,7 @@
 // it, by itself, and one that fails touches nothing (0.99.72, the plugin store redesign).
 //
 // CONVERTED (stub campaign B3, 0.99.84 house pattern): master ran this in the window (AppWindow::pollPluginAsync -> cleanUpAfterUpdate); it is
-// the ENGINE's now (src/engine/engine_store.cpp), so every touch of it goes through rawEngine and the pass seam (tests/pass_seam.hpp: the same
+// the ENGINE's now (src/engine/engine_store.cpp), so every touch of it goes through th::engine and the pass seam (tests/pass_seam.hpp: the same
 // test runs inline and with the pass on its own thread). One thing differs in the way it is driven and nothing in what is asserted: the old
 // copy is deleted on a WORKER (the pass never waits on a disk), so the update's "landed" is the install collected AND the clean-up collected -
 // a poll until neither is pending - where master's was the install alone.
@@ -64,6 +64,7 @@
 #include "core/plugin_repo.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
 
@@ -77,8 +78,8 @@ using cascade::core::PluginRepo;
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
-    static const cascade::engine::Engine& eng(const AppWindow& a) { return rawEngine(const_cast<AppWindow&>(a).engine_); }
+    static cascade::engine::Engine& eng(AppWindow& a) { return th::engine(a); }
+    static const cascade::engine::Engine& eng(const AppWindow& a) { return th::engine(const_cast<AppWindow&>(a)); }
     static void rescan(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).rescanPlugins(); }); }
     // Every instance destroyed and every module unmapped, so a folder can be emptied (a mapped
     // module cannot be deleted on Windows).
@@ -412,7 +413,7 @@ int main(int argc, char** argv) {
     g_otherBuild = argv[3];
     isolate();
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         testSuccessRemovesTheSupersededCopy(app);
         testFailureTouchesNothing(app);
     }

@@ -50,6 +50,7 @@
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
@@ -179,39 +180,39 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
         cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(c); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { a.applyConfig(c); }); }
     // The retry's clock, in seconds: set before the restore (the failure's stamp) and before every poll.
-    static void clock(AppWindow& a, double t) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).savedRadioRetryClockS_ = t; }); }
-    static void poll(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSavedRadioRetry(); }); }
+    static void clock(AppWindow& a, double t) { passseam::on(th::engine(a), [&] { th::engine(a).savedRadioRetryClockS_ = t; }); }
+    static void poll(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).pollSavedRadioRetry(); }); }
     static bool pending(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceOpenPending_; });
     }
     // The frame loop's own call, until the open in flight has been applied.
     static bool settle(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         while (pending(a)) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool deviceOpen(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).device_ != nullptr; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).device_ != nullptr; });
     }
     static bool armed(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).savedRadioRetryBusy_; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).savedRadioRetryBusy_; });
     }
     static int attempts(AppWindow& a) {
-        return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).savedRadioRetryAttempts_; });
+        return passseam::read<int>(th::engine(a), [&] { return th::engine(a).savedRadioRetryAttempts_; });
     }
     static bool kept(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).restoreKeep_.valid(); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).restoreKeep_.valid(); });
     }
     static std::string sourceError(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceError_; });
     }
-    static void selectGenerator(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(0); }); }
+    static void selectGenerator(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(0); }); }
 };
 
 }  // namespace cascade::gui
@@ -271,7 +272,7 @@ int main() {
         g_otherError.clear();
         g_busyOpens = 2;
         g_opens = 0;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::clock(app, 0.0);
         Access::restore(app, savedRadio());
 
@@ -336,7 +337,7 @@ int main() {
         g_otherError.clear();
         g_busyOpens = 1000;
         g_opens = 0;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::clock(app, 0.0);
         Access::restore(app, savedRadio());
         // Each delay counted from the failure before it: 2, 4, 8, 16.
@@ -368,7 +369,7 @@ int main() {
         g_busyOpens = 0;
         g_otherError = "no RTL-SDR with serial 00000001 is present";
         g_opens = 0;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::clock(app, 0.0);
         Access::restore(app, savedRadio());
         CHECK(g_opens == 1);
@@ -391,7 +392,7 @@ int main() {
         g_otherError.clear();
         g_busyOpens = 1;
         g_opens = 0;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::clock(app, 0.0);
         Access::restore(app, savedRadio());
         CHECK(Access::armed(app));
@@ -414,7 +415,7 @@ int main() {
         g_otherError.clear();
         g_busyOpens = 1000;
         g_opens = 0;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::clock(app, 0.0);
         Access::restore(app, savedRadio());
         CHECK(Access::armed(app));

@@ -43,6 +43,7 @@
 
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/basemap_stand_in.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
@@ -98,12 +99,12 @@ int freePort() {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static cascade::engine::Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
+    static cascade::engine::Engine& engine(AppWindow& a) { return th::engine(a); }
     // The engine's pass as far as the look needs it (the audio half reads the window's ImGui clock: no context in this test).
     static void pass(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            (void)th::engine(a).pumpPublish();
         });
     }
     // The look: the state (its flags carry WEB_LISTENING) and the answers the window is owed.
@@ -145,7 +146,7 @@ using Access = cascade::gui::AppWindowTestAccess;
 int main() {
     std::printf("test_window_web_feed\n");
     isolate();
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     cascade::engine::Engine& engine = Access::engine(app);
 
     // The receiver runs on the signal generator, so the pipeline makes audio.

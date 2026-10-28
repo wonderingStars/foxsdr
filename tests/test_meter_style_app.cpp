@@ -31,6 +31,7 @@
 
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/meter_styles_math.hpp"
 #include "test_check.hpp"
 
@@ -95,7 +96,7 @@ int main() {
 
     cascade::core::AppConfig saved;
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
 
         // --- BOTH METERS OPEN ON THE FACE THEY HAVE ALWAYS HAD ------------------
         CHECK(Access::volumeStyle(app) == MeterStyle::Classic);
@@ -141,7 +142,7 @@ int main() {
 
     // --- A LATER LAUNCH: BOTH CHOICES COME BACK, INDEPENDENTLY --------------
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, saved);
         CHECK(Access::volumeStyle(app) == MeterStyle::Peak);  // the loop above's last pick
         CHECK(Access::rateStyle(app) == MeterStyle::Peak);
@@ -156,7 +157,7 @@ int main() {
         cascade::core::AppConfig bogus;
         bogus.meterStyleVolume = "bogus";
         bogus.meterStyleRate = "";
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, bogus);
         CHECK(Access::volumeStyle(app) == MeterStyle::Classic);
         CHECK(Access::rateStyle(app) == MeterStyle::Classic);

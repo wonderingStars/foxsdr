@@ -71,6 +71,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/plugin_window_ids.hpp"
@@ -173,13 +174,13 @@ struct AppWindowTestAccess {
     // window's read of the state.
     static void look(AppWindow& a) {
         releasePass();
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     static std::vector<Answer> answers(AppWindow& a) {
@@ -195,7 +196,7 @@ struct AppWindowTestAccess {
         return out;
     }
     static void submit(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) { a.uiSubmit(q); }
-    static Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
+    static Engine& engine(AppWindow& a) { return th::engine(a); }
     static void tap(AppWindow& a, Sent* log) { a.uiSubmitTap_ = log; }
     // The survey's clicks are made with the session CLOSED (the tap records each submit before the session is asked), so
     // what a click sends is seen and never applied, whenever a pass runs; reopened after the click, with the state read.
@@ -205,10 +206,10 @@ struct AppWindowTestAccess {
         a.refreshUiState();
     }
     static void command(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
-        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyCommand(q.c, q.longText); });
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).applyCommand(q.c, q.longText); });
     }
     static void command(AppWindow& a, const FoxCommand& c) {
-        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyCommand(c); });
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).applyCommand(c); });
     }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
     static std::uint64_t listSeq(AppWindow& a) { return a.uiState_.listSeq; }
@@ -231,36 +232,36 @@ struct AppWindowTestAccess {
     // The engine, for comparison and for what a hermetic window cannot make. (Copies made on the pass, never a reference
     // into a member the pass rewrites.)
     static std::vector<cascade::core::LoadedPlugin> host(AppWindow& a) {
-        return passseam::read<std::vector<cascade::core::LoadedPlugin>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginHost_.plugins(); });
+        return passseam::read<std::vector<cascade::core::LoadedPlugin>>(th::engine(a), [&] { return th::engine(a).pluginHost_.plugins(); });
     }
     static bool running(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.running(); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).pipeline_.running(); });
     }
     static bool stopped(AppWindow& a, const std::string& key) {
-        if (passHeld()) { return rawEngine(a.engine_).pluginIsStopped(key); }  // (the pass is parked in the hold)
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginIsStopped(key); });
+        if (passHeld()) { return th::engine(a).pluginIsStopped(key); }  // (the pass is parked in the hold)
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).pluginIsStopped(key); });
     }
     // (both are the API core's grants, under its lock: any thread)
     static bool tuneAllowed(AppWindow& a, const std::string& key) { return rawPluginUi(*a.pluginFeed_).tuneAllowed(key); }
     static bool settingsAllowed(AppWindow& a, const std::string& key) { return rawPluginUi(*a.pluginFeed_).settingsAllowed(key); }
     // (the core is built with the engine and never replaced; client() and the plugin-side calls take its lock)
-    static cascade::core::PluginApiCore& core(AppWindow& a) { return *rawEngine(a.engine_).pluginApi_; }
+    static cascade::core::PluginApiCore& core(AppWindow& a) { return *th::engine(a).pluginApi_; }
     static void addInventory(AppWindow& a, const cascade::core::InstalledPlugin& rec) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pluginInventory_.plugins.push_back(rec); });
+        passseam::on(th::engine(a), [&] { th::engine(a).pluginInventory_.plugins.push_back(rec); });
     }
     static void clearInventory(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pluginInventory_.plugins.clear(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).pluginInventory_.plugins.clear(); });
     }
     static void aLine(AppWindow& a, const std::string& plugin, const std::string& text) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).decoderLog_.push_back({plugin, text});
-            while (rawEngine(a.engine_).decoderLog_.size() > Engine::kDecoderLogMax) { rawEngine(a.engine_).decoderLog_.pop_front(); }
-            ++rawEngine(a.engine_).decoderLinesTotal_;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).decoderLog_.push_back({plugin, text});
+            while (th::engine(a).decoderLog_.size() > Engine::kDecoderLogMax) { th::engine(a).decoderLog_.pop_front(); }
+            ++th::engine(a).decoderLinesTotal_;
         });
     }
     // An environment variable the fixture reads when the pass creates its instance, set on the pass.
     static void envOnPass(AppWindow& a, const char* name, const std::string& value) {
-        passseam::on(rawEngine(a.engine_), [&] { setEnv(name, value); });
+        passseam::on(th::engine(a), [&] { setEnv(name, value); });
     }
 
     // STUB CAMPAIGN B5 (0.99.73, docs/engine-stage4.md 6.22): a fitted plugin runs only while it is USED, and in a hermetic frame nothing uses a decoder
@@ -268,7 +269,7 @@ struct AppWindowTestAccess {
     // instances to run - FED, a decoder's command keys - the plugins are PINNED to ALWAYS ("keep running"), the state the product has for a plugin the
     // user keeps running (test_decoders_mute_grants.cpp does the same, for the same reason).
     static void pinPlugins(AppWindow& a) {
-        Engine& e = rawEngine(a.engine_);
+        Engine& e = th::engine(a);
         passseam::on(e, [&] {
             std::vector<std::string> keys;
             for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
@@ -280,11 +281,11 @@ struct AppWindowTestAccess {
     static void resetDeck(AppWindow& a) { a.fittedDeck_ = std::make_unique<FittedModulesDeck>(); }
     static void addRecord(AppWindow& a, const cascade::core::InstalledPlugin& rec) { addInventory(a, rec); }
     static void setSites(AppWindow& a, const std::vector<std::string>& sites) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pluginSites_ = sites; });
+        passseam::on(th::engine(a), [&] { th::engine(a).pluginSites_ = sites; });
     }
     // A catalogue entry, as the engine holds one after a read (catalogSeq_ is what moves the table's fingerprint for it).
     static void addCatalogue(AppWindow& a, const std::string& id, const std::string& name, const std::string& category, const std::string& source = {}) {
-        passseam::on(rawEngine(a.engine_), [&] {
+        passseam::on(th::engine(a), [&] {
             cascade::core::PluginCatalogEntry ce;
             ce.id = id;
             ce.name = name;
@@ -294,20 +295,20 @@ struct AppWindowTestAccess {
             ce.category = category;
             ce.source = source;
             ce.abiVersion = CASCADE_PLUGIN_ABI_VERSION;
-            rawEngine(a.engine_).catalog_.push_back(ce);
-            ++rawEngine(a.engine_).catalogSeq_;
+            th::engine(a).catalog_.push_back(ce);
+            ++th::engine(a).catalogSeq_;
         });
     }
     static void clearCatalogue(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).catalog_.clear();
-            ++rawEngine(a.engine_).catalogSeq_;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).catalog_.clear();
+            ++th::engine(a).catalogSeq_;
         });
     }
     static void setOldCopies(AppWindow& a, const std::vector<cascade::core::SupersededPlugin>& copies, const std::string& report) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pluginOldCopies_ = copies;
-            rawEngine(a.engine_).pluginCleanupReport_ = report;
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).pluginOldCopies_ = copies;
+            th::engine(a).pluginCleanupReport_ = report;
         });
     }
     static FittedModulesDeck& openPage(AppWindow& a, const std::string& file) {
@@ -323,7 +324,7 @@ struct AppWindowTestAccess {
     // every module to it by the catalogue key, only then. Built on the pass; `allocs`, when given, gets what the build allocated, counted on the thread
     // that built it.
     static FittedModulesModel masterModel(AppWindow& a, const std::string& pageFile = std::string(), long* allocs = nullptr) {
-        return passseam::read<FittedModulesModel>(rawEngine(a.engine_), [&] {
+        return passseam::read<FittedModulesModel>(th::engine(a), [&] {
             const long mark = t_allocs;
             FittedModulesModel m = masterModelOnPass(a, pageFile);
             if (allocs != nullptr) { *allocs += t_allocs - mark; }
@@ -344,7 +345,7 @@ struct AppWindowTestAccess {
         return std::string();
     }
     static FittedModulesModel masterModelOnPass(AppWindow& a, const std::string& pageFile) {
-        Engine& e = rawEngine(a.engine_);
+        Engine& e = th::engine(a);
         FittedModulesModel model;
         model.directory = e.pluginDir_;
         model.receiverRunning = e.pipeline_.running();
@@ -446,9 +447,9 @@ struct AppWindowTestAccess {
         return s;
     }
     static std::vector<std::string> masterCatalogueIds(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] {
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] {
             std::vector<std::string> ids;
-            for (const cascade::core::PluginCatalogEntry& ce : rawEngine(a.engine_).catalog_) {
+            for (const cascade::core::PluginCatalogEntry& ce : th::engine(a).catalog_) {
                 ids.push_back(cascade::core::PluginRepo::catalogueKey(ce.source, ce.id));
             }
             return ids;
@@ -500,7 +501,7 @@ void junk(const std::string& file) {
 // A window with the three fixtures loaded and the refused file in the folder (put back: a scenario may remove it), its
 // state read and its window open.
 struct Fresh {
-    AppWindow app;
+    th::TestWindow app;
     // `pin`: the fitted modules are kept running (ALWAYS), the state the product has for a plugin the user keeps - so their instances exist and
     // are FED, which B to E read; F and the first state of A are the ones that leave them to the engine's own decision (AUTO: asleep).
     explicit Fresh(bool pin = true) {

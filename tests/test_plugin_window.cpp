@@ -52,6 +52,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/map_view.hpp"
@@ -82,7 +83,7 @@ struct AppWindowTestAccess {
     // product has for a plugin the user keeps running. What the test holds is unchanged: what a RUNNING plugin's targets, panels,
     // pictures and rows are, as the window shows them. (How a plugin comes to run: tests/test_engine_api_03.cpp group N.)
     static void pinPlugins(AppWindow& a) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         passseam::on(e, [&] {
             std::vector<std::string> keys;
             for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
@@ -101,19 +102,19 @@ struct AppWindowTestAccess {
 
     // ---- one frame's engine part, in drawUi's order ----------------------------------------------------------------------
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
-        passseam::workers(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpWorkers();
-            rawEngine(a.engine_).pumpAudio();
+        passseam::workers(th::engine(a), [&] {
+            th::engine(a).pumpWorkers();
+            th::engine(a).pumpAudio();
         });
     }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.uiSubmit(q); }
@@ -127,20 +128,20 @@ struct AppWindowTestAccess {
     static void pumpEvents(AppWindow& a) { a.pumpUiEvents(); }
     // What the window hands the engine once a frame (the track-info answers, the pictures' headers), and what a browser reads.
     static void hand(AppWindow& a) { a.handFrontEndFacts(); }
-    static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
+    static cascade::net::RadioStatus webStatus(AppWindow& a) { return th::engine(a).webStatusNow(); }
     // The track list the window hands the engine, replaced by one a test built (stub campaign B16: the web status' staleness rule takes a track's flags).
     static void handTracks(AppWindow& a, const std::vector<cascade::core::HostTrack>& polled) {
-        cascade::engine::FrontEndFacts f = rawEngine(a.engine_).frontEndFacts();
+        cascade::engine::FrontEndFacts f = th::engine(a).frontEndFacts();
         auto feed = std::make_shared<cascade::engine::TrackFeed>();
         feed->polled = polled;
         f.trackFeed = feed;
-        rawEngine(a.engine_).setFrontEndFacts(f);
+        th::engine(a).setFrontEndFacts(f);
     }
     static void attachTrackInfo(AppWindow& a, const CascadeTrackInfoApi* api) { a.trackInfo_.attach(api); }
     static void sendTrackInfoText(AppWindow& a) { a.sendTrackInfoText(); }
     // The engine's image feed (stage 5e): the cycle its worker makes while a web server listens - poll, encode what changed, publish the set and the
     // headers - made by hand, since no server listens in this test.
-    static void cycleImages(AppWindow& a) { rawEngine(a.engine_).servers().images().cycleForTest(); }
+    static void cycleImages(AppWindow& a) { th::engine(a).servers().images().cycleForTest(); }
     static const AppWindow::DecoderLineCache& decoderLines(AppWindow& a) { return a.decoderLines(); }
     static const SpectrumView& spectrum(AppWindow& a) { return *a.spectrum_; }
     // the eight accessors
@@ -168,9 +169,9 @@ struct AppWindowTestAccess {
     static bool& scopeMode(AppWindow& a) { return a.scopeMode_; }
     static void tap(AppWindow& a, std::vector<cmd::QueuedCommand>* log) { a.uiSubmitTap_ = log; }
     static std::size_t engineReports(AppWindow& a, const std::string& file) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] {
-            const auto it = rawEngine(a.engine_).pluginUseReported_.find(cascade::core::pluginRunId(file));
-            return it == rawEngine(a.engine_).pluginUseReported_.end() ? std::size_t{0} : static_cast<std::size_t>(it->second);
+        return passseam::read<std::size_t>(th::engine(a), [&] {
+            const auto it = th::engine(a).pluginUseReported_.find(cascade::core::pluginRunId(file));
+            return it == th::engine(a).pluginUseReported_.end() ? std::size_t{0} : static_cast<std::size_t>(it->second);
         });
     }
     static CoverageMap& coverage(AppWindow& a) { return a.coverage_; }
@@ -184,8 +185,8 @@ struct AppWindowTestAccess {
     // The engine's plugin host's records: a COPY made on the pass's thread (the pass owns the host; a reference into it
     // would be read from this thread beside a free-running pass).
     static std::vector<cascade::core::LoadedPlugin> loaded(AppWindow& a) {
-        return passseam::read<std::vector<cascade::core::LoadedPlugin>>(rawEngine(a.engine_),
-                                                                          [&] { return rawEngine(a.engine_).pluginHost_.plugins(); });
+        return passseam::read<std::vector<cascade::core::LoadedPlugin>>(th::engine(a),
+                                                                          [&] { return th::engine(a).pluginHost_.plugins(); });
     }
     static const AppWindow::PluginListCache& pluginRows(AppWindow& a) { return a.pluginLists(); }
     static std::string fact(AppWindow& a, const char* key) {
@@ -197,13 +198,13 @@ struct AppWindowTestAccess {
     // (passseam::on); the runner is fed and counted directly: PluginRunner guards every call with its own mutex (the product
     // feeds it from the audio thread beside the pass), and pluginRunner_ is a member the engine never replaces.
     static void engineSetPosition(AppWindow& a, double lat, double lon) {
-        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyReceiverPosition(lat, lon); });
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).applyReceiverPosition(lat, lon); });
     }
     static void feedAudio(AppWindow& a, std::size_t frames) {
         std::vector<float> mono(frames, 0.0f);
-        rawEngine(a.engine_).pluginRunner_.processAudio(mono.data(), frames);
+        th::engine(a).pluginRunner_.processAudio(mono.data(), frames);
     }
-    static std::size_t activeDecoders(AppWindow& a) { return rawEngine(a.engine_).pluginRunner_.activeCount(); }
+    static std::size_t activeDecoders(AppWindow& a) { return th::engine(a).pluginRunner_.activeCount(); }
 };
 
 }  // namespace cascade::gui
@@ -288,9 +289,9 @@ void drawPlugins(AppWindow& a, bool capture = false) {
 }
 
 struct Env {
-    std::unique_ptr<AppWindow> app;
+    std::unique_ptr<th::TestWindow> app;
     Env() {
-        app = std::make_unique<AppWindow>();
+        app = std::make_unique<th::TestWindow>();
         Access::pinPlugins(*app);
         passes(*app, 3);
     }

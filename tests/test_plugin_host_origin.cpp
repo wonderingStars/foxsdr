@@ -52,6 +52,7 @@
 #include "core/plugin_host.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/plugins_view.hpp"
 #include "test_check.hpp"
@@ -67,13 +68,13 @@ namespace cascade::gui {
 
 struct AppWindowTestAccess {
     // THE ENGINE'S PLUGIN SYSTEM, on the pass's own thread (tests/pass_seam.hpp); what is read out is a COPY made there.
-    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
-    static void takeDown(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).detachAndUnloadPlugins(); }); }
+    static void rescan(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPlugins(); }); }
+    static void takeDown(AppWindow& a) { passseam::on(th::engine(a), [&] { (void)th::engine(a).detachAndUnloadPlugins(); }); }
     static std::vector<LoadedPlugin> plugins(AppWindow& a) {
-        return passseam::read<std::vector<LoadedPlugin>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginHost_.plugins(); });
+        return passseam::read<std::vector<LoadedPlugin>>(th::engine(a), [&] { return th::engine(a).pluginHost_.plugins(); });
     }
     static bool scanSkippable(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginScanSigValid_; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).pluginScanSigValid_; });
     }
 };
 
@@ -283,7 +284,7 @@ void testAppWindow() {
     writeText(dir / "installed.json", manifestWith("", site));
     DiagLog::instance().resetForTest();
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         // (A COPY of the engine's records, made on the pass: the pointers below point into it, so it lives as long as they are used.)
         std::vector<LoadedPlugin> snap = Access::plugins(app);
         const LoadedPlugin* o = recordFor(snap, modName(kOld));

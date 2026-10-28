@@ -5,7 +5,7 @@
 // transmitter, the arming window, the grant and the plugin runner through `a.transmitter_`, `a.txArming_`, `a.armTransmitPlugins`, `a.applyPluginTransmitKey`,
 // `a.afterTransmitTick` ... - members this branch's window does not have, because a plugin's key is the ENGINE's (src/engine/engine_tx_plugin.cpp): the grant, the arming
 // window and the decision are decided on the engine's pass, so a window that stops cannot leave a plugin able to key. The house pattern (tests/test_programme_audio_app.cpp):
-// rawEngine(a.engine_) through AppWindowTestAccess, tests/pass_seam.hpp for every call that must run on the pass thread - so the test is registered again as _stepped, and
+// th::engine(a) through AppWindowTestAccess, tests/pass_seam.hpp for every call that must run on the pass thread - so the test is registered again as _stepped, and
 // the same assertions run against the pass on its own thread - and the PAGE is a stand-in that sends exactly the commands the real page sends (tx_front_end.hpp's
 // FrontEnd for the key, gui::txPluginArmCommands for the window), because there is no ImGui frame here.
 //   * frame() is the page's frame: the heartbeat, the key's commands (PTT), the arming window's commands (ARM, "still here", OFF), then ONE pass of the engine - whose key
@@ -82,6 +82,7 @@
 #include "core/plugin_host.hpp"
 #include "core/plugin_run.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/transmit_page.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
@@ -213,7 +214,7 @@ struct Counts {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
+    static cascade::engine::Engine& eng(AppWindow& a) { return th::engine(a); }
     static void rescan(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).rescanPlugins(); }); }
     static void start(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).startReceiver(); }); }
     static void stop(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).stopReceiver("test"); }); }
@@ -436,7 +437,7 @@ void dumpTxLog(const char* where) {
 // A window with the fixture loaded, pinned to run, and the receiver running, so the module is
 // being polled by the pipeline's DSP thread. The module's flag starts OFF.
 struct Rig {
-    std::unique_ptr<AppWindow> app = std::make_unique<AppWindow>();
+    std::unique_ptr<th::TestWindow> app = std::make_unique<th::TestWindow>();
     FakeTxRadio* radio = nullptr;
     std::string file = std::string(kFile) + kExt;
     Counts base;  // what the module had counted before this window's first call to it

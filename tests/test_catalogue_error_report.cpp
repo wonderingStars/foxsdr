@@ -37,6 +37,7 @@
 #include "engine/engine.hpp"
 #include "engine/engine_host.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
@@ -80,7 +81,7 @@ struct AppWindowTestAccess {
         e.catalogPending_ = true;
     }
     static void poll(Engine& e) { e.pollPluginAsync(); }
-    static Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
+    static Engine& engine(AppWindow& a) { return th::engine(a); }
     static void armPluginTest(AppWindow& a) { a.pluginTestHook_ = "http://127.0.0.1:9/catalogue.json"; }
     // What the window hands the engine once a frame (handFrontEndFacts): here, the report switch and the frame it names.
     static void handFacts(AppWindow& a, int frame) {
@@ -134,7 +135,7 @@ int main() {
     // onCatalogueResult hook used to read the window's own frame counter from the engine's pass.
     ImGuiContext* ctx = ImGui::CreateContext();
     {
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         const auto captured = [&](const std::function<void()>& body) {
             const std::string out = (scratch / "report.txt").string();
             std::fflush(stdout);

@@ -54,6 +54,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
@@ -99,20 +100,20 @@ struct AppWindowTestAccess {
         Engine::testHooks_.serialPorts = &ports;
     }
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pollGpsReader();  // (run() takes the reader's fix before the frame, ahead of the pass)
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pollGpsReader();  // (run() takes the reader's fix before the frame, ahead of the pass)
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
-        passseam::workers(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpWorkers();
-            rawEngine(a.engine_).pumpAudio();
+        passseam::workers(th::engine(a), [&] {
+            th::engine(a).pumpWorkers();
+            th::engine(a).pumpAudio();
         });
     }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.uiSubmit(q); }
@@ -141,13 +142,13 @@ struct AppWindowTestAccess {
     // The engine's reader and its refusal line are the pass's: each reach goes through passseam::on/read (on the pass's thread
     // with the pass out of the way when it free-runs; right here otherwise).
     static void gpsOpener(AppWindow& a, cascade::core::GpsReader::Opener op) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).gpsReader_.setOpenerForTest(std::move(op)); });
+        passseam::on(th::engine(a), [&] { th::engine(a).gpsReader_.setOpenerForTest(std::move(op)); });
     }
     static cascade::core::GpsReader::Status gpsStatus(AppWindow& a) {
-        return passseam::read<cascade::core::GpsReader::Status>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).gpsReader_.status(); });
+        return passseam::read<cascade::core::GpsReader::Status>(th::engine(a), [&] { return th::engine(a).gpsReader_.status(); });
     }
-    static void gpsStop(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).gpsReader_.stop(); }); }
-    static void setRefusal(AppWindow& a, const std::string& s) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).gpsRefusal_ = s; }); }
+    static void gpsStop(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).gpsReader_.stop(); }); }
+    static void setRefusal(AppWindow& a, const std::string& s) { passseam::on(th::engine(a), [&] { th::engine(a).gpsRefusal_ = s; }); }
 };
 
 }  // namespace cascade::gui
@@ -335,10 +336,10 @@ void closePopups() {
 }
 
 struct Env {
-    std::unique_ptr<AppWindow> app;
+    std::unique_ptr<th::TestWindow> app;
     Env() {
         closePopups();
-        app = std::make_unique<AppWindow>();
+        app = std::make_unique<th::TestWindow>();
         Access::gpsOpener(*app, &openWire);
         passes(*app, 3);
     }

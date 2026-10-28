@@ -79,6 +79,7 @@
 #include "core/recorder.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/siggen_source.hpp"
 #include "test_check.hpp"
@@ -94,16 +95,16 @@ namespace cascade::gui {
 struct AppWindowTestAccess {
     // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp); the radios and the destination are driven directly with
     // the pass stepped or out of the way.
-    static void setSeams(AppWindow& a, pc::DestSeams s) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchDestSeams_ = std::move(s); }); }
-    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = std::move(d); }); }
+    static void setSeams(AppWindow& a, pc::DestSeams s) { passseam::on(th::engine(a), [&] { th::engine(a).patchDestSeams_ = std::move(s); }); }
+    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(th::engine(a), [&] { th::engine(a).recordDir_ = std::move(d); }); }
 
     // A patch as the parts bin builds it - a radio, a channel, a demodulator and a speaker wired behind - with the radio RUNNING on the signal
     // generator, as a patch radio is, so its reader thread feeds the speaker for real. `device` is the speaker's output key ("" is the
     // default, a WAV file; "mp3").
     static pc::NodeId buildSpeakerPatch(AppWindow& a, const std::string& device, bool start) {
         a.patchSeeded_ = true;
-        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
-            cascade::engine::Engine& e = rawEngine(a.engine_);
+        return passseam::read<pc::NodeId>(th::engine(a), [&] {
+            cascade::engine::Engine& e = th::engine(a);
             const pc::NodeId r = e.patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq);
             const pc::NodeId c = e.patchGraph_.addNode(pc::NodeKind::Channel, "Tone", pc::PortType::Iq);
             const pc::NodeId d = e.patchGraph_.addNode(pc::NodeKind::Demod, "AM", pc::PortType::Iq);
@@ -130,23 +131,23 @@ struct AppWindowTestAccess {
     }
 
     // What the patch page calls once a pass, after the plan is compiled.
-    static void publish(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchPublishSets(); }); }
+    static void publish(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).patchPublishSets(); }); }
 
     static std::shared_ptr<pc::AudioDest> destOf(AppWindow& a, pc::NodeId sink) {
-        return passseam::read<std::shared_ptr<pc::AudioDest>>(rawEngine(a.engine_), [&] { return pc::destFor(rawEngine(a.engine_).patchDests_, sink); });
+        return passseam::read<std::shared_ptr<pc::AudioDest>>(th::engine(a), [&] { return pc::destFor(th::engine(a).patchDests_, sink); });
     }
-    static bool published(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return !rawEngine(a.engine_).patchRadioSig_.empty(); }); }
-    static auto& radios(AppWindow& a) { return rawEngine(a.engine_).patchRadios_; }
+    static bool published(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return !th::engine(a).patchRadioSig_.empty(); }); }
+    static auto& radios(AppWindow& a) { return th::engine(a).patchRadios_; }
     static std::string destError(AppWindow& a, pc::NodeId sink) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] {
-            const auto it = rawEngine(a.engine_).patchDestError_.find(sink);
-            return it == rawEngine(a.engine_).patchDestError_.end() ? std::string() : it->second;
+        return passseam::read<std::string>(th::engine(a), [&] {
+            const auto it = th::engine(a).patchDestError_.find(sink);
+            return it == th::engine(a).patchDestError_.end() ? std::string() : it->second;
         });
     }
     // The page closing: radios stop and are destroyed, then the outputs go.
     static void closeRadios(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            cascade::engine::Engine& e = rawEngine(a.engine_);
+        passseam::on(th::engine(a), [&] {
+            cascade::engine::Engine& e = th::engine(a);
             for (auto& [id, radio] : e.patchRadios_) {
                 (void)id;
                 radio->stop();
@@ -338,7 +339,7 @@ std::vector<fs::path> filesIn(const std::string& dir, const char* ext) {
 // was opening - a fix that merely dropped the speaker's file would pass everything
 // but the last of these.
 void checkAppWindowWavNeverHoldsAFrame() {
-    AppWindow app;
+    th::TestWindow app;
     auto disk = makeDisk(2500);
     pc::DestSeams seams;
     seams.wavOpener = slowOpener(disk);
@@ -396,7 +397,7 @@ void checkAppWindowMp3NeverHoldsAFrame() {
         SKIP_LINUX("no MP3 encoder on this build: the patch writes WAV instead");
         return;
     }
-    AppWindow app;
+    th::TestWindow app;
     auto disk = makeDisk(2500);
     pc::DestSeams seams;
     seams.makeDirectory = slowMakeDirectory(disk);
@@ -436,7 +437,7 @@ void checkRetiringAnMp3SpeakerNeverHoldsAFrame() {
         SKIP_LINUX("no MP3 encoder on this build: the patch writes WAV instead");
         return;
     }
-    AppWindow app;
+    th::TestWindow app;
     auto disk = makeDisk(2500);
     pc::DestSeams seams;
     seams.makeDirectory = slowMakeDirectory(disk);
@@ -694,7 +695,7 @@ void checkExitWhileASpeakerFileIsOpening() {
     auto disk = makeDisk(2500);
     double destroyMs = 0.0;
     {
-        auto app = std::make_unique<AppWindow>();
+        auto app = std::make_unique<th::TestWindow>();
         pc::DestSeams seams;
         seams.wavOpener = countingOpener(disk);
         Access::setSeams(*app, seams);

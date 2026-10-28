@@ -35,7 +35,7 @@
 //
 // CONVERTED FOR THE ENGINE'S TABLE (stub campaign B19; the 0.99.84 house pattern, docs/engine-stage4.md 6.22). The Open key sends
 // SELECT_SOURCE "file:<path>" and the source it opens is the ENGINE's, so the worker is the engine's too (src/engine/engine_disk_work.cpp:
-// Engine::openIqFile asks, Engine::pollIqOpen installs, once a pass, in pumpWorkers), and the case reads what the engine holds (rawEngine)
+// Engine::openIqFile asks, Engine::pollIqOpen installs, once a pass, in pumpWorkers), and the case reads what the engine holds (th::engine)
 // after the frame that carries the press to it. What master's test said of the window is said here of the pass: the frame loop beats
 // between frames, and a frame that waits on the disk is a gap the watchdog reports. The assertions are master's; where master asserted a
 // state the instant the key was pressed (a job pending, "nothing installed yet"), the case runs the frame that carries the key first
@@ -79,6 +79,7 @@
 #include "core/recorder.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "source/iq_file_source.hpp"
 #include "test_check.hpp"
 
@@ -123,7 +124,7 @@ namespace cascade::gui {
 
 // The friend AppWindow names for the test files that drive its private members.
 struct AppWindowTestAccess {
-    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
+    static cascade::engine::Engine& eng(AppWindow& a) { return th::engine(a); }
 
     static void bindFactory(AppWindow& a, std::function<std::unique_ptr<IqFileSource>()> f) { eng(a).iqFileFactory_ = std::move(f); }
     // The engine's slow-disk seam: called by the open's worker immediately before it touches the file.
@@ -301,7 +302,7 @@ void checkAppWindowOpenNeverHoldsAFrame() {
     auto disk = std::make_shared<SlowDisk>();
     disk->blockMs.store(2500);
     const std::string path = makeRecording("app-slow");
-    AppWindow app;
+    th::TestWindow app;
     Access::bindFactory(app, [disk]() -> std::unique_ptr<IqFileSource> { return std::make_unique<SlowIqFile>(disk); });
     Access::setPath(app, path);
 
@@ -342,13 +343,13 @@ void checkAppWindowOpenNeverHoldsAFrame() {
 // The same file through the synchronous path - what the button used to do - and the new one end in the same state.
 void checkTheAsyncOpenEqualsTheSyncOpen() {
     const std::string path = makeRecording("equal");
-    AppWindow viaWorker;
+    th::TestWindow viaWorker;
     Access::setPath(viaWorker, path);
     Access::open(viaWorker);
     CHECK(pumpApp(viaWorker, 5000.0, [&] { return Access::sourceKind(viaWorker) == "file"; }));
     checkInstalledAsTheSynchronousOpenInstalledIt(viaWorker, path);
 
-    AppWindow direct;
+    th::TestWindow direct;
     auto file = std::make_unique<IqFileSource>();
     CHECK(file->open(path));
     Access::installOpened(direct, std::move(file), path);
@@ -375,7 +376,7 @@ void checkAFailedOpenSaysWhatTheSyncOpenSaid() {
 
         auto disk = std::make_shared<SlowDisk>();
         disk->blockMs.store(400);
-        AppWindow app;
+        th::TestWindow app;
         Access::bindFactory(app, [disk]() -> std::unique_ptr<IqFileSource> { return std::make_unique<SlowIqFile>(disk); });
         // A file that is not there is refused before any header is read, so the factory's slow read never runs for it: the engine's own seam,
         // called by the worker before it touches the file, is what makes the open take its 400 ms in both cases.
@@ -417,7 +418,7 @@ void checkAResultAfterTheChoiceMovedOnIsDropped() {
     auto disk = std::make_shared<SlowDisk>();
     disk->blockMs.store(600);
     const std::string path = makeRecording("moved-on");
-    AppWindow app;
+    th::TestWindow app;
     Access::bindFactory(app, [disk]() -> std::unique_ptr<IqFileSource> { return std::make_unique<CountedIqFile>(disk); });
     Access::setPath(app, path);
     Access::open(app);
@@ -441,7 +442,7 @@ void checkExitWhileTheOpenIsWedged() {
     const std::string path = makeRecording("exit");
     double destroyMs = 0.0;
     {
-        auto app = std::make_unique<AppWindow>();
+        auto app = std::make_unique<th::TestWindow>();
         Access::bindFactory(*app, [disk]() -> std::unique_ptr<IqFileSource> { return std::make_unique<CountedIqFile>(disk); });
         Access::setPath(*app, path);
         Access::open(*app);

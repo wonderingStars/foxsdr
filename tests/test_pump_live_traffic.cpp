@@ -33,6 +33,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pump3_support.hpp"
 #include "source/tx_sink.hpp"
 #include "test_check.hpp"
@@ -106,9 +107,9 @@ private:
 };
 
 struct Env {
-    std::unique_ptr<AppWindow> app;
+    std::unique_ptr<th::TestWindow> app;
     Env() {
-        app = std::make_unique<AppWindow>();
+        app = std::make_unique<th::TestWindow>();
         Access::pinPlugins(*app);
         Access::poll(*app);
     }

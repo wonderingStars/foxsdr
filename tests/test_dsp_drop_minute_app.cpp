@@ -66,6 +66,7 @@
 #include "core/pipeline.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/iq_source.hpp"
 #include "test_check.hpp"
@@ -217,11 +218,11 @@ namespace cascade::gui {
 
 struct AppWindowTestAccess {
     // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp), as tests/test_audio_lead_app.cpp does.
-    static cascade::core::Pipeline& pipeline(AppWindow& a) { return rawEngine(a.engine_).pipeline_; }
-    static void closeDspMinute(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).closeDspMinute(); }); }
+    static cascade::core::Pipeline& pipeline(AppWindow& a) { return th::engine(a).pipeline_; }
+    static void closeDspMinute(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).closeDspMinute(); }); }
     // What the engine's pass does every pass: publish the ring counters for the bundle (and close a minute if sixty seconds passed -
     // they have not, in a test).
-    static void pollDspMinute(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollDspMinute(); }); }
+    static void pollDspMinute(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).pollDspMinute(); }); }
     static std::string bundle(AppWindow& a) { return a.currentDiagnosticsBundle(); }
 };
 
@@ -256,7 +257,7 @@ int main() {
         CHECK(std::strlen(longest) < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
     }
 
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     cascade::core::Pipeline& p = Access::pipeline(app);
     auto owned = std::make_unique<BudgetSource>();
     BudgetSource* src = owned.get();

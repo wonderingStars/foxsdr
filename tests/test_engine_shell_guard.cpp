@@ -27,6 +27,9 @@
 //      the ops that name a row by position are a reviewed set; the plugin UI is the window's (the host feed applies the directive
 //      before any reference into it is taken); the data header split (the views take core/plugin_ui_data.hpp); no ImGui input in the
 //      window's machinery.
+//   6. THE TEST HOST (shell retirement R1): tests reach the Engine behind a window through th::engine and build windows as
+//      th::TestWindow (tests/test_host.hpp); rawEngine is named in code by the shell's two files and that header alone, the window has
+//      exactly one TestHostAccess friend, and no test constructs an AppWindow by that name.
 //
 // PROVEN RED (docs/engine-stage4.md, the closing section): a method added to engine_shell.hpp with no call, a call from a widget, a
 // section without its date, a stub-less deny list ...; and the compiler's half by tests/CMakeLists.txt's interface_fence_* probes,
@@ -135,6 +138,13 @@ const char* const kMustDeny[] = {"engine/engine.hpp",       "engine/engine_host.
                                  // src/net, denied whole by stage 5f (the servers are the engine's)
                                  "net/web_server.hpp",       "net/cat_server.hpp",     "net/web_session.hpp",       "net/status_compose.hpp"};
 constexpr std::size_t kAllowedEngineHeadersBudget = 13;
+
+// THE TEST HOST (shell retirement R1, 2026-10-28; docs/engine-stage4.md 6.25). The files that NAME rawEngine in code, in src/ and tests/ together:
+// 72 before R1 (69 window tests, pump3_support.hpp's local access, the shell's two files, and the comment-only mentions the code scan blanks),
+// 3 after - the shell's declaration and definition (they go with the shell, R10) and tests/test_host.hpp, the one audited place a test reaches
+// the Engine behind its window. The budget only goes down: 1 at R10, when rawEngine itself is deleted.
+constexpr int kRawEngineFilesBudget = 3;
+const char* const kRawEngineAllowed[] = {"src/engine/engine_shell.hpp", "src/engine/engine_shell.cpp", "tests/test_host.hpp"};
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -1115,6 +1125,105 @@ void checkDataHeaderSplit(const fs::path& root) {
     }
 }
 
+// ----------------------------------------------------------------------------------------------------------------------------------
+// THE TEST HOST (shell retirement R1). Tests reach the Engine behind a window through th::engine(window) and build their windows as
+// th::TestWindow, both from tests/test_host.hpp; nothing else names rawEngine, and no test constructs an AppWindow by any other name.
+// ----------------------------------------------------------------------------------------------------------------------------------
+std::vector<fs::path> sourcesUnder(const fs::path& dir) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) { continue; }
+        const std::string ext = it->path().extension().string();
+        if (ext == ".cpp" || ext == ".hpp" || ext == ".h") { out.push_back(it->path()); }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+void checkTheTestHost(const fs::path& root, bool rootGiven) {
+    std::printf("the test host\n");
+    const fs::path testsDir = root / "tests";
+    std::error_code ec;
+    if (rootGiven && !fs::exists(testsDir, ec)) {
+        std::printf("  (probe copy without tests/: the test-host check is skipped)\n");
+        return;
+    }
+    const std::string host = readFile(testsDir / "test_host.hpp");
+    CHECK(!host.empty());
+
+    // 1. rawEngine is named in code by exactly the allowed files (comments and strings do not count: they are blanked)
+    std::vector<fs::path> all = sourcesUnder(root / "src");
+    const std::vector<fs::path> tests = sourcesUnder(testsDir);
+    all.insert(all.end(), tests.begin(), tests.end());
+    int named = 0;
+    int stray = 0;
+    for (const fs::path& p : all) {
+        bool hit = false;
+        for (const std::string& l : codeLines(readFile(p))) {
+            if (l.find("rawEngine") != std::string::npos) {
+                hit = true;
+                break;
+            }
+        }
+        if (!hit) { continue; }
+        ++named;
+        const std::string rel = fs::relative(p, root).generic_string();
+        bool allowed = false;
+        for (const char* a : kRawEngineAllowed) { allowed = allowed || rel == a; }
+        if (!allowed) {
+            ++stray;
+            std::printf("FAIL: %s names rawEngine - a test reaches the Engine through th::engine (tests/test_host.hpp), the one audited place\n", rel.c_str());
+        }
+    }
+    std::printf("  rawEngine is named in code by %d files (budget %d: the shell's two and tests/test_host.hpp)\n", named, kRawEngineFilesBudget);
+    CHECK(stray == 0);
+    CHECK(named <= kRawEngineFilesBudget);
+    // the host does name it, and through ONE friend of the window, which no other src/ file names
+    CHECK(host.find("rawEngine") != std::string::npos);
+    int friends = 0;
+    int namingTheKey = 0;
+    for (const fs::path& p : sourcesUnder(root / "src")) {
+        for (const std::string& l : codeLines(readFile(p))) {
+            if (l.find("TestHostAccess") != std::string::npos) {
+                ++namingTheKey;
+                if (l.find("friend struct TestHostAccess;") != std::string::npos) { ++friends; }
+            }
+        }
+    }
+    std::printf("  TestHostAccess: %d friend declaration(s), %d code line(s) naming it in src/ (expect 1 and 1)\n", friends, namingTheKey);
+    CHECK(friends == 1);
+    CHECK(namingTheKey == 1);
+
+    // 2. no test constructs an AppWindow by its own name: every window a test builds is a th::TestWindow (R7 makes that type own the
+    // Engine and its service; a bare AppWindow made anywhere else would then be a window with no engine behind it)
+    static const std::regex decl(R"((^|[^\w:])(cascade::gui::|g::)?AppWindow\s+\w+\s*[;({=])");
+    static const std::regex newed(R"(\bnew\s+(cascade::gui::|g::)?AppWindow\b)");
+    static const std::regex made(R"((make_unique|make_shared|unique_ptr|shared_ptr)\s*<\s*(cascade::gui::|g::)?AppWindow\s*>)");
+    int bare = 0;
+    for (const fs::path& p : tests) {
+        if (p.filename() == "test_host.hpp") { continue; }
+        for (const std::string& l : codeLines(readFile(p))) {
+            if (std::regex_search(l, newed) || std::regex_search(l, made)) {
+                ++bare;
+                std::printf("FAIL: %s builds an AppWindow by that name: %s\n", p.filename().string().c_str(), l.c_str());
+                continue;
+            }
+            std::smatch m;
+            if (std::regex_search(l, m, decl)) {
+                const std::string before = l.substr(0, static_cast<std::size_t>(m.position(0)));
+                const bool keyword = before.find("friend") != std::string::npos || before.find("class") != std::string::npos ||
+                                     before.find("struct") != std::string::npos || before.find("using") != std::string::npos;
+                if (!keyword) {
+                    ++bare;
+                    std::printf("FAIL: %s builds an AppWindow by that name: %s\n", p.filename().string().c_str(), l.c_str());
+                }
+            }
+        }
+    }
+    CHECK(bare == 0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1137,5 +1246,6 @@ int main(int argc, char** argv) {
     checkRetiredHooks(root);
     checkPluginUiOwnership(root);
     checkDataHeaderSplit(root);
+    checkTheTestHost(root, argc > 1);
     return testSummary("test_engine_shell_guard");
 }

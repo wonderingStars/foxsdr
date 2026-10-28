@@ -33,6 +33,7 @@
 #include "engine/airspy_panel.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "engine/device_scan_plan.hpp"
 #include "engine/tune_control.hpp"
@@ -151,52 +152,52 @@ struct AppWindowTestAccess {
     // Picks the one native row and waits for the worker's answer.
     static bool select(AppWindow& a) {
         int row = -1;
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).scanNative();
-            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
-                if (rawEngine(a.engine_).nativeDevices_[i].driver != "hydrasdr") { continue; }
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).scanNative();
+            for (std::size_t i = 0; i < th::engine(a).nativeDevices_.size(); ++i) {
+                if (th::engine(a).nativeDevices_[i].driver != "hydrasdr") { continue; }
                 row = AppWindow::kNativeRowBase + static_cast<int>(i);
-                rawEngine(a.engine_).selectSource(row);
+                th::engine(a).selectSource(row);
                 break;
             }
         });
         if (row < 0) { return false; }
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
+        while (passseam::read<bool>(th::engine(a), [&] { return th::engine(a).deviceOpenPending_; })) {
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).device_ != nullptr; });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).device_ != nullptr; });
     }
-    static cascade::source::AirspySource* radio(AppWindow& a) { return cascade::gui::asAirspy(rawEngine(a.engine_).device_); }
-    static cascade::source::DeviceSource* device(AppWindow& a) { return rawEngine(a.engine_).device_; }
+    static cascade::source::AirspySource* radio(AppWindow& a) { return cascade::gui::asAirspy(th::engine(a).device_); }
+    static cascade::source::DeviceSource* device(AppWindow& a) { return th::engine(a).device_; }
     static std::vector<std::string> gainNames(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceGainNames_; });
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] { return th::engine(a).deviceGainNames_; });
     }
     static std::vector<std::string> antennas(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceAntennas_; });
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] { return th::engine(a).deviceAntennas_; });
     }
     static std::vector<std::string> rateLabels(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceRateLabels_; });
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] { return th::engine(a).deviceRateLabels_; });
     }
     static std::string sourceError(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceError_; });
     }
     static std::string sourceKind(AppWindow& a) {
-        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceKind_; });
+        return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).sourceKind_; });
     }
     static bool mode(AppWindow& a, cascade::source::AirspySource::GainMode m) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyGainMode(m); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).chooseAirspyGainMode(m); });
     }
     static bool decimate(AppWindow& a, unsigned d) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyDecimation(d); });
+        return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).chooseAirspyDecimation(d); });
     }
     static cascade::core::AppConfig config(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishConfig(); });
         return a.currentConfig();
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(c); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(th::engine(a), [&] { a.applyConfig(c); }); }
 };
 
 }  // namespace cascade::gui
@@ -213,7 +214,7 @@ int main() {
     cascade::core::AppConfig saved;
     {
         auto g = fresh();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::select(app));
         cascade::source::DeviceSource* dev = Access::device(app);
         CHECK(dev != nullptr);
@@ -251,7 +252,7 @@ int main() {
         cascade::core::AppConfig cfg = saved;
         cfg.sourceKind = "hydrasdr";
         cfg.nativeArgs = kArgs;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, cfg);
         cascade::source::AirspySource* a = Access::radio(app);
         CHECK(a != nullptr);
@@ -283,7 +284,7 @@ int main() {
         s.decimation = 8;
         cfg.airspy.clear();
         cfg.airspy[kKey] = s;
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         Access::restore(app, cfg);
         CHECK(Access::select(app));
         cascade::source::AirspySource* a = Access::radio(app);
@@ -300,7 +301,7 @@ int main() {
     {
         auto g = fresh();
         g_real.store(true);
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(!Access::select(app));
         g_real.store(false);
         std::string only;

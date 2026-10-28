@@ -53,6 +53,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "gui/fonts.hpp"
 #include "gui/ui_census.hpp"
 #include "imgui.h"
@@ -134,13 +135,13 @@ struct AppWindowTestAccess {
     }
     // One frame's engine part, in drawUi's order: the session's queue taken, the publish, the status copy, the window's read of the state.
     static void look(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            (void)th::engine(a).pumpPublish();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();
+        a.statusLines_ = th::engine(a).statusText();
         a.refreshUiState();
     }
     // The Recorder section alone, in a window of this test's own.
@@ -153,28 +154,28 @@ struct AppWindowTestAccess {
     }
 
     static void bindOpener(AppWindow& a, Recorder::Opener o) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).iqRecorder_.bindOpener(o);
-            rawEngine(a.engine_).audioRecorder_.bindOpener(std::move(o));
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).iqRecorder_.bindOpener(o);
+            th::engine(a).audioRecorder_.bindOpener(std::move(o));
         });
     }
     static Recorder::Opener opener(AppWindow& a) {
-        return passseam::read<Recorder::Opener>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecorder_.opener(); });
+        return passseam::read<Recorder::Opener>(th::engine(a), [&] { return th::engine(a).audioRecorder_.opener(); });
     }
     static void setRecordDir(AppWindow& a, std::string d) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = std::move(d); });
+        passseam::on(th::engine(a), [&] { th::engine(a).recordDir_ = std::move(d); });
     }
-    static void poll(AppWindow& a, double nowS) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(nowS); }); }
+    static void poll(AppWindow& a, double nowS) { passseam::on(th::engine(a), [&] { th::engine(a).pollRecordStarts(nowS); }); }
     static void settleFinishes(AppWindow& a) {
         cascade::core::RecordFinisher::drain(std::chrono::steady_clock::now() + std::chrono::seconds(10));
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordFinishes(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).pollRecordFinishes(); });
     }
-    static bool iqPending(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).iqStart_.pending(); }); }
-    static bool audioPending(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioStart_.pending(); }); }
-    static bool iqCancelled(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).iqStart_.cancelled(); }); }
-    static bool audioCancelled(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioStart_.cancelled(); }); }
-    static bool iqRecording(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).iqRecorder_.recording(); }); }
-    static bool audioRecording(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecorder_.recording(); }); }
+    static bool iqPending(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).iqStart_.pending(); }); }
+    static bool audioPending(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).audioStart_.pending(); }); }
+    static bool iqCancelled(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).iqStart_.cancelled(); }); }
+    static bool audioCancelled(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).audioStart_.cancelled(); }); }
+    static bool iqRecording(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).iqRecorder_.recording(); }); }
+    static bool audioRecording(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).audioRecorder_.recording(); }); }
 };
 
 }  // namespace cascade::gui
@@ -271,7 +272,7 @@ int main() {
     CHECK(cascade::gui::fonts::load());
 
     {
-        AppWindow app;
+        th::TestWindow app;
         Access::setRecordDir(app, recDir.string());
         g_realOpener = Access::opener(app);
         Access::bindOpener(app, &heldOpener);

@@ -712,6 +712,9 @@ private:
     // build of the application - nothing ever sets them outside that test -
     // and each is read at exactly one place.
     friend struct AppWindowTestAccess;
+    // THE TEST HOST'S KEY (shell retirement R1; tests/test_host.hpp): the one friend through which th::engine(window) hands a test the Engine
+    // behind this window. Defined in the tests only; no src/ file names it. Goes with rawEngine (R10).
+    friend struct TestHostAccess;
     // THE ENGINE (engine extraction stage 3a, docs/engine-stage3.md), BEHIND THE FENCE (stage 4, step 5): the receiver's state and
     // machinery are owned by an Engine this window holds - but the window holds it as an EngineShell, the narrow door declared in
     // engine/engine_shell.hpp, and the interface target cannot include engine.hpp at all. Declared FIRST, so it is built before and

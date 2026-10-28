@@ -43,6 +43,7 @@
 
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
@@ -73,25 +74,25 @@ struct AppWindowTestAccess {
     // The engine's pass as far as the session's queue needs it - applied and
     // published (the same two calls the other window tests make).
     static void pass(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            (void)th::engine(a).pumpPublish();
         });
     }
     // The engine's list, COPIED on the pass's thread with the pass out of the way (passseam::read).
     static std::vector<std::string> panels(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).telemetryPanels_; });
+        return passseam::read<std::vector<std::string>>(th::engine(a), [&] { return th::engine(a).telemetryPanels_; });
     }
     // The usage record the engine writes for the next launch to send: reporting
     // switched on the way the checkbox does (the desktop's own op), then the
     // config snapshot the save reads, whose telemetryPending is that record.
     // (The consent and the publish are the pass's, made through passseam::on; configSnapshot() is the published copy, any thread.)
     static std::string usageRecord(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] {
-            (void)rawEngine(a.engine_).applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, 1));
-            rawEngine(a.engine_).publishConfig();
+        passseam::on(th::engine(a), [&] {
+            (void)th::engine(a).applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, 1));
+            th::engine(a).publishConfig();
         });
-        return rawEngine(a.engine_).configSnapshot().telemetryPending;
+        return th::engine(a).configSnapshot().telemetryPending;
     }
     static std::size_t notedByWindow(AppWindow& a) { return a.uiNotedPanels_.size(); }
     // How many FOXAPP_OP_NOTE_PANEL results the window's session holds (one
@@ -178,7 +179,7 @@ int main() {
     CHECK(cascade::gui::fonts::load());
 
     {
-        AppWindow* a = new AppWindow();
+        th::TestWindow* a = new th::TestWindow();
         int refused = 0;
 
         // A: nothing drawn, nothing said.
@@ -221,7 +222,7 @@ int main() {
 
     // D: what the set costs once a name is in it.
     {
-        AppWindow* a = new AppWindow();
+        th::TestWindow* a = new th::TestWindow();
         // 17 characters: longer than a std::string keeps inline, so a
         // temporary built per call would be an allocation we can see.
         const char* name = "diagnostics offer";

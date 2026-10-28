@@ -120,6 +120,7 @@
 #include "core/app_commands.hpp"
 #include "core/patch_draft.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/patch_view_math.hpp"
@@ -238,9 +239,9 @@ struct AppWindowTestAccess {
     }
     static void holdPass(AppWindow& a) {
         if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
-        passseam::attach(rawEngine(a.engine_));
+        passseam::attach(th::engine(a));
         auto h = std::make_shared<Hold>();
-        rawEngine(a.engine_).postToPass([h] {
+        th::engine(a).postToPass([h] {
             std::unique_lock<std::mutex> lk(h->m);
             h->running = true;
             h->cv.notify_all();
@@ -271,16 +272,16 @@ struct AppWindowTestAccess {
             releasePass();
         }
     }
-    static bool direct(AppWindow& a) { return held() != nullptr || !rawEngine(a.engine_).controlThreadRunning(); }
+    static bool direct(AppWindow& a) { return held() != nullptr || !th::engine(a).controlThreadRunning(); }
     template <class R>
     static R rd(AppWindow& a, const std::function<R()>& readIt) {
-        return direct(a) ? readIt() : passseam::read<R>(rawEngine(a.engine_), readIt);
+        return direct(a) ? readIt() : passseam::read<R>(th::engine(a), readIt);
     }
     static void wr(AppWindow& a, const std::function<void()>& work) {
         if (direct(a)) {
             work();
         } else {
-            passseam::on(rawEngine(a.engine_), work);
+            passseam::on(th::engine(a), work);
         }
     }
     // THE ENGINE'S PART OF A FRAME, in drawUi's order: the commands the last frame queued are applied by the pass, the
@@ -288,21 +289,21 @@ struct AppWindowTestAccess {
     // answers (pumpTransmitKey) - which is where a commit's answer reaches the page.
     static void look(AppWindow& a) {
         releasePass();   // (held between looks: let go for this look's pass)
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).drainLocalCommands();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).drainLocalCommands();
             a.syncPatchPageOpen();
             a.commitPatchDraft();
-            rawEngine(a.engine_).pumpInputs();
-            rawEngine(a.engine_).pumpPlugins();
-            rawEngine(a.engine_).pumpPatch();
-            (void)rawEngine(a.engine_).pumpPublish();
+            th::engine(a).pumpInputs();
+            th::engine(a).pumpPlugins();
+            th::engine(a).pumpPatch();
+            (void)th::engine(a).pumpPublish();
         }, [&] {
             if (holdingLooks()) { holdPass(a); }
             a.syncPatchPageOpen();
             a.commitPatchDraft();
         });
-        a.statusLines_ = rawEngine(a.engine_).statusText();   // (a copy behind the engine's own lock: any thread)
+        a.statusLines_ = th::engine(a).statusText();   // (a copy behind the engine's own lock: any thread)
         a.refreshUiState();
         a.pumpTransmitKey();
     }
@@ -321,25 +322,25 @@ struct AppWindowTestAccess {
     static bool seeded(AppWindow& a) { return a.patchSeeded_; }
     static bool inStepNow(AppWindow& a) { return a.patchDraftInStep_; }
     static bool sending(AppWindow& a) { return a.patchSend_.state != AppWindow::PatchSend::State::Idle; }
-    static bool enginePageOpen(AppWindow& a) { return rd<bool>(a, [&] { return rawEngine(a.engine_).patchPageOpen_; }); }
-    static bool enginePageWasOpen(AppWindow& a) { return rd<bool>(a, [&] { return rawEngine(a.engine_).patchWasOpen_; }); }
-    static bool engineRunning(AppWindow& a) { return rd<bool>(a, [&] { return rawEngine(a.engine_).patchRunning_; }); }
-    static std::size_t engineRadios(AppWindow& a) { return rd<std::size_t>(a, [&] { return rawEngine(a.engine_).patchRadios_.size(); }); }
-    static std::uint64_t engineVersion(AppWindow& a) { return rd<std::uint64_t>(a, [&] { return rawEngine(a.engine_).patchGraphVersion_; }); }
+    static bool enginePageOpen(AppWindow& a) { return rd<bool>(a, [&] { return th::engine(a).patchPageOpen_; }); }
+    static bool enginePageWasOpen(AppWindow& a) { return rd<bool>(a, [&] { return th::engine(a).patchWasOpen_; }); }
+    static bool engineRunning(AppWindow& a) { return rd<bool>(a, [&] { return th::engine(a).patchRunning_; }); }
+    static std::size_t engineRadios(AppWindow& a) { return rd<std::size_t>(a, [&] { return th::engine(a).patchRadios_.size(); }); }
+    static std::uint64_t engineVersion(AppWindow& a) { return rd<std::uint64_t>(a, [&] { return th::engine(a).patchGraphVersion_; }); }
     static std::uint64_t draftVersion(AppWindow& a) { return a.patchDraftVersion_; }
     static FoxCommandResult apply(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
-        return rd<FoxCommandResult>(a, [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
+        return rd<FoxCommandResult>(a, [&] { return th::engine(a).applyCommand(q.c, q.longText); });
     }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) {
-        return rd<FoxCommandResult>(a, [&] { return rawEngine(a.engine_).applyCommand(c); });
+        return rd<FoxCommandResult>(a, [&] { return th::engine(a).applyCommand(c); });
     }
     // A patch document, as applyConfig loads one.
     static void load(AppWindow& a, const pc::Graph& g) { (void)a.loadPatchDocument(g); }
     // The engine's graph: a COPY, made where no pass runs beside it (a reference into patchGraph_ is read while the pass assigns it).
-    static pc::Graph engine(AppWindow& a) { return rd<pc::Graph>(a, [&] { return rawEngine(a.engine_).patchGraph_; }); }
+    static pc::Graph engine(AppWindow& a) { return rd<pc::Graph>(a, [&] { return th::engine(a).patchGraph_; }); }
     // Where the engine's node store holds a node - compared, never dereferenced (I2: the store is the very one it was).
     static const pc::Node* engineNodeAddress(AppWindow& a, pc::NodeId id) {
-        return rd<const pc::Node*>(a, [&] { return rawEngine(a.engine_).patchGraph_.find(id); });
+        return rd<const pc::Node*>(a, [&] { return th::engine(a).patchGraph_.find(id); });
     }
     static const pc::Graph& draft(AppWindow& a) { return a.patchDraft_; }
     static pc::Graph& mutableDraft(AppWindow& a) { return a.patchDraft_; }
@@ -347,7 +348,7 @@ struct AppWindowTestAccess {
     // an I/Q recording tells a Radio its rate) - the test stands in for it.
     static void engineSetsRate(AppWindow& a, pc::NodeId id, double hz) {
         wr(a, [&] {
-            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) { n->rateHz = hz; }
+            if (pc::Node* n = th::engine(a).patchGraph_.mutableNode(id)) { n->rateHz = hz; }
         });
     }
     static float originX(AppWindow& a) { return a.patchCanvasOriginX_; }
@@ -383,22 +384,22 @@ struct AppWindowTestAccess {
     }
     static void clearDecoderOutput(AppWindow& a) { a.clearDecoderLines(); }
     static void injectNote(AppWindow& a, pc::NodeId node, const std::string& text) {
-        wr(a, [&] { rawEngine(a.engine_).patchRadioError_[node] = text; });
+        wr(a, [&] { th::engine(a).patchRadioError_[node] = text; });
     }
-    static void clearNote(AppWindow& a, pc::NodeId node) { wr(a, [&] { rawEngine(a.engine_).patchRadioError_.erase(node); }); }
+    static void clearNote(AppWindow& a, pc::NodeId node) { wr(a, [&] { th::engine(a).patchRadioError_.erase(node); }); }
     struct Pending {
         std::promise<cascade::engine::Engine::PatchRadioOpen> promise;
     };
     static void injectPending(AppWindow& a, pc::NodeId node, Pending& held) {
         wr(a, [&] {
-            rawEngine(a.engine_).patchRadioPending_[node] = held.promise.get_future();
-            rawEngine(a.engine_).patchRadioPendingAs_[node] = "test@1";
+            th::engine(a).patchRadioPending_[node] = held.promise.get_future();
+            th::engine(a).patchRadioPendingAs_[node] = "test@1";
         });
     }
     static void answerPending(Pending& held) { held.promise.set_value(cascade::engine::Engine::PatchRadioOpen{}); }
-    static void setRecordDir(AppWindow& a, const std::string& d) { wr(a, [&] { rawEngine(a.engine_).recordDir_ = d; }); }
+    static void setRecordDir(AppWindow& a, const std::string& d) { wr(a, [&] { th::engine(a).recordDir_ = d; }); }
     static void injectDestError(AppWindow& a, pc::NodeId node, const std::string& text) {
-        wr(a, [&] { rawEngine(a.engine_).patchDestError_[node] = text; });
+        wr(a, [&] { th::engine(a).patchDestError_[node] = text; });
     }
     // A line the engine's decoders said, as pumpDecoderOutput logs one (node 0: the receiver's own decoders).
     static void injectLine(AppWindow& a, pc::NodeId node, const std::string& plugin, const std::string& text) {
@@ -407,8 +408,8 @@ struct AppWindowTestAccess {
         l.plugin = plugin;
         l.text = text;
         wr(a, [&] {
-            rawEngine(a.engine_).decoderLog_.push_back(std::move(l));
-            ++rawEngine(a.engine_).decoderLinesTotal_;
+            th::engine(a).decoderLog_.push_back(std::move(l));
+            ++th::engine(a).decoderLinesTotal_;
         });
     }
     // The cache refresh alone (no draw): the table's lists and facts when listSeq moved, PATCH_LIVE, a radio's spectrum.
@@ -431,7 +432,7 @@ struct AppWindowTestAccess {
     static const FoxEngineApi* engineApi(AppWindow& a) { return a.engineApi_; }
     static void setEngineApi(AppWindow& a, const FoxEngineApi* t) { a.engineApi_ = t; }
     static void engineStops(AppWindow& a) {
-        wr(a, [&] { (void)rawEngine(a.engine_).applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, 0)); });
+        wr(a, [&] { (void)th::engine(a).applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, 0)); });
     }
 };
 }  // namespace cascade::gui
@@ -577,7 +578,7 @@ struct Starter {
 };
 
 AppWindow* makeApp(Starter& s) {
-    auto* a = new AppWindow();
+    auto* a = new th::TestWindow();
     pc::Graph g;
     s.radio = g.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, 40.0f, 40.0f);
     s.chan = g.addNode(pc::NodeKind::Channel, "Channel", pc::PortType::Iq, 420.0f, 40.0f);
@@ -947,7 +948,7 @@ int main() {
     for (const std::int64_t flags : {std::int64_t{FOXAPP_PATCH_GRAPH_DOCUMENT}, std::int64_t{0}}) {
         std::printf("I: a patch put in the engine (flags %lld), then the commit before any frame\n",
                     static_cast<long long>(flags));
-        auto* a = new AppWindow();
+        auto* a = new th::TestWindow();
         pc::Graph g;
         (void)g.addNode(pc::NodeKind::Channel, "one", pc::PortType::Iq, 1.0f, 2.0f);
         (void)g.addNode(pc::NodeKind::Demod, "two", pc::PortType::Iq, 3.0f, 4.0f);
@@ -1025,7 +1026,7 @@ int main() {
     //     a new Graph), so the address of a node tells whether one happened.
     {
         std::printf("I2: a graph set in the engine (flags 0), then the first flush sends nothing\n");
-        auto* a = new AppWindow();
+        auto* a = new th::TestWindow();
         pc::Graph g;
         const pc::NodeId one = g.addNode(pc::NodeKind::Channel, "one", pc::PortType::Iq, 1.0f, 2.0f);
         const cascade::core::cmd::QueuedCommand q =
@@ -1291,7 +1292,7 @@ int main() {
         };
         {
             // M1: the engine holds the patch (the config's, applied) and nothing has been published yet.
-            auto* a = new AppWindow();
+            auto* a = new th::TestWindow();
             const cascade::core::cmd::QueuedCommand q =
                 cascade::core::cmd::makeText(FOXAPP_OP_PATCH_SET_GRAPH, loadedText, FOXAPP_PATCH_GRAPH_DOCUMENT);
             CHECK(A::apply(*a, q).status == FOXAPI_OK);
@@ -1312,7 +1313,7 @@ int main() {
         {
             // M2: the patch is still QUEUED on the session (loadPatchDocument, as applyConfig does) when the first
             // frames are drawn and the page would seed its starter.
-            auto* a = new AppWindow();
+            auto* a = new th::TestWindow();
             std::vector<cascade::core::cmd::QueuedCommand> sent;
             A::tap(*a, &sent);
             A::load(*a, loaded);
@@ -1329,7 +1330,7 @@ int main() {
         {
             // M3: no patch at all. Nothing is sent from the top of frame 1; once the first publish has been read, the
             // page seeds ONE starter radio on the generator and sends it once.
-            auto* a = new AppWindow();
+            auto* a = new th::TestWindow();
             std::vector<cascade::core::cmd::QueuedCommand> sent;
             A::tap(*a, &sent);
             A::flush(*a);
@@ -1489,7 +1490,7 @@ int main() {
             f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"sourceKind\": \"siggen\", "
                  "\"uiTheme\": \"today\", \"mainView\": \"receiver\" }\n";
         }
-        auto* a = new AppWindow(cfg.string());
+        auto* a = new th::TestWindow(cfg.string());
         A::look(*a);
         CHECK(!A::enginePageOpen(*a));
         CHECK(!A::enginePageWasOpen(*a));   // the step never ran in the first pass: nothing opened, so nothing is closed again
@@ -1504,7 +1505,7 @@ int main() {
     // frames until the engine's passes have published it, and reads what the page DREW (frameText).
 
     const auto appOn = [&](const pc::Graph& g) {
-        auto* a = new AppWindow();
+        auto* a = new th::TestWindow();
         A::setSeeded(*a, true);   // (the scenario brings its own patch: the starter radio, and a device for a Radio without one, are not under test)
         A::load(*a, g);
         ImGui::GetIO().AddMousePosEvent(1390.0f, 890.0f);
@@ -1922,7 +1923,7 @@ int main() {
         CHECK(g.connect(radio, 0, display, 0) == pc::Connect::Ok);
         CHECK(g.connect(radio, 0, dec, 0) == pc::Connect::Ok);
         CHECK(g.connect(dec, 0, text, 0) == pc::Connect::Ok);
-        auto* a = new AppWindow();
+        auto* a = new th::TestWindow();
         A::load(*a, g);
         // Not one pass has run: every read finds nothing, and every face and inspector draws.
         for (const pc::NodeId id : {radio, chan, demod, speaker, text, display, map, dec}) {
@@ -2011,7 +2012,7 @@ int main() {
         std::filesystem::copy_file(fixture, std::filesystem::path(g_pluginDir) / fixture.filename(),
                                    std::filesystem::copy_options::overwrite_existing, copyEc);
         CHECK(!copyEc);
-        auto* a = new AppWindow();
+        auto* a = new th::TestWindow();
         A::setSeeded(*a, true);
         frames(*a, 4);
         std::string key;

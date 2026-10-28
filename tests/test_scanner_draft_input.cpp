@@ -46,6 +46,7 @@
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
@@ -61,32 +62,32 @@ struct AppWindowTestAccess {
     static void seed(AppWindow& a) { a.applyConfig(cascade::core::AppConfig{}); }
     // EVERY READ OF THE ENGINE from the test's thread (the pump move's P6) is made on the pass's thread with the pass out of the way
     // (passseam::read): free-running, the pass - which runs the scanner - runs beside the test.
-    static double rd(AppWindow& a, const std::function<double()>& readIt) { return passseam::read<double>(rawEngine(a.engine_), readIt); }
-    static double start(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanStartMhz_; }); }
-    static double stop(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanStopMhz_; }); }
-    static double step(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanStepKhz_; }); }
-    static double dwell(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanDwellMs_; }); }
-    static double hold(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanHoldMs_; }); }
+    static double rd(AppWindow& a, const std::function<double()>& readIt) { return passseam::read<double>(th::engine(a), readIt); }
+    static double start(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanStartMhz_; }); }
+    static double stop(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanStopMhz_; }); }
+    static double step(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanStepKhz_; }); }
+    static double dwell(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanDwellMs_; }); }
+    static double hold(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanHoldMs_; }); }
     static double draft(AppWindow& a, int i) { return a.scanDraft_[i]; }
-    static bool active(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanner_.active(); }); }
-    static double scanningHz(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanner_.currentHz(); }); }
-    static void drain(AppWindow& a) { passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).drainLocalCommands(); }); }
+    static bool active(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).scanner_.active(); }); }
+    static double scanningHz(AppWindow& a) { return rd(a, [&] { return th::engine(a).scanner_.currentHz(); }); }
+    static void drain(AppWindow& a) { passseam::custom(th::engine(a), [&] { th::engine(a).drainLocalCommands(); }); }
     // Window port group 7: the section draws from the state the engine PUBLISHED and sends its
     // commands on the window's engine API session. A frame of this harness therefore looks first
     // (the engine publishes, the window reads its state, as drawUi does) and, after the draw, lets
     // the engine's pass take what the session was handed (and the local queue, as before).
     static void look(AppWindow& a) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
+        passseam::on(th::engine(a), [&] { th::engine(a).publishReceiverState(); });
         a.refreshUiState();
     }
     static void pass(AppWindow& a) {
-        passseam::custom(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            rawEngine(a.engine_).drainLocalCommands();
+        passseam::custom(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            th::engine(a).drainLocalCommands();
         });
     }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) {
-        return passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(c); });
+        return passseam::read<FoxCommandResult>(th::engine(a), [&] { return th::engine(a).applyCommand(c); });
     }
 };
 }  // namespace cascade::gui
@@ -176,7 +177,7 @@ void typeOver(AppWindow& a, const char* s) {
 void clickAway(AppWindow& a) { click(a, 850.0f, 880.0f); }  // somewhere empty: deactivates
 
 AppWindow* makeApp(bool seeded) {
-    auto* a = new AppWindow();
+    auto* a = new th::TestWindow();
     if (seeded) { A::seed(*a); }
     g_open = true;
     frames(*a, 3);

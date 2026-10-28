@@ -43,6 +43,7 @@
 
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "iiod_fake_server.hpp"
 #include "imgui.h"
@@ -198,7 +199,7 @@ struct AppWindowTestAccess {
     // product has for a plugin the user keeps running. What the test holds is unchanged: what a RUNNING plugin's rows, status and
     // counts are, as the window shows them. (How a plugin comes to run: tests/test_engine_api_03.cpp group N.)
     static void pinPlugins(AppWindow& a) {
-        cascade::engine::Engine& e = rawEngine(a.engine_);
+        cascade::engine::Engine& e = th::engine(a);
         passseam::on(e, [&] {
             std::vector<std::string> keys;
             for (const cascade::core::LoadedPlugin& p : e.pluginHost_.plugins()) {
@@ -218,69 +219,69 @@ struct AppWindowTestAccess {
     // A RECORDING'S FILE OPENS ON A WORKER (0.99.63): a take just asked for is armed on the pass that collects the file. Waits (bounded) until no
     // start is out, polling as the pass does, so a test that asked for a take then reads it "recording".
     static bool recordStartsOut(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&] {
-            return rawEngine(a.engine_).iqStart_.pending() || rawEngine(a.engine_).audioStart_.pending() || rawEngine(a.engine_).iqStartQueued_ ||
-                   rawEngine(a.engine_).audioStartQueued_;
+        return passseam::read<bool>(th::engine(a), [&] {
+            return th::engine(a).iqStart_.pending() || th::engine(a).audioStart_.pending() || th::engine(a).iqStartQueued_ ||
+                   th::engine(a).audioStartQueued_;
         });
     }
     static void settleRecordStarts(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         while (recordStartsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
-            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(rawEngine(a.engine_).clockS()); });
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollRecordStarts(th::engine(a).clockS()); });
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) {
         const FoxCommandResult r =
-            passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(c, {}); });
+            passseam::read<FoxCommandResult>(th::engine(a), [&] { return th::engine(a).applyCommand(c, {}); });
         if (c.op == FOXAPI_OP_RECORD_IQ || c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
         return r;
     }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
         const FoxCommandResult r = passseam::read<FoxCommandResult>(
-            rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
+            th::engine(a), [&] { return th::engine(a).applyCommand(q.c, q.longText); });
         if (q.c.op == FOXAPI_OP_RECORD_IQ || q.c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
         return r;
     }
     // Inline and stepped the wait runs the poll a frame's workers run; free-running the pass runs its own and the wait watches.
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
-            return passseam::read<bool>(rawEngine(a.engine_), [&a] {
-                if (passseam::mode() != passseam::Mode::Free) { rawEngine(a.engine_).pollSourceAsync(); }
-                return !rawEngine(a.engine_).deviceOpenPending_;
+            return passseam::read<bool>(th::engine(a), [&a] {
+                if (passseam::mode() != passseam::Mode::Free) { th::engine(a).pollSourceAsync(); }
+                return !th::engine(a).deviceOpenPending_;
             });
         });
     }
     static bool sourceBusy(AppWindow& a) {
-        return passseam::read<bool>(rawEngine(a.engine_), [&a] {
-            if (passseam::mode() != passseam::Mode::Free) { rawEngine(a.engine_).pollSourceAsync(); }
-            return rawEngine(a.engine_).soapyScanPending_ || rawEngine(a.engine_).deviceOpenPending_;
+        return passseam::read<bool>(th::engine(a), [&a] {
+            if (passseam::mode() != passseam::Mode::Free) { th::engine(a).pollSourceAsync(); }
+            return th::engine(a).soapyScanPending_ || th::engine(a).deviceOpenPending_;
         });
     }
-    static void setRecordDir(AppWindow& a, const std::string& d) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = d; }); }
+    static void setRecordDir(AppWindow& a, const std::string& d) { passseam::on(th::engine(a), [&] { th::engine(a).recordDir_ = d; }); }
     static void setTransmitPageOpen(AppWindow& a, bool on) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).transmitOpen_ = on; });
+        passseam::on(th::engine(a), [&] { th::engine(a).transmitOpen_ = on; });
     }
-    static bool haveTx(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).transmitter_.haveSink(); }); }
+    static bool haveTx(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).transmitter_.haveSink(); }); }
     static std::uint64_t addBookmarkHeld(AppWindow& a, const std::string& name, double hz, const char* mode) {
         cascade::core::Bookmark b;
         b.name = name;
         b.freqHz = hz;
         b.mode = mode;
         b.bandwidthHz = 10.0e3;
-        const int at = rawEngine(a.engine_).freqMgr_.add(b);
-        return rawEngine(a.engine_).freqMgr_.list()[static_cast<std::size_t>(at)].id;
+        const int at = th::engine(a).freqMgr_.add(b);
+        return th::engine(a).freqMgr_.list()[static_cast<std::size_t>(at)].id;
     }
     static std::uint64_t addBookmark(AppWindow& a, const std::string& name, double hz, const char* mode) {
-        return passseam::read<std::uint64_t>(rawEngine(a.engine_), [&] { return addBookmarkHeld(a, name, hz, mode); });
+        return passseam::read<std::uint64_t>(th::engine(a), [&] { return addBookmarkHeld(a, name, hz, mode); });
     }
-    static int modeIndexHeld(AppWindow& a) { return rawEngine(a.engine_).modeIndex_; }
-    static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
-    static void webRequestHeld(AppWindow& a, const cascade::net::ControlRequest& r) { web_test::applyRequestDirect(rawEngine(a.engine_), r); }
-    static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *rawEngine(a.engine_).receiverSnapshot_; }
-    static void publish(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); }); }
-    static void publishHeld(AppWindow& a) { rawEngine(a.engine_).publishReceiverState(); }
+    static int modeIndexHeld(AppWindow& a) { return th::engine(a).modeIndex_; }
+    static cascade::net::RadioStatus webStatus(AppWindow& a) { return th::engine(a).webStatusNow(); }
+    static void webRequestHeld(AppWindow& a, const cascade::net::ControlRequest& r) { web_test::applyRequestDirect(th::engine(a), r); }
+    static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *th::engine(a).receiverSnapshot_; }
+    static void publish(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).publishReceiverState(); }); }
+    static void publishHeld(AppWindow& a) { th::engine(a).publishReceiverState(); }
     // THE PASS HELD OUT OF THE WAY for a block of the test's own steps. Inline and stepped no pass runs between them anyway;
     // free-running a second thread parks the pass inside passseam::on (Engine::runOnPass: work run at the pass's head) from
     // the constructor to the destructor - so in that block the only publish is the test's, and the test's thread may use
@@ -289,9 +290,9 @@ struct AppWindowTestAccess {
     public:
         explicit PassHold(AppWindow& a) : a_(a) {
             if (passseam::mode() != passseam::Mode::Free) { return; }
-            passseam::attach(rawEngine(a_.engine_));
+            passseam::attach(th::engine(a_));
             holder_ = std::thread([this] {
-                passseam::on(rawEngine(a_.engine_), [this] {
+                passseam::on(th::engine(a_), [this] {
                     std::unique_lock<std::mutex> lk(m_);
                     held_ = true;
                     cv_.notify_all();
@@ -321,35 +322,35 @@ struct AppWindowTestAccess {
         bool held_ = false;
         bool release_ = false;
     };
-    static cascade::engine::Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
+    static cascade::engine::Engine& engine(AppWindow& a) { return th::engine(a); }
     // The engine's pass as far as the key needs it (the queue applied, the
     // state published), without the audio half, which reads ImGui's clock.
     static void pass(AppWindow& a) {
-        passseam::pass(rawEngine(a.engine_), [&] {
-            rawEngine(a.engine_).pumpFrameBegin();
-            (void)rawEngine(a.engine_).pumpPublish();
+        passseam::pass(th::engine(a), [&] {
+            th::engine(a).pumpFrameBegin();
+            (void)th::engine(a).pumpPublish();
         });
     }
     static std::size_t loadedDecoders(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).loadedDecoderCount(); });
+        return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).loadedDecoderCount(); });
     }
     static std::size_t fedDecoders(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).fedDecoderCount(); });
+        return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).fedDecoderCount(); });
     }
     static std::size_t runnerActive(AppWindow& a) {
-        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pluginRunner_.activeCount(); });
+        return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).pluginRunner_.activeCount(); });
     }
-    static bool running(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.running(); }); }
+    static bool running(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).pipeline_.running(); }); }
     static cascade::core::PublishedState state(AppWindow& a) {
         cascade::core::PublishedState s;
-        const bool ok = rawEngine(a.engine_).receiverSnapshot_->read(s);
+        const bool ok = th::engine(a).receiverSnapshot_->read(s);
         CHECK(ok);
         return s;
     }
     static double publishNs(AppWindow& a, int n) {
         const auto t0 = std::chrono::steady_clock::now();
-        passseam::on(rawEngine(a.engine_), [&] {
-            for (int i = 0; i < n; ++i) { rawEngine(a.engine_).publishReceiverState(); }
+        passseam::on(th::engine(a), [&] {
+            for (int i = 0; i < n; ++i) { th::engine(a).publishReceiverState(); }
         });
         return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() / n;
     }
@@ -605,7 +606,7 @@ int main() {
     A::installHooks();
     ImGui::CreateContext();
     {
-        AppWindow app;
+        th::TestWindow app;
         A::pinPlugins(app);
         decodersAndCost(app);
         walkingOneWindow(app);
