@@ -203,6 +203,7 @@ extern "C" {
 #define FOXAPI_CAP_FACTS         (1ull << 26) /* read-only "fact.*" keys through get_setting */
 #define FOXAPI_CAP_LONG_TEXT     (1ull << 27) /* submit_text: one command with a text longer than text[] */
 #define FOXAPI_CAP_NODE_SPECTRUM (1ull << 28) /* read_node_spectrum: a patch radio's own spectrum */
+#define FOXAPI_CAP_LOCAL_EXT     (1ull << 29) /* get_local_extension: in-process extension points (section 9.15); never over a transport */
 
 /* ---------------------------------------------------------------------------
  * Session grants. Asked for in FoxSessionParams::grants; the engine grants
@@ -942,6 +943,16 @@ typedef struct FoxSessionParams {
 
 #define FOXAPI_MIN_SESSION_PARAMS (offsetof(FoxSessionParams, token) + sizeof(const char *))
 
+/* 0.3 (section 9.15): the extension points get_local_extension serves, and the prefix every extension's `args` begins with. */
+#define FOXAPI_EXT_PLUGIN_UI 1u  /* the plugin UI plane: src/core/plugin_ui_port.hpp (out: a PluginUiPort*, owned by the caller) */
+typedef struct FoxLocalExtensionArgs {
+    uint32_t structSize;        /* sizeof of the WHOLE args struct as the caller compiled it (the extension's, not this prefix) */
+    uint32_t reserved;          /* 0 */
+    FoxSession *session;        /* the interface's LOCAL session on this engine */
+} FoxLocalExtensionArgs;
+
+#define FOXAPI_MIN_LOCAL_EXT_ARGS (offsetof(FoxLocalExtensionArgs, session) + sizeof(FoxSession *))
+
 /* ---------------------------------------------------------------------------
  * THE TABLE. An engine module exports foxsdr_engine_query(); a remote client
  * library exports the same symbol and speaks the wire protocol behind it.
@@ -1080,6 +1091,21 @@ typedef struct FoxEngineApi {
      * FOXAPI_MAX_LONG_TEXT. */
     int32_t (FOXAPI_CALL *submit_text)(FoxSession *session, const FoxCommand *command, const char *text,
                                        uint32_t len, FoxSubmitResult *result);
+
+    /* ---- 0.3, shell retirement R4 (docs/api-0.3-additions.md 9.15) ---------- */
+
+    /* AN IN-PROCESS EXTENSION POINT (FOXAPI_CAP_LOCAL_EXT). Some things an interface needs of its engine are C++ objects living in the
+     * engine's process and cannot be a list, a fact or an op: the plugin UI plane (FOXAPI_EXT_PLUGIN_UI) is the first - the plugin ABI
+     * promises its instances are created, polled and destroyed on the INTERFACE's thread, and what builds them carries pointers into module
+     * images. `args` begins with a FoxLocalExtensionArgs naming the interface's own session, which must be a LOCAL session of THIS engine
+     * (opened with FOXAPI_SESSION_LOCAL, not an engine-internal one): a REMOTE session, a web or CAT session, and any table a transport
+     * speaks for (a remote client library answers UNSUPPORTED) are refused. The rest of `args`, and what `*out` receives, are the
+     * extension's own types, defined by the in-process header that names it (for FOXAPI_EXT_PLUGIN_UI: src/core/plugin_ui_port.hpp of the
+     * same build); no engine of another build serves one. Answers: OK; BAD_ARGUMENT (NULL, a short struct, a session this engine does not hold); UNSUPPORTED
+     * (an unknown extension); DENIED (not a LOCAL interface session); BUSY (the extension is already attached - one at a time).
+     * `*out` is NULL unless the answer is OK. */
+    int32_t (FOXAPI_CALL *get_local_extension)(FoxEngine *engine, uint32_t extension, const FoxLocalExtensionArgs *args,
+                                               void **out);
 } FoxEngineApi;
 
 /* True when the table covers member `m`: the engine was built with it. */

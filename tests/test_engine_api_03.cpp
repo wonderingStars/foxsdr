@@ -175,6 +175,7 @@
 #include "engine/bias_tee.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
+#include "engine/plugin_ui_port.hpp"
 #include "engine/plugin_store_reasons.hpp"
 #include "engine/soundcard_panel.hpp"
 #include "engine_api_fake_radio.hpp"
@@ -9330,6 +9331,213 @@ void testShellRetirementR3Facts() {
     }
 }
 
+// SHELL RETIREMENT R4 (docs/api-0.3-additions.md 9.15, docs/engine-stage4.md 6.25): the plugin UI plane is reached through ONE table member,
+// get_local_extension(FOXAPI_EXT_PLUGIN_UI), for a LOCAL interface session and nobody else.
+void testShellRetirementR4Extension() {
+    namespace cc = cascade::core;
+    namespace ce = cascade::engine;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+    CHECK(remote.ok());
+    d.eng.controlPass();
+
+    // R4.1 THE TABLE SAYS SO: the member is covered and set, and capability bit 29 is in the word (bit 29 is FOXAPI_CAP_LOCAL_EXT, nothing else).
+    CHECK(FOXAPI_HAS(api(), get_local_extension));
+    CHECK((api()->capabilities & FOXAPI_CAP_LOCAL_EXT) != 0u);
+    CHECK_EQ(static_cast<unsigned long long>(FOXAPI_CAP_LOCAL_EXT), 1ull << 29);
+    CHECK(api()->structSize >= FOXAPI_MIN_ENGINE_API);
+
+    const auto attachOf = [&](FoxSession* session) {
+        cc::PluginUiAttach a{};
+        a.structSize = sizeof(a);
+        a.session = session;
+        return a;
+    };
+    const auto call = [&](const cc::PluginUiAttach* a, void** out, uint32_t ext = FOXAPI_EXT_PLUGIN_UI) {
+        return api()->get_local_extension(d.eng.apiHandle(), ext, a, out);
+    };
+
+    // R4.2 WHO IS REFUSED, and what comes back when they are: nothing (*out is null on every refusal), and the engine's applier is not installed.
+    void* out = reinterpret_cast<void*>(0x1);
+    {
+        cc::PluginUiAttach a = attachOf(remote.raw());
+        CHECK_EQ(call(&a, &out), FOXAPI_DENIED);                          // a REMOTE session: refused, whatever it holds
+        CHECK(out == nullptr);
+        out = reinterpret_cast<void*>(0x1);
+        FoxSession* web = d.eng.api().openInternalSession(ce::InternalKind::Web, "r4 web");
+        CHECK(web != nullptr);
+        if (web != nullptr) {
+            a = attachOf(web);
+            CHECK_EQ(call(&a, &out), FOXAPI_DENIED);                      // the web page's session: REMOTE by construction, and on no profile
+            CHECK(out == nullptr);
+            api()->close_session(web);
+        }
+        FoxSession* cat = d.eng.api().openInternalSession(ce::InternalKind::Cat, "r4 cat");
+        CHECK(cat != nullptr);
+        if (cat != nullptr) {
+            a = attachOf(cat);
+            out = reinterpret_cast<void*>(0x1);
+            CHECK_EQ(call(&a, &out), FOXAPI_DENIED);                      // ...and CAT's
+            CHECK(out == nullptr);
+            api()->close_session(cat);
+        }
+        int notASession = 0;                                              // a pointer the engine does not hold: never dereferenced
+        a = attachOf(reinterpret_cast<FoxSession*>(&notASession));
+        out = reinterpret_cast<void*>(0x1);
+        CHECK_EQ(call(&a, &out), FOXAPI_BAD_ARGUMENT);
+        CHECK(out == nullptr);
+        a = attachOf(nullptr);
+        CHECK_EQ(call(&a, &out), FOXAPI_BAD_ARGUMENT);
+        a = attachOf(s.raw());
+        a.structSize = static_cast<uint32_t>(FOXAPI_MIN_LOCAL_EXT_ARGS);  // the prefix alone is not the plugin UI's arguments
+        CHECK_EQ(call(&a, &out), FOXAPI_BAD_ARGUMENT);
+        a.structSize = 4;                                                 // shorter than the prefix
+        CHECK_EQ(call(&a, &out), FOXAPI_BAD_ARGUMENT);
+        a = attachOf(s.raw());
+        CHECK_EQ(call(&a, &out, 2u), FOXAPI_UNSUPPORTED);                 // no such extension
+        CHECK(out == nullptr);
+        CHECK_EQ(call(nullptr, &out), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(api()->get_local_extension(nullptr, FOXAPI_EXT_PLUGIN_UI, &a, &out), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(api()->get_local_extension(d.eng.apiHandle(), FOXAPI_EXT_PLUGIN_UI, &a, nullptr), FOXAPI_BAD_ARGUMENT);
+        CHECK(!d.eng.pluginUiAttached());                          // not one of those installed an applier
+    }
+
+    // R4.3 THE LOCAL INTERFACE SESSION GETS THE PORT; ONE AT A TIME; A NEW ONE AFTER THE OLD IS GONE.
+    {
+        cc::PluginUiAttach a = attachOf(s.raw());
+        CHECK_EQ(call(&a, &out), FOXAPI_OK);
+        CHECK(out != nullptr);
+        std::unique_ptr<cc::PluginUiPort> port(static_cast<cc::PluginUiPort*>(out));
+        CHECK(d.eng.pluginUiAttached());
+        CHECK(port->tracks().empty() && port->instruments().empty() && port->panels().empty());
+        void* second = reinterpret_cast<void*>(0x1);
+        CHECK_EQ(call(&a, &second), FOXAPI_BUSY);                         // a second front end is refused ...
+        CHECK(second == nullptr);
+        ce::PluginUiPortImpl& impl = ce::rawPluginUiPort(*port);
+        CHECK_EQ(impl.offThreadCalls(), std::uint64_t{0});                // ... and the calls above were all on the attaching thread
+        // THE TRIPWIRE ITSELF: a call from another thread is counted (not refused - it changes nothing about what the call does).
+        std::thread t([&] {
+            (void)port->tracks();
+            std::vector<cc::HostImage> img;
+            port->pollImages(img);
+        });
+        t.join();
+        CHECK_EQ(impl.offThreadCalls(), std::uint64_t{2});
+        port->disconnect();
+        CHECK(!d.eng.pluginUiAttached());
+        port->disconnect();                                               // idempotent
+        port.reset();
+        CHECK(!d.eng.pluginUiAttached());
+    }
+    {
+        cc::PluginUiAttach a = attachOf(s.raw());
+        out = nullptr;
+        CHECK_EQ(call(&a, &out), FOXAPI_OK);                              // the engine can be attached to again
+        std::unique_ptr<cc::PluginUiPort> port(static_cast<cc::PluginUiPort*>(out));
+        CHECK(port != nullptr);
+        port.reset();                                                     // the destructor disconnects
+        CHECK(!d.eng.pluginUiAttached());
+    }
+    // A REFUSED attach leaves the first port attached (the failed object's destructor must not disconnect it).
+    {
+        cc::PluginUiAttach a = attachOf(s.raw());
+        out = nullptr;
+        CHECK_EQ(call(&a, &out), FOXAPI_OK);
+        std::unique_ptr<cc::PluginUiPort> first(static_cast<cc::PluginUiPort*>(out));
+        void* again = nullptr;
+        CHECK_EQ(call(&a, &again), FOXAPI_BUSY);
+        CHECK(d.eng.pluginUiAttached());
+    }
+    CHECK(!d.eng.pluginUiAttached());
+
+    // R4.4 setFrontEnd COPIES. The window refills the object the moment the call returns; the engine's feed must be the first frame's.
+    {
+        cc::PluginUiAttach a = attachOf(s.raw());
+        out = nullptr;
+        CHECK_EQ(call(&a, &out), FOXAPI_OK);
+        std::unique_ptr<cc::PluginUiPort> port(static_cast<cc::PluginUiPort*>(out));
+        CHECK(d.eng.trackFeed() == nullptr);                              // nothing handed over yet
+        cc::PluginUiFrontEnd f;
+        f.tunerDisplayStyle = "Dial";
+        f.basemap.active = true;
+        f.basemap.tileSize = 256;
+        f.basemap.attribution = "r4 attribution";
+        f.hasTrackFeed = true;
+        cc::TrackFeedInfo info;
+        info.id = "AB12CD";
+        info.kind = 1;
+        info.infoState = 1;
+        info.registration = "G-R4";
+        f.trackFeed.tracks.push_back(info);
+        cc::HostTrack t;
+        t.plugin = "r4 plugin";
+        std::snprintf(t.t.id, sizeof(t.t.id), "%s", "AB12CD");
+        f.trackFeed.polled.push_back(t);
+        f.pluginTestReport = true;
+        f.frame = 17;
+        port->setFrontEnd(f);
+        const std::shared_ptr<const ce::TrackFeed> first = d.eng.trackFeed();
+        CHECK(first != nullptr);
+        if (first != nullptr) {
+            CHECK_EQ(first->tracks.size(), std::size_t{1});
+            CHECK_EQ(first->tracks[0].registration, std::string("G-R4"));
+            CHECK_EQ(first->polled.size(), std::size_t{1});
+            CHECK_EQ(std::string(first->polled[0].t.id), std::string("AB12CD"));
+            CHECK(first.get() != &f.trackFeed);                           // not the caller's object ...
+            // ... and it does not change when the caller does (the window refills `f` next frame; a feed that shared it would change here)
+            f.trackFeed.tracks.clear();
+            f.trackFeed.polled.clear();
+            f.trackFeed.tracks.push_back(cc::TrackFeedInfo{});
+            f.trackFeed.tracks.back().registration = "OVERWRITTEN";
+            CHECK_EQ(first->tracks.size(), std::size_t{1});
+            CHECK_EQ(first->tracks[0].registration, std::string("G-R4"));
+            CHECK_EQ(first->polled.size(), std::size_t{1});
+        }
+        const ce::FrontEndFacts facts = d.eng.frontEndFacts();
+        CHECK_EQ(facts.tunerDisplayStyle, std::string("Dial"));
+        CHECK(facts.basemap.active && facts.basemap.tileSize == 256u);
+        CHECK_EQ(facts.basemap.attribution, std::string("r4 attribution"));
+        CHECK(facts.pluginTestReport);
+        CHECK_EQ(facts.frame, 17);
+        CHECK(facts.pluginStatus == nullptr);                             // only a bounded run that asked hands the report's half over
+        // No track feed this frame: the pass lists none, and an empty face name leaves the engine's default face.
+        cc::PluginUiFrontEnd none;
+        port->setFrontEnd(none);
+        CHECK(d.eng.trackFeed() == nullptr);
+        CHECK_EQ(d.eng.frontEndFacts().tunerDisplayStyle, ce::FrontEndFacts{}.tunerDisplayStyle);
+    }
+    CHECK(!d.eng.pluginUiAttached());
+
+    // R4.5 THE PLUGIN STATUS REPORT'S HALF rides the hand-over and is taken by the engine's first teardown phase, once.
+    {
+        Direct d2;
+        testing::Session s2(api(), d2.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        CHECK(s2.ok());
+        cc::PluginUiAttach a = attachOf(s2.raw());
+        void* o2 = nullptr;
+        CHECK_EQ(api()->get_local_extension(d2.eng.apiHandle(), FOXAPI_EXT_PLUGIN_UI, &a, &o2), FOXAPI_OK);
+        std::unique_ptr<cc::PluginUiPort> port(static_cast<cc::PluginUiPort*>(o2));
+        cc::PluginUiFrontEnd f;
+        f.pluginStatusReport = true;
+        f.pluginUi.paths = 7;
+        cc::HostImage img;
+        img.plugin = "r4 picture";
+        f.pluginImages.push_back(img);
+        port->setFrontEnd(f);
+        const ce::FrontEndFacts facts = d2.eng.frontEndFacts();
+        CHECK(facts.pluginStatus != nullptr);
+        if (facts.pluginStatus != nullptr) {
+            CHECK_EQ(facts.pluginStatus->ui.paths, std::size_t{7});
+            CHECK_EQ(facts.pluginStatus->images.size(), std::size_t{1});
+        }
+        d2.eng.shutdownQuiesce();
+        CHECK(d2.eng.frontEndFacts().pluginStatus == nullptr);            // taken: a second phase prints no second report
+        port.reset();
+    }
+}
+
 int main() {
     engine_api_test::hermetic("api03");
     // The plugins' hysteresis, shortened for group N (the engine reads it at its first lifecycle step; no other group has a window).
@@ -9449,5 +9657,7 @@ int main() {
     // Shell retirement R2: the two test ops.
     testShellRetirementR2Ops();
     testShellRetirementR3Facts();
+    // Shell retirement R4: the plugin UI plane's table member.
+    testShellRetirementR4Extension();
     return check::finish("test_engine_api_03");
 }

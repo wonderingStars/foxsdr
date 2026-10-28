@@ -56,6 +56,7 @@
 #include "core/host_image.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_ui_data.hpp"
+#include "core/plugin_ui_port.hpp"
 #include "core/receiver_snapshot.hpp"
 #include "engine/bias_tee.hpp"
 #include "engine/tune_control.hpp"
@@ -133,38 +134,23 @@ struct ControlThreadOptions {
 //   Back   the workers (device scans and opens, the retune coalescer, downloads) and the audio sink's health, the config copy
 enum class PassPart { Front, Mute, Back };
 
-// THE TRACK LIST AND WHAT THE TRACK-INFO PLUGIN SAYS OF IT, the window's plugin poll as it hands it to the engine (pump move steps P2 and P3;
-// named WebExtras until stage 5e, when the receiver plugins' pictures left it: they are the engine's own now, polled by its image feed
-// - engine/image_feed.hpp - so what is left is the one thing only the window's plugin UI knows). The track-info plugin's answers for the
-// tracks on screen used to be asked of the window while the engine published (the host hook enrichWebTrack), reading the window's
-// TrackInfoCache - GUI-thread state - from the pass. The window builds this once a frame, immutable, and hands the pointer over inside
-// FrontEndFacts (a copy of the facts is a refcount, so the publish's three copies stay free); the pass only looks the answer up. A
-// headless engine has no window and so no feed: its status lists no tracks (whether it polls the plugin UI itself is stage 7's to decide).
-struct TrackFeedInfo {
-    std::string id;           // the track's id and kind: the key (the vector is sorted by id, then kind)
-    unsigned kind = 0;
-    unsigned infoState = 0;   // 1 = known, 2 = the source does not have it (RadioStatus::Track::infoState)
-    std::string registration;
-    std::string acType;
-    std::string acOperator;
-    std::string acCountry;
-};
-struct TrackFeed {
-    std::vector<TrackFeedInfo> tracks;
-    // THE TRACKS THE LAST PLUGIN POLL FOUND, as the window drew them (the pump move's step P3): the pass used to walk the plugin
-    // UI's own vector for the browser's target list - a vector the window's poll clears and refills every frame - and walks this
-    // immutable copy now. The window carries the VISIBLE ones (the staleness rule the desktop applies); the pass applies it again.
-    std::vector<cascade::core::HostTrack> polled;
-};
+// THE TRACK FEED, THE BASEMAP'S FIGURES, THE BOUNDED-RUN STATUS REPORT'S PLUGIN HALF, THE TILE VOCABULARY AND WHAT ONE DIRECTIVE SAYS TO THE
+// WINDOW moved to core/plugin_ui_port.hpp with the plugin UI plane (shell retirement R4, 2026-10-28): they are the port's data, which the
+// interface includes. They are in namespace cascade::core there, and named back here for the engine's code (R10 deletes this header and names them
+// where they are used).
+using cascade::core::TrackFeedInfo;
+using cascade::core::TrackFeed;
+using cascade::core::BasemapFacts;
+using cascade::core::PluginUiReport;
+using cascade::core::WebTileAnswer;
+using cascade::core::WebTileRequest;
+using cascade::core::WebTileSource;
+using cascade::core::PluginDirectiveFacts;
 
-// The basemap plugin's figures, handed over once a frame inside FrontEndFacts (engine/stage3b-pre OPEN 4; EngineHost::BasemapFacts
-// is this).
-struct BasemapFacts {
-    bool active = false;
-    std::uint32_t minZoom = 0;
-    std::uint32_t maxZoom = 0;
-    std::uint32_t tileSize = 0;
-    std::string attribution;
+// THE PLUGIN HALF OF THE BOUNDED-RUN STATUS REPORT AND THE PICTURES IT PRINTS (FrontEndFacts::pluginStatus; Engine::reportPluginStatus prints it).
+struct PluginStatusFacts {
+    PluginUiReport ui;
+    std::vector<cascade::core::HostImage> images;
 };
 
 // WHAT THE FRONT END HANDS OVER FOR THE PUBLISH (engine/stage3b-pre, docs/engine-stage3.md OPEN 4): the facts only the window knows -
@@ -183,28 +169,11 @@ struct FrontEndFacts {
     // window's frame count to name in it - the window's onCatalogueResult hook used to read its own counter from the pass.
     bool pluginTestReport = false;
     int frame = 0;
+    // A BOUNDED RUN'S DIAGNOSTIC (CASCADE_PLUGIN_STATUS; shell retirement R4): what the window's plugin poll and picture buffer hold, handed over
+    // once at the end of a run that asked for the report (PluginUiFrontEnd::pluginStatusReport) and printed, once, by Engine::shutdownQuiesce
+    // right after its first phase - where the window used to call reportPluginStatus. Null in every other pass.
+    std::shared_ptr<const PluginStatusFacts> pluginStatus;
 };
-
-// WHAT THE BOUNDED-RUN STATUS REPORT PRINTS OF THE PLUGIN UI (pump move step P3): the engine no longer holds the plugin UI - it is
-// the front end's - so the front end hands over what it polled when it asks for the report (EngineShell::reportPluginStatus).
-struct PluginUiReport {
-    std::vector<cascade::core::HostTrack> tracks;
-    std::size_t paths = 0;
-    std::vector<cascade::core::HostPanel> panels;
-};
-
-// WHAT THE WINDOW ANSWERS A PAGE'S TILE REQUEST WITH (stage 5e; used by EngineShell::serveWebTiles). The page asks the engine's web server for
-// a basemap tile, which records the want; the window - whose plugin client is the only thing that can produce one - drains the wants once a
-// frame and publishes what its plugin has.
-enum class WebTileAnswer { Pending, Missing, Ready };  // Pending: asked of the plugin, ask again later (nothing is published)
-struct WebTileRequest {
-    std::uint32_t z = 0;
-    std::uint32_t x = 0;
-    std::uint32_t y = 0;
-};
-// Fills `bmp` (a 24-bit BMP) and answers Ready; Missing is the plugin saying the tile will never exist (published empty, so the page stops
-// asking); Pending publishes nothing.
-using WebTileSource = std::function<WebTileAnswer(const WebTileRequest&, std::vector<std::uint8_t>& bmp)>;
 
 // The status sentences the panels letter (Engine::StatusText is this) - see Engine::publishStatusText.
 struct EngineStatusText {
@@ -273,17 +242,6 @@ public:
 // the API core the engine owns. This is the one object the window holds for it. It owns the PluginUi and the directive link's
 // front-end side; the window names neither.
 // ==================================================================================================================================
-
-// What one plugin directive says to the WINDOW (the rest of it - the plugins, their services - is the plugin UI's, applied inside
-// the feed): a release (the engine is about to unmap the modules), and the basemap and track-info tables to attach.
-struct PluginDirectiveFacts {
-    bool release = false;
-    // One plugin woken or put to sleep, nothing rebuilt (stub campaign B2): the basemap and track-info tables are the engine's choice again,
-    // but nothing was created that a window has to show.
-    bool lifeOnly = false;
-    const CascadeBasemapApi* basemap = nullptr;
-    const CascadeTrackInfoApi* trackInfo = nullptr;
-};
 
 class HostPluginFeed {
 public:

@@ -3111,11 +3111,63 @@ void Engine::setPluginUiApplier(PluginUiApplier applier) {
     }
 }
 
+void Engine::recordPluginUiStateLocked(const cascade::core::PluginDirective& d) {
+    if (d.release) {
+        // Nothing of any module is borrowed after a release, and the modules may be unmapped from here on: no state to replay.
+        pluginUiState_.reset();
+        return;
+    }
+    if (!d.lifeOnly) {
+        pluginUiState_ = d;  // a rebuild is the whole state: the plugins, the sets, the services, the two tables
+        pluginUiState_->epoch = 0;
+        return;
+    }
+    // A life-only directive is STATE, not an event (plugin_directive.hpp): it restates the plugins and the sets and the two tables, and leaves
+    // the services of the rebuild it follows. With no rebuild before it there is nothing built for it to restate.
+    if (pluginUiState_.has_value()) {
+        pluginUiState_->plugins = d.plugins;
+        pluginUiState_->stopped = d.stopped;
+        pluginUiState_->dormant = d.dormant;
+        pluginUiState_->basemap = d.basemap;
+        pluginUiState_->trackInfo = d.trackInfo;
+    }
+}
+
+bool Engine::attachPluginUi(PluginUiApplier applier) {
+    if (!applier) { return false; }
+    std::optional<cascade::core::PluginDirective> replay;
+    {
+        std::lock_guard<std::mutex> lk(pluginApplierMutex_);
+        if (pluginApplier_ != nullptr) { return false; }
+        pluginApplier_ = std::make_shared<const PluginUiApplier>(std::move(applier));
+        pluginGuiThread_.store(std::this_thread::get_id());
+        frontEnd_.store(true, std::memory_order_release);
+        if (pluginUiState_.has_value()) {
+            replay = *pluginUiState_;
+            replay->release = false;
+            replay->lifeOnly = false;
+        }
+    }
+    // THE INSTANCES THE ENGINE'S OWN PLUGIN UI BUILT WHILE NO FRONT END WAS ATTACHED are let go (a release applied to headlessUi_ is the only
+    // thing the engine does to it besides the apply in deliverPluginDirective), so that no track source, panel or instrument is held twice.
+    {
+        cascade::core::PluginDirective gone;
+        gone.release = true;
+        headlessUi_.apply(gone);
+    }
+    // THE REPLAY: posted, not applied here. The caller is mid-construction (its own port object is not yet in its hands, and the directive's
+    // steps reach back into it), so the front end applies it at its next applyNewestDirective, as it applies any directive; a newer directive
+    // the pass posts before then replaces it (newest wins) - which is what a replay of an older state ought to do.
+    if (replay.has_value()) { (void)pluginLink_.post(std::move(*replay)); }
+    return true;
+}
+
 bool Engine::deliverPluginDirective(cascade::core::PluginDirective d) {
     std::shared_ptr<const PluginUiApplier> applier;
     {
         std::lock_guard<std::mutex> lk(pluginApplierMutex_);
         applier = pluginApplier_;
+        recordPluginUiStateLocked(d);
     }
     // Inline where nothing can be inside the plugin UI but this thread: no front end (the engine's own plugin UI, driven by
     // whichever thread posts), the front end's own thread, or no control thread (the pass IS the front end's frame).
@@ -9449,6 +9501,17 @@ void Engine::shutdownQuiesce() {
     // the pipeline teardown below ends the sample flow they were taping.
     stopIqRecording();
     stopAudioRecording();
+
+    // THE BOUNDED RUN'S PLUGIN STATUS REPORT (CASCADE_PLUGIN_STATUS; shell retirement R4), where the window used to call reportPluginStatus - right
+    // after this first phase, so it reports the state the run finished in. The plugin UI's half rode in on the front end's last hand-over
+    // (FrontEndFacts::pluginStatus, set only at the end of a bounded run that asked); printed once, and taken so that a second phase prints no
+    // second report. A headless engine, and every product run, hands over none.
+    std::shared_ptr<const PluginStatusFacts> status;
+    {
+        std::lock_guard<std::mutex> lk(frontEndFactsMutex_);
+        status = std::move(frontEndFacts_.pluginStatus);
+    }
+    if (status != nullptr) { reportPluginStatus(status->images, status->ui); }
 }
 
 void Engine::shutdownStop() {

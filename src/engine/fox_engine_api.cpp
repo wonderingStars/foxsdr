@@ -42,6 +42,7 @@
 #include "core/seqlock_box.hpp"
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
+#include "engine/plugin_ui_port.hpp"
 #include "engine/receiver_tables.hpp"
 #include "net/status_compose.hpp"
 #include "net/web_audio.hpp"
@@ -626,6 +627,44 @@ public:
         }
         if (status != nullptr) { *status = FOXAPI_OK; }
         return s.get();
+    }
+
+    // ---- local extensions (shell retirement R4, API 0.3 9.15) ----------------------------------------------------------------
+
+    // get_local_extension. The session in `args` must be one this engine holds, opened LOCAL by a client through the table - not a REMOTE one
+    // and not an engine-internal one (the web page's and CAT's sessions are REMOTE by construction, and carry closed op profiles: the
+    // extension is on no profile). Found by POINTER among the engine's own sessions, never dereferenced before it is known to be one of them.
+    int32_t localExtension(uint32_t extension, const FoxLocalExtensionArgs* args, void** out) {
+        if (out == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+        *out = nullptr;
+        if (args == nullptr || args->structSize < FOXAPI_MIN_LOCAL_EXT_ARGS || args->session == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+        std::shared_ptr<ApiSession> session;
+        {
+            std::lock_guard<std::mutex> lk(sessionsMutex_);
+            for (const auto& kv : sessions_) {
+                if (static_cast<FoxSession*>(kv.second.get()) == args->session) {
+                    session = kv.second;
+                    break;
+                }
+            }
+        }
+        if (session == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+        if ((session->flags & FOXAPI_SESSION_REMOTE) != 0u || (session->flags & FOXAPI_SESSION_LOCAL) == 0u ||
+            session->internal != InternalKind::None) {
+            return FOXAPI_DENIED;
+        }
+        switch (extension) {
+            case FOXAPI_EXT_PLUGIN_UI: {
+                if (args->structSize < sizeof(cascade::core::PluginUiAttach)) { return FOXAPI_BAD_ARGUMENT; }
+                const auto* attach = static_cast<const cascade::core::PluginUiAttach*>(args);
+                std::unique_ptr<cascade::core::PluginUiPort> port = attachPluginUiPort(engine_, attach->steps);
+                if (port == nullptr) { return FOXAPI_BUSY; }
+                *out = port.release();
+                return FOXAPI_OK;
+            }
+            default: break;
+        }
+        return FOXAPI_UNSUPPORTED;
     }
 
     void closeSession(ApiSession* s) {
@@ -3266,6 +3305,11 @@ int32_t FOXAPI_CALL apiSubmitText(FoxSession* s, const FoxCommand* c, const char
     return onSession(s, [&](ApiSession* x) { return x->host->submitText(x, c, text, len, r); });
 }
 
+int32_t FOXAPI_CALL apiGetLocalExtension(FoxEngine* e, uint32_t extension, const FoxLocalExtensionArgs* args, void** out) {
+    if (e == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+    return guarded([&] { return H(e)->localExtension(extension, args, out); });
+}
+
 const FoxEngineApi kApi = {
     sizeof(FoxEngineApi),
     FOXAPI_VERSION_MAJOR,
@@ -3281,7 +3325,10 @@ const FoxEngineApi kApi = {
         FOXAPI_CAP_BOOKMARKS | FOXAPI_CAP_SCANNER | FOXAPI_CAP_PLUGIN_STORE | FOXAPI_CAP_EVENTS | FOXAPI_CAP_BAND_PLAN |
         FOXAPI_CAP_POSITION | FOXAPI_CAP_TRANSMIT |
         // API 0.3 (docs/api-0.3-additions.md).
-        FOXAPI_CAP_FACTS | FOXAPI_CAP_LONG_TEXT | FOXAPI_CAP_SCOPE | FOXAPI_CAP_NODE_SPECTRUM | FOXAPI_CAP_IMAGES,
+        FOXAPI_CAP_FACTS | FOXAPI_CAP_LONG_TEXT | FOXAPI_CAP_SCOPE | FOXAPI_CAP_NODE_SPECTRUM | FOXAPI_CAP_IMAGES |
+        // API 0.3 9.15 (shell retirement R4): the in-process extension points (the plugin UI plane). An engine that serves them says so; a
+        // transport's client library does not, and a REMOTE session is refused them whatever the word says.
+        FOXAPI_CAP_LOCAL_EXT,
     "FoxSDR engine",
     CASCADE_VERSION_STRING,
     apiCreate,
@@ -3305,6 +3352,7 @@ const FoxEngineApi kApi = {
     apiReadScope,
     apiReadNodeSpectrum,
     apiSubmitText,
+    apiGetLocalExtension,
 };
 
 }  // namespace

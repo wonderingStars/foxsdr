@@ -1006,11 +1006,14 @@ void checkPluginUiOwnership(const fs::path& root) {
                 ++headlessLines;
                 const bool declaration = l.find("PluginUi headlessUi_{pluginApi_}") != std::string::npos;
                 const bool apply = l.find("headlessUi_.apply(x)") != std::string::npos;
-                if (!declaration && !apply) { flag(e.path().filename().string(), l, "the engine drives its own plugin UI only through apply()"); }
+                // (shell retirement R4: a front end that attaches late lets go of what the engine's own plugin UI built before it came - the
+                // one release directive Engine::attachPluginUi applies to it)
+                const bool attachRelease = l.find("headlessUi_.apply(gone)") != std::string::npos;
+                if (!declaration && !apply && !attachRelease) { flag(e.path().filename().string(), l, "the engine drives its own plugin UI only through apply()"); }
             }
         }
     }
-    CHECK(headlessLines == 2);  // the declaration and the one apply: both exist, and nothing else
+    CHECK(headlessLines == 3);  // the declaration, the one apply and (R4) the attach's release of what it built: all exist, and nothing else
     int basemapAttach = 0, basemapDetach = 0, infoAttach = 0, infoDetach = 0, uiNamed = 0, linkNamed = 0;
     for (const fs::path& p : guiFiles(root, true)) {
         for (const std::string& l : codeLines(readFile(p))) {

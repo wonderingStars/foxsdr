@@ -330,6 +330,13 @@ private:
     mutable std::mutex pluginApplierMutex_;
     std::shared_ptr<const PluginUiApplier> pluginApplier_;
     std::atomic<std::thread::id> pluginGuiThread_{};
+    // WHAT THE PLUGIN UI IS NOW TO HOLD (shell retirement R4; under pluginApplierMutex_, the lock the applier is read under, so a directive and an
+    // attach are ordered one way or the other): the last rebuild directive with every life-only directive since folded in, empty after a release
+    // and before the first scan. It is what a front end that attaches LATE (attachPluginUi) is replayed, so it misses no instrument. The records
+    // in it point into module images; a release is always delivered before the modules are unmapped (detachAndUnloadPlugins), and delivering it
+    // clears this, so a replay never carries a pointer into an unmapped module.
+    std::optional<cascade::core::PluginDirective> pluginUiState_;
+    void recordPluginUiStateLocked(const cascade::core::PluginDirective& d);
     // Runs one SoapySDR enumeration into soapyDevices_ and re-points the
     // combo selection at the active device by args (labels can repeat; a
     // device that vanished from the scan leaves sourceSel_ = -1 and the
@@ -3310,6 +3317,16 @@ public:
     // (the pass is then in the front end's frame, as it is today). The calling thread is recorded as the front end's. An empty
     // function removes the front end: the engine drives its own plugin UI again. Install before the first scan.
     void setPluginUiApplier(PluginUiApplier applier);
+    // A FRONT END THAT ARRIVES AFTER THE ENGINE STARTED (shell retirement R4; docs/engine-stage4.md 6.25, survey 2.5): installs the applier as
+    // setPluginUiApplier does - the calling thread becomes the front end's - and then (1) lets go of the instances the engine's own plugin UI
+    // built while nobody was attached (they were built for no one: headlessUi_ is released), and (2) posts the plugin UI's CURRENT state as the
+    // newest directive, which the new front end applies at its next applyNewestDirective, so the first scan's instruments, tracks and basemap
+    // are not lost to a window that came after it. Returns false, installing nothing, while another front end is attached (one at a time).
+    // CALL IT ON THE THREAD THAT RAN THE SCAN and before the control thread runs (the headless instances are destroyed on the calling thread,
+    // which is where the ABI created them): the engine host's start-up order, a window constructed before start().
+    bool attachPluginUi(PluginUiApplier applier);
+    // Whether a front end is attached now (its applier is installed).
+    bool pluginUiAttached() const { return frontEnd_.load(std::memory_order_acquire); }
     cascade::core::PluginDirectiveLink& pluginDirectives() { return pluginLink_; }
     // The engine-owned API core the window builds its PluginUi over.
     const std::shared_ptr<cascade::core::PluginApiCore>& pluginApiShared() const { return pluginApi_; }
