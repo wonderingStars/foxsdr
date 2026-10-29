@@ -7,19 +7,19 @@ This is a receive-path fix with no change to how FoxSDR tunes, demodulates or dr
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.101.exe`:**
-`TBD`
+`2dbe5fe11ba6af8989d4f439dff9b06c3a351ab725e4f59ed1c057b2afb7fb25`
 
 **SHA-256 of `FoxSDR-0.99.101-x86_64.AppImage`:**
-`TBD`
+`b7c69e3ae67802c4df35ad3eef0c35e6d0538654b37fad2cd82749b67560ad35`
 
 **SHA-256 of `foxsdr-0.99.101-linux-x64.tar.gz`:**
-`TBD`
+`20c223c680d79391f93b0e8c037fbe06acd60158cf34d352525c59ef7be5c45a`
 
 **SHA-256 of `FoxSDR-0.99.101-aarch64.AppImage`:**
-`TBD`
+`1c529e21fc054317556c3eda02bfabe01c1727786febbb5ef2f6c7fdc902c5ed`
 
 **SHA-256 of `foxsdr-0.99.101-linux-arm64.tar.gz`:**
-`TBD`
+`7c1bf8b19e8ef6b24a9233590ea13e7ac897ea43b5227f44f2f3895adf37f0c7`
 
 ## Features and fixes, 2026-10-29
 
