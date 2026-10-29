@@ -63,7 +63,7 @@ struct GLFWwindow;
 #include "core/store_update.hpp"
 #include "core/pasted_report.hpp"
 #include "core/utf8_text.hpp"
-#include "core/engine_measure.hpp"
+#include "core/bounded_hooks.hpp"
 #include "gui/frame_log.hpp"
 #include "gui/airband_window_state.hpp"
 #include "gui/deck_parts.hpp"
@@ -643,9 +643,13 @@ struct WindowHost {
     // window cannot include either).
     const FoxEngineApi* api = nullptr;
     FoxEngine* handle = nullptr;
-    // THE ENGINE ITSELF, for the shell's view of it (the start, the stop and the pieces of the door that remain). Transitional: R8 moves the start
-    // and the stop to the service and R9 the bounded-run hooks, and with them this member.
+    // THE ENGINE ITSELF, for the shell's view of it - a holder with no methods since R9, which only the tests reach (rawEngine). Transitional: R10
+    // deletes the shell and, with it, this member.
     cascade::engine::Engine* engine = nullptr;
+    // THE BOUNDED RUN'S TWO HOOKS (shell retirement R9; core/bounded_hooks.hpp): the stepping of the engine's pass and the end of each frame, installed
+    // by the host in a `--frames` run and left EMPTY in a product run (a free-running pass has nothing to step, and the window then does nothing there).
+    // Built by engine/host_measure.hpp's makeBoundedHooks, which the window cannot include.
+    cascade::core::BoundedHooks bounded;
     // THE SETTINGS FILE the host restored from; empty is hermetic - nothing read, written or kept. The window still owns the KEEPER until R8 (it
     // saves to this path, debounced, and at the end), so it needs the path and is told how the restore went.
     std::string configPath;
@@ -658,11 +662,10 @@ struct WindowHost {
 // Owns the GLFW window, the ImGui context and the top-level panel layout.
 // All GLFW/ImGui usage stays behind this interface so main() (and any future
 // headless harness) never needs GUI headers.
-class AppWindow : private cascade::engine::ShellHooks {
+class AppWindow {
 public:
     // The window's start-up on an engine the host has built and restored: its API session, the plugin UI's port (a late attach - the scan has
-    // run), its half of the settings from the table, and the shell's view of the engine (which installs the window as its host, so this must
-    // run before the engine's control thread starts: it throws std::runtime_error when the engine refuses the host). Nothing here builds,
+    // run), its half of the settings from the table, and the bounded run's two hooks when the host installed them. Nothing here builds,
     // starts or restores the engine - that is EngineService's (engine/engine_service.hpp) - and nothing reads the settings file. An EMPTY
     // `configPath` is the hermetic mode the --frames/--selftest CI contract requires: nothing is read or written. The CASCADE_CONFIG_TEST line
     // ("config applied: ...") is the host's to print (EngineService::announce).
@@ -695,10 +698,6 @@ public:
     // stopped LAST (so a wedge anywhere in the engine's stop is reported against the shutdown budget), and the lines a clean end prints ("teardown N
     // ms", "rendered N frames", ...). A no-op when run() never made a window (it failed, or handed the run to the software renderer). Idempotent.
     void closeWindow();
-
-    // The bounded measurement run (FOXSDR_MEASURE, core/engine_measure.hpp) the host read from the environment: it decides the engine's pass (a
-    // measurement times the product's own free-running arrangement), so the host reads it once and hands it over. Null: none.
-    void setMeasurement(std::unique_ptr<cascade::core::EngineMeasure> measure) { measure_ = std::move(measure); }
 
     // True when run() returned because the graphics driver could not be used
     // and this run is to be handed to a second process on the software
@@ -737,8 +736,8 @@ private:
     // THE ENGINE (engine extraction stage 3a, docs/engine-stage3.md), BEHIND THE FENCE (stage 4, step 5): the receiver's state and
     // machinery are an Engine the HOST owns (shell retirement R7: an EngineService, built by main.cpp or the test host and restored before this
     // window exists) - the window holds a VIEW of it, an EngineShell, the narrow door declared in engine/engine_shell.hpp, and the interface target
-    // cannot include engine.hpp at all. The view installs this window as the engine's host (Engine::setHost) and puts the engine's own back when
-    // it is destroyed. Declared FIRST, so it is built before and destroyed after everything the window keeps.
+    // cannot include engine.hpp at all. (Until R9 the view also installed this window as the engine's host, Engine::setHost; it installs nothing now.)
+    // Declared FIRST, so it is built before and destroyed after everything the window keeps.
     std::unique_ptr<cascade::engine::EngineShell> engineHolder_;
     cascade::engine::EngineShell& engine_;
     // THE PLUGIN UI IS THIS WINDOW'S (the pump move's step P3): the track sources, panels and instruments polled in the frame
@@ -754,18 +753,27 @@ private:
     // The frame's hand-over (handFrontEndFacts): one object, refilled each frame and passed by reference - the engine's side copies what it keeps.
     cascade::core::PluginUiFrontEnd frontEnd_;
 
-    // --- WHAT THE ENGINE ASKS OF THIS WINDOW (engine/engine_shell.hpp: ShellHooks) ---------
-    // Each answers exactly as the line the moved code used to run here did,
-    // on the same (GUI) thread at the same moment; the definitions are at the
-    // end of app_window.cpp. (The pump move's step P2 took seven hooks out of this list - onDisplayRange, onBookmarksChanged,
+    // --- WHAT THE ENGINE ONCE ASKED OF THIS WINDOW (engine/engine_shell.hpp: ShellHooks, until shell retirement R9) ---------
+    // Nothing: the engine asks its front end for no answer. What is left is the window's own clock, the usage report's session timer. (The pump move's
+    // step P2 took seven hooks out of this list - onDisplayRange, onBookmarksChanged,
     // onConverterChanged, drainTrackInfoText, enrichWebTrack, fillWebImages and the window's onCatalogueResult - and turned
     // openPluginWindowsFor into the window's own answer to an event: each wrote or read state the window owns from the engine's
     // pass, which a pass on a thread of its own must not.)
     // (The pump move's step P4 took the frame clock out: frameClockRunning and frameTimeS, and the caches that made them answerable from
     // the pass's thread. The engine runs on its own steady clock, Engine::clockS().)
-    double wallTimeS() const override;
-    void pauseWatchdog() override;
-    void resumeWatchdog() override;
+    // The wall-clock the window's own usage report (the beta tester's) measures a session with (glfwGetTime()).
+    double wallTimeS() const;
+    // THE BOUNDED RUN'S STEP (shell retirement R9): the host's hook run under the window's own WatchdogPause - the frame is BLOCKED in the wait for the
+    // engine's pass part, not hung, and a part that really hangs is the control thread's own watchdog's to report (it was Engine::setFrontEndWaitBeat,
+    // the window's heartbeat, until R9). Does nothing in a product run, whose pass free-runs. The three calls of drawUi's look are these.
+    void stepPass(cascade::core::PassPart part);
+    // THE END OF A FRAME in a bounded run: the host's hook (the measurement's step, the frame the catalogue report names). It is not under a pause of its
+    // own (it runs every frame); the host brackets the one wait it makes with boundedClient_.blocked. False when the measurement has finished and the
+    // window is to close. True, and nothing done, when the host installed none.
+    bool endOfFrameHook(int nextFrame);
+    // The hooks the host installed (empty in a product run), and what only this window can do for a measurement, built once when there are some.
+    cascade::core::BoundedHooks bounded_;
+    cascade::core::BoundedClient boundedClient_;
     // (The pump move's step P3 took the last five hooks out - beforePluginRescan, onPluginsUnloading, attachBasemap, attachTrackInfo
     // and showDemonstrationInstrument: the plugin UI is this window's, so the engine POSTS a directive and this window applies it.)
     // Applies the newest plugin directive, if one is waiting, on this thread: at the head of the frame and at the head of
@@ -4115,16 +4123,16 @@ private:
     bool pluginUrlSeeded_ = false;
     std::string pluginUrlSeed_;
     // --- measurement (tools/measure_engine.ps1) ------------------------------
-    // All three null in every ordinary run; each is created only by its debug
-    // switch. FOXSDR_MEASURE (measure_) is honoured in a bounded --frames run
-    // ONLY. FOXSDR_FRAME_LOG (frameLog_), FOXSDR_FRAME_CAP_HZ (frameCap_) and
+    // Both null in every ordinary run; each is created only by its debug
+    // switch. FOXSDR_MEASURE is the bounded run's HOST's since shell retirement R9
+    // (engine/host_measure.hpp; honoured in a bounded --frames run ONLY, driven by
+    // the end-of-frame hook above). FOXSDR_FRAME_LOG (frameLog_), FOXSDR_FRAME_CAP_HZ (frameCap_) and
     // FOXSDR_VSYNC_OFF (the swap interval, read where the window is made) are
     // read in EVERY run, interactive ones included - an environment switch,
     // never a setting, and there is no other way on. See gui/frame_log.hpp
     // and core/engine_measure.hpp.
     std::unique_ptr<FrameLog> frameLog_;
     std::unique_ptr<FrameCap> frameCap_;  // FOXSDR_FRAME_CAP_HZ
-    std::unique_ptr<cascade::core::EngineMeasure> measure_;
     // --- update check --------------------------------------------------------
     bool closeRequested_ = false;     // set by the updater; the run loop honours it
     bool updateCheckEnabled_ = true;

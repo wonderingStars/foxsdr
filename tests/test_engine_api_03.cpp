@@ -9690,8 +9690,6 @@ void testShellRetirementR4Extension() {
         t.plugin = "r4 plugin";
         std::snprintf(t.t.id, sizeof(t.t.id), "%s", "AB12CD");
         f.trackFeed.polled.push_back(t);
-        f.pluginTestReport = true;
-        f.frame = 17;
         port->setFrontEnd(f);
         const std::shared_ptr<const ce::TrackFeed> first = d.eng.trackFeed();
         CHECK(first != nullptr);
@@ -9714,8 +9712,6 @@ void testShellRetirementR4Extension() {
         CHECK_EQ(facts.tunerDisplayStyle, std::string("Dial"));
         CHECK(facts.basemap.active && facts.basemap.tileSize == 256u);
         CHECK_EQ(facts.basemap.attribution, std::string("r4 attribution"));
-        CHECK(facts.pluginTestReport);
-        CHECK_EQ(facts.frame, 17);
         CHECK(facts.pluginStatus == nullptr);                             // only a bounded run that asked hands the report's half over
         // No track feed this frame: the pass lists none, and an empty face name leaves the engine's default face.
         cc::PluginUiFrontEnd none;

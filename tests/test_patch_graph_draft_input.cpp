@@ -577,7 +577,7 @@ struct Starter {
     pc::NodeId demod = pc::kNoNode;
 };
 
-AppWindow* makeApp(Starter& s) {
+th::TestWindow* makeApp(Starter& s) {
     auto* a = new th::TestWindow();
     pc::Graph g;
     s.radio = g.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, 40.0f, 40.0f);
@@ -728,7 +728,7 @@ int main() {
     {
         std::printf("A: the Channel key in the parts bin\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         CHECK(inStep(*a));
         float rowY = 0.0f;
         const std::vector<float> keys = partKeys(*a, rowY);
@@ -749,7 +749,7 @@ int main() {
     {
         std::printf("B: drag the radio 150,60 across five frames\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const pc::Node start = *A::engine(*a).find(s.radio);
         const ImVec2 at = header(*a, s.radio);
         g_watch = s.radio;
@@ -801,7 +801,7 @@ int main() {
     {
         std::printf("C: wire the radio's output to the channel's input\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const pc::Node radio = *A::engine(*a).find(s.radio);
         const pc::Node chan = *A::engine(*a).find(s.chan);
         const ImVec2 from = screen(*a, pg::outputPortPos(radio, 0));
@@ -831,7 +831,7 @@ int main() {
     {
         std::printf("E: click the channel's title bar and press Delete\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const ImVec2 at = header(*a, s.chan);
         click(*a, at.x, at.y);
         pressDelete(*a);
@@ -851,7 +851,7 @@ int main() {
     {
         std::printf("F: ALL OFF, then a new patch loaded - the page follows each\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         CHECK(A::draft(*a).find(s.radio) != nullptr && A::draft(*a).find(s.radio)->on);
         CHECK(A::apply(*a, cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF)).status == FOXAPI_OK);
         frame(*a);
@@ -874,7 +874,7 @@ int main() {
     {
         std::printf("G: drag the radio; mid-drag ALL OFF and a rate the engine learns\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const pc::Node start = *A::engine(*a).find(s.radio);
         const float zoom = A::view(*a).zoom;
         const ImVec2 at = header(*a, s.radio);
@@ -919,7 +919,7 @@ int main() {
     {
         std::printf("H: a channel frequency that is not a number\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const std::string before = pc::graphCommandText(A::engine(*a));
         if (pc::Node* n = A::mutableDraft(*a).mutableNode(s.chan)) {
             n->freqHz = std::numeric_limits<double>::infinity();
@@ -980,7 +980,7 @@ int main() {
         std::printf("J%d: drag the radio; a new patch (%s) puts a Map under its id\n", via,
                     via == 0 ? "a DOCUMENT op" : "loadPatchDocument");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const ImVec2 at = header(*a, s.radio);
         mouseTo(*a, at.x, at.y);
         press(*a);
@@ -1053,7 +1053,7 @@ int main() {
     {
         std::printf("S: Ctrl+click the demodulator's squelch slider, type -200\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const pc::Node demod = *A::engine(*a).find(s.demod);
         CHECK(demod.squelch && demod.squelchDb == -50.0f);
         // The face's widgets, top to bottom: the mode, the squelch switch,
@@ -1119,7 +1119,7 @@ int main() {
     {
         std::printf("P: serialisations on idle frames, open and not drawn, and on a drag frame\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         frames(*a, 3);
         auto& count = pc::serialiseCount();
         std::uint64_t c0 = count.load();
@@ -1163,7 +1163,7 @@ int main() {
     {
         std::printf("K: start a wire, hide the view, release; ALL OFF; show the view\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const pc::Node radio = *A::engine(*a).find(s.radio);
         const ImVec2 from = screen(*a, pg::outputPortPos(radio, 0));
         mouseTo(*a, from.x, from.y);
@@ -1205,7 +1205,7 @@ int main() {
     {
         std::printf("L: drag the radio across five frames while the engine's pass stalls, then let go\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const pc::Node start = *A::engine(*a).find(s.radio);
         const float zoom = A::view(*a).zoom;
         const ImVec2 at = header(*a, s.radio);
@@ -1362,7 +1362,7 @@ int main() {
     {
         std::printf("B2: a full session queue (BUSY) keeps the edit in the draft\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         const pc::Node start = *A::engine(*a).find(s.radio);
         const float zoom = A::view(*a).zoom;
         const ImVec2 at = header(*a, s.radio);
@@ -1397,7 +1397,7 @@ int main() {
     {
         std::printf("N: ALL OFF, then START and a drag committed from before it, applied in one pass\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         CHECK(A::apply(*a, cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF)).status == FOXAPI_OK);
         frames(*a, 3);
         CHECK(A::engine(*a).find(s.radio) != nullptr && !A::engine(*a).find(s.radio)->on);
@@ -1441,7 +1441,7 @@ int main() {
     {
         std::printf("O: START, the receiver view chosen, the patch view chosen again\n");
         Starter s;
-        AppWindow* a = makeApp(s);
+        th::TestWindow* a = makeApp(s);
         std::vector<cascade::core::cmd::QueuedCommand> sent;
         A::tap(*a, &sent);
         const auto pageCommands = [&] {
@@ -1551,7 +1551,7 @@ int main() {
         if (pc::Node* n = g.mutableNode(off)) { n->on = false; }
         const pc::NodeId main = radioNode(g, "Main", 40.0f, pc::kGeneratorKey, 620.0f);
         (void)bare;
-        AppWindow* a = appOn(g);
+        th::TestWindow* a = appOn(g);
         // NOT RUNNING: the device named by the table's list (a generator's label), the three words a stopped face has.
         textNow(*a);
         if (std::getenv("G13_DUMP") != nullptr) { std::printf("[[%s]]%c", g_text.c_str(), 10); }
@@ -1646,7 +1646,7 @@ int main() {
         CHECK(g.connect(chan, 0, demod, 0) == pc::Connect::Ok);
         CHECK(g.connect(demod, 0, speaker, 0) == pc::Connect::Ok);
         CHECK(g.connect(radio, 0, display, 0) == pc::Connect::Ok);
-        AppWindow* a = appOn(g);
+        th::TestWindow* a = appOn(g);
         A::setRecordDir(*a, rec.string());
         // STOPPED: the speaker waits, the Spectrum part has no spectrum, nothing is read live.
         textNow(*a);
@@ -1765,7 +1765,7 @@ int main() {
         CHECK(g.connect(decA, 0, outA, 0) == pc::Connect::Ok);
         CHECK(g.connect(decA, 0, outB, 0) == pc::Connect::Ok);   // A shows on both Text outs...
         CHECK(g.connect(decB, 0, outB, 0) == pc::Connect::Ok);   // ...B only on the second
-        AppWindow* a = appOn(g);
+        th::TestWindow* a = appOn(g);
         textNow(*a);
         CHECK(shows("Decoded lines appear here."));
         A::injectLine(*a, decA, "POCSAG", "page for A one");
@@ -1812,7 +1812,7 @@ int main() {
         std::printf("T: START, ALL OFF, the device list and \"Look for radios\" go through the session\n");
         pc::Graph g;
         const pc::NodeId radio = radioNode(g, "Radio", 40.0f, pc::kGeneratorKey);
-        AppWindow* a = appOn(g);
+        th::TestWindow* a = appOn(g);
         std::vector<cascade::core::cmd::QueuedCommand> sent;
         A::tap(*a, &sent);
         const auto ops = [&] {
@@ -1964,7 +1964,7 @@ int main() {
         CHECK(g.connect(chan, 0, demod, 0) == pc::Connect::Ok);
         CHECK(g.connect(demod, 0, speaker, 0) == pc::Connect::Ok);
         CHECK(g.connect(radio, 0, display, 0) == pc::Connect::Ok);
-        AppWindow* a = appOn(g);
+        th::TestWindow* a = appOn(g);
         A::setRecordDir(*a, rec.string());
         A::submit(*a, cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, 1));
         CHECK(untilText(*a, "2.400 MS/s"));

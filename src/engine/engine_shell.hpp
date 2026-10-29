@@ -52,16 +52,15 @@
 
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
-#include "core/engine_measure.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/host_image.hpp"
+#include "core/pass_part.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_ui_data.hpp"
 #include "core/plugin_ui_port.hpp"
 #include "core/receiver_snapshot.hpp"
 #include "engine/bias_tee.hpp"
 #include "engine/tune_control.hpp"
-#include "source/iq_source.hpp"
 
 namespace cascade::core {
 class PluginUi;  // named, never defined here: only engine_shell.cpp and the tests see it
@@ -133,13 +132,9 @@ struct ControlThreadOptions {
     std::string diagnosticsDir;
 };
 
-// THE THREE PARTS OF A PASS (pump move P4/P5). A free-running pass runs them in this order as one; a stepped one runs each when
-// the front end asks (EngineShell::stepPass), which is how the window keeps the order the pump had in its frame - the part up to and
-// including the publish, then the audio mute (which the frame ran after its look, before it drew), then the workers and audio:
-//   Front  the GPS fix, the command queues, the inputs, the remote controls, the plugins and the scanner, the patch, the publish
-//   Mute   the audio mute (a decision about the receiver the state it just published describes)
-//   Back   the workers (device scans and opens, the retune coalescer, downloads) and the audio sink's health, the config copy
-enum class PassPart { Front, Mute, Back };
+// THE THREE PARTS OF A PASS (pump move P4/P5) are core/pass_part.hpp now (shell retirement R9, 2026-10-28): the word a bounded run's host and its window
+// share, in namespace cascade::core, named back here for the engine's code (R10 deletes this header and names it where it is used).
+using cascade::core::PassPart;
 
 // THE TRACK FEED, THE BASEMAP'S FIGURES AND THE BOUNDED-RUN STATUS REPORT'S PLUGIN HALF moved to core/plugin_ui_port.hpp with the plugin UI plane
 // (shell retirement R4, 2026-10-28), beside the tile vocabulary and what one directive says to the window: they are the port's data, which the
@@ -168,10 +163,9 @@ struct FrontEndFacts {
     BasemapFacts basemap;
     // The track feed (above); null when there is none, which is every pass of a headless engine.
     std::shared_ptr<const TrackFeed> trackFeed;
-    // A BOUNDED RUN'S DIAGNOSTIC (CASCADE_PLUGIN_TEST): whether to print the catalogue report when a fetch resolves, and the
-    // window's frame count to name in it - the window's onCatalogueResult hook used to read its own counter from the pass.
-    bool pluginTestReport = false;
-    int frame = 0;
+    // (A BOUNDED RUN'S CATALOGUE DIAGNOSTIC - CASCADE_PLUGIN_TEST: whether to print the report when a fetch resolves, and the frame to name in it - was
+    // a pair of fields here until shell retirement R9, 2026-10-28. It is the bounded run's HOST's: the harness (engine/host_measure.hpp) arms it and is told
+    // the frame at the end of each of the window's frames - Engine::setPluginTestReport, notePluginTestFrame.)
     // A BOUNDED RUN'S DIAGNOSTIC (CASCADE_PLUGIN_STATUS; shell retirement R4): what the window's plugin poll and picture buffer hold, handed over
     // once at the end of a run that asked for the report (PluginUiFrontEnd::pluginStatusReport) and printed, once, by Engine::shutdownQuiesce
     // right after its first phase - where the window used to call reportPluginStatus. Null in every other pass.
@@ -231,23 +225,10 @@ struct EngineStatusText {
 // here until stage 5d: the web server and CAT hold sessions on the table now, and the pass drains what they submit in the internal tier.
 // docs/engine-stage4.md 6.12.)
 
-// ==================================================================================================================================
-// WHAT THE ENGINE ASKS OF ITS FRONT END (replaces the interface's use of EngineHost, which names the web server and the plugin UI)
-// ==================================================================================================================================
-
-// The clocks and the watchdog - three calls, thread-safe by construction (engine/stage3b-pre OPEN 4). The shell adapts the two watchdog calls to the
-// engine's own EngineHost; the window implements all three. (wallTimeS is NOT asked of the window by the engine since shell retirement R7: the engine
-// started on its own host's clock, in the service's restore, and a host that replaced it with glfwGetTime would have put the usage report's session
-// start and its reads on two clocks. The window's own tester session still reads it. It goes with the class, R9.)
-class ShellHooks {
-public:
-    virtual ~ShellHooks() = default;
-    // The wall-clock the window's own usage report measures a session with (glfwGetTime()).
-    virtual double wallTimeS() const = 0;
-    // Paused across deliberate blocking work on the calling thread (a plugin rescan, a bounded device open).
-    virtual void pauseWatchdog() = 0;
-    virtual void resumeWatchdog() = 0;
-};
+// (WHAT THE ENGINE ASKED OF ITS FRONT END - ShellHooks: the wall clock, the hang watchdog's pause and resume - was here until shell retirement R9,
+// 2026-10-28. The clock was the engine host's own since R7, and the pause is the window's: it wraps the bounded run's step in its own WatchdogPause
+// (AppWindow::stepPass), because the only wait a front-end thread makes for the engine is the stepped run's. The engine's host is fixed for life;
+// Engine::setHost and resetHost, and the shell's adapter, are gone with the class.)
 
 // ==================================================================================================================================
 // THE SHELL
@@ -256,59 +237,25 @@ public:
 class EngineShell {
 public:
     // ---------------------------------------------------------------------------------------------------------------------------
-    // CLASS SHELL (added 2026-10-21, stage 4 step 5; END: stage 7, the host process split from the interface). The bounded-run
-    // driver and the engine's start and stop. AppWindow::AppWindow, ~AppWindow and run are the callers.
-    // (THE COMPOSITION ROOT is not here any more: shell retirement R7, 2026-10-28, moved the construction of the engine to the host
-    // process. main - or the test host - builds an EngineService, restores the settings and hands the window the engine's API table, its
-    // handle and the engine itself; the shell is a VIEW of that engine now, not its owner. The restore - initialise, the settings
-    // file's load and the receiver's half of it, the usage journal's start-up, the bookmarks, the CASCADE_CONFIG_TEST read-back - is the
-    // service's, and the table's api and handle are main's to pass: initialise, loadBookmarks, telemetryStartup, applyConfig,
-    // configReadback, apiTable and apiHandle left this door.)
+    // CLASS SHELL (added 2026-10-21, stage 4 step 5; END: stage 7, the host process split from the interface). IT HAS NO METHODS LEFT: shell
+    // retirement R9 (2026-10-28) took the last six, so SHELL 0, HOST 0, the feed 0 and the window's call sites on the engine 0. What remains is
+    // the holder, until R10 deletes this header: a non-owning view of the engine the host built, which the tests reach (rawEngine, through
+    // tests/test_host.hpp's one audited friend). The window calls nothing on it.
+    // (THE COMPOSITION ROOT is not here: shell retirement R7, 2026-10-28, moved the construction of the engine to the host process. main - or
+    // the test host - builds an EngineService, restores the settings and hands the window the engine's API table, its handle and the engine
+    // itself. R8 moved the engine's START and STOP to the service; the window's own part of its end is the prelude of run() and closeWindow().)
+    // (R9, 2026-10-28: the six that were left went to the HOST, whose bounded run is core/bounded_hooks.hpp - two std::functions the host installs
+    // in a `--frames` run and never in a product run: setFrontEndWaitBeat (the window wraps the step in its own WatchdogPause), stepPass (the
+    // hook), and the measurement run's four seams (seamMeasureTick, seamMarkPassStats, seamPassStatsJson, seamInstallSource: the harness,
+    // engine/host_measure.cpp, driven by the hook that ends each frame). The settings are the service's since R8; the store's URL box, the status
+    // lines, the frame's kick and the two listeners' use are table facts since R3; the diagnostics directory rides the interface's half since R5.)
     // ---------------------------------------------------------------------------------------------------------------------------
 
-    // A view of the engine the host built, for the window `hooks` fronts (`hooks` must outlive the shell, and so must `engine`).
-    // It installs the window's answers to the engine's three questions of its front end (the hang watchdog's pause and resume) with
-    // Engine::setHost, and the destructor puts the engine's own host back (Engine::resetHost): a window can come and go over an engine
-    // that stays. NOTHING in the engine is built or destroyed by a shell. Throws std::runtime_error, with the sentence, when the engine
-    // refuses the host (its control thread is already running - setHost answers false then and changes nothing): a window that cannot
-    // become the engine's host must not carry on as if it were one.
-    static std::unique_ptr<EngineShell> view(Engine& engine, ShellHooks& hooks);
+    // A view of the engine the host built (`engine` must outlive the shell). NOTHING in the engine is built, installed or destroyed by a shell.
+    static std::unique_ptr<EngineShell> view(Engine& engine);
     ~EngineShell();
     EngineShell(const EngineShell&) = delete;
     EngineShell& operator=(const EngineShell&) = delete;
-
-    // --- the front end's wait ---
-    // (The settings are the engine service's since shell retirement R8: the window's keeper, and with it configSnapshot and publishConfig, are gone.)
-    // (The store's URL box is seeded from the table's fact.store.url, the status lines are read as fact.status.*, the frame's kick is the heartbeat of a
-    // FOXAPI_SESSION_FRAME session and the two listeners' use is fact.web.served / fact.cat.accepted: shell retirement R3 retired
-    // pluginCatalogueUrl, publishStatusText, statusText, frameKick and setServerUsageHooks from this door.)
-    void setFrontEndWaitBeat(std::function<void()> beat);
-    // (The Diagnostics switch reaches the control thread's watchdog inside the interface's half of the configuration - FOXAPP_OP_INTERFACE_CONFIG,
-    // Engine::applyInterfaceConfig - against the directory the host named in ControlThreadOptions::diagnosticsDir: shell retirement R5 retired
-    // setControlWatchdogReportDir from this door.)
-    // (The engine API's table and the handle its LOCAL session opens on are main's to pass - AppWindow(WindowHost) - and not the door's: shell
-    // retirement R7 retired apiTable and apiHandle.)
-
-    // --- the run ---
-    void stepPass(PassPart part);
-    // (SHELL RETIREMENT R8, 2026-10-28: the engine's START and STOP left this door for EngineService, which main.cpp - or the test host - calls: the receiver
-    // started, the control thread's first pass and the thread, the usage heartbeat (startReceiver, controlPass, startControlThread, configureHeartbeat), the
-    // clean-exit marker (markCleanExit), the engine's transfers and teardown (stopTransfers, teardown) and its four shutdown phases (shutdownQuiesce,
-    // shutdownStop, shutdownRelease, shutdownDrain). The window's own part of its end is the prelude of run() and closeWindow().)
-    // (The enforcement diagnostic - a bounded run's CASCADE_PLUGIN_STATUS - is printed by the engine at the end of shutdownQuiesce, from what the
-    // window handed over in its last setFrontEnd; shell retirement R4 retired reportPluginStatus from this door.)
-
-    // --- the bounded-run seams: each is an environment-driven test or capture hook, honoured in a bounded run only ---
-    // (R2 of the shell retirement, 2026-10-28: the eight seams of the window's ordinary hooks are CLIENT CODE now - the window sends the
-    // table's own ops on its session: FOXAPP_OP_TEST_BIAS_STAND_IN, SET_CATALOGUE_URL + STORE_FETCH, SCAN_NATIVE_ONLY + SELECT_SOURCE read
-    // from the DEVICES list, the state's FOXAPI_RX_DEVICE_OPENING and FOXAPI_RX_PATCH_RUNNING flags, PLUGIN_PRESET / PLUGIN_RUN_MODE read
-    // from the PLUGINS and PRESETS lists, FOXAPP_OP_TEST_PATCH_RUNNING, and uiSubmit for the six commands the old seamSubmit carried.
-    // What is left is the measurement run, which R9 moves to the host.)
-    // The measurement run (FOXSDR_MEASURE): one step a frame over the pipeline, the pass's figures, and the generator's install.
-    bool seamMeasureTick(cascade::core::EngineMeasure& measure, const cascade::core::MeasureHooks& hooks);
-    void seamMarkPassStats();
-    std::string seamPassStatsJson() const;
-    void seamInstallSource(std::unique_ptr<cascade::source::IqSource> source);
 
 private:
     EngineShell();

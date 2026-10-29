@@ -3,35 +3,36 @@
 //
 // THE CHANGE UNDER TEST. The window used to build the engine inside its own constructor (EngineShell::create), restore the settings into it there,
 // attach to the plugin UI before the plugin scan, and own it to the end. Now main.cpp - and the test host, tests/test_host.hpp, which is main's
-// order for a test - builds an EngineService, restores, and only then constructs the window, which is a GUEST of the engine: its shell is a VIEW
-// that installs the window as the engine's host (Engine::setHost, before any control thread) and lets it go again (Engine::resetHost). This test
-// holds the three things that change underneath that:
+// order for a test - builds an EngineService, restores, and only then constructs the window, which is a GUEST of the engine. (From R7 to R9 its shell
+// was a VIEW that installed the window as the engine's host - Engine::setHost, before any control thread - and let it go again; R9 removed the
+// host swap with the class that did it: the engine's host is its own for life, and the window pauses its own watchdog around the stepped run's
+// wait - AppWindow::stepPass.) This test holds the things that change underneath that:
 //
-//   A  THE HOST OWNS THE ENGINE. The window's engine is the Host's own; the window is installed as the engine's host while it lives and the
-//      engine has its own host back when it goes; its plugin UI is attached while it lives and not after.
-//   B  THE INSTALL IS REFUSED LOUDLY, NOT SILENTLY. Engine::setHost answers false while the control thread runs (R6's audited guard). A window built
-//      on an engine that is already running must not carry on as if it were the engine's host: the constructor throws, with the sentence, says so
-//      in the log, and changes nothing about the engine - which then takes a window built after the thread is gone.
-//   C  A WINDOW THAT GOES WHILE THE ENGINE STILL RUNS IS DETACHED, NOT DANGLING. The shell's destructor cannot take the host back (resetHost
-//      refuses while the control thread runs); the adapter is kept, loudly, and answers nothing - the engine's later pause and resume reach no
-//      dead window - until the engine does let go.
+//   A  THE HOST OWNS THE ENGINE. The window's engine is the Host's own; the engine's host is its own before, while and after the window lives;
+//      its plugin UI is attached while the window lives and not after.
+//   B  THE HOST IS FIXED FOR LIFE (R9; was: THE INSTALL IS REFUSED LOUDLY, R7 - Engine::setHost refused while the control thread ran, and the window's
+//      constructor threw). There is no install to refuse: a window built beside an engine whose control thread runs does not touch the engine's host
+//      and says nothing about it. (That the window is built BEFORE the service starts - the late attach would race a running thread - is main's
+//      order, held from main.cpp's text by tests/test_engine_service_order.cpp.)
+//   C  A WINDOW THAT GOES WHILE THE ENGINE STILL RUNS LEAVES NOTHING BEHIND (R9; was: DETACHED, NOT DANGLING - the shell's adapter was kept, loudly,
+//      until the engine let go). The engine's pause and resume are its own host's, whether or not a window ever existed.
 //   D  THE START-UP PATH EXERCISES THE REPLAY, and the cost of it to third-party code is exactly what the survey (2.5) said: the restore's scan built
 //      the plugin UI for nobody (the engine's own instances: one create each), the window's attach destroys them and the replay builds the window's
 //      (a second create each, one destroy) - inside the window's constructor. Before R7 the window attached BEFORE the scan and each GUI-class
 //      instance was created once. Every create and destroy is on the thread that polls, the window's and the host's being one thread.
 //   F  WHAT THE WINDOW KEEPS OF THE RESTORE. It no longer reads the settings file: its half is the table's (fact.config.interface); the last run's marker
 //      (the crash-report offer), the saved I/Q file path (the path box) and the closed Transmit page come from the host's restore.
-//   E  THE ENGINE'S CLOCK IS ONE CLOCK. The restore stamps the usage report's session start on the service's host; the window installs its own host
-//      afterwards. Every EngineHost measures from the process's first, so the stamp and the reads that follow it are one clock (a host that restarted
-//      the clock at its own construction would put the session's length and its mode seconds on two).
+//   E  THE ENGINE'S CLOCK IS ONE CLOCK. The restore stamps the usage report's session start on the service's host. Every EngineHost measures from the
+//      process's first, so the stamp and the reads that follow it are one clock (a host that restarted the clock at its own construction would put the
+//      session's length and its mode seconds on two).
 //
 //   G  THE WINDOW GOES AFTER THE ENGINE HAS BEEN STOPPED (shell retirement R8: the product's order - main stops the service with the window alive and destroys
 //      the window after): its session is closed on an engine with no pass left while a key is held; a harmless release, the key let go of once, by the stop.
 //   H  THE LAST HALF OF THE SETTINGS REACHES THE FILE: the window's last-second change, handed over by the prelude's flush and applied by the service's final
 //      pass, is in the file the stop writes - for the stepped pass and the free-running one; the control run without the flush keeps the loaded value.
 //
-// Break-it (docs/engine-stage4.md 6.25): the shell's view does not check setHost's answer: B RED (no throw); the destructor does not detach: C RED
-// (the engine's pause reaches the dead hooks); Engine::attachPluginUi without its replay: D RED (the window has no instance); the clock per host: E RED.
+// Break-it (docs/engine-stage4.md 6.25): the window installs itself as the engine's host again (a hostIsOwn that is false while it lives): A, B and C RED;
+// Engine::attachPluginUi without its replay: D RED (the window has no instance); the clock per host: E RED.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -42,7 +43,6 @@
 #include <fstream>
 #include <functional>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -51,7 +51,6 @@
 #include "core/plugin_api.hpp"
 #include "engine/engine.hpp"
 #include "engine/engine_host.hpp"
-#include "engine/engine_shell.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "source/tx_sink.hpp"
 #include "gui/app_window.hpp"
@@ -67,25 +66,11 @@ using namespace pump3;
 
 namespace {
 
-// What a window answers: counted, so a test can tell a call that reached it from one that did not.
-class CountingHooks final : public cascade::engine::ShellHooks {
-public:
-    double wallTimeS() const override {
-        ++wall;
-        return 0.0;
-    }
-    void pauseWatchdog() override { ++pauses; }
-    void resumeWatchdog() override { ++resumes; }
-    mutable std::atomic<int> wall{0};
-    std::atomic<int> pauses{0};
-    std::atomic<int> resumes{0};
-};
-
 // ======================================================================================================================
 // A. THE HOST OWNS THE ENGINE
 // ======================================================================================================================
 void testHostOwnsTheEngine() {
-    std::printf("  A: the Host's engine is the window's; the window is its host and its plugin UI while it lives, and neither after\n");
+    std::printf("  A: the Host's engine is the window's; the engine keeps its own host throughout, and its plugin UI is the window's while it lives, and not after\n");
     th::Host h("");
     Engine& e = h.engine();
     CHECK(Access::hostIsOwn(e));                // restored: the engine asks its own host
@@ -94,74 +79,52 @@ void testHostOwnsTheEngine() {
     {
         th::BareWindow w(h);
         CHECK(&th::engine(w) == &e);            // the window's engine IS the Host's
-        CHECK(!Access::hostIsOwn(e));           // the window is the engine's host now (the shell's adapter)
-        CHECK(e.pluginUiAttached());            // and its plugin UI's front end
+        CHECK(Access::hostIsOwn(e));            // the window is NOT the engine's host (R9: it was, through the shell's adapter, from R7)
+        CHECK(e.pluginUiAttached());            // but it is the plugin UI's front end
     }
-    CHECK(Access::hostIsOwn(e));                // the view gave the engine its own host back
+    CHECK(Access::hostIsOwn(e));                // the engine's host is the same after
     CHECK(!e.pluginUiAttached());               // the port disconnected
 }
 
 // ======================================================================================================================
-// B. THE INSTALL IS REFUSED LOUDLY
+// B. THE HOST IS FIXED FOR LIFE
 // ======================================================================================================================
-void testRefusedWhileTheControlThreadRuns() {
-    std::printf("  B: a window built on an engine whose control thread runs is refused - a thrown sentence, a log line, nothing changed\n");
+void testNoHostToInstall() {
+    std::printf("  B: a window built beside an engine whose control thread runs installs nothing - no refusal, no sentence, the engine's host untouched\n");
     th::Host h("");
     Engine& e = h.engine();
     Access::startControlOn(e);
     CHECK(e.controlThreadRunning());
     const int said0 = diagLines("could not become the engine's host");
-    bool threw = false;
-    std::string what;
-    try {
-        th::BareWindow w(h);
-    } catch (const std::runtime_error& ex) {
-        threw = true;
-        what = ex.what();
-    }
-    CHECK(threw);                                                                    // loud: not a window that quietly carries on
-    CHECK(what.find("control thread is already running") != std::string::npos);     // ... with the reason
-    CHECK(what.find("Engine::setHost") != std::string::npos);
-    CHECK_EQ(diagLines("could not become the engine's host") - said0, 1);            // ... and in the log
-    CHECK(Access::hostIsOwn(e));                                                     // nothing changed: the engine still asks its own host
-    CHECK(!e.pluginUiAttached());
-    CHECK(e.controlThreadRunning());                                                 // ... and is still running
-    e.stopControlThread();
     {
-        th::BareWindow w(h);                                                         // the same engine takes a window once its thread is gone
-        CHECK(!Access::hostIsOwn(e));
+        th::BareWindow w(h);                                                         // (R7 threw here: Engine::setHost refused while the thread ran)
+        CHECK(Access::hostIsOwn(e));                                                 // the engine still asks its own host
+        CHECK(e.controlThreadRunning());                                             // ... and is still running
     }
+    CHECK_EQ(diagLines("could not become the engine's host") - said0, 0);            // nothing said: there is nothing the window could not become
+    CHECK(Access::hostIsOwn(e));
+    e.stopControlThread();
 }
 
 // ======================================================================================================================
-// C. A WINDOW THAT GOES WHILE THE ENGINE STILL RUNS IS DETACHED, NOT DANGLING
+// C. A WINDOW THAT GOES WHILE THE ENGINE STILL RUNS LEAVES NOTHING BEHIND
 // ======================================================================================================================
-void testViewDetachesWhenTheEngineWillNotLetGo() {
-    std::printf("  C: a shell destroyed while the control thread runs keeps its adapter, says so, and answers nothing\n");
+void testWindowGoingLeavesNothing() {
+    std::printf("  C: a window destroyed while the control thread runs says nothing about a host, and the engine's pause and resume stay its own\n");
     th::Host h("");
     Engine& e = h.engine();
-    CountingHooks hooks;
-    std::unique_ptr<cascade::engine::EngineShell> view = cascade::engine::EngineShell::view(e, hooks);
-    CHECK(!Access::hostIsOwn(e));
-    // The window answers the watchdog's two questions while installed - and NOT the clock: the engine's clock is the engine's.
-    Access::hostPause(e);
-    Access::hostResume(e);
-    CHECK_EQ(hooks.pauses.load(), 1);
-    CHECK_EQ(hooks.resumes.load(), 1);
-    (void)Access::hostWall(e);
-    CHECK_EQ(hooks.wall.load(), 0);
     Access::startControlOn(e);
     const int said0 = diagLines("the window went while the control thread was still running");
-    view.reset();                                                                    // the engine refuses to give the host up
-    CHECK_EQ(diagLines("the window went while the control thread was still running") - said0, 1);
-    CHECK(!Access::hostIsOwn(e));                                                    // it still holds the (detached) adapter ...
-    Access::hostPause(e);
-    Access::hostResume(e);
-    CHECK_EQ(hooks.pauses.load(), 1);                                                // ... which reaches no window
-    CHECK_EQ(hooks.resumes.load(), 1);
-    e.stopControlThread();
-    CHECK(e.resetHost());                                                            // and the engine takes its own back when it can
+    {
+        th::BareWindow w(h);
+        Access::hostPause(e);                                                        // the engine's watchdog pause reaches its own host (a no-op), not the window
+        Access::hostResume(e);
+    }                                                                                // (R8: the destroyed window took the engine down first; the thread is stopped below)
+    CHECK_EQ(diagLines("the window went while the control thread was still running") - said0, 0);   // (R7 said it, loudly, and kept the adapter)
     CHECK(Access::hostIsOwn(e));
+    Access::hostPause(e);                                                            // after the window: still the engine's own, still harmless
+    Access::hostResume(e);
+    e.stopControlThread();
 }
 
 // ======================================================================================================================
@@ -256,13 +219,13 @@ void testStartupPathReplays(const std::string& fixturePath) {
 // E. THE ENGINE'S CLOCK IS ONE CLOCK
 // ======================================================================================================================
 void testOneClock() {
-    std::printf("  E: every host measures from the process's first - a later host (the window's) continues the restore's clock\n");
+    std::printf("  E: every host measures from the process's first - a later host continues the restore's clock\n");
     cascade::engine::EngineHost first;
     const double t0 = first.wallTimeS();
     std::this_thread::sleep_for(std::chrono::milliseconds(160));
     cascade::engine::EngineHost later;             // a host built later: with a clock of its own it would start again near zero
     CHECK(later.wallTimeS() >= t0 + 0.15);
-    // And across the engine's own host swap: the stamp the restore takes and the read after the window installed.
+    // And across a window's life: the stamp the restore takes and the read after a window was built on the engine.
     th::Host h("");
     Engine& e = h.engine();
     const double before = Access::hostWall(e);
@@ -338,8 +301,7 @@ void testRestoredIntoTheWindow() {
 // ======================================================================================================================
 // main.cpp stops the service with the window still alive and destroys the window after: the window's session is closed on an engine whose control
 // thread is joined, with a key held at that moment (the survey's 2.4). A close on a stopped engine must be a harmless release - no crash, no second
-// unkey, no pass to hang for, and the window's shell gives the engine its own host back (resetHost succeeds because the thread is gone) without the
-// "went while the control thread was still running" line of C.
+// unkey, no pass to hang for, and the engine's host is its own throughout (R9) - no "went while the control thread was still running" line.
 class KeySink final : public cascade::source::IqSink {
 public:
     bool start() override {
@@ -385,7 +347,7 @@ private:
 };
 
 void testWindowGoesAfterTheStop() {
-    std::printf("  G: the service stopped with a key held, THEN the window destroyed - a harmless release, the engine's own host back\n");
+    std::printf("  G: the service stopped with a key held, THEN the window destroyed - a harmless release\n");
     th::Host h("");
     Engine& e = h.engine();
     auto sinkOwner = std::make_unique<KeySink>();
@@ -410,8 +372,8 @@ void testWindowGoesAfterTheStop() {
         CHECK(e.pluginUiAttached());                // (the window's port is still connected: the prelude was not run by this test)
     }                                               // ... and the window goes: its session is closed on an engine with no pass left
     CHECK_EQ(sink->stops.load(), 1);                // the key was not let go of a second time, by anyone
-    CHECK(Access::hostIsOwn(e));                    // the engine's own host is back ...
-    CHECK_EQ(diagLines("the window went while the control thread was still running") - wentRunning0, 0);   // ... without the detach of C
+    CHECK(Access::hostIsOwn(e));                    // the engine's host is its own ...
+    CHECK_EQ(diagLines("the window went while the control thread was still running") - wentRunning0, 0);   // ... and nothing was said
     CHECK(!e.pluginUiAttached());                   // and the port is gone
 }
 
@@ -488,8 +450,8 @@ int main() {
     Access::install();
     const std::string fixturePath = installFixture();
     testHostOwnsTheEngine();
-    testRefusedWhileTheControlThreadRuns();
-    testViewDetachesWhenTheEngineWillNotLetGo();
+    testNoHostToInstall();
+    testWindowGoingLeavesNothing();
     testOneClock();
     testRestoredIntoTheWindow();
     testWindowGoesAfterTheStop();

@@ -231,8 +231,8 @@ struct AppWindowTestAccess {
         }
         for (const std::string& k : keys) { e.setPluginRun(k, cascade::core::PluginRun::Always); }
     }
-    // WHO THE ENGINE ASKS (shell retirement R7: Engine::setHost / resetHost, the window's shell installing and letting go of its adapter): whether it is
-    // the engine's own host, and the three questions asked of whichever host it holds, from this thread.
+    // WHO THE ENGINE ASKS (the engine's host is the one it was built with, for life: shell retirement R9 removed Engine::setHost / resetHost, which the window's
+    // shell used from R7 to R8 to install and let go of its adapter): whether it is the engine's own host, and the three questions asked of it, from this thread.
     static bool hostIsOwn(Engine& e) { return e.host_ == &e.ownHost_; }
     static void hostPause(Engine& e) { e.host_->pauseWatchdog(); }
     static void hostResume(Engine& e) { e.host_->resumeWatchdog(); }

@@ -14,7 +14,8 @@
 //                        service on its own (most tests drive the pass themselves through the pass seam; th::run below is main's start, run, stop and
 //                        closeWindow for the one in-process test that runs a window) and takes no lock (a test window never did). Its options are
 //                        the window application's, from the SAME function main.cpp calls (engine/window_service_options.hpp) - R8. Everything a test
-//                        builds is in main's order: service, restore, window.
+//                        builds is in main's order: service, restore, window. A window built for a bounded run (frames >= 0, which every test window
+//                        is) is handed the bounded run's two hooks, built by the SAME function main.cpp calls (engine/host_measure.hpp) - R9.
 //   th::TestWindow       an AppWindow, built the way `AppWindow app;` / `AppWindow app(path[, announce])` always built one - and built the way
 //                        main builds it since R7: the HOST FIRST (base-from-member: the Host is a base that is constructed before the window and
 //                        destroyed after it), then the window on the restored engine. It is a distinct type so that every test window is made in
@@ -46,6 +47,7 @@
 #include "engine/engine_service.hpp"
 #include "engine/engine_shell.hpp"
 #include "engine/fox_engine_api.hpp"
+#include "engine/host_measure.hpp"
 #include "engine/plugin_ui_port.hpp"
 #include "engine/window_service_options.hpp"
 #include "gui/app_window.hpp"
@@ -82,7 +84,7 @@ public:
     // `frames` is the --frames of the run the host is for (0: a bounded run, the default of every test window; negative: a real session's options, which
     // a test never wants): it decides the service's options exactly as main's --frames does (engine/window_service_options.hpp).
     explicit Host(const std::string& configPath, bool announceConfig = false, bool restoreNow = true, int frames = 0)
-        : service_(options(configPath, frames)), announce_(announceConfig) {
+        : service_(options(configPath, frames)), announce_(announceConfig), frames_(frames) {
         if (restoreNow) { (void)restore(); }
     }
     Host(const Host&) = delete;
@@ -109,6 +111,9 @@ public:
         h.lastRunUnclean = restored_.lastRunUnclean;
         h.sourceKind = restored_.sourceKind;
         h.iqFilePath = restored_.iqFilePath;
+        // THE BOUNDED RUN'S TWO HOOKS, as main.cpp installs them: in a bounded run (frames >= 0) and never in a real session's (R9). A test window is a
+        // bounded run, so its frame steps the engine's pass through them exactly as `cascade --frames N` does; no measurement is taken.
+        if (frames_ >= 0) { h.bounded = cascade::engine::makeBoundedHooks(service_.engine(), nullptr); }
         return h;
     }
 
@@ -121,6 +126,7 @@ private:
     }
     cascade::engine::EngineService service_;
     bool announce_ = false;
+    int frames_ = 0;
     cascade::engine::EngineService::Restored restored_;
 };
 
@@ -132,8 +138,8 @@ struct HostHolder {
 
 // WHAT THE OLD ~AppWindow DID TO THE ENGINE, for a test (shell retirement R8): the window no longer takes the engine down - the host stops it before the
 // window goes, and the host's service tears it down when it is destroyed - but a test window is destroyed with its engine's control thread often still
-// running (the pass seam starts it), and the engine's window host (the shell's adapter) cannot be given back while it does. So a test window takes its
-// engine down first, in the order the window's destructor always did: the transfers cancelled, then the teardown. Idempotent (Engine::teardown is).
+// running (the pass seam starts it), and the window's session and plugin port are let go of while it does. So a test window takes its engine down
+// first, in the order the window's destructor always did: the transfers cancelled, then the teardown. Idempotent (Engine::teardown is).
 inline void takeEngineDown(cascade::engine::Engine& engine) {
     engine.stopTransfers();
     engine.teardown();

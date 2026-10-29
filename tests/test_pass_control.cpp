@@ -1265,27 +1265,10 @@ void testSteppedRestart() {
     e.stopControlThread();
 }
 
-// D3: the front end's watchdog beat while it waits ----------------------------------------------------------------------------
-void testWaitBeat() {
-    std::printf("  D3: a front end blocked in stepPass beats its watchdog from the wait\n");
-    Engine e;
-    e.initialise();
-    e.startControlThread(opts(5, 1, /*stepped=*/true));
-    std::atomic<int> beats{0};
-    e.setFrontEndWaitBeat([&] { ++beats; });
-    A::stall(e, 150);
-    const auto t0 = Clock::now();
-    e.stepPass(PassPart::Front);
-    const double ms = msSince(t0);
-    std::printf("      a front part that took %.0f ms: %d beat(s) from the waiting thread (every %d ms)\n", ms, beats.load(),
-                static_cast<int>(Engine::kPassWaitNet.count()));
-    CHECK(ms >= 140.0);
-    CHECK(beats.load() >= 3);
-    e.setFrontEndWaitBeat({});
-    e.stepPass(PassPart::Mute);
-    e.stepPass(PassPart::Back);
-    e.stopControlThread();
-}
+// (D3 - "a front end blocked in stepPass beats its watchdog from the wait", Engine::setFrontEndWaitBeat - was here until shell retirement R9, 2026-10-28.
+// The engine calls nothing of its front end from the wait any more; the window holds its own WatchdogPause across the step and gives the watchdog the
+// heartbeat that follows it, which tests/test_bounded_hooks.cpp C and C2 pin: the pause is taken BEFORE a long part and released after it, and the frame's
+// own gap is still measured.)
 
 // E: work posted to the pass -------------------------------------------------------------------------------------------------
 void testPostedWork() {
@@ -1523,7 +1506,6 @@ int main() {
     testRunPassNow();
     testStepped();
     testSteppedRestart();
-    testWaitBeat();
     testPostedWork();
     testProxyApply();
     testClock();

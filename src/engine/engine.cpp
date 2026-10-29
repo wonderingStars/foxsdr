@@ -10148,7 +10148,6 @@ bool Engine::waitForPassCounter(std::unique_lock<std::mutex>& lk, const std::fun
             }
         }
         passDoneCv_.wait_for(lk, kPassWaitNet);
-        if (frontEndWaitBeat_) { frontEndWaitBeat_(); }
     }
 }
 
@@ -10227,18 +10226,6 @@ void Engine::configureHeartbeat() {
 void Engine::requestPluginStatusReport() {
     std::lock_guard<std::mutex> lk(frontEndFactsMutex_);
     if (frontEndFacts_.pluginStatus == nullptr) { frontEndFacts_.pluginStatus = std::make_shared<const PluginStatusFacts>(); }
-}
-
-bool Engine::setHost(EngineHost& host) {
-    if (controlThreadRunning()) { return false; }   // the control thread reads host_, and it is a plain pointer (see host_)
-    host_ = &host;
-    return true;
-}
-
-bool Engine::resetHost() {
-    if (controlThreadRunning()) { return false; }
-    host_ = &ownHost_;
-    return true;
 }
 
 }  // namespace cascade::engine

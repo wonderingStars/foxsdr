@@ -114,13 +114,16 @@
 #include "source/soundcard_source.hpp"
 #include "usb/usb_device.hpp"
 
-// The window's tests are named, never included: the engine does not depend on them. (The window itself reaches the engine only through
-// EngineShell - engine/engine_shell.hpp - since the fence; stage 4 step 5.)
+// The window's tests are named, never included: the engine does not depend on them. (The window itself reaches the engine only through the
+// engine API's table - and, in a bounded run, the two hooks its host installs, core/bounded_hooks.hpp - since shell retirement R9; before it, through
+// EngineShell - engine/engine_shell.hpp - since the fence, stage 4 step 5.)
 namespace cascade::gui {
 struct AppWindowTestAccess;
 }  // namespace cascade::gui
 
 namespace cascade::engine {
+
+class BoundedHost;   // engine/host_measure.cpp: a bounded run's stepping and measurement, the host's (shell retirement R9)
 
 // The vocabulary the engine shares with its front end (ControlThreadOptions, PassPart, TrackFeedInfo, TrackFeed, BasemapFacts, FrontEndFacts,
 // PluginUiReport, EngineStatusText) moved to engine/engine_shell.hpp with the fence (engine extraction stage 4, step 5): a
@@ -157,9 +160,10 @@ public:
     Engine& operator=(const Engine&) = delete;
 
 private:
-    // THE WINDOW IS NOT A FRIEND ANY MORE (stage 4, the fence): its door is EngineShell, the only class here besides the table's host
-    // and the tests' accessor that reaches the members below.
-    friend class EngineShell;
+    // THE WINDOW IS NOT A FRIEND (stage 4, the fence), and since shell retirement R9 it has no door either: the one class here besides the table's
+    // host and the tests' accessor that reaches the members below is the bounded run's HOST harness (engine/host_measure.cpp), which steps the pass
+    // for the window and takes the measurement run's one step a frame over the pipeline.
+    friend class BoundedHost;
     friend struct cascade::gui::AppWindowTestAccess;
     // The engine API's host (engine/fox_engine_api.cpp) applies commands
     // through applyCommand and reads the snapshot, the source generation and
@@ -177,15 +181,10 @@ private:
     // null after construction (the constructor takes it from a reference
     // parameter) and is never cleared.
     //
-    // RESEATED BY setHost / resetHost (shell retirement R6), which is a SECOND reason for it to be a pointer and one this comment did not give
-    // until the survey asked whether it was sound. It is: host_ is read in eight places (wallTimeS x3, pauseWatchdog, resumeWatchdog,
-    // onCatalogueFetchStarting, onCatalogueResult, onAddAllFinished), every one on the control thread or on the thread that owns the engine's
-    // front side (the constructor's thread: initialise's rescan, telemetryStartup, a publishConfig), and the pointer is a plain one - so it is
-    // reseated only while NO control thread runs (setHost answers false otherwise and changes nothing), by the thread that owns the front
-    // side, which is also the only other thread that reads it. The thread that starts later is created after the write, the one that was
-    // joined has finished before it. A host must be reset (resetHost) before it is destroyed unless the engine is destroyed first: the
-    // destructor's fallback repoints a never-torn-down engine at its own host before its teardown runs, but a call made after a TORN-DOWN
-    // engine's host has died (a save that publishes after the stop) would reach a dead object.
+    // (It was RESEATED by Engine::setHost / resetHost from shell retirement R6 to R8, so that the window application could install itself as the
+    // host after the service's restore; shell retirement R9, 2026-10-28, removed both: the engine's host is the one it was built with, for life - the
+    // window's hang watchdog is paused by the window itself, around the stepped run's wait, AppWindow::stepPass. It stays a pointer for the
+    // fallback teardown above.)
     EngineHost* host_;
 
     // NO DEFAULT MEMBER INITIALISERS, on purpose: GCC refuses them on a
@@ -3433,10 +3432,12 @@ public:
     // printed once, at the end of the first teardown phase, with an empty plugin half. A host whose interface DID hand one over (the window: its last
     // setFrontEnd) is left alone.
     void requestPluginStatusReport();
-    // WHO THIS ENGINE ASKS, reseated (see host_). False, and nothing changes, while the control thread runs. resetHost puts the engine's own host
-    // back (the same condition); a host that is to die before the engine does must be reset first.
-    bool setHost(EngineHost& host);
-    bool resetHost();
+    // A BOUNDED RUN'S CATALOGUE DIAGNOSTIC (CASCADE_PLUGIN_TEST; shell retirement R9 - it was two fields of FrontEndFacts, handed over by the window each
+    // frame): the host's harness arms it (setPluginTestReport) and tells the engine the frame the window has reached (notePluginTestFrame, once at
+    // the end of each frame), and the pass that sees a catalogue fetch resolve prints the report naming that frame (reportPluginTestResult). Both are
+    // atomics: the harness writes them on the window's thread and the pass reads them on its own.
+    void setPluginTestReport(bool on) { pluginTestReport_.store(on, std::memory_order_relaxed); }
+    void notePluginTestFrame(int frame) { pluginTestFrame_.store(frame, std::memory_order_relaxed); }
     // THE TWO BOUNDED-RUN PLUGIN DIAGNOSTICS (window port group 14, part e; engine_diagnostics.cpp). Test machinery that
     // prints what the engine decided to stdout; they read nothing but the engine's own state and were the window's until
     // then. A front end calls reportPluginStatus once, right after shutdownQuiesce (the state a bounded run finished in,
@@ -3528,10 +3529,9 @@ public:
     // window's stepPass calls are the passes; none: the front end is the pump).
     void frameKick();
     bool controlStepped() const { return controlStepped_.load(); }
-    // A function the front end's thread calls every kPassWaitNet while it waits inside stepPass or runPassNow (null: none). The window
-    // installs its own watchdog's heartbeat: its frame is BLOCKED in the wait - not hung - and a pass part that really hangs is the control
-    // thread's own watchdog's to report. (Set and cleared by the thread that waits; nothing else reads it.)
-    void setFrontEndWaitBeat(std::function<void()> beat) { frontEndWaitBeat_ = std::move(beat); }
+    // (A function the front end's thread called every kPassWaitNet while it waited inside stepPass or runPassNow - Engine::setFrontEndWaitBeat, the
+    // window's watchdog heartbeat - was here until shell retirement R9. The window's frame is BLOCKED in that wait, not hung: it wraps its own call
+    // in a WatchdogPause now (AppWindow::stepPass), and a pass part that really hangs is the control thread's own watchdog's to report.)
     // WHAT THE FREE-RUNNING PASS COSTS (the measurement run's pass-specific figures, the survey's section 4; written by the pass, read by anyone):
     // how many passes, the sum and the longest of their durations in microseconds, how many ran longer than the period, and how many were
     // started by a wake rather than by the period running out. A stepped thread keeps none (its parts are timed by the front end that asks).
@@ -3691,8 +3691,10 @@ private:
     PassMark passMark_;
     std::atomic<std::uint64_t> passesBegun_{0};
     std::atomic<std::uint64_t> passesEnded_{0};
+    // THE BOUNDED RUN'S CATALOGUE DIAGNOSTIC (setPluginTestReport / notePluginTestFrame): armed, and the frame it names.
+    std::atomic<bool> pluginTestReport_{false};
+    std::atomic<int> pluginTestFrame_{0};
     // The wait a front-end thread makes for a pass or a step; applies a plugin directive for it if it is the front end's thread.
-    std::function<void()> frontEndWaitBeat_;
     bool waitForPassCounter(std::unique_lock<std::mutex>& lk, const std::function<bool()>& done, std::chrono::milliseconds bound);
     // WORK POSTED TO THE PASS (postToPass).
     std::mutex passWorkMutex_;

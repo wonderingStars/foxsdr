@@ -99,8 +99,6 @@ void PluginUiPortImpl::setFrontEnd(const cc::PluginUiFrontEnd& f) {
     if (!f.tunerDisplayStyle.empty()) { facts.tunerDisplayStyle = f.tunerDisplayStyle; }
     facts.basemap = f.basemap;
     if (f.hasTrackFeed) { facts.trackFeed = std::make_shared<const TrackFeed>(f.trackFeed); }
-    facts.pluginTestReport = f.pluginTestReport;
-    facts.frame = f.frame;
     if (f.pluginStatusReport) {
         auto st = std::make_shared<PluginStatusFacts>();
         st->ui = f.pluginUi;

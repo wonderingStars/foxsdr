@@ -17,8 +17,9 @@
 //   7  STALL SEAMS: shutdownStallMs wedges between the final-state save and the receiver's stop (the config on disk is the final state, the marker
 //      still false, while wedged); unloadStallMs between the release and the marker; the lines carry the label and go to stderr, or to stdout;
 //   8  LABEL on the lines the service writes; PLUGIN STATUS report once, only when asked; BREADCRUMB phases in their places, only when asked;
-//   9  THE ENGINE'S OWN SURFACE the host needs: configReadback() public; setHost / resetHost (the pointer's contract: never while the control thread
-//      runs; calls follow it; a host that is gone is never called after a reset or by the destructor).
+//   9  THE ENGINE'S OWN SURFACE the host needs: configReadback() public; the engine's host is the one it was built with, for life (R9: Engine::setHost /
+//      resetHost, the R6 pointer contract, are gone with the window's adapter - the engine asks the host it was given, and a host that is gone is
+//      never called by the destructor).
 //  10  WHAT THE WINDOW HOST NEEDS OF THE RESTORE (R7: the window no longer reads the file): restore() returns the last run's marker, the saved source as
 //      the file named it, the read-back and whether writes are forbidden; announce() prints the CASCADE_CONFIG_TEST line; a service destroyed lets
 //      the settings lock go (src/main.cpp relies on it across the software-GL relaunch).
@@ -723,40 +724,33 @@ int main() {
         CHECK(rb.centreHz > 0.0);
     }
     {
-        // setHost / resetHost.
-        cascade::engine::Engine e;
+        // THE HOST THE ENGINE WAS BUILT WITH is the one it asks, for life (R9: there is no setHost any more - was: setHost / resetHost, R6).
         CountingHost host;
-        CHECK(e.setHost(host));
-        AppConfig cfg;
-        e.telemetryStartup(cfg, std::string());                     // asks the host for the wall clock
-        CHECK(host.wallCalls.load() >= 1);
-        const int asked = host.wallCalls.load();
-        CHECK(e.resetHost());
-        e.telemetryStartup(cfg, std::string());
-        CHECK(host.wallCalls.load() == asked);                      // after a reset the engine's own host answers
-
-        // never while the control thread runs: the pointer is a plain one, and the thread reads it
-        cascade::engine::ControlThreadOptions opt;
-        opt.stepped = true;
-        e.startControlThread(opt);
-        CHECK(!e.setHost(host));
-        CHECK(!e.resetHost());
-        e.stopControlThread();
-        CHECK(e.setHost(host));
-        e.telemetryStartup(cfg, std::string());
-        CHECK(host.wallCalls.load() > asked);
-        // the destructor's fallback: a host marked gone is never called by the engine's teardown
-        host.gone = true;
+        {
+            cascade::engine::Engine e(host);
+            AppConfig cfg;
+            e.telemetryStartup(cfg, std::string());                 // asks the host for the wall clock
+            CHECK(host.wallCalls.load() >= 1);
+            const int asked = host.wallCalls.load();
+            // a control thread running changes nothing about who is asked
+            cascade::engine::ControlThreadOptions opt;
+            opt.stepped = true;
+            e.startControlThread(opt);
+            e.telemetryStartup(cfg, std::string());
+            CHECK(host.wallCalls.load() > asked);
+            e.stopControlThread();
+            // the destructor's fallback: a host marked gone is never called by the engine's teardown
+            host.gone = true;
+        }
+        CHECK(host.callsAfterGone.load() == 0);
     }
     {
-        CountingHost* gone = new CountingHost;
-        {
-            cascade::engine::Engine e;
-            CHECK(e.setHost(*gone));
-            gone->gone = true;           // (the host's owner is done with it; the engine is destroyed after)
-        }
-        CHECK(gone->callsAfterGone.load() == 0);
-        delete gone;
+        // ... and an engine built with no host asks its own, and never a host that was never given
+        CountingHost bystander;
+        cascade::engine::Engine e;
+        AppConfig cfg;
+        e.telemetryStartup(cfg, std::string());
+        CHECK(bystander.wallCalls.load() == 0);
     }
 
     testFinalPass(home);   // (11: its own function - an EngineService is a local the size of the engine, and main's frame is already full)

@@ -176,7 +176,7 @@ void typeOver(AppWindow& a, const char* s) {
 
 void clickAway(AppWindow& a) { click(a, 850.0f, 880.0f); }  // somewhere empty: deactivates
 
-AppWindow* makeApp(bool seeded) {
+th::TestWindow* makeApp(bool seeded) {
     auto* a = new th::TestWindow();
     if (seeded) { A::seed(*a); }
     g_open = true;
@@ -227,7 +227,7 @@ int main() {
     // --- A: the web remote moves the range, then the desk edits Dwell only.
     {
         std::printf("A: web remote sets 144-146 MHz, then the desk edits Dwell only\n");
-        AppWindow* a = makeApp(true);
+        th::TestWindow* a = makeApp(true);
         const auto ids = locate(*a);
         CHECK(ids.size() >= 10);
         if (ids.size() >= 10) {
@@ -260,7 +260,7 @@ int main() {
     //     runs), then the desk edits Dwell.
     {
         std::printf("B: no config applied, desk edits Dwell only\n");
-        AppWindow* a = makeApp(false);
+        th::TestWindow* a = makeApp(false);
         const auto ids = locate(*a);
         CHECK(ids.size() >= 10);
         if (ids.size() >= 10) {
@@ -282,7 +282,7 @@ int main() {
     // --- C: type a Start MHz and press Start scan straight away.
     {
         std::printf("C: type Start MHz 95, click Start scan with the field still active\n");
-        AppWindow* a = makeApp(true);
+        th::TestWindow* a = makeApp(true);
         const auto ids = locate(*a);
         CHECK(ids.size() >= 10);
         if (ids.size() >= 10) {
@@ -301,7 +301,7 @@ int main() {
     //     is deactivated; then it comes back and Start scan is pressed.
     {
         std::printf("D: type Start MHz 95, then the section stops being drawn\n");
-        AppWindow* a = makeApp(true);
+        th::TestWindow* a = makeApp(true);
         const auto ids = locate(*a);
         CHECK(ids.size() >= 10);
         if (ids.size() >= 10) {
@@ -326,7 +326,7 @@ int main() {
     // --- F: a RUNNING scan takes a field only once it is finished with.
     {
         std::printf("F: running scan, type Start MHz 95, then deactivate\n");
-        AppWindow* a = makeApp(true);
+        th::TestWindow* a = makeApp(true);
         const auto ids = locate(*a);
         CHECK(ids.size() >= 10);
         if (ids.size() >= 10) {
@@ -353,7 +353,7 @@ int main() {
     // --- G: a running scan's edit left mid-field when the section goes.
     {
         std::printf("G: running scan, type Start MHz 95, then the section stops being drawn\n");
-        AppWindow* a = makeApp(true);
+        th::TestWindow* a = makeApp(true);
         const auto ids = locate(*a);
         CHECK(ids.size() >= 10);
         if (ids.size() >= 10) {
@@ -376,7 +376,7 @@ int main() {
     // --- H: a running scan's timing edit reaches the engine.
     {
         std::printf("H: running scan, edit Dwell\n");
-        AppWindow* a = makeApp(true);
+        th::TestWindow* a = makeApp(true);
         const auto ids = locate(*a);
         CHECK(ids.size() >= 10);
         if (ids.size() >= 10) {

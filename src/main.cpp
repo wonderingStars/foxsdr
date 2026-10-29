@@ -47,6 +47,7 @@
 #include "core/sentinel.hpp"
 #include "engine/engine_service.hpp"
 #include "engine/fox_engine_api.hpp"
+#include "engine/host_measure.hpp"
 #include "engine/process_boot.hpp"
 #include "engine/window_service_options.hpp"
 #include "gui/app_window.hpp"
@@ -72,7 +73,7 @@ int main(int argc, char** argv) {
         // works in a session that started with diagnostics off, so the directory is named whenever boot allows it.
         //
         // THE MEASUREMENT RUN (FOXSDR_MEASURE, bounded runs only) is read here, once, because it decides the pass (a measurement times the product's own
-        // free-running arrangement) and the window drives it: it is handed over below.
+        // free-running arrangement) and the HOST drives it (engine/host_measure.hpp): it is handed to the bounded run's hooks below.
         std::unique_ptr<cascade::core::EngineMeasure> measure;
         if (boot.frames >= 0) { measure = cascade::core::EngineMeasure::fromEnvironment(); }
         cascade::engine::WindowServiceRun serviceRun;
@@ -110,6 +111,10 @@ int main(int argc, char** argv) {
         host.lastRunUnclean = restored.lastRunUnclean;
         host.sourceKind = restored.sourceKind;
         host.iqFilePath = restored.iqFilePath;
+        // THE BOUNDED RUN'S TWO HOOKS (shell retirement R9, core/bounded_hooks.hpp): the host owns the engine, so it owns the stepping of the pass and the
+        // measurement run, and hands the window two std::functions - ONLY in a `--frames` run. A product run has no hooks: its pass free-runs, there is
+        // nothing to step, and the window does nothing where a bounded run's would step (tests/test_engine_shell_guard.cpp holds this gate).
+        if (boot.frames >= 0) { host.bounded = cascade::engine::makeBoundedHooks(service.engine(), std::move(measure)); }
         cascade::gui::AppWindow app(host);
         // Empty unless this run is ALLOWED to write - which is not the same as
         // whether the user wants it. run() gates the writing on the stored switch;
@@ -121,7 +126,6 @@ int main(int argc, char** argv) {
         app.setDiagStallMs(boot.diagStallMs);
         app.setDiagToggle(boot.diagToggle);
         app.setLinkTesterReveal(boot.linkTesterReveal);
-        app.setMeasurement(std::move(measure));
 
         // THE ENGINE STARTS HERE: after the window object exists (its plugin UI has attached - a control thread already running would race that
         // attach) and before run() creates the GL window (the engine has been running since before the first frame, as it was when the window

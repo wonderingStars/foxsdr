@@ -326,8 +326,24 @@ struct AppWindowTestAccess {
     static void rescan(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPlugins(); }); }
     static void rescanIfChanged(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).rescanPluginsIfChanged(); }); }
     static ShellPauseHooks shellHooks(AppWindow& a) { return a.watchdogShellHooks(); }
-    // The pauses the WINDOW's watchdog took: the engine's rescan holds the host's pause (EngineHost::pauseWatchdog) when it is not on its control thread, which is the window's.
+    // The pauses the WINDOW's watchdog took. Since shell retirement R9 the engine knows nothing of the window's watchdog (its host's pause is a no-op of its own): the
+    // window pauses itself around the wait for the engine's pass part (AppWindow::stepPass). And the pauses the ENGINE's control thread took - the rescan's own.
     static unsigned pauses(AppWindow& a) { return a.watchdog_.pausesTaken(); }
+    static unsigned controlPauses(AppWindow& a) { return th::engine(a).controlWatchdog_.pausesTaken(); }
+    // A RESCAN AS A BOUNDED RUN MAKES ONE (R9): on the engine's STEPPED control thread, at the head of a pass's front part, which the window's frame waits for
+    // in its own step - the product's path in every bounded run - and not on the test's thread (where the engine, which no longer holds the window as its host,
+    // has no window to pause: before R9 that call reached the window's watchdog through the shell's adapter, a path the product's frame never took).
+    static void rescanAsAStep(AppWindow& a) {
+        Engine& e = th::engine(a);
+        if (!e.controlThreadRunning()) {
+            cascade::engine::ControlThreadOptions o;
+            o.stepped = true;
+            o.watchdogThresholdMs = 20000;
+            e.startControlThread(o);
+        }
+        e.postToPass([&e] { e.rescanPlugins(); });
+        a.stepPass(cascade::core::PassPart::Front);
+    }
     static std::size_t loaded(AppWindow& a) {
         return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).pluginHost_.loadedCount(); });
     }
@@ -576,18 +592,20 @@ void testAPluginReloadUnderItsPauseCounts() {
 
     g_slowRead = true;
     const unsigned pausesBefore = Access::pauses(app);
+    const unsigned controlPausesBefore = Access::controlPauses(app);
     t.beginFrame(100);  // past start-up
     {
-        // As pollPluginAsync() reaches it from the frame's polls.
+        // As pollPluginAsync() reaches it from the frame's polls - in a bounded run, in the step the frame waits in.
         FrameScopeGuard polls(FrameScope::Polls);
-        Access::rescan(app);
+        Access::rescanAsAStep(app);
     }
     t.endFrame();
     t.finish();
     g_slowRead = false;
 
-    // The application-paced pause was held (it is what excuses the WATCHDOG), and
-    // the frame counted all the same: it is its own scope.
+    // The application-paced pause was held (it is what excuses the WATCHDOG) - the rescan's own, on the control thread, and the window's, around the wait for it
+    // - and the frame counted all the same: it is its own scope.
+    CHECK(Access::controlPauses(app) > controlPausesBefore);
     CHECK(Access::pauses(app) > pausesBefore);
     const SlowFrameCounts n = slowFrameCounts();
     std::printf("    table: %s\n", slowFramesText(n).c_str());

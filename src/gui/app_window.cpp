@@ -551,7 +551,7 @@ const char* scannerStateName(std::uint32_t state) {
 }  // namespace
 
 AppWindow::AppWindow(const WindowHost& host)
-    : engineHolder_(cascade::engine::EngineShell::view(*host.engine, static_cast<cascade::engine::ShellHooks&>(*this))),
+    : engineHolder_(cascade::engine::EngineShell::view(*host.engine)),
       engine_(*engineHolder_),
       spectrum_(std::make_unique<SpectrumView>()),
       waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)),
@@ -570,9 +570,8 @@ AppWindow::AppWindow(const WindowHost& host)
     // into it - Engine::initialise (the recording folder, the demo signal, the band plan, the plugin scan, the output device list), the settings
     // file's load and the receiver's half of it, the usage journal's start-up, the bookmarks, the status sentences: EngineService::restore, which
     // main.cpp and the test host call BEFORE this window exists. What this constructor does is the window's own start-up on an engine that is
-    // already running its restore: the shell above installed the window as the engine's host (Engine::setHost, before any control thread), and
-    // what follows is a client's attach - a session on the table, the plugin UI's port, and the window's half of the settings read from the
-    // table.
+    // already running its restore, and what follows is a client's attach - a session on the table, the plugin UI's port, and the window's half of
+    // the settings read from the table.
     //
     // THE WINDOW'S ENGINE API SESSION (stage 4): a LOCAL session with every
     // grant, on this process's own engine - the one the Transmit page keys
@@ -595,9 +594,32 @@ AppWindow::AppWindow(const WindowHost& host)
     // (THE WEB AND CAT SERVERS ARE THE ENGINE'S since stage 5b: it installs their providers itself, and starts them when the restored
     // config says so; their control and their reads are sessions of the table (5c-5e). This window configures them from its panels
     // and hands the web page what only it makes: the track feed and the basemap's tiles.)
-    // While this window's frame waits for the engine's pass (a STEPPED run: stepPass, runPassNow) it is blocked, not hung - it beats its
-    // watchdog from the wait (the gap is not a frame gap), and a pass part that really hangs is the control thread's own watchdog's to report.
-    engine_.setFrontEndWaitBeat([this] { watchdog_.heartbeat(false); });
+    // THE BOUNDED RUN'S HOOKS (shell retirement R9): the host's, installed in a `--frames` run only. While this window's frame waits for the engine's
+    // pass (a STEPPED run: stepPass; a measurement's source install: BoundedClient::blocked) it is blocked, not hung - the window holds its watchdog's
+    // pause across the wait - and a pass part that really hangs is the control thread's own watchdog's to report. What only this window can do for a
+    // measurement is built once, here, when the host handed a hook that wants it.
+    bounded_ = host.bounded;
+    if (bounded_.onFrame) {
+        boundedClient_.startReceiver = [this] { uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 1)); };
+        boundedClient_.setMode = [this](const char* mode) {
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, cascade::core::cmd::foxDemodFromName(mode)));
+        };
+        boundedClient_.blocked = [this](bool on) {
+            // The host's wait for the engine's pass on this window's behalf (the measurement's source install): paused for its length, and the
+            // heartbeat after it takes the pause's gap-skip, as stepPass does (below).
+            if (on) {
+                watchdog_.pause();
+            } else {
+                watchdog_.resume();
+                watchdog_.heartbeat(false);
+            }
+        };
+        boundedClient_.tuneVfoHz = [this](double offsetHz) {
+            // The centre the receiver last published (the click on the spectrum reads the same number): the source itself is the pass's, and a swap of
+            // it would race a read from this thread.
+            uiSubmit(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE, uiState_.centreHz + offsetHz, 0));
+        };
+    }
     // --- Config restore (P5) ------------------------------------------------
     // The file was loaded by the host (EngineService::restore), which also kept a damaged one aside before anything could save over it and set
     // the start-up state (core::startupState: every open flag cleared) on the engine's half AND on the interface's half it serves back. Missing
@@ -655,8 +677,6 @@ AppWindow::~AppWindow() {
     // already (the product's order) there is no next pass: closing a session on an engine whose control thread is joined is a harmless release
     // (tests/test_engine_service_window.cpp, G).
     closeUiSession();
-    // The engine no longer calls into this window while it waits for a pass.
-    engine_.setFrontEndWaitBeat({});
 
     // The app-update download is the same problem and needs its own flag:
     // it runs through the STATIC fetch helper, which has no PluginRepo
@@ -1273,8 +1293,9 @@ int AppWindow::run(int frames) {
         // byte-identical-stdout contract of a plain --frames run is untouched.
         const char* status = std::getenv("CASCADE_PLUGIN_STATUS");
         pluginStatusReport = (status != nullptr && *status != '\0');
-        // (The engine measurement - core/engine_measure.hpp, driven by tools/measure_engine.ps1 - is read by the host, once, and handed over with
-        // setMeasurement: it decides the engine's pass, which the host starts. Bounded runs only, like the hooks above.)
+        // (The engine measurement - core/engine_measure.hpp, driven by tools/measure_engine.ps1 - is read by the host, once, and run by the host's
+        // harness (engine/host_measure.hpp) from the end-of-frame hook: it decides the engine's pass, which the host starts. Bounded runs only, like
+        // the hooks above.)
     }
     // A PATH settings field and the "Import a frequency list" window draw their BROWSE key only where there is a file dialog to open (the
     // system's on Windows; zenity or kdialog on Linux) - or the test seam above to stand in for one.
@@ -2096,34 +2117,11 @@ int AppWindow::run(int frames) {
         if (frameCap_) { frameCap_->waitForNext(); }
         ++rendered;
 
-        // The engine measurement's one step a frame, through the same
-        // COMMANDS the START key, the mode buttons and a click on the spectrum
-        // submit - queued, so a tune-to-audio latency measured here includes
-        // the command path's own wait for the next frame's drain.
-        if (measure_) {
-            cascade::core::MeasureHooks hooks;
-            hooks.startReceiver = [this] {
-                uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 1));
-            };
-            hooks.setMode = [this](const char* mode) {
-                uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, cascade::core::cmd::foxDemodFromName(mode)));
-            };
-            hooks.tuneVfoHz = [this](double offsetHz) {
-                // The centre the receiver last published (the click on the spectrum reads the same number): the source itself is
-                // the pass's, and a swap of it would race a read from this thread.
-                uiSubmit(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE, uiState_.centreHz + offsetHz, 0));
-            };
-            hooks.markPassStats = [this] { engine_.seamMarkPassStats(); };
-            hooks.passStatsJson = [this] { return engine_.seamPassStatsJson(); };
-            hooks.installSource = [this](std::unique_ptr<cascade::source::IqSource> src) {
-                // THE PASS INSTALLS IT (the pump move's step P4; EngineShell::seamInstallSource says how, and waits one whole pass).
-                engine_.seamInstallSource(std::move(src));
-            };
-            if (!engine_.seamMeasureTick(*measure_, hooks)) {
-                measure_.reset();
-                closeRequested_ = true;
-            }
-        }
+        // THE END OF A BOUNDED FRAME (shell retirement R9): the host's hook - the engine measurement's one step a frame, through the same
+        // COMMANDS the START key, the mode buttons and a click on the spectrum submit (boundedClient_) - queued, so a tune-to-audio latency measured
+        // there includes the command path's own wait for the next frame's drain - and the frame the catalogue report names. `rendered` is the index
+        // of the frame about to begin. Nothing in a product run, where the host installed no hook.
+        if (!endOfFrameHook(rendered)) { closeRequested_ = true; }
 
         // (The context follows the session rather than being frozen at start-up - a report filed after the user switched
         // to the B200 must say so - and the engine's pass keeps it so: once a second at most, when its inputs change.)
@@ -3106,7 +3104,7 @@ void AppWindow::drawUi() {
     // on the first frame that sees it, before any stop or start a browser or plugin queued can run), the web remote's and CAT's
     // requests and the remote key's standing condition, what plugins asked for, the scanner (after every command of the pass has
     // landed: its user-wins test must see any manual tune), the patch runtime, and the publish the look below reads.
-    engine_.stepPass(cascade::engine::PassPart::Front);
+    stepPass(cascade::core::PassPart::Front);
     // (THE KEYBOARD is dispatched below, right after the frame's read of the
     // state: a key reads the value it changes, and since the window's port
     // (stage 4, group 6) its command lands at the engine's next pass like a
@@ -3189,7 +3187,7 @@ void AppWindow::drawUi() {
     // After pumpRemoteControls for the same reason that call is where it is: a
     // browser's tune has already landed, so the mute follows a web tune in the
     // same frame rather than one behind it.
-    engine_.stepPass(cascade::engine::PassPart::Mute);  // Engine: the audio mute, the part of the pass that follows the look
+    stepPass(cascade::core::PassPart::Mute);  // the audio mute, the part of the pass that follows the look
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
@@ -3549,7 +3547,7 @@ void AppWindow::drawUi() {
     // not judge a stream an open is still installing.
     // THE BACK PART OF THE PASS (stepped runs only; free-running it ran by itself): the workers above, then the sink's collect and
     // health check, the microphone's open, the heartbeat and the config copy.
-    engine_.stepPass(cascade::engine::PassPart::Back);
+    stepPass(cascade::core::PassPart::Back);
 }
 
 namespace {
@@ -21315,9 +21313,30 @@ bool AppWindow::sendInterfaceHalf(double nowS) {
 
 double AppWindow::wallTimeS() const { return glfwGetTime(); }
 
-void AppWindow::pauseWatchdog() { watchdog_.pause(); }
+// THE BOUNDED RUN'S STEP, under the window's own WatchdogPause (shell retirement R9). The frame is BLOCKED here - in the wait for the engine's pass part
+// (a stepped run) - not hung, so it is not the watchdog's to report: a part that really hangs is the control thread's own watchdog's. This was
+// Engine::setFrontEndWaitBeat (the window's heartbeat, called from the engine's wait) until R9; the engine knows nothing of the window's watchdog now.
+// THE GAP IS NOT A FRAME GAP: the pause's release makes the next heartbeat skip its gap (a pause is a stall excused), and a bounded run's every frame holds
+// three of them, so the heartbeat is given here, as the wait ended, what the wait's own beats gave - a mark that the thread is alive WITHOUT a recorded
+// interval (heartbeat(false)), which also takes that skip - so the frame's own beat still measures the frame's own gap (tests/test_diag_hang.cpp reads
+// "worst frame gap" back from a bounded run and wants a number: with the skip left in, every gap of every frame was dropped and it read 0.0 ms). With no hook
+// (a product run) there is nothing to wait for.
+void AppWindow::stepPass(cascade::core::PassPart part) {
+    if (!bounded_.stepPass) { return; }
+    {
+        cascade::core::WatchdogPause blocked(watchdog_);
+        bounded_.stepPass(part);
+    }
+    watchdog_.heartbeat(false);
+}
 
-void AppWindow::resumeWatchdog() { watchdog_.resume(); }
+// THE END OF A BOUNDED FRAME: the host's hook, NOT bracketed by a pause of its own - it is called at the end of EVERY frame of a bounded run, a pause and its
+// release on each would drop every frame's gap (and the beat the release needs would sit at the very end of the frame, measuring nothing), and it blocks only
+// where the host says so, for the length of one wait (boundedClient_.blocked, above). Nothing to do in a product run.
+bool AppWindow::endOfFrameHook(int nextFrame) {
+    if (!bounded_.onFrame) { return true; }
+    return bounded_.onFrame(nextFrame, boundedClient_);
+}
 
 // (onDisplayRange, onBookmarksChanged and onConverterChanged are not here any more: the pump move's step P2 took them out. The
 // spectrum's range is set from the state in refreshUiState; the bookmark view follows the store's version on its own
@@ -21464,9 +21483,6 @@ void AppWindow::handFrontEndFacts(bool withPluginStatus) {
     f.tunerDisplayStyle = tunerDisplayStyle();
     f.basemap = basemapFacts();
     f.hasTrackFeed = fillTrackFeed(f.trackFeed);
-    // The bounded run's catalogue diagnostic (CASCADE_PLUGIN_TEST): whether it is on, and the frame it names.
-    f.pluginTestReport = !pluginTestHook_.empty();
-    f.frame = frameCounter_;
     // The bounded run's plugin status report (CASCADE_PLUGIN_STATUS), once, at the end: what only this window holds of it.
     f.pluginStatusReport = withPluginStatus;
     if (withPluginStatus) {

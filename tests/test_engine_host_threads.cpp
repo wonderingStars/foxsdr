@@ -40,7 +40,6 @@
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static cascade::engine::ShellHooks& host(AppWindow& a) { return a; }
     static double clockS(AppWindow& a) { return th::engine(a).clockS(); }
     static void handFacts(AppWindow& a, const cascade::engine::FrontEndFacts& f) { th::engine(a).setFrontEndFacts(f); }
     static cascade::core::PublishedState published(AppWindow& a) {
@@ -99,8 +98,6 @@ int main() {
     io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
     {
         th::TestWindow app;
-        cascade::engine::ShellHooks& host = A::host(app);
-
         // A: the engine's clock moves with no frame; ImGui's does not.
         frame(1.0);
         const double imgui1 = ImGui::GetTime();

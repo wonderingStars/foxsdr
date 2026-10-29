@@ -46,8 +46,8 @@ public:
     // pass is not the frame any more and a clock that stands still when the window does - a drag of its title bar, a modal loop -
     // froze the scanner's dwell, the bookmark save's debounce, the audio watchdog and the radio reopen's hold-off with it.)
     // The wall-clock the usage report measures a session with. One clock for every host of the process (engine_host.cpp, processEpoch): the window
-    // application's host replaces the service's after the restore stamped the session's start (Engine::setHost; R7b), and a host that replaces another
-    // must not override this either (the shell's adapter does not), so the stamp and the reads that follow it are on one clock.
+    // application's host replaced the service's after the restore stamped the session's start (Engine::setHost, R7b to R8; removed by R9), and a host that replaced another
+    // had to leave this alone (the shell's adapter did), so the stamp and the reads that follow it are on one clock - which stays true of every host a test builds.
     virtual double wallTimeS() const;
 
     // --- THE HANG WATCHDOG ------------------------------------------------------

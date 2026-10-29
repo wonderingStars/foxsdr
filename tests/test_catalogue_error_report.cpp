@@ -82,12 +82,10 @@ struct AppWindowTestAccess {
     }
     static void poll(Engine& e) { e.pollPluginAsync(); }
     static Engine& engine(AppWindow& a) { return th::engine(a); }
-    static void armPluginTest(AppWindow& a) { a.pluginTestHook_ = "http://127.0.0.1:9/catalogue.json"; }
-    // What the window hands the engine once a frame (handFrontEndFacts): here, the report switch and the frame it names.
-    static void handFacts(AppWindow& a, int frame) {
-        a.frameCounter_ = frame;
-        a.handFrontEndFacts();
-    }
+    // The end of the window's frame as a bounded run's host hears it (shell retirement R9: the hook the host installed, core/bounded_hooks.hpp): here, the
+    // frame the window says is about to begin - which the engine's report names. (Before R9 the window handed the engine a switch and a frame number in
+    // its front-end facts, every frame; the switch is the host's now - the harness arms it from CASCADE_PLUGIN_TEST - and the frame is this hook's.)
+    static bool endOfFrame(AppWindow& a, int nextFrame) { return a.bounded_.onFrame(nextFrame, a.boundedClient_); }
 };
 }  // namespace cascade::gui
 
@@ -130,9 +128,10 @@ int main() {
         e.teardown();
     }
 
-    // C: the bounded run's report. Since the pump move's step P2 the ENGINE prints it - when the fetch resolves, if the front end
-    // handed over (FrontEndFacts) that the diagnostic is on, naming the frame it handed over - where the window's
-    // onCatalogueResult hook used to read the window's own frame counter from the engine's pass.
+    // C: the bounded run's report. Since the pump move's step P2 the ENGINE prints it - when the fetch resolves, if the diagnostic is on, naming the
+    // frame the window had reached - where the window's onCatalogueResult hook used to read the window's own frame counter from the engine's pass. Since
+    // shell retirement R9 the diagnostic is armed by the bounded run's HOST (CASCADE_PLUGIN_TEST read when the hooks are built) and the frame is told it by
+    // the hook that ends each of the window's frames; the window hands the engine neither.
     ImGuiContext* ctx = ImGui::CreateContext();
     {
         th::TestWindow app;
@@ -165,16 +164,20 @@ int main() {
             const std::size_t at = text.find("plugin catalogue:");
             return at == std::string::npos ? std::string() : text.substr(at, text.find('\n', at) - at);
         };
-        // C0: nothing handed over - the diagnostic is off, whatever the fetch did: the engine prints nothing.
+        // C0: not armed (CASCADE_PLUGIN_TEST unset when the hooks were built) - the diagnostic is off, whatever the fetch did, whatever frame the hook
+        // is told: the engine prints nothing.
+        CHECK(A::endOfFrame(app, 7));
         A::finishFetch(A::engine(app), false, "the store could not be reached", "");
         const std::string silent = captured([&] { A::poll(A::engine(app)); });
-        std::printf("C0: no switch handed over: \"%s\"\n", silent.c_str());
+        std::printf("C0: not armed: \"%s\"\n", silent.c_str());
         CHECK(silent.empty());
-        // C: armed and handed over, naming frame 7.
-        A::armPluginTest(app);
-        A::handFacts(app, 7);
-        A::finishFetch(A::engine(app), false, "the store could not be reached", "");
-        const std::string line = captured([&] { A::poll(A::engine(app)); });
+        // C: armed by the host (the variable named an address when the hooks were built), told the frame - naming frame 7.
+        setEnv("CASCADE_PLUGIN_TEST", "http://127.0.0.1:9/catalogue.json");
+        th::TestWindow armed;
+        setEnv("CASCADE_PLUGIN_TEST", "");
+        CHECK(A::endOfFrame(armed, 7));
+        A::finishFetch(A::engine(armed), false, "the store could not be reached", "");
+        const std::string line = captured([&] { A::poll(A::engine(armed)); });
         std::printf("C: the bounded run's report: \"%s\"\n", line.c_str());
         CHECK(line.find("FAILED") != std::string::npos);
         CHECK(line.find("the store could not be reached") != std::string::npos);

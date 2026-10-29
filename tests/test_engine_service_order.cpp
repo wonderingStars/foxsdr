@@ -619,8 +619,18 @@ int checkHostMain(const std::string& hostBlank, bool say) {
              body.find("serviceRun.measuring = measure != nullptr;") != std::string::npos,
          "main builds the service's options with windowServiceOptions(), from boot.frames and the measurement run");
     need(countOf(body, "EngineMeasure::fromEnvironment()") == 1 && body.find("boot.frames >= 0") != std::string::npos &&
-             body.find("app.setMeasurement(") != std::string::npos,
-         "the measurement run is read once, in a bounded run only, and handed to the window");
+             body.find("app.setMeasurement(") == std::string::npos,
+         "the measurement run is read once, in a bounded run only, and handed to the bounded run's hooks (not to the window: R9)");
+    // THE BOUNDED RUN'S HOOKS (R9): built from the engine and the measurement in a bounded run ONLY, on the one line that tests boot.frames, and handed to the
+    // window through WindowHost - before the window is constructed (the window copies them in its constructor).
+    {
+        const std::size_t hooks = body.find("makeBoundedHooks(service.engine(), std::move(measure))");
+        const std::size_t gate = hooks == std::string::npos ? std::string::npos : body.rfind("boot.frames >= 0", hooks);
+        const std::size_t winAt = body.find("AppWindow app(");
+        need(hooks != std::string::npos && gate != std::string::npos && hooks - gate < 60 && countOf(body, "makeBoundedHooks(") == 1 && winAt != std::string::npos &&
+                 hooks < winAt && body.find("host.bounded = ") != std::string::npos,
+             "the bounded run's hooks are built only when boot.frames >= 0, from the service's engine and the measurement, and handed over in WindowHost before the window exists");
+    }
     // What the restore found reaches the window by main (the window reads no file): every field of WindowHost is filled from the restore, none dropped.
     for (const char* field : {"host.configLoaded = restored.loaded;",
                               "host.lastRunUnclean = restored.lastRunUnclean;", "host.sourceKind = restored.sourceKind;",
@@ -890,6 +900,18 @@ int main(int argc, char** argv) {
              [](std::string& s) { return replaceOnce(s, "windowServiceOptions(serviceRun)", "ServiceOptions()"); }},
             {"the measurement run read twice",
              [](std::string& s) { return replaceOnce(s, "serviceRun.measuring = measure != nullptr;", "serviceRun.measuring = cascade::core::EngineMeasure::fromEnvironment() != nullptr;"); }},
+            {"the bounded run's hooks installed in a product run too (R9: the gate removed)",
+             [](std::string& s) {
+                 return replaceOnce(s, "if (boot.frames >= 0) { host.bounded = cascade::engine::makeBoundedHooks(service.engine(), std::move(measure)); }",
+                                    "host.bounded = cascade::engine::makeBoundedHooks(service.engine(), std::move(measure));");
+             }},
+            {"the bounded run's hooks built AFTER the window is constructed (R9: the window copies them in its constructor)",
+             [](std::string& s) {
+                 return swapStatements(s, "if (boot.frames >= 0) { host.bounded = cascade::engine::makeBoundedHooks(service.engine(), std::move(measure)); }",
+                                       "cascade::gui::AppWindow app(host);");
+             }},
+            {"the measurement handed to the window again (R9: it is the harness's)",
+             [](std::string& s) { return replaceOnce(s, "app.setLinkTesterReveal(boot.linkTesterReveal);", "app.setLinkTesterReveal(boot.linkTesterReveal);\n        app.setMeasurement(nullptr);"); }},
             {"the saved I/Q path not handed to the window",
              [](std::string& s) { return replaceOnce(s, "host.iqFilePath = restored.iqFilePath;", ""); }},
             {"the last run's marker not handed to the window",

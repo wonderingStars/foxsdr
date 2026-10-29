@@ -628,12 +628,10 @@ void Engine::pollPluginAsync() {
         publishStatusText();
         host_->onCatalogueResult();
         // A bounded run's diagnostic (CASCADE_PLUGIN_TEST): the engine prints the catalogue and every entry's install-gate decision from its own
-        // state, naming the frame the window had reached - both handed over in FrontEndFacts (pump move step P2: the window's onCatalogueResult
-        // hook used to read its own frame counter from this pass).
-        {
-            const FrontEndFacts facts = frontEndFacts();
-            if (facts.pluginTestReport) { reportPluginTestResult(facts.frame); }
-        }
+        // state, naming the frame the window had reached - armed by the bounded run's host and told the frame at the end of each of the window's
+        // frames (shell retirement R9: they were fields of FrontEndFacts, handed over by the window every frame, until then; pump move step P2: the
+        // window's onCatalogueResult hook used to read its own frame counter from this pass).
+        if (pluginTestReport_.load(std::memory_order_relaxed)) { reportPluginTestResult(pluginTestFrame_.load(std::memory_order_relaxed)); }
     }
 
     // A picture that finished (0.99.72), then the next one in line (below, last).

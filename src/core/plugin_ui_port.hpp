@@ -109,7 +109,7 @@ struct PluginDirectiveFacts {
 };
 
 // WHAT THE FRONT END HANDS OVER, ONCE A FRAME (PluginUiPort::setFrontEnd): the facts only the window knows - the counter's face (the web page
-// mirrors it), the basemap plugin's figures, the track feed - and a bounded run's two diagnostics. ALL BY VALUE: the engine's side copies what
+// mirrors it), the basemap plugin's figures, the track feed - and a bounded run's plugin status report. ALL BY VALUE: the engine's side copies what
 // it keeps, so the window may refill this object at once; nothing in it is shared between the two threads.
 struct PluginUiFrontEnd {
     // The product's default face is the Nixie counter; an empty name is "no face handed over" and shows the engine's default.
@@ -119,10 +119,9 @@ struct PluginUiFrontEnd {
     // none.
     bool hasTrackFeed = false;
     TrackFeed trackFeed;
-    // A BOUNDED RUN'S DIAGNOSTIC (CASCADE_PLUGIN_TEST): whether to print the catalogue report when a fetch resolves, and the window's frame
-    // count to name in it.
-    bool pluginTestReport = false;
-    int frame = 0;
+    // (A BOUNDED RUN'S CATALOGUE DIAGNOSTIC - CASCADE_PLUGIN_TEST: whether to print the report when a fetch resolves, and the window's frame count to
+    // name in it - was a pair of fields here until shell retirement R9, 2026-10-28. The bounded run's host owns it now: core/bounded_hooks.hpp's onFrame
+    // tells the engine the frame, at the end of each frame.)
     // A BOUNDED RUN'S DIAGNOSTIC (CASCADE_PLUGIN_STATUS): when true, `pluginUi` and `pluginImages` are what the window's plugin poll and its
     // picture buffer hold, and the engine prints the report with them right after its first teardown phase (Engine::shutdownQuiesce). The
     // window sets it for the one hand-over made at the end of a bounded run that asked for the report, never in a product run.
