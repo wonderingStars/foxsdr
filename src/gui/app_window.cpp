@@ -85,6 +85,8 @@
 #include "dsp/window.hpp"
 #include "gui/bookmark_marker_geometry.hpp"
 #include "gui/freq_marker_layout.hpp"
+#include "gui/iq_file_box.hpp"
+#include "gui/paste_files.hpp"
 #include "gui/press_gesture.hpp"
 #include "gui/fonts.hpp"
 #include "gui/text_fit.hpp"
@@ -1266,6 +1268,10 @@ int AppWindow::run(int frames) {
     // platform but Windows) the window keeps the frame the desktop gave it
     // and drawCabinetRail draws no keys.
     cascade::gui::frame::install(window);
+    // A FILE COPIED IN EXPLORER PASTES AS ITS PATH (gui/paste_files.hpp, 2026-10-29): the backend's clipboard reader knows text alone, and a copied
+    // file is a list of files, so Ctrl+V over a copied recording pasted nothing. Wrapped once the backend has installed its reader, which the
+    // wrapper asks first.
+    cascade::gui::installFilePaste();
     glfwShowWindow(window);
     cascade::core::diagLogf("window: window shown; the Dear ImGui backends are up");
     glUp_ = true;   // from here closeWindow() has the GL context, ImGui and GLFW to take down (shell retirement R8)
@@ -3314,6 +3320,14 @@ void AppWindow::submitPendingDrop() {
     if (pendingDropPath_.empty()) { return; }
     const std::string dropped = std::move(pendingDropPath_);
     pendingDropPath_.clear();
+    // A WAV IS A RECORDING TO PLAY, not a frequency list to import (2026-10-29, the same report that found the I/Q file's row could not be pasted
+    // into): it goes to the I/Q file's box and is opened as Open would open it - the combo moves to that row so the box, and the open's answer, are
+    // drawn where the file went. Before this a dropped recording was tried as a frequency list and the IMPORT window opened to say it was not one.
+    if (cascade::gui::isWavName(dropped)) {
+        cascade::core::diagLogf("source: a WAV file was dropped on the window; opening it as the I/Q file");
+        openIqFileAt(dropped);
+        return;
+    }
     importBookmarkFile(dropped, importDialogOpen_ ? importDialogInto_ : cascade::core::ImportInto{});
 }
 
@@ -8099,19 +8113,32 @@ void AppWindow::drawSourceSection() {
     // and destroys a throwaway IqFileSource without ever touching the
     // pipeline, so there is nothing to roll back.
     if (c.row == 1) {
-        ImGui::SetNextItemWidth(-60.0f);
+        // THE BOX, A BROWSE KEY AND OPEN (the Browse key since 2026-10-29: a tester found a row he could neither choose a file in nor paste one into,
+        // see core/iq_file_box.hpp). Browse is drawn only where there is a file dialog to open - the system's on Windows, zenity or kdialog on Linux, the
+        // FOXSDR_FILE_PICK seam in a bounded run - never a key that does nothing; Open over an empty box opens the same dialog (openIqFile). The widths:
+        // the keys take what they need, the box the rest.
+        const float keyW = ImGui::CalcTextSize(trId("Open")).x + 2.0f * ImGui::GetStyle().FramePadding.x;
+        const float browseW = filePickOffered_ ? ImGui::CalcTextSize(tr("Browse...")).x + 2.0f * ImGui::GetStyle().FramePadding.x : 0.0f;
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetNextItemWidth(-(keyW + spacing + (filePickOffered_ ? browseW + spacing : 0.0f)));
         ImGui::InputText("##iq_path", iqPath_, sizeof(iqPath_));
+        cascade::gui::census::rect("source:iqpath", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                   ImGui::GetItemRectMax().y);
         ImGui::SameLine();
         // DISABLED WHILE THE HEADER IS BEING READ (0.99.64, stub campaign B19): the engine reads it on a worker (fact.source.iqOpening), and a second
         // press would only be ignored; a wait of a second or more says it is the disk's and not the window's.
         ImGui::BeginDisabled(iqOpenPending());
-        if (ImGui::Button(trId("Open"))) {
-            // SELECT_SOURCE "file:<path>" (openIqFile): the pipeline keeps
-            // what it has unless the file opens. A path past 255 bytes rides
-            // in the command's long text.
-            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, std::string("file:") + iqPath_));
+        if (filePickOffered_) {
+            if (ImGui::Button(trId("Browse...##iq_browse"))) { browseIqFile(); }
+            cascade::gui::census::rect("source:iqbrowse", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                       ImGui::GetItemRectMax().y);
+            ImGui::SameLine();
         }
+        if (ImGui::Button(trId("Open"))) { openIqFile(); }
+        cascade::gui::census::rect("source:iqopen", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                   ImGui::GetItemRectMax().y);
         ImGui::EndDisabled();
+        if (!iqBoxNote_.empty()) { ImGui::TextWrapped("%s", iqBoxNote_.c_str()); }
         if (iqOpenPending() && iqOpenElapsedS() >= 1.0) {
             ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"), iqOpenElapsedS());
         }
@@ -11437,10 +11464,11 @@ void AppWindow::applyInputScript(long frame) {
             case cascade::gui::ScriptStep::Verb::Key: {
                 // A down and an up in one frame is still two frames to ImGui:
                 // its input queue trickles them, so the key is seen pressed.
-                if (st.arg == "ctrl+a") {
+                if (st.arg == "ctrl+a" || st.arg == "ctrl+v") {
+                    const ImGuiKey letter = (st.arg == "ctrl+a") ? ImGuiKey_A : ImGuiKey_V;
                     io.AddKeyEvent(ImGuiMod_Ctrl, true);
-                    io.AddKeyEvent(ImGuiKey_A, true);
-                    io.AddKeyEvent(ImGuiKey_A, false);
+                    io.AddKeyEvent(letter, true);
+                    io.AddKeyEvent(letter, false);
                     io.AddKeyEvent(ImGuiMod_Ctrl, false);
                     break;
                 }
@@ -11458,6 +11486,15 @@ void AppWindow::applyInputScript(long frame) {
             }
             case cascade::gui::ScriptStep::Verb::Text:
                 io.AddInputCharactersUTF8(st.arg.c_str());
+                break;
+            case cascade::gui::ScriptStep::Verb::Paste:
+                // The text goes on the SCRIPTED clipboard (gui/paste_files.hpp), never the desk's, and Ctrl+V is tapped as ctrl+a is above: the
+                // paste then runs through Dear ImGui's own shortcut, filter and buffer checks against the field that holds the keys.
+                cascade::gui::setScriptedClipboard(st.arg);
+                io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                io.AddKeyEvent(ImGuiKey_V, true);
+                io.AddKeyEvent(ImGuiKey_V, false);
+                io.AddKeyEvent(ImGuiMod_Ctrl, false);
                 break;
             case cascade::gui::ScriptStep::Verb::Wheel:
                 io.AddMouseWheelEvent(0.0f, st.y);

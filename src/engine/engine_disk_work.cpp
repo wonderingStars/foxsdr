@@ -44,6 +44,7 @@
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
 #include "core/i18n.hpp"
+#include "core/iq_file_box.hpp"
 #include "core/patch_recordings.hpp"
 #include "core/unique_file.hpp"
 #include "core/utf8_text.hpp"
@@ -138,8 +139,12 @@ void Engine::pollIqOpen() {
         return;
     }
     if (!r.file) {
-        // The reason, exactly as the synchronous open gave it.
+        // The reason, exactly as the synchronous open gave it - on screen. IN THE LOG TOO, since 2026-10-29, with the path taken out
+        // (gui/iq_file_box.hpp: PRIVACY.md promises the log never names a file you opened): a tester's report of an Open that "does nothing"
+        // came with a log that had no I/Q line at all, and a refused open was the one outcome of the key that left no trace anywhere but a
+        // red line on the screen.
         sourceError_ = r.error;
+        cc::diagWarnf("source: the I/Q file did not open: %s", cascade::core::iqOpenReasonForLog(r.error, r.path).c_str());
         return;
     }
     installOpenedIqFile(std::move(r.file), r.path);

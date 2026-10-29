@@ -562,6 +562,13 @@ foreach(src ${CASCADE_TESTS})
         # screenshot's window list, and the rows from the bookmarks file the run leaves (0.99.80).
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_iq_file_box_app")
+        # Runs the real cascade.exe (built first) with a recording as the saved I/Q file, presses the
+        # Source row's Browse and Open keys and pastes into its box with the input script (the file
+        # dialog answered by FOXSDR_FILE_PICK, the paste from the scripted clipboard), and reads the
+        # row's parts from the UI census, the log the run leaves and the config it saves (2026-10-29).
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
@@ -1185,6 +1192,11 @@ endif()
 if(TEST test_import_dialog_app)
     set_tests_properties(test_import_dialog_app PROPERTIES TIMEOUT 600)
 endif()
+# Six starts of the real application, 50 to 60 frames each (the I/Q-file row's layout, Browse, an
+# emptied box's Open, its cancel, a paste and its control); the same bound as its siblings.
+if(TEST test_iq_file_box_app)
+    set_tests_properties(test_iq_file_box_app PROPERTIES TIMEOUT 600)
+endif()
 # The display-menu test starts the real application twenty-three times (the menu on the waterfall and the
 # spectrum, Manual with its sliders, the ten-decibel rule, Reset, a restart, a 0.99.75 config, a patch
 # Spectrum part, and nine runs that hold the frame loop with `sleep` steps for the 4-second tip, 4 to
@@ -1537,6 +1549,7 @@ set(CASCADE_GUI_TESTS
     test_gps_app
     test_health_app
     test_import_dialog_app
+    test_iq_file_box_app
     test_main_view
     test_map_coverage_app
     test_markers_window_app

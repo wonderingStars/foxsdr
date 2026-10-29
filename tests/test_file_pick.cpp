@@ -200,6 +200,35 @@ void testFilters() {
     f = openFileFilters(nameless);
     CHECK(f.size() == 2u);
     if (f.size() == 2u) { CHECK(f[0].first == "*.xml;*.csv" && f[1].first == "*.*"); }
+
+    // 2026-10-29, the Source section's I/Q-file Browse key: `recordings` offers the WAV
+    // recordings first, so the dialog opens on what the row can play.
+    FilePickRequest rec;
+    rec.recordings = true;
+    rec.recordingsName = "I/Q recordings (*.wav)";
+    rec.allFilesName = "All files (*.*)";
+    f = openFileFilters(rec);
+    CHECK(f.size() == 2u);
+    if (f.size() == 2u) {
+        CHECK(f[0].first == "I/Q recordings (*.wav)" && f[0].second == "*.wav");  // selected when it opens
+        CHECK(f[1].first == "All files (*.*)" && f[1].second == "*.*");
+    }
+    // Off (the default): no such filter, whatever recordingsName holds.
+    rec.recordings = false;
+    f = openFileFilters(rec);
+    CHECK(f.size() == 1u);
+    // With lists too: lists, then recordings, then all files.
+    rec.recordings = true;
+    rec.lists = true;
+    f = openFileFilters(rec);
+    CHECK(f.size() == 3u);
+    if (f.size() == 3u) { CHECK(f[0].second == "*.xml;*.csv" && f[1].second == "*.wav" && f[2].second == "*.*"); }
+    // No words: the pattern stands in.
+    FilePickRequest recBare;
+    recBare.recordings = true;
+    f = openFileFilters(recBare);
+    CHECK(f.size() == 2u);
+    if (f.size() == 2u) { CHECK(f[0].first == "*.wav"); }
 }
 
 void testCommands() {

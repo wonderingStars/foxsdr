@@ -1955,7 +1955,10 @@ private:
     double soundCardCentreSentHz_ = 0.0;      // the centre the last commit sent
     double soundCardCentreEditedAt_ = 0.0;
 
-    char iqPath_[512] = "";     // InputText buffer for the IQ file path
+    // InputText buffer for the IQ file path. 2 KiB, not 512: Dear ImGui refuses a paste that does not fit WHOLE, and a recording several folders deep
+    // under a long user name, in UTF-8 and in quotes, is longer than a typed path ever was (a tester could not paste a path, 2026-10-29).
+    char iqPath_[2048] = "";
+    std::string iqBoxNote_;     // the line under the I/Q-file row when Open was pressed over an empty box with no dialog to offer
     // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands round 2): the
     // Pluto address box's edit buffer, seeded from engine_.plutoUri_ once in
     // applyConfig - typing here never writes the engine field (Open commits
@@ -4029,6 +4032,11 @@ private:
     void pollDiskJobs();   // once a frame: a saved picture's note; a finished screenshot frees the next
     // WHAT THE ENGINE'S WORKERS ARE DOING, as it publishes it (the keys that start them are disabled while they run, and a long wait says so):
     bool bookmarkExportPending();    // fact.bookmarks.exporting: a frequency list is being written
+    // The I/Q-file row's Open (the box's text as gui/iq_file_box.hpp's typedIqPath has it; an EMPTY box opens the file dialog where there is
+    // one), its Browse key, and the open of a path put in the box at once (a chosen file, a WAV dropped on the window).
+    void openIqFile();
+    bool browseIqFile();
+    void openIqFileAt(const std::string& path);
     bool iqOpenPending();            // fact.source.iqOpening: an I/Q file's header is being read
     double iqOpenElapsedS();         // ...for how long (this window's clock from when it first saw it)
     double iqOpenSinceS_ = -1.0;

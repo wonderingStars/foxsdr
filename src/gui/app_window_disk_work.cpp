@@ -47,7 +47,9 @@
 #include "core/i18n.hpp"
 #include "core/image_write.hpp"
 #include "core/unique_file.hpp"
+#include "core/file_pick.hpp"
 #include "core/utf8_text.hpp"
+#include "gui/iq_file_box.hpp"
 #include "gui/app_window_disk_state.hpp"
 #include "core/disk_job.hpp"
 
@@ -75,6 +77,69 @@ double AppWindow::iqOpenElapsedS() {
     const double now = ImGui::GetTime();
     if (iqOpenSinceS_ < 0.0) { iqOpenSinceS_ = now; }
     return now - iqOpenSinceS_;
+}
+
+// THE I/Q FILE ROW'S OPEN (2026-10-29, re-expressed on the engine split: master ran the worker here, the engine runs it now - SELECT_SOURCE
+// "file:<path>" - and this is the window's half: what the box holds, the file dialog and an empty box).
+void AppWindow::openIqFile() {
+    // WHAT THE BOX HOLDS, AS A PATH (gui/iq_file_box.hpp): Explorer's "Copy as path" puts the path in double quotes and a pasted line can end
+    // in a space, and until 2026-10-29 both went to the open as part of the name. The box shows what is tried, so what the person reads and
+    // what the disk is asked agree.
+    const std::string path = cascade::gui::typedIqPath(iqPath_);
+    if (path != iqPath_) { cascade::core::formatUtf8(iqPath_, sizeof(iqPath_), "%s", path.c_str()); }
+    // AN EMPTY BOX IS NOT A FILE THAT WOULD NOT OPEN. Until 2026-10-29 Open over an empty box handed "" to the worker, whose "cannot open file: "
+    // (nothing after the colon) landed in the red line below the converter and crystal controls, with no log line - a tester's "the Open does
+    // nothing". The row had no way to CHOOSE a file at all. Open over an empty box now opens the file dialog, where this machine has one, and
+    // otherwise says what the box is for.
+    if (path.empty()) {
+        if (filePickOffered_) {
+            browseIqFile();
+        } else {
+            iqBoxNote_ = tr("Type or paste the path of a WAV recording, then press Open.");
+            cascade::core::diagLogf("source: Open pressed with no I/Q file named and no file dialog to offer");
+        }
+        return;
+    }
+    iqBoxNote_.clear();
+    // SELECT_SOURCE "file:<path>" (the engine's openIqFile): the pipeline keeps what it has unless the file opens. A path past 255 bytes rides
+    // in the command's long text.
+    uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, std::string("file:") + path));
+}
+
+bool AppWindow::browseIqFile() {
+    if (iqOpenPending()) { return false; }
+    // THE SYSTEM'S FILE DIALOG, through the same pickFile the IMPORT window's and a PATH setting's Browse keys use: the watchdog's user-paced
+    // pause around it, the FOXSDR_FILE_PICK seam in a bounded run, no dialog where the machine has none (the key is not drawn then, and Open
+    // says to type a path instead). It opens beside the path in the box, else in the recordings folder - where this program's own Record
+    // writes - with the WAV recordings offered first.
+    cascade::core::FilePickRequest rq;
+    rq.title = tr("Choose a recording to play");
+    std::string recordDir;
+    readFactText("fact.recorder.dir", recordDir);
+    rq.startFrom = cascade::core::pickStartPath(iqPath_, recordDir, "recording.wav");
+    rq.recordings = true;
+    rq.recordingsName = tr("I/Q recordings (*.wav)");
+    rq.allFilesName = tr("All files (*.*)");
+    std::string chosen;
+    if (!pickFile(rq, chosen) || chosen.empty()) {
+        // Nothing changes: the box, the source, the row. Said in the log so an "Open does nothing" report can be told from a dialog that was
+        // dismissed.
+        cascade::core::diagLogf("source: the I/Q file dialog was closed without a choice");
+        return false;
+    }
+    // THE CHOICE, NEVER ITS NAME: a recording's file name is the user's own data (the rule installOpenedIqFile states for the rate line).
+    cascade::core::diagLogf("source: a recording was chosen in the I/Q file dialog");
+    openIqFileAt(chosen);
+    return true;
+}
+
+void AppWindow::openIqFileAt(const std::string& path) {
+    // The combo moves to the row whose controls hold the box (the engine's "row:iqfile"), so what happens next is drawn where it happens, and
+    // the box shows the file the open is for; then the same open the Open key makes. A dropped file arrives while another row may be selected;
+    // a chosen one does not, but the rule is one rule. The two commands are taken in order by the engine's pass.
+    uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, std::string("row:iqfile")));
+    cascade::core::formatUtf8(iqPath_, sizeof(iqPath_), "%s", path.c_str());
+    openIqFile();
 }
 
 bool AppWindow::imageSavePending() const { return diskWork_ != nullptr && diskWork_->imageSave.pending(); }

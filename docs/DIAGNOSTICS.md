@@ -3534,6 +3534,23 @@ never saw it because the scan runs in a child.
   `radio_fail.<driver>.busy`. While no radio is open the deck's GAIN dial and its
   AUTO key say so in their tooltips (and name the saved radio's reason when there
   is one).
+- `source: the I/Q file did not open: <reason>` — the Source section's I/Q-file
+  Open refused (`Engine::pollIqOpen`, re-expressed from `AppWindow::pollIqOpen`, 2026-10-29). The reason is the source's own
+  sentence with the path replaced by `(the file)` (`gui::iqOpenReasonForLog`):
+  `cannot open file: (the file)`, `not a RIFF/WAVE file: (the file)`, `missing fmt
+  chunk`, and so on; the full sentence, path included, is the red line on screen.
+  Until this line existed a refused Open left no trace but that red line, and a
+  tester's report that "the Open does nothing" came with a log that had no I/Q line
+  at all. Beside it, three lines from the same change: `source: a recording was
+  chosen in the I/Q file dialog` and `source: the I/Q file dialog was closed without
+  a choice` (the row's Browse key, and Open pressed over an empty box, both open the
+  system's file dialog - `AppWindow::browseIqFile`), `source: Open pressed with no
+  I/Q file named and no file dialog to offer` (a Linux machine with neither zenity nor
+  kdialog: the red line says to type or paste a path), and `source: a WAV file was
+  dropped on the window; opening it as the I/Q file` (`consumePendingDrop`: a dropped
+  recording goes to the row's box, not to the frequency-list import). None names
+  the file; the success line is the rate line it always was (`source: opened an I/Q
+  file at <rate> S/s`).
 
 A hang report captures every thread because *a deadlock is only legible as a
 pair.* "The GUI thread is blocked" names no bug; "the GUI thread waits on the
