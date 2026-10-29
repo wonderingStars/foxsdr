@@ -1088,8 +1088,10 @@ void RecoveryWatch::poll(const RecoveryReadings& now) {
         issue::fileIssueReport(Recovered::VendorCall);
     }
     if (const std::uint32_t n = moved(now.ringDroppedSamples, last_.ringDroppedSamples)) {
+        // Counted here, every drop; the feed ROW is filed by the DSP minute
+        // (AppWindow::closeDspMinute) behind ringDropWorthAReport's share
+        // floor - this poll sees samples, not the minute they are a share of.
         g->note(tokenRecovered(Recovered::RingDrop), n);
-        issue::fileIssueReport(Recovered::RingDrop);
     }
     if (const std::uint32_t n = moved(now.dspThreadExceptions, last_.dspThreadExceptions)) {
         g->note(tokenRecovered(Recovered::DspExc), n);

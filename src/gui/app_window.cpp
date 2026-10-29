@@ -5039,6 +5039,19 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
     const bool pluginsReloadedThisMinute = pluginRescans_ != audioRescansAtLogStart_;
     audioRescansAtLogStart_ = pluginRescans_;
 
+    // ...AND NEITHER IS THE USER'S OWN STOP (the same field day): each stop of
+    // a running receiver starves the sink's last callback once, and three STOP
+    // presses in one minute met the raise threshold by themselves. One starved
+    // callback per stop is discounted from the RAISE decision only - never
+    // below zero, so starvation beyond the stops counts in full. The quiet run
+    // is untouched: a stop leaves the sink unprimed, which already keeps such
+    // a minute from counting as quiet, and a starved callback still resets the
+    // run exactly as the step-down policy argues it should.
+    const std::uint64_t stopsThisMinute =
+        receiverStops_ >= audioStopsAtLogStart_ ? receiverStops_ - audioStopsAtLogStart_ : 0;
+    audioStopsAtLogStart_ = receiverStops_;
+    const std::uint64_t starvedBeyondStops = starved > stopsThisMinute ? starved - stopsThisMinute : 0;
+
     // THE BUFFER THAT DEEPENS ITSELF (0.99.73) AND EASES BACK (0.99.83). The
     // 12CF report - 110 to 126 starved callbacks every minute at a fixed 120 ms
     // - is the case: when a minute closes with three or more, the lead steps up
@@ -5068,12 +5081,22 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
                 leadMs);
         }
     } else {
-        const int nextMs = cascade::sink::nextAudioLead(starved, leadMs, audioBufferMs_);
+        const int nextMs = cascade::sink::nextAudioLead(starvedBeyondStops, leadMs, audioBufferMs_);
+        if (nextMs == leadMs && starvedBeyondStops < starved &&
+            starved >= static_cast<std::uint64_t>(cascade::sink::kAudioLeadStarvedPerMinute)) {
+            // The discount is why nothing steps; say so, or the digest above
+            // reads as a raise the code forgot.
+            cascade::core::diagLogf(
+                "audio: buffer kept at %d ms - %llu of the %llu starved callbacks came with "
+                "receiver stops",
+                leadMs, static_cast<unsigned long long>(starved - starvedBeyondStops),
+                static_cast<unsigned long long>(starved));
+        }
         if (nextMs > leadMs) {
             out.setLeadFrames(cascade::sink::audioLeadFrames(nextMs));
             audioLeadNote_ = AudioLeadNote::kRaised;
             audioLeadNoteMs_ = nextMs;
-            audioLeadNoteCount_ = sayRaised(nextMs, starved, "");
+            audioLeadNoteCount_ = sayRaised(nextMs, starvedBeyondStops, "");
             audioLeadQuietMinutes_ = 0;   // whatever run there was ended in a raise
             // REMEMBERED FOR THE NEXT LAUNCH: a computer that fell behind this often is slow every
             // time, and starting at 120 ms again costs the same bad minutes at every start. Only the
@@ -5199,6 +5222,14 @@ void AppWindow::closeDspMinute() {
     cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)",
                             static_cast<unsigned long long>(dropped),
                             share.empty() ? "share unknown" : share.c_str());
+    // THE FEED ROW, behind the severity floor (core/diag_report.hpp,
+    // ringDropWorthAReport): a minute that lost a hearable share files the
+    // `ringdrop` issue report, once a session; a start-of-stream blip does
+    // not. The ledger still counts every drop (RecoveryWatch) - a count is
+    // not a row. The window's thread, so the report may lock.
+    if (cascade::core::ringDropWorthAReport(dropped, read)) {
+        cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
+    }
     // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
     // many writes, how full the ring got, and the longest one block took on the
     // DSP thread. A long block is a stall on the DSP side; a short one beside
@@ -28362,6 +28393,15 @@ void AppWindow::stopReceiver(const char* who) {
     // the fault left behind. Joins within ~10 ms, an acceptable one-off hitch
     // on the GUI thread for a Stop.
     pipeline_.stop();
+    // A stop leaves the sink open with nothing feeding it, so its last
+    // callback starves - an expected cost of the user's own action, not the
+    // machine falling behind. Counted for closeAudioMinute's discount (the
+    // 2026-10-29 field report: three STOP presses in one minute = exactly the
+    // three starved callbacks that raise the buffer). Only a stop that
+    // stopped something: a stop of a stopped receiver starves nobody, and
+    // counting it would hide a real starved callback. This thread is the
+    // window's, the same one that closes minutes.
+    if (running) { ++receiverStops_; }
 }
 
 void AppWindow::endTakesOnFault() {

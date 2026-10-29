@@ -849,7 +849,7 @@ The sites that are counted:
 | `reopen` | `AppWindow::reopenAfterDriverFault`, a SoapySDR driver fault answered by reopening the radio | the window's thread |
 | `srcthread` | `Pipeline::quiesceSourceThreadLocked`'s abandonment, read as `abandonedSourceThreads()` | the poll |
 | `vendorcall` | `SoapySource::driverCallsAbandoned()`, a vendor call let go after `kVendorCallWait` | the poll |
-| `ringdrop` | `Pipeline::ringDroppedSamples()`, the source ring full | the poll |
+| `ringdrop` | `Pipeline::ringDroppedSamples()`, the source ring full - counted by the poll; the issue report is filed by `AppWindow::closeDspMinute` only for a minute that lost at least 0.05% of its samples (`ringDropWorthAReport`, 0.99.102) | the poll (the count), the window's thread (the report) |
 | `dspexc` | `Pipeline::dspThreadExceptions()`, the DSP thread's catch blocks | the poll |
 | `cfgsave` | `AppWindow::pollConfigWriter`, the settings write that failed | the window's thread |
 | `enumchild` | `soapy_enum_proc.cpp`, a scan child that died and was contained | the scan's worker |
@@ -2305,6 +2305,18 @@ the drop count, read first, never runs ahead of its read). A share too small for
 two decimals is `under 0.01%`, never `0.00%`. The bundle carries the session's
 total as `dsp-dropped: 324608 of 2400000000 samples (0.01%)`.
 
+**The feed row has a floor (0.99.102).** The `ringdrop` issue report used to be
+filed by the health poll on the first dropped sample of a session, and its first
+day on the feed (2026-10-29) was six rows from five installs, every one a
+start-of-stream blip of a few milliseconds - 7168 samples, 3.5 ms at 2.048 MS/s,
+"under 0.01%" - that nobody could hear, while the loss GitHub issue 6 was about
+ran at 0.69% of a minute. The report is now filed by `closeDspMinute`, for a
+minute that lost at least **0.05%** of what it read (`ringDropWorthAReport`,
+core/diag_report.hpp: twenty times the blip, a tenth of the real fault), once a
+session as before. The log line above and the ledger count `recovered.ringdrop`
+are not gated: they are the reader's record of one machine, and a count is not
+a row.
+
 **What the loss looked like (0.99.101, the 0.99.90 report on the same issue).** A
 lost minute writes a second line straight after the first:
 
@@ -2548,6 +2560,16 @@ the fill to a fixed 160 ms. A deeper lead alone would have been bled back down t
   the starved callbacks came in a minute that reloaded plugins`**. The constructor's
   first plugin load is consumed at construction, so the session's first minute is still
   judged on its own figures.
+- **A user's stop is not the machine falling behind** (0.99.102, the same day's feed: a
+  Store install raised its buffer to 240 ms after three STOP presses in one minute - each
+  stop of a running receiver starves the sink's last callback once, and three met the
+  threshold by themselves). `AppWindow::stopReceiver` counts the stops that stopped
+  something, and `closeAudioMinute` subtracts the minute's stops from its starved
+  callbacks - one per stop, never below zero - before deciding a raise, so starvation
+  beyond the stops still counts in full; a raise that the discount prevented is said:
+  **`audio: buffer kept at <N> ms - <S> of the <T> starved callbacks came with receiver
+  stops`**. The quiet run is untouched (a stop leaves the sink unprimed, which already
+  keeps the minute from counting as quiet).
 - Each step writes **`audio: buffer raised to <N> ms after <N> starved callbacks in a
   minute`** (a patch speaker's carries ` (patch speaker)` at the end), shows
   "Audio buffer raised to 240 ms: this computer fell behind 5 times in the last

@@ -440,6 +440,21 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in);
 // capped at "100.00%". Empty when nothing was read: there is no share to give.
 std::string droppedShareText(std::uint64_t dropped, std::uint64_t read);
 
+// THE SEVERITY FLOOR FOR A RINGDROP FEED ROW (2026-10-29). The issue-report
+// pipeline filed `ringdrop` on the first dropped sample of a session, and its
+// first day on the feed was six rows from five installs, every one a start-of-
+// stream blip of a few milliseconds ("under 0.01%" - 7168 samples, 3.5 ms at
+// 2.048 MS/s) that nobody could hear and no decoder noticed, while the loss
+// GitHub issue 6 was about ran at 0.69% of a minute. A minute is worth a row
+// when it lost at least this share of what it read: twenty times the blip,
+// a tenth of the real fault. The log line and the ledger count are not gated
+// - they are for the reader of one machine's story, and a count is not a row.
+inline constexpr double kRingDropReportShare = 0.0005;  // 0.05% of the minute's samples
+inline bool ringDropWorthAReport(std::uint64_t dropped, std::uint64_t read) {
+    if (dropped == 0 || read == 0) { return false; }  // nothing lost, or no share to judge
+    return static_cast<double>(dropped) >= static_cast<double>(read) * kRingDropReportShare;
+}
+
 // THE FIELD INVENTORY, in the same spirit as TelemetryReport's: PRIVACY.md
 // documents what a bundle contains field by field, and a test asserts the
 // bundle matches this list exactly. A new field cannot be added without the

@@ -494,7 +494,7 @@ by itself, so a count of 1 means "this session had it".
 | `reopen` | a SoapySDR radio's driver faulted and FoxSDR reopened the radio by itself. Once a session. |
 | `srcthread` | a radio driver's read never returned when the receiver was stopped, and FoxSDR let the thread go rather than freeze the window. |
 | `vendorcall` | a call into a SoapySDR vendor module did not return in time and was let go. |
-| `ringdrop` | the radio delivered samples faster than they were taken off and some were dropped. Once a session. |
+| `ringdrop` | the radio delivered samples faster than they were taken off and some were dropped. Once a session. Filed only for a minute that lost at least 0.05% of its samples: a blip of a few milliseconds at the start of a stream is logged on the machine but makes no report. |
 | `dspexc` | the signal-processing thread threw an error that was caught, and the receiver stopped rather than the program. |
 | `cfgsave` | the settings file could not be written. Once a session. |
 | `enumchild` | the helper that lists SoapySDR radios died and was contained. Once a session. |

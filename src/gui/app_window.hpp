@@ -2633,6 +2633,16 @@ private:
     // judged on its own figures.
     std::uint64_t pluginRescans_ = 0;
     std::uint64_t audioRescansAtLogStart_ = 0;
+    // A USER'S STOP IS NOT THE MACHINE FALLING BEHIND (same 2026-10-29 feed
+    // read): each stop of a running receiver starves the sink's last callback
+    // once, and three stops in a minute met the raise threshold on their own.
+    // receiverStops_ counts them (stopReceiver, running stops only); the mark
+    // is where the count stood when the minute opened. closeAudioMinute
+    // subtracts the minute's stops from its starved callbacks before judging
+    // a raise - one callback per stop, never below zero, so starvation beyond
+    // the stops still counts in full. Window's thread, like the pair above.
+    std::uint64_t receiverStops_ = 0;
+    std::uint64_t audioStopsAtLogStart_ = 0;
     // The pipeline ring's minute (pollDspMinute / closeDspMinute): its own clock,
     // and the two monotonic pipeline counters as they stood when it last closed.
     double lastDspLogSec_ = 0.0;

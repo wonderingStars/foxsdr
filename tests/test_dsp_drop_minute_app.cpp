@@ -54,8 +54,10 @@
 #include <unistd.h>
 #endif
 
+#include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/issue_report.hpp"
 #include "core/pipeline.hpp"
 #include "gui/app_window.hpp"
 #include "source/iq_source.hpp"
@@ -270,6 +272,55 @@ int main() {
         CHECK(std::strlen(widest) < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
     }
 
+    // --- 0b. THE SEVERITY FLOOR FOR A FEED ROW (0.99.102), by itself -------------------
+    // The feed's first day of `ringdrop` rows: six start-of-stream blips of a few
+    // milliseconds, "under 0.01%". A minute is worth a row at 0.05% of its input.
+    {
+        using cascade::core::kRingDropReportShare;
+        using cascade::core::ringDropWorthAReport;
+        const std::uint64_t minute = 2048000ULL * 60;          // 2.048 MS/s for a minute
+        CHECK(kRingDropReportShare == 0.0005);
+        CHECK(!ringDropWorthAReport(7168, minute));            // the field blip: 3.5 ms
+        CHECK(!ringDropWorthAReport(1, minute));
+        CHECK(!ringDropWorthAReport(0, minute));               // nothing lost
+        CHECK(!ringDropWorthAReport(5, 0));                    // nothing read: no share
+        CHECK(!ringDropWorthAReport(0, 0));
+        const std::uint64_t floor = minute / 2000;             // exactly 0.05%
+        CHECK(!ringDropWorthAReport(floor - 1, minute));
+        CHECK(ringDropWorthAReport(floor, minute));            // the boundary is in
+        CHECK(ringDropWorthAReport(848000, minute));           // GitHub issue 6's 0.69%
+        CHECK(ringDropWorthAReport(3, 2));                     // more dropped than read
+    }
+
+    // CAPTURE ON, so a minute that files the `ringdrop` report writes a file this test
+    // can count (core/issue_report.hpp: capture off files nothing, and says nothing).
+    const fs::path reports = g_scratch / "reports";
+    {
+        std::error_code ec;
+        fs::create_directories(reports, ec);
+        cascade::core::CrashHandlerConfig on;
+        on.crashDir = reports.string();
+        on.enabled = true;
+        on.minidump = false;
+        on.exitAfterReport = false;
+        cascade::core::installCrashHandlers(on);
+        CHECK(!cascade::core::activeCrashDir().empty());
+        cascade::core::issue::resetIssueReportsForTest();
+    }
+    auto ringdropReports = [&] {
+        std::size_t n = 0;
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(reports, ec)) {
+            const std::string name = e.path().filename().string();
+            if (name.rfind("issue-", 0) != 0 || name.size() < 4 ||
+                name.compare(name.size() - 4, 4, ".txt") != 0) {
+                continue;
+            }
+            if (readFile(e.path()).find("reason: issue: ringdrop - ") != std::string::npos) { ++n; }
+        }
+        return n;
+    };
+
     cascade::gui::AppWindow app;
     cascade::core::Pipeline& p = Access::pipeline(app);
     auto owned = std::make_unique<BudgetSource>();
@@ -301,6 +352,7 @@ int main() {
         Access::closeDspMinute(app);
         CHECK(dropLines().size() == linesAtStart);
         CHECK(ringLines().size() == ringLinesAtStart);   // no second line without a first
+        CHECK(ringdropReports() == 0);                   // and no feed row
     }
 
     // --- 2. THE DSP SIDE STALLS: one line, the pipeline's own count, its share ----------
@@ -373,6 +425,11 @@ int main() {
             CHECK(blockMs <= 10000);
             CHECK(line.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
         }
+        // THE FEED ROW (0.99.102): a minute that lost two rings of three is far over
+        // the 0.05% floor, so the `ringdrop` issue report is filed - by this minute
+        // close, not by the health poll, which now only counts.
+        CHECK(cascade::core::ringDropWorthAReport(stalledDropped, read));
+        CHECK(ringdropReports() == 1);
     }
 
     // --- 3. THE NEXT CLEAN MINUTE IS SILENT AGAIN ---------------------------------------
@@ -393,6 +450,7 @@ int main() {
         // ...and a minute with nothing at all in it is silent too.
         Access::closeDspMinute(app);
         CHECK(dropLines().size() == linesAtStart + 1);
+        CHECK(ringdropReports() == 1);                   // once a session, and no new row
     }
 
     // --- 4. THE BUNDLE carries the running total and what was read ----------------------
@@ -450,6 +508,28 @@ int main() {
         if (audioBody != std::string::npos && audioEnd != std::string::npos) {
             CHECK(srcText.substr(audioBody, audioEnd - audioBody).find("closeDspMinute") ==
                   std::string::npos);
+        }
+        // THE ROW IS THE MINUTE'S, BEHIND THE FLOOR (0.99.102): closeDspMinute files the
+        // report only inside the ringDropWorthAReport test, and the health poll's
+        // ring branch counts without filing.
+        const std::size_t closeFn = srcText.find("void AppWindow::closeDspMinute()");
+        const std::size_t closeEnd = closeFn == std::string::npos ? closeFn : srcText.find("\n}", closeFn);
+        CHECK(closeFn != std::string::npos && closeEnd != std::string::npos);
+        if (closeFn != std::string::npos && closeEnd != std::string::npos) {
+            const std::string body = srcText.substr(closeFn, closeEnd - closeFn);
+            const std::size_t floor = body.find("if (cascade::core::ringDropWorthAReport(dropped, read))");
+            const std::size_t file = body.find("fileIssueReport(cascade::core::health::Recovered::RingDrop)");
+            CHECK(floor != std::string::npos && file != std::string::npos && floor < file);
+        }
+        const std::string health = stripComments(
+            readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "core" / "health_events.cpp"));
+        const std::size_t watch = health.find("void RecoveryWatch::poll(");
+        const std::size_t watchEnd = watch == std::string::npos ? watch : health.find("\n}", watch);
+        CHECK(watch != std::string::npos && watchEnd != std::string::npos);
+        if (watch != std::string::npos && watchEnd != std::string::npos) {
+            const std::string body = health.substr(watch, watchEnd - watch);
+            CHECK(body.find("tokenRecovered(Recovered::RingDrop)") != std::string::npos);
+            CHECK(body.find("fileIssueReport(Recovered::RingDrop)") == std::string::npos);
         }
     }
 

@@ -287,6 +287,9 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"TakeHeader", "src/gui/app_window_disk_work.cpp", 1},
         {"SentinelGone", "src/core/sentinel_host_win.cpp", 2}, {"SentinelGone", "src/core/sentinel_host_posix.cpp", 2},
         {"DisplayWatch", "src/gui/win_frame.cpp", 1},
+        // Counted by the poll like the other three it watches, but its issue report is the DSP
+        // minute's, behind the share floor (0.99.102): the one direct use is that filing.
+        {"RingDrop", "src/gui/app_window.cpp", 1},
     };
     // The four counters a poll reads: named in the window's poll, where the readings are made.
     const std::string window = readFile(root / "src" / "gui" / "app_window.cpp");
@@ -298,7 +301,9 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         if (window.find(reading) == std::string::npos) { std::printf("FAIL the window's poll lacks %s\n", reading); }
         CHECK(window.find(reading) != std::string::npos);
     }
-    const std::set<std::string> watched = {"SrcThread", "VendorCall", "RingDrop", "DspExc"};
+    // The words the poll both counts AND files, with no direct use anywhere (RingDrop is
+    // counted by the poll too, but filed by closeDspMinute - so it is in the table above).
+    const std::set<std::string> watched = {"SrcThread", "VendorCall", "DspExc"};
     std::set<std::string> listedWords;
     for (const Site& s : sites) { listedWords.insert(s.word); }
     CHECK(listedWords.size() + watched.size() == health::kRecoveredCount);
@@ -330,7 +335,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
             std::printf(" (expected %s x%d)\n", s.file, s.count);
         }
     }
-    // ...and nothing else is counted that the table does not know (the watched four have no
+    // ...and nothing else is counted that the table does not know (the watched three have no
     // direct use at all), and no file counts a word the table does not list for it.
     std::size_t known = 0;
     for (const auto& kv : found) {

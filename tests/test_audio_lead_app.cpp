@@ -193,6 +193,12 @@ struct AppWindowTestAccess {
     // the section drives the mark and a source scan (9b) holds the real function to
     // the increment.
     static void noteRescan(AppWindow& a) { ++a.pluginRescans_; }
+    // A stop that stopped something, as stopReceiver counts it (the real stop also
+    // joins the pipeline's threads, which this harness never starts), the real
+    // stopReceiver for the stop-of-a-stopped-receiver case, and the count itself.
+    static void noteStop(AppWindow& a) { ++a.receiverStops_; }
+    static void stopReal(AppWindow& a) { a.stopReceiver("the test"); }
+    static std::uint64_t stops(AppWindow& a) { return a.receiverStops_; }
 };
 
 }  // namespace cascade::gui
@@ -555,6 +561,46 @@ int main() {
             CHECK(ctor != std::string::npos);
             CHECK(src.find("audioRescansAtLogStart_ = pluginRescans_;", ctor) !=
                   std::string::npos);
+
+            // --- 9c. A USER'S STOP IS NOT THE MACHINE FALLING BEHIND (0.99.102) ----------------
+            // The same day's feed: a Store install raised its buffer to 240 ms after
+            // three STOP presses in one minute - each stop of a running receiver
+            // starves the sink's last callback once, and three met the threshold by
+            // themselves. One starved callback per stop is discounted from the raise.
+            playUntilStarved(out);                    // the quiet run's fill, played dry...
+            Access::closeMinute(app);                 // ...and its one starved callback closed out
+            CHECK(Access::leadNow(app) == 120);
+            const int raisedBeforeStops = logLinesWith("audio: buffer raised to");
+            for (int s = 0; s < 3; ++s) { Access::noteStop(app); }
+            starve(out, 3);                           // exactly the three the stops cost
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) == 120);       // not a raise
+            CHECK(logLinesWith("audio: buffer raised to") == raisedBeforeStops);
+            CHECK(logLinesWith("audio: buffer kept at 120 ms - 3 of the 3 starved callbacks "
+                               "came with receiver stops") == 1);
+            // Starvation BEYOND the stops counts in full: one stop, four starved, is
+            // three of the machine's own - a raise, and the sentence says three.
+            Access::noteStop(app);
+            starve(out, 4);
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) == 240);
+            CHECK(logLinesWith("audio: buffer raised to") == raisedBeforeStops + 1);
+            CHECK(Access::notice(app) == kRaisedTo240By3);
+            // A stop of a receiver that was not running stops nothing and starves
+            // nobody, so it is not counted (it would hide a real starved callback).
+            const std::uint64_t stopsBefore = Access::stops(app);
+            Access::stopReal(app);
+            CHECK(Access::stops(app) == stopsBefore);
+            CHECK(logLinesWith("receiver: stop requested by the test; the receiver was not running") == 1);
+            // CODE, NOT A PROMISE: the real stop counts, guarded by `running`.
+            const std::size_t stopFn = src.find("void AppWindow::stopReceiver(const char* who)");
+            CHECK(stopFn != std::string::npos);
+            const std::size_t stopEnd = src.find("\n}", stopFn);
+            CHECK(stopEnd != std::string::npos);
+            if (stopFn != std::string::npos && stopEnd != std::string::npos) {
+                const std::string body = src.substr(stopFn, stopEnd - stopFn);
+                CHECK(body.find("if (running) { ++receiverStops_; }") != std::string::npos);
+            }
         }
     }
 

@@ -323,7 +323,29 @@ void AudioOut::closeLocked() {
     // queued buffers (tens of ms of already-heard audio); the stop button
     // should cut output immediately. Any samples still in the ring are
     // discarded by the next open()'s drain.
-    Pa_AbortStream(static_cast<PaStream*>(stream_));
+    const PaError abortErr = Pa_AbortStream(static_cast<PaStream*>(stream_));
+    if (abortErr != paNoError) {
+        // THE ABORT DID NOT TAKE, SO DO NOT CLOSE (crash 62DCA, 0.99.81,
+        // 2026-10-25: an exit-time access violation in ucrtbase called only
+        // from wdmaud.drv - the WMME driver completing a buffer - with no
+        // cascade frame on the faulting thread). PortAudio's WMME backend
+        // frees its WAVEHDRs in Pa_CloseStream unconditionally; if the abort
+        // did not stop the device (a stalled waveOutReset), closing hands the
+        // driver's own callback a freed header to write into, which is the
+        // shape of that fault. A stream we could not abort is left open on
+        // purpose: at process exit the operating system reclaims it, and a
+        // leaked handle for the seconds until then is cheaper than a write
+        // into freed memory. Never seen in the field (the fault is one
+        // report and this path has not been provably hit); it is the cheap
+        // guard the analysis asked for, not a reproduction.
+        cascade::core::diagWarnf(
+            "audio: the output stream would not abort (%s); it is left open rather than closed "
+            "under a driver that may still be writing",
+            Pa_GetErrorText(abortErr));
+        stream_ = nullptr;
+        running_ = false;
+        return;
+    }
     {
         // Pa_CloseStream takes the stream off PortAudio's unlocked list of
         // open streams as its first act (see sink/pa_init.hpp), while a sound
