@@ -67,7 +67,7 @@ constexpr const char* kSentences[health::kRecoveredCount] = {
     "the audio buffer was made deeper because this computer fell behind",
     // Viewport
     "the graphics driver refused a second window for a page torn off the main one, and every "
-    "page is kept inside the main window for the rest of the session",
+    "page is kept inside the main window instead",
     // ReaderLeak
     "a radio driver's reader did not stop when asked and was let go; the radio is left to the "
     "operating system until FoxSDR is restarted",

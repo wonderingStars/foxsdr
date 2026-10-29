@@ -618,12 +618,21 @@ the panel:
   65543) - every page stays inside the main window`, written once at startup
   when the probe FoxSDR makes before enabling torn-off pages is refused; or
   `viewports: the display could not create a second OpenGL context (GLFW
-  65543) - every page stays inside the main window for this session`, written
-  the first time the driver refuses one while running. Either means torn-off
-  pages are off and everything is drawn inside the main window — which is a
-  restriction, not a fault, and is what 0.95.0 took an access violation
-  instead of doing. `viewports: single (FOXSDR_SINGLE_VIEWPORT set)` is the
-  developer switch and means the same thing on purpose.
+  65543) - every page stays inside the main window, and tear-off will be
+  offered again`, written when the driver refuses one while running. Either
+  means torn-off pages are off and everything is drawn inside the main window
+  — which is a restriction, not a fault, and is what 0.95.0 took an access
+  violation instead of doing. A mid-session refusal RESTS the feature rather
+  than ending it (0.99.102 — both 2026-10-29 field reports carried Win32
+  error 0xc00705aa, ERROR_NO_SYSTEM_RESOURCES, a transient shortage, one of
+  them two seconds after the display came back from 13 minutes off): a minute
+  after the first refusal, and ten after a second, the log says `viewports:
+  torn-off pages are offered again after the refusal (N of 3 this session)`
+  and tearing a page off works again. A third refusal is taken as the
+  machine's answer, and the line ends `for this session` instead. `viewports:
+  single (FOXSDR_SINGLE_VIEWPORT set)` is the developer switch and means
+  pages stay inside for the whole run on purpose; so does a startup-probe
+  refusal, which is the machine that never allows a second context at all.
   **And no page is left outside the main window.** Through 0.99.96 a page that had
   been its own window kept its place beside the main window when separate windows
   went off, and every page opens overhanging the main window's right edge on
@@ -2525,6 +2534,20 @@ the fill to a fixed 160 ms. A deeper lead alone would have been bled back down t
   effect at the next re-prime: a ring that is already playing is not stopped, the
   matcher simply steers it to the new target; the next underrun is followed by silence
   until the new lead is queued - about the step's worth, once.
+- **A minute that reloaded plugins is not judged** (0.99.102). A rescan
+  (`AppWindow::rescanPlugins` - a store install, remove or update, or a changed plugins
+  folder) deliberately stalls the window's thread for as long as the loader and the
+  plugins' own `destroy()` take, and a 2026-10-29 field report showed what the judgment
+  made of that: nine installs in 55 s, 27 starved callbacks, and a buffer raised to
+  960 ms - a second of latency the machine had not earned. A minute in which a rescan
+  began steps **nothing**, in either direction, for the receiver's sink and every patch
+  speaker: no raise, no `recovered.audiolead`, and the quiet run neither grows nor
+  resets - the judgment resumes with the next minute's own figures (a machine that is
+  genuinely behind starves on in minutes that reloaded nothing, and is caught then).
+  The starvation digest is still written, followed by **`audio: buffer kept at <N> ms -
+  the starved callbacks came in a minute that reloaded plugins`**. The constructor's
+  first plugin load is consumed at construction, so the session's first minute is still
+  judged on its own figures.
 - Each step writes **`audio: buffer raised to <N> ms after <N> starved callbacks in a
   minute`** (a patch speaker's carries ` (patch speaker)` at the end), shows
   "Audio buffer raised to 240 ms: this computer fell behind 5 times in the last

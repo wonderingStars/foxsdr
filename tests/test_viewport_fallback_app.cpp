@@ -236,7 +236,13 @@ std::string recoveredCounts() {
     return out;
 }
 
-Result once(const std::string& tag, bool single, int refuseAt) {
+// `refuseAt` is the comma-separated frame list FOXSDR_TEST_VIEWPORT_REFUSE_AT takes
+// (empty: no refusal). `retrySec` overrides the rest-and-retry wait
+// (FOXSDR_TEST_VIEWPORT_RETRY_SEC; empty: the real minutes-long waits), and `frames`
+// how long the run is - the retry stages need room for more than one refusal.
+Result once(const std::string& tag, bool single, const std::string& refuseAt,
+            const std::string& retrySec = "", int frames = 110,
+            const std::string& probeAt = "") {
     Result r;
     const fs::path cfg = g_dir / (tag + ".json");
     const fs::path diag = g_dir / (tag + "-diag");
@@ -260,9 +266,11 @@ Result once(const std::string& tag, bool single, int refuseAt) {
     setEnv("FOXSDR_SHOT_DIR", shots.string());
     setEnv("FOXSDR_SHOT_AT_FRAME", "50,100");
     setEnv("FOXSDR_SINGLE_VIEWPORT", single ? "1" : "");
-    setEnv("FOXSDR_TEST_VIEWPORT_REFUSE_AT", refuseAt >= 0 ? std::to_string(refuseAt) : "");
-    r.out = run("\"" + exePath() + "\" --frames 110 2>&1");
-    if (r.out.find("rendered 110 frames") == std::string::npos) {
+    setEnv("FOXSDR_TEST_VIEWPORT_REFUSE_AT", refuseAt);
+    setEnv("FOXSDR_TEST_VIEWPORT_RETRY_SEC", retrySec);
+    setEnv("FOXSDR_TEST_VIEWPORT_PROBE_AT", probeAt);
+    r.out = run("\"" + exePath() + "\" --frames " + std::to_string(frames) + " 2>&1");
+    if (r.out.find("rendered " + std::to_string(frames) + " frames") == std::string::npos) {
         std::printf("  %s: the run did not finish cleanly:\n%s\n", tag.c_str(), r.out.c_str());
         return r;
     }
@@ -275,6 +283,17 @@ Result once(const std::string& tag, bool single, int refuseAt) {
     r.ok = r.before.ok && r.after.ok;
     if (!r.ok) { std::printf("  %s: a window list is missing or has no main window\n", tag.c_str()); }
     return r;
+}
+
+// How many times `needle` occurs in `hay` (the log), for the retry stages: the
+// same refusal line twice must read as two refusals, not one.
+int countOf(const std::string& hay, const std::string& needle) {
+    int n = 0;
+    for (std::size_t at = hay.find(needle); at != std::string::npos;
+         at = hay.find(needle, at + needle.size())) {
+        ++n;
+    }
+    return n;
 }
 
 // Every page is present at frame 100 and wholly inside the main window, no smaller than the
@@ -348,8 +367,10 @@ int main(int argc, char** argv) {
     CHECK(!ec);
 
     // --- REFUSED: separate windows go off at frame 60, and every page is brought inside ----------
+    // The real retry wait is a minute, which this two-second run never reaches, so the
+    // stage still proves the fallback exactly as it did when the refusal was final.
     {
-        const Result r = once("refused", false, 60);
+        const Result r = once("refused", false, "60");
         CHECK(r.ok);
         if (r.ok && r.startedSingle) {
             std::printf("    refused: this machine starts with separate windows off - nothing to refuse\n");
@@ -424,9 +445,58 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --- RETRIED: the refusal rests tear-off, and a later window is granted again ----------------
+    // One refusal at frame 60 with the retry wait collapsed to 0 s. The pages the fallback
+    // brought inside STAY inside (they come back when the user tears one off), so the proof
+    // that tear-off is back is the probe at frame 90: a window asked for after the retry,
+    // GRANTED - had the driver refused it, the rising count would log a second refusal,
+    // which this stage asserts never happens. The user story: a transient refusal costs a
+    // retry wait, not the session.
+    {
+        const Result r = once("retried", false, "60", "0", 110, "90");
+        CHECK(r.ok);
+        if (r.ok && r.startedSingle) {
+            std::printf("    retried: this machine starts with separate windows off - nothing to retry\n");
+        } else if (r.ok) {
+            CHECK(countOf(r.log, "could not create a second OpenGL context") == 1);
+            CHECK(r.log.find("tear-off will be offered again") != std::string::npos);
+            CHECK(r.log.find("for this session") == std::string::npos);
+            CHECK(r.log.find("viewports: torn-off pages are offered again after the refusal "
+                             "(1 of 3 this session)") != std::string::npos);
+            // Counted and reported once, exactly as a final refusal is.
+            CHECK(recoveredCounts() == "recovered.viewport=1");
+            CHECK(issueReports("retried").size() == 1);
+            // The fallback itself worked as in the refused stage: the map was outside at
+            // frame 50 and every page is inside at frame 100.
+            const Rect* mapBefore = r.before.page(kPages[0].id);
+            CHECK(mapBefore != nullptr);
+            CHECK(mapBefore != nullptr && !inside(*mapBefore, r.before.root));
+            checkAllInside(r, "retried");
+        }
+    }
+
+    // --- PERMANENT: the third refusal in a session is the machine's answer -----------------------
+    // Three refusals (the retry wait again 0 s): the first two rest and return, the third
+    // turns separate windows off for the session - and the ledger and the reports folder
+    // still carry ONE viewport event, however many refusals the session had.
+    {
+        const Result r = once("permanent", false, "60,120,180", "0", 240);
+        CHECK(r.ok);
+        if (r.ok && r.startedSingle) {
+            std::printf("    permanent: this machine starts with separate windows off - nothing to refuse\n");
+        } else if (r.ok) {
+            CHECK(countOf(r.log, "could not create a second OpenGL context") == 3);
+            CHECK(countOf(r.log, "tear-off will be offered again") == 2);
+            CHECK(countOf(r.log, "viewports: torn-off pages are offered again after the refusal") == 2);
+            CHECK(countOf(r.log, "for this session") == 1);
+            CHECK(recoveredCounts() == "recovered.viewport=1");
+            CHECK(issueReports("permanent").size() == 1);
+        }
+    }
+
     // --- SINGLE: separate windows off from the start; pages open inside ----------------------------
     {
-        const Result r = once("single", true, -1);
+        const Result r = once("single", true, "");
         CHECK(r.ok);
         if (r.ok) {
             CHECK(r.startedSingle);
@@ -436,7 +506,7 @@ int main(int argc, char** argv) {
 
     // --- KEPT: the control - no refusal, the pages stay their own windows --------------------------
     {
-        const Result r = once("kept", false, -1);
+        const Result r = once("kept", false, "");
         CHECK(r.ok);
         if (r.ok && r.startedSingle) {
             std::printf("    kept: this machine starts with separate windows off - no control to run\n");

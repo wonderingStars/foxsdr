@@ -1183,6 +1183,11 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // a build tree — and every bounded --frames CI run takes this path.
     loadBandPlan();
     rescanPlugins();
+    // The construction load is consumed here, not judged later: closeAudioMinute
+    // discounts a minute in which a rescan began, and the rescan above would
+    // otherwise discount the session's whole first minute - whose starvation,
+    // with priming already excluded at the sink, is the machine's own doing.
+    audioRescansAtLogStart_ = pluginRescans_;
     // Old plugin copies an earlier session could not delete (in use then).
     processPendingPluginRemovals();
     // The catalogue the last good read kept on disk, so the store opens
@@ -1866,7 +1871,7 @@ int AppWindow::run(int frames) {
     // drag. See gui/viewport_policy.hpp.
     const bool viewportProbeOk = probeSecondGlContext(window);
     viewportDecision_ = cascade::gui::viewportDecision(std::getenv("FOXSDR_SINGLE_VIEWPORT"),
-                                                       viewportProbeOk, 0);
+                                                       viewportProbeOk, 0, 0);
     if (cascade::gui::viewportsEnabled(viewportDecision_)) {
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     } else if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
@@ -2739,15 +2744,49 @@ int AppWindow::run(int frames) {
         // refused. What follows is the application's real fallback, end to end:
         // tests/test_viewport_fallback_app.
         if (frames >= 0) {
-            static const long refuseAt = [] {
+            // A comma-separated list since the retry (2026-10-29): one refusal proves
+            // the fallback, a second and third prove the rest-and-retry policy's cap.
+            static const std::vector<long> refuseAt = [] {
+                std::vector<long> at;
                 const char* v = std::getenv("FOXSDR_TEST_VIEWPORT_REFUSE_AT");
-                return (v != nullptr && v[0] != '\0') ? std::atol(v) : -1L;
+                while (v != nullptr && *v != '\0') {
+                    char* end = nullptr;
+                    const long n = std::strtol(v, &end, 10);
+                    if (end == v) { break; }
+                    at.push_back(n);
+                    v = (*end == ',') ? end + 1 : end;
+                }
+                return at;
             }();
-            if (refuseAt >= 0 && static_cast<long>(rendered) == refuseAt) {
-                ImGui_ImplGlfw_FailNextViewportWindowForTest();
+            // ...and FOXSDR_TEST_VIEWPORT_PROBE_AT draws the same probe WITHOUT arming a
+            // refusal: after a retry re-enables tear-off, a window actually asked for and
+            // GRANTED is what proves the feature is back (a refusal would raise the
+            // backend's count and log a second refusal, which the test asserts against).
+            static const std::vector<long> probeAt = [] {
+                std::vector<long> at;
+                const char* v = std::getenv("FOXSDR_TEST_VIEWPORT_PROBE_AT");
+                while (v != nullptr && *v != '\0') {
+                    char* end = nullptr;
+                    const long n = std::strtol(v, &end, 10);
+                    if (end == v) { break; }
+                    at.push_back(n);
+                    v = (*end == ',') ? end + 1 : end;
+                }
+                return at;
+            }();
+            bool probeFrame = false;
+            for (const long at : refuseAt) {
+                if (static_cast<long>(rendered) == at) {
+                    ImGui_ImplGlfw_FailNextViewportWindowForTest();
+                }
+                probeFrame = probeFrame || (static_cast<long>(rendered) >= at &&
+                                            static_cast<long>(rendered) < at + 3);
             }
-            if (refuseAt >= 0 && static_cast<long>(rendered) >= refuseAt &&
-                static_cast<long>(rendered) < refuseAt + 3 &&
+            for (const long at : probeAt) {
+                probeFrame = probeFrame || (static_cast<long>(rendered) >= at &&
+                                            static_cast<long>(rendered) < at + 3);
+            }
+            if (probeFrame &&
                 (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
                 const ImGuiViewport* mv = ImGui::GetMainViewport();
                 ImGuiWindowClass probeClass;
@@ -2827,15 +2866,20 @@ int AppWindow::run(int frames) {
             // later inside the backend (0.95.0, "crash cascade.exe @
             // glfwGetWin32Window"). The backend counts the refusal instead of
             // using the nullptr, and this is the application reading the
-            // count: viewports go off for the rest of the session, so the page
-            // is merged back into this window on the next frame and the log
-            // says what happened. The probe at startup catches the machine
-            // that never allows it; this catches the one that stops allowing
-            // it - a GPU reset, a display change, an adapter switch.
+            // count: viewports go off, so the page is merged back into this
+            // window on the next frame and the log says what happened. The
+            // probe at startup catches the machine that never allows it; this
+            // catches the one that stops allowing it - a GPU reset, a display
+            // change, an adapter switch. The count is monotonic (it survives a
+            // backend restart on purpose), so what fires here is it RISING
+            // past what this loop has already answered - which is also what
+            // lets a refusal met again after a retry be seen as a new one.
             const int failures = ImGui_ImplGlfw_ViewportWindowCreationFailures();
-            if (failures > 0) {
+            if (failures > viewportFailuresSeen_) {
+                viewportFailuresSeen_ = failures;
+                ++viewportRefusals_;
                 viewportDecision_ = cascade::gui::viewportDecision(
-                    std::getenv("FOXSDR_SINGLE_VIEWPORT"), true, failures);
+                    std::getenv("FOXSDR_SINGLE_VIEWPORT"), true, failures, viewportRefusals_);
                 ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
                 if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
                     cascade::core::diagWarnf("%s", why);
@@ -2843,9 +2887,8 @@ int AppWindow::run(int frames) {
                 // ...AND COUNTED (0.99.100, `recovered.viewport`, core/health_events.hpp). The
                 // program carries on, so no crash, freeze or sentinel report ever says this
                 // happened: two Intel UHD machines had it through October 2026 and the
-                // website saw nothing. Once a session by nature - viewports stay off - and
-                // reached once, because the flag above is cleared and this block is inside
-                // the ViewportsEnable test. The window's thread, so noteRecovered may lock.
+                // website saw nothing. Once a session (the ledger's own rule), however many
+                // refusals the session has. The window's thread, so noteRecovered may lock.
                 cascade::core::health::noteRecovered(cascade::core::health::Recovered::Viewport);
                 // ...AND THE PAGES THAT WERE THEIR OWN WINDOWS ARE BROUGHT INSIDE. ImGui
                 // keeps each one where it was beside this window, which for a page that
@@ -2854,7 +2897,38 @@ int AppWindow::run(int frames) {
                 // page is checked for the next few frames: the move into this window's
                 // viewport takes ImGui a frame or two, and the check is idempotent.
                 pagesFitFrames_ = 4;
+                // ...AND RESTED RATHER THAN ENDED (gui/viewport_policy.hpp: both 2026-10-29
+                // field reports were ERROR_NO_SYSTEM_RESOURCES, a transient - one of them
+                // two seconds after the display came back from 13 minutes off). The first
+                // two refusals arm a retry; the third leaves the deadline 0, and the line
+                // above has already said "for this session". The override is for the
+                // bounded test runs (tests/test_viewport_fallback_app), where a wall-clock
+                // minute would be the whole run many times over.
+                static const double testRetrySec = [] {
+                    const char* v = std::getenv("FOXSDR_TEST_VIEWPORT_RETRY_SEC");
+                    return (v != nullptr && v[0] != '\0') ? std::atof(v) : -1.0;
+                }();
+                const double delaySec = cascade::gui::viewportRetryDelaySec(viewportRefusals_);
+                viewportRetryAtSec_ =
+                    delaySec >= 0.0
+                        ? ImGui::GetTime() + (testRetrySec >= 0.0 ? testRetrySec : delaySec)
+                        : 0.0;
             }
+        } else if (viewportRetryAtSec_ > 0.0 && ImGui::GetTime() >= viewportRetryAtSec_) {
+            // TEAR-OFF COMES BACK. The wait armed above has passed: offer separate
+            // windows again, and say so with the refusal count, so a log that later
+            // shows a second refusal reads as a story and not a repetition. Nothing
+            // else needs undoing - a page the fallback brought inside stays where it
+            // is until the user tears it off again, and a page still positioned
+            // outside gets its window back on the next UpdatePlatformWindows. If the
+            // driver refuses that one too, the rising count above fires again.
+            viewportRetryAtSec_ = 0.0;
+            viewportDecision_ = cascade::gui::ViewportDecision::Enabled;
+            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+            cascade::core::diagLogf(
+                "viewports: torn-off pages are offered again after the refusal (%d of %d this "
+                "session)",
+                viewportRefusals_, cascade::gui::kViewportRefusalsBeforePermanent);
         }
 
         // SCOPE MODE IS SUPPOSED TO COVER THE WHOLE APPLICATION, NOT JUST
@@ -4951,6 +5025,20 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
     audioPrimingAtLogStart_ = primingNow;
     audioRingLowWaterFrames_ = ringFramesNow;  // next minute's mark starts here
 
+    // A MINUTE THAT RELOADED PLUGINS IS NOT JUDGED (2026-10-29 field report: a
+    // user installing plugins from the store, nine rescans in 55 s, each a
+    // deliberate ~300 ms stall of this very thread - and 27 starved callbacks
+    // read as "this computer fell behind", raising the buffer to 960 ms, a
+    // second of added latency the next quarter hour then had to earn back
+    // down). The stall is application-paced work, not the machine's pace, so
+    // such a minute neither raises the lead nor counts toward - nor against -
+    // the quiet run: the marks above are taken as always, and the judgment
+    // resumes with the next minute's own figures. A machine that is genuinely
+    // behind is still caught: its starvation continues into minutes that
+    // reloaded nothing.
+    const bool pluginsReloadedThisMinute = pluginRescans_ != audioRescansAtLogStart_;
+    audioRescansAtLogStart_ = pluginRescans_;
+
     // THE BUFFER THAT DEEPENS ITSELF (0.99.73) AND EASES BACK (0.99.83). The
     // 12CF report - 110 to 126 starved callbacks every minute at a fixed 120 ms
     // - is the case: when a minute closes with three or more, the lead steps up
@@ -4970,44 +5058,56 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
         return shown;
     };
     const int leadMs = cascade::sink::audioLeadMs(out.leadFrames());
-    const int nextMs = cascade::sink::nextAudioLead(starved, leadMs, audioBufferMs_);
-    if (nextMs > leadMs) {
-        out.setLeadFrames(cascade::sink::audioLeadFrames(nextMs));
-        audioLeadNote_ = AudioLeadNote::kRaised;
-        audioLeadNoteMs_ = nextMs;
-        audioLeadNoteCount_ = sayRaised(nextMs, starved, "");
-        audioLeadQuietMinutes_ = 0;   // whatever run there was ended in a raise
-        // REMEMBERED FOR THE NEXT LAUNCH: a computer that fell behind this often is slow every time,
-        // and starting at 120 ms again costs the same bad minutes at every start. Only the
-        // receiver's own raise is kept (the patch speakers are seeded from it when they are made),
-        // and only in AUTOMATIC - nextAudioLead never raises a fixed setting. Saved by the normal
-        // config save, as audioBufferAutoMs; audioBufferMs itself stays 0, because a raise is the
-        // session's and not a choice.
-        audioBufferAutoMs_ = nextMs;
+    if (pluginsReloadedThisMinute) {
+        // Say why nothing steps, but only when there is something not to step
+        // on: a reloading minute that starved nobody has no news.
+        if (starved > 0) {
+            cascade::core::diagLogf(
+                "audio: buffer kept at %d ms - the starved callbacks came in a minute that "
+                "reloaded plugins",
+                leadMs);
+        }
     } else {
-        // THE WAY BACK DOWN (0.99.83). A quiet minute is one the sink PLAYED
-        // through (primed at its close - an idle sink proves nothing; stopping
-        // the radio starves the last callback, which resets the run anyway) and
-        // starved nobody. A quarter hour of them in a row lowers the lead one
-        // rung, and the remembered depth with it - at the 120 ms floor there is
-        // nothing left to remember, so the memory is 0 again. Why a lead comes
-        // back down at all, against the old "a machine that fell behind once
-        // will again": sink/audio_out.hpp, the policy comment.
-        audioLeadQuietMinutes_ =
-            starved == 0 && out.primed()
-                ? std::min(audioLeadQuietMinutes_ + 1, cascade::sink::kAudioLeadQuietMinutesToStepDown)
-                : 0;
-        const int downMs = cascade::sink::audioLeadAfterQuietMinutes(audioLeadQuietMinutes_, leadMs,
-                                                                     audioBufferMs_);
-        if (downMs < leadMs) {
-            out.setLeadFrames(cascade::sink::audioLeadFrames(downMs));
-            cascade::core::diagLogf("audio: buffer lowered to %d ms after %d quiet minutes", downMs,
-                                    audioLeadQuietMinutes_);
-            audioLeadNote_ = AudioLeadNote::kLowered;
-            audioLeadNoteMs_ = downMs;
-            audioLeadNoteCount_ = audioLeadQuietMinutes_;
-            audioLeadQuietMinutes_ = 0;   // the next rung needs a quarter hour of its own
-            audioBufferAutoMs_ = downMs == 120 ? 0 : downMs;
+        const int nextMs = cascade::sink::nextAudioLead(starved, leadMs, audioBufferMs_);
+        if (nextMs > leadMs) {
+            out.setLeadFrames(cascade::sink::audioLeadFrames(nextMs));
+            audioLeadNote_ = AudioLeadNote::kRaised;
+            audioLeadNoteMs_ = nextMs;
+            audioLeadNoteCount_ = sayRaised(nextMs, starved, "");
+            audioLeadQuietMinutes_ = 0;   // whatever run there was ended in a raise
+            // REMEMBERED FOR THE NEXT LAUNCH: a computer that fell behind this often is slow every
+            // time, and starting at 120 ms again costs the same bad minutes at every start. Only the
+            // receiver's own raise is kept (the patch speakers are seeded from it when they are
+            // made), and only in AUTOMATIC - nextAudioLead never raises a fixed setting. Saved by
+            // the normal config save, as audioBufferAutoMs; audioBufferMs itself stays 0, because a
+            // raise is the session's and not a choice.
+            audioBufferAutoMs_ = nextMs;
+        } else {
+            // THE WAY BACK DOWN (0.99.83). A quiet minute is one the sink PLAYED
+            // through (primed at its close - an idle sink proves nothing; stopping
+            // the radio starves the last callback, which resets the run anyway) and
+            // starved nobody. A quarter hour of them in a row lowers the lead one
+            // rung, and the remembered depth with it - at the 120 ms floor there is
+            // nothing left to remember, so the memory is 0 again. Why a lead comes
+            // back down at all, against the old "a machine that fell behind once
+            // will again": sink/audio_out.hpp, the policy comment.
+            audioLeadQuietMinutes_ =
+                starved == 0 && out.primed()
+                    ? std::min(audioLeadQuietMinutes_ + 1,
+                               cascade::sink::kAudioLeadQuietMinutesToStepDown)
+                    : 0;
+            const int downMs = cascade::sink::audioLeadAfterQuietMinutes(audioLeadQuietMinutes_,
+                                                                         leadMs, audioBufferMs_);
+            if (downMs < leadMs) {
+                out.setLeadFrames(cascade::sink::audioLeadFrames(downMs));
+                cascade::core::diagLogf("audio: buffer lowered to %d ms after %d quiet minutes",
+                                        downMs, audioLeadQuietMinutes_);
+                audioLeadNote_ = AudioLeadNote::kLowered;
+                audioLeadNoteMs_ = downMs;
+                audioLeadNoteCount_ = audioLeadQuietMinutes_;
+                audioLeadQuietMinutes_ = 0;   // the next rung needs a quarter hour of its own
+                audioBufferAutoMs_ = downMs == 120 ? 0 : downMs;
+            }
         }
     }
 
@@ -5024,6 +5124,9 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
         const std::uint64_t before = was == patchStarvedAtMinute_.end() ? total : was->second;
         const std::uint64_t minute = total >= before ? total - before : 0;
         patchStarvedAtMinute_[node] = total;
+        // The reloading minute sits out here too, after the mark above is
+        // taken - or next minute would inherit this one's starvation.
+        if (pluginsReloadedThisMinute) { continue; }
         const int speakerMs = dest->leadMs();
         const int speakerNext = cascade::sink::nextAudioLead(minute, speakerMs, audioBufferMs_);
         if (speakerNext > speakerMs) {
@@ -14260,6 +14363,11 @@ void AppWindow::rescanPlugins() {
     //
     // Scope guard, because there is a `return` in the middle of this function.
     cascade::core::WatchdogPause holdWatchdog(watchdog_);
+    // Counted BEFORE any work, early return included: a minute in which a
+    // rescan so much as began is a minute the audio judgment sits out
+    // (closeAudioMinute - the 2026-10-29 field report it answers is told
+    // there). This thread is the window's, the same one that closes minutes.
+    ++pluginRescans_;
     // AND TOLD TO THE SENTINEL (core/breadcrumb.hpp), the same way: a death inside
     // a plugin's load or unload is the most likely death this application has, and
     // the report should say it was in one. Raised for the length of the call -

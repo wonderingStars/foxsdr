@@ -504,7 +504,7 @@ by itself, so a count of 1 means "this session had it".
 | `sdrenum` | the SDRplay service did not answer a scan, and the scan was let go. Once a session. |
 | `sdrlost` | the SDRplay API session was lost and SDRplay is shut for the rest of the session. Once a session. |
 | `audiolead` | the audio buffer was made deeper, by itself, because this computer fell behind: a minute in which the sound card ran out of audio three times or more. Once a session. |
-| `viewport` | the graphics driver refused FoxSDR a second window for a page torn off the main one, and every page was kept inside the main window for the rest of the session. Once a session. |
+| `viewport` | the graphics driver refused FoxSDR a second window for a page torn off the main one, and every page was kept inside the main window instead. Once a session. |
 | `readerleak` | a radio driver's reader did not stop when asked and was let go; the radio is left to the operating system until FoxSDR is restarted. Once a session. |
 | `closeleak` | a sound device did not close in time and the close was left to finish on its own. Once a session. |
 | `linkstranded` | the SDRplay driver was still delivering samples after it was told to stop, and its link was left behind rather than torn down under it. Once a session. |
@@ -759,7 +759,7 @@ another would otherwise never be heard from. It carries this header and no other
 | Field | Example | Why |
 |---|---|---|
 | `kind` | `issue` | Which of the three documents this is. |
-| `reason` | `issue: viewport - the graphics driver refused a second window for a page torn off the main one, and every page is kept inside the main window for the rest of the session` | One fixed word from the *Recovered from* table and one fixed sentence for it. Never a device, a file, a frequency or a driver's own message. |
+| `reason` | `issue: viewport - the graphics driver refused a second window for a page torn off the main one, and every page is kept inside the main window instead` | One fixed word from the *Recovered from* table and one fixed sentence for it. Never a device, a file, a frequency or a driver's own message. |
 | `signature` | `3B9A…` (16 hex digits) | Derived from the word alone, so every report of one issue, from every machine and every version, is one row. |
 
 After the header come the same application-context lines as the table above, the

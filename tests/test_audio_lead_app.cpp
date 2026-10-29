@@ -187,6 +187,12 @@ struct AppWindowTestAccess {
                            std::shared_ptr<cascade::core::patch::AudioDest> d) {
         a.patchDests_.emplace_back(id, std::move(d));
     }
+    // What a rescan (a store install's, a changed folder's) leaves for the minute
+    // poll: the count that it BEGAN. The real rescanPlugins restarts the receiver
+    // and reopens the sink, which would race this test's hand-driven callbacks, so
+    // the section drives the mark and a source scan (9b) holds the real function to
+    // the increment.
+    static void noteRescan(AppWindow& a) { ++a.pluginRescans_; }
 };
 
 }  // namespace cascade::gui
@@ -491,6 +497,64 @@ int main() {
             CHECK(speaker->lead == 120);
             CHECK(file->leadMs() == 0);
             CHECK(file->starvedCallbacks() == 0u);
+
+            // --- 9b. A MINUTE THAT RELOADED PLUGINS IS NOT JUDGED (0.99.102) --------------------
+            // The 2026-10-29 field report: a user installing plugins from the store -
+            // nine rescans in a minute, 27 starved callbacks from those deliberate
+            // stalls of the window's thread - and the buffer raised to 960 ms, a
+            // second of latency the machine had not earned. A minute in which a
+            // rescan began steps nothing, for the receiver's sink or a speaker's,
+            // counts nothing, and says why; the quiet run neither grows nor resets.
+            CHECK(Access::leadNow(app) == 120);
+            const int raisedBefore = logLinesWith("audio: buffer raised to");
+            Access::noteRescan(app);                  // a store install's rescan began
+            starve(out, 5);                           // the stall's own starvation
+            speaker->starved += 50;                   // and the speaker's
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) == 120);       // no raise for the receiver...
+            CHECK(speaker->lead == 120);              // ...or the speaker
+            CHECK(Access::config(app).audioBufferAutoMs == 0);   // nothing remembered
+            CHECK(logLinesWith("audio: buffer raised to") == raisedBefore);
+            CHECK(logLinesWith("audio: buffer kept at 120 ms - the starved callbacks came "
+                               "in a minute that reloaded plugins") == 1);
+            // And the minute is NEUTRAL to the quiet run: ten quiet minutes, a
+            // reloading minute that starved (which used to reset the run - and
+            // raise), then the five that complete the quarter hour step the
+            // lead down exactly as if the reload had not happened.
+            starve(out, 3);
+            Access::closeMinute(app);                 // a real bad minute still raises
+            CHECK(Access::leadNow(app) == 240);
+            primeAndPlay(out);
+            for (int m = 0; m < 10; ++m) { Access::closeMinute(app); }
+            CHECK(Access::leadNow(app) == 240);       // ten quiet minutes: not enough
+            Access::noteRescan(app);
+            playUntilStarved(out);                    // the quiet run's priming fill is still
+                                                      // queued: play it dry (its one starved
+                                                      // callback lands in the reloading minute)
+            starve(out, 2);
+            Access::closeMinute(app);                 // the reloading minute: sits out
+            CHECK(Access::leadNow(app) == 240);
+            primeAndPlay(out);                        // the starve left the sink unprimed
+            for (int m = 0; m < 5; ++m) { Access::closeMinute(app); }
+            CHECK(Access::leadNow(app) == 120);       // 10 + 5 quiet: the step comes on time
+            CHECK(Access::notice(app) == "Audio buffer lowered to 120 ms after 15 quiet minutes.");
+
+            // CODE, NOT A PROMISE (the section-12 pattern): the mark the seam above
+            // drives is really fed by rescanPlugins - counted before any work, early
+            // return included - and really consumed at the end of construction, so
+            // the session's first minute is still judged.
+            const std::string src = stripComments(
+                readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp"));
+            const std::size_t fn = src.find("void AppWindow::rescanPlugins()");
+            CHECK(fn != std::string::npos);
+            const std::size_t bump = src.find("++pluginRescans_;", fn);
+            const std::size_t firstReturn = src.find("return", fn);
+            CHECK(bump != std::string::npos);
+            CHECK(firstReturn == std::string::npos || bump < firstReturn);
+            const std::size_t ctor = src.find("AppWindow::AppWindow(");
+            CHECK(ctor != std::string::npos);
+            CHECK(src.find("audioRescansAtLogStart_ = pluginRescans_;", ctor) !=
+                  std::string::npos);
         }
     }
 

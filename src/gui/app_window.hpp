@@ -2622,6 +2622,17 @@ private:
     std::size_t audioRingLowWaterFrames_ = SIZE_MAX;
     std::uint64_t audioUnderrunsAtLogStart_ = 0;
     std::uint64_t audioPrimingAtLogStart_ = 0;
+    // A MINUTE THAT RELOADED PLUGINS IS NOT JUDGED (2026-10-29 field report: 27
+    // starved callbacks during nine store installs in one minute raised the
+    // buffer to 960 ms - a deliberate, GUI-thread stall read as "this computer
+    // fell behind", costing a second of audio latency for the next quarter
+    // hour). pluginRescans_ counts every rescanPlugins(); the mark is where it
+    // stood when the minute opened. Both are the window's thread. The
+    // constructor's initial plugin load is a rescan too, consumed into the
+    // mark at the end of construction so the session's first minute is still
+    // judged on its own figures.
+    std::uint64_t pluginRescans_ = 0;
+    std::uint64_t audioRescansAtLogStart_ = 0;
     // The pipeline ring's minute (pollDspMinute / closeDspMinute): its own clock,
     // and the two monotonic pipeline counters as they stood when it last closed.
     double lastDspLogSec_ = 0.0;
@@ -4582,6 +4593,18 @@ private:
     // glfwGetWin32Window" report that made it necessary. Kept as state rather
     // than re-derived because the sentence has to be logged exactly once.
     cascade::gui::ViewportDecision viewportDecision_ = cascade::gui::ViewportDecision::Enabled;
+    // THE REFUSAL IS RESTED, NOT FINAL (see kViewportRefusalsBeforePermanent in
+    // gui/viewport_policy.hpp: both 2026-10-29 field reports were the NTSTATUS
+    // of ERROR_NO_SYSTEM_RESOURCES, a transient). The backend's failure count
+    // is monotonic and survives a backend restart on purpose, so the frame
+    // loop keeps the value it has already answered (viewportFailuresSeen_) and
+    // reacts to the count RISING, not to it being nonzero. viewportRefusals_
+    // is how many times this session has been refused; viewportRetryAtSec_ is
+    // the frame-clock moment tear-off is offered again, 0 when nothing is
+    // waiting (never armed for the startup probe or the developer switch).
+    int viewportFailuresSeen_ = 0;
+    int viewportRefusals_ = 0;
+    double viewportRetryAtSec_ = 0.0;
 
     // PAGES BROUGHT INSIDE WHEN SEPARATE WINDOWS ARE OFF (gui/page_geometry.hpp,
     // pageFitInside). With separate windows off, every top-level page that is not
