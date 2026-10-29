@@ -7,19 +7,19 @@ This is a diagnostics release; nothing changes in how FoxSDR receives, decodes o
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.100.exe`:**
-`TBD`
+`26b5c78436be45a20a64ff4008080dad2fcf0809d9271bd2495ba57306808254`
 
 **SHA-256 of `FoxSDR-0.99.100-x86_64.AppImage`:**
-`TBD`
+`6ab641933b7691b463bf2979f095a6ace0deace7b5c36dbcfa3aa63b2c22e104`
 
 **SHA-256 of `foxsdr-0.99.100-linux-x64.tar.gz`:**
-`TBD`
+`c13b11148a077eb83e59b649836fd84b1f877dd2ed93b6768e458ae58a021c1f`
 
 **SHA-256 of `FoxSDR-0.99.100-aarch64.AppImage`:**
-`TBD`
+`296a92c6f7793cc8da6f4fc8c8087ed688bb53e8ad099f9ff7b3da1d05603067`
 
 **SHA-256 of `foxsdr-0.99.100-linux-arm64.tar.gz`:**
-`TBD`
+`b0b20a0adc6d0c33cd2d64b648739a0ae7a0b46fa7a5183283241604a807e78c`
 
 ## Features and fixes, 2026-10-28
 
