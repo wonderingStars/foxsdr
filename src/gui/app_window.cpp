@@ -116,6 +116,9 @@
 #include "gui/window_platform.hpp"
 // Where a slow frame spent its time (0.99.64): the scope guards below.
 #include "core/frame_timing.hpp"
+// What this process holds of what the system hands out in limited numbers
+// (0.99.103): the `resources:` line.
+#include "core/process_resources.hpp"
 // The fixed names of a plugin reload's steps (0.99.84): what the publishing
 // PhaseClock in the reload path says, and the freeze watchdog reports.
 #include "core/plugin_reload_phases.hpp"
@@ -1559,6 +1562,37 @@ using GlGetStringFn = const unsigned char* (*)(unsigned int);
 const char* glString(GlGetStringFn fn, unsigned int name) {
     return fn != nullptr ? reinterpret_cast<const char*>(fn(name)) : nullptr;
 }
+
+// THE TORN-OFF WINDOWS, DRAWN AND SWAPPED ONE BY ONE AND TIMED (0.99.103). This
+// is ImGui::RenderPlatformWindowsDefault (imgui.cpp) with a clock around each
+// call: two passes over the secondary viewports, every window's draw and then
+// every window's swap, exactly as ImGui does it - the swaps are kept together
+// after the draws so that no window waits on its vertical sync before the next
+// one has been drawn. What it adds is one charge per window per pass to the
+// frame timer's `window-draw` and `window-swap` parts, by viewport id, so a slow
+// `render` frame names the torn-off window that took the time (the 2026-10-29
+// tester log: 81 minutes of half-second render frames, and no way to say whether
+// the torn-off map or the main window was the half). Kept beside ImGui's own:
+// when imgui.cpp's version changes shape, this follows it.
+void renderTornOffWindowsTimed(cascade::core::FrameTimer& timer) {
+    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    for (int i = 1; i < pio.Viewports.Size; ++i) {
+        ImGuiViewport* vp = pio.Viewports[i];
+        if ((vp->Flags & ImGuiViewportFlags_IsMinimized) != 0) { continue; }
+        const std::int64_t at = timer.nanos();
+        if (pio.Platform_RenderWindow) { pio.Platform_RenderWindow(vp, nullptr); }
+        if (pio.Renderer_RenderWindow) { pio.Renderer_RenderWindow(vp, nullptr); }
+        timer.noteRenderPart(cascade::core::RenderPart::WindowDraw, timer.nanos() - at, vp->ID);
+    }
+    for (int i = 1; i < pio.Viewports.Size; ++i) {
+        ImGuiViewport* vp = pio.Viewports[i];
+        if ((vp->Flags & ImGuiViewportFlags_IsMinimized) != 0) { continue; }
+        const std::int64_t at = timer.nanos();
+        if (pio.Platform_SwapBuffers) { pio.Platform_SwapBuffers(vp, nullptr); }
+        if (pio.Renderer_SwapBuffers) { pio.Renderer_SwapBuffers(vp, nullptr); }
+        timer.noteRenderPart(cascade::core::RenderPart::WindowSwap, timer.nanos() - at, vp->ID);
+    }
+}
 }  // namespace
 
 int AppWindow::run(int frames) {
@@ -1972,6 +2006,9 @@ int AppWindow::run(int frames) {
     cascade::gui::frame::install(window);
     glfwShowWindow(window);
     cascade::core::diagLogf("window: window shown; the Dear ImGui backends are up");
+    // The baseline the later `resources:` lines are read against (0.99.103).
+    resourcesSaidAt_ = glfwGetTime();
+    sayResources("at start-up");
     // The window is up. Everything from here to the end of the first frame - the
     // receiver, the watchdog, the config save, the first draw - is still start-up
     // to the sentinel; the second heartbeat (HangWatchdog::heartbeat) ends it.
@@ -2358,6 +2395,14 @@ int AppWindow::run(int frames) {
         cascade::core::breadcrumb::setActivity(cascade::core::breadcrumb::kOpeningRadio,
                                                deviceOpenPending_);
         if (rendered % 300 == 0) { cascade::core::sentinelPoll(); }
+        // ...and every ten minutes, what this process holds (0.99.103): the one
+        // trend line a session that runs out of GDI objects, handles or video
+        // memory leaves behind. On the sentinel's cadence, so the clock is read
+        // once in 300 frames, not every frame.
+        if (rendered % 300 == 0 && glfwGetTime() - resourcesSaidAt_ >= kResourcesLineGapS) {
+            resourcesSaidAt_ = glfwGetTime();
+            sayResources("ten minutes on");
+        }
         // HOW THE PREVIOUS SESSION ENDED (0.99.69): while an unclean exit found at
         // start-up is waiting for its evidence this asks, each frame, whether the
         // worker that reads the reports folder has answered - a flag test when
@@ -2834,6 +2879,10 @@ int AppWindow::run(int frames) {
         frameScope.to(cascade::core::FrameScope::Other);
         if (!scriptTracePath_.empty()) { traceScriptFrame(static_cast<long>(rendered)); }
         frameScope.to(cascade::core::FrameScope::Render);
+        // THE PARTS OF RENDER (0.99.103, core/frame_timing.hpp RenderPart): the scope
+        // is one, and a slow frame in it names which of these took the time. Timed
+        // on the timer's own clock, around calls that are not scopes of their own.
+        std::int64_t renderPartAt = frameTimer.nanos();
         ImGui::Render();
         int fbWidth = 0;
         int fbHeight = 0;
@@ -2844,10 +2893,12 @@ int AppWindow::run(int frames) {
         // Drawn only while the display is on; the frame itself (ImGui::Render
         // above) is still ended, so the interface's state moves on.
         if (!displayPause.paused()) { ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData()); }
+        frameTimer.noteRenderPart(cascade::core::RenderPart::MainDraw,
+                                  frameTimer.nanos() - renderPartAt);
 
         // The torn-off windows are rendered here, each into its own operating
         // system window and GL context. The current context has to be saved
-        // and restored around it: RenderPlatformWindowsDefault leaves whichever
+        // and restored around it: the platform-window render leaves whichever
         // platform window it drew last current, and the next frame's
         // glClear/RenderDrawData above would then paint the main UI into it.
         // UpdatePlatformWindows runs every frame whatever the display is doing -
@@ -2855,8 +2906,11 @@ int AppWindow::run(int frames) {
         // presented from, a torn-off window while the display is off.
         if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
             GLFWwindow* const restore = glfwGetCurrentContext();
+            renderPartAt = frameTimer.nanos();
             ImGui::UpdatePlatformWindows();
-            if (!displayPause.paused()) { ImGui::RenderPlatformWindowsDefault(); }
+            frameTimer.noteRenderPart(cascade::core::RenderPart::WindowsUpdate,
+                                      frameTimer.nanos() - renderPartAt);
+            if (!displayPause.paused()) { renderTornOffWindowsTimed(frameTimer); }
             glfwMakeContextCurrent(restore);
 
             // DID THE DRIVER JUST REFUSE ONE? UpdatePlatformWindows is where a
@@ -2881,6 +2935,11 @@ int AppWindow::run(int frames) {
                 viewportDecision_ = cascade::gui::viewportDecision(
                     std::getenv("FOXSDR_SINGLE_VIEWPORT"), true, failures, viewportRefusals_);
                 ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
+                // What the process held, and how many windows the session had
+                // already made, at the moment the driver said it had no more
+                // (0.99.103): the two lines that tell a leak from a driver.
+                sayResources("at the refusal");
+                sayWindowsMadeBeforeRefusal();
                 if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
                     cascade::core::diagWarnf("%s", why);
                 }
@@ -2930,6 +2989,10 @@ int AppWindow::run(int frames) {
                 "session)",
                 viewportRefusals_, cascade::gui::kViewportRefusalsBeforePermanent);
         }
+        // Which pages are their own windows now, said once per change (0.99.103) -
+        // after the refusal above, so the frame that turned viewports off is the
+        // frame the ledger says every page came back inside.
+        noteTornOffWindows();
 
         // SCOPE MODE IS SUPPOSED TO COVER THE WHOLE APPLICATION, NOT JUST
         // THIS WINDOW. Switching what this window draws alone left a user's
@@ -3031,7 +3094,7 @@ int AppWindow::run(int frames) {
 
                 // THE TORN-OFF WINDOWS TOO. Each is its own GL window with
                 // its own framebuffer, already presented by
-                // RenderPlatformWindowsDefault above, so their picture is read
+                // renderTornOffWindowsTimed above, so their picture is read
                 // from the FRONT buffer of each. One file per viewport,
                 // suffixed -vp<n>, so a store or a map dragged onto another
                 // screen is photographed with the same key as the bench.
@@ -16658,6 +16721,94 @@ void AppWindow::separateWindowAnchor(int slot, float& x, float& y) {
 // contents, and holding one to the page floor would undo that. Popups, tooltips and child
 // windows are ImGui's own to place; a docked window is placed by its dock node. One log line
 // per page brought in, so a field log shows the rescue beside the refusal that caused it.
+// THE TORN-OFF WINDOWS ImGui HAS RIGHT NOW, handed to the ledger (0.99.103). Every
+// secondary viewport that got its operating system window - never the main one,
+// never a viewport whose window was refused. The monitor's name is read through
+// the window library only for a monitor that is in its list THIS frame: ImGui's
+// backend keeps its previous monitor list while a monitor is being reconfigured
+// (imgui_impl_glfw.cpp, "Preserve existing monitor list"), and the handle in a
+// kept entry may be one the library has already freed - which is exactly the
+// moment the tester's logs are about.
+void AppWindow::noteTornOffWindows() {
+    // With viewports off (the developer switch, a failed probe, a refusal this
+    // frame) there is nothing outside: ImGui destroys the windows at its next
+    // NewFrame, and the ledger is told now. Nothing to compare when it already
+    // knows that.
+    const bool enabled = (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0;
+    if (!enabled && tornOffLedger_.outside() == 0) { return; }
+    const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    cascade::gui::TornOffWindow windows[cascade::gui::TornOffLedger::kMax];
+    int n = 0;
+    int monitorCount = 0;
+    GLFWmonitor** const monitors = enabled ? glfwGetMonitors(&monitorCount) : nullptr;
+    for (int i = 1; enabled && i < pio.Viewports.Size && n < cascade::gui::TornOffLedger::kMax;
+         ++i) {
+        const ImGuiViewportP* vp = static_cast<const ImGuiViewportP*>(pio.Viewports[i]);
+        if (vp == nullptr || vp->PlatformHandle == nullptr) { continue; }
+        cascade::gui::TornOffWindow& w = windows[n++];
+        w.id = vp->ID;
+        // A tooltip, menu or popup past a page's own window is given a window of
+        // its own by ImGui, and taken away a frame after it goes: counted by the
+        // ledger, never listed (see torn_off_ledger.hpp, "POP-UPS ARE WINDOWS TOO").
+        w.popup = vp->Window != nullptr &&
+                  (vp->Window->Flags & (ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_Popup |
+                                        ImGuiWindowFlags_ChildMenu)) != 0;
+        const char* name = vp->Window != nullptr ? vp->Window->Name : "";
+        const char* cut = std::strstr(name, "###");
+        w.name = name;
+        w.nameLen = cut != nullptr ? static_cast<int>(cut - name) : static_cast<int>(std::strlen(name));
+        w.x = vp->Pos.x;
+        w.y = vp->Pos.y;
+        w.w = vp->Size.x;
+        w.h = vp->Size.y;
+        w.monitors = pio.Monitors.Size;
+        w.monitor = (vp->PlatformMonitor >= 0 && vp->PlatformMonitor < pio.Monitors.Size)
+                        ? vp->PlatformMonitor
+                        : -1;
+        if (w.monitor >= 0) {
+            const ImGuiPlatformMonitor& m = pio.Monitors[w.monitor];
+            w.dpiScale = m.DpiScale;
+            for (int k = 0; k < monitorCount; ++k) {
+                if (monitors != nullptr && m.PlatformHandle == monitors[k]) {
+                    w.monitorName = glfwGetMonitorName(monitors[k]);
+                    break;
+                }
+            }
+        }
+    }
+    std::vector<std::string> lines;
+    const int pagesBefore = tornOffLedger_.ownWindows() + tornOffLedger_.outside();
+    if (tornOffLedger_.update(windows, n, glfwGetTime(), lines) > 0) {
+        for (const std::string& line : lines) { cascade::core::diagLogf("%s", line.c_str()); }
+        // The resources line follows a PAGE's window coming or going, not a pop-up's
+        // summary: a tooltip blinking every second must not cost a DXGI query each.
+        if (tornOffLedger_.ownWindows() + tornOffLedger_.outside() != pagesBefore) {
+            sayResources(tornOffLedger_.outside() > 0 ? "with a page in its own window"
+                                                      : "with every page in the main window");
+        }
+    }
+}
+
+// WHAT THE SESSION HAD MADE BY THE TIME THE DRIVER REFUSED (0.99.103): the counts
+// that decide whether a refusal is "the first context of the session" or the
+// thousandth. ImGui's own counter is every platform window it ever created -
+// pages and pop-ups - and it is read here, on the window's thread, from the
+// context the window owns.
+void AppWindow::sayWindowsMadeBeforeRefusal() {
+    const ImGuiContext* ctx = ImGui::GetCurrentContext();
+    cascade::core::diagLogf(
+        "viewports: before the refusal this session - %d page window%s, %d pop-up window%s over them, "
+        "%d platform windows created in all",
+        tornOffLedger_.ownWindows(), tornOffLedger_.ownWindows() == 1 ? "" : "s",
+        tornOffLedger_.popupsMade(), tornOffLedger_.popupsMade() == 1 ? "" : "s",
+        ctx != nullptr ? ctx->PlatformWindowsCreatedCount : -1);
+}
+
+void AppWindow::sayResources(const char* when) {
+    cascade::core::diagLogf(
+        "%s", cascade::core::processResourcesLine(cascade::core::readProcessResources(), when).c_str());
+}
+
 void AppWindow::fitPagesIntoMainWindow() {
     if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
         pagesFitFrames_ = 0;

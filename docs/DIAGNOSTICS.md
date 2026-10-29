@@ -1642,7 +1642,7 @@ wherever they were called from.
 | `dialogs` | the dialogs and menus drawn at the top level |
 | `polls` | the once-a-frame polls of workers and files (sources, sound, updates, the catalogue, telemetry, the tester link) and the scanner and airband drivers |
 | `saves` | deferred saves: bookmarks, markers and the settings file |
-| `render` | `ImGui::Render`, the GL draw, the torn-off windows' own draw |
+| `render` | `ImGui::Render`, the GL draw, the torn-off windows' own draw and swap - with its **parts** named when it is the slow one, see below (0.99.103) |
 | `present` | `glfwSwapBuffers` - on a vsynced window, mostly waiting for the display |
 | `recorder` | starting, stopping and arming a recording (nested: counted here whatever called it) |
 | `plugins-reload` | unloading every plugin and loading them again (nested, likewise) |
@@ -1678,6 +1678,91 @@ whoever reads them next (`cascade: frame timing:`, below).
   session - recorder 2/0/0, plugins-reload 0/1/0 (250 ms to 1 s / 1 s to 5 s / 5
   s or more, by scope)`. Fixed words and numbers only - never a plugin's name, a
   file, a path, a frequency or a device.
+- **A slow frame in `render` names the part of `render` (0.99.103).** The
+  2026-10-29 tester log (an Intel UHD 630 laptop docked to a second monitor) had
+  81 minutes of `frame: 450 ms, 442 ms of it in render` and could not say which
+  half of `render` it was: the main window's draw, or the torn-off pages'
+  windows, which `render` draws and swaps too - and if a window, which one. The
+  frame loop now times four **parts** of that one scope on the timer's clock
+  (`RenderPart`, `FrameTimer::noteRenderPart`): `main-draw` (`ImGui::Render` and
+  the main window's GL draw), `windows-update` (`ImGui::UpdatePlatformWindows`,
+  where torn-off windows are created, moved and destroyed - and where a driver
+  refuses one), `window-draw` and `window-swap` (one torn-off window's each; the
+  loop is FoxSDR's own copy of `ImGui::RenderPlatformWindowsDefault`,
+  `renderTornOffWindowsTimed` in `gui/app_window.cpp`, with a clock around every
+  call). When a slow frame's scope is `render` the line adds the largest part -
+  a whole part for the first two, the **largest single window** for the other
+  two, by the viewport id the tear-off line gave it: `frame: 455 ms, 455 ms of
+  it in render; largest part: window-swap 440 ms (torn-off window 0x8a3f2b1c of
+  2)`, or `; largest part: main-draw 400 ms (2 torn off)`. A render frame whose
+  parts saw none of the time (the `FOXSDR_FRAME_STALL` hook holds the thread at
+  the scope's entry, inside no part) names none. The parts are a breakdown of one
+  scope: the scopes still add up to the frame on their own, and nothing in the
+  table or the usage record changes. `tests/test_frame_timing.cpp` holds the
+  line's words.
+- **Every page that gets a window of its own, and every one that comes back
+  (0.99.103).** A window that works was never logged - only the refusal, and the
+  page brought back inside after it - so the same tester log could not say
+  whether a page had its own window during those 81 minutes, on which monitor,
+  or how many windows the session had made before the driver refused one. After
+  `UpdatePlatformWindows` each frame the frame loop hands `TornOffLedger`
+  (`gui/torn_off_ledger.hpp`, pure, `tests/test_torn_off_ledger.cpp`) every
+  secondary viewport that has its operating system window, and the ledger says
+  once per change: `viewports: page "ADS-B Map" in its own window 0x8a3f2b1c -
+  1026x699 at 588,202 on monitor 2 of 2 (DELL U2720Q, 100%); window 3 this
+  session, 1 outside` and `viewports: page "ADS-B Map" back in the main window
+  (window 0x8a3f2b1c gone); 0 outside`. "In its own window", not "torn off",
+  because a page need not be torn off to have one: the map, store and
+  fitted-modules pages are `ImGuiViewportFlags_NoAutoMerge` and are their own
+  operating system window and shared GL context from the frame they open,
+  wherever they sit. The monitor is the one ImGui placed the window on (its
+  model name as GLFW reports it, read only for a monitor that is in GLFW's list
+  that frame - the backend keeps a stale list while a monitor is being
+  reconfigured, and a handle in it may already be freed); `on no monitor the
+  interface could place (2 listed)` when it could not. The ledger follows at
+  most 16 windows and keeps 27 characters of a page's name and 20 of a
+  monitor's, so that the widest line (187 characters) fits the log's 192-byte
+  line with its counts intact. On the frame a refusal turns viewports off, every
+  page it followed is said to be back inside.
+- **Pop-up windows are counted, not listed (0.99.103).** A tooltip, menu or
+  popup that protrudes past a page's own window is given a window and shared GL
+  context of *its own* by ImGui (`Begin`, "Late create viewport if we don't
+  fit"), inside `UpdatePlatformWindows` - and destroyed one frame after the
+  pop-up goes. Over a map page an aircraft tooltip can do that every time a
+  target drifts under the pointer: one wglCreateContextAttribsARB and one
+  wglDeleteContext per blink, in the `render` scope, only while a page has its
+  own window and never while every page is inside. A read-only code hunt
+  (2026-10-29, five readers and two skeptics per suspect) found that to be the
+  one mechanism of this codebase that fits the tester's shape; whether it is
+  what the laptop does, the next log says. One line per blink would push the
+  whole log out of its ring in exactly those sessions, so the ledger counts them
+  and writes one summary at most every 30 s: `viewports: 41 pop-up windows (a
+  tooltip or menu past a page's own window, each a window and GL context of its
+  own while it shows) since the last line; 42 this session`. At a refusal the
+  frame loop adds the session's totals beside the `resources:` line:
+  `viewports: before the refusal this session - 2 page windows, 412 pop-up
+  windows over them, 415 platform windows created in all` - the last from
+  ImGui's own `PlatformWindowsCreatedCount`, so a refusal reads as the first
+  context of the session or the four-hundredth.
+- **What the process holds, as a line (0.99.103, `core/process_resources.hpp`,
+  `tests/test_process_resources.cpp`).** The refusal the same laptop reports is
+  Win32 error `0xc00705aa` - 1450, `ERROR_NO_SYSTEM_RESOURCES` - and its earlier
+  sessions show pages torn off successfully before a later request was refused:
+  something ran out, and the log could not say whether FoxSDR used it up. So the
+  log now carries `resources: gdi 412, user 97, handles 1234, memory 812 MB,
+  video 356 of 3900 MB - at start-up`: this process's GDI and USER objects
+  (Windows allows 10,000 of each a process by default, and every window needs
+  some of both), its kernel handles, its private commit, and its own video
+  memory in use and budget as Windows' graphics kernel accounts it
+  (`IDXGIAdapter3::QueryVideoMemoryInfo`, for every API the process draws with,
+  on the adapter it uses the most of; DXGI is loaded by name, so a machine
+  without it reads `video ? of ? MB`). Written once the window is shown, at every
+  tear-off and merge-back (`with a page torn off` / `with the pages inside`),
+  `at the refusal`, and `ten minutes on` for the rest of the session - about
+  twenty lines of a three-hour session's 256. A field that could not be read is
+  `?`, in place, so the line's shape is the same on every machine. On Linux the
+  handles are open file descriptors and the memory the resident set; the GUI and
+  video fields are `?`. Every number is this process's own.
 - The **diagnostics bundle** (Copy diagnostics, and what a bug report attaches):
   one line, `slow-frames: recorder 2/0/0, plugins-reload 0/1/0`, or `none`. It is
   listed in PRIVACY.md's table and compared with it, both ways, by

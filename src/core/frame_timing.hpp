@@ -97,7 +97,11 @@
 // the lines it did not write are counted in the next one it does. And one summary
 // line at shutdown, if any were recorded. Fixed words and numbers only - never a
 // plugin's name, a file, a path, a frequency or a device (the log rides inside
-// bug reports, PRIVACY.md).
+// bug reports, PRIVACY.md). A slow frame in `render` also names the part of
+// `render` that took the most (RenderPart below, 0.99.103): `; largest part:
+// window-swap 440 ms (torn-off window 0x8a3f2b1c of 2)` - the window by the id
+// the `viewports: page ... torn off` line gave it (gui/torn_off_ledger.hpp), so
+// the two lines read together.
 //
 // ANOTHER THREAD CAN ASK WHERE THE FRAME IS. currentFrameScope() is one atomic
 // the frame loop keeps up to date, readable from any thread without a lock. The
@@ -215,6 +219,42 @@ inline const char* frameScopeName(FrameScope s) {
 // The scope with this name, for the test hooks. False for anything else.
 bool frameScopeFromName(const char* name, FrameScope& out);
 
+// WHERE A `render` FRAME'S TIME CAN GO (0.99.103). The 2026-10-29 tester log had
+// 81 minutes of half-second frames in `render` and could not say which half of
+// it: the main window's draw, or the torn-off pages' windows, which `render` also
+// draws and swaps - and if a window, which one. These are the parts of that one
+// scope, charged by the frame loop with this timer's clock (nanos()) around calls
+// that are not scopes of their own, and named only when a slow frame's scope is
+// `render`. A part is not a scope: the scopes still add up to the frame on their
+// own, and the parts are a breakdown of one of them.
+enum class RenderPart : std::uint8_t {
+    // ImGui::Render and the main window's GL draw.
+    MainDraw,
+    // ImGui::UpdatePlatformWindows: torn-off windows created, moved, resized and
+    // destroyed - where a driver's refusal of a second context happens.
+    WindowsUpdate,
+    // One torn-off window's GL draw. The largest single window is what is named.
+    WindowDraw,
+    // One torn-off window's swap. Likewise.
+    WindowSwap,
+    kCount
+};
+
+inline constexpr int kRenderPartCount = static_cast<int>(RenderPart::kCount);
+
+inline constexpr const char* const kRenderPartNames[kRenderPartCount] = {
+    "main-draw", "windows-update", "window-draw", "window-swap"};
+
+inline const char* renderPartName(RenderPart p) {
+    const int i = static_cast<int>(p);
+    return (i >= 0 && i < kRenderPartCount) ? kRenderPartNames[i] : "?";
+}
+
+// The two parts that are one torn-off window's each.
+inline bool renderPartIsOneWindow(RenderPart p) {
+    return p == RenderPart::WindowDraw || p == RenderPart::WindowSwap;
+}
+
 // THE TIERS: where a slow frame starts, and the two steps above it.
 inline constexpr int kSlowFrameTiers = 3;
 inline constexpr std::int64_t kSlowFrameTierNs[kSlowFrameTiers] = {
@@ -324,6 +364,8 @@ public:
     void beginFrame(long frameIndex) {
         frameIndex_ = frameIndex;
         for (std::int64_t& a : acc_) { a = 0; }
+        for (RenderPartAcc& p : renderParts_) { p = RenderPartAcc{}; }
+        renderWindows_ = 0;
         cur_ = FrameScope::Other;
         publish(FrameScope::Other);
         excluded_ = false;
@@ -417,6 +459,32 @@ public:
         acc_[static_cast<int>(s)] = 0;
     }
 
+    // ---- the parts of render -----------------------------------------------------
+
+    // The clock the parts are measured with - this timer's, so a test's fake clock
+    // measures them too, and a part's time is on the same clock as its scope's.
+    std::int64_t nanos() const { return steady_(); }
+
+    // Charges `ns` to a part of the frame in progress's `render` scope. For the two
+    // per-window parts `window` is the torn-off window's viewport id, and what a
+    // slow frame's line names is the LARGEST single window; for the other two it is
+    // 0 and the part's whole time is what is named. Plain adds on the GUI thread;
+    // nothing is read until a frame is slow.
+    void noteRenderPart(RenderPart p, std::int64_t ns, std::uint32_t window = 0) {
+        RenderPartAcc& a = renderParts_[static_cast<int>(p)];
+        a.totalNs += ns;
+        if (ns > a.largestNs) {
+            a.largestNs = ns;
+            a.largestWindow = window;
+        }
+        if (p == RenderPart::WindowSwap) { ++renderWindows_; }
+    }
+
+    // What the frame in progress has charged to a part so far: the whole of it.
+    std::int64_t renderPartNanos(RenderPart p) const {
+        return renderParts_[static_cast<int>(p)].totalNs;
+    }
+
     // ---- reading it --------------------------------------------------------------
 
     // Which scope the frame is in right now. One relaxed load: any thread, no lock.
@@ -467,6 +535,20 @@ private:
         // For a start-up frame: the part that took the most, named.
         FrameScope part = FrameScope::Other;
         std::int64_t partNs = 0;
+        // For a render frame: the part of `render` that took the most, the window
+        // it was (0 when it was not one window's) and how many torn-off windows
+        // the frame drew.
+        RenderPart renderPart = RenderPart::MainDraw;
+        std::int64_t renderPartNs = 0;
+        std::uint32_t renderWindow = 0;
+        int renderWindows = 0;
+    };
+
+    // One part's running total this frame, and its largest single charge.
+    struct RenderPartAcc {
+        std::int64_t totalNs = 0;
+        std::int64_t largestNs = 0;
+        std::uint32_t largestWindow = 0;
     };
 
     static int idx(FrameScope s) { return static_cast<int>(s); }
@@ -483,6 +565,10 @@ private:
     // equals, so the answer does not move with the order of anything. `ns`, when
     // given, receives its time.
     FrameScope dominant(std::int64_t* ns) const;
+    // The part of `render` that took the most of this frame, into `h`: a whole
+    // part for the two that are not one window's, the largest single window for
+    // the two that are; the first of equals.
+    void dominantRenderPart(Held& h) const;
 
     // The slow path: runs only for a frame whose counted time reached the first
     // tier. Applies the exclusions, picks the scope, and HOLDS the result until the
@@ -515,6 +601,8 @@ private:
     std::int64_t frameStart_ = 0;
     std::int64_t awakeStart_ = 0;
     std::int64_t acc_[kFrameScopeCount] = {};
+    RenderPartAcc renderParts_[kRenderPartCount] = {};
+    int renderWindows_ = 0;
     long frameIndex_ = 0;
     bool excluded_ = false;
     int userDepth_ = 0;

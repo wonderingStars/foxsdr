@@ -117,6 +117,9 @@ struct GLFWwindow;
 #include "gui/device_scan_plan.hpp"
 #include "gui/source_fallback.hpp"
 #include "gui/viewport_policy.hpp"
+// Which pages are their own windows right now, and the lines that say when that
+// changes (0.99.103).
+#include "gui/torn_off_ledger.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
 // keeps app_window.hpp usable from the tests (see the note below).
@@ -4626,6 +4629,24 @@ private:
     // many more frames check every page.
     void fitPagesIntoMainWindow();
     int pagesFitFrames_ = 0;
+
+    // THE TORN-OFF WINDOWS, LOGGED AS THEY COME AND GO (0.99.103, gui/torn_off_ledger.hpp):
+    // after UpdatePlatformWindows each frame the ledger is handed every secondary
+    // viewport that has its operating system window, and says in the log which page
+    // was torn off onto which monitor, and when it came back. noteTornOffWindows is
+    // the frame loop's call; the ledger is the memory between frames.
+    void noteTornOffWindows();
+    void sayWindowsMadeBeforeRefusal();
+    cascade::gui::TornOffLedger tornOffLedger_;
+
+    // WHAT THIS PROCESS HOLDS (0.99.103, core/process_resources.hpp): one `resources:`
+    // line at start-up, at every tear-off and merge-back, at a refusal of a second GL
+    // context, and every kResourcesLineGapS of the session - so a session that runs
+    // out of something says what was running out. resourcesSaidAt_ is the window
+    // clock (glfwGetTime) of the last timed line.
+    static constexpr double kResourcesLineGapS = 600.0;
+    void sayResources(const char* when);
+    double resourcesSaidAt_ = 0.0;
 
     // --- THE WINDOW FRAMES, ON THE METAL (0.78.0) ------------------------------
     //

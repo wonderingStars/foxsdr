@@ -17360,15 +17360,20 @@ static void ImGui::WindowSelectViewport(ImGuiWindow* window)
     {
         if (flags & (ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_Popup))
         {
-            // We need to take account of the possibility that mouse may become invalid.
-            // Popups/Tooltip always set ViewportAllowPlatformMonitorExtend so GetWindowAllowedExtentRect() will return full monitor bounds.
-            ImVec2 mouse_ref = (flags & ImGuiWindowFlags_Tooltip) ? g.IO.MousePos : g.BeginPopupStack.back().OpenMousePos;
-            bool use_mouse_ref = (!g.NavCursorVisible || !g.NavHighlightItemUnderNav || !g.NavWindow);
-            bool mouse_valid = IsMousePosValid(&mouse_ref);
-            if ((window->Appearing || (flags & (ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_ChildMenu))) && (!use_mouse_ref || mouse_valid))
-                window->ViewportAllowPlatformMonitorExtend = FindPlatformMonitorForPos((use_mouse_ref && mouse_valid) ? mouse_ref : NavCalcPreferredRefPos(window->Flags));
-            else
-                window->ViewportAllowPlatformMonitorExtend = window->Viewport->PlatformMonitor;
+            // FOXSDR PATCH BEGIN (popups-stay-inside) - see third_party/imgui/FOXSDR-PATCHES.md.
+            // Upstream lets a tooltip or popup extend over the whole monitor (ViewportAllowPlatformMonitorExtend =
+            // the monitor under the mouse), and Begin() then gives any one that does not fit its host viewport an
+            // operating system window and shared GL context of ITS OWN ("Late create viewport if we don't fit"),
+            // destroyed a frame after the pop-up goes. Over a page that has a window of its own - FoxSDR's map
+            // pages - that is one wglCreateContextAttribsARB and one wglDeleteContext per tooltip blink, on the
+            // thread that draws the window (the 2026-10-29 Intel UHD 630 report: half-second render frames, and
+            // a driver that later refused a shared context with ERROR_NO_SYSTEM_RESOURCES). Kept inside the
+            // window the pop-up belongs to instead: -1 makes GetWindowAllowedExtentRect() answer the host
+            // viewport's work rect, so FindBestWindowPosForPopup() places it there, CalcWindowAutoFitSize()
+            // caps it there, and the late create in Begin() is skipped. A menu near the main window's bottom
+            // edge now flips up or is clamped inside it instead of spilling over the desktop.
+            window->ViewportAllowPlatformMonitorExtend = -1;
+            // FOXSDR PATCH END (popups-stay-inside)
         }
         else if (window->Viewport && window != window->Viewport->Window && window->Viewport->Window && !(flags & ImGuiWindowFlags_ChildWindow) && window->DockNode == NULL)
         {

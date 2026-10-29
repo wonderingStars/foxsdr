@@ -846,6 +846,7 @@ set(CASCADE_GUI_TESTS
     test_plugin_inuse_app
     test_plugin_pathpick_app
     test_plugin_store_app
+    test_popup_stays_inside
     test_radio_setup_app
     test_rail_fold_app
     test_receiver_layout_app

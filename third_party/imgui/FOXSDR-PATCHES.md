@@ -200,3 +200,67 @@ redundant repeats, which upstream never checked for, are removed.
    must show one call per change, and a window destroyed then "recreated" at
    the identical key (a fabricated pointer stands in for a reused address)
    must not inherit its predecessor's last value.
+
+## popups-stay-inside - a tooltip or popup never gets an operating system window of its own
+
+**File:** `imgui.cpp`, `UpdateSelectWindowViewport`, the `if (flags &
+(ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_Popup))` block under "Mark window
+as allowed to protrude outside of its viewport and into the current monitor".
+
+**Why.** Upstream marks every tooltip and popup as allowed to extend over the
+whole monitor under the mouse (`ViewportAllowPlatformMonitorExtend` = that
+monitor's index). `Begin()` then checks whether the window fits its host
+viewport and, when it does not, gives it a viewport of its own ("Late create
+viewport if we don't fit"), which `UpdatePlatformWindows` turns into an
+operating system window with a shared GL context - created through
+`glfwCreateWindow(..., share = main)`, i.e. `wglCreateContextAttribsARB`, on
+the thread that draws the window - and destroys one frame after the pop-up is
+gone. FoxSDR's map, store and fitted-modules pages are `NoAutoMerge`, so each is
+a window of its own from the frame it opens, and an aircraft's hover detail on
+the ADS-B map near the page's edge, or the zoom keys' tooltips, blink such a
+window and context into and out of existence every time a target drifts under
+the pointer. A read-only code hunt on 2026-10-29 (five readers, two skeptics a
+suspect) found this to be the one mechanism in the tree that fits a tester's
+Intel UHD 630 laptop: 81 minutes of 430-520 ms `render` frames (where
+`UpdatePlatformWindows` sits) only while a map page had its own window, and a
+driver that later refused a shared context with `ERROR_NO_SYSTEM_RESOURCES`
+(GLFW 65543, Win32 0xc00705aa) - a refusal the log had read as "the first
+tear-off of the session" and which this makes the N-hundredth context.
+Whether it is what that laptop does is what the 0.99.103 instrumentation
+(docs/DIAGNOSTICS.md, "Pop-up windows are counted, not listed") says.
+
+**What it changes.** The block sets `ViewportAllowPlatformMonitorExtend = -1`
+and nothing else. With -1: `GetWindowAllowedExtentRect()` answers the host
+viewport's work rect instead of the monitor's, so `FindBestWindowPosForPopup()`
+places the pop-up inside the window it belongs to (flipping a menu up at the
+bottom edge, as a non-viewport application would); `CalcWindowAutoFitSize()`
+caps it at the main viewport's size; and the late create in `Begin()` (guarded
+by `ViewportAllowPlatformMonitorExtend >= 0`) is skipped, so no pop-up ever has
+a viewport, an operating system window or a GL context of its own. Regular
+windows are untouched: the `else if` below the block still lets them protrude
+(that is what a torn-off page is).
+
+**What it does not change.** A page dragged out of the main window still gets
+its own window (`GetWindowAlwaysWantOwnViewport`, the moving-window branch and
+the merge test are above this block and unchanged). Tooltips and popups inside
+the main viewport draw exactly where they did unless they would have spilled
+over its edge.
+
+**Tests.** `tests/test_popup_stays_inside.cpp` (a real GL window and the real
+backends): a page with its own viewport, a tooltip opened at its edge wide
+enough to protrude - the tooltip's viewport stays the page's, its rect stays
+inside the page's window, and ImGui's `PlatformWindowsCreatedCount` does not
+move over a hundred blinks; the same for a tooltip at the main window's edge.
+Break-it: with the patch block restored to upstream the count climbs by one per
+blink and the tooltip's viewport is its own.
+
+**Re-applying on an ImGui upgrade.**
+1. Vendor the new upstream unmodified first (`THIRD_PARTY.md`).
+2. In `UpdateSelectWindowViewport`, find the `if (flags & (ImGuiWindowFlags_Tooltip
+   | ImGuiWindowFlags_Popup))` block that sets `ViewportAllowPlatformMonitorExtend`
+   from `FindPlatformMonitorForPos` / `window->Viewport->PlatformMonitor`; replace
+   its body with `window->ViewportAllowPlatformMonitorExtend = -1;` inside the
+   fence. Check that `Begin()`'s late create is still guarded by
+   `ViewportAllowPlatformMonitorExtend >= 0` and that
+   `GetWindowAllowedExtentRect()` still falls back to the viewport's work rect
+   for -1; if either moved, the test above is red.

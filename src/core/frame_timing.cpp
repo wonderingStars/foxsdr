@@ -228,6 +228,8 @@ void FrameTimer::resetForTest() {
         logged_[i] = false;
         suppressed_[i] = 0;
     }
+    for (RenderPartAcc& p : renderParts_) { p = RenderPartAcc{}; }
+    renderWindows_ = 0;
     steady_ = &frameSteadyNanos;
     awake_ = &frameAwakeNanos;
     sink_ = nullptr;
@@ -260,6 +262,24 @@ FrameScope FrameTimer::dominant(std::int64_t* ns) const {
     return static_cast<FrameScope>(best);
 }
 
+void FrameTimer::dominantRenderPart(Held& h) const {
+    int best = 0;
+    std::int64_t bestNs = -1;
+    for (int p = 0; p < kRenderPartCount; ++p) {
+        const RenderPartAcc& a = renderParts_[p];
+        const std::int64_t ns =
+            renderPartIsOneWindow(static_cast<RenderPart>(p)) ? a.largestNs : a.totalNs;
+        if (ns > bestNs) {
+            bestNs = ns;
+            best = p;
+        }
+    }
+    h.renderPart = static_cast<RenderPart>(best);
+    h.renderPartNs = bestNs < 0 ? 0 : bestNs;
+    h.renderWindow = renderPartIsOneWindow(h.renderPart) ? renderParts_[best].largestWindow : 0u;
+    h.renderWindows = renderWindows_;
+}
+
 void FrameTimer::slowFrame(std::int64_t total, std::int64_t counted) {
     // A frame that was inside a display grace or a hidden window: slow, and not
     // ours.
@@ -279,6 +299,7 @@ void FrameTimer::slowFrame(std::int64_t total, std::int64_t counted) {
     h.countedNs = counted;
     h.tier = slowFrameTier(counted);
     h.scope = dominant(&h.scopeNs);
+    if (h.scope == FrameScope::Render) { dominantRenderPart(h); }
     if (frameIndex_ < kStartupFrames) {
         h.part = h.scope;
         h.partNs = h.scopeNs;
@@ -319,6 +340,23 @@ void FrameTimer::commit(const Held& h) {
     if (h.scope == FrameScope::Startup && n > 0 && n < static_cast<int>(sizeof(line))) {
         n += std::snprintf(line + n, sizeof(line) - static_cast<std::size_t>(n),
                            "; largest part: %s %lld ms", frameScopeName(h.part), ms(h.partNs));
+    }
+    // A render frame names its part - when the parts saw the time. A stall placed
+    // at the scope's entry by the test hook is inside `render` and inside no part,
+    // and a line that then said "largest part: main-draw 0 ms" would be noise.
+    if (h.scope == FrameScope::Render && h.renderPartNs >= 1'000'000 && n > 0 &&
+        n < static_cast<int>(sizeof(line))) {
+        n += std::snprintf(line + n, sizeof(line) - static_cast<std::size_t>(n),
+                           "; largest part: %s %lld ms", renderPartName(h.renderPart),
+                           ms(h.renderPartNs));
+        if (h.renderWindow != 0 && n > 0 && n < static_cast<int>(sizeof(line))) {
+            n += std::snprintf(line + n, sizeof(line) - static_cast<std::size_t>(n),
+                               " (torn-off window 0x%08x of %d)",
+                               static_cast<unsigned>(h.renderWindow), h.renderWindows);
+        } else if (h.renderWindows > 0 && n > 0 && n < static_cast<int>(sizeof(line))) {
+            n += std::snprintf(line + n, sizeof(line) - static_cast<std::size_t>(n),
+                               " (%d torn off)", h.renderWindows);
+        }
     }
     if (suppressed_[si] > 0 && n > 0 && n < static_cast<int>(sizeof(line))) {
         std::snprintf(line + n, sizeof(line) - static_cast<std::size_t>(n),
