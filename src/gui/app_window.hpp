@@ -4306,6 +4306,11 @@ private:
     bool crashUploadSwept_ = false;
     void crashUploadStart();
     void crashUploadFinish();
+    // AN ISSUE REPORT IS SENT IN THE SESSION THAT WROTE IT (0.99.101): polled once a
+    // frame beside the recovery poll. A report filed since the last sweep starts the
+    // next one as soon as the last has finished.
+    bool crashUploadWanted_ = false;
+    void crashUploadPoll();
 
     // --- REQUEST A FEATURE (see core/feature_request.hpp) -------------------
     //

@@ -728,6 +728,75 @@ static void issueSweepBlock() {
     }
 }
 
+// A SWEEP STARTED MID-SESSION SEES WHAT THE START-UP SWEEP COULD NOT (0.99.101): running()
+// says when a sweep has finished without a join, stop() then joins at once, and a second
+// start() on the same uploader sweeps the folder again - and finds the issue report filed
+// after the first sweep listed it. The window does exactly this (AppWindow::crashUploadPoll),
+// carrying each sweep's policy state into the next as it does at start-up.
+static void uploaderRestartBlock() {
+    const fs::path dir = scratchDir("restart");
+    StubServer srv;
+    CHECK(srv.start(StubServer::Mode::Accept204));
+    SweepParams p;
+    p.crashDir = dir.string();
+    p.url = srv.url();
+    p.enabled = true;
+    p.installId = "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5";
+    p.nowEpoch = 1'700'000'000ull;
+    CrashUploader up;
+    CHECK(!up.running());
+    CHECK(!up.busy());
+    up.start(p);
+    // The first sweep finds an empty folder and ends; running() falls without a join.
+    for (int i = 0; i < 2000 && up.running(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(!up.running());
+    CHECK(up.busy());  // not joined yet: that is stop()'s job, and it is instant now
+    writeFile(dir / "issue-20261029-110000-4242-1.txt",
+              "kind: issue\n"
+              "reason: issue: ringdrop - the radio delivered samples faster than they were taken off\n"
+              "signature: 5A76C1C886A78DC5\n--- context ---\nversion: 0.99.101\n"
+              "commit: abc123def456\nos: Windows 10.0.22631\narch: x64\n"
+              "--- process ---\nuptime-sec: 9\n--- log (last 1 of 1 lines) ---\n"
+              "dsp: 7168 samples dropped between the source and the DSP in the last minute\n");
+    up.stop();
+    CHECK(!up.busy());
+    CHECK(up.outcome().considered == 0);
+    CHECK(srv.bodies().empty());
+    // The second sweep, with the first's policy state, as the window carries it - and left
+    // to finish, as the window leaves it: stop() cancels whatever is in flight, and a sweep
+    // cancelled before it has listed the folder considers nothing (that is the shutdown rule).
+    p.state = up.outcome().state;
+    up.start(p);
+    CHECK(up.busy());
+    for (int i = 0; i < 2000 && up.running(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(!up.running());
+    up.stop();
+    CHECK(up.outcome().considered == 1);
+    CHECK(up.outcome().sent == 1);
+    CHECK(srv.bodies().size() == 1);
+    if (srv.bodies().size() == 1) {
+        const nlohmann::json j = nlohmann::json::parse(srv.bodies()[0], nullptr, false);
+        CHECK(!j.is_discarded());
+        CHECK(j.value("kind", std::string()) == "issue");
+        CHECK(j.value("signature", std::string()) == "5A76C1C886A78DC5");
+    }
+    // A third, with nothing new filed: the sidecar says sent, nothing is sent again.
+    p.state = up.outcome().state;
+    up.start(p);
+    for (int i = 0; i < 2000 && up.running(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    up.stop();
+    CHECK(up.outcome().considered == 0);
+    CHECK(srv.bodies().size() == 1);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 int main() {
     // --- The report parses back into the fields the wire contract needs -----
     {
@@ -2048,6 +2117,7 @@ int main() {
 
     sentinelSweepBlock();
     issueSweepBlock();
+    uploaderRestartBlock();
 
     return testSummary("test_crash_upload");
 }

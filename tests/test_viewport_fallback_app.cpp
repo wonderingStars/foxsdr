@@ -13,7 +13,10 @@
  *             page is WHOLLY INSIDE the main window, at least the drag floor in size, with one
  *             "brought inside the main window" log line each. Before the refusal (frame 50) the
  *             pages were their own windows, at least one of them past the main window's edge - or
- *             the check after it would prove nothing;
+ *             the check after it would prove nothing. The refusal's issue report is SENT in this
+ *             run (0.99.101), not left for the next start: the log records the sweep that took
+ *             it, and the attempt either fails against the discard port (a sidecar says so) or
+ *             is cut short by the end of the run, the shutdown rule;
  *   single    FOXSDR_SINGLE_VIEWPORT=1, separate windows off from the start: the same three pages,
  *             which open overhanging the main window's right edge on purpose, are inside it too;
  *   kept      the control - no refusal: the pages stay their own windows, where they opened, and
@@ -198,19 +201,27 @@ std::string readFile(const fs::path& p) {
     return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
 }
 
-// The issue reports (core/issue_report.hpp) a run left in its reports folder, newest last.
-std::vector<std::string> issueReports(const std::string& tag) {
+// The files in a run's reports folder whose names begin `issue-` and end `suffix`, read,
+// newest last: the issue reports themselves (core/issue_report.hpp) end ".txt", and the
+// uploader's sidecar beside each (core/crash_upload.cpp) ends ".txt.upload".
+std::vector<std::string> issueFilesEnding(const std::string& tag, const std::string& suffix) {
     std::vector<fs::path> files;
     std::error_code ec;
     for (const auto& e : fs::directory_iterator(g_dir / (tag + "-diag") / "crashes", ec)) {
         const std::string name = e.path().filename().string();
-        if (name.rfind("issue-", 0) == 0) { files.push_back(e.path()); }
+        if (name.rfind("issue-", 0) == 0 && name.size() >= suffix.size() &&
+            name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            files.push_back(e.path());
+        }
     }
     std::sort(files.begin(), files.end());
     std::vector<std::string> out;
     for (const fs::path& f : files) { out.push_back(readFile(f)); }
     return out;
 }
+
+std::vector<std::string> issueReports(const std::string& tag) { return issueFilesEnding(tag, ".txt"); }
+std::vector<std::string> issueSidecars(const std::string& tag) { return issueFilesEnding(tag, ".txt.upload"); }
 
 // The health ledger's file for every run of this test (its config files all live in g_dir).
 fs::path ledgerPath() { return g_dir / cascade::core::health::HealthLedger::kFileName; }
@@ -360,6 +371,31 @@ int main(int argc, char** argv) {
                 CHECK(issues[0].find("could not create a second OpenGL context", log) !=
                       std::string::npos);
             }
+            // ...AND SENT IN THIS SESSION (0.99.101): the folder was swept again once the report
+            // was filed, not left for the next start. The sweep's outcome is logged when the
+            // window closes: one report considered, none sent (the crash address is the discard
+            // port). What became of it depends on how much of the run was left - a connect to a
+            // closed port takes WinHTTP its retries, and the fifty frames after the refusal can be
+            // shorter than that - so it either FAILED, with a sidecar saying one attempt was made,
+            // or was ABANDONED FOR SHUTDOWN: the shutdown rule (nothing waits for a transfer at
+            // exit, and an abandoned attempt costs the report nothing). Either is the folder swept
+            // again in this session, and neither happens without that: before 0.99.101 this log
+            // had no "crash upload:" line at all.
+            CHECK(r.log.find("crash upload: 1 considered, 0 sent, 0 duplicate, 0 held, ") !=
+                  std::string::npos);
+            const bool failed = r.log.find(": failed, will retry") != std::string::npos;
+            const bool cutShort = r.log.find(": abandoned for shutdown") != std::string::npos;
+            std::printf("    refused upload: %s\n",
+                        failed     ? "attempted and failed (the discard port)"
+                        : cutShort ? "cut short by the end of the run"
+                                   : "neither failed nor abandoned");
+            CHECK(failed != cutShort);
+            const std::vector<std::string> sidecars = issueSidecars("refused");
+            CHECK(sidecars.size() == (failed ? 1u : 0u));
+            if (failed && sidecars.size() == 1) {
+                CHECK(sidecars[0].rfind("status: failed\n", 0) == 0);
+                CHECK(sidecars[0].find("\nattempts: 1\n") != std::string::npos);
+            }
             // THE SETUP, or the check below proves nothing: at frame 50 the pages are their own
             // windows, and the map - the page of the field report - is past the main window's
             // edge. (The plugin store opens over the main window by its own placement,
@@ -407,9 +443,11 @@ int main(int argc, char** argv) {
         } else if (r.ok) {
             CHECK(r.log.find("could not create a second OpenGL context") == std::string::npos);
             CHECK(r.log.find("brought inside the main window") == std::string::npos);
-            // ...and nothing was counted or reported: the control run met no refusal.
+            // ...and nothing was counted or reported: the control run met no refusal - and with
+            // nothing filed, the folder was not swept again (no sweep's outcome was logged).
             CHECK(recoveredCounts().empty());
             CHECK(issueReports("kept").empty());
+            CHECK(r.log.find("crash upload:") == std::string::npos);
             bool anyOutside = false;
             for (const Page& p : kPages) {
                 const Rect* pg = r.after.page(p.id);
