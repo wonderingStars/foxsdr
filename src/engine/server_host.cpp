@@ -11,6 +11,7 @@
 
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
+#include "core/thread_beats.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "foxsdr_api.h"
 #include "net/status_compose.hpp"
@@ -225,16 +226,23 @@ void ServerHost::kick(bool retry) {
 }
 
 void ServerHost::workerLoop() {
+    // THE HEARTBEAT (core/thread_beats.hpp, 6.27). Parked until a kick is a declared wait ("job"); a reconcile that wedges
+    // in a server's start or stop is named by phase ("reconcile-web", "reconcile-cat").
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadServerHost);
     std::unique_lock<std::mutex> lk(wm_);
     for (;;) {
+        beat.wait(cascade::core::beats::kWaitJob);
         wcv_.wait(lk, [this] { return wStop_ || wKick_; });
+        beat.beat("woke");
         if (wStop_) { return; }
         const bool retry = wRetry_;
         wKick_ = false;
         wRetry_ = false;
         wBusy_ = true;
         lk.unlock();
+        beat.beat("reconcile-web");
         reconcileWeb(retry);
+        beat.beat("reconcile-cat");
         if (!stopping()) { reconcileCat(retry); }
         lk.lock();
         wBusy_ = false;
@@ -422,6 +430,9 @@ ServerHost::Outcome ServerHost::apply(const ServerConfigRequest& r) {
 
 void ServerHost::startHash(std::string plain, std::uint64_t generation) {
     hashing_ = std::async(std::launch::async, [plain = std::move(plain), generation]() mutable {
+        // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the hash is the thread's life; it is the long job of the Feed kind.
+        cascade::core::beats::Registration beat(cascade::core::beats::kThreadPasswordHash);
+        beat.beat("hash");
         Hashed h;
         h.generation = generation;
         cascade::net::PasswordRecord rec;

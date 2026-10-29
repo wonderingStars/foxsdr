@@ -52,6 +52,7 @@
 #include "core/running_view.hpp"
 #include "net/control_ops.hpp"
 #include "net/status_compose.hpp"
+#include "core/thread_beats.hpp"
 #include "core/tune_control.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/rsp_rows.hpp"
@@ -98,6 +99,11 @@ Engine::Engine(EngineHost& host)
     // a pointer to the other. Harmless with no plugin: nothing writes, and nothing reads unless a plugin's key is the only key down.
     transmitter_.setPluginLink(txLink_);
     pluginRunner_.setTxLink(txLink_);
+    // WHETHER THE RADIO IS KEYED, for the watchdog's worker-wedge reports (core/thread_beats.hpp, 6.27): a DSP thread that stops in the
+    // middle of a transmission says so in its report. One relaxed atomic read of the transmitter's own flag, called from the watchdog's
+    // thread; the monitor never keys or un-keys anything - the dead-man's handles are the transmitter's own. Taken away at the head of
+    // ~Engine, before the transmitter it reads is destroyed.
+    cascade::core::beats::Registry::setKeyedProbe(this, [this] { return transmitter_.transmitting(); });
     // A directive posted wakes a front-end thread that is waiting for the pass (waitForPassCounter): the pass it waits for may be
     // waiting, in turn, for that thread to apply the directive. The lock is taken and dropped so a waiter between its check and
     // its wait cannot miss the notify.
@@ -215,6 +221,7 @@ void Engine::frameKick() {
 // specific needs doing, and detaching is the only safe choice. Proven with
 // tests/test_engine_fallback_teardown.cpp (a throwing constructor seam).
 Engine::~Engine() {
+    cascade::core::beats::Registry::clearKeyedProbe(this);
     if (!tornDown_) {
         host_ = &ownHost_;
         // The front end's applier points into a window that is, by construction of this path, no longer there.
@@ -1200,6 +1207,10 @@ void Engine::scanSoapy() {
     const auto scanHook = testHooks_.soapyScan;  // null in every build of the application
     soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps,
                                                        absentOut, uhdNoImagesOut, usrpOnUsbOut, scanHook] {
+        // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the scan is the thread's life; pumpWorkers collects it, and a scan that
+        // never comes back is named here after the Open kind's budget.
+        cascade::core::beats::Registration beat(cascade::core::beats::kThreadDeviceScan);
+        beat.beat("scan");
         if (scanHook != nullptr) { return scanHook(); }
         std::vector<cascade::usb::UsbId> present;
         const bool listed = cascade::usb::presentUsbIds(present);
@@ -1698,6 +1709,9 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
     // into the worker and comes back as the answer, with the device (or the
     // reason) filled in.
     deviceOpenFuture_ = std::async(std::launch::async, [r = std::move(r)]() mutable {
+        // THE HEARTBEAT (6.27): the open is the thread's life, and "opening radio" for ever is what a wedged driver looks like.
+        cascade::core::beats::Registration beat(cascade::core::beats::kThreadDeviceOpen);
+        beat.beat("open");
         std::unique_ptr<cascade::source::DeviceSource> dev = makeDeviceSource(r.kind);
         if (!dev) {
             r.error = "\"" + r.kind + "\" is not a source kind this build can open";
@@ -8378,6 +8392,7 @@ void Engine::healthPoll() {
     now.vendorCallsAbandoned = cascade::source::SoapySource::driverCallsAbandoned();
     now.ringDroppedSamples = pipeline_.ringDroppedSamples();
     now.dspThreadExceptions = static_cast<unsigned long long>(pipeline_.dspThreadExceptions());
+    now.threadWedges = cascade::core::beats::Registry::wedgesFound();
     recoveryWatch_.poll(now);
 }
 

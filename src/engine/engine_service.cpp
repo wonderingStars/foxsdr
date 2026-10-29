@@ -21,6 +21,7 @@
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/receiver_tables.hpp"
+#include "core/thread_beats.hpp"
 #include "source/soundcard_source.hpp"
 
 namespace cascade::engine {
@@ -364,9 +365,13 @@ void EngineService::startKeeper() {
         keeperStop_ = false;
     }
     keeper_ = std::thread([this] {
+        // THE HEARTBEAT (core/thread_beats.hpp, 6.27): a look every kKeeperPeriod; a look that blocks (the settings folder on a
+        // network share, a write that never starts) is named by the watchdog's poll after the Keeper kind's budget.
+        cascade::core::beats::Registration beat(cascade::core::beats::kThreadKeeper);
         std::unique_lock<std::mutex> lk(keeperMutex_);
         while (!keeperStop_) {
             lk.unlock();
+            beat.beat("look");
             keepOnce();
             lk.lock();
             keeperCv_.wait_for(lk, kKeeperPeriod, [this] { return keeperStop_; });

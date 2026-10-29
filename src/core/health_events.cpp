@@ -48,6 +48,7 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"sdrenum", true},      // the service stays wedged
     {"sdrlost", true},      // the session stays lost
     {"audiolead", true},    // the lead steps up at most three times, and "this session had it" is the fact
+    {"threadwedge", false}, // each is a worker reported late by the watchdog's poll; a thread must recover before it can be counted again
 };
 
 // The frame timer's own names for the scopes, but for `user-wait`.
@@ -1066,6 +1067,9 @@ void RecoveryWatch::poll(const RecoveryReadings& now) {
     }
     if (const std::uint32_t n = moved(now.dspThreadExceptions, last_.dspThreadExceptions)) {
         g->note(tokenRecovered(Recovered::DspExc), n);
+    }
+    if (const std::uint32_t n = moved(now.threadWedges, last_.threadWedges)) {
+        g->note(tokenRecovered(Recovered::ThreadWedge), n);
     }
     last_ = now;
 }

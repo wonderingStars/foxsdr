@@ -34,6 +34,7 @@
 #include "core/i18n.hpp"
 #include "core/patch_devices.hpp"
 #include "core/radio_setup.hpp"
+#include "core/thread_beats.hpp"
 #include "core/winusb_install.hpp"
 #include "gui/radio_setup_inventory.hpp"
 #include "gui/shell_open.hpp"
@@ -240,7 +241,14 @@ void AppWindow::radioSetupInstallDriver(const std::string& instanceId) {
     }
     const HANDLE process = sei.hProcess;
     std::thread([job, process]() {
+        // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the installer is somebody else's program and a person answers its
+        // prompts, so the wait for it is a DECLARED wait with a cap (kWaitInstaller, eight minutes), after which the watchdog
+        // names this thread.
+        cascade::core::beats::Registration beat(cascade::core::beats::kThreadDriverInstall);
+        beat.beat("launched");
+        beat.wait(cascade::core::beats::kWaitInstaller);
         ::WaitForSingleObject(process, INFINITE);
+        beat.beat("result");
         ::CloseHandle(process);
         wu::Result r;
         {

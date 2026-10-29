@@ -165,6 +165,10 @@
 
 namespace cascade::core {
 
+namespace beats {
+class Registration;  // core/thread_beats.hpp: the source thread's heartbeat is passed down by reference
+}
+
 // Forward declaration (core/recorder.hpp): the pipeline stores only
 // non-owning pointers, so the full type is needed in pipeline.cpp alone.
 class Recorder;
@@ -807,7 +811,8 @@ private:
                           std::shared_ptr<std::atomic<bool>> stopToken,
                           std::shared_ptr<PriorityNote> priority);
     void dspThreadMain();
-    void sourceThreadBody(double chainRateHz, const std::atomic<bool>& stopToken);
+    void sourceThreadBody(double chainRateHz, const std::atomic<bool>& stopToken,
+                          cascade::core::beats::Registration& beat);
     void dspThreadBody();
     // Mints a fresh per-generation stop token and exit latch (srcStopToken_ /
     // srcExitFuture_ below) and spawns srcThread_ against them, capturing the

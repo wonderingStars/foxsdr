@@ -9,6 +9,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/plugin_api.hpp"
+#include "core/thread_beats.hpp"
 #include "dsp/spectrum.hpp"
 
 namespace cascade::core::patch {
@@ -204,7 +205,12 @@ void readerBody(const std::shared_ptr<PatchRadio::Shared>& shp) {
     const auto t0 = clock::now();
     std::uint64_t produced = 0;
 
+    // THE HEARTBEAT (core/thread_beats.hpp, 6.27), retired the moment stop() clears `run` - a reader the radio abandons to a
+    // driver that never lets go is a leaked thread already counted (Recovered::SrcThread's sibling), not a live wedge.
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadPatchSource,
+                                            std::shared_ptr<const std::atomic<bool>>(shp, &shp->run));
     while (sh.run.load(std::memory_order_acquire)) {
+        beat.beat("read");
         if (!paced) {
             // The generator has no clock of its own: hold it to real time.
             const auto due =
@@ -230,6 +236,7 @@ void readerBody(const std::shared_ptr<PatchRadio::Shared>& shp) {
         produced += got;
         sh.blocks.fetch_add(1, std::memory_order_relaxed);
 
+        beat.beat("decode");
         sh.runner.process(buf.data(), got);
 
         // The spectrum: the newest kFftSize samples, about twenty times a second.

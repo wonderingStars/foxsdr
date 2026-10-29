@@ -180,6 +180,16 @@
 //      lost by that: a shutdown that really wedges never reaches stop() at
 //      all, and is reported against the budget while it is still stuck.
 //
+// AND THE WORKERS (6.27). The same poll that watches the frame loop reads core/thread_beats.hpp's registry - a heartbeat for
+// every long-lived worker thread - and a worker that misses its kind's budget gets a report of its own: the same file family
+// (`hang-<pid>-w<N>.txt`, the `w` keeping it out of the sentinel's "a freeze report covers this ending" match, which is about
+// the frame loop), the same every-thread capture with the WEDGED thread first, a header that names it (`thread:`,
+// `thread-phase:`, `thread-wait:`, and `transmitting:` so a DSP wedge in the middle of a transmission says so), and a count in
+// the health ledger (Recovered::ThreadWedge). Nothing is killed, nothing is restarted, nothing is paused: the debugger rule
+// and the machine-asleep rule apply to the workers as they do to the frame loop; the pauses and the window's modal loops do
+// not, because they are about the GUI thread. Several watchdogs in one process (the window's, the engine's control thread's,
+// the headless stop's) all poll the registry and the registry's latch makes each wedge reported by exactly one of them.
+//
 // RECOVERY. A hang is reported once, and the watchdog then stays quiet until
 // the heartbeat resumes. If the application comes back - and the 120 s CAT
 // freeze did come back - the recovery is logged with the stall duration and
@@ -198,6 +208,8 @@
 #include <string>
 #include <thread>
 
+#include "core/thread_beats.hpp"
+
 namespace cascade::core {
 
 class HangWatchdog {
@@ -210,6 +222,15 @@ public:
     // INTERRUPTIBLE (see threadMain), so this is a polling interval and not a
     // floor on how long stop() takes.
     static constexpr unsigned kPollMs = 500;
+
+    // The workers' monitor (thread_beats.hpp): if a poll arrives later than the poll interval by more than this, the process
+    // lost time (a machine asleep, a paused VM) and every registration is re-armed instead of read. Smaller than the
+    // smallest budget by a wide margin (10 s), larger than any scheduling hiccup a loaded machine produces.
+    static constexpr unsigned kBeatsOvershootMs = 2000;
+
+    // At most this many worker-wedge FILES are written per process, however many threads wedge (a stuck machine can wedge
+    // all of them at once). Every wedge past it is still logged and still counted in the ledger.
+    static constexpr unsigned kMaxWedgeReports = 8;
 
     // THE SHUTDOWN BUDGET. See the header comment for the field report that
     // forced it; the three numbers are the arithmetic that report exposed.
@@ -624,13 +645,24 @@ public:
     static int captureThreadStackForTest(unsigned long tid, std::uintptr_t* out, int max);
     // The calling thread's kernel id, as captureThreadStackForTest takes it.
     static unsigned long currentThreadIdForTest();
+    // TESTS ONLY: how late a poll may be before it counts as lost time (kBeatsOvershootMs). With 0 every poll is late, so the
+    // registry is re-armed on every wake and no worker can be found - which is how a test shows that the rule is wired.
+    void setBeatsOvershootMsForTest(unsigned ms);
+    // TESTS ONLY: the process-wide count of worker-wedge files (capped at kMaxWedgeReports) back to zero, so one test
+    // process can run more cases than the cap allows. Nothing under src/ calls it (tests/test_thread_beats.cpp scans).
+    static void resetWedgeFileCountForTest();
     // The signal a Linux capture is asked with (0 elsewhere), so a test can
     // block it on a thread and make that thread answer late.
     static int captureSignalForTest();
 
 private:
     void threadMain();
-    void captureAllThreads(const std::string& path, double stalledMs);
+    // `wedge` null: the GUI thread stalled (the frame loop's report). Non-null: the worker it names did, and the report puts
+    // that thread first, labels it, and names it in the header.
+    void captureAllThreads(const std::string& path, double stalledMs, const beats::Finding* wedge = nullptr);
+    // One look at the worker registry (called from threadMain on every wake), and the report/ledger/log for what it finds.
+    void pollThreadBeats(double pollIntervalMs);
+    void reportThreadWedge(const beats::Finding& f);
 
     // The three false-positive rules of the header comment, in one place, so
     // the wiring a test CAN reach is the same wiring the debugger and modal
@@ -679,6 +711,7 @@ private:
     std::function<void()> displayStallSink_;
     std::atomic<int> suppression_{0};   // SuppressionForTest, as an int
     std::atomic<int> captureAbort_{0};  // CaptureAbortForTest, as an int
+    std::atomic<unsigned> beatsOvershootMs_{kBeatsOvershootMs};  // setBeatsOvershootMsForTest
     // NOT reset by start(), unlike everything above it: see pausesTaken().
     std::atomic<unsigned> pauses_{0};
 

@@ -18,6 +18,7 @@
 #include "core/diag_log.hpp"
 #include "core/mp3_writer.hpp"
 #include "core/record_finish.hpp"
+#include "core/thread_beats.hpp"
 #include "core/recorder.hpp"
 #include "core/unique_file.hpp"
 #include "dsp/spsc_ring.hpp"
@@ -96,6 +97,9 @@ public:
         shared_->started = std::chrono::steady_clock::now();
         Recorder::Opener open = opener ? opener : rec_.opener();
         std::thread([sh = shared_, req = std::move(req), open = std::move(open)]() {
+            // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the patch recording's file open is the thread's life.
+            cascade::core::beats::Registration beat(cascade::core::beats::kThreadDiskJob);
+            beat.beat("open");
             Recorder::OpenedFile file;
             std::string err;
             bool ok = false;

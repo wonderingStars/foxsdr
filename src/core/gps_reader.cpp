@@ -21,6 +21,7 @@
 #include "core/diag_log.hpp"
 // The one acceptance rule, exactly as config.cpp reaches it. Not copied.
 #include "core/receiver_position.hpp"
+#include "core/thread_beats.hpp"
 
 namespace cascade::core {
 
@@ -194,6 +195,10 @@ void GpsReader::run(std::shared_ptr<Shared> sh, std::unique_ptr<ByteSource> sour
     }
     diagLogf("gps: listening on %s at %d", portForLog.c_str(), opts.baud);
 
+    // THE HEARTBEAT (core/thread_beats.hpp, 6.27), from here: the reads below are each bounded by the port layer's own event
+    // wait, so a loop that stops coming round is a wedge. The OPEN above is not registered - it is the call a wedged USB
+    // driver can sit in for seconds, and stop() has its own answer to it (kOpenAbandonWait, then the worker is abandoned).
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadGps);
     NmeaLineAssembler assembler;
     assembler.reset();
     std::vector<std::string> lines;
@@ -212,6 +217,7 @@ void GpsReader::run(std::shared_ptr<Shared> sh, std::unique_ptr<ByteSource> sour
         // and is closed below without a single read.
         if (sh->stopping.load()) { terminal = State::Idle; break; }
 
+        beat.beat("read");
         const int n = source->read(buf, sizeof buf);
         if (n < 0) {
             // Terminal by contract: the device is unplugged, the pipe's server

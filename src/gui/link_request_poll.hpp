@@ -67,6 +67,7 @@
 #include <utility>
 
 #include "core/tester_link.hpp"
+#include "core/thread_beats.hpp"
 
 namespace cascade::gui {
 
@@ -132,6 +133,9 @@ public:
         stuckReported_ = false;
         future_ = std::async(std::launch::async,
                              [claim = std::move(claim), dir = configDir]() -> std::string {
+                                 // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the settings-folder probe is the thread's life.
+                                 cascade::core::beats::Registration beat(cascade::core::beats::kThreadLinkPoll);
+                                 beat.beat("probe");
                                  // A throw out of a worker would be rethrown from
                                  // future::get() on the GUI thread, which is the
                                  // one place this file exists to keep clear.

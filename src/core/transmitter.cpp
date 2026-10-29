@@ -7,6 +7,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"  // FOX_TR_NOOP: the input names are drawn through trId()
+#include "core/thread_beats.hpp"
 #include "core/utf8_text.hpp"  // formatUtf8: lastErrorInto cuts on a character
 
 #include <algorithm>
@@ -800,6 +801,10 @@ void Transmitter::stop() {
 }
 
 void Transmitter::threadBody() {
+    // THE HEARTBEAT (core/thread_beats.hpp, 6.27). This thread exists for one transmission, so the registration is its life.
+    // The monitor reports a TX thread that stops beating - a sink write that never returns, a lock never given back - by
+    // name; it touches nothing else. The dead-man's handles below stay this thread's own and are not read by the monitor.
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadTransmit);
     constexpr double kAudioRate = 48000.0;
     std::vector<float> audio(kAudioBlock);
     std::vector<std::complex<float>> base(kAudioBlock);
@@ -813,6 +818,7 @@ void Transmitter::threadBody() {
     bool rampedDown = false;
 
     while (run_.load(std::memory_order_relaxed)) {
+        beat.beat("block");
         next += blockPeriod;
 
         // --- THE DEAD-MAN'S HANDLES -----------------------------------------
@@ -944,6 +950,7 @@ void Transmitter::threadBody() {
             rf.resize(interp_.maxOut(kAudioBlock));
             made = interp_.process(base.data(), kAudioBlock, rf.data(), rf.size());
             if (made > 0) {
+                beat.beat("sink-write");
                 const std::size_t took = sink_->write(rf.data(), made);
                 blocks_.fetch_add(1, std::memory_order_relaxed);
                 if (took < made) { shortBlocks_.fetch_add(1, std::memory_order_relaxed); }
@@ -980,6 +987,7 @@ void Transmitter::threadBody() {
     // finish() lets the queue play out first. Every other exit (a fault, the
     // dead-man's handle, run_ dropped by the bounded wait) has no ramp at the
     // end of the queue, only carrier nobody is keying, and is stopped at once.
+    beat.beat("silence");
     {
         std::lock_guard<std::mutex> lk(stateMutex_);
         if (sink_ != nullptr) {

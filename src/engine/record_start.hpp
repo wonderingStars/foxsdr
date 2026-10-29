@@ -77,6 +77,7 @@
 
 #include "core/health_events.hpp"
 #include "core/recorder.hpp"
+#include "core/thread_beats.hpp"
 
 namespace cascade::gui {
 
@@ -136,6 +137,9 @@ public:
         future_ = std::async(
             std::launch::async,
             [opener = std::move(opener), req = std::move(req)]() -> Result {
+                // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the file open is the thread's life.
+                cascade::core::beats::Registration beat(cascade::core::beats::kThreadRecordOpen);
+                beat.beat("open");
                 Result r;
                 // A throw out of a worker would be rethrown from future::get()
                 // on the GUI thread, which is the one place this file exists to

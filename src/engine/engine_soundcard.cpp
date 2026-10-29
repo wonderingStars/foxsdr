@@ -14,6 +14,7 @@
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/i18n.hpp"
+#include "core/thread_beats.hpp"
 #include "core/utf8_text.hpp"
 #include "core/audio_open.hpp"
 #include "core/soundcard_panel.hpp"
@@ -51,6 +52,9 @@ void Engine::scanSoundCards() {
     // ON A WORKER: every rate of every input is asked of the host API, and a
     // WASAPI device answers each one by activating an audio client.
     soundCardScanFuture_ = std::async(std::launch::async, [factory = soundCardBackendFactory()] {
+        // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the scan is the thread's life (WASAPI activates an audio client per rate).
+        cascade::core::beats::Registration beat(cascade::core::beats::kThreadSoundCardScan);
+        beat.beat("scan");
         return (factory ? factory() : cascade::source::makePortAudioSoundCardBackend())->listDevices();
     });
     soundCardScanPending_ = true;
@@ -129,6 +133,9 @@ void Engine::launchSoundCardOpen(bool restore, const SoundCardSettings& settings
     soundCardOpenFuture_ =
         std::async(std::launch::async, [settings, list, listed, gen, restore, release, same, previous,
                                         factory = soundCardBackendFactory()] {
+            // THE HEARTBEAT (6.27): the open is the thread's life.
+            cascade::core::beats::Registration beat(cascade::core::beats::kThreadSoundCardOpen);
+            beat.beat("open");
             SoundCardOpenResult r;
             r.gen = gen;
             r.restore = restore;

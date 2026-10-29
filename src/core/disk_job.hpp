@@ -65,6 +65,7 @@
 #include <utility>
 
 #include "core/diag_log.hpp"
+#include "core/thread_beats.hpp"
 
 namespace cascade::core {
 
@@ -110,6 +111,12 @@ public:
         threw_ = std::make_shared<std::atomic<bool>>(false);
         future_ = std::async(std::launch::async,
                              [work = std::move(work), threw = threw_]() -> Result {
+                                 // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the job is the thread's life. A disk that
+                                 // never answers is reported by the watchdog's poll after the Disk kind's budget (60 s: a
+                                 // network share that is offline waits out Windows' 21 s timeout, B19), by the name of the
+                                 // thread - the caller's `label` is in the log line poll() writes at 5 s.
+                                 cascade::core::beats::Registration beat(cascade::core::beats::kThreadDiskJob);
+                                 beat.beat("disk");
                                  try {
                                      return work();
                                  } catch (...) {

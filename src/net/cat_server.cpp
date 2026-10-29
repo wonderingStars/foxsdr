@@ -30,6 +30,7 @@
 #include <unistd.h>
 #endif
 
+#include "core/thread_beats.hpp"
 #include "net/control_ops.hpp"
 
 namespace cascade::net {
@@ -317,9 +318,13 @@ void CatServer::stop() {
 }
 
 void CatServer::acceptLoop() {
+    // THE HEARTBEAT (core/thread_beats.hpp, 6.27). accept() is a declared wait: a CAT server nobody has connected to is idle,
+    // and stop() ends the wait by closing the listener.
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadCatAccept);
     while (!stopping_.load(std::memory_order_relaxed)) {
         sockaddr_in peer{};
         SockLen len = sizeof(peer);
+        beat.wait(cascade::core::beats::kWaitAccept);
         const std::intptr_t c = static_cast<std::intptr_t>(::accept(
 #if defined(_WIN32)
             static_cast<SOCKET>(listener_),
@@ -327,6 +332,7 @@ void CatServer::acceptLoop() {
             static_cast<int>(listener_),
 #endif
             reinterpret_cast<sockaddr*>(&peer), &len));
+        beat.beat("accepted");
         if (c == kInvalidSock) {
             if (stopping_.load(std::memory_order_relaxed)) break;
             continue;
@@ -444,10 +450,14 @@ void CatServer::serveClient(std::intptr_t sock, CatSession& session, int& outsta
     // stand in, as the old lock-free read fell back to the installed block rather than answer nothing.
     CatRadio lastRadio;
 
+    // THE HEARTBEAT of this connection's thread (6.27): a beat every receive-poll interval; a session call that never returns
+    // (the 120 s freeze that started this feature was a CAT client being shut down) is named by the phase it was in.
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadCatClient);
     std::string pending;
     char buf[512];
     for (;;) {
         if (stopping_.load(std::memory_order_relaxed)) break;
+        beat.beat("poll");
         const int n =
 #if defined(_WIN32)
             ::recv(static_cast<SOCKET>(sock), buf, static_cast<int>(sizeof(buf)), 0);
@@ -481,6 +491,7 @@ void CatServer::serveClient(std::intptr_t sock, CatSession& session, int& outsta
 
             // The figures come from the session's own read_state, asked afresh for every line (as they always were). BUSY is the engine
             // saying the read overlapped a publish: ask once more, then keep the last good ones.
+            beat.beat("read-state");
             CatRadio radio = lastRadio;
             if (session.readState(radio) || session.readState(radio)) lastRadio = radio;
             const CatResult result = executeCatLine(line, lastRadio);
@@ -496,8 +507,10 @@ void CatServer::serveClient(std::intptr_t sock, CatSession& session, int& outsta
                 }
                 // A command the session answers BUSY (256 outstanding: the engine is not applying) is not taken, and the client is told
                 // what it was always told: the set was accepted. The old queue dropped its OLDEST past 64; the session refuses the NEWEST.
+                beat.beat("submit");
                 if (!batch.empty()) outstanding += session.submit(batch);
             }
+            beat.beat("collect");
             collect();
             // Returning is enough: the caller deregisters the socket and then
             // closes it, which is the only ordering under which stop() can

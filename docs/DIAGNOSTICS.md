@@ -850,6 +850,7 @@ The sites that are counted:
 | `sdrenum` | `AppWindow::pollSdrPlayService`, the SDRplay scan worker let go | the window's thread |
 | `sdrlost` | `AppWindow::pollSdrPlayService`, the SDRplay API session lost | the window's thread |
 | `audiolead` | `AppWindow::closeAudioMinute`, the once-a-minute close that deepened the audio buffer (0.99.73; see *The DSP thread asks for priority, and the audio buffer deepens itself*) | the window's thread |
+| `threadwedge` | `HangWatchdog`'s poll found a registered worker thread past its budget and wrote a freeze report naming it (see *A worker that stops answering is reported by name*) | the engine's pass, from `beats::Registry::wedgesFound()` (a counter, like the four above) |
 
 **Surveyed and deliberately not counted**, so the next reader does not re-do the
 survey: the person's own actions that look like recoveries (re-picking a stopped
@@ -3364,6 +3365,46 @@ the STATUS column on the right (0.99.74). The state the keys leave is also in
 the configuration file (`railCollapsed`, `statusCollapsed`), and a launch that
 starts with a panel folded writes no line, because nothing was pressed: read the
 file for that. Nothing else is logged and no figure is attached.
+
+## A worker that stops answers for itself: the per-thread watchdog
+
+The hang watchdog watched one thread, the window's frame loop. Every other thread this product runs - the DSP thread, the source
+thread, the transmitter's, the settings keeper, the servers', the image feed's, the disk workers - could wedge for the rest of a
+session and nothing said so: the window went on drawing, the pass went on ticking, and what a person saw was a spectrum that
+stopped or a settings file that was never written. The registry that closes that gap is `core/thread_beats.hpp`; the record of
+what was built, with the inventory table (every registered thread, its budget, its declared waits), is docs/engine-stage4.md 6.27.
+
+**What a worker does.** It constructs a `beats::Registration` on its own thread when it starts and calls `beat("phase")` at its
+natural cadence - a string literal, so the report can say not only "dsp stopped" but "dsp stopped in plugin-iq". A thread that is
+parked on purpose (a server in accept(), a worker with no job) declares it with `wait(kWaitAccept)` and leaves with `beat()`.
+
+**Who watches.** Nobody new: `HangWatchdog::threadMain` calls `pollThreadBeats` on every wake (twice a second), in every process
+that has a watchdog - the window's, the engine's control thread's, the headless stop's. They share one registry, and a latch per
+registration makes a given wedge reported by exactly one of them.
+
+**What a miss does.** The budget is per kind (`kKinds` in the header, each with the argument for its size and the longest
+legitimate block it must clear by a margin of two). A worker that goes a budget without a beat, outside a declared wait, gets a
+report `hang-<pid>-w<N>.txt` in the freeze-report family: the same every-thread capture with the WEDGED thread first and labelled
+with its name, the header lines `thread:`, `thread-phase:`, `thread-wait:` and `transmitting:` (and `threshold-ms` is that kind's
+budget), and a `--- beats ---` section with one line per registered worker. The signature mixes the thread's name into the tag, so
+two workers that stop in the same kernel stub do not group. The `w` keeps it out of the sentinel's "the frame loop's watchdog
+filed a report after the last heartbeat" match (`hangNamePid`), which is about the window and must stay about the window. At most
+eight such files are written per process; every wedge past them is still logged and counted. Nothing is killed, restarted or
+paused: when the thread beats again the recovery is logged and the registration re-armed, and a second wedge is a second report.
+
+**What it is careful not to say.** The debugger rule and the machine-asleep rule (a poll that arrives late re-arms every
+registration instead of reading it) apply; the window's pauses and modal loops do not, because they are about the GUI thread. A
+source thread the pipeline has abandoned (and counted, `srcthread`) is retired from the table by its own stop token, and so is a
+patch radio's reader. A native driver's own producer thread is not registered: the pipeline's source thread reads from it with a
+timeout and keeps beating, so a radio that goes silent is the "no data" lamp's finding, not this one's.
+
+**The TX dead-man.** Untouched. The monitor reads one probe (the engine installs `[this] { return transmitter_.transmitting(); }`,
+an atomic read) so a report taken in the middle of a transmission says `transmitting: yes`; it never keys or un-keys anything, and
+`tests/test_thread_beats.cpp` holds that with a wedged DSP thread, a keyed radio and a control side that then stops ticking: the
+key opens at `kKeyAliveWait` exactly as before.
+
+**The health word.** `recovered.threadwedge`, one count per wedge, taken from `Registry::wedgesFound()` by the engine's pass with the
+other recovery counters (never by the watchdog's thread, which takes no ledger lock).
 
 ## The 5-second threshold, and why it is not a guess
 

@@ -539,6 +539,7 @@ by itself, so a count of 1 means "this session had it".
 | `sdrenum` | the SDRplay service did not answer a scan, and the scan was let go. Once a session. |
 | `sdrlost` | the SDRplay API session was lost and SDRplay is shut for the rest of the session. Once a session. |
 | `audiolead` | the audio buffer was made deeper, by itself, because this computer fell behind: a minute in which the sound card ran out of audio three times or more. Once a session. |
+| `threadwedge` | one of FoxSDR's own worker threads (the signal processing, the radio's reader, the settings keeper, a server, a disk job) stopped answering for longer than its allowance, and the watchdog wrote a freeze report naming it. Once for each time a thread stops; it is counted again only after the thread has answered again. |
 
 ### The "still running" beat
 
@@ -773,7 +774,13 @@ none of them adds a field, and all are governed by the same switch in
 | `signature` | `7C04…` | As above. |
 | `threads` | `9` | How many stacks follow. |
 | `frame-scope` | `rail` | Since 0.99.64. Which part of drawing the window was under way when it stopped, as one word from a fixed list of nineteen: `events`, `frame-start`, `pre-draw`, `plugin-panels`, `toolbar`, `rail`, `spectrum`, `patch`, `status`, `dialogs`, `polls`, `saves`, `render`, `present`, `recorder`, `plugins-reload`, `startup`, `user-wait`, `other`. It names a part of the program, never a plugin, a file, a radio or a frequency. |
+| `thread` | `gui` or `dsp` | Since the per-thread watchdog. Which thread stopped: `gui` for the window's own, or one word from a fixed list of FoxSDR's worker threads (`dsp`, `source`, `patch-source`, `transmit`, `keeper`, `web-listen`, `web-idle`, `cat-accept`, `cat-client`, `image-feed`, `server-host`, `password-hash`, `disk-job`, `config-write`, `record-open`, `link-poll`, `driver-install`, `gps`, `device-scan`, `device-open`, `patch-open`, `soundcard-scan`, `soundcard-open`). It names a thread of the program, never a plugin, a file, a radio or a frequency. A report about a worker is the same kind of file as a freeze report and is written under the same switch, with the name `hang-<number>-w<number>.txt`. |
+| `thread-phase` | `plugin-process` | Since the per-thread watchdog. The last step that thread said it had reached, one lower-case word written in the program (`read`, `spectrum`, `plugin-iq`, `audio-lock`, `sink-write`...), or `none`. A step of the program, never data. |
+| `thread-wait` | `none` | Since the per-thread watchdog. When the thread was waiting on purpose past its allowance (today only the driver installer's window), one word naming the wait; otherwise `none`. |
+| `transmitting` | `no` | Since the per-thread watchdog. Whether the radio was keyed when the report was taken: `yes`, `no`, or `unknown` where no radio engine is running. One fact about the transmitter, never a frequency, a callsign or a modulation. |
 | `reload-phase` | `unload` | Since 0.99.84. When `frame-scope` says `plugins-reload`: which step of reloading the plugins was under way, as one of a fixed list of eight step names - `check`, `decoders`, `patch`, `panels and map`, `unload`, `inventory`, `load`, `restart` - and `none` for every freeze outside a reload. It names a step of the program, never a plugin, a file, a radio or a frequency. |
+
+A freeze report - the window's or a worker's - also has a short `--- beats ---` section after the process block: one line for every registered worker with how long ago it last answered (`dsp age-ms=12 phase=sink wait=none`) - names, whole milliseconds and the same fixed words as above, nothing else. It is not part of what a report sends: the upload reads only the fields listed under it.
 
 Both kinds of report also end their application-context lines with two more, after
 the plugin list, so a stall in drawing the window can be told from one in the window

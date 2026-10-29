@@ -24,6 +24,7 @@
 #include "core/diag_log.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "core/plugin_runner.hpp"
+#include "core/thread_beats.hpp"
 #include "core/thread_priority.hpp"
 #include "dsp/limiter.hpp"
 
@@ -38,6 +39,16 @@ namespace cascade::core {
 namespace {
 
 constexpr double kTwoPi = 6.283185307179586476925286766559;
+
+// THE DSP THREAD'S HEARTBEAT (core/thread_beats.hpp, docs/engine-stage4.md 6.27). dspThreadMain registers the thread and points
+// this at its registration for as long as the loop runs; processAudioBlock - which only ever runs on that thread - says where in
+// the block it is, so a report names the step ("plugin-iq", "audio-lock", "plugin-audio") and not just "the DSP thread". A
+// thread_local rather than a member: no other thread reads it, and a Pipeline that is torn down and rebuilt starts clean.
+// Two relaxed stores and a clock read per call; six calls a block, a block every 10-20 ms.
+thread_local cascade::core::beats::Registration* t_dspBeat = nullptr;
+inline void dspBeat(const char* phase) {
+    if (t_dspBeat != nullptr) { t_dspBeat->beat(phase); }
+}
 
 // Ring sized for at least 4 source chunks (~40 ms) of headroom so a scheduler
 // hiccup on the DSP side does not force sample drops, and at least 8 FFT
@@ -1548,8 +1559,11 @@ void Pipeline::sourceThreadMain(double chainRateHz,
     const cascade::core::ThreadPriorityScope raised;
     priority->set(raised.outcome());
     cascade::core::diagLogf("dsp: source thread priority %s", raised.outcome().c_str());
+    // THE HEARTBEAT, tied to THIS generation's stop token: a thread stop() gives up on and abandons (and counts,
+    // Recovered::SrcThread) reads as retired, and the monitor says nothing more about it.
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadSource, stopToken);
     try {
-        sourceThreadBody(chainRateHz, *stopToken);
+        sourceThreadBody(chainRateHz, *stopToken, beat);
     } catch (const std::exception& e) {
         noteThreadFault("source thread", e.what());
     } catch (...) {
@@ -1574,6 +1588,12 @@ void Pipeline::dspThreadMain() {
     const cascade::core::ThreadPriorityScope raised;
     dspPriority_->set(raised.outcome());
     cascade::core::diagLogf("dsp: thread priority %s", raised.outcome().c_str());
+    // THE HEARTBEAT (6.27): registered for the life of this function, and visible to processAudioBlock through t_dspBeat.
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadDsp);
+    t_dspBeat = &beat;
+    struct ClearBeat {
+        ~ClearBeat() { t_dspBeat = nullptr; }
+    } clearBeat;
     try {
         dspThreadBody();
     } catch (const std::exception& e) {
@@ -1586,7 +1606,8 @@ void Pipeline::dspThreadMain() {
 }
 
 void Pipeline::sourceThreadBody(double chainRateHz,
-                                const std::atomic<bool>& stopToken) {
+                                const std::atomic<bool>& stopToken,
+                                cascade::core::beats::Registration& beat) {
     using clock = std::chrono::steady_clock;
 
     // Stable for this thread's entire lifetime: setSource only changes
@@ -1650,6 +1671,7 @@ void Pipeline::sourceThreadBody(double chainRateHz,
             // `chunk` samples it wrote; a driver that returns more is wrong, and
             // believing it would copy past the end of `buf` (tests/
             // test_source_overreport.cpp).
+            beat.beat("read");
             const std::size_t got = std::min(src.read(buf.data(), chunk), chunk);
             if (!stopToken.load(std::memory_order_relaxed)) { return; }
             // AN INVERTING CONVERTER MIRRORS THE BAND, and this is where it is
@@ -1717,6 +1739,7 @@ void Pipeline::sourceThreadBody(double chainRateHz,
            run_.load(std::memory_order_relaxed) &&
            srcRun_.load(std::memory_order_relaxed)) {
         // Clamped to what was asked for, as in the self-paced loop above.
+        beat.beat("read");
         const std::size_t got = std::min(src.read(buf.data(), chunk), chunk);
         // Same post-read token test as the self-paced loop, same reasons.
         if (!stopToken.load(std::memory_order_relaxed)) { return; }
@@ -1741,6 +1764,7 @@ void Pipeline::sourceThreadBody(double chainRateHz,
             return;
         }
 
+        beat.beat("pace");
         std::this_thread::sleep_until(next);
         next += period;
         const auto now = clock::now();
@@ -1761,6 +1785,9 @@ void Pipeline::dspThreadBody() {
     // srcRun_ lets setSource quiesce the source thread alone.
     while (run_.load(std::memory_order_relaxed) &&
            dspRun_.load(std::memory_order_relaxed)) {
+        // ALIVE AND POLLING: an empty ring is a source with nothing to say, not a wedged DSP thread - the 1 ms sleep below
+        // is this loop's idle, and it beats through it.
+        dspBeat("ring");
         filled += ring_->read(acc.data() + filled, n - filled);
         if (filled < n) {
             // Ring drained mid-block: yield instead of spinning. 1 ms is far
@@ -1770,6 +1797,7 @@ void Pipeline::dspThreadBody() {
             continue;
         }
         filled = 0;
+        dspBeat("spectrum");
         estimator_.process(acc.data(), db.data());
 
         {
@@ -1785,7 +1813,9 @@ void Pipeline::dspThreadBody() {
 }
 
 void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
+    dspBeat("audio-lock");
     std::lock_guard<std::mutex> lk(audioMutex_);
+    dspBeat("taps");
 
     // THE SETTERS' QUEUE, between two blocks and nowhere else: a parameter set
     // never lands halfway through one. One atomic load when nothing was posted.
@@ -1810,6 +1840,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // the standard), and the ABI's interleaved I,Q,I,Q rule is that same
     // layout, so this is a reinterpretation and not a copy.
     if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
+        dspBeat("plugin-iq");
         runner->processIq(reinterpret_cast<const float*>(in), n);
         // A PLUGIN'S TRANSMIT AUDIO (CASCADE_CAP_TX_AUDIO), once per block and BEFORE any
         // of the early returns below: whether the plugin wants the transmitter, and - only
@@ -1826,9 +1857,11 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // handing it the user's tuning instead of its own. This also adopts any
     // set the GUI thread has published, so a rewire takes effect on a block
     // boundary and never halfway through one.
+    dspBeat("patch");
     patch_.process(in, n);
 
     // VFO: mix the tuned offset to DC, band-limit, decimate to channel rate.
+    dspBeat("demod");
     chanBuf_.resize(n / vfoDecim_ + 1);
     const std::size_t m = vfo_.process(in, n, chanBuf_.data(), chanBuf_.size());
     if (m == 0) { return; }
@@ -1961,6 +1994,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         decoderFeed_.resize(dcap);
         const std::size_t dk =
             resamplerD_.process(preAgcBuf_.data(), m, decoderFeed_.data(), dcap);
+        dspBeat("plugin-audio");
         if (dk > 0) { runner->processAudio(decoderFeed_.data(), dk); }
     }
 
@@ -2034,6 +2068,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // processed audio and never disagree about what is playing. A no-op with
     // no processor loaded; stereo at 48 kHz, in place.
     if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
+        dspBeat("plugin-chain");
         runner->processAudioChain(outL_.data(), outR_.data(), k);
     }
 
@@ -2246,6 +2281,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // Audio recorder tap (P6): the same post-chain 48 kHz samples the test
     // tap above just captured — post-squelch, pre-AudioOut, so the recording
     // is independent of the output device and its volume.
+    dspBeat("sink");
     if (audioRecorder_ != nullptr) { audioRecorder_->writeAudio(monoOut_.data(), k); }
     // THE SOUND CARD RUNS ON ITS OWN CLOCK. Everything above is in the
     // radio's time; the sink's ring is drained in the sound card's. The

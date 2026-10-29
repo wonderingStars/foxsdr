@@ -65,6 +65,8 @@ set(CASCADE_TSAN_TESTS
     # the health ledger's writer, the frame timer's cross-thread reads, the watchdog
     test_health_events test_health_paths test_frame_timing test_hang_signature
     test_excuse_cap test_watchdog_startup test_telemetry
+    # the per-thread watchdog (6.27): the worker registry beaten, parked, registered and ended while the watchdog polls it
+    test_thread_beats test_thread_beats_pipeline test_thread_beats_engine
     # servers and senders
     test_web_server test_cat_server test_httplib_vendor test_updater test_feature_request
     test_gps_reader test_serial_port test_transmitter

@@ -18,6 +18,7 @@
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/i18n.hpp"
+#include "core/thread_beats.hpp"
 #include "core/utf8_text.hpp"
 #include "core/mp3_writer.hpp"
 #include "core/patch_audio.hpp"
@@ -467,6 +468,9 @@ void Engine::patchReconcile() {
             patchRadioError_.erase(id);
             const auto hook = diskHook();
             patchRadioPending_[id] = std::async(std::launch::async, [device = n->device, radioHz, hook]() {
+                // THE HEARTBEAT (core/thread_beats.hpp, 6.27): a patch radio's open is the thread's life.
+                cascade::core::beats::Registration beat(cascade::core::beats::kThreadPatchOpen);
+                beat.beat("open");
                 PatchRadioOpen r;
                 r.label = "I/Q recording";
                 if (hook) { hook(); }
@@ -535,6 +539,8 @@ void Engine::patchReconcile() {
         const double ppm = ppmForPatchDevice(n->device);
         patchRadioPending_[id] = std::async(std::launch::async, [driver, args, label, rate,
                                                                  centre = radioCentre, ppm]() {
+            cascade::core::beats::Registration beat(cascade::core::beats::kThreadPatchOpen);
+            beat.beat("open");
             PatchRadioOpen r;
             r.label = label;
             // SoapySDR's modules are loaded by its enumeration, and the

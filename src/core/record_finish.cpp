@@ -8,6 +8,8 @@
 #include <thread>
 #include <utility>
 
+#include "core/thread_beats.hpp"
+
 namespace cascade::core {
 
 namespace {
@@ -40,6 +42,9 @@ std::shared_ptr<RecordFinisher::Ticket> RecordFinisher::submit(Recorder::FinishR
     // A thread of its own per finish, detached: the request is moved into it, so
     // nothing it touches outlives it, and a quit that cannot wait just leaves it.
     std::thread([req = std::move(req), ticket]() mutable {
+        // THE HEARTBEAT (core/thread_beats.hpp, 6.27): closing a take is file-system work, possibly on a share that has gone away.
+        cascade::core::beats::Registration beat(cascade::core::beats::kThreadDiskJob);
+        beat.beat("finish");
         bool ok = false;
         try {
             ok = Recorder::finishFile(std::move(req));

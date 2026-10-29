@@ -1069,9 +1069,14 @@ const std::vector<std::string>& hangReportFieldNames() {
     // one word from core/plugin_reload_phases.hpp's closed list - the evidence
     // report 7591C65EFB69DD94 lacked - and `none` outside a reload: always
     // written, for the same reason again.
+    // `thread`, `thread-phase`, `thread-wait` and `transmitting` (6.27, the per-thread watchdog) say WHICH thread stopped -
+    // `gui` for the frame loop's report, a name from core/thread_beats.hpp's closed inventory for a worker's - the last phase
+    // that thread beat in and the declared wait it was parked in (`none` for either), and whether the radio was keyed
+    // (`yes`, `no`, or `unknown` where no engine has installed the probe). Always written, for the reason `note` is.
     static const std::vector<std::string> names = {"kind",         "note",      "stalled-ms",
                                                    "threshold-ms", "signature", "threads",
-                                                   "frame-scope",  "reload-phase"};
+                                                   "frame-scope",  "reload-phase", "thread",
+                                                   "thread-phase", "thread-wait",  "transmitting"};
     return names;
 }
 

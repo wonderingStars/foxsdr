@@ -36,6 +36,8 @@ asks for `-WorkerDeployed`), or the count that says whether the deeper buffer ev
 fires is dropped. The Worker as 0.99.67 shipped it, kept in
 `test-fixtures/worker-0.99.67.js`, is the one `worker.test.mjs` shows dropping it.
 
+The release that carries the per-thread watchdog (docs/engine-stage4.md 6.27) adds one more, `recovered.threadwedge` (a worker thread stopped answering and the watchdog reported it by name): the same rule - deploy this Worker before that release ships, or the count of how often a worker wedges in the field is dropped. (Nothing was deployed by the change that adds the word.)
+
 ## The columns of `foxsdr_usage`
 
 Written in `worker.js`; never renumbered, because a column that changes meaning

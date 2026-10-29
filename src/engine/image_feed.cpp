@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "core/image_write.hpp"
+#include "core/thread_beats.hpp"
 
 namespace cascade::engine {
 
@@ -88,20 +89,27 @@ bool ImageFeed::waitIdle(std::chrono::milliseconds timeout) {
 }
 
 void ImageFeed::workerLoop() {
+    // THE HEARTBEAT (core/thread_beats.hpp, 6.27). Not serving, the worker is parked on its condition variable until a kick -
+    // a declared wait ("job"), not a wedge; serving, it wakes every kPollPeriod and beats.
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadImageFeed);
     std::unique_lock<std::mutex> lk(wm_);
     for (;;) {
         // Listening: a cycle every kPollPeriod (the poll is the work; the encode follows a change). Not listening: asleep until woken - the
         // server's start wakes it, and so does a window's poll that finds a picture the served set does not have.
         if (serving()) {
+            beat.beat("poll");
             wcv_.wait_for(lk, kPollPeriod, [this] { return stop_ || kick_; });
         } else {
+            beat.wait(cascade::core::beats::kWaitJob);
             wcv_.wait(lk, [this] { return stop_ || kick_; });
         }
+        beat.beat("woke");
         if (stop_) { return; }
         kick_ = false;
         if (!serving()) { continue; }
         busy_ = true;
         lk.unlock();
+        beat.beat("cycle");
         cycle();
         lk.lock();
         busy_ = false;

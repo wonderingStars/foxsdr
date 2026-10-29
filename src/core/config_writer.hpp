@@ -63,6 +63,8 @@
 #include <thread>
 #include <utility>
 
+#include "core/thread_beats.hpp"
+
 namespace cascade::gui {
 
 class ConfigWriter {
@@ -216,6 +218,10 @@ private:
         Writer w = writer_;
         future_ = std::async(std::launch::async,
                               [w, path = std::move(path), text = std::move(text)]() mutable -> Outcome {
+                                  // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the settings write is the thread's life; a
+                                  // profile folder on a share that has gone away is named by the Disk kind's budget.
+                                  cascade::core::beats::Registration beat(cascade::core::beats::kThreadConfigWrite);
+                                  beat.beat("write");
                                   Outcome o;
                                   o.ok = w ? w(path, text, o.error) : false;
                                   return o;

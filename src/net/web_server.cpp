@@ -5,6 +5,7 @@
 #include "net/web_server.hpp"
 
 #include "core/health_events.hpp"
+#include "core/thread_beats.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -3318,11 +3319,15 @@ private:
 };
 
 void WebServer::Impl::idleLoop() {
+    // THE HEARTBEAT (core/thread_beats.hpp, 6.27): a tick every kSessionIdleTick; a pollResults() that never returns is named.
+    cascade::core::beats::Registration beat(cascade::core::beats::kThreadWebIdle);
     std::unique_lock<std::mutex> lk(idleMutex_);
     while (!idleStop_) {
+        beat.beat("idle");
         idleCv_.wait_for(lk, kSessionIdleTick, [this] { return idleStop_; });
         if (idleStop_) { break; }
         lk.unlock();
+        beat.beat("poll-results");
         session_->pollResults();  // (session_ is set before this thread exists and reset after it is joined)
         lk.lock();
     }
@@ -3887,7 +3892,14 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
         boundPort_ = port;
     }
     running_.store(true, std::memory_order_release);
-    thread_ = std::thread([this]() { svr_->listen_after_bind(); });
+    thread_ = std::thread([this]() {
+        // THE LISTENER: httplib's accept loop runs inside listen_after_bind() for the server's whole life - a declared wait
+        // ("accept"), registered so the inventory is complete and the report's `beats` section shows the server is up. The
+        // handlers run on httplib's own pool threads, which this product does not own and cannot beat for.
+        cascade::core::beats::Registration beat(cascade::core::beats::kThreadWebListen);
+        beat.wait(cascade::core::beats::kWaitAccept);
+        svr_->listen_after_bind();
+    });
     if (session_) {
         {
             std::lock_guard<std::mutex> lk(idleMutex_);

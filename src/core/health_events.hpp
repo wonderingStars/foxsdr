@@ -98,8 +98,9 @@ enum class Recovered : std::uint8_t {
     SdrEnum,     // the SDRplay service's enumeration was abandoned
     SdrLost,     // the SDRplay API session was lost and shut for the session
     AudioLead,   // the audio buffer was deepened because this computer fell behind (0.99.73)
+    ThreadWedge, // a worker thread missed its heartbeat budget and was reported by name (core/thread_beats.hpp)
 };
-inline constexpr std::size_t kRecoveredCount = 14;
+inline constexpr std::size_t kRecoveredCount = 15;
 
 // One event of the vocabulary, as documentation and the Worker see it: its
 // name, the word lists of its qualifiers in order (empty for a bare event), and
@@ -408,10 +409,10 @@ void noteRecovered(Recovered r);
 void raiseRecovered(Recovered r);
 void drainRecovered();
 
-// THE POLL FOR WHAT ONLY A COUNTER CAN SAY. Four recoveries happen inside a
+// THE POLL FOR WHAT ONLY A COUNTER CAN SAY. Five recoveries happen inside a
 // thread this code must not count from (the pipeline's source and DSP threads,
-// a vendor call's worker); each leaves a monotonic counter the control path can
-// read. A poll gives this the readings; the FIRST poll only takes the baseline
+// a vendor call's worker, the watchdog's own thread); each leaves a monotonic
+// counter the control path can read. A poll gives this the readings; the FIRST poll only takes the baseline
 // (a process that has already abandoned a call before the poll started is not
 // news), and every later poll counts what moved.
 struct RecoveryReadings {
@@ -419,6 +420,7 @@ struct RecoveryReadings {
     unsigned long long vendorCallsAbandoned = 0;    // SoapySource::driverCallsAbandoned()
     unsigned long long ringDroppedSamples = 0;      // Pipeline::ringDroppedSamples()
     unsigned long long dspThreadExceptions = 0;     // Pipeline::dspThreadExceptions()
+    unsigned long long threadWedges = 0;            // beats::Registry::wedgesFound(): workers the watchdog reported late (6.27)
 };
 class RecoveryWatch {
 public:
