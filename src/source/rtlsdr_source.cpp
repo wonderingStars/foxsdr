@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "core/ppm_correction.hpp"
 
@@ -777,6 +778,7 @@ void RtlSdrSource::stop() {
         // its own copy of the link's shared pointer, so everything it is
         // still reading stays alive, and the link is marked so teardown never
         // frees it. The radio is condemned for the life of the process.
+        core::health::raiseRecovered(core::health::Recovered::ReaderLeak);
         core::diagWarnf("source: the RTL-SDR reader thread did not exit within its bound; "
                         "it is abandoned and the radio is condemned");
         reader_.detach();

@@ -571,6 +571,30 @@ test('the plugin containment CLIENT (recovered.pluginfault, .pluginquarantine, .
   assert.equal(bad.usage[0].blobs[12], '');
 });
 
+test('the MERGED vocabulary (0.99.100 merge): master\'s thirty-three recovered words AND the branch\'s five are every one kept, each alone, and nothing else is', async () => {
+  // Master's 0.99.100 (viewport and the eighteen words of the 2026-10-28 survey) and this branch's plugin containment and per-thread watchdog words
+  // are ONE closed family in ONE list (worker.js HEALTH VOCABULARY, held to core/health_events.cpp and PRIVACY.md by tests/test_health_events.cpp). The
+  // plugin test above covers four of them against the old Worker; this one proves the union, so a merge that drops either side's words is red here.
+  const master = ['audio', 'reopen', 'srcthread', 'vendorcall', 'ringdrop', 'dspexc', 'cfgsave', 'enumchild', 'pluginapi', 'webroute', 'patchload',
+    'sdrenum', 'sdrlost', 'audiolead', 'viewport', 'readerleak', 'closeleak', 'linkstranded', 'streamrestart', 'tunerretry', 'latecall', 'scanlimit',
+    'usbstuck', 'ratesdefault', 'gainrefused', 'ppmrefused', 'iqfilegone', 'cataloguebad', 'catstop', 'filekept', 'takeheader', 'sentinelgone',
+    'displaywatch'];
+  const branch = ['pluginfault', 'pluginquarantine', 'pluginwedge', 'pluginoveruse', 'threadwedge'];
+  assert.equal(master.length, 33);
+  assert.equal(branch.length, 5);
+  for (const word of [...master, ...branch]) {
+    const p = await post({ ...newRecord(), v: '0.99.100', stalls: 0, health: `recovered.${word}=3` });
+    assert.equal(p.status, 204, word);
+    assert.equal(p.usage[0].blobs[12], `recovered.${word}=3`, word);
+    assert.equal(p.usage[0].doubles[11], 3, word);
+  }
+  // A word that is neither side's is dropped, and so are near misses of both sides' (case, a qualifier, a separator).
+  for (const bad of ['recovered.viewports=1', 'recovered.Viewport=1', 'recovered.threadwedge.dsp=1', 'recovered.thread_wedge=1', 'recovered.issue=1']) {
+    const p = await post({ ...newRecord(), v: '0.99.100', stalls: 0, health: bad });
+    assert.equal(p.usage[0].blobs[12], '', bad);
+  }
+});
+
 test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Worker wrote, and zeros in the new columns', async () => {
   for (const body of [oldRecord(), { ...record064(), stalls: 2 }, { ...record064(), stalls: 2, health: HEALTH },
     { ...record064(), health: '' }]) {

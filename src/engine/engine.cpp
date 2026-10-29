@@ -2806,6 +2806,7 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
                 deviceAgc_ = true;
             } else {
                 cascade::core::diagWarnf("source: auto gain remembered on but the radio refused it");
+                cascade::core::health::noteRecovered(cascade::core::health::Recovered::GainRefused);
             }
         }
     }
@@ -5450,6 +5451,7 @@ namespace {
 void collectFinish(std::shared_ptr<cascade::core::RecordFinisher::Ticket>& slot, const char* what) {
     if (!slot || !slot->done.load()) { return; }
     if (!slot->ok.load()) {
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::TakeHeader);
         cascade::core::diagWarnf("recorder: the %s take's file could not be finalised - it keeps the header it was opened with", what);
     }
     slot.reset();
@@ -7627,6 +7629,19 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             }
             return res;
         }
+        case FOXAPP_OP_IMAGE_PRESS: {
+            // A CLICK ON A PLUGIN'S PICTURE (the 0.99.100 merge, docs/api-0.3-additions.md 9.18): the window used to call the runner itself; the window cannot call a
+            // plugin, so the engine does, through the runner's guarded press. A remote session is refused at submit (the general rule for application ops) and here.
+            if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
+            if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no plugin named"); }
+            if (c.ival[0] < 0 || c.ival[1] < 0 || c.ival[0] > 0xFFFFFFFFll || c.ival[1] > 0xFFFFFFFFll) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "a click is a position inside the picture");
+            }
+            if (!pluginRunner_.imagePress(text, static_cast<std::uint32_t>(c.ival[0]), static_cast<std::uint32_t>(c.ival[1]))) {
+                res.status = FOXAPI_NO_CHANGE;   // nothing was delivered: no such picture, no input, an inert picture, outside it, or the plugin is switched off
+            }
+            return res;
+        }
         case FOXAPP_OP_PLUGIN_USE:
             // What the window shows of each plugin (the whole table; empty clears it). Applied here, at the head of the pass; the lifecycle
             // step of THIS pass reads it - the window's signal is one pass late by design, the wake is not later still.
@@ -8746,6 +8761,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             // full text stays in sourceError_, which is shown on screen to the
             // person who already knows what they opened.
             cascade::core::diagWarnf("source: the saved I/Q file did not reopen");
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::IqFileGone);
 
             // ...AND THE CONFIG GOES ON NAMING IT, exactly as it does for a
             // radio that did not reopen (see the device branch below). A
@@ -9238,6 +9254,7 @@ void Engine::loadBookmarks() {
                 break;
             case cascade::core::SetAsideResult::Outcome::CouldNotKeep:
                 bookmarkSaver_.forbidWrites("bookmarks: not saved - the damaged file could not be kept aside");
+                cascade::core::health::noteRecovered(cascade::core::health::Recovered::FileKept);
                 cascade::core::diagWarnf(
                     "bookmarks: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it in this session", bytes);
                 break;
@@ -9260,6 +9277,7 @@ void Engine::loadBookmarks() {
                 break;
             case cascade::core::SetAsideResult::Outcome::CouldNotKeep:
                 markerSaver_.forbidWrites("markers: not saved - the damaged file could not be kept aside");
+                cascade::core::health::noteRecovered(cascade::core::health::Recovered::FileKept);
                 cascade::core::diagWarnf(
                     "markers: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it in this session", bytes);
                 break;

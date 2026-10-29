@@ -3926,6 +3926,14 @@ private:
     std::vector<unsigned int> imageTex_;
     std::vector<std::uint64_t> imageTexRev_;
     std::vector<std::string> imageTexPlugin_;
+    // Uploads image slot i's pixels into imageTex_[i] when its revision moved.
+    // Shared by the picture window and the fax recorder's paper (which prints
+    // the chart, field report 932444a354dee32f), so the upload happens whenever
+    // EITHER consumer is on screen; the caller checks the image has pixels.
+    void ensureImageTexture(std::size_t i, const cascade::core::HostImage& im);
+    // True while a SHOWN fax instrument belongs to `plugin` - the question that
+    // keeps its picture uploaded while the picture window itself is closed.
+    bool faxInstrumentWantsChart(const std::string& plugin);
     // WHAT THE SAVE BUTTON SAID, WHOSE WINDOW SAID IT, AND WHEN.
     //
     // It was one AppWindow-wide string drawn inside EVERY image window by the

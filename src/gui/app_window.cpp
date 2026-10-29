@@ -117,6 +117,8 @@
 #include "gui/volume_meter.hpp"
 #include "gui/waterfall_view.hpp"
 #include "gui/display_power.hpp"
+#include "gui/display_query_episode.hpp"
+#include "core/issue_report.hpp"
 #include "gui/present_grace.hpp"
 #include "gui/software_gl.hpp"
 #include "gui/win_frame.hpp"
@@ -146,6 +148,20 @@ using cascade::i18n::trId;
 // - or two demonstrations - into a single window; the title goes in as well.
 static std::string instrumentWindowId(const cascade::core::HostInstrument& in) {
     return in.title + "###instrument_" + in.plugin + "|" + in.title;
+}
+
+// Whether a SHOWN fax instrument belongs to `plugin` - the one question that
+// decides whether its picture must be kept uploaded while the picture window
+// is closed, so the recorder's paper can print it (instrument_fax.cpp).
+// (Master 0.99.83; lost in the 0.99.84 merge, restored by the 0.99.100 one.)
+bool AppWindow::faxInstrumentWantsChart(const std::string& plugin) {
+    for (const cascade::core::HostInstrument& in : hostInstruments()) {
+        if (in.kind == CASCADE_INSTRUMENT_FAX && in.plugin == plugin &&
+            pluginWindows_.shown(instrumentWindowId(in))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // THE PAGE `windowId` AS IMGUI HOLDS IT THIS FRAME, in the census under `name` (0.99.73 - 0.99.77; stub campaign B5 - the lines were lost in the 0.99.84
@@ -405,19 +421,42 @@ std::atomic<int> g_lastGlfwError{0};
 
 void glfwErrorCallback(int code, const char* description) {
     g_lastGlfwError.store(code, std::memory_order_relaxed);
-    std::fprintf(stderr, "cascade: GLFW error %d: %s\n", code,
-                 description ? description : "(no description)");
-    // Matched on the MESSAGE as well as the code: GLFW_PLATFORM_ERROR covers
-    // most of what the Win32 backend can refuse, and only the display-settings
-    // one says the desktop is being reconfigured. Anything else keeps the
-    // watchdog armed, which is the safe direction.
+    // THE DISPLAY-SETTINGS ERROR IS COUNTED AND NOTHING MORE (2026-10-28 tester log,
+    // gui/display_query_episode.hpp). The Dear ImGui backend polls every monitor every
+    // frame, and while a monitor is detached GLFW raises this on every frame for as long
+    // as that lasts - minutes, in the field - so neither the log nor stderr may be written
+    // from here, and it must not spend the fifty lines below that a later, different error
+    // (65543, a refused second context) needs. The frame loop reads the count and speaks
+    // for it once per episode. Matched on the MESSAGE as well as the code:
+    // GLFW_PLATFORM_ERROR covers most of what the Win32 backend can refuse, and only the
+    // display-settings one says the desktop is being reconfigured. Anything else keeps
+    // the watchdog armed, which is the safe direction.
     if (code == 0x00010008 && description != nullptr &&
         std::strstr(description, "display settings") != nullptr) {
         g_glfwDisplayErrors.fetch_add(1u, std::memory_order_relaxed);
-        cascade::core::diagWarnf(
-            "display: GLFW could not query display settings - presentation may stall "
-            "briefly; hang reports are suppressed for the next %u ms",
-            cascade::core::HangWatchdog::kDisplayGraceMs);
+        return;
+    }
+    std::fprintf(stderr, "cascade: GLFW error %d: %s\n", code,
+                 description ? description : "(no description)");
+    // THE SAME TEXT IN THE DIAGNOSTICS LOG (0.99.78; this block was lost in the 0.99.84 merge and is restored by the 0.99.100 one, because the
+    // issue report of the refused window (core/issue_report.hpp) is only worth filing if this line - with the driver's Win32 error code in it -
+    // is in the log it carries), flushed by diagLogf before it returns.
+    // Field report A0E0967441A8E6B4 (0.99.75, Linux, an AppImage): the process ended while the
+    // window was being created and the log had nothing from GLFW, because stderr is all this
+    // callback ever wrote to and an AppImage keeps none. The first lines are the ones that say
+    // why; a driver that errors on every call must not fill the log, so the rest is counted
+    // and said once. The one name GLFW puts in a message - the display it could not open - is
+    // taken out (gui/window_platform.hpp).
+    {
+        static std::atomic<unsigned> logged{0};
+        constexpr unsigned kLoggedErrors = 50;
+        const unsigned n = logged.fetch_add(1u, std::memory_order_relaxed);
+        if (n < kLoggedErrors) {
+            cascade::core::diagLogf("%s",
+                                    cascade::gui::windowplatform::glfwErrorLine(code, description).c_str());
+        } else if (n == kLoggedErrors) {
+            cascade::core::diagLogf("window: further GLFW errors are not logged (%u so far)", kLoggedErrors);
+        }
     }
 }
 
@@ -1094,6 +1133,11 @@ int AppWindow::run(int frames) {
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     } else if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
         cascade::core::diagLogf("%s", why);
+        // The same fault as the mid-session refusal, met at start-up: counted and
+        // reported under the same word (never for the developer switch).
+        if (viewportDecision_ == cascade::gui::ViewportDecision::ProbeFailed) {
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::Viewport);
+        }
     }
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     // DEAR IMGUI'S "PROGRAMMER ERROR" BOX STAYS OUT OF SHIPPED BUILDS (0.99.77; stub campaign B5 - the block was lost in the 0.99.84 merge). A US
@@ -1420,9 +1464,42 @@ int AppWindow::run(int frames) {
     cascade::gui::PresentGrace presentGrace(
         [this] { watchdog_.pause(); }, [this] { watchdog_.resume(); },
         cascade::core::HangWatchdog::kDisplayGraceMs / 1000.0);
-    unsigned lastDisplayChanges =
-        cascade::gui::frame::displayChangeCount() +
-        g_glfwDisplayErrors.load(std::memory_order_relaxed);
+    unsigned lastDisplayChanges = cascade::gui::frame::displayChangeCount();
+    // A RUN OF FRAMES IN WHICH THE DISPLAY COULD NOT BE QUERIED IS ONE DISPLAY CHANGE
+    // (gui/display_query_episode.hpp, the 2026-10-28 tester log): GLFW's display-settings
+    // error is counted by the error callback above, and this turns the count into one
+    // beginning - the change, with its grace and its log line - and one end, with how long
+    // it lasted. The count as it stands now is not an episode. (The watchdog it excuses is the WINDOW'S
+    // hang watchdog, core/hang_watchdog.hpp, whose grace a stalled present needs; the per-thread watchdog
+    // of core/thread_beats.hpp watches the engine's workers, which a monitor going away cannot stop.)
+    cascade::gui::DisplayQueryEpisode displayQueries(
+        g_glfwDisplayErrors.load(std::memory_order_relaxed));
+    // FOXSDR_TEST_DISPLAY_QUERY_FAIL="<first frame>,<last frame>", bounded runs only: on
+    // each of those frames the GLFW error callback is handed the display-settings error
+    // itself, as the backend's monitor poll hands it in the field, so
+    // tests/test_display_query_app drives the real path from the callback to the log.
+    long queryFailFirst = -1;
+    long queryFailLast = -1;
+    if (frames >= 0) {
+        if (const char* v = std::getenv("FOXSDR_TEST_DISPLAY_QUERY_FAIL");
+            v != nullptr && *v != '\0') {
+            char* end = nullptr;
+            queryFailFirst = std::strtol(v, &end, 10);
+            queryFailLast = queryFailFirst;
+            if (end != nullptr && *end == ',') { queryFailLast = std::strtol(end + 1, nullptr, 10); }
+            if (queryFailLast < queryFailFirst) { queryFailLast = queryFailFirst; }
+        }
+    }
+    // FOXSDR_TEST_GLFW_ERROR_AT="<frame>", bounded runs only (the 0.99.100 merge): on that frame the error callback is handed the error the
+    // driver's refusal of a second shared context raises, with the Win32 code in it (master 193295f7: third_party/glfw wgl_context.c), so a test
+    // can see that the log - and so the issue report that carries it - still has that line after a flood of display-settings errors, and that
+    // the callback writes the log at all (this block of the callback was lost in the 0.99.84 merge and restored by the 0.99.100 one).
+    long glfwErrorAt = -1;
+    if (frames >= 0) {
+        if (const char* v = std::getenv("FOXSDR_TEST_GLFW_ERROR_AT"); v != nullptr && *v != '\0') {
+            glfwErrorAt = std::strtol(v, nullptr, 10);
+        }
+    }
 
     // NOTHING IS DRAWN WHILE THIS SESSION'S DISPLAY IS OFF (gui/display_power.hpp, the 2026-10-27 tester report): the frame loop keeps
     // turning - the interface's own work, the message pump, the radio and decoders on their threads - but draws and presents nothing, and
@@ -1512,6 +1589,13 @@ int AppWindow::run(int frames) {
         } else if (static_cast<long>(rendered) == displayOnAt) {
             cascade::gui::frame::sendDisplayPowerForTest(window, 1u);
         }
+        if (queryFailFirst >= 0 && static_cast<long>(rendered) >= queryFailFirst &&
+            static_cast<long>(rendered) <= queryFailLast) {
+            glfwErrorCallback(0x00010008, "Win32: Failed to query display settings");
+        }
+        if (glfwErrorAt >= 0 && static_cast<long>(rendered) == glfwErrorAt) {
+            glfwErrorCallback(0x00010007, "WGL: Failed to create OpenGL context (Win32 error 0x00000008)");
+        }
         const cascade::gui::DisplayPause::Edge displayEdge =
             displayPause.update(cascade::gui::frame::displayPower(), glfwGetTime());
         if (displayEdge == cascade::gui::DisplayPause::Edge::Paused) {
@@ -1529,13 +1613,30 @@ int AppWindow::run(int frames) {
         // procedure runs, so a WM_DISPLAYCHANGE that arrived this frame has
         // been counted by the time this reads it - and the pause is therefore
         // in force for the very first present after the change, which is the
-        // one that stalls. Both sources are summed into one number: either
-        // moving means the desktop is being reconfigured, and the counters are
-        // monotonic so a sum cannot go backwards.
+        // one that stalls. Two sources: the WM_DISPLAYCHANGE count moving, and
+        // GLFW's display-settings error BEGINNING an episode - not every frame
+        // it recurs on, or a monitor that stays detached would restart the
+        // grace every frame and leave the watchdog off for the whole of it
+        // (gui/display_query_episode.hpp). The episode's two edges each get one
+        // line, so a field log shows a flood of minutes as two lines.
         {
-            const unsigned changes = cascade::gui::frame::displayChangeCount() +
-                                     g_glfwDisplayErrors.load(std::memory_order_relaxed);
-            const bool displayChanged = changes != lastDisplayChanges || frameSituations.displayChangeAt(rendered) ||
+            const unsigned changes = cascade::gui::frame::displayChangeCount();
+            const cascade::gui::DisplayQueryEpisode::Edge queries = displayQueries.update(
+                glfwGetTime(), g_glfwDisplayErrors.load(std::memory_order_relaxed));
+            if (queries.began) {
+                cascade::core::diagWarnf(
+                    "display: GLFW could not query display settings - a monitor is off, "
+                    "detached or being reconfigured; presentation may stall briefly, and hang "
+                    "reports are suppressed for the next %u ms (said once, until the queries "
+                    "answer again)",
+                    cascade::core::HangWatchdog::kDisplayGraceMs);
+            } else if (queries.ended) {
+                cascade::core::diagLogf(
+                    "display: display settings answered again - %u queries failed over %.0f s",
+                    queries.failures, queries.seconds);
+            }
+            const bool displayChanged = changes != lastDisplayChanges || queries.began ||
+                                        frameSituations.displayChangeAt(rendered) ||
                                         displayEdge == cascade::gui::DisplayPause::Edge::Resumed;
             if (displayChanged) {
                 lastDisplayChanges = changes;
@@ -1946,6 +2047,13 @@ int AppWindow::run(int frames) {
                 if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
                     cascade::core::diagWarnf("%s", why);
                 }
+                // ...AND COUNTED (0.99.100, `recovered.viewport`, core/health_events.hpp). The
+                // program carries on, so no crash, freeze or sentinel report ever says this
+                // happened: two Intel UHD machines had it through October 2026 and the
+                // website saw nothing. Once a session by nature - viewports stay off - and
+                // reached once, because the flag above is cleared and this block is inside
+                // the ViewportsEnable test. The window's thread, so noteRecovered may lock.
+                cascade::core::health::noteRecovered(cascade::core::health::Recovered::Viewport);
                 // ...AND THE PAGES THAT WERE THEIR OWN WINDOWS ARE BROUGHT INSIDE. ImGui keeps each one where it was beside this window, which
                 // for a page that opened past its right edge is past its right edge still - a 140 px strip with its rail off the top (the
                 // 2026-10-27 tester report). Every page is checked for the next few frames: the move into this window's viewport takes ImGui
@@ -9731,6 +9839,31 @@ void AppWindow::drawBlockedPluginRows() {
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+// Uploads image slot i's pixels into its GL texture when the plugin says they
+// changed. Shared by the picture window and the fax recorder's paper: uploaded
+// only when the plugin's revision moved - a slow-scan frame updates a few
+// times a second at most, and re-uploading a megapixel texture every frame to
+// show the same picture would cost more than the decoding does. The caller
+// has already checked the image has pixels (width and height non-zero).
+void AppWindow::ensureImageTexture(std::size_t i, const cascade::core::HostImage& im) {
+    if (i >= imageTex_.size() || i >= imageTexRev_.size()) { return; }
+    if (imageTexRev_[i] == im.revision) { return; }
+    if (imageTex_[i] == 0u) { glGenTextures(1, &imageTex_[i]); }
+    glBindTexture(GL_TEXTURE_2D, imageTex_[i]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // Rows are tightly packed by PluginUi, which is NOT the 4-byte default
+    // OpenGL assumes; without this a greyscale image whose width is not a
+    // multiple of four shears.
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    const GLenum fmt = (im.format == CASCADE_IMAGE_RGB24) ? GL_RGB : GL_LUMINANCE;
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt), static_cast<GLsizei>(im.width),
+                 static_cast<GLsizei>(im.height), 0, fmt, GL_UNSIGNED_BYTE, im.pixels.data());
+    imageTexRev_[i] = im.revision;
+}
+
 void AppWindow::separateWindowAnchor(int slot, float& x, float& y) {
     // See the note at the Map window for why overhanging the edge is what
     // produces a separate operating system window.
@@ -13914,6 +14047,62 @@ std::string pluginPageLegend(const char* format, const std::string& name) {
     return cascade::core::upperLegend(s, cascade::i18n::current());
 }
 
+// A PICTURE FITTED TO A REGION, DRAWN, MEASURED AND CLICKABLE (field request, SWL F20806,
+// 2026-10-28). The image window and the radiofax recorder's own window both show a plugin's decoded
+// picture and both let a click on it reach the plugin (SET LEFT EDGE), so the one block lives here:
+// the picture is scaled by ONE factor to fit `avail` with its aspect kept - a weather chart
+// stretched to the pane is a misread chart - drawn at the cursor, recorded in the census as
+// `censusName`, and, when the plugin takes image input, covered by an invisible button (`buttonId`,
+// under `scopeId`, so two windows' buttons can never share an identity) that owns the gesture: a
+// press elsewhere, or a release outside the picture, must never select a programme. A click inside
+// the picture is returned in NATIVE pixels; the caller delivers it to the plugin.
+struct FittedPicture {
+    bool pressed = false;         // the picture was clicked, at (x, y) in the image's own pixels
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+};
+
+FittedPicture drawFittedPicture(const cascade::core::HostImage& im, unsigned int tex,
+                                const ImVec2& avail, const std::string& censusName,
+                                const char* scopeId, const char* buttonId) {
+    FittedPicture out;
+    if (im.width == 0 || im.height == 0) { return out; }
+    const float sx = avail.x / static_cast<float>(im.width);
+    const float sy = avail.y / static_cast<float>(im.height);
+    const float s = (sx < sy ? sx : sy);
+    if (tex == 0u || !(s > 0.0f)) { return out; }
+    const ImVec2 pictureMin = ImGui::GetCursorScreenPos();
+    const ImVec2 pictureSize(static_cast<float>(im.width) * s,
+                             static_cast<float>(im.height) * s);
+    ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tex)), pictureSize);
+    if (cascade::gui::census::enabled()) {
+        cascade::gui::census::rect(censusName, pictureMin.x, pictureMin.y,
+            pictureMin.x + pictureSize.x, pictureMin.y + pictureSize.y);
+    }
+    if (im.interactive) {
+        // Own the gesture with an ImGui item: a press elsewhere or
+        // a release outside this image must never select a programme.
+        ImGui::SetCursorScreenPos(pictureMin);
+        ImGui::PushID(scopeId);
+        if (ImGui::InvisibleButton(buttonId, pictureSize)) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const float x = (mouse.x - pictureMin.x) / s;
+            const float y = (mouse.y - pictureMin.y) / s;
+            if (x >= 0 && y >= 0 && x < static_cast<float>(im.width) &&
+                y < static_cast<float>(im.height)) {
+                out.pressed = true;
+                out.x = static_cast<std::uint32_t>(x);
+                out.y = static_cast<std::uint32_t>(y);
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        }
+        ImGui::PopID();
+    }
+    return out;
+}
+
 }  // namespace
 
 void AppWindow::drawPluginWindows() {
@@ -14547,6 +14736,15 @@ void AppWindow::drawPluginWindows() {
         // across launches). Opened before a picture exists it says it is
         // waiting, which is the truth and what the user asked to see.
         const std::string id = im.plugin + " image###image_" + im.plugin;
+        // THE RECORDER PRINTS THE CHART (field report 932444a354dee32f): a
+        // shown fax instrument of the SAME plugin wants this picture's texture
+        // even while the picture window is closed, so the upload serves either
+        // consumer. With neither on screen nothing is uploaded, exactly as
+        // before - a decoder nobody is watching still costs no texture.
+        const bool chartWanted = faxInstrumentWantsChart(im.plugin);
+        if ((pluginWindows_.shown(id) || chartWanted) && im.width != 0 && im.height != 0) {
+            ensureImageTexture(i, im);
+        }
         if (!pluginWindows_.shown(id)) { continue; }
         uiNotePanel("image");
         // A page that opens INSIDE THE MAIN WINDOW, where the press that asked
@@ -14575,29 +14773,8 @@ void AppWindow::drawPluginWindows() {
             if (im.width == 0 || im.height == 0) {
                 ImGui::TextDisabled("%s", tr("Waiting for the first image..."));
             } else {
-                // Uploaded only when the plugin says the pixels changed. A
-                // slow-scan frame updates a few times a second at most, and
-                // re-uploading a megapixel texture every frame to show the
-                // same picture would cost more than the decoding does.
-                if (imageTexRev_[i] != im.revision) {
-                    if (imageTex_[i] == 0u) { glGenTextures(1, &imageTex_[i]); }
-                    glBindTexture(GL_TEXTURE_2D, imageTex_[i]);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    // Rows are tightly packed by PluginUi, which is NOT the
-                    // 4-byte default OpenGL assumes; without this a greyscale
-                    // image whose width is not a multiple of four shears.
-                    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                    const GLenum fmt =
-                        (im.format == CASCADE_IMAGE_RGB24) ? GL_RGB : GL_LUMINANCE;
-                    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt),
-                                 static_cast<GLsizei>(im.width),
-                                 static_cast<GLsizei>(im.height), 0, fmt, GL_UNSIGNED_BYTE,
-                                 im.pixels.data());
-                    imageTexRev_[i] = im.revision;
-                }
+                // The texture was ensured above, for this window and the
+                // recorder's paper alike (ensureImageTexture).
 
                 // Two whole lines rather than a state word dropped into one.
                 ImGui::Text(im.complete ? tr("%ux%u  complete  frame %llu")
@@ -14611,16 +14788,15 @@ void AppWindow::drawPluginWindows() {
                 ImGui::EndDisabled();
 
                 // Fit to the window, preserving aspect: a weather image
-                // stretched to the pane is a misread image.
-                const ImVec2 avail = ImGui::GetContentRegionAvail();
-                const float sx = avail.x / static_cast<float>(im.width);
-                const float sy = avail.y / static_cast<float>(im.height);
-                const float s = (sx < sy ? sx : sy);
-                if (imageTex_[i] != 0u && s > 0.0f) {
-                    ImGui::Image(static_cast<ImTextureID>(
-                                     static_cast<std::uintptr_t>(imageTex_[i])),
-                                 ImVec2(static_cast<float>(im.width) * s,
-                                        static_cast<float>(im.height) * s));
+                // stretched to the pane is a misread image. The fit, the draw,
+                // the census rect and the click are drawFittedPicture's, shared
+                // with the radiofax recorder's window. A click is the ENGINE's to
+                // deliver (FOXAPP_OP_IMAGE_PRESS): this window holds no plugin.
+                const FittedPicture fit = drawFittedPicture(
+                    im, imageTex_[i], ImGui::GetContentRegionAvail(),
+                    "image:picture:" + im.plugin, im.plugin.c_str(), "##image-input");
+                if (fit.pressed) {
+                    uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_IMAGE_PRESS, im.plugin, fit.x, fit.y));
                 }
             }
             // ONLY IN THE WINDOW THAT SAVED IT. A note about a file written
@@ -14716,19 +14892,84 @@ void AppWindow::drawPluginWindows() {
             cascade::gui::InstrumentCue cue;
             cue.unread = in.have && (now - seen.atSec) < kInstrumentNewHoldSec;
             cue.nowSec = now;
+            // THE CHART ON THE PAPER (field report 932444a354dee32f; master 0.99.83, lost in the 0.99.84 merge and restored by the 0.99.100 one): a fax
+            // face is handed the texture of its OWN plugin's decoded picture,
+            // when there is one and its upload is current (ensureImageTexture
+            // ran earlier this frame, image windows are drawn first). The
+            // revision check means a half-swapped slot after a rescan hands
+            // the face nothing rather than another plugin's picture.
+            const cascade::core::HostImage* chartImage = nullptr;
+            unsigned int chartTexId = 0u;
+            if (in.kind == CASCADE_INSTRUMENT_FAX) {
+                for (std::size_t ci = 0;
+                     ci < pluginImages_.size() && ci < imageTex_.size() && ci < imageTexRev_.size();
+                     ++ci) {
+                    const cascade::core::HostImage& chart = pluginImages_[ci];
+                    if (chart.plugin == in.plugin && chart.width != 0 && chart.height != 0 &&
+                        imageTex_[ci] != 0u && imageTexRev_[ci] == chart.revision) {
+                        cue.chartTex = static_cast<ImTextureID>(
+                            static_cast<std::uintptr_t>(imageTex_[ci]));
+                        cue.chartComplete = chart.complete;
+                        chartImage = &chart;
+                        chartTexId = imageTex_[ci];
+                        break;
+                    }
+                }
+            }
 
             const bool hasMemory = !in.headings.empty();
             const ImVec2 tl = ImGui::GetCursorScreenPos();
             const ImVec2 avail = ImGui::GetContentRegionAvail();
+            // THE CHART BESIDE ITS KEYS (field request, SWL F20806, 2026-10-28; master 0.99.98): with a
+            // chart to show, the window is three parts - the face compacted across the top,
+            // then the picture on the left and the memory rows (SLANT -10 ppm, SLANT +10 ppm,
+            // SET LEFT EDGE) on the right - so the keys sit beside the picture they correct
+            // and nobody jumps between this window and the image window. The paper strip
+            // on the face (0.99.83) was the earlier step and stays. No chart: as before.
+            const bool chartBesideKeys = chartImage != nullptr;
             // The face takes the window when there is no memory to show, and
             // otherwise the upper part, leaving the memory at least a few rows.
-            const float faceH = hasMemory ? std::max(160.0f, std::min(avail.y * 0.6f, 360.0f))
-                                          : avail.y;
+            const float faceH = chartBesideKeys
+                ? std::max(160.0f, std::min(avail.y * 0.35f, 220.0f))
+                : (hasMemory ? std::max(160.0f, std::min(avail.y * 0.6f, 360.0f)) : avail.y);
             const ImVec2 br(tl.x + avail.x, tl.y + faceH);
             const float used =
                 cascade::gui::drawInstrumentFace(ImGui::GetWindowDrawList(), tl, br, in, cue);
             ImGui::Dummy(ImVec2(avail.x, std::max(used, 1.0f)));
-            if (hasMemory) {
+            if (chartBesideKeys) {
+                ImGui::Spacing();
+                const ImVec2 lower = ImGui::GetContentRegionAvail();
+                // The picture's region has a FIXED width so the keys column starts at the same
+                // place whatever the fitted picture's size; with no memory it takes the lot.
+                // The memory keeps at least 300 px: at the window's first-use width the
+                // keys' labels ("SET LEFT EDGE") were being cut mid-word, and a key that
+                // cannot be read is no key. The picture grows with the window from there.
+                constexpr float kMemoryMinW = 300.0f;
+                const float pictureW =
+                    hasMemory ? std::max(120.0f, std::min(avail.x * 0.58f, avail.x - kMemoryMinW))
+                              : lower.x;
+                const ImGuiWindowFlags quiet =
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+                if (ImGui::BeginChild("##recorder-picture", ImVec2(pictureW, lower.y),
+                                      ImGuiChildFlags_None, quiet)) {
+                    // Its own button identity, under this window's id, so it cannot meet the
+                    // image window's "##image-input" (that one is scoped by plugin name).
+                    const FittedPicture fit = drawFittedPicture(
+                        *chartImage, chartTexId, ImGui::GetContentRegionAvail(),
+                        "instrument:picture:" + in.plugin, id.c_str(), "##recorder-image-input");
+                    if (fit.pressed) {
+                        uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_IMAGE_PRESS, in.plugin, fit.x, fit.y));
+                    }
+                }
+                ImGui::EndChild();
+                if (hasMemory) {
+                    ImGui::SameLine();
+                    if (ImGui::BeginChild("##recorder-memory", ImVec2(0.0f, lower.y))) {
+                        drawPluginRows(in.plugin, ":memory", in.headings, in.rows);
+                    }
+                    ImGui::EndChild();
+                }
+            } else if (hasMemory) {
                 ImGui::Spacing();
                 drawPluginRows(in.plugin, ":memory", in.headings, in.rows);
             }
@@ -20533,6 +20774,7 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
         // log file opened - once at start-up, and on a press of the switch.
         cascade::core::WatchdogPause holdWatchdog(watchdog_);
         cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+        cascade::core::issue::filePendingIssueReports();
         // Guarded on diagCrashDir_ for the same reason as in run(): a run that was
         // never allowed to write (a bounded CI run) must not start writing because
         // a switch was flipped.
@@ -20610,6 +20852,7 @@ void AppWindow::drawDiagnosticsSection() {
         // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): the reports folder, on a click.
         cascade::core::WatchdogPause holdWatchdog(watchdog_);
         cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+        cascade::core::issue::filePendingIssueReports();
     }
     ImGui::TextDisabled(
         "%s",

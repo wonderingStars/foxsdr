@@ -2422,6 +2422,19 @@ One new application op, two list/state additions and four facts. Nothing else of
 * **The process flags**: `--safe-plugins` (either program; the window also takes the Shift key held at launch) starts with no plugin loaded and changes no
   record. It is a command-line/boot concern, not an API one.
 
+### 9.18 The 0.99.100 merge's addition: a click on a plugin's picture (docs/engine-merge-0.99.100.md)
+
+One new application op; nothing else of the table moves.
+
+* **`FOXAPP_OP_IMAGE_PRESS` (0x870F, grant SETTINGS, LOCAL sessions only, not on either internal profile)**: `text`: the plugin's name as its picture carries it
+  (`HostImage::plugin`); `ival[0]`, `ival[1]`: the click in the picture's own pixels. The engine delivers it to the plugin's image-input capability
+  (`CascadeImageInputApi::press`, `CASCADE_CAP_IMAGE_INPUT`, docs/IMAGE-INPUT.md) through the plugin guard (`PluginRunner::imagePress`, `calls::press`): a faulting or
+  never-returning `press` is absorbed like any other call into a plugin. Answers: `BAD_ARGUMENT` for empty text, `OUT_OF_RANGE` for a negative or 32-bit-overflowing
+  coordinate, `NO_CHANGE` when nothing was delivered (no such picture, a plugin that takes no input, an inert picture, a click outside it, a plugin switched off),
+  `OK` when the plugin was handed the click. A REMOTE session is refused (the general rule for application ops, and again where it is applied). **Why an op**:
+  master's window (0.99.81) called `PluginRunner::imagePress` itself; on this branch the window holds no runner, and the click had no route at all after the
+  0.99.84 merge (found by the 0.99.100 merge, which needs it for the fax chart in the Radiofax recorder, master 0.99.98).
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

@@ -2397,6 +2397,21 @@ void pluginOps(AppWindow& a) {
         CHECK(A::apply(a, text(FOXAPP_OP_PLUGIN_REENABLE, key)).status == FOXAPI_NO_CHANGE);
     }
 
+    covering(FOXAPP_OP_IMAGE_PRESS);
+    {
+        // A CLICK ON A PLUGIN'S PICTURE (the 0.99.100 merge, docs/api-0.3-additions.md 9.18): the engine hands it to the plugin's image input through the guard. What
+        // reaches a plugin that takes input - in native pixels, once, and that a click outside the picture or on an inert one does not - is
+        // tests/test_plugin_runner.cpp's against the real runner, and the whole route from a click on the recorder's picture is tests/test_fax_picture_app.cpp's
+        // against the real binary; what is held here is applyCommand's own answers: a plugin is named, a position is a position, and a picture that is not there
+        // is a no-change and never an error (the window fires and forgets).
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_IMAGE_PRESS, std::string(), 1, 1)), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_IMAGE_PRESS, key, -1, 1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_IMAGE_PRESS, key, 1, -1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_IMAGE_PRESS, key, 0x100000000ll, 1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::apply(a, text(FOXAPP_OP_IMAGE_PRESS, "nobody.dll", 1, 1)).status == FOXAPI_NO_CHANGE);
+        CHECK(A::apply(a, text(FOXAPP_OP_IMAGE_PRESS, key, 1, 1)).status == FOXAPI_NO_CHANGE);   // this fixture has no picture
+    }
+
     covering(FOXAPP_OP_PLUGIN_USE);
     {
         // The window's table of what it shows: one "<file>\t<bits>" line a plugin; an empty one clears it; a line that does not parse

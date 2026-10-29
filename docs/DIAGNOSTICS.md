@@ -850,6 +850,25 @@ The sites that are counted:
 | `sdrenum` | `AppWindow::pollSdrPlayService`, the SDRplay scan worker let go | the window's thread |
 | `sdrlost` | `AppWindow::pollSdrPlayService`, the SDRplay API session lost | the window's thread |
 | `audiolead` | `AppWindow::closeAudioMinute`, the once-a-minute close that deepened the audio buffer (0.99.73; see *The DSP thread asks for priority, and the audio buffer deepens itself*) | the window's thread |
+| `viewport` | `AppWindow::run` (the interface's own: no engine reads the driver), the frame that read the backend's count of a refused second OpenGL context (`ImGui_ImplGlfw_ViewportWindowCreationFailures`, GLFW 65543) and turned separate windows off for the session, and the start-up probe's refusal (`ProbeFailed`) (0.99.100; the 2026-10 "map vanished" reports, which no crash or freeze report could carry) | the window's thread |
+| `readerleak` | the stop paths that abandon a reader thread: the eight native sources' `g_readersAbandoned` sites (airspy, airspyhf, aor, hackrf, mirisdr, rx888, pluto, rtl_tcp), `RtlSdrSource`'s bound, `PlutoTx`'s writer and `PatchRadio::stop` (0.99.100, the survey of 2026-10-28) | raised; drained by the poll |
+| `closeleak` | `SoundCardSource`'s abandoned close tickets and `pa_init.cpp`'s stream-list wait (0.99.100) | raised; drained by the poll |
+| `linkstranded` | `SdrPlaySource`, the callback still running after Uninit (`strandLink`) (0.99.100) | raised; drained by the poll |
+| `streamrestart` | `AirspySource`, the halted bulk stream re-armed (0.99.100) | raised; drained by the poll |
+| `tunerretry` | `rtl2832u.cpp`, the I2C transfer accepted on a retry (0.99.100) | raised; drained by the poll |
+| `latecall` | `SoapySource`'s late call answered, and `SdrPlaySource`'s (0.99.100) | raised; drained by the poll |
+| `scanlimit` | `soapy_enum_proc.cpp`: the scan's budget spent before a driver, a driver stopped for not answering, no helper to start, the whole scan timed out (0.99.100) | the scan's worker |
+| `usbstuck` | `usbfs_device.cpp`, a sysfs node that did not answer, or a listing that hit its limit (Linux, 0.99.100) | the scan's worker |
+| `ratesdefault` | `AirspySource` and `AirspyHfSource`, the firmware's rate list not answered (0.99.100) | raised; drained by the poll |
+| `gainrefused` | `Engine::adoptDeviceMirrors`, the remembered automatic gain refused (0.99.100; master counted it in `AppWindow`, which holds no radio here) | the engine's pass |
+| `ppmrefused` | `engine_ppm.cpp`, the frequency correction refused, on apply and on change (0.99.100) | the engine's pass |
+| `iqfilegone` | `Engine::applyConfig`, the saved recording that did not reopen (0.99.100) | the engine's pass |
+| `cataloguebad` | `engine_store.cpp`, a kept catalogue (the main one, or a site's) ignored as unreadable (0.99.100) | the engine's pass |
+| `catstop` | `CatServer::stop`, connections still running at the drain's limit (0.99.100) | the window's thread |
+| `filekept` | `engine.cpp` (the bookmarks and the markers) and `engine_service.cpp` (the settings): a damaged file that could not be set aside (0.99.100; master's one `AppWindow::setAsideDamagedFile`) | the engine's pass / the keeper |
+| `takeheader` | `engine.cpp` `collectFinish`, a take not finalised (0.99.100) | the engine's pass |
+| `sentinelgone` | `sentinel_host_win.cpp` / `sentinel_host_posix.cpp`, the watcher not started or ended early (0.99.100) | the window's thread |
+| `displaywatch` | `win_frame.cpp`, the display-state notification not registered (0.99.100) | the window's thread |
 | `pluginfault` | `core/plugin_fault.cpp` `totals().faults`: a guarded call into a plugin faulted and was absorbed (see *A bad plugin does not take the program down*) | the engine's pass, from `fault::totals()` |
 | `pluginquarantine` | `fault::totals().quarantines`: a plugin was switched off for the session | the engine's pass |
 | `pluginwedge` | `fault::totals().wedges`: a guarded call never returned (the stage-2 finding of the call budget), or an unload timed out inside one | the engine's pass |

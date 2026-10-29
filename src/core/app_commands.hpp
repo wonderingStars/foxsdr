@@ -165,6 +165,12 @@
 // plugin carries; NO_CHANGE for a plugin that is not switched off; BAD_ARGUMENT for empty text. A REMOTE session is DENIED (three ways, as
 // the transmit grant is): nothing a browser sends can switch a faulted plugin back on.
 #define FOXAPP_OP_PLUGIN_REENABLE        0x870Eu /* text: the module file or id */
+// A CLICK ON A PLUGIN'S PICTURE (the 0.99.100 merge, docs/api-0.3-additions.md 9.18; master 0.99.81 / 0.99.98), LOCAL sessions only and NOT on the web profile.
+// text: the plugin's name as the picture carries it (HostImage::plugin); ival[0], ival[1]: the click in the picture's OWN pixels (x, y). The engine hands it to
+// the plugin's image-input capability (CascadeImageInputApi::press) through the guard (PluginRunner::imagePress -> calls::press) - the window cannot call a plugin.
+// BAD_ARGUMENT for empty text, OUT_OF_RANGE for a coordinate that is negative or past 32 bits; NO_CHANGE when nothing was delivered (no such picture, the plugin takes
+// no input, its picture is inert, the click is outside the picture, or the plugin is switched off). A REMOTE session is DENIED.
+#define FOXAPP_OP_IMAGE_PRESS            0x870Fu /* text: the plugin's name; ival[0]: x, ival[1]: y, in the picture's pixels */
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.
 #define FOXAPP_TXBIT_DECLARED  1u   /* the runner has a transmit-audio instance of it */

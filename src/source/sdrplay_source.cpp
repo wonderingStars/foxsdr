@@ -4,6 +4,7 @@
 #include "source/sdrplay_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/i18n.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "core/utf8_text.hpp"
@@ -2420,6 +2421,7 @@ void SdrPlaySource::stopStreamingLocked() {
         link_->waitCv.wait_for(wl, std::chrono::milliseconds(1));
     }
     if (link_->inCallback.load(std::memory_order_acquire) > 0) {
+        core::health::raiseRecovered(core::health::Recovered::LinkStranded);
         core::diagWarnf(
             "source: SDRplay callback still running %lld ms after Uninit - stranding the link",
             static_cast<long long>(kCallbackDrainWait.count()));
@@ -2662,6 +2664,7 @@ void SdrPlaySource::reapLateControlLocked() {
     const abi::Api& a = api();
     endLateControlLocked();
     controlAbandoned_ = false;
+    core::health::raiseRecovered(core::health::Recovered::LateCall);
     core::diagWarnf("source: SDRplay %s answered after %lld ms - %s", what.c_str(), lateMs,
                     errText(a, answer.err).c_str());
 

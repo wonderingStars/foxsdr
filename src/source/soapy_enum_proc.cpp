@@ -1178,6 +1178,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                 for (std::size_t j = i; j < asked.size(); ++j) {
                     result.outOfTimeDrivers.push_back(asked[j]);
                 }
+                core::health::noteRecovered(core::health::Recovered::ScanLimit);
                 core::diagWarnf(
                     "soapy: the scan beside an open radio spent its %lu ms before asking %s - "
                     "not asked this scan",
@@ -1268,6 +1269,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
         }
         result.faultedDrivers.push_back(driver);
         if (one.outcome == EnumOutcome::ChildTimedOut) {
+            core::health::noteRecovered(core::health::Recovered::ScanLimit);
             core::diagWarnf(
                 "soapy: the '%s' driver did not answer within %lu ms and was stopped - it is "
                 "skipped for this scan",
@@ -1522,6 +1524,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
     // whole-bus walk here would probe that dongle from inside this process.
     if (result.outcome == EnumOutcome::SpawnFailed && options.allowInProcessFallback &&
         options.skipDrivers.empty()) {
+        core::health::noteRecovered(core::health::Recovered::ScanLimit);
         core::diagWarnf(
             "soapy: no enumeration helper could be started ('%s') - walking the bus "
             "in-process instead, which is not crash-isolated",
@@ -1601,6 +1604,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
                 result.exitCode, result.attempts);
             break;
         case EnumOutcome::ChildTimedOut:
+            core::health::noteRecovered(core::health::Recovered::ScanLimit);
             core::diagWarnf(
                 "soapy: enumeration timed out after %lu ms and the child was killed - "
                 "a device on this machine is not answering its probe (still probing: %s)",

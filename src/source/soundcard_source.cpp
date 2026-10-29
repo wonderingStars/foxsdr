@@ -26,6 +26,7 @@
 #include <thread>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 
 namespace cascade::source {
 
@@ -687,6 +688,7 @@ void waitForCloses(const std::vector<std::shared_ptr<SoundCardCloseTicket>>& tic
         std::unique_lock<std::mutex> lk(t->m);
         if (t->cv.wait_until(lk, deadline, [&t] { return t->done; })) { continue; }
         gAbandonedCloses.fetch_add(1, std::memory_order_relaxed);
+        cascade::core::health::raiseRecovered(cascade::core::health::Recovered::CloseLeak);
         cascade::core::diagWarnf(
             "source: the sound card (%s) did not close within %lld ms; the close is left to finish on a "
             "thread of its own",

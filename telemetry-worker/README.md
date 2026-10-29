@@ -35,10 +35,21 @@ computer fell behind): deploy this Worker before it ships (the release preflight
 asks for `-WorkerDeployed`), or the count that says whether the deeper buffer ever
 fires is dropped. The Worker as 0.99.67 shipped it, kept in
 `test-fixtures/worker-0.99.67.js`, is the one `worker.test.mjs` shows dropping it.
+And again for **0.99.100**, which adds `recovered.viewport` (the graphics driver
+refused FoxSDR a second OpenGL window part-way through a session, and every page was
+kept inside the main window from then on - the "map vanished" reports of 2026-10 from
+two Intel UHD machines, which no crash or freeze report could ever carry because the
+program keeps running) and eighteen more words for the handled faults a survey of
+2026-10-28 found - `readerleak`, `closeleak`, `linkstranded`, `streamrestart`,
+`tunerretry`, `latecall`, `scanlimit`, `usbstuck`, `ratesdefault`, `gainrefused`,
+`ppmrefused`, `iqfilegone`, `cataloguebad`, `catstop`, `filekept`, `takeheader`,
+`sentinelgone`, `displaywatch`: deploy this Worker before 0.99.100 ships.
 
 The release that carries the per-thread watchdog (docs/engine-stage4.md 6.27) adds one more, `recovered.threadwedge` (a worker thread stopped answering and the watchdog reported it by name): the same rule - deploy this Worker before that release ships, or the count of how often a worker wedges in the field is dropped. (Nothing was deployed by the change that adds the word.)
 
 The release that carries the plugin containment (docs/engine-stage4.md 6.28) adds four more, `recovered.pluginfault` (the host absorbed a fault inside a plugin's call), `recovered.pluginquarantine` (a plugin was switched off for the session), `recovered.pluginwedge` (a plugin call never returned, or an unload timed out inside one) and `recovered.pluginoveruse` (a plugin call overran its budget; once a session): the same rule - deploy this Worker before that release ships, or those counts are dropped. The words carry no plugin id; which plugin it was is in the crash reports' `blamed-plugin` fields, not here. (Nothing was deployed by the change that adds the words.)
+
+Merging master's 0.99.100 into the engine branch (docs/engine-merge-0.99.100.md) joined those five words (the four above and `recovered.threadwedge`) to master's thirty-three, so the Worker's family is thirty-eight words, in master's order and then the branch's; every one is also an issue report (core/issue_report.hpp). Deploy-before applies to the whole union: the branch's release ships after a Worker that has all thirty-eight (`worker.test.mjs`, the merged-vocabulary test).
 
 ## The columns of `foxsdr_usage`
 

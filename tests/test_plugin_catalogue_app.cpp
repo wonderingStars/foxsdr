@@ -65,6 +65,8 @@
 #endif
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
+#include "core/telemetry.hpp"
 #include "core/package_identity.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_host.hpp"
@@ -454,11 +456,20 @@ void testCatalogueKept() {
         writeAll(g_dir / "catalogue.json", "{ not json");
         writeAll(g_dir / "catalogue.json.time", "1760000000\n");
         DiagLog::instance().resetForTest();
+        // ...AND COUNTED (the 0.99.100 merge): master counted `recovered.cataloguebad` in AppWindow::loadCachedCatalogue; here it is the engine's.
+        auto ledger = cascade::core::health::globalLedger();
+        ledger->reset();
+        ledger->arm("", cascade::core::newInstallId(), false);
         th::TestWindow app;
         CHECK(Access::catalogue(app).empty());
         CHECK(!Access::fromCache(app));
         CHECK(Access::readTime(app) == 0);
         CHECK(logged("plugin store: kept catalogue ignored - the kept catalogue is not usable") == 1u);
+        {
+            const auto counts = ledger->counts();
+            const auto it = counts.find("recovered.cataloguebad");
+            CHECK(it != counts.end() && it->second == 1u);
+        }
         CHECK(readAll(g_dir / "catalogue.json") == "{ not json");
     }
     clearPluginsFolder();

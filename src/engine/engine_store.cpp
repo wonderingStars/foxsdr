@@ -140,6 +140,7 @@ void Engine::loadCachedCatalogue() {
     } else if (error != "no catalogue has been kept yet") {
         // NEVER A FILE NAME OR PATH IN THE LOG: the reason is PluginRepo's, in words, and names the kept file only as "the kept catalogue".
         cascade::core::diagWarnf("plugin store: kept catalogue ignored - %s", error.c_str());
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::CatalogueBad);
     }
 }
 
@@ -187,6 +188,7 @@ void Engine::loadCachedSites() {
         } else if (error != "no catalogue has been kept yet") {
             // The reason is PluginRepo's, in words, and names the file only as "the kept catalogue": never an address or a path in the log.
             cascade::core::diagWarnf("plugin store: a site's kept catalogue ignored - %s", error.c_str());
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::CatalogueBad);
         }
         siteStatus_.push_back(std::move(st));
     }

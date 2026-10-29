@@ -254,6 +254,7 @@ void EngineService::setAsideDamaged() {
             break;
     }
     writer_.forbidWrites("config: not saved - the damaged settings file could not be kept aside");
+    cascade::core::health::noteRecovered(cascade::core::health::Recovered::FileKept);
     cascade::core::diagWarnf(
         "settings: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it in this session", bytes);
     std::fprintf(stderr, "%s: the damaged settings file could not be kept aside, so nothing will be saved over it in this run\n",

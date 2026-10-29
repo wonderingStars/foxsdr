@@ -20,6 +20,7 @@
 
 #include "core/frame_timing.hpp"
 #include "core/i18n.hpp"
+#include "core/issue_report.hpp"
 #include "core/telemetry.hpp"
 
 namespace cascade::core::health {
@@ -48,6 +49,28 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"sdrenum", true},      // the service stays wedged
     {"sdrlost", true},      // the session stays lost
     {"audiolead", true},    // the lead steps up at most three times, and "this session had it" is the fact
+    {"viewport", true},     // separate windows stay off for the session: "this session had it" is the fact
+    // The 2026-10-28 survey's words (0.99.100). Once a session where the fault repeats by
+    // itself or condemns something for the session; once an occurrence where each is a
+    // separate event the person met.
+    {"readerleak", true},    // the radio is condemned for the session
+    {"closeleak", true},     // a wedged host API wedges every close
+    {"linkstranded", true},  // the link stays stranded
+    {"streamrestart", true}, // a pipe that halts halts again
+    {"tunerretry", true},    // a marginal bus stays marginal
+    {"latecall", true},      // a slow driver stays slow
+    {"scanlimit", true},     // every rescan can run out of time again
+    {"usbstuck", true},      // the wedged node stays wedged
+    {"ratesdefault", false}, // per open: each is a radio the person opened
+    {"gainrefused", false},  // per open
+    {"ppmrefused", false},   // per open or change
+    {"iqfilegone", true},    // start-up, once by nature
+    {"cataloguebad", true},  // start-up, once by nature
+    {"catstop", false},      // per stop
+    {"filekept", true},      // start-up, once by nature
+    {"takeheader", false},   // per take: each is a recording the person made
+    {"sentinelgone", true},  // the watcher is gone for the session
+    {"displaywatch", true},  // start-up, once by nature
     {"pluginfault", false},       // each absorbed fault switches that plugin off, so the next is another plugin's or another session's
     {"pluginquarantine", false},  // likewise: one per plugin switched off
     {"pluginwedge", false},       // each is a call that never returned (or an unload that timed out inside one)
@@ -1026,6 +1049,10 @@ void noteSlowFrame(int frameScope, int tier) {
 }
 
 void noteRecovered(Recovered r) {
+    // ...AND REPORTED (0.99.100, core/issue_report.hpp): once a session per word, under
+    // the Diagnostics switch rather than usage reporting, so the feed hears of a fault
+    // the person met whether or not this count is ever sent.
+    issue::fileIssueReport(r);
     const std::string token = tokenRecovered(r);
     if (!token.empty()) { note(token); }
 }
@@ -1033,19 +1060,21 @@ void noteRecovered(Recovered r) {
 namespace {
 // The words raised and not yet counted: one bit each. Lock-free, so a thread that
 // must not take a lock can still say "this happened".
-std::atomic<std::uint32_t> g_raisedRecovered{0};
+// Sixty-four bits: the vocabulary passed thirty-two words in 0.99.100.
+static_assert(kRecoveredCount <= 64, "raiseRecovered holds one bit per word");
+std::atomic<std::uint64_t> g_raisedRecovered{0};
 }  // namespace
 
 void raiseRecovered(Recovered r) {
     const std::size_t i = static_cast<std::size_t>(r);
-    if (i < kRecoveredCount) { g_raisedRecovered.fetch_or(1u << i, std::memory_order_relaxed); }
+    if (i < kRecoveredCount) { g_raisedRecovered.fetch_or(1ull << i, std::memory_order_relaxed); }
 }
 
 void drainRecovered() {
-    const std::uint32_t bits = g_raisedRecovered.exchange(0u, std::memory_order_relaxed);
+    const std::uint64_t bits = g_raisedRecovered.exchange(0ull, std::memory_order_relaxed);
     if (bits == 0) { return; }
     for (std::size_t i = 0; i < kRecoveredCount; ++i) {
-        if ((bits & (1u << i)) != 0) { noteRecovered(static_cast<Recovered>(i)); }
+        if ((bits & (1ull << i)) != 0) { noteRecovered(static_cast<Recovered>(i)); }
     }
 }
 
@@ -1062,30 +1091,41 @@ void RecoveryWatch::poll(const RecoveryReadings& now) {
     auto g = globalLedger();
     if (const std::uint32_t n = moved(now.sourceThreadsAbandoned, last_.sourceThreadsAbandoned)) {
         g->note(tokenRecovered(Recovered::SrcThread), n);
+        issue::fileIssueReport(Recovered::SrcThread);
     }
     if (const std::uint32_t n = moved(now.vendorCallsAbandoned, last_.vendorCallsAbandoned)) {
         g->note(tokenRecovered(Recovered::VendorCall), n);
+        issue::fileIssueReport(Recovered::VendorCall);
     }
     if (const std::uint32_t n = moved(now.ringDroppedSamples, last_.ringDroppedSamples)) {
         g->note(tokenRecovered(Recovered::RingDrop), n);
+        issue::fileIssueReport(Recovered::RingDrop);
     }
     if (const std::uint32_t n = moved(now.dspThreadExceptions, last_.dspThreadExceptions)) {
         g->note(tokenRecovered(Recovered::DspExc), n);
+        issue::fileIssueReport(Recovered::DspExc);
     }
+    // THE BRANCH'S FIVE (the per-thread watchdog, the plugin containment) are polled counters like the four above, so each is
+    // REPORTED as well as counted - master's rule (0.99.100, core/issue_report.hpp: filed wherever a word is counted, once a session).
     if (const std::uint32_t n = moved(now.threadWedges, last_.threadWedges)) {
         g->note(tokenRecovered(Recovered::ThreadWedge), n);
+        issue::fileIssueReport(Recovered::ThreadWedge);
     }
     if (const std::uint32_t n = moved(now.pluginFaults, last_.pluginFaults)) {
         g->note(tokenRecovered(Recovered::PluginFault), n);
+        issue::fileIssueReport(Recovered::PluginFault);
     }
     if (const std::uint32_t n = moved(now.pluginQuarantines, last_.pluginQuarantines)) {
         g->note(tokenRecovered(Recovered::PluginQuarantine), n);
+        issue::fileIssueReport(Recovered::PluginQuarantine);
     }
     if (const std::uint32_t n = moved(now.pluginWedges, last_.pluginWedges)) {
         g->note(tokenRecovered(Recovered::PluginWedge), n);
+        issue::fileIssueReport(Recovered::PluginWedge);
     }
     if (const std::uint32_t n = moved(now.pluginOveruses, last_.pluginOveruses)) {
         g->note(tokenRecovered(Recovered::PluginOveruse), n);
+        issue::fileIssueReport(Recovered::PluginOveruse);
     }
     last_ = now;
 }

@@ -124,10 +124,11 @@ struct ReportThread {
 };
 
 struct ParsedReport {
-    // "crash" | "hang" are sent; "stall" (a display-driver presentation stall,
-    // see core/hang_watchdog.cpp) parses but is kept on the machine, because it
-    // is not a fault in this application; anything else is refused as
-    // unreadable.
+    // "crash" | "hang" | "issue" are sent ("issue" since 0.99.100: a fault the
+    // program met and carried on from, core/issue_report.hpp); "stall" (a
+    // display-driver presentation stall, see core/hang_watchdog.cpp) parses but
+    // is kept on the machine, because it is not a fault in this application;
+    // anything else is refused as unreadable.
     std::string kind;
     std::string signature;
     // The report's own `reason:` and `code:` lines, verbatim. These are what

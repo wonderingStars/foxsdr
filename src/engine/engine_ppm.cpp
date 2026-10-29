@@ -68,6 +68,7 @@ void Engine::applyPpmForSource() {
             ppmError_ = raw.lastError();
             cascade::core::diagWarnf("source: the %s refused its frequency correction (%s)",
                                      sourceKind_.c_str(), ppmError_.c_str());
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::PpmRefused);
         }
         return;
     }
@@ -131,6 +132,7 @@ void Engine::changePpm(bool on, double ppm) {
             ppmError_ = raw.lastError();
             cascade::core::diagWarnf("source: the %s refused its frequency correction (%s)",
                                      sourceKind_.c_str(), ppmError_.c_str());
+            cascade::core::health::noteRecovered(cascade::core::health::Recovered::PpmRefused);
         }
         return;
     }

@@ -10,6 +10,7 @@
 
 #include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -287,6 +288,7 @@ bool install(GLFWwindow* window) {
                                          DEVICE_NOTIFY_WINDOW_HANDLE) != nullptr) {
         cascade::core::diagLogf("display: watching this session's display state");
     } else {
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::DisplayWatch);
         cascade::core::diagLogf(
             "display: could not watch this session's display state (error %lu) - drawing "
             "continues while the screen is off",

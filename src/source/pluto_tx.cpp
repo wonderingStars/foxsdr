@@ -7,6 +7,7 @@
 #include "source/pluto_tx.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "source/pluto_source.hpp"
 
@@ -800,6 +801,7 @@ void PlutoTx::stopWritingLocked(bool drain) {
             // means the stranded writer still has a live connection to
             // silence the board through if the board comes back.
             g_writersAbandoned.fetch_add(1, std::memory_order_relaxed);
+            core::health::raiseRecovered(core::health::Recovered::ReaderLeak);
             noteFault("waiting for the transmit writer to stop",
                       "the writer did not return; FoxSDR could not confirm the board was made "
                       "quiet - check the radio");

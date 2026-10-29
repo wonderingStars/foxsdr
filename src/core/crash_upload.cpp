@@ -380,7 +380,12 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     // through this line would file it as "not a readable report", which is
     // false and would send whoever read the sidecar looking for a corruption
     // bug that is not there.
-    if (out.kind != "crash" && out.kind != "hang" && out.kind != "stall") { return false; }
+    // "issue" (0.99.100, core/issue_report.hpp) is the third kind the receiving end
+    // accepts: a fault the program met and carried on from, with a reason and a log and
+    // no stack. Sent like a crash, listed there as a fault the application survived.
+    if (out.kind != "crash" && out.kind != "hang" && out.kind != "stall" && out.kind != "issue") {
+        return false;
+    }
 
     // A FREEZE'S REASON IS WHERE THE FRAME WAS (0.99.64). A freeze report has no
     // `reason:` line; it has `frame-scope:`, the part of the frame the window's
@@ -1366,7 +1371,8 @@ bool isReportName(const std::string& name) {
     // crash-*.txt and hang-*.txt ONLY. A .dmp is process memory and is never
     // opened here, let alone sent; diagnostics.txt is the bundle the user
     // copied for themselves and is not ours to transmit.
-    return name.rfind("crash-", 0) == 0 || name.rfind("hang-", 0) == 0;
+    return name.rfind("crash-", 0) == 0 || name.rfind("hang-", 0) == 0 ||
+           name.rfind("issue-", 0) == 0;
 }
 
 }  // namespace

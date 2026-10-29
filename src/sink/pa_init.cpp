@@ -31,6 +31,7 @@ std::uint64_t paStreamListWaitsAbandoned() { return 0; }
 #include <shared_mutex>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 
 namespace cascade::sink {
 
@@ -121,6 +122,7 @@ PaStreamListGuard::PaStreamListGuard(Mode mode) {
         if (!holderStopped && !starved) { continue; }
         gStreamListWaitsAbandoned.fetch_add(1, std::memory_order_relaxed);
         if (holderStopped) {
+            cascade::core::health::raiseRecovered(cascade::core::health::Recovered::CloseLeak);
             cascade::core::diagWarnf(
                 "audio: PortAudio's stream list was held for more than %lld ms (a sound card close "
                 "that has stopped answering?); going ahead without it",

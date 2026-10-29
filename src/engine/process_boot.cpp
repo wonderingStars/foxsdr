@@ -28,6 +28,7 @@
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/exit_record.hpp"
+#include "core/issue_report.hpp"
 #include "core/relaunch_marker.hpp"
 #include "core/sentinel.hpp"
 #include "core/stop_signal.hpp"
@@ -378,6 +379,9 @@ void armDiagnostics(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     // applies the user's - a dump is process memory and is never armed on a
     // guess.
     cascade::core::setCrashCaptureEnabled(wanted, false);
+    // ...and the issue reports of faults met before this (0.99.100, core/issue_report.hpp): a watcher that did not start, a display
+    // notification refused. Both programs (the host and the headless engine) come through here, so both file them.
+    cascade::core::issue::filePendingIssueReports();
     cascade::core::DiagLog::instance().configure(
         wanted ? cascade::core::diagLogDir() : std::string(), wanted);
     cascade::core::diagLogf("FoxSDR %s (%s) starting", cascade::versionString(),

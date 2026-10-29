@@ -287,9 +287,12 @@ int main(int argc, char** argv) {
 
     // --- 3. Crash arming, then the config read, then capture --------------------
     const std::string armCode = slice(boot.blank, arming);
+    // (0.99.100 merge: the issue reports of faults met BEFORE capture was armed - a watcher that did not start, a display notification refused -
+    // are filed the moment it is, in this one place for both programs: master did it in main(), which no longer arms anything.)
     CHECK(inOrder(armCode, {"crashCfg.enabled = false", "installCrashHandlers(", "storedDiagnosticsEnabled(",
-                            "setCrashCaptureEnabled(", "configure("},
+                            "setCrashCaptureEnabled(", "filePendingIssueReports(", "configure("},
                   "armDiagnostics"));
+    CHECK(countOf(boot.blank, "filePendingIssueReports(") == 1);
     // The stored switch is read in this one place (plus its definition).
     CHECK(countOf(boot.blank, "storedDiagnosticsEnabled(") == 2);
     CHECK(countOf(boot.blank, "setCrashCaptureEnabled(") == 1);

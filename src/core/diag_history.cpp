@@ -212,7 +212,8 @@ void parseReport(const std::string& text, ReportSummary& r) {
         if (part == Part::Header) {
             if (key == "kind") {
                 sawKind = true;
-                r.kind = (value == "crash" || value == "hang" || value == "stall")
+                r.kind = (value == "crash" || value == "hang" || value == "stall" ||
+                          value == "issue")
                              ? value
                              : std::string("unknown");
             } else if (key == "reason") {
@@ -386,7 +387,10 @@ ReportListing listRecentReports(const std::string& crashDir, std::time_t now,
         // opens. A .dmp is process memory, the .upload sidecars are read by name,
         // and diagnostics.txt is a bundle the user copied for themselves.
         if (name.size() < 5 || name.compare(name.size() - 4, 4, ".txt") != 0) { continue; }
-        if (name.rfind("crash-", 0) != 0 && name.rfind("hang-", 0) != 0) { continue; }
+        if (name.rfind("crash-", 0) != 0 && name.rfind("hang-", 0) != 0 &&
+            name.rfind("issue-", 0) != 0) {
+            continue;
+        }
         found.push_back({it->path(), fileEpoch(*it)});
     }
     out.readable = !ec || !found.empty();
@@ -415,7 +419,7 @@ std::string reportSummaryLine(const ReportSummary& r) {
     s += ", " + agoText(r.ageSec);
     s += ", version " + (r.version.empty() ? std::string("unknown") : r.version);
     s += ", uptime " + (r.uptimeSec >= 0 ? std::to_string(r.uptimeSec) + " s" : std::string("unknown"));
-    if (r.kind == "crash") {
+    if (r.kind == "crash" || r.kind == "issue") {
         s += ", " + (r.reason.empty() ? std::string("reason not recorded") : r.reason);
         if (!r.code.empty()) { s += " (" + r.code + ")"; }
     } else if (r.kind == "hang" || r.kind == "stall") {

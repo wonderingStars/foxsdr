@@ -98,13 +98,37 @@ enum class Recovered : std::uint8_t {
     SdrEnum,     // the SDRplay service's enumeration was abandoned
     SdrLost,     // the SDRplay API session was lost and shut for the session
     AudioLead,   // the audio buffer was deepened because this computer fell behind (0.99.73)
+    Viewport,    // the driver refused a second OpenGL context mid-session; every page is kept
+                 // inside the main window for the rest of the session (0.99.100)
+    // THE SURVEY OF 2026-10-28 (0.99.100): the handled faults that were logged and never
+    // counted, each now a word and therefore an issue report (core/issue_report.hpp).
+    ReaderLeak,    // a native radio's reader (or Pluto's writer) thread did not stop and was let go
+    CloseLeak,     // a sound device's close did not return in time and was left to finish alone
+    LinkStranded,  // the SDRplay callback was still running after Uninit; its link was stranded
+    StreamRestart, // an Airspy's halted bulk stream was re-armed and streaming continued
+    TunerRetry,    // the RTL-SDR tuner refused an I2C transfer and accepted it on a retry
+    LateCall,      // a SoapySDR or SDRplay control call answered seconds late; changes were held
+    ScanLimit,     // the device search ran out of time: drivers skipped, or walked in-process
+    UsbStuck,      // a USB device's sysfs node did not answer and it was left out of the scan
+    RatesDefault,  // a radio's firmware did not list its rates; a built-in default list was used
+    GainRefused,   // the radio refused the remembered automatic gain; manual gain stays
+    PpmRefused,    // the radio refused its frequency correction; none is applied
+    IqFileGone,    // the saved recording did not reopen at start-up; the generator runs instead
+    CatalogueBad,  // a kept plugin catalogue was unreadable and was ignored until the next fetch
+    CatStop,       // the CAT server could not drain its connections when stopped and gave up
+    FileKept,      // a damaged settings, bookmarks or markers file could not be set aside
+    TakeHeader,    // a recording's file could not be finalised and keeps its opening header
+    SentinelGone,  // the watcher process did not start, or ended while the application ran
+    DisplayWatch,  // the display on/off notification could not be registered
+    // THE ENGINE-EXTRACTION BRANCH'S FIVE (docs/engine-stage4.md 6.27, 6.28), after master's thirty-three: the order is the vocabulary's
+    // order in the Worker, PRIVACY.md and the tests, and master's words keep their places so the next merge from master stays a merge.
     PluginFault,       // a plugin's call faulted and the host absorbed it (core/plugin_fault.hpp, plugin containment P1)
     PluginQuarantine,  // the host switched a plugin off for the session after it faulted, threw or never returned
     PluginWedge,       // a plugin call never returned and the host let it go, or an unload timed out inside a plugin's call
     PluginOveruse,     // a plugin call overran its budget
     ThreadWedge, // a worker thread missed its heartbeat budget and was reported by name (core/thread_beats.hpp)
 };
-inline constexpr std::size_t kRecoveredCount = 19;
+inline constexpr std::size_t kRecoveredCount = 38;
 
 // One event of the vocabulary, as documentation and the Worker see it: its
 // name, the word lists of its qualifiers in order (empty for a bare event), and

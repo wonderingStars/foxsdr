@@ -1210,6 +1210,22 @@ void testRecoveriesAreCountedWhereTheWindowMeetsThem() {
         Access::restore(app, clean);
         CHECK(countOf(g2->counts(), "recovered.patchload") == 0);
     }
+    // `iqfilegone` - REAL (the 0.99.100 merge): the saved I/Q file that does not reopen at start-up. Master counted it in AppWindow::applyConfig; on this
+    // branch the restore is Engine::applyConfig, so the engine counts it. A file that opens counts nothing. (The other sites master counted in the window
+    // - the radio's gain and correction, the catalogues, the damaged files, the takes - moved the same way; test_health_paths holds which file counts each.)
+    {
+        auto g = fresh();
+        th::TestWindow app;
+        cascade::core::AppConfig cfg;
+        cfg.sourceKind = "file";
+        cfg.iqFilePath = (scratchDir("app-iqgone") / "no-such-recording.iq").string();
+        CHECK(countOf(g->counts(), "recovered.iqfilegone") == 0);
+        Access::restore(app, cfg);
+        CHECK(countOf(g->counts(), "recovered.iqfilegone") == 1);
+        // Restored again with the same missing file: the word is "once a session by nature" (it is a start-up fact).
+        Access::restore(app, cfg);
+        CHECK(countOf(g->counts(), "recovered.iqfilegone") == 1);
+    }
     // `sdrenum` and `sdrlost` - SEAM: the process-wide SDRplay table's own trouble word, which the
     // service poll reads (an abandoned scan worker, a lost session). An open that was refused
     // (trouble 1) is a radio failure, counted as one, and is not a recovery.

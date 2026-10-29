@@ -725,10 +725,17 @@ GLFWbool _glfwCreateContextWGL(_GLFWwindow* window,
             }
             else
             {
+                // FoxSDR: the Win32 error code goes in the message, so a field log says WHY
+                // the driver refused. Two Intel UHD machines reported this exact refusal of a
+                // second shared context mid-session (2026-10, GLFW 65543) and the message
+                // alone cannot tell a lost device from exhausted resources from a sharing
+                // rule. `error` is GetLastError as captured above; nothing between there and
+                // here calls into Win32.
                 if (ctxconfig->client == GLFW_OPENGL_API)
                 {
                     _glfwInputError(GLFW_VERSION_UNAVAILABLE,
-                                    "WGL: Failed to create OpenGL context");
+                                    "WGL: Failed to create OpenGL context (Win32 error 0x%08lx)",
+                                    (unsigned long) error);
                 }
                 else
                 {

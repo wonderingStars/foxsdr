@@ -35,6 +35,7 @@
  *
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -43,6 +44,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -53,6 +55,7 @@
 #include <unistd.h>
 #endif
 
+#include "core/health_events.hpp"
 #include "gui/page_geometry.hpp"
 #include "test_check.hpp"
 
@@ -195,6 +198,33 @@ std::string readFile(const fs::path& p) {
     return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
 }
 
+// The issue reports (core/issue_report.hpp) a run left in its reports folder, newest last.
+std::vector<std::string> issueReports(const std::string& tag) {
+    std::vector<fs::path> files;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(g_dir / (tag + "-diag") / "crashes", ec)) {
+        const std::string name = e.path().filename().string();
+        if (name.rfind("issue-", 0) == 0) { files.push_back(e.path()); }
+    }
+    std::sort(files.begin(), files.end());
+    std::vector<std::string> out;
+    for (const fs::path& f : files) { out.push_back(readFile(f)); }
+    return out;
+}
+
+// The health ledger's file for every run of this test (its config files all live in g_dir).
+fs::path ledgerPath() { return g_dir / cascade::core::health::HealthLedger::kFileName; }
+
+// What the ledger counted under `recovered.`, as its file holds it ("token=count" lines).
+std::string recoveredCounts() {
+    std::string out;
+    std::istringstream lines(readFile(ledgerPath()));
+    for (std::string l; std::getline(lines, l);) {
+        if (l.rfind("recovered.", 0) == 0) { out += (out.empty() ? "" : ",") + l; }
+    }
+    return out;
+}
+
 Result once(const std::string& tag, bool single, int refuseAt) {
     Result r;
     const fs::path cfg = g_dir / (tag + ".json");
@@ -203,9 +233,14 @@ Result once(const std::string& tag, bool single, int refuseAt) {
     std::error_code ec;
     fs::remove_all(diag, ec);
     fs::remove_all(shots, ec);
+    // The health ledger (core/health_events.hpp) lives beside the config file, so one run's
+    // counts would be read by the next: each run starts without one.
+    fs::remove(ledgerPath(), ec);
     fs::create_directories(diag, ec);
     fs::create_directories(shots, ec);
-    writeFile(cfg, "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, "
+    // Usage reporting and diagnostics ON (their addresses are the discard port, set in main):
+    // the refusal is a counted health event, and the ledger counts only while both are on.
+    writeFile(cfg, "{ \"telemetryEnabled\": true, \"diagnosticsEnabled\": true, \"updateCheckEnabled\": false, "
                    "\"sourceKind\": \"siggen\", \"uiTheme\": \"today\", \"interfaceScale\": \"100\", "
                    "\"mainView\": \"receiver\", \"bandPlanOverlay\": false, "
                    "\"pluginCatalogueUrl\": \"http://127.0.0.1:9/catalogue.json\" }\n");
@@ -309,6 +344,22 @@ int main(int argc, char** argv) {
             std::printf("    refused: this machine starts with separate windows off - nothing to refuse\n");
         } else if (r.ok) {
             CHECK(r.log.find("could not create a second OpenGL context") != std::string::npos);
+            // ...AND IT WAS COUNTED, once, as the health event `recovered.viewport` (0.99.100):
+            // the one way this ever reaches the website, since the program carries on.
+            std::printf("    refused ledger: %s\n", recoveredCounts().c_str());
+            CHECK(recoveredCounts() == "recovered.viewport=1");
+            // ...AND REPORTED (0.99.100): one issue report in the run's reports folder, of
+            // the viewport word, carrying the log that names the refusal.
+            const std::vector<std::string> issues = issueReports("refused");
+            CHECK(issues.size() == 1);
+            if (issues.size() == 1) {
+                CHECK(issues[0].rfind("kind: issue\n", 0) == 0);
+                CHECK(issues[0].find("\nreason: issue: viewport - ") != std::string::npos);
+                const std::size_t log = issues[0].find("--- log (last ");
+                CHECK(log != std::string::npos);
+                CHECK(issues[0].find("could not create a second OpenGL context", log) !=
+                      std::string::npos);
+            }
             // THE SETUP, or the check below proves nothing: at frame 50 the pages are their own
             // windows, and the map - the page of the field report - is past the main window's
             // edge. (The plugin store opens over the main window by its own placement,
@@ -356,6 +407,9 @@ int main(int argc, char** argv) {
         } else if (r.ok) {
             CHECK(r.log.find("could not create a second OpenGL context") == std::string::npos);
             CHECK(r.log.find("brought inside the main window") == std::string::npos);
+            // ...and nothing was counted or reported: the control run met no refusal.
+            CHECK(recoveredCounts().empty());
+            CHECK(issueReports("kept").empty());
             bool anyOutside = false;
             for (const Page& p : kPages) {
                 const Rect* pg = r.after.page(p.id);
