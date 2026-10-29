@@ -183,6 +183,26 @@ MSVC's `/fsanitize=fuzzer` is used on Windows (Visual Studio 2022 17.14 here). T
 first directory given is where libFuzzer writes what it finds; the second is the
 regression corpus, read as seeds.
 
+**The plugin surface** (plugin containment P2, docs/engine-stage4.md 6.29) has five targets of its own, beside `plugin_index`, `plugin_manifest`
+and `plugin_strings`: `plugin_module` (a file in the plugins folder, judged before any of it runs: PE and ELF headers, exports, in every format
+and for every machine), `plugin_marker` (the clean-exit marker and the strike store, as the next start reads what a dead run left),
+`plugin_settings` (the settings strings a plugin sends and a hand-edited config holds: strict UTF-8, bounds, and that the config writer gives back
+what the check let through), `plugin_hostapi` (a sequence of host API calls with arbitrary arguments against the core that answers them, with the
+owner changing the world between calls) and `plugin_records` (everything a plugin hands BACK - tracks, paths, rows, state, text, pictures - consumed
+by the product's own `PluginUi` and `PluginRunner` through a fake plugin that answers from the input). Their seeds are generated, not captured.
+
+**A bounded pass on every platform: the label `fuzz_smoke`.** `fuzz_smoke <target> <mutants> <seed> <corpus>` (tests/fuzz/fuzz_smoke_main.cpp)
+makes that many deterministic mutants of the corpus and runs them through the target; `ctest -L fuzz_smoke` runs it for the plugin-surface targets
+in a few seconds, with no fuzzing engine, so it is in the ordinary suite. No coverage feedback: it finds the shallow things, the same ones every
+time. **The long run is libFuzzer** (above), by hand or from a nightly job (the nightly CI leg is a master-branch item; none is defined on this
+branch):
+
+```
+cmake -S . -B build-fuzz -G Ninja -DCMAKE_BUILD_TYPE=Release -DCASCADE_SANITIZE=address,undefined,fuzzer -DCASCADE_FUZZ=ON   # CC=clang CXX=clang++
+ninja -C build-fuzz fuzz_plugin_module fuzz_plugin_marker fuzz_plugin_settings fuzz_plugin_hostapi fuzz_plugin_records
+mkdir -p work && build-fuzz/tests/fuzz_plugin_records -max_total_time=3600 -timeout=60 work tests/fuzz/corpus/plugin_records
+```
+
 **A finding becomes a test.** Minimise it (`-minimize_crash=1`), put the file in
 `tests/fuzz/corpus/<target>/` with a name that says what it was, and write the
 ordinary unit test that fails without the fix, in the existing test file for that

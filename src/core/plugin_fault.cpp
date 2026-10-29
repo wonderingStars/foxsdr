@@ -28,6 +28,9 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#elif defined(__linux__)
+#include <sys/uio.h>
+#include <unistd.h>
 #endif
 
 namespace cascade::core::fault {
@@ -58,6 +61,8 @@ struct Slot {
     std::atomic<std::uint64_t> overruns{0};
     std::atomic<std::uint64_t> wedges{0};
     std::atomic<std::uint64_t> unloadTimeouts{0};
+    std::atomic<std::uint64_t> misuse[kMisuseCount] = {};  // the tripwires (plugin containment P2)
+    std::atomic<std::uint32_t> noticed{0};                  // bit per Misuse already said once in the log
 };
 
 namespace {
@@ -75,7 +80,17 @@ struct State {
     std::atomic<std::uint64_t> overruns{0};
     std::atomic<std::uint64_t> wedges{0};
     std::atomic<unsigned> budgetOverride[kEntryCount] = {};
+    std::atomic<std::uint64_t> misuseTotals[kMisuseCount] = {};
+    std::atomic<std::uint64_t> misuseSeq{0};      // advances when any slot counts a tripwire
+    std::atomic<std::uint64_t> misuseSeqSeen{0};  // what drainMisuseNotices last looked at
 };
+
+// The guarded calls the calling thread is inside, innermost last (the tripwires' "inside a call into this plugin" and the host's re-entry
+// check). A fixed depth: calls into plugins do not nest in this host (that is the HostReentry rule), so four is generous; a deeper stack
+// stops being recorded and is no worse than before.
+constexpr std::size_t kCallDepthMax = 4;
+thread_local const Slot* t_inCall[kCallDepthMax] = {};
+thread_local std::size_t t_inCallDepth = 0;
 
 // Published once the state exists, so the CRASH path can ask "is there anything to attribute?" without constructing it (a first-use
 // allocation inside a fault handler is exactly what that path must never do).
@@ -208,31 +223,36 @@ static_assert(reasonStartsWith(kAbsorbedPluginReason, kAbsorbedPluginFaultReason
 // The filter. It absorbs what source/vendor_guard.cpp absorbs (the same codes, at an address in an image that is not this program's own
 // - one predicate, so the two guards cannot disagree about what is "theirs") and files the fault before it unwinds, where the exception
 // information is still valid. A fault it declines goes to the crash handler, and kills the process with the ordinary report.
-int pluginFaultFilter(EXCEPTION_POINTERS* ep, unsigned long* codeOut) noexcept {
+int pluginFaultFilter(EXCEPTION_POINTERS* ep, unsigned long* codeOut, bool lentMemory) noexcept {
     if (ep == nullptr || ep->ExceptionRecord == nullptr) { return EXCEPTION_CONTINUE_SEARCH; }
     const DWORD code = ep->ExceptionRecord->ExceptionCode;
     const void* addr = ep->ExceptionRecord->ExceptionAddress;
-    if (!cascade::source::vendorGuardAbsorbs(static_cast<std::uint32_t>(code), addr)) { return EXCEPTION_CONTINUE_SEARCH; }
+    // The read of memory a plugin lent: the faulting instruction is the host's copy, the address it touched the plugin's - a bad pointer is
+    // the plugin's whoever's instruction found out. Only an access violation or an in-page error, and only inside the copy helpers' thunks.
+    const bool lent = lentMemory && (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR);
+    if (!lent && !cascade::source::vendorGuardAbsorbs(static_cast<std::uint32_t>(code), addr)) { return EXCEPTION_CONTINUE_SEARCH; }
     *codeOut = static_cast<unsigned long>(code);
     cascade::core::reportAbsorbedFault(kAbsorbedPluginReason, static_cast<unsigned long>(code), addr, ep);
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
 // MSVC rejects __try in a frame that needs C++ object unwinding (C2712): nothing but pointers lives here.
-bool protectedCall(void (*fn)(void*) noexcept, void* ctx, unsigned long* code) noexcept {
+bool protectedCall(void (*fn)(void*) noexcept, void* ctx, unsigned long* code, bool lentMemory) noexcept {
     __try {
         fn(ctx);
         return true;
-    } __except (pluginFaultFilter(GetExceptionInformation(), code)) {
+    } __except (pluginFaultFilter(GetExceptionInformation(), code, lentMemory)) {
         return false;
     }
 }
 
 #else
 
-bool protectedCall(void (*fn)(void*) noexcept, void* ctx, unsigned long* code) noexcept {
+bool protectedCall(void (*fn)(void*) noexcept, void* ctx, unsigned long* code, bool lentMemory) noexcept {
     // POSIX cannot return from a SIGSEGV handler into the faulting call: the plugin runs unguarded (plugin_fault.hpp, the platform caveat).
+    // (The reads of lent memory do not fault there: they are made by a call that answers EFAULT.)
     (void)code;
+    (void)lentMemory;
     fn(ctx);
     return true;
 }
@@ -307,10 +327,19 @@ void clearModule(const std::string& pluginKeyOrId) {
 
 namespace detail {
 
-Outcome run(Slot* s, Entry e, void (*fn)(void*) noexcept, void* ctx) noexcept {
+Outcome run(Slot* s, Entry e, void (*fn)(void*) noexcept, void* ctx, bool lentMemory) noexcept {
     if (s == nullptr) { s = &state().shared; }
     if (s->why.load(std::memory_order_acquire) != 0) { return Outcome::Refused; }
     s->lastEntry.store(static_cast<std::uint8_t>(e), std::memory_order_relaxed);
+    // THE HOST'S OWN RULE (Misuse::HostReentry): a call into this plugin begun while this thread is already inside one into it.
+    if (insideCallOf(s)) { noteMisuse(s, Misuse::HostReentry); }
+    struct InCall {
+        explicit InCall(const Slot* slot) {
+            if (t_inCallDepth < kCallDepthMax) { t_inCall[t_inCallDepth] = slot; }
+            ++t_inCallDepth;
+        }
+        ~InCall() { --t_inCallDepth; }
+    } inCall(s);
 
     const unsigned budget = effectiveBudget(e);
     const unsigned wedge = budget * kWedgeFactor;
@@ -319,7 +348,7 @@ Outcome run(Slot* s, Entry e, void (*fn)(void*) noexcept, void* ctx) noexcept {
     {
         // The existing monitor names it: the declared call is in the table the hang watchdog's poll reads.
         cascade::core::beats::CallScope scope(s, s->pub.load(std::memory_order_relaxed), entryWord(e), budget, wedge);
-        ok = protectedCall(fn, ctx, &code);
+        ok = protectedCall(fn, ctx, &code, lentMemory);
         // A LATE RETURN the monitor never saw (no watchdog in this process, or it had not looked yet) is counted here; a stage the
         // monitor claimed while the call was in flight is not counted twice.
         const std::int64_t took = scope.elapsedMs();
@@ -342,6 +371,85 @@ Outcome noteThrown(Slot* s, Entry e) noexcept {
 }
 
 }  // namespace detail
+
+const char* misuseWord(Misuse m) {
+    switch (m) {
+        case Misuse::WrongThread: return "wrong-thread";
+        case Misuse::AfterDetach: return "after-detach";
+        case Misuse::Flood: return "flood";
+        case Misuse::BadCall: return "bad-call";
+        case Misuse::BadReturn: return "bad-return";
+        case Misuse::HostReentry: return "host-reentry";
+    }
+    return "unknown";
+}
+
+bool insideCallOf(const Slot* s) noexcept {
+    if (s == nullptr) { return false; }
+    const std::size_t n = t_inCallDepth < kCallDepthMax ? t_inCallDepth : kCallDepthMax;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (t_inCall[i] == s) { return true; }
+    }
+    return false;
+}
+
+void noteMisuse(Slot* s, Misuse m) noexcept {
+    if (s == nullptr) { return; }
+    State* const published = g_published.load(std::memory_order_acquire);
+    if (published == nullptr || s == &published->shared) { return; }  // a key-less call belongs to no plugin
+    const std::size_t k = static_cast<std::size_t>(m);
+    if (k >= kMisuseCount) { return; }
+    s->misuse[k].fetch_add(1, std::memory_order_relaxed);
+    published->misuseTotals[k].fetch_add(1, std::memory_order_relaxed);
+    published->misuseSeq.fetch_add(1, std::memory_order_release);
+}
+
+void pin(Slot* s) noexcept {
+    if (s == nullptr) { return; }
+    State* const published = g_published.load(std::memory_order_acquire);
+    if (published == nullptr || s == &published->shared) { return; }
+    s->pinned.store(true, std::memory_order_release);
+}
+
+bool noteDetachedCall(Slot* s) noexcept {
+    if (s == nullptr || insideCallOf(s)) { return false; }  // destroy() saving its state after the stop is the ABI's own allowance
+    noteMisuse(s, Misuse::AfterDetach);
+    pin(s);  // a thread that outlived destroy() may be inside the image when it would be unmapped
+    return true;
+}
+
+std::uint64_t misuseTotal(Misuse m) {
+    const std::size_t k = static_cast<std::size_t>(m);
+    return k < kMisuseCount ? state().misuseTotals[k].load(std::memory_order_relaxed) : 0u;
+}
+
+std::vector<MisuseNotice> drainMisuseNotices() {
+    State& st = state();
+    std::vector<MisuseNotice> out;
+    const std::uint64_t seq = st.misuseSeq.load(std::memory_order_acquire);
+    if (seq == st.misuseSeqSeen.load(std::memory_order_relaxed)) { return out; }   // the settled pass: nothing counted since the last look
+    st.misuseSeqSeen.store(seq, std::memory_order_relaxed);
+    const std::size_t n = st.count.load(std::memory_order_acquire);
+    for (std::size_t i = 0; i < n; ++i) {
+        Slot* s = st.slots[i].load(std::memory_order_relaxed);
+        for (std::size_t k = 0; k < kMisuseCount; ++k) {
+            const std::uint64_t c = s->misuse[k].load(std::memory_order_relaxed);
+            if (c == 0 || (s->noticed.load(std::memory_order_relaxed) & (1u << k)) != 0) { continue; }
+            s->noticed.fetch_or(1u << k, std::memory_order_relaxed);
+            MisuseNotice note;
+            note.id = s->id;
+            note.publicId = s->pub.load(std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lk(st.identity);
+                note.version = s->version;
+            }
+            note.kind = static_cast<Misuse>(k);
+            note.count = c;
+            out.push_back(std::move(note));
+        }
+    }
+    return out;
+}
 
 Why quarantineWhy(const Slot* s) {
     return s != nullptr ? static_cast<Why>(s->why.load(std::memory_order_acquire)) : Why::None;
@@ -415,6 +523,7 @@ std::vector<HealthRow> health() {
         r.overruns = s->overruns.load(std::memory_order_relaxed);
         r.wedges = s->wedges.load(std::memory_order_relaxed);
         r.unloadTimeouts = s->unloadTimeouts.load(std::memory_order_relaxed);
+        for (std::size_t k = 0; k < kMisuseCount; ++k) { r.misuse[k] = s->misuse[k].load(std::memory_order_relaxed); }
         r.quarantined = static_cast<Why>(s->why.load(std::memory_order_relaxed));
         r.lastEntry = static_cast<Entry>(s->lastEntry.load(std::memory_order_relaxed));
         out.push_back(std::move(r));
@@ -482,12 +591,15 @@ bool attributeCrash(const std::uintptr_t* frames, int nFrames, unsigned long fau
             }
         }
     }
-    if (found == nullptr) {
-        const void* owner = nullptr;
-        if (cascade::core::beats::callOfThread(faultingTid, &owner, nullptr) && isSlotPointer(owner) && owner != &st.shared) {
-            found = static_cast<const Slot*>(owner);
-            how = "in-flight";
-        }
+    // The call in flight on the faulting thread, if any: it names the plugin when no module range does, and the ENTRY in either case (a
+    // plugin whose module is on the stack AND whose guarded call is in flight is named by the stack and still gets its entry).
+    const void* flightOwner = nullptr;
+    const char* flightWord = nullptr;
+    const bool inFlight = cascade::core::beats::callOfThread(faultingTid, &flightOwner, &flightWord) && isSlotPointer(flightOwner) &&
+                          flightOwner != &st.shared;
+    if (found == nullptr && inFlight) {
+        found = static_cast<const Slot*>(flightOwner);
+        how = "in-flight";
     }
     if (found == nullptr) {
         out.found = false;
@@ -507,6 +619,149 @@ bool attributeCrash(const std::uintptr_t* frames, int nFrames, unsigned long fau
     out.how[k] = '\0';
     for (k = 0; found->id[k] != '\0' && k + 1 < sizeof(out.runId); ++k) { out.runId[k] = found->id[k]; }
     out.runId[k] = '\0';
+    out.entry[0] = '\0';
+    if (inFlight && flightOwner == found && flightWord != nullptr) {
+        for (k = 0; flightWord[k] != '\0' && k + 1 < sizeof(out.entry); ++k) { out.entry[k] = flightWord[k]; }
+        out.entry[k] = '\0';
+    }
+    return true;
+}
+
+// ---- reading memory a plugin lent ------------------------------------------------------------------------------------------------------
+
+namespace {
+
+// One chunk of the plugin's memory into the host's. Windows reads it with the instruction that faults (the caller's guard catches it); Linux asks
+// the kernel to copy it from this process to itself, which answers EFAULT or a short count where the instruction would have faulted.
+bool readLent(void* dst, const void* src, std::size_t bytes, std::size_t* got) noexcept {
+#if defined(__linux__)
+    constexpr std::size_t kChunk = 64u << 20;   // (a single call moves at most 0x7ffff000 bytes)
+    std::size_t done = 0;
+    while (done < bytes) {
+        const std::size_t want = bytes - done < kChunk ? bytes - done : kChunk;
+        iovec local{static_cast<char*>(dst) + done, want};
+        iovec remote{const_cast<char*>(static_cast<const char*>(src)) + done, want};
+        const ssize_t n = ::process_vm_readv(::getpid(), &local, 1, &remote, 1, 0);
+        if (n <= 0) {
+            if (got != nullptr) { *got = done; }
+            return false;
+        }
+        done += static_cast<std::size_t>(n);
+    }
+    if (got != nullptr) { *got = done; }
+    return true;
+#else
+    std::memcpy(dst, src, bytes);
+    if (got != nullptr) { *got = bytes; }
+    return true;
+#endif
+}
+
+struct CopyJob {
+    void* dst;
+    const void* src;
+    std::size_t bytes;
+    bool ok;
+};
+void copyThunk(void* p) noexcept {
+    CopyJob* j = static_cast<CopyJob*>(p);
+    j->ok = readLent(j->dst, j->src, j->bytes, nullptr);
+}
+
+struct RowsJob {
+    std::uint8_t* dst;
+    std::size_t rowBytes;
+    const std::uint8_t* src;
+    std::size_t stride;
+    std::size_t rows;
+    bool ok;
+};
+void rowsThunk(void* p) noexcept {
+    RowsJob* j = static_cast<RowsJob*>(p);
+    j->ok = true;
+    for (std::size_t y = 0; y < j->rows && j->ok; ++y) {
+        j->ok = readLent(j->dst + y * j->rowBytes, j->src + y * j->stride, j->rowBytes, nullptr);
+    }
+}
+
+constexpr std::size_t kStringBufBytes = 1024;
+struct StringJob {
+    const char* src;
+    char* buf;
+    std::size_t max;
+    std::size_t len;
+    bool ok;
+};
+void stringThunk(void* p) noexcept {
+    StringJob* j = static_cast<StringJob*>(p);
+    j->len = 0;
+    j->ok = true;
+#if defined(__linux__)
+    while (j->len < j->max) {
+        const std::size_t want = j->max - j->len < 64 ? j->max - j->len : 64;
+        std::size_t got = 0;
+        (void)readLent(j->buf + j->len, j->src + j->len, want, &got);
+        if (got == 0) {   // the very first byte of this chunk is unreadable
+            j->ok = false;
+            return;
+        }
+        for (std::size_t i = 0; i < got; ++i) {
+            if (j->buf[j->len + i] == '\0') {
+                j->len += i;
+                return;
+            }
+        }
+        j->len += got;   // (a short chunk with no terminator: the next read starts at the unreadable byte and fails)
+    }
+#else
+    while (j->len < j->max) {
+        const char c = j->src[j->len];
+        if (c == '\0') { return; }
+        j->buf[j->len++] = c;
+    }
+#endif
+}
+
+// What a read that reported failure without faulting (Linux) costs the plugin: the same as a fault, counted and switched off.
+bool finishRead(Slot* s, Entry e, Outcome o, bool ok) noexcept {
+    if (o != Outcome::Ran) { return false; }   // refused (switched off already) or faulted (counted and switched off by run())
+    if (!ok) {
+        noteFault(s, e, 0xC0000005ul);
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+bool copyFromPlugin(Slot* s, Entry e, void* dst, const void* src, std::size_t bytes) noexcept {
+    if (bytes == 0) { return true; }
+    CopyJob j{dst, src, bytes, false};
+    const Outcome o = detail::run(s, e, &copyThunk, &j, true);
+    return finishRead(s, e, o, j.ok);
+}
+
+bool copyRowsFromPlugin(Slot* s, Entry e, std::uint8_t* dst, std::size_t rowBytes, const std::uint8_t* src, std::size_t stride,
+                        std::size_t rows) noexcept {
+    if (rowBytes == 0 || rows == 0) { return true; }
+    RowsJob j{dst, rowBytes, src, stride, rows, false};
+    const Outcome o = detail::run(s, e, &rowsThunk, &j, true);
+    return finishRead(s, e, o, j.ok);
+}
+
+bool copyStringFromPlugin(Slot* s, Entry e, const char* src, std::size_t maxBytes, std::string& out) noexcept {
+    out.clear();
+    if (src == nullptr || maxBytes == 0) { return true; }
+    char buf[kStringBufBytes];
+    StringJob j{src, buf, maxBytes < kStringBufBytes ? maxBytes : kStringBufBytes, 0, false};
+    const Outcome o = detail::run(s, e, &stringThunk, &j, true);
+    if (!finishRead(s, e, o, j.ok)) { return false; }
+    try {
+        out.assign(buf, j.len);
+    } catch (...) {
+        out.clear();
+        return false;
+    }
     return true;
 }
 
@@ -530,7 +785,12 @@ void resetForTest() {
         s->overruns.store(0);
         s->wedges.store(0);
         s->unloadTimeouts.store(0);
+        for (auto& m : s->misuse) { m.store(0); }
+        s->noticed.store(0);
     }
+    for (auto& m : st.misuseTotals) { m.store(0); }
+    st.misuseSeq.store(0);
+    st.misuseSeqSeen.store(0);
     st.faults.store(0);
     st.quarantines.store(0);
     st.overruns.store(0);

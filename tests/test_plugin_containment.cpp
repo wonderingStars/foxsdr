@@ -83,7 +83,7 @@ void testNoRawCalls() {
     const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src";
     // every entry point the guard owns, spelled as the host spells a call through a table pointer
     const char* guarded[] = {"->create(", "->destroy(", "->poll_text(", "->poll_image(", "->release_image(", "->poll_tracks(", "->poll_paths(",
-                             "->poll_state(", "->poll_rows(", "->get_tile(", "->release_tile(", "->get_info(", "->release_info(",
+                             "->poll_state(", "->columns(", "->poll_rows(", "->get_tile(", "->release_tile(", "->get_info(", "->release_info(",
                              "->attach(", "->press(", "preset->count(", "preset->get("};
     std::size_t files = 0;
     std::vector<std::string> offenders;
@@ -110,6 +110,34 @@ void testNoRawCalls() {
     CHECK(files > 100);   // the scan really looked at the tree
     for (const std::string& o : offenders) { std::printf("FAIL a raw plugin call outside core/plugin_calls.hpp: %s\n", o.c_str()); }
     CHECK(offenders.empty());
+
+    // MEMORY A PLUGIN LENT (plugin containment P2, fault::copyFromPlugin and its kin): a pixel row, a tile row, a vertex array or a string that a
+    // plugin's struct points at is read by the host's own code after the call has returned, outside the guard - so it is read through the helpers
+    // that guard it, and by nothing else. The forms below are the ones the unguarded reads took; none may come back anywhere under src/.
+    {
+        std::vector<std::string> lent;
+        for (const auto& e : fs::recursive_directory_iterator(src, ec)) {
+            if (!e.is_regular_file()) { continue; }
+            const std::string name = e.path().filename().string();
+            if (name == "plugin_fault.cpp" || name == "plugin_fault.hpp") { continue; }
+            const std::string ext = e.path().extension().string();
+            if (ext != ".cpp" && ext != ".hpp") { continue; }
+            std::ifstream in(e.path());
+            std::string line;
+            int lineNo = 0;
+            while (std::getline(in, line)) {
+                ++lineNo;
+                const std::size_t cut = line.find("//");
+                const std::string code = cut == std::string::npos ? line : line.substr(0, cut);
+                const bool pixels = code.find("img.pixels +") != std::string::npos || code.find("t.pixels +") != std::string::npos;
+                const bool points = code.find("assign(p.points") != std::string::npos;
+                const bool strings = code.find("copyField(t.") != std::string::npos;
+                if (pixels || points || strings) { lent.push_back(name + ":" + std::to_string(lineNo) + "  " + code); }
+            }
+        }
+        for (const std::string& o : lent) { std::printf("FAIL an unguarded read of memory a plugin lent: %s\n", o.c_str()); }
+        CHECK(lent.empty());
+    }
 
     // The HOT calls (the signal path) are the ones that remain unguarded, named: a change to this list is a decision, not an accident.
     const std::string runner = readFile(src / "core" / "plugin_runner.cpp");

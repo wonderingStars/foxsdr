@@ -42,29 +42,37 @@ void copyBoundedUtf8(char* dst, std::size_t cap, const char* src) {
     dst[n] = '\0';
 }
 
-// Whole-string UTF-8 check: every lead byte followed by the right number of
-// continuation bytes, no overlong 2-byte form, nothing above U+10FFFF. A
-// settings value goes into a JSON config file, and JSON is UTF-8 by
-// definition - refusing here is better than having the writer mangle it later.
+// Whole-string UTF-8 check, the standard's (RFC 3629): every lead byte followed by the right number of continuation bytes, no overlong form
+// (C0, C1, E0 80..9F, F0 80..8F), no UTF-16 surrogate (ED A0..BF) and nothing above U+10FFFF (F4 90.., F5..). A settings value goes into a JSON
+// config file, and JSON is UTF-8 by definition - refusing here is better than having the writer mangle it later. (The check used to refuse only
+// the overlong two-byte form and the lead bytes past F4; the fuzz target `plugin_settings` found that what it let through came back from the
+// file as U+FFFD - docs/engine-stage4.md 6.29.)
 bool validUtf8(const char* s, std::size_t n) {
     std::size_t i = 0;
     while (i < n) {
         const auto c = static_cast<unsigned char>(s[i]);
         std::size_t len = 0;
+        unsigned char lo = 0x80u;   // the range the FIRST continuation byte may take: wider than 80..BF only for no lead byte, narrower for five
+        unsigned char hi = 0xBFu;
         if (c < 0x80u) {
             len = 1;
-        } else if (c >= 0xC2u && c < 0xE0u) {
+        } else if (c >= 0xC2u && c <= 0xDFu) {
             len = 2;
-        } else if (c >= 0xE0u && c < 0xF0u) {
+        } else if (c >= 0xE0u && c <= 0xEFu) {
             len = 3;
-        } else if (c >= 0xF0u && c < 0xF5u) {
+            if (c == 0xE0u) { lo = 0xA0u; }   // not an overlong form
+            if (c == 0xEDu) { hi = 0x9Fu; }   // not a surrogate
+        } else if (c >= 0xF0u && c <= 0xF4u) {
             len = 4;
+            if (c == 0xF0u) { lo = 0x90u; }   // not an overlong form
+            if (c == 0xF4u) { hi = 0x8Fu; }   // not above U+10FFFF
         } else {
             return false;
         }
         if (i + len > n) { return false; }
         for (std::size_t k = 1; k < len; ++k) {
-            if ((static_cast<unsigned char>(s[i + k]) & 0xC0u) != 0x80u) { return false; }
+            const auto b = static_cast<unsigned char>(s[i + k]);
+            if (k == 1 ? (b < lo || b > hi) : (b & 0xC0u) != 0x80u) { return false; }
         }
         i += len;
     }
@@ -195,6 +203,7 @@ PluginApiClient& PluginApiCore::client(const std::string& key, const std::string
     c->key = key;
     c->name = name;
     c->capabilities = capabilities;
+    c->slot = fault::slotFor(key);
     c->index = clients_.size();
     ClientState st;
     st.markers.reserve(CASCADE_MAX_MARKERS_PER_PLUGIN);

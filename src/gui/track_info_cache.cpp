@@ -12,19 +12,8 @@ namespace cascade::gui {
 namespace {
 constexpr std::size_t kPollBufBytes = 4096;
 
-// Third-party bytes about to become a std::string the GUI will render every
-// frame: bounded, and stopped at the first NUL like the C string it claims to
-// be. A null pointer is simply "nothing to say".
-std::string copyField(const char* s, std::size_t cap) {
-    if (s == nullptr) {
-        return std::string();
-    }
-    std::size_t n = 0;
-    while (n < cap && s[n] != '\0') {
-        ++n;
-    }
-    return std::string(s, n);
-}
+// (A string the plugin lent is read through fault::copyStringFromPlugin below - bounded, stopped at the first NUL like the C string it claims
+// to be, a null pointer "nothing to say", and a pointer that cannot be read the plugin's fault rather than the process's.)
 }  // namespace
 
 TrackInfoCache::~TrackInfoCache() { detach(); }
@@ -83,13 +72,21 @@ const TrackInfoCache::Info* TrackInfoCache::get(const std::string& id, std::uint
 
     Info info;
     if (got == CASCADE_INFO_READY) {
-        info.known = true;
-        info.registration = copyField(t.registration, kMaxFieldBytes);
-        info.typeCode = copyField(t.typeCode, kMaxFieldBytes);
-        info.typeName = copyField(t.typeName, kMaxFieldBytes);
-        info.manufacturer = copyField(t.manufacturer, kMaxFieldBytes);
-        info.operatorName = copyField(t.operatorName, kMaxFieldBytes);
-        info.country = copyField(t.country, kMaxFieldBytes);
+        namespace fault = cascade::core::fault;
+        bool readable = true;
+        const auto field = [&](const char* s) {
+            std::string v;
+            // (the first string that cannot be read switches the plugin off, which refuses the reads after it)
+            if (readable) { readable = fault::copyStringFromPlugin(slot_, fault::Entry::GetInfo, s, kMaxFieldBytes, v); }
+            return v;
+        };
+        info.registration = field(t.registration);
+        info.typeCode = field(t.typeCode);
+        info.typeName = field(t.typeName);
+        info.manufacturer = field(t.manufacturer);
+        info.operatorName = field(t.operatorName);
+        info.country = field(t.country);
+        info.known = readable;
         // The borrow ends the moment the copies are taken.
         cascade::core::calls::releaseInfo(slot_, api_, handle_, &t);
     }

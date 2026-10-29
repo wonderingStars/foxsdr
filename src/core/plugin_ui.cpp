@@ -304,6 +304,8 @@ struct HostCtx {
     // the four original functions, which have to test `self` for that.
     std::shared_ptr<PluginApiCore> core;
     PluginApiClient* client = nullptr;  // owned by `core`, never freed before it
+    // The plugin's slot in the containment: where the tripwires count this plugin's misuse of the host API (plugin containment P2).
+    fault::Slot* slot = nullptr;
 };
 
 namespace {
@@ -410,6 +412,7 @@ inline void raiseHostFault() noexcept {
 double hostCentre(void* ctx) {
     try {
         auto* c = static_cast<HostCtx*>(ctx);
+        if (c != nullptr && c->self == nullptr) { fault::noteDetachedCall(c->slot); }   // (AFTER UNLOAD: the owner is gone)
         if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0.0; }
         return c->self->servicesCentreHz();
     } catch (...) {
@@ -421,6 +424,7 @@ double hostCentre(void* ctx) {
 double hostRate(void* ctx) {
     try {
         auto* c = static_cast<HostCtx*>(ctx);
+        if (c != nullptr && c->self == nullptr) { fault::noteDetachedCall(c->slot); }
         if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0.0; }
         return c->self->servicesRateHz();
     } catch (...) {
@@ -432,6 +436,7 @@ double hostRate(void* ctx) {
 std::int32_t hostTune(void* ctx, double centreHz) {
     try {
         auto* c = static_cast<HostCtx*>(ctx);
+        if (c != nullptr && c->self == nullptr) { fault::noteDetachedCall(c->slot); }
         if (c == nullptr || c->self == nullptr) { return CASCADE_TUNE_FAILED; }
         return c->self->tuneRequestFromPlugin(c->plugin, centreHz);
     } catch (...) {
@@ -443,6 +448,7 @@ std::int32_t hostTune(void* ctx, double centreHz) {
 std::int64_t hostTime(void* ctx) {
     try {
         auto* c = static_cast<HostCtx*>(ctx);
+        if (c != nullptr && c->self == nullptr) { fault::noteDetachedCall(c->slot); }
         if (c == nullptr || c->self == nullptr || !c->self->hasServices()) { return 0; }
         return c->self->servicesUnixTimeMs();
     } catch (...) {
@@ -459,12 +465,38 @@ std::int64_t hostTime(void* ctx) {
 // same reason. None of them reads `self`: the core outlives the PluginUi, and
 // that is what lets a call after the owner has gone be answered rather than
 // be a use-after-free.
+//
+// THE TRIPWIRES (plugin containment P2, core/plugin_fault.hpp Misuse): the answer this call is about to return is the ABI's refusal of a
+// rule-breaker, and the breaker is counted on its plugin's slot - one relaxed atomic add, no lock, so this file's rule still holds. `Write`
+// marks a call whose BUSY means "a bounded queue is full" (the control ring, the log ring); for a read, BUSY is the snapshot's retry and is no
+// one's fault.
+enum class CallKind : std::uint8_t { Read, Write, Other };
+
+inline void tripwire(const HostCtx* c, std::int32_t answer, CallKind kind) noexcept {
+    if (c == nullptr) { return; }
+    switch (answer) {
+        case CASCADE_API_DETACHED: fault::noteDetachedCall(c->slot); break;
+        case CASCADE_API_WRONG_THREAD: fault::noteMisuse(c->slot, fault::Misuse::WrongThread); break;
+        case CASCADE_API_LIMIT: fault::noteMisuse(c->slot, fault::Misuse::Flood); break;
+        case CASCADE_API_BAD_ARGUMENT: fault::noteMisuse(c->slot, fault::Misuse::BadCall); break;
+        case CASCADE_API_BUSY:
+            if (kind == CallKind::Write) { fault::noteMisuse(c->slot, fault::Misuse::Flood); }
+            break;
+        default: break;
+    }
+}
+
 template <class F>
-std::int32_t level1(void* ctx, F&& f) {
+std::int32_t level1(void* ctx, F&& f, CallKind kind = CallKind::Other) {
     try {
         auto* c = static_cast<HostCtx*>(ctx);
-        if (c == nullptr || !c->core || c->client == nullptr) { return CASCADE_API_DETACHED; }
-        return f(*c->core, *c->client);
+        if (c == nullptr || !c->core || c->client == nullptr) {
+            tripwire(c, CASCADE_API_DETACHED, kind);
+            return CASCADE_API_DETACHED;
+        }
+        const std::int32_t answer = f(*c->core, *c->client);
+        tripwire(c, answer, kind);
+        return answer;
     } catch (...) {
         raiseHostFault();
         return CASCADE_API_FAILED;
@@ -472,20 +504,20 @@ std::int32_t level1(void* ctx, F&& f) {
 }
 
 std::int32_t l1GetState(void* ctx, CascadeReceiverState* out) {
-    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.getState(c, out); });
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.getState(c, out); }, CallKind::Read);
 }
 std::int32_t l1GetGain(void* ctx, std::uint32_t index, CascadeGainInfo* out) {
     return level1(ctx,
-                  [&](PluginApiCore& a, PluginApiClient& c) { return a.getGain(c, index, out); });
+                  [&](PluginApiCore& a, PluginApiClient& c) { return a.getGain(c, index, out); }, CallKind::Read);
 }
 std::int32_t l1GetRates(void* ctx, double* out, std::uint32_t cap) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) {
         return a.getSampleRates(c, out, cap);
-    });
+    }, CallKind::Read);
 }
 std::int32_t l1GetStream(void* ctx, CascadeStreamInfo* out) {
     return level1(ctx,
-                  [&](PluginApiCore& a, PluginApiClient& c) { return a.getStreamInfo(c, out); });
+                  [&](PluginApiCore& a, PluginApiClient& c) { return a.getStreamInfo(c, out); }, CallKind::Read);
 }
 
 std::int32_t l1Control(void* ctx, PluginControl::Kind kind, double value, std::uint32_t mode,
@@ -508,7 +540,7 @@ std::int32_t l1Control(void* ctx, PluginControl::Kind kind, double value, std::u
             if (gainName[n] != '\0') { return static_cast<std::int32_t>(CASCADE_API_UNSUPPORTED); }
         }
         return a.requestControl(c, r);
-    });
+    }, CallKind::Write);
 }
 
 using K = PluginControl::Kind;
@@ -531,7 +563,10 @@ std::int32_t l1SetSampleRate(void* ctx, double hz) {
     return l1Control(ctx, K::SampleRate, hz, 0, false, nullptr);
 }
 std::int32_t l1SetGain(void* ctx, const char* name, double db) {
-    if (name == nullptr) { return CASCADE_API_BAD_ARGUMENT; }
+    if (name == nullptr) {
+        tripwire(static_cast<HostCtx*>(ctx), CASCADE_API_BAD_ARGUMENT, CallKind::Write);
+        return CASCADE_API_BAD_ARGUMENT;
+    }
     return l1Control(ctx, K::Gain, db, 0, false, name);
 }
 std::int32_t l1SetDeviceAgc(void* ctx, std::int32_t on) {
@@ -567,7 +602,7 @@ std::int32_t l1SettingsSet(void* ctx, const char* key, const char* value) {
                   [&](PluginApiCore& a, PluginApiClient& c) { return a.settingsSet(c, key, value); });
 }
 std::int32_t l1Log(void* ctx, std::uint32_t level, const char* text) {
-    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.log(c, level, text); });
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.log(c, level, text); }, CallKind::Write);
 }
 std::int32_t l1AddCommand(void* ctx, std::uint32_t id, const char* label) {
     return level1(ctx,
@@ -904,6 +939,7 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
             // built before level 1 reads only the four members above at
             // the offsets they have always had (plugin_abi.h, VERSIONING).
             owned->core = api_;
+            owned->slot = slot;
             if (!key.empty()) {
                 owned->client = &api_->client(key, lp.name, lp.capabilities);
             }
@@ -1393,6 +1429,21 @@ void PluginUi::destroyInstances() {
     altTrails_.clear();
 }
 
+namespace {
+
+// A row's cells are fixed arrays the plugin filled, "NUL-terminated by contract" - and a plugin that fills one to the brim has no terminator, so
+// every drawer that treats a cell as a C string would walk off the end of it (into the next cell, and from the last cell of the last row into
+// whatever follows the vector). Enforced where the rows come in, as the instrument's text slots below always were (plugin containment P2: found by
+// the hostile fixture's poll-rows-lie, which fills every cell to the brim). A cell cut here may end in half a UTF-8 character, which the drawers
+// already survive (the instruments' text slots are cut the same way).
+void terminateCells(std::vector<CascadePanelRow>& rows) {
+    for (CascadePanelRow& r : rows) {
+        for (auto& cell : r.cells) { cell[CASCADE_PANEL_CELL_CHARS - 1] = '\0'; }
+    }
+}
+
+}  // namespace
+
 void PluginUi::poll() {
     if (demoCount_ != 0u) {
         stepDemos(std::chrono::duration<double>(
@@ -1474,8 +1525,12 @@ void PluginUi::poll() {
             hp.flags = p.flags;
             // COPIED here: the ABI only guarantees the vertices until the next
             // poll, and the host draws on its own schedule.
+            // (GUARDED, plugin containment P2: the vertex pointer is the plugin's, and a wild one is its fault, not the process's.)
             const std::uint32_t n2 = std::min(p.count, kMaxPathPoints);
-            hp.points.assign(p.points, p.points + n2);
+            hp.points.resize(n2);
+            if (!fault::copyFromPlugin(ti.slot, fault::Entry::PollPaths, hp.points.data(), p.points, n2 * sizeof(CascadePathPoint))) {
+                break;   // switched off by the read: the rest of its paths are not read
+            }
             paths_.push_back(std::move(hp));
         }
     }
@@ -1524,6 +1579,7 @@ void PluginUi::poll() {
                 std::min(static_cast<std::uint32_t>(n), kMaxRowsPerPanel);
             hp.rows.assign(rowScratch_.begin(),
                            rowScratch_.begin() + static_cast<std::ptrdiff_t>(count));
+            terminateCells(hp.rows);
         }
     }
 
@@ -1556,6 +1612,7 @@ void PluginUi::poll() {
                     std::min(static_cast<std::uint32_t>(n), kMaxRowsPerPanel);
                 hi.rows.assign(rowScratch_.begin(),
                                rowScratch_.begin() + static_cast<std::ptrdiff_t>(count));
+                terminateCells(hi.rows);
             }
         }
     }

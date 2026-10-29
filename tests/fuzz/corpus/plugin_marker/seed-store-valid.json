@@ -1,0 +1,28 @@
+{
+  "plugins": [
+    {
+      "id": "crashy",
+      "version": "1.2.3",
+      "strikes": 1,
+      "state": "suspect",
+      "phase": "create",
+      "when": 1761700000,
+      "site": false
+    },
+    {
+      "id": "worse",
+      "version": "0.9.0",
+      "strikes": 2,
+      "state": "disabled",
+      "phase": "running",
+      "when": 1761700100,
+      "site": true
+    },
+    {
+      "id": "second-chance",
+      "version": "2.0.0",
+      "strikes": 1,
+      "state": "probation"
+    }
+  ]
+}

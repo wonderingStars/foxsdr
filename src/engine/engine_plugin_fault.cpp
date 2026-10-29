@@ -95,6 +95,17 @@ void Engine::applyPluginQuarantines() {
         static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()),
         cascade::core::marker::kFirstPassMs);
 
+    // THE TRIPWIRES (core/plugin_fault.hpp Misuse, plugin containment P2): the first time a plugin breaks each rule of the API it is said once,
+    // here, where a lock may be taken - the count itself was a relaxed atomic add on whatever thread the plugin called from. The counts stay
+    // in fault::health(); the host has already refused the call with the ABI's own answer.
+    for (const cascade::core::fault::MisuseNotice& note : cascade::core::fault::drainMisuseNotices()) {
+        cascade::core::diagWarnf("plugin: %s %s (%s); the call was refused or clamped and the session carries on", note.id.c_str(),
+                                 note.kind == cascade::core::fault::Misuse::HostReentry
+                                     ? "was called by FoxSDR from inside a call into the same plugin, which the plugin ABI promises never to do"
+                                     : "broke a rule of the plugin API",
+                                 cascade::core::fault::misuseWord(note.kind));
+    }
+
     const std::vector<cascade::core::fault::Event> events = cascade::core::fault::drainEvents();
     if (events.empty()) { return; }
     bool changed = false;

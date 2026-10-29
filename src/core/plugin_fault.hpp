@@ -168,7 +168,9 @@ enum class Outcome : std::uint8_t {
 };
 
 namespace detail {
-Outcome run(Slot* s, Entry e, void (*fn)(void*) noexcept, void* ctx) noexcept;
+// `lentMemory` is the read of memory a plugin lent (copyFromPlugin below): the filter then also absorbs an access violation at an address in
+// THIS program's image, because the faulting instruction is the host's copy and the address it touched is the plugin's.
+Outcome run(Slot* s, Entry e, void (*fn)(void*) noexcept, void* ctx, bool lentMemory = false) noexcept;
 Outcome noteThrown(Slot* s, Entry e) noexcept;
 }  // namespace detail
 
@@ -201,6 +203,30 @@ template <class F>
 Outcome call(const std::string& pluginKeyOrId, Entry e, F&& f) noexcept {
     return call(slotFor(pluginKeyOrId), e, static_cast<F&&>(f));
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Reading memory a plugin lent (plugin containment P2)
+// ---------------------------------------------------------------------------------------------------------------------------------
+//
+// A pointer a plugin hands back in a struct - an image's or a tile's pixels, a path's vertices, a track-info client's strings - is READ BY THE
+// HOST'S OWN CODE after the plugin's call has returned: outside call(), at an address in this program's image, which the guard's filter declines
+// by design (rule 2: the guard hides a plugin's faults, never the host's). A plugin that lies about such a pointer - wild, readable for less than
+// the struct says, or NULL where the ABI says never - would therefore end the process with an unattributed report, and the lie is the one thing no
+// static check can see. These do the read under the guard, with the plugin's call (the entry named) as the thing that is in flight: a fault while
+// reading is the plugin's, is counted and filed like any other, and switches the plugin off. They are the ONLY way the host reads lent memory
+// (tests/test_plugin_containment.cpp scans for the sites that used to).
+//
+// On Windows a structured exception is caught. On Linux the read is made by process_vm_readv, which answers EFAULT where a plain read would
+// fault, and the same accounting follows. Elsewhere the read is a plain copy (the platform caveat of the top of this file).
+//
+// All return false when nothing was read - the plugin was already switched off (nothing of it is read), or the read faulted (it now is) - and
+// then the destination is not to be used.
+bool copyFromPlugin(Slot* s, Entry e, void* dst, const void* src, std::size_t bytes) noexcept;
+// `rows` rows of `rowBytes` bytes at `stride` intervals from `src` into `dst`, tightly packed (an image's or a tile's pixels).
+bool copyRowsFromPlugin(Slot* s, Entry e, std::uint8_t* dst, std::size_t rowBytes, const std::uint8_t* src, std::size_t stride,
+                        std::size_t rows) noexcept;
+// The NUL-terminated string at `src`, cut at `maxBytes` bytes (never read past that), into `out`. A null `src` is the empty string.
+bool copyStringFromPlugin(Slot* s, Entry e, const char* src, std::size_t maxBytes, std::string& out) noexcept;
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // The quarantine, live
@@ -246,6 +272,8 @@ struct Totals {
 };
 Totals totals();
 
+inline constexpr std::size_t kMisuseCount = 6;   // the tripwires below (Misuse)
+
 struct HealthRow {
     std::string id;        // the run id
     std::string publicId;
@@ -258,9 +286,60 @@ struct HealthRow {
     std::uint64_t unloadTimeouts = 0;  // unloads that timed out, charged to the plugin that was inside a call
     Why quarantined = Why::None;
     Entry lastEntry = Entry::Create;
+    std::uint64_t misuse[kMisuseCount] = {};   // the tripwires below, by Misuse
 };
 // Every plugin the containment has a slot for, in first-use order.
 std::vector<HealthRow> health();
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The tripwires (plugin containment batch P2, docs/engine-stage4.md 6.29)
+// ---------------------------------------------------------------------------------------------------------------------------------
+//
+// The ABI states the rules a plugin lives by (core/plugin_abi.h: THREADING AND LIFETIME CONTRACT, HOST API LEVEL 1 - THREADING and AFTER
+// UNLOAD). A plugin that breaks one is not necessarily dangerous - the host answers the call with the ABI's own refusal - but it is a plugin
+// whose author should hear of it, and a host that answers a rule-breaker as if nothing had happened has hidden a defect. Every refusal below
+// is therefore COUNTED per plugin id and version (health(), the same row as the faults) and the first of each kind per plugin is said once in
+// the diagnostic log (drainMisuseNotices, the engine's pass). Counting is a single relaxed atomic add on the plugin's slot: it is called from
+// whatever thread the plugin called from, including the real-time one, and takes no lock and allocates nothing.
+//
+//   WrongThread   a host call the ABI forbids on the thread it came from: settings_get / settings_set on the real-time thread (answered
+//                 CASCADE_API_WRONG_THREAD).
+//   AfterDetach   a host call through a table the host has shut down (the plugin was stopped, its instances destroyed, the host is exiting),
+//                 made from OUTSIDE any call into the plugin: a plugin that saves its state from destroy() is inside one and is not counted;
+//                 a thread the plugin started and let outlive destroy() (ABI rule 3) is not, and is counted. Answered CASCADE_API_DETACHED.
+//                 Such a thread may still be running in the image when the host unmaps it, which is a crash the host cannot absorb, so the
+//                 plugin's module is PINNED (never unmapped) from the first such call - exactly what a quarantine does.
+//   Flood         a write refused because the bounded queue or per-plugin quota it fills was full (BUSY from the control and log rings, LIMIT
+//                 from the markers, commands and settings quotas).
+//   BadCall       a host call with a NULL, a malformed or too-small struct, or a bad key (CASCADE_API_BAD_ARGUMENT).
+//   BadReturn     an answer to a host-to-plugin call that is outside what the call allows - a poll that returns more than it was given room
+//                 for, a panel with more columns than the ABI has. The host clamps it, as it always did; now it also counts.
+//   HostReentry   THE HOST'S OWN RULE, not the plugin's: a guarded call into a plugin began on a thread that was already inside a call into
+//                 the same plugin. The ABI promises "no callbacks" - the host never calls plugin code from inside a host API call - so this
+//                 counter is a defect in the host, and a test holds it at zero across everything the suite does.
+enum class Misuse : std::uint8_t { WrongThread = 0, AfterDetach, Flood, BadCall, BadReturn, HostReentry };
+const char* misuseWord(Misuse m);  // "wrong-thread", "after-detach", "flood", "bad-call", "bad-return", "host-reentry"
+
+// Counts one tripwire for the plugin. Lock-free and allocation-free: any thread. A null or key-less slot counts nothing.
+void noteMisuse(Slot* s, Misuse m) noexcept;
+// AfterDetach, with its two rules: counted (and the module pinned) only when the calling thread is NOT inside a guarded call into this
+// plugin. Returns whether it counted.
+bool noteDetachedCall(Slot* s) noexcept;
+// Whether the calling thread is inside a guarded call (call()) into this plugin.
+bool insideCallOf(const Slot* s) noexcept;
+// Keeps the plugin's module mapped for the life of the process (what a quarantine does, without the switching off).
+void pin(Slot* s) noexcept;
+std::uint64_t misuseTotal(Misuse m);
+
+// The first occurrence of each kind, per plugin, since the last drain (the engine's pass writes them to the diagnostic log, once each).
+struct MisuseNotice {
+    std::string id;        // the run id
+    std::string publicId;
+    std::string version;
+    Misuse kind = Misuse::WrongThread;
+    std::uint64_t count = 0;  // how many so far
+};
+std::vector<MisuseNotice> drainMisuseNotices();
 
 // The monitor's findings (core/thread_beats.hpp): the hang watchdog's thread hands a call that overran or wedged here. Counts it once
 // (the call's own end counts a late return the monitor never saw), quarantines on a wedge.
@@ -281,6 +360,7 @@ struct Attribution {
     char version[24] = {0};
     char origin[12] = {0};     // "official", "site", "unrecorded"
     char how[10] = {0};        // "stack" or "in-flight"
+    char entry[16] = {0};      // the guarded entry in flight on the faulting thread for THIS plugin ("create", "poll-text"...), empty when none
     char runId[48] = {0};      // the plugin's run id: what the crash-loop marker is keyed by (internal - never written to a report)
 };
 bool attributeCrash(const std::uintptr_t* frames, int nFrames, unsigned long faultingTid, Attribution& out) noexcept;
@@ -288,7 +368,7 @@ bool attributeCrash(const std::uintptr_t* frames, int nFrames, unsigned long fau
 // TESTS ONLY (nothing under src/ calls these; tests/test_plugin_fault.cpp scans): forget every quarantine and counter, and the events;
 // stand a budget in for an entry's (the wedge limit follows: kWedgeFactor times it), so a test can stage a call that overruns in
 // milliseconds and still run the product's code path.
-void resetForTest();
+void resetForTest();   // (and the tripwires' counters)
 void overrideBudgetForTest(Entry e, unsigned budgetMs);
 void dropBudgetOverridesForTest();
 

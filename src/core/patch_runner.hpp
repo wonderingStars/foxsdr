@@ -973,8 +973,12 @@ private:
                           img.height >= 1u && img.width <= CASCADE_IMAGE_MAX_DIM &&
                           img.height <= CASCADE_IMAGE_MAX_DIM &&
                           img.stride >= img.width * bpp;
+        // (THE READ OF THE PLUGIN'S PIXELS IS GUARDED - plugin containment P2, fault::copyRowsFromPlugin: a pointer that is wild, or readable
+        // for less than the numbers say, is the plugin's fault. A plugin switched off by it is not polled again.)
+        if (!sane) { cascade::core::fault::noteMisuse(d.slot, cascade::core::fault::Misuse::BadReturn); }
+        cascade::core::HostImage h;
+        bool copied = false;
         if (sane) {
-            cascade::core::HostImage h;
             h.plugin = d.name;
             h.width = img.width;
             h.height = img.height;
@@ -984,10 +988,11 @@ private:
             h.revision = ++d.imageRevision;
             const std::size_t row = static_cast<std::size_t>(img.width) * bpp;
             h.pixels.resize(row * img.height);
-            for (std::uint32_t y = 0; y < img.height; ++y) {
-                const std::uint8_t* src = img.pixels + static_cast<std::size_t>(y) * img.stride;
-                std::copy(src, src + row, h.pixels.begin() + static_cast<std::ptrdiff_t>(y * row));
-            }
+            copied = cascade::core::fault::copyRowsFromPlugin(d.slot, cascade::core::fault::Entry::PollImage, h.pixels.data(), row,
+                                                              img.pixels, img.stride, img.height);
+            if (!copied) { d.failed = true; }
+        }
+        if (copied) {
             std::lock_guard<std::mutex> lock(imagesMutex_);
             // The newest per node only: a GUI that is not looking loses
             // superseded frames, never grows a queue of them.

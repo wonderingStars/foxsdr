@@ -35,6 +35,13 @@ using fault::Entry;
 using fault::Outcome;
 using fault::Slot;
 
+// THE ANSWERS THAT ARE MORE THAN THE CALL ALLOWED (plugin containment P2, Misuse::BadReturn): a poll that says it filled more than it was given
+// room for, a panel with more columns than the ABI has. The callers have always clamped these; the wrapper now also counts the plugin that said
+// it, on its slot, and still hands the answer back unchanged (the clamp stays where it was, the count is new).
+inline void checkCount(Slot* s, std::int32_t n, std::uint32_t cap) noexcept {
+    if (n > 0 && static_cast<std::uint32_t>(n) > cap) { fault::noteMisuse(s, fault::Misuse::BadReturn); }
+}
+
 // ---- the life of an instance -------------------------------------------------------------------------------------------------------
 
 // Any capability's create(): `Api` is the table (CascadeDecoderApi, CascadeTrackSourceApi...) and `args` are its create()'s arguments.
@@ -57,6 +64,7 @@ template <class Api>
 std::int32_t pollText(Slot* s, const Api* api, void* handle, char* buf, std::size_t cap) noexcept {
     std::int32_t r = -1;
     const Outcome o = fault::call(s, Entry::PollText, [&] { r = api->poll_text(handle, buf, cap); });
+    if (o == Outcome::Ran && r > 0 && static_cast<std::size_t>(r) > cap) { fault::noteMisuse(s, fault::Misuse::BadReturn); }
     return o == Outcome::Ran ? r : -1;
 }
 
@@ -73,18 +81,21 @@ inline void releaseImage(Slot* s, const CascadeImageDecoderApi* api, void* handl
 inline std::int32_t pollTracks(Slot* s, const CascadeTrackSourceApi* api, void* handle, CascadeTrack* out, std::uint32_t cap) noexcept {
     std::int32_t r = -1;
     const Outcome o = fault::call(s, Entry::PollTracks, [&] { r = api->poll_tracks(handle, out, cap); });
+    if (o == Outcome::Ran) { checkCount(s, r, cap); }
     return o == Outcome::Ran ? r : -1;
 }
 
 inline std::int32_t pollPaths(Slot* s, const CascadeTrackSourceApi* api, void* handle, CascadePath* out, std::uint32_t cap) noexcept {
     std::int32_t r = -1;
     const Outcome o = fault::call(s, Entry::PollPaths, [&] { r = api->poll_paths(handle, out, cap); });
+    if (o == Outcome::Ran) { checkCount(s, r, cap); }
     return o == Outcome::Ran ? r : -1;
 }
 
 inline std::int32_t pollState(Slot* s, const CascadeInstrumentApi* api, void* handle, CascadeInstrumentState* out) noexcept {
     std::int32_t r = -1;
     const Outcome o = fault::call(s, Entry::PollState, [&] { r = api->poll_state(handle, out); });
+    if (o == Outcome::Ran && r > 1) { fault::noteMisuse(s, fault::Misuse::BadReturn); }   // the ABI answers 1, 0 or negative
     return o == Outcome::Ran ? r : -1;
 }
 
@@ -93,6 +104,7 @@ template <class Api>
 std::uint32_t columns(Slot* s, const Api* api, void* handle, char (*headings)[CASCADE_PANEL_CELL_CHARS]) noexcept {
     std::uint32_t r = 0;
     const Outcome o = fault::call(s, Entry::Columns, [&] { r = api->columns(handle, headings); });
+    if (o == Outcome::Ran && r > CASCADE_PANEL_MAX_COLUMNS) { fault::noteMisuse(s, fault::Misuse::BadReturn); }
     return o == Outcome::Ran ? r : 0u;
 }
 
@@ -100,6 +112,7 @@ template <class Api>
 std::int32_t pollRows(Slot* s, const Api* api, void* handle, CascadePanelRow* out, std::uint32_t cap) noexcept {
     std::int32_t r = -1;
     const Outcome o = fault::call(s, Entry::PollRows, [&] { r = api->poll_rows(handle, out, cap); });
+    if (o == Outcome::Ran) { checkCount(s, r, cap); }
     return o == Outcome::Ran ? r : -1;
 }
 

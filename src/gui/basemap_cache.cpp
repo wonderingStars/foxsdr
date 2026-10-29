@@ -102,12 +102,17 @@ unsigned int BasemapCache::texture(std::uint32_t z, std::uint32_t x, std::uint32
                       t.height == tileSize_ && t.format == CASCADE_IMAGE_RGB24 &&
                       t.stride >= rowBytes && t.width <= CASCADE_TILE_SIZE_MAX;
     unsigned int tex = 0u;
+    // (The numbers are checked above; the POINTER cannot be, so the read of it is guarded - plugin containment P2, fault::copyRowsFromPlugin: a
+    // tile that is wild or readable for less than it says is the plugin's fault and switches it off, it does not end the process.)
+    if (!sane) { cascade::core::fault::noteMisuse(slot_, cascade::core::fault::Misuse::BadReturn); }
+    std::vector<std::uint8_t> packed;
+    bool copied = false;
     if (sane) {
-        std::vector<std::uint8_t> packed(rowBytes * t.height);
-        for (std::uint32_t row = 0; row < t.height; ++row) {
-            std::memcpy(packed.data() + static_cast<std::size_t>(row) * rowBytes,
-                        t.pixels + static_cast<std::size_t>(row) * t.stride, rowBytes);
-        }
+        packed.resize(rowBytes * t.height);
+        copied = cascade::core::fault::copyRowsFromPlugin(slot_, cascade::core::fault::Entry::GetTile, packed.data(), rowBytes, t.pixels,
+                                                          t.stride, t.height);
+    }
+    if (copied) {
         glGenTextures(1, &tex);
         glBindTexture(GL_TEXTURE_2D, tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -153,15 +158,17 @@ std::int32_t BasemapCache::rawTile(std::uint32_t z, std::uint32_t x, std::uint32
     const bool sane = t.pixels != nullptr && t.width == tileSize_ &&
                       t.height == tileSize_ && t.format == CASCADE_IMAGE_RGB24 &&
                       t.stride >= rowBytes && t.width <= CASCADE_TILE_SIZE_MAX;
+    // (GUARDED - see texture() above.)
+    if (!sane) { cascade::core::fault::noteMisuse(slot_, cascade::core::fault::Misuse::BadReturn); }
+    bool copied = false;
     if (sane) {
         rgb.resize(rowBytes * t.height);
-        for (std::uint32_t row = 0; row < t.height; ++row) {
-            std::memcpy(rgb.data() + static_cast<std::size_t>(row) * rowBytes,
-                        t.pixels + static_cast<std::size_t>(row) * t.stride, rowBytes);
-        }
+        copied = cascade::core::fault::copyRowsFromPlugin(slot_, cascade::core::fault::Entry::GetTile, rgb.data(), rowBytes, t.pixels,
+                                                          t.stride, t.height);
+        if (!copied) { rgb.clear(); }
     }
     cascade::core::calls::releaseTile(slot_, api_, handle_, &t);
-    return sane ? CASCADE_TILE_READY : CASCADE_TILE_MISSING;
+    return copied ? CASCADE_TILE_READY : CASCADE_TILE_MISSING;
 }
 
 void BasemapCache::endFrame() {

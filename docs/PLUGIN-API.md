@@ -765,7 +765,20 @@ The host does not trust a plugin's code to be right, and a plugin that is wrong 
   executable, a library with no `cascade_plugin_query`, a file name that declares another plugin ABI (`-abi<N>-`), and a plugin-site file
   whose bytes are not the ones that were installed. The Fitted modules window shows the verdict.
 - Crash and freeze reports name the plugin involved: an official plugin by its id, any other by a one-way hash (`site-` and eight hex digits)
-  and its declared version.
+  and its declared version - and, when a guarded call was in flight, which entry point.
+- **A pointer you hand back is read under the same guard.** An image's or a tile's `pixels`, a path's `points`, the strings of a track-info
+  answer are read by the host *after* your call has returned. If reading them faults - a wild pointer, a buffer shorter than the width, height
+  and stride say, a string with no terminator before the page ends - that is your fault, in the entry point that gave the pointer: the plugin is
+  switched off exactly as if the call had faulted. (A `NULL` where the header says never, or dimensions outside the header's bounds, are
+  refused without a read and counted below.)
+- **The host counts the rules you break, and says so once in the log.** Per plugin id and version: a `settings_get` / `settings_set` on the
+  real-time thread (answered `CASCADE_API_WRONG_THREAD`), a write refused because a bounded store or queue was full (`LIMIT`, `BUSY`: 64 settings,
+  64 marks, 16 commands, the 256-entry log and control rings), a malformed call (`BAD_ARGUMENT`), an answer that is more than the call allows (a
+  poll that says it wrote more than it was given room for, a panel with more than eight columns), and **a host call made through a table the host
+  has shut down by a thread of yours that was not inside one of your own calls** - which is a thread that outlived `destroy()`. Nothing is
+  switched off for these: the host's answer is the ABI's refusal. But the module of a plugin that does the last one is **never unmapped** for
+  the rest of the session (unmapping it would end the process under the thread), and the log line is
+  `plugin: <id> broke a rule of the plugin API (<kind>)`.
 
 ## Checklist before you ship
 

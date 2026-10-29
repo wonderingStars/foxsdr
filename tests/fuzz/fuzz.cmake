@@ -45,7 +45,12 @@ set(CASCADE_FUZZ_TARGETS
     patch_document
     patch_rates
     resampler
-    channel_chain)
+    channel_chain
+    plugin_module
+    plugin_marker
+    plugin_settings
+    plugin_hostapi
+    plugin_records)
 
 option(CASCADE_FUZZ "Build the libFuzzer executables (needs CASCADE_SANITIZE=address,fuzzer)" OFF)
 
@@ -98,7 +103,14 @@ function(cascade_fuzz_finish target)
     endif()
 endfunction()
 
+# The bounded, deterministic mutation pass (plugin containment P2, tests/fuzz/fuzz_smoke_main.cpp): the corpus as seeds, a fixed random seed, a
+# fixed number of mutants. Label `fuzz_smoke`; the plugin-surface targets only (CASCADE_FUZZ_SMOKE_ITERATIONS says how many mutants each).
+add_executable(fuzz_smoke "${_fuzz_dir}/fuzz_smoke_main.cpp" $<TARGET_OBJECTS:cascade_fuzz_objects>)
+target_link_libraries(fuzz_smoke PRIVATE cascade_engine)
+target_include_directories(fuzz_smoke PRIVATE "${_fuzz_gen}")
+
 cascade_fuzz_finish(fuzz_corpus_replay)
+cascade_fuzz_finish(fuzz_smoke)
 # The objects of the replay program carry the same per-target treatment.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CASCADE_SANITIZE_ENABLED)
     target_compile_options(cascade_fuzz_objects PRIVATE -g0)
@@ -109,6 +121,23 @@ foreach(_t ${CASCADE_FUZZ_TARGETS})
              COMMAND fuzz_corpus_replay ${_t} "${_fuzz_dir}/corpus/${_t}")
     set_tests_properties(fuzz_corpus_${_t} PROPERTIES TIMEOUT 120 LABELS fuzz)
     list(APPEND CASCADE_ALL_TEST_NAMES fuzz_corpus_${_t})
+endforeach()
+
+# fuzz_smoke_<target>: the targets that read what a PLUGIN or a plugin's files hand the host (plugin containment P2, docs 6.29). Each is bounded
+# (seconds) and deterministic; the long run is libFuzzer, by hand or nightly (docs/SANITIZERS-AND-FUZZING.md).
+# <target>:<mutants>. The two that read FILES (the module and the marker/store) write each mutant to disk first, which on Windows is slow
+# (a scanner looks at every file), so they get fewer; the rest are in-memory and run tens of thousands a second.
+set(CASCADE_FUZZ_SMOKE_TARGETS
+    plugin_module:400 plugin_marker:200 plugin_settings:20000 plugin_hostapi:20000 plugin_records:5000
+    plugin_index:5000 plugin_manifest:5000 plugin_strings:20000)
+foreach(_spec ${CASCADE_FUZZ_SMOKE_TARGETS})
+    string(REPLACE ":" ";" _parts "${_spec}")
+    list(GET _parts 0 _t)
+    list(GET _parts 1 _n)
+    add_test(NAME fuzz_smoke_${_t}
+             COMMAND fuzz_smoke ${_t} ${_n} 1 "${_fuzz_dir}/corpus/${_t}")
+    set_tests_properties(fuzz_smoke_${_t} PROPERTIES TIMEOUT 240 LABELS "fuzz;fuzz_smoke")
+    list(APPEND CASCADE_ALL_TEST_NAMES fuzz_smoke_${_t})
 endforeach()
 
 # ---------------------------------------------------------------------------

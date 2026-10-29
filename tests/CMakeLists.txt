@@ -27,6 +27,28 @@ set_target_properties(fault_probe_fixture PROPERTIES
     PREFIX ""
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_fault/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_fault/$<CONFIG>")
+# THE HOSTILE-PLUGIN FIXTURE (plugin containment P2, docs/engine-stage4.md 6.29): the probe widened to the whole ABI - a fault, a throw, a loop or a
+# death in EVERY guarded entry point, abuse of the host API on any thread, lies in what it hands back, a thread that outlives destroy(), and a
+# referee that records every rule the HOST breaks towards it (tests/fixtures/hostile_plugin.cpp). Same rules as the probe: it misbehaves on purpose,
+# is built into a directory of its own and is only ever copied into scratch plugin folders by the tests.
+find_package(Threads REQUIRED)
+add_library(hostile_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hostile_plugin.cpp")
+target_include_directories(hostile_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+target_link_libraries(hostile_fixture PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)   # (dladdr for the declared name; a thread that outlives destroy())
+if(MSVC)
+    # /EHa: a structured exception unwinds the fixture's frames and runs their destructors (the referee's counters are released by them).
+    target_compile_options(hostile_fixture PRIVATE /EHa)
+endif()
+set_target_properties(hostile_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_hostile/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_hostile/$<CONFIG>")
+# The tests that are handed the hostile fixture's path as their first argument (and need it built first).
+set(CASCADE_HOSTILE_TESTS
+    test_plugin_hostile
+    test_plugin_misuse
+    test_plugin_hostile_loop
+    test_engine_api_plugin_hostile)
 # The tests that are handed the probe's path as their first argument (and need it built first).
 set(CASCADE_FAULT_PROBE_TESTS
     test_plugin_fault
@@ -507,6 +529,13 @@ foreach(src ${CASCADE_TESTS})
         # real frame loop; both built first.
         add_dependencies(${name} late_fault_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:late_fault_fixture>")
+    elseif(name IN_LIST CASCADE_HOSTILE_TESTS)
+        # The hostile-plugin fixture (plugin containment P2) copied into scratch plugin folders by the test.
+        add_dependencies(${name} hostile_fixture)
+        if(name STREQUAL "test_plugin_hostile_loop")
+            add_dependencies(${name} foxsdr-engine)   # (it runs the real engine binary as a child)
+        endif()
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:hostile_fixture>")
     elseif(name IN_LIST CASCADE_FAULT_PROBE_TESTS)
         # The fault probe (plugin containment P1) copied into scratch plugin folders by the test, and - for the ones that spawn the real
         # binaries - the engine and the window built first.
@@ -890,6 +919,13 @@ set_tests_properties(test_gui_file_jobs test_failure_files PROPERTIES TIMEOUT 30
 # CI run 38564730541: x64 passed in 61.98 s; arm64 hit the inherited 120 s
 # bound at 120.11 s without stdout (Store test: 35.27 s x64, 69.55 s arm64).
 # Give only this test 300 s; unbuffered launch tags identify a child if it hangs.
+# The hostile-plugin suites (plugin containment P2): the loop rows stand a budget down to 100 ms and the plugin spins past four of them (about 1.3 s
+# a row, eighteen rows), the dead-process ones start the real engine eight times.
+foreach(_h test_plugin_hostile test_plugin_hostile_loop test_engine_api_plugin_hostile test_plugin_misuse)
+    if(TEST ${_h})
+        set_tests_properties(${_h} PROPERTIES TIMEOUT 300)
+    endif()
+endforeach()
 if(TEST test_plugin_fault_notice_app)
     set_tests_properties(test_plugin_fault_notice_app PROPERTIES TIMEOUT 300)
 endif()

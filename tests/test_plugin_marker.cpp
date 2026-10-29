@@ -358,6 +358,37 @@ void testStore(const fs::path& dir) {
         partial << R"({"plugins":[{"id":""},{"nope":1},{"id":"ok","strikes":3,"state":"disabled"},"x"]})";
     }
     CHECK(cascade::core::loadStore(path, none, err) && none.size() == 1 && none[0].id == "ok" && none[0].strikes == 3);
+
+    // FOUND BY THE FUZZ TARGET `plugin_marker` (docs/engine-stage4.md 6.29): this file is read before anything else at every start, and a record whose
+    // field had the wrong TYPE used to throw out of loadStore (nlohmann's value() converts nothing) - an uncaught exception at start-up, every
+    // start-up, until a person found the file. A wrong type is a default; the record, and the plugin it names, stay.
+    {
+        std::ofstream typed(path, std::ios::binary | std::ios::trunc);
+        typed << R"({"plugins":[{"id":"typed","strikes":"many","state":3,"when":"yesterday","site":"yes","version":7,"phase":[1]}]})";
+    }
+    CHECK(cascade::core::loadStore(path, none, err) && none.size() == 1 && none[0].id == "typed");
+    if (none.size() == 1) {
+        CHECK(none[0].strikes == 1 && none[0].state == StrikeState::Suspect && none[0].whenUnix == 0 && !none[0].fromSite);
+        CHECK(none[0].version.empty() && none[0].phase.empty());
+    }
+    // numbers outside the type's range are a default too (the conversions are not undefined), and a count is never zero or absurd
+    {
+        std::ofstream big(path, std::ios::binary | std::ios::trunc);
+        big << R"({"plugins":[{"id":"big","strikes":4294967296,"when":9223372036854775808},{"id":"neg","strikes":-5,"when":-1},{"id":"flt","strikes":1.5e300,"when":1e300}]})";
+    }
+    CHECK(cascade::core::loadStore(path, none, err) && none.size() == 3);
+    for (const StrikeRecord& r : none) { CHECK(r.strikes >= 1 && r.strikes <= 1000); }
+    if (none.size() == 3) { CHECK(none[1].whenUnix == -1); }
+    // a plugin named twice (a hand-edited file) is ONE record, with the worse of what the two say
+    {
+        std::ofstream twice(path, std::ios::binary | std::ios::trunc);
+        twice << R"({"plugins":[{"id":"x","strikes":1,"state":"probation","version":"1.0.0"},{"id":"x","strikes":2,"state":"disabled","version":"2.0.0"},{"id":"y"}]})";
+    }
+    CHECK(cascade::core::loadStore(path, none, err) && none.size() == 2);
+    if (none.size() == 2) {
+        CHECK(none[0].id == "x" && none[0].strikes == 2 && none[0].state == StrikeState::Disabled);
+        CHECK(none[1].id == "y");
+    }
     // an empty store is no file
     CHECK(cascade::core::saveStore(path, {}, err));
     CHECK(!fs::exists(path));

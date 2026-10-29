@@ -1630,24 +1630,34 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
             strideOk && static_cast<std::size_t>(img.width) * img.height <= kMaxImagePixels;
 
         if (sizeOk) {
-            ii.width = img.width;
-            ii.height = img.height;
-            HostImage& hi = out[i];
-            hi.width = img.width;
-            hi.height = img.height;
-            hi.format = img.format;
-            hi.complete = img.complete != 0;
-            hi.sequence = img.sequence;
             // Copied ROW BY ROW into a tightly packed buffer: the plugin may
             // pad its rows for alignment, and everything downstream (the
             // texture upload, the file writer) is simpler if the host copy
-            // never does.
-            hi.pixels.resize(rowBytes * img.height);
-            for (std::uint32_t y = 0; y < img.height; ++y) {
-                std::memcpy(hi.pixels.data() + static_cast<std::size_t>(y) * rowBytes,
-                            img.pixels + static_cast<std::size_t>(y) * img.stride, rowBytes);
+            // never does. THE READ IS GUARDED (plugin containment P2,
+            // fault::copyRowsFromPlugin): the numbers above are checked, but a
+            // pointer cannot be - one that is wild, or readable for less than
+            // width x height says, is the plugin's fault, not the process's.
+            std::vector<std::uint8_t> packed(rowBytes * img.height);
+            if (fault::copyRowsFromPlugin(ii.slot, fault::Entry::PollImage, packed.data(), rowBytes, img.pixels, img.stride,
+                                          img.height)) {
+                ii.width = img.width;
+                ii.height = img.height;
+                HostImage& hi = out[i];
+                hi.width = img.width;
+                hi.height = img.height;
+                hi.format = img.format;
+                hi.complete = img.complete != 0;
+                hi.sequence = img.sequence;
+                hi.pixels = std::move(packed);
+                ++hi.revision;
+            } else {
+                // The plugin lent memory it did not have: switched off by the read, so its instance is finished here as a failed poll is.
+                ii.failed = true;
+                out[i].interactive = false;
+                failLocked(ii.statusIndex, ii.name, ii.slot);
             }
-            ++hi.revision;
+        } else {
+            fault::noteMisuse(ii.slot, fault::Misuse::BadReturn);   // a picture whose numbers cannot be believed
         }
         // Released either way, and immediately: the borrow is over the moment
         // the copy is taken, so a plugin is never waiting on the GUI to finish

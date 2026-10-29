@@ -42,3 +42,10 @@ tools/check-linux-tarball.sh text eol=lf
 tools/check-symbol-archive-linux.sh text eol=lf
 
 # Everything else in the tree keeps git's default handling.
+
+# The plugin-surface fuzz seeds that are bytes (plugin containment P2) are exact inputs: no line-ending filter (some hold a CR and an LF by chance).
+tests/fuzz/corpus/plugin_hostapi/*.bin binary
+tests/fuzz/corpus/plugin_marker/*.bin binary
+tests/fuzz/corpus/plugin_module/*.bin binary
+tests/fuzz/corpus/plugin_records/*.bin binary
+tests/fuzz/corpus/plugin_settings/*.bin binary

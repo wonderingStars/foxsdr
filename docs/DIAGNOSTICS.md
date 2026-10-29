@@ -3422,8 +3422,12 @@ The record of what was built, with the contract (every rule and the test that pi
 - **A call that never returns.** Every guarded call is entered in a lock-free table (`beats::CallScope`) with its budget. The watchdog's
   existing poll finds it: at the budget a count (`pluginoveruse`, once a session), at four times the budget a freeze report
   `hang-<pid>-w<N>.txt` whose header says `blamed-plugin:` and `blamed-plugin-entry:`, and the plugin is switched off. No second monitor.
-- **A crash with a plugin in it.** The process block of a crash report carries `blamed-plugin`, `-version`, `-origin` and `-how` when the
-  plugin's module is on the faulting stack or a guarded call of it was in flight on the faulting thread. A crash with no plugin on it names none.
+- **A crash with a plugin in it.** The process block of a crash report carries `blamed-plugin`, `-version`, `-origin`, `-how` and (since the
+  second batch, docs/engine-stage4.md 6.29) `-entry` - which guarded call was in flight - when the plugin's module is on the faulting stack or
+  a guarded call of it was in flight on the faulting thread. A crash with no plugin on it names none.
+- **A rule of the plugin API broken** (6.29). One line a session per plugin and kind: `plugin: <id> broke a rule of the plugin API (<kind>)`,
+  kind one of `wrong-thread`, `after-detach`, `flood`, `bad-call`, `bad-return` (and `host-reentry`, which is the host's own and says so). The
+  counts are per plugin id and version in the containment's health table; nothing reaches the anonymous ledger for them.
 - **The clean-exit marker, extended.** `plugin-play.marker` (8 KiB, memory-mapped, beside the settings file) records which plugin is in
   which phase (load, create, first pass, running, unload) while it is in play. A run that does not end in order leaves it behind; the next
   start reads it, and only the rules in `core/plugin_marker.hpp` make a plugin a suspect (the program's own crash is never put to a plugin's

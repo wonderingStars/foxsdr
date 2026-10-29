@@ -57,6 +57,7 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "core/plugin_fault.hpp"
 #include "core/plugin_ui_data.hpp"
 #include "core/receiver_snapshot.hpp"
 #include "core/seqlock_box.hpp"
@@ -136,6 +137,9 @@ struct PluginApiClient {
     // after it is fully built. getState() reads this to decide whether THIS
     // client's plugin may see receiverLocator (CASCADE_CAP_RECEIVER_LOCATOR).
     std::uint32_t capabilities = 0;
+    // The plugin's slot in the containment (core/plugin_fault.hpp), found once at construction: the tripwires count a plugin's misuse of
+    // this API on it (fault::noteMisuse - one relaxed atomic add, safe from any thread, including the real-time one).
+    fault::Slot* slot = nullptr;
 
     // False until the host attaches the plugin and again once it is stopped,
     // removed or the host is shutting down. Every call through a client that

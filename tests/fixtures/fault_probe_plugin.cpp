@@ -145,13 +145,20 @@ struct Instance {
     int unused = 0;
 };
 
+// Instances come from a static pool and are never freed: the host LEAKS a switched-off plugin's instances on purpose (it must not call into the
+// plugin again), and an instance on the heap would then be a leak the leak checker reports of the plugin's own allocation (found by the first
+// AddressSanitizer run of the plugin suites, docs/engine-stage4.md 6.29).
+Instance g_pool[256];
+unsigned g_poolNext = 0;
+Instance* grabInstance() { return g_poolNext < 256 ? &g_pool[g_poolNext++] : nullptr; }
+
 // ---- the decoder -----------------------------------------------------------------------------------------------------------------
 void* decoderCreate(uint32_t) {
     note("create");
     if (has("create-av")) { fault(); }
     if (has("create-die")) { die(); }
     if (has("create-throw")) { throw std::runtime_error("fault probe: create threw"); }
-    return new (std::nothrow) Instance();
+    return grabInstance();
 }
 
 void decoderProcess(void*, const float*, size_t) {
@@ -171,7 +178,7 @@ void decoderDestroy(void* handle) {
     note("destroy");
     if (has("destroy-av")) { fault(); }
     if (has("destroy-die")) { die(); }
-    delete static_cast<Instance*>(handle);
+    (void)handle;   // (a pool entry: nothing to free)
 }
 
 const CascadeDecoderApi kDecoder = {
@@ -182,7 +189,7 @@ const CascadeDecoderApi kDecoder = {
 void* tracksCreate() {
     note("tracks_create");
     if (has("tracks-create-av")) { fault(); }
-    return new (std::nothrow) Instance();
+    return grabInstance();
 }
 
 int32_t tracksPoll(void*, CascadeTrack*, uint32_t) {
@@ -193,7 +200,7 @@ int32_t tracksPoll(void*, CascadeTrack*, uint32_t) {
 
 void tracksDestroy(void* handle) {
     note("tracks_destroy");
-    delete static_cast<Instance*>(handle);
+    (void)handle;   // (a pool entry: nothing to free)
 }
 
 const CascadeTrackSourceApi kTracks = {
@@ -203,7 +210,7 @@ const CascadeTrackSourceApi kTracks = {
 // ---- the image decoder -----------------------------------------------------------------------------------------------------------
 void* imageCreate(double, double) {
     note("image_create");
-    return new (std::nothrow) Instance();
+    return grabInstance();
 }
 
 void imageProcess(void*, const float*, size_t) {}
@@ -220,7 +227,7 @@ int32_t imagePollText(void*, char*, size_t) { return 0; }
 
 void imageDestroy(void* handle) {
     note("image_destroy");
-    delete static_cast<Instance*>(handle);
+    (void)handle;   // (a pool entry: nothing to free)
 }
 
 const CascadeImageDecoderApi kImage = {
@@ -240,7 +247,7 @@ const CascadeImageDecoderApi kImage = {
 // ---- the track-info client -------------------------------------------------------------------------------------------------------
 void* infoCreate() {
     note("info_create");
-    return new (std::nothrow) Instance();
+    return grabInstance();
 }
 
 int32_t infoGet(void*, const char*, uint32_t, CascadeTrackInfo*) {
@@ -255,7 +262,7 @@ int32_t infoPollText(void*, char*, size_t) { return 0; }
 
 void infoDestroy(void* handle) {
     note("info_destroy");
-    delete static_cast<Instance*>(handle);
+    (void)handle;   // (a pool entry: nothing to free)
 }
 
 const CascadeTrackInfoApi kInfo = {

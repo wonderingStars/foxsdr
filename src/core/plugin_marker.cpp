@@ -68,7 +68,9 @@ static_assert(sizeof(Header) + kSlots * sizeof(SlotRec) <= kFileBytes, "the slot
 // Never destroyed: a worker that sets a phase after main() has returned finds the table still there.
 struct State {
     std::atomic_flag lock = ATOMIC_FLAG_INIT;
-    std::uint8_t memory[kFileBytes] = {};
+    // (alignas: the slots are read in place through a SlotRec pointer, which needs four-byte alignment. A mapped view is page-aligned; this array, behind
+    // a one-byte flag, was not - found by UndefinedBehaviorSanitizer on the first Linux run of the plugin suites with it, docs/engine-stage4.md 6.29.)
+    alignas(8) std::uint8_t memory[kFileBytes] = {};
     std::uint8_t* base = nullptr;  // the mapped view, or `memory`
     bool mapped = false;
     std::atomic<std::size_t> dropped{0};
@@ -523,20 +525,53 @@ bool loadStore(const std::string& path, std::vector<StrikeRecord>& out, std::str
         error = "the plugin fault record is not readable and was ignored";
         return false;
     }
+    // A FIELD OF THE WRONG TYPE IS A DEFAULT (plugin containment P2, found by the fuzz target `plugin_marker`): nlohmann's value() throws on a
+    // mismatched type instead of converting, and this runs before anything else at every start - one hand-edited record would have been an
+    // uncaught exception at start-up for ever. Each reader below asks the type first.
+    const auto textOf = [](const nlohmann::json& e, const char* key) {
+        const auto it = e.find(key);
+        return it != e.end() && it->is_string() ? it->get<std::string>() : std::string();
+    };
     for (const nlohmann::json& e : j["plugins"]) {
         if (!e.is_object() || !e.contains("id") || !e["id"].is_string()) { continue; }
         StrikeRecord r;
         r.id = e["id"].get<std::string>();
         if (r.id.empty() || r.id.size() >= 48) { continue; }
-        r.version = e.value("version", std::string());
+        r.version = textOf(e, "version");
         if (r.version.size() > 23) { r.version.resize(23); }
-        r.strikes = e.value("strikes", 1u);
-        const std::string st = e.value("state", std::string("suspect"));
+        r.strikes = 1;
+        if (const auto it = e.find("strikes"); it != e.end() && it->is_number_unsigned()) {
+            const std::uint64_t n = it->get<std::uint64_t>();
+            r.strikes = n < 1 ? 1u : (n > 1000 ? 1000u : static_cast<unsigned>(n));   // (a count is never zero or absurd)
+        } else if (it != e.end() && it->is_number_integer()) {
+            r.strikes = 1;   // negative
+        }
+        const std::string st = textOf(e, "state");
         r.state = st == "disabled" ? StrikeState::Disabled : (st == "probation" ? StrikeState::Probation : StrikeState::Suspect);
-        r.phase = e.value("phase", std::string());
-        r.whenUnix = e.value("when", std::int64_t{0});
-        r.fromSite = e.value("site", false);
-        out.push_back(std::move(r));
+        r.phase = textOf(e, "phase");
+        if (const auto it = e.find("when"); it != e.end() && it->is_number_unsigned()) {
+            const std::uint64_t w = it->get<std::uint64_t>();
+            r.whenUnix = w <= static_cast<std::uint64_t>(INT64_MAX) ? static_cast<std::int64_t>(w) : 0;
+        } else if (it != e.end() && it->is_number_integer()) {
+            r.whenUnix = it->get<std::int64_t>();
+        }
+        if (const auto it = e.find("site"); it != e.end() && it->is_boolean()) { r.fromSite = it->get<bool>(); }
+        // A PLUGIN NAMED TWICE (a hand-edited file) IS ONE RECORD, with the worse of what the two say: the planner keys on the id, and a disabled
+        // record must not be shadowed by an older one.
+        bool merged = false;
+        for (StrikeRecord& x : out) {
+            if (x.id != r.id) { continue; }
+            merged = true;
+            if (static_cast<int>(r.state) > static_cast<int>(x.state)) { x.state = r.state; }
+            if (r.strikes > x.strikes) {
+                x.strikes = r.strikes;
+                x.version = r.version;
+                x.phase = r.phase;
+            }
+            x.whenUnix = std::max(x.whenUnix, r.whenUnix);
+            x.fromSite = x.fromSite || r.fromSite;
+        }
+        if (!merged) { out.push_back(std::move(r)); }
     }
     return true;
 }

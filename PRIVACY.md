@@ -824,6 +824,7 @@ crash report and before the stacks in a freeze report:
 | `blamed-plugin-version` | `1.2.3` or `none` | Since the plugin containment. Crash reports only. The version the plugin declares. |
 | `blamed-plugin-origin` | `official`, `site`, `unrecorded` or `none` | Since the plugin containment. Crash reports only. Whether FoxSDR's plugin store, a site you added, or neither installed the file. One word; never an address. |
 | `blamed-plugin-how` | `stack`, `in-flight` or `none` | Since the plugin containment. Crash reports only. How the plugin was found: its module on the stack, or a call into it in flight on the faulting thread. |
+| `blamed-plugin-entry` | `create`, `poll-tracks` or `none` | Since the plugin containment's second batch (docs/engine-stage4.md 6.29). Crash reports only. Which of the program's calls into the plugin was in flight on the faulting thread, as one word from the same fixed list of twenty as in a freeze report; `none` when no call was (a death in the signal path, which the program does not wrap). A call of the program, never data. It stays in the report on this machine: the upload (`context`, below) does not carry it. |
 | `child-exit-code` | `0xC0000005` | Child-process faults only (0.96.4). What the small device-search process died of - the same number Windows gave it. |
 | `child-attempt` | `1` | Child-process faults only. Which try it was, since the search is retried once. |
 

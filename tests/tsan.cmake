@@ -69,7 +69,10 @@ set(CASCADE_TSAN_TESTS
     test_thread_beats test_thread_beats_pipeline test_thread_beats_engine
     # the plugin containment (6.28): the call table and the quarantine state against concurrent callers, the marker's mapped slots written by many
     # threads, the engine's pass applying a quarantine while the DSP stand-in runs, and the faulting paths' no-ops off Windows
-    test_plugin_marker test_plugin_fault test_plugin_containment test_plugin_validate test_engine_api_plugin_fault
+    test_plugin_marker test_plugin_fault test_plugin_containment test_plugin_validate test_engine_api_plugin_fault
+    # the hostile-plugin fixture's suites (P2, 6.29): every guarded entry x fault / throw / loop, the lies, the tripwires over the real bridges from
+    # real-time, plain and worker threads, a thread that outlives destroy()
+    test_plugin_hostile test_plugin_misuse test_engine_api_plugin_hostile
     # servers and senders
     test_web_server test_cat_server test_httplib_vendor test_updater test_feature_request
     test_gps_reader test_serial_port test_transmitter
@@ -181,7 +184,7 @@ _cascade_tsan_exclude(
     # run the application as a child too (CMakeLists.txt, _runs_app); master's list does not name them
     test_bias_key_run test_startup_state test_stop_ends_recordings test_plugin_status_report
     # (plugin containment) the real engine binary, and a child of its own that ends its process on purpose
-    test_plugin_crashloop)
+    test_plugin_crashloop test_plugin_hostile_loop)
 
 _cascade_tsan_exclude(
     "it faults a process on purpose to prove the crash handler writes its report, and ThreadSanitizer's own handling of the fault signals is in the way"

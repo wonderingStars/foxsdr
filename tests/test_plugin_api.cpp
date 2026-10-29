@@ -1051,6 +1051,23 @@ void testSettings() {
     CHECK(h->settings_set(c, "big", tooBig.c_str()) == CASCADE_API_OUT_OF_RANGE);
     CHECK(h->settings_set(c, "badutf", "\xC3\x28") == CASCADE_API_BAD_ARGUMENT);
     CHECK(h->settings_set(c, "badutf", "\xFF") == CASCADE_API_BAD_ARGUMENT);
+    // THE STANDARD'S UTF-8, NOT A SHORTER ONE (plugin containment P2, found by the fuzz target `plugin_settings`, docs/engine-stage4.md 6.29): the check
+    // the store used accepted the overlong forms of three and four bytes, the UTF-16 surrogates and everything above U+10FFFF - none of which is
+    // UTF-8, all of which the JSON writer replaces on its way to the file, so the value that came back after a restart was not the one stored.
+    CHECK(h->settings_set(c, "badutf", "\xE0\x80\x80") == CASCADE_API_BAD_ARGUMENT);          // overlong U+0000, three bytes
+    CHECK(h->settings_set(c, "badutf", "\xE0\x9F\xBF") == CASCADE_API_BAD_ARGUMENT);          // overlong U+07FF
+    CHECK(h->settings_set(c, "badutf", "\xED\xA0\x80") == CASCADE_API_BAD_ARGUMENT);          // U+D800, a surrogate
+    CHECK(h->settings_set(c, "badutf", "\xED\xBF\xBF") == CASCADE_API_BAD_ARGUMENT);          // U+DFFF
+    CHECK(h->settings_set(c, "badutf", "\xF0\x80\x80\x80") == CASCADE_API_BAD_ARGUMENT);      // overlong, four bytes
+    CHECK(h->settings_set(c, "badutf", "\xF0\x8F\xBF\xBF") == CASCADE_API_BAD_ARGUMENT);      // overlong U+FFFF
+    CHECK(h->settings_set(c, "badutf", "\xF4\x90\x80\x80") == CASCADE_API_BAD_ARGUMENT);      // U+110000
+    CHECK(h->settings_set(c, "badutf", "\xF5\x80\x80\x80") == CASCADE_API_BAD_ARGUMENT);      // a lead byte past the range
+    CHECK(h->settings_set(c, "badutf", "\xC0\xAF") == CASCADE_API_BAD_ARGUMENT);              // overlong '/'
+    CHECK(h->settings_set(c, "goodutf", "\xE0\xA0\x80") == CASCADE_API_OK);                   // U+0800, the first three-byte character
+    CHECK(h->settings_set(c, "goodutf", "\xED\x9F\xBF") == CASCADE_API_OK);                   // U+D7FF, the last before the surrogates
+    CHECK(h->settings_set(c, "goodutf", "\xEE\x80\x80") == CASCADE_API_OK);                   // U+E000, the first after them
+    CHECK(h->settings_set(c, "goodutf", "\xF0\x90\x80\x80") == CASCADE_API_OK);               // U+10000, the first four-byte character
+    CHECK(h->settings_set(c, "goodutf", "\xF4\x8F\xBF\xBF") == CASCADE_API_OK);               // U+10FFFF, the last
     CHECK(h->settings_get(c, "k", nullptr, 4) == CASCADE_API_BAD_ARGUMENT);
 
     // THE QUOTA: CASCADE_MAX_SETTINGS_PER_PLUGIN keys, then LIMIT - but an

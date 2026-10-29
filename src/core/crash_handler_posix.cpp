@@ -487,6 +487,8 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
         e.str(a.found ? a.origin : "none");
         e.str("\nblamed-plugin-how: ");
         e.str(a.found ? a.how : "none");
+        e.str("\nblamed-plugin-entry: ");
+        e.str(a.found && a.entry[0] != '\0' ? a.entry : "none");
         e.str("\n");
         // A DEATH, NOT A SURVIVED FAULT: the crash-loop breaker's marker is told whose death this was (core/plugin_marker.hpp), so the next start
         // begins without the plugin. An absorbed fault (the process went on) and a child's death are not this process's death.
