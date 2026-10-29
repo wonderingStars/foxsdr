@@ -9,6 +9,17 @@ contract for every member, list, flag, event, op and fact below, and
 0.2 specification (`third_party/foxsdr_api/reference/docs/API.md`) still
 holds except where a section below says otherwise.
 
+Status update, **2026-10-29** (additions through section 9.16): the shell retirement (stage 7h, docs/engine-stage4.md 6.25 and 6.26) is
+finished, and this table is now the whole of the window's contact with the engine, with two bounded exceptions that are not part of the
+API. The window reaches the engine through (1) this table and the session it opens on it, (2) the ONE in-process extension of section 9.15
+(`get_local_extension`, `FOXAPI_EXT_PLUGIN_UI`, capability bit 29, LOCAL sessions only), and (3) two host-installed bounded-run hooks
+(`core/bounded_hooks.hpp`: `stepPass` and `onFrame`), present only in a `--frames` run and never in a product run - a host contract, not a
+table member. The C++ door that carried the rest (`engine/engine_shell.hpp`: 41 methods, 3 host methods, 12 feed virtuals, 67 call sites
+at the start of the phase) is deleted, and the fence admits no header of `src/engine/` to the interface. The last batch (R10) added NO op,
+list, fact, event, table member, capability bit or session flag, and `FOXAPI_VERSION_MINOR` stays 3. This file is still a **draft 0.3**: the
+consolidation of sections 9.13 to 9.16 (and the stub campaign's 9.1 to 9.12) into one 0.4 cut, and the contract repository's copy, are
+the survey's section 7 sketch and are not done (docs/engine-stage4.md 6.26, "what remains").
+
 Implemented by the application's engine (`src/engine/fox_engine_api.cpp`,
 `src/engine/engine_api_lists.cpp`) and held by
 `tests/test_engine_api_03.cpp`. The reference mock engine is 0.2 and

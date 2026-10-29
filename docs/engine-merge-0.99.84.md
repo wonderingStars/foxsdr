@@ -7,6 +7,12 @@ what is merged here is master's 237 non-merge commits since: releases 0.99.43 to
 Read docs/engine-merge-0.99.42.md first for the method (isolate master's real delta of a function the branch moved, apply it to the
 Engine method that now holds the machinery) and docs/engine-stage4.md for the vocabulary (EngineShell, the table, the pass, the fence).
 
+NOTE, 2026-10-29: the EngineShell this ledger speaks of (engine/engine_shell.hpp, the fence's one door) was RETIRED by the shell retirement
+(stage 7h, docs/engine-stage4.md 6.25 and 6.26): its methods, host class and feed went to the table, the plugin UI port and the host between
+2026-10-28 and 2026-10-29, and the header, its source, the cascade_shell target and rawEngine were DELETED on 2026-10-29 (R10). Every mention
+of the shell, "the door", its methods and its budgets below is history as of that date and is left as written; the tests named here that
+guarded it (test_engine_shell_guard) now hold the port and the fence at zero.
+
 This document is the record the campaign asked for: the shape of the conflict, the rules used, the CHECKLIST of every release
 note item with its state (carried / re-expressed / stubbed / not applicable) and where it lives, the API additions, the traps, and what
 is not verified. It is written as the merge goes and is complete only at its last section ("Status at the end of this pass").
