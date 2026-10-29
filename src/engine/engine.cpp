@@ -68,6 +68,7 @@
 #include "core/audio_open.hpp"
 #include "core/bias_tee.hpp"
 #include "engine/airspy_panel.hpp"
+#include "core/plugin_calls.hpp"
 #include "core/plugin_store_reasons.hpp"
 #include "core/receiver_tables.hpp"
 #include "core/source_fallback.hpp"
@@ -4010,7 +4011,9 @@ void Engine::refreshPluginRunner() {
     // Track enrichment, by the same first-wins rule and for the same reason.
     const CascadeBasemapApi* wantBasemap = nullptr;
     const CascadeTrackInfoApi* wantTrackInfo = nullptr;
-    chooseBasemapAndTrackInfo(wantBasemap, wantTrackInfo);
+    std::string wantBasemapPlugin;
+    std::string wantTrackInfoPlugin;
+    chooseBasemapAndTrackInfo(wantBasemap, wantTrackInfo, &wantBasemapPlugin, &wantTrackInfoPlugin);
     // THE DIRECTIVE: what the plugin UI is to be built over, as values. The interface rebuilds its track sources, panels and
     // instruments, attaches the host table (the ABI's attach(), before any capability's create()) and the basemap and the
     // track-info client from it, on its own thread. Where that thread is not this one the wait is bounded and is NOT an error
@@ -4024,6 +4027,8 @@ void Engine::refreshPluginRunner() {
         d.services = std::move(svc);
         d.basemap = wantBasemap;
         d.trackInfo = wantTrackInfo;
+        d.basemapPlugin = std::move(wantBasemapPlugin);
+        d.trackInfoPlugin = std::move(wantTrackInfoPlugin);
         if (!deliverPluginDirective(std::move(d))) {
             cascade::core::diagWarnf(
                 "plugins: the interface had not applied the plugin directive (it is not framing; waited at most %d ms); the decoders are built without it",
@@ -4174,14 +4179,16 @@ std::vector<cascade::gui::IndexedPreset> Engine::validatedPresets(
     const cascade::core::LoadedPlugin& p) const {
     std::vector<cascade::gui::IndexedPreset> out;
     if (p.preset == nullptr) { return out; }
+    // (THE PRESET TABLE'S TWO CALLS ARE GUARDED, plugin containment P1: a fault in count() or get() is absorbed and the plugin has no presets.)
+    cascade::core::fault::Slot* const presetSlot = cascade::core::fault::slotFor(cascade::core::pluginKey(p));
     const std::uint32_t n =
-        cascade::gui::cappedPresetCount(p.preset->count(), kMaxPresetsPerPlugin);
+        cascade::gui::cappedPresetCount(cascade::core::calls::presetCount(presetSlot, p.preset), kMaxPresetsPerPlugin);
     out.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i) {
         cascade::gui::IndexedPreset ip;
         ip.index = i;
         ip.preset.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
-        if (p.preset->get(i, &ip.preset) != 1) { continue; }
+        if (cascade::core::calls::presetGet(presetSlot, p.preset, i, &ip.preset) != 1) { continue; }
         // Third-party numbers about to command a radio. A frequency that is
         // not a frequency is refused here rather than handed to a driver;
         // cascade::gui::presetIsValid is written as a positive test because
@@ -7545,12 +7552,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // module file name (the preset bars).
             for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
                 if (lp.name != text && cascade::core::pluginKey(lp) != text) { continue; }
-                const std::uint32_t n = (lp.preset != nullptr) ? lp.preset->count() : 0u;
+                cascade::core::fault::Slot* const presetSlot = cascade::core::fault::slotFor(cascade::core::pluginKey(lp));
+                const std::uint32_t n = (lp.preset != nullptr) ? cascade::core::calls::presetCount(presetSlot, lp.preset) : 0u;
                 const auto idx = static_cast<std::uint32_t>(c.ival[0]);
                 CascadePreset ps{};
                 ps.structSize = static_cast<std::uint32_t>(sizeof(CascadePreset));
                 const bool fetchedOk = c.ival[0] >= 0 && lp.preset != nullptr && idx < n &&
-                                       lp.preset->get(idx, &ps) == 1;
+                                       cascade::core::calls::presetGet(presetSlot, lp.preset, idx, &ps) == 1;
                 if (!cascade::gui::presetRequestStillValid(true, n, kMaxPresetsPerPlugin, idx,
                                                             fetchedOk, ps)) {
                     return refuse(FOXAPI_NOT_FOUND, "no such preset");
@@ -7599,6 +7607,24 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             setPluginRun(text, c.ival[0] == 1 ? cascade::core::PluginRun::Always
                                : c.ival[0] == 2 ? cascade::core::PluginRun::Stopped
                                                 : cascade::core::PluginRun::Auto);
+            return res;
+        }
+        case FOXAPP_OP_PLUGIN_REENABLE: {
+            // THE FOURTH LOCK (the table refuses a REMOTE sender at submit, and the API gives no remote session the grant): where it is applied.
+            if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
+            if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no plugin named"); }
+            const std::string id = cascade::core::pluginRunId(text);
+            bool known = false;
+            for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+                known = known || cascade::core::pluginRunId(cascade::core::pluginKey(lp)) == id;
+            }
+            known = known || containment_.recordOf(id) != nullptr;
+            if (!known) { return refuse(FOXAPI_NOT_FOUND, "no plugin with that name is installed"); }
+            std::string why;
+            if (!reenablePlugin(text, why)) {
+                res.status = FOXAPI_NO_CHANGE;
+                return res;
+            }
             return res;
         }
         case FOXAPP_OP_PLUGIN_USE:
@@ -8393,6 +8419,15 @@ void Engine::healthPoll() {
     now.ringDroppedSamples = pipeline_.ringDroppedSamples();
     now.dspThreadExceptions = static_cast<unsigned long long>(pipeline_.dspThreadExceptions());
     now.threadWedges = cascade::core::beats::Registry::wedgesFound();
+    // THE PLUGIN CONTAINMENT'S FOUR (core/plugin_fault.hpp, 6.28): counted where they happen (the guarded call's own thread, the hang
+    // watchdog's poll) into process-wide atomics, and read here with the others - so the ledger's lock is taken by this thread only.
+    {
+        const cascade::core::fault::Totals pf = cascade::core::fault::totals();
+        now.pluginFaults = pf.faults;
+        now.pluginQuarantines = pf.quarantines;
+        now.pluginWedges = pf.wedges;
+        now.pluginOveruses = pf.overruns;
+    }
     recoveryWatch_.poll(now);
 }
 
@@ -9139,6 +9174,10 @@ void Engine::initialise() {
     // their directory is absent, which is the normal case when running out of
     // a build tree — and every bounded --frames CI run takes this path.
     loadBandPlan();
+    // THE CRASH-LOOP BREAKER IS OPEN BEFORE THE FIRST SCAN: the load gate refuses what the last run's marker made suspect, and the marker
+    // says `load` for every module this scan maps. (A host that did not call beginPluginContainment gets a hermetic one: an in-memory marker, no records.)
+    beginPluginContainment(std::string());
+    installPluginLoadGate();
     rescanPlugins();
     // THE FIRST SCAN IS DONE: the copies a session before this one could not delete (a module was mapped) are deleted now if this scan still
     // finds them superseded, and the store opens with the catalogue the last good read kept - no request is made (stub campaign B3; both run

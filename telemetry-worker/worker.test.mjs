@@ -553,6 +553,24 @@ test('0.99.73 CLIENT (a recovered.audiolead token) -> OLD WORKER (0.99.67): a 20
   assert.equal(bad.usage[0].blobs[12], '');
 });
 
+test('the plugin containment CLIENT (recovered.pluginfault, .pluginquarantine, .pluginwedge, .pluginoveruse) -> the Worker that predates them drops them; the NEW Worker keeps them', async () => {
+  // THE SAME ORDER OF DEPLOYMENT as recovered.audiolead above (docs/engine-stage4.md 6.28): this Worker is deployed BEFORE the release that
+  // sends the four words, or the counts that say how often a plugin faulted, was switched off, never returned or overran are dropped.
+  const was = (await import('./test-fixtures/worker-0.99.67.js')).default;
+  const sent = 'recovered.audio=1,recovered.pluginfault=2,recovered.pluginquarantine=1,recovered.pluginwedge=1,recovered.pluginoveruse=1';
+  const old = await postTo(was, { ...newRecord(), v: '0.99.98', stalls: 0, health: sent });
+  assert.equal(old.status, 204);
+  assert.equal(old.usage[0].blobs[12], 'recovered.audio=1');
+  const now = await post({ ...newRecord(), v: '0.99.98', stalls: 0, health: sent });
+  assert.equal(now.usage[0].blobs[12], sent);
+  // They are words of the `recovered` family and nothing more: the recoveries column counts them all (1 + 2 + 1 + 1 + 1) ...
+  assert.equal(now.usage[0].doubles[11], 6);
+  // ... and they are not a way to write anything else (no plugin id rides on them: the family is closed).
+  const bad = await post({ ...newRecord(), v: '0.99.98', stalls: 0,
+    health: 'recovered.pluginfault.pocsag=1,recovered.plugin_fault=1,recovered.PluginFault=1,recovered.plugin=1,pluginfault=1' });
+  assert.equal(bad.usage[0].blobs[12], '');
+});
+
 test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Worker wrote, and zeros in the new columns', async () => {
   for (const body of [oldRecord(), { ...record064(), stalls: 2 }, { ...record064(), stalls: 2, health: HEALTH },
     { ...record064(), health: '' }]) {

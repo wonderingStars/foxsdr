@@ -43,6 +43,8 @@
 
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/plugin_fault.hpp"
+#include "core/plugin_marker.hpp"
 #include "core/ubsan_exempt.hpp"
 
 #include <csignal>
@@ -857,6 +859,29 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
         e.str(own ? "yes" : "no");
     }
     e.str("\n");
+    // WHICH PLUGIN THE FAULT BELONGS TO, if any (plugin containment P1, docs 6.28): a plugin MODULE on the walked stack, else a plugin
+    // whose guarded call was in flight on this thread. The PUBLIC id (an official plugin's catalogue id, a hash for any other), its
+    // version and origin, and how it was found. Always written, `none` when no plugin is involved. Read from lock-free tables;
+    // allocates nothing.
+    {
+        fault::Attribution a;
+        (void)fault::attributeCrash(reinterpret_cast<const std::uintptr_t*>(g_frames), nFrames,
+                                    static_cast<unsigned long>(::GetCurrentThreadId()), a);
+        e.str("blamed-plugin: ");
+        e.str(a.found ? a.id : "none");
+        e.str("\nblamed-plugin-version: ");
+        e.str(a.found && a.version[0] != '\0' ? a.version : "none");
+        e.str("\nblamed-plugin-origin: ");
+        e.str(a.found ? a.origin : "none");
+        e.str("\nblamed-plugin-how: ");
+        e.str(a.found ? a.how : "none");
+        e.str("\n");
+        // A DEATH, NOT A SURVIVED FAULT: the crash-loop breaker's marker is told whose death this was (core/plugin_marker.hpp), so the next start
+        // begins without the plugin. An absorbed fault (the process went on) and a child's death are not this process's death.
+        const bool survived = child != nullptr || reasonStartsWith(reason, kAbsorbedFaultReasonPrefix) ||
+                              reasonStartsWith(reason, kAbsorbedPluginFaultReasonPrefix);
+        if (a.found && !survived) { marker::blame(a.runId); }
+    }
     // THE TWO FACTS A CHILD DEATH ACTUALLY CARRIES. In the process block rather
     // than the header because the header's field set is inventoried in
     // crashReportFieldNames() and compared BOTH WAYS against a report from a
@@ -1297,6 +1322,7 @@ bool isWholeFatalReportHead(const std::string& head) {
             // A fault the process SURVIVED is not the report of a death: an
             // absorbed vendor fault, or its report of a child process's death.
             absorbed = reasonStartsWith(reason.c_str(), kAbsorbedFaultReasonPrefix) ||
+                       reasonStartsWith(reason.c_str(), kAbsorbedPluginFaultReasonPrefix) ||
                        reasonStartsWith(reason.c_str(), kChildDeathReasonPrefix) ||
                        reasonStartsWith(reason.c_str(), "child process fault (contained)");
         } else if (complete && line.rfind("signature: ", 0) == 0) {

@@ -162,6 +162,17 @@ bool EngineService::acquireConfig(std::string& sentence) {
 // ---------------------------------------------------------------------------------------------------
 EngineService::Restored EngineService::restore() {
     Restored out;
+    // THE CRASH-LOOP BREAKER OPENS BEFORE THE FIRST SCAN (inside initialise): the previous run's marker and the strike records live beside the
+    // settings file, and a hermetic run (no file) keeps nothing. Safe mode refuses every plugin whatever the records say.
+    engine_.setSafePlugins(options_.safePlugins);
+    {
+        std::string settingsDir;
+        if (persistent()) {
+            const std::size_t cut = options_.configPath.find_last_of("/\\");
+            if (cut != std::string::npos) { settingsDir = options_.configPath.substr(0, cut); }
+        }
+        engine_.beginPluginContainment(settingsDir);
+    }
     engine_.initialise();
     writer_.bind(cascade::core::ConfigStore::writeFile);
 

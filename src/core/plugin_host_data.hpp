@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "core/plugin_fault.hpp"
 
 namespace cascade::core {
 
@@ -29,6 +30,10 @@ namespace cascade::core {
 // Only resolveDuplicatePlugins() reads it, for the one rule that a SITE'S module never takes a
 // declared name away from an OFFICIAL one (see there).
 enum class PluginOrigin { Unrecorded = 0, Official, Site };
+// ...as the containment spells it (core/plugin_fault.hpp): the same three, in the same order.
+inline fault::Origin faultOriginOf(PluginOrigin o) {
+    return o == PluginOrigin::Official ? fault::Origin::Official : (o == PluginOrigin::Site ? fault::Origin::Site : fault::Origin::Unrecorded);
+}
 
 // File name -> "installed from a plugin site". A file with an entry has an install record;
 // `true` is a site's, `false` the official catalogue's. Keys are bare module file names
@@ -133,6 +138,8 @@ enum class PluginRejection {
     ImageInputStructSizeMismatch,
     MissingImageInputFunction,
     ImageInputNeedsDecoder,
+    // --- plugin containment P1, load-time validation (docs/engine-stage4.md 6.28) ----------------------------------------------
+    DuplicateCapabilityTable,    // two entries claim one declared capability: which table is the plugin's?
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -166,6 +173,12 @@ struct LoadedPlugin {
 
     bool loaded = false;   // true iff the module is mapped and validated
     std::string error;     // empty iff loaded; the reason otherwise
+    // THE VERDICT WORD of a refusal the host reached from the FILE and the records alone, before or without running the module
+    // (core/plugin_module_check.hpp moduleVerdictWord: "truncated", "wrong-abi", "changed-since-install", "faulted-last-session",
+    // "safe-mode", "corrupt", ...), or empty - for a loaded module, and for a refusal that only the loader could make (which a rescan may
+    // see differently when something outside the folder changes). A refusal with a verdict is deterministic, so a rescan that found
+    // nothing else changed does not need to be repeated for its sake (Engine::rescanPlugins).
+    std::string verdict;
     // The module file (pluginKey) of the copy that is running INSTEAD of
     // this one, when resolveDuplicatePlugins turned this one off as another
     // copy of the same plugin; empty otherwise. What core/plugin_cleanup.hpp

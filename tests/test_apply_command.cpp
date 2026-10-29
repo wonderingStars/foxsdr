@@ -2386,6 +2386,17 @@ void pluginOps(AppWindow& a) {
         CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_RUN_MODE, key, 1))));
     }
 
+    covering(FOXAPP_OP_PLUGIN_REENABLE);
+    {
+        // THE ONE CLICK THAT SWITCHES A FAULTED PLUGIN BACK ON (plugin containment P1, docs/engine-stage4.md 6.28). What it does to a plugin the guard or the
+        // crash-loop breaker really switched off - and that a REMOTE session is refused - is tests/test_engine_api_plugin_fault.cpp's, against the real fault
+        // probe; what is held here is applyCommand's own answers: a name is needed, a plugin nobody has is NOT_FOUND, and one that is not switched off is a
+        // no-change (nothing is rescanned for it).
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_REENABLE, std::string())), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_REENABLE, "nobody.dll")), FOXAPI_NOT_FOUND));
+        CHECK(A::apply(a, text(FOXAPP_OP_PLUGIN_REENABLE, key)).status == FOXAPI_NO_CHANGE);
+    }
+
     covering(FOXAPP_OP_PLUGIN_USE);
     {
         // The window's table of what it shows: one "<file>\t<bits>" line a plugin; an empty one clears it; a line that does not parse

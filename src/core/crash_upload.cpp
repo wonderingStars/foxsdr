@@ -171,6 +171,20 @@ std::string comparableName(const std::string& s) {
     return out;
 }
 
+// The plugin a report names (6.28), reduced to what an id or a version is made of: lower-case letters, digits, '-', '_' and '.' for an id;
+// those plus upper-case letters and '+' for a version. `none`, anything longer than `maxLen`, and anything with another character is the
+// empty string - this is the one place the field becomes bytes that leave the machine, and a corrupt report must not choose its content.
+std::string cleanBlamedField(const std::string& value, std::size_t maxLen, bool version) {
+    const std::string v = trimSpace(value);
+    if (v.empty() || v == "none" || v.size() > maxLen) { return std::string(); }
+    for (const char c : v) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
+                        (version && ((c >= 'A' && c <= 'Z') || c == '+'));
+        if (!ok) { return std::string(); }
+    }
+    return v;
+}
+
 std::string moduleStem(const std::string& fileName) {
     const std::size_t dot = fileName.find_last_of('.');
     return (dot == std::string::npos) ? fileName : fileName.substr(0, dot);
@@ -246,6 +260,12 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                     out.uptimeSec = static_cast<std::uint64_t>(std::strtoull(v.c_str(), nullptr, 10));
                 } else if (k == "fault-thread-own") {
                     out.faultThreadOwn = v;
+                } else if (k == "blamed-plugin") {
+                    out.blamedPlugin = cleanBlamedField(v, 40, false);
+                } else if (k == "blamed-plugin-version") {
+                    out.blamedPluginVersion = cleanBlamedField(v, 24, true);
+                } else if (k == "blamed-plugin-origin") {
+                    out.blamedPluginOrigin = (v == "official" || v == "site" || v == "unrecorded") ? v : std::string();
                 }
                 continue;
             }
@@ -268,6 +288,9 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                 } else if (k == "code") {
                     // The exception code, e.g. 0xC0000005, verbatim.
                     out.code = v;
+                } else if (k == "blamed-plugin") {
+                    // A freeze report that is about a call into a plugin (6.28): the plugin's public id.
+                    out.blamedPlugin = cleanBlamedField(v, 40, false);
                 } else if (k == "frame-scope") {
                     // A freeze report's own line (0.99.64). Kept aside until the
                     // kind is known - see below, where it becomes the reason.
@@ -504,6 +527,13 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     // outside a reload, an older build's file. Always present rather than
     // omitted-when-empty, for the reason `reason` and `code` are.
     ctx["reloadPhase"] = r.reloadPhase;
+    // Which plugin the fault belongs to (6.28): the public id, the version and the origin word, empty when the report names none.
+    // Re-validated here as well as where it was parsed, because this is the one place it becomes bytes that leave the machine.
+    ctx["blamedPlugin"] = cleanBlamedField(r.blamedPlugin, 40, false);
+    ctx["blamedPluginVersion"] = cleanBlamedField(r.blamedPluginVersion, 24, true);
+    ctx["blamedPluginOrigin"] = (r.blamedPluginOrigin == "official" || r.blamedPluginOrigin == "site" || r.blamedPluginOrigin == "unrecorded")
+                                    ? r.blamedPluginOrigin
+                                    : std::string();
     j["context"] = std::move(ctx);
 
     nlohmann::json log = nlohmann::json::array();
@@ -605,7 +635,8 @@ const std::vector<std::string>& uploadContextFieldNames() {
     static const std::vector<std::string> names = {"mode",     "source",    "sampleRate",
                                                    "deviceOpen", "sdrModel", "uptimeSec",
                                                    "faultThreadOwn", "foreignModules",
-                                                   "reloadPhase"};
+                                                   "reloadPhase", "blamedPlugin", "blamedPluginVersion",
+                                                   "blamedPluginOrigin"};
     return names;
 }
 

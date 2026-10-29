@@ -12,13 +12,17 @@
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 // For runningInPackage(), which decides whether defaultPluginDir() may run its
 // write probe at all - inside an MSIX package the exe directory is read-only
 // by design and nothing here should try it.
+#include "core/diag_log.hpp"
 #include "core/package_identity.hpp"
+#include "core/plugin_fault.hpp"
+#include "core/plugin_marker.hpp"
 // For PluginRepo::compareVersions. The catalogue's version ordering is REUSED
 // here rather than reimplemented: a second comparator would eventually
 // disagree with the one the update check uses about which of two versions is
@@ -208,20 +212,143 @@ bool safeQuery(CascadePluginQueryFn fn, const CascadePluginDesc** out, std::stri
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// Reading what a plugin's descriptor points at
+// ---------------------------------------------------------------------------
+
+#if defined(_MSC_VER)
+// The descriptor and everything it points at is memory the PLUGIN owns: a corrupt module can hand back a name that points at nothing, a
+// table array that runs off the end of its page. Reading it faults in THIS program's code (validatePluginDesc, the string copies), so the
+// vendor-call guard's rule - decline a fault in our own image - cannot be the filter here. This one is narrower and stands on a different
+// ground: the function it guards does nothing but read plugin-provided memory and copy it into the record, so an access violation or a
+// page that cannot be read IS the plugin's, whichever image the instruction is in. Nothing else is absorbed (no stack overflow, no
+// illegal instruction, no C++ exception): those would be this program's bugs, and they still go to the crash handler.
+bool readGuarded(void (*fn)(void*) noexcept, void* ctx) noexcept {
+    __try {
+        fn(ctx);
+        return true;
+    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION || GetExceptionCode() == EXCEPTION_IN_PAGE_ERROR
+                    ? EXCEPTION_EXECUTE_HANDLER
+                    : EXCEPTION_CONTINUE_SEARCH) {
+        return false;
+    }
+}
+#else
+bool readGuarded(void (*fn)(void*) noexcept, void* ctx) noexcept {
+    fn(ctx);   // no structured exceptions here (plugin_fault.hpp, the platform caveat)
+    return true;
+}
+#endif
+
+template <class F>
+bool guardedRead(F&& f) noexcept {
+    using Fn = std::remove_reference_t<F>;
+    return readGuarded([](void* p) noexcept { (*static_cast<Fn*>(p))(); }, &f);
+}
+
+// The size of the mapped image, so the crash path can say which plugin's code a frame is in. 0 when it cannot be read (and then a crash is
+// still attributed to a plugin whose call was in flight, just not by its stack).
+std::size_t moduleImageSize(NativeModule m) {
+#if defined(_WIN32)
+    std::size_t size = 0;
+    if (m == nullptr) { return 0; }
+    (void)guardedRead([&] {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(m);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) { return; }
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const unsigned char*>(m) + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) { return; }
+        size = nt->OptionalHeader.SizeOfImage;
+    });
+    return size;
+#else
+    (void)m;
+    return 0;
+#endif
+}
+
+
+// What the person is told for a file the host would not map: the words the check found, in the voice the other refusals use.
+std::string notLoadedSentence(const ModuleCheck& c) { return "Not loaded: " + c.detail + "."; }
+
+// Unmaps a module the host has finished with, as a guarded call into the plugin's own detach code (its DllMain runs in FreeLibrary). A
+// plugin that faults there is switched off and its module is LEFT MAPPED: an unmapped image under a thread it started is a crash with no
+// useful stack, and one leaked module is the lesser harm.
+void releaseModule(fault::Slot* slot, NativeModule m) {
+    const fault::Outcome o = fault::call(slot, fault::Entry::Unload, [&] { closeModule(m); });
+    if (o == fault::Outcome::Faulted) {
+        diagWarnf("plugin: %s faulted while its module was being unmapped; the module is left mapped", fault::idOf(slot));
+    }
+}
+
 // Loads and validates one candidate file. Never throws; every failure path
 // produces a record with `loaded == false` and a populated `error`.
-LoadedPlugin loadOne(const fs::path& p) {
+//
+// THE ORDER IS THE CONTAINMENT (plugin containment P1, docs/engine-stage4.md 6.28): the gate (a plugin faulted last session, safe mode, a
+// site's file that is not the bytes that were installed) and the file's own headers are judged BEFORE anything of the module runs; the
+// mapping, its DllMain and the descriptor query run as guarded calls with a budget, the crash-loop marker saying `load` the whole time; and
+// the descriptor is read under its own narrow guard.
+LoadedPlugin loadOne(const fs::path& p, const PluginHost::LoadGate& gate) {
     LoadedPlugin rec;
     rec.path = p.string();
+    const std::string leaf = p.filename().string();
 
     // A PLUGIN REFUSED AT LOAD IS COUNTED, ANONYMOUSLY (0.99.64,
     // core/health_events.hpp): one of "built for another ABI" and "could not be
     // loaded", never which plugin or what the loader said. A file in the plugins
     // folder that exports no plugin entry point is not counted at all - it is a
     // stray library, not a plugin that failed.
-    NativeModule mod = openModule(p);
+    auto refuse = [&rec](ModuleVerdict v, const std::string& sentence) {
+        rec.error = sentence;
+        rec.verdict = moduleVerdictWord(v);
+    };
+
+    // 1. THE GATE: a decision the host already made about this plugin. Nothing of the file is read.
+    if (gate) {
+        ModuleVerdict v = ModuleVerdict::Ok;
+        std::string sentence;
+        if (gate(leaf, v, sentence)) {
+            refuse(v, sentence);
+            return rec;
+        }
+    }
+    fault::Slot* slot = fault::slotFor(leaf);
+    if (fault::isQuarantined(slot)) {
+        refuse(ModuleVerdict::Quarantined,
+               "Not loaded: it faulted, threw an error or stopped answering earlier in this session and was switched off. RE-ENABLE it, or restart FoxSDR.");
+        return rec;
+    }
+
+    // 2. THE FILE, as bytes: is it a library for this machine that exports the plugin entry point, and was it built for this plugin ABI?
+    {
+        const ModuleCheck c = checkModuleFile(rec.path);
+        if (!c.ok()) {
+            refuse(c.verdict, notLoadedSentence(c));
+            // (A library that exports no plugin entry point is a stray file in the folder, not a failed load: it was never counted - the mapping
+            // used to find that out - and the byte check that finds it first must not start to.)
+            if (c.verdict != ModuleVerdict::NoExports && c.verdict != ModuleVerdict::NoEntry) {
+                health::notePluginLoadRefused(c.verdict == ModuleVerdict::WrongAbi ? health::LoadClass::Abi : health::LoadClass::Load);
+            }
+            return rec;
+        }
+    }
+
+    // 3. THE MAPPING, with the module's DllMain inside it: a guarded call, and the marker says this plugin is in `load`.
+    marker::set(leaf, marker::Phase::Load);
+    NativeModule mod = kNoModule;
+    std::string osError;
+    const fault::Outcome mapped = fault::call(slot, fault::Entry::Load, [&] {
+        mod = openModule(p);
+        if (mod == kNoModule) { osError = lastOsError(); }
+    });
+    if (mapped != fault::Outcome::Ran) {
+        marker::clear(leaf);
+        refuse(ModuleVerdict::Corrupt, "Not loaded: its start-up code faulted while the module was being mapped, so it was not loaded.");
+        health::notePluginLoadRefused(health::LoadClass::Load);
+        return rec;
+    }
     if (mod == kNoModule) {
-        rec.error = "cannot be loaded as a module: " + lastOsError();
+        marker::clear(leaf);
+        rec.error = "cannot be loaded as a module: " + osError;
         health::notePluginLoadRefused(health::LoadClass::Load);
         return rec;
     }
@@ -233,22 +360,117 @@ LoadedPlugin loadOne(const fs::path& p) {
         // calling the file broken.
         rec.error = std::string("not a cascade plugin: it exports no ") +
                     CASCADE_PLUGIN_ENTRY_NAME;
-        closeModule(mod);
+        releaseModule(slot, mod);
+        marker::clear(leaf);
         return rec;
     }
 
     const CascadePluginDesc* desc = nullptr;
     std::string queryError;
-    if (!safeQuery(query, &desc, queryError)) {
-        rec.error = queryError;
+    bool queried = false;
+    const fault::Outcome queryRan = fault::call(slot, fault::Entry::Load, [&] { queried = safeQuery(query, &desc, queryError); });
+    if (queryRan != fault::Outcome::Ran || !queried) {
+        // (safeQuery turned the plugin's fault into this refusal itself; the containment still has to hear of it.)
+        if (queryRan == fault::Outcome::Ran) { fault::noteFault(slot, fault::Entry::Load, 0); }
+        rec.error = queryError.empty() ? std::string("cascade_plugin_query faulted - the plugin is faulty and was not loaded") : queryError;
         health::notePluginLoadRefused(health::LoadClass::Load);
-        closeModule(mod);
+        releaseModule(slot, mod);
+        marker::clear(leaf);
         return rec;
     }
 
-    const PluginRejection why = validatePluginDesc(desc);
+    // 4. THE DESCRIPTOR: validated and copied under the read guard - the memory it points at is the plugin's.
+    PluginRejection why = PluginRejection::None;
+    std::string rejection;
+    const bool readable = guardedRead([&] {
+        why = validatePluginDesc(desc);
+        if (why != PluginRejection::None) {
+            rejection = describePluginRejection(why, desc);
+            return;
+        }
+        // Strings are COPIED, not aliased: the records outlive unloadAll(), and a
+        // UI that still shows "you had plugin X loaded" after an unload must not
+        // be reading a freed image.
+        rec.name = desc->name;
+        rec.version = desc->version;
+        rec.author = desc->author;
+        rec.licence = desc->licence;
+        rec.capabilities = desc->capabilities;
+        // Only the tables whose capability bit was DECLARED are propagated.
+        // validatePluginDesc has already proven each declared bit has a usable
+        // table; a table supplied without its bit is dropped here, so nothing
+        // downstream can call into a facility the plugin did not claim.
+        rec.decoder = (desc->capabilities & CASCADE_CAP_DECODER) != 0u
+                          ? static_cast<const CascadeDecoderApi*>(
+                                findCapabilityTable(desc, CASCADE_CAP_DECODER))
+                          : nullptr;
+        rec.iqDecoder = (desc->capabilities & CASCADE_CAP_IQ_DECODER) != 0u
+                            ? static_cast<const CascadeIqDecoderApi*>(
+                                  findCapabilityTable(desc, CASCADE_CAP_IQ_DECODER))
+                            : nullptr;
+        rec.imageDecoder = (desc->capabilities & CASCADE_CAP_IMAGE_DECODER) != 0u
+                               ? static_cast<const CascadeImageDecoderApi*>(
+                                     findCapabilityTable(desc, CASCADE_CAP_IMAGE_DECODER))
+                               : nullptr;
+        rec.imageInput = (desc->capabilities & CASCADE_CAP_IMAGE_INPUT) != 0u
+                             ? cascade_plugin_image_input(desc) : nullptr;
+        rec.trackSource = (desc->capabilities & CASCADE_CAP_TRACK_SOURCE) != 0u
+                              ? static_cast<const CascadeTrackSourceApi*>(
+                                    findCapabilityTable(desc, CASCADE_CAP_TRACK_SOURCE))
+                              : nullptr;
+        rec.panel = (desc->capabilities & CASCADE_CAP_PANEL) != 0u
+                        ? static_cast<const CascadePanelApi*>(
+                              findCapabilityTable(desc, CASCADE_CAP_PANEL))
+                        : nullptr;
+        rec.instrument = (desc->capabilities & CASCADE_CAP_INSTRUMENT) != 0u
+                             ? static_cast<const CascadeInstrumentApi*>(
+                                   findCapabilityTable(desc, CASCADE_CAP_INSTRUMENT))
+                             : nullptr;
+        rec.hostClient = (desc->capabilities & CASCADE_CAP_HOST_CLIENT) != 0u
+                             ? static_cast<const CascadeHostClientApi*>(
+                                   findCapabilityTable(desc, CASCADE_CAP_HOST_CLIENT))
+                             : nullptr;
+        rec.preset = (desc->capabilities & CASCADE_CAP_PRESET) != 0u
+                         ? static_cast<const CascadePresetApi*>(
+                               findCapabilityTable(desc, CASCADE_CAP_PRESET))
+                         : nullptr;
+        rec.settingsUi = (desc->capabilities & CASCADE_CAP_SETTINGS_UI) != 0u
+                             ? static_cast<const CascadeSettingsUiApi*>(
+                                   findCapabilityTable(desc, CASCADE_CAP_SETTINGS_UI))
+                             : nullptr;
+        rec.basemap = (desc->capabilities & CASCADE_CAP_BASEMAP) != 0u
+                          ? static_cast<const CascadeBasemapApi*>(
+                                findCapabilityTable(desc, CASCADE_CAP_BASEMAP))
+                          : nullptr;
+        rec.trackInfo = (desc->capabilities & CASCADE_CAP_TRACK_INFO) != 0u
+                            ? static_cast<const CascadeTrackInfoApi*>(
+                                  findCapabilityTable(desc, CASCADE_CAP_TRACK_INFO))
+                            : nullptr;
+        rec.audioOut = (desc->capabilities & CASCADE_CAP_AUDIO_OUT) != 0u
+                           ? static_cast<const CascadeAudioOutApi*>(
+                                 findCapabilityTable(desc, CASCADE_CAP_AUDIO_OUT))
+                           : nullptr;
+        rec.audioProcessor = (desc->capabilities & CASCADE_CAP_AUDIO_PROCESSOR) != 0u
+                                 ? static_cast<const CascadeAudioProcessorApi*>(
+                                       findCapabilityTable(desc, CASCADE_CAP_AUDIO_PROCESSOR))
+                                 : nullptr;
+        rec.txAudio = (desc->capabilities & CASCADE_CAP_TX_AUDIO) != 0u
+                          ? static_cast<const CascadeTxAudioApi*>(
+                                findCapabilityTable(desc, CASCADE_CAP_TX_AUDIO))
+                          : nullptr;
+    });
+    if (!readable) {
+        // The descriptor read faulted: the plugin handed back a pointer that points at nothing. Whatever was copied is thrown away.
+        rec = LoadedPlugin{};
+        rec.path = p.string();
+        refuse(ModuleVerdict::Corrupt, "Not loaded: its descriptor points at memory that cannot be read, so the module is damaged or was not built for this program.");
+        health::notePluginLoadRefused(health::LoadClass::Load);
+        releaseModule(slot, mod);
+        marker::clear(leaf);
+        return rec;
+    }
     if (why != PluginRejection::None) {
-        rec.error = describePluginRejection(why, desc);
+        rec.error = rejection;
         // "Built for another ABI" is three ways of saying the same thing from here: a
         // descriptor that says so, a descriptor of another size, and - the common
         // one, what every plugin built for an OLDER host answers - a query that
@@ -261,82 +483,16 @@ LoadedPlugin loadOne(const fs::path& p) {
         // A refused plugin does not get to stay in the address space: its
         // DllMain already ran, but leaving it mapped would also leave its
         // static initialisers, threads and hooks alive for no benefit.
-        closeModule(mod);
+        releaseModule(slot, mod);
+        marker::clear(leaf);
         return rec;
     }
 
-    // Strings are COPIED, not aliased: the records outlive unloadAll(), and a
-    // UI that still shows "you had plugin X loaded" after an unload must not
-    // be reading a freed image.
-    rec.name = desc->name;
-    rec.version = desc->version;
-    rec.author = desc->author;
-    rec.licence = desc->licence;
-    rec.capabilities = desc->capabilities;
-    // Only the tables whose capability bit was DECLARED are propagated.
-    // validatePluginDesc has already proven each declared bit has a usable
-    // table; a table supplied without its bit is dropped here, so nothing
-    // downstream can call into a facility the plugin did not claim.
-    rec.decoder = (desc->capabilities & CASCADE_CAP_DECODER) != 0u
-                      ? static_cast<const CascadeDecoderApi*>(
-                            findCapabilityTable(desc, CASCADE_CAP_DECODER))
-                      : nullptr;
-    rec.iqDecoder = (desc->capabilities & CASCADE_CAP_IQ_DECODER) != 0u
-                        ? static_cast<const CascadeIqDecoderApi*>(
-                              findCapabilityTable(desc, CASCADE_CAP_IQ_DECODER))
-                        : nullptr;
-    rec.imageDecoder = (desc->capabilities & CASCADE_CAP_IMAGE_DECODER) != 0u
-                           ? static_cast<const CascadeImageDecoderApi*>(
-                                 findCapabilityTable(desc, CASCADE_CAP_IMAGE_DECODER))
-                           : nullptr;
-    rec.imageInput = (desc->capabilities & CASCADE_CAP_IMAGE_INPUT) != 0u
-                         ? cascade_plugin_image_input(desc) : nullptr;
-    rec.trackSource = (desc->capabilities & CASCADE_CAP_TRACK_SOURCE) != 0u
-                          ? static_cast<const CascadeTrackSourceApi*>(
-                                findCapabilityTable(desc, CASCADE_CAP_TRACK_SOURCE))
-                          : nullptr;
-    rec.panel = (desc->capabilities & CASCADE_CAP_PANEL) != 0u
-                    ? static_cast<const CascadePanelApi*>(
-                          findCapabilityTable(desc, CASCADE_CAP_PANEL))
-                    : nullptr;
-    rec.instrument = (desc->capabilities & CASCADE_CAP_INSTRUMENT) != 0u
-                         ? static_cast<const CascadeInstrumentApi*>(
-                               findCapabilityTable(desc, CASCADE_CAP_INSTRUMENT))
-                         : nullptr;
-    rec.hostClient = (desc->capabilities & CASCADE_CAP_HOST_CLIENT) != 0u
-                         ? static_cast<const CascadeHostClientApi*>(
-                               findCapabilityTable(desc, CASCADE_CAP_HOST_CLIENT))
-                         : nullptr;
-    rec.preset = (desc->capabilities & CASCADE_CAP_PRESET) != 0u
-                     ? static_cast<const CascadePresetApi*>(
-                           findCapabilityTable(desc, CASCADE_CAP_PRESET))
-                     : nullptr;
-    rec.settingsUi = (desc->capabilities & CASCADE_CAP_SETTINGS_UI) != 0u
-                         ? static_cast<const CascadeSettingsUiApi*>(
-                               findCapabilityTable(desc, CASCADE_CAP_SETTINGS_UI))
-                         : nullptr;
-    rec.basemap = (desc->capabilities & CASCADE_CAP_BASEMAP) != 0u
-                      ? static_cast<const CascadeBasemapApi*>(
-                            findCapabilityTable(desc, CASCADE_CAP_BASEMAP))
-                      : nullptr;
-    rec.trackInfo = (desc->capabilities & CASCADE_CAP_TRACK_INFO) != 0u
-                        ? static_cast<const CascadeTrackInfoApi*>(
-                              findCapabilityTable(desc, CASCADE_CAP_TRACK_INFO))
-                        : nullptr;
-    rec.audioOut = (desc->capabilities & CASCADE_CAP_AUDIO_OUT) != 0u
-                       ? static_cast<const CascadeAudioOutApi*>(
-                             findCapabilityTable(desc, CASCADE_CAP_AUDIO_OUT))
-                       : nullptr;
-    rec.audioProcessor = (desc->capabilities & CASCADE_CAP_AUDIO_PROCESSOR) != 0u
-                             ? static_cast<const CascadeAudioProcessorApi*>(
-                                   findCapabilityTable(desc, CASCADE_CAP_AUDIO_PROCESSOR))
-                             : nullptr;
-    rec.txAudio = (desc->capabilities & CASCADE_CAP_TX_AUDIO) != 0u
-                      ? static_cast<const CascadeTxAudioApi*>(
-                            findCapabilityTable(desc, CASCADE_CAP_TX_AUDIO))
-                      : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
+    // Out of the `load` phase: mapped and valid, with no instance yet. The slot stays (idle), so that a crash whose stack passes through this
+    // module can still be blamed on it; scan() fills in its version and origin. (From here its instances set their own phases.)
+    marker::set(leaf, marker::Phase::Idle);
     return rec;
 }
 
@@ -406,6 +562,24 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
     }
     if (desc->capabilityTables == nullptr) {
         return PluginRejection::MissingCapabilityTables;
+    }
+
+    // CAPABILITY-WORD SANITY (plugin containment P1). The word says which tables the plugin has; the entries are where they are, and the two
+    // must agree before any table is read: two entries for one declared capability are ambiguous (the accessor would take the first; a
+    // corrupt module could put its good table first and a different one second) - refused. (An entry that names no capability, or two, is
+    // skipped as the ABI says - the accessor ignores it. The entry's own tableSize stays ADVISORY, as it always was: the table's own
+    // structSize, checked below before anything else in it is read, is the size the host trusts; tests/test_plugin_api.cpp holds that.)
+    {
+        const std::uint32_t n = std::min(desc->capabilityCount, kMaxCapabilityEntries);
+        for (std::uint32_t bit = 1u; bit != 0u; bit <<= 1) {
+            if ((desc->capabilities & bit) == 0u) { continue; }
+            unsigned claims = 0;
+            for (std::uint32_t i = 0; i < n; ++i) {
+                const CascadeCapabilityEntry& e = desc->capabilityTables[i];
+                if (e.capability == bit && e.table != nullptr) { ++claims; }
+            }
+            if (claims > 1) { return PluginRejection::DuplicateCapabilityTable; }
+        }
     }
 
     // ABI 3: unknown capability bits are IGNORED, not refused. The host reads
@@ -808,6 +982,8 @@ const char* pluginRejectionMessage(PluginRejection r) {
                    "built for a newer version of FoxSDR";
         case PluginRejection::MissingImageDecoderApi:
             return "declares CASCADE_CAP_IMAGE_DECODER but supplies no image decoder table";
+        case PluginRejection::DuplicateCapabilityTable:
+            return "descriptor supplies two tables for one capability";
         case PluginRejection::MissingImageInputApi:
             return "declares CASCADE_CAP_IMAGE_INPUT but supplies no image input table";
         case PluginRejection::ImageInputStructSizeMismatch:
@@ -1576,7 +1752,7 @@ void PluginHost::scan(const std::string& dir, const PluginFileOrigins& origins) 
 
     plugins_.reserve(candidates.size());
     for (const auto& [path, bytes] : candidates) {
-        LoadedPlugin rec = loadOne(path);
+        LoadedPlugin rec = loadOne(path, loadGate_);
         rec.fileBytes = bytes;
         std::string leaf = path.filename().string();
         for (char& c : leaf) {
@@ -1598,9 +1774,20 @@ void PluginHost::scan(const std::string& dir, const PluginFileOrigins& origins) 
         // and hooks alive for no benefit - and it is the older code.
         for (LoadedPlugin& p : plugins_) {
             if (!p.loaded && p.nativeHandle != nullptr) {
-                closeModule(static_cast<NativeModule>(p.nativeHandle));
+                releaseModule(fault::slotFor(pluginKey(p)), static_cast<NativeModule>(p.nativeHandle));
                 p.nativeHandle = nullptr;
             }
+        }
+    }
+
+    // WHO IS IN THE PROCESS, for the containment: each module that is staying is registered with its run id, its version, where it came
+    // from and the address range it occupies, so a crash whose stack passes through it is attributed to it (core/plugin_fault.hpp
+    // attributeCrash) and the counters carry its version. Done here, after the duplicates are settled and the origins stamped.
+    for (const LoadedPlugin& p : plugins_) {
+        if (p.loaded && p.nativeHandle != nullptr) {
+            fault::setIdentity(pluginKey(p), p.version, faultOriginOf(p.origin), p.nativeHandle,
+                               moduleImageSize(static_cast<NativeModule>(p.nativeHandle)));
+            marker::set(pluginKey(p), marker::Phase::Idle, p.version, faultOriginOf(p.origin));
         }
     }
 }
@@ -1620,7 +1807,20 @@ std::size_t PluginHost::loadedCount() const {
 void PluginHost::unloadAll() {
     for (LoadedPlugin& p : plugins_) {
         if (p.loaded && p.nativeHandle != nullptr) {
-            closeModule(static_cast<NativeModule>(p.nativeHandle));
+            const std::string key = pluginKey(p);
+            fault::Slot* slot = fault::slotFor(key);
+            if (fault::isPinned(slot)) {
+                // A PLUGIN THAT FAULTED, THREW OR WEDGED IS NEVER UNMAPPED: its instances were leaked (nothing calls into it again) and a
+                // thread it started may still be running inside the image. One leaked module is the lesser harm; the next scan refuses to
+                // map the file again while the quarantine stands.
+                diagWarnf("plugin: %s is switched off, so its module is left mapped", fault::idOf(slot));
+                fault::clearModule(key);
+            } else {
+                marker::set(key, marker::Phase::Unload);
+                releaseModule(slot, static_cast<NativeModule>(p.nativeHandle));
+                fault::clearModule(key);
+                marker::clear(key);
+            }
         }
         p.nativeHandle = nullptr;
         p.decoder = nullptr;

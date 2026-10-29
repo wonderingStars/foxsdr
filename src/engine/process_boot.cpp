@@ -40,6 +40,10 @@
 #include "source/sdrplay_service.hpp"
 #include "source/soapy_enum_proc.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>   // GetAsyncKeyState: the safe-mode key
+#endif
+
 // ---------------------------------------------------------------------------
 // Fatal-fault capture.
 //
@@ -550,6 +554,22 @@ const char* provisionValue(int argc, char** argv, int& i, const char* flag, cons
     return argv[++i];
 }
 
+// THE SAFE-MODE KEY (plugin containment P1, item 3): Shift held while the window application starts. Windows only - a key's state is read from
+// the keyboard, not from any message - and the answer of a session with no keyboard (a hidden desktop, a service) is "not held". A BOUNDED run
+// (--frames) may stand FOXSDR_TEST_SAFE_KEY=1 in for the key, as every seam here is bounded-only: an interactive session can never be put in
+// safe mode by a stray variable.
+bool safeKeyHeldAtLaunch(bool bounded) {
+    if (bounded) {
+        const char* const seam = std::getenv("FOXSDR_TEST_SAFE_KEY");
+        if (seam != nullptr) { return seam[0] == '1'; }
+    }
+#if defined(_WIN32)
+    return (::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+#else
+    return false;
+#endif
+}
+
 Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     const bool host = kind == ProcessKind::Host;
     const bool argv1IsLinkActivation = boot.argv1IsLinkActivation;
@@ -557,6 +577,7 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     double seconds = -1.0;  // negative: run until stopped (Engine)
     std::string configArg;  // --config PATH (Engine)
     bool useConfig = false;  // --use-config (Engine)
+    bool safeFlag = false;   // --safe-plugins (both kinds)
     ProvisionRequest prov;   // --web-* and --cat-* (Engine, stage 7e)
     int diagStallMs = 0;
     int diagToggle = 0;
@@ -761,6 +782,9 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
             }
             configArg = argv[i + 1];
             ++i;
+        } else if (std::strcmp(argv[i], "--safe-plugins") == 0) {
+            // SAFE MODE (plugin containment P1): no plugin is loaded this run. Both programs take it.
+            safeFlag = true;
         } else if (!host && std::strcmp(argv[i], "--use-config") == 0) {
             // The per-user settings file the window application uses: the one shared file, behind a lock.
             useConfig = true;
@@ -834,7 +858,7 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
             }
             std::fprintf(stderr,
                          "foxsdr-engine: unknown argument '%s' (usage: foxsdr-engine [--seconds N] "
-                         "[--config PATH | --use-config] [--selftest] [--version] "
+                         "[--config PATH | --use-config] [--safe-plugins] [--selftest] [--version] "
                          "[--web-enable [--web-bind ADDR] [--web-port N] [--web-user NAME] [--web-password-file FILE|-]] "
                          "[--cat-enable [--cat-bind-all]])\n",
                          shown.c_str());
@@ -842,7 +866,7 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
         } else {
             std::fprintf(stderr,
                          "cascade: unknown argument '%s' (usage: cascade [--frames N] "
-                         "[--selftest] [--version])\n",
+                         "[--safe-plugins] [--selftest] [--version])\n",
                          argv[i]);
             return 1;
         }
@@ -876,6 +900,7 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
 
     boot.frames = frames;
     boot.seconds = seconds;
+    boot.safePlugins = safeFlag || (host && safeKeyHeldAtLaunch(frames >= 0));
     boot.provision = prov;
     boot.engineConfigArg = configArg;
     boot.engineUseConfig = useConfig;

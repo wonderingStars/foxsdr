@@ -88,6 +88,10 @@ struct BootResult {
     int diagStallMs = 0;           // --diag-stall
     int diagToggle = 0;            // --diag-toggle on (1) / off (-1)
     bool linkTesterReveal = false; // --link-tester
+    // SAFE MODE (plugin containment P1, item 3): --safe-plugins on either program, or - the window only - the Shift key held at launch
+    // (Windows; a bounded run's FOXSDR_TEST_SAFE_KEY=1 stands in for the key). Every plugin is refused for this run and the crash-loop records are neither
+    // read as news nor changed: the manual escape hatch for when the breaker itself is the question.
+    bool safePlugins = false;
     bool mayWrite = false;         // this run may put diagnostics on disk (a real session)
 
     // --- boot's own bookkeeping, public so a test can read what boot decided ---

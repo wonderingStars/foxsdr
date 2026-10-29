@@ -250,6 +250,7 @@ std::uint64_t Engine::apiListsFingerprint() {
         }
     }
     f.value(pluginScans_);  // the files' sizes, and everything else a rescan can change, as one value
+    f.value(pluginFaultGen_);  // plugin containment (P1): the guard switched one off, or a person switched it on again
     f.text(pluginDir_);
     // Which modules have asked for a setting, whose command keys changed, and whether any module's idle sentence
     // moved: counters the plugin API and the runner keep, so none of the three builds a vector or copies a row.
@@ -712,7 +713,9 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
         // is using it, so it has no instance. A refused file has neither.
         if (p.loaded) {
             w.runWord = static_cast<std::uint32_t>(pluginRunMode(w.key)) |
-                        ((pluginIsIdle(w.key)) ? 4u : 0u);
+                        ((pluginIsIdle(w.key)) ? 4u : 0u) |
+                        // bit 3 (8): the guard switched it off this session (plugin containment P1); the window offers RE-ENABLE
+                        (pluginIsQuarantinedId(cascade::core::pluginRunId(w.key)) ? 8u : 0u);
         }
         w.tuneAllowed = listHolds(pluginTuneAllowed_, w.key);
         w.settingsAllowed = listHolds(pluginSettingsAllowed_, w.key);
@@ -772,6 +775,17 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // "known and empty" is told from NOT_FOUND - and the command keys of the loaded ones. The facts are keyed by
     // the module file name (PLUGINS' detail): the table's reader takes the leaf from the right.
     fact("plugin.dir", pluginDir_, true);
+    // THE START NOTICES (plugin containment P1): one line a plugin the crash-loop breaker acted on at this start, "<run id>\t<version>\t<strikes>\t
+    // <permanent 1/0>\t<phase word>" - what the window says once ("X faulted last session - started without it"). Empty when it acted on none.
+    // And whether this is safe mode (every plugin refused). Names a plugin by its run id, which is its file name less its version: local only.
+    {
+        std::string lines;
+        for (const cascade::core::StartNotice& n : containment_.notices()) {
+            lines += n.id + '\t' + n.version + '\t' + std::to_string(n.strikes) + '\t' + (n.permanent ? "1" : "0") + '\t' + n.phase + '\n';
+        }
+        fact("plugins.fault.notices", std::move(lines), true);
+        fact("plugins.safe", containment_.safeMode() ? "1" : "0");
+    }
     {
         const auto& records = pluginHost_.plugins();
         for (std::size_t i = 0; i < b.plugins.size() && i < records.size(); ++i) {
@@ -784,6 +798,19 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             fact(k + "author", p.author);
             fact(k + "licence", p.licence);
             fact(k + "error", p.error);
+            // PLUGIN CONTAINMENT (P1): the verdict word of a refusal made from the file or the records (empty otherwise), and - for a plugin the
+            // containment holds off, at this start or by the guard this session - the sentence that says so. The window offers RE-ENABLE against a
+            // row whose `fault` is not empty (and is not safe mode, which has no per-plugin key).
+            fact(k + "verdict", p.verdict);
+            {
+                std::string fault;
+                if (p.verdict == "faulted-last-session" || p.verdict == "switched-off") {
+                    fault = p.error;
+                } else if (p.loaded && pluginIsQuarantinedId(cascade::core::pluginRunId(w.key))) {
+                    fault = pluginFaultSentence(w.key);
+                }
+                fact(k + "fault", std::move(fault));
+            }
             // The runner's own sentence for the FIRST row of this module that is not Running, quoted whole.
             std::string idle;
             for (const cascade::core::DecoderStatus& st : status) {

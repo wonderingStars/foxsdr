@@ -870,6 +870,22 @@ private:
     void drawTeamMessages();
     // Has the Seen key been pressed for the message with this id (messagesSeen_).
     bool teamMessageSeen(const std::string& id) const;
+    // A PLUGIN LEFT OUT OF THIS START (plugin containment P1, docs/engine-stage4.md 6.28; src/gui/app_window_updates.cpp): a card above the team's
+    // messages for each plugin the crash-loop breaker held off at this start - the last run ended with it in play - with the one key that turns it
+    // back on (RE-ENABLE: FOXAPP_OP_PLUGIN_REENABLE, a local op) and a Seen key that puts the card away for this session. Read from
+    // fact.plugins.fault.notices when the lists move; not persisted (the engine says it once, at the start it acted on).
+    void drawPluginFaultNotices();
+    struct FaultNotice {
+        std::string id;        // the plugin's id (what RE-ENABLE takes)
+        std::string version;
+        unsigned strikes = 0;
+        bool permanent = false;  // strike two: off until re-enabled
+        std::string phase;
+    };
+    std::vector<FaultNotice> faultNotices_;
+    std::uint64_t faultNoticesSeq_ = 0;
+    bool faultNoticesRead_ = false;
+    std::vector<std::string> faultNoticesSeen_;
     void startUpdateCheck();
     void startUpdateDownload();
     void pollUpdateAsync();

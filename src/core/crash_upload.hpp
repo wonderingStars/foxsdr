@@ -183,6 +183,16 @@ struct ParsedReport {
     std::uint64_t uptimeSec = 0;
     std::string faultThreadOwn;
 
+    // WHICH PLUGIN A FAULT BELONGS TO (plugin containment P1, docs/engine-stage4.md 6.28): the crash writer's `blamed-plugin*` lines of the
+    // process block (a plugin module on the faulting stack, or a plugin whose guarded call was in flight), and a freeze report's
+    // `blamed-plugin:` header line (a call that overran its budget). The plugin's PUBLIC id - an official plugin's catalogue id, a hash
+    // for any other, so a third-party plugin's name never leaves the machine - its version and its origin word. Each is EMPTY when the
+    // report says `none`, when it predates the lines, and for any value that is not made of the characters an id, a version or an origin
+    // is made of.
+    std::string blamedPlugin;
+    std::string blamedPluginVersion;
+    std::string blamedPluginOrigin;
+
     // The report's own --- modules --- block: file name -> build id, with an
     // empty build id where the report said "(none)". This is what puts a build
     // id on every frame, and it is kept rather than folded away because it is

@@ -54,6 +54,7 @@
 
 #include "core/host_image.hpp"
 #include "core/plugin_abi.h"
+#include "core/plugin_fault.hpp"
 #include "core/plugin_api.hpp"
 #include "core/plugin_host.hpp"
 #include "core/tx_audio.hpp"
@@ -497,6 +498,9 @@ private:
     struct Instance {
         const CascadeDecoderApi* api = nullptr;
         void* handle = nullptr;
+        // The containment's slot for this instance's plugin (core/plugin_fault.hpp): what the guarded calls are made through, and what the
+        // hot loops ask, one atomic load, before they feed or pull an instance whose plugin has been switched off.
+        fault::Slot* slot = nullptr;
         std::string name;
         // The module file name (pluginKey): which plugin owns this instance,
         // so stopPlugin() can take out exactly its instances and no one else's.
@@ -523,6 +527,9 @@ private:
     struct IqInstance {
         const CascadeIqDecoderApi* api = nullptr;
         void* handle = nullptr;
+        // The containment's slot for this instance's plugin (core/plugin_fault.hpp): what the guarded calls are made through, and what the
+        // hot loops ask, one atomic load, before they feed or pull an instance whose plugin has been switched off.
+        fault::Slot* slot = nullptr;
         std::string name;
         std::string key;  // as Instance::key
         std::string partial;
@@ -539,6 +546,9 @@ private:
         std::uint32_t width = 0;
         std::uint32_t height = 0;
         void* handle = nullptr;
+        // The containment's slot for this instance's plugin (core/plugin_fault.hpp): what the guarded calls are made through, and what the
+        // hot loops ask, one atomic load, before they feed or pull an instance whose plugin has been switched off.
+        fault::Slot* slot = nullptr;
         std::string name;
         std::string key;  // as Instance::key
         std::string partial;
@@ -567,6 +577,9 @@ private:
     struct AudioInstance {
         const CascadeAudioOutApi* api = nullptr;
         void* handle = nullptr;  // borrowed from a decoder instance
+        // The containment's slot for this instance's plugin (core/plugin_fault.hpp): what the guarded calls are made through, and what the
+        // hot loops ask, one atomic load, before they feed or pull an instance whose plugin has been switched off.
+        fault::Slot* slot = nullptr;
         std::string name;
         std::string key;
         std::uint32_t rateHz = 0;
@@ -597,6 +610,9 @@ private:
     struct TxInstance {
         const CascadeTxAudioApi* api = nullptr;
         void* handle = nullptr;  // borrowed from a decoder instance
+        // The containment's slot for this instance's plugin (core/plugin_fault.hpp): what the guarded calls are made through, and what the
+        // hot loops ask, one atomic load, before they feed or pull an instance whose plugin has been switched off.
+        fault::Slot* slot = nullptr;
         std::string name;
         std::string key;
         bool active = false;   // the last active() reading
@@ -691,7 +707,7 @@ private:
     // to draw, and one line goes into the decoder log so the failure is written
     // where everything else the decoder said is written. Called once per
     // instance, on the transition, by whichever poll saw the negative return.
-    void failLocked(std::size_t statusIndex, const std::string& name);
+    void failLocked(std::size_t statusIndex, const std::string& name, const fault::Slot* slot = nullptr);
 
     // One in-chain processor. Created at rebuild on the control thread,
     // run by processAudioChain on the DSP thread, destroyed with the lock
@@ -699,6 +715,9 @@ private:
     struct ProcessorInstance {
         const CascadeAudioProcessorApi* api = nullptr;
         void* handle = nullptr;
+        // The containment's slot for this instance's plugin (core/plugin_fault.hpp): what the guarded calls are made through, and what the
+        // hot loops ask, one atomic load, before they feed or pull an instance whose plugin has been switched off.
+        fault::Slot* slot = nullptr;
         std::string name;
         std::string key;  // as Instance::key
         std::string title;

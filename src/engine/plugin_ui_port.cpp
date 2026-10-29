@@ -156,6 +156,8 @@ void PluginUiPortImpl::apply(const cc::PluginDirective& d) {
     f.lifeOnly = d.lifeOnly;
     f.basemap = d.basemap;
     f.trackInfo = d.trackInfo;
+    f.basemapPlugin = d.basemapPlugin;
+    f.trackInfoPlugin = d.trackInfoPlugin;
     if (steps_.before) { steps_.before(f); }
     ui_.apply(d);
     if (steps_.after) { steps_.after(f); }

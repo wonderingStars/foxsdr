@@ -2398,6 +2398,30 @@ Held by tests/test_config_halves.cpp (the table complete against `config.hpp`'s 
 
 **Shell retirement R6 adds nothing to the table** (engine side only, docs/engine-stage4.md 6.25): the engine service that is to host the window as well as the headless binary learns to use the half. Its keeper compares snapshots with the ten self-moving fields masked (`clearBookkeeping`, the `moves` rows of the table), so an interface whose beta-tester report moves every second makes no save by itself and the report rides along in the next real one; its control thread is started with `ControlThreadOptions::diagnosticsDir = ServiceOptions::diagnosticsDir`, so the half's Diagnostics switch moves the watchdog of a service-hosted engine as it moves the windowed engine's; and `Engine::configReadback()`, `configureHeartbeat()`, `requestPluginStatusReport()` and `setHost()` / `resetHost()` are public on the engine for the host that is not the shell's friend. Held by tests/test_engine_service_options.cpp (the mask: a half whose report moves every 100 ms makes no save and a real change in it is saved in the middle of the movement).
 
+### 9.17 The plugin containment (plugin containment P1; docs/engine-stage4.md 6.28)
+
+One new application op, two list/state additions and four facts. Nothing else of the table moves; no field of an existing struct changes.
+
+* **`FOXAPP_OP_PLUGIN_REENABLE` (0x870E, grant SETTINGS, LOCAL sessions only, not on either internal profile)**: `text`: the module's file name (or its plugin id). Puts a
+  plugin the containment switched off - the guard caught it faulting, throwing or never returning this session, or the previous run ended with it in play
+  and this start left it out - back to work: the engine forgets the fault (a live quarantine and/or the standing strike record, which goes on probation with its
+  count kept), and rescans so the module is mapped (or, if it never was, mapped now) and built afresh. Answers: `BAD_ARGUMENT` for empty text, `NOT_FOUND` for a
+  name the engine has no record of, `NO_CHANGE` for a plugin that is not switched off, `OK` otherwise. **A REMOTE session can neither quarantine nor
+  re-enable**: quarantining is the guard's alone (no op reaches it), and this op is refused to a remote session at submit (general rule for application ops),
+  again at submit by its own validate case, again by the web/CAT sessions' profiles (it is on neither), and a fourth time where it is applied
+  (`commandFromRemote_`) - the same four locks as `FOXAPP_OP_PLUGIN_TX_GRANT`. Switched-off plugins stay out of every START and every rescan until this op.
+* **`PLUGINS` `value[3]`** gains **bit 3 (value 8)**: the containment has switched this plugin off *this session* (its instances are gone; the row's `fault`
+  fact says why). A plugin held off at *this start* (a suspect of the last run, a second strike, safe mode) is `loaded = false` with `verdict` set instead.
+* **Facts** (`get_setting("fact.<name>")`, LOCAL): `plugin.<file>.verdict` - one word when the host refused the file or the records did, `""` otherwise (`ok` is the empty
+  string; the words are `unreadable`, `not-a-module`, `truncated`, `wrong-machine`, `not-a-library`, `no-exports`, `no-entry`, `wrong-abi`, `changed-since-install`,
+  `corrupt`, `faulted-last-session`, `switched-off`, `safe-mode`); `plugin.<file>.fault` - the engine's sentence for a plugin the containment holds off (the window
+  offers RE-ENABLE while it is not empty; empty for safe mode, which has no per-plugin key); `plugins.fault.notices` - one line per plugin this start acted on,
+  `<run id> TAB <version> TAB <strikes> TAB <1 if disabled until re-enabled, else 0> TAB <phase word> LF`; `plugins.safe` - `1` when this run is in safe mode.
+* **The health words** `recovered.pluginfault`, `pluginquarantine`, `pluginwedge`, `pluginoveruse` are counts in the anonymous ledger, not API surface; see
+  PRIVACY.md.
+* **The process flags**: `--safe-plugins` (either program; the window also takes the Shift key held at launch) starts with no plugin loaded and changes no
+  record. It is a command-line/boot concern, not an API one.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

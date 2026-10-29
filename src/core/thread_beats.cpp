@@ -94,6 +94,24 @@ unsigned long currentTid() {
 #endif
 }
 
+// THE CALL TABLE (CallScope): a fixed array of lock-free slots, so a call costs the calling thread a few atomic stores and the
+// monitor needs no lock to read them. It is plain static storage with no destructor, so a worker that finishes a call after
+// main() has returned finds it still there.
+constexpr int kMaxCalls = 128;
+struct CallSlot {
+    std::atomic<std::uint32_t> state{0};  // 0 free, 1 being filled, 2 live
+    std::atomic<std::uint32_t> epoch{0};  // bumped on every entry: the monitor re-reads it to know the slot was not reused
+    std::atomic<unsigned long> tid{0};
+    std::atomic<const void*> owner{nullptr};
+    std::atomic<const char*> subject{nullptr};
+    std::atomic<const char*> what{nullptr};
+    std::atomic<std::int64_t> startMs{0};
+    std::atomic<unsigned> budgetMs{0};
+    std::atomic<unsigned> wedgeMs{0};
+    std::atomic<std::uint32_t> stages{0};  // bit 1: overrun claimed, bit 2: wedge claimed
+};
+CallSlot g_calls[kMaxCalls];
+
 unsigned budgetFor(Kind k) {
     const unsigned o = g_budgetOverride[static_cast<std::size_t>(k)].load(std::memory_order_relaxed);
     return o != 0 ? o : budgetMs(k);
@@ -119,6 +137,19 @@ std::string reportWord(const char* s) {
     for (const char* p = s; *p != '\0' && out.size() < 32; ++p) {
         const char c = *p;
         const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+        if (!ok) { return "unknown"; }
+        out.push_back(c);
+    }
+    return out.empty() ? std::string("unknown") : out;
+}
+
+std::string reportId(const char* s) {
+    if (s == nullptr) { return "unknown"; }
+    std::string out;
+    for (const char* p = s; *p != '\0'; ++p) {
+        if (out.size() >= 40) { break; }
+        const char c = *p;
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
         if (!ok) { return "unknown"; }
         out.push_back(c);
     }
@@ -153,6 +184,80 @@ void Registration::wait(const WaitSpec& w) noexcept {
     detail::Slot& s = *slot_;
     s.waitSinceMs.store(clockMs(), std::memory_order_relaxed);
     s.wait.store(&w, std::memory_order_release);
+}
+
+// ---------------------------------------------------------------------------
+// CallScope
+// ---------------------------------------------------------------------------
+
+CallScope::CallScope(const void* owner, const char* subject, const char* what, unsigned budgetMs, unsigned wedgeMs) noexcept
+    : startMs_(clockMs()), budgetMs_(budgetMs), wedgeMs_(wedgeMs) {
+    // Start the search at a slot this thread is likely to find free, so two threads entering at once rarely race for one.
+    const unsigned long tid = currentTid();
+    const int first = static_cast<int>(tid % static_cast<unsigned long>(kMaxCalls));
+    for (int n = 0; n < kMaxCalls; ++n) {
+        const int i = (first + n) % kMaxCalls;
+        CallSlot& c = g_calls[i];
+        std::uint32_t expected = 0;
+        if (!c.state.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) { continue; }
+        c.tid.store(tid, std::memory_order_relaxed);
+        c.owner.store(owner, std::memory_order_relaxed);
+        c.subject.store(subject, std::memory_order_relaxed);
+        c.what.store(what, std::memory_order_relaxed);
+        c.startMs.store(startMs_, std::memory_order_relaxed);
+        c.budgetMs.store(budgetMs, std::memory_order_relaxed);
+        c.wedgeMs.store(wedgeMs, std::memory_order_relaxed);
+        c.stages.store(0, std::memory_order_relaxed);
+        c.epoch.fetch_add(1, std::memory_order_relaxed);
+        c.state.store(2, std::memory_order_release);  // published
+        index_ = i;
+        return;
+    }
+    // No room: the call goes ahead, unwatched.
+}
+
+CallScope::~CallScope() {
+    if (index_ >= 0) { g_calls[index_].state.store(0, std::memory_order_release); }
+}
+
+std::int64_t CallScope::elapsedMs() const noexcept { return clockMs() - startMs_; }
+
+bool CallScope::claimStage(int stage) noexcept {
+    if (stage != 1 && stage != 2) { return false; }
+    const std::uint32_t bit = 1u << stage;
+    if (index_ < 0) { return false; }
+    const std::uint32_t before = g_calls[index_].stages.fetch_or(bit, std::memory_order_acq_rel);
+    return (before & bit) == 0;
+}
+
+bool callOfThread(unsigned long tid, const void** owner, const char** what) noexcept {
+    for (int i = 0; i < kMaxCalls; ++i) {
+        const CallSlot& c = g_calls[i];
+        if (c.state.load(std::memory_order_acquire) != 2) { continue; }
+        if (c.tid.load(std::memory_order_relaxed) != tid) { continue; }
+        if (owner != nullptr) { *owner = c.owner.load(std::memory_order_relaxed); }
+        if (what != nullptr) { *what = c.what.load(std::memory_order_relaxed); }
+        return true;
+    }
+    return false;
+}
+
+std::size_t liveCallOwners(const void** out, std::size_t cap) noexcept {
+    std::size_t n = 0;
+    for (int i = 0; i < kMaxCalls && n < cap; ++i) {
+        const CallSlot& c = g_calls[i];
+        if (c.state.load(std::memory_order_acquire) != 2) { continue; }
+        out[n++] = c.owner.load(std::memory_order_relaxed);
+    }
+    return n;
+}
+
+std::size_t callsInFlight() noexcept {
+    std::size_t n = 0;
+    for (int i = 0; i < kMaxCalls; ++i) {
+        if (g_calls[i].state.load(std::memory_order_acquire) == 2) { ++n; }
+    }
+    return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +336,39 @@ PollResult Registry::poll() {
             out.recovered.push_back(makeFinding(s, now - s.episodeStartMs, budget, w));
         }
     }
+
+    // THE CALLS IN FLIGHT. A call is accused only on a reading that is unchanged (the slot was not freed and reused between the reads),
+    // and each stage of each call is claimed - and so reported - once, by whoever gets there first.
+    for (int i = 0; i < kMaxCalls; ++i) {
+        CallSlot& c = g_calls[i];
+        if (c.state.load(std::memory_order_acquire) != 2) { continue; }
+        const std::uint32_t epoch = c.epoch.load(std::memory_order_relaxed);
+        const std::int64_t start = c.startMs.load(std::memory_order_relaxed);
+        const unsigned budget = c.budgetMs.load(std::memory_order_relaxed);
+        const unsigned wedge = c.wedgeMs.load(std::memory_order_relaxed);
+        const std::int64_t age = now - start;
+        const int stage = (wedge != 0 && age >= static_cast<std::int64_t>(wedge)) ? 2
+                          : (budget != 0 && age >= static_cast<std::int64_t>(budget)) ? 1 : 0;
+        if (stage == 0) { continue; }
+        Finding f;
+        f.name = "plugin-call";
+        const char* what = c.what.load(std::memory_order_relaxed);
+        f.phase = what != nullptr ? reportWord(what) : std::string("unknown");
+        f.tid = c.tid.load(std::memory_order_relaxed);
+        f.stalledMs = age;
+        f.owner = c.owner.load(std::memory_order_relaxed);
+        f.subject = reportId(c.subject.load(std::memory_order_relaxed));
+        if (c.state.load(std::memory_order_acquire) != 2 || c.epoch.load(std::memory_order_relaxed) != epoch) { continue; }
+        // Stage 2 implies stage 1 was reached: a call first seen past its wedge limit reports (and counts) both, in order.
+        for (int st = 1; st <= stage; ++st) {
+            const std::uint32_t bit = 1u << st;
+            if ((c.stages.fetch_or(bit, std::memory_order_acq_rel) & bit) != 0) { continue; }
+            Finding f2 = f;
+            f2.stage = st;
+            f2.budgetMs = st == 2 ? wedge : budget;
+            out.calls.push_back(std::move(f2));
+        }
+    }
     return out;
 }
 
@@ -244,6 +382,10 @@ void Registry::rearm() {
     for (const auto& s : copy) {
         s->lastBeatMs.store(now, std::memory_order_release);
         s->waitSinceMs.store(now, std::memory_order_relaxed);
+    }
+    // A call in flight when the machine stopped was not slow: its clock starts again.
+    for (int i = 0; i < kMaxCalls; ++i) {
+        if (g_calls[i].state.load(std::memory_order_acquire) == 2) { g_calls[i].startMs.store(now, std::memory_order_relaxed); }
     }
 }
 
@@ -263,6 +405,18 @@ std::string Registry::snapshotText() {
                       static_cast<long long>(now - s->lastBeatMs.load(std::memory_order_acquire)),
                       ph != nullptr ? reportWord(ph).c_str() : "none",
                       w != nullptr ? reportWord(w->name).c_str() : "none");
+        out += line;
+    }
+    // The calls in flight, one line each: which plugin, through which entry, for how long (no thread name and no path - the
+    // subject is the public id).
+    for (int i = 0; i < kMaxCalls; ++i) {
+        const CallSlot& c = g_calls[i];
+        if (c.state.load(std::memory_order_acquire) != 2) { continue; }
+        char line[160];
+        const char* what = c.what.load(std::memory_order_relaxed);
+        std::snprintf(line, sizeof(line), "  call %s %s age-ms=%lld\n", reportId(c.subject.load(std::memory_order_relaxed)).c_str(),
+                      what != nullptr ? reportWord(what).c_str() : "unknown",
+                      static_cast<long long>(now - c.startMs.load(std::memory_order_relaxed)));
         out += line;
     }
     return out;

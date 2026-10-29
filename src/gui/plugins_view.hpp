@@ -140,6 +140,10 @@ struct FittedModule {
     bool idle = false;
     // The module is set to ALWAYS ("keep running"): the tick on its page.
     bool keepRunning = false;
+    // SWITCHED OFF BY THE CONTAINMENT (plugin containment P1; PLUGINS value[3] bit 3 and fact.plugin.<file>.fault): the guard caught it faulting,
+    // or the last run ended with it in play. `fault` is the engine's sentence for it; the page offers RE-ENABLE while it is not empty.
+    bool switchedOff = false;
+    std::string fault;
     // PluginRunner::isFeeding(file) - the runner has an instance for this module
     // MATCHED to the rate the pipeline is delivering.
     bool fed = false;
@@ -311,6 +315,8 @@ struct FittedModulesAction {
         // The "keep running" tick on the module's page (0.99.73): FOXAPP_OP_PLUGIN_RUN_MODE (the file,
         // flag ? ALWAYS : AUTO). `flag` is the state being asked for. (Stub campaign B2 made the op; B5 sends it.)
         SetKeepRunning,
+        // FOXAPP_OP_PLUGIN_REENABLE (the file): the one click that puts a module the containment switched off back to work (a LOCAL op).
+        Reenable,
         Remove,    // FOXAPI_OP_STORE_REMOVE (the file)
         // FOXAPP_OP_STORE_CLEAN_OLD, ival[0] 1 (the file) (0.99.69): the same two-step key on a file that is
         // not in the plugin index and not running - and the engine re-checks that against its own scan
@@ -485,6 +491,8 @@ struct FittedRow {
     // nothing is using it, so it has no instance. Asleep is the Fitted modules window's IDLE: not stopped and not failing.
     int runMode = 0;
     bool asleep = false;
+    bool switchedOff = false;  // value[3] bit 3: the containment switched it off
+    std::string fault;         // fact.plugin.<file>.fault
     std::string path, version, author, licence, error, idle, notice, integrity;  // fact.plugin.<file>.*
 };
 

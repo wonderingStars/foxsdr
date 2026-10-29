@@ -165,6 +165,11 @@ constexpr const char* kFaultLinePrefix = "cascade-fault: ";
 // own wording still starts with it.
 constexpr const char* kAbsorbedFaultReasonPrefix = "fault in a third-party SDR module, absorbed";
 
+// THE SAME FOR A PLUGIN'S FAULT (core/plugin_fault.cpp, plugin containment P1): the guard around every plugin entry point that is not the
+// signal path files its absorbed fault with a reason that begins with this, and crashReportWrittenByProcess and the exit classifier tell it
+// from the report of a death by exactly that prefix.
+constexpr const char* kAbsorbedPluginFaultReasonPrefix = "fault in a plugin, absorbed";
+
 // THE START OF THE `reason:` LINE OF THE PARENT'S REPORT OF AN ENUMERATION CHILD'S
 // DEATH (source/soapy_enum_proc.cpp), and the second kind of report that is
 // written by a process that SURVIVED. Shared so that crashReportWrittenByProcess

@@ -85,6 +85,9 @@ bool Engine::pluginIsStopped(const std::string& pluginKey) const {
     // An empty key is what a record with no path produces; it must never match, or one stray entry would stop every path-less plugin at
     // once.
     if (pluginKey.empty()) { return false; }
+    // A plugin the guard switched off is stopped in every sense that matters (no instance anywhere, no basemap, no track info) - and a
+    // person's START cannot bring it back; only RE-ENABLE can.
+    if (pluginIsQuarantinedId(cascade::core::pluginRunId(pluginKey))) { return true; }
     return pluginRunMode(pluginKey) == PluginRun::Stopped;
 }
 
@@ -93,10 +96,16 @@ std::vector<std::string> Engine::stoppedPluginIds() const {
     for (const auto& [id, mode] : pluginRun_) {
         if (mode == PluginRun::Stopped) { out.push_back(id); }
     }
+    // ...and the ones the guard switched off: the runner, the API core and the interface's directive all take "stopped" as their one word for
+    // "no instance of this plugin, anywhere".
+    for (const std::string& id : quarantinedIds_) {
+        if (std::find(out.begin(), out.end(), id) == out.end()) { out.push_back(id); }
+    }
     return out;
 }
 
 bool Engine::pluginShouldRunById(const cascade::core::LoadedPlugin& p, const std::string& id) const {
+    if (pluginIsQuarantinedId(id)) { return false; }
     switch (pluginRunModeById(id)) {
         case PluginRun::Stopped: return false;
         case PluginRun::Always: return true;
@@ -175,7 +184,8 @@ void Engine::restorePluginRun(const cascade::core::AppConfig& cfg) {
     }
 }
 
-void Engine::chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const CascadeTrackInfoApi*& trackInfo) const {
+void Engine::chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const CascadeTrackInfoApi*& trackInfo, std::string* basemapPlugin,
+                                       std::string* trackInfoPlugin) const {
     // THE BASEMAP, if a plugin supplies one. The first loaded plugin declaring the capability wins: two basemaps cannot both be the map, and
     // picking silently by load order is more predictable than picking by some quality the user cannot see. A STOPPED plugin is skipped, and
     // that is the whole of what "stopped" means for a basemap: the map falls back to its built-in coastlines rather than keeping tiles from
@@ -186,12 +196,14 @@ void Engine::chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const 
     for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
         if (lp.loaded && lp.basemap != nullptr && !pluginIsStopped(cascade::core::pluginKey(lp))) {
             basemap = lp.basemap;
+            if (basemapPlugin != nullptr) { *basemapPlugin = cascade::core::pluginKey(lp); }
             break;
         }
     }
     for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
         if (lp.loaded && lp.trackInfo != nullptr && !pluginIsStopped(cascade::core::pluginKey(lp))) {
             trackInfo = lp.trackInfo;
+            if (trackInfoPlugin != nullptr) { *trackInfoPlugin = cascade::core::pluginKey(lp); }
             break;
         }
     }
@@ -208,7 +220,7 @@ void Engine::postPluginLife() {
     d.plugins = pluginHost_.plugins();
     d.stopped = stoppedPluginIds();
     d.dormant = pluginDormantIds_;
-    chooseBasemapAndTrackInfo(d.basemap, d.trackInfo);
+    chooseBasemapAndTrackInfo(d.basemap, d.trackInfo, &d.basemapPlugin, &d.trackInfoPlugin);
     if (!deliverPluginDirective(std::move(d))) {
         // Not an error (nothing is being unmapped), but a wake whose GUI half is late: the decoder below is created without waiting.
         cascade::core::diagLogf(
@@ -395,6 +407,8 @@ PluginUse Engine::pluginUseOfKeyed(const cascade::core::LoadedPlugin& p, const s
 // --- once a pass ----------------------------------------------------------------------------------------------------------------
 
 void Engine::updatePluginLifecycle() {
+    // First, before any wake is decided: a plugin the guard switched off since the last pass is put down (and its key let go) now.
+    applyPluginQuarantines();
     if (pluginDormantAfterMs_ < 0) { pluginDormantAfterMs_ = dormantAfterMsFromEnvironment(); }
     refreshApiPluginKeys();
     const std::vector<cascade::core::LoadedPlugin>& plugins = pluginHost_.plugins();

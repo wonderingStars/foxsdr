@@ -269,7 +269,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"EnumChild", "src/source/soapy_enum_proc.cpp", 1},
         {"PluginApi", "src/core/plugin_ui.cpp", 1},  {"WebRoute", "src/net/web_server.cpp", 1},
     };
-    // The five counters a poll reads (the fifth, the per-thread watchdog's, 6.27): named in the poll, where the readings are made - the engine's pass since the extraction (the window
+    // The nine counters a poll reads (the fifth, the per-thread watchdog's, 6.27; the last four, the plugin containment's, 6.28): named in the poll, where the readings are made - the engine's pass since the extraction (the window
     // no longer holds a pipeline to read them from).
     const std::string window = readFile(root / "src" / "engine" / "engine.cpp");
     // The words the table names, and how many files each has a site in (a word's files are exactly its rows').
@@ -284,11 +284,13 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
                                 "now.ringDroppedSamples = pipeline_.ringDroppedSamples()",
                                 "now.dspThreadExceptions = static_cast<unsigned long long>(pipeline_.dspThreadExceptions())",
                                 "now.threadWedges = cascade::core::beats::Registry::wedgesFound()",
+                                "now.pluginFaults = pf.faults", "now.pluginQuarantines = pf.quarantines", "now.pluginWedges = pf.wedges",
+                                "now.pluginOveruses = pf.overruns",
                                 "recoveryWatch_.poll(now)", "cascade::core::health::drainRecovered()"}) {
         if (window.find(reading) == std::string::npos) { std::printf("FAIL the engine's poll lacks %s\n", reading); }
         CHECK(window.find(reading) != std::string::npos);
     }
-    const std::set<std::string> watched = {"SrcThread", "VendorCall", "RingDrop", "DspExc", "ThreadWedge"};
+    const std::set<std::string> watched = {"SrcThread", "VendorCall", "RingDrop", "DspExc", "ThreadWedge", "PluginFault", "PluginQuarantine", "PluginWedge", "PluginOveruse"};
     CHECK(words.size() + watched.size() == health::kRecoveredCount);
     // scan the whole tree for uses outside the vocabulary's own files
     std::map<std::string, std::map<std::string, int>> found;   // word -> file -> count
@@ -319,7 +321,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
             std::printf(" (expected %s x%d)\n", s.file, s.count);
         }
     }
-    // ...and nothing else is counted that the table does not know (the watched five have no direct use at all).
+    // ...and nothing else is counted that the table does not know (the watched nine have no direct use at all).
     std::size_t known = 0;
     for (const auto& kv : found) {
         const bool listed = std::any_of(sites.begin(), sites.end(), [&](const Site& s) { return kv.first == s.word; });

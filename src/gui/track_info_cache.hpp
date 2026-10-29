@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "core/plugin_fault.hpp"
 
 namespace cascade::gui {
 
@@ -45,7 +46,8 @@ public:
     // Points the cache at a plugin's table, creating one instance. nullptr
     // detaches and drops every cached answer - a different plugin's answers
     // must not be served as this one's.
-    void attach(const CascadeTrackInfoApi* api);
+    // `pluginKey`: the module file the table belongs to (see BasemapCache::attach).
+    void attach(const CascadeTrackInfoApi* api, const std::string& pluginKey = std::string());
     void detach();
 
     bool active() const { return api_ != nullptr && handle_ != nullptr; }
@@ -74,6 +76,7 @@ public:
 private:
     const CascadeTrackInfoApi* api_ = nullptr;
     void* handle_ = nullptr;
+    cascade::core::fault::Slot* slot_ = nullptr;
 
     std::unordered_map<std::string, Info> cache_;
     std::unordered_map<std::string, std::uint64_t> age_;

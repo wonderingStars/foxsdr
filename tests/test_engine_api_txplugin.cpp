@@ -55,6 +55,7 @@
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
+#include "core/plugin_fault.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
 #include "engine/engine.hpp"
@@ -1398,6 +1399,39 @@ void testStoppingWhileKeyed() {
     }
 }
 
+
+// ---- M: a plugin the containment switched off always unkeys (plugin containment P1; docs/engine-stage4.md 6.28) ---------------------------------------
+
+void testQuarantineUnkeys() {
+    std::printf("  M: a keyed plugin the guard switched off lets go of the key and closes the window in that pass, and is not re-keyed\n");
+    // (the guard's own decision is made by hand here, as a fault it caught would make it; a fault IN the fixture is not what is held - the rule is that
+    // a module going away for THIS reason unkeys like every other: engine_plugin_fault.cpp applyPluginQuarantines, txPluginModuleGoing first)
+    Rig r;
+    CHECK(r.key());
+    CHECK(r.keyed());
+    const int starts = r.radio()->starts.load();
+    CHECK(cc::fault::quarantine(cc::fault::slotFor(kFile), cc::fault::Why::Fault, cc::fault::Entry::PollText));
+    r.passes(1);   // ONE pass: it drains the guard's events and puts the plugin down
+    CHECK(!r.requested());
+    CHECK(!r.keyed());
+    CHECK(!r.armed());
+    std::printf("    closed because: %s\n", Access::whyClosed(r.eng).c_str());
+    // (TWO layers close it, whichever sees it first in the pass: the key step, which finds the runner no longer feeding the holder - "stopped
+    // (dormant, stopped, unloaded or rebuilt)" - and applyPluginQuarantines' own txPluginModuleGoing - "switched off after a fault". The outcome
+    // pinned is the same, within the one pass; the reason is one of the two and never empty.)
+    CHECK(Access::whyClosed(r.eng).find("switched off") != std::string::npos || Access::whyClosed(r.eng).find("stopped (dormant") != std::string::npos);
+    r.frame(true);
+    CHECK(!r.onAir());
+    CHECK(!Access::runner(r.eng).hasInstances(kFile));
+    // still asking, still granted: NOT re-keyed, and nothing is pulled from it
+    const unsigned long long pulls = r.pulls();
+    r.framesFor(800);
+    CHECK(!r.keyed());
+    CHECK(r.pulls() == pulls);
+    CHECK_EQ(r.radio()->starts.load(), starts);
+    CHECK(cc::fault::release(cc::fault::slotFor(kFile)));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1436,6 +1470,7 @@ int main(int argc, char** argv) {
     testOffAtTheCap();
     testOffFromAClosedSession();
     testStoppingWhileKeyed();
+    testQuarantineUnkeys();
 
     fs::remove_all(g_scratch, ec);
     return check::finish("test_engine_api_txplugin");

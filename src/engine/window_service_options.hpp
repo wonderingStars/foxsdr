@@ -39,6 +39,8 @@ struct WindowServiceRun {
     int frames = -1;
     // A bounded measurement run (FOXSDR_MEASURE, tools/measure_engine.ps1): it times the product's own arrangement, so its pass is free-running.
     bool measuring = false;
+    // Safe mode (BootResult::safePlugins): the window was started with --safe-plugins or the key held.
+    bool safePlugins = false;
 };
 
 // The options a window application's service is built with; see the header comment for what each run kind sets.

@@ -67,6 +67,9 @@ set(CASCADE_TSAN_TESTS
     test_excuse_cap test_watchdog_startup test_telemetry
     # the per-thread watchdog (6.27): the worker registry beaten, parked, registered and ended while the watchdog polls it
     test_thread_beats test_thread_beats_pipeline test_thread_beats_engine
+    # the plugin containment (6.28): the call table and the quarantine state against concurrent callers, the marker's mapped slots written by many
+    # threads, the engine's pass applying a quarantine while the DSP stand-in runs, and the faulting paths' no-ops off Windows
+    test_plugin_marker test_plugin_fault test_plugin_containment test_plugin_validate test_engine_api_plugin_fault
     # servers and senders
     test_web_server test_cat_server test_httplib_vendor test_updater test_feature_request
     test_gps_reader test_serial_port test_transmitter
@@ -176,7 +179,9 @@ _cascade_tsan_exclude(
     test_theme_census app_smoke app_selftest app_version app_cli_bad_value app_cli_negative
     app_cli_missing_value app_cli_unknown_arg
     # run the application as a child too (CMakeLists.txt, _runs_app); master's list does not name them
-    test_bias_key_run test_startup_state test_stop_ends_recordings test_plugin_status_report)
+    test_bias_key_run test_startup_state test_stop_ends_recordings test_plugin_status_report
+    # (plugin containment) the real engine binary, and a child of its own that ends its process on purpose
+    test_plugin_crashloop)
 
 _cascade_tsan_exclude(
     "it faults a process on purpose to prove the crash handler writes its report, and ThreadSanitizer's own handling of the fault signals is in the way"

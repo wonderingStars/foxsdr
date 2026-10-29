@@ -38,6 +38,8 @@ fires is dropped. The Worker as 0.99.67 shipped it, kept in
 
 The release that carries the per-thread watchdog (docs/engine-stage4.md 6.27) adds one more, `recovered.threadwedge` (a worker thread stopped answering and the watchdog reported it by name): the same rule - deploy this Worker before that release ships, or the count of how often a worker wedges in the field is dropped. (Nothing was deployed by the change that adds the word.)
 
+The release that carries the plugin containment (docs/engine-stage4.md 6.28) adds four more, `recovered.pluginfault` (the host absorbed a fault inside a plugin's call), `recovered.pluginquarantine` (a plugin was switched off for the session), `recovered.pluginwedge` (a plugin call never returned, or an unload timed out inside one) and `recovered.pluginoveruse` (a plugin call overran its budget; once a session): the same rule - deploy this Worker before that release ships, or those counts are dropped. The words carry no plugin id; which plugin it was is in the crash reports' `blamed-plugin` fields, not here. (Nothing was deployed by the change that adds the words.)
+
 ## The columns of `foxsdr_usage`
 
 Written in `worker.js`; never renumbered, because a column that changes meaning

@@ -103,7 +103,7 @@ int main() {
 
     // --- a usage line that names the engine and its one flag --------------------------------------------
     const emt::RunResult usage = engine({"--bogus"});
-    CHECK(emt::contains(usage.err, "usage: foxsdr-engine [--seconds N] [--config PATH | --use-config] [--selftest] [--version]"));
+    CHECK(emt::contains(usage.err, "usage: foxsdr-engine [--seconds N] [--config PATH | --use-config] [--safe-plugins] [--selftest] [--version]"));  // (--safe-plugins: plugin containment P1)
 
     // --- the Host is where it was: it refuses --seconds, as cascade, naming itself ------------------------
     if (fs::exists(cascadeExe)) {

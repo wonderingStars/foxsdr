@@ -653,12 +653,14 @@ private:
     struct TrackInstance {
         const CascadeTrackSourceApi* api = nullptr;
         void* handle = nullptr;
+        fault::Slot* slot = nullptr;   // the containment's slot for this instance's plugin (core/plugin_fault.hpp)
         std::string name;
         std::string key;
     };
     struct PanelInstance {
         const CascadePanelApi* api = nullptr;
         void* handle = nullptr;
+        fault::Slot* slot = nullptr;
         std::string name;
         std::string key;
         std::size_t panelIndex = 0;  // into panels_
@@ -666,6 +668,7 @@ private:
     struct InstrumentInstance {
         const CascadeInstrumentApi* api = nullptr;
         void* handle = nullptr;
+        fault::Slot* slot = nullptr;
         std::string name;
         std::string key;
         std::size_t index = 0;  // into instruments_

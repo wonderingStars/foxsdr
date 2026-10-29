@@ -25,6 +25,7 @@ ServiceOptions windowServiceOptions(const WindowServiceRun& run) {
     const bool bounded = run.frames >= 0;
     ServiceOptions o;
     o.configPath = run.configPath;
+    o.safePlugins = run.safePlugins;
     // Empty unless this run is ALLOWED to write - which is not the same as whether the user wants it: the Settings toggle works in a session that
     // started with diagnostics off, so the directory is named whenever boot allows it (the service follows the stored switch itself).
     o.diagnosticsDir = run.diagnosticsDir;

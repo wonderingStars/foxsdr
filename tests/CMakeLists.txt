@@ -15,6 +15,27 @@ set_target_properties(settings_ui_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_plugins/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_plugins/$<CONFIG>")
 
+# THE FAULT PROBE (plugin containment P1, docs/engine-stage4.md 6.28): a REAL plugin module that misbehaves on demand - an access violation in
+# create / destroy / a poll, a C++ exception across the C boundary, a poll that does not return, a fault in DllMain or in the descriptor query -
+# for the tests that stage the faults. IT CRASHES ON PURPOSE, so it is built into a directory of its own (fixture_fault/) and never staged
+# beside anything a person runs; the tests copy it into scratch plugin folders under names of their own. Batch P2 widens it into the
+# hostile-plugin fixture.
+add_library(fault_probe_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/fault_probe_plugin.cpp")
+target_include_directories(fault_probe_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+target_link_libraries(fault_probe_fixture PRIVATE ${CMAKE_DL_LIBS})   # (dladdr, for the declared name: empty on Windows)
+set_target_properties(fault_probe_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_fault/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_fault/$<CONFIG>")
+# The tests that are handed the probe's path as their first argument (and need it built first).
+set(CASCADE_FAULT_PROBE_TESTS
+    test_plugin_fault
+    test_plugin_containment
+    test_plugin_crashloop
+    test_engine_api_plugin_fault
+    test_plugin_fault_notice_app
+    test_plugin_validate)
+
 # TWO REAL plugin modules for test_plugin_rescan_skip, from one source
 # (tests/fixtures/rescan_probe_plugin.cpp): each writes a line to a file when
 # the host maps it, unmaps it, creates a decoder and destroys one, so the test
@@ -486,6 +507,14 @@ foreach(src ${CASCADE_TESTS})
         # real frame loop; both built first.
         add_dependencies(${name} late_fault_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:late_fault_fixture>")
+    elseif(name IN_LIST CASCADE_FAULT_PROBE_TESTS)
+        # The fault probe (plugin containment P1) copied into scratch plugin folders by the test, and - for the ones that spawn the real
+        # binaries - the engine and the window built first.
+        add_dependencies(${name} fault_probe_fixture)
+        if(name STREQUAL "test_plugin_crashloop")
+            add_dependencies(${name} foxsdr-engine)
+        endif()
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:fault_probe_fixture>")
     elseif(name STREQUAL "test_crash_late_module" AND TARGET late_fault_fixture)
         # Loads the late fixture by full path after arming its handlers.
         add_dependencies(${name} late_fault_fixture)
@@ -590,7 +619,7 @@ endif()
 foreach(_runs_app IN ITEMS test_bias_key_run test_crash_upload test_diag_hang test_diagnostics test_plugin_status_report
                            test_gps_app test_problem_report_app test_shutdown_budget test_startup_state
                            test_stop_ends_recordings test_theme_census test_tester_usage_app test_ui_scale_app test_soapy_enum_proc
-                           test_soapy_source)
+                           test_soapy_source test_plugin_fault_notice_app)
     if(TARGET ${_runs_app})
         add_dependencies(${_runs_app} cascade)
     endif()
@@ -666,6 +695,12 @@ target_include_directories(fixture_stage1_plugin PRIVATE "${CMAKE_SOURCE_DIR}/sr
 add_dependencies(test_apply_command fixture_stage1_plugin)
 target_compile_definitions(test_apply_command PRIVATE
     FIXTURE_STAGE1_PLUGIN="$<TARGET_FILE:fixture_stage1_plugin>")
+# THE STACK OF test_engine_service_options (plugin containment P1, docs/engine-stage4.md 6.28): its main() keeps one EngineService (an Engine by value) per scenario in one
+# frame - 962 KB of the 1 MB default stack on MSVC, measured from a crash in __chkstk under ConfigStore::load when the Engine grew by the containment's few hundred
+# bytes. The test was one scenario away from the edge before this change and nothing about the product moved; the headroom is the test host's to give.
+if(MSVC AND TARGET test_engine_service_options)
+    target_link_options(test_engine_service_options PRIVATE /STACK:8388608)
+endif()
 # THE GROUP-8 FIXTURE (window port group 8, API 0.3 section 8.7): a second real module - an I/Q
 # decoder (mute-while-running defaults ON), a DEVICE-CENTRE preset, a preset the host drops, a
 # preset with no label, and two marks on the spectrum - loaded beside the stage-1 fixture by the
@@ -855,6 +890,9 @@ set_tests_properties(test_gui_file_jobs test_failure_files PROPERTIES TIMEOUT 30
 # CI run 38564730541: x64 passed in 61.98 s; arm64 hit the inherited 120 s
 # bound at 120.11 s without stdout (Store test: 35.27 s x64, 69.55 s arm64).
 # Give only this test 300 s; unbuffered launch tags identify a child if it hangs.
+if(TEST test_plugin_fault_notice_app)
+    set_tests_properties(test_plugin_fault_notice_app PROPERTIES TIMEOUT 300)
+endif()
 if(TEST test_team_message_app)
     set_tests_properties(test_team_message_app PROPERTIES TIMEOUT 300)
 endif()
@@ -1360,6 +1398,7 @@ set(CASCADE_GUI_TESTS
     test_patch_info_pane
     test_patch_map_credit
     test_plugin_dup_app
+    test_plugin_fault_notice_app
     test_plugin_inuse_app
     test_plugin_pathpick_app
     test_plugin_store_app

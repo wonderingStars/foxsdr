@@ -426,6 +426,8 @@ void fillFittedModule(FittedModule& m, const FittedRow& r) {
     m.catalogueIndex = -1;
     m.idle = r.loaded && r.asleep;
     m.keepRunning = r.loaded && r.runMode == 1;
+    m.switchedOff = r.switchedOff;
+    m.fault = r.fault;
     m.ownWindow = fittedOwnWindowOfCaps(r.caps, r.loaded);
     m.path = r.path;
     // A caps word of 0 is "no descriptor read" (the host validates a descriptor, which refuses a zero word,
@@ -843,6 +845,25 @@ float drawOnThisMachine(ImDrawList* dl, const FittedModule& m, const ModulePlate
                             sentence.c_str(), nullptr, inner);
             }
             cy += h + 10.0f * k;
+        }
+        // 3a. RE-ENABLE (plugin containment P1): the one click that puts a module the containment switched off back to work - the guard caught it
+        // faulting this session, or the last run ended with it in play. The sentence above (or the module's notice) says which. The engine's
+        // FOXAPP_OP_PLUGIN_REENABLE is a LOCAL op; this key is the window's, on this machine.
+        if (!m.fault.empty()) {
+            const float kh = outlineKeyHeight();
+            const char* label = tr("RE-ENABLE");
+            const float kw = outlineKeyWidth(label) + 20.0f * k;
+            if (draw) {
+                if (drawOutlineKey(dl, ImVec2(x + pad, cy), ImVec2(x + pad + kw, cy + kh), label, theme::kPhosphor, true, "reenable", nullptr)) {
+                    act.kind = FittedModulesAction::Kind::Reenable;
+                    act.file = m.file;
+                }
+                if (census::enabled()) {
+                    census::note("fitted:page:reenable:", m.file);
+                    censusRect("fitted:page:reenable", x + pad, cy, x + pad + kw, cy + kh);
+                }
+            }
+            cy += kh + 8.0f * k;
         }
         // 3b. KEEP RUNNING (0.99.73): the tick that pins a module to ALWAYS. Offered to a module that
         // can be idle at all - not to a refused one, a stopped one (START is its key), a module with

@@ -9,6 +9,8 @@
 #include <cstring>
 
 #include "core/diag_log.hpp"
+#include "core/plugin_calls.hpp"
+#include "core/plugin_marker.hpp"
 #include "core/utf8_text.hpp"  // utf8Floor: audioPathSnapshot cuts a name on a character
 #include "core/plugin_run.hpp"
 
@@ -87,11 +89,32 @@ std::string failureSentence(const std::string& name) {
            "once more.";
 }
 
+// What the row says when the plugin was SWITCHED OFF (core/plugin_fault.hpp) rather than reporting a permanent error itself: it faulted,
+// threw or stopped answering, the host contained it, and nothing of it is called again this session.
+std::string quarantineSentence(const std::string& name, const fault::Slot* slot) {
+    const fault::Why why = fault::quarantineWhy(slot);
+    const char* what = why == fault::Why::Wedge       ? "stopped answering"
+                       : why == fault::Why::Exception ? "threw an error"
+                                                      : "faulted";
+    return "\"" + name + "\" " + what + " in " + fault::entryWord(fault::quarantineEntry(slot)) +
+           " and was switched off for this session, so it is being fed nothing further. RE-ENABLE it in Fitted modules to try it again.";
+}
+
 // The host clock an epoch is stamped with (CascadeStreamInfo::epochStartUnixMs).
 std::int64_t nowUnixMs() {
     return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                          std::chrono::system_clock::now().time_since_epoch())
                                          .count());
+}
+
+// One instance's destroy(), as a guarded call: the marker says `unload` for the length of it, a plugin that faults in it is switched off
+// (its other instances are then not destroyed at all, and are leaked with their module), and an instance of a plugin that was already
+// switched off is simply dropped - nothing of it is called again.
+template <class Api>
+void destroyOne(fault::Slot* slot, const std::string& key, const Api* api, void* handle) {
+    if (api == nullptr || handle == nullptr) { return; }
+    marker::CallPhase inUnload(key, marker::Phase::Unload);
+    calls::destroy(slot, api, handle);
 }
 
 }  // namespace
@@ -238,6 +261,14 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
     // and the one that was forgotten would be a plugin isFeeding could
     // never see.
     const std::string key = pluginKey(lp);
+    fault::Slot* const slot = fault::slotFor(key);
+    // A plugin that was switched off this session gets no instance, whoever asks (a rebuild, a wake): the engine's pass has already put
+    // it down, and the module is only still mapped because nothing may unmap it.
+    if (fault::isQuarantined(slot)) { return; }
+    const fault::Origin origin = faultOriginOf(lp.origin);
+    // THE CRASH-LOOP MARKER (core/plugin_marker.hpp): this plugin is inside create() from here to the end of this function.
+    const marker::Phase phaseBefore = marker::phaseOf(key);
+    marker::set(key, marker::Phase::Create, lp.version, origin);
     const std::size_t statusBegin = status_.size();
     // A plugin may declare both. Each declared capability gets its own
     // instance and its own stream, which is why this is two independent
@@ -262,8 +293,8 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
         const double want = static_cast<double>(lp.decoder->requiredRateHz);
         const bool resample = want != 0.0 && want != audioRateHz_;
         {
-            void* h = lp.decoder->create(want != 0.0 ? static_cast<uint32_t>(want)
-                                                     : static_cast<uint32_t>(audioRateHz_));
+            void* h = calls::create(slot, lp.decoder,
+                                    want != 0.0 ? static_cast<uint32_t>(want) : static_cast<uint32_t>(audioRateHz_));
             if (h == nullptr) {
                 DecoderStatus st;
                 st.plugin = lp.name;
@@ -276,6 +307,7 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
                 Instance inst;
                 inst.api = lp.decoder;
                 inst.handle = h;
+                inst.slot = slot;
                 inst.name = lp.name;
                 inst.key = key;
                 if (resample) { setUpResample(inst.resample, audioRateHz_, want); }
@@ -308,7 +340,7 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
             st.detail = rateSentence(lp.name, want, iqRateHz_, "raw I/Q");
             status_.push_back(std::move(st));
         } else {
-            void* h = lp.iqDecoder->create(want != 0.0 ? want : iqRateHz_, centreHz_);
+            void* h = calls::create(slot, lp.iqDecoder, want != 0.0 ? want : iqRateHz_, centreHz_);
             if (h == nullptr) {
                 DecoderStatus st;
                 st.plugin = lp.name;
@@ -321,6 +353,7 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
                 IqInstance inst;
                 inst.api = lp.iqDecoder;
                 inst.handle = h;
+                inst.slot = slot;
                 inst.name = lp.name;
                 inst.key = key;
                 inst.statusIndex = status_.size();
@@ -363,8 +396,7 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
             // centerHz is 0 for an audio-input decoder, per the ABI: the
             // audio it receives has already been tuned and demodulated, so
             // an RF frequency would be a number it could only misuse.
-            void* h = lp.imageDecoder->create(want != 0.0 ? want : have,
-                                              isIq ? centreHz_ : 0.0);
+            void* h = calls::create(slot, lp.imageDecoder, want != 0.0 ? want : have, isIq ? centreHz_ : 0.0);
             if (h == nullptr) {
                 st.reason = DecoderIdleReason::CreateFailed;
                 st.detail =
@@ -375,6 +407,7 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
                 inst.api = lp.imageDecoder;
                 inst.input = lp.imageInput;
                 inst.handle = h;
+                inst.slot = slot;
                 inst.name = lp.name;
                 inst.key = key;
                 inst.inputKind = isIq ? CASCADE_INPUT_IQ : CASCADE_INPUT_AUDIO;
@@ -406,6 +439,7 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
         AudioInstance a;
         a.api = lp.audioOut;
         a.handle = audioHandle;
+        a.slot = slot;
         a.name = lp.name;
         a.key = key;
         a.rateHz = lp.audioOut->sampleRateHz;
@@ -440,6 +474,7 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
         TxInstance t;
         t.api = lp.txAudio;
         t.handle = audioHandle;
+        t.slot = slot;
         t.name = lp.name;
         t.key = key;
         // Reserved here, on the control thread: the real-time pull never allocates.
@@ -456,11 +491,12 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
     // rate, because that is the shape of the chain where it runs (see
     // processAudioChain and the ABI's CascadeAudioProcessorApi).
     if (lp.audioProcessor != nullptr && audioRateHz_ > 0.0) {
-        void* h = lp.audioProcessor->create(static_cast<uint32_t>(audioRateHz_), 2u);
+        void* h = calls::create(slot, lp.audioProcessor, static_cast<uint32_t>(audioRateHz_), 2u);
         if (h != nullptr) {
             ProcessorInstance p;
             p.api = lp.audioProcessor;
             p.handle = h;
+            p.slot = slot;
             p.name = lp.name;
             p.key = key;
             p.title = lp.audioProcessor->title != nullptr ? lp.audioProcessor->title
@@ -505,6 +541,9 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
         status_[i].key = key;
     }
     statusGen_.fetch_add(1, std::memory_order_release);
+    // Out of create(): an instance exists and has not yet been fed (`first-pass`; the engine's pass promotes it to `running` once it has
+    // survived a few seconds), or none was made and the plugin is not in play at all.
+    marker::set(key, (started || !processors_.empty()) ? marker::Phase::FirstPass : phaseBefore, lp.version, origin);
 }
 
 bool PluginRunner::isFeeding(const std::string& pluginKey) const {
@@ -537,12 +576,12 @@ void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
     // nothing, and the count only moves when something was actually fed.
     bool fedAny = false;
     for (IqInstance& i : iqInstances_) {
-        if (i.failed) { continue; }
+        if (i.failed || fault::isQuarantined(i.slot)) { continue; }
         i.api->process(i.handle, interleaved, frames);
         fedAny = true;
     }
     for (ImageInstance& i : imageInstances_) {
-        if (i.failed || i.inputKind != CASCADE_INPUT_IQ) { continue; }
+        if (i.failed || i.inputKind != CASCADE_INPUT_IQ || fault::isQuarantined(i.slot)) { continue; }
         i.api->process(i.handle, interleaved, frames);
         fedAny = true;
     }
@@ -576,6 +615,7 @@ void PluginRunner::retuneLocked(double centreHz) {
     if (centreHz == centreHz_) { return; }
     centreHz_ = centreHz;
     for (IqInstance& i : iqInstances_) {
+        if (fault::isQuarantined(i.slot)) { continue; }
         // retune is OPTIONAL in the ABI - a decoder working on the envelope
         // usually does not care - so it is null-checked at the call site,
         // which is the contract the header states.
@@ -585,7 +625,7 @@ void PluginRunner::retuneLocked(double centreHz) {
         // Only the I/Q ones. An audio-input image decoder was created with
         // centerHz 0 by the ABI's own rule, so handing it a real RF frequency
         // now would contradict what it was told at create().
-        if (i.inputKind == CASCADE_INPUT_IQ && i.api->retune != nullptr) {
+        if (i.inputKind == CASCADE_INPUT_IQ && i.api->retune != nullptr && !fault::isQuarantined(i.slot)) {
             i.api->retune(i.handle, centreHz);
         }
     }
@@ -617,6 +657,7 @@ void PluginRunner::processAudioChain(float* left, float* right, std::size_t fram
         ilv[2u * i + 1u] = right[i];
     }
     for (ProcessorInstance& p : processors_) {
+        if (fault::isQuarantined(p.slot)) { continue; }   // a switched-off processor passes the audio through untouched
         p.api->process(p.handle, ilv, frames);
         // AFTER EACH ONE, so the next processor is never handed a NaN either:
         // a processor that divides by its input would turn one into a block.
@@ -694,18 +735,10 @@ void PluginRunner::destroyInstances(std::unique_lock<std::mutex>& lock) {
     // THE ORDER IS THE ABI'S: a handle is destroyed exactly once, after the
     // last call of anything else on it. An instance that failed permanently
     // kept its handle for precisely this moment.
-    for (Instance& i : deadAudio) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    for (IqInstance& i : deadIq) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    for (ImageInstance& i : deadImage) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    for (ProcessorInstance& p : deadProc) {
-        if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
-    }
+    for (Instance& i : deadAudio) { destroyOne(i.slot, i.key, i.api, i.handle); }
+    for (IqInstance& i : deadIq) { destroyOne(i.slot, i.key, i.api, i.handle); }
+    for (ImageInstance& i : deadImage) { destroyOne(i.slot, i.key, i.api, i.handle); }
+    for (ProcessorInstance& p : deadProc) { destroyOne(p.slot, p.key, p.api, p.handle); }
     // The moved-out vectors are released here, with the lock still down: a
     // resampler's buffers are a free() and belong outside it too.
     deadAudio.clear();
@@ -822,18 +855,10 @@ void PluginRunner::removePluginLocked(const std::string& key,
     // plugin's destroy() may call the host back, and the host's tune service
     // comes straight back into retune() and this mutex.
     lock.unlock();
-    for (Instance& i : deadAudio) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    for (IqInstance& i : deadIq) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    for (ImageInstance& i : deadImage) {
-        if (i.api != nullptr && i.handle != nullptr) { i.api->destroy(i.handle); }
-    }
-    for (ProcessorInstance& p : deadProc) {
-        if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
-    }
+    for (Instance& i : deadAudio) { destroyOne(i.slot, i.key, i.api, i.handle); }
+    for (IqInstance& i : deadIq) { destroyOne(i.slot, i.key, i.api, i.handle); }
+    for (ImageInstance& i : deadImage) { destroyOne(i.slot, i.key, i.api, i.handle); }
+    for (ProcessorInstance& p : deadProc) { destroyOne(p.slot, p.key, p.api, p.handle); }
     deadAudio.clear();
     deadIq.clear();
     deadImage.clear();
@@ -853,7 +878,7 @@ void PluginRunner::processAudio(const float* mono, std::size_t frames) {
     // answer that question with the wrong one of the two.
     bool fedAny = false;
     for (Instance& i : instances_) {
-        if (i.failed) { continue; }
+        if (i.failed || fault::isQuarantined(i.slot)) { continue; }
         if (i.resample.resampler) {
             const std::size_t n = resampleBlock(i.resample, mono, frames);
             if (n != 0) { i.api->process(i.handle, i.resample.out.data(), n); }
@@ -863,7 +888,7 @@ void PluginRunner::processAudio(const float* mono, std::size_t frames) {
         fedAny = true;
     }
     for (ImageInstance& i : imageInstances_) {
-        if (i.failed || i.inputKind != CASCADE_INPUT_AUDIO) { continue; }
+        if (i.failed || i.inputKind != CASCADE_INPUT_AUDIO || fault::isQuarantined(i.slot)) { continue; }
         if (i.resample.resampler) {
             const std::size_t n = resampleBlock(i.resample, mono, frames);
             if (n != 0) { i.api->process(i.handle, i.resample.out.data(), n); }
@@ -907,6 +932,7 @@ void PluginRunner::pullAudioLocked(AudioInstance& a, float* left, float* right,
     // block below needs an exact count; the FIFO is what absorbs the
     // difference. Only the shortfall is asked for, so the buffer never runs
     // ahead and the plugin's own latency is not added to.
+    if (fault::isQuarantined(a.slot)) { a.stopped = true; }
     const std::size_t have = a.fifoL.size() - a.fifoHead;
     if (have < frames && !a.stopped) {
         const std::size_t shortfall = frames - have;
@@ -1016,6 +1042,7 @@ bool PluginRunner::pullPluginAudio(float* left, float* right, std::size_t frames
     std::size_t want = kNoAudio;
     for (std::size_t i = 0; i < audioInstances_.size(); ++i) {
         AudioInstance& a = audioInstances_[i];
+        if (!a.stopped && fault::isQuarantined(a.slot)) { a.stopped = true; }   // switched off: it stops producing, as the ABI's negative pull
         if (a.stopped) { continue; }
         if (a.api->active(a.handle) == 0) {
             a.contentionLogged = false;
@@ -1183,6 +1210,9 @@ void PluginRunner::pollTxAudioLocked() {
     // as a read of state the plugin has already decided, so asking costs nothing and
     // puts nothing on the air.
     for (TxInstance& t : txInstances_) {
+        // A plugin that was switched off stops here, as if its pull() had said "stopped for good": it never holds the transmitter again
+        // this session, and the key it held goes up with it (the GUI thread unkeys when the link says nobody wants it).
+        if (!t.stopped && fault::isQuarantined(t.slot)) { t.stopped = true; }
         if (t.stopped) {
             t.active = false;
             continue;
@@ -1433,8 +1463,8 @@ void PluginRunner::absorbLocked(const std::string& name, std::string& partial,
     while (pending_.size() > kMaxPendingLines) { pending_.pop_front(); }
 }
 
-void PluginRunner::failLocked(std::size_t statusIndex, const std::string& name) {
-    const std::string sentence = failureSentence(name);
+void PluginRunner::failLocked(std::size_t statusIndex, const std::string& name, const fault::Slot* slot) {
+    const std::string sentence = (slot != nullptr && fault::isQuarantined(slot)) ? quarantineSentence(name, slot) : failureSentence(name);
 
     // The row this instance was created with. The index cannot go stale -
     // status_ is only ever emptied together with the instance vectors - but it
@@ -1467,11 +1497,10 @@ void PluginRunner::pollLocked() {
         if (i.failed) { continue; }
         // Bounded - see kMaxPollsPerBlock. The rest waits for the next block.
         for (int k = 0; k < kMaxPollsPerBlock; ++k) {
-            const int32_t n =
-                i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
-            if (n < 0) {  // failed for good
+            const int32_t n = calls::pollText(i.slot, i.api, i.handle, pollBuf_.data(), pollBuf_.size());
+            if (n < 0) {  // failed for good (or switched off: the guard answers the same)
                 i.failed = true;
-                failLocked(i.statusIndex, i.name);
+                failLocked(i.statusIndex, i.name, i.slot);
                 break;
             }
             if (n == 0) { break; }  // nothing pending, the ordinary case
@@ -1488,11 +1517,10 @@ void PluginRunner::pollIqLocked() {
         if (i.failed) { continue; }
         // And the same bound (kMaxPollsPerBlock).
         for (int k = 0; k < kMaxPollsPerBlock; ++k) {
-            const int32_t n =
-                i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
+            const int32_t n = calls::pollText(i.slot, i.api, i.handle, pollBuf_.data(), pollBuf_.size());
             if (n < 0) {
                 i.failed = true;
-                failLocked(i.statusIndex, i.name);
+                failLocked(i.statusIndex, i.name, i.slot);
                 break;
             }
             if (n == 0) { break; }
@@ -1511,11 +1539,10 @@ void PluginRunner::pollImageTextLocked(std::uint32_t inputKind) {
         if (i.failed || i.inputKind != inputKind) { continue; }
         // And the same bound (kMaxPollsPerBlock).
         for (int k = 0; k < kMaxPollsPerBlock; ++k) {
-            const int32_t n =
-                i.api->poll_text(i.handle, pollBuf_.data(), pollBuf_.size());
+            const int32_t n = calls::pollText(i.slot, i.api, i.handle, pollBuf_.data(), pollBuf_.size());
             if (n < 0) {
                 i.failed = true;
-                failLocked(i.statusIndex, i.name);
+                failLocked(i.statusIndex, i.name, i.slot);
                 break;
             }
             if (n == 0) { break; }
@@ -1573,7 +1600,7 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
         if (ii.failed) { continue; }
         CascadeImage img{};
         img.structSize = static_cast<std::uint32_t>(sizeof(CascadeImage));
-        const std::int32_t got = ii.api->poll_image(ii.handle, &img);
+        const std::int32_t got = calls::pollImage(ii.slot, ii.api, ii.handle, &img);
         if (got < 0) {
             // NEGATIVE IS NOT "NO PICTURE YET". The ABI defines it as the
             // decoder having failed permanently, and this line used to fold it
@@ -1583,7 +1610,7 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
             // is nothing to release here.
             ii.failed = true;
             out[i].interactive = false;
-            failLocked(ii.statusIndex, ii.name);
+            failLocked(ii.statusIndex, ii.name, ii.slot);
             continue;
         }
         if (got == 0) { continue; }  // nothing new; the last picture stands
@@ -1625,7 +1652,7 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
         // Released either way, and immediately: the borrow is over the moment
         // the copy is taken, so a plugin is never waiting on the GUI to finish
         // looking at a picture.
-        ii.api->release_image(ii.handle, &img);
+        calls::releaseImage(ii.slot, ii.api, ii.handle, &img);
     }
 }
 
@@ -1634,7 +1661,7 @@ bool PluginRunner::imagePress(const std::string& plugin, std::uint32_t x, std::u
     for (const ImageInstance& image : imageInstances_) {
         if (image.name == plugin && !image.failed && image.input != nullptr &&
             x < image.width && y < image.height) {
-            image.input->press(x, y);
+            calls::press(image.slot, image.input, x, y);
             return true;
         }
     }

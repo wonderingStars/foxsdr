@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "core/plugin_fault.hpp"
 
 namespace cascade::gui {
 
@@ -40,7 +41,9 @@ public:
     // Points the cache at a plugin's basemap table, creating one instance.
     // Passing nullptr detaches and releases everything, which is what happens
     // when the user removes the plugin.
-    void attach(const CascadeBasemapApi* api);
+    // `pluginKey` is the module file the table belongs to (the containment's slot, core/plugin_fault.hpp: every call into the plugin is made
+    // through its guard, and a plugin that was switched off is not asked for a tile). Empty for the built-in stand-in.
+    void attach(const CascadeBasemapApi* api, const std::string& pluginKey = std::string());
     void detach();
 
     bool active() const { return api_ != nullptr && handle_ != nullptr; }
@@ -118,6 +121,7 @@ private:
 
     const CascadeBasemapApi* api_ = nullptr;
     void* handle_ = nullptr;
+    cascade::core::fault::Slot* slot_ = nullptr;
     std::string attribution_;
     std::uint32_t minZoom_ = 0;
     std::uint32_t maxZoom_ = 19;

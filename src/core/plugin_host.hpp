@@ -55,8 +55,11 @@
 #include <string>
 #include <vector>
 
+#include <functional>
+
 #include "core/plugin_abi.h"
 #include "core/plugin_host_data.hpp"
+#include "core/plugin_module_check.hpp"
 
 namespace cascade::core {
 
@@ -187,6 +190,14 @@ public:
     // Empty (the default) means no records: every module is Unrecorded.
     void scan(const std::string& dir, const PluginFileOrigins& origins = PluginFileOrigins{});
 
+    // THE LOAD GATE (plugin containment P1): asked of every candidate BEFORE its file is read or mapped, with the module's file name. It
+    // answers true to refuse the file - with the verdict and the sentence that say why (core/plugin_marker.hpp's Containment::gate: the
+    // plugin faulted last session, safe mode; the engine adds a plugin site's file that is not the bytes that were installed) - and the
+    // record is then kept with `loaded == false`, that error and that verdict, and nothing of the module runs. Unset (the default), every
+    // file is a candidate. Called on the scanning thread.
+    using LoadGate = std::function<bool(const std::string& fileName, ModuleVerdict& verdict, std::string& sentence)>;
+    void setLoadGate(LoadGate gate) { loadGate_ = std::move(gate); }
+
     // Convenience: scan(defaultPluginDir()).
     void scanDefault();
 
@@ -209,6 +220,7 @@ public:
 private:
     std::vector<LoadedPlugin> plugins_;
     std::string directory_;
+    LoadGate loadGate_;
 };
 
 }  // namespace cascade::core

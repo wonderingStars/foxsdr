@@ -6162,6 +6162,7 @@ void AppWindow::drawMenuColumn() {
     ImGui::PopStyleColor();
     // A message from the team goes ABOVE the update banner: it is what the owner chose to say to everyone right now, and it is shown whether or not there is
     // an update (0.99.79).
+    drawPluginFaultNotices();
     drawTeamMessages();
     drawUpdateBanner();
 
@@ -13161,8 +13162,8 @@ void AppWindow::applyDirectiveAfter(const cascade::core::PluginDirectiveFacts& d
     // table or null, and the window is where the stand-in itself lives (it is not engine-linkable - gui/basemap_stand_in.hpp).
     const CascadeBasemapApi* basemap = d.basemap;
     if (basemap == nullptr && basemapStandIn_) { basemap = cascade::gui::standInBasemap(); }
-    basemap_.attach(basemap);
-    trackInfo_.attach(d.trackInfo);
+    basemap_.attach(basemap, d.basemapPlugin);
+    trackInfo_.attach(d.trackInfo, d.trackInfoPlugin);
     // DEMONSTRATION instruments open their windows by themselves: the one deliberate exception to "nothing opens but by your hand"
     // (0.79.1), safe because a demonstration exists only when a developer set FOXSDR_DEMO_INSTRUMENT for this launch. The window that
     // rebuilt them shows them - the engine used to ask for it through a hook. (Not for a wake or a sleep of one plugin: nothing was

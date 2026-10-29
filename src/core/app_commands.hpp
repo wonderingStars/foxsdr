@@ -158,6 +158,13 @@
 //   (NOT_FOUND otherwise); a revoke is accepted for any name (a grant held for a module that has gone can still be taken back). The grant is saved
 //   (AppConfig::pluginTransmitAllowed); the arming window is not, ever. A revoke unkeys, and closes the window when it was the last grant, in the same pass.
 #define FOXAPP_OP_PLUGIN_TX_GRANT        0x870Du /* text: the module file; ival[0]: 1 grant / 0 revoke */
+// RE-ENABLING A PLUGIN THE CONTAINMENT SWITCHED OFF (plugin containment P1, docs/engine-stage4.md 6.28), LOCAL sessions only and NOT on the web
+// profile: a person's one click on the Fitted modules row (or the start notice). text: the plugin's module file name or its id. A plugin the crash-loop
+// breaker skipped at this start (it was in use when the last run ended unexpectedly) or disabled by a second strike, or one the guard switched off
+// this session after it faulted, threw or stopped answering, is allowed again and the plugins folder is scanned afresh. NOT_FOUND for a name no
+// plugin carries; NO_CHANGE for a plugin that is not switched off; BAD_ARGUMENT for empty text. A REMOTE session is DENIED (three ways, as
+// the transmit grant is): nothing a browser sends can switch a faulted plugin back on.
+#define FOXAPP_OP_PLUGIN_REENABLE        0x870Eu /* text: the module file or id */
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.
 #define FOXAPP_TXBIT_DECLARED  1u   /* the runner has a transmit-audio instance of it */

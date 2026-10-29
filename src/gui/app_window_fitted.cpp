@@ -139,6 +139,7 @@ cascade::gui::FittedListCache& AppWindow::fittedLists() {
         r.noticeLevel = static_cast<std::uint32_t>(it.value[2] > 0 ? it.value[2] : 0);
         r.runMode = static_cast<int>(it.value[3]) & 3;
         r.asleep = (static_cast<int>(it.value[3]) & 4) != 0;
+        r.switchedOff = (static_cast<int>(it.value[3]) & 8) != 0;
         r.loaded = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
         r.stopped = (it.flags & FOXAPI_ITEM_STOPPED) != 0u;
         r.tuneAllowed = (it.flags & FOXAPI_ITEM_TUNE_ALLOWED) != 0u;
@@ -151,6 +152,7 @@ cascade::gui::FittedListCache& AppWindow::fittedLists() {
         fact("licence", r.licence);
         fact("error", r.error);
         fact("idle", r.idle);
+        fact("fault", r.fault);
         fact("notice", r.notice);
         fact("integrity", r.integrity);
         cascade::gui::FittedModule& m = c.model.modules[rows++];
@@ -366,6 +368,10 @@ void AppWindow::drawFittedModulesWindow() {
             case cascade::gui::FittedModulesAction::Kind::SetKeepRunning:
                 // The "keep running" tick: ALWAYS, or back to AUTO (running until the clock takes it down, if nothing is using it).
                 uiSubmit(cmd::makeText(FOXAPP_OP_PLUGIN_RUN_MODE, act.file, act.flag ? 1 : 0));
+                break;
+            case cascade::gui::FittedModulesAction::Kind::Reenable:
+                // RE-ENABLE (plugin containment P1): LOCAL only; the engine forgets the fault, rescans and builds the plugin afresh.
+                uiSubmit(cmd::makeText(FOXAPP_OP_PLUGIN_REENABLE, act.file));
                 break;
             case cascade::gui::FittedModulesAction::Kind::Remove:
                 uiSubmit(cmd::makeText(FOXAPI_OP_STORE_REMOVE, act.file));

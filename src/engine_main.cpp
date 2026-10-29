@@ -139,6 +139,8 @@ ShutdownGuard::Options guardOptions(const EngineService& service, const cascade:
 int runEngine(const cascade::engine::BootResult& boot) {
     cascade::engine::ServiceOptions options;
     options.configPath = boot.configPath;
+    options.safePlugins = boot.safePlugins;
+    if (boot.safePlugins) { std::fprintf(stderr, "foxsdr-engine: safe mode - no plugin will be loaded in this run\n"); }
     // The hang watchdog's report directory when this run may write diagnostics at all (boot decided) and the
     // stored switch is on - the window's setDiagnosticsDir, handed over the same way (main.cpp).
     options.diagnosticsDir = boot.mayWrite ? cascade::core::diagCrashDir() : std::string();

@@ -98,9 +98,13 @@ enum class Recovered : std::uint8_t {
     SdrEnum,     // the SDRplay service's enumeration was abandoned
     SdrLost,     // the SDRplay API session was lost and shut for the session
     AudioLead,   // the audio buffer was deepened because this computer fell behind (0.99.73)
+    PluginFault,       // a plugin's call faulted and the host absorbed it (core/plugin_fault.hpp, plugin containment P1)
+    PluginQuarantine,  // the host switched a plugin off for the session after it faulted, threw or never returned
+    PluginWedge,       // a plugin call never returned and the host let it go, or an unload timed out inside a plugin's call
+    PluginOveruse,     // a plugin call overran its budget
     ThreadWedge, // a worker thread missed its heartbeat budget and was reported by name (core/thread_beats.hpp)
 };
-inline constexpr std::size_t kRecoveredCount = 15;
+inline constexpr std::size_t kRecoveredCount = 19;
 
 // One event of the vocabulary, as documentation and the Worker see it: its
 // name, the word lists of its qualifiers in order (empty for a bare event), and
@@ -421,6 +425,12 @@ struct RecoveryReadings {
     unsigned long long ringDroppedSamples = 0;      // Pipeline::ringDroppedSamples()
     unsigned long long dspThreadExceptions = 0;     // Pipeline::dspThreadExceptions()
     unsigned long long threadWedges = 0;            // beats::Registry::wedgesFound(): workers the watchdog reported late (6.27)
+    // The plugin containment's four (core/plugin_fault.hpp totals(), 6.28): absorbed faults, plugins switched off, calls that never
+    // returned (and unloads that timed out), and calls that overran their budget.
+    unsigned long long pluginFaults = 0;
+    unsigned long long pluginQuarantines = 0;
+    unsigned long long pluginWedges = 0;
+    unsigned long long pluginOveruses = 0;
 };
 class RecoveryWatch {
 public:

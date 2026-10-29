@@ -17,6 +17,7 @@
 #include "core/diag_report.hpp"
 #include "core/frame_timing.hpp"
 #include "core/phase_clock.hpp"
+#include "core/plugin_fault.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -1083,6 +1084,11 @@ void writeWorkerHeaderLines(std::ofstream& out, const beats::Finding* wedge) {
     out << "thread-wait: " << ((wedge != nullptr && !wedge->wait.empty()) ? wedge->wait : std::string("none")) << "\n";
     const int keyed = beats::Registry::keyedNow();
     out << "transmitting: " << (keyed == 1 ? "yes" : (keyed == 0 ? "no" : "unknown")) << "\n";
+    // WHICH PLUGIN, AND THROUGH WHICH ENTRY POINT, when the stopped thing is a call into one (plugin containment P1, docs 6.28): the
+    // PUBLIC id (an official plugin's catalogue id, a hash for any other) and the entry's word. `none` for a thread's own report.
+    const bool isCall = wedge != nullptr && wedge->stage != 0;
+    out << "blamed-plugin: " << ((isCall && !wedge->subject.empty()) ? wedge->subject : std::string("none")) << "\n";
+    out << "blamed-plugin-entry: " << ((isCall && !wedge->phase.empty()) ? wedge->phase : std::string("none")) << "\n";
 }
 
 // What every registered worker was doing when the report was taken: one line each. The stalled one is not the only
@@ -1102,6 +1108,12 @@ std::string stalledLabel(const beats::Finding* wedge) {
 unsigned long wedgeTag(const beats::Finding& f) {
     std::uint32_t h = 2166136261u;
     for (const char c : f.name) { h = (h ^ static_cast<unsigned char>(c)) * 16777619u; }
+    // A call into a plugin is told apart by WHICH plugin and WHICH entry point: two plugins whose calls stop in the same kernel stub are
+    // two faults, not one.
+    if (f.stage != 0) {
+        for (const char c : f.subject) { h = (h ^ static_cast<unsigned char>(c)) * 16777619u; }
+        for (const char c : f.phase) { h = (h ^ static_cast<unsigned char>(c)) * 16777619u; }
+    }
     return static_cast<unsigned long>(0x57454447u ^ h);
 }
 
@@ -1128,6 +1140,20 @@ void HangWatchdog::pollThreadBeats(double pollIntervalMs) {
                                    static_cast<long long>(f.stalledMs), f.budgetMs);
     }
     for (const beats::Finding& f : r.wedged) { reportThreadWedge(f); }
+    // A CALL INTO A PLUGIN that overran its budget (stage 1) or never returned (stage 2): counted per plugin and entry by the
+    // containment (core/plugin_fault.hpp: a wedge quarantines the plugin), then reported like any worker wedge - the calling thread's
+    // stack first, `plugin:` and `plugin-entry:` in the header. Each stage of each call arrives here once (the monitor's claim).
+    for (const beats::Finding& f : r.calls) {
+        fault::noteMonitorFinding(f.owner, f.stage, f.phase.c_str());
+        if (f.stage == 2) {
+            // The call that never came back: the report for this call was filed when it overran its budget (the same stack, the same
+            // plugin and entry), so this stage is a log line and a quarantine, not a second file.
+            DiagLog::instance().writef("warn", "plugin %s did not return from %s within %lld ms (limit %u ms)", f.subject.c_str(),
+                                       f.phase.c_str(), static_cast<long long>(f.stalledMs), f.budgetMs);
+            continue;
+        }
+        reportThreadWedge(f);
+    }
 }
 
 void HangWatchdog::setBeatsOvershootMsForTest(unsigned ms) { beatsOvershootMs_.store(ms, std::memory_order_relaxed); }
@@ -1138,10 +1164,15 @@ void HangWatchdog::reportThreadWedge(const beats::Finding& f) {
     // NOT COUNTED HERE. The wedge is a fault the program met and carried on from (Recovered::ThreadWedge), and it is counted
     // whether or not a file may be written - but by the engine's pass, which reads Registry::wedgesFound() with the other
     // recovery counters (health::RecoveryReadings), so this thread takes no ledger lock a wedged thread might hold.
-    DiagLog::instance().writef("warn", "thread %s did not beat for %lld ms (budget %u ms) - phase %s%s%s", f.name.c_str(),
-                               static_cast<long long>(f.stalledMs), f.budgetMs,
-                               f.phase.empty() ? "none" : f.phase.c_str(), f.wait.empty() ? "" : ", waiting in ",
-                               f.wait.c_str());
+    if (f.stage != 0) {
+        DiagLog::instance().writef("warn", "plugin %s has been inside %s for %lld ms (budget %u ms)", f.subject.c_str(),
+                                   f.phase.c_str(), static_cast<long long>(f.stalledMs), f.budgetMs);
+    } else {
+        DiagLog::instance().writef("warn", "thread %s did not beat for %lld ms (budget %u ms) - phase %s%s%s", f.name.c_str(),
+                                   static_cast<long long>(f.stalledMs), f.budgetMs,
+                                   f.phase.empty() ? "none" : f.phase.c_str(), f.wait.empty() ? "" : ", waiting in ",
+                                   f.wait.c_str());
+    }
     const std::string dir = reportDir();
     if (dir.empty()) { return; }
     // A stuck machine wedges everything at once; the files are capped, the log lines and the count are not.
@@ -1369,8 +1400,11 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
                   "are the graphics stack, not this application. A monitor switched off, a "
                   "resolution change, a GPU reset or a remote session will do this."
                 : (wedge != nullptr
-                       ? "a worker thread did not beat within its budget - the thread named below is the first stack, "
-                         "and the frames under it are where it stopped"
+                       ? (wedge->stage != 0
+                              ? "a call into a plugin did not return within its budget - the plugin and the entry point are named "
+                                "below, and the first stack is the thread that is inside the call"
+                              : "a worker thread did not beat within its budget - the thread named below is the first stack, "
+                                "and the frames under it are where it stopped")
                        : "the gui thread did not complete a frame within the threshold"))
         << "\n";
     out << "stalled-ms: " << static_cast<long long>(stalledMs) << "\n";
@@ -1586,8 +1620,11 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
                   "window the compositor is not showing, a monitor switched off or a GPU "
                   "reset will do this."
                 : (wedge != nullptr
-                       ? "a worker thread did not beat within its budget - the thread named below is the first stack, "
-                         "and the frames under it are where it stopped"
+                       ? (wedge->stage != 0
+                              ? "a call into a plugin did not return within its budget - the plugin and the entry point are named "
+                                "below, and the first stack is the thread that is inside the call"
+                              : "a worker thread did not beat within its budget - the thread named below is the first stack, "
+                                "and the frames under it are where it stopped")
                        : "the gui thread did not complete a frame within the threshold"))
         << "\n";
     out << "stalled-ms: " << static_cast<long long>(stalledMs) << "\n";

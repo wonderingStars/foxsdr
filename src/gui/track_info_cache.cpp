@@ -2,6 +2,8 @@
 
 #include "gui/track_info_cache.hpp"
 
+#include "core/plugin_calls.hpp"
+
 #include <algorithm>
 #include <cstring>
 
@@ -27,7 +29,7 @@ std::string copyField(const char* s, std::size_t cap) {
 
 TrackInfoCache::~TrackInfoCache() { detach(); }
 
-void TrackInfoCache::attach(const CascadeTrackInfoApi* api) {
+void TrackInfoCache::attach(const CascadeTrackInfoApi* api, const std::string& pluginKey) {
     if (api == api_) {
         return;
     }
@@ -35,21 +37,27 @@ void TrackInfoCache::attach(const CascadeTrackInfoApi* api) {
     if (api == nullptr) {
         return;
     }
-    void* h = api->create();
+    cascade::core::fault::Slot* const slot = cascade::core::fault::slotFor(pluginKey);
+    if (!pluginKey.empty() && cascade::core::fault::isQuarantined(slot)) {
+        return;   // switched off this session
+    }
+    void* h = cascade::core::calls::create(slot, api);
     if (h == nullptr) {
         return;
     }
     api_ = api;
     handle_ = h;
+    slot_ = slot;
     pollBuf_.assign(kPollBufBytes, '\0');
 }
 
 void TrackInfoCache::detach() {
     if (api_ != nullptr && handle_ != nullptr) {
-        api_->destroy(handle_);
+        cascade::core::calls::destroy(slot_, api_, handle_);
     }
     api_ = nullptr;
     handle_ = nullptr;
+    slot_ = nullptr;
     cache_.clear();
     age_.clear();
     partial_.clear();
@@ -66,7 +74,7 @@ const TrackInfoCache::Info* TrackInfoCache::get(const std::string& id, std::uint
 
     CascadeTrackInfo t{};
     t.structSize = static_cast<std::uint32_t>(sizeof(CascadeTrackInfo));
-    const std::int32_t got = api_->get_info(handle_, id.c_str(), kind, &t);
+    const std::int32_t got = cascade::core::calls::getInfo(slot_, api_, handle_, id.c_str(), kind, &t);
     if (got == CASCADE_INFO_PENDING) {
         // Deliberately not recorded: the next frame asks again, which is what
         // tells the plugin the answer is still wanted.
@@ -83,7 +91,7 @@ const TrackInfoCache::Info* TrackInfoCache::get(const std::string& id, std::uint
         info.operatorName = copyField(t.operatorName, kMaxFieldBytes);
         info.country = copyField(t.country, kMaxFieldBytes);
         // The borrow ends the moment the copies are taken.
-        api_->release_info(handle_, &t);
+        cascade::core::calls::releaseInfo(slot_, api_, handle_, &t);
     }
     // MISSING (and anything unrecognised) is cached as known == false, which
     // is what stops the plugin being asked about that id ever again.
@@ -117,7 +125,7 @@ std::vector<std::string> TrackInfoCache::drainText() {
     // emits; whatever is still queued is taken by the next frame, the same
     // trade the tile server's per-frame cap makes.
     for (std::size_t polls = 0; polls < kMaxPollsPerDrain; ++polls) {
-        const std::int32_t n = api_->poll_text(handle_, pollBuf_.data(), pollBuf_.size());
+        const std::int32_t n = cascade::core::calls::pollText(slot_, api_, handle_, pollBuf_.data(), pollBuf_.size());
         if (n <= 0) {
             break;
         }

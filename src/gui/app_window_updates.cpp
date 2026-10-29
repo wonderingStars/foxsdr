@@ -10,7 +10,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
 
+#include <algorithm>
 #include <cfloat>
+#include <cstdlib>
 #include <chrono>
 #include <future>
 #include <string>
@@ -257,6 +259,80 @@ void AppWindow::drawTeamMessages() {
         cascade::gui::census::rect("message:seen:", index, k0.x, k0.y, k1.x, k1.y);
         // The first card's key under a name of its own, for the test that has only one.
         if (index == 0) { cascade::gui::census::rect("message:seen", k0.x, k0.y, k1.x, k1.y); }
+        ImGui::Separator();
+        ImGui::PopID();
+        ++index;
+    }
+}
+
+// A PLUGIN LEFT OUT OF THIS START (plugin containment P1). The previous run ended with a plugin in play and no orderly stop, so the engine began this one
+// without it (strike one: for this start only; strike two: until it is turned back on). Said once, above everything else the rail has to say, because a
+// plugin that is missing from a person's window with no word of why is the whole of the problem; and with the one key that undoes it. LOCAL by
+// construction: the card and its key exist in the window on this machine, and the op behind the key is refused to every remote session.
+void AppWindow::drawPluginFaultNotices() {
+    if (uiSession_ == nullptr) { return; }
+    if (!faultNoticesRead_ || faultNoticesSeq_ != uiState_.listSeq) {
+        faultNoticesRead_ = true;
+        faultNoticesSeq_ = uiState_.listSeq;
+        std::string text;
+        readFactText("fact.plugins.fault.notices", text);
+        faultNotices_.clear();
+        std::size_t at = 0;
+        while (at < text.size()) {
+            const std::size_t nl = text.find('\n', at);
+            const std::string line = text.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+            at = nl == std::string::npos ? text.size() : nl + 1;
+            std::vector<std::string> f;
+            std::size_t b = 0;
+            for (;;) {
+                const std::size_t tab = line.find('\t', b);
+                f.push_back(line.substr(b, tab == std::string::npos ? std::string::npos : tab - b));
+                if (tab == std::string::npos) { break; }
+                b = tab + 1;
+            }
+            if (f.size() < 5 || f[0].empty()) { continue; }
+            FaultNotice n;
+            n.id = f[0];
+            n.version = f[1];
+            n.strikes = static_cast<unsigned>(std::strtoul(f[2].c_str(), nullptr, 10));
+            n.permanent = f[3] == "1";
+            n.phase = f[4];
+            faultNotices_.push_back(std::move(n));
+        }
+    }
+    int index = 0;
+    for (const FaultNotice& n : faultNotices_) {
+        if (std::find(faultNoticesSeen_.begin(), faultNoticesSeen_.end(), n.id) != faultNoticesSeen_.end()) { continue; }
+        ImGui::PushID(n.id.c_str());
+        cascade::gui::census::note("faultnotice:card");
+        cascade::gui::census::note("faultnotice:id:", n.id);
+        if (n.permanent) { cascade::gui::census::note("faultnotice:permanent"); }
+        ImGui::PushStyleColor(ImGuiCol_Text, n.permanent ? kErrorRed : cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", tr("Started without a plugin"));
+        ImGui::PopStyleColor();
+        std::string sentence;
+        cascade::core::formatUtf8(sentence,
+                                  n.permanent ? tr("%s was in use when FoxSDR stopped unexpectedly twice, so it stays off until you re-enable it.")
+                                              : tr("%s was in use when FoxSDR last stopped unexpectedly, so it was left out of this start."),
+                                  n.id.c_str());
+        ImGui::TextWrapped("%s", sentence.c_str());
+        ImGui::Spacing();
+        const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (ImGui::Button(trId("RE-ENABLE"), ImVec2(half, 0.0f))) {
+            // The engine forgets the strike's hold, rescans, and builds the plugin afresh; the card is put away with it.
+            uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_REENABLE, n.id));
+            faultNoticesSeen_.push_back(n.id);
+        }
+        const ImVec2 r0 = ImGui::GetItemRectMin();
+        const ImVec2 r1 = ImGui::GetItemRectMax();
+        cascade::gui::census::rect("faultnotice:reenable:", index, r0.x, r0.y, r1.x, r1.y);
+        if (index == 0) { cascade::gui::census::rect("faultnotice:reenable", r0.x, r0.y, r1.x, r1.y); }
+        ImGui::SameLine();
+        if (ImGui::Button(trId("Seen"), ImVec2(-FLT_MIN, 0.0f))) { faultNoticesSeen_.push_back(n.id); }
+        const ImVec2 k0 = ImGui::GetItemRectMin();
+        const ImVec2 k1 = ImGui::GetItemRectMax();
+        cascade::gui::census::rect("faultnotice:seen:", index, k0.x, k0.y, k1.x, k1.y);
+        if (index == 0) { cascade::gui::census::rect("faultnotice:seen", k0.x, k0.y, k1.x, k1.y); }
         ImGui::Separator();
         ImGui::PopID();
         ++index;

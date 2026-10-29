@@ -33,7 +33,8 @@ plugin would, and its test drives the real module against a fake host.
 15. [The patch page](#the-patch-page)
 16. [A minimal plugin](#a-minimal-plugin)
 17. [What the host does not offer](#what-the-host-does-not-offer)
-18. [Checklist before you ship](#checklist-before-you-ship)
+18. [When a plugin misbehaves](#when-a-plugin-misbehaves)
+19. [Checklist before you ship](#checklist-before-you-ship)
 
 ## What changed, and what did not
 
@@ -736,6 +737,35 @@ opening, no drawing surface. A plugin that needs a file or a socket uses its
 own; routing them through the host would only launder them. A plugin that needs
 a picture uses the image, panel, instrument and map capabilities the header
 already has.
+
+## When a plugin misbehaves
+
+The host does not trust a plugin's code to be right, and a plugin that is wrong does not take the application down with it
+(docs/engine-stage4.md 6.28). What that means for an author:
+
+- **Every call the host makes into your tables, except the signal path, is guarded.** `create`, `destroy`, `poll_text`, `poll_image`,
+  `poll_tracks`, `poll_paths`, `poll_state`, `columns`, `poll_rows`, `get_tile`, `get_info`, `attach`, `press`, the preset table's `count`
+  and `get`, and your module's load and unload. A fault inside your code (an access violation, a bad instruction, a divide by zero) or a C++
+  exception that crosses the boundary is absorbed: **your plugin is switched off for the rest of the session**, its instances are put down
+  without calling `destroy()` (they are leaked on purpose), your module stays mapped, and the person sees "switched off" on your row with a
+  RE-ENABLE key. Nothing of yours is called again until they press it. (On Linux and macOS a fault in your code is a signal, which cannot be
+  resumed from: the call is made unguarded there and a fault ends the process - the crash-loop rule below is what limits the damage.)
+- **`process()`, the audio-out and transmit-audio `pull()`/`active()` and `retune()` are NOT guarded.** They run once per block on the signal
+  path; a fault there ends the process with a report that names your plugin.
+- **A call that takes too long is named.** Each guarded call has a budget (the table is `kEntries` in `src/core/plugin_fault.hpp`, with the
+  argument for each: thirty seconds for `create` and `destroy`, ten for `attach` and `poll_image`, five for the other polls, twenty for a
+  tile or a lookup, sixty for the load).
+  Past its budget a call is counted; past **four** budgets it is treated as never returning: a freeze report names your plugin and the
+  entry point, and the plugin is switched off. Do your waiting on your own thread, never inside a poll.
+- **A plugin that dies at start-up is left out of the next start.** The host records which plugin was in play and in which phase; a run that does
+  not end in order makes the plugin that was inside `create()`, the load or the unload - or the only one that had just been created - a suspect.
+  The next start begins without it (and says so); the one after gives it a second chance; a second suspicion disables it until the person
+  re-enables it. `--safe-plugins` (or Shift held at launch) starts with no plugin at all.
+- **A file that is not a plugin for this machine is refused before any of its code runs**: a truncated download, another processor's build, an
+  executable, a library with no `cascade_plugin_query`, a file name that declares another plugin ABI (`-abi<N>-`), and a plugin-site file
+  whose bytes are not the ones that were installed. The Fitted modules window shows the verdict.
+- Crash and freeze reports name the plugin involved: an official plugin by its id, any other by a one-way hash (`site-` and eight hex digits)
+  and its declared version.
 
 ## Checklist before you ship
 

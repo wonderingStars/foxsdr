@@ -48,6 +48,10 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"sdrenum", true},      // the service stays wedged
     {"sdrlost", true},      // the session stays lost
     {"audiolead", true},    // the lead steps up at most three times, and "this session had it" is the fact
+    {"pluginfault", false},       // each absorbed fault switches that plugin off, so the next is another plugin's or another session's
+    {"pluginquarantine", false},  // likewise: one per plugin switched off
+    {"pluginwedge", false},       // each is a call that never returned (or an unload that timed out inside one)
+    {"pluginoveruse", true},      // a plugin that is slow is slow every frame: "this session had one" is the fact
     {"threadwedge", false}, // each is a worker reported late by the watchdog's poll; a thread must recover before it can be counted again
 };
 
@@ -1070,6 +1074,18 @@ void RecoveryWatch::poll(const RecoveryReadings& now) {
     }
     if (const std::uint32_t n = moved(now.threadWedges, last_.threadWedges)) {
         g->note(tokenRecovered(Recovered::ThreadWedge), n);
+    }
+    if (const std::uint32_t n = moved(now.pluginFaults, last_.pluginFaults)) {
+        g->note(tokenRecovered(Recovered::PluginFault), n);
+    }
+    if (const std::uint32_t n = moved(now.pluginQuarantines, last_.pluginQuarantines)) {
+        g->note(tokenRecovered(Recovered::PluginQuarantine), n);
+    }
+    if (const std::uint32_t n = moved(now.pluginWedges, last_.pluginWedges)) {
+        g->note(tokenRecovered(Recovered::PluginWedge), n);
+    }
+    if (const std::uint32_t n = moved(now.pluginOveruses, last_.pluginOveruses)) {
+        g->note(tokenRecovered(Recovered::PluginOveruse), n);
     }
     last_ = now;
 }

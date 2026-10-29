@@ -106,6 +106,9 @@ struct PluginDirectiveFacts {
     bool lifeOnly = false;
     const CascadeBasemapApi* basemap = nullptr;
     const CascadeTrackInfoApi* trackInfo = nullptr;
+    // The module file each table came from (plugin containment P1): the interface's clients call the plugin through its guard.
+    std::string basemapPlugin;
+    std::string trackInfoPlugin;
 };
 
 // WHAT THE FRONT END HANDS OVER, ONCE A FRAME (PluginUiPort::setFrontEnd): the facts only the window knows - the counter's face (the web page

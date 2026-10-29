@@ -85,6 +85,10 @@ struct PluginDirective {
     // The basemap and track-info plugins chosen (first loaded, not stopped), or null.
     const CascadeBasemapApi* basemap = nullptr;
     const CascadeTrackInfoApi* trackInfo = nullptr;
+    // ...and the module file each came from (plugin containment P1): the interface's caches call the plugin through its guard, which is keyed
+    // on the plugin, and the tables alone name nobody. Empty when the table is null.
+    std::string basemapPlugin;
+    std::string trackInfoPlugin;
 };
 
 class PluginDirectiveLink {
@@ -116,6 +120,8 @@ public:
                     merged.dormant = std::move(d.dormant);
                     merged.basemap = d.basemap;
                     merged.trackInfo = d.trackInfo;
+                    merged.basemapPlugin = std::move(d.basemapPlugin);
+                    merged.trackInfoPlugin = std::move(d.trackInfoPlugin);
                     pending_ = std::move(merged);
                     epoch = posted_;
                     d.epoch = 0;

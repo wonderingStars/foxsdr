@@ -128,6 +128,8 @@ struct ServiceOptions {
     // A bounded run that asked for the enforcement diagnostic (CASCADE_PLUGIN_STATUS): stop() makes sure the engine prints it at the end of
     // its first phase even when no interface handed over a plugin half (the window hands its own over first). False: no report.
     bool pluginStatusReport = false;
+    // SAFE MODE (plugin containment P1; BootResult::safePlugins): no plugin is loaded, and the crash-loop records are not touched.
+    bool safePlugins = false;
     // stop() sets the process's breadcrumb phase (core/breadcrumb.hpp) at the stages it owns - the receiver's stop, the plugins' unload, the
     // marker - for a host whose sentinel watches them. The window keeps ShutdownBegun and ShutdownClosingWindow, which bracket the service's three.
     // False: foxsdr-engine, which has never set one.

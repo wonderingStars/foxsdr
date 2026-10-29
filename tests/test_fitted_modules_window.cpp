@@ -66,6 +66,7 @@
 #include "core/app_commands.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_cleanup.hpp"
+#include "core/plugin_fault.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/plugin_run.hpp"
 #include "engine/engine.hpp"
@@ -1352,6 +1353,29 @@ void testDrawnAndClicked() {
     std::sort(got.begin(), got.end());
     CHECK(got == std::vector<std::string>{expect("PLUGIN_RESCAN", 0, 0, "")});
     std::printf("      the refused file's page: %zu command(s), no key to start it\n", got.size());
+
+    // A MODULE THE CONTAINMENT SWITCHED OFF (plugin containment P1, docs/engine-stage4.md 6.28): the guard says so for one that faulted; the next look
+    // is the pass that puts it down and publishes the row's fault sentence, and its page then offers RE-ENABLE - one more key, and the one that
+    // sends the local-only application op for that file (the engine, not the window, forgets the fault; tests/test_engine_api_plugin_fault.cpp).
+    {
+        cascade::core::fault::resetForTest();
+        CHECK(cascade::core::fault::quarantine(cascade::core::fault::slotFor(kGroup9), cascade::core::fault::Why::Fault,
+                                               cascade::core::fault::Entry::PollText));
+        for (int i = 0; i < 6; ++i) { lookDraw(app); }
+        got.clear();
+        const std::vector<Found> off = survey(app, kGroup9, &got);
+        const std::string reenable = expect("APP_PLUGIN_REENABLE", 0, 0, kGroup9);
+        const long long keys = std::count(got.begin(), got.end(), reenable);
+        std::printf("      the switched-off module's page: %zu widgets, %lld RE-ENABLE key(s)\n", off.size(), keys);
+        if (keys != 1) {
+            for (const std::string& g : got) { std::printf("        sent   %s\n", g.c_str()); }
+        }
+        CHECK(keys == 1);
+        // and a module that is NOT switched off has no such key (the page above sent none)
+        CHECK(std::count(wantPage.begin(), wantPage.end(), reenable) == 0);
+        cascade::core::fault::resetForTest();
+        for (int i = 0; i < 3; ++i) { lookDraw(app); }
+    }
 }
 
 // --- E -----------------------------------------------------------------------

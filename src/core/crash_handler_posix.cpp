@@ -36,6 +36,8 @@
 #include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/plugin_fault.hpp"
+#include "core/plugin_marker.hpp"
 
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
@@ -472,6 +474,26 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
         e.str(own ? "yes" : "no");
     }
     e.str("\n");
+    // WHICH PLUGIN THE FAULT BELONGS TO, if any (see the Windows writer, crash_handler.cpp).
+    {
+        fault::Attribution a;
+        (void)fault::attributeCrash(reinterpret_cast<const std::uintptr_t*>(g_frames), nFrames,
+                                    static_cast<unsigned long>(::syscall(SYS_gettid)), a);
+        e.str("blamed-plugin: ");
+        e.str(a.found ? a.id : "none");
+        e.str("\nblamed-plugin-version: ");
+        e.str(a.found && a.version[0] != '\0' ? a.version : "none");
+        e.str("\nblamed-plugin-origin: ");
+        e.str(a.found ? a.origin : "none");
+        e.str("\nblamed-plugin-how: ");
+        e.str(a.found ? a.how : "none");
+        e.str("\n");
+        // A DEATH, NOT A SURVIVED FAULT: the crash-loop breaker's marker is told whose death this was (core/plugin_marker.hpp), so the next start
+        // begins without the plugin. An absorbed fault (the process went on) and a child's death are not this process's death.
+        const bool survived = child != nullptr || reasonStartsWith(reason, kAbsorbedFaultReasonPrefix) ||
+                              reasonStartsWith(reason, kAbsorbedPluginFaultReasonPrefix);
+        if (a.found && !survived) { marker::blame(a.runId); }
+    }
     if (child != nullptr) {
         e.str("child-exit-code: 0x");
         e.hex(child->exitCode, 8);

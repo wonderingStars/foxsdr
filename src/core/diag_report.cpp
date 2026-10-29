@@ -1073,10 +1073,14 @@ const std::vector<std::string>& hangReportFieldNames() {
     // `gui` for the frame loop's report, a name from core/thread_beats.hpp's closed inventory for a worker's - the last phase
     // that thread beat in and the declared wait it was parked in (`none` for either), and whether the radio was keyed
     // (`yes`, `no`, or `unknown` where no engine has installed the probe). Always written, for the reason `note` is.
+    // `blamed-plugin` and `blamed-plugin-entry` (6.28, plugin containment P1) name WHICH plugin a call-budget report is about and through which entry
+    // point (the plugin's public id - the catalogue id of an official one, a hash for any other - and the entry's word); `none` for the
+    // report of a thread. Always written, for the same reason.
     static const std::vector<std::string> names = {"kind",         "note",      "stalled-ms",
                                                    "threshold-ms", "signature", "threads",
                                                    "frame-scope",  "reload-phase", "thread",
-                                                   "thread-phase", "thread-wait",  "transmitting"};
+                                                   "thread-phase", "thread-wait",  "transmitting",
+                                                   "blamed-plugin", "blamed-plugin-entry"};
     return names;
 }
 

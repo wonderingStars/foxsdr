@@ -69,6 +69,8 @@
 #include "core/plugin_cleanup.hpp"
 #include "core/plugin_directive.hpp"
 #include "core/plugin_dir_signature.hpp"
+#include "core/plugin_fault.hpp"
+#include "core/plugin_marker.hpp"
 #include "core/plugin_reload_phases.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
@@ -554,6 +556,10 @@ private:
     // Whether the user has stopped this plugin. `pluginKey` is a module file
     // name (cascade::core::pluginKey), the same identity the tune grant uses.
     bool pluginIsStopped(const std::string& pluginKey) const;
+    // Whether the guard switched this plugin off this session, by run id (the pass's cache: no string is built, no lock is taken).
+    bool pluginIsQuarantinedId(const std::string& runId) const;
+    // The sentence for the Fitted modules row of a plugin that is switched off (empty when it is not).
+    std::string pluginFaultSentence(const std::string& pluginKey) const;
     // ===== HOW EACH PLUGIN RUNS (stub campaign B2, 0.99.73; engine/engine_plugin_run.cpp, core/plugin_run.hpp) =====
     // AUTO (the default: runs while something uses it), ALWAYS (pinned) or STOPPED, kept by plugin id so an update of the module keeps it.
     // The `ById` forms take an id already reduced (the pass's hot path: no string is built).
@@ -588,7 +594,8 @@ private:
     // report a window, so the lifecycle treats AUTO as pinned.
     bool frontEndPresent() const { return frontEnd_.load(std::memory_order_acquire) || frontEndExpected_.load(std::memory_order_acquire); }
     // The basemap and track-info plugins chosen (first loaded, not stopped), or null.
-    void chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const CascadeTrackInfoApi*& trackInfo) const;
+    void chooseBasemapAndTrackInfo(const CascadeBasemapApi*& basemap, const CascadeTrackInfoApi*& trackInfo, std::string* basemapPlugin = nullptr,
+                                   std::string* trackInfoPlugin = nullptr) const;
     // Records a stop or a start WITHOUT rebuilding: updates the durable state
     // and pushes it into the runner and the UI half, so the next rebuild sees
     // it. Split from the button's action below because applyPluginPreset has
@@ -2521,6 +2528,15 @@ private:
     // 0.99.73 (stub campaign B2): the durable state is now HOW EACH PLUGIN RUNS, by plugin id (AppConfig::pluginRun); a stop is
     // `Stopped` in it, and the old file-name list is only migrated at the config's door (restorePluginRun; fillConfig writes it back).
     std::map<std::string, cascade::core::PluginRun> pluginRun_;
+    // THE PLUGIN CONTAINMENT (see beginPluginContainment): the crash-loop breaker's plan for this start, the run ids the guard switched off this
+    // session (the pass's cache of fault::isQuarantined: it reads no lock), a counter that moves whenever the picture changes (it is hashed into
+    // the lists' fingerprint), and --safe-plugins.
+    cascade::core::Containment containment_;
+    std::vector<std::string> quarantinedIds_;
+    std::uint64_t pluginFaultGen_ = 0;
+    bool safePlugins_ = false;
+    void installPluginLoadGate();
+    void applyPluginQuarantines();
     // Each plugin's life, by id: whether it has been woken and when it was last wanted (core/plugin_run.hpp). Only the pass writes it.
     std::map<std::string, cascade::core::PluginLife> pluginLife_;
     // What the window reported it shows (FOXAPP_OP_PLUGIN_USE), by id: FOXAPP_PLUGIN_USE_* bits. The whole table, replaced by each report.
@@ -3414,12 +3430,30 @@ public:
     // takes' files still being closed on workers are waited for. A default-constructed one waits for nothing and collects what has finished.
     void shutdownDrain(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
     void shutdown();
+    // ===== PLUGIN CONTAINMENT (plugin containment P1; engine/engine_plugin_fault.cpp, core/plugin_fault.hpp, core/plugin_marker.hpp) =====
+    // --safe-plugins (or the key held at launch): every plugin is refused for this session and the crash-loop records are neither read as
+    // news nor changed. Set BEFORE initialise().
+    void setSafePlugins(bool on) { safePlugins_ = on; }
+    bool safePlugins() const { return safePlugins_; }
+    // Reads the previous run's marker and the strike records from `settingsDir` (the folder of the settings file; empty for a hermetic run:
+    // nothing read or kept), plans, and opens the marker for this run. BEFORE initialise() - the first scan is inside it. Once; a second call
+    // changes nothing. initialise() makes a hermetic call itself if nobody has.
+    void beginPluginContainment(const std::string& settingsDir);
+    const cascade::core::Containment& pluginContainment() const { return containment_; }
+    // The person's click: a plugin the guard switched off, or one skipped at this start, is allowed again and the folder is scanned afresh.
+    // LOCAL only (FOXAPP_OP_PLUGIN_REENABLE refuses a remote session). `why` says what stopped it when it returns false.
+    bool reenablePlugin(const std::string& pluginKeyOrId, std::string& why);
     // THE CLEAN-EXIT MARKER (stage 7c): what the shell's markCleanExit set for the window until R8 moved it to the service - the
     // host's service (engine/engine_service.cpp), for the window and the headless engine alike. From here every snapshot the engine publishes says telemetryCleanExit = true, so the
     // call belongs AFTER shutdownRelease (the pipeline join and the plugins' destroy() are the two places a shutdown wedges: a marker
     // written before them reads a session killed inside them as a clean one), and the service writes its marker by rewriting the LAST
     // REQUESTED snapshot, not by publishing a fresh one (engine_service.cpp, stop()). tests/test_engine_service_order.cpp holds the order.
-    void markCleanExit() { telemetryCleanExit_ = true; }
+    void markCleanExit() {
+        telemetryCleanExit_ = true;
+        // ...and the crash-loop breaker's half of the same moment (core/plugin_marker.hpp): the strikes of a plugin that ran clean come off, and the
+        // marker is cleared - a run that ends in order leaves no plugin "in play".
+        containment_.cleanShutdown();
+    }
 
     // --- what a HOST of the engine needs of it (shell retirement R6): the window application becomes a second host of EngineService (R7, R8), and the
     // service is not the shell's friend. Each was the shell's inline body and is the engine's own now; the shell forwards. ---

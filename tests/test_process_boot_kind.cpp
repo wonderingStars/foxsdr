@@ -181,6 +181,37 @@ int main() {
         CHECK(!hostFrames.exit && hostFrames.frames == 0 && hostFrames.seconds < 0.0);
     }
 
+    // --- SAFE MODE (plugin containment P1, docs/engine-stage4.md 6.28): --safe-plugins for either kind, and the Shift key held at launch for the
+    // window only - the key being read ONLY by a bounded (--frames) run through FOXSDR_TEST_SAFE_KEY, so an interactive session can never be put
+    // in safe mode by a stray variable, and a headless service has no key to hold.
+    {
+        unsetEnv("FOXSDR_TEST_SAFE_KEY");
+        const BootResult plain = boot(ProcessKind::Engine, {"foxsdr-engine", "--seconds", "0"});
+        CHECK(!plain.exit && !plain.safePlugins);
+        const BootResult flagged = boot(ProcessKind::Engine, {"foxsdr-engine", "--safe-plugins", "--seconds", "0"});
+        CHECK(!flagged.exit && flagged.safePlugins);
+        setEnv(cascade::core::kInstanceScopeEnv, "bootkind-sp1-" + std::to_string(std::rand()));
+        const BootResult hostPlain = boot(ProcessKind::Host, {"cascade", "--frames", "0"});
+        CHECK(!hostPlain.exit && !hostPlain.safePlugins);
+        setEnv(cascade::core::kInstanceScopeEnv, "bootkind-sp2-" + std::to_string(std::rand()));
+        const BootResult hostFlag = boot(ProcessKind::Host, {"cascade", "--safe-plugins", "--frames", "0"});
+        CHECK(!hostFlag.exit && hostFlag.safePlugins);
+        // the key, through the bounded run's seam
+        setEnv("FOXSDR_TEST_SAFE_KEY", "1");
+        setEnv(cascade::core::kInstanceScopeEnv, "bootkind-sp3-" + std::to_string(std::rand()));
+        const BootResult hostKey = boot(ProcessKind::Host, {"cascade", "--frames", "0"});
+        CHECK(!hostKey.exit && hostKey.safePlugins);
+        setEnv("FOXSDR_TEST_SAFE_KEY", "0");
+        setEnv(cascade::core::kInstanceScopeEnv, "bootkind-sp4-" + std::to_string(std::rand()));
+        const BootResult hostNoKey = boot(ProcessKind::Host, {"cascade", "--frames", "0"});
+        CHECK(!hostNoKey.exit && !hostNoKey.safePlugins);
+        // the engine has no key to hold: the seam is not read for it
+        setEnv("FOXSDR_TEST_SAFE_KEY", "1");
+        const BootResult engKey = boot(ProcessKind::Engine, {"foxsdr-engine", "--seconds", "0"});
+        CHECK(!engKey.exit && !engKey.safePlugins);
+        unsetEnv("FOXSDR_TEST_SAFE_KEY");
+    }
+
     // --- the Engine is hermetic (stage 7b) -------------------------------------------------------------------
     {
         // CASCADE_CONFIG_TEST names a path (set above). The Host with --frames hands it on and says so; an Engine has no

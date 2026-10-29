@@ -146,6 +146,7 @@ bool ExitCounts::refine(ExitClass cls) {
 
 bool reportReasonIsSurvivedFault(const std::string& reason) {
     if (startsWith(reason, kAbsorbedFaultReasonPrefix) ||
+        startsWith(reason, kAbsorbedPluginFaultReasonPrefix) ||
         startsWith(reason, kChildDeathReasonPrefix) ||
         startsWith(reason, "child process fault (contained)")) {
         return true;

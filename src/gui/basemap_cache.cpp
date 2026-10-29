@@ -2,6 +2,8 @@
 
 #include "gui/basemap_cache.hpp"
 
+#include "core/plugin_calls.hpp"
+
 #include <algorithm>
 #include <cstring>
 
@@ -22,14 +24,17 @@ constexpr std::size_t kPollBufBytes = 4096;
 
 BasemapCache::~BasemapCache() { detach(); }
 
-void BasemapCache::attach(const CascadeBasemapApi* api) {
+void BasemapCache::attach(const CascadeBasemapApi* api, const std::string& pluginKey) {
     if (api == api_) { return; }
     detach();
     if (api == nullptr) { return; }
-    void* h = api->create();
+    cascade::core::fault::Slot* const slot = cascade::core::fault::slotFor(pluginKey);
+    if (!pluginKey.empty() && cascade::core::fault::isQuarantined(slot)) { return; }   // switched off this session
+    void* h = cascade::core::calls::create(slot, api);
     if (h == nullptr) { return; }
     api_ = api;
     handle_ = h;
+    slot_ = slot;
     attribution_ = api->attribution != nullptr ? api->attribution : "";
     minZoom_ = api->minZoom;
     maxZoom_ = api->maxZoom;
@@ -39,9 +44,10 @@ void BasemapCache::attach(const CascadeBasemapApi* api) {
 
 void BasemapCache::detach() {
     releaseAll();
-    if (api_ != nullptr && handle_ != nullptr) { api_->destroy(handle_); }
+    if (api_ != nullptr && handle_ != nullptr) { cascade::core::calls::destroy(slot_, api_, handle_); }
     api_ = nullptr;
     handle_ = nullptr;
+    slot_ = nullptr;
     attribution_.clear();
     partial_.clear();
 }
@@ -70,7 +76,7 @@ unsigned int BasemapCache::texture(std::uint32_t z, std::uint32_t x, std::uint32
 
     CascadeTile t{};
     t.structSize = static_cast<std::uint32_t>(sizeof(CascadeTile));
-    const std::int32_t got = api_->get_tile(handle_, z, x, y, &t);
+    const std::int32_t got = cascade::core::calls::getTile(slot_, api_, handle_, z, x, y, &t);
     if (got == CASCADE_TILE_PENDING) {
         // Deliberately NOT recorded. The next frame asks again, which is what
         // tells the plugin the tile is still wanted; caching "pending" would
@@ -119,7 +125,7 @@ unsigned int BasemapCache::texture(std::uint32_t z, std::uint32_t x, std::uint32
     // Released whether or not it was believed: the borrow is over the moment
     // the copy is taken, and a plugin must never be left holding a tile
     // because the host disliked its dimensions.
-    api_->release_tile(handle_, &t);
+    cascade::core::calls::releaseTile(slot_, api_, handle_, &t);
 
     Entry e;
     e.tex = tex;
@@ -137,7 +143,7 @@ std::int32_t BasemapCache::rawTile(std::uint32_t z, std::uint32_t x, std::uint32
 
     CascadeTile t{};
     t.structSize = static_cast<std::uint32_t>(sizeof(CascadeTile));
-    const std::int32_t got = api_->get_tile(handle_, z, x, y, &t);
+    const std::int32_t got = cascade::core::calls::getTile(slot_, api_, handle_, z, x, y, &t);
     if (got == CASCADE_TILE_PENDING) { return CASCADE_TILE_PENDING; }
     if (got != CASCADE_TILE_READY) { return CASCADE_TILE_MISSING; }
 
@@ -154,7 +160,7 @@ std::int32_t BasemapCache::rawTile(std::uint32_t z, std::uint32_t x, std::uint32
                         t.pixels + static_cast<std::size_t>(row) * t.stride, rowBytes);
         }
     }
-    api_->release_tile(handle_, &t);
+    cascade::core::calls::releaseTile(slot_, api_, handle_, &t);
     return sane ? CASCADE_TILE_READY : CASCADE_TILE_MISSING;
 }
 
@@ -192,7 +198,7 @@ std::vector<std::string> BasemapCache::drainText() {
     // by the next frame, the same trade the tile eviction cap makes.
     for (std::size_t polls = 0; polls < kMaxPollsPerDrain; ++polls) {
         const std::int32_t n =
-            api_->poll_text(handle_, pollBuf_.data(), pollBuf_.size());
+            cascade::core::calls::pollText(slot_, api_, handle_, pollBuf_.data(), pollBuf_.size());
         if (n <= 0) { break; }
         const std::size_t got = std::min(static_cast<std::size_t>(n), pollBuf_.size());
         partial_.append(pollBuf_.data(), got);

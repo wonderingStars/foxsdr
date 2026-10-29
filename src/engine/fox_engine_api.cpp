@@ -1753,6 +1753,11 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
                 if (!offered) { return FOXAPI_OUT_OF_RANGE; }
             }
             return (c.ival[1] == 0 || c.ival[1] == 1) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPP_OP_PLUGIN_REENABLE:
+            // Switching a faulted plugin back on is a person's decision at this computer (plugin containment P1): a remote session is refused
+            // here as well as by the general rule above and again where the op is applied.
+            if (c.text[0] == '\0') { return FOXAPI_BAD_ARGUMENT; }
+            return remote ? FOXAPI_DENIED : FOXAPI_OK;
         case FOXAPP_OP_PLUGIN_TX_GRANT:
             if (c.text[0] == '\0') { return FOXAPI_BAD_ARGUMENT; }
             return (c.ival[0] == 0 || c.ival[0] == 1) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;

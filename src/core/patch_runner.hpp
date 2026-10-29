@@ -64,6 +64,7 @@
 
 #include "core/patch_graph.hpp"
 #include "core/plugin_abi.h"
+#include "core/plugin_calls.hpp"
 #include "core/host_image.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_audio.hpp"
@@ -142,6 +143,9 @@ struct RunningDecoder {
     const CascadeIqDecoderApi* iqApi = nullptr;
     const CascadeImageDecoderApi* imageApi = nullptr;
     void* handle = nullptr;
+    // The containment's slot for this decoder's plugin (core/plugin_fault.hpp): the calls below are made through it, and a plugin that
+    // was switched off is neither fed nor polled nor destroyed.
+    cascade::core::fault::Slot* slot = nullptr;
     // PICTURES: polled on the DSP thread (poll_image must be serialised with
     // process() on the same instance, and this path takes no lock), no more
     // often than every kImagePollFrames of input, copied out and released at
@@ -171,14 +175,14 @@ struct RunningDecoder {
     ~RunningDecoder() {
         if (handle == nullptr) { return; }
         if (iqApi != nullptr) {
-            iqApi->destroy(handle);
+            cascade::core::calls::destroy(slot, iqApi, handle);
         } else if (audioApi != nullptr) {
-            audioApi->destroy(handle);
+            cascade::core::calls::destroy(slot, audioApi, handle);
         } else if (imageApi != nullptr) {
             // No borrow can be outstanding: every successful poll_image is
             // released before pollImage() returns, as the ABI requires before
             // destroy().
-            imageApi->destroy(handle);
+            cascade::core::calls::destroy(slot, imageApi, handle);
         }
     }
 };
@@ -265,6 +269,13 @@ inline void buildDecoders(StripSet& set, const Plan& plan, const Graph& g,
         if (dp.plugin >= apis.size() || dp.plugin >= catalogue.size()) { continue; }
         const PluginApis& a = apis[dp.plugin];
         const bool iqFeed = dp.source != DecoderSource::Audio;
+        // The plugin's slot, by its module file: a patch node's decoder is a plugin's instance like any other, and a plugin that was switched
+        // off this session builds none.
+        cascade::core::fault::Slot* const slot = cascade::core::fault::slotFor(catalogue[dp.plugin].key);
+        if (cascade::core::fault::isQuarantined(slot)) {
+            set.refused.push_back(dp.node);
+            continue;
+        }
 
         auto d = std::make_unique<RunningDecoder>();
         d->node = dp.node;
@@ -272,6 +283,7 @@ inline void buildDecoders(StripSet& set, const Plan& plan, const Graph& g,
         d->source = dp.source;
         const Node* n = g.find(dp.node);
         d->name = (n != nullptr && !n->name.empty()) ? n->name : catalogue[dp.plugin].name;
+        d->slot = slot;
 
         if (dp.source != DecoderSource::Radio) {
             for (std::size_t i = 0; i < set.channels.size(); ++i) {
@@ -303,21 +315,21 @@ inline void buildDecoders(StripSet& set, const Plan& plan, const Graph& g,
                 continue;
             }
             d->imageApi = a.image;
-            d->handle = a.image->create(dp.rateHz, iqFeed ? dp.centreHz : 0.0);
+            d->handle = cascade::core::calls::create(slot, a.image, dp.rateHz, iqFeed ? dp.centreHz : 0.0);
         } else if (iqFeed) {
             if (a.iq == nullptr) {
                 set.refused.push_back(dp.node);
                 continue;
             }
             d->iqApi = a.iq;
-            d->handle = a.iq->create(dp.rateHz, dp.centreHz);
+            d->handle = cascade::core::calls::create(slot, a.iq, dp.rateHz, dp.centreHz);
         } else {
             if (a.audio == nullptr) {
                 set.refused.push_back(dp.node);
                 continue;
             }
             d->audioApi = a.audio;
-            d->handle = a.audio->create(static_cast<std::uint32_t>(dp.rateHz + 0.5));
+            d->handle = cascade::core::calls::create(slot, a.audio, static_cast<std::uint32_t>(dp.rateHz + 0.5));
         }
         if (d->handle == nullptr) {
             // The ABI's "the plugin is unusable": nothing else may be called
@@ -946,7 +958,7 @@ private:
         d.lastImagePoll = d.framesFed == 0 ? 1 : d.framesFed;
         CascadeImage img{};
         img.structSize = sizeof(CascadeImage);
-        const std::int32_t r = d.imageApi->poll_image(d.handle, &img);
+        const std::int32_t r = cascade::core::calls::pollImage(d.slot, d.imageApi, d.handle, &img);
         if (r < 0) {
             d.failed = true;
             return;
@@ -991,12 +1003,13 @@ private:
         }
         // Released whether or not it was sane: every successful poll_image
         // gets exactly one release_image, before destroy().
-        d.imageApi->release_image(d.handle, &img);
+        cascade::core::calls::releaseImage(d.slot, d.imageApi, d.handle, &img);
     }
 
     // The one place each kind of table is called, so a picture decoder - which
     // takes either input through one process() - is fed by the same code.
     static void processIq(RunningDecoder& d, const float* interleaved, std::size_t frames) {
+        if (cascade::core::fault::isQuarantined(d.slot)) { return; }
         if (d.iqApi != nullptr) {
             d.iqApi->process(d.handle, interleaved, frames);
         } else if (d.imageApi != nullptr) {
@@ -1004,6 +1017,7 @@ private:
         }
     }
     static void processAudio(RunningDecoder& d, const float* samples, std::size_t frames) {
+        if (cascade::core::fault::isQuarantined(d.slot)) { return; }
         if (d.audioApi != nullptr) {
             d.audioApi->process(d.handle, samples, frames);
         } else if (d.imageApi != nullptr) {
@@ -1067,9 +1081,9 @@ private:
         char buf[1024];
         for (int tries = 0; tries < 8; ++tries) {
             const std::int32_t r =
-                (d.iqApi != nullptr)      ? d.iqApi->poll_text(d.handle, buf, sizeof(buf))
-                : (d.audioApi != nullptr) ? d.audioApi->poll_text(d.handle, buf, sizeof(buf))
-                                          : d.imageApi->poll_text(d.handle, buf, sizeof(buf));
+                (d.iqApi != nullptr)      ? cascade::core::calls::pollText(d.slot, d.iqApi, d.handle, buf, sizeof(buf))
+                : (d.audioApi != nullptr) ? cascade::core::calls::pollText(d.slot, d.audioApi, d.handle, buf, sizeof(buf))
+                                          : cascade::core::calls::pollText(d.slot, d.imageApi, d.handle, buf, sizeof(buf));
             if (r < 0) {
                 // "Failed permanently": fed and polled no further. The handle
                 // is KEPT until the set dies, so destroy() still runs exactly

@@ -81,6 +81,8 @@ int main(int argc, char** argv) {
         serviceRun.diagnosticsDir = boot.mayWrite ? cascade::core::diagCrashDir() : std::string();
         serviceRun.frames = boot.frames;
         serviceRun.measuring = measure != nullptr;
+        serviceRun.safePlugins = boot.safePlugins;
+        if (boot.safePlugins) { std::fprintf(stderr, "cascade: safe mode - no plugin will be loaded in this session\n"); }
         const cascade::engine::ServiceOptions options = cascade::engine::windowServiceOptions(serviceRun);
         cascade::engine::EngineService service(options);
 

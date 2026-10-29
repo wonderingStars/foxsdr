@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #include "core/plugin_ui.hpp"
+#include "core/leak_on_purpose.hpp"
+
+#include "core/plugin_calls.hpp"
+#include "core/plugin_marker.hpp"
 
 #include "core/health_events.hpp"
 #include "core/plugin_run.hpp"
@@ -359,9 +363,15 @@ namespace {
 // the last moment any plugin code could run. One bridge per plugin, reused
 // across rebuilds, so this is bounded by the number of distinct plugins that
 // have ever attached rather than by how often the user changes source.
+//
+// PLUGIN CONTAINMENT (docs/engine-stage4.md 6.28) CHANGED THE LAST MOMENT: a plugin the guard switched off is never unmapped and its instances
+// are leaked (nothing calls into it again), so a thread it started may still be inside its image - and calling through its bridge - while
+// main() returns and the static destructors run. Found by ThreadSanitizer on the first Linux run of the containment's tests (the TX fixture's
+// worker thread, left running by a quarantine, read the host core as the store was reclaimed). The store is therefore never reclaimed: the
+// process ends with it, and the operating system takes the few hundred bytes (marked as a leak on purpose for the leak checker).
 std::vector<std::unique_ptr<HostCtx>>& ctxStore() {
-    static std::vector<std::unique_ptr<HostCtx>> store;
-    return store;
+    static std::vector<std::unique_ptr<HostCtx>>* const store = cascade::core::leakOnPurpose(new std::vector<std::unique_ptr<HostCtx>>());
+    return *store;
 }
 
 // The bridge already issued to `plugin` on behalf of `owner`, or null.
@@ -698,6 +708,19 @@ bool PluginUi::startPlugin(const LoadedPlugin& lp) {
     return true;
 }
 
+namespace {
+
+// One instance's destroy(), as a guarded call (core/plugin_calls.hpp): the marker says `unload` for the length of it, and an instance of a
+// plugin that was switched off is dropped without being called - it is leaked with its module, on purpose.
+template <class Api>
+void destroyInstance(fault::Slot* slot, const std::string& key, const Api* api, void* handle) {
+    if (api == nullptr || handle == nullptr) { return; }
+    marker::CallPhase inUnload(key, marker::Phase::Unload);
+    calls::destroy(slot, api, handle);
+}
+
+}  // namespace
+
 void PluginUi::stopPlugin(const std::string& pluginKey) {
     // Down until startPlugin(): a rebuild() in between must not bring it back.
     {
@@ -729,7 +752,7 @@ void PluginUi::stopPlugin(const std::string& pluginKey) {
         std::vector<TrackInstance> keep;
         for (TrackInstance& t : trackInstances_) {
             if (t.key == pluginKey) {
-                if (t.api != nullptr && t.handle != nullptr) { t.api->destroy(t.handle); }
+                destroyInstance(t.slot, t.key, t.api, t.handle);
             } else {
                 keep.push_back(std::move(t));
             }
@@ -762,7 +785,7 @@ void PluginUi::stopPlugin(const std::string& pluginKey) {
         std::vector<PanelInstance> keep;
         for (PanelInstance& p : panelInstances_) {
             if (p.key == pluginKey) {
-                if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
+                destroyInstance(p.slot, p.key, p.api, p.handle);
                 goneAt.push_back(p.panelIndex);
             } else {
                 keep.push_back(std::move(p));
@@ -794,7 +817,7 @@ void PluginUi::stopPlugin(const std::string& pluginKey) {
         std::vector<InstrumentInstance> keep;
         for (InstrumentInstance& in : instrumentInstances_) {
             if (in.key == pluginKey) {
-                if (in.api != nullptr && in.handle != nullptr) { in.api->destroy(in.handle); }
+                destroyInstance(in.slot, in.key, in.api, in.handle);
                 goneAt.push_back(in.index);
             } else {
                 keep.push_back(std::move(in));
@@ -843,6 +866,12 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
     // The module file name every instance below is filed under, so
     // stopPlugin() can take out exactly this plugin's.
     const std::string modKey = tuneKey(lp);
+    fault::Slot* const slot = fault::slotFor(modKey);
+    // A plugin that was switched off this session gets no UI instance either.
+    if (fault::isQuarantined(slot)) { return; }
+    const marker::Phase phaseBefore = marker::phaseOf(modKey);
+    marker::set(modKey, marker::Phase::Create, lp.version, faultOriginOf(lp.origin));
+    bool createdAny = false;
     // Host services FIRST. The ABI says attach() runs before any other
     // capability's create(), so a tracker can read the receiver while
     // building its initial state instead of waiting a frame for it.
@@ -882,15 +911,17 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
             bridge = owned.get();
             ctxStore().push_back(std::move(owned));
         }
-        lp.hostClient->attach(&bridge->api);
+        calls::attach(slot, lp.hostClient, &bridge->api);
     }
 
     if (lp.trackSource != nullptr) {
-        void* h = lp.trackSource->create();
+        void* h = calls::create(slot, lp.trackSource);
         if (h != nullptr) {
+            createdAny = true;
             TrackInstance ti;
             ti.api = lp.trackSource;
             ti.handle = h;
+            ti.slot = slot;
             ti.name = lp.name;
             ti.key = modKey;
             // The name mirror rides with the instance, so the two can
@@ -904,8 +935,9 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
     // consumes samples, so PluginRunner owns it - see the header.
 
     if (lp.panel != nullptr) {
-        void* h = lp.panel->create();
+        void* h = calls::create(slot, lp.panel);
         if (h != nullptr) {
+            createdAny = true;
             HostPanel hp;
             hp.plugin = lp.name;
             hp.title = lp.panel->title != nullptr ? lp.panel->title : lp.name;
@@ -914,7 +946,7 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
             // lifetime, so rediscovering it every frame would be work that
             // can only ever return the same answer.
             char headings[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS] = {};
-            std::uint32_t cols = lp.panel->columns(h, headings);
+            std::uint32_t cols = calls::columns(slot, lp.panel, h, headings);
             if (cols == 0u) { cols = 1u; }
             if (cols > CASCADE_PANEL_MAX_COLUMNS) { cols = CASCADE_PANEL_MAX_COLUMNS; }
             for (std::uint32_t c = 0; c < cols; ++c) {
@@ -924,6 +956,7 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
             PanelInstance pi;
             pi.api = lp.panel;
             pi.handle = h;
+            pi.slot = slot;
             pi.name = lp.name;
             pi.key = modKey;
             pi.panelIndex = panels_.size();
@@ -933,8 +966,9 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
     }
 
     if (lp.instrument != nullptr) {
-        void* h = lp.instrument->create();
+        void* h = calls::create(slot, lp.instrument);
         if (h != nullptr) {
+            createdAny = true;
             HostInstrument hi;
             hi.plugin = lp.name;
             hi.title = lp.instrument->title != nullptr ? lp.instrument->title : lp.name;
@@ -943,7 +977,7 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
             // and its columns are read once, as a panel's are.
             if (lp.instrument->columns != nullptr && lp.instrument->poll_rows != nullptr) {
                 char headings[CASCADE_PANEL_MAX_COLUMNS][CASCADE_PANEL_CELL_CHARS] = {};
-                std::uint32_t cols = lp.instrument->columns(h, headings);
+                std::uint32_t cols = calls::columns(slot, lp.instrument, h, headings);
                 if (cols == 0u) { cols = 1u; }
                 if (cols > CASCADE_PANEL_MAX_COLUMNS) { cols = CASCADE_PANEL_MAX_COLUMNS; }
                 for (std::uint32_t c = 0; c < cols; ++c) {
@@ -953,6 +987,7 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
             InstrumentInstance ii;
             ii.api = lp.instrument;
             ii.handle = h;
+            ii.slot = slot;
             ii.name = lp.name;
             ii.key = modKey;
             // BEFORE THE DEMONSTRATION FACES, which sit at the end of
@@ -966,6 +1001,9 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
             instrumentInstances_.push_back(std::move(ii));
         }
     }
+    // Out of create(): an instance exists and has not yet been polled (`first-pass`, promoted by the engine's pass), or none was made and the
+    // plugin is back to the phase it was in.
+    marker::set(modKey, createdAny ? marker::Phase::FirstPass : phaseBefore, lp.version, faultOriginOf(lp.origin));
 }
 
 // ---------------------------------------------------------------------------
@@ -1334,18 +1372,12 @@ void PluginUi::clear() {
 }
 
 void PluginUi::destroyInstances() {
-    for (TrackInstance& t : trackInstances_) {
-        if (t.api != nullptr && t.handle != nullptr) { t.api->destroy(t.handle); }
-    }
+    for (TrackInstance& t : trackInstances_) { destroyInstance(t.slot, t.key, t.api, t.handle); }
     trackInstances_.clear();
     trackPluginNames_.clear();
-    for (PanelInstance& p : panelInstances_) {
-        if (p.api != nullptr && p.handle != nullptr) { p.api->destroy(p.handle); }
-    }
+    for (PanelInstance& p : panelInstances_) { destroyInstance(p.slot, p.key, p.api, p.handle); }
     panelInstances_.clear();
-    for (InstrumentInstance& in : instrumentInstances_) {
-        if (in.api != nullptr && in.handle != nullptr) { in.api->destroy(in.handle); }
-    }
+    for (InstrumentInstance& in : instrumentInstances_) { destroyInstance(in.slot, in.key, in.api, in.handle); }
     instrumentInstances_.clear();
     instruments_.clear();
     demoCount_ = 0;
@@ -1377,9 +1409,9 @@ void PluginUi::poll() {
     for (AltTrail& a : altTrails_) { a.seenThisPoll = false; }
 
     for (TrackInstance& ti : trackInstances_) {
+        if (fault::isQuarantined(ti.slot)) { continue; }   // switched off: nothing of it is polled (the directive removes it next)
         trackScratch_.assign(kMaxTracksPerPlugin, CascadeTrack{});
-        const std::int32_t n =
-            ti.api->poll_tracks(ti.handle, trackScratch_.data(), kMaxTracksPerPlugin);
+        const std::int32_t n = calls::pollTracks(ti.slot, ti.api, ti.handle, trackScratch_.data(), kMaxTracksPerPlugin);
         if (n > 0) {
             const std::uint32_t count =
                 std::min(static_cast<std::uint32_t>(n), kMaxTracksPerPlugin);
@@ -1428,8 +1460,7 @@ void PluginUi::poll() {
 
         if (ti.api->poll_paths == nullptr) { continue; }
         pathScratch_.assign(kMaxPathsPerPlugin, CascadePath{});
-        const std::int32_t np =
-            ti.api->poll_paths(ti.handle, pathScratch_.data(), kMaxPathsPerPlugin);
+        const std::int32_t np = calls::pollPaths(ti.slot, ti.api, ti.handle, pathScratch_.data(), kMaxPathsPerPlugin);
         if (np <= 0) { continue; }
         const std::uint32_t pcount =
             std::min(static_cast<std::uint32_t>(np), kMaxPathsPerPlugin);
@@ -1483,9 +1514,9 @@ void PluginUi::poll() {
                      altTrails_.end());
 
     for (PanelInstance& pi : panelInstances_) {
+        if (fault::isQuarantined(pi.slot)) { continue; }
         rowScratch_.assign(kMaxRowsPerPanel, CascadePanelRow{});
-        const std::int32_t n =
-            pi.api->poll_rows(pi.handle, rowScratch_.data(), kMaxRowsPerPanel);
+        const std::int32_t n = calls::pollRows(pi.slot, pi.api, pi.handle, rowScratch_.data(), kMaxRowsPerPanel);
         HostPanel& hp = panels_[pi.panelIndex];
         hp.rows.clear();
         if (n > 0) {
@@ -1497,13 +1528,14 @@ void PluginUi::poll() {
     }
 
     for (InstrumentInstance& ii : instrumentInstances_) {
+        if (fault::isQuarantined(ii.slot)) { continue; }
         HostInstrument& hi = instruments_[ii.index];
         // The host sets the size and ZEROES the rest before every call, so a
         // plugin that fills three slots leaves the other five empty rather
         // than holding last frame's figures.
         CascadeInstrumentState st{};
         st.structSize = static_cast<std::uint32_t>(sizeof(CascadeInstrumentState));
-        const std::int32_t r = ii.api->poll_state(ii.handle, &st);
+        const std::int32_t r = calls::pollState(ii.slot, ii.api, ii.handle, &st);
         if (r > 0) {
             hi.state = st;
             hi.have = true;
@@ -1518,8 +1550,7 @@ void PluginUi::poll() {
         hi.rows.clear();
         if (ii.api->poll_rows != nullptr) {
             rowScratch_.assign(kMaxRowsPerPanel, CascadePanelRow{});
-            const std::int32_t n =
-                ii.api->poll_rows(ii.handle, rowScratch_.data(), kMaxRowsPerPanel);
+            const std::int32_t n = calls::pollRows(ii.slot, ii.api, ii.handle, rowScratch_.data(), kMaxRowsPerPanel);
             if (n > 0) {
                 const std::uint32_t count =
                     std::min(static_cast<std::uint32_t>(n), kMaxRowsPerPanel);

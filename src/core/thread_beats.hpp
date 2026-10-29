@@ -237,6 +237,56 @@ private:
     Registration& r_;
 };
 
+// ---------------------------------------------------------------------------
+// A CALL INTO CODE THE PRODUCT DOES NOT OWN, in flight (plugin containment P1, docs/engine-stage4.md 6.28)
+// ---------------------------------------------------------------------------
+//
+// The registry above names a THREAD that stopped beating. A call into a plugin is a different shape: the thread (the interface's, the
+// control thread, the image feed's worker) is perfectly healthy until the call, and the call is what stops - so the thing to name is the
+// plugin and the entry point it was called through. That is what a CallScope declares: "this thread is inside <subject>'s <what> and
+// should be out within <budget> ms". It rides the SAME monitor (Registry::poll, which HangWatchdog's thread already calls twice a
+// second) and the same report path (`hang-<pid>-w<N>.txt`): there is no second watchdog and no new thread.
+//
+// `subject` and `what` are pointers that outlive the scope (the plugin containment passes an interned public id and a string literal);
+// they are never copied, and the report only ever writes them through reportId() below. A scope costs a clock read and a handful of
+// atomic stores on the calling thread and takes no lock, so it is as safe on the real-time thread as a beat.
+//
+// TWO STAGES, because a slow call and a call that never returns are different faults: past `budgetMs` the call has OVERRUN (one report,
+// naming the subject and the entry; the call may yet return), and past `wedgeMs` it is WEDGED (counted, and the owner decides what to do
+// about a plugin it can no longer call - the containment quarantines it). Each stage is reported once per call. A call that returns
+// is simply gone from the table; the owner of the scope asks `overranFlags()` at its end to count a late return the monitor never
+// saw (no watchdog in the process), and both sides count a stage at most once through `claimStage`.
+class CallScope {
+public:
+    // `owner` is the caller's own handle for the subject (the containment's slot), handed back by ownerOfThread() for the crash path.
+    CallScope(const void* owner, const char* subject, const char* what, unsigned budgetMs, unsigned wedgeMs) noexcept;
+    ~CallScope();
+    CallScope(const CallScope&) = delete;
+    CallScope& operator=(const CallScope&) = delete;
+
+    // Milliseconds since the call began, on the registry's clock (a test can advance it).
+    std::int64_t elapsedMs() const noexcept;
+    // Claims stage 1 (overrun) or 2 (wedge) of THIS call for the caller: true exactly once per stage, whoever asks first (this scope's
+    // owner at the end of the call, or the monitor while it is in flight). False for a call whose table slot was full.
+    bool claimStage(int stage) noexcept;
+    // True when the table had no room and this call is not watched (the call itself is unaffected).
+    bool unwatched() const noexcept { return index_ < 0; }
+
+private:
+    int index_ = -1;
+    std::int64_t startMs_ = 0;
+    unsigned budgetMs_ = 0;
+    unsigned wedgeMs_ = 0;
+};
+
+// The call the given OS thread is in: its `owner` and the `what` it declared. False when it is in none. Lock-free and
+// allocation-free: the crash path reads it.
+bool callOfThread(unsigned long tid, const void** owner, const char** what) noexcept;
+// How many calls are in flight now (tests, and the report).
+std::size_t callsInFlight() noexcept;
+// The `owner` of every call in flight now (up to `cap`; the same owner may appear twice), for the containment's unload-timeout charge.
+std::size_t liveCallOwners(const void** out, std::size_t cap) noexcept;
+
 // What the monitor found.
 struct Finding {
     std::string name;   // the thread's name, from the inventory
@@ -245,11 +295,18 @@ struct Finding {
     unsigned long tid = 0;
     std::int64_t stalledMs = 0;  // since its last beat (or since the wait began)
     unsigned budgetMs = 0;       // what it exceeded
+    // FOR A CALL (CallScope) AND ONLY THEN: who and through what. `name` is "plugin-call", `phase` the entry's word, `tid` the thread
+    // that is inside the call (its stack is the first one in the report), and these three are what the containment counts by.
+    std::string subject;           // the interned public id the call declared
+    const void* owner = nullptr;  // the owner pointer the call declared
+    int stage = 0;                 // 0 for a thread; 1 overrun; 2 wedged
 };
 
 struct PollResult {
     std::vector<Finding> wedged;     // newly late: each is reported once per episode
     std::vector<Finding> recovered;  // beat again after a report: stalledMs is how long the episode lasted
+    // Calls in flight past their budget (stage 1) or their wedge limit (stage 2), each reported once per call.
+    std::vector<Finding> calls;
 };
 
 class Registry {
@@ -305,6 +362,10 @@ private:
 // A thread name safe to write into a report: letters, digits and '-' only, and no longer than 32. Anything else - a
 // name this build does not know - reads as "unknown".
 std::string reportWord(const char* s);
+
+// An identifier safe to write into a report: lower-case letters, digits, '-', '_' and '.', at most 40 characters. Anything else reads as
+// "unknown". (A plugin's public id: the catalogue id of an official plugin, or a hash for any other.)
+std::string reportId(const char* s);
 
 }  // namespace cascade::core::beats
 

@@ -850,6 +850,10 @@ The sites that are counted:
 | `sdrenum` | `AppWindow::pollSdrPlayService`, the SDRplay scan worker let go | the window's thread |
 | `sdrlost` | `AppWindow::pollSdrPlayService`, the SDRplay API session lost | the window's thread |
 | `audiolead` | `AppWindow::closeAudioMinute`, the once-a-minute close that deepened the audio buffer (0.99.73; see *The DSP thread asks for priority, and the audio buffer deepens itself*) | the window's thread |
+| `pluginfault` | `core/plugin_fault.cpp` `totals().faults`: a guarded call into a plugin faulted and was absorbed (see *A bad plugin does not take the program down*) | the engine's pass, from `fault::totals()` |
+| `pluginquarantine` | `fault::totals().quarantines`: a plugin was switched off for the session | the engine's pass |
+| `pluginwedge` | `fault::totals().wedges`: a guarded call never returned (the stage-2 finding of the call budget), or an unload timed out inside one | the engine's pass |
+| `pluginoveruse` | `fault::totals().overruns`: a guarded call overran its budget (the stage-1 finding), once a session | the engine's pass |
 | `threadwedge` | `HangWatchdog`'s poll found a registered worker thread past its budget and wrote a freeze report naming it (see *A worker that stops answering is reported by name*) | the engine's pass, from `beats::Registry::wedgesFound()` (a counter, like the four above) |
 
 **Surveyed and deliberately not counted**, so the next reader does not re-do the
@@ -3405,6 +3409,28 @@ key opens at `kKeyAliveWait` exactly as before.
 
 **The health word.** `recovered.threadwedge`, one count per wedge, taken from `Registry::wedgesFound()` by the engine's pass with the
 other recovery counters (never by the watchdog's thread, which takes no ledger lock).
+
+## A bad plugin does not take the program down: the containment's evidence (plugin containment P1)
+
+The record of what was built, with the contract (every rule and the test that pins it), is docs/engine-stage4.md 6.28. What it writes:
+
+- **A fault absorbed at a plugin's entry point.** The non-hot calls into a plugin (create, destroy, the polls, the tile and info calls, attach,
+  press, the preset reads) go through one guard, `core/plugin_calls.hpp`. A structured exception raised inside the plugin's own image is eaten
+  there; the host's own faults and a stack overflow are not. The plugin is switched off for the session and a crash-family report is written
+  with the reason `fault in a plugin, absorbed` - the same family as a vendor fault absorbed in a radio driver, and likewise read by the
+  reader as a survived event, never as the program's death.
+- **A call that never returns.** Every guarded call is entered in a lock-free table (`beats::CallScope`) with its budget. The watchdog's
+  existing poll finds it: at the budget a count (`pluginoveruse`, once a session), at four times the budget a freeze report
+  `hang-<pid>-w<N>.txt` whose header says `blamed-plugin:` and `blamed-plugin-entry:`, and the plugin is switched off. No second monitor.
+- **A crash with a plugin in it.** The process block of a crash report carries `blamed-plugin`, `-version`, `-origin` and `-how` when the
+  plugin's module is on the faulting stack or a guarded call of it was in flight on the faulting thread. A crash with no plugin on it names none.
+- **The clean-exit marker, extended.** `plugin-play.marker` (8 KiB, memory-mapped, beside the settings file) records which plugin is in
+  which phase (load, create, first pass, running, unload) while it is in play. A run that does not end in order leaves it behind; the next
+  start reads it, and only the rules in `core/plugin_marker.hpp` make a plugin a suspect (the program's own crash is never put to a plugin's
+  account). The strikes are `plugin-faults.json`, beside it.
+- **The words.** `recovered.pluginfault`, `pluginquarantine`, `pluginwedge`, `pluginoveruse` (table above). No plugin is named in them.
+- **The log.** `plugin: <id> was switched off for this session (<why> in <entry>)`, `plugins: <id> starts the next session switched off`,
+  `plugin: <id> re-enabled by the user`.
 
 ## The 5-second threshold, and why it is not a guess
 
