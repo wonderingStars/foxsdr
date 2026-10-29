@@ -40,7 +40,7 @@
 #include "core/utf8_text.hpp"
 #include "gui/patch_view_math.hpp"
 #include "gui/theme.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "gui/ui_census.hpp"
 #include "gui/ui_scale.hpp"
 

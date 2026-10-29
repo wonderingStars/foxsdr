@@ -1,7 +1,7 @@
 // plugin_ui_port.hpp (engine) - THE ENGINE'S SIDE OF THE PLUGIN UI PLANE: the PluginUiPort an interface holds (core/plugin_ui_port.hpp), built
 // over the Engine, the PluginUi (core/plugin_ui.hpp) and the engine's directive link (shell retirement R4; docs/engine-stage4.md 6.25).
 //
-// It is today's PluginFeedImpl (engine/engine_shell.cpp until R4) moved here, where it can keep seeing PluginUi - which the interface's fence
+// It is today's PluginFeedImpl (the shell's engine_shell.cpp until R4) moved here, where it can keep seeing PluginUi - which the interface's fence
 // denies - and given the three calls the window used to make of the shell's HOST class and of the shell itself: setFrontEnd, serveTiles and
 // release. It is created by one place only, the table's get_local_extension(FOXAPI_EXT_PLUGIN_UI) (fox_engine_api.cpp), which has checked
 // that the caller is a LOCAL interface session; the interface (the window, a test) never names this header. Part of cascade_engine, so the

@@ -46,7 +46,7 @@
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 
 namespace cascade::engine {
 

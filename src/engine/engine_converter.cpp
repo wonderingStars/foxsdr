@@ -17,18 +17,18 @@
 #include "core/i18n.hpp"
 #include "core/patch_devices.hpp"
 #include "core/utf8_text.hpp"
-#include "engine/soundcard_panel.hpp"
-#include "engine/tune_control.hpp"
+#include "core/soundcard_panel.hpp"
+#include "core/tune_control.hpp"
 
-#include "engine/audio_open.hpp"
-#include "engine/bias_tee.hpp"
-#include "engine/device_scan_plan.hpp"
-#include "engine/plugin_store_reasons.hpp"
-#include "engine/rate_follow_status.hpp"
-#include "engine/receiver_tables.hpp"
-#include "engine/running_view.hpp"
-#include "engine/source_fallback.hpp"
-#include "engine/tx_frequency.hpp"
+#include "core/audio_open.hpp"
+#include "core/bias_tee.hpp"
+#include "core/device_scan_plan.hpp"
+#include "core/plugin_store_reasons.hpp"
+#include "core/rate_follow_status.hpp"
+#include "core/receiver_tables.hpp"
+#include "core/running_view.hpp"
+#include "core/source_fallback.hpp"
+#include "core/tx_frequency.hpp"
 
 namespace cc = cascade::core;
 
@@ -251,7 +251,7 @@ std::string Engine::converterTuneNote(double requestAirHz, bool refused, double 
             msg, tr("%s is out of reach through the %s: the radio would have to tune to 0 Hz or below."),
             air.c_str(), name.c_str());
     } else if (refused) {
-        // The same rule as the plain sentence (engine/tune_control.hpp,
+        // The same rule as the plain sentence (core/tune_control.hpp,
         // tuneRefusedMessage): a refusal INSIDE the radio's range is a busy
         // driver, not a fact about the radio, and says nothing.
         if (!hasRange || !(rHi > rLo) || (radioHz >= rLo && radioHz <= rHi)) { return {}; }

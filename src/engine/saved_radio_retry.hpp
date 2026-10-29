@@ -1,7 +1,7 @@
 // When a saved radio that was merely BUSY at start-up is tried again - the
 // pure decision behind Engine::pollSavedRadioRetry, pulled out so it is
 // checkable without a window, a pipeline or a dongle (the same reason
-// autoReopenDue lives in engine/tune_control.hpp). THE FILE LIVES IN src/engine/ SINCE THE 0.99.97 MERGE (master had it in gui/; the retry runs in the
+// autoReopenDue lives in core/tune_control.hpp). THE FILE LIVES IN src/engine/ SINCE THE 0.99.97 MERGE (master had it in gui/; the retry runs in the
 // Engine now, and the engine library may not include gui/ - the namespace is master's, as tune_control.hpp's is).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0

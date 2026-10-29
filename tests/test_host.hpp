@@ -2,12 +2,12 @@
 // R7 = survey step M1; docs/engine-stage4.md 6.25).
 //
 // WHY. A hermetic window test is, in truth, a test of the ENGINE written with a window in front of it: 69 test files reached the Engine
-// 1,979 times through `rawEngine(a.engine_)` (786 of them private-field reads), each from a local AppWindowTestAccess. The shell is being
-// retired (the window will reach the engine through the API table and nothing else), and `rawEngine` is the shell's back door, so the tests
-// cannot keep a door of their own scattered across 69 files: when the Engine's owner changes (R7: the host process owns it, as main does in
-// the product), every one of those files would have to change again. This header is the answer the survey (3.3, 3.4) chose: tests name the
-// engine through ONE function, th::engine(window), and build their windows through ONE type, th::TestWindow. The day the owner changed
-// (R7, M1) only this header changed; the files that moved here did not.
+// 1,979 times through `rawEngine(a.engine_)` (786 of them private-field reads), each from a local AppWindowTestAccess. The shell was retired (the
+// window reaches the engine through the API table and nothing else), and `rawEngine` was the shell's back door, so the tests could not keep a door of
+// their own scattered across 69 files: when the Engine's owner changed (R7: the host process owns it, as main does in the product), every one of those
+// files would have had to change again. This header is the answer the survey (3.3, 3.4) chose: tests name the engine through ONE function,
+// th::engine(window), and build their windows through ONE type, th::TestWindow. The day the owner changed (R7, M1) only this header changed; the files
+// that moved here did not; and when the shell and `rawEngine` were deleted (R10, M2, 2026-10-29) again only this header changed.
 //
 //   th::Host             WHAT main.cpp IS, for a test: an EngineService (hermetic when the window has no settings path, persistent on a scratch
 //                        path when it has one), its restore, and the CASCADE_CONFIG_TEST line when asked. It owns the Engine. It does NOT start the
@@ -21,14 +21,17 @@
 //                        destroyed after it), then the window on the restored engine. It is a distinct type so that every test window is made in
 //                        one place - tests/test_engine_shell_guard.cpp holds that no test names `AppWindow` as a thing it constructs.
 //   th::BareWindow      an AppWindow on a Host the TEST built and owns, for the tests that must act on the engine before its window exists.
-//   th::engine(a)        the Engine the window `a` sits on - the Host's own, the one the shell views (what `rawEngine(a.engine_)` was, the same
-//                        reference). Tests that hold the window as an `AppWindow&` (every AppWindowTestAccess helper does) use it unchanged.
+//   th::HostedWindow     the base of both: an AppWindow that knows the Host it sits on (the window itself holds no engine of any kind since R10).
+//   th::engine(a)        the Engine the window `a` sits on - the Host's own (what `rawEngine(a.engine_)` was, the same reference). Tests that hold the
+//                        window as an `AppWindow&` (every AppWindowTestAccess helper does) use it unchanged: every window a test builds is a HostedWindow
+//                        (TestWindow or BareWindow - tests/test_engine_shell_guard.cpp holds that no test constructs an AppWindow another way).
 //   th::applyConfig(a,c) what the window's own `applyConfig(c)` was: the start-up state of `c` onto the engine, then the window's half of it from the table
 //                        (R7 split the window's applyConfig in two: the engine's half is the host's, applied here; the window's is AppWindow's).
 //
-// THE AUDIT. This is the one place that names rawEngine: tests/test_engine_shell_guard.cpp scans tests/ and holds that no other test file
-// does (before R1, 72 files named it). It reaches the window's private `engine_` through ONE friend declaration, `TestHostAccess`, beside
-// AppWindow's AppWindowTestAccess; deleting it is a compile failure here and in every test (proved: docs/engine-stage4.md 6.25).
+// THE AUDIT. `rawEngine` is deleted (R10): nothing names it, in src/ or tests/ (tests/test_engine_shell_guard.cpp holds it, in code). The window has no
+// engine member to reach. What TestHostAccess is left with is the window's OWN seams - the plugin UI port, the late attach, the window's half of a
+// start-up state - through ONE friend declaration beside AppWindow's AppWindowTestAccess (the survey wanted the friend deleted with rawEngine; these
+// seams are window-private and no table call stands in for them, so it stays, and the guard holds it to one declaration and no Engine in it).
 // Private FIELDS of the Engine still come through each test's own AppWindowTestAccess/Engine friend, exactly as before - this batch
 // moved who hands out the Engine, not what a test may read of it.
 //
@@ -45,7 +48,6 @@
 
 #include "engine/engine.hpp"
 #include "engine/engine_service.hpp"
-#include "engine/engine_shell.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/host_measure.hpp"
 #include "engine/plugin_ui_port.hpp"
@@ -54,9 +56,8 @@
 
 namespace cascade::gui {
 
-// The window's friend for this header and nothing else (src/gui/app_window.hpp: `friend struct TestHostAccess;`).
+// The window's friend for this header and nothing else (src/gui/app_window.hpp: `friend struct TestHostAccess;`). It names no Engine.
 struct TestHostAccess {
-    static cascade::engine::Engine& engine(AppWindow& a) { return cascade::engine::rawEngine(a.engine_); }
     // THE PLUGIN UI PORT behind a window (shell retirement R4): what rawPluginUi(*a.pluginFeed_) was, and the two steps a late-attach test needs - the
     // window lets go of its port (the destructor disconnects it, the engine drives its own plugin UI again), and asks for one again (the same call the
     // constructor makes: a window that arrives after the engine's scan).
@@ -105,7 +106,6 @@ public:
         cascade::gui::WindowHost h;
         h.api = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
         h.handle = service_.engine().apiHandle();
-        h.engine = &service_.engine();
         h.configPath = configPath;
         h.configLoaded = restored_.loaded;
         h.lastRunUnclean = restored_.lastRunUnclean;
@@ -145,10 +145,21 @@ inline void takeEngineDown(cascade::engine::Engine& engine) {
     engine.teardown();
 }
 
-class TestWindow : private HostHolder, public cascade::gui::AppWindow {
+// An AppWindow that knows the Host it sits on: the window holds no engine of any kind (R10), so th::engine(window) finds the Host's through this base.
+// Both test window types derive from it, and tests/test_engine_shell_guard.cpp holds that a test builds a window no other way.
+class HostedWindow : public cascade::gui::AppWindow {
+public:
+    HostedWindow(Host& host, const std::string& configPath) : cascade::gui::AppWindow(host.windowHost(configPath)), host_(&host) {}
+    Host& hostOf() { return *host_; }
+
+private:
+    Host* host_ = nullptr;
+};
+
+class TestWindow : private HostHolder, public HostedWindow {
 public:
     explicit TestWindow(std::string configPath = {}, bool announceConfig = false, int frames = 0)
-        : HostHolder(configPath, announceConfig, frames), cascade::gui::AppWindow(HostHolder::host.windowHost(configPath)), frames_(frames) {}
+        : HostHolder(configPath, announceConfig, frames), HostedWindow(HostHolder::host, configPath), frames_(frames) {}
     ~TestWindow() { takeEngineDown(HostHolder::host.engine()); }
 
     Host& host() { return HostHolder::host; }
@@ -160,13 +171,10 @@ private:
 
 // A window on a Host the TEST owns (tests/test_engine_service_window.cpp): what a test that has to act on the engine BEFORE its window exists - start the
 // control thread, count what the restore's scan built - needs. The Host is built first, restored by its constructor, and outlives the window.
-class BareWindow : public cascade::gui::AppWindow {
+class BareWindow : public HostedWindow {
 public:
-    explicit BareWindow(Host& host, const std::string& configPath = {}) : cascade::gui::AppWindow(host.windowHost(configPath)), host_(&host) {}
-    ~BareWindow() { takeEngineDown(host_->engine()); }
-
-private:
-    Host* host_ = nullptr;
+    explicit BareWindow(Host& host, const std::string& configPath = {}) : HostedWindow(host, configPath) {}
+    ~BareWindow() { takeEngineDown(hostOf().engine()); }
 };
 
 // MAIN'S START, RUN, STOP AND CLOSE FOR A TEST WINDOW (src/main.cpp; shell retirement R8): the service started after the window's constructor and
@@ -186,9 +194,9 @@ inline int run(TestWindow& window) {
     return rc;
 }
 
-// THE ENGINE behind a window: the Host's own, which the window's shell views (rawEngine(a.engine_) is the same reference, for a TestWindow and a
-// BareWindow alike; tests/test_engine_service_window.cpp holds that it is the Host's).
-inline cascade::engine::Engine& engine(cascade::gui::AppWindow& a) { return cascade::gui::TestHostAccess::engine(a); }
+// THE ENGINE behind a window: the Host's own (what rawEngine(a.engine_) was, the same reference, for a TestWindow and a BareWindow alike;
+// tests/test_engine_service_window.cpp holds that it is the Host's). Every window a test builds is a HostedWindow, so the cast is sound.
+inline cascade::engine::Engine& engine(cascade::gui::AppWindow& a) { return static_cast<HostedWindow&>(a).hostOf().engine(); }
 
 // A start-up state restored into a window that exists: the engine's half applied the way the host's restore applies it, then the window's own half
 // from the table (what AppWindow::applyConfig did in one call before R7).

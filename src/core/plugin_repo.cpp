@@ -1259,11 +1259,6 @@ const PluginPlatform* PluginCatalogEntry::thisPlatform() const {
 // Static, portable surface
 // ---------------------------------------------------------------------------
 
-std::string PluginRepo::defaultIndexUrl() {
-    return "https://raw.githubusercontent.com/wonderingStars/foxsdr-plugins/master/"
-           "index.json";
-}
-
 // ---------------------------------------------------------------------------
 // Regional catalogue (see the REGIONAL CATALOGUE block in the header)
 // ---------------------------------------------------------------------------
@@ -1422,125 +1417,6 @@ std::string PluginRepo::catalogueKey(const std::string& source, const std::strin
     return id + "@" + siteLabel(source);
 }
 
-std::string PluginRepo::urlHost(const std::string& url) {
-    if (!isHttpsUrl(url)) { return {}; }
-    const std::size_t start = 8;  // past "https://"
-    std::size_t end = url.find_first_of("/?#", start);
-    if (end == std::string::npos) { end = url.size(); }
-    const std::string authority = url.substr(start, end - start);
-    if (authority.empty()) { return {}; }
-    // Userinfo ("good.example@evil.example"), a backslash (a browser reads it as a
-    // slash), a space, a control character or a byte >= 0x80 anywhere in the
-    // authority: not a host this code will lock anything to. Refused outright
-    // rather than parsed, because a parser that guesses which half is the host is
-    // exactly how a host lock gets walked around.
-    for (char c : authority) {
-        const unsigned char u = static_cast<unsigned char>(c);
-        if (c == '@' || c == '\\' || u <= 0x20 || u >= 0x7F) { return {}; }
-    }
-    std::string host;
-    std::string port;
-    if (authority.front() == '[') {
-        const std::size_t close = authority.find(']');
-        if (close == std::string::npos) { return {}; }
-        host = authority.substr(0, close + 1);
-        for (std::size_t i = 1; i < close; ++i) {
-            if (!isHexDigit(authority[i]) && authority[i] != ':' && authority[i] != '.') { return {}; }
-        }
-        if (close + 1 < authority.size()) {
-            if (authority[close + 1] != ':') { return {}; }
-            port = authority.substr(close + 2);
-        }
-    } else {
-        const std::size_t colon = authority.find(':');
-        host = colon == std::string::npos ? authority : authority.substr(0, colon);
-        if (colon != std::string::npos) { port = authority.substr(colon + 1); }
-        if (host.empty()) { return {}; }
-        for (char c : host) {
-            const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                            (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_';
-            if (!ok) { return {}; }
-        }
-    }
-    if (authority.find(':') != std::string::npos && authority.front() != '[' && port.empty()) {
-        return {};  // "host:" - an empty port is a malformed authority
-    }
-    if (!port.empty()) {
-        if (port.size() > 5 || !allDigits(port)) { return {}; }
-        if (port == "443") { port.clear(); }  // the default: "host" and "host:443" are one host
-    }
-    host = toLowerAscii(host);
-    return port.empty() ? host : host + ":" + port;
-}
-
-std::string PluginRepo::siteLabel(const std::string& siteUrl) {
-    const std::string host = urlHost(siteUrl);
-    if (!host.empty()) { return host; }
-    if (siteUrl.find("://") != std::string::npos) { return siteUrl; }  // not a usable address: shown as it is
-    // A local file: its name, which is what tells two files apart in a list.
-    const std::size_t cut = siteUrl.find_last_of("/\\");
-    if (cut == std::string::npos || cut + 1 >= siteUrl.size()) { return siteUrl; }
-    return siteUrl.substr(cut + 1);
-}
-
-std::string PluginRepo::siteDisplay(const std::string& siteUrl, std::size_t maxChars) {
-    std::string s = siteUrl;
-    if (urlHost(siteUrl).empty() == false) {
-        s = siteUrl.substr(8);  // past "https://"
-    }
-    if (s.size() <= maxChars) { return s; }
-    if (maxChars < 8) { return s.substr(0, maxChars); }
-    const std::size_t keep = maxChars - 3;
-    std::size_t left = keep / 2 + keep % 2;
-    std::size_t rightStart = s.size() - keep / 2;
-    // Never cut inside a multi-byte character: a continuation byte is 10xxxxxx.
-    while (left > 0 && (static_cast<unsigned char>(s[left]) & 0xC0) == 0x80) { --left; }
-    while (rightStart < s.size() && (static_cast<unsigned char>(s[rightStart]) & 0xC0) == 0x80) {
-        ++rightStart;
-    }
-    return s.substr(0, left) + "..." + s.substr(rightStart);
-}
-
-bool PluginRepo::normaliseSiteUrl(const std::string& raw, std::string& out, std::string& error) {
-    out.clear();
-    error.clear();
-    std::size_t b = 0;
-    std::size_t e = raw.size();
-    while (b < e && (raw[b] == ' ' || raw[b] == '\t')) { ++b; }
-    while (e > b && (raw[e - 1] == ' ' || raw[e - 1] == '\t' || raw[e - 1] == '\r' ||
-                     raw[e - 1] == '\n')) {
-        --e;
-    }
-    const std::string s = raw.substr(b, e - b);
-    if (s.empty()) {
-        error = "the site address is empty";
-        return false;
-    }
-    if (s.size() > 2048) {
-        error = "the site address is longer than 2048 characters";
-        return false;
-    }
-    for (char c : s) {
-        const unsigned char u = static_cast<unsigned char>(c);
-        if (u < 0x20 || u == 0x7F) {
-            error = "the site address contains a control character";
-            return false;
-        }
-    }
-    if (s.find("://") != std::string::npos) {
-        if (!isHttpsUrl(s)) {
-            error = "a site address must start with https:// (or be the path of a local index.json)";
-            return false;
-        }
-        if (urlHost(s).empty()) {
-            error = "the site address has no usable host name";
-            return false;
-        }
-    }
-    out = s;
-    return true;
-}
-
 bool PluginRepo::siteFilesAllowed(const std::string& url, const std::string& siteUrl) {
     // A local index has no host to lock to: its file is the user's own.
     if (siteUrl.find("://") == std::string::npos) { return true; }
@@ -1622,30 +1498,6 @@ PluginRepo::SiteMergeResult PluginRepo::mergeSite(
         ++result.added;
     }
     return result;
-}
-
-const char* PluginRepo::hostOs() {
-#if defined(_WIN32)
-    return "windows";
-#elif defined(__APPLE__)
-    return "macos";
-#else
-    return "linux";
-#endif
-}
-
-const char* PluginRepo::hostArch() {
-#if defined(_M_ARM64) || defined(__aarch64__)
-    return "arm64";
-#elif defined(_M_X64) || defined(__x86_64__)
-    return "x64";
-#else
-    return "x86";
-#endif
-}
-
-bool PluginRepo::isHttpsUrl(const std::string& url) {
-    return startsWithAscii(url, "https://") && url.size() > 8;
 }
 
 bool PluginRepo::sanitiseFileName(const std::string& raw, std::string& out, std::string& error) {

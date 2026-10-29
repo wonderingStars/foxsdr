@@ -174,7 +174,7 @@ void testSources(const fs::path& root) {
         engineSide.push_back(std::move(m));
     }
 
-    // 1a. The record and the means of sending it are named by no engine-side file. (The door, engine_shell.*, is engine-side too: it names none of them either - it
+    // 1a. The record and the means of sending it are named by no engine-side file. (The door, the shell header, was engine-side too: it names none of them either - it
     //     hands over closures it does not look into.)
     const char* const kHostOnly[] = {"TesterUsageRecorder", "TesterUsageSender", "TesterUsageReport", "TesterUsageOutcome", "postTesterUsage",
                                      "testerUsageEndpoint", "BetaLinkNameSender", "BetaMigrationSender", "resolveAppTokenName", "exchangePortalToken",

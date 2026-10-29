@@ -38,7 +38,7 @@
 
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "gui/deck_parts.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"

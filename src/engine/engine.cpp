@@ -9,7 +9,7 @@
 #include "core/config_halves.hpp"
 #include "core/patch_draft.hpp"
 #include "core/serial_port.hpp"
-#include "engine/add_all_plan.hpp"
+#include "core/add_all_plan.hpp"
 #include "core/patch_io.hpp"
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
@@ -46,17 +46,17 @@
 #include "core/utf8_text.hpp"
 #include "core/image_write.hpp"
 #include "core/package_identity.hpp"
-#include "engine/rate_follow_status.hpp"
-#include "engine/soundcard_panel.hpp"
+#include "core/rate_follow_status.hpp"
+#include "core/soundcard_panel.hpp"
 #include "dsp/window.hpp"
-#include "engine/running_view.hpp"
+#include "core/running_view.hpp"
 #include "net/control_ops.hpp"
 #include "net/status_compose.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/soapy_enum_proc.hpp"
-#include "engine/device_scan_plan.hpp"
+#include "core/device_scan_plan.hpp"
 #include "usb/usb_device.hpp"
 #ifdef _WIN32
 #include <windows.h>
@@ -64,13 +64,13 @@
 #include <timeapi.h>
 #endif
 
-#include "engine/audio_open.hpp"
-#include "engine/bias_tee.hpp"
+#include "core/audio_open.hpp"
+#include "core/bias_tee.hpp"
 #include "engine/airspy_panel.hpp"
-#include "engine/plugin_store_reasons.hpp"
-#include "engine/receiver_tables.hpp"
-#include "engine/source_fallback.hpp"
-#include "engine/tx_frequency.hpp"
+#include "core/plugin_store_reasons.hpp"
+#include "core/receiver_tables.hpp"
+#include "core/source_fallback.hpp"
+#include "core/tx_frequency.hpp"
 
 
 namespace cascade::engine {
@@ -86,7 +86,7 @@ using cascade::gui::bandwidthStepIndex;
 using cascade::gui::formatBandwidth;
 
 // The Pipeline is built exactly as the window built it: the same rate, FFT
-// length and smoothing (engine/receiver_tables.hpp), audio on.
+// length and smoothing (core/receiver_tables.hpp), audio on.
 Engine::Engine() : Engine(ownHost_) {}
 
 Engine::Engine(EngineHost& host)
@@ -1039,7 +1039,7 @@ bool Engine::soapyScanGated() const {
 cascade::gui::SoapyScanPlan Engine::soapyScanPlan() const {
     // Every radio this process has open: the receiver's and each patch radio's,
     // named by family the way both name them. A patch radio on the generator
-    // is not a radio. See engine/device_scan_plan.hpp for the rule.
+    // is not a radio. See core/device_scan_plan.hpp for the rule.
     std::vector<cascade::gui::OpenRadio> open;
     int soapyListed = 0;
     if (device_ != nullptr) {
@@ -1094,7 +1094,7 @@ void Engine::scanSoapy() {
     // header for why this may not run inline. One at a time: a second scan
     // while one is in flight would race the result into soapyDevices_.
     //
-    // THREE ANSWERS since 2026-09-23 (engine/device_scan_plan.hpp):
+    // THREE ANSWERS since 2026-09-23 (core/device_scan_plan.hpp):
     //
     //  - nothing open: the whole-bus scan, exactly as before;
     //  - radios open, every one of a known family: a scan that leaves THEIR
@@ -2803,7 +2803,7 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
     // THAT dongle, and never an "on" on a dongle with no EEPROM. The checkbox
     // then shows the READBACK. A radio without one leaves every remembered
     // setting alone. The whole rule, and why, is biasTeeAfterOpen in
-    // engine/bias_tee.hpp.
+    // core/bias_tee.hpp.
     biasTeeAfterOpen(biasTeePanel_, dev, args);
 
     // THE PER-RADIO SWITCHES, READ AND NOT WRITTEN. Unlike the bias tee these
@@ -3682,7 +3682,7 @@ void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledg
     // the whole point of this queue is that it acts over many frames.
     // PLANNED HERE (engine/stage3b-pre, docs/engine-stage3.md OPEN 5), from
     // the catalogue and the inventory, by the SAME rule the store window
-    // letters its key from (engine/add_all_plan.hpp) - so a headless engine
+    // letters its key from (core/add_all_plan.hpp) - so a headless engine
     // runs ADD ALL too. The one thing only the window knew, which module's
     // own notice tick is on, comes in the command (acknowledgedId).
     const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
@@ -4339,7 +4339,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // A DEVICE-CENTRE PRESET ALSO ZEROES THE VFO OFFSET, through the exact
     // setter path the VFO slider uses (so the slider follows). Without this a
     // remembered offset walked the device off the centre the decoder asked
-    // for — see engine/tune_control.hpp's presetVfoOffsetHz for the measurement
+    // for — see core/tune_control.hpp's presetVfoOffsetHz for the measurement
     // this fixes (a -12 kHz offset put the ADS-B preset's counter at
     // 1089.988 MHz, not 1090.000 MHz). isPluginPreset=true on both branches:
     // the frequency this button asked for is the whole reason a mismatch
@@ -4953,7 +4953,7 @@ void Engine::maybeAutoPreset(const std::string& pluginKey, const char* verb, boo
     // channel the user saved against this plugin is what opening it tunes to
     // - and being on it, or on any of the plugin's own, tunes nowhere. Before
     // this, a UK listener on 153.050 MHz was moved to POCSAG's DAPNET preset
-    // every time they opened POCSAG. See engine/tune_control.hpp.
+    // every time they opened POCSAG. See core/tune_control.hpp.
     const std::vector<CascadePreset> presets =
         cascade::gui::autoPresetCandidates(userPresetsForPlugin(*found), own);
     if (presets.empty()) { return; }
@@ -5085,7 +5085,7 @@ void Engine::rebuildMuteStates() {
 }
 
 std::string Engine::muteNameList(const std::vector<std::string>& names) {
-    // "A and B" for two, "A, B and C" beyond: engine/tune_control.hpp, where the
+    // "A and B" for two, "A, B and C" beyond: core/tune_control.hpp, where the
     // mute banner's test measures the same sentence the banner draws.
     return cascade::gui::joinMuteNames(names);
 }
@@ -6141,7 +6141,7 @@ void Engine::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // for 7.000 MHz landed at 30.800 MHz with sourceError_, faultMessage and
     // the log all silent — the counter simply showed the wrong figure and the
     // plugin it was for looked broken instead of the hardware. The comparison
-    // and the wording live in engine/tune_control.hpp so they are testable
+    // and the wording live in core/tune_control.hpp so they are testable
     // without an open device; this call site only supplies what the device
     // actually said.
     //
@@ -8019,7 +8019,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             holdAudioLockMs_ = static_cast<int>(c.ival[0]);
             return res;
         case FOXAPP_OP_TEST_PATCH_RUNNING:
-            // FOXSDR_PATCH_START (bounded runs only; the window reads the variable and sends it). THE SEAM EngineShell::seamPatchStart WAS, WORD FOR WORD:
+            // FOXSDR_PATCH_START (bounded runs only; the window reads the variable and sends it). THE SEAM seamPatchStart (a method of the shell, deleted in R10) WAS, WORD FOR WORD:
             // the patch graph is marked running and nothing else happens. NOT FOXAPI_OP_PATCH_RUN - that is patchPressStart, which first switches the radios
             // ON, and the 36 tests that set FOXSDR_PATCH_START are about graphs whose radios are off. (Shell retirement R2; docs/engine-stage4.md 6.25.)
             if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
@@ -8035,7 +8035,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
         }
         case FOXAPP_OP_TEST_BIAS_STAND_IN:
-            // FOXSDR_FORCE_BIAS_KEY (bounded runs only; the window sends biasStandInFor's answer). EngineShell::seamBiasStandIn's whole body: the field is set and
+            // FOXSDR_FORCE_BIAS_KEY (bounded runs only; the window sends biasStandInFor's answer). seamBiasStandIn's (the shell's, deleted in R10) whole body: the field is set and
             // biasStandInOn_ is left as it is (the table's "test.biasStandIn" setting also clears it; the seam never did, and neither does this).
             if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "the application's own commands are for sessions on this machine"); }
             switch (c.ival[0]) {
@@ -8492,7 +8492,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // by the next save. adoptDeviceMirrors is what applies it to a radio that
     // does open - every one of these drivers switches the bias tee off during
     // open(), so it has to be re-applied afterwards or a mast-head amplifier
-    // goes dark on every launch. It is PER RADIO (engine/bias_tee.hpp,
+    // goes dark on every launch. It is PER RADIO (core/bias_tee.hpp,
     // BiasTeePanel::remembered): each radio gets back only its own.
     biasTeePanel_.remembered = cfg.biasTee;
     // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
@@ -9144,7 +9144,7 @@ void Engine::initialise() {
     // including every bounded --frames CI run — never execute that code.
 
     // THE DEVICE OPEN IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD.
-    // engine/audio_open.hpp carries the field report and the whole argument; the
+    // core/audio_open.hpp carries the field report and the whole argument; the
     // opener is Pipeline's, packaged so it can outlive this window, and the
     // hooks are the watchdog's for the bounded wait the requesting frame
     // spends. Bound here, before anything can ask for a device.

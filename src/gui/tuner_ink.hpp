@@ -7,7 +7,7 @@
 #define CASCADE_GUI_TUNER_INK_HPP
 
 #include "gui/theme.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 
 namespace cascade::gui {
 

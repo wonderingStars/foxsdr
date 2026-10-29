@@ -1,6 +1,6 @@
 // Tests for the user's own presets (0.99.4): core/user_presets.hpp (identity,
 // sanitising, add/remove), their round trip through the config file, and the
-// GUI helpers in engine/tune_control.hpp that put them in front of the plugin's
+// GUI helpers in core/tune_control.hpp that put them in front of the plugin's
 // own presets when the host decides what to auto-apply.
 //
 // THE CASE THIS EXISTS FOR, pinned at the bottom: a UK listener saves
@@ -27,7 +27,7 @@
 #include "core/config.hpp"
 #include "core/plugin_abi.h"
 #include "core/user_presets.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;

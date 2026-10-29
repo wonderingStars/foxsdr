@@ -634,9 +634,11 @@ int checkHostMain(const std::string& hostBlank, bool say) {
     // What the restore found reaches the window by main (the window reads no file): every field of WindowHost is filled from the restore, none dropped.
     for (const char* field : {"host.configLoaded = restored.loaded;",
                               "host.lastRunUnclean = restored.lastRunUnclean;", "host.sourceKind = restored.sourceKind;",
-                              "host.iqFilePath = restored.iqFilePath;", "host.api = ", "host.handle = ", "host.engine = ", "host.configPath = "}) {
+                              "host.iqFilePath = restored.iqFilePath;", "host.api = ", "host.handle = ", "host.configPath = "}) {
         need(body.find(field) != std::string::npos, field);
     }
+    // ...and the window is handed NO engine of its own (shell retirement R10: WindowHost::engine, the shell view's pointer, is deleted): the table and the handle are the whole of it.
+    need(body.find("host.engine") == std::string::npos, "main.cpp hands the window no Engine pointer (WindowHost has none)");
     // The service is built inside the window's scope and before the window: destroyed after it, and before the software-GL relaunch.
     {
         const std::size_t svcAt = body.find("EngineService service(");

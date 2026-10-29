@@ -5,7 +5,7 @@
 // its host (EngineHost::planAddAll), the window built its whole store model
 // and planned over it, and a headless engine - no window to ask - refused ADD
 // ALL outright. Now the engine plans from its own catalogue and inventory with
-// the SAME rule the window's key is lettered from (engine/add_all_plan.hpp),
+// the SAME rule the window's key is lettered from (core/add_all_plan.hpp),
 // and the command carries only what the engine cannot know: whether every
 // maker's notice is acknowledged (the ADD ALL tick), and the one module whose
 // own notice tick is on.

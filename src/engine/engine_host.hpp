@@ -31,7 +31,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_host.hpp"
 #include "core/plugin_ui.hpp"
-#include "engine/engine_shell.hpp"
+#include "engine/engine_types.hpp"
 #include "net/web_server.hpp"
 
 namespace cascade::engine {
@@ -85,7 +85,7 @@ public:
     virtual void onCatalogueResult();
     virtual void onAddAllFinished();
     // (ADD ALL is planned by the Engine itself since engine/stage3b-pre -
-    // engine/add_all_plan.hpp, docs/engine-stage3.md OPEN 5.)
+    // core/add_all_plan.hpp, docs/engine-stage3.md OPEN 5.)
     // (THE PUMP MOVE'S STEP P3 took the last five out, the plugin UI's: beforePluginRescan, onPluginsUnloading, attachBasemap,
     // attachTrackInfo and showDemonstrationInstrument. The plugin UI is the front end's - its instances, its basemap cache, its
     // track-info cache and its windows are polled and drawn on its own thread - so the engine no longer reaches them: it posts a
@@ -100,7 +100,7 @@ public:
     // until the pump move's step P2; the front end HANDS THEM OVER now, Engine::setFrontEndFacts, like the web listener's
     // state, the counter's face and the basemap plugin's figures since engine/stage3b-pre - docs/engine-stage3.md OPEN 4.
     // BasemapFacts is the basemap's type.)
-    using BasemapFacts = cascade::engine::BasemapFacts;  // (moved to engine_shell.hpp with the fence: the interface names it)
+    using BasemapFacts = cascade::engine::BasemapFacts;  // (core/plugin_ui_port.hpp: the interface names it)
 
 private:
     std::chrono::steady_clock::time_point born_;

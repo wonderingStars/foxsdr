@@ -14,7 +14,7 @@
 //
 // What the surface sends is the engine's own limits applied for the frame (the VFO
 // reach, the bandwidth bounds): those are the engine's functions, called as the
-// engine calls them (engine/soundcard_panel.hpp, engine/receiver_tables.hpp), not
+// engine calls them (core/soundcard_panel.hpp, core/receiver_tables.hpp), not
 // restated here.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0

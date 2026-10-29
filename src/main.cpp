@@ -105,7 +105,6 @@ int main(int argc, char** argv) {
         cascade::gui::WindowHost host;
         host.api = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
         host.handle = service.engine().apiHandle();
-        host.engine = &service.engine();
         host.configPath = boot.configPath;
         host.configLoaded = restored.loaded;
         host.lastRunUnclean = restored.lastRunUnclean;

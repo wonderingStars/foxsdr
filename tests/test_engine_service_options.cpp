@@ -57,7 +57,7 @@
 #include "core/config.hpp"
 #include "core/config_halves.hpp"
 #include "engine/engine_service.hpp"
-#include "engine/receiver_tables.hpp"
+#include "core/receiver_tables.hpp"
 #include "engine_main_proc.hpp"
 #include "test_check.hpp"
 

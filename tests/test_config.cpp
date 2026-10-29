@@ -52,7 +52,7 @@
 // AppWindow makes about WHICH source the file names, exercised here against
 // the real store because the defect they fix is only visible as a config that
 // came back without the radio in it.
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 // The interface theme's vocabulary: the config mirrors gui::theme's six preset
 // names rather than including it (core must not depend on gui), and the theme
 // block below holds the two sides to the same list.
@@ -1833,7 +1833,7 @@ int main() {
     //
     // AppWindow cannot be constructed here (it wants a window), so the two
     // pure decisions it now makes are driven directly - which is exactly the
-    // reason they are pure. See engine/tune_control.hpp.
+    // reason they are pure. See core/tune_control.hpp.
     {
         const std::string path = p("failed_restore_keeps_radio.json");
         CHECK(writeText(path,

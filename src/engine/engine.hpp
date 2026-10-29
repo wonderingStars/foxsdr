@@ -85,18 +85,18 @@
 #include "core/health_events.hpp"
 #include "core/telemetry.hpp"
 #include "core/transmitter.hpp"
-#include "engine/audio_open.hpp"
-#include "engine/bias_tee.hpp"
-#include "engine/device_scan_plan.hpp"
+#include "core/audio_open.hpp"
+#include "core/bias_tee.hpp"
+#include "core/device_scan_plan.hpp"
 #include "engine/engine_host.hpp"
-#include "engine/engine_shell.hpp"
+#include "engine/engine_types.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/server_host.hpp"
 #include "engine/pass_stats.hpp"
-#include "engine/running_view.hpp"
-#include "engine/source_fallback.hpp"
+#include "core/running_view.hpp"
+#include "core/source_fallback.hpp"
 #include "engine/saved_radio_retry.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "source/airspy_source.hpp"
 #include "source/airspyhf_source.hpp"
 #include "source/aor_source.hpp"
@@ -116,7 +116,7 @@
 
 // The window's tests are named, never included: the engine does not depend on them. (The window itself reaches the engine only through the
 // engine API's table - and, in a bounded run, the two hooks its host installs, core/bounded_hooks.hpp - since shell retirement R9; before it, through
-// EngineShell - engine/engine_shell.hpp - since the fence, stage 4 step 5.)
+// the shell, a narrow door header, since the fence, stage 4 step 5; the shell was deleted in R10.)
 namespace cascade::gui {
 struct AppWindowTestAccess;
 }  // namespace cascade::gui
@@ -126,8 +126,9 @@ namespace cascade::engine {
 class BoundedHost;   // engine/host_measure.cpp: a bounded run's stepping and measurement, the host's (shell retirement R9)
 
 // The vocabulary the engine shares with its front end (ControlThreadOptions, PassPart, TrackFeedInfo, TrackFeed, BasemapFacts, FrontEndFacts,
-// PluginUiReport, EngineStatusText) moved to engine/engine_shell.hpp with the fence (engine extraction stage 4, step 5): a
-// name reachable only through this header is a name the interface cannot use. They are in namespace cascade::engine still.
+// PluginUiReport, EngineStatusText) moved to the shell header with the fence (engine extraction stage 4, step 5), and out of it in R10: the ones the window needs are
+// core/ data (engine_vocab.hpp, status_text.hpp, pass_part.hpp, plugin_ui_port.hpp), the ones only the engine speaks are engine/engine_types.hpp. All are named in
+// namespace cascade::engine still.
 
 // WHAT THE TABLE'S HOST TELLS THE ENGINE ABOUT THE SESSION THAT HOLDS THE ARMING WINDOW (stub campaign B13, engine_tx_plugin.cpp): the host is the only
 // thing that knows a session's heartbeat, so the engine's plugin-key step is handed the answer once a drive (ApiHostImpl::txPass), never a session to look up.
@@ -373,7 +374,7 @@ private:
     std::string soapyScanGateDevice() const;
     // What scanSoapy() would do right now (2026-09-23): a whole scan, one that
     // leaves the open radios' drivers out, or nothing - built from the
-    // receiver's radio and every patch radio. See engine/device_scan_plan.hpp.
+    // receiver's radio and every patch radio. See core/device_scan_plan.hpp.
     cascade::gui::SoapyScanPlan soapyScanPlan() const;
     // Combo-row click handler: 0 = generator, 1 = IQ file (panel only — the
     // pipeline switches on a successful Open), 2+i = soapyDevices_[i]
@@ -464,7 +465,7 @@ public:
     // core/app_commands.hpp). docs/engine-stage1.md has the op table, the
     // rule for when a widget's command is queued and when it is applied at
     // once, and the line between receiver state and view state; tests/
-    // the interface target cannot name this class (engine/engine_shell.hpp is its door), so a widget that
+    // the interface target cannot name this class (the fence denies every header of engine/), so a widget that
     // changes the receiver any other way does not compile. THE PUMPING THREAD ONLY - the engine's pass, which is the
     // control thread since the pump move's step P5 (the same rule every setter
     // it calls has always had: the window never calls it - it submits). `longText`
@@ -600,7 +601,7 @@ private:
     // "WE WANT THE USER TO HAVE TO DO NOTHING" (the owner's words). Called
     // from setPluginStopped's own START branch only: looks the plugin back up
     // by key, and if it carries presets and the receiver is not already
-    // sitting inside one of them (engine/tune_control.hpp's
+    // sitting inside one of them (core/tune_control.hpp's
     // autoPresetIndexOnStart), applies the first exactly as if its own button
     // had been pressed. A no-op for a plugin with no preset table, and never
     // called on a stop or from config load — see the call site in
@@ -733,12 +734,12 @@ private:
     // do) and, past kTuneMismatchToleranceHz, sets tuneMismatchNote_ (shown
     // in the Source section) and logs once per distinct request. Pulled out
     // of applyRetuneNow only so its one non-trivial decision — the wording,
-    // in engine/tune_control.hpp's tuneMismatchMessage — stays testable without
+    // in core/tune_control.hpp's tuneMismatchMessage — stays testable without
     // a device.
     void noteTuneMismatch(double requestHz, double answeredHz, bool isPluginPreset);
     // The refusal's counterpart: a tune the source would not make at all,
     // reported only when the request lies outside the range the radio itself
-    // publishes (engine/tune_control.hpp, tuneRefusedMessage). Same note line,
+    // publishes (core/tune_control.hpp, tuneRefusedMessage). Same note line,
     // logged once per distinct request.
     void noteTuneRefused(double requestHz, bool isPluginPreset);
     double lastRefusedRequestHz_ = -1.0;
@@ -1089,7 +1090,7 @@ private:
     std::string audioLeadNoteFact() const;
     // THE DEVICE OPEN, OFF THIS THREAD. Field report "hang ntdll.dll @
     // InitializeWaveHandles" (0.96.4): picking an output device put the GUI
-    // thread inside waveOutOpen for 57 seconds. See engine/audio_open.hpp for the
+    // thread inside waveOutOpen for 57 seconds. See core/audio_open.hpp for the
     // whole argument; what matters here is that nothing on this thread may
     // query the sink while inFlight() is true.
     cascade::gui::AudioOpen audioOpen_;
@@ -1170,7 +1171,7 @@ private:
     // pass: the Source section used to ask for it by a command every frame),
     // so the next radio gets its own line.
     bool soapyScanDeferredLogged_ = false;
-    // THE SCAN BESIDE AN OPEN RADIO (2026-09-23; engine/device_scan_plan.hpp).
+    // THE SCAN BESIDE AN OPEN RADIO (2026-09-23; core/device_scan_plan.hpp).
     // soapyScanSkip_ is the drivers the scan in flight left out - the open
     // radios' own families - and pollSourceAsync keeps the rows of those
     // drivers from the old list, since that scan could not have seen them.
@@ -1615,7 +1616,7 @@ private:
 
     // THE BIAS TEE. Present only when the OPEN device is one of the native
     // drivers that has one and can say so (see withBiasTee in
-    // engine/bias_tee.hpp for which, and for why this is not a DeviceSource
+    // core/bias_tee.hpp for which, and for why this is not a DeviceSource
     // method). `shown` is the checkbox and is always the driver's READBACK;
     // `remembered` is AppConfig::biasTee, the memory PER RADIO (driver and
     // serial) for every family. It is seeded at restore, applied by
@@ -1691,7 +1692,7 @@ private:
     std::atomic<double> converterRadioCentre_{0.0};
     // A tune the converter could not deliver, or the radio refused or moved,
     // stated in AIR terms. "" when no converter is on (the plain sentences in
-    // engine/tune_control.hpp speak then).
+    // core/tune_control.hpp speak then).
     std::string converterTuneNote(double requestAirHz, bool refused, double answeredAirHz,
                                   bool isPluginPreset);
     // The AIR centre a source switch carries to the next radio, or no value
@@ -1741,7 +1742,7 @@ private:
     // mirror the DRIVER'S READBACK for the session and nothing more - which
     // also means there is no stale saved value to reconcile against a
     // driver's open-time policy, the reconciliation the RTL-SDR's bias tee
-    // needed a rule of its own for (engine/bias_tee.hpp, rtlBiasTeeAtOpen).
+    // needed a rule of its own for (core/bias_tee.hpp, rtlBiasTeeAtOpen).
     //
     // "Present" is asked of the CONCRETE TYPE once per open, because these
     // are per-model even within one driver: an RSP1A has no HDR mode, an
@@ -2752,7 +2753,7 @@ private:
     AddAllRun addAllRun_;
     // Builds the queue from the store's own plan and starts it. Re-plans from
     // live state rather than trusting the plan the key was drawn from.
-    // ADD ALL, planned HERE (engine/add_all_plan.hpp, docs/engine-stage3.md
+    // ADD ALL, planned HERE (core/add_all_plan.hpp, docs/engine-stage3.md
     // OPEN 5) from the catalogue and inventory. `acknowledgedId` is the one
     // module whose own notice tick is on in the store window (empty: none).
     // `updatesOnly` is the store window's UPDATE ALL key (0.99.72): the same queue with nothing to fetch in it (stub campaign B4;
@@ -3182,7 +3183,7 @@ private:
     // The lease is DECIDED on the pass (txPluginStep, txPluginArmOp, txPluginAfterTick, ApiHostImpl::txPass reading the owner) and in the PRODUCT every write to it is on the pass
     // or on a thread with no pass beside it: the config's load (applyConfig runs before startControlThread, in the window's constructor and in EngineService::restore), the
     // plugin unload/rebuild/stop/dormancy paths (the pass), the shutdown paths (shutdownQuiesce/teardown join the control thread first), and stopControlThread (atomics only).
-    // But Engine::applyCommand is also CALLED DIRECTLY by tests (rawEngine, e.applyCommand(RUN 0) beside a free-running pass: tests/test_web_pictures.cpp), and its stop reaches
+    // But Engine::applyCommand is also CALLED DIRECTLY by tests (th::engine, e.applyCommand(RUN 0) beside a free-running pass: tests/test_web_pictures.cpp), and its stop reaches
     // txPluginEnd -> txPluginDisarm from that thread. So the three things txPluginDisarm and the readers of them share are made safe for ANY thread, and nothing else is:
     //   - txArmOwner_, txArmLiveMs_, txArmRefusal_: std::atomic, every access seq_cst (the discipline of txPluginStopping_, commit 5415eca1: one total order for the whole
     //     TX path's cross-thread state, nothing weaker to reason about). They are independent scalars - a reader needs no other value to interpret one - so seq_cst is chosen for
@@ -3282,8 +3283,8 @@ public:
     void loadBookmarks();
     // Reads the previous session out of the config, counts a crash if it
     // never finished, and sends its report. Start-up only, after applyConfig (the crash count and the pending report are read
-    // from the file, not from freshly defaulted members). The window reaches it through EngineShell; the headless service
-    // (engine/engine_service.cpp, stage 7c) has no shell and calls it here.
+    // from the file, not from freshly defaulted members). The host process calls it (EngineService::restore: main.cpp, the test host, and the headless
+    // engine, engine/engine_service.cpp).
     // `configDir`: where config.json lives (the usage record's ledgers and send marker sit beside it); empty = memory only.
     void telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir = std::string());
     void stopTransfers();
@@ -3321,7 +3322,7 @@ public:
     // with the frame's snapshot (pumpPublish, before anything is drawn) and
     // at the end of the frame (pumpAudio, after the workers' answers); the
     // window reads its own copy of it, refreshed once a frame, and never these
-    // fields themselves (the interface cannot name them: engine/engine_shell.hpp).
+    // fields themselves (the interface cannot name them: it cannot include this header).
     using StatusText = cascade::engine::EngineStatusText;
     void publishStatusText();
     StatusText statusText() const;
@@ -3413,8 +3414,8 @@ public:
     // takes' files still being closed on workers are waited for. A default-constructed one waits for nothing and collects what has finished.
     void shutdownDrain(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
     void shutdown();
-    // THE CLEAN-EXIT MARKER (stage 7c): what EngineShell::markCleanExit sets for the window, for the front end that has no shell - the
-    // headless service (engine/engine_service.cpp). From here every snapshot the engine publishes says telemetryCleanExit = true, so the
+    // THE CLEAN-EXIT MARKER (stage 7c): what the shell's markCleanExit set for the window until R8 moved it to the service - the
+    // host's service (engine/engine_service.cpp), for the window and the headless engine alike. From here every snapshot the engine publishes says telemetryCleanExit = true, so the
     // call belongs AFTER shutdownRelease (the pipeline join and the plugins' destroy() are the two places a shutdown wedges: a marker
     // written before them reads a session killed inside them as a clean one), and the service writes its marker by rewriting the LAST
     // REQUESTED snapshot, not by publishing a fresh one (engine_service.cpp, stop()). tests/test_engine_service_order.cpp holds the order.

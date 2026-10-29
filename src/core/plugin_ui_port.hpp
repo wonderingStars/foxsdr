@@ -6,8 +6,8 @@
 // pointers into module images (core/plugin_directive.hpp). Pointers into a module are not a list item, a fact or an op payload; the table's
 // TRACKS list is a gap and stays one. So the plane keeps its C++ shape: this interface, reached through ONE table member,
 // `get_local_extension(engine, FOXAPI_EXT_PLUGIN_UI, args, &out)` (foxsdr_api.h; LOCAL sessions only, capability bit
-// FOXAPI_CAP_LOCAL_EXT, REFUSED to a REMOTE session). It was `HostPluginFeed` in engine/engine_shell.hpp, the HOST class of the fenced door;
-// from R4 the door has no HOST class and no feed, and this is the whole of what the window has of the plugin UI.
+// FOXAPI_CAP_LOCAL_EXT, REFUSED to a REMOTE session). It was `HostPluginFeed` in the shell header (the HOST class of the fenced door, engine_shell.hpp, deleted in R10);
+// from R4 the door had no HOST class and no feed, and this is the whole of what the window has of the plugin UI.
 //
 // WHAT THIS HEADER MAY CONTAIN: data and pure virtuals, and nothing the fence denies the interface. It is the one new header the interface
 // includes for this plane; tests/test_engine_shell_guard.cpp holds that it includes nothing of the engine, and counts its virtuals
@@ -42,7 +42,7 @@
 namespace cascade::core {
 
 // ==================================================================================================================================
-// THE DATA - moved here verbatim from engine/engine_shell.hpp (R4), which names each back in namespace cascade::engine.
+// THE DATA - moved here verbatim from the shell header (R4); engine/engine_types.hpp names each back in namespace cascade::engine.
 // ==================================================================================================================================
 
 // THE TRACK LIST AND WHAT THE TRACK-INFO PLUGIN SAYS OF IT, the window's plugin poll as it hands it to the engine (pump move steps P2 and P3;

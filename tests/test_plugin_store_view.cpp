@@ -36,6 +36,7 @@
 
 #include "core/i18n.hpp"
 #include "core/plugin_abi.h"
+#include "core/plugin_repo.hpp"
 #include "gui/fonts.hpp"
 #include "gui/plugin_store_view.hpp"
 #include "gui/theme.hpp"

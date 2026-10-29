@@ -50,7 +50,7 @@
 #include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "gui/converter_lo_seed.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
 

@@ -58,7 +58,7 @@
 #include "core/patch_draft.hpp"
 #include "core/config.hpp"
 #include "core/config_halves.hpp"
-#include "engine/soundcard_panel.hpp"
+#include "core/soundcard_panel.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
 #include "pass_seam.hpp"

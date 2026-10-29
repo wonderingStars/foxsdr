@@ -27,7 +27,7 @@
 #include "core/app_commands.hpp"
 #include "core/i18n.hpp"
 #include "core/plugin_abi.h"
-#include "core/plugin_repo.hpp"
+#include "core/plugin_repo_data.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/decoder_reads.hpp"
 #include "gui/page_geometry.hpp"
@@ -197,7 +197,7 @@ cascade::gui::FittedListCache& AppWindow::fittedLists() {
             if (word == "orphan") {
                 m.orphaned = true;
             } else if (word == "site" || word == "removed-site") {
-                const std::string label = cascade::core::PluginRepo::siteLabel(tab == std::string::npos ? std::string() : c.text.substr(tab + 1));
+                const std::string label = cascade::core::pluginSiteLabel(tab == std::string::npos ? std::string() : c.text.substr(tab + 1));
                 m.originNote = cascade::core::formatText(word == "site" ? tr("Installed from %s, not from the FoxSDR catalogue.")
                                                                          : tr("Installed from %s, a site you removed. It gets no updates."),
                                                          label.c_str());

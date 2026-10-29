@@ -28,8 +28,11 @@
 // headless build depend on one.
 struct GLFWwindow;
 
-#include "engine/engine_shell.hpp"
-#include "engine/receiver_tables.hpp"
+#include "core/engine_vocab.hpp"
+#include "core/pass_part.hpp"
+#include "core/plugin_ui_port.hpp"
+#include "core/receiver_tables.hpp"
+#include "core/status_text.hpp"
 #include "core/app_commands.hpp"
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
@@ -38,9 +41,9 @@ struct GLFWwindow;
 #include "core/freq_markers.hpp"
 #include "core/file_pick.hpp"
 #include "core/radio_setup.hpp"
-#include "core/freq_manager.hpp"
+#include "core/bookmark.hpp"
 #include "core/i18n.hpp"
-#include "core/plugin_host.hpp"
+#include "core/plugin_host_data.hpp"
 #include "core/patch_blueprints.hpp"
 #include "core/patch_graph.hpp"
 #include "core/patch_presets.hpp"
@@ -58,7 +61,7 @@ struct GLFWwindow;
 #include "gui/input_script.hpp"
 #include "core/plugin_ui_data.hpp"
 #include "core/plugin_ui_port.hpp"
-#include "core/plugin_repo.hpp"
+#include "core/plugin_repo_data.hpp"
 #include "core/updater.hpp"
 #include "core/store_update.hpp"
 #include "core/pasted_report.hpp"
@@ -81,9 +84,9 @@ struct GLFWwindow;
 #include "gui/plugin_settings_form.hpp"
 #include "gui/scope_gain.hpp"
 #include "gui/tune_local.hpp"
-#include "engine/running_view.hpp"
+#include "core/running_view.hpp"
 #include "gui/bench_rail.hpp"
-#include "engine/audio_open.hpp"
+#include "core/audio_open.hpp"
 #include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
 // opaquely rather than including imgui.h - see its own note), so a KeyBindings
@@ -110,15 +113,15 @@ struct GLFWwindow;
 // RememberedSource, held by value below: the pure source decisions, ImGui-free
 // like every other gui header included here.
 #include "gui/readout_hold.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "source/soundcard_source.hpp"
 // THE SDRPLAY API SERVICE CARD and THE SDRPLAY DIAGNOSTIC (stub campaign B18): the service's state and its restart worker, the driver's trouble record, and the probe's child process.
 #include "core/frame_timing.hpp"
 #include "source/sdrplay_probe.hpp"
 #include "source/sdrplay_service.hpp"
 #include "source/sdrplay_source.hpp"
-#include "engine/device_scan_plan.hpp"
-#include "engine/source_fallback.hpp"
+#include "core/device_scan_plan.hpp"
+#include "core/source_fallback.hpp"
 #include "gui/viewport_policy.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
@@ -173,7 +176,7 @@ struct GLFWwindow;
 #include "source/sdrplay_source.hpp"
 #include "usb/usb_device.hpp"
 // The bias tee checkbox's state and rules (no ImGui in it).
-#include "engine/bias_tee.hpp"
+#include "core/bias_tee.hpp"
 
 namespace cascade::gui {
 
@@ -643,9 +646,6 @@ struct WindowHost {
     // window cannot include either).
     const FoxEngineApi* api = nullptr;
     FoxEngine* handle = nullptr;
-    // THE ENGINE ITSELF, for the shell's view of it - a holder with no methods since R9, which only the tests reach (rawEngine). Transitional: R10
-    // deletes the shell and, with it, this member.
-    cascade::engine::Engine* engine = nullptr;
     // THE BOUNDED RUN'S TWO HOOKS (shell retirement R9; core/bounded_hooks.hpp): the stepping of the engine's pass and the end of each frame, installed
     // by the host in a `--frames` run and left EMPTY in a product run (a free-running pass has nothing to step, and the window then does nothing there).
     // Built by engine/host_measure.hpp's makeBoundedHooks, which the window cannot include.
@@ -730,16 +730,14 @@ private:
     // build of the application - nothing ever sets them outside that test -
     // and each is read at exactly one place.
     friend struct AppWindowTestAccess;
-    // THE TEST HOST'S KEY (shell retirement R1; tests/test_host.hpp): the one friend through which th::engine(window) hands a test the Engine
-    // behind this window. Defined in the tests only; no src/ file names it. Goes with rawEngine (R10).
+    // THE TEST HOST'S KEY (shell retirement R1; tests/test_host.hpp): the window-side seams a test needs and a table call cannot give - the plugin UI port
+    // (ui_), the late attach, and the window's half of a start-up state. Defined in the tests only; no src/ file names it. (It reached the Engine behind the
+    // window until shell retirement R10, 2026-10-29; the window holds no engine of any kind now, and th::engine(window) finds the Host's.)
     friend struct TestHostAccess;
-    // THE ENGINE (engine extraction stage 3a, docs/engine-stage3.md), BEHIND THE FENCE (stage 4, step 5): the receiver's state and
-    // machinery are an Engine the HOST owns (shell retirement R7: an EngineService, built by main.cpp or the test host and restored before this
-    // window exists) - the window holds a VIEW of it, an EngineShell, the narrow door declared in engine/engine_shell.hpp, and the interface target
-    // cannot include engine.hpp at all. (Until R9 the view also installed this window as the engine's host, Engine::setHost; it installs nothing now.)
-    // Declared FIRST, so it is built before and destroyed after everything the window keeps.
-    std::unique_ptr<cascade::engine::EngineShell> engineHolder_;
-    cascade::engine::EngineShell& engine_;
+    // THE ENGINE IS NOT HERE. It is the HOST's (shell retirement R7: an EngineService, built by main.cpp or the test host and restored before this
+    // window exists); the window is a client of it through the API table and nothing else (the port and the two bounded hooks below are the two
+    // bounded exceptions), and the interface target cannot include engine.hpp at all. (The window held a non-owning VIEW of it, an EngineShell, until
+    // shell retirement R10, 2026-10-29.)
     // THE PLUGIN UI IS THIS WINDOW'S (the pump move's step P3): the track sources, panels and instruments polled in the frame
     // (hostPollPlugins) and drawn all frame long, built over the API core the ENGINE owns and held behind the PLUGIN UI PORT
     // (core/plugin_ui_port.hpp - the window names neither the PluginUi nor the directive link), which it reaches through the table's one
@@ -753,7 +751,7 @@ private:
     // The frame's hand-over (handFrontEndFacts): one object, refilled each frame and passed by reference - the engine's side copies what it keeps.
     cascade::core::PluginUiFrontEnd frontEnd_;
 
-    // --- WHAT THE ENGINE ONCE ASKED OF THIS WINDOW (engine/engine_shell.hpp: ShellHooks, until shell retirement R9) ---------
+    // --- WHAT THE ENGINE ONCE ASKED OF THIS WINDOW (the shell's ShellHooks, until shell retirement R9) ---------
     // Nothing: the engine asks its front end for no answer. What is left is the window's own clock, the usage report's session timer. (The pump move's
     // step P2 took seven hooks out of this list - onDisplayRange, onBookmarksChanged,
     // onConverterChanged, drainTrackInfoText, enrichWebTrack, fillWebImages and the window's onCatalogueResult - and turned
@@ -817,9 +815,9 @@ private:
     // aliased here - LocalCommand, DeviceOpenResult, SoundCardOpenResult, ConverterHeldAir, PatchRadioOpen, PluginNotice,
     // PendingUserPresetEdit, CatalogFetchResult, PluginInstallResult, AddAllRun - had no user left in src/gui; the fence cannot see
     // them and the aliases are gone with it.)
-    static constexpr auto kSoundCardRow = cascade::engine::kSoundCardRow;
-    static constexpr auto kNativeRowBase = cascade::engine::kNativeRowBase;
-    static constexpr auto kDecoderLogMax = cascade::engine::kDecoderLogMax;
+    static constexpr auto kSoundCardRow = cascade::core::kSoundCardRow;
+    static constexpr auto kNativeRowBase = cascade::core::kNativeRowBase;
+    static constexpr auto kDecoderLogMax = cascade::core::kDecoderLogMax;
 
     // One plugin's map page — declared ahead of the drawing methods that take
     // it, defined in full beside the map state below.
@@ -2019,7 +2017,7 @@ private:
     // open radio has a bias tee, lit exactly when `shown` is, and switching
     // through switchBiasTee - the checkbox's own path - so the two cannot
     // disagree. Off is immediate; on asks first, once per radio per session
-    // (engine/bias_tee.hpp, BiasKeyGate, says why a dialog and not a hold).
+    // (core/bias_tee.hpp, BiasKeyGate, says why a dialog and not a hold).
     cascade::gui::BiasKeyGate biasKeyGate_;
     // Raised by a press that has to ask; the dialog is opened from the top
     // level (drawBiasKeyConfirm), because the press happens inside the deck's
@@ -3086,7 +3084,7 @@ private:
     // OPEN 3): refreshed once a frame by refreshStatusLines, after the frame's
     // publish and before the state is read; every panel letters from this,
     // never from the engine's fields.
-    cascade::engine::EngineStatusText statusLines_;
+    cascade::core::EngineStatusText statusLines_;
     // The look's status read: the 22 sentences from fact.status.*, the ADD ALL
     // run's level from the STATUS_LINES list, and - once, at the first look that
     // finds fact.store.url - the store's URL box.

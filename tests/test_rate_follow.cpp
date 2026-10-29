@@ -68,7 +68,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/pipeline.hpp"
-#include "engine/rate_follow_status.hpp"
+#include "core/rate_follow_status.hpp"
 #include "source/hackrf_source.hpp"
 #include "source/mirisdr_source.hpp"
 #include "source/rtl2832u.hpp"
@@ -444,7 +444,7 @@ int main() {
         p.stop();
     }
 
-    // --- 9. The device panel's red line (engine/rate_follow_status.hpp). A
+    // --- 9. The device panel's red line (core/rate_follow_status.hpp). A
     //        refusal is shown; the next ACCEPTED rate clears it, so going back
     //        to a working rate does not leave "refused" on screen under a
     //        chain that is running fine (a beta tester's screenshot, 0.99.27);

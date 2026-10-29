@@ -20,7 +20,7 @@
 #include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
-#include "engine/receiver_tables.hpp"
+#include "core/receiver_tables.hpp"
 #include "source/soundcard_source.hpp"
 
 namespace cascade::engine {

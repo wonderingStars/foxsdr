@@ -30,8 +30,8 @@
 
 #include "core/i18n.hpp"
 #include "core/plugin_abi.h"
-#include "core/plugin_repo.hpp"
-#include "engine/add_all_plan.hpp"
+#include "core/plugin_repo_data.hpp"
+#include "core/add_all_plan.hpp"
 #include "core/png_decode.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/fonts.hpp"
@@ -795,13 +795,13 @@ std::string storeCheckSiteAdd(const std::string& raw, const std::vector<StoreSit
     normalised.clear();
     std::string url;
     std::string why;
-    if (!cascade::core::PluginRepo::normaliseSiteUrl(raw, url, why)) {
+    if (!cascade::core::normalisePluginSiteUrl(raw, url, why)) {
         return tr("That is not a site address. It must start with https:// (or be the path of an "
                   "index.json on this computer).");
     }
     // The official catalogue is already listed, by definition: a second copy of it as a "site"
     // would list every plugin twice, all hidden as the same id.
-    bool already = url == officialUrl || url == cascade::core::PluginRepo::defaultIndexUrl();
+    bool already = url == officialUrl || url == cascade::core::defaultPluginIndexUrl();
     for (const StoreSite& s : sites) {
         if (s.url == url) { already = true; }
     }
@@ -1221,7 +1221,7 @@ std::vector<PageFact> modulePageFacts(const ModulePlate& m) {
 
 // (The two reason formats and the three functions made from them -
 // pluginAbiMismatchReason, pluginNoBuildReason, trStoredReason - are in
-// engine/plugin_store_reasons.cpp.)
+// core/plugin_store_reasons.cpp.)
 
 // ===========================================================================
 // OLD VERSIONS - the words
@@ -1250,7 +1250,7 @@ void fillStoreModule(StoreModule& sm, const StoreRow& r) {
     // unchanged - and "<id>@<site>" for a site's. The table's CATALOGUE already names an entry by it.
     sm.id = r.id;
     sm.thirdParty = !r.site.empty();
-    sm.siteHost = sm.thirdParty ? cascade::core::PluginRepo::siteLabel(r.site) : std::string();
+    sm.siteHost = sm.thirdParty ? cascade::core::pluginSiteLabel(r.site) : std::string();
     ModulePlate& p = sm.plate;
     p.haveDescriptor = true;
     p.name = r.name;
@@ -1271,7 +1271,7 @@ void fillStoreModule(StoreModule& sm, const StoreRow& r) {
         p.originNote = tr("Offered by foxsdr.com in some countries only.");
     } else if (sm.thirdParty) {
         p.originNote = cascade::core::formatText(tr("From a site you added: %s"),
-                                                 cascade::core::PluginRepo::siteDisplay(r.site, 90).c_str());
+                                                 cascade::core::pluginSiteDisplay(r.site, 90).c_str());
     } else {
         p.originNote.clear();
     }
@@ -1374,8 +1374,8 @@ void fillStoreModule(StoreModule& sm, const StoreRow& r) {
             sm.updateBlockedReason = pluginAbiMismatchReason(static_cast<unsigned>(r.abi),
                                                              static_cast<unsigned>(CASCADE_PLUGIN_ABI_VERSION));
         } else if (!r.buildHere) {
-            sm.updateBlockedReason = pluginNoBuildReason(std::string(cascade::core::PluginRepo::hostOs()) + "/" +
-                                                         cascade::core::PluginRepo::hostArch());
+            sm.updateBlockedReason = pluginNoBuildReason(std::string(cascade::core::pluginHostOs()) + "/" +
+                                                         cascade::core::pluginHostArch());
         }
     }
     // THE PICTURES, and how far each has got. Nothing is fetched here: a page asks when it is opened, and never for the grid.
@@ -1441,8 +1441,8 @@ void parseStoreSites(const std::string& text, std::vector<StoreSite>& out) {
         StoreSite& s = out[n++];
         const std::string_view url = nextField(line);
         s.url.assign(url.data(), url.size());
-        s.label = cascade::core::PluginRepo::siteLabel(s.url);
-        s.display = cascade::core::PluginRepo::siteDisplay(s.url, 90);
+        s.label = cascade::core::pluginSiteLabel(s.url);
+        s.display = cascade::core::pluginSiteDisplay(s.url, 90);
         switch (toLong(nextField(line))) {
             case 1: s.state = StoreSite::State::Kept; break;
             case 2: s.state = StoreSite::State::Read; break;
@@ -1529,7 +1529,7 @@ std::uint64_t foldStoreRow(std::uint64_t h, const StoreRow& r) {
 // ===========================================================================
 
 AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
-    // THE RULE IS THE ENGINE'S (engine/add_all_plan.hpp, engine/stage3b-pre
+    // THE RULE IS THE ENGINE'S (core/add_all_plan.hpp, engine/stage3b-pre
     // OPEN 5), so the key's words and the run the engine starts are one
     // answer. This only hands it the model's rows.
     std::vector<cascade::engine::AddAllRow> rows;

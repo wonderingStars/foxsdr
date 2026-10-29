@@ -43,11 +43,11 @@
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
 #include "engine/plugin_ui_port.hpp"
-#include "engine/receiver_tables.hpp"
+#include "core/receiver_tables.hpp"
 #include "net/status_compose.hpp"
 #include "net/web_audio.hpp"
 #include "source/tx_sink.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 
 // The C handles are opaque to callers; inside the engine they are these.
 struct FoxEngine {};

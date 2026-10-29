@@ -10,18 +10,18 @@
 #include <cstring>
 #include <string>
 #include "core/i18n.hpp"
-#include "engine/bias_tee.hpp"
+#include "core/bias_tee.hpp"
 
-#include "engine/audio_open.hpp"
-#include "engine/device_scan_plan.hpp"
-#include "engine/plugin_store_reasons.hpp"
-#include "engine/rate_follow_status.hpp"
-#include "engine/receiver_tables.hpp"
-#include "engine/running_view.hpp"
-#include "engine/soundcard_panel.hpp"
-#include "engine/source_fallback.hpp"
-#include "engine/tune_control.hpp"
-#include "engine/tx_frequency.hpp"
+#include "core/audio_open.hpp"
+#include "core/device_scan_plan.hpp"
+#include "core/plugin_store_reasons.hpp"
+#include "core/rate_follow_status.hpp"
+#include "core/receiver_tables.hpp"
+#include "core/running_view.hpp"
+#include "core/soundcard_panel.hpp"
+#include "core/source_fallback.hpp"
+#include "core/tune_control.hpp"
+#include "core/tx_frequency.hpp"
 
 
 namespace cascade::engine {

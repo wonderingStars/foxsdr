@@ -1,6 +1,6 @@
 // plugin_ui_port.cpp - the engine's side of the plugin UI plane (engine/plugin_ui_port.hpp; shell retirement R4, docs/engine-stage4.md 6.25).
 //
-// The bodies of engine_shell.cpp's PluginFeedImpl, the bounded-run report's hand-over and the browser map's tile service, moved here
+// The bodies of the shell's PluginFeedImpl (engine_shell.cpp, deleted in R10), the bounded-run report's hand-over and the browser map's tile service, moved here
 // unchanged in what they do: the same calls on the same objects, in the same order, on the same (interface) thread.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0

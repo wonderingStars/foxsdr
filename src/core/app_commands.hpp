@@ -209,7 +209,7 @@
 // EXISTING FOXAPI_OP_SCANNER_CONFIG (num[0..3], which already
 // reconfigures-if-running on its own - found only after a from-scratch
 // FOXAPP_OP_SCANNER_TIMING briefly duplicated it byte for byte).
-#define FOXAPP_OP_SOUND_CARD_FORM        0x8412u /* text: device '\x1F' hostApi; ival[0]: 1 IqStereo | 2 channel right | 4 swapIq | 8 pickedFromList; num[0]: cardRateHz; num[1]: iqCentreHz; ival[1]: the FIELD MASK, FOXAPP_SOUND_CARD_FIELD_* (0 = the whole form) (gui::soundCardFormCommand / soundCardFormFromCommand, engine/soundcard_panel.hpp) */
+#define FOXAPP_OP_SOUND_CARD_FORM        0x8412u /* text: device '\x1F' hostApi; ival[0]: 1 IqStereo | 2 channel right | 4 swapIq | 8 pickedFromList; num[0]: cardRateHz; num[1]: iqCentreHz; ival[1]: the FIELD MASK, FOXAPP_SOUND_CARD_FIELD_* (0 = the whole form) (gui::soundCardFormCommand / soundCardFormFromCommand, core/soundcard_panel.hpp) */
 #define FOXAPP_OP_PATCH_LOOK_FOR_RADIOS  0x8413u /* no args: "Look for radios" pressed in the patch radio inspector */
 // "Stop and resume sound" needs no new op: FOXAPP_OP_DECODER_STOP_LIST
 // already covers it, unchanged - the mute lifts on its own once the engine's
@@ -339,13 +339,13 @@
 //   TX_DATA_FLAT: the page's DATA (flat) tick, for a plugin's audio only: on (the default) it goes out as NFM with the pre-emphasis off, whatever mode the page shows. Session-only
 //     (never saved). ival[0]: 0 / 1.
 #define FOXAPP_OP_TX_DATA_FLAT           0x842Cu /* ival[0]: 0 off / 1 on */
-// THE TWO TEST OPS OF SHELL RETIREMENT R2 (docs/engine-stage4.md 6.25; API 0.3 9.13). They replace the bounded-run seams EngineShell::seamPatchStart and
-// seamBiasStandIn, which the window called through the door: now the window sends them on its own session, in bounded runs only, as it sends
+// THE TWO TEST OPS OF SHELL RETIREMENT R2 (docs/engine-stage4.md 6.25; API 0.3 9.13). They replace the bounded-run seams seamPatchStart and
+// seamBiasStandIn (methods of the retired shell, deleted in R10), which the window called through the door: now the window sends them on its own session, in bounded runs only, as it sends
 // FOXAPP_OP_TEST_HOLD_AUDIO_LOCK. Like every FOXAPP_OP_* they are refused to a REMOTE session ("the application's own commands are for sessions on this machine").
 //   TEST_PATCH_RUNNING: FOXSDR_PATCH_START. No arguments. Sets the patch graph's "running" flag and NOTHING else - it does not switch any radio on (that is
 //     what FOXAPI_OP_PATCH_RUN does, through patchPressStart), which is the point: a graph whose radios are off is what the tests that use it are about.
 //   TEST_BIAS_STAND_IN: FOXSDR_FORCE_BIAS_KEY. ival[0]: 0 none / 1 accept / 2 refuse (cascade::gui::BiasStandIn); anything else is OUT_OF_RANGE. The stand-in
-//     bias tee in front of the deck's key (engine/bias_tee.hpp) while no real radio with one is open.
+//     bias tee in front of the deck's key (core/bias_tee.hpp) while no real radio with one is open.
 #define FOXAPP_OP_TEST_PATCH_RUNNING     0x842Du /* no arguments (FOXSDR_PATCH_START, bounded runs only): the patch graph is marked running, no radio is switched on */
 #define FOXAPP_OP_TEST_BIAS_STAND_IN     0x842Eu /* ival[0]: 0 none / 1 accept / 2 refuse (FOXSDR_FORCE_BIAS_KEY, bounded runs only) */
 // THE INTERFACE'S HALF OF THE SETTINGS FILE (shell retirement R5; API 0.3 9.16; core/config_halves.hpp). The settings file has two halves, and an interface

@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <string>
 
+#include "core/mp3_support.hpp"
+
 namespace cascade::core {
 
 class Mp3Writer {
@@ -29,8 +31,8 @@ public:
     Mp3Writer(const Mp3Writer&) = delete;
     Mp3Writer& operator=(const Mp3Writer&) = delete;
 
-    // Whether this build and this machine can write MP3 at all.
-    static bool available();
+    // Whether this build and this machine can write MP3 at all (kMp3Supported, core/mp3_support.hpp: a compile-time fact).
+    static bool available() { return kMp3Supported; }
 
     // Creates `path` for `channels` of 16-bit PCM at `sampleRateHz`, encoded
     // at `bitrateKbps`. False with a reason in `error`.

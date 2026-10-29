@@ -22,7 +22,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_census.hpp"

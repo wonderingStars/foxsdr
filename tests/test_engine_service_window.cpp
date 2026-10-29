@@ -1,7 +1,7 @@
 // test_engine_service_window.cpp - THE CONSTRUCTION FLIP: THE HOST BUILDS THE ENGINE, THE WINDOW IS ITS GUEST (shell retirement R7;
 // docs/engine-stage4.md 6.25).
 //
-// THE CHANGE UNDER TEST. The window used to build the engine inside its own constructor (EngineShell::create), restore the settings into it there,
+// THE CHANGE UNDER TEST. The window used to build the engine inside its own constructor (the shell's create), restore the settings into it there,
 // attach to the plugin UI before the plugin scan, and own it to the end. Now main.cpp - and the test host, tests/test_host.hpp, which is main's
 // order for a test - builds an EngineService, restores, and only then constructs the window, which is a GUEST of the engine. (From R7 to R9 its shell
 // was a VIEW that installed the window as the engine's host - Engine::setHost, before any control thread - and let it go again; R9 removed the

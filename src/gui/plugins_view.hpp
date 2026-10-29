@@ -72,7 +72,7 @@
 #include <string>
 #include <vector>
 
-#include "core/plugin_host.hpp"
+#include "core/plugin_host_data.hpp"
 #include "gui/plugin_store_view.hpp"
 #include "imgui.h"
 

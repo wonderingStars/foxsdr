@@ -29,7 +29,7 @@ namespace cascade::net {
 
 // The receiver's mode names, indexed by FOXAPI_DEMOD_* (1..8): the SAME words
 // the desktop's mode buttons carry (app_window.cpp kModeNames, checked against
-// this table where it is defined, engine/receiver_tables.hpp). "" outside
+// this table where it is defined, core/receiver_tables.hpp). "" outside
 // 1..8. The table is core/demod_names.hpp's (data, so the interface can take
 // it without net/; stage 5f); this names it back.
 using cascade::core::kDemodNames;

@@ -44,7 +44,7 @@
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
-#include "engine/plugin_store_reasons.hpp"
+#include "core/plugin_store_reasons.hpp"
 
 namespace cascade::engine {
 

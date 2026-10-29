@@ -4,6 +4,8 @@
 #include "core/plugin_cleanup.hpp"
 
 #include "core/file_read.hpp"
+#include "core/plugin_host.hpp"
+#include "core/plugin_repo.hpp"
 #include "core/plugin_run.hpp"
 
 #include <algorithm>

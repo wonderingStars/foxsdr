@@ -9,7 +9,7 @@
 
 #include <utility>
 
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 
 namespace cascade::engine {
 

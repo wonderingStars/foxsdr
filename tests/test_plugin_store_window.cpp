@@ -76,7 +76,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_repo.hpp"
 #include "engine/engine.hpp"
-#include "engine/plugin_store_reasons.hpp"
+#include "core/plugin_store_reasons.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"

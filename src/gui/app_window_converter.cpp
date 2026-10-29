@@ -43,10 +43,10 @@
 #include "core/freq_converter.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "engine/soundcard_panel.hpp"
+#include "core/soundcard_panel.hpp"
 #include "gui/converter_lo_seed.hpp"
 #include "gui/theme.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 
 namespace cascade::gui {
 

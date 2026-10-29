@@ -2,7 +2,7 @@
 // from gui/plugin_store_view.cpp (engine extraction stage 3).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-#include "engine/plugin_store_reasons.hpp"
+#include "core/plugin_store_reasons.hpp"
 
 #include <cstdio>
 #include <cstring>

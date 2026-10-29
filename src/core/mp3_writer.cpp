@@ -103,14 +103,6 @@ struct Mp3Writer::Impl {
     bool failed = false;
 };
 
-bool Mp3Writer::available() {
-#ifdef _WIN32
-    return true;
-#else
-    return false;
-#endif
-}
-
 Mp3Writer::~Mp3Writer() { close(); }
 
 bool Mp3Writer::open(const std::string& path, unsigned sampleRateHz, unsigned channels,
@@ -235,8 +227,6 @@ void Mp3Writer::close() {
 namespace cascade::core {
 
 struct Mp3Writer::Impl {};
-
-bool Mp3Writer::available() { return false; }
 
 Mp3Writer::~Mp3Writer() { close(); }
 

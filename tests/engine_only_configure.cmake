@@ -15,7 +15,7 @@
 #      option, so they are not reached either: the generated project holds none of them, below.)
 #   2. THE CONTROL: the same configure with the option ON (the default) and OpenGL disabled must
 #      FAIL, and name OpenGL. Without this, step 1 could pass because the switch does nothing.
-#   3. WHAT THE OFF TREE IS: no cascade, cascade_gui, cascade_shell, cascade_interface, imgui or glfw
+#   3. WHAT THE OFF TREE IS: no cascade, cascade_gui, cascade_interface, imgui or glfw
 #      target (asking the build for each is an error), no OpenGL or GLFW cache entry, and the
 #      targets there are: foxsdr-engine, cascade_engine, the link check, the reader.
 #   4. THE STAGING, from that tree: building cascade_stage_resources (the target foxsdr-engine
@@ -101,7 +101,7 @@ file(STRINGS "${_off}/CMakeCache.txt" _cache REGEX "OPENGL|OpenGL_|GLFW_|glfw")
 list(FILTER _cache EXCLUDE REGEX "CASCADE_BUILD_INTERFACE|CMAKE_DISABLE_FIND_PACKAGE_OpenGL|^//")
 check("NOT _cache" "no OpenGL or GLFW cache entry (${_cache})")
 
-foreach(_t cascade cascade_gui cascade_shell cascade_interface imgui glfw)
+foreach(_t cascade cascade_gui cascade_interface imgui glfw)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" --build "${_off}" --config ${CONFIG} --target ${_t}
         RESULT_VARIABLE _trc OUTPUT_QUIET ERROR_QUIET)

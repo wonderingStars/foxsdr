@@ -56,8 +56,8 @@
 #include <string>
 #include <vector>
 
-#include "core/plugin_host.hpp"
-#include "core/plugin_repo.hpp"
+#include "core/plugin_host_data.hpp"
+#include "core/plugin_repo_data.hpp"
 
 namespace cascade::core {
 

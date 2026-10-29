@@ -25,7 +25,7 @@
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "core/i18n.hpp"
-#include "core/plugin_repo.hpp"
+#include "core/plugin_repo_data.hpp"
 #include "gui/page_geometry.hpp"
 #include "gui/plugin_store_view.hpp"
 #include "gui/ui_census.hpp"
@@ -193,9 +193,9 @@ cascade::gui::StoreListCache& AppWindow::storeLists(bool full) {
         const auto fact = [&](const char* key, std::string& out) { readFactText(key, out); };
         fact("fact.store.url", m.sourceUrl);
         // WHAT THIS MACHINE IS, as the catalogue spells it ("windows/x64"): what the page's header line says the size and build are OF.
-        m.hostPlatform.assign(cascade::core::PluginRepo::hostOs());
+        m.hostPlatform.assign(cascade::core::pluginHostOs());
         m.hostPlatform += '/';
-        m.hostPlatform += cascade::core::PluginRepo::hostArch();
+        m.hostPlatform += cascade::core::pluginHostArch();
         m.maxSites = cascade::core::AppConfig::kMaxPluginSites;
 
         // THE KEPT COPY AND HOW FRESH IT IS, and the transfer's keys. The fitting key is drawn on the catalogue key of a DOWNLOAD only (a

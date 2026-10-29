@@ -33,7 +33,7 @@
 #include <utility>
 #include <vector>
 
-#include "core/freq_manager.hpp"
+#include "core/bookmark.hpp"
 
 namespace cascade::core {
 

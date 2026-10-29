@@ -73,8 +73,8 @@
 #include "gui/band_plan_style.hpp"
 #include "gui/basemap_stand_in.hpp"
 #include "gui/plugin_markers.hpp"
-#include "engine/rate_follow_status.hpp"
-#include "engine/soundcard_panel.hpp"
+#include "core/rate_follow_status.hpp"
+#include "core/soundcard_panel.hpp"
 #include "gui/scope_face.hpp"
 // The demod scope's tube, and the window function its spectrum position needs.
 // The ARITHMETIC half (gui/demod_scope.hpp) arrives through app_window.hpp;
@@ -105,14 +105,14 @@
 // imgui.h and that header is compiled into the tests; the members are held by
 // unique_ptr behind forward declarations for exactly that reason.
 #include "gui/plugin_store_view.hpp"
-#include "engine/running_view.hpp"
+#include "core/running_view.hpp"
 #include "core/plugin_run.hpp"
 #include "gui/imgui_debug_policy.hpp"
 #include "gui/plugin_window_ids.hpp"
 #include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "gui/tuner_ink.hpp"
 #include "gui/volume_meter.hpp"
 #include "gui/waterfall_view.hpp"
@@ -123,7 +123,7 @@
 #include "source/iq_file_source.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/soapy_enum_proc.hpp"
-#include "engine/device_scan_plan.hpp"
+#include "core/device_scan_plan.hpp"
 #include "usb/usb_device.hpp"
 
 #ifdef _WIN32
@@ -162,13 +162,13 @@ static void noteWindowRectInCensus(std::string_view name, const char* windowId) 
 namespace {
 
 // isNativeSourceKind - the one list of native driver kinds - now lives in
-// engine/tune_control.hpp, in cascade::gui, so unqualified calls in this file
+// core/tune_control.hpp, in cascade::gui, so unqualified calls in this file
 // still find it. It moved because the remembered-source rule beside it needs
 // the same list, and a rule kept in this .cpp is a rule no test can reach.
 
 // THE BIAS TEE - which radios have one, why that is a dynamic_cast and not a
 // DeviceSource method, and the RTL-SDR's own rule for what is put back after
-// an open - lives in engine/bias_tee.hpp (withBiasTee, biasTeeAfterOpen,
+// an open - lives in core/bias_tee.hpp (withBiasTee, biasTeeAfterOpen,
 // biasTeeTicked), where tests/test_rtl_bias_tee.cpp can reach it. Unqualified
 // calls here still find it: it is in cascade::gui.
 
@@ -178,7 +178,7 @@ namespace {
 // width nothing can check against.
 
 // The pipeline configuration (kSampleRateHz, kFftSize, kAveragingAlpha) is in
-// engine/receiver_tables.hpp: the Engine builds the Pipeline with it, and the
+// core/receiver_tables.hpp: the Engine builds the Pipeline with it, and the
 // waterfall below is sized from the same FFT length.
 // Waterfall history depth: 512 lines at one line per GUI frame is ~8.5 s of
 // scroll-back, plenty for a demo signal while keeping the texture small.
@@ -299,7 +299,7 @@ constexpr cascade::gui::theme::Tone kWfMarkerColor{255, 170, 60, 200,
 
 // The frequency readout's 10 digit places, most significant first (digit i
 // steps by cascade::gui::digitPlaceHz(i) on a wheel tick over its tube, or a
-// flick of the 0.88.0 toggle switch beneath it — engine/tune_control.hpp, so the
+// flick of the 0.88.0 toggle switch beneath it — core/tune_control.hpp, so the
 // wheel and the switches share one table rather than each carrying a copy).
 
 // Largest value the fixed 10-digit field can show; the display clamps here
@@ -323,7 +323,7 @@ constexpr double kMaxDisplayHz = 9999999999.0;
 // beside those constants, so neither can drift away from the other.
 // Both numbers are the CLIENT area, which is what glfwSetWindowSizeLimits
 // takes - GLFW adds the frame itself.
-// The figure itself lives in engine/tune_control.hpp (kDeckMinWindowW) beside
+// The figure itself lives in core/tune_control.hpp (kDeckMinWindowW) beside
 // the deck's core width, so the meters rule test can read both.
 constexpr int kMinWindowW = cascade::gui::kDeckMinWindowW;
 // A minimum height is not needed by the bar and is given anyway: GLFW's Win32
@@ -551,9 +551,7 @@ const char* scannerStateName(std::uint32_t state) {
 }  // namespace
 
 AppWindow::AppWindow(const WindowHost& host)
-    : engineHolder_(cascade::engine::EngineShell::view(*host.engine)),
-      engine_(*engineHolder_),
-      spectrum_(std::make_unique<SpectrumView>()),
+    : spectrum_(std::make_unique<SpectrumView>()),
       waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)),
       // The plugin store's view and both windows' decks. Created here, where
       // their headers are visible, and never rebuilt: a deck holds the search
@@ -1250,7 +1248,7 @@ int AppWindow::run(int frames) {
         // (TEST SEAM, 0.99.68: FOXSDR_HOLD_AUDIO_LOCK, a held audio mutex at the next control request's stop - see Engine::holdAudioLockMs_ - is the engine's
         // service's option now, ServiceOptions::holdAudioLockMs, in force from its start: the engine runs and its web server answers before this window
         // exists, so a browser's stop could have arrived before this function's submit. Shell retirement R8.)
-        // The deck's bias tee stand-in (engine/bias_tee.hpp, biasStandInFor):
+        // The deck's bias tee stand-in (core/bias_tee.hpp, biasStandInFor):
         // bounded runs only, for the same reason as the script below. Sent as a command (shell retirement R2: it was the door's seamBiasStandIn); the
         // engine's default is "none", so a run that sets nothing sends nothing.
         if (const cascade::gui::BiasStandIn standIn = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
@@ -4452,7 +4450,7 @@ namespace {
 // tuner - olive-drab riveted plate, engraved name plate, Nixie tubes in a
 // black bezel, a chrome toggle switch under every tube) and asked for it
 // "bolted on to the front" of the deck; every measurement of the plate
-// itself lives in engine/tune_control.hpp (kFreqPlateW/H and the rest), where
+// itself lives in core/tune_control.hpp (kFreqPlateW/H and the rest), where
 // a test can pin it.
 //
 // THE BAR DID NOT GROW FOR IT. The first cut let the bar grow 69 units to
@@ -4460,7 +4458,7 @@ namespace {
 // "need[s] to be smaller", and "we don't want to affect the size of the top
 // bar - it's perfect the way we have it". So the bar is the 160 units it
 // has been since the reference, and the plate was compacted to stand inside
-// it (engine/tune_control.hpp says what was shrunk). It sits kPlateTopY below
+// it (core/tune_control.hpp says what was shrunk). It sits kPlateTopY below
 // the bar's top edge - centred on the same line the old drum well and its
 // caption were (42 to 118) - and the static_assert holds it off the bar's
 // foot rail, so a plate that grows again stops compiling rather than
@@ -4473,7 +4471,7 @@ static_assert(kPlateTopY + cascade::gui::kFreqPlateH + kPlateFootMarginY <= kBar
               "for it (the owner: it's perfect the way we have it)");
 
 // THE FIXED CLUSTER'S WIDTH, transport button through the volume dial. The
-// figure lives in engine/tune_control.hpp (kDeckCoreW) so the meters rule can
+// figure lives in core/tune_control.hpp (kDeckCoreW) so the meters rule can
 // be checked against it without an open frame; it is the bar's scale
 // reference below and the left limit of the meters and the mute banner.
 constexpr float kCoreW = cascade::gui::kDeckCoreW;
@@ -4508,7 +4506,7 @@ static_assert(kCounterDividerX >= kFreqPlateRightX + 8.0f,
 // scale floor is a promise about these controls and a promise checked against
 // a number typed somewhere else is not checked at all. Three dials since
 // 0.99.74 - GAIN, SQUELCH, VOLUME, left to right - whose centres, radius and
-// pitch live in engine/tune_control.hpp (deckGainCx and its two neighbours) so
+// pitch live in core/tune_control.hpp (deckGainCx and its two neighbours) so
 // a test can pin them; this is where the cluster's right-hand end, the last
 // dial's tick arc and its edge pad, is held against kCoreW and the floor.
 constexpr float kLastDialCx =
@@ -4547,7 +4545,7 @@ static_assert(kKnobRowEndX * kBarMinScale <=
 //
 // kFreqCellW, kFreqTubeH, the gaps, the paddings, freqCellLeftX,
 // tubeRectForCell, switchRectForCell and kFreqPlateW/H all live in
-// engine/tune_control.hpp - that header has no ImGui dependency, so it is the
+// core/tune_control.hpp - that header has no ImGui dependency, so it is the
 // only place a live click test's own arithmetic can be pinned in a test
 // without an open frame. Only the constants this file still reads directly
 // are pulled in by name below. kFreqCells keeps its short local name rather
@@ -4585,7 +4583,7 @@ void AppWindow::drawToolbar() {
     // child clipped it, and the application had no volume control at all.
     //
     // THE COUNTER'S LAYOUT DECIDES THE CLUSTER (themes, 2026-09-25): its size
-    // and whether it has switches (engine/tune_control.hpp, CounterLayout). The
+    // and whether it has switches (core/tune_control.hpp, CounterLayout). The
     // 1x counter keeps today's rule exactly; the enlarged one may not cost the
     // meters, so the deck is drawn smaller until they fit (deckScale), and a
     // 2x plate with its switches makes the bar taller (deckBarH).
@@ -4805,7 +4803,7 @@ void AppWindow::drawToolbar() {
     // it is amber, the deck's caution lamp - the MUTE lamp's hue: something
     // the user switched is in effect on the signal path. A press goes to
     // biasKeyPressed: off at once, on only through the confirmation dialog the
-    // first time for each radio in a session (engine/bias_tee.hpp says why).
+    // first time for each radio in a session (core/bias_tee.hpp says why).
     if (const cascade::gui::BiasTeePanel& bk = biasKeyPanel(); bk.present) {
         const cascade::gui::FreqRect area = cascade::gui::deckBiasKeyArea();
         const ImVec2 kTL(X(area.x0), Y(area.y0));
@@ -4876,7 +4874,7 @@ void AppWindow::drawToolbar() {
     // gain for certain things often ... without having to go to the Signal
     // tab/Source menu. This area is also empty space"; the same was said of the
     // squelch, adjusted "often" while using the Airband tool. Geometry:
-    // engine/tune_control.hpp (kDeckKnobR and the rest); the AUTO keys under the
+    // core/tune_control.hpp (kDeckKnobR and the rest); the AUTO keys under the
     // first two are deckAutoKey's, and the whole row is drawDeckKnobs'
     // (app_window_deck.cpp, stub campaign B12).
     drawDeckKnobs(dl, barTL, barBR, scale, capPx, layout);
@@ -4925,7 +4923,7 @@ void AppWindow::drawToolbar() {
     const float meter1X = meter2X - meterGap - meterW;
     // DROPPED ENTIRELY ON A NARROW WINDOW rather than allowed to slide left
     // into the volume dial - the rule, and why it is as tight as it is, are
-    // metersFitOnBar's in engine/tune_control.hpp, where a test holds it to the
+    // metersFitOnBar's in core/tune_control.hpp, where a test holds it to the
     // bar a fresh install opens with.
     const bool showMeters = cascade::gui::deckMetersFit(barW, layout, scale);
     if (showMeters) {
@@ -5009,7 +5007,7 @@ void AppWindow::drawToolbar() {
     // in the same terms the meters rule uses, so the two cannot disagree about
     // where the middle ends - and otherwise the clear brass across the top of
     // the bar or at the head of the master cluster: layoutMuteBanner in
-    // engine/tune_control.hpp, where tests/test_mute_banner.cpp sweeps every bar
+    // core/tune_control.hpp, where tests/test_mute_banner.cpp sweeps every bar
     // width, every catalogue's real widths and one to six decoders named
     // against every part of the deck. It is never laid over the counter, and
     // its "Stop plugin" key is always drawn WHOLE and at least 13 px - the
@@ -5087,7 +5085,7 @@ void AppWindow::drawToolbar() {
 //
 // THE GEOMETRY IS NOT HERE. Where the plate, the bezel, each tube and each
 // switch half sit is cascade::gui::tubeRectForCell / switchRectForCell
-// (engine/tune_control.hpp), pinned in a test without an open frame; these
+// (core/tune_control.hpp), pinned in a test without an open frame; these
 // functions are handed rectangles and paint inside them.
 //
 // TWO FACES STAND IN FOR THE REFERENCE'S TWO. It names Oswald for its labels
@@ -5578,7 +5576,7 @@ void drawNixieTube(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digi
 // the click that opens the typed editor and both switch halves beneath are
 // untouched by the choice of style. Only the ink inside this rectangle differs.
 //
-// EVERY NUMBER COMES FROM THE PAINT STRUCT (engine/tune_control.hpp), which is
+// EVERY NUMBER COMES FROM THE PAINT STRUCT (core/tune_control.hpp), which is
 // pinned in tests/test_tune_control.cpp: a later edit here cannot quietly make
 // the neon figure small or the plain one grey.
 void drawFlatDigitCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, char digit, bool bright,
@@ -5883,12 +5881,12 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     // THE PLATE FIRST, because everything else in the counter sits on it -
     // the name plate and the status cluster across its head, the bezel with
     // the ten tubes and their switches, the footer line. Its size comes from
-    // engine/tune_control.hpp, so the bar that placed it and the readout that
+    // core/tune_control.hpp, so the bar that placed it and the readout that
     // fills it cannot disagree about where the counter ends.
     ImDrawList* fdl = ImGui::GetWindowDrawList();
     const float s = scale;
     // THE LAYOUT (themes): 1x or 2x figures, with or without the switches. The
-    // default is today's plate exactly (engine/tune_control.hpp, CounterLayout).
+    // default is today's plate exactly (core/tune_control.hpp, CounterLayout).
     const cascade::gui::CounterLayout layout{counterScale_, counterSwitches_};
     // What the cells' own furniture (glow, rims, mesh) is drawn at: the bar's
     // scale times the counter's, so a doubled tube is a bigger tube, not a
@@ -5928,7 +5926,7 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
 
     // THE TUBES AND THEIR SWITCHES ARE PLACED, NOT FLOWED. Each tube's
     // rectangle and each switch half's rectangle come from the plate's own
-    // origin through engine/tune_control.hpp, so the row cannot drift with
+    // origin through core/tune_control.hpp, so the row cannot drift with
     // ImGui's item spacing and the bar can put the whole plate wherever its
     // own geometry says.
     //
@@ -6010,7 +6008,7 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         }
 
         // THE TOGGLE SWITCH BENEATH THIS TUBE: the same tune the wheel above
-        // just took, through cascade::gui::stepDigit (engine/tune_control.hpp)
+        // just took, through cascade::gui::stepDigit (core/tune_control.hpp)
         // rather than a second copy of the arithmetic - and clamped the same
         // way at the call site, to minTunedHz rather than stepDigit's own
         // floor of 0, because a positive VFO offset still means the source
@@ -6487,7 +6485,7 @@ void AppWindow::drawSinksSection() {
     const bool sinkMuted = st.audioMutedBy[0] != '\0';
     // AN OPEN IN FLIGHT IS NOT A STATE OF THE SINK, it is a state of the
     // driver, and asking the sink anything while a worker is inside its open()
-    // is the race engine/audio_open.hpp forbids. So it is reported on its own
+    // is the race core/audio_open.hpp forbids. So it is reported on its own
     // terms and nothing below is consulted.
     const bool sinkOpening = (st.audioFlags & FOXAPI_AUDIO_OPENING) != 0u;
     const bool sinkOpened = !sinkOpening && (st.audioFlags & FOXAPI_AUDIO_EVER_OPENED) != 0u;
@@ -8083,7 +8081,7 @@ void AppWindow::drawSourceSection() {
         // radio refused must leave the box where it was, because a ticked box
         // over a radio with no power on the port is the same lie the antenna
         // combo was fixed for. What a tick remembers, and for which radio, is
-        // engine/bias_tee.hpp's (biasTeeTicked).
+        // core/bias_tee.hpp's (biasTeeTicked).
         //
         // The deck's BIAS TEE key shows the same `shown` and switches through
         // the same switchBiasTee, so the box and the key always agree.
@@ -8217,7 +8215,7 @@ void AppWindow::drawSourceSection() {
 
     // THE TUNE DID NOT LAND WHERE IT WAS ASKED. A device coercing to its
     // nearest step is a few Hz and never reaches here (see
-    // kTuneMismatchToleranceHz in engine/tune_control.hpp) — this is the radio
+    // kTuneMismatchToleranceHz in core/tune_control.hpp) — this is the radio
     // refusing the band outright, which used to retune silently and leave the
     // counter looking wrong with no explanation anywhere. See
     // AppWindow::noteTuneMismatch.
@@ -9320,7 +9318,7 @@ void AppWindow::drawDecodersSection() {
     // decoders." Stopping a decoder is not housekeeping in that story, it is
     // how you get your audio back - so it belongs on the screen the user is
     // already looking at, beside the presets that started the decoder in the
-    // first place. engine/running_view.hpp holds every decision and
+    // first place. core/running_view.hpp holds every decision and
     // tests/test_running_view.cpp drives it.
     // From the window's engine API session (window port, group 8): the plugins as the table lists them, and the
     // state's count of the decoders being fed.
@@ -16549,7 +16547,7 @@ bool AppWindow::readFactText(const char* key, std::string& out) {
 // one pass AHEAD of the state they are read with and only in the instant between the pass's two publishes, and 22 reads can straddle a publish (two lines from two
 // passes). Both are a frame's cosmetic lag between a sentence and the flag it explains, as every other fact the window reads has (docs/engine-stage4.md 6.25, R3).
 void AppWindow::refreshStatusLines() {
-    cascade::engine::EngineStatusText& t = statusLines_;
+    cascade::core::EngineStatusText& t = statusLines_;
     readFactText("fact.status.sourceError", t.sourceError);
     readFactText("fact.status.gpsRefusal", t.gpsRefusal);
     readFactText("fact.status.catalogError", t.catalogError);

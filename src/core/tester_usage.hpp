@@ -43,7 +43,7 @@
 #include <vector>
 
 #include "core/crash_upload.hpp"
-#include "core/plugin_repo.hpp"
+#include "core/plugin_repo_data.hpp"
 
 namespace cascade::core {
 

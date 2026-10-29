@@ -53,7 +53,7 @@
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
 #include "pass_seam.hpp"
-#include "engine/source_fallback.hpp"
+#include "core/source_fallback.hpp"
 #include "source/soundcard_source.hpp"
 #include "test_check.hpp"
 

@@ -114,7 +114,7 @@ struct RadioStatus {
     float dbMax = 0.0f;
 
     // WHICH FACE THE FREQUENCY READOUT WEARS: "nixie", "neon" or "plain"
-    // (engine/tune_control.hpp). The browser has a readout of its own - ten
+    // (core/tune_control.hpp). The browser has a readout of its own - ten
     // spans, one per digit, carrying the same per-digit wheel gesture - and
     // GitHub issue #1 was about being able to READ the frequency, which is as
     // true of a phone propped beside the radio as it is of the desk. So the

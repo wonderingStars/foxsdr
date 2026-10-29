@@ -26,7 +26,7 @@ namespace cascade::gui {
 
 // The height of the smallest main window (client area), logical pixels: the
 // height at which the bar and the head of the function rail still sit on screen
-// together. The width is kDeckMinWindowW (engine/tune_control.hpp); both are
+// together. The width is kDeckMinWindowW (core/tune_control.hpp); both are
 // multiplied by the interface size wherever they are handed to GLFW.
 inline constexpr int kWindowMinH = 400;
 

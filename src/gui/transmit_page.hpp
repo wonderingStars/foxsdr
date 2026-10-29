@@ -21,7 +21,7 @@
 
 #include "core/app_commands.hpp"  // FOXAPP_OP_TX_PLUGIN_ARM: the arming window's commands
 #include "core/i18n.hpp"  // FOX_TR_NOOP: txLampText is drawn through tr()
-#include "engine/tx_frequency.hpp"
+#include "core/tx_frequency.hpp"
 #include "foxsdr_api.h"
 #include "core/tx_audio.hpp"  // TxArming::Refusal: the sentences below name its reasons
 
@@ -48,7 +48,7 @@ inline constexpr const char* kTxLicenceNotice =
 
 // --- the frequency -----------------------------------------------------------
 //
-// txFrequencyHz is in engine/tx_frequency.hpp (included above), where the
+// txFrequencyHz is in core/tx_frequency.hpp (included above), where the
 // engine's transmitter-follows-the-dial step can reach it.
 
 // --- the power ---------------------------------------------------------------

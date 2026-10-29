@@ -44,7 +44,7 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
-#include "core/plugin_host.hpp"
+#include "core/plugin_host_data.hpp"
 
 namespace cascade::gui {
 

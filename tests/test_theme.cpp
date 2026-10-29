@@ -28,7 +28,7 @@
 #include <vector>
 
 #include "gui/theme.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "gui/tuner_ink.hpp"
 #include "test_check.hpp"
 

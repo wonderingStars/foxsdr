@@ -5,7 +5,7 @@
 // extraction, set patchScanWanted_ the FIRST time a Radio's device list
 // opened (never immediately) when the scan was unscanned or partial, and
 // patchReconcile ran the scan once the scan PLAN stopped deferring (a radio
-// still opening defers it - see engine/device_scan_plan.hpp). This branch's
+// still opening defers it - see core/device_scan_plan.hpp). This branch's
 // merge reused FOXAPP_OP_SCAN_DEVICES_ON_OPEN for the same call site, which
 // scans IMMEDIATELY and never retries - so patchScanWanted_ was set nowhere
 // at all (dead code, read and reset at engine_patch_radios.cpp:580-582 but

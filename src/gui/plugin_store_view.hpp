@@ -55,7 +55,7 @@
 #include <string>
 #include <vector>
 
-#include "engine/plugin_store_reasons.hpp"
+#include "core/plugin_store_reasons.hpp"
 #include "core/plugin_cleanup.hpp"
 #include "gui/text_fit.hpp"
 #include "imgui.h"
@@ -191,7 +191,7 @@ std::string moduleMachineText(const ModulePlate& m);
 // --- a reason kept in English, drawn in the language in force -----------------
 //
 // pluginAbiMismatchReason, pluginNoBuildReason and trStoredReason are in
-// engine/plugin_store_reasons.hpp (included above), where the engine's store
+// core/plugin_store_reasons.hpp (included above), where the engine's store
 // machinery that makes the reasons can reach them.
 
 // ===========================================================================
@@ -907,7 +907,7 @@ std::string storeCleanupKeyLabel(std::size_t count);
 std::string storeOldCopyLine(const StoreOldCopy& c);
 // The confirmation's own key: "Remove 1 file" / "Remove 3 files".
 std::string storeCleanupConfirmLabel(std::size_t count);
-// (pluginCleanupReport - what a clean-up did, in sentences - is in engine/plugin_store_reasons.hpp: the engine makes it, stub campaign B3.)
+// (pluginCleanupReport - what a clean-up did, in sentences - is in core/plugin_store_reasons.hpp: the engine makes it, stub campaign B3.)
 
 // Draws the CLEAN UP OLD VERSIONS key, its one confirmation popup and the report
 // under it, at the ImGui cursor, `width` wide. Returns true on the frame the

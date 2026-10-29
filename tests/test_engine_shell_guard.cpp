@@ -1,46 +1,39 @@
-// test_engine_shell_guard.cpp - THE FENCE'S GUARD: what the compiler cannot hold about the interface's one door onto the engine
-// (engine extraction stage 4, step 5; the record is the closing section of docs/engine-stage4.md).
+// test_engine_shell_guard.cpp - THE FENCE'S GUARD: what the compiler cannot hold about the window's contact with the engine
+// (engine extraction stage 4, step 5; shell retirement R1 to R10; the records are docs/engine-stage4.md 6.25 and 6.26).
 //
 // THE SUCCESSOR OF tests/test_command_path_guard.cpp. That ratchet scanned the whole window for reads and writes of the engine's state
 // (163 reads of 31 fields at its first count, 788 calls before the port; 33 of 141 when the pump move began; 13 fields and 26 reads when
 // the fence stepped in) and was written to reach zero. It did not: it ended at a CLASSIFIED RESIDUE (the shell's seams, the host
-// accessors, stage 5's web/CAT reads - gone in stage 5f), and the fence did what a ratchet could not - the interface is its own target
-// (cascade_interface), cmake/interface_fence.cmake puts stubs of every header it may not include first on its include path, and the
-// window's engine member is an EngineShell, a class that declares only the residue. A direct read of an engine field, a call to an
-// engine method, a write to engine state, an engine object passed as an argument: none of them compiles, so the ratchet's rules 1 to
-// 4 are retired with the ratchet. What is left here is what the compiler CANNOT see:
+// accessors, stage 5's web/CAT reads), and the fence did what a ratchet could not - the interface is its own target (cascade_interface),
+// cmake/interface_fence.cmake puts stubs of every header it may not include first on its include path. Shell retirement (stage 7h, 2026-10-28 to
+// 2026-10-29) then took the residue itself to zero and DELETED THE DOOR; this file is what is left of the door's guard: the door's surface check, its
+// three budgets and their giant dated comments, its knock table and its holder checks are gone, and the survivors (the frame, the port, the plugin UI,
+// the bounded hooks, the test host) and the new fence-to-zero checks are what keep it near its old length. What the compiler CANNOT see, held here:
 //
-//   0. THE DOOR IS SHUT (shell retirement R9, 2026-10-28): SHELL 0, HOST 0, the feed 0, the window's call sites on the engine 0. Every budget below that
-//      counts the door is ZERO now and this file holds it there; what is left of the window's contact with the engine is the table, the plugin UI
-//      port (counted below as the extension surface) and the bounded run's two hooks (core/bounded_hooks.hpp), which the host installs in a `--frames`
-//      run and never in a product run (checkTheBoundedHooks).
-//   1. THE SURFACE (engine/engine_shell.hpp) does not grow silently. Its section is dated and says how it ends; its declarations are
-//      counted against a budget; every declaration is implemented and is CALLED (a stale door is found here, the way the old guard's
-//      allow lists were). THE PLUGIN UI PORT (core/plugin_ui_port.hpp, shell retirement R4) is the same discipline on the other surface the
-//      window has: 14 pure virtuals and one extension id, each implemented by the engine's side and called by the window, in a header of data
-//      and pure virtuals that includes nothing the fence denies.
-//   2. WHO MAY KNOCK. The compiler lets any AppWindow member call any EngineShell method; this holds which members call which (the
-//      shell's seams from the shell's members), and which members reach the plugin UI through the port (the host accessors, the tile pump,
-//      the front end's hand-over, the shutdown's release).
-//      A widget that calls engine_.teardown() compiles. It fails here.
-//   3. THE FENCE ITSELF IS STILL BUILT. The interface target exists and is put behind the fence; the deny list still holds the engine,
-//      its host, its API table and its pipeline; the engine/ allow list stays small and names no denied header; no file under src/gui -
-//      the headers no interface translation unit happens to include included - names a denied header (the compiler sees only what is
-//      compiled); the engine's link check refuses the interface and the shell.
-//   4. THE BACK DOOR (rawEngine) is named nowhere in src/gui, and the engine is reached by no other name (engineHolder_ is the
-//      constructor's alone).
-//   5. THE SURVIVORS of the old guard, which were never about reads: the frame is a look (three stepPass calls in drawUi, in order; the
-//      engine's pass started in run()); the config save is the shell's (saveConfigNow twice, in run, around the control thread's life);
-//      the ops that name a row by position are a reviewed set; the plugin UI is the window's (the host feed applies the directive
-//      before any reference into it is taken); the data header split (the views take core/plugin_ui_data.hpp); no ImGui input in the
-//      window's machinery.
-//   6. THE TEST HOST (shell retirement R1): tests reach the Engine behind a window through th::engine and build windows as
-//      th::TestWindow (tests/test_host.hpp); rawEngine is named in code by the shell's two files and that header alone, the window has
-//      exactly one TestHostAccess friend, and no test constructs an AppWindow by that name.
+//   0. THE DOOR IS DELETED (shell retirement R10, 2026-10-29): engine/engine_shell.hpp and .cpp do not exist, nothing includes them, the
+//      cascade_shell target is not in CMake, `rawEngine`, `EngineShell`, `ShellHooks` and the window's `engine_` / `engineHolder_` are named
+//      nowhere in code, and the window calls nothing on the engine by any name (the tombstone rows print their zeros). It was a header of 471 lines
+//      at the survey, 274 as a holder with no methods, and a budget table of 41 methods, 3 host methods, 12 feed virtuals and 67 call sites.
+//   1. THE PORT. The plugin UI port (core/plugin_ui_port.hpp, R4) is the window's one C++ contact with the engine that is not the table: 14 pure
+//      virtuals and one extension id, each implemented by the engine's side and called by the window, in a header of data and pure virtuals
+//      that includes nothing the fence denies. WHO MAY KNOCK: which window members reach the plugin UI through it (the host accessors, the
+//      tile pump, the front end's hand-over, the shutdown's release).
+//   2. THE FENCE REACHES ZERO. src/engine/ and src/net/ are denied WHOLE (no allow list; the guard reads the directories, so a new header is
+//      denied too); the fence's stubs exist; no src/gui file includes a denied header; and the whole INCLUDE CLOSURE of src/gui - every header a
+//      window file reaches through any other header - contains no denied one, no engine/ header and no net/ header. The twelve pure helpers that
+//      were engine/'s (an allow list of 13 until R10) are core/ headers; the machinery whose data the interface was reaching (R11a) is denied.
+//   3. THE SURVIVORS of the old guard, which were never about reads: the frame is a look (three stepPass calls in drawUi, in order; the
+//      engine's pass started by the service); the window saves nothing; the ops that name a row by position are a reviewed set; the plugin UI
+//      is the window's (the port applies the directive before any reference into it is taken); the data header split (the views take
+//      core/plugin_ui_data.hpp); no ImGui input in the window's machinery; the bounded run's two hooks (core/bounded_hooks.hpp), which the host
+//      installs in a `--frames` run and never in a product run.
+//   4. THE TEST HOST (R1, R7, R10): tests reach the Engine behind a window through th::engine and build windows as th::TestWindow or
+//      th::BareWindow, both th::HostedWindow (tests/test_host.hpp); `rawEngine` is named nowhere; the window has exactly one TestHostAccess
+//      friend, which names no Engine; and no test constructs an AppWindow by that name.
 //
-// PROVEN RED (docs/engine-stage4.md, the closing section): a method added to engine_shell.hpp with no call, a call from a widget, a
-// section without its date, a stub-less deny list ...; and the compiler's half by tests/CMakeLists.txt's interface_fence_* probes,
-// which compile an interface translation unit that includes engine.hpp (and the others) and want the build to fail.
+// PROVEN RED (docs/engine-stage4.md 6.26): a 15th virtual in the port, a call from a widget, a stub-less deny list, `#include "engine/tune_control.hpp"` in a
+// gui file, an engine header put back on an allow list, the door's header recreated; and the compiler's half by tests/CMakeLists.txt's
+// interface_fence_* probes, which compile an interface translation unit that includes a denied header and want the build to fail.
 //
 // argv[1], optional: a root to scan instead of the source tree (used to run the probes against a copy).
 //
@@ -65,31 +58,27 @@ namespace fs = std::filesystem;
 namespace {
 
 // ----------------------------------------------------------------------------------------------------------------------------------
-// BUDGETS. Every number is the surface as the fence left it (2026-10-21); a change moves the number in the same commit, with the dated
-// comment in engine_shell.hpp that says why. They only go down on their own: stage 5f deleted the web/CAT section (there is no budget for
-// it any more), stage 7 deletes the shell's.
+// BUDGETS. Every number is the surface as shell retirement left it; a change moves the number in the same commit, with the dated comment that says
+// why. They only went down: the door's budgets (kShellMethodsBudget 41 at the survey, kHostMethodsBudget 3, kFeedMethodsBudget 12, kCallSitesBudget 67,
+// kAllowedEngineHeadersBudget 13) are ZERO and are held as the tombstone rows below, not as constants.
 // ----------------------------------------------------------------------------------------------------------------------------------
-constexpr int kShellMethodsBudget = 0;    // CLASS SHELL: EngineShell's own declarations (distinct names; view and the special members apart): 0 after shell retirement R9 (2026-10-28: -6, THE LAST SIX - setFrontEndWaitBeat (the window wraps its step in its own WatchdogPause), stepPass (the bounded run's hook, core/bounded_hooks.hpp) and the measurement run's four seams, seamMeasureTick, seamMarkPassStats, seamPassStatsJson, seamInstallSource (the host's harness, engine/host_measure.cpp, driven by the hook that ends each frame); the class is a holder with no methods until R10 deletes it, and ShellHooks, the shell's adapter and Engine::setHost are gone); 6 after shell retirement R8b (2026-10-28: -2, configSnapshot and publishConfig left with the window's copy of the settings keeper - 400 lines of app_window.cpp: configsEqual, currentConfig, maybeSaveConfig, saveConfigNow, requestConfigSave, pollConfigWriter, the writer and its back-off; what is left is setFrontEndWaitBeat, stepPass and the measurement run's three seams, which R9 moves to the host; 8 before it); 8 after shell retirement R8a (2026-10-28: -11, the engine's START and STOP left for EngineService, which main.cpp - or the test host - calls: startReceiver, controlPass, startControlThread, configureHeartbeat, markCleanExit, stopTransfers, teardown, shutdownQuiesce, shutdownStop, shutdownRelease, shutdownDrain; the window keeper's two - configSnapshot, publishConfig - are compiled and unused until R8b deletes them, 8 -> 6; 19 before it); 19 after shell retirement R7 (2026-10-28: -7, the construction flip - initialise, loadBookmarks, telemetryStartup, applyConfig and configReadback are the host's restore (EngineService::restore: main.cpp, or the test host, builds the engine's service and restores BEFORE the window exists), apiTable and apiHandle are main's to pass (WindowHost::api, handle); the shell's create(hooks) became view(engine, hooks), a non-owning view that installs the window as the engine's host through Engine::setHost; 26 before it); 26 after shell retirement R5 (2026-10-28: -1, setControlWatchdogReportDir - the Diagnostics switch is a field of the interface's half of the settings, which crosses the table as FOXAPP_OP_INTERFACE_CONFIG, and the control thread's hang-report directory is derived from it by the engine; 27 before it); 27 after shell retirement R4 (2026-10-28: -2, the plugin UI plane left the door - setFrontEndFacts (the face, the basemap's figures and the track feed ride the port's setFrontEnd) and reportPluginStatus (the engine prints the bounded run's report at the end of shutdownQuiesce, from the plugin half the window hands over in its last setFrontEnd); 29 before it); 29 after shell retirement R3 (2026-10-28: -4, status, URL and kick as table facts - pluginCatalogueUrl, publishStatusText, statusText, frameKick; 33 before it); 33 after shell retirement R2 (2026-10-28: -8, the seams that became client code - seamBiasStandIn, seamFetchCatalogue, seamSelectNativeDevice, seamDeviceOpenPending, seamPressPreset, seamPatchStart, seamPatchRunning, seamSubmit; 41 before it); 40 before the frame's kick (frameKick, 6.9)
-// (kHostMethodsBudget and kFeedMethodsBudget are GONE, shell retirement R4, 2026-10-28: the HOST class - makePluginFeed and serveWebTiles, 2 after R3, 3 with setServerUsageHooks (stub campaign B15, gone in R3), 2 before B15 - and HostPluginFeed's 12 virtuals (12 with unplacedTracks, stub campaign B16; 11 before it) were deleted with their knock rows: makePluginFeed became the table's get_local_extension(FOXAPI_EXT_PLUGIN_UI), serveWebTiles became PluginUiPort::serveTiles, and the 12 virtuals became PluginUiPort's 14 (minus `report`, plus setFrontEnd, serveTiles and release), counted below as the EXTENSION surface, not the door.)
-constexpr int kCallSitesBudget = 0;       // `engine_.x` in src/gui, all classes: 0 after shell retirement R9 (2026-10-28: -9 - the constructor's and destructor's setFrontEndWaitBeat (2), drawUi's three stepPass, run's four measurement seams; THE WINDOW CALLS NOTHING ON THE ENGINE); 9 after shell retirement R8b (2026-10-28: -3, currentConfig's configSnapshot, saveConfigNow's publishConfig and the constructor's publishConfig baseline; 12 before it); 12 after shell retirement R8a (2026-10-28: -11 - run's nine (startReceiver, controlPass, startControlThread, configureHeartbeat, markCleanExit, shutdownQuiesce, shutdownStop, shutdownRelease, shutdownDrain) and ~AppWindow's two (stopTransfers, teardown); the three sites of the unused window keeper - currentConfig's configSnapshot, saveConfigNow's publishConfig, the constructor's publishConfig - go with it in R8b, 12 -> 9; 23 before it); 23 after shell retirement R7 (2026-10-28: -6, the constructor's initialise, loadBookmarks, telemetryStartup and configReadback (4), applyConfig's applyConfig (1) and openUiSession's apiHandle (1); 29 before it); 29 after shell retirement R5 (2026-10-28: -1, applyDiagnosticsEnabled's setControlWatchdogReportDir; 30 before it); 30 after shell retirement R4 (2026-10-28: -4, the four door methods of the plugin UI plane - makePluginFeed 1, setFrontEndFacts 1, reportPluginStatus 1, serveWebTiles 1 - whose sites are `ui_->` sites of the port now, 15 of them, counted by kPortCallSitesBudget; with them gone `pluginFeed_->x` (13 sites) is not a thing the guard counts any more: 47 before R4 was 34 engine_ + 13 pluginFeed_); 47 after shell retirement R3 (2026-10-28: -7, the five methods' sites - pluginCatalogueUrl 2, publishStatusText 1, statusText 2, frameKick 1, setServerUsageHooks 1; 54 before it); 54 after shell retirement R2 (2026-10-28: -13, the eight seams' sites - seamBiasStandIn 1, seamFetchCatalogue 1, seamSelectNativeDevice 1, seamDeviceOpenPending 1, seamPressPreset 1, seamPatchStart 1, seamPatchRunning 1, seamSubmit 6; 67 before it); 67 with stub campaign B16 (+1: hostUnplacedTracks' unplacedTracks, the one read of the new feed accessor); 66 with stub campaign B15 (+1: installTesterUsageHooks' setServerUsageHooks, the window's one call, from its constructor's helper); 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
-
-// THE PLUGIN UI PORT (core/plugin_ui_port.hpp; shell retirement R4, 2026-10-28; docs/api-0.3-additions.md 9.15) - the window's one C++ contact with the engine that is not the door and not the table's lists and facts, reached through ONE table member (get_local_extension) on the window's LOCAL session. Its surface is held like the door's: counted, implemented, called.
 constexpr int kPortMethodsBudget = 14;    // PluginUiPort's pure virtuals (the destructor apart): the seven host accessors (tracks, unplacedTracks, paths, panels, instruments, trackPluginNames, altitudeNear), poll, pollImages, applyNewestDirective, setFrontEnd, serveTiles, release, disconnect. 14 at R4: HostPluginFeed's 12 minus `report` (the plugin half of the status report rides setFrontEnd once) plus setFrontEnd (was the door's setFrontEndFacts), serveTiles (was the door's serveWebTiles) and release (the window's own shutdown release)
 constexpr int kPortCallSitesBudget = 15;  // `ui_->x` in src/gui: 15 at R4 - the 13 sites `pluginFeed_->x` had, minus `report` (run: 1) plus setFrontEnd (handFrontEndFacts: 1), serveTiles (pumpWebTiles: 1) and release (run: 1); the extension's own call, `get_local_extension`, is a table call (attachPluginUi) and is held by checkThePort
 constexpr int kExtensionIdsBudget = 1;    // FOXAPI_EXT_* in the vendored header: FOXAPI_EXT_PLUGIN_UI only. A second in-process extension is a decision (it reaches the engine's process by C++ objects), not a thing that happens
+// THE DOOR'S ROWS, AT THEIR EPITAPH (shell retirement R10, 2026-10-29): what the window may call on the engine by `engine_.x` is NOTHING and the allow list of engine/ headers is
+// EMPTY. They are constants only so that the tombstone rows print them; a number here that is not zero is a door that came back.
+constexpr int kDoorCallSitesBudget = 0;
+constexpr int kAllowedEngineHeadersBudget = 0;
+constexpr int kRawEngineFilesBudget = 0;
 
 // ----------------------------------------------------------------------------------------------------------------------------------
-// WHO MAY KNOCK: for each AppWindow member, the door methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails),
-// so this is exactly the set of calls the window makes - and the fence's list of who in the window talks to the engine at all.
+// WHO MAY KNOCK: for each AppWindow member, the port methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails), so this is
+// exactly the set of calls the window makes through the port. (There was a table of the DOOR's knocks beside it, kEngineKnocks, empty since R9 and
+// deleted with the door in R10: a call `engine_.x` is outside every table now, which is a failure by construction.)
 // ----------------------------------------------------------------------------------------------------------------------------------
 struct Knock {
     const char* member;
     std::vector<const char*> methods;
-};
-const std::vector<Knock> kEngineKnocks = {
-    // EMPTY since shell retirement R9 (2026-10-28): the window calls nothing on the engine - not the construction, the run, the frame's three parts of the pass
-    // (they are the window's own stepPass, which runs the bounded run's hook if the host installed one) nor the measurement run (the hook that ends each
-    // frame). A call `engine_.x` anywhere in src/gui is a call outside this table and fails checkWhoMayKnock.
 };
 // THE PLUGIN UI PORT (shell retirement R4; was the host feed, CLASS HOST): the host accessors and what drives them, the frame's hand-over, the
 // browser map's tiles and the shutdown's release - every `ui_->x` in src/gui.
@@ -111,7 +100,7 @@ const std::vector<Knock> kPortKnocks = {
     {"AppWindow::pumpWebTiles", {"serveTiles"}},              // the browser map's tiles, drained and answered on the window's thread (R4; was serveWebTiles)
 };
 
-// The window's machinery: the members that drive the shell or answer for it. Rule: no ImGui input in them.
+// The window's machinery: the members that drive the port or answer for the host. Rule: no ImGui input in them.
 const char* const kWindowMachinery[] = {
     "AppWindow::AppWindow",       "AppWindow::~AppWindow",       "AppWindow::applyWindowHalf",  "AppWindow::flushInterfaceHalf",
     "AppWindow::handFrontEndFacts", "AppWindow::wallTimeS",      "AppWindow::stepPass",         "AppWindow::endOfFrameHook",
@@ -130,17 +119,21 @@ const char* const kMustDeny[] = {"engine/engine.hpp",       "engine/engine_host.
                                  "core/pipeline.hpp",        "core/plugin_ui.hpp",     "core/plugin_api.hpp",       "core/plugin_runner.hpp",
                                  // the engine's side of the plugin UI port (R4): the window sees core/plugin_ui_port.hpp, never this
                                  "engine/plugin_ui_port.hpp",
+                                 // src/engine, denied WHOLE since R10: the vocabulary only the engine speaks, the service, the harness, the process boot
+                                 "engine/engine_types.hpp",  "engine/engine_service.hpp", "engine/host_measure.hpp", "engine/process_boot.hpp",
+                                 // the machinery whose data the interface was reaching, hoisted by R11a
+                                 "core/plugin_host.hpp",     "core/plugin_repo.hpp",   "core/freq_manager.hpp",     "core/mp3_writer.hpp",
                                  "core/recorder.hpp",        "core/transmitter.hpp",   "core/gps_reader.hpp",       "core/scanner.hpp",
                                  // src/net, denied whole by stage 5f (the servers are the engine's)
                                  "net/web_server.hpp",       "net/cat_server.hpp",     "net/web_session.hpp",       "net/status_compose.hpp"};
-constexpr std::size_t kAllowedEngineHeadersBudget = 13;
-
-// THE TEST HOST (shell retirement R1, 2026-10-28; docs/engine-stage4.md 6.25). The files that NAME rawEngine in code, in src/ and tests/ together:
-// 72 before R1 (69 window tests, pump3_support.hpp's local access, the shell's two files, and the comment-only mentions the code scan blanks),
-// 3 after - the shell's declaration and definition (they go with the shell, R10) and tests/test_host.hpp, the one audited place a test reaches
-// the Engine behind its window. The budget only goes down: 1 at R10, when rawEngine itself is deleted.
-constexpr int kRawEngineFilesBudget = 3;
-const char* const kRawEngineAllowed[] = {"src/engine/engine_shell.hpp", "src/engine/engine_shell.cpp", "tests/test_host.hpp"};
+// The twelve pure helpers that were src/engine's (the allow list of 13, with the door) until shell retirement R10 moved them: they live in core/ and nowhere else.
+const char* const kMovedToCore[] = {"tune_control.hpp",     "bias_tee.hpp",       "soundcard_panel.hpp",     "audio_open.hpp",
+                                    "device_scan_plan.hpp", "receiver_tables.hpp", "source_fallback.hpp",    "add_all_plan.hpp",
+                                    "running_view.hpp",     "rate_follow_status.hpp", "plugin_store_reasons.hpp", "tx_frequency.hpp"};
+// The data headers shell retirement made: the vocabulary split out of the door (R10) and the hoists of the ledger (R11a). The interface may include each; none may include a denied header.
+const char* const kDataHeaders[] = {"core/engine_vocab.hpp",     "core/status_text.hpp",       "core/pass_part.hpp",       "core/plugin_ui_port.hpp",
+                                    "core/bounded_hooks.hpp",    "core/plugin_host_data.hpp",  "core/plugin_repo_data.hpp", "core/bookmark.hpp",
+                                    "core/mp3_support.hpp"};
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -275,7 +268,7 @@ std::vector<fs::path> guiFiles(const fs::path& root, bool headers) {
     return out;
 }
 
-// --- engine_shell.hpp -----------------------------------------------------------------------------------------------------------
+// --- the plugin UI port's header ------------------------------------------------------------------------------------------------
 
 struct Decl {
     std::string name;
@@ -337,48 +330,13 @@ std::vector<Decl> declarationsIn(const std::vector<std::string>& lines) {
 }
 
 struct Surface {
-    std::vector<Decl> shell, port;
-    bool sectionsDated = true;
-    std::string whyNot;
+    std::vector<Decl> port;
     std::string portText;  // core/plugin_ui_port.hpp, whole
 };
 
 Surface readSurface(const fs::path& root) {
     Surface s;
-    const std::string text = readFile(root / "src" / "engine" / "engine_shell.hpp");
-    CHECK(!text.empty());
-    // The class body, by its opening line.
-    const std::size_t shellAt = text.find("class EngineShell {");
-    CHECK(shellAt != std::string::npos);
-    const std::size_t shellEnd = text.find("\nprivate:", shellAt);
-    CHECK(shellEnd != std::string::npos);
-    // The marker inside EngineShell (a comment, so found in the raw text).
-    const std::size_t mShell = text.find("CLASS SHELL (added", shellAt);
-    CHECK(mShell != std::string::npos);
-    CHECK(mShell < shellEnd);
-    // THE HOST CLASS IS GONE (shell retirement R4): its marker may not come back without this file changing with it, any more than the WEB / CAT
-    // class's (stage 5f) may. The words survive in comments (the retired classes are told of), so what is looked for is the MARKER form.
-    const bool webClassGone = text.find("CLASS WEB / CAT (added") == std::string::npos;
-    if (!webClassGone) { std::printf("FAIL: engine_shell.hpp has a CLASS WEB / CAT marker again - the class was deleted by stage 5f\n"); }
-    CHECK(webClassGone);
-    const bool hostClassGone = text.find("CLASS HOST (added") == std::string::npos && text.find("class HostPluginFeed") == std::string::npos;
-    if (!hostClassGone) {
-        std::printf("FAIL: engine_shell.hpp has a CLASS HOST marker or a HostPluginFeed again - the class was deleted by shell retirement R4: the plugin UI is "
-                    "the port's (core/plugin_ui_port.hpp)\n");
-    }
-    CHECK(hostClassGone);
-    // the marker carries a DATE and an END
-    const std::size_t eol = text.find("\n", text.find("\n", mShell) + 1);
-    const std::string head = text.substr(mShell, eol - mShell);
-    if (!(std::regex_search(head, std::regex("added 20[0-9][0-9]-[01][0-9]-[0-3][0-9]")) && head.find("END:") != std::string::npos)) {
-        s.sectionsDated = false;
-        s.whyNot += " SHELL";
-    }
-    const auto lineStart = [&](std::size_t at) { return text.rfind('\n', at) == std::string::npos ? std::size_t(0) : text.rfind('\n', at) + 1; };
-    (void)lineStart;
-    s.shell = declarationsIn(codeLines(text.substr(shellAt + std::strlen("class EngineShell {"), shellEnd - (shellAt + std::strlen("class EngineShell {")))));
-
-    // THE PORT: core/plugin_ui_port.hpp's class body.
+    // THE PORT: core/plugin_ui_port.hpp's class body. (The door's header, engine/engine_shell.hpp, was read here until R10 deleted it.)
     s.portText = readFile(root / "src" / "core" / "plugin_ui_port.hpp");
     CHECK(!s.portText.empty());
     const std::size_t portAt = s.portText.find("class PluginUiPort {");
@@ -389,12 +347,11 @@ Surface readSurface(const fs::path& root) {
     return s;
 }
 
-// The parts of engine_shell.hpp's EngineShell section that precede the marker are comments and the "public:"; CLASS SHELL's marker sits in
-// the comment before create(), so the shell slice above starts at the class head and includes create(). Names of every door method:
-std::set<std::string> namesOf(const std::vector<Decl>& v, bool skipCtors) {
+// Names of every port method (the destructor apart).
+std::set<std::string> namesOf(const std::vector<Decl>& v) {
     std::set<std::string> out;
     for (const Decl& d : v) {
-        if (skipCtors && (d.name == "EngineShell" || d.name == "~EngineShell" || d.name == "create" || d.name == "view" || d.name == "~PluginUiPort")) { continue; }
+        if (d.name == "~PluginUiPort") { continue; }
         out.insert(d.name);
     }
     return out;
@@ -454,7 +411,9 @@ std::vector<Call> callsIn(const fs::path& root) {
 
 // --- the fence's configuration ---------------------------------------------------------------------------------------------------
 
-std::set<std::string> denyListOf(const fs::path& root, std::set<std::string>& allowedEngine) {
+// The fence's deny list, as the fence file builds it: every `cascade_interface_deny(<header> "<why>")` line, plus EVERY header of src/engine and of src/net (both are
+// denied whole, by a directory glob, with no allow list: the guard reads the directories, so a header added there is denied here too).
+std::set<std::string> denyListOf(const fs::path& root) {
     std::set<std::string> deny;
     const std::string text = readFile(root / "cmake" / "interface_fence.cmake");
     CHECK(!text.empty());
@@ -464,29 +423,13 @@ std::set<std::string> denyListOf(const fs::path& root, std::set<std::string>& al
         const std::string h = (*it)[1].str();
         if (h.find("${") == std::string::npos) { deny.insert(h); }
     }
-    // the allow list for src/engine
-    const std::size_t a = text.find("set(CASCADE_INTERFACE_ALLOWED_ENGINE_HEADERS");
-    CHECK(a != std::string::npos);
-    const std::size_t b = text.find(")", a);
-    std::istringstream in(text.substr(a, b - a));
-    std::string tok;
-    in >> tok;  // set(CASCADE_INTERFACE_ALLOWED_ENGINE_HEADERS
-    while (in >> tok) {
-        if (tok.find(".hpp") != std::string::npos || tok.find(".h") != std::string::npos) { allowedEngine.insert(tok); }
-    }
-    // src/engine is denied by default
     std::error_code ec;
-    for (const auto& e : fs::directory_iterator(root / "src" / "engine", ec)) {
-        const std::string ext = e.path().extension().string();
-        if (ext != ".hpp" && ext != ".h") { continue; }
-        const std::string name = e.path().filename().string();
-        if (allowedEngine.count(name) == 0) { deny.insert("engine/" + name); }
-    }
-    // src/net is denied WHOLE (stage 5f: the servers are the engine's), with no allow list
-    for (const auto& e : fs::directory_iterator(root / "src" / "net", ec)) {
-        const std::string ext = e.path().extension().string();
-        if (ext != ".hpp" && ext != ".h") { continue; }
-        deny.insert("net/" + e.path().filename().string());
+    for (const char* dir : {"engine", "net"}) {
+        for (const auto& e : fs::directory_iterator(root / "src" / dir, ec)) {
+            const std::string ext = e.path().extension().string();
+            if (ext != ".hpp" && ext != ".h") { continue; }
+            deny.insert(std::string(dir) + "/" + e.path().filename().string());
+        }
     }
     return deny;
 }
@@ -503,39 +446,47 @@ std::vector<std::string> includesOf(const std::string& text) {
     return out;
 }
 
+// THE INCLUDE CLOSURE of src/gui: every header a window file reaches through quoted includes, followed through every header it reaches (an include is
+// resolved against src/ and then against the including file's own directory; <system> includes and generated headers resolve to nothing). The
+// compiler fence sees only the headers some interface translation unit happens to compile; this is the whole closure. Returns the set of src-relative paths.
+std::set<std::string> guiClosure(const fs::path& root) {
+    std::set<std::string> seen;
+    std::vector<std::string> todo;
+    for (const fs::path& p : guiFiles(root, true)) { todo.push_back("gui/" + p.filename().string()); }
+    while (!todo.empty()) {
+        const std::string h = todo.back();
+        todo.pop_back();
+        if (!seen.insert(h).second) { continue; }
+        const fs::path file = root / "src" / h;
+        std::error_code ec;
+        if (!fs::exists(file, ec)) { continue; }
+        const std::string dir = h.find('/') == std::string::npos ? std::string() : h.substr(0, h.rfind('/') + 1);
+        for (const std::string& inc : includesOf(readFile(file))) {
+            if (fs::exists(root / "src" / inc, ec)) {
+                todo.push_back(inc);
+            } else if (fs::exists(root / "src" / (dir + inc), ec)) {
+                todo.push_back(dir + inc);
+            }
+        }
+    }
+    return seen;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call>& calls) {
-    const auto sh = namesOf(s.shell, true);
-    const auto po = namesOf(s.port, true);
-    std::printf("  the door's surface: shell %zu methods (budget %d); no host or web/CAT class; the plugin UI port's %zu virtuals (budget %d)\n", sh.size(),
-                kShellMethodsBudget, po.size(), kPortMethodsBudget);
-    if (static_cast<int>(sh.size()) > kShellMethodsBudget || static_cast<int>(po.size()) > kPortMethodsBudget) {
-        std::printf("FAIL: engine_shell.hpp or core/plugin_ui_port.hpp grew past a budget - a new door is a decision: say which class it is, give it its "
-                    "dated comment and its end, and move the budget in this file in the same change (or port the read the house way "
-                    "instead of widening the door)\n");
+    const auto po = namesOf(s.port);
+    std::printf("  the port's surface: %zu virtuals (budget %d); the door's: engine_shell.hpp deleted (R10), no host or web/CAT class\n", po.size(), kPortMethodsBudget);
+    if (static_cast<int>(po.size()) != kPortMethodsBudget) {
+        std::printf("FAIL: core/plugin_ui_port.hpp has %zu virtuals, the budget is %d - a new method on the port is a decision: say why in the header's dated comment and "
+                    "move the budget in this file in the same change (or port the read the house way: a list, a fact or an op of the table)\n",
+                    po.size(), kPortMethodsBudget);
     }
-    CHECK(static_cast<int>(sh.size()) <= kShellMethodsBudget);
     CHECK(static_cast<int>(po.size()) <= kPortMethodsBudget);
-    // The scan saw the real headers (the door has no methods to see since R9: the class head and its marker are found above; the port is the one with a body).
-    CHECK(po.size() >= 8);
-    // ...and a class that only ever shrinks: a budget above what is there is a stale budget.
-    CHECK(static_cast<int>(sh.size()) == kShellMethodsBudget);
-    CHECK(static_cast<int>(po.size()) == kPortMethodsBudget);
-    if (!s.sectionsDated) {
-        std::printf("FAIL: engine_shell.hpp's section marker lacks 'added YYYY-MM-DD' or 'END:' for:%s\n", s.whyNot.c_str());
-    }
-    CHECK(s.sectionsDated);
+    CHECK(static_cast<int>(po.size()) >= 8);   // the scan saw the real header
+    CHECK(static_cast<int>(po.size()) == kPortMethodsBudget);   // ...and a budget above what is there is a stale budget
 
-    // Every declaration is implemented in engine_shell.cpp (EngineShell::x for the door), and every port virtual is a PURE one implemented by
-    // the engine's side, src/engine/plugin_ui_port.cpp (PluginUiPortImpl::x).
-    const std::string impl = readFile(root / "src" / "engine" / "engine_shell.cpp");
-    CHECK(!impl.empty());
-    for (const std::string& n : sh) {
-        const bool ok = impl.find("EngineShell::" + n + "(") != std::string::npos;
-        if (!ok) { std::printf("FAIL: EngineShell::%s is declared in engine_shell.hpp and defined nowhere in engine_shell.cpp\n", n.c_str()); }
-        CHECK(ok);
-    }
+    // Every port virtual is PURE and implemented by the engine's side, src/engine/plugin_ui_port.cpp (PluginUiPortImpl::x).
     const std::string portImpl = readFile(root / "src" / "engine" / "plugin_ui_port.cpp");
     CHECK(!portImpl.empty());
     for (const Decl& d : s.port) {
@@ -547,137 +498,131 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
         CHECK(ok);
     }
 
-    // Every declaration is CALLED from src/gui (a method nobody calls is a door nobody needs: retire it). create / apiTable are static
-    // (EngineShell::x), the rest go through engine_ / ui_.
-    std::set<std::string> engineCalled, portCalled;
-    for (const Call& c : calls) { (c.object == "engine_" ? engineCalled : portCalled).insert(c.method); }
-    std::string guiText;
-    for (const fs::path& p : guiFiles(root, false)) { guiText += readFile(p); }
-    for (const fs::path& p : guiFiles(root, true)) {
-        if (p.extension() == ".hpp") { guiText += readFile(p); }
-    }
-    const auto called = [&](const std::string& n) {
-        return engineCalled.count(n) != 0 || guiText.find("EngineShell::" + n + "(") != std::string::npos;
-    };
-    for (const std::string& n : sh) {
-        if (!called(n)) {
-            std::printf("FAIL: EngineShell::%s is declared and no member of the window calls it - retire the door (its last caller is gone)\n", n.c_str());
-        }
-        CHECK(called(n));
+    // Every port method is CALLED from src/gui (a method nobody calls is a surface nobody needs: retire it), and the window calls nothing the port does not declare.
+    std::set<std::string> portCalled;
+    for (const Call& c : calls) {
+        if (c.object == "ui_") { portCalled.insert(c.method); }
     }
     for (const std::string& n : po) {
-        if (portCalled.count(n) == 0) {
-            std::printf("FAIL: PluginUiPort::%s is declared and the window never calls it - retire it\n", n.c_str());
-        }
+        if (portCalled.count(n) == 0) { std::printf("FAIL: PluginUiPort::%s is declared and the window never calls it - retire it\n", n.c_str()); }
         CHECK(portCalled.count(n) != 0);
     }
-    // ...and the window calls nothing the door does not declare (the compiler says so too; this names the class when it is a typo of one).
     for (const Call& c : calls) {
-        if (c.object == "engine_" && sh.count(c.method) == 0) {
-            std::printf("FAIL: %s:%d calls engine_.%s, which engine_shell.hpp does not declare\n", c.file.c_str(), c.line, c.method.c_str());
-            CHECK(false);
-        }
         if (c.object == "ui_" && po.count(c.method) == 0) {
             std::printf("FAIL: %s:%d calls ui_->%s, which core/plugin_ui_port.hpp does not declare\n", c.file.c_str(), c.line, c.method.c_str());
             CHECK(false);
         }
     }
-    (void)root;
 }
 
 void checkWhoMayKnock(const std::vector<Call>& calls) {
     std::set<std::string> matched;
-    int sites = 0, portSites = 0, bad = 0;
+    int doorSites = 0, portSites = 0, bad = 0;
     std::set<std::string> members;
     for (const Call& c : calls) {
-        if (c.object == "engine_") { ++sites; } else { ++portSites; }
-        const std::vector<Knock>& table = (c.object == "engine_") ? kEngineKnocks : kPortKnocks;
+        if (c.object == "engine_") { ++doorSites; } else { ++portSites; }
         bool ok = false;
-        for (const Knock& k : table) {
-            if (c.member != k.member) { continue; }
-            for (const char* m : k.methods) {
-                if (c.method == m) {
-                    ok = true;
-                    matched.insert(c.object + "|" + k.member + "|" + m);
+        if (c.object == "ui_") {
+            for (const Knock& k : kPortKnocks) {
+                if (c.member != k.member) { continue; }
+                for (const char* m : k.methods) {
+                    if (c.method == m) {
+                        ok = true;
+                        matched.insert(k.member + std::string("|") + m);
+                    }
                 }
             }
         }
         members.insert(c.member);
         if (!ok) {
             ++bad;
-            std::printf("FAIL: %s:%d: %s calls %s%s%s, which the fence does not let it - only the shell's members drive the door, the plugin UI's "
-                        "accessors, the frame's hand-over, the tile pump and the shutdown go through the port (kEngineKnocks / kPortKnocks)\n",
+            std::printf("FAIL: %s:%d: %s calls %s%s%s - the window calls NOTHING on the engine (the door was deleted, R10); only the plugin UI's accessors, the "
+                        "frame's hand-over, the tile pump and the shutdown go through the port (kPortKnocks)\n",
                         c.file.c_str(), c.line, c.member.c_str(), c.object.c_str(), c.object == "engine_" ? "." : "->", c.method.c_str());
         }
     }
-    std::printf("  who knocks: %d door call sites and %d port call sites in %zu window members, %d outside the table (budgets %d and %d sites)\n", sites,
-                portSites, members.size(), bad, kCallSitesBudget, kPortCallSitesBudget);
+    std::printf("  who knocks: %d door call sites (budget %d - the tombstone) and %d port call sites in %zu window members, %d outside the table (budget %d port sites)\n",
+                doorSites, kDoorCallSitesBudget, portSites, members.size(), bad, kPortCallSitesBudget);
     CHECK(bad == 0);
-    CHECK(sites == kCallSitesBudget);
+    CHECK(doorSites == kDoorCallSitesBudget);
     CHECK(portSites == kPortCallSitesBudget);
-    CHECK(portSites >= 9);  // the scan saw the real files (the door has no sites left: R9)
+    CHECK(portSites >= 9);  // the scan saw the real files
     // Every table entry is matched by a call.
-    for (const Knock& k : kEngineKnocks) {
-        for (const char* m : k.methods) {
-            const bool ok = matched.count("engine_|" + std::string(k.member) + "|" + m) != 0;
-            if (!ok) { std::printf("FAIL: kEngineKnocks {%s, %s} matches no call - remove it\n", k.member, m); }
-            CHECK(ok);
-        }
-    }
     for (const Knock& k : kPortKnocks) {
         for (const char* m : k.methods) {
-            const bool ok = matched.count("ui_|" + std::string(k.member) + "|" + m) != 0;
+            const bool ok = matched.count(k.member + std::string("|") + m) != 0;
             if (!ok) { std::printf("FAIL: kPortKnocks {%s, %s} matches no call - remove it\n", k.member, m); }
             CHECK(ok);
         }
     }
 }
 
-void checkTheFence(const fs::path& root, const std::set<std::string>& deny, const std::set<std::string>& allowedEngine) {
+void checkTheFence(const fs::path& root, const std::set<std::string>& deny) {
     // the deny list holds what it must
     for (const char* h : kMustDeny) {
         const bool ok = deny.count(h) != 0;
         if (!ok) { std::printf("FAIL: the fence no longer denies <%s> to the interface (cmake/interface_fence.cmake)\n", h); }
         CHECK(ok);
     }
-    // src/net is denied WHOLE by the fence file, with no allow list and no way to take a header back out of the deny list (the guard reads
-    // the directory for the deny set above; this holds that the file really does the same)
+    const std::string fenceText = readFile(root / "cmake" / "interface_fence.cmake");
+    // src/engine and src/net are denied WHOLE by the fence file, with no allow list and no way to take a header back out of the deny list (the guard reads the
+    // directories for the deny set above; this holds that the file really does the same). The fence file's CODE (its comments tell of the dead list).
     {
-        const std::string fenceText = readFile(root / "cmake" / "interface_fence.cmake");
-        const bool netGlob = fenceText.find("src/net/*.hpp") != std::string::npos &&
-                             fenceText.find("foreach(_h IN LISTS _cascade_net_headers)") != std::string::npos;
-        const bool noTakeBack = fenceText.find("REMOVE_ITEM CASCADE_INTERFACE_DENIED") == std::string::npos &&
-                                fenceText.find("ALLOWED_NET") == std::string::npos;
+        std::string code;
+        for (const std::string& l : codeLines(fenceText)) { code += l + "\n"; }
+        // (codeLines blanks `#` comments? no: it blanks C++ comments, and a cmake comment is `#`: drop those lines here)
+        std::string cmakeCode;
+        std::istringstream in(fenceText);
+        for (std::string l; std::getline(in, l);) {
+            const std::size_t first = l.find_first_not_of(" \t");
+            if (first == std::string::npos || l[first] == '#') { continue; }
+            cmakeCode += l + "\n";
+        }
+        const bool netGlob = cmakeCode.find("src/net/*.hpp") != std::string::npos && cmakeCode.find("foreach(_h IN LISTS _cascade_net_headers)") != std::string::npos;
+        const bool engineGlob = cmakeCode.find("src/engine/*.hpp") != std::string::npos && cmakeCode.find("foreach(_h IN LISTS _cascade_engine_headers)") != std::string::npos;
+        const bool noTakeBack = cmakeCode.find("REMOVE_ITEM CASCADE_INTERFACE_DENIED") == std::string::npos && cmakeCode.find("ALLOWED_NET") == std::string::npos;
+        const bool noAllowList = cmakeCode.find("ALLOWED_ENGINE") == std::string::npos && cmakeCode.find("list(FIND CASCADE_INTERFACE_ALLOWED") == std::string::npos;
         if (!netGlob) { std::printf("FAIL: cmake/interface_fence.cmake no longer denies every header of src/net (stage 5f)\n"); }
+        if (!engineGlob) { std::printf("FAIL: cmake/interface_fence.cmake no longer denies every header of src/engine (shell retirement R10)\n"); }
         if (!noTakeBack) { std::printf("FAIL: cmake/interface_fence.cmake takes a header back out of the deny list or has a net/ allow list\n"); }
+        if (!noAllowList) { std::printf("FAIL: cmake/interface_fence.cmake has an engine/ allow list again - src/engine is denied WHOLE (R10); a pure helper belongs in core/\n"); }
         CHECK(netGlob);
+        CHECK(engineGlob);
         CHECK(noTakeBack);
+        CHECK(noAllowList);
     }
-    // the engine/ allow list stays small, and never names the Engine
-    std::printf("  the fence: %zu headers denied, %zu engine/ headers allowed (budget %zu)\n", deny.size(), allowedEngine.size(),
-                kAllowedEngineHeadersBudget);
-    CHECK(allowedEngine.size() <= kAllowedEngineHeadersBudget);
-    CHECK(allowedEngine.count("engine.hpp") == 0);
-    CHECK(allowedEngine.count("engine_host.hpp") == 0);
-    CHECK(allowedEngine.count("fox_engine_api.hpp") == 0);
-    CHECK(allowedEngine.count("engine_shell.hpp") == 1);
+    // THE ALLOWED ENGINE HEADERS: every header of src/engine is on the deny list, so the allow side is empty (budget 0; it was 13 until R10)
+    {
+        std::size_t engineHeaders = 0, engineDenied = 0;
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(root / "src" / "engine", ec)) {
+            const std::string ext = e.path().extension().string();
+            if (ext != ".hpp" && ext != ".h") { continue; }
+            ++engineHeaders;
+            if (deny.count("engine/" + e.path().filename().string()) != 0) { ++engineDenied; }
+        }
+        const std::size_t allowed = engineHeaders - engineDenied;
+        std::printf("  the fence: %zu headers denied; %zu of %zu engine/ headers allowed (budget %d - it was 13 until R10)\n", deny.size(), allowed, engineHeaders,
+                    kAllowedEngineHeadersBudget);
+        CHECK(engineHeaders >= 10);   // the scan saw the real directory
+        CHECK(allowed == static_cast<std::size_t>(kAllowedEngineHeadersBudget));
+    }
 
-    // the interface target is built, from src/gui, behind the fence, and the headless programs refuse it
+    // the interface target is built, from src/gui, behind the fence; it links the engine LIBRARY (core/'s objects) and no shell; the headless programs refuse it
     const std::string cmake = readFile(root / "CMakeLists.txt");
     CHECK(!cmake.empty());
     const bool target = cmake.find("add_library(cascade_interface STATIC ${CASCADE_GUI})") != std::string::npos;
     const bool fenced = cmake.find("cascade_apply_interface_fence(cascade_interface)") != std::string::npos;
-    const bool shellTarget = cmake.find("add_library(cascade_shell STATIC src/engine/engine_shell.cpp)") != std::string::npos;
-    const bool excluded = cmake.find("EXCLUDE REGEX \"engine_shell") != std::string::npos;
-    const bool refused = cmake.find("^cascade_interface$|^cascade_shell$") != std::string::npos;
+    const bool links = cmake.find("    OpenGL::GL\n    cascade_engine)") != std::string::npos &&
+                       cmake.find("target_link_libraries(cascade_gui INTERFACE cascade_interface cascade_engine)") != std::string::npos;
+    const bool refused = cmake.find("^cascade_gui$|^cascade_interface$\")") != std::string::npos;
     const bool headless = cmake.find("set(_todo cascade_engine cascade_engine_link_check foxsdr-reports foxsdr-engine)") != std::string::npos;
     if (!target || !fenced) { std::printf("FAIL: CMakeLists.txt no longer builds the window as cascade_interface behind the fence\n"); }
-    if (!shellTarget || !excluded) { std::printf("FAIL: engine_shell.cpp is not the cascade_shell target's alone (the headless engine must not carry it)\n"); }
-    if (!refused || !headless) { std::printf("FAIL: the engine-side link check no longer refuses cascade_interface / cascade_shell for the headless programs\n"); }
+    if (!links) { std::printf("FAIL: cascade_interface / cascade_gui no longer link the engine library directly (the shell target is gone: they link cascade_engine)\n"); }
+    if (!refused || !headless) { std::printf("FAIL: the engine-side link check no longer refuses cascade_interface / cascade_gui for the headless programs\n"); }
     CHECK(target);
     CHECK(fenced);
-    CHECK(shellTarget);
-    CHECK(excluded);
+    CHECK(links);
     CHECK(refused);
     CHECK(headless);
     // the compile probes exist (tests/CMakeLists.txt registers them)
@@ -687,50 +632,122 @@ void checkTheFence(const fs::path& root, const std::set<std::string>& deny, cons
     CHECK(probes);
 
     // NO FILE UNDER src/gui NAMES A DENIED HEADER - the compiler sees only the headers some interface translation unit happens to include.
-    int named = 0;
+    int named = 0, engineNamed = 0;
     for (const fs::path& p : guiFiles(root, true)) {
         for (const std::string& inc : includesOf(readFile(p))) {
             if (deny.count(inc) != 0) {
                 ++named;
                 std::printf("FAIL: src/gui/%s includes <%s>, which the fence denies the interface\n", p.filename().string().c_str(), inc.c_str());
             }
+            if (inc.rfind("engine/", 0) == 0) { ++engineNamed; }
         }
     }
     CHECK(named == 0);
+    std::printf("  src/gui includes %d engine/ headers (budget 0)\n", engineNamed);
+    CHECK(engineNamed == 0);
 
-    // THE SIBLING HOLE. An allowed header of src/engine that itself includes a denied one would be caught by the compiler only through a
-    // translation unit that reaches it; this holds it for the allowed ones whether or not one does yet.
-    int holes = 0;
-    for (const std::string& h : allowedEngine) {
-        for (const std::string& inc : includesOf(readFile(root / "src" / "engine" / h))) {
-            if (deny.count(inc) != 0) {
-                ++holes;
-                std::printf("FAIL: src/engine/%s is on the interface's allow list and includes <%s>, which is denied\n", h.c_str(), inc.c_str());
+    // THE INCLUDE CLOSURE OF src/gui. Everything a window file reaches through any header: none denied, none under engine/ or net/. (The sibling-hole check of the
+    // allow list - an allowed header that itself includes a denied one - is this check, for every header the interface reaches, allowed by a list or not.)
+    {
+        const std::set<std::string> closure = guiClosure(root);
+        std::map<std::string, int> byDir;
+        int denied = 0;
+        for (const std::string& h : closure) {
+            const std::size_t slash = h.find('/');
+            if (slash == std::string::npos) { continue; }
+            ++byDir[h.substr(0, slash)];
+            if (deny.count(h) != 0 || h.rfind("engine/", 0) == 0 || h.rfind("net/", 0) == 0) {
+                ++denied;
+                std::printf("FAIL: the interface's include closure reaches <%s>, which the fence denies (through a header the interface includes)\n", h.c_str());
+            }
+        }
+        std::printf("  the interface's include closure: %zu files (", closure.size());
+        for (const auto& kv : byDir) { std::printf("%s %d, ", kv.first.c_str(), kv.second); }
+        std::printf("engine %d, net %d): %d denied (expect 0)\n", byDir.count("engine") != 0 ? byDir["engine"] : 0, byDir.count("net") != 0 ? byDir["net"] : 0, denied);
+        CHECK(denied == 0);
+        CHECK(closure.size() > 200);   // the walk saw the real tree
+        // every data header shell retirement made is reached or at least exists, is not denied and includes nothing denied
+        for (const char* h : kDataHeaders) {
+            CHECK(deny.count(h) == 0);
+            const std::string t = readFile(root / "src" / h);
+            if (t.empty()) { std::printf("FAIL: %s is missing\n", h); }
+            CHECK(!t.empty());
+            for (const std::string& inc : includesOf(t)) {
+                if (deny.count(inc) != 0 || inc.rfind("engine/", 0) == 0) {
+                    std::printf("FAIL: %s includes \"%s\" - a data header the interface may include takes nothing denied\n", h, inc.c_str());
+                    CHECK(false);
+                }
             }
         }
     }
-    CHECK(holes == 0);
 
-    // THE BACK DOOR. rawEngine returns the Engine; naming it from src/gui is the one way left to hold an incomplete reference. And the
-    // engine is reached by no other name: engineHolder_ is the constructor's.
+    // THE TWELVE PURE HELPERS live in core/ and nowhere in engine/ (R10's moves; an allow list of 13 held them until then)
+    {
+        int bad = 0;
+        for (const char* n : kMovedToCore) {
+            std::error_code ec;
+            const bool inCore = fs::exists(root / "src" / "core" / n, ec);
+            const bool inEngine = fs::exists(root / "src" / "engine" / n, ec);
+            if (!inCore || inEngine) {
+                ++bad;
+                std::printf("FAIL: %s must be src/core/%s and not src/engine/%s (shell retirement R10)\n", n, n, n);
+            }
+        }
+        CHECK(bad == 0);
+    }
+
+    // THE DOOR DOES NOT EXIST. The header, its implementation and the target are gone, and nothing in src/, tests/ or the CMake files includes, links or names them
+    // in code (comments tell the history; this file names them in strings to hold them dead).
+    {
+        std::error_code ec;
+        const bool gone = !fs::exists(root / "src" / "engine" / "engine_shell.hpp", ec) && !fs::exists(root / "src" / "engine" / "engine_shell.cpp", ec);
+        if (!gone) { std::printf("FAIL: engine/engine_shell.hpp or .cpp exists again - the door was deleted by shell retirement R10\n"); }
+        CHECK(gone);
+        std::vector<fs::path> all = sourcesUnder(root / "src");
+        const std::vector<fs::path> tests = sourcesUnder(root / "tests");
+        all.insert(all.end(), tests.begin(), tests.end());
+        int doorNames = 0;
+        for (const fs::path& p : all) {
+            if (p.filename() == "test_engine_shell_guard.cpp") { continue; }
+            for (const std::string& l : codeLines(readFile(p))) {
+                for (const char* n : {"engine_shell", "EngineShell"}) {
+                    if (l.find(n) != std::string::npos) { ++doorNames; }
+                }
+            }
+            for (const std::string& inc : includesOf(readFile(p))) {
+                if (inc.find("engine_shell") != std::string::npos) { ++doorNames; }
+            }
+        }
+        std::printf("  the door: engine_shell.{hpp,cpp} %s; engine_shell / EngineShell named in code or includes: %d (expect 0)\n", gone ? "deleted" : "BACK",
+                    doorNames);
+        CHECK(doorNames == 0);
+        // CMake: no cascade_shell target or link, no engine_shell source (comment lines of the files tell the history)
+        int cmakeNames = 0;
+        for (const fs::path& f : {root / "CMakeLists.txt", root / "tests" / "CMakeLists.txt", root / "cmake" / "interface_fence.cmake"}) {
+            std::istringstream in(readFile(f));
+            for (std::string l; std::getline(in, l);) {
+                const std::size_t first = l.find_first_not_of(" \t");
+                if (first == std::string::npos || l[first] == '#') { continue; }
+                if (l.find("engine_shell") != std::string::npos) { ++cmakeNames; }
+                if (l.find("cascade_shell") != std::string::npos && l.find("^cascade_shell$") == std::string::npos) { ++cmakeNames; }
+            }
+        }
+        std::printf("  the shell target: named in CMake code %d time(s) (expect 0)\n", cmakeNames);
+        CHECK(cmakeNames == 0);
+    }
+
+    // THE BACK DOORS. rawEngine returned the Engine and engineHolder_ held the shell's view of it; naming either from src/gui is the one way left to hold an engine
+    // (they do not exist; this holds it for the window's CODE).
     int back = 0;
     for (const fs::path& p : guiFiles(root, true)) {
         for (const std::string& l : codeLines(readFile(p))) {
-            if (l.find("rawEngine") != std::string::npos) {
+            if (l.find("rawEngine") != std::string::npos || l.find("engineHolder_") != std::string::npos) {
                 ++back;
-                std::printf("FAIL: src/gui/%s names rawEngine - the Engine behind the door is not the interface's\n", p.filename().string().c_str());
+                std::printf("FAIL: src/gui/%s names rawEngine or engineHolder_ - the window holds no engine\n", p.filename().string().c_str());
             }
         }
     }
     CHECK(back == 0);
-    int holders = 0;
-    for (const fs::path& p : guiFiles(root, true)) {
-        for (const std::string& l : codeLines(readFile(p))) {
-            if (l.find("engineHolder_") != std::string::npos) { ++holders; }
-        }
-    }
-    std::printf("  engineHolder_: %d code lines in src/gui (expect 3: the declaration, the initialiser and engine_'s)\n", holders);
-    CHECK(holders == 3);
 }
 
 // RULE 5, kept from the ratchet: the window's machinery contains no ImGui input.
@@ -775,12 +792,12 @@ void checkMachineryHasNoInput(const fs::path& root) {
 // compile.)
 void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) {
     // THE THREE PARTS OF THE PASS are the window's own stepPass since shell retirement R9 (it runs the bounded run's hook, when the host installed one, under
-    // the window's watchdog pause; the door's stepPass is gone): its calls are counted as text over the CODE of src/gui, not as calls on the door.
-    int stepCalls = 0, controlPassCalls = 0, startCalls = 0, kickCalls = 0, engineCalls = 0;
+    // the window's watchdog pause): its calls are counted as text over the CODE of src/gui. The window starts no pass, kicks none and calls nothing on the engine
+    // (the door's rows - frameKick, controlPass, startControlThread, engine_ calls - are the tombstone: zero, and the global door-site count says so).
+    int stepCalls = 0, controlPassCalls = 0, startCalls = 0, engineCalls = 0;
     for (const Call& c : calls) {
         if (c.object != "engine_") { continue; }
         ++engineCalls;
-        if (c.method == "frameKick") { ++kickCalls; }   // (the door no longer has it: the frame's kick is the heartbeat of a FRAME session)
         if (c.method == "controlPass") { ++controlPassCalls; }
         if (c.method == "startControlThread") { ++startCalls; }
     }
@@ -796,7 +813,6 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
     std::printf("  the frame is a look: stepPass %d (expect 3), controlPass %d (expect 0), startControlThread %d (expect 0), engine_ calls %d (expect 0)\n", stepCalls,
                 controlPassCalls, startCalls, engineCalls);
     CHECK(stepCalls == 3);
-    CHECK(kickCalls == 0);   // THE FRAME KICKS THE PASS through the table now (6.9, R3): the heartbeat in run()'s loop - checked below
     CHECK(controlPassCalls == 0);   // THE ENGINE'S PASS IS THE SERVICE'S TO START (shell retirement R8): the window starts nothing - checked below
     CHECK(startCalls == 0);
     CHECK(engineCalls == 0);
@@ -999,7 +1015,7 @@ void checkRetiredHooks(const fs::path& root) {
         ++found;
         std::printf("FAIL: retired host hook %s is back in %s: %s\n", hook, where.c_str(), line.c_str());
     };
-    for (const char* rel : {"src/engine/engine_host.hpp", "src/engine/engine_host.cpp", "src/engine/engine_shell.hpp"}) {
+    for (const char* rel : {"src/engine/engine_host.hpp", "src/engine/engine_host.cpp"}) {
         for (const std::string& l : codeLines(readFile(root / rel))) {
             for (const char* h : kRetiredHooks) {
                 if (l.find(std::string(h) + "(") != std::string::npos) { flag(rel, l, h); }
@@ -1070,7 +1086,7 @@ void checkPluginUiOwnership(const fs::path& root) {
         const std::string ext = e.path().extension().string();
         if (ext != ".cpp" && ext != ".hpp") { continue; }
         for (const std::string& l : codeLines(readFile(e.path()))) {
-            if (l.find("pluginUi_") != std::string::npos && e.path().filename() != "engine_shell.cpp") {
+            if (l.find("pluginUi_") != std::string::npos) {
                 flag(e.path().filename().string(), l, "the engine has no pluginUi_ any more");
             }
             if (l.find("headlessUi_") != std::string::npos) {
@@ -1172,7 +1188,7 @@ void checkDataHeaderSplit(const fs::path& root) {
     CHECK(includes >= 5);
     // The data headers the fence's hoists made (core/spectrum_frame.hpp, scanner_params.hpp, tx_input.hpp, and since stage 5b
     // server_ports.hpp - the settings panels' ports and address classifiers - and since stage 5f demod_names.hpp, the mode names
-    // engine/receiver_tables.hpp checks the window's buttons against) stay as light.
+    // core/receiver_tables.hpp checks the window's buttons against) stay as light.
     for (const char* h : {"spectrum_frame.hpp", "scanner_params.hpp", "tx_input.hpp", "server_ports.hpp", "demod_names.hpp"}) {
         const std::string t = readFile(root / "src" / "core" / h);
         CHECK(!t.empty());
@@ -1183,8 +1199,8 @@ void checkDataHeaderSplit(const fs::path& root) {
     }
     // STAGES 5b AND 5f: the window's header takes the panels' vocabulary from core/server_ports.hpp, and net/ is fenced whole (5f): the
     // deny list names every header of the directory (read from the directory, so a new one is denied too), no src/gui file includes any
-    // of them (checkTheFence, over the deny list), and no header the interface is allowed - the engine/ allow list, the hoisted data
-    // headers - includes one either. The compiler holds the same by the interface_fence_denies_net_* probes.
+    // of them (checkTheFence, over the deny list), and no header the interface reaches - the hoisted data headers, the twelve helpers
+    // that moved from engine/ to core/ (R10) - includes one either (checkTheFence's include closure). The compiler holds the same by the interface_fence_denies_net_* probes.
     {
         const std::string w = readFile(root / "src" / "gui" / "app_window.hpp");
         const bool hoisted = w.find("#include \"core/server_ports.hpp\"") != std::string::npos;
@@ -1201,11 +1217,11 @@ void checkDataHeaderSplit(const fs::path& root) {
             }
         }
         CHECK(netNamed == 0);
-        // the one allowed header that used to reach net/ (receiver_tables.hpp, for the mode names) takes them from the data header
-        const std::string rt = readFile(root / "src" / "engine" / "receiver_tables.hpp");
+        // the one header that used to reach net/ (receiver_tables.hpp, for the mode names; core/ since R10) takes them from the data header
+        const std::string rt = readFile(root / "src" / "core" / "receiver_tables.hpp");
         CHECK(!rt.empty());
         const bool rtClean = rt.find("#include \"net/") == std::string::npos && rt.find("#include \"core/demod_names.hpp\"") != std::string::npos;
-        if (!rtClean) { std::printf("FAIL: engine/receiver_tables.hpp must take the mode names from core/demod_names.hpp and include nothing of net/\n"); }
+        if (!rtClean) { std::printf("FAIL: core/receiver_tables.hpp must take the mode names from core/demod_names.hpp and include nothing of net/\n"); }
         CHECK(rtClean);
     }
 }
@@ -1392,35 +1408,31 @@ void checkTheTestHost(const fs::path& root, bool rootGiven) {
     const std::string host = readFile(testsDir / "test_host.hpp");
     CHECK(!host.empty());
 
-    // 1. rawEngine is named in code by exactly the allowed files (comments and strings do not count: they are blanked)
+    // 1. rawEngine is named in code by NO file of src/ or tests/ (comments and strings do not count: they are blanked). It was named by 72 files before R1, by the shell's
+    // two and test_host.hpp (3) between R1 and R9, and the shell's two went with the shell in R10; test_host.hpp finds the Host's Engine without it.
     std::vector<fs::path> all = sourcesUnder(root / "src");
     const std::vector<fs::path> tests = sourcesUnder(testsDir);
     all.insert(all.end(), tests.begin(), tests.end());
     int named = 0;
-    int stray = 0;
     for (const fs::path& p : all) {
-        bool hit = false;
+        if (p.filename() == "test_engine_shell_guard.cpp") { continue; }   // (this file names it in strings and in this comment; codeLines blanks both, but be exact)
         for (const std::string& l : codeLines(readFile(p))) {
             if (l.find("rawEngine") != std::string::npos) {
-                hit = true;
+                ++named;
+                std::printf("FAIL: %s names rawEngine - it was deleted with the shell (R10); a test reaches the Engine through th::engine (tests/test_host.hpp)\n",
+                            fs::relative(p, root).generic_string().c_str());
                 break;
             }
         }
-        if (!hit) { continue; }
-        ++named;
-        const std::string rel = fs::relative(p, root).generic_string();
-        bool allowed = false;
-        for (const char* a : kRawEngineAllowed) { allowed = allowed || rel == a; }
-        if (!allowed) {
-            ++stray;
-            std::printf("FAIL: %s names rawEngine - a test reaches the Engine through th::engine (tests/test_host.hpp), the one audited place\n", rel.c_str());
-        }
     }
-    std::printf("  rawEngine is named in code by %d files (budget %d: the shell's two and tests/test_host.hpp)\n", named, kRawEngineFilesBudget);
-    CHECK(stray == 0);
-    CHECK(named <= kRawEngineFilesBudget);
-    // the host does name it, and through ONE friend of the window, which no other src/ file names
-    CHECK(host.find("rawEngine") != std::string::npos);
+    std::printf("  rawEngine is named in code by %d files (budget %d: it was 72 before R1, 3 until R9)\n", named, kRawEngineFilesBudget);
+    CHECK(named == kRawEngineFilesBudget);
+    // the host's Engine comes from the Host, through ONE base every test window has
+    CHECK(host.find("class HostedWindow : public cascade::gui::AppWindow") != std::string::npos);
+    CHECK(host.find("class TestWindow : private HostHolder, public HostedWindow") != std::string::npos);
+    CHECK(host.find("class BareWindow : public HostedWindow") != std::string::npos);
+    CHECK(host.find("static_cast<HostedWindow&>(a).hostOf().engine()") != std::string::npos);
+    // the window's ONE friend, which names no Engine: the window-private seams a test needs (the port, the late attach, the window's half of a state)
     int friends = 0;
     int namingTheKey = 0;
     for (const fs::path& p : sourcesUnder(root / "src")) {
@@ -1434,9 +1446,24 @@ void checkTheTestHost(const fs::path& root, bool rootGiven) {
     std::printf("  TestHostAccess: %d friend declaration(s), %d code line(s) naming it in src/ (expect 1 and 1)\n", friends, namingTheKey);
     CHECK(friends == 1);
     CHECK(namingTheKey == 1);
+    {
+        const std::size_t at = host.find("struct TestHostAccess {");
+        const std::size_t end = at == std::string::npos ? std::string::npos : host.find("\n};", at);
+        CHECK(at != std::string::npos && end != std::string::npos);
+        int engineWords = 0;
+        if (at != std::string::npos && end != std::string::npos) {
+            std::string body;
+            for (const std::string& l : codeLines(host.substr(at, end - at))) { body += l + "\n"; }
+            for (const char* w : {"Engine", "engine::", "rawEngine", "engine_"}) {
+                if (body.find(w) != std::string::npos) { ++engineWords; }
+            }
+        }
+        std::printf("  TestHostAccess names %d engine words (expect 0: it is the window's seams, not a way to the Engine)\n", engineWords);
+        CHECK(engineWords == 0);
+    }
 
-    // 2. no test constructs an AppWindow by its own name: every window a test builds is a th::TestWindow (R7 makes that type own the
-    // Engine and its service; a bare AppWindow made anywhere else would then be a window with no engine behind it)
+    // 2. no test constructs an AppWindow by its own name: every window a test builds is a th::TestWindow or th::BareWindow (both th::HostedWindow, which owns or
+    // knows the Engine's Host); a bare AppWindow made anywhere else would be a window th::engine cannot find an engine for
     static const std::regex decl(R"((^|[^\w:])(cascade::gui::|g::)?AppWindow\s+\w+\s*[;({=])");
     static const std::regex newed(R"(\bnew\s+(cascade::gui::|g::)?AppWindow\b)");
     static const std::regex made(R"((make_unique|make_shared|unique_ptr|shared_ptr)\s*<\s*(cascade::gui::|g::)?AppWindow\s*>)");
@@ -1648,14 +1675,14 @@ int main(int argc, char** argv) {
     {
         std::size_t doorCalls = 0;
         for (const Call& c : calls) { doorCalls += (c.object == "engine_") ? 1u : 0u; }
-        std::printf("  %zu calls found in src/gui: %zu through the door (engine_.x), %zu through the plugin UI port (ui_->x)\n", calls.size(), doorCalls, calls.size() - doorCalls);
+        std::printf("  %zu calls found in src/gui: %zu through the door (engine_.x - expect 0), %zu through the plugin UI port (ui_->x)\n", calls.size(), doorCalls,
+                    calls.size() - doorCalls);
     }
-    std::set<std::string> allowedEngine;
-    const std::set<std::string> deny = denyListOf(root, allowedEngine);
+    const std::set<std::string> deny = denyListOf(root);
 
     checkSurface(root, surface, calls);
     checkWhoMayKnock(calls);
-    checkTheFence(root, deny, allowedEngine);
+    checkTheFence(root, deny);
     checkMachineryHasNoInput(root);
     checkTheFrameIsALook(root, calls);
     checkTheWindowSavesNothing(root);

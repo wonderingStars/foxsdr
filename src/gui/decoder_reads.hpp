@@ -22,7 +22,7 @@
 
 #include "core/plugin_abi.h"
 #include "core/plugin_ui_data.hpp"
-#include "engine/running_view.hpp"
+#include "core/running_view.hpp"
 #include "gui/module_census.hpp"
 
 namespace cascade::gui {

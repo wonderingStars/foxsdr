@@ -1,6 +1,6 @@
 // Tests for the SOUND CARD source (source/soundcard_source.hpp), its real-to-
 // complex conversion (dsp/real_to_iq.hpp) and the Source section's rules for
-// it (engine/soundcard_panel.hpp, the remembered-source rule in tune_control.hpp,
+// it (core/soundcard_panel.hpp, the remembered-source rule in tune_control.hpp,
 // the config fields).
 //
 // NO SOUND CARD IS USED. The source is handed a FAKE backend that lists
@@ -55,9 +55,9 @@
 #include "dsp/demod.hpp"
 #include "dsp/fft.hpp"
 #include "dsp/real_to_iq.hpp"
-#include "engine/device_scan_plan.hpp"
-#include "engine/soundcard_panel.hpp"
-#include "engine/tune_control.hpp"
+#include "core/device_scan_plan.hpp"
+#include "core/soundcard_panel.hpp"
+#include "core/tune_control.hpp"
 #include "sink/pa_init.hpp"
 #include "source/soundcard_portaudio.hpp"
 #include "source/soundcard_source.hpp"

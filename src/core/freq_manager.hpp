@@ -69,24 +69,9 @@
 #include <utility>
 #include <vector>
 
-namespace cascade::core {
+#include "core/bookmark.hpp"
 
-struct Bookmark {
-    std::string name;
-    double freqHz = 0;
-    std::string mode = "WFM";
-    double bandwidthHz = 150000;
-    std::string group;       // "" = ungrouped
-    bool favourite = false;
-    // STABLE FOR THE ENTRY'S LIFETIME IN THIS SESSION, never saved (engine
-    // extraction stage 1: the engine API names a bookmark by id, not by list
-    // index, because an index moves under every insert). Assigned by
-    // FreqManager on every way an entry enters the list, kept across updateAt,
-    // and never reused within a session; 0 means "not in a list".
-    std::uint64_t id = 0;
-    bool scan = false;          // ticked: scanned / monitored
-    double heardSeconds = 0.0;  // squelch-open time measured here
-};
+namespace cascade::core {
 
 class FreqManager {
 public:

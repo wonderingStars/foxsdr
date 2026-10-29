@@ -81,7 +81,6 @@
 #include "core/config.hpp"
 #include "core/patch_devices.hpp"
 #include "engine/engine.hpp"
-#include "engine/engine_shell.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
 #include "source/device_source.hpp"

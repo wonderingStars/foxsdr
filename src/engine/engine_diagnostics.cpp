@@ -27,7 +27,7 @@
 #include "core/host_image.hpp"
 #include "core/plugin_repo.hpp"
 #include "engine/engine.hpp"
-#include "engine/receiver_tables.hpp"
+#include "core/receiver_tables.hpp"
 
 namespace cascade::engine {
 

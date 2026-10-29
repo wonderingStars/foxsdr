@@ -1,6 +1,6 @@
 // host_measure.cpp - A BOUNDED RUN'S HOST HARNESS (engine/host_measure.hpp; shell retirement R9, 2026-10-28).
 //
-// Every statement here was a line of the shell (engine_shell.cpp) or of the window's frame loop, moved verbatim: the engine sees exactly the calls it
+// Every statement here was a line of the shell (engine_shell.cpp, deleted in R10) or of the window's frame loop, moved verbatim: the engine sees exactly the calls it
 // saw before, in the same order, from the same thread (the window's - the thread that calls the hooks).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0

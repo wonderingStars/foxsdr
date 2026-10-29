@@ -36,7 +36,7 @@
 
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "engine/tune_control.hpp"
+#include "core/tune_control.hpp"
 #include "gui/text_fit.hpp"
 
 namespace cascade::gui {

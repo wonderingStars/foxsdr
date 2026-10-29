@@ -51,7 +51,7 @@
 #include "gui/app_window.hpp"
 #include "test_host.hpp"
 #include "pass_seam.hpp"
-#include "engine/bias_tee.hpp"
+#include "core/bias_tee.hpp"
 #include "hackrf_fake_usb.hpp"
 #include "source/airspy_source.hpp"
 #include "source/device_source.hpp"

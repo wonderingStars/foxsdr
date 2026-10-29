@@ -68,7 +68,7 @@
 #include "core/freq_converter.hpp"
 #include "core/i18n.hpp"
 #include "engine/engine.hpp"
-#include "engine/soundcard_panel.hpp"
+#include "core/soundcard_panel.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
 #include "test_host.hpp"

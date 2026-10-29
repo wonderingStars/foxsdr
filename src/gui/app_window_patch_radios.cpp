@@ -37,12 +37,12 @@
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "core/mp3_writer.hpp"
+#include "core/mp3_support.hpp"
 #include "core/patch_audio_rate.hpp"
 #include "core/patch_devices.hpp"
-#include "engine/rate_follow_status.hpp"
+#include "core/rate_follow_status.hpp"
 #include "gui/scope_face.hpp"
-#include "engine/soundcard_panel.hpp"
+#include "core/soundcard_panel.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_census.hpp"
 #include "source/siggen_source.hpp"
@@ -597,7 +597,7 @@ void AppWindow::drawPatchSinkInspector(pc::Node& n) {
             n.device = "wav";
             patchUi_.dirty = true;
         }
-        const bool mp3 = cascade::core::Mp3Writer::available();
+        const bool mp3 = cascade::core::kMp3Supported;
         ImGui::BeginDisabled(!mp3);
         if (ImGui::Selectable(mp3 ? trId("An MP3 file") : trId("An MP3 file (needs Windows)"),
                               pc::outputKind(key) == pc::OutputKind::Mp3)) {

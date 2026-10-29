@@ -4,6 +4,7 @@
 #include "core/bias_tee_memory.hpp"
 #include "core/diag_log.hpp"
 #include "core/display_range.hpp"
+#include "core/plugin_repo.hpp"
 #include "core/file_read.hpp"
 #include "core/patch_presets.hpp"
 #include "core/ppm_correction.hpp"
@@ -578,7 +579,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     // for a non-string, so this only has to reject a string that is not one
     // of the three names.
     //
-    // THE THREE NAMES ARE MIRRORED FROM engine/tune_control.hpp's
+    // THE THREE NAMES ARE MIRRORED FROM core/tune_control.hpp's
     // tunerStyleFromName, deliberately rather than by including it: core must
     // not depend on gui. tests/test_config.cpp loads each name in turn and
     // asserts the painter reads back the SAME style, so a name added on one
