@@ -750,7 +750,10 @@ be restarted, a radio driver that faulted and was reopened, the graphics driver 
 a second window...). Each is written once a session, the first time it happens, into the
 same reports folder, under the same Diagnostics switch, and sent the same way - because a
 fault the program survives is still a fault you met, and until 0.99.100 none of them ever
-reached us. It carries this header and no other:
+reached us. Unlike a crash report it does not wait for the next start: since 0.99.101 it is
+sent in the session that wrote it, as soon as it is written, under the same switch, the same
+once-a-day-per-fault rule and the same five-a-day limit - a session that is never followed by
+another would otherwise never be heard from. It carries this header and no other:
 
 | Field | Example | Why |
 |---|---|---|

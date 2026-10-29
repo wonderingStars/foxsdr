@@ -5186,7 +5186,13 @@ them is why the code is shaped the way it is:
    once; it cannot safely allocate, lock, or open a socket, and `WinHttpOpen`
    does all three. Phase 1 writes to disk from the handler *on purpose*. The
    send happens on the **next start**, from a healthy process — which is also
-   the only moment there is a user to ask.
+   the only moment there is a user to ask. An **issue report** (0.99.101) is
+   the exception, because it is written by a healthy thread of a session that
+   carries on: `AppWindow::crashUploadPoll()` sweeps the folder again as soon
+   as one is filed (`issue::takeNewlyFiled()` is the cue, `CrashUploader::
+   running()` says the previous sweep is over), under the same switch, dedup
+   and daily limits. A person who met a fault and never opened FoxSDR again
+   was never heard from before this.
 2. **Never block or delay the application, including shutdown.** The sweep runs
    on a background thread armed with the frame loop; the live WinHTTP request
    handle is published to an atomic, and `AppWindow::crashUploadFinish()` closes

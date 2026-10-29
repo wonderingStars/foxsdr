@@ -1546,6 +1546,7 @@ void CrashUploader::start(const SweepParams& params) {
         copy.nowEpoch = static_cast<std::uint64_t>(std::time(nullptr));
     }
     auto cancel = cancel_;
+    running_.store(true, std::memory_order_release);
     thread_ = std::thread([this, copy, cancel]() {
         try {
             outcome_ = sweepCrashDir(copy, cancel);
@@ -1554,6 +1555,7 @@ void CrashUploader::start(const SweepParams& params) {
             // somebody's listening to complain it could not file a report
             // would be worse than having no diagnostics feature.
         }
+        running_.store(false, std::memory_order_release);
     });
 }
 
@@ -1564,5 +1566,7 @@ void CrashUploader::stop() {
 }
 
 bool CrashUploader::busy() const { return thread_.joinable(); }
+
+bool CrashUploader::running() const { return running_.load(std::memory_order_acquire); }
 
 }  // namespace cascade::core

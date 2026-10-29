@@ -4855,6 +4855,8 @@ void AppWindow::healthPoll() {
     now.ringDroppedSamples = pipeline_.ringDroppedSamples();
     now.dspThreadExceptions = static_cast<unsigned long long>(pipeline_.dspThreadExceptions());
     recoveryWatch_.poll(now);
+    // ...and what those polls just filed is sent now, not at the next start.
+    crashUploadPoll();
 }
 
 void AppWindow::healthWatchSamples(const std::string& kind) {
@@ -33784,6 +33786,9 @@ void AppWindow::crashUploadStart() {
     p.installId = telemetryEnabled_ ? telemetryInstallId_ : std::string();
     p.enabled = true;
     p.state = crashUploadState_;
+    // Whatever was filed before this moment is in the folder this sweep is about to
+    // list, so it is not a reason for another one.
+    (void)cascade::core::issue::takeNewlyFiled();
     crashUploader_.start(p);
     crashUploadSwept_ = true;
 }
@@ -33806,6 +33811,23 @@ void AppWindow::crashUploadFinish() {
             cascade::core::diagLogf("crash upload: %s", n.c_str());
         }
     }
+}
+
+void AppWindow::crashUploadPoll() {
+    // AN ISSUE REPORT IS SENT IN THE SESSION THAT WROTE IT (0.99.101). A crash report
+    // waits for the next start because the process that wrote it was dying; an issue
+    // report (core/issue_report.hpp) is written by a healthy thread of a session that
+    // carries on, and the person who met the fault may never open FoxSDR again - on the
+    // first morning the kind existed, every report on the feed had waited for a
+    // restart, and the sessions that never had one were never heard from. So the folder
+    // is swept again, on the same thread and under the same switch, dedup and daily
+    // limits as at start-up, as soon as the sweep before it has finished: one atomic
+    // exchange a frame, and nothing more while nothing was filed.
+    if (cascade::core::issue::takeNewlyFiled() != 0) { crashUploadWanted_ = true; }
+    if (!crashUploadWanted_ || crashUploader_.running()) { return; }
+    crashUploadWanted_ = false;
+    crashUploadFinish();  // joins the finished thread, journals its state, logs its notes
+    crashUploadStart();
 }
 
 void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {

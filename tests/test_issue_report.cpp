@@ -13,7 +13,9 @@
 //   uploadable  core/crash_upload.cpp parses it as its own kind, with the reason and the log
 //               and no stack, and the file name is one its sweep opens;
 //   survived    the sentinel's rules never take it for the record of a death;
-//   every word  has a sentence and a distinct signature.
+//   every word  has a sentence and a distinct signature;
+//   sent now    takeNewlyFiled() counts each file written and nothing else, once (0.99.101:
+//               the window's cue to sweep the folder in the session that wrote it).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/issue_report.hpp"
@@ -144,6 +146,8 @@ int main() {
         // ...and flushing what waits writes nothing either while capture is off.
         issue::filePendingIssueReports();
         CHECK(issueFiles(dir).empty());
+        // Nothing written, nothing to send.
+        CHECK(issue::takeNewlyFiled() == 0);
     }
 
     // --- A WORD MET BEFORE CAPTURE WAS ARMED IS FILED ONCE IT IS (start-up words) -----------
@@ -158,14 +162,19 @@ int main() {
         issue::filePendingIssueReports();   // the Viewport met above, while off
         const std::vector<fs::path> pending = issueFiles(dir);
         CHECK(pending.size() == 1);
+        // The cue to sweep: the one file, counted once, then taken.
+        CHECK(issue::takeNewlyFiled() == 1);
+        CHECK(issue::takeNewlyFiled() == 0);
         if (pending.size() == 1) {
             const std::string text = readFile(pending[0]);
             CHECK(text.find("\nreason: " + issue::issueReason(Recovered::Viewport) + "\n") != std::string::npos);
         }
-        // Filed once: a second flush, or the word again, writes nothing more.
+        // Filed once: a second flush, or the word again, writes nothing more...
         issue::filePendingIssueReports();
         CHECK(issue::fileIssueReport(Recovered::Viewport).empty());
         CHECK(issueFiles(dir).size() == 1);
+        // ...and is not a reason to sweep again.
+        CHECK(issue::takeNewlyFiled() == 0);
         for (const fs::path& p : pending) { fs::remove(p, ec); }
     }
     issue::resetIssueReportsForTest();
@@ -239,10 +248,13 @@ int main() {
         // Another word is another file.
         CHECK(!issue::fileIssueReport(Recovered::Audio).empty());
         CHECK(issueFiles(dir).size() == 2);
-        // ...and after the reset a test can file the first again.
+        // Two files written since the last take, the refused word counted once: two.
+        CHECK(issue::takeNewlyFiled() == 2);
+        // ...and after the reset a test can file the first again, and that counts afresh.
         issue::resetIssueReportsForTest();
         CHECK(!issue::fileIssueReport(Recovered::Viewport).empty());
         CHECK(issueFiles(dir).size() == 3);
+        CHECK(issue::takeNewlyFiled() == 1);
     }
 
     fs::remove_all(dir, ec);

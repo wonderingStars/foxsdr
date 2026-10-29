@@ -89,6 +89,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <atomic>
 #include <utility>
 #include <string>
 #include <thread>
@@ -471,6 +472,12 @@ public:
 
     bool busy() const;
 
+    // Whether a sweep is in progress: true from start() until its thread has finished
+    // with the directory, with no join. busy() stays true until stop() joins; this
+    // says when that stop() would be instant - what a sweep started mid-session
+    // (AppWindow::crashUploadPoll, 0.99.101) waits for before it starts the next.
+    bool running() const;
+
     // The last finished sweep's outcome. Only read after stop().
     SweepOutcome outcome() const { return outcome_; }
 
@@ -478,6 +485,7 @@ private:
     std::thread thread_;
     std::shared_ptr<UploadCancel> cancel_;
     SweepOutcome outcome_;
+    std::atomic<bool> running_{false};
 };
 
 }  // namespace cascade::core

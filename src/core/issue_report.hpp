@@ -71,7 +71,15 @@ std::string fileIssueReport(health::Recovered word);
 // nothing is pending or capture is still off.
 void filePendingIssueReports();
 
-// Forgets which words were filed or are pending, so a test can file the same word again.
+// How many reports were written since the last call - and then none, until the next is
+// written. The window's frame loop asks (AppWindow::crashUploadPoll) and sweeps the
+// reports folder when the answer is not zero, so an issue report is SENT IN THE SESSION
+// THAT WROTE IT (0.99.101) rather than at the next start: a person who met a fault and
+// never opened FoxSDR again was never heard from. Any thread may file; one thread asks.
+unsigned takeNewlyFiled();
+
+// Forgets which words were filed or are pending, and what was newly filed, so a test can
+// file the same word again.
 void resetIssueReportsForTest();
 
 }  // namespace cascade::core::issue
