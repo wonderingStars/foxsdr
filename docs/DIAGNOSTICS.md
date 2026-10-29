@@ -2296,6 +2296,36 @@ the drop count, read first, never runs ahead of its read). A share too small for
 two decimals is `under 0.01%`, never `0.00%`. The bundle carries the session's
 total as `dsp-dropped: 324608 of 2400000000 samples (0.01%)`.
 
+**What the loss looked like (0.99.101, the 0.99.90 report on the same issue).** A
+lost minute writes a second line straight after the first:
+
+    dsp: ring high water 100% of 1048576 samples, 14 writes cut, longest DSP block 3 ms
+
+The three figures are `Pipeline::ringCutWrites` (one write per source read, so
+twenty big holes and eight hundred tiny ones read differently),
+`Pipeline::takeRingHighWaterSamples` (always the whole ring in a minute that lost
+something; its value is in the bundle, for the minutes that did not) and
+`Pipeline::takeDspBlockLongestNs`, the longest one block took on the DSP thread
+from the spectrum estimate to the end of the audio chain. A long block is a stall
+on the DSP side - something holding `audioMutex_`, a slow machine; a block of
+microseconds beside drops means the samples arrived late from the source and all
+at once. The bundle carries the session's maxima as `dsp-ring: 1048576 samples
+(262 ms), high water 61%, longest DSP block 4.0 ms`, the depth in milliseconds
+of the source's rate.
+
+That report is also why the ring is now a quarter of a second deep
+(`ringCapacityFor`, pipeline.cpp; capped at 8388608 samples, 64 MB) where it was
+four 10 ms chunks: the tester's SDRplay service handed its samples over in runs,
+with 20 to 43 ms of silence between them (825 reads a minute waited their whole
+20 ms bound for nothing), and the source thread's "1 ms" back-off after such a
+read - 15.6 ms on a Windows machine that has not asked for a finer timer, as the
+DSP thread's idle sleep is - stacked onto the silence past the 65 ms ring. The
+back-off is now skipped after a read that itself waited; a read that returns 0
+without blocking (a dead handle) is still backed off, so the hot spin it exists
+for cannot return. `tests/test_pipeline_throughput.cpp` drives the real pipeline
+from a source that behaves as that service did and pins zero loss at the tester's
+rate and silence, beside the DSP chain's measured ceiling.
+
 **Reading it beside the SDRplay lines:** service gaps or link-ring overflows mean
 samples were lost before FoxSDR had them; a `dsp:` drop line means FoxSDR had
 them and its own processing could not keep up - a slow machine, or something

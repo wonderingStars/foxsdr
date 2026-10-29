@@ -129,6 +129,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -278,9 +279,25 @@ public:
         return srcSamplesRead_.load(std::memory_order_relaxed);
     }
     // Diagnostics/tests: the ring's current capacity in samples. Sized from
-    // the SOURCE's rate each time a source thread is spawned, never below the
-    // construction-time size (see ringCapacityForActiveSourceLocked).
+    // the SOURCE's rate each time a source thread is spawned - a quarter of a
+    // second of it since GitHub issue 6 (ringCapacityFor in the .cpp) - never
+    // below the construction-time size (see ringCapacityForActiveSourceLocked).
     std::size_t ringCapacity();
+    // THE RING AND THE DSP THREAD, AS A MINUTE'S DROP LINE AND THE BUNDLE READ
+    // THEM (GitHub issue 6, the 0.99.90 report; AppWindow::closeDspMinute and
+    // DiagBundleInput). Three figures beside the drop count: how many writes
+    // lost part of themselves (one write per source read, so twenty big holes
+    // and eight hundred tiny ones read differently), the fullest the ring has
+    // been (how near the edge a minute that lost nothing still came), and the
+    // longest the DSP thread spent on one block (a stall on the DSP side, as
+    // against a run of samples arriving late from the source). The two maxima
+    // are windows: take*() returns the mark and starts a new one; the plain
+    // getter only looks. Never reset otherwise.
+    std::uint64_t ringCutWrites() const;
+    std::size_t ringHighWaterSamples() const;
+    std::size_t takeRingHighWaterSamples();
+    std::uint64_t dspBlockLongestNs() const;
+    std::uint64_t takeDspBlockLongestNs();
     // True when a worker thread aborted on an exception — a USB SDR pulled
     // mid-stream being the case that motivated it. Latched until start().
     bool faulted() const;
@@ -1192,6 +1209,14 @@ private:
     // write that may drop part of the same read, so a reader that loads the
     // drop count first never sees a drop without its read.
     std::atomic<std::uint64_t> srcSamplesRead_{0};
+    // See ringCutWrites() / ringHighWaterSamples(): written only by the source
+    // thread, in noteRingWrite, which moves ringDropped_ too.
+    std::atomic<std::uint64_t> ringCutWrites_{0};
+    std::atomic<std::size_t> ringHighWater_{0};
+    // See dspBlockLongestNs(): written only by the DSP thread, in noteDspBlock.
+    std::atomic<std::uint64_t> dspBlockLongestNs_{0};
+    void noteRingWrite(std::size_t got, std::size_t put);
+    void noteDspBlock(std::chrono::steady_clock::duration took);
 
     std::shared_ptr<std::atomic<bool>> srcStopToken_;
     std::future<void> srcExitFuture_;

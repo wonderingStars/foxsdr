@@ -1127,6 +1127,10 @@ int main() {
         in.sdrPlayService = "stopped, manual start (SDRplayAPIService)";
         in.ringDroppedSamples = 324608;
         in.sourceSamplesRead = 2400000000ULL;
+        in.ringCapacitySamples = 1048576;
+        in.ringCapacityMs = 262.144;
+        in.ringHighWaterSamples = 645000;   // 61.5 % of the ring: printed whole, 61
+        in.dspBlockLongestMs = 4.04;
 
         // THE BUNDLE AS THE WINDOW MAKES IT (0.99.64): the builder's text with the
         // slow-frame line added by the function AppWindow::currentDiagnosticsBundle
@@ -1163,6 +1167,12 @@ int main() {
         // A session that read nothing has no share to give, and says the counts.
         CHECK(buildDiagnosticsBundle(DiagBundleInput{}).find("\ndsp-dropped: 0 of 0 samples\n") !=
               std::string::npos);
+        // THE RING ITSELF (GitHub issue 6, the 0.99.90 report), by value: depth in
+        // samples and milliseconds, the high water as a whole share, the longest DSP
+        // block to a tenth of a millisecond - and "(none)" before a ring exists.
+        CHECK(bundle.find("\ndsp-ring: 1048576 samples (262 ms), high water 61%, longest DSP block 4.0 ms\n") !=
+              std::string::npos);
+        CHECK(buildDiagnosticsBundle(DiagBundleInput{}).find("\ndsp-ring: (none)\n") != std::string::npos);
 
         // THE OTHER SOFTWARE'S DLLs (0.99.69), by value, in the exact "name: value" form the
         // inventory parses, inside the header block and BEFORE the plugin list (the one part

@@ -119,6 +119,9 @@ std::string stripComments(const std::string& text) {
 }
 
 const char* kNeedle = "samples dropped between the source and the DSP in the last minute";
+// The second line a lost minute writes (GitHub issue 6, the 0.99.90 report): what
+// the loss looked like.
+const char* kRingNeedle = "dsp: ring high water ";
 
 // The log lines that are the minute's drop line.
 std::vector<std::string> dropLines() {
@@ -127,6 +130,22 @@ std::vector<std::string> dropLines() {
         if (line.find(kNeedle) != std::string::npos) { out.push_back(line); }
     }
     return out;
+}
+
+// ...and the lines that are its second line.
+std::vector<std::string> ringLines() {
+    std::vector<std::string> out;
+    for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+        if (line.find(kRingNeedle) != std::string::npos) { out.push_back(line); }
+    }
+    return out;
+}
+
+// The number that follows `key` in `line`, or -1.
+long long numberAfter(const std::string& line, const char* key) {
+    const std::size_t at = line.find(key);
+    if (at == std::string::npos) { return -1; }
+    return std::atoll(line.c_str() + at + std::strlen(key));
 }
 
 // Self-paced, and only as generous as the test lets it be: each read hands over
@@ -241,6 +260,14 @@ int main() {
                       droppedShareText(18446744073709551615ULL, 18446744073709551615ULL).c_str());
         std::printf("the longest minute line is %zu characters\n", std::strlen(longest));
         CHECK(std::strlen(longest) < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
+        // ...AND THE SECOND LINE a lost minute writes, at its widest: the share is at
+        // most three digits, the other three figures uint64.
+        char widest[cascade::core::DiagLog::kLineBytes * 2] = {};
+        std::snprintf(widest, sizeof(widest),
+                      "%s100%% of %llu samples, %llu writes cut, longest DSP block %llu ms", kRingNeedle,
+                      18446744073709551615ULL, 18446744073709551615ULL, 18446744073709551615ULL);
+        std::printf("the longest second line is %zu characters\n", std::strlen(widest));
+        CHECK(std::strlen(widest) < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
     }
 
     cascade::gui::AppWindow app;
@@ -257,6 +284,7 @@ int main() {
     // test took the pipeline is not this test's minute.
     Access::closeDspMinute(app);
     const std::size_t linesAtStart = dropLines().size();
+    const std::size_t ringLinesAtStart = ringLines().size();
 
     // --- 1. A CLEAN MINUTE: samples read, none dropped - nothing written ----------------
     {
@@ -272,6 +300,7 @@ int main() {
         CHECK(p.ringDroppedSamples() == droppedBefore);
         Access::closeDspMinute(app);
         CHECK(dropLines().size() == linesAtStart);
+        CHECK(ringLines().size() == ringLinesAtStart);   // no second line without a first
     }
 
     // --- 2. THE DSP SIDE STALLS: one line, the pipeline's own count, its share ----------
@@ -310,6 +339,10 @@ int main() {
         // builds is longer than 65536.
         CHECK(stalledDropped <= grant - ring + 65536);
         CHECK(stalledDropped >= grant - ring - 65536);
+        // The block that waited on the held mutex is recorded when it ENDS, on the
+        // DSP thread, which the holder's release has only just let go: give it the
+        // moment it needs before the minute is closed, or its 3 s lands in the next.
+        CHECK(waitFor([&] { return p.dspBlockLongestNs() >= 2500000000ULL; }));
 
         Access::closeDspMinute(app);
         const std::vector<std::string> lines = dropLines();
@@ -320,6 +353,24 @@ int main() {
             const std::string want = "dsp: " + std::to_string(stalledDropped) + " " + kNeedle + " (" +
                                      expectedShare(stalledDropped, read) + ")";
             CHECK(line.find(want) != std::string::npos);
+            CHECK(line.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
+        }
+        // THE SECOND LINE (GitHub issue 6, the 0.99.90 report): the ring filled to
+        // the brim while the DSP thread was held, so its high water is 100% of the
+        // ring's own capacity; at least one write was cut; and the longest DSP block
+        // is the block that waited on the held mutex - the 3 s hold, give or take
+        // the scheduler, and nothing like the microseconds a block normally takes.
+        const std::vector<std::string> ring2 = ringLines();
+        CHECK(ring2.size() == ringLinesAtStart + 1);
+        if (!ring2.empty()) {
+            const std::string& line = ring2.back();
+            std::printf("the second line: %s\n", line.c_str());
+            CHECK(line.find(std::string(kRingNeedle) + "100% of " + std::to_string(ring) + " samples, ") !=
+                  std::string::npos);
+            CHECK(numberAfter(line, " samples, ") >= 1);   // writes cut
+            const long long blockMs = numberAfter(line, "longest DSP block ");
+            CHECK(blockMs >= 2500);
+            CHECK(blockMs <= 10000);
             CHECK(line.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
         }
     }
@@ -338,6 +389,7 @@ int main() {
         CHECK(p.ringDroppedSamples() == droppedBefore);
         Access::closeDspMinute(app);
         CHECK(dropLines().size() == linesAtStart + 1);
+        CHECK(ringLines().size() == ringLinesAtStart + 1);   // and no second line either
         // ...and a minute with nothing at all in it is silent too.
         Access::closeDspMinute(app);
         CHECK(dropLines().size() == linesAtStart + 1);
@@ -356,6 +408,15 @@ int main() {
         CHECK(bundle.find(want) != std::string::npos);
         CHECK(bundle.find("\ndsp-dropped: ") < bundle.find("--- log ---"));
         CHECK(dropped >= stalledDropped);
+        // ...AND THE RING ITSELF (GitHub issue 6, the 0.99.90 report): the real ring's
+        // depth, in samples and in milliseconds of the 2 MS/s source (262), the
+        // session's high water - the stall filled it - and the stalled block, still
+        // the session's longest, to a tenth of a millisecond.
+        const std::string ringWant = "\ndsp-ring: " + std::to_string(ring) + " samples (262 ms), high water 100%, longest DSP block ";
+        std::printf("bundle wants:%s\n", ringWant.c_str());
+        CHECK(bundle.find(ringWant) != std::string::npos);
+        CHECK(numberAfter(bundle, "longest DSP block ") >= 2500);
+        CHECK(bundle.find("\ndsp-ring: ") < bundle.find("--- log ---"));
     }
 
     // --- 5. THE FRAME LOOP closes the minute once a minute, on its own clock ------------

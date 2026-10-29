@@ -5072,10 +5072,20 @@ void AppWindow::closeDspMinute() {
     // lives as long as the window; the guards are for marks that ever got ahead.
     const std::uint64_t droppedNow = pipeline_.ringDroppedSamples();
     const std::uint64_t readNow = pipeline_.sourceSamplesRead();
+    const std::uint64_t cutNow = pipeline_.ringCutWrites();
     const std::uint64_t dropped = droppedNow >= dspDroppedAtMinute_ ? droppedNow - dspDroppedAtMinute_ : 0;
     const std::uint64_t read = readNow >= dspReadAtMinute_ ? readNow - dspReadAtMinute_ : 0;
+    const std::uint64_t cut = cutNow >= dspCutAtMinute_ ? cutNow - dspCutAtMinute_ : 0;
     dspDroppedAtMinute_ = droppedNow;
     dspReadAtMinute_ = readNow;
+    dspCutAtMinute_ = cutNow;
+    // THE MINUTE'S TWO MARKS, taken whether or not anything was lost, so a bad
+    // minute's figures are its own and not the session's. The session keeps its
+    // own maxima for the bundle's dsp-ring line.
+    const std::size_t highWater = pipeline_.takeRingHighWaterSamples();
+    const std::uint64_t blockNs = pipeline_.takeDspBlockLongestNs();
+    dspRingHighWaterSession_ = std::max(dspRingHighWaterSession_, highWater);
+    dspBlockLongestNsSession_ = std::max(dspBlockLongestNsSession_, blockNs);
     // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it. 94
     // characters at the widest a uint64 can make it - inside the log's line
     // (DiagLog::kLineBytes), which a cut line would be masked whole by the scrub.
@@ -5084,6 +5094,19 @@ void AppWindow::closeDspMinute() {
     cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)",
                             static_cast<unsigned long long>(dropped),
                             share.empty() ? "share unknown" : share.c_str());
+    // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
+    // many writes, how full the ring got, and the longest one block took on the
+    // DSP thread. A long block is a stall on the DSP side; a short one beside
+    // drops is a run of samples arriving late from the source and all at once.
+    // The high water is 100% in any minute that lost something - its value is in
+    // the bundle, for the minutes that did not. 112 characters at the widest.
+    const std::size_t capacity = pipeline_.ringCapacity();
+    const std::size_t pct = capacity == 0 ? 0 : std::min<std::size_t>(100, highWater * 100 / capacity);
+    cascade::core::diagLogf("dsp: ring high water %llu%% of %llu samples, %llu writes cut, longest DSP block %llu ms",
+                            static_cast<unsigned long long>(pct),
+                            static_cast<unsigned long long>(capacity),
+                            static_cast<unsigned long long>(cut),
+                            static_cast<unsigned long long>(blockNs / 1000000u));
 }
 
 void AppWindow::setAudioBufferMs(int ms) {
@@ -32781,6 +32804,17 @@ std::string AppWindow::currentDiagnosticsBundle(bool freshHistory) {
     // for the reason closeDspMinute gives.
     in.ringDroppedSamples = pipeline_.ringDroppedSamples();
     in.sourceSamplesRead = pipeline_.sourceSamplesRead();
+    // The ring itself (GitHub issue 6, the 0.99.90 report): its depth, the fullest
+    // it has been this session and the longest one DSP block took - the maxima of
+    // the minutes closed so far and of the window still open.
+    in.ringCapacitySamples = pipeline_.ringCapacity();
+    const double sourceRate = pipeline_.activeSource().sampleRateHz();
+    const double ringRate = sourceRate > 0.0 ? sourceRate : pipeline_.inputRateHz();
+    in.ringCapacityMs =
+        ringRate > 0.0 ? 1000.0 * static_cast<double>(in.ringCapacitySamples) / ringRate : 0.0;
+    in.ringHighWaterSamples = std::max(dspRingHighWaterSession_, pipeline_.ringHighWaterSamples());
+    in.dspBlockLongestMs =
+        static_cast<double>(std::max(dspBlockLongestNsSession_, pipeline_.dspBlockLongestNs())) / 1.0e6;
     // The end of the previous session's log and the reports on this machine
     // (0.99.62). Not included, and not read, while diagnostics are off.
     in.history = diagHistoryForBundle(freshHistory);

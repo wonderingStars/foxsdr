@@ -497,6 +497,10 @@ endforeach()
 # window sizes), so it gets more than the loop's two minutes - most of all on a
 # software-rendered Linux runner.
 set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
+# The throughput bench runs the real pipeline for about 70 s of wall clock: the DSP
+# chain's ceiling at five rates and in four modes, then the tester's bursting source
+# at three rates and three silences (GitHub issue 6).
+set_tests_properties(test_pipeline_throughput PROPERTIES TIMEOUT 300)
 # The team-message test starts the real application fourteen times, 70 frames each.
 # CI run 38564730541: x64 passed in 61.98 s; arm64 hit the inherited 120 s
 # bound at 120.11 s without stdout (Store test: 35.27 s x64, 69.55 s arm64).
@@ -716,6 +720,8 @@ if(CASCADE_SANITIZE_ENABLED)
     # report and ends the process (exit 1), and the product's handler - the thing
     # under test - never sees the fault. Memory-error CHECKS (heap, stack, use
     # after free) are instrumentation, not handlers, and stay on.
+    list(APPEND CASCADE_SANITIZE_EXCLUDED_TESTS
+        "test_pipeline_throughput|it measures the DSP thread's ceiling against the wall clock and drives the real pipeline from a real-time bursting source (GitHub issue 6), and the instrumented DSP thread falls behind the clock (ring overflow drops samples) so both measurements fail with no sanitizer report")
     set(CASCADE_SANITIZE_FAULT_TESTS test_crash_capture test_crash_late_module
         test_soapy_enum_proc)
     set(_cascade_fault_env ${CASCADE_SANITIZE_TEST_ENV})

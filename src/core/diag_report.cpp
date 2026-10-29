@@ -988,6 +988,8 @@ const std::vector<std::string>& bundleFieldNames() {
         "log-lines-total", "sdrplay-service",
         // Samples the pipeline's ring had no room for, of those read (0.99.86).
         "dsp-dropped",
+        // The ring's depth, its high water and the longest DSP block (GitHub issue 6).
+        "dsp-ring",
         // The sound path (0.99.61): see DiagAudio.
         "audio-output", "volume", "audio-muted", "squelch",
         // The patch page's radios, by driver kind (0.99.62): see
@@ -1097,6 +1099,25 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
         const std::string share = droppedShareText(in.ringDroppedSamples, in.sourceSamplesRead);
         if (!share.empty()) { v += " (" + share + ")"; }
         kv("dsp-dropped", v);
+    }
+    // THE RING ITSELF (GitHub issue 6, the 0.99.90 report): how deep, how full it
+    // has been and the longest the DSP thread spent on one block - what says
+    // whether a loss was the ring too shallow for a run of late samples or the
+    // DSP side stalling, and how near the edge a session that lost nothing came.
+    // Sizes and times, nothing about the signal (PRIVACY.md).
+    {
+        std::string v;
+        if (in.ringCapacitySamples != 0) {
+            const std::uint64_t pct =
+                std::min<std::uint64_t>(100, in.ringHighWaterSamples * 100 / in.ringCapacitySamples);
+            char ms[32];
+            std::snprintf(ms, sizeof(ms), "%.0f", in.ringCapacityMs);
+            char block[32];
+            std::snprintf(block, sizeof(block), "%.1f", in.dspBlockLongestMs);
+            v = std::to_string(in.ringCapacitySamples) + " samples (" + ms + " ms), high water " +
+                std::to_string(pct) + "%, longest DSP block " + block + " ms";
+        }
+        kv("dsp-ring", v);
     }
 
     out += "\n--- log ---\n";

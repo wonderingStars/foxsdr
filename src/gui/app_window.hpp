@@ -2627,6 +2627,11 @@ private:
     double lastDspLogSec_ = 0.0;
     std::uint64_t dspDroppedAtMinute_ = 0;
     std::uint64_t dspReadAtMinute_ = 0;
+    std::uint64_t dspCutAtMinute_ = 0;
+    // The session's maxima of the two marks closeDspMinute takes each minute (the
+    // ring's high water, the longest DSP block), for the bundle's dsp-ring line.
+    std::size_t dspRingHighWaterSession_ = 0;
+    std::uint64_t dspBlockLongestNsSession_ = 0;
     // THE AUDIO BUFFER (0.99.73). The setting (0 automatic; see AppConfig::
     // audioBufferMs), and the one thing automatic mode last did, which is what
     // the Sinks rail and the AUDIO card say (audioLeadNotice): RAISED this

@@ -39,25 +39,47 @@ namespace {
 
 constexpr double kTwoPi = 6.283185307179586476925286766559;
 
-// Ring sized for at least 4 source chunks (~40 ms) of headroom so a scheduler
-// hiccup on the DSP side does not force sample drops, and at least 8 FFT
-// blocks so accumulation never starves at low sample rates. Rounded up to a
-// power of two because SpscRing requires it.
+// THE RING'S DEPTH, IN TIME: at least kRingSeconds of the SOURCE's rate, at
+// least 4 source chunks (a chunk is 10 ms of that rate, sourceThreadBody), at
+// least 8 FFT blocks so accumulation never starves at low sample rates, rounded
+// up to a power of two because SpscRing requires it, and never more than
+// kRingMaxSamples (64 MB of complex float).
 //
-// `rateHz` is the SOURCE's rate, because a chunk is 10 ms of the source's
-// rate (sourceThreadBody). This used to be sized once, in the constructor,
-// from the rate the pipeline was BUILT at - 2 MS/s in the app, 131072
-// samples - so a 20 MS/s source handed the ring 200000 samples per read and
-// a third of every chunk was dropped with the DSP thread idle. The ring is
-// now re-sized for the incoming source at each source-thread spawn (start(),
-// setSource()), never below the construction size; see
-// ringCapacityForActiveSourceLocked() and resizeRingLocked().
+// WHY A QUARTER OF A SECOND (GitHub issue 6, the 0.99.90 report). The ring used
+// to be 4 chunks: 40 ms rounded up, so 65 ms at 2 and 4 MS/s and 44 ms at
+// 3 MS/s. A tester's RSPduo at 4 MS/s crackled constantly while the SDRplay
+// service streamed cleanly: his health line counted 825 reads a minute that
+// waited their whole 20 ms bound for nothing, and a longest callback gap of
+// 43 ms. The service hands its samples over in runs, 13 to 14 times a second,
+// with 20 to 43 ms of silence between them - and when a silence ended, the
+// run reached this ring late. The source thread had backed off for "1 ms"
+// after its timed-out read, which on a Windows machine that has not asked for
+// a finer timer is 15.6 ms (measured, tests/test_pipeline_throughput.cpp);
+// the DSP thread sleeps the same "1 ms" when the ring runs dry. 43 ms of
+// silence plus two such sleeps is more than 65 ms of ring, and the overflow
+// was 0.66 to 0.88 % of every minute - the share that test measures against
+// a source behaving as his service did. A quarter of a second rides out every
+// silence that log shows several times over. Depth here is headroom, not
+// latency: the DSP thread drains whatever is there as soon as it is there.
+//
+// `rateHz` is the SOURCE's rate. The ring used to be sized once, in the
+// constructor, from the rate the pipeline was BUILT at - 2 MS/s in the app -
+// so a 20 MS/s source handed the ring 200000 samples per read and a third of
+// every chunk was dropped with the DSP thread idle. It is re-sized for the
+// incoming source at each source-thread spawn (start(), setSource()), never
+// below the construction size; see ringCapacityForActiveSourceLocked() and
+// resizeRingLocked().
+constexpr double kRingSeconds = 0.25;
+constexpr std::size_t kRingMaxSamples = std::size_t{1} << 23;  // 8388608 samples, 64 MB
+
 std::size_t ringCapacityFor(double rateHz, std::size_t fftSize) {
-    double want = 4.0 * rateHz * 0.010;
+    double want = kRingSeconds * rateHz;
+    const double chunks = 4.0 * rateHz * 0.010;
+    if (want < chunks) { want = chunks; }
     const double blocks = 8.0 * static_cast<double>(fftSize);
     if (want < blocks) { want = blocks; }
     std::size_t cap = 1;
-    while (static_cast<double>(cap) < want) { cap <<= 1; }
+    while (static_cast<double>(cap) < want && cap < kRingMaxSamples) { cap <<= 1; }
     return cap;
 }
 
@@ -663,6 +685,51 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
 std::size_t Pipeline::ringCapacity() {
     std::lock_guard<std::mutex> lk(controlMutex_);
     return ring_->capacity();
+}
+
+std::uint64_t Pipeline::ringCutWrites() const {
+    return ringCutWrites_.load(std::memory_order_relaxed);
+}
+std::size_t Pipeline::ringHighWaterSamples() const {
+    return ringHighWater_.load(std::memory_order_relaxed);
+}
+std::size_t Pipeline::takeRingHighWaterSamples() {
+    return ringHighWater_.exchange(0, std::memory_order_relaxed);
+}
+std::uint64_t Pipeline::dspBlockLongestNs() const {
+    return dspBlockLongestNs_.load(std::memory_order_relaxed);
+}
+std::uint64_t Pipeline::takeDspBlockLongestNs() {
+    return dspBlockLongestNs_.exchange(0, std::memory_order_relaxed);
+}
+
+// SOURCE THREAD ONLY, straight after every ring write: the three counters a
+// write can move. The drop count and the cut-write count move together; the
+// high-water mark is this write's occupancy against the mark, a compare-exchange
+// loop because the window's reader resets the mark to zero from another thread
+// (a plain load-then-store could put a stale mark back over its reset).
+void Pipeline::noteRingWrite(std::size_t got, std::size_t put) {
+    if (put < got) {
+        ringDropped_.fetch_add(got - put, std::memory_order_relaxed);
+        ringCutWrites_.fetch_add(1, std::memory_order_relaxed);
+    }
+    const std::size_t occupancy = ring_->size();
+    std::size_t seen = ringHighWater_.load(std::memory_order_relaxed);
+    while (occupancy > seen &&
+           !ringHighWater_.compare_exchange_weak(seen, occupancy, std::memory_order_relaxed)) {
+    }
+}
+
+// DSP THREAD ONLY, once per block: the longest one block has taken, from the
+// spectrum estimate to the end of the audio chain. A block that waited on
+// audioMutex_ counts its wait - that is the stall this figure exists to show.
+void Pipeline::noteDspBlock(std::chrono::steady_clock::duration took) {
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(took).count();
+    const std::uint64_t taken = ns > 0 ? static_cast<std::uint64_t>(ns) : 0u;
+    std::uint64_t seen = dspBlockLongestNs_.load(std::memory_order_relaxed);
+    while (taken > seen &&
+           !dspBlockLongestNs_.compare_exchange_weak(seen, taken, std::memory_order_relaxed)) {
+    }
 }
 
 // Caller holds controlMutex_. The ring capacity the ACTIVE source needs: the
@@ -1650,8 +1717,13 @@ void Pipeline::sourceThreadBody(double chainRateHz,
             // `chunk` samples it wrote; a driver that returns more is wrong, and
             // believing it would copy past the end of `buf` (tests/
             // test_source_overreport.cpp).
+            const auto readBegan = clock::now();
             const std::size_t got = std::min(src.read(buf.data(), chunk), chunk);
             if (!stopToken.load(std::memory_order_relaxed)) { return; }
+            // Whether that read waited at all: a device read that blocked for
+            // its own bound and came back with nothing needs no back-off from
+            // this loop (the got == 0 branch below).
+            const bool readWaited = clock::now() - readBegan >= std::chrono::milliseconds(1);
             // AN INVERTING CONVERTER MIRRORS THE BAND, and this is where it is
             // put back the right way round - after the token test above, so an
             // abandoned generation never reaches it (see airView_).
@@ -1665,8 +1737,7 @@ void Pipeline::sourceThreadBody(double chainRateHz,
                 // Counted, so the loss is never silent, and so is what was
                 // read, so the loss has a denominator (sourceSamplesRead).
                 srcSamplesRead_.fetch_add(got, std::memory_order_relaxed);
-                const std::size_t put = ring_->write(buf.data(), got);
-                if (put < got) { ringDropped_.fetch_add(got - put, std::memory_order_relaxed); }
+                noteRingWrite(got, ring_->write(buf.data(), got));
             }
             // Device loss does NOT arrive here as an exception: a source that
             // let the driver's throw escape would be torn down mid-fault, so
@@ -1680,7 +1751,17 @@ void Pipeline::sourceThreadBody(double chainRateHz,
                 noteThreadFault("source thread", src.lastError());
                 return;
             }
-            if (got == 0) {
+            if (got == 0 && !readWaited) {
+                // ONLY WHEN THE READ ITSELF DID NOT WAIT (GitHub issue 6, the
+                // 0.99.90 report). A device read that blocked for its own bound
+                // (SdrPlaySource::read waits 20 ms on an empty link ring) and
+                // came back with nothing is not a hot spin, and this sleep on
+                // top of it was 15.6 ms on a Windows machine that has not asked
+                // for a finer timer - time in which the service's next run of
+                // samples sat in the link ring and then reached this ring all
+                // at once, stacked onto the service's own silence. See
+                // ringCapacityFor for what that cost.
+                //
                 // Retry, but not instantly. The comment above used to claim
                 // the source's own block bound paced this loop; that holds
                 // only while the source still blocks. One that returns 0
@@ -1727,8 +1808,7 @@ void Pipeline::sourceThreadBody(double chainRateHz,
         // ring is full, the overflow is dropped (write() accepts what fits),
         // and counted - beside what was read, as in the self-paced loop.
         srcSamplesRead_.fetch_add(got, std::memory_order_relaxed);
-        const std::size_t put = ring_->write(buf.data(), got);
-        if (put < got) { ringDropped_.fetch_add(got - put, std::memory_order_relaxed); }
+        noteRingWrite(got, ring_->write(buf.data(), got));
         // The same fault poll as the self-paced branch, and it matters MORE
         // here: a free-running source cannot report failure through read() at
         // all (IqFileSource zero-fills and still returns n, because a 0 would
@@ -1770,6 +1850,7 @@ void Pipeline::dspThreadBody() {
             continue;
         }
         filled = 0;
+        const auto blockBegan = std::chrono::steady_clock::now();
         estimator_.process(acc.data(), db.data());
 
         {
@@ -1781,6 +1862,7 @@ void Pipeline::dspThreadBody() {
         // Duplicate the same drained block into the audio path (the spectrum
         // path above is untouched — both consume identical samples).
         processAudioBlock(acc.data(), n);
+        noteDspBlock(std::chrono::steady_clock::now() - blockBegan);
     }
 }
 

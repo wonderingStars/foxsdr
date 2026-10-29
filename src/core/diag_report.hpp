@@ -405,6 +405,16 @@ struct DiagBundleInput {
     // service line: printed as `dsp-dropped: 324608 of 2400000000 samples (0.01%)`.
     std::uint64_t ringDroppedSamples = 0;
     std::uint64_t sourceSamplesRead = 0;
+    // THE RING ITSELF (GitHub issue 6, the 0.99.90 report): its depth in samples
+    // and in milliseconds of the source's rate, the fullest it has been this
+    // session, and the longest the DSP thread spent on one block. Sizes and
+    // times, nothing about the signal. Printed as `dsp-ring: 1048576 samples
+    // (262 ms), high water 61%, longest DSP block 4.0 ms`; "(none)" while no
+    // ring exists (a capacity of 0).
+    std::uint64_t ringCapacitySamples = 0;
+    double ringCapacityMs = 0.0;
+    std::uint64_t ringHighWaterSamples = 0;
+    double dspBlockLongestMs = 0.0;
     // THE SESSIONS BEFORE THIS ONE (0.99.62): the end of the previous session's
     // log and one line per crash or freeze report on the machine, written after
     // the current log under headings of their own. `history.included` false -
