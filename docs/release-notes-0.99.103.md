@@ -7,19 +7,19 @@ This is a drawing-path change plus diagnostics; nothing changes in how FoxSDR tu
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.103.exe`:**
-`TBD`
+`7eaee39c15e240e6ab91e85015fd1fd165d60e0fa4988cb3b996b3bfe7acb019`
 
 **SHA-256 of `FoxSDR-0.99.103-x86_64.AppImage`:**
-`TBD`
+`eb6cd97cbba742b8c1bc41f9a1849710f3efbfbd5134108175189f4a82ebbf3d`
 
 **SHA-256 of `foxsdr-0.99.103-linux-x64.tar.gz`:**
-`TBD`
+`0f33b9acdf77f23483c64049714b06dd9f574fb04ccc1944a8733b91f838d2b4`
 
 **SHA-256 of `FoxSDR-0.99.103-aarch64.AppImage`:**
-`TBD`
+`b287c90a438e7039d74446617abce2f3a539aa16f772ba258537bc727ca90c14`
 
 **SHA-256 of `foxsdr-0.99.103-linux-arm64.tar.gz`:**
-`TBD`
+`ed52b4082b3891933356397aa98e48900e2d1f11aeee8ff62cbe5b5cb20a5c0a`
 
 ## Features and fixes, 2026-10-29
 
