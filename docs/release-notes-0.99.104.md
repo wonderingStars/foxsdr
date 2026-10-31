@@ -28,4 +28,4 @@ Windows is released first. Linux packages remain at 0.99.103 until their builds
 and verification finish; there are no Linux 0.99.104 downloads in this release.
 
 **SHA-256 of `foxsdr-setup-0.99.104.exe`:**
-`TBD`
+`57a7ce3c8c4ce7dae18f66f1c5334ac2eefe58186cf80f18d7d42dc666986a41`
