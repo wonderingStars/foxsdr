@@ -418,12 +418,11 @@ int main(int argc, char** argv) {
                 CHECK(sidecars[0].find("\nattempts: 1\n") != std::string::npos);
             }
             // THE SETUP, or the check below proves nothing: at frame 50 the pages are their own
-            // windows, and the map - the page of the field report - is past the main window's
-            // edge. (The plugin store opens over the main window by its own placement,
-            // pageOpenInside, so it may already be inside.)
+            // windows. Maps now open inside by default; the explicit map tear-off
+            // and refusal path is covered by test_map_open_inside_app.
             const Rect* mapBefore = r.before.page(kPages[0].id);
             CHECK(mapBefore != nullptr);
-            CHECK(mapBefore != nullptr && !inside(*mapBefore, r.before.root));
+            CHECK(mapBefore != nullptr && inside(*mapBefore, r.before.root));
             checkAllInside(r, "refused");
             std::istringstream logLines(r.log);
             for (std::string l; std::getline(logLines, l);) {
@@ -466,11 +465,11 @@ int main(int argc, char** argv) {
             // Counted and reported once, exactly as a final refusal is.
             CHECK(recoveredCounts() == "recovered.viewport=1");
             CHECK(issueReports("retried").size() == 1);
-            // The fallback itself worked as in the refused stage: the map was outside at
-            // frame 50 and every page is inside at frame 100.
+            // The fallback worked for the native pages; the map starts inside
+            // by default and remains inside alongside the recovered pages.
             const Rect* mapBefore = r.before.page(kPages[0].id);
             CHECK(mapBefore != nullptr);
-            CHECK(mapBefore != nullptr && !inside(*mapBefore, r.before.root));
+            CHECK(mapBefore != nullptr && inside(*mapBefore, r.before.root));
             checkAllInside(r, "retried");
         }
     }

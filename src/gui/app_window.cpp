@@ -22029,24 +22029,10 @@ void AppWindow::drawPluginWindows() {
         if (!page.open) { continue; }
         telemetryNotePanel("map");
         testerUsage_.noteFeature("map");
-        // PLACED SO IT DOES NOT FIT INSIDE THE APPLICATION WINDOW, which is
-        // what makes ImGui give it a real operating system window rather than
-        // merging it into the main one. There is no "always be a separate
-        // window" flag; the rule is that a window which fits inside the main
-        // viewport gets merged into it, so the way to ask for a window of its
-        // own is to start it overhanging the edge. Anchored just inside the
-        // right edge rather than flung off to one side, so it appears next to
-        // the radio instead of somewhere the user has to hunt for it - and
-        // only on first use, so moving or docking it afterwards sticks.
-        // ...WHICH IS NO LONGER ENOUGH ON ITS OWN once a saved size is
-        // restored: a window that FITS inside the main viewport is merged into
-        // it, and a map restored to a modest size on a large main window would
-        // silently stop being its own window. NoAutoMerge says outright what
-        // the overhang was only implying, and is what makes restoring an
-        // arbitrary rectangle safe.
-        ImGuiWindowClass mapClass;
-        mapClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
-        ImGui::SetNextWindowClass(&mapClass);
+        // A map opens inside the main window (0.99.104). Opening a map used to
+        // force a second native window/shared GL context. The field reports'
+        // refused contexts happen on that path; merely decoding ADS-B never
+        // needs it. A deliberate drag can still tear the page off.
         // ...AND THE SAVED RECTANGLE ONLY COUNTS IF IT IS STILL SOMEWHERE.
         // The config sanitizer checks the numbers are sane; it cannot know
         // what monitors exist. A geometry saved on a display that has since
@@ -22081,11 +22067,13 @@ void AppWindow::drawPluginWindows() {
         float dy = 0.0f;
         // The page's index is the anchor slot, so several fresh pages cascade
         // instead of stacking exactly on top of one another.
-        separateWindowAnchor(static_cast<int>(pageIndex), dx, dy);
         float dw = 0.0f;
         float dh = 0.0f;
         mapDefaultSize(dw, dh);
-        mapPlaceDefaultRect(dx, dy, dw, dh, workAreas);
+        const ImGuiViewport* mainForMap = ImGui::GetMainViewport();
+        pageOpenInsideStaggered(mainForMap->Pos.x, mainForMap->Pos.y,
+                                mainForMap->Size.x, mainForMap->Size.y,
+                                dw, dh, static_cast<int>(pageIndex), dx, dy, dw, dh);
         if (page.w > 0 && page.h > 0 &&
             mapGeometryOnScreen(page.x, page.y, page.w, page.h, workAreas)) {
             // ...AND NO BIGGER THAN WHAT FITS WHERE IT SITS. A rectangle saved
@@ -22106,14 +22094,8 @@ void AppWindow::drawPluginWindows() {
                 ImVec2(static_cast<float>(page.w), static_cast<float>(page.h)),
                 ImGuiCond_FirstUseEver);
         } else {
-            // THE DEFAULT RECTANGLE, POSITION INCLUDED. The anchor overhangs
-            // the main window on purpose, but it knows nothing about the
-            // monitor: with a height derived from the screen the bottom - and
-            // the resize grip with it - fell off the work area whenever the
-            // main window sat low, and that rectangle was then persisted and
-            // restored verbatim. Measured at (1248,491) 1120x1168 against a
-            // 1392 px work area. See mapPlaceDefaultRect. Computed above,
-            // because a reset needs the same rectangle.
+            // An unsaved page uses the contained default, also used by the
+            // window-size reset. Opening below fits saved rectangles too.
             ImGui::SetNextWindowPos(ImVec2(dx, dy), ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowSize(ImVec2(dw, dh), ImGuiCond_FirstUseEver);
         }
@@ -22135,6 +22117,24 @@ void AppWindow::drawPluginWindows() {
         std::string titleBuf;
         cascade::core::formatUtf8(titleBuf, tr("%s Map"), pageIdent.c_str());
         const std::string pageTitle = titleBuf + "###mapPage:" + pageIdent;
+        const ImGuiWindow* previous = ImGui::FindWindowByName(pageTitle.c_str());
+        if (previous == nullptr || !previous->WasActive) {
+            const ImGuiViewport* main = ImGui::GetMainViewport();
+            float x, y, w, h;
+            // A live window remembers its OUTER size. The saved page size is
+            // read while the body child is current; reusing it here would
+            // subtract the cabinet margins on every close/reopen.
+            const ImVec2 want = previous != nullptr
+                                    ? previous->SizeFull
+                                    : ImVec2(page.w > 0 ? static_cast<float>(page.w) : dw,
+                                             page.h > 0 ? static_cast<float>(page.h) : dh);
+            pageOpenInsideStaggered(main->Pos.x, main->Pos.y, main->Size.x, main->Size.y,
+                                    want.x, want.y, static_cast<int>(pageIndex), x, y, w, h);
+            ImGui::SetNextWindowViewport(main->ID);
+            ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
+        }
+
         // NO WINDOW PADDING ON THE SATELLITE PAGE, because its content is a
         // CABINET: the brass has to reach the frame the operating system drew,
         // and a four-pixel border of ImGui's window background all the way

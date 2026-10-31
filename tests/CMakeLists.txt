@@ -388,6 +388,9 @@ foreach(src ${CASCADE_TESTS})
         # bank up, and reads from the UI census whether the plugin's settings row is folded (0.99.74).
         add_dependencies(${name} settings_ui_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:settings_ui_fixture>")
+    elseif(name STREQUAL "test_map_open_inside_app")
+        add_dependencies(${name} track_probe_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
     elseif(name STREQUAL "test_unplaced_list_app")
         # Runs the real cascade.exe (built first) with the track fixture fitted and its map page opened
         # by FOXSDR_OPEN_MAP, and reads the target list's heading and rows from the UI census: aircraft
@@ -868,6 +871,7 @@ set(CASCADE_GUI_TESTS
     test_tx_audio_page_app
     test_tx_audio_plate_app
     test_unplaced_list_app
+    test_map_open_inside_app
     test_viewport_fallback_app
     test_viewports
     test_window_platform_app
