@@ -1135,6 +1135,18 @@ endif()
 endif()  # CASCADE_BUILD_INTERFACE: the window application's half ends here
 
 # ---------------------------------------------------------------------------
+# The Slint front end (spike, 2026-11-02)
+# ---------------------------------------------------------------------------
+# A SECOND window over the same C API table, built only on request and only when the prebuilt Slint
+# SDK is on CMAKE_PREFIX_PATH (src/slint/CMakeLists.txt returns quietly otherwise). It is independent
+# of CASCADE_BUILD_INTERFACE: it links the engine, not OpenGL, GLFW or Dear ImGui, and changes nothing
+# about the ImGui window or the tests. docs/engine-stage4.md records the spike.
+option(CASCADE_BUILD_SLINT "Build foxsdr-slint, the Slint window over the C API table (needs the Slint SDK on CMAKE_PREFIX_PATH)" OFF)
+if(CASCADE_BUILD_SLINT)
+    add_subdirectory(src/slint)
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 

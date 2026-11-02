@@ -1,0 +1,403 @@
+// FoxSDR Slint front end - THE MAIN SCREEN (spike).
+// project/Workbench.dc.html, 1440 x 900, top to bottom: title bar 36 | receiver strip 104 |
+// body (icon rail 64 | sections panel 296 | centre: tab row 32, spectrum, splitter 6, waterfall 270) | status bar 28.
+// Everything the strip and bar show is a property the C++ host fills from the C API table once per frame;
+// every key is a callback the host turns into a submit() on the table. The spectrum and waterfall are
+// Image wells the host paints (SharedPixelBuffer -> Image) - the handover's "surfaces fed by a renderer".
+
+import { Theme } from "theme.slint";
+import { Caption, Key, SegGroup, SegKey, Lamp, LampState, Chip, ChipTone, Digit, Slider, Section, Tab, RailKey, StatusChip, VLine } from "components.slint";
+
+export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool }
+export struct StatusCard { key: string, value: string, detail: string, good: bool, warn: bool, lamp: LampState, show-lamp: bool }
+
+export component MainWindow inherits Window {
+    title: "FoxSDR";
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    background: Theme.bg;
+    default-font-family: Theme.font-ui;
+    default-font-size: 12px;
+
+    // ---- state the host publishes (read_state, once per frame) ----
+    in property <string> version: "0.99.100";
+    in property <bool> running;                     // receiver RUN
+    in property <bool> decoding;                    // DEC
+    in property <bool> muted;                       // MUTE
+    in property <bool> failed;                      // FAIL
+    in property <bool> rcvr-held;                   // the amber RCVR lamp (a plugin holds receiver control)
+    in property <string> tuned-text: "145.500000 MHz";
+    in property <[int]> digits: [0, 1,4,5, 5,0,0, 0,0,0];   // GHz . MHz x3 . kHz x3 . Hz x3
+    in property <int> leading-zeros: 1;              // how many leading digits draw dim
+    in property <string> tune-hint: "Scroll a digit to tune · click to type (T) · no converter";
+    in property <[string]> modes: ["NFM","WFM","AM","DSB","USB","CW","LSB","RAW"];
+    in property <int> mode-index: 0;
+    in property <string> mode-hint: "Passband 12.5 kHz · step 12.5 kHz · more in Signal › Radio";
+    in property <float> gain-norm: 0.62;   in property <string> gain-text: "32 dB";     in property <bool> gain-auto;
+    in property <string> gain-hint: "TUNER stage";
+    in property <float> squelch-norm: 0.29; in property <string> squelch-text: "-85 dB"; in property <bool> squelch-auto: true;
+    in property <string> squelch-hint: "Automatic: 8 dB above the noise floor";
+    in property <float> volume-norm: 0.72; in property <string> volume-text: "0.72";
+    in property <float> level-norm: 0.55;  in property <string> level-text: "-12.4 dB";
+    in property <bool> bias-tee-on;
+    in property <string> bias-hint: "Off · 4.5 V on the cable · asks first";
+    in property <int> bank-index: 0;                 // SIGNAL DECODE TOOLS EXTEND SYSTEM
+    in property <string> bank-title: "Signal path";
+    in property <string> bank-chip: "RECEIVING";
+    in property <[SectionRow]> sections: [
+        { name: "Patch", chip: "RECEIVER VIEW", tone: ChipTone.neutral, open: false },
+        { name: "Source", chip: "RTL-SDR", tone: ChipTone.good, open: false },
+        { name: "Radio", chip: "NFM", tone: ChipTone.warn, open: true },
+        { name: "Audio filters", chip: "OFF", tone: ChipTone.neutral, open: false },
+        { name: "Sinks", chip: "OPEN", tone: ChipTone.good, open: false },
+        { name: "Transmit", chip: "NO TX", tone: ChipTone.neutral, open: false },
+        { name: "Recorder", chip: "OFF", tone: ChipTone.neutral, open: false },
+        { name: "Frequency correction", chip: "0.0 PPM", tone: ChipTone.neutral, open: false },
+    ];
+    in property <string> source-line: "RTL-SDR Blog V4 · 2 m amateur";
+    in property <string> rate-line: "2.400 MS/s · ch 12.5 kHz · underruns 0";
+    in property <int> view-index: 0;                 // RECEIVER PATCH SCOPE
+    in property <string> spectrum-caption: "Spectrum · 4096 bin · EMA 0.35";
+    in property <string> peak-text: "-41.2 dBFS";
+    in property <string> peak-age: "0.1 s ago";
+    in property <string> span-text: "SPAN 2.400 MHz";
+    in property <image> spectrum-image;             // painted by the host
+    in property <image> waterfall-image;            // painted by the host
+    in property <string> waterfall-foot-left: "24 lines/s · 42 s of history";
+    in property <string> waterfall-foot-right: "NFM · decoding: APRS";
+    in property <[StatusCard]> status: [
+        { key: "RECEIVER", value: "RUNNING", detail: "RTL-SDR Blog V4 · ANT RX · GAIN 32 dB · PPM 0.0 · 2.400 MS/s", good: false, warn: false, lamp: LampState.green, show-lamp: true },
+        { key: "DECODERS", value: "2 running", detail: "of 5 fitted, 1 idle", good: true, warn: false, lamp: LampState.off, show-lamp: false },
+        { key: "OUTPUT", value: "3.2 /s", detail: "2.0 s mean", good: false, warn: true, lamp: LampState.off, show-lamp: false },
+        { key: "SINK", value: "OPEN", detail: "Speakers (Realtek) · playing NFM", good: true, warn: false, lamp: LampState.off, show-lamp: false },
+        { key: "RECORDER", value: "off", detail: "no file open", good: false, warn: false, lamp: LampState.off, show-lamp: false },
+        { key: "WEB", value: "port 8080", detail: "0.0.0.0", good: false, warn: false, lamp: LampState.off, show-lamp: false },
+        { key: "UNDERRUNS", value: "0", detail: "none starved", good: false, warn: false, lamp: LampState.off, show-lamp: false },
+    ];
+
+    // ---- what the operator does (the host submits each on the table) ----
+    callback stop-clicked;
+    callback nudge(int, int);            // digit index 0..9, +1 / -1
+    callback mode-selected(int);
+    callback gain-changed(float);        // 0..1 of the slider
+    callback gain-auto-clicked;
+    callback squelch-changed(float);
+    callback squelch-auto-clicked;
+    callback volume-changed(float);
+    callback bias-tee-clicked;
+    callback bank-selected(int);
+    callback section-clicked(int);
+    callback view-selected(int);
+    callback status-clicked(int);
+    callback palette-requested;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // ===================== TITLE BAR (36) =====================
+        Rectangle {
+            height: 36px; background: Theme.bg;
+            Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
+            HorizontalLayout {
+                padding-left: 12px; padding-right: 8px; spacing: 12px;
+                HorizontalLayout { // brand
+                    min-width: 220px; spacing: 8px; alignment: start;
+                    Rectangle { width: 18px; height: 18px; y: (parent.height - 18px) / 2;
+                        Path { commands: "M 3 14 L 9 3 L 15 14 Z"; fill: Theme.accent; viewbox-width: 18; viewbox-height: 18; }
+                    }
+                    Text { text: "FoxSDR"; font-weight: 600; color: Theme.fg; vertical-alignment: center; }
+                    Text { text: root.version; font-family: Theme.font-mono; color: Theme.muted; vertical-alignment: center; }
+                    Text { text: "Fox & Schirmyver · Type 71 Mk II"; font-size: 8px; letter-spacing: 1px; color: Theme.faint; font-weight: 600; vertical-alignment: center; }
+                }
+                Rectangle { // command palette
+                    HorizontalLayout { alignment: center;
+                        Rectangle {
+                            width: 520px; height: 26px; y: (parent.height - 26px) / 2;
+                            background: Theme.panel; border-width: 1px; border-color: Theme.line; border-radius: Theme.radius;
+                            HorizontalLayout { padding-left: 10px; padding-right: 10px; spacing: 8px;
+                                Text { text: "⌕"; color: Theme.dim; vertical-alignment: center; }
+                                Text { text: "Find a setting, plugin, frequency or bookmark…"; color: Theme.dim; vertical-alignment: center; horizontal-stretch: 1; }
+                                Rectangle { border-width: 1px; border-color: Theme.line-strong; border-radius: 4px; width: 42px; height: 16px; y: (parent.height - 16px) / 2;
+                                    Text { text: "Ctrl K"; font-size: 10px; font-family: Theme.font-mono; color: Theme.fg; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                            }
+                            TouchArea { clicked => { root.palette-requested(); } }
+                        }
+                    }
+                }
+                HorizontalLayout { // window keys
+                    min-width: 220px; spacing: 4px; alignment: end;
+                    Key { label: "🔔"; ghost: true; min-w: 30px; }
+                    Key { label: "—"; ghost: true; min-w: 30px; }
+                    Key { label: "▢"; ghost: true; min-w: 30px; }
+                    Key { label: "✕"; ghost: true; min-w: 30px; }
+                }
+            }
+        }
+
+        // ===================== RECEIVER STRIP (104) =====================
+        Rectangle {
+            height: 104px; background: Theme.strip;
+            Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
+            HorizontalLayout {
+                padding-left: 16px; padding-right: 16px; spacing: 20px; alignment: start;
+
+                HorizontalLayout { // STOP + lamps
+                    spacing: 14px; alignment: center;
+                    stop := Rectangle {
+                        width: 92px; height: 64px; y: (parent.height - 64px) / 2;
+                        border-radius: 10px; border-width: 1px; border-color: Theme.danger-line; background: Theme.danger-bg;
+                        VerticalLayout { alignment: center; spacing: 2px;
+                            Rectangle { width: 18px; height: 18px; HorizontalLayout { alignment: center; Rectangle { width: 12px; height: 12px; border-radius: 2px; background: Theme.danger-glyph; } } }
+                            Text { text: root.running ? "STOP" : "START"; font-size: 12px; font-weight: 600; letter-spacing: 0.7px; color: Theme.danger-fg; horizontal-alignment: center; }
+                        }
+                        TouchArea { clicked => { root.stop-clicked(); } }
+                    }
+                    GridLayout { spacing: 6px; y: (parent.height - self.height) / 2;
+                        Row { Lamp { caption: "RUN";  state: root.running  ? LampState.green : LampState.off; } Lamp { caption: "DEC";  state: root.decoding ? LampState.green : LampState.off; } }
+                        Row { Lamp { caption: "MUTE"; state: root.muted    ? LampState.amber : LampState.off; } Lamp { caption: "FAIL"; state: root.failed   ? LampState.red   : LampState.off; } }
+                    }
+                }
+                VLine { y: (parent.height - 72px) / 2; }
+
+                VerticalLayout { // frequency
+                    spacing: 2px; alignment: center;
+                    HorizontalLayout { alignment: space-between;
+                        Caption { text: "Tuned frequency"; }
+                        HorizontalLayout { spacing: 10px;
+                            Lamp { caption: "RCVR"; state: root.rcvr-held ? LampState.amber : LampState.off; }
+                            Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: 11px; color: Theme.accent-soft; vertical-alignment: center; }
+                        }
+                    }
+                    Rectangle { // the counter
+                        background: Theme.counter; border-width: 1px; border-color: Theme.line; border-radius: Theme.radius-panel;
+                        HorizontalLayout { padding-left: 8px; padding-right: 8px; padding-top: 2px; padding-bottom: 2px; spacing: 0px;
+                            for d[i] in root.digits : HorizontalLayout { spacing: 0px;
+                                if i == 1 || i == 4 || i == 7 : Text { text: "."; color: Theme.knob-ring; font-size: 22px; vertical-alignment: center; }
+                                Digit { value: d; dim: i < root.leading-zeros; up => { root.nudge(i, 1); } down => { root.nudge(i, -1); } }
+                            }
+                        }
+                    }
+                    HorizontalLayout { padding-left: 10px; padding-right: 10px; alignment: space-between;
+                        Text { text: "GHz                MHz                     kHz                     Hz"; font-family: Theme.font-mono; font-size: 9px; letter-spacing: 1px; color: Theme.faint; }
+                        Text { text: root.tune-hint; font-size: 10px; color: Theme.dim; }
+                    }
+                }
+                VLine { y: (parent.height - 72px) / 2; }
+
+                VerticalLayout { // mode
+                    spacing: 6px; alignment: center;
+                    Caption { text: "Mode"; }
+                    SegGroup {
+                        HorizontalLayout { padding: 2px; spacing: 2px;
+                            for m[i] in root.modes : SegKey { label: m; on: i == root.mode-index; clicked => { root.mode-selected(i); } }
+                        }
+                    }
+                    Text { text: root.mode-hint; font-size: 10px; color: Theme.dim; }
+                }
+                VLine { y: (parent.height - 72px) / 2; }
+
+                GridLayout { // gain / squelch / volume
+                    spacing: 18px; horizontal-stretch: 1; y: (parent.height - self.height) / 2;
+                    Row {
+                        VerticalLayout { spacing: 7px;
+                            HorizontalLayout { alignment: space-between;
+                                Caption { text: "Gain"; }
+                                HorizontalLayout { spacing: 6px;
+                                    Text { text: root.gain-text; font-family: Theme.font-mono; font-weight: 600; vertical-alignment: center; color: Theme.fg; }
+                                    Key { label: "AUTO"; on: root.gain-auto; key-height: 20px; min-w: 48px; font-px: 10px; clicked => { root.gain-auto-clicked(); } }
+                                }
+                            }
+                            Slider { value: root.gain-norm; changed(v) => { root.gain-changed(v); } }
+                            Text { text: root.gain-hint; font-size: 10px; color: Theme.dim; }
+                        }
+                        VerticalLayout { spacing: 7px;
+                            HorizontalLayout { alignment: space-between;
+                                Caption { text: "Squelch"; }
+                                HorizontalLayout { spacing: 6px;
+                                    Text { text: root.squelch-text; font-family: Theme.font-mono; font-weight: 600; vertical-alignment: center; color: Theme.fg; }
+                                    Key { label: "AUTO"; on: root.squelch-auto; key-height: 20px; min-w: 48px; font-px: 10px; clicked => { root.squelch-auto-clicked(); } }
+                                }
+                            }
+                            Slider { value: root.squelch-norm; changed(v) => { root.squelch-changed(v); } }
+                            Text { text: root.squelch-hint; font-size: 10px; color: Theme.dim; }
+                        }
+                        VerticalLayout { spacing: 7px;
+                            HorizontalLayout { alignment: space-between;
+                                Caption { text: "Volume"; }
+                                Text { text: root.volume-text; font-family: Theme.font-mono; font-weight: 600; vertical-alignment: center; color: Theme.fg; }
+                            }
+                            Slider { value: root.volume-norm; changed(v) => { root.volume-changed(v); } }
+                            HorizontalLayout { spacing: 6px;
+                                Text { text: "Level"; font-size: 10px; color: Theme.dim; vertical-alignment: center; }
+                                Rectangle { height: 4px; border-radius: 2px; background: Theme.line; horizontal-stretch: 1; y: (parent.height - 4px) / 2;
+                                    Rectangle { x: 0; width: parent.width * root.level-norm; height: 4px; border-radius: 2px; background: Theme.lamp-green; }
+                                }
+                                Text { text: root.level-text; font-family: Theme.font-mono; font-size: 10px; color: Theme.muted; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+                VLine { y: (parent.height - 72px) / 2; }
+
+                VerticalLayout { // bias tee (hazard)
+                    spacing: 6px; alignment: center;
+                    Caption { text: "Antenna power"; }
+                    Rectangle {
+                        height: 36px; min-width: 120px; border-radius: Theme.radius; border-width: 1px; border-color: Theme.hazard-line;
+                        background: root.bias-tee-on ? Theme.accent : Theme.hazard-stripe;
+                        HorizontalLayout { padding-left: 14px; padding-right: 14px; spacing: 6px; alignment: center;
+                            Lamp { caption: ""; state: root.bias-tee-on ? LampState.amber : LampState.off; }
+                            Text { text: "BIAS TEE"; font-weight: 500; color: root.bias-tee-on ? Theme.accent-ink : Theme.fg; vertical-alignment: center; }
+                        }
+                        TouchArea { clicked => { root.bias-tee-clicked(); } }
+                    }
+                    Text { text: root.bias-hint; font-size: 10px; color: Theme.dim; }
+                }
+            }
+        }
+
+        // ===================== BODY =====================
+        HorizontalLayout {
+            spacing: 0px;
+
+            Rectangle { // ICON RAIL (64)
+                width: 64px; background: Theme.bg;
+                Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
+                VerticalLayout { padding-top: 8px; padding-bottom: 8px; spacing: 4px; alignment: start;
+                    RailKey { caption: "SIGNAL"; hint: "F1"; on: root.bank-index == 0; clicked => { root.bank-selected(0); } }
+                    RailKey { caption: "DECODE"; hint: "F2"; on: root.bank-index == 1; clicked => { root.bank-selected(1); } }
+                    RailKey { caption: "TOOLS";  hint: "F3"; on: root.bank-index == 2; clicked => { root.bank-selected(2); } }
+                    RailKey { caption: "EXTEND"; hint: "F4"; on: root.bank-index == 3; clicked => { root.bank-selected(3); } }
+                    RailKey { caption: "SYSTEM"; hint: "F5"; on: root.bank-index == 4; clicked => { root.bank-selected(4); } }
+                    Rectangle { vertical-stretch: 1; }
+                    RailKey { caption: "FOLD"; hint: ""; }
+                }
+            }
+
+            Rectangle { // SECTIONS PANEL (296)
+                width: 296px; background: Theme.panel-alt;
+                Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
+                VerticalLayout { spacing: 0px;
+                    Rectangle { height: 40px;
+                        Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
+                        HorizontalLayout { padding-left: 12px; padding-right: 12px; alignment: space-between;
+                            Caption { text: root.bank-title; color: Theme.fg; }
+                            VerticalLayout { alignment: center; Chip { label: root.bank-chip; tone: ChipTone.good; } }
+                        }
+                    }
+                    VerticalLayout { spacing: 0px; vertical-stretch: 1; alignment: start;
+                        for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; clicked => { root.section-clicked(i); } }
+                    }
+                    Rectangle { // update card slot
+                        height: 78px;
+                        Rectangle { x: 10px; y: 0; width: parent.width - 20px; height: 68px; border-radius: 8px; background: Theme.card; border-width: 1px; border-color: Theme.line-strong;
+                            VerticalLayout { padding: 10px; spacing: 6px;
+                                HorizontalLayout { alignment: space-between;
+                                    Caption { text: "FoxSDR 0.99.105 is available"; color: Theme.accent-soft; }
+                                    Text { text: "you run " + root.version; font-size: 10px; color: Theme.dim; vertical-alignment: center; }
+                                }
+                                HorizontalLayout { spacing: 6px;
+                                    Key { label: "Download update"; on: true; key-height: 26px; horizontal-stretch: 1; }
+                                    Key { label: "Not now"; ghost: true; key-height: 26px; min-w: 72px; }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { height: 44px;
+                        Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.line; }
+                        VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 8px; spacing: 2px;
+                            Text { text: root.source-line; font-size: 10px; color: Theme.dim; }
+                            Text { text: root.rate-line; font-size: 10px; color: Theme.dim; font-family: Theme.font-mono; }
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout { // CENTRE
+                spacing: 0px; horizontal-stretch: 1;
+                Rectangle { // tab row + spectrum toolbar (32)
+                    height: 32px;
+                    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
+                    HorizontalLayout { padding-left: 8px; padding-right: 8px; alignment: space-between;
+                        HorizontalLayout { spacing: 0px;
+                            Tab { label: "RECEIVER"; on: root.view-index == 0; clicked => { root.view-selected(0); } }
+                            Tab { label: "PATCH";    on: root.view-index == 1; clicked => { root.view-selected(1); } }
+                            Tab { label: "SCOPE";    on: root.view-index == 2; clicked => { root.view-selected(2); } }
+                            Tab { label: "+ Window"; min-w: 0px; }
+                        }
+                        HorizontalLayout { spacing: 6px; alignment: end;
+                            Caption { text: "Trace"; font-size: 9px; }
+                            SegGroup { HorizontalLayout { padding: 2px; spacing: 2px; SegKey { label: "Normal"; min-w: 0px; } SegKey { label: "Peak hold"; on: true; min-w: 0px; } SegKey { label: "Average"; min-w: 0px; } } }
+                            Caption { text: "Range"; font-size: 9px; }
+                            SegGroup { HorizontalLayout { padding: 2px; spacing: 2px; SegKey { label: "Auto"; on: true; min-w: 0px; } SegKey { label: "Manual"; min-w: 0px; } } }
+                            Key { label: "Markers  3"; ghost: true; key-height: 24px; }
+                            Key { label: "Band plan"; ghost: true; key-height: 24px; }
+                            SegGroup { HorizontalLayout { padding: 2px; spacing: 2px; SegKey { label: "−"; min-w: 26px; } SegKey { label: "+"; min-w: 26px; } SegKey { label: "Full span"; min-w: 0px; } } }
+                        }
+                    }
+                }
+                Rectangle { // SPECTRUM well
+                    vertical-stretch: 1; background: Theme.well;
+                    Image { source: root.spectrum-image; width: parent.width; height: parent.height; image-fit: fill; }
+                    HorizontalLayout { x: 52px; y: 14px; spacing: 14px;
+                        Caption { text: root.spectrum-caption; color: Theme.fg-soft; }
+                        Text { text: "average of the last frames, not the audio"; font-size: 10px; color: Theme.dim; vertical-alignment: center; }
+                        Caption { text: "Peak hold"; color: Theme.trace-peak; font-size: 9px; }
+                    }
+                    VerticalLayout { x: parent.width - 16px - self.width; y: 12px; alignment: start;
+                        Caption { text: "Peak in passband"; font-size: 9px; horizontal-alignment: right; }
+                        HorizontalLayout { spacing: 4px; alignment: end;
+                            Text { text: root.peak-text; font-family: Theme.font-mono; font-size: 16px; font-weight: 600; color: Theme.accent-soft; }
+                            Text { text: root.peak-age; font-size: 10px; color: Theme.dim; vertical-alignment: bottom; }
+                        }
+                    }
+                    Chip { x: parent.width - 16px - self.width; y: 58px; label: root.span-text; mono: true; }
+                }
+                Rectangle { // SPLITTER (6)
+                    height: 6px; background: Theme.panel;
+                    Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.line; }
+                    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
+                    Rectangle { width: 48px; height: 2px; border-radius: 1px; background: Theme.knob-ring; x: (parent.width - 48px) / 2; y: 2px; }
+                }
+                Rectangle { // WATERFALL well (270)
+                    height: 270px; background: Theme.well-deep; clip: true;
+                    Image { source: root.waterfall-image; x: 44px; y: 0; width: parent.width - 44px; height: 238px; image-fit: fill; }
+                    Caption { x: 6px; y: 4px; text: "Age"; font-size: 9px; }
+                    Text { x: 8px; y: 22px;  text: "now";  font-family: Theme.font-mono; font-size: 10px; color: Theme.dim; }
+                    Text { x: 8px; y: 76px;  text: "10 s"; font-family: Theme.font-mono; font-size: 10px; color: Theme.dim; }
+                    Text { x: 8px; y: 130px; text: "20 s"; font-family: Theme.font-mono; font-size: 10px; color: Theme.dim; }
+                    Text { x: 8px; y: 184px; text: "30 s"; font-family: Theme.font-mono; font-size: 10px; color: Theme.dim; }
+                    Rectangle { // foot
+                        x: 44px; y: parent.height - 28px; width: parent.width - 44px - 14px; height: 28px;
+                        Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.line; }
+                        HorizontalLayout { alignment: space-between;
+                            Text { text: root.waterfall-foot-left; font-family: Theme.font-mono; font-size: 10px; color: Theme.muted; vertical-alignment: center; }
+                            HorizontalLayout { spacing: 4px;
+                                Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: 10px; color: Theme.accent-soft; vertical-alignment: center; }
+                                Text { text: " · " + root.waterfall-foot-right; font-family: Theme.font-mono; font-size: 10px; color: Theme.muted; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ===================== STATUS BAR (28) =====================
+        Rectangle {
+            height: 28px; background: Theme.strip;
+            Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.line; }
+            HorizontalLayout { padding-left: 4px; spacing: 0px; alignment: start;
+                for c[i] in root.status : StatusChip {
+                    key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp;
+                    value-color: c.good ? Theme.chip-good-fg : (c.warn ? Theme.accent-soft : Theme.fg);
+                    clicked => { root.status-clicked(i); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Key { label: "Request a feature"; ghost: true; key-height: 24px; min-w: 0px; }
+                Key { label: "Report a bug / dislike"; ghost: true; key-height: 24px; min-w: 0px; }
+                Rectangle { width: 8px; }
+            }
+        }
+    }
+}

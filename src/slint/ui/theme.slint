@@ -1,0 +1,87 @@
+// FoxSDR Slint front end - THEME TOKENS (spike).
+// Every value here is lifted verbatim from the design canvas's Workbench main sheet
+// (project/Workbench.dc.html, its <helmet><style> block): row 16, "the arrangement I'd build".
+// The handover's rule: a theme is a set of property values on one component library, so the
+// 21 themes are 21 fillings of this global. Workbench is the neutral base the premium skins
+// (Cupertino, Obsidian, Atelier, Vitrine, Horology) are drawn on.
+
+export global Theme {
+    // grounds
+    in-out property <color> bg: #15171b;          // body / rail / window ground
+    in-out property <color> strip: #191c21;       // receiver strip, status bar
+    in-out property <color> panel: #1d2026;       // .panel, open section body, splitter
+    in-out property <color> panel-alt: #1a1d22;   // sections panel, .seg ground
+    in-out property <color> card: #20242b;        // update / team-message card
+    in-out property <color> well: #0d0f12;        // spectrum ground
+    in-out property <color> well-deep: #06070a;   // waterfall ground
+    in-out property <color> counter: #0f1114;     // frequency counter ground
+
+    // lines
+    in-out property <color> line: #2b2f37;        // every 1px divider
+    in-out property <color> line-strong: #363b45; // key / chip / seg borders
+    in-out property <color> line-faint: #1e2229;  // spectrum graticule
+    in-out property <color> knob-ring: #434955;   // lamp-off ring, cursor chip border, counter dots
+
+    // text
+    in-out property <color> fg: #e6e8ec;
+    in-out property <color> fg-soft: #c9ced6;
+    in-out property <color> muted: #9aa3ad;       // .cap captions, chevrons
+    in-out property <color> dim: #7d8694;         // hints, axis labels, .sb .k
+    in-out property <color> faint: #5c6370;       // F-key hints, unit row
+    in-out property <color> nudge: #6c7480;       // digit nudge arrows
+
+    // accent (amber)
+    in-out property <color> accent: #f5a524;
+    in-out property <color> accent-ink: #1b1400;  // text on an accent key
+    in-out property <color> accent-soft: #f5c66b; // tuned readout, bookmarks, warn chip text
+    in-out property <color> accent-hover: #ffc66a;
+    in-out property <color> digit: #ffb84d;       // counter digits (+ glow #f5a52455)
+    in-out property <color> digit-dim: #5c5345;   // dimmed leading zero
+
+    // lamps (dot + caption colour when lit)
+    in-out property <color> lamp-off: #2b2f37;
+    in-out property <color> lamp-green: #3ddc84;
+    in-out property <color> lamp-green-cap: #cfead9;
+    in-out property <color> lamp-amber: #f5a524;
+    in-out property <color> lamp-amber-cap: #f3dcae;
+    in-out property <color> lamp-red: #ff5c5c;
+    in-out property <color> lamp-red-cap: #ffc9c9;
+
+    // chips
+    in-out property <color> chip-bg: #262a32;     // also .btn ground, .rb.on ground
+    in-out property <color> chip-good-bg: #163626;
+    in-out property <color> chip-good-fg: #7fe6ad;
+    in-out property <color> chip-good-line: #1f5a3c;
+    in-out property <color> chip-warn-bg: #3a2a0e;
+    in-out property <color> chip-warn-fg: #f5c66b;
+    in-out property <color> chip-warn-line: #6b4d16;
+    in-out property <color> chip-err-bg: #3a1d1d;
+    in-out property <color> chip-err-fg: #ff9b9b;
+    in-out property <color> chip-err-line: #6b2a2a;
+
+    // the STOP key (danger) and the BIAS TEE hazard key
+    in-out property <color> danger-bg: #3a1d1d;
+    in-out property <color> danger-line: #8a3434;
+    in-out property <color> danger-fg: #ffd4d4;
+    in-out property <color> danger-glyph: #ff8a8a;
+    in-out property <color> hazard-line: #6b4d16;
+    in-out property <color> hazard-stripe: #2e2a1c;
+
+    // spectrum + waterfall
+    in-out property <color> trace-live: #7ad7ff;
+    in-out property <color> trace-peak: #ff9f43;
+    in-out property <color> vfo: #f5a524;         // band fill is vfo at 13% alpha
+    in-out property <color> bandplan: #2a3b5a;
+    in-out property <color> bandplan-fg: #8fb3e0;
+    in-out property <color> mark: #d4b060;        // plugin marks
+    in-out property <color> bookmark: #f5c66b;
+    in-out property <color> wf-floor: #0a1430;
+    in-out property <color> wf-mid: #1b3a6a;
+    in-out property <color> wf-high: #2e86c1;
+
+    // type + shape
+    in-out property <string> font-ui: "Inter";
+    in-out property <string> font-mono: "JetBrains Mono";
+    in-out property <length> radius: 6px;
+    in-out property <length> radius-panel: 8px;
+}
