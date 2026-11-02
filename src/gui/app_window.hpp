@@ -1581,6 +1581,10 @@ private:
     bool airbandImportPending();   // the file for a preset is being read on its worker
     void airbandPollExport();   // the preset's Export CSV the engine has finished writing (fact.bookmarks.export.*)
     void airbandSendChunks();
+    // TICK ALL / UNTICK ALL (the deep pre-merge review, batch B, finding 3; docs/engine-stage4.md 6.32): the key's action over the rows the section lists (indexes into the window's one
+    // copy of BOOKMARKS), and the once-a-frame sender it hands them to. One FOXAPP_OP_BOOKMARK_TICK a row, kTickRowsPerFrame a frame at most, offered again when the session is full.
+    void airbandTickAll(const std::vector<std::uint32_t>& rows, bool on);
+    void airbandSendTicks();
     void airbandFinishImport();
     void airbandRemovePreset();
     void airbandExportPreset();
@@ -3607,9 +3611,28 @@ private:
     // are the ones refused). A setter of this kind (latestWins) the session refuses with BUSY is HELD instead - one per op, a newer figure
     // replacing an older - and offered again once a frame (pollUiAnswers) until the session has room. Everything else is refused as ever
     // (counted, the first said in the log).
+    // (Cancelled by a NEWER figure of the same op that the session accepts: uiSubmitTicket erases the held one, or the next flush would send the older after the newer - the deep
+    // pre-merge review, batch B, finding 5.)
     std::map<std::uint32_t, cascade::core::cmd::QueuedCommand> uiHeld_;
     static bool latestWins(std::uint32_t op);
     void flushHeldSetters();
+    // OFFERED, NOT SUBMITTED (batch B, findings 3, 4 and 6): a command the caller KEEPS and will offer again. Taken or refused exactly as uiSubmitTicket's, but a refusal is no drop -
+    // nothing counted, nothing said, nothing held: the caller has the command and the answer is 0 (and *busy true when the session was full). This is what the retried edges
+    // (syncPatchPageOpen, syncTransmitPageOpen, the plugin-use table, a panel's name) and the paced senders (Tick all, the track-info lines) go through.
+    std::uint64_t uiOffer(const cascade::core::cmd::QueuedCommand& q, bool* busy = nullptr);
+    std::uint64_t uiOffer(const FoxCommand& c, bool* busy = nullptr) { return uiOffer(cascade::core::cmd::QueuedCommand{c, {}}, busy); }
+    // HOW MUCH OF THE SESSION A BULK SENDER MAY TAKE IN ONE FRAME. The window reads at most UiAnswers::kMaxResults (64) results a frame, and a command counts against the session's
+    // 256 until its result is read - so a sender that puts more than that into a frame every frame fills the session, and every command drawn after it in the frame is refused. These
+    // two together (32 + 8 = 40) leave 24 of the 64 a frame frees for everything else the window says in a frame (a drag, a click, a key), so the bulk cannot fill a healthy session
+    // by itself, and a stalled one is found out by the first BUSY.
+    static constexpr int kTickRowsPerFrame = 32;          // Tick all / Untick all: FOXAPP_OP_BOOKMARK_TICK rows (airbandSendTicks)
+    static constexpr int kTrackInfoLinesPerFrame = 8;     // the track-info plugin's status lines: FOXAPP_OP_TRACK_INFO_LINE (sendTrackInfoText)
+    static constexpr int kTickSettleFrames = 3;           // frames after a Tick all's last row went out that a press still covers every row (AirbandTickRun::settle)
+    static_assert(kTickRowsPerFrame + kTrackInfoLinesPerFrame + 16 <= UiAnswers::kMaxResults, "the bulk senders leave at least 16 of the results a frame's look frees for every other command");
+    // The lines the plugin said and the window has not yet passed on, oldest first: at most the engine's ring (kDecoderLogMax) - an older line would be pushed out of the ring by the
+    // time it arrived. What fell off the front is counted (trackInfoLinesLost_) and said once.
+    std::deque<std::string> trackInfoLines_;
+    std::uint64_t trackInfoLinesLost_ = 0;
     // THE USAGE REPORT'S PANEL NAMES (window port, group 3): a page calls
     // this every frame it is open, and the name goes to the engine ONCE a run
     // as FOXAPP_OP_NOTE_PANEL. uiNotedPanels_ is the names already sent, kept
@@ -3848,6 +3871,11 @@ private:
     // (FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN) for the web status and the save.
     bool transmitPageOpen_ = false;
     void setTransmitPageOpen(bool open);
+    // WHAT THE ENGINE HAS BEEN TOLD (the deep pre-merge review, batch B, finding 6): the page's flag as the session last TOOK it - false at a launch, the engine's own start. The flag
+    // is told on every change and offered again once a frame (syncTransmitPageOpen, beside syncPatchPageOpen) until the session takes it: a BUSY used to be forgotten, and the
+    // engine's flag stayed wrong for the saved state, and the page's address box (the same command seeds it) stayed unseeded.
+    bool transmitPageOpenSent_ = false;
+    void syncTransmitPageOpen();
     // The microphone's peak, decayed towards zero so the meter falls rather
     // than flickering - a bar redrawn from one 10 ms peak a frame is unreadable.
     float transmitPeak_ = 0.0f;

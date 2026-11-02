@@ -937,9 +937,15 @@ void testModelEqualsMastersModel() {
         used.orphaned = true;
         used.catalogueId = "old";
         used.catalogueIndex = 3;
+        // ...nor of the TRANSMIT grant, the offer of its key and the plate (the deep pre-merge review, batch B, finding 1): fittedLists sets those three only from a module that
+        // has fact.plugin.<file>.tx, so the reset is fillFittedModule's, for every module that has not
+        used.txCapable = true;
+        used.txAllowed = true;
+        used.txPlate = static_cast<int>(cascade::gui::TxPlateState::OnAir);
         cascade::gui::fillFittedModule(used, r);
         CHECK(used.name.empty() && used.commands.empty() && used.originNote.empty() && !used.orphaned && used.catalogueId.empty() &&
               used.catalogueIndex == -1);
+        CHECK(!used.txCapable && !used.txAllowed && used.txPlate == 0);
     }
 }
 
@@ -1839,6 +1845,87 @@ void testRunStatesAndOwnWindows() {
     }
 }
 
+// --- G -----------------------------------------------------------------------
+
+// A SLOT THE TABLE REFILLS FOR ANOTHER MODULE KEEPS NOTHING OF THE ONE IT HELD (the deep pre-merge review, batch B, finding 1; docs/engine-stage4.md 6.32).
+// fittedLists refills the model's slots IN PLACE, so after the list shifts a slot is a different module. The transmit grant, the offer of its key and the plate are set only
+// from a module that has fact.plugin.<file>.tx (the engine publishes it for a module that declares transmit audio and no other), and fillFittedModule reset every other
+// conditional field but not these three - so the module that moved up into a granted transmitter's slot showed REVOKE TRANSMIT and an ARMED plate, for as long as the process
+// lived. T, the transmitting fixture, is fitted FIRST in the list (slot 0), granted TRANSMIT, and then removed by the operator (the product's own REMOVE): the decoder that
+// moves up into slot 0 must be what the engine's own records give, field for field (the oracle restates master's block, transmit fields included).
+void testRefilledSlotKeepsNothing() {
+    std::printf("  G: a slot refilled for another module keeps nothing of the one it held (the transmit grant, the offer of its key, the plate)\n");
+    const std::string tx = moduleFile("aa_tx_fixture");   // sorts before every other fixture: slot 0
+    std::error_code ec;
+    std::filesystem::copy_file(FIXTURE_TX_AUDIO_PLUGIN, g_plugins / tx, std::filesystem::copy_options::overwrite_existing, ec);
+    CHECK(!ec);
+    {
+        Fresh f;
+        AppWindow& app = f.app;
+        Access::command(app, cmd::make(FOXAPI_OP_PLUGIN_RESCAN));
+        Access::look(app);
+        Access::look(app);
+        const FittedModule* t = mod(app, tx);
+        CHECK(t != nullptr);
+        if (t == nullptr) { return; }
+        CHECK(t->loaded && (t->capabilities & CASCADE_CAP_TX_AUDIO) != 0u);
+        CHECK_EQ(indexOf(app, tx), 0);   // the first row: the slot the next module moves up into
+        CHECK(!t->txCapable && !t->txAllowed && t->txPlate == 0);   // it has never asked, and holds no grant: no key, no plate
+
+        // GRANTED: the key is offered (a permission nobody can see is one nobody can take back) and the plate says the page is not armed.
+        Access::command(app, cmd::makeText(FOXAPP_OP_PLUGIN_TX_GRANT, tx, 1));
+        Access::look(app);
+        Access::look(app);
+        t = mod(app, tx);
+        CHECK(t != nullptr && t->txAllowed && t->txCapable);
+        CHECK(t != nullptr && t->txPlate == static_cast<int>(cascade::gui::TxPlateState::GrantedDisarmed));
+        CHECK_EQ(sameModel(app, "the transmitting module granted"), static_cast<int>(Access::lists(app).model.modules.size()));
+        // THE KEY, DRAWN: T's page offers REVOKE TRANSMIT, and a click on it sends the revoke (the survey can see the key at all).
+        {
+            std::vector<std::string> got;
+            (void)survey(app, tx, &got);
+            CHECK_EQ(std::count(got.begin(), got.end(), expect("APP_PLUGIN_TX_GRANT", 0, 0, tx)), 1);
+        }
+
+        // REMOVED, the way the operator does it: the file and its row go, and every module below moves up one slot.
+        Access::command(app, cmd::makeText(FOXAPI_OP_STORE_REMOVE, tx));
+        for (int i = 0; i < 6 && mod(app, tx) != nullptr; ++i) { Access::look(app); }
+        Access::look(app);
+        CHECK(mod(app, tx) == nullptr);
+        const std::vector<FittedModule>& modules = Access::lists(app).model.modules;
+        CHECK(!modules.empty());
+        if (!modules.empty()) {
+            // the module that moved up into the transmitter's slot: a loaded one that cannot transmit (which one is the folder's order, not this test's business)
+            CHECK(modules[0].file != tx);
+            CHECK(modules[0].loaded && (modules[0].capabilities & CASCADE_CAP_TX_AUDIO) == 0u);
+            if (modules[0].txCapable || modules[0].txAllowed || modules[0].txPlate != 0) {
+                std::printf("      slot 0 is %s and still says: key offered %d, granted %d, plate %d\n", modules[0].file.c_str(), modules[0].txCapable ? 1 : 0,
+                            modules[0].txAllowed ? 1 : 0, modules[0].txPlate);
+            }
+            CHECK(!modules[0].txCapable);
+            CHECK(!modules[0].txAllowed);
+            CHECK_EQ(modules[0].txPlate, 0);
+        }
+        CHECK_EQ(sameModel(app, "the transmitting module removed"), static_cast<int>(modules.size()));
+        // ...AND DRAWN: the page of the module that took the slot offers no transmit key (it showed REVOKE TRANSMIT, on a module that cannot transmit), and the survey of the whole list
+        // finds no transmit grant to click either.
+        if (!modules.empty()) {
+            std::vector<std::string> got;
+            const std::string moved = modules[0].file;
+            (void)survey(app, moved, &got);
+            (void)survey(app, std::string(), &got);
+            const long long grants = std::count_if(got.begin(), got.end(), [](const std::string& s) { return s.rfind("APP_PLUGIN_TX_GRANT", 0) == 0; });
+            if (grants != 0) {
+                std::printf("      the page of %s offers a transmit key:\n", moved.c_str());
+                for (const std::string& g : got) { std::printf("        sent   %s\n", g.c_str()); }
+            }
+            CHECK_EQ(grants, 0LL);
+        }
+        std::printf("      T fitted first and granted, then removed: the module that took slot 0 has no key, no grant and no plate; the model equals the oracle\n");
+    }
+    std::filesystem::remove(g_plugins / tx, ec);
+}
+
 }  // namespace
 
 int main() {
@@ -1887,6 +1974,8 @@ int main() {
     testControlsLandAtTheNextPass();
     junk(kRefused);
     testRunStatesAndOwnWindows();
+    junk(kRefused);
+    testRefilledSlotKeepsNothing();
 
     ImGui::DestroyContext();
     std::error_code ec;

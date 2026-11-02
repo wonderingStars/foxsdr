@@ -90,6 +90,20 @@ struct AirbandImportRun {
     bool refused = false;
 };
 
+// The TICK ALL / UNTICK ALL that is going out (the deep pre-merge review, batch B, finding 3): the rows still to be set, as the bookmarks' ids, in the list's order, and what they are
+// being set to. One FOXAPP_OP_BOOKMARK_TICK a row - a session holds 256 commands and the key used to send every row of a group in the frame of the press, dropping the rest - so the
+// run is paced: kTickRowsPerFrame a frame, the same row offered again when the session is full. A new press REPLACES the run: the newest press wins, for every row.
+struct AirbandTickRun {
+    bool on = false;
+    std::vector<std::uint64_t> ids;
+    std::size_t next = 0;      // ids[next] is the next to send
+    // Frames left after the last row went out in which the list may still not show it (the engine applies it at its next pass and the window reads the lists a frame or two
+    // later): a press then is a press while the run is out - it covers every row, because "this row is already as asked" cannot be judged from the list yet.
+    int settle = 0;
+    bool active() const { return next < ids.size(); }
+    bool unsettled() const { return active() || settle > 0; }
+};
+
 struct AirbandWindowState {
     // --- what the user types and chooses -----------------------------------------------------------------------------------------
     char code[16] = {};
@@ -122,6 +136,7 @@ struct AirbandWindowState {
     bool wasWanting = false;                 // fact.airband.listening or .pending last frame (the view switch is made on the rising edge)
     std::vector<AirbandAsk> asks;
     AirbandImportRun import;
+    AirbandTickRun ticks;                    // Tick all / Untick all, going out a few rows a frame
     std::string importAgain;                 // an Import pressed while one was being read: the path, read when the first is back
     cascade::core::ImportInto importAgainInto;   // ...and the preset (and tick) it was pressed for
     bool exportWaiting = false;              // an Export CSV was accepted and its file is being written (the engine says when: fact.bookmarks.export.*)

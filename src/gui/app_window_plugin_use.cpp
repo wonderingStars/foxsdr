@@ -77,8 +77,12 @@ void AppWindow::reportPluginUse() {
         pluginUseText_ += '\n';
     }
     if (pluginUseText_ == pluginUseSent_) { return; }
+    // THE TABLE IS RECORDED AS SENT WHEN THE SESSION TOOK IT (the deep pre-merge review, batch B, finding 6; docs/engine-stage4.md 6.32). It was recorded before the submit and the
+    // answer ignored, so a session that was full answered BUSY, the command was dropped, and the window believed the engine had its table: an AUTO plugin whose window was open
+    // stayed asleep, with no window content, until the table's text next changed. Refused, it is built again and offered again by the next frame's poll (this runs once a frame).
+    if (uiSession_ == nullptr) { return; }
+    if (uiOffer(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_USE, pluginUseText_, 0)) == 0u) { return; }
     pluginUseSent_ = pluginUseText_;
-    uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_USE, pluginUseText_, 0));
 }
 
 }  // namespace cascade::gui

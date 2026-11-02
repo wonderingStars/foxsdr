@@ -1107,6 +1107,68 @@ int main() {
         }
     }
 
+    // --- tick all, untick all: the two keys on a group on show (the deep pre-merge review, batch B, finding 3; docs/engine-stage4.md 6.32) ------------------------
+    // O'Hare looked up: its 29 rows are on show, 28 of them ticked (ATIS is not). Untick all leaves none ticked; Tick all - pressed after it - ticks all 29, ATIS too. The keys send
+    // one command a row, a few a frame, until every row is as asked (the window used to send every row in the frame of the press and drop what the session had no room for); the
+    // group is small enough for one frame here, so what this holds is the keys' wiring: the press reaches the engine's list and the file the run saves. (tests/test_window_full_
+    // session.cpp C holds the pacing, with 600 rows and a session that is full.) Each run starts from an empty list, so each looks the airport up afresh.
+    {
+        const char* const kEmpty = "{ \"schemaVersion\": 1, \"bookmarks\": [] }\n";
+        writeBookmarks(kEmpty);
+        const Result base = once("tickall-base", 60, "receiver", "");
+        CHECK(base.ok);
+        CHECK(base.rects.count("airband:code") == 1);
+        if (base.rects.count("airband:code") == 1) {
+            const std::string lookup = click(60, base.rects.at("airband:code")) + "70 text ORD\n72 key enter\n";
+            // The keys exist only while a group is on show, so the layout pass looks the airport up too and reports where they are once it has.
+            writeBookmarks(kEmpty);
+            const Result layout = once("tickall-layout", 100, "receiver", lookup);
+            CHECK(layout.ok);
+            CHECK(layout.items.count("airband:rows:29") == 1);
+            CHECK(layout.items.count("airband:ticked:28") == 1);
+            CHECK(layout.rects.count("airband:tickall") == 1);
+            CHECK(layout.rects.count("airband:untickall") == 1);
+            if (layout.rects.count("airband:tickall") == 1 && layout.rects.count("airband:untickall") == 1) {
+                const Rect tickAll = layout.rects.at("airband:tickall");
+                const Rect untickAll = layout.rects.at("airband:untickall");
+                std::printf("  tick all and untick all on O'Hare's list (29 rows, 28 ticked): Tick all at (%.0f, %.0f), Untick all at (%.0f, %.0f)\n", static_cast<double>(tickAll.cx()),
+                            static_cast<double>(tickAll.cy()), static_cast<double>(untickAll.cx()), static_cast<double>(untickAll.cy()));
+                CHECK(untickAll.x0 >= tickAll.x1 - 0.5f);   // Untick all is the key after Tick all, on the same line
+                // What each key did is read from the SAVED list, not from the census: the census is a set of everything noted over the whole run, so "airband:ticked:0" is in it
+                // from the frames before the lookup, and a count there cannot tell a key that did nothing (or the wrong thing) from one that worked.
+                const auto savedOHare = [&]() {
+                    cascade::core::FreqManager fm;
+                    std::string fmErr;
+                    CHECK(fm.load(bookmarksPath().string(), fmErr));
+                    std::pair<std::size_t, std::size_t> rowsAndTicked{0u, 0u};
+                    for (const cascade::core::Bookmark& b : fm.list()) {
+                        if (b.group != "KORD Chicago O'Hare International Airport") { continue; }
+                        ++rowsAndTicked.first;
+                        rowsAndTicked.second += b.scan ? 1u : 0u;
+                    }
+                    return rowsAndTicked;
+                };
+                writeBookmarks(kEmpty);
+                const Result off = once("tickall-untick", 140, "receiver", lookup + click(100, untickAll));
+                CHECK(off.ok);
+                CHECK(off.items.count("airband:rows:29") == 1);
+                const std::pair<std::size_t, std::size_t> afterOff = savedOHare();
+                std::printf("    saved after Untick all: %zu O'Hare rows, %zu ticked\n", afterOff.first, afterOff.second);
+                CHECK(afterOff.first == 29);
+                CHECK(afterOff.second == 0);
+                writeBookmarks(kEmpty);
+                const Result on = once("tickall-tick", 180, "receiver", lookup + click(100, untickAll) + click(130, tickAll));
+                CHECK(on.ok);
+                CHECK(on.items.count("airband:rows:29") == 1);
+                CHECK(on.items.count("airband:ticked:29") == 1);
+                const std::pair<std::size_t, std::size_t> afterOn = savedOHare();
+                std::printf("    saved after Untick all, then Tick all: %zu O'Hare rows, %zu ticked\n", afterOn.first, afterOn.second);
+                CHECK(afterOn.first == 29);
+                CHECK(afterOn.second == 29);
+            }
+        }
+    }
+
     const int rc = testSummary("test_airband_app");
     if (rc == 0) { fs::remove_all(g_dir, ec); }
     return rc;

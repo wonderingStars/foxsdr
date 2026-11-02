@@ -3219,6 +3219,7 @@ void AppWindow::drawUi() {
     // committed in the frame it is made, and this makes sure of it for a view
     // that stopped drawing part-way (a no-op when the draft holds no edit).
     syncPatchPageOpen();
+    syncTransmitPageOpen();   // (the transmit page's flag, again until the session takes it: the same rule - batch B, finding 6)
     commitPatchDraft();
     // THE KEY REQUEST IS REBUILT FROM NOTHING EVERY FRAME, and this is where
     // it is cleared. Whatever is holding the PTT down - the mouse on the big
@@ -11942,7 +11943,8 @@ void AppWindow::setMainViewPatch(bool patch) {
 // so only a difference is sent - and again next frame if the session could not take it.
 void AppWindow::syncPatchPageOpen() {
     if (patchOpen_ == patchPageOpenSent_ || uiSession_ == nullptr) { return; }
-    if (uiSubmitTicket(cascade::core::cmd::QueuedCommand{
+    // OFFERED, not submitted (batch B, finding 6): a refusal here is no drop - the flag is offered again next frame - so nothing is counted or said about it.
+    if (uiOffer(cascade::core::cmd::QueuedCommand{
             cascade::core::cmd::makeInt(FOXAPP_OP_SET_PATCH_PAGE_OPEN, patchOpen_ ? 1 : 0), {}}) != 0u) {
         patchPageOpenSent_ = patchOpen_;
     }
@@ -16619,7 +16621,16 @@ void AppWindow::drawTransmitSection() {
 
 void AppWindow::setTransmitPageOpen(bool open) {
     transmitPageOpen_ = open;
-    uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, open ? 1 : 0));
+    syncTransmitPageOpen();
+}
+
+// THE ENGINE IS TOLD WHETHER THE TRANSMIT PAGE IS OPEN (FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN: the engine saves the flag with the settings - its one reader - and the same command seeds the
+// page's address box when it opens), and the window believes it has told it only when the session TOOK the command (the deep pre-merge review, batch B, finding 6; docs/engine-stage4.md 6.32). The flag used to be sent once, on the change, with the answer ignored: a
+// session that was full answered BUSY, the command was dropped, and the engine's flag stayed wrong for the rest of the run. It is the patch page's rule (syncPatchPageOpen): only a
+// difference is sent, again each frame until the session takes it. (The engine starts "closed", as this does.)
+void AppWindow::syncTransmitPageOpen() {
+    if (transmitPageOpen_ == transmitPageOpenSent_ || uiSession_ == nullptr) { return; }
+    if (uiOffer(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, transmitPageOpen_ ? 1 : 0)) != 0u) { transmitPageOpenSent_ = transmitPageOpen_; }
 }
 
 void AppWindow::uiSubmit(const cascade::core::cmd::QueuedCommand& q) { (void)uiSubmitTicket(q); }
@@ -16686,38 +16697,57 @@ void AppWindow::flushHeldSetters() {
     }
 }
 
-std::uint64_t AppWindow::uiSubmitTicket(const cascade::core::cmd::QueuedCommand& q) {
+// OFFERED (see the header): the one place a command meets the session. The ticket the engine gave it, or 0 when the session did not take it - and *busy tells a full session
+// (or one that would not take the batch) from none at all. Nothing is counted, said or held here: that is uiSubmitTicket's, for a caller that will not offer the command again.
+std::uint64_t AppWindow::uiOffer(const cascade::core::cmd::QueuedCommand& q, bool* busy) {
+    if (busy != nullptr) { *busy = false; }
     if (uiSubmitTap_ != nullptr) { uiSubmitTap_->push_back(q); }  // (a test's; see the header)
-    if (uiSession_ == nullptr) {
-        cascade::core::diagWarnf("ui: no engine API session - %s was not sent",
-                                 cascade::core::cmd::opName(q.c.op));
-        return 0u;
-    }
+    if (uiSession_ == nullptr) { return 0u; }
     FoxSubmitResult sr{};
     sr.structSize = sizeof(sr);
     const int32_t n = q.longText.empty()
                           ? engineApi_->submit(uiSession_, &q.c, 1, &sr)
                           : engineApi_->submit_text(uiSession_, &q.c, q.longText.data(),
                                                     static_cast<uint32_t>(q.longText.size()), &sr);
+    if (n < 0 || sr.status == FOXAPI_BUSY) {
+        if (busy != nullptr) { *busy = true; }
+        return 0u;
+    }
+    if (sr.status != FOXAPI_OK && sr.status != FOXAPI_NO_CHANGE) { return 0u; }
+    return sr.ticket;
+}
+
+std::uint64_t AppWindow::uiSubmitTicket(const cascade::core::cmd::QueuedCommand& q) {
+    bool busy = false;
+    const std::uint64_t ticket = uiOffer(q, &busy);
+    if (uiSession_ == nullptr) {
+        cascade::core::diagWarnf("ui: no engine API session - %s was not sent",
+                                 cascade::core::cmd::opName(q.c.op));
+        return 0u;
+    }
+    if (!busy) {
+        // A NEWER FIGURE OF A NEWEST-WINS SETTER THAT THE SESSION TOOK SUPERSEDES THE ONE HELD FOR ITS OP (the deep pre-merge review, batch B, finding 5; docs/engine-stage4.md 6.32).
+        // A figure is held when the session is full and offered again once a frame, at the head of the next one (pollUiAnswers); when the stall ends part-way through a frame and
+        // the hand's newest figure is accepted DIRECTLY, the held older one was left in uiHeld_ and the next flush sent it after the newer - and if the gesture had ended nothing sent
+        // a newer figure, so the volume, the dB window or the squelch ended at the older. Taking the newer is what makes the older stale.
+        if (ticket != 0u && latestWins(q.c.op)) { uiHeld_.erase(q.c.op); }
+        return ticket;
+    }
     // BUSY (the session already has its maximum pending) takes no ticket and answers nothing: the caller sends again. With the pass on a
     // thread of its own this is a new way to lose a command (the pump move's step P4, the survey's 1.6 I): a pass stalled for seconds
     // (a rescan, a vendor wait) while a gesture emits one non-mergeable command a frame fills the session's queue after FOXAPI_MAX_PENDING
     // of them. The mergeable kinds (a drag's offset, a volume) merge into the pending one and are never refused; the rest are dropped here,
     // COUNTED and SAID ONCE, so a stalled pass shows as one line in the log and not as controls that silently stop answering.
-    if (n < 0 || sr.status == FOXAPI_BUSY) {
-        // THE NEWEST FIGURE WINS (see uiHeld_): a setter whose newest value supersedes the older ones is held and offered again, not dropped.
-        if (latestWins(q.c.op)) {
-            uiHeld_[q.c.op] = q;
-            return 0u;
-        }
-        if (uiBusyDrops_++ == 0) {
-            cascade::core::diagWarnf("ui: the engine's pass is not keeping up - %s was dropped (BUSY: %d commands already waiting); later ones are counted, not said",
-                                     cascade::core::cmd::opName(q.c.op), static_cast<int>(FOXAPI_MAX_PENDING));
-        }
+    // THE NEWEST FIGURE WINS (see uiHeld_): a setter whose newest value supersedes the older ones is held and offered again, not dropped.
+    if (latestWins(q.c.op)) {
+        uiHeld_[q.c.op] = q;
         return 0u;
     }
-    if (sr.status != FOXAPI_OK && sr.status != FOXAPI_NO_CHANGE) { return 0u; }
-    return sr.ticket;
+    if (uiBusyDrops_++ == 0) {
+        cascade::core::diagWarnf("ui: the engine's pass is not keeping up - %s was dropped (BUSY: %d commands already waiting); later ones are counted, not said",
+                                 cascade::core::cmd::opName(q.c.op), static_cast<int>(FOXAPI_MAX_PENDING));
+    }
+    return 0u;
 }
 
 // A PAGE SAYS ITS NAME TO THE USAGE REPORT, ONCE A RUN (window port, group 3).
@@ -16735,8 +16765,12 @@ void AppWindow::uiNotePanel(const char* name) {
     const auto at = std::lower_bound(uiNotedPanels_.begin(), uiNotedPanels_.end(), name,
                                      [](const std::string& have, const char* want) { return have.compare(want) < 0; });
     if (at != uiNotedPanels_.end() && *at == name) { return; }
+    // A NAME IS RECORDED AS SENT WHEN THE SESSION TOOK IT (the deep pre-merge review, batch B, finding 6): it was recorded before the submit and the answer ignored, so a session that was
+    // full dropped the command and the name was never offered again - the panel was missing from the usage report for the run. A refused name is offered again by the page's next frame
+    // (a page calls this every frame it is open): a command built per frame, while the session is full, and nothing otherwise.
+    if (uiSession_ == nullptr) { return; }
+    if (uiOffer(cascade::core::cmd::makeText(FOXAPP_OP_NOTE_PANEL, name)) == 0u) { return; }
     uiNotedPanels_.insert(at, name);
-    uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_NOTE_PANEL, name));
 }
 
 const std::string& AppWindow::uiFact(const char* key) {
@@ -16860,6 +16894,7 @@ void AppWindow::openUiSession() {
 
 void AppWindow::closeUiSession() {
     uiHeld_.clear();   // (a figure held for the session being closed belongs to nobody else)
+    airband_.ticks = cascade::gui::AirbandTickRun{};   // ...nor do the rows of a Tick all that was still going out
     if (uiSession_ != nullptr) {
         engineApi_->close_session(uiSession_);
         uiSession_ = nullptr;
@@ -21709,10 +21744,31 @@ void AppWindow::submitReceiverPosition(double latDeg, double lonDeg) {
 // THE TRACK-INFO PLUGIN'S STATUS LINES, from this thread (the pump move's step P2): the cache's text polled here, in the frame,
 // and sent to the engine as one command each. The engine used to ask through a hook, from its pass, and the plugin's poll_text
 // ran there beside the GUI's trackInfo_.get.
+//
+// A PLUGIN'S LOG IS NOT A COMMAND PER LINE (the deep pre-merge review, batch B, finding 4; docs/engine-stage4.md 6.32). drainText yields every line of up to 32 polls of 4 KB a
+// frame - hundreds, for a plugin with a bad network or URL that logs a failure per lookup, or a faulty or hostile one that logs short lines in a loop - and each used to be a command
+// of its own, submitted first thing in the frame. The session holds 256 and the window reads 64 results a frame, so at 100 lines a frame the lines took every slot the frame freed,
+// and every command after them (a tune, a start or stop, a setting, a tick) was refused and dropped for as long as the plugin kept talking. Now the lines wait in a backlog of the
+// engine's ring's size - a line older than 500 would be pushed out of the ring by the time it arrived, so the oldest go first, counted and said once - and at most
+// kTrackInfoLinesPerFrame are passed on a frame, in order, the first refusal ending the frame's share (the session is full: they wait, they are not dropped).
 void AppWindow::sendTrackInfoText() {
-    if (!trackInfo_.active()) { return; }
+    if (!trackInfo_.active()) {
+        trackInfoLines_.clear();   // (the plugin went, and takes what it had not yet been heard saying with it)
+        return;
+    }
     for (std::string& line : trackInfo_.drainText()) {
-        uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_TRACK_INFO_LINE, line));
+        if (trackInfoLines_.size() >= kDecoderLogMax) {
+            trackInfoLines_.pop_front();
+            if (trackInfoLinesLost_++ == 0) {
+                cascade::core::diagWarnf("ui: the track-info plugin is saying lines faster than the window passes them on - the oldest are dropped (the Decoder output holds the newest %zu); later ones are counted, not said",
+                                         static_cast<std::size_t>(kDecoderLogMax));
+            }
+        }
+        trackInfoLines_.push_back(std::move(line));
+    }
+    for (int sent = 0; sent < kTrackInfoLinesPerFrame && !trackInfoLines_.empty(); ++sent) {
+        if (uiOffer(cascade::core::cmd::makeText(FOXAPP_OP_TRACK_INFO_LINE, trackInfoLines_.front())) == 0u) { break; }
+        trackInfoLines_.pop_front();
     }
 }
 

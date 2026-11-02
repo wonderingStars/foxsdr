@@ -524,6 +524,56 @@ void AppWindow::airbandSendChunks() {
     }
 }
 
+// TICK ALL / UNTICK ALL (the deep pre-merge review, batch B, finding 3; docs/engine-stage4.md 6.32). `rows` are the indexes of the rows the section lists, into the window's one copy
+// of BOOKMARKS; the key sets every one of them to `on`. It sent one FOXAPP_OP_BOOKMARK_TICK a row, all in the frame of the press - and a session holds 256 ordinary commands, so a
+// group of more rows than the room left ticked the first part and DROPPED the rest (BUSY, never offered again): some rows ticked, some not, the "N ticked of M" line and the
+// monitor's playlist wrong with nothing said, and the one log line blamed the engine's pass for the window's own burst. The press now starts a RUN (AirbandTickRun): the ids of the
+// rows that change, sent by airbandSendTicks - from airbandFrame, so the first batch goes at the end of this frame and the rest on the frames after - kTickRowsPerFrame a frame, the
+// same row offered again when the session is full. Nothing is dropped, and a full session is waited out, not counted against the pass.
+//
+// A PRESS WHILE A RUN IS OUT (or in the few frames after its last row went out, AirbandTickRun::settle) replaces it - the newest press wins - and covers EVERY listed row, not only
+// those the list shows differently: the rows the older run has already sent are in the engine's queue ahead of these and the list does not show them yet (or shows them half-done), so
+// "the row is already as asked" cannot be judged from it. (An opposite key pressed while a large group is still going out is no longer a race with the list.) The engine answers a
+// row already as asked with nothing changed and nothing written. A press on a settled list sends only the rows that differ - for a group already as asked, nothing at all.
+void AppWindow::airbandTickAll(const std::vector<std::uint32_t>& rows, bool on) {
+    const std::vector<cascade::gui::BookmarkRow>& list = tuningLists().markers;
+    AirbandTickRun& run = airband_.ticks;
+    const bool coverAll = run.unsettled();
+    std::vector<std::uint64_t> ids;
+    ids.reserve(rows.size());
+    for (const std::uint32_t i : rows) {
+        if (i < list.size() && (coverAll || list[i].ticked != on)) { ids.push_back(list[i].id); }
+    }
+    run.on = on;
+    run.ids = std::move(ids);
+    run.next = 0;
+    run.settle = 0;
+}
+
+// The run's next rows, once a frame (airbandFrame): at most kTickRowsPerFrame, in order, the first refusal ends the frame's share - the row stays next, and is offered again.
+void AppWindow::airbandSendTicks() {
+    AirbandTickRun& run = airband_.ticks;
+    if (run.ids.empty()) {   // (the quiet frame: nothing to say, nothing built; the list's lag after a finished run counts down)
+        if (run.settle > 0) { --run.settle; }
+        return;
+    }
+    if (uiSession_ == nullptr) {
+        run = AirbandTickRun{};
+        return;
+    }
+    int sent = 0;
+    while (run.active() && sent < kTickRowsPerFrame) {
+        if (uiOffer(cmd::makeInt(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(run.ids[run.next]), run.on ? 1 : 0)) == 0u) { return; }
+        ++run.next;
+        ++sent;
+    }
+    if (!run.active()) {   // done: the ids are let go, and for a few frames the list may not yet show the last of them
+        run.ids.clear();
+        run.next = 0;
+        run.settle = kTickSettleFrames;
+    }
+}
+
 // An import whose every chunk has been answered: the note, the group on show, the log.
 void AppWindow::airbandFinishImport() {
     AirbandImportRun& run = airband_.import;
@@ -713,6 +763,7 @@ void AppWindow::airbandFrame() {
     if (uiSession_ == nullptr) { return; }
     airbandPollJobs();
     airbandSendChunks();
+    airbandSendTicks();
     const AirbandFacts& f = airbandFacts();
 
     // THE PATCH VIEW HAS THE RECEIVER'S RADIO. LISTEN with it showing makes the engine close it and wait for the radio (fact.airband.pending); the
@@ -1094,8 +1145,10 @@ void AppWindow::drawAirbandSection() {
     if (!rows.empty() && !a.group.empty()) {
         ImGui::SameLine();
         if (ImGui::SmallButton(trId("Tick all"))) { setAll = 1; }
+        cascade::gui::census::rect("airband:tickall", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
         ImGui::SameLine();
         if (ImGui::SmallButton(trId("Untick all"))) { setAll = 0; }
+        cascade::gui::census::rect("airband:untickall", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
     }
     ImGui::Checkbox(trId("Busiest first"), &a.busyFirst);
     if (ImGui::IsItemHovered()) {
@@ -1192,13 +1245,7 @@ void AppWindow::drawAirbandSection() {
                                    ImGui::GetItemRectMax().y);
     }
     // Commands by id, landing at the engine's next pass - never while the clipper above still walks the list.
-    if (setAll >= 0) {
-        for (const std::uint32_t i : rows) {
-            if (i < list.size() && list[i].ticked != (setAll == 1)) {
-                uiSubmit(cmd::makeInt(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(list[i].id), setAll));
-            }
-        }
-    }
+    if (setAll >= 0) { airbandTickAll(rows, setAll == 1); }
     if (toggleId >= 0) { uiSubmit(cmd::makeInt(FOXAPP_OP_BOOKMARK_TICK, toggleId, toggleTo ? 1 : 0)); }
     if (tuneId >= 0) {
         // One channel, on the receiver: the monitor stops ("Tuned to <name> alone."), because the receiver is now somewhere the monitor did not put

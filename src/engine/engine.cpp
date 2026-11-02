@@ -5032,7 +5032,9 @@ void Engine::maybeAutoPreset(const std::string& pluginKey, const char* verb, boo
 std::string Engine::pluginKeyForDisplayName(const std::string& displayName) const {
     if (displayName.empty()) { return {}; }
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
-        if (p.name == displayName) { return cascade::core::pluginKey(p); }
+        // LOADED ONLY, as the header says: the host keeps a name on the copy it turns off when two files declare one (resolveDuplicatePlugins), and that copy sorts
+        // first by path after an update. Held equal to the table's re-expression, gui::moduleFileForName, by tests/test_module_file_for_name (batch B, finding 2).
+        if (p.loaded && p.name == displayName) { return cascade::core::pluginKey(p); }
     }
     return {};
 }

@@ -446,6 +446,13 @@ void fillFittedModule(FittedModule& m, const FittedRow& r) {
     m.tuneAllowed = r.tuneAllowed;
     m.settingsCapable = r.askedSettings;
     m.settingsAllowed = r.settingsAllowed;
+    // THE TRANSMIT GRANT, THE OFFER OF ITS KEY AND THE PLATE are not the row's: the window sets them from fact.plugin.<file>.tx afterwards, and the engine publishes that for a
+    // module that declares transmit audio and no other. A slot is REUSED across refreshes (fittedLists refills the model in place), so what the module that held it before
+    // was granted, offered and shown is reset here with every other conditional field - or the module that moves up into a granted transmitter's slot shows REVOKE TRANSMIT
+    // and an ARMED plate for as long as the process lives (the deep pre-merge review, batch B, finding 1).
+    m.txCapable = false;
+    m.txAllowed = false;
+    m.txPlate = 0;
     m.commands.clear();
     m.noticeLevel = r.noticeLevel;
     m.notice = r.notice;

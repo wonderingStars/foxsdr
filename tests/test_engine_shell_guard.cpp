@@ -19,9 +19,14 @@
 //      that includes nothing the fence denies. WHO MAY KNOCK: which window members reach the plugin UI through it (the host accessors, the
 //      tile pump, the front end's hand-over, the shutdown's release).
 //   2. THE FENCE REACHES ZERO. src/engine/ and src/net/ are denied WHOLE (no allow list; the guard reads the directories, so a new header is
-//      denied too); the fence's stubs exist; no src/gui file includes a denied header; and the whole INCLUDE CLOSURE of src/gui - every header a
-//      window file reaches through any other header - contains no denied one, no engine/ header and no net/ header. The twelve pure helpers that
-//      were engine/'s (an allow list of 13 until R10) are core/ headers; the machinery whose data the interface was reaching (R11a) is denied.
+//      denied too, and a file there that is not a .cpp, .hpp or .h - which the fence's stubs cannot shadow - fails the guard); the fence's stubs exist;
+//      no src/gui file includes a denied header; and the whole INCLUDE CLOSURE of src/gui - every header a window file reaches through any other
+//      header - contains no denied one, no engine/ header and no net/ header. The twelve pure helpers that were engine/'s (an allow list of 13 until
+//      R10) are core/ headers; the machinery whose data the interface was reaching (R11a) is denied.
+//      EVERY INCLUDE IS COMPARED BY WHAT IT NORMALISES TO, never by its spelling, in both places a quoted include may land (beside the including file, then
+//      on the include path) - and an include that spells '..' fails unless it is the one on kClimbingIncludes (the window's icon). The compiler cannot hold
+//      that spelling: it looks beside the including file first, so the fence's stubs on the include path are never asked (batch B of the deep pre-merge
+//      review, docs 6.32: `#include "../engine/pass_stats.hpp"` compiles behind the fence).
 //   3. THE SURVIVORS of the old guard, which were never about reads: the frame is a look (three stepPass calls in drawUi, in order; the
 //      engine's pass started by the service); the window saves nothing; the ops that name a row by position are a reviewed set; the plugin UI
 //      is the window's (the port applies the directive before any reference into it is taken); the data header split (the views take
@@ -33,7 +38,10 @@
 //
 // PROVEN RED (docs/engine-stage4.md 6.26): a 15th virtual in the port, a call from a widget, a stub-less deny list, `#include "engine/tune_control.hpp"` in a
 // gui file, an engine header put back on an allow list, the door's header recreated; and the compiler's half by tests/CMakeLists.txt's
-// interface_fence_* probes, which compile an interface translation unit that includes a denied header and want the build to fail.
+// interface_fence_* probes, which compile an interface translation unit that includes a denied header and want the build to fail. (6.32, the climbing spelling:
+// `../engine/pass_stats.hpp` and `../net/web_auth.hpp` written in a gui file and in a closure header, `../../src/engine/...`, a `.inl` in src/engine, a `.inc` in
+// src/net and a subdirectory of src/engine - each staged in a scratch copy of the tree and run through this guard by argv[1]; the old guard passed every one whose
+// denied header includes nothing denied itself, and saw the rest only by what THEY include.)
 //
 // argv[1], optional: a root to scan instead of the source tree (used to run the probes against a copy).
 //
@@ -70,6 +78,10 @@ constexpr int kExtensionIdsBudget = 1;    // FOXAPI_EXT_* in the vendored header
 constexpr int kDoorCallSitesBudget = 0;
 constexpr int kAllowedEngineHeadersBudget = 0;
 constexpr int kRawEngineFilesBudget = 0;
+// THE INCLUDES THAT SPELL '..' (deep pre-merge review, batch B, finding 7; docs/engine-stage4.md 6.32): in src/gui and in every header the interface reaches, an include is spelled
+// from src/ ("core/x.hpp"), never by climbing out of its own directory, because the compiler looks beside the including file first and so cannot fence a climbing spelling (see
+// includeCandidates). ONE exists, and is named in kClimbingIncludes below with its reason; the budget only goes down.
+constexpr int kClimbingIncludesBudget = 1;
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 // WHO MAY KNOCK: for each AppWindow member, the port methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails), so this is
@@ -134,6 +146,18 @@ const char* const kMovedToCore[] = {"tune_control.hpp",     "bias_tee.hpp",     
 const char* const kDataHeaders[] = {"core/engine_vocab.hpp",     "core/status_text.hpp",       "core/pass_part.hpp",       "core/plugin_ui_port.hpp",
                                     "core/bounded_hooks.hpp",    "core/plugin_host_data.hpp",  "core/plugin_repo_data.hpp", "core/bookmark.hpp",
                                     "core/mp3_support.hpp"};
+// THE ONE INCLUDE THAT CLIMBS (kClimbingIncludesBudget): where it is written (src-relative), how it is spelled, and why it is allowed to be. Every row must be matched by an include
+// of the walk (a stale row fails), and an include that climbs and is not a row fails.
+struct ClimbRow {
+    const char* from;
+    const char* spelled;
+    const char* why;
+};
+const ClimbRow kClimbingIncludes[] = {
+    {"gui/app_window.cpp", "../../resources/icon/foxsdr_icon_rgba.hpp",
+     "the window's icon pixels: a header GENERATED by resources/icon/generate_icon.py that lives in the repository's resources/ folder, outside src/ and on no include path, so "
+     "the only way to name it is by its place. It lands outside src/, includes nothing, and is checked for what it normalises to as every include is"},
+};
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -446,10 +470,62 @@ std::vector<std::string> includesOf(const std::string& text) {
     return out;
 }
 
-// THE INCLUDE CLOSURE of src/gui: every header a window file reaches through quoted includes, followed through every header it reaches (an include is
-// resolved against src/ and then against the including file's own directory; <system> includes and generated headers resolve to nothing). The
-// compiler fence sees only the headers some interface translation unit happens to compile; this is the whole closure. Returns the set of src-relative paths.
-std::set<std::string> guiClosure(const fs::path& root) {
+// WHERE A QUOTED INCLUDE CAN LAND (the deep pre-merge review, batch B, finding 7; docs/engine-stage4.md 6.32). A quoted include is looked for BESIDE THE INCLUDING FILE first
+// and on the include path (src/) second. That order is why the fence's stubs - which live on the include path - cannot see `#include "../engine/pass_stats.hpp"`: the real
+// header is found beside the including file and the path is never asked (shown with the compiler, docs 6.32: the plain spelling stops at the stub's #error, the climbing one
+// compiles). So the compiler cannot hold that spelling, and every comparison in THIS file is made on the src-relative path an include NORMALISES to - for both places it may
+// land - and never on the spelled text: "core/../engine/pass_stats.hpp" IS "engine/pass_stats.hpp". (The old walk compared the spelled text, so a denied header that includes
+// nothing denied itself - a leaf, like engine/pass_stats.hpp or net/web_auth.hpp - went unseen when spelled with '..'; one that includes denied headers was seen only by the
+// accident of what IT includes.)
+std::string canonicalInclude(std::string inc) {
+    std::replace(inc.begin(), inc.end(), '\\', '/');   // (MSVC takes a backslash spelling; a POSIX path component would not be split on it)
+    return inc;
+}
+
+// True when a '..' is a COMPONENT of the include's path ("../x.hpp", "a/../b.hpp"); "a..b/c.hpp" climbs nowhere.
+bool climbs(const std::string& canonicalInc) {
+    std::size_t at = 0;
+    while (at <= canonicalInc.size()) {
+        std::size_t end = canonicalInc.find('/', at);
+        if (end == std::string::npos) { end = canonicalInc.size(); }
+        if (canonicalInc.compare(at, end - at, "..") == 0) { return true; }
+        at = end + 1;
+    }
+    return false;
+}
+
+// The src-relative, normalised paths a quoted include in `fromRel` (src-relative, "gui/app_window.cpp") may land on: beside the including file, then on the include path.
+// A path that leaves src/ keeps its leading "..".
+std::vector<std::string> includeCandidates(const std::string& fromRel, const std::string& rawInc) {
+    const std::string inc = canonicalInclude(rawInc);
+    const std::string dir = fromRel.find('/') == std::string::npos ? std::string() : fromRel.substr(0, fromRel.rfind('/') + 1);
+    std::vector<std::string> out;
+    for (const std::string& spelled : {dir + inc, inc}) {
+        std::string n = fs::path(spelled).lexically_normal().generic_string();
+        // OUT AND BACK IN: src/'s parent is the repository root and src/ is under it, so "../src/engine/x.hpp" (from src/gui: "../../src/engine/x.hpp") is src/'s own engine/x.hpp.
+        if (n.rfind("../src/", 0) == 0) { n.erase(0, 7); }
+        if (std::find(out.begin(), out.end(), n) == out.end()) { out.push_back(n); }
+    }
+    return out;
+}
+
+// A src-relative path the interface may not reach: a header on the deny list, or ANYTHING under engine/ or net/ (whatever its extension: the fence's stubs exist for *.hpp and *.h
+// only, so the directory is what is denied here).
+bool isFencedRel(const std::set<std::string>& deny, const std::string& rel) {
+    return deny.count(rel) != 0 || rel.rfind("engine/", 0) == 0 || rel.rfind("net/", 0) == 0;
+}
+
+// An include that spells '..', where it was written (a src-relative file) and how it was spelled.
+struct ClimbingInclude {
+    std::string from;
+    std::string spelled;
+};
+
+// THE INCLUDE CLOSURE of src/gui: every header a window file reaches through quoted includes, followed through every header it reaches (an include is followed to every place
+// it may land - beside the including file and on the include path - NORMALISED; <system> includes and generated headers resolve to nothing). The compiler fence sees only
+// the headers some interface translation unit happens to compile, and not the climbing spellings at all; this is the whole closure. Returns the set of normalised
+// src-relative paths (a path that leaves src/, the icon header, keeps its leading "../"). `climbing`, when given, gets every include of the walk that spells a '..'.
+std::set<std::string> guiClosure(const fs::path& root, std::vector<ClimbingInclude>* climbing = nullptr) {
     std::set<std::string> seen;
     std::vector<std::string> todo;
     for (const fs::path& p : guiFiles(root, true)) { todo.push_back("gui/" + p.filename().string()); }
@@ -460,12 +536,10 @@ std::set<std::string> guiClosure(const fs::path& root) {
         const fs::path file = root / "src" / h;
         std::error_code ec;
         if (!fs::exists(file, ec)) { continue; }
-        const std::string dir = h.find('/') == std::string::npos ? std::string() : h.substr(0, h.rfind('/') + 1);
         for (const std::string& inc : includesOf(readFile(file))) {
-            if (fs::exists(root / "src" / inc, ec)) {
-                todo.push_back(inc);
-            } else if (fs::exists(root / "src" / (dir + inc), ec)) {
-                todo.push_back(dir + inc);
+            if (climbing != nullptr && climbs(canonicalInclude(inc))) { climbing->push_back({h, inc}); }
+            for (const std::string& cand : includeCandidates(h, inc)) {
+                if (fs::exists(root / "src" / cand, ec)) { todo.push_back(cand); }
             }
         }
     }
@@ -607,6 +681,24 @@ void checkTheFence(const fs::path& root, const std::set<std::string>& deny) {
         CHECK(engineHeaders >= 10);   // the scan saw the real directory
         CHECK(allowed == static_cast<std::size_t>(kAllowedEngineHeadersBudget));
     }
+    // THE DENIED DIRECTORIES HOLD NOTHING THE FENCE CANNOT NAME (finding 7). The fence writes a stub for each *.hpp and *.h directly in src/engine and src/net (its glob), and the
+    // deny list above is read the same way; a header-like file with another extension (.inc, .inl, .ipp, .tpp ...) or a header in a subdirectory would be reachable by an
+    // include that no stub shadows. None exists; one appearing is a decision (name its extension in the fence's glob and here), not something that can slip in.
+    {
+        int strangers = 0;
+        std::error_code ec;
+        for (const char* dir : {"engine", "net"}) {
+            for (const auto& e : fs::directory_iterator(root / "src" / dir, ec)) {
+                const std::string ext = e.path().extension().string();
+                if (e.is_directory(ec) || (ext != ".cpp" && ext != ".hpp" && ext != ".h")) {
+                    ++strangers;
+                    std::printf("FAIL: src/%s/%s is not a .cpp, .hpp or .h file directly in the directory - the fence's stubs (cmake/interface_fence.cmake: *.hpp and *.h) cannot "
+                                "shadow it, so the directory is no longer denied whole\n", dir, e.path().filename().string().c_str());
+                }
+            }
+        }
+        CHECK(strangers == 0);
+    }
 
     // the interface target is built, from src/gui, behind the fence; it links the engine LIBRARY (core/'s objects) and no shell; the headless programs refuse it
     const std::string cmake = readFile(root / "CMakeLists.txt");
@@ -631,15 +723,26 @@ void checkTheFence(const fs::path& root, const std::set<std::string>& deny) {
     if (!probes) { std::printf("FAIL: tests/CMakeLists.txt registers no interface_fence_* compile probes\n"); }
     CHECK(probes);
 
-    // NO FILE UNDER src/gui NAMES A DENIED HEADER - the compiler sees only the headers some interface translation unit happens to include.
+    // NO FILE UNDER src/gui NAMES A DENIED HEADER - the compiler sees only the headers some interface translation unit happens to include, and not at all a spelling that
+    // climbs (finding 7): each include is compared by what it NORMALISES to, in both places it may land (includeCandidates), so "../engine/pass_stats.hpp" is engine/pass_stats.hpp.
     int named = 0, engineNamed = 0;
     for (const fs::path& p : guiFiles(root, true)) {
+        const std::string rel = "gui/" + p.filename().string();
         for (const std::string& inc : includesOf(readFile(p))) {
-            if (deny.count(inc) != 0) {
-                ++named;
-                std::printf("FAIL: src/gui/%s includes <%s>, which the fence denies the interface\n", p.filename().string().c_str(), inc.c_str());
+            bool fencedHere = false, engineHere = false;
+            std::string landing;
+            for (const std::string& cand : includeCandidates(rel, inc)) {
+                if (isFencedRel(deny, cand) && !fencedHere) {
+                    fencedHere = true;
+                    landing = cand;
+                }
+                if (cand.rfind("engine/", 0) == 0) { engineHere = true; }
             }
-            if (inc.rfind("engine/", 0) == 0) { ++engineNamed; }
+            if (fencedHere) {
+                ++named;
+                std::printf("FAIL: src/gui/%s includes \"%s\", which is <%s> and the fence denies the interface\n", p.filename().string().c_str(), inc.c_str(), landing.c_str());
+            }
+            if (engineHere) { ++engineNamed; }
         }
     }
     CHECK(named == 0);
@@ -649,23 +752,57 @@ void checkTheFence(const fs::path& root, const std::set<std::string>& deny) {
     // THE INCLUDE CLOSURE OF src/gui. Everything a window file reaches through any header: none denied, none under engine/ or net/. (The sibling-hole check of the
     // allow list - an allowed header that itself includes a denied one - is this check, for every header the interface reaches, allowed by a list or not.)
     {
-        const std::set<std::string> closure = guiClosure(root);
+        std::vector<ClimbingInclude> climbing;
+        const std::set<std::string> closure = guiClosure(root, &climbing);
         std::map<std::string, int> byDir;
-        int denied = 0;
+        int denied = 0, outside = 0;
         for (const std::string& h : closure) {
             const std::size_t slash = h.find('/');
             if (slash == std::string::npos) { continue; }
-            ++byDir[h.substr(0, slash)];
-            if (deny.count(h) != 0 || h.rfind("engine/", 0) == 0 || h.rfind("net/", 0) == 0) {
+            if (h.rfind("../", 0) == 0) {   // a file that leaves src/ (the icon): it is not under any directory of it
+                ++outside;
+            } else {
+                ++byDir[h.substr(0, slash)];
+            }
+            if (isFencedRel(deny, h)) {
                 ++denied;
                 std::printf("FAIL: the interface's include closure reaches <%s>, which the fence denies (through a header the interface includes)\n", h.c_str());
             }
         }
         std::printf("  the interface's include closure: %zu files (", closure.size());
         for (const auto& kv : byDir) { std::printf("%s %d, ", kv.first.c_str(), kv.second); }
-        std::printf("engine %d, net %d): %d denied (expect 0)\n", byDir.count("engine") != 0 ? byDir["engine"] : 0, byDir.count("net") != 0 ? byDir["net"] : 0, denied);
+        std::printf("outside src/ %d, engine %d, net %d): %d denied (expect 0)\n", outside, byDir.count("engine") != 0 ? byDir["engine"] : 0,
+                    byDir.count("net") != 0 ? byDir["net"] : 0, denied);
         CHECK(denied == 0);
         CHECK(closure.size() > 200);   // the walk saw the real tree
+        // THE INCLUDES THAT CLIMB: only the table's, each matched by an include of the walk (finding 7).
+        {
+            int unlisted = 0;
+            std::set<std::string> matchedRows;
+            for (const ClimbingInclude& c : climbing) {
+                bool listed = false;
+                for (const ClimbRow& r : kClimbingIncludes) {
+                    if (c.from == r.from && c.spelled == r.spelled) {
+                        listed = true;
+                        matchedRows.insert(std::string(r.from) + "|" + r.spelled);
+                    }
+                }
+                if (!listed) {
+                    ++unlisted;
+                    std::printf("FAIL: %s includes \"%s\", which climbs out of its directory with '..' - spell it from src/ (core/x.hpp), as every other include is: the compiler looks beside "
+                                "the including file first, so the fence's stubs cannot shadow a climbing spelling (docs/engine-stage4.md 6.32)\n", c.from.c_str(), c.spelled.c_str());
+                }
+            }
+            for (const ClimbRow& r : kClimbingIncludes) {
+                const bool ok = matchedRows.count(std::string(r.from) + "|" + r.spelled) != 0;
+                if (!ok) { std::printf("FAIL: kClimbingIncludes {%s, %s} matches no include of the walk - remove it\n", r.from, r.spelled); }
+                CHECK(ok);
+            }
+            std::printf("  includes that climb with '..': %zu in the interface's closure (budget %d: the window's icon), %d not on the table\n", climbing.size(),
+                        kClimbingIncludesBudget, unlisted);
+            CHECK(unlisted == 0);
+            CHECK(climbing.size() == static_cast<std::size_t>(kClimbingIncludesBudget));
+        }
         // every data header shell retirement made is reached or at least exists, is not denied and includes nothing denied
         for (const char* h : kDataHeaders) {
             CHECK(deny.count(h) == 0);
@@ -673,9 +810,12 @@ void checkTheFence(const fs::path& root, const std::set<std::string>& deny) {
             if (t.empty()) { std::printf("FAIL: %s is missing\n", h); }
             CHECK(!t.empty());
             for (const std::string& inc : includesOf(t)) {
-                if (deny.count(inc) != 0 || inc.rfind("engine/", 0) == 0) {
-                    std::printf("FAIL: %s includes \"%s\" - a data header the interface may include takes nothing denied\n", h, inc.c_str());
-                    CHECK(false);
+                for (const std::string& cand : includeCandidates(h, inc)) {
+                    if (isFencedRel(deny, cand)) {
+                        std::printf("FAIL: %s includes \"%s\" (<%s>) - a data header the interface may include takes nothing denied\n", h, inc.c_str(), cand.c_str());
+                        CHECK(false);
+                        break;
+                    }
                 }
             }
         }

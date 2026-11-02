@@ -1656,7 +1656,11 @@ for the shared Decoder output window beside the module's own (`CASCADE_PRESET_SH
 track-info plugin ("cannot reach the registry"). The engine appends it to the Decoder output backlog as "Aircraft info", counted like
 every other line (`decoderLinesTotal` moves, `DECODER_LINES` serves it, `listSeq` does not). An empty text is `FOXAPI_BAD_ARGUMENT`. The
 interface that holds the plugin's cache (the standard window's `TrackInfoCache` is GUI-thread state) polls the plugin's text in its own
-frame and sends each line; the engine used to ask for them through `EngineHost::drainTrackInfoText` on every pass.
+frame and sends each line; the engine used to ask for them through `EngineHost::drainTrackInfoText` on every pass. **An interface passes the lines on at a
+bounded rate.** A line is an ordinary command, a session holds `FOXAPI_MAX_PENDING` of them outstanding, and a plugin may say hundreds of lines a frame, so
+a client must not send one command per line as fast as the plugin says them: the standard window keeps the lines in a backlog of at most the Decoder
+output's size (500 - an older line would be pushed out of the ring by the time it arrived; the oldest are dropped first, and the log says so once) and
+passes on at most 8 a frame, in order, offering a line again when the session answers `FOXAPI_BUSY` (docs/engine-stage4.md 6.32, finding 4).
 
 ### 8.15 The plugin UI is the interface's thread (the pump move, step P3) - what a plugin author and an interface may rely on
 

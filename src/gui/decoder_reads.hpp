@@ -241,12 +241,21 @@ inline bool runnerStatusEmpty(const std::vector<PluginRow>& rows) {
 }
 
 // The module file a plugin's DISPLAY name stands for (Engine::pluginKeyForDisplayName over the table's rows: the first
-// row of that name; "" for an empty name or none): what a map page's or a plugin window's rail row sends
-// FOXAPP_OP_PLUGIN_AUTO_PRESET with, because the pages and windows carry the display name and the op takes the file.
+// LOADED row of that name; "" for an empty name or none): what a map page's or a plugin window's rail row sends
+// FOXAPP_OP_PLUGIN_AUTO_PRESET with, because the pages and windows carry the display name and the op takes the file; and what a panel's
+// rows and a plugin's settings form are found by.
+//
+// LOADED ONLY (the deep pre-merge review, batch B, finding 2; docs/engine-stage4.md 6.32). The host keeps a name on the copy it turns off
+// when two files declare one (resolveDuplicatePlugins sets loaded = false and leaves the name), an update leaves the older file beside the newer
+// until CLEAN UP OLD VERSIONS, and the older sorts first by path - so the first row of the name was the file that is NOT running: its commands
+// are empty, it has no settings form, and an automatic preset sent for it reaches a module the host does not run. The host runs ONE loaded
+// plugin per display name, so the answer is unique; a name that only an unloaded copy has answers nothing - the "module unloaded since this
+// row was drawn" its callers skip silently. (muteStateForDisplayName and the DECODERS and PRESETS joins of AppWindow::pluginLists ask for
+// `loaded` too.)
 inline std::string moduleFileForName(const std::vector<PluginRow>& rows, const std::string& displayName) {
     if (displayName.empty()) { return {}; }
     for (const PluginRow& r : rows) {
-        if (r.name == displayName) { return r.file; }
+        if (r.loaded && r.name == displayName) { return r.file; }
     }
     return {};
 }

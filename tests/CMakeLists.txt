@@ -824,6 +824,29 @@ foreach(_t IN ITEMS test_map_window test_plugin_window test_plugin_status_report
             FIXTURE_GROUP14_PLUGIN="$<TARGET_FILE:fixture_group14_plugin>")
     endif()
 endforeach()
+# THE TRANSMITTING FIXTURE IN THE FITTED-MODULES WINDOW'S TEST (the deep pre-merge review, batch B, finding 1; docs/engine-stage4.md 6.32): section G fits
+# tests/fixtures/tx_audio_plugin.cpp first in the list, grants it TRANSMIT and removes it, to show that the module that moves up into its slot keeps nothing of its
+# grant, its key or its plate. (The module is the one test_tx_audio_app, test_tx_audio_plate_app and test_tx_audio_page_app already build.)
+if(TARGET test_fitted_modules_window)
+    add_dependencies(test_fitted_modules_window tx_audio_fixture)
+    target_compile_definitions(test_fitted_modules_window PRIVATE
+        FIXTURE_TX_AUDIO_PLUGIN="$<TARGET_FILE:tx_audio_fixture>")
+endif()
+# TWO FILES OF ONE PLUGIN IN THE DISPLAY-NAME LOOKUP'S TEST (the deep pre-merge review, batch B, finding 2; docs/engine-stage4.md 6.32): the rescan probe at 1.0.0 and at 1.1.0 (the
+# same declared name), copied into a plugin folder as an update leaves them - the older one turned off and listed first - for test_module_file_for_name.
+if(TARGET test_module_file_for_name)
+    add_dependencies(test_module_file_for_name rescan_probe_a rescan_probe_a_newer)
+    target_compile_definitions(test_module_file_for_name PRIVATE
+        FIXTURE_RESCAN_A_PLUGIN="$<TARGET_FILE:rescan_probe_a>"
+        FIXTURE_RESCAN_A_NEWER_PLUGIN="$<TARGET_FILE:rescan_probe_a_newer>")
+endif()
+# THE STAGE-ONE TEXT DECODER IN THE FULL-SESSION TEST (the deep pre-merge review, batch B, finding 6; docs/engine-stage4.md 6.32): the plugin the Decoder output window wants, so the
+# window's plugin-use table has a line to send - and to refuse - for test_window_full_session.
+if(TARGET test_window_full_session)
+    add_dependencies(test_window_full_session fixture_stage1_plugin)
+    target_compile_definitions(test_window_full_session PRIVATE
+        FIXTURE_STAGE1_PLUGIN="$<TARGET_FILE:fixture_stage1_plugin>")
+endif()
 # THE WAKE PROBE (stub campaign B2, PLUGIN-RUN; tests/fixture_wake_probe_plugin.cpp): an audio TEXT decoder that says one line per block it is
 # handed, naming the block by its first sample - the module that shows WHICH block a plugin woken by a window's signal decoded first
 # (test_engine_api_03 group N). Copied into a plugin directory of the test's own.
