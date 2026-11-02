@@ -1,87 +1,374 @@
-// FoxSDR Slint front end - THEME TOKENS (spike).
-// Every value here is lifted verbatim from the design canvas's Workbench main sheet
-// (project/Workbench.dc.html, its <helmet><style> block): row 16, "the arrangement I'd build".
-// The handover's rule: a theme is a set of property values on one component library, so the
-// 21 themes are 21 fillings of this global. Workbench is the neutral base the premium skins
-// (Cupertino, Obsidian, Atelier, Vitrine, Horology) are drawn on.
+// FoxSDR Slint front end - THE THEME: one struct, many fillings.
+//
+// The handover's rule: a theme is a set of property values on ONE component library, so the 21 themes
+// of the design canvas are 21 fillings of the same struct. Every colour, font, radius and signature
+// drawing switch a component may use lives in `Skin`; `Theme` is the global every component reads
+// (`Theme.bg`, `Theme.accent`, ...) and holds the filling in force (`Theme.skin`). Workbench - row 16,
+// "the arrangement I'd build" - is the filling here, lifted from the sheets' <helmet><style> blocks
+// (Workbench.dc.html, Workbench-PluginKit.dc.html). A skin (Cupertino, Obsidian, Atelier, Vitrine,
+// Horology - the owner has not chosen) is added as ANOTHER `Skin` value and installed with one
+// assignment `Theme.skin = ...` (from .slint or from C++ through the exported global): no component
+// changes. tests/test_slint_theme.cpp proves that with a second, trivial filling.
+//
+// METRICS (key heights, panel widths, font sizes) are NOT part of the skin in phase 1: the Workbench
+// arrangement is the one layout, and the artboards' pixel measurements are what the render tests check.
+// They are constants on `Theme` so a later density setting has one place to change.
+
+export enum DigitFace { plain, drum, nixie }
+export enum MeterStyle { classic, analogue, led-ladder, peak }
+
+export struct Skin {
+    // ---- grounds ----
+    bg: color,              // body, rail, window ground
+    strip: color,           // receiver strip, status bar, table heading row
+    panel: color,           // .panel, open section body, splitter, palette field
+    panel-alt: color,       // sections panel, .seg ground
+    card: color,            // update / team-message card, table band row
+    well: color,            // spectrum ground
+    well-deep: color,       // waterfall ground
+    field: color,           // counter ground, text fields, decoder output, figure cells
+    menu: color,            // menus, torn-off window title strips, chip ground, key ground
+    menu-hot: color,        // hovered menu item
+    table-selected: color,  // selected table row ground
+    card-warn: color,       // warning card ground
+    card-warn-line: color,
+    card-err: color,        // error card ground
+    card-err-line: color,
+    backdrop: color,        // the dimmed sheet backdrop behind a dialog
+
+    // ---- lines ----
+    line: color,            // every 1px divider
+    line-strong: color,     // key / chip / seg borders
+    line-faint: color,      // spectrum graticule
+    knob-ring: color,       // lamp-off ring, torn-off window border, cursor chip border, counter dots, menu border
+
+    // ---- text ----
+    fg: color,
+    fg-soft: color,
+    muted: color,           // captions, chevrons, table headings
+    dim: color,             // hints, axis labels, status-bar keys
+    faint: color,           // F-key hints, unit row, maker mark
+    nudge: color,           // digit nudge arrows
+    disabled: color,        // disabled key / menu-item text
+    focus: color,           // keyboard focus ring
+
+    // ---- accent (amber on Workbench) ----
+    accent: color,
+    accent-ink: color,      // text on an accent key
+    accent-soft: color,     // tuned readout, bookmarks, warn chip text, plate-key text
+    accent-hover: color,
+    digit: color,           // counter numerals
+    digit-glow: color,      // their glow (transparent = none)
+    digit-dim: color,       // dimmed leading zero
+
+    // ---- lamps: dot colour, and the caption colour while lit ----
+    lamp-off: color,
+    lamp-ring: color,
+    lamp-green: color,
+    lamp-green-cap: color,
+    lamp-amber: color,
+    lamp-amber-cap: color,
+    lamp-red: color,
+    lamp-red-cap: color,
+    lamp-yellow: color,
+    lamp-yellow-cap: color,
+
+    // ---- chips ----
+    chip-bg: color,
+    chip-fg: color,
+    chip-line: color,
+    chip-good-bg: color,
+    chip-good-fg: color,
+    chip-good-line: color,
+    chip-warn-bg: color,
+    chip-warn-fg: color,
+    chip-warn-line: color,
+    chip-err-bg: color,
+    chip-err-fg: color,
+    chip-err-line: color,
+
+    // ---- keys ----
+    key-bg: color,
+    key-line: color,
+    key-fg: color,
+    key-disabled-bg: color,
+    key-disabled-fg: color,
+    danger-bg: color,       // the STOP key and .btn.danger
+    danger-line: color,
+    danger-strong-line: color, // the STOP dome's border
+    danger-fg: color,
+    danger-glyph: color,
+    hazard-line: color,     // BIAS TEE
+    hazard-stripe: color,
+    plate-line: color,      // .btn.plate: outlined accent key
+    plate-fg: color,
+
+    // ---- sliders and bars ----
+    slider-track: color,
+    slider-fill: color,
+    slider-knob: color,
+    slider-knob-ring: color,
+    slider-disabled-fill: color,
+    slider-disabled-knob: color,
+    level-bar: color,       // the volume level bar
+
+    // ---- meters ----
+    meter-face: color,
+    meter-ink: color,
+    meter-needle: color,
+    meter-led-low: color,
+    meter-led-mid: color,
+    meter-led-high: color,
+    meter-peak: color,
+
+    // ---- spectrum ----
+    trace-live: color,
+    trace-peak: color,
+    trace-average: color,
+    vfo: color,
+    vfo-fill: color,
+    bandplan: color,
+    bandplan-fg: color,
+    mark: color,            // plugin marks
+    mark-fill: color,       // a span mark's tint
+    bookmark: color,        // bookmark names
+    bookmark-tick: color,
+    marker: color,          // user markers M<n>
+    cursor: color,          // cursor readout line
+    cursor-chip-bg: color,
+    cursor-chip-line: color,
+    graticule: color,
+    axis-fg: color,
+
+    // ---- waterfall ----
+    wf-floor: color,
+    wf-mid: color,
+    wf-high: color,
+    wf-hot: color,
+    wf-peak: color,
+    wf-vfo: color,
+    wf-key-bg: color,       // the strength key plate
+
+    // ---- type + shape ----
+    font-ui: string,
+    font-mono: string,
+    radius: length,         // keys, fields, palette
+    radius-panel: length,   // panels, cards, counter, rail keys, torn-off windows
+    radius-seg: length,     // a segmented group
+    radius-seg-key: length, // a key inside it
+    radius-chip: length,    // pill
+    radius-dome: length,    // the STOP key
+    radius-menu-item: length,
+
+    // ---- signature drawing switches ----
+    digit-face: DigitFace,  // plain figures, a drum counter, or nixie tubes
+    lamp-glow: bool,        // lit lamps cast a soft glow
+    shadows: bool,          // drop shadows under knobs, menus, torn-off windows
+    hairline: length,       // the divider thickness
+}
+
+// Row 16, Workbench: the neutral base every premium skin is drawn on.
+export global Workbench {
+    out property <Skin> value: {
+        bg: #15171b, strip: #191c21, panel: #1d2026, panel-alt: #1a1d22, card: #20242b, well: #0d0f12, well-deep: #06070a,
+        field: #0f1114, menu: #262a32, menu-hot: #363b45, table-selected: #2a2414,
+        card-warn: #2a2312, card-warn-line: #6b4d16, card-err: #2a1717, card-err-line: #6b2a2a, backdrop: #08090b9e,
+        line: #2b2f37, line-strong: #363b45, line-faint: #1e2229, knob-ring: #434955,
+        fg: #e6e8ec, fg-soft: #c9ced6, muted: #9aa3ad, dim: #7d8694, faint: #5c6370, nudge: #6c7480, disabled: #8a93a0, focus: #7ad7ff,
+        accent: #f5a524, accent-ink: #1b1400, accent-soft: #f5c66b, accent-hover: #ffc66a, digit: #ffb84d, digit-glow: #f5a52455, digit-dim: #5c5345,
+        lamp-off: #2b2f37, lamp-ring: #434955, lamp-green: #3ddc84, lamp-green-cap: #cfead9, lamp-amber: #f5a524, lamp-amber-cap: #f3dcae,
+        lamp-red: #ff5c5c, lamp-red-cap: #ffc9c9, lamp-yellow: #ffd27a, lamp-yellow-cap: #f3e2b8,
+        chip-bg: #262a32, chip-fg: #c9ced6, chip-line: #363b45, chip-good-bg: #163626, chip-good-fg: #7fe6ad, chip-good-line: #1f5a3c,
+        chip-warn-bg: #3a2a0e, chip-warn-fg: #f5c66b, chip-warn-line: #6b4d16, chip-err-bg: #3a1d1d, chip-err-fg: #ff9b9b, chip-err-line: #6b2a2a,
+        key-bg: #262a32, key-line: #363b45, key-fg: #e6e8ec, key-disabled-bg: #1d2026, key-disabled-fg: #8a93a0,
+        danger-bg: #3a1d1d, danger-line: #6b2a2a, danger-strong-line: #8a3434, danger-fg: #ffd4d4, danger-glyph: #ff8a8a,
+        hazard-line: #6b4d16, hazard-stripe: #2e2a1c, plate-line: #f5a524, plate-fg: #f5c66b,
+        slider-track: #2b2f37, slider-fill: #f5a524, slider-knob: #e6e8ec, slider-knob-ring: #1d2026, slider-disabled-fill: #5a606b, slider-disabled-knob: #8a93a0,
+        level-bar: #3ddc84,
+        meter-face: #0f1114, meter-ink: #c9ced6, meter-needle: #f5a524, meter-led-low: #3ddc84, meter-led-mid: #f5a524, meter-led-high: #ff5c5c, meter-peak: #ffd27a,
+        trace-live: #7ad7ff, trace-peak: #ff9f43, trace-average: #f1ead6, vfo: #f5a524, vfo-fill: #f5a52422, bandplan: #2a3b5a, bandplan-fg: #8fb3e0,
+        mark: #d4b060, mark-fill: #d4b06022, bookmark: #f5c66b, bookmark-tick: #f5a524, marker: #e6e8ec, cursor: #e6e8ec66,
+        cursor-chip-bg: #0d0f12dd, cursor-chip-line: #434955, graticule: #1e2229, axis-fg: #7d8694,
+        wf-floor: #0a1430, wf-mid: #1b3a6a, wf-high: #2e86c1, wf-hot: #f5a524, wf-peak: #ffffff, wf-vfo: #ffd27a, wf-key-bg: #0d0f12dd,
+        font-ui: "Inter", font-mono: "JetBrains Mono",
+        radius: 6px, radius-panel: 8px, radius-seg: 7px, radius-seg-key: 5px, radius-chip: 10px, radius-dome: 10px, radius-menu-item: 5px,
+        digit-face: DigitFace.plain, lamp-glow: true, shadows: true, hairline: 1px,
+    };
+}
 
 export global Theme {
-    // grounds
-    in-out property <color> bg: #15171b;          // body / rail / window ground
-    in-out property <color> strip: #191c21;       // receiver strip, status bar
-    in-out property <color> panel: #1d2026;       // .panel, open section body, splitter
-    in-out property <color> panel-alt: #1a1d22;   // sections panel, .seg ground
-    in-out property <color> card: #20242b;        // update / team-message card
-    in-out property <color> well: #0d0f12;        // spectrum ground
-    in-out property <color> well-deep: #06070a;   // waterfall ground
-    in-out property <color> counter: #0f1114;     // frequency counter ground
+    // THE FILLING IN FORCE. Components never read this directly: they read the tokens below.
+    in-out property <Skin> skin: Workbench.value;
 
-    // lines
-    in-out property <color> line: #2b2f37;        // every 1px divider
-    in-out property <color> line-strong: #363b45; // key / chip / seg borders
-    in-out property <color> line-faint: #1e2229;  // spectrum graticule
-    in-out property <color> knob-ring: #434955;   // lamp-off ring, cursor chip border, counter dots
+    // ---- tokens: one per Skin field, same name ----
+    out property <color> bg: skin.bg;
+    out property <color> strip: skin.strip;
+    out property <color> panel: skin.panel;
+    out property <color> panel-alt: skin.panel-alt;
+    out property <color> card: skin.card;
+    out property <color> well: skin.well;
+    out property <color> well-deep: skin.well-deep;
+    out property <color> field: skin.field;
+    out property <color> menu: skin.menu;
+    out property <color> menu-hot: skin.menu-hot;
+    out property <color> table-selected: skin.table-selected;
+    out property <color> card-warn: skin.card-warn;
+    out property <color> card-warn-line: skin.card-warn-line;
+    out property <color> card-err: skin.card-err;
+    out property <color> card-err-line: skin.card-err-line;
+    out property <color> backdrop: skin.backdrop;
+    out property <color> line: skin.line;
+    out property <color> line-strong: skin.line-strong;
+    out property <color> line-faint: skin.line-faint;
+    out property <color> knob-ring: skin.knob-ring;
+    out property <color> fg: skin.fg;
+    out property <color> fg-soft: skin.fg-soft;
+    out property <color> muted: skin.muted;
+    out property <color> dim: skin.dim;
+    out property <color> faint: skin.faint;
+    out property <color> nudge: skin.nudge;
+    out property <color> disabled: skin.disabled;
+    out property <color> focus: skin.focus;
+    out property <color> accent: skin.accent;
+    out property <color> accent-ink: skin.accent-ink;
+    out property <color> accent-soft: skin.accent-soft;
+    out property <color> accent-hover: skin.accent-hover;
+    out property <color> digit: skin.digit;
+    out property <color> digit-glow: skin.digit-glow;
+    out property <color> digit-dim: skin.digit-dim;
+    out property <color> lamp-off: skin.lamp-off;
+    out property <color> lamp-ring: skin.lamp-ring;
+    out property <color> lamp-green: skin.lamp-green;
+    out property <color> lamp-green-cap: skin.lamp-green-cap;
+    out property <color> lamp-amber: skin.lamp-amber;
+    out property <color> lamp-amber-cap: skin.lamp-amber-cap;
+    out property <color> lamp-red: skin.lamp-red;
+    out property <color> lamp-red-cap: skin.lamp-red-cap;
+    out property <color> lamp-yellow: skin.lamp-yellow;
+    out property <color> lamp-yellow-cap: skin.lamp-yellow-cap;
+    out property <color> chip-bg: skin.chip-bg;
+    out property <color> chip-fg: skin.chip-fg;
+    out property <color> chip-line: skin.chip-line;
+    out property <color> chip-good-bg: skin.chip-good-bg;
+    out property <color> chip-good-fg: skin.chip-good-fg;
+    out property <color> chip-good-line: skin.chip-good-line;
+    out property <color> chip-warn-bg: skin.chip-warn-bg;
+    out property <color> chip-warn-fg: skin.chip-warn-fg;
+    out property <color> chip-warn-line: skin.chip-warn-line;
+    out property <color> chip-err-bg: skin.chip-err-bg;
+    out property <color> chip-err-fg: skin.chip-err-fg;
+    out property <color> chip-err-line: skin.chip-err-line;
+    out property <color> key-bg: skin.key-bg;
+    out property <color> key-line: skin.key-line;
+    out property <color> key-fg: skin.key-fg;
+    out property <color> key-disabled-bg: skin.key-disabled-bg;
+    out property <color> key-disabled-fg: skin.key-disabled-fg;
+    out property <color> danger-bg: skin.danger-bg;
+    out property <color> danger-line: skin.danger-line;
+    out property <color> danger-strong-line: skin.danger-strong-line;
+    out property <color> danger-fg: skin.danger-fg;
+    out property <color> danger-glyph: skin.danger-glyph;
+    out property <color> hazard-line: skin.hazard-line;
+    out property <color> hazard-stripe: skin.hazard-stripe;
+    out property <color> plate-line: skin.plate-line;
+    out property <color> plate-fg: skin.plate-fg;
+    out property <color> slider-track: skin.slider-track;
+    out property <color> slider-fill: skin.slider-fill;
+    out property <color> slider-knob: skin.slider-knob;
+    out property <color> slider-knob-ring: skin.slider-knob-ring;
+    out property <color> slider-disabled-fill: skin.slider-disabled-fill;
+    out property <color> slider-disabled-knob: skin.slider-disabled-knob;
+    out property <color> level-bar: skin.level-bar;
+    out property <color> meter-face: skin.meter-face;
+    out property <color> meter-ink: skin.meter-ink;
+    out property <color> meter-needle: skin.meter-needle;
+    out property <color> meter-led-low: skin.meter-led-low;
+    out property <color> meter-led-mid: skin.meter-led-mid;
+    out property <color> meter-led-high: skin.meter-led-high;
+    out property <color> meter-peak: skin.meter-peak;
+    out property <color> trace-live: skin.trace-live;
+    out property <color> trace-peak: skin.trace-peak;
+    out property <color> trace-average: skin.trace-average;
+    out property <color> vfo: skin.vfo;
+    out property <color> vfo-fill: skin.vfo-fill;
+    out property <color> bandplan: skin.bandplan;
+    out property <color> bandplan-fg: skin.bandplan-fg;
+    out property <color> mark: skin.mark;
+    out property <color> mark-fill: skin.mark-fill;
+    out property <color> bookmark: skin.bookmark;
+    out property <color> bookmark-tick: skin.bookmark-tick;
+    out property <color> marker: skin.marker;
+    out property <color> cursor: skin.cursor;
+    out property <color> cursor-chip-bg: skin.cursor-chip-bg;
+    out property <color> cursor-chip-line: skin.cursor-chip-line;
+    out property <color> graticule: skin.graticule;
+    out property <color> axis-fg: skin.axis-fg;
+    out property <color> wf-floor: skin.wf-floor;
+    out property <color> wf-mid: skin.wf-mid;
+    out property <color> wf-high: skin.wf-high;
+    out property <color> wf-hot: skin.wf-hot;
+    out property <color> wf-peak: skin.wf-peak;
+    out property <color> wf-vfo: skin.wf-vfo;
+    out property <color> wf-key-bg: skin.wf-key-bg;
+    out property <string> font-ui: skin.font-ui;
+    out property <string> font-mono: skin.font-mono;
+    out property <length> radius: skin.radius;
+    out property <length> radius-panel: skin.radius-panel;
+    out property <length> radius-seg: skin.radius-seg;
+    out property <length> radius-seg-key: skin.radius-seg-key;
+    out property <length> radius-chip: skin.radius-chip;
+    out property <length> radius-dome: skin.radius-dome;
+    out property <length> radius-menu-item: skin.radius-menu-item;
+    out property <DigitFace> digit-face: skin.digit-face;
+    out property <bool> lamp-glow: skin.lamp-glow;
+    out property <bool> shadows: skin.shadows;
+    out property <length> hairline: skin.hairline;
 
-    // text
-    in-out property <color> fg: #e6e8ec;
-    in-out property <color> fg-soft: #c9ced6;
-    in-out property <color> muted: #9aa3ad;       // .cap captions, chevrons
-    in-out property <color> dim: #7d8694;         // hints, axis labels, .sb .k
-    in-out property <color> faint: #5c6370;       // F-key hints, unit row
-    in-out property <color> nudge: #6c7480;       // digit nudge arrows
-
-    // accent (amber)
-    in-out property <color> accent: #f5a524;
-    in-out property <color> accent-ink: #1b1400;  // text on an accent key
-    in-out property <color> accent-soft: #f5c66b; // tuned readout, bookmarks, warn chip text
-    in-out property <color> accent-hover: #ffc66a;
-    in-out property <color> digit: #ffb84d;       // counter digits (+ glow #f5a52455)
-    in-out property <color> digit-dim: #5c5345;   // dimmed leading zero
-
-    // lamps (dot + caption colour when lit)
-    in-out property <color> lamp-off: #2b2f37;
-    in-out property <color> lamp-green: #3ddc84;
-    in-out property <color> lamp-green-cap: #cfead9;
-    in-out property <color> lamp-amber: #f5a524;
-    in-out property <color> lamp-amber-cap: #f3dcae;
-    in-out property <color> lamp-red: #ff5c5c;
-    in-out property <color> lamp-red-cap: #ffc9c9;
-
-    // chips
-    in-out property <color> chip-bg: #262a32;     // also .btn ground, .rb.on ground
-    in-out property <color> chip-good-bg: #163626;
-    in-out property <color> chip-good-fg: #7fe6ad;
-    in-out property <color> chip-good-line: #1f5a3c;
-    in-out property <color> chip-warn-bg: #3a2a0e;
-    in-out property <color> chip-warn-fg: #f5c66b;
-    in-out property <color> chip-warn-line: #6b4d16;
-    in-out property <color> chip-err-bg: #3a1d1d;
-    in-out property <color> chip-err-fg: #ff9b9b;
-    in-out property <color> chip-err-line: #6b2a2a;
-
-    // the STOP key (danger) and the BIAS TEE hazard key
-    in-out property <color> danger-bg: #3a1d1d;
-    in-out property <color> danger-line: #8a3434;
-    in-out property <color> danger-fg: #ffd4d4;
-    in-out property <color> danger-glyph: #ff8a8a;
-    in-out property <color> hazard-line: #6b4d16;
-    in-out property <color> hazard-stripe: #2e2a1c;
-
-    // spectrum + waterfall
-    in-out property <color> trace-live: #7ad7ff;
-    in-out property <color> trace-peak: #ff9f43;
-    in-out property <color> vfo: #f5a524;         // band fill is vfo at 13% alpha
-    in-out property <color> bandplan: #2a3b5a;
-    in-out property <color> bandplan-fg: #8fb3e0;
-    in-out property <color> mark: #d4b060;        // plugin marks
-    in-out property <color> bookmark: #f5c66b;
-    in-out property <color> wf-floor: #0a1430;
-    in-out property <color> wf-mid: #1b3a6a;
-    in-out property <color> wf-high: #2e86c1;
-
-    // type + shape
-    in-out property <string> font-ui: "Inter";
-    in-out property <string> font-mono: "JetBrains Mono";
-    in-out property <length> radius: 6px;
-    in-out property <length> radius-panel: 8px;
+    // ---- metrics: the Workbench arrangement's measurements (the artboards' CSS), fixed in phase 1 ----
+    out property <length> title-h: 36px;        // custom title bar, every platform
+    out property <length> strip-h: 104px;       // receiver strip
+    out property <length> rail-w: 64px;         // icon rail
+    out property <length> rail-key: 56px;       // a rail key is square
+    out property <length> panel-w: 296px;       // sections panel
+    out property <length> status-h: 28px;       // status bar and a status chip
+    out property <length> tab-h: 32px;          // tab row
+    out property <length> splitter-h: 6px;
+    out property <length> waterfall-h: 270px;
+    out property <length> key-h: 30px;          // .btn
+    out property <length> key-sm-h: 24px;       // .btn.sm
+    out property <length> key-xs-h: 20px;       // .btn.xs
+    out property <length> key-min-w: 64px;
+    out property <length> key-pad: 14px;
+    out property <length> seg-h: 26px;          // .seg .btn
+    out property <length> seg-sm-h: 22px;
+    out property <length> seg-key-min-w: 52px;
+    out property <length> chip-h: 20px;
+    out property <length> lamp-dot: 9px;
+    out property <length> lamp-dot-sm: 8px;     // .ld
+    out property <length> digit-w: 34px;
+    out property <length> digit-h: 52px;
+    out property <length> nudge-h: 10px;
+    out property <length> slider-track-h: 6px;
+    out property <length> slider-knob-d: 16px;  // knob diameter (slider-knob is its colour)
+    out property <length> level-bar-h: 4px;
+    out property <length> section-h: 36px;      // .sec
+    out property <length> section-sm-h: 30px;   // .sec.s
+    out property <length> section-dense-h: 25px;// .dn .sec.s
+    out property <length> field-h: 24px;        // .in
+    out property <length> menu-item-h: 26px;    // .mi
+    out property <length> win-title-h: 30px;    // .wt, a torn-off window's title strip
+    out property <length> table-row-h: 24px;    // 11px text + 4px padding each side + the 1px rule
+    out property <length> font-body: 12px;
+    out property <length> font-small: 11px;
+    out property <length> font-cap: 10px;
+    out property <length> font-hint: 10px;
+    out property <length> font-tiny: 9px;
+    out property <length> font-micro: 8px;
+    out property <length> font-readout: 16px;   // the peak figure
+    out property <length> font-digit: 30px;     // the counter numerals
+    out property <length> font-counter-dot: 22px;
+    out property <length> cap-spacing: 0.8px;   // .cap letter-spacing .08em at 10px
+    out property <int> weight-regular: 400;
+    out property <int> weight-medium: 500;
+    out property <int> weight-semibold: 600;
 }

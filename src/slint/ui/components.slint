@@ -44,7 +44,7 @@ export component Key inherits Rectangle {
         alignment: center;
         Text {
             text: root.label;
-            color: on ? Theme.accent-ink : (danger ? #ffb3b3 : Theme.fg);
+            color: on ? Theme.accent-ink : (danger ? Theme.danger-fg : Theme.fg);
             font-size: root.font-px;
             font-weight: 500;
             font-family: Theme.font-ui;
@@ -196,7 +196,7 @@ export component Slider inherits Rectangle {
         y: -5px;
         background: Theme.fg;
         border-width: 2px; border-color: Theme.panel;
-        drop-shadow-blur: 3px; drop-shadow-offset-y: 1px; drop-shadow-color: #00000088;
+        drop-shadow-blur: 3px; drop-shadow-offset-y: 1px; drop-shadow-color: Theme.well-deep.with-alpha(0.53);
     }
     touch := TouchArea {
         y: -8px; height: 22px;

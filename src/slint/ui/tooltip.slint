@@ -1,0 +1,58 @@
+// The one tooltip. Every interactive component carries `in property <string> tooltip` and shows it through
+// this popup after the pointer has rested on it: the Workbench IA gives window keys, deck keys, lamps and
+// gestures their explanatory sentences, and the inventory lists each one. The delay and look are shared so a
+// skin changes them in one place (Theme.menu / Theme.knob-ring / Theme.fg-soft).
+//
+// Use, INSIDE the component, after the TouchArea it watches:
+//   area := TouchArea { ... }
+//   TipTimer { hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+// (A PopupWindow cannot be a component's root, so the popup lives inside TipTimer.)
+import { Theme } from "theme.slint";
+
+// The tip's face, for anything that wants to draw one in a popup of its own.
+export component TooltipFace inherits Rectangle {
+    in property <string> text;
+    width: body.preferred-width;
+    height: body.preferred-height;
+    background: Theme.menu;
+    border-width: Theme.hairline;
+    border-color: Theme.knob-ring;
+    border-radius: Theme.radius;
+    drop-shadow-blur: Theme.shadows ? 10px : 0px;
+    drop-shadow-offset-y: Theme.shadows ? 4px : 0px;
+    drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+    body := HorizontalLayout {
+        padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px;
+        Text {
+            text: root.text;
+            color: Theme.fg-soft;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+            max-width: 360px;
+        }
+    }
+}
+
+// Opens the tip below its parent after 600 ms of hover and closes it when the pointer leaves.
+export component TipTimer {
+    in property <bool> hovered;
+    in property <string> text;
+    in property <length> anchor-h;          // the parent's height: the tip opens 6px under it
+    in property <length> anchor-x: 0px;
+    out property <bool> shown;
+    width: 0px; height: 0px;
+    tip := PopupWindow {
+        x: root.anchor-x; y: root.anchor-h + 6px;
+        close-policy: no-auto-close;
+        TooltipFace { text: root.text; }
+    }
+    Timer {
+        interval: 600ms;
+        running: root.hovered && root.text != "" && !root.shown;
+        triggered => { root.shown = true; tip.show(); }
+    }
+    changed hovered => {
+        if (!self.hovered && root.shown) { root.shown = false; tip.close(); }
+    }
+}

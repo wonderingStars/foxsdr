@@ -1,0 +1,59 @@
+// Chips and the state dot - the two smallest pieces, used by several families (sections, status bar, tabs,
+// tables, the palette), so they live in a file of their own that nothing else edits.
+//   .chip   20px pill, 10px/600 letter-spaced; neutral / good (g) / warn (a) / err (r); "FED 3" carries a count
+//   .ld     8px state dot beside a panel row's name
+import { Theme } from "theme.slint";
+
+export enum ChipTone { neutral, good, warn, err }
+export enum LampState { off, green, amber, red, yellow }
+
+export component Chip inherits Rectangle {
+    in property <string> label;
+    in property <ChipTone> tone: ChipTone.neutral;
+    in property <int> count: -1;             // >= 0 draws "LABEL n" (the kit's "FED 3")
+    in property <bool> mono;                 // figures (the SPAN chip, a marker tab) in the mono face
+    in property <bool> small;                // 16px, the count beside "Markers" on the toolbar
+    in property <string> tooltip;
+    height: small ? 16px : Theme.chip-h;
+    // A chip is as wide as its words: placed absolutely a bare Rectangle would take its parent's width.
+    width: body.preferred-width;
+    border-radius: Theme.radius-chip;
+    border-width: Theme.hairline;
+    background: tone == ChipTone.good ? Theme.chip-good-bg
+              : tone == ChipTone.warn ? Theme.chip-warn-bg
+              : tone == ChipTone.err  ? Theme.chip-err-bg
+              : Theme.chip-bg;
+    border-color: tone == ChipTone.good ? Theme.chip-good-line
+                : tone == ChipTone.warn ? Theme.chip-warn-line
+                : tone == ChipTone.err  ? Theme.chip-err-line
+                : Theme.chip-line;
+    accessible-role: text;
+    accessible-label: root.count >= 0 ? root.label + " " + root.count : root.label;
+    body := HorizontalLayout {
+        padding-left: small ? 6px : 8px; padding-right: small ? 6px : 8px; alignment: center;
+        Text {
+            text: root.count >= 0 ? root.label + " " + root.count : root.label;
+            font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: 0.5px;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            vertical-alignment: center;
+            color: root.tone == ChipTone.good ? Theme.chip-good-fg
+                 : root.tone == ChipTone.warn ? Theme.chip-warn-fg
+                 : root.tone == ChipTone.err  ? Theme.chip-err-fg
+                 : Theme.chip-fg;
+        }
+    }
+}
+
+export component LampDot inherits Rectangle {
+    // .ld - the 8px state dot: off (ring), green, amber, red, yellow
+    in property <LampState> state: LampState.off;
+    width: Theme.lamp-dot-sm; height: Theme.lamp-dot-sm;
+    border-radius: self.width / 2;
+    border-width: Theme.hairline;
+    background: state == LampState.green  ? Theme.lamp-green
+              : state == LampState.amber  ? Theme.lamp-amber
+              : state == LampState.red    ? Theme.lamp-red
+              : state == LampState.yellow ? Theme.lamp-yellow
+              : Theme.lamp-off;
+    border-color: state == LampState.off ? Theme.lamp-ring : self.background;
+}
