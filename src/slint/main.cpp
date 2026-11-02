@@ -696,6 +696,8 @@ int main(int argc, char** argv) {
         const auto w = static_cast<std::uint32_t>(std::max(624.0f * scale(), sz.width + (edge != 2 ? dx * scale() : 0.f)));
         const auto h = static_cast<std::uint32_t>(std::max(400.0f * scale(), sz.height + (edge != 1 ? dy * scale() : 0.f)));
         ui->window().set_size(slint::PhysicalSize({w, h}));
+        ui->set_win_w(static_cast<float>(w) / scale());
+        ui->set_win_h(static_cast<float>(h) / scale());
     });
 
     // ---- the tick: heartbeat, read_state, lists, read_spectrum, poll_results -> properties ----
@@ -712,6 +714,11 @@ int main(int argc, char** argv) {
         ui->set_muted((state.flags & FOXAPI_RX_MUTED) != 0 || state.audioMutedBy[0] != '\0');
         ui->set_failed((state.flags & FOXAPI_RX_FAULTED) != 0);
         ui->set_maximised(ui->window().is_maximized());
+        {   // the screen follows the real window size (maximise, restore, a DPI change)
+            const auto sz = ui->window().size();
+            const float sf = std::max(0.5f, ui->window().scale_factor());
+            if (sz.width > 0 && sz.height > 0) { ui->set_win_w(static_cast<float>(sz.width) / sf); ui->set_win_h(static_cast<float>(sz.height) / sf); }
+        }
         ui->set_tuned_text(ss(fmtMHz(state.tunedHz)));
         const auto d = digitsOf(state.tunedHz);
         {
@@ -937,7 +944,6 @@ int main(int argc, char** argv) {
     });
 
     ui->show();
-    ui->window().set_size(slint::LogicalSize({1600.f, 900.f}));   // the design size: left to the layout, the window opened at its minimum height
     slint::run_event_loop();
 
     tick.stop();

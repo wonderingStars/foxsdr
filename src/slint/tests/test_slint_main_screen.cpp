@@ -86,6 +86,8 @@ int main() {
     installHeadlessPlatform();
     auto ui = MainWindow::create();
     fillAsTheSheet(ui);
+    // the window's size is a pair of properties the host mirrors from the real window; the test sets them per frame
+    const auto renderAt = [&](std::uint32_t w, std::uint32_t h) { ui->set_win_w(static_cast<float>(w)); ui->set_win_h(static_cast<float>(h)); return render(ui, w, h); };
 
     int stops = 0, banks = -1, views = -1, modes = -1, statusClicks = -1, closes = 0, maximises = 0, minimises = 0;
     int specClicks = 0, wfClicks = 0;
@@ -105,10 +107,9 @@ int main() {
     ui->on_shortcut([&](slint::SharedString id) { shortcuts.push_back(std::string(id)); });
 
     ui->window().show();   // what size does the window itself ask for? (the live window opened at its minimum height)
-    { const auto sz = ui->window().size(); std::printf("the window asks for %u x %u
-", sz.width, sz.height); }
+    { const auto sz = ui->window().size(); std::printf("the window asks for %u x %u\n", sz.width, sz.height); }
     const std::uint32_t W = 1440, H = 900;
-    Frame f = render(ui, W, H);
+    Frame f = renderAt(W, H);
     CHECK(f.width == W && f.height == H);
     f.savePng(shotDir() + "main-screen.png");
     // the strip's content does not fit the sheet's 1440 by the sheet's own numbers (counter 386 + eight mode keys 434 +
@@ -116,7 +117,7 @@ int main() {
     {
         CHECK(ui->get_compact_strip());
         CHECK(f.countNear(690, 70, 860, 100, rgb(0x262a32), 6) > 800);        // the picker key's ground where the segment would be
-        Frame wide = render(ui, 1920, H);
+        Frame wide = renderAt(1920, H);
         wide.savePng(shotDir() + "main-screen-1920.png");
         CHECK(!ui->get_compact_strip());
         CHECK(wide.countNear(560, 50, 1000, 125, rgb(0xf5a524), 12) > 100); // the lit NFM key of the segment
@@ -124,7 +125,7 @@ int main() {
         const int hazardLeft = wide.firstColNear(88, 1500, 1920, rgb(0x6b4d16));
         CHECK(hazardLeft > 1920 - 16 - 120 - 12 && hazardLeft < 1920 - 16 - 120 + 12);
         CHECK(wide.countNear(1200, 60, hazardLeft - 20, 110, rgb(0x2b2f37), 6) > 100);
-        f = render(ui, W, H);   // back to the sheet's size for the geometry below
+        f = renderAt(W, H);   // back to the sheet's size for the geometry below
     }
 
     // ---- the regions, as the artboard places them ----
@@ -206,9 +207,9 @@ int main() {
     // ---- the fold: the sections panel gives its width to the centre ----
     click(ui->window(), 32, 836);                       // FOLD at the rail's foot
     settle(std::chrono::milliseconds(300));
-    render(ui, W, H);                                   // one frame mid-way, as the real window would draw it
+    renderAt(W, H);                                   // one frame mid-way, as the real window would draw it
     settle(std::chrono::milliseconds(300));
-    Frame g = render(ui, W, H);
+    Frame g = renderAt(W, H);
     std::printf("after FOLD: folded=%d, (200,600)=%s (70,600)=%s (100,300)=%s\n", ui->get_rail_folded() ? 1 : 0, hex(g.at(200, 600)).c_str(), hex(g.at(70, 600)).c_str(), hex(g.at(100, 300)).c_str());
     if (!ui->get_rail_folded()) { std::printf("FOLD click at (32,836) missed; bank-index now %d\n", ui->get_bank_index()); }
     CHECK(ui->get_rail_folded());
@@ -218,7 +219,7 @@ int main() {
     // ---- a status chip expands to its detail lines (a popup: it takes the clicks after it, so it is tested last) ----
     click(ui->window(), 20, 886);                       // the RECEIVER status chip
     CHECK(statusClicks == 0);
-    Frame h = render(ui, W, H);
+    Frame h = renderAt(W, H);
     CHECK(h.countNear(4, 700, 400, 872, rgb(0x262a32), 6) > 400);   // the lines panel, in the menu colour, above the chip
     h.savePng(shotDir() + "main-screen-status-lines.png");
 

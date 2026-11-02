@@ -68,10 +68,17 @@ component Sheet inherits Rectangle {
 export component MainWindow inherits Window {
     title: "FoxSDR";
     no-frame: true;
-    preferred-width: 1600px;   // the sheet is 1440 wide, but its strip does not fit 1440 by its own numbers (counter 386 + mode segment 434 + ...): 1600 gives the three lanes their width
-    preferred-height: 900px;
-    min-width: 624px;
-    min-height: 400px;
+    // THE WINDOW'S SIZE. The desktop backend sized the window from the layout and opened it at its 400 px minimum
+    // whatever preferred-height said (docs 6.36); an explicit size opens as asked, so the size is a pair of properties:
+    // the host mirrors the real window size into them every tick (so maximise, restore and the drag-resize edges
+    // re-lay the screen) and the render tests set them per frame. 1600 x 900 opens: the sheet is 1440 wide, but its
+    // strip does not fit 1440 by its own numbers. The inventory minimum of 624 x 400 is held on the drag-resize edges.
+    in-out property <length> win-w: 1600px;
+    in-out property <length> win-h: 900px;
+    width: win-w;
+    height: win-h;
+
+
     background: Theme.bg;
     default-font-family: Theme.font-ui;
     default-font-size: Theme.font-body;
@@ -541,10 +548,10 @@ export component MainWindow inherits Window {
                     }
                 }
                 Rectangle { // the view: RECEIVER (spectrum + splitter + waterfall), PATCH, SCOPE
-                    vertical-stretch: 1;
-                    if root.view-index == 0 : VerticalLayout { spacing: 0px;
+                    vertical-stretch: 1; preferred-height: 700px;   // the layout sizes the window on the desktop: 36 + 104 + 32 + 700 + 28 is the design height (the well alone would count as 120)
+                    if root.view-index == 0 : Rectangle {   // the wells are placed, not laid out: a layout here fed its 120 px minimum to the window's own size
                         spectrum := SpectrumView {
-                            vertical-stretch: 1;
+                            x: 0; y: 0; width: parent.width;
                             height: max(120px, (parent.height - Theme.splitter-h) * root.split-ratio);
                             trace: root.trace-image; db-ticks: root.db-ticks; freq-ticks: root.freq-ticks; axis-unit: root.axis-unit;
                             caption: root.spectrum-caption; caveat: root.spectrum-caveat;
@@ -564,9 +571,9 @@ export component MainWindow inherits Window {
                             edge-dragged(h) => { root.edge-dragged(h); }
                             wheel(x, n, shift) => { root.spectrum-wheel(x, n, shift); }
                         }
-                        Splitter { moved(dy) => { root.split-ratio = max(0.1, min(0.9, root.split-ratio + dy / max(1px, parent.height - Theme.splitter-h))); } }
+                        Splitter { x: 0; y: spectrum.height; width: parent.width; moved(dy) => { root.split-ratio = max(0.1, min(0.9, root.split-ratio + dy / max(1px, parent.height - Theme.splitter-h))); } }
                         WaterfallView {
-                            vertical-stretch: 1;
+                            x: 0; y: spectrum.height + Theme.splitter-h; width: parent.width; height: max(0px, parent.height - spectrum.height - Theme.splitter-h);
                             picture: root.waterfall-image; age-ticks: root.age-ticks;
                             show-key: root.show-strength-key; key-labels: root.key-labels; key-foot: root.key-foot; key-manual: root.range-manual; key-coverage: root.key-coverage;
                             rail-pos: root.wf-rail-pos;

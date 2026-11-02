@@ -38,6 +38,7 @@ public:
     }
     void request_redraw() override { dirty_ = true; }
     void set_size(slint::PhysicalSize size) override {
+        if (std::getenv("FOXSDR_SLINT_TRACE_SIZE") != nullptr) { std::fprintf(stderr, "headless: slint asks for %u x %u\n", size.width, size.height); }
         size_ = size;
         window().dispatch_resize_event(slint::LogicalSize({static_cast<float>(size.width), static_cast<float>(size.height)}));
     }
