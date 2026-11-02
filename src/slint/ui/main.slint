@@ -622,7 +622,7 @@ export component MainWindow inherits Window {
     Rectangle { x: parent.width - 12px; y: parent.height - 12px; width: 12px; height: 12px; TouchArea { mouse-cursor: nwse-resize; moved => { if (self.pressed) { root.resize-drag(3, self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); } } } }
 
     // ===================== overlays =====================
-    menu := Menu { entries: root.menu-entries; activated(id) => { root.menu-activated(id); } slider-changed(id, v) => { root.menu-slider-changed(id, v); } }
+    menu := Menu { x: 0; y: 0; entries: root.menu-entries; activated(id) => { root.menu-activated(id); } slider-changed(id, v) => { root.menu-slider-changed(id, v); } }
     palette := CommandPalette { at-x: (root.width - 640px) / 2; at-y: 48px; query <=> root.palette-query; results: root.palette-results;
         query-changed(q) => { root.palette-query-changed(q); } activated(id) => { root.palette-activated(id); } }
 

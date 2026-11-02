@@ -7,11 +7,13 @@
 //   40, 144, 200,   6 - Slider C: value 0 (the knob overhangs the left end)
 //   40, 194, 200,   6 - Slider D: value 1 (the knob overhangs the right end)
 //   40, 244, 200,   6 - Slider E: value 0.62, DISABLED (its changes would still count: they must stay zero)
+//  300, 244, 200,   6 - Slider F: value bound ONE-WAY to the host's number host-f (0.40), the way main.slint binds its sliders:
+//                       the user moves it, the host's number is left alone, and a new host number moves it again
 //  300,  44, 200,   4 - LevelBar: value 0.55
 //  300,  94, 200,   4 - LevelBar: value 0
 //  300, 144, 200,   4 - LevelBar: value 1
 //    0, 280, 780, 170 - the receiver strip's ground (Theme.strip) under the lanes
-//   24, 296, 232,  53 - SliderGroup Gain: 0.62, "32 dB", AUTO off and enabled, hint, tooltips
+//   24, 296, 232,  53 - SliderGroup Gain: value bound one-way to host-g (0.62), "32 dB", AUTO off and enabled, hint, tooltips
 //  274, 296, 232,  53 - SliderGroup Squelch: 0.29, "-85 dB", AUTO on, hint
 //  524, 296, 232,  49 - SliderGroup Volume: 0.72, "0.72", no AUTO, no hint; its Level row sits in the hint slot:
 //  524, 332,  30,  13 -   "Level" text
@@ -44,6 +46,8 @@ export component SlidersSpecimen inherits Window {
     in-out property <int> backsteps;     // changed() calls whose value was LOWER than the previous call's
     in-out property <int> auto-clicks;
     in-out property <int> last-auto;     // which lane's AUTO key fired last: 1 Gain, 2 Squelch, 4 the disabled Gain, 5 the long word, 6 GAIN
+    in-out property <float> host-f: 0.40;    // the host's numbers behind slider F and the Gain lane: the sliders must not write them,
+    in-out property <float> host-g: 0.62;    // and must follow them whenever the test (the host) sets them
 
     function moved(v: float) {
         if (v < root.last-value) { root.backsteps += 1; }
@@ -62,6 +66,9 @@ export component SlidersSpecimen inherits Window {
     Label { x: 40px; y: 220px; width: 200px; text: "E  0.62 disabled"; }
     Slider { x: 40px; y: 244px; width: 200px; value: 0.62; enabled: false; accessible-label: "Specimen E"; changed(v) => { root.moved(v); } }
 
+    Label { x: 300px; y: 220px; width: 200px; text: "F  host-driven (bound one-way to host-f)"; }
+    Slider { x: 300px; y: 244px; width: 200px; value: root.host-f; accessible-label: "Specimen F"; changed(v) => { root.moved(v); } }
+
     Label { x: 300px; y: 20px; width: 200px; text: "level bar 0.55"; }
     LevelBar { x: 300px; y: 44px; width: 200px; value: 0.55; }
     Label { x: 300px; y: 70px; width: 200px; text: "level bar 0.00"; }
@@ -74,7 +81,7 @@ export component SlidersSpecimen inherits Window {
     SliderGroup {
         x: 24px; y: 296px; width: 232px;
         caption: "Gain"; readout: "32 dB"; hint: "TUNER stage · RTL-SDR Blog V4";
-        value: 0.62; has-auto: true; auto-on: false;
+        value: root.host-g; has-auto: true; auto-on: false;
         tooltip: "Gain - drag the slider, or scroll over it";
         auto-tooltip: "Let the receiver choose the gain";
         changed(v) => { root.moved(v); }

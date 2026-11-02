@@ -21,7 +21,7 @@
 //   ---- row 5: PASSWORD, revealed -----------------------------------------------------------------------------------------
 //    16, 376, 468,  52 - the same, starting revealed: the text, the lit HIDE key
 //   ---- row 6: disabled ----------------------------------------------------------------------------------------------------
-//    16, 452, 226,  52 - TEXT "Callsign filter" M0ABC, disabled                  (dis-value)
+//    16, 452, 226,  52 - TEXT "Callsign filter" M0ABC, disabled, with a tooltip that still shows   (dis-value)
 //   258, 452, 226,  52 - BOOL "Log to file", checked, disabled                    (dis-bool-checked)
 //    16, 512, 226,  52 - PATH "Log file" C:\logs\aprs.txt, disabled: its key does nothing    (dis-path-value)
 //   ---- rows 6b and 6c: the words a host hands in (a translation) -----------------------------------------------------------
@@ -134,6 +134,7 @@ export component FieldsSpecimen inherits Window {
 
     // ---- row 6 ----
     f-dis := Field { x: 16px; y: 452px; width: 226px; label: "Callsign filter"; kind: FieldKind.text; value: "M0ABC"; enabled: false;
+        tooltip: "Needs a receiver first";
         edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } }
     f-dis-bool := Field { x: 258px; y: 452px; width: 226px; label: "Log to file"; kind: FieldKind.bool; checked: true; enabled: false;
         toggled(v) => { root.toggled-to(v); } }

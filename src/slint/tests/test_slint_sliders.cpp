@@ -136,6 +136,8 @@ int main() {
     CHECK(knobRun(f, cx(0.62), kYE + 2, kDisKnob) == 12);                // the .sl.dis knob
     CHECK(knobRun(f, cx(0.62), kYE + 2, kKnob) == 0);                    // and none of the enabled knob colour
     CHECK(f.countNear(cx(0.62) - 40, kYE - 12, cx(0.62) + 40, kYE + 18, kFill) == 0);   // no amber anywhere on it
+    // F, bound to the host's 0.40: the same slider as the others, at x 300
+    CHECK(knobRun(f, 300 + 80, kYE + 2, kKnob) == 12 && f.near(300 + 80 - 14, kYE + 3, kFill) && f.near(300 + 80 + 14, kYE + 3, kTrack));
 
     // ===== LevelBar: 4px, slider-track ground, level-bar fill to the value ===================================
     CHECK(f.countNear(480, 30, 481, 70, kTrack) == 4);                  // 4px high (not the slider's 6)
@@ -365,6 +367,51 @@ int main() {
     Frame hot = render(ui, 780, 450);
     CHECK(hot.near(212, 306, rgb(0x363b45)));
     moveTo(w, 600, 20);
+
+    // ===== the host stays in charge: bound one-way, a slider follows its host again after the user has moved it =====
+    // main.slint binds its sliders this way (`value: root.gain-norm`). A slider that assigned `value` itself would lose that
+    // binding at the first move and never follow the engine again.
+    {
+        moveTo(w, 600, 20);
+        const int fx = 300, fyF = 244, yF = fyF + 3;
+        const auto fcx = [&](double v) { return fx + static_cast<int>(std::lround(v * 200)); };
+        Frame h0 = render(ui, 780, 450);
+        CHECK(knobRun(h0, fcx(0.40), fyF + 2, kKnob) == 12 && h0.near(fcx(0.40) - 14, yF, kFill) && h0.near(fcx(0.40) + 14, yF, kTrack));
+        int n = ui->get_changes();
+        click(w, fx + 160, yF);                                      // the user puts it at 0.8
+        CHECK(ui->get_changes() == n + 1);
+        CHECK_NEAR(ui->get_last_value(), 0.8, 0.03);
+        Frame h1 = render(ui, 780, 450);
+        CHECK(knobRun(h1, fcx(0.8), fyF + 2, kKnob) == 12);          // and there it stays: the host has not answered
+        CHECK_NEAR(ui->get_host_f(), 0.40, 0.0001);                  // and the slider left the host's own number alone
+        ui->set_host_f(0.10f);                                       // the host moves it (an engine update, a shortcut key)
+        Frame h2 = render(ui, 780, 450);
+        CHECK(knobRun(h2, fcx(0.10), fyF + 2, kKnob) == 12);         // the knob follows, though the user had moved it before
+        CHECK(h2.near(fcx(0.10) - 14, yF, kFill) && h2.near(fcx(0.10) + 14, yF, kTrack));
+        CHECK(h2.countNear(fcx(0.8) - 12, fyF - 16, fcx(0.8) + 12, fyF + 22, kKnob, 30) == 0);   // nothing is left at 0.8
+        // the user again, then the host sends back the very number it started with: that is a change too, the knob goes to it
+        click(w, fx + 180, yF);
+        CHECK_NEAR(ui->get_last_value(), 0.9, 0.03);
+        ui->set_host_f(0.40f);
+        Frame h3 = render(ui, 780, 450);
+        CHECK(knobRun(h3, fcx(0.40), fyF + 2, kKnob) == 12 && knobRun(h3, fcx(0.9), fyF + 2, kKnob) == 0);
+        // the wheel and the keys start from where the knob is
+        scroll(w, fx + 100, yF, 0, 60);
+        CHECK_NEAR(ui->get_last_value(), 0.45, 0.002);
+        Frame h4 = render(ui, 780, 450);
+        CHECK(knobRun(h4, fcx(0.45), fyF + 2, kKnob) == 12);
+        // a host that takes the move on stores what it is told: its number and the knob then agree
+        ui->set_host_f(ui->get_last_value());
+        Frame h5 = render(ui, 780, 450);
+        CHECK(knobRun(h5, fcx(0.45), fyF + 2, kKnob) == 12);
+        // the same through a SliderGroup: the Gain lane is bound to host-g (0.62) and the user moved it to 0.5 above
+        CHECK_NEAR(ui->get_host_g(), 0.62, 0.0001);
+        ui->set_host_g(0.90f);
+        Frame h6 = render(ui, 780, 450);
+        const int laneKnob = static_cast<int>(std::lround(g1x + 0.90 * 232));
+        CHECK(knobRun(h6, laneKnob, 325, kKnob) >= 11 && knobRun(h6, laneKnob, 325, kKnob) <= 13);
+        CHECK(knobRun(h6, g1x + 116, 325, kKnob) == 0);              // nothing left at 0.5
+    }
 
     // ===== tooltips: shown after the pointer rests, gone when it leaves; shown on a disabled slider too ======
     {

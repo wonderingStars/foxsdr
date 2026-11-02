@@ -57,8 +57,7 @@ export component PaletteSpecimen inherits Window {
         }
     }
     palette := CommandPalette {
-        x: 0px;
-        y: 0px;
+        // no x and y: a zero-sized component placed without them would be centred, and the sheet would open that far off
         at-x: 30px;
         at-y: root.at-y;
         results: root.rows;

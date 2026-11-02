@@ -5,7 +5,9 @@
 //   x, y, w, h       what
 //   0, 0, 1024, 270  WaterfallView filling the sheet: picture (44, 0, 980, 238), foot (44, 242, 966, 28), age strip
 //                    (0..44), strength key at the picture's top right, VFO at 0.44, a dashed plugin mark at 0.10,
-//                    user markers M1 0.306, M2 0.312 (touching M1: its tab goes one row up) and M3 0.80
+//                    user markers M1 0.306, M2 0.312 (touching M1: its tab goes one row up) and M3 0.80.
+//                    The test can swap `marks` and `markers`, narrow the view with `view-w`, and turn on the key's MANUAL
+//                    chip and coverage line, the range rail, the gap break and the cursor.
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { WaterfallView, AgeTick } from "../waterfall.slint";
 import { PluginMark, UserMarker } from "../spectrum.slint";

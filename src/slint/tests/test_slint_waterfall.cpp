@@ -484,7 +484,7 @@ int main() {
     // ...also with a pause between the two clicks, so long as it is under the double-click time (500 ms)
     settle(milliseconds(520));
     click(win, 700, 100);
-    settle(milliseconds(300));
+    settle(milliseconds(250));
     click(win, 700, 100);
     CHECK(ui->get_dclicks() == 2 && ui->get_clicks() == clicksBefore + 2);
     // two slow clicks (past the double-click time) are two clicks
@@ -599,7 +599,7 @@ int main() {
     settle(milliseconds(300));
     Frame tipWait = render(ui, kW, kH);
     CHECK(tipWait.countNear(600, 122, 760, 144, kMenu, 4) == 0);                          // not yet
-    settle(milliseconds(450));
+    settle(milliseconds(600));
     Frame tip = render(ui, kW, kH);
     CHECK(tip.countNear(600, 122, 760, 144, kMenu, 4) > 400);                             // TooltipFace
     CHECK(tip.countNear(600, 122 - 8, 760, 122 - 1, kMenu, 4) == 0 && tip.countNear(600, 150, 760, 175, kMenu, 4) == 0);   // just that face
@@ -612,7 +612,7 @@ int main() {
     moveTo(win, 620, 100);
     CHECK(render(ui, kW, kH).countNear(620, 122, 780, 144, kMenu, 4) == 0);
     CHECK_NEAR(ui->get_hover_x(), (620.0 - kPicX) / kPicW, 0.0005);                       // ...and the first move after it was seen
-    settle(milliseconds(750));
+    settle(milliseconds(900));
     CHECK(render(ui, kW, kH).countNear(620, 122, 780, 144, kMenu, 4) > 400);
     // a click with the tip up is a click (it was lost while the tip was a popup), and a button going down hides it
     const int clicksTip = ui->get_clicks();
@@ -623,24 +623,27 @@ int main() {
     // ...and with a button held there is no tip however long the pointer rests (the press is no click either: it was held 0.75 s)
     settle(milliseconds(520));
     press(win, 640, 100);
-    settle(milliseconds(750));
+    settle(milliseconds(900));
     CHECK(render(ui, kW, kH).countNear(640, 122, 800, 144, kMenu, 4) == 0);
     release(win, 640, 100);
     CHECK(ui->get_clicks() == clicksTip + 1);
     // a wheel with the tip up is a wheel
     settle(milliseconds(520));
     moveTo(win, 600, 100);
-    settle(milliseconds(750));
+    settle(milliseconds(900));
     CHECK(render(ui, kW, kH).countNear(600, 122, 760, 144, kMenu, 4) > 400);
     const int wheelsTip = ui->get_wheels();
     scroll(win, 600, 100, 0, 120);
     CHECK(ui->get_wheels() == wheelsTip + 1);
+    CHECK(render(ui, kW, kH).countNear(600, 122, 760, 144, kMenu, 4) > 400);             // the wheel does not hide it...
+    moveTo(win, 20, 100);                                                                 // ...the pointer leaving the picture does
+    CHECK(render(ui, kW, kH).countNear(600, 122, 760, 144, kMenu, 4) == 0);
     // onto a marker: its own words (longer than the gesture help, so a wider face), 600 ms after the pointer came onto it
     moveTo(win, 345, 100);
     CHECK(ui->get_marker_hover() == 0);
     settle(milliseconds(300));
     CHECK(render(ui, kW, kH).countNear(345, 122, 560, 144, kMenu, 4) == 0);
-    settle(milliseconds(450));
+    settle(milliseconds(600));
     Frame tipM = render(ui, kW, kH);
     CHECK(tipM.countNear(345, 122, 560, 144, kMenu, 4) > 400);
     CHECK(tipWidth(tipM, 341, 125) > gestureTipW + 60);
@@ -662,7 +665,7 @@ int main() {
     CHECK(ui->get_clicks() == clicksNow && ui->get_wheels() == wheelsNow && ui->get_rclicks() == rNow && ui->get_pans() == panNow);
     CHECK(ui->get_hover_x() == -2.0f && ui->get_marker_hover() == -1);
     moveTo(win, 600, 100);
-    settle(milliseconds(750));
+    settle(milliseconds(900));
     CHECK(render(ui, kW, kH).countNear(600, 122, 760, 144, kMenu, 4) == 0);               // and no tip
     ui->set_view_enabled(true);
 

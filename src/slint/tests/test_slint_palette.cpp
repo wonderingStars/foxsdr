@@ -9,6 +9,7 @@
 
 #include "palette_specimen.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -68,6 +69,13 @@ bool rowIsPlain(const Frame& f, int row, int top = kRowsY) {
 // the sheet is open when its border is there, at row y
 bool sheetOpen(const Frame& f, int y = kPy + 40) { return f.near(kPx, y, kKnobRing) && f.near(kPx + kPw - 1, y, kKnobRing); }
 
+// The brightest blue channel in a rectangle: the ink's own colour, which its anti-aliased edges never exceed.
+int brightestBlue(const Frame& f, int x0, int y0, int x1, int y1) {
+    int best = 0;
+    for (int y = y0; y < y1; ++y) { for (int x = x0; x < x1; ++x) { best = std::max(best, int(f.at(x, y).b)); } }
+    return best;
+}
+
 // The first column in [x0, x1) with ink (a pixel unlike `bg`) in rows [y0, y1); -1 when none.
 int firstInkX(const Frame& f, int x0, int x1, int y0, int y1, Rgb bg) {
     for (int x = x0; x < x1; ++x) {
@@ -95,9 +103,11 @@ int main() {
     CHECK(f.near(kFx + 1, kFy + 1, kBg, 10) && f.near(kFx + kFw - 2, kFy + kFh - 2, kBg, 10));   // rounded corners (radius 6)
     CHECK(f.near(kFx + 5, kFy + 13, kPanel) && f.near(300, kFy + 4, kPanel) && f.near(kFx + kFw - 5, kFy + 13, kPanel));   // the panel ground
     CHECK(f.countInk(kFx + 11, kFy + 6, kFx + 25, kFy + 20, kPanel) > 15);         // the search icon, 14 px at x 11
-    CHECK(f.countNear(kFx + 11, kFy + 6, kFx + 25, kFy + 20, kDim, 24) > 5);       // in the dim ink
+    CHECK(f.countNear(kFx + 11, kFy + 6, kFx + 25, kFy + 20, kDim, 24) > 5);       // in the dim ink...
+    CHECK(brightestBlue(f, kFx + 11, kFy + 6, kFx + 25, kFy + 20) > 0x70 && brightestBlue(f, kFx + 11, kFy + 6, kFx + 25, kFy + 20) <= 0x94 + 8);   // ...and no brighter (Theme.dim is 0x7d8694)
     CHECK(f.countInk(kFx + 33, kFy + 4, kFx + 400, kFy + 22, kPanel) > 80);        // the placeholder
     CHECK(f.countNear(kFx + 33, kFy + 4, kFx + 400, kFy + 22, kDim, 24) > 10);     // in the dim ink
+    CHECK(brightestBlue(f, kFx + 33, kFy + 4, kFx + 400, kFy + 22) > 0x60 && brightestBlue(f, kFx + 33, kFy + 4, kFx + 400, kFy + 22) <= 0x94 + 8);
     CHECK(f.countInk(kFx + 400, kFy + 4, kFx + 458, kFy + 22, kPanel) == 0);       // ...and it stops well short of the badge
     CHECK(f.countNear(kFx + 450, kFy + 2, kFx + kFw - 2, kFy + kFh - 2, kLineStrong, 4) > 50);     // the badge's 1 px line-strong box
     CHECK(f.countNear(kFx + 460, kFy + 6, kFx + kFw - 12, kFy + kFh - 6, kFg, 40) > 8);            // "Ctrl K" in the sheet's bright ink
@@ -157,6 +167,7 @@ int main() {
     for (int row = 0; row < 4; ++row) {
         const int top = kRowsY + 32 * row;
         CHECK(o.countNear(49, top + 6, 49 + 70, top + 26, kChipBg, 4) > 150);      // the kind chip's ground, 20 px high, in the first column
+        CHECK(o.countNear(55, top + 8, 100, top + 24, rgb(0xc9ced6), 40) > 8);     // and its word, in the chip's ink
         CHECK(o.countNear(155, top + 6, 400, top + 26, kFg, 40) > 12);             // the title in the bright ink
         CHECK(o.countNear(520, top + 6, 655, top + 26, kDim, 30) > 5);             // the detail, dim, at the right
     }

@@ -112,12 +112,15 @@ int main() {
     const Rgb lampRed = tok(wb.lamp_red), errFg = tok(wb.chip_err_fg), keyBg = tok(wb.key_bg), keyLine = tok(wb.key_line);
     const Rgb accentHover = tok(wb.accent_hover), keyDisBg = tok(wb.key_disabled_bg), keyDisFg = tok(wb.key_disabled_fg), focus = tok(wb.focus), menu = tok(wb.menu);
 
+    // pointer positions are whole pixels here; the harness takes floats
+    const auto clk = [&](int x, int y) { click(win, static_cast<float>(x), static_cast<float>(y)); };
+    const auto mv = [&](int x, int y) { moveTo(win, static_cast<float>(x), static_cast<float>(y)); };
     const auto reset = [&] {
         ui->set_edits(0); ui->set_commits(0); ui->set_toggles(0); ui->set_browses(0);
         ui->set_last_value(""); ui->set_last_checked(false);
     };
     // Parks the pointer on the sheet's empty corner: closes any tooltip and ends any hover.
-    const auto park = [&] { moveTo(win, 495, 825); settle(milliseconds(30)); };
+    const auto park = [&] { mv(495, 825); settle(milliseconds(30)); };
     const auto sval = [&](const slint::SharedString& s) { return std::string(s); };
     const auto tap = [&](std::u8string_view k) { keyTap(win, k); };
 
@@ -362,13 +365,13 @@ int main() {
         const int showLeft = keyLeft(f0, piy + 6, pr - 2, keyBg, false);
         CHECKV(pr - showLeft >= 40 && f0.near(showLeft + 8, piy + 12, keyBg), "AFFICHER key at %d", showLeft);
         reset();
-        click(win, showLeft + 20, piy + kIn / 2);
+        clk(showLeft + 20, piy + kIn / 2);
         CHECKV(ui->get_fr_pass_revealed() && sval(ui->get_fr_pass_key_text()) == "MASQUER", "after AFFICHER: revealed %d, key '%s'", ui->get_fr_pass_revealed(), sval(ui->get_fr_pass_key_text()).c_str());
         park();
         Frame lit = render(ui, kW, kH);
         const int hideLeft = keyLeft(lit, piy + 6, pr - 2, accent, true);
         CHECKV(pr - hideLeft >= 40 && lit.near(hideLeft + 8, piy + 12, accent), "MASQUER key lit at %d", hideLeft);
-        click(win, hideLeft + 20, piy + kIn / 2);
+        clk(hideLeft + 20, piy + kIn / 2);
         CHECK(!ui->get_fr_pass_revealed() && sval(ui->get_fr_pass_key_text()) == "AFFICHER");
         park();
     }
@@ -417,7 +420,7 @@ int main() {
         reset();
         const int ix = kLeftX + 100, iy = kTextY + kInputDy + kIn / 2;                  // the middle of the Callsign filter input
         const int nx = kRightX + 100;                                                    // the number field's input
-        click(win, ix, iy);
+        clk(ix, iy);
         tap(u8"a");
         tap(u8"b");
         CHECKV(ui->get_edits() == 2, "edited fired %d times for two keys", ui->get_edits());
@@ -438,25 +441,25 @@ int main() {
         CHECKV(ui->get_commits() == 1 && sval(ui->get_last_value()) == "ab", "Enter: %d commits, last '%s'", ui->get_commits(), sval(ui->get_last_value()).c_str());
         CHECK(ui->get_edits() == 2);
         // a click away after Enter commits nothing more: nothing was edited since
-        click(win, nx, iy);
+        clk(nx, iy);
         CHECKV(ui->get_commits() == 1, "Enter then a click away: %d commits", ui->get_commits());
         Frame left = render(ui, kW, kH);
         CHECKV(left.near(kLeftX - 2, iy, bg, 14), "the ring leaves with the focus: %s", hex(left.at(kLeftX - 2, iy)).c_str());
         CHECK(left.near(kRightX - 2, iy, focus, 14));                                    // and shows on the field that took it
         // typing then a click on another input commits on the focus leaving
-        click(win, ix, iy);
+        clk(ix, iy);
         tap(u8"c");
         CHECK(ui->get_commits() == 1);
-        click(win, nx, iy);
+        clk(nx, iy);
         CHECKV(ui->get_commits() == 2 && sval(ui->get_last_value()) == "abc", "focus lost: %d commits, last '%s'", ui->get_commits(), sval(ui->get_last_value()).c_str());
         CHECK(sval(ui->get_typed()) == "abc");
         // Backspace is an edit
-        click(win, ix, iy);
+        clk(ix, iy);
         tap(slint::platform::key_codes::Backspace);
         CHECKV(sval(ui->get_typed()) == "ab" && sval(ui->get_last_value()) == "ab", "Backspace left '%s'", sval(ui->get_typed()).c_str());
         // the padding around the text is part of the input: a click there focuses it
-        click(win, nx, iy);
-        click(win, kLeftX + 4, iy);
+        clk(nx, iy);
+        clk(kLeftX + 4, iy);
         tap(u8"z");
         CHECKV(sval(ui->get_typed()) == "abz", "typing after a click on the padding gave '%s'", sval(ui->get_typed()).c_str());
         // Enter commits the whole text
@@ -464,7 +467,7 @@ int main() {
         tap(slint::platform::key_codes::Return);
         CHECK(ui->get_commits() == 1 && sval(ui->get_last_value()) == "abz");
         // NUMBER is not a filter: letters and commas go in, so the host can answer "that is not a number"
-        click(win, nx, iy);
+        clk(nx, iy);
         tap(slint::platform::key_codes::End);
         reset();
         tap(u8"x");
@@ -480,7 +483,7 @@ int main() {
     // =========================================================================================================
     {
         reset();
-        click(win, kLeftX + 100, kMaxY + kInputDy + kIn / 2);
+        clk(kLeftX + 100, kMaxY + kInputDy + kIn / 2);
         for (const std::u8string_view c : {u8"a", u8"b", u8"c", u8"d", u8"e", u8"f"}) { tap(c); }
         CHECKV(sval(ui->get_limited()) == "abcd", "limited field holds '%s'", sval(ui->get_limited()).c_str());
         CHECKV(ui->get_edits() == 4 && sval(ui->get_last_value()) == "abcd", "%d edits reported, last '%s'", ui->get_edits(), sval(ui->get_last_value()).c_str());
@@ -490,6 +493,24 @@ int main() {
         CHECKV(sval(ui->get_limited()) == "abcz" && ui->get_edits() == 6, "after Backspace and z: '%s' in %d edits", sval(ui->get_limited()).c_str(), ui->get_edits());
         Frame m = render(ui, kW, kH);
         CHECK(m.countInk(kLeftX + 9, kMaxY + kInputDy + 4, kLeftX + 60, kMaxY + kInputDy + kIn - 4, field) >= 20);   // the four characters are drawn
+        // a value the host set that is already past the limit can be cut down, key by key, but not added to
+        ui->set_limited("abcdefg");
+        reset();
+        clk(kLeftX + 100, kMaxY + kInputDy + kIn / 2);
+        tap(slint::platform::key_codes::End);
+        tap(u8"z");
+        CHECKV(sval(ui->get_limited()) == "abcdefg" && ui->get_edits() == 0, "adding to an over-long value: '%s' in %d edits", sval(ui->get_limited()).c_str(), ui->get_edits());
+        tap(slint::platform::key_codes::Backspace);
+        CHECKV(sval(ui->get_limited()) == "abcdef" && ui->get_edits() == 1 && sval(ui->get_last_value()) == "abcdef", "trimming it: '%s' in %d edits", sval(ui->get_limited()).c_str(), ui->get_edits());
+        tap(slint::platform::key_codes::Backspace);
+        tap(slint::platform::key_codes::Backspace);
+        tap(slint::platform::key_codes::Backspace);
+        tap(slint::platform::key_codes::Backspace);
+        CHECKV(sval(ui->get_limited()) == "ab" && ui->get_edits() == 5, "cut down to the limit and below: '%s' in %d edits", sval(ui->get_limited()).c_str(), ui->get_edits());
+        tap(u8"c");
+        tap(u8"d");
+        tap(u8"e");
+        CHECKV(sval(ui->get_limited()) == "abcd" && ui->get_edits() == 7, "and the limit holds again: '%s' in %d edits", sval(ui->get_limited()).c_str(), ui->get_edits());
         park();
     }
 
@@ -500,7 +521,7 @@ int main() {
         ui->invoke_focus_checkbox();                                                     // the focus is on a Checkbox, not on a text input
         settle(milliseconds(20));                                                        // (a dirty field commits as the focus leaves it, a turn later)
         reset();
-        click(win, kLeftX + 100, kDisY + kInputDy + kIn / 2);
+        clk(kLeftX + 100, kDisY + kInputDy + kIn / 2);
         tap(u8"x");
         tap(slint::platform::key_codes::Return);
         CHECK(ui->get_key_checkbox_focused());                                           // the click did not take the focus
@@ -510,19 +531,19 @@ int main() {
         CHECK(d.countNear(kLeftX - 4, kDisY + kInputDy - 4, kLeftX + kColW + 4, kDisY + kInputDy + kIn + 4, focus, 20) == 0);   // no focus ring
         // the disabled path: its key (the same label as the enabled path's, so the same width, ending at its own right edge)
         const int piy = kDisPathY + kInputDy, pr = kLeftX + kColW, keyW = (kLeftX + kWideW) - browseLeft;
-        click(win, pr - keyW / 2, piy + kIn / 2);
-        click(win, kLeftX + 40, piy + kIn / 2);
+        clk(pr - keyW / 2, piy + kIn / 2);
+        clk(kLeftX + 40, piy + kIn / 2);
         tap(u8"y");
         CHECKV(ui->get_browses() == 0 && ui->get_edits() == 0, "disabled path fired %d browses, %d edits", ui->get_browses(), ui->get_edits());
         CHECK(sval(ui->get_dis_path_value()) == "C:\\logs\\aprs.txt");
         // the disabled bool
         const int by = kDisY + kInputDy + kIn / 2;
-        click(win, kRightX + kBox / 2, by);
-        click(win, kRightX + 80, by);
+        clk(kRightX + kBox / 2, by);
+        clk(kRightX + 80, by);
         CHECKV(ui->get_toggles() == 0 && ui->get_dis_bool_checked(), "disabled bool toggled %d times", ui->get_toggles());
         // and a disabled Checkbox
-        click(win, kLeftX + kBox / 2, kCbDisY + kBox / 2);
-        click(win, kLeftX + 80, kCbDisY + kBox / 2);
+        clk(kLeftX + kBox / 2, kCbDisY + kBox / 2);
+        clk(kLeftX + 80, kCbDisY + kBox / 2);
         CHECKV(ui->get_toggles() == 0 && ui->get_cb_dis_checked(), "disabled checkbox toggled %d times", ui->get_toggles());
         park();
     }
@@ -533,7 +554,7 @@ int main() {
     {
         reset();
         const int fy = kBoolY + kInputDy + kIn / 2;                                     // the BOOL row's middle
-        click(win, kRightX + kBox / 2, fy);
+        clk(kRightX + kBox / 2, fy);
         CHECKV(ui->get_toggles() == 1 && !ui->get_last_checked() && !ui->get_bool_checked(), "BOOL click: %d toggles, last %d, checked %d", ui->get_toggles(), ui->get_last_checked(), ui->get_bool_checked());
         CHECK(ui->get_edits() == 0 && ui->get_commits() == 0);                           // a bool is not an edit
         Frame a = render(ui, kW, kH);
@@ -541,7 +562,7 @@ int main() {
         CHECK(a.near(kRightX + 6, by + 3, field));                                      // now unchecked: the field ground ...
         CHECK(a.colNear(kRightX, by + 3, by + kBox - 3, lineStrong));                  // ... and the strong border
         CHECK(a.countNear(kRightX + 1, by + 1, kRightX + kBox - 1, by + kBox - 1, accent, 20) == 0);
-        click(win, kRightX + 40, fy);                                                    // the word "on" and the row beside it also toggle
+        clk(kRightX + 40, fy);                                                    // the word "on" and the row beside it also toggle
         CHECKV(ui->get_toggles() == 2 && ui->get_last_checked() && ui->get_bool_checked(), "second BOOL click: %d toggles, last %d", ui->get_toggles(), ui->get_last_checked());
         park();
         Frame b = render(ui, kW, kH);
@@ -554,7 +575,7 @@ int main() {
     // =========================================================================================================
     {
         reset();
-        click(win, kRightX + kBox / 2, kCbOnY + kBox / 2);                              // the unchecked one, at the right
+        clk(kRightX + kBox / 2, kCbOnY + kBox / 2);                              // the unchecked one, at the right
         CHECKV(ui->get_toggles() == 1 && ui->get_last_checked() && ui->get_cb_off_checked(), "Checkbox click: %d toggles, last %d", ui->get_toggles(), ui->get_last_checked());
         Frame hot = render(ui, kW, kH);
         CHECKV(hot.near(kRightX + 3, kCbOnY + 3, accentHover), "a checked box under the pointer lights: %s", hex(hot.at(kRightX + 3, kCbOnY + 3)).c_str());
@@ -562,12 +583,12 @@ int main() {
         Frame a = render(ui, kW, kH);
         CHECK(a.near(kRightX + 3, kCbOnY + 3, accent));
         CHECK(a.countNear(kRightX + 1, kCbOnY + 1, kRightX + kBox - 1, kCbOnY + kBox - 1, accentInk, 40) >= 6);
-        click(win, kRightX + 120, kCbOnY + kBox / 2);                                    // the label toggles it back
+        clk(kRightX + 120, kCbOnY + kBox / 2);                                    // the label toggles it back
         CHECKV(ui->get_toggles() == 2 && !ui->get_last_checked() && !ui->get_cb_off_checked(), "label click: %d toggles, last %d", ui->get_toggles(), ui->get_last_checked());
         Frame b = render(ui, kW, kH);
         CHECK(b.near(kRightX + 6, kCbOnY + 3, field));
         reset();
-        click(win, kLeftX + kBox / 2, kCbOnY + kBox / 2);                                // the checked one turns off
+        clk(kLeftX + kBox / 2, kCbOnY + kBox / 2);                                // the checked one turns off
         CHECK(ui->get_toggles() == 1 && !ui->get_last_checked() && !ui->get_cb_on_checked());
         CHECK(render(ui, kW, kH).near(kLeftX + 6, kCbOnY + 3, field));
         park();
@@ -577,7 +598,7 @@ int main() {
     // 16. Keyboard: Space toggles the focused Checkbox and a 2 px ring shows round its box
     // =========================================================================================================
     {
-        click(win, kLeftX + 100, kTextY + kInputDy + kIn / 2);                           // the focus is in a text input, so the Checkbox has none
+        clk(kLeftX + 100, kTextY + kInputDy + kIn / 2);                           // the focus is in a text input, so the Checkbox has none
         settle(milliseconds(20));
         reset();
         Frame before = render(ui, kW, kH);
@@ -606,14 +627,14 @@ int main() {
     {
         reset();
         const int iy = kPathY + kInputDy;
-        click(win, browseLeft + 30, iy + kIn / 2);
+        clk(browseLeft + 30, iy + kIn / 2);
         CHECKV(ui->get_browses() == 1 && ui->get_edits() == 0 && ui->get_toggles() == 0, "BROWSE FILES: %d browses", ui->get_browses());
-        click(win, browseLeft + 1, iy + 1);                                              // its corner still counts
+        clk(browseLeft + 1, iy + 1);                                              // its corner still counts
         CHECK(ui->get_browses() == 2);
-        click(win, browseLeft - 10, iy + kIn / 2);                                       // the input is not the key
+        clk(browseLeft - 10, iy + kIn / 2);                                       // the input is not the key
         CHECK(ui->get_browses() == 2);
         // the host's word for the key is the key, too
-        click(win, kRightX + kColW - 20, kFrPathY + kInputDy + kIn / 2);
+        clk(kRightX + kColW - 20, kFrPathY + kInputDy + kIn / 2);
         CHECK(ui->get_browses() == 3);
         park();
     }
@@ -625,7 +646,7 @@ int main() {
         reset();
         const int iy = kPassY + kInputDy, r = kLeftX + kWideW;
         Frame hidden = render(ui, kW, kH);
-        click(win, passLeft + 20, iy + kIn / 2);
+        clk(passLeft + 20, iy + kIn / 2);
         CHECKV(ui->get_pw_revealed() && sval(ui->get_pw_key_text()) == "HIDE", "after SHOW: revealed %d, key '%s'", ui->get_pw_revealed(), sval(ui->get_pw_key_text()).c_str());
         CHECK(ui->get_toggles() == 0 && ui->get_browses() == 0 && ui->get_edits() == 0);
         park();
@@ -638,7 +659,7 @@ int main() {
         CHECKV(changed >= 40, "the input shows different pixels once revealed: %d", changed);
         CHECK(hideLeft == pass2Left);                                                    // the lit key matches the revealed twin's
         // and back
-        click(win, hideLeft + 20, iy + kIn / 2);
+        clk(hideLeft + 20, iy + kIn / 2);
         CHECKV(!ui->get_pw_revealed() && sval(ui->get_pw_key_text()) == "SHOW", "after HIDE: revealed %d, key '%s'", ui->get_pw_revealed(), sval(ui->get_pw_key_text()).c_str());
         park();
         Frame again = render(ui, kW, kH);
@@ -646,13 +667,13 @@ int main() {
         CHECKV(dd == 0, "the hidden picture returns exactly: %d pixels differ", dd);
         // pressing SHOW while typing leaves the caret where it was (a key never steals the focus)
         reset();
-        click(win, kLeftX + 150, iy + kIn / 2);                                           // focus the password input
+        clk(kLeftX + 150, iy + kIn / 2);                                           // focus the password input
         tap(u8"Q");
         CHECK(ui->get_edits() == 1);
-        click(win, passLeft + 20, iy + kIn / 2);                                          // SHOW
+        clk(passLeft + 20, iy + kIn / 2);                                          // SHOW
         tap(u8"R");
         CHECKV(ui->get_edits() == 2 && ui->get_pw_revealed(), "typing after pressing SHOW: %d edits", ui->get_edits());
-        click(win, hideLeft + 20, iy + kIn / 2);                                          // HIDE again
+        clk(hideLeft + 20, iy + kIn / 2);                                          // HIDE again
         CHECK(!ui->get_pw_revealed());
         park();
     }
@@ -664,7 +685,7 @@ int main() {
         const int iy = kTipY + kInputDy;                                                 // the Station input
         Frame none = render(ui, kW, kH);
         CHECK(none.near(kRightX + 5, iy + kIn + 12, bg));                                // nothing under it yet
-        moveTo(win, kRightX + 100, iy + kIn / 2);                                        // over the text
+        mv(kRightX + 100, iy + kIn / 2);                                        // over the text
         settle(milliseconds(750));
         Frame tip = render(ui, kW, kH);
         CHECKV(tip.near(kRightX + 5, iy + kIn + 12, menu), "tooltip ground under the input: %s", hex(tip.at(kRightX + 5, iy + kIn + 12)).c_str());
@@ -672,31 +693,38 @@ int main() {
         park();
         Frame gone = render(ui, kW, kH);
         CHECK(gone.near(kRightX + 5, iy + kIn + 12, bg));
-        moveTo(win, kRightX + 3, iy + kIn / 2);                                          // over the padding
+        mv(kRightX + 3, iy + kIn / 2);                                          // over the padding
         settle(milliseconds(750));
         CHECK(render(ui, kW, kH).near(kRightX + 5, iy + kIn + 12, menu));
         park();
         // a field with no tooltip opens none
-        moveTo(win, kRightX + 100, kTextY + kInputDy + kIn / 2);
+        mv(kRightX + 100, kTextY + kInputDy + kIn / 2);
         settle(milliseconds(750));
         CHECK(render(ui, kW, kH).near(kRightX + 5, kTextY + kInputDy + kIn + 12, bg));
         park();
         // a key inside a field carries its own tooltip: SHOW says "Show", 6 px under the key
-        moveTo(win, passLeft + 20, kPassY + kInputDy + kIn / 2);
+        mv(passLeft + 20, kPassY + kInputDy + kIn / 2);
         settle(milliseconds(750));
         Frame k = render(ui, kW, kH);
         CHECKV(k.near(passLeft + 5, kPassY + kInputDy + kIn + 12, menu), "SHOW's tooltip ground: %s", hex(k.at(passLeft + 5, kPassY + kInputDy + kIn + 12)).c_str());
         park();
+        // a disabled field still explains itself
+        const int diy = kDisY + kInputDy;
+        mv(kLeftX + 100, diy + kIn / 2);
+        settle(milliseconds(750));
+        Frame dt = render(ui, kW, kH);
+        CHECKV(dt.countNear(kLeftX + 1, diy + kIn + 6 + 4, kLeftX + 7, diy + kIn + 6 + 18, menu, 2) >= 80, "disabled field tooltip: %d of 84 pixels are tip ground", dt.countNear(kLeftX + 1, diy + kIn + 6 + 4, kLeftX + 7, diy + kIn + 6 + 18, menu, 2));
+        park();
         // a BOOL field hands its tooltip to the Checkbox row: 6 px under the 24 px row
         const int ry = kBoolY + kInputDy;
         CHECK(render(ui, kW, kH).countNear(kRightX + 1, ry + kIn + 6 + 4, kRightX + 7, ry + kIn + 6 + 18, menu, 2) <= 16);
-        moveTo(win, kRightX + 60, ry + kIn / 2);
+        mv(kRightX + 60, ry + kIn / 2);
         settle(milliseconds(750));
         Frame b = render(ui, kW, kH);
         CHECKV(b.countNear(kRightX + 1, ry + kIn + 6 + 4, kRightX + 7, ry + kIn + 6 + 18, menu, 2) >= 80, "BOOL field tooltip: %d of 84 pixels are tip ground", b.countNear(kRightX + 1, ry + kIn + 6 + 4, kRightX + 7, ry + kIn + 6 + 18, menu, 2));
         park();
         // a standalone Checkbox: 6 px under its own 14 px
-        moveTo(win, kLeftX + 80, kCbOnY + kBox / 2);
+        mv(kLeftX + 80, kCbOnY + kBox / 2);
         settle(milliseconds(750));
         Frame c = render(ui, kW, kH);
         CHECKV(c.countNear(kLeftX + 1, kCbOnY + kBox + 6 + 4, kLeftX + 7, kCbOnY + kBox + 6 + 18, menu, 2) >= 80, "Checkbox tooltip: %d of 84 pixels are tip ground", c.countNear(kLeftX + 1, kCbOnY + kBox + 6 + 4, kLeftX + 7, kCbOnY + kBox + 6 + 18, menu, 2));

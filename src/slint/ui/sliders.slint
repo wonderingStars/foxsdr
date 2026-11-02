@@ -112,12 +112,12 @@ export component Slider inherits Rectangle {
         key-pressed(e) => {
             if (e.text == Key.LeftArrow) {
                 root.keyboard = true; root.pointer-focus = false;
-                root.set-to(root.value - root.wheel-step);
+                root.set-to(root.shown - root.wheel-step);
                 return accept;
             }
             if (e.text == Key.RightArrow) {
                 root.keyboard = true; root.pointer-focus = false;
-                root.set-to(root.value + root.wheel-step);
+                root.set-to(root.shown + root.wheel-step);
                 return accept;
             }
             return reject;
@@ -143,13 +143,12 @@ export component Slider inherits Rectangle {
             }
             scroll-event(e) => {
                 if (!root.enabled || e.delta-y == 0px) { return reject; }
-                root.set-to(root.value + e.delta-y / root.wheel-notch * root.wheel-step);
+                root.set-to(root.shown + e.delta-y / root.wheel-notch * root.wheel-step);
                 return accept;
             }
         }
     }
     TipTimer {
-        x: 0px; y: 0px;                          // unpositioned, Slint would centre it in the slider and the tip would open mid-track
         hovered: touch.has-hover;
         text: root.tooltip;
         anchor-h: root.height + (root.reach - root.height / 2);   // the tip clears the knob
@@ -228,7 +227,7 @@ export component SliderGroup inherits Rectangle {
         x: 0px;
         y: root.caption-h + root.gap;
         width: root.width;
-        value <=> root.value;
+        value: root.value;                      // the host's number flows in; the slider keeps the user's position itself
         enabled: root.enabled;
         tooltip: root.tooltip;
         accessible-label: root.caption;
@@ -287,6 +286,6 @@ export component SliderGroup inherits Rectangle {
             enabled: root.has-auto;
             clicked => { if (root.auto-enabled) { root.auto-clicked(); } }
         }
-        TipTimer { x: 0px; y: 0px; hovered: auto-touch.has-hover; text: root.auto-tooltip; anchor-h: parent.height; }
+        TipTimer { hovered: auto-touch.has-hover; text: root.auto-tooltip; anchor-h: parent.height; }
     }
 }

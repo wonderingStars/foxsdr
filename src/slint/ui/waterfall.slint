@@ -137,7 +137,7 @@ export component WaterfallView inherits Rectangle {
     private property <length> pic-h: max(0px, root.height - root.foot-h - 4px);
     private property <length> tab-h: 18px;        // the sheet's marker tab
     private property <length> tab-pitch: 20px;    // one row up = a tab and 2 px
-    private property <length> cursor-x: false ? root.cursor-pos * root.pic-w : (area.has-hover ? area.mouse-x : -1px);
+    private property <length> cursor-x: root.cursor-pos >= 0 ? root.cursor-pos * root.pic-w : (area.has-hover ? area.mouse-x : -1px);
     private property <length> rail-y: round(root.rail-pos * root.pic-h / 1px) * 1px;
     private property <bool> rail-shown: root.rail-pos >= 0 && root.rail-pos <= 1 && root.rail-y < root.pic-h - 2px
         && (!key.visible || root.rail-y > key.y + key.height + 6px);

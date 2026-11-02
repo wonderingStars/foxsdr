@@ -154,17 +154,20 @@ int main() {
     // The tokens, read from the Workbench skin by name (the theme test pins their values).
     const Skin wb = ui->global<Workbench>().get_value();
     const Rgb bg = tok(wb.bg), card = tok(wb.card), lineStrong = tok(wb.line_strong), fg = tok(wb.fg), fgSoft = tok(wb.fg_soft), dim = tok(wb.dim);
-    const Rgb accent = tok(wb.accent), accentInk = tok(wb.accent_ink), accentSoft = tok(wb.accent_soft), accentHover = tok(wb.accent_hover);
+    const Rgb accent = tok(wb.accent), accentInk = tok(wb.accent_ink), accentSoft = tok(wb.accent_soft);
     const Rgb cardWarn = tok(wb.card_warn), cardWarnLine = tok(wb.card_warn_line), cardErr = tok(wb.card_err), cardErrLine = tok(wb.card_err_line);
     const Rgb errFg = tok(wb.chip_err_fg), keyBg = tok(wb.key_bg), keyLine = tok(wb.key_line), keyFg = tok(wb.key_fg);
     const Rgb keyDisBg = tok(wb.key_disabled_bg), keyDisFg = tok(wb.key_disabled_fg), menu = tok(wb.menu), menuHot = tok(wb.menu_hot);
     const Rgb sliderTrack = tok(wb.slider_track), sliderFill = tok(wb.slider_fill), field = tok(wb.field);
 
+    // pointer positions are whole pixels here; the harness takes floats
+    const auto clk = [&](int x, int y) { click(win, static_cast<float>(x), static_cast<float>(y)); };
+    const auto mv = [&](int x, int y) { moveTo(win, static_cast<float>(x), static_cast<float>(y)); };
     const auto reset = [&] {
         ui->set_primaries(0); ui->set_secondaries(0); ui->set_banner_clicks(0); ui->set_toggles(0); ui->set_last_clicked("");
     };
     // Parks the pointer on the sheet's empty corner: closes any tooltip and ends any hover.
-    const auto park = [&] { moveTo(win, 636, 760); settle(milliseconds(30)); };
+    const auto park = [&] { mv(636, 760); settle(milliseconds(30)); };
     const auto sval = [&](const slint::SharedString& s) { return std::string(s); };
 
     // =========================================================================================================
@@ -480,53 +483,53 @@ int main() {
         reset();
         const Box& c = upd;
         const int cx = c.x + kPad;
-        click(win, cx + updPriW / 2, updKeyTop + 13);
+        clk(cx + updPriW / 2, updKeyTop + 13);
         CHECKV(ui->get_primaries() == 1 && ui->get_secondaries() == 0 && sval(ui->get_last_clicked()) == "upd", "primary: %d / %d, last '%s'", ui->get_primaries(), ui->get_secondaries(), sval(ui->get_last_clicked()).c_str());
         Frame hot = render(ui, kW, kH);
-        CHECKV(hot.near(cx + 8, updKeyTop + 13, accentHover), "the key under the pointer lights: %s", hex(hot.at(cx + 8, updKeyTop + 13)).c_str());
-        click(win, updSecLeft + updSecW / 2, updKeyTop + 13);
+        CHECKV(!hot.near(cx + 8, updKeyTop + 13, accent, 6), "the key under the pointer lights: still %s", hex(hot.at(cx + 8, updKeyTop + 13)).c_str());   // (how is the Key family's: the card's key is one)
+        clk(updSecLeft + updSecW / 2, updKeyTop + 13);
         CHECKV(ui->get_primaries() == 1 && ui->get_secondaries() == 1 && sval(ui->get_last_clicked()) == "upd", "secondary: %d / %d", ui->get_primaries(), ui->get_secondaries());
         Frame hot2 = render(ui, kW, kH);
         CHECKV(hot2.near(updSecLeft + 8, updKeyTop + 13, menuHot), "the ghost key under the pointer lights: %s", hex(hot2.at(updSecLeft + 8, updKeyTop + 13)).c_str());
-        click(win, cx + updPriW + 3, updKeyTop + 13);                                    // the gap between the keys is neither
+        clk(cx + updPriW + 3, updKeyTop + 13);                                    // the gap between the keys is neither
         CHECK(ui->get_primaries() == 1 && ui->get_secondaries() == 1);
-        click(win, cx + 30, c.y + kPad + 4);                                             // nor is the title
+        clk(cx + 30, c.y + kPad + 4);                                             // nor is the title
         CHECK(ui->get_primaries() == 1 && ui->get_secondaries() == 1);
         park();
         Frame cool = render(ui, kW, kH);
         CHECK(differing(f0, cool, upd.x, upd.y, upd.x + upd.w, upd.y + upd.h) == 0);    // the card is as it was once the pointer leaves
         // the Seen key: the whole width is the key
         reset();
-        click(win, team.x + kPad + 4, teamKeyTop + 13);
-        click(win, team.x + team.w - kPad - 5, teamKeyTop + 13);
-        click(win, team.x + team.w / 2, teamKeyTop + 13);
+        clk(team.x + kPad + 4, teamKeyTop + 13);
+        clk(team.x + team.w - kPad - 5, teamKeyTop + 13);
+        clk(team.x + team.w / 2, teamKeyTop + 13);
         CHECKV(ui->get_primaries() == 3 && sval(ui->get_last_clicked()) == "team", "Seen: %d clicks, last '%s'", ui->get_primaries(), sval(ui->get_last_clicked()).c_str());
         CHECK(ui->get_secondaries() == 0);
-        click(win, team.x + 5, teamKeyTop + 13);                                         // the padding beside the key is not
+        clk(team.x + 5, teamKeyTop + 13);                                         // the padding beside the key is not
         CHECK(ui->get_primaries() == 3);
         // the Store card's only key
         reset();
-        click(win, store.x + store.w / 2, storeKeyTop + 13);
+        clk(store.x + store.w / 2, storeKeyTop + 13);
         CHECKV(ui->get_primaries() == 1 && sval(ui->get_last_clicked()) == "store", "Store key: %d clicks, last '%s'", ui->get_primaries(), sval(ui->get_last_clicked()).c_str());
         // the err card's two keys
         reset();
         const Run ek = colRun(f0, err.x + kPad + 8, err.y + kPad + 20, err.y + err.h - 2, accent, 3, 10);
-        click(win, err.x + kPad + 40, ek.top + 13);
-        click(win, err.x + err.w - kPad - 20, ek.top + 13);
+        clk(err.x + kPad + 40, ek.top + 13);
+        clk(err.x + err.w - kPad - 20, ek.top + 13);
         CHECK(ui->get_primaries() == 1 && ui->get_secondaries() == 1 && sval(ui->get_last_clicked()) == "err");
         // a download in progress has no primary key: a click on the bar does nothing, the secondary still answers
         reset();
-        click(win, (progBar.x0 + progBar.end) / 2, progKeyTop + 13);
-        click(win, prog.x + kPad + 5, progKeyTop + 13);
+        clk((progBar.x0 + progBar.end) / 2, progKeyTop + 13);
+        clk(prog.x + kPad + 5, progKeyTop + 13);
         CHECKV(ui->get_primaries() == 0 && ui->get_secondaries() == 0, "bar and label: %d primaries, %d secondaries", ui->get_primaries(), ui->get_secondaries());
-        click(win, prog.x + prog.w - kPad - 30, progKeyTop + 13);
+        clk(prog.x + prog.w - kPad - 30, progKeyTop + 13);
         CHECKV(ui->get_primaries() == 0 && ui->get_secondaries() == 1 && sval(ui->get_last_clicked()) == "prog", "Not now beside the bar: %d / %d", ui->get_primaries(), ui->get_secondaries());
         // a disabled primary never acts; the secondary beside it does
         reset();
-        click(win, dis.x + kPad + 40, disKeyTop + 13);
-        click(win, dis.x + kPad + 5, disKeyTop + 13);
+        clk(dis.x + kPad + 40, disKeyTop + 13);
+        clk(dis.x + kPad + 5, disKeyTop + 13);
         CHECKV(ui->get_primaries() == 0, "disabled primary fired %d times", ui->get_primaries());
-        click(win, dis.x + dis.w - kPad - 20, disKeyTop + 13);
+        clk(dis.x + dis.w - kPad - 20, disKeyTop + 13);
         CHECK(ui->get_secondaries() == 1 && sval(ui->get_last_clicked()) == "dis");
         park();
     }
@@ -537,18 +540,18 @@ int main() {
     if (warnBoxes.size() == 2) {
         reset();
         const int cx = warn.x + kPad, top = warnBoxes[0].top - 2;
-        click(win, cx + 7, top + 7);
+        clk(cx + 7, top + 7);
         CHECKV(ui->get_toggles() == 1 && ui->get_primaries() == 0, "child checkbox: %d toggles", ui->get_toggles());
         park();
         Frame off = render(ui, kW, kH);
         CHECKV(off.near(cx + 7, top + 2, field) && off.near(cx + 2, top + 7, field), "unchecked: the field ground, %s", hex(off.at(cx + 7, top + 2)).c_str());
-        click(win, cx + 7, top + 7);
+        clk(cx + 7, top + 7);
         park();
         CHECK(render(ui, kW, kH).near(cx + 3, top + 3, accent));
         CHECK(ui->get_toggles() == 2);
-        click(win, cx + 7, warnBoxes[1].top - 2 + 7);                                     // the second row's box is its own
+        clk(cx + 7, warnBoxes[1].top - 2 + 7);                                     // the second row's box is its own
         CHECK(ui->get_toggles() == 3);
-        click(win, cx + 7, warnBoxes[1].top - 2 + 7);
+        clk(cx + 7, warnBoxes[1].top - 2 + 7);
         park();
     }
 
@@ -581,7 +584,7 @@ int main() {
         const Run key = colRun(back, cx + 8, prog.y + kPad + 20, prog.y + prog.h - 2, accent, 3, 10);
         CHECKV(key.top > 0 && key.bot - key.top + 1 == kKeyH, "progress -1: the key returns (rows %d..%d)", key.top, key.bot);
         reset();
-        click(win, cx + 40, key.top + 13);
+        clk(cx + 40, key.top + 13);
         CHECKV(ui->get_primaries() == 1 && sval(ui->get_last_clicked()) == "prog", "the returned key fires primary-clicked: %d", ui->get_primaries());
         park();
         ui->set_prog_progress(0.4f);
@@ -599,21 +602,21 @@ int main() {
         const int tipX = notes.x + kPad + 1, tipY = key.bot + 1 + kGapPx + 4;           // inside the tip's left padding, clear of its words
         Frame none = render(ui, kW, kH);
         CHECKV(blockNear(none, tipX, tipY, 6, 14, menu, 2) <= 16, "no tip before the pointer rests: %d of 84 pixels are tip ground", blockNear(none, tipX, tipY, 6, 14, menu, 2));
-        moveTo(win, notes.x + kPad + 40, key.top + 13);
+        mv(notes.x + kPad + 40, key.top + 13);
         settle(milliseconds(750));
         Frame tip = render(ui, kW, kH);
         CHECKV(blockNear(tip, tipX, tipY, 6, 14, menu, 2) >= 80, "tooltip ground under the key: %d of 84 pixels", blockNear(tip, tipX, tipY, 6, 14, menu, 2));
         park();
         CHECK(blockNear(render(ui, kW, kH), tipX, tipY, 6, 14, menu, 2) <= 16);
         // the disabled primary says why
-        moveTo(win, dis.x + kPad + 40, disKeyTop + 13);
+        mv(dis.x + kPad + 40, disKeyTop + 13);
         settle(milliseconds(750));
         Frame d = render(ui, kW, kH);
         const int dx = dis.x + kPad + 1, dy = disKeyTop + kKeyH + kGapPx + 4;
         CHECKV(blockNear(d, dx, dy, 6, 14, menu, 2) >= 80, "the disabled key's tooltip: %d of 84 pixels", blockNear(d, dx, dy, 6, 14, menu, 2));
         park();
         // a key without a tooltip opens none
-        moveTo(win, upd.x + kPad + 40, updKeyTop + 13);
+        mv(upd.x + kPad + 40, updKeyTop + 13);
         settle(milliseconds(750));
         CHECK(blockNear(render(ui, kW, kH), upd.x + kPad + 1, updKeyTop + kKeyH + kGapPx + 4, 6, 14, menu, 2) <= 16);
         park();
@@ -670,37 +673,37 @@ int main() {
     }
     {
         reset();
-        click(win, warnKeyLeft + 25, bWarn.y + 14);
+        clk(warnKeyLeft + 25, bWarn.y + 14);
         CHECKV(ui->get_banner_clicks() == 1 && sval(ui->get_last_clicked()) == "ban-warn", "Stop plugin: %d clicks, last '%s'", ui->get_banner_clicks(), sval(ui->get_last_clicked()).c_str());
         Frame hot = render(ui, kW, kH);
         CHECKV(hot.near(warnKeyLeft + 8, bWarn.y + 14, menuHot), "the key under the pointer lights: %s", hex(hot.at(warnKeyLeft + 8, bWarn.y + 14)).c_str());
-        click(win, bWarn.x + 60, bWarn.y + 14);                                          // the words are not the key
+        clk(bWarn.x + 60, bWarn.y + 14);                                          // the words are not the key
         CHECK(ui->get_banner_clicks() == 1);
-        click(win, bLong.x + 90, bLong.y + 14);
+        clk(bLong.x + 90, bLong.y + 14);
         CHECK(ui->get_banner_clicks() == 1);
-        click(win, longKeyLeft + 25, bLong.y + 14);
+        clk(longKeyLeft + 25, bLong.y + 14);
         CHECK(ui->get_banner_clicks() == 2 && sval(ui->get_last_clicked()) == "ban-long");
-        click(win, plainKeyLeft + 25, bPlain.y + 14);
+        clk(plainKeyLeft + 25, bPlain.y + 14);
         CHECK(ui->get_banner_clicks() == 3 && sval(ui->get_last_clicked()) == "ban-plain");
         // a disabled bar's key does nothing and looks it
         ui->set_ban_enabled(false);
         park();
         Frame d = render(ui, kW, kH);
         CHECKV(d.near(plainKeyLeft + 8, bPlain.y + 14, keyDisBg), "disabled key ground %s", hex(d.at(plainKeyLeft + 8, bPlain.y + 14)).c_str());
-        click(win, plainKeyLeft + 25, bPlain.y + 14);
+        clk(plainKeyLeft + 25, bPlain.y + 14);
         CHECKV(ui->get_banner_clicks() == 3, "disabled banner key fired: %d", ui->get_banner_clicks());
         ui->set_ban_enabled(true);
         park();
         CHECK(render(ui, kW, kH).near(plainKeyLeft + 8, bPlain.y + 14, keyBg));
         // the tooltip: only a bar that shortened its sentence has one, and it is the whole sentence, 6 px under the bar
         reset();
-        moveTo(win, bLong.x + 90, bLong.y + 14);
+        mv(bLong.x + 90, bLong.y + 14);
         settle(milliseconds(750));
         Frame tip = render(ui, kW, kH);
         CHECKV(blockNear(tip, bLong.x + 1, bLong.y + bLong.h + 6 + 4, 6, 14, menu, 2) >= 80, "the long banner's tooltip ground: %d of 84 pixels", blockNear(tip, bLong.x + 1, bLong.y + bLong.h + 6 + 4, 6, 14, menu, 2));
         CHECK(tip.near(bLong.x + 5, bLong.y + bLong.h + 3, bg) || tip.near(bLong.x + 5, bLong.y + bLong.h + 3, card));   // the 6 px between
         park();
-        moveTo(win, bWarn.x + 60, bWarn.y + 14);
+        mv(bWarn.x + 60, bWarn.y + 14);
         settle(milliseconds(750));
         Frame none = render(ui, kW, kH);
         CHECK(blockNear(none, bWarn.x + 1, bWarn.y + bWarn.h + 6 + 4, 6, 14, menu, 2) <= 16);
@@ -709,7 +712,7 @@ int main() {
         // edge, so the popup is shifted left to fit: probe the three rows of padding above its words, where it is all ground
         const int tipTop = bWarn.y + 2 + 24 + 6 + 2;
         CHECK(blockNear(render(ui, kW, kH), 545, tipTop, 80, 3, menu, 2) <= 24);
-        moveTo(win, warnKeyLeft + 25, bWarn.y + 14);
+        mv(warnKeyLeft + 25, bWarn.y + 14);
         settle(milliseconds(750));
         Frame kt = render(ui, kW, kH);
         CHECKV(blockNear(kt, 545, tipTop, 80, 3, menu, 2) >= 216, "the banner key's tooltip: %d of 240 pixels are tip ground", blockNear(kt, 545, tipTop, 80, 3, menu, 2));

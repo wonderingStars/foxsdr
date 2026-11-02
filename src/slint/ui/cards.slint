@@ -146,7 +146,7 @@ export component Card inherits Rectangle {
                 on: root.primary-on;
                 wide: true;
                 min-width: 0px;                     // beside the secondary a long word is elided, never pushed over the card's edge
-                height: 30px;
+                height: 26px;                       // the sheet's inline height, not the .btn 30
                 enabled: root.primary-enabled;
                 tooltip: root.primary-tooltip;
                 clicked => { root.primary-clicked(); }
