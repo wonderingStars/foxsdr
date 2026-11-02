@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "core/plugin_fault.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
@@ -358,6 +359,7 @@ void testPinned() {
     std::error_code ec;
     fs::create_directories(dir);
     for (const char* id : {"ct-pin-a", "ct-pin-b"}) { fs::copy_file(g_probe, dir / leafOf(id), fs::copy_options::overwrite_existing, ec); }
+    cascade::core::DiagLog::instance().resetForTest();
     PluginHost h;
     h.scan(dir.string());
     CHECK(h.loadedCount() == 2);
@@ -367,6 +369,18 @@ void testPinned() {
     h.unloadAll();
     CHECK(::GetModuleHandleA(leafOf("ct-pin-a").c_str()) != nullptr);   // switched off: left mapped
     CHECK(::GetModuleHandleA(leafOf("ct-pin-b").c_str()) == nullptr);   // not switched off: unmapped
+    // ...and the log says so by the plugin's PUBLIC id (the ring is copied into every report; deep review of engine/stage4, batch A, docs/engine-stage4.md 6.31)
+    {
+        const std::string pub = fault::publicIdOf(fault::slotFor(leafOf("ct-pin-a")));
+        bool said = false;
+        for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (line.find("so its module is left mapped") == std::string::npos) { continue; }
+            said = said || line.find(pub) != std::string::npos;
+            if (line.find("ct-pin-a") != std::string::npos) { std::printf("FAIL the log names a plugin by its file's id: %s\n", line.c_str()); }
+            CHECK(line.find("ct-pin-a") == std::string::npos);
+        }
+        CHECK(said);
+    }
     // and a scan while the quarantine stands does not map it again (the host answers with a verdict, the file is not opened)
     PluginHost again;
     again.scan(dir.string());

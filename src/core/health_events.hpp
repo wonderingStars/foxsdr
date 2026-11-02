@@ -459,6 +459,12 @@ struct RecoveryReadings {
 class RecoveryWatch {
 public:
     void poll(const RecoveryReadings& now);
+    // THE BASELINE, TAKEN BY THE OWNER WHEN IT STARTS rather than by whatever poll comes first (deep review of engine/stage4, batch A; docs/engine-stage4.md
+    // 6.31). The first poll as the baseline was written for four counters that cannot move before the first frame. The plugin containment's four and the
+    // per-thread watchdog's can: the engine's first pass runs its plugin phase (a plugin that faults in create on every launch is absorbed THERE) before the
+    // health poll at the end of the same pass, so the first poll's baseline swallowed exactly the fault most worth reporting. An owner that baselines at
+    // construction counts everything that moves after; one that never does keeps the old rule (its first poll is the baseline).
+    void baseline(const RecoveryReadings& r);
 
 private:
     bool started_ = false;

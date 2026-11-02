@@ -133,6 +133,18 @@ pile-up and a satellite each need — and the key stays lit while it is on,
 because that is the state in which you are not listening where you are
 transmitting.
 
+### The transmit frequency does not move while you transmit
+
+From the moment the radio is keyed - by the PTT, the latch, the web remote's hold or a plugin's key, whichever - until it has been un-keyed and its last ramp has
+played, **the frequency it transmits on is the one it had at key-down, whatever else moves the receiver**: a scanner stepping, the airband monitor, a plugin's
+tune, a web page's centre, your own hand on the dial. (Until the 0.99.100 branch the transmitter followed the dial every pass, so any of those could walk a keyed
+carrier across the band.) The receiver stays free to tune, and the frequency the panel and the status show is where the radio *is*, not where the dial has gone.
+The frequency it holds is the dial's AT key-down: the transmitter is brought onto the dial before the key can go down, so a dial move and a key press that arrive
+together (a script, two messages of one web tick) key the radio where the dial is, not where it was a pass ago.
+At key-up the transmitter follows the dial again, in the next pass. Setting the transmit frequency, or turning SPLIT on or off, while keyed is refused, with the
+reason, rather than done or put off - say it again after you let go. SPLIT is what it was: a split transmitter sits on its split frequency whatever the dial
+does. (The owner's decision of 2026-11-02; docs/engine-stage4.md 6.31.)
+
 ### The web remote gets a key, and it is a key you have to keep holding
 
 0.95.0 gave the browser a light and no switch, on the argument that a key

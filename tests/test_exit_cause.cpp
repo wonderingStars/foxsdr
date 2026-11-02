@@ -488,6 +488,32 @@ void testRealSentinelReports() {
         std::error_code ec;
         if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
     }
+    // A WORKER'S WEDGE AND A PLUGIN CALL'S OVERRUN ARE FREEZE-FAMILY REPORTS OF THINGS THE PROCESS RECOVERED FROM (deep review of engine/stage4, batch A;
+    // docs/engine-stage4.md 6.27/6.28/6.31): `hang-<pid>-w<N>.txt`, kind hang, filed while the window went on drawing. The sentinel leaves these names out of
+    // "the watchdog filed a freeze and the process never came back" on purpose (hangNamePid); the previous-exit rule read any in-window hang report as that,
+    // so a session that ran for hours after a recovered wedge and then ended with no report at all (power loss, a reset) was counted DIED - "a freeze report and
+    // no recovery" - and the beta-promotion gate's `died` count rose for a program that had not frozen.
+    {
+        const fs::path dir = scratchDir("workerhang");
+        writeFile(dir / "hang-7005-w1.txt",
+                  "kind: hang\nstalled-ms: 12000\nsignature: A31F00112233445C\nthread: disk-job\nthread-phase: write\nthread-wait: none\ntransmitting: no\n");
+        writeFile(dir / "hang-7005-w2.txt",
+                  "kind: hang\nstalled-ms: 6000\nsignature: A31F00112233445D\nthread: plugin-call\nthread-phase: poll-text\nblamed-plugin: pocsag-decoder\n");
+        const std::time_t now = std::time(nullptr);
+        const ReportListing l = listRecentReports(dir.string(), now);
+        CHECK(l.newest.size() == 2);
+        const ExitVerdict v = classifyPreviousExit(l, static_cast<std::int64_t>(now) - 60, static_cast<std::int64_t>(now));
+        if (v.cls != ExitClass::Unknown) { std::printf("FAIL recovered worker reports classified %s (%s)\n", exitClassId(v.cls), v.detail.c_str()); }
+        CHECK(v.cls == ExitClass::Unknown);   // neither the crash handler nor the sentinel left a report of the ending
+        // ...beside the frame loop's OWN freeze report, which is still the ending it always was (it sorts after them in the listing: 'w' > '1')
+        writeFile(dir / "hang-7005-1.txt", "kind: hang\nstalled-ms: 9000\nsignature: A31F00112233445A\nthread: gui\n");
+        const ReportListing both = listRecentReports(dir.string(), now);
+        CHECK(both.newest.size() == 3);
+        const ExitVerdict ending = classifyPreviousExit(both, static_cast<std::int64_t>(now) - 60, static_cast<std::int64_t>(now));
+        CHECK(ending.cls == ExitClass::Died);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
     std::error_code ec;
     if (g_checksFailed == 0) { fs::remove_all(logs, ec); }
 }

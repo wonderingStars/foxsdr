@@ -429,6 +429,18 @@ public:
     // the measurement the threshold is justified against.
     void heartbeat(bool recordGap = true);
 
+    // WHETHER THIS WATCHDOG'S HEARTBEAT IS THE SENTINEL'S (core/breadcrumb.hpp), on by default. The watcher outside the process judges ONE loop - the
+    // host's frame loop - and heartbeat() has always passed each beat on to it, which was right while the window's watchdog was the only HangWatchdog
+    // that beat. Since the shell retirement (6.25) the engine's control thread runs one of its own, and a second watchdog that beats is not a second
+    // frame loop: through the window's life it kept the watcher's silence clock at zero while the window was wedged (the ending was filed Outside, not
+    // Frozen), cleared the "somebody is holding the window" bit within 16 ms of a drag beginning, and ended AwaitingFirstFrame on its own two beats
+    // before the window had drawn one. So a watchdog that is not the process's frame loop says so, once, before it starts: the window's keeps the
+    // default; the engine's control thread is told (Engine::startControlThread) and is the sentinel's heartbeat only when no window follows - a
+    // headless service has no frame loop, and the pass is the loop whose liveness the watcher should judge. The watchdog's OWN stall rules read
+    // lastBeatMs_ and are untouched by this. docs/engine-stage4.md 6.31.
+    void setSentinelHeartbeat(bool on) { sentinelBeat_.store(on, std::memory_order_relaxed); }
+    bool sentinelHeartbeat() const { return sentinelBeat_.load(std::memory_order_relaxed); }
+
     bool running() const;
 
     // Bracket blocking work the application enters deliberately. Nested calls
@@ -648,6 +660,9 @@ public:
     // TESTS ONLY: how late a poll may be before it counts as lost time (kBeatsOvershootMs). With 0 every poll is late, so the
     // registry is re-armed on every wake and no worker can be found - which is how a test shows that the rule is wired.
     void setBeatsOvershootMsForTest(unsigned ms);
+    // TESTS ONLY: how long a worker-wedge report's capture takes, as a sleep before it (a diagnostics folder on the same stalled profile as the wedge,
+    // or under an antivirus scan, takes seconds). The poll interval must not count it as lost time (threadMain).
+    void setWedgeCaptureDelayForTest(unsigned ms) { wedgeCaptureDelayMs_.store(ms, std::memory_order_relaxed); }
     // TESTS ONLY: the process-wide count of worker-wedge files (capped at kMaxWedgeReports) back to zero, so one test
     // process can run more cases than the cap allows. Nothing under src/ calls it (tests/test_thread_beats.cpp scans).
     static void resetWedgeFileCountForTest();
@@ -712,6 +727,9 @@ private:
     std::atomic<int> suppression_{0};   // SuppressionForTest, as an int
     std::atomic<int> captureAbort_{0};  // CaptureAbortForTest, as an int
     std::atomic<unsigned> beatsOvershootMs_{kBeatsOvershootMs};  // setBeatsOvershootMsForTest
+    std::atomic<unsigned> wedgeCaptureDelayMs_{0};               // setWedgeCaptureDelayForTest
+    // setSentinelHeartbeat: whether heartbeat() is also the breadcrumb's. Set by the owner before start(), and not reset by it.
+    std::atomic<bool> sentinelBeat_{true};
     // NOT reset by start(), unlike everything above it: see pausesTaken().
     std::atomic<unsigned> pauses_{0};
 

@@ -91,9 +91,16 @@ void clear(const std::string& pluginKeyOrId) noexcept;
 // The phase a plugin is in now (Idle when it has no slot).
 Phase phaseOf(const std::string& pluginKeyOrId) noexcept;
 
-// A BRACKET around one call into a plugin (a create, a destroy): the plugin is in `during` for the life of the object and is put back to
-// the phase it was in before - or its slot freed, if it had none - when the object goes. The way to say "inside create()" without
-// forgetting what the plugin was doing around it.
+// A BRACKET around one call into a plugin (a create, a destroy): the plugin is in `during` for the life of the object, and when the LAST bracket
+// open on it ends it settles at the phase it RESTS in - what it was doing around the calls, or what the bracket that settled it said (settle()).
+// The way to say "inside create()" without forgetting what the plugin was doing around it.
+//
+// BRACKETS MAY OVERLAP, from two threads or by hand, and the phase must come out right whichever ends first (deep review of engine/stage4, batch A;
+// docs/engine-stage4.md 6.31). The first version saved the phase at construction and put it back at destruction: the second bracket of an overlap
+// saved the FIRST one's in-call phase as "what it was before", and whichever ended last restored it - the plugin was left in `create` (or `unload`)
+// for good, and any later crash of the application for its own reasons put a strike on a plugin that was not in a call. Now the slot counts the
+// brackets open on it (in the process's memory, not the file: the file's phase byte is the evidence and is unchanged) and keeps the phase it rests
+// in beside the in-call one; it reads as the call for as long as any bracket is open and settles when the last closes.
 class CallPhase {
 public:
     CallPhase(const std::string& pluginKeyOrId, Phase during, const std::string& version = std::string(),
@@ -102,9 +109,17 @@ public:
     CallPhase(const CallPhase&) = delete;
     CallPhase& operator=(const CallPhase&) = delete;
 
+    // THE CALL MADE AN INSTANCE: when the last bracket closes the plugin rests at `after` (`first-pass`: created and not yet fed) instead of at
+    // what it was doing before. A bracket that never settles leaves the resting phase alone (the call made nothing).
+    void settle(Phase after) noexcept {
+        settled_ = after;
+        hasSettled_ = true;
+    }
+
 private:
     std::string key_;
-    Phase before_;
+    Phase settled_ = Phase::Idle;
+    bool hasSettled_ = false;
 };
 // FROM THE CRASH HANDLER: the death belongs to the plugin whose run id this is. Async-signal-safe: plain stores into the mapped bytes, no
 // lock, no allocation; a plugin with no slot is not blamed.
@@ -124,6 +139,8 @@ std::size_t dropped() noexcept;
 
 // TESTS ONLY: forget the in-process memory and unmap, as a fresh process would.
 void resetForTest();
+// TESTS ONLY: the mapped view of the marker file (null when the marker is in memory), to look at the pages the operating system holds for it.
+const void* viewForTest();
 
 }  // namespace marker
 
@@ -166,6 +183,17 @@ std::vector<StrikeRecord> graduate(const std::vector<StrikeRecord>& stored, cons
 
 // The store's file (plugin-faults.json): tolerant on load (a damaged or alien file is an empty store and says so), atomic on save.
 inline constexpr const char* kStoreFileName = "plugin-faults.json";
+
+// THE TWO FILES (plugin-play.marker and plugin-faults.json) ARE NAMED BY THE SETTINGS FILE THEY SIT BESIDE (deep review of engine/stage4, batch A;
+// docs/engine-stage4.md 6.31). The config lock is per settings file, so two programs on two settings files in one folder (`foxsdr-engine --config
+// a.json` beside `--config b.json` - the engine's own refusal text advises exactly that) each hold their own lock - and used to share one marker,
+// each reading the other's LIVE slots as a dead predecessor's evidence (a strike for a plugin that was running fine) and zeroing them. The default
+// settings file name (config.json, or none) keeps the names these files have always had; any other settings file gets a pair of its own:
+// plugin-play-<name>.marker and plugin-faults-<name>.json, <name> being the file's name without ".json", lower-cased, with anything that is not a
+// letter, a digit, '.', '-' or '_' made '_', at most 40 characters. `settingsFile` is the file's name or its path; empty is the default.
+std::string markerFileNameFor(const std::string& settingsFile);
+std::string storeFileNameFor(const std::string& settingsFile);
+
 bool loadStore(const std::string& path, std::vector<StrikeRecord>& out, std::string& error);
 bool saveStore(const std::string& path, const std::vector<StrikeRecord>& records, std::string& error);
 
@@ -177,8 +205,9 @@ public:
     // Reads the previous run's marker and the store (both beside the settings file in `dir`; empty `dir` is a hermetic run: nothing is
     // read, kept or written), plans, persists the plan, and opens the marker for THIS run. `safeMode` (--safe-plugins) starts with every
     // plugin refused whatever the store says, and records nothing: it is the escape hatch for when the breaker itself is the question.
-    // Call once, BEFORE the first plugin scan.
-    void begin(const std::string& dir, bool safeMode, std::int64_t nowUnix);
+    // Call once, BEFORE the first plugin scan. `settingsFile` is the settings file the folder holds (see markerFileNameFor): its name picks the
+    // marker and the store this program keeps; empty is the default pair.
+    void begin(const std::string& dir, bool safeMode, std::int64_t nowUnix, const std::string& settingsFile = std::string());
 
     // Whether the plugin at `pluginKeyOrId` is not to be loaded this start, and the verdict and the sentence that say why.
     struct Gate {
@@ -206,6 +235,7 @@ public:
 private:
     void persist();
     std::string dir_;
+    std::string settingsFile_;   // begin()'s: names the store this program writes
     bool safeMode_ = false;
     bool started_ = false;
     StartPlan plan_;

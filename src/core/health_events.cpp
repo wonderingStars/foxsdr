@@ -1078,6 +1078,11 @@ void drainRecovered() {
     }
 }
 
+void RecoveryWatch::baseline(const RecoveryReadings& r) {
+    started_ = true;
+    last_ = r;
+}
+
 void RecoveryWatch::poll(const RecoveryReadings& now) {
     if (!started_) {
         // The first look is the baseline: what the process had before it is not news.

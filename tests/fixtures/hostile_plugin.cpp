@@ -22,6 +22,8 @@
 //     <entry>-spin      loop (busy) for HOSTILE_PLUGIN_SPIN_MS (default 3000), then return as if nothing had happened
 //     <entry>-die       end THE PROCESS with exit code 0xC0000005 (TerminateProcess: no handler, no report)
 //     <entry>-stack     recurse until the stack is gone (a stack overflow is never absorbed: the process dies, with a report)
+//     <entry>-nullcall  call through a null function pointer (the fault's instruction pointer is 0: the plugin is on the stack only by the
+//                       return address its call pushed)
 //
 //   AT LOAD AND UNLOAD:  dllmain-av, query-av, dllmain-detach-av; and the corrupt descriptors: desc-wild-name, desc-wild-tables, entry-size,
 //   entry-dup, panel-title-wild, instrument-title-wild, basemap-attribution-wild, and caps-word-lie (claims a capability bit it has no entry for).
@@ -185,6 +187,15 @@ void note(const char* event) {
     for (;;) {}
 }
 
+// A CALL THROUGH A NULL FUNCTION POINTER (batch A of the deep review, docs/engine-stage4.md 6.31): the call pushes its return address - which is in
+// THIS module - and the processor then fetches an instruction from address 0. The fault's instruction pointer is 0, so there is no frame of the
+// plugin's own to start a stack walk from; the only trace of the plugin on the stack is the return address the call left at its top.
+[[noreturn]] void nullCall() {
+    void (*volatile target)() = nullptr;
+    target();
+    for (;;) {}
+}
+
 // A loop that does not return until HOSTILE_PLUGIN_SPIN_MS (default 3000) has gone, and burns the processor meanwhile.
 void spin() {
     unsigned ms = 3000;
@@ -206,12 +217,13 @@ void recurse(unsigned depth, volatile char* from) {
     pad[2] = pad[0];
 }
 
-// The five abuses at an entry point, in the order a test cares about: die, stack, fault, throw, loop.
+// The six abuses at an entry point, in the order a test cares about: die, stack, fault, null call, throw, loop.
 void misbehave(const char* entry) {
     note(entry);
     if (hasMode(entry, "die")) { die(); }
     if (hasMode(entry, "stack")) { recurse(0, nullptr); }
     if (hasMode(entry, "av")) { fault(); }
+    if (hasMode(entry, "nullcall")) { nullCall(); }
     if (hasMode(entry, "throw")) { throw std::runtime_error("hostile plugin: thrown across the C boundary"); }
     if (hasMode(entry, "spin")) { spin(); }
 }

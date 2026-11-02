@@ -450,6 +450,17 @@ void buildReportPath(char* out, std::size_t cap, const char* prefix, long seq) {
 int walkFromContext(CONTEXT* ctx, ULONG64* frames, int maxFrames) {
     int n = 0;
     __try {
+        // A CALL THROUGH A NULL FUNCTION POINTER faults AT address 0: the instruction pointer is 0, there is nothing to look up and nothing to unwind from - and the
+        // call that was made pushed its return address, which is at the top of the stack and is the code that made it (deep review of engine/stage4, batch A;
+        // docs/engine-stage4.md 6.31). The walk used to give up here with no frames at all, so a plugin's unguarded hot-path callback that called null after the
+        // first-pass allowance was never found on the stack, never blamed, and the next start loaded it again. Frame 0 is the fetch at 0 itself (shown as 0x0: the
+        // report says what happened), the next is the caller, and the walk goes on from there as ever. One hop only, like the leaf rule below: a stack with nothing
+        // readable at the top (Rsp 0) gives nothing.
+        if (ctx->Rip == 0 && ctx->Rsp != 0 && n < maxFrames) {
+            frames[n++] = 0;
+            ctx->Rip = *reinterpret_cast<DWORD64*>(ctx->Rsp);
+            ctx->Rsp += 8;
+        }
         while (n < maxFrames && ctx->Rip != 0) {
             frames[n++] = ctx->Rip;
             DWORD64 imageBase = 0;
@@ -697,8 +708,10 @@ int captureFramesGuarded(EXCEPTION_POINTERS* ep, bool mayWalkCurrentThread) {
 #if defined(_M_X64)
             // The FAULTING stack, not the handler's: unwound from the context
             // Windows captured at the moment of the fault. A context with no
-            // Rip has no stack to unwind and says so with zero frames.
-            if (ep->ContextRecord != nullptr && ep->ContextRecord->Rip != 0) {
+            // stack pointer has nothing to unwind and says so with zero frames; one
+            // whose instruction pointer is 0 (a call through a null pointer) is
+            // walked from the return address the call pushed (walkFromContext).
+            if (ep->ContextRecord != nullptr && (ep->ContextRecord->Rip != 0 || ep->ContextRecord->Rsp != 0)) {
                 std::memcpy(&g_walkContext, ep->ContextRecord, sizeof(CONTEXT));
                 n = walkFromContext(&g_walkContext, g_frames, kMaxFrames);
             }

@@ -48,6 +48,13 @@
 //     EngineService::stop() whatever ended the run - a signal, `--seconds`, a run that failed to start - with
 //     the window teardown's own budget (HangWatchdog::kShutdownThresholdMs, 53 s, a hang report when a report
 //     directory is allowed) and ended after it, with exit code 3, if it has not returned.
+//   * ITS OWN SENTINEL TIMELINE (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). When FOXSDR_DIAG_DIR names a directory boot arms the
+//     sentinel (the watcher outside the process) for an engine as for the window, and the watcher judges the process by a small block of phases and a
+//     heartbeat that only the host can keep. The window keeps them from its frame loop; this host has no window, so it keeps them itself: BuildingApp (boot)
+//     -> AwaitingFirstFrame (the control thread has started) -> Running (its second beat: ControlThreadOptions::sentinelHeartbeat makes the pass the
+//     heartbeat here and nowhere else) -> ShutdownBegun (the stop's guard) -> the service's three stages -> ShutdownClosingWindow (the stop returned) ->
+//     Finished. Without this the block stayed at "building the application" for the life of the process: every clean `systemctl stop` of a service that
+//     had diagnostics on was filed as a crash-kind report ("exit code 0 before the shutdown had finished"), and a kill an hour in as a start-up death.
 //
 // EXIT CODES (cascade's: 0 success, 1 a refused or failed run, 2 a refused
 // helper argument):
@@ -74,6 +81,7 @@
 #include <thread>
 #include <utility>
 
+#include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 #include "core/receiver_snapshot.hpp"
 #include "core/stop_signal.hpp"
@@ -140,6 +148,9 @@ int runEngine(const cascade::engine::BootResult& boot) {
     cascade::engine::ServiceOptions options;
     options.configPath = boot.configPath;
     options.safePlugins = boot.safePlugins;
+    // The service sets the shutdown stages of the sentinel's timeline as it goes (a no-op without a sentinel: no block is attached); the rest of the timeline is
+    // this function's - see the head of this file.
+    options.breadcrumbs = true;
     if (boot.safePlugins) { std::fprintf(stderr, "foxsdr-engine: safe mode - no plugin will be loaded in this run\n"); }
     // The hang watchdog's report directory when this run may write diagnostics at all (boot decided) and the
     // stored switch is on - the window's setDiagnosticsDir, handed over the same way (main.cpp).
@@ -217,6 +228,8 @@ int runEngine(const cascade::engine::BootResult& boot) {
         }
         return kExitFailed;
     }
+    // THE ENGINE IS UP: the control thread has started, and its beats (the pass is this host's frame loop) end this phase at the second.
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::AwaitingFirstFrame);
 
     const auto t0 = std::chrono::steady_clock::now();
     const auto elapsedS = [&t0] {
@@ -272,12 +285,15 @@ int runEngine(const cascade::engine::BootResult& boot) {
         bound.arm();
         service.stop();
     }
+    // THE STOP RETURNED (the clean-exit marker is written and the last save is waited for): the sentinel's "shutdown finished". An exit after this is a clean one.
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownClosingWindow);
     std::fprintf(stderr, "foxsdr-engine: stopped after %.1f s (%llu passes)\n", elapsedS(),
                  static_cast<unsigned long long>(passes));
     if (persistent) {
         std::fprintf(stderr, "foxsdr-engine: settings saved %llu time(s)\n",
                      static_cast<unsigned long long>(service.savesRequested()));
     }
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::Finished);
     return code;
 }
 

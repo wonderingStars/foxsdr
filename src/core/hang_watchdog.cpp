@@ -515,7 +515,12 @@ void HangWatchdog::heartbeat(bool recordGap) {
     // outside the process calls "the window had not drawn for N s" is exactly what
     // this watchdog calls a stall, because both are read off the same call. A
     // pointer test when no watcher is attached; two relaxed stores when one is.
-    breadcrumb::beat();
+    //
+    // BUT ONLY FOR THE WATCHDOG THAT IS THE PROCESS'S FRAME LOOP (setSentinelHeartbeat; deep review of engine/stage4, batch A, docs/engine-stage4.md 6.31). The engine's
+    // control thread runs a HangWatchdog of its own and beats it every pass; made here, that call fed the watcher's clock from a thread that has nothing to do with
+    // the window - so a wedged window looked alive to the watcher, a drag's "somebody is holding the window" bit was cleared within a pass, and the second
+    // control beat ended the first-frame phase before a frame was drawn. One root, three symptoms: a watchdog that is not the frame loop does not feed it.
+    if (sentinelBeat_.load(std::memory_order_relaxed)) { breadcrumb::beat(); }
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 #elif defined(__linux__)
@@ -911,7 +916,6 @@ HangWatchdog::Excuse HangWatchdog::excuse() const {
 }
 
 void HangWatchdog::threadMain() {
-    double lastPoll = nowMs();
     // When rule 2c first excused the stall now in progress, or 0 for none. Only
     // this thread reads or writes it.
     double pumpExcusedSinceMs = 0.0;
@@ -922,6 +926,7 @@ void HangWatchdog::threadMain() {
         // is evaluated before the wait begins and again on every wake, and
         // stop() sets the flag under this same mutex, so the notification
         // cannot be missed.
+        const double waitFrom = nowMs();
         {
             std::unique_lock<std::mutex> lk(stopMutex_);
             if (stopCv_.wait_for(lk, std::chrono::milliseconds(kPollMs),
@@ -930,8 +935,14 @@ void HangWatchdog::threadMain() {
             }
         }
         const double now = nowMs();
-        const double pollInterval = now - lastPoll;
-        lastPoll = now;
+        // THE TIME THE WATCHDOG LOST IS THE WAIT'S ALONE (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). A sleeping machine stops this thread
+        // inside its wait; that is the time "the machine stopped" (below, and Registry::rearm in pollThreadBeats) is a verdict about. The interval used to run from
+        // the PREVIOUS wake, so it also held everything the previous iteration did - and a worker-wedge report's capture (it suspends the process's threads one at
+        // a time and walks their stacks, on a profile that may be on the very share that is stalled, or under a scanner) can take seconds: a capture longer than
+        // the margin looked like a sleep, re-armed every registration - the still-wedged worker included - and the next poll "recovered" a thread that had never
+        // beaten, then reported it again a budget later (a duplicate report, a second count). (A machine that sleeps DURING a capture is no longer seen by
+        // this test; that residue is the price, and a capture is rare.)
+        const double pollInterval = now - waitFrom;
         // THE WORKERS (thread_beats.hpp), on the same wake and the same clock - before the frame loop's own rules, which have
         // `continue`s of their own that must not skip this.
         pollThreadBeats(pollInterval);
@@ -1189,6 +1200,10 @@ void HangWatchdog::reportThreadWedge(const beats::Finding& f) {
     // the sentinel's `hang-<pid>-<digits>` match, which means "the frame loop's watchdog filed this" (sentinel.cpp
     // hangNamePid). N is the PROCESS's count, because two watchdogs in one process write into one directory.
     std::snprintf(name, sizeof(name), "/hang-%lu-w%u.txt", pid, seq);
+    // (tests only: a capture that is slow because the disk is - setWedgeCaptureDelayForTest)
+    if (const unsigned delay = wedgeCaptureDelayMs_.load(std::memory_order_relaxed); delay != 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+    }
     captureAllThreads(dir + name, static_cast<double>(f.stalledMs), &f);
 }
 

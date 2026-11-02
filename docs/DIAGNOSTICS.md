@@ -3450,10 +3450,17 @@ The record of what was built, with the contract (every rule and the test that pi
 - **The clean-exit marker, extended.** `plugin-play.marker` (8 KiB, memory-mapped, beside the settings file) records which plugin is in
   which phase (load, create, first pass, running, unload) while it is in play. A run that does not end in order leaves it behind; the next
   start reads it, and only the rules in `core/plugin_marker.hpp` make a plugin a suspect (the program's own crash is never put to a plugin's
-  account). The strikes are `plugin-faults.json`, beside it.
+  account - with one stated residue: a plugin that was inside a call on another thread when the program died of something else is suspected,
+  because a plugin that corrupts memory in `create()` dies on someone else's thread; the cost is one start without it and a one-click re-enable).
+  The strikes are `plugin-faults.json`, beside it. **The pair is named by the settings file** (docs/engine-stage4.md 6.31): the default
+  `config.json` keeps `plugin-play.marker` and `plugin-faults.json`; any other settings file in the same folder has `plugin-play-<name>.marker` and
+  `plugin-faults-<name>.json` of its own (two programs on two settings files each hold their own lock, and used to share one marker and read each
+  other's live slots as a crash). A program that does not hold the settings file's lock keeps no record beside it. The marker's pages are locked
+  into the working set when it is opened, so a store into it never has a page to read back in from a folder that has gone away.
 - **The words.** `recovered.pluginfault`, `pluginquarantine`, `pluginwedge`, `pluginoveruse` (table above). No plugin is named in them.
 - **The log.** `plugin: <id> was switched off for this session (<why> in <entry>)`, `plugins: <id> starts the next session switched off`,
-  `plugin: <id> re-enabled by the user`.
+  `plugin: <id> re-enabled by the user`. `<id>` is the id that may leave the machine: an official plugin's own, `site-` and eight hexadecimal digits
+  for any other (the log is copied into every report; docs/engine-stage4.md 6.31).
 
 ## The 5-second threshold, and why it is not a guess
 
@@ -3837,9 +3844,12 @@ needs no bit: the frame timer already calls it the scope `user-wait`. Either one
 makes the phase read `held by the user` and, below, keeps a long silence from
 being called a freeze.
 
-**The heartbeat is the watchdog's.** `HangWatchdog::heartbeat`, called once per
+**The heartbeat is the watchdog's** - the frame loop's watchdog. `HangWatchdog::heartbeat`, called once per
 drawn frame, now also calls `breadcrumb::beat()`, so "the window had not drawn for
-N s" to the watcher is exactly what the watchdog calls a stall. The second
+N s" to the watcher is exactly what the watchdog calls a stall. *Only the watchdog that is the process's frame loop makes that call*
+(`HangWatchdog::setSentinelHeartbeat`, docs/engine-stage4.md 6.31): the window's does; the engine's control thread, which beats its own watchdog 62 times a
+second whatever the window is doing, does only in a host with no window (`foxsdr-engine`, where the pass is the loop the watcher should judge) - otherwise a
+frozen window looked alive to the watcher, a drag's "somebody is holding the window" bit was cleared within a pass, and the first frame was ended early. The second
 heartbeat ends *waiting for the first frame* (so a death during the first frame is
 still start-up). **Hot path, measured:** 18 ns per frame for the heartbeat, the
 activity mirror and a phase write together, **zero allocations** (a replaced

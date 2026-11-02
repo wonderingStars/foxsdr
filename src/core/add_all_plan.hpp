@@ -27,8 +27,10 @@ struct AddAllRow {
     bool hasUpdate = false;      // a newer build is planned for a fitted module
     bool hasNotice = false;      // the maker attached a legal notice
     // 0.99.74 (merged 0.99.84): a plugin from a site the USER added is never in the run - neither to fetch nor to update, and not listed as passed
-    // over - because FoxSDR has not reviewed it and its notice is always on its own page; each is fitted from that page. (The engine's catalogue has
-    // no such rows yet - the sites are the window's, ledger STORE-VIEW - so only the store window's model sets it.)
+    // over - because FoxSDR has not reviewed it and its notice is always on its own page; each is fitted from that page. (Both callers set it: the
+    // store window's model for the key it letters, and - since B3 moved the sites into the engine, where a site's entries are in the catalogue with
+    // their `source` set - Engine::startAddAll for the run it starts, from the same test: the key and the run cannot disagree. Deep review of
+    // engine/stage4, batch A; docs/engine-stage4.md 6.31.)
     bool thirdParty = false;
     // 0.99.74: a copy of the module is on disk in some state (master's `sm.install != StoreInstallKind::NotInstalled`: installed, update available or
     // a NEWER build installed) though not counted as fitted: treated as fitted, so it is at most an update and never a fresh install.

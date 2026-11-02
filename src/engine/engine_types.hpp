@@ -44,6 +44,12 @@ struct ControlThreadOptions {
     // not come back is a hang.
     std::string watchdogReportDir;
     unsigned watchdogThresholdMs = cascade::core::HangWatchdog::kDefaultThresholdMs;
+    // WHETHER THE CONTROL THREAD'S BEAT IS THE SENTINEL'S HEARTBEAT (core/breadcrumb.hpp; HangWatchdog::setSentinelHeartbeat; docs/engine-stage4.md
+    // 6.31). The watcher outside the process judges the host's FRAME LOOP. With a window that is the window's, and the control thread's watchdog -
+    // which beats 62 times a second whatever the window is doing - must not stand in for it (it hid a wedged window from the watcher, cleared the
+    // "somebody is holding the window" bit within a frame and ended the first-frame phase early): false, the default. A headless service has no
+    // frame loop, and its pass IS the loop whose liveness the watcher should judge: EngineService::start sets this when no window follows.
+    bool sentinelHeartbeat = false;
     // THE PASS FLOOR (pump move P4, adopted decision 6; the survey's section 3.4): the least time between the STARTS of two passes. A
     // submit wakes the loop at once (that is what keeps a tune-to-audio inside one pass of its submit), so without a floor a flood
     // of submits - a drag at the frame rate, a script, a misbehaving client - becomes a flood of passes, each paying the whole

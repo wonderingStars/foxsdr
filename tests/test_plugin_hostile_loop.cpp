@@ -5,9 +5,12 @@
 // it does not survive, by design: the signal path (process(), pull(), active(), retune()) is not guarded, and a plugin that ends the process there,
 // or inside any call, is turned from a loop of crashes into one crash and a start without it by the marker.
 //
-//   A  WHO IS GUILTY. This executable re-runs itself as a child that loads the hostile fixture and dies seven ways:
+//   A  WHO IS GUILTY. This executable re-runs itself as a child that loads the hostile fixture and dies eight ways:
 //        hot-av          process() - the unguarded hot path - faults: the report names the plugin (its module is on the stack) and the marker
 //                        BLAMES it, though it was `running`;
+//        hot-nullcall    process() calls through a NULL function pointer: the fault's instruction pointer is 0, so there is no frame to walk from, and
+//                        the plugin is on the stack only by the return address its call pushed - the report still names it and the marker BLAMES it
+//                        (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31: the walk used to give up at an instruction pointer of 0);
 //        hot-die         the process ends inside process(): no handler, no report; the plugin was `running` and unblamed - INNOCENT (the one case
 //                        the breaker cannot attribute, said here as a fact and not hidden);
 //        first-pass-die  the process ends inside poll_text() of a plugin that was created a moment ago and is the only one in `first-pass`: suspect;
@@ -80,6 +83,13 @@ int childMain(const std::string& scenario, const fs::path& dir) {
         hostile::setMode("process-av");
         runner.processAudio(buf, 480);   // the plugin's process() faults here, on the unguarded hot path
         return 21;                        // (not reached)
+    }
+    if (scenario == "hot-nullcall") {
+        runner.rebuild({*lp}, 48000.0, 2400000.0, 100000000.0);
+        marker::promoteFirstPass(0xFFFFFFFFu, 0);
+        hostile::setMode("process-nullcall");
+        runner.processAudio(buf, 480);   // the plugin's process() calls address 0 here, on the unguarded hot path
+        return 28;                        // (not reached)
     }
     if (scenario == "hot-die") {
         runner.rebuild({*lp}, 48000.0, 2400000.0, 100000000.0);
@@ -193,6 +203,25 @@ void testDeaths(const fs::path& self, const fs::path& root, const std::string& f
         CHECK(report.find("blamed-plugin-entry: none") != std::string::npos);   // the hot path is not a guarded entry: no call was in flight
         const cascade::core::StartPlan plan = cascade::core::planStart({}, prev, 1);
         CHECK(plan.skip == std::vector<std::string>{"victim"} && plan.notices.size() == 1);
+    }
+    {   // hot-nullcall: the fault is AT address 0 - the plugin is only on the stack as the return address its call pushed
+        const fs::path dir = root / "hotnull";
+        freshDir(dir, fixture, "victim");
+        const Run r = runChild(self, "hot-nullcall", dir);
+        CHECK(r.ended && r.code == kAv);   // (a jump to 0 is an access violation like any other)
+        const std::vector<marker::InPlay> prev = previousOf(dir);
+        const marker::InPlay* v = named(prev, "victim");
+        CHECK(v != nullptr);
+        if (v != nullptr && !v->blamed) { std::printf("FAIL a plugin that called a null function pointer was not blamed (phase %s)\n", marker::phaseWord(v->phase)); }
+        CHECK(v != nullptr && v->blamed && v->version == "1.2.3");
+        CHECK(cascade::core::suspectsOf(prev).size() == 1);
+        const std::string report = crashReport(dir);
+        CHECK(!report.empty());
+        CHECK(report.find("blamed-plugin-how: stack") != std::string::npos);
+        CHECK(report.find("blamed-plugin: site-") != std::string::npos);
+        CHECK(report.find("blamed-plugin: victim") == std::string::npos);
+        const cascade::core::StartPlan plan = cascade::core::planStart({}, prev, 1);
+        CHECK(plan.skip == std::vector<std::string>{"victim"} && plan.notices.size() == 1);   // the next start is without it: the loop is broken
     }
     {   // hot-die: the one death the breaker cannot attribute
         const fs::path dir = root / "hotdie";

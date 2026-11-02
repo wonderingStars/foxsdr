@@ -303,7 +303,25 @@ public:
     void setPowerDb(double db);
     double powerDb() const;
 
+    // THE FREQUENCY IS FROZEN WHILE KEYED (the owner's decision of 2026-11-02, deep review of engine/stage4 batch A; docs/engine-stage4.md 6.31).
+    // From the moment the radio is keyed - by the PTT, the latch, the web remote's hold or a plugin's key, whichever - until it has been un-keyed, THE
+    // TRANSMIT FREQUENCY DOES NOT MOVE, whatever moves the receiver: a scanner stepping, an airband monitor, a plugin's tune, a web page's centre, the
+    // operator's own dial. The receiver stays free to tune; the transmitter keeps the frequency it had at key-down, and follows the dial again once the
+    // key is up. (It used to follow the dial every pass - Engine::followTransmitFrequency - and a scanner or a plugin could walk a keyed carrier across the
+    // band, off the frequency the operator keyed on and into somebody else's.) The tail counts as keyed: the ramp is played on the frequency it began on,
+    // and the freeze ends when the key-up has been acknowledged (the thread ended AND tick() has seen it), not a block before.
+    //
+    // It is implemented HERE, once, because this is the one place the sink's frequency is changed: a caller cannot forget it.
+    //   Done    the sink was retuned (or was already there)
+    //   Held    the transmitter is keyed: nothing was changed, and nothing is wrong (no lastError()) - a caller that FOLLOWS (the engine's pass) holds
+    //           silently; a caller that was ASKED to set the frequency (an explicit operation) says why it did not
+    //   Failed  the sink refused (lastError() says why), or there is no sink
+    enum class Retune { Done, Held, Failed };
+    Retune retuneHz(double hz);
+    // As above, for a caller that only asks "did it move": true is Done.
     bool setFrequencyHz(double hz);
+    // Whether the frequency is held now: the radio is keyed (tail included). Cheap; any thread.
+    bool frequencyHeld() const;
     double frequencyHz() const;
 
     void setToneHz(double hz);
@@ -552,10 +570,16 @@ private:
     std::atomic<bool> transmitting_{false};
     std::atomic<bool> pttHeld_{false};
     std::atomic<bool> latched_{false};
-    // The plugin's key, when it went down (for the cap), and the fault latch.
+    // The plugin's key, when its carrier began (for the cap), and the fault latch.
     std::atomic<bool> pluginKey_{false};
     std::atomic<bool> pluginFault_{false};
-    std::chrono::steady_clock::time_point pluginKeyedAt_{};  // stateMutex_
+    // THE CAP IS ON THE CARRIER (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The stamp of the plugin's episode, in steady-clock
+    // milliseconds, as a plain atomic so that taking it never waits for a lock the TX thread holds: setPluginKey is called between two stores of the request
+    // (down, up), and a wait for stateMutex_ in the middle of a block made the gap long enough for the TX thread to see - the carrier then really dropped.
+    // `pluginInCarrier_` says that the carrier now up (or about to come up) is the one the stamp began: a request that blips low and back while the radio
+    // stays keyed is the same episode, and does not restart the cap. Cleared when the carrier ends and when the key is cut.
+    std::atomic<std::int64_t> pluginKeyedAtMs_{0};
+    std::atomic<bool> pluginInCarrier_{false};
     std::atomic<std::uint64_t> faults_{0};
     std::atomic<std::uint64_t> pluginFrames_{0};
     std::atomic<std::uint64_t> pluginUnderruns_{0};

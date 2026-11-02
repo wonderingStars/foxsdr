@@ -24,9 +24,11 @@ std::string signatureId(const std::string& raw) {
     return out;
 }
 
-// One of the three kinds a report can be, or "unknown": the closed list, whatever a file said.
+// One of the four kinds a report can be, or "unknown": the closed list, whatever a file said. (The fourth, `issue`, is 0.99.100's: a fault the program met and
+// recovered from, filed as a report of its own - core/issue_report.hpp. Collapsed to "unknown" here, a pasted line sent a reader looking for a report nobody
+// could read; deep review of engine/stage4, batch A, docs/engine-stage4.md 6.31.)
 std::string kindWord(const std::string& raw) {
-    if (raw == "crash" || raw == "hang" || raw == "stall") { return raw; }
+    if (raw == "crash" || raw == "hang" || raw == "stall" || raw == "issue") { return raw; }
     return "unknown";
 }
 

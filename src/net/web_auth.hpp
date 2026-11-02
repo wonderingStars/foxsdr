@@ -127,6 +127,13 @@ bool constantTimeEquals(const void* a, const void* b, std::size_t n);
 bool constantTimeEquals(const std::vector<std::uint8_t>& a,
                         const std::vector<std::uint8_t>& b);
 
+// Equality for two pieces of TEXT that are credentials - a typed password against the configured one, a presented token against the configured token (the
+// engine's table: engine/fox_engine_api.cpp login, logout, tokenValid; deep review of engine/stage4, batch A, docs/engine-stage4.md 6.31). The time it takes
+// does not depend on the contents or on where they first differ: every byte of the LONGER string is read, the shorter reads as if padded with zeros, and the
+// two lengths are folded into the answer rather than ending the compare. (Like the overload above it does not hide the lengths themselves: a longer
+// presented string simply takes longer. A text with an embedded NUL is compared whole.)
+bool constantTimeEqualsText(const std::string& a, const std::string& b);
+
 // --- Randomness --------------------------------------------------------------
 
 // Fills out[0..n) from the system CSPRNG. Returns false with `error` set on any

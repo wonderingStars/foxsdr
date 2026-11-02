@@ -198,6 +198,9 @@ public:
     void shutdown();
     // TESTS: waits until the worker has nothing pending and is not inside a start or a stop; false on timeout.
     bool waitIdle(std::chrono::milliseconds timeout);
+    // TESTS ONLY: called by apply() on the pumping thread at the first instant the configuration it merged can be read by the worker - the lock released,
+    // the rest of apply() still to do - which is where a worker already inside reconcileWeb may read it. A test asks passwordPending() from it.
+    void setAfterConfigForTest(std::function<void()> f) { afterConfigForTest_ = std::move(f); }
 
     // --- the engine's pumping thread -------------------------------------------------------------------------------------------
     // Applies a parsed request: merges what it names into the configuration (NO_CHANGE when nothing moves and no password job starts),
@@ -273,6 +276,8 @@ private:
     bool wRetry_ = false;  // a wish that asks a refused listener to try again (a SERVER_CONFIG said, even to say nothing new)
     bool wBusy_ = false;
     bool wStop_ = false;
+
+    std::function<void()> afterConfigForTest_;   // setAfterConfigForTest (the pumping thread's)
 
     // The password job. Only the pumping thread touches these.
     std::future<Hashed> hashing_;

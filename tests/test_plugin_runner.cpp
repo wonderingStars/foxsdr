@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "core/plugin_api.hpp"
+#include "core/plugin_marker.hpp"
 #include "core/plugin_runner.hpp"
 #include "test_check.hpp"
 
@@ -1568,6 +1569,58 @@ int main() {
         CHECK(!r.hasInstances("bravo-decoder-1.0.0.dll"));
         CHECK(rowFor(r.status(), "bravo-decoder-1.0.0.dll").reason == DecoderIdleReason::CreateFailed);
         CHECK(r.activeCount() == 1u);
+    }
+
+    // --- THE CRASH-LOOP MARKER SAYS `first-pass` ONLY FOR A PLUGIN THAT MADE AN INSTANCE (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31).
+    // The runner restored a plugin's phase with "an instance was made, or ANY audio processor is running" - `processors_` is every plugin's - so while a
+    // noise filter ran, a decoder whose create() returned nothing (its dongle absent) was marked first-pass with no instance behind it: if the application
+    // then died for its own reasons within five seconds that plugin was the lone first-pass slot and took a strike, and after the five seconds the first-pass
+    // clock promoted it to `running`, which graduated it off probation although it never ran.
+    {
+        cascade::core::marker::resetForTest();
+        cascade::core::marker::open(std::string());   // (an in-memory marker: nothing is kept)
+        using cascade::core::marker::Phase;
+        PerPlugin<1>::reset();
+        PerPlugin<1>::failCreate = true;
+        const CascadeDecoderApi apiB = PerPlugin<1>::api();
+        LoadedPlugin decoderThatFails = makePlugin("Bravo", &apiB);
+        decoderThatFails.path = "C:/plugins/bravo-decoder-1.0.0.dll";
+        static int procMade = 0;
+        const CascadeAudioProcessorApi procApi = [] {
+            CascadeAudioProcessorApi a{};
+            a.structSize = static_cast<uint32_t>(sizeof(CascadeAudioProcessorApi));
+            a.title = "Noise filter";
+            a.create = [](uint32_t, uint32_t) -> void* { return &procMade; };
+            a.process = [](void*, float*, size_t) {};
+            a.destroy = [](void*) {};
+            return a;
+        }();
+        LoadedPlugin filter;
+        filter.loaded = true;
+        filter.name = "Filter";
+        filter.version = "1.0.0";
+        filter.path = "C:/plugins/noise-filter-1.0.0.dll";
+        filter.audioProcessor = &procApi;
+
+        PluginRunner r;
+        r.rebuild({filter}, 48000.0, kIqRate, kCentre);
+        CHECK(r.processorTitles().size() == 1u);                                            // the premise: a processor is running
+        CHECK(cascade::core::marker::phaseOf("noise-filter-1.0.0.dll") == Phase::FirstPass);   // (the plugin that made one is first-pass, as ever)
+        CHECK(r.startPlugin(decoderThatFails));                                            // create() returns nothing
+        CHECK(!r.hasInstances("bravo-decoder-1.0.0.dll"));
+        const Phase after = cascade::core::marker::phaseOf("bravo-decoder-1.0.0.dll");
+        if (after == Phase::FirstPass) { std::printf("FAIL a plugin with no instance was marked first-pass because another plugin's processor is running\n"); }
+        CHECK(after == Phase::Idle);
+        // the other half of the rule: a plugin that DID make an instance is first-pass whether or not a processor runs
+        PerPlugin<2>::reset();
+        const CascadeDecoderApi apiC = PerPlugin<2>::api();
+        LoadedPlugin decoderThatWorks = makePlugin("Charlie", &apiC);
+        decoderThatWorks.path = "C:/plugins/charlie-decoder-1.0.0.dll";
+        CHECK(r.startPlugin(decoderThatWorks));
+        CHECK(r.hasInstances("charlie-decoder-1.0.0.dll"));
+        CHECK(cascade::core::marker::phaseOf("charlie-decoder-1.0.0.dll") == Phase::FirstPass);
+        r.clear();
+        cascade::core::marker::resetForTest();
     }
 
     // --- THE STOP LIST IS KEPT BY ID: the versioned file name no longer matters ------------

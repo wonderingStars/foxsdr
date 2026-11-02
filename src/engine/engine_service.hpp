@@ -234,6 +234,16 @@ public:
     // The sentence a refused lock prints (public so a test can hold its wording without running a process).
     static std::string refusal(const cascade::core::ConfigLock& lock, const std::string& configPath);
 
+    // THE FOLDER A SETTINGS FILE LIVES IN, and the file's own name (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): the folder the crash-loop
+    // breaker keeps its marker and strike records in, and the telemetry ledgers sit in. A path with a directory part gives that part, as written; a BARE FILE
+    // NAME (`foxsdr-engine --config foxsdr.json`, relative to the working directory) gives the working directory, absolute - the folder the file is read from
+    // and written to. The first version cut the string at the last separator and found none, and an empty folder means a hermetic run: for the engine started
+    // with a bare name the breaker never opened its marker or kept a record (a plugin that crashed the process in create() did it again at every start, with no
+    // strike and no start without it - under a supervisor that restarts on failure, a boot loop) and the telemetry ledgers were never read or written. Empty
+    // only for an empty path. The name is what the marker's and the store's file names follow (core/plugin_marker.hpp markerFileNameFor).
+    static std::string settingsDirOf(const std::string& configPath);
+    static std::string settingsFileNameOf(const std::string& configPath);
+
 private:
     void keepOnce();
     void startKeeper();

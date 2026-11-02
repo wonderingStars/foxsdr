@@ -402,6 +402,12 @@ ServerHost::Outcome ServerHost::apply(const ServerConfigRequest& r) {
         if (r.webPassword) {
             ++passwordGeneration_;
             passwordAsked = true;
+            // PENDING BEFORE THE CONFIGURATION THAT SWITCHES THE SERVER ON CAN BE READ (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The worker
+            // (reconcileWeb) reads the configuration under this lock and the flag after it; the flag used to be raised below, after the lock was gone, so a worker that
+            // was already inside reconcileWeb could read the new configuration in the gap with the flag still down - and start the server with the old (or no)
+            // password record, open on a loopback bind for the length of a hash, which is exactly what the flag exists to prevent. Raised here, inside the same
+            // critical section as the configuration it guards, no reader can see one without the other.
+            passwordPending_.store(true, std::memory_order_relaxed);
             if (hashing_.valid()) {
                 waitingPlain_ = *r.webPassword;  // one hash at a time; the newest wish is the one that runs next
             } else {
@@ -409,9 +415,9 @@ ServerHost::Outcome ServerHost::apply(const ServerConfigRequest& r) {
             }
         }
     }
+    if (afterConfigForTest_) { afterConfigForTest_(); }   // (tests only: where a worker already inside reconcileWeb may read the new configuration)
     if (passwordAsked) {
         if (!hashing_.valid()) { startHash(*r.webPassword, passwordGeneration_); }
-        passwordPending_.store(true, std::memory_order_relaxed);
         changed = true;
         out.message = "accepted; the password is being hashed and its record will follow";
     }

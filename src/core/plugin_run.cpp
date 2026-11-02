@@ -63,6 +63,15 @@ std::string pluginRunId(const std::string& moduleFileOrId) {
     return s;
 }
 
+std::string containmentId(const std::string& moduleFileOrId) {
+    std::string id = pluginRunId(moduleFileOrId);
+    for (char& c : id) {
+        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+    }
+    if (id.size() > kContainmentIdMax) { id.resize(kContainmentIdMax); }
+    return id;
+}
+
 namespace {
 
 // The capabilities something can be opened or fed by, which is what can wake a module.

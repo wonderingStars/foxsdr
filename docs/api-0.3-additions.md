@@ -183,7 +183,7 @@ says when to read again.
 `FED` fed signal now), `CATALOGUE` (`name`; `detail`: id; `INSTALLED`,
 `COMPATIBLE`; 0.3 (8.9): `value[0]` the ABI version the entry's build declares,
 `value[1]` the size of the build for this machine, `BUILD_HERE`), `TX_DEVICES` (one entry: `detail` is the address `TX_OPEN`
-will be given; `ACTIVE` open), `MARKERS` (`id`; `name`: label; `detail`:
+will be given - **LOCAL sessions only**, blank to a REMOTE one, like `fact.transmit.args`, which is the same value; `ACTIVE` open), `MARKERS` (`id`; `name`: label; `detail`:
 plugin; `value[0..2]`: Hz, width, colour), `BAND_PLAN` (`name`; `detail`:
 service; `value[0..2]`: start, stop, colour), `PRESETS` and `USER_PRESETS`
 (`name`: label; `detail`: plugin; `value[0..2]`: Hz, mode, bandwidth),
@@ -317,7 +317,10 @@ not read them back. Appended (all in the tx group - `txSeq` - except
 
 Two 0.2 members are made exact: `txFrequencyHz` is WHERE IT WOULD TRANSMIT -
 `txSplitHz` with SPLIT on, the receiver's `tunedHz` with it off, whether a
-board is open or not (the engine keeps an open board there once a pass) - and
+board is open or not (the engine keeps an open board there once a pass) -
+**except while the radio is keyed, the tail included: then it is where the radio IS.** The transmit frequency is frozen from key-down until the key-up has
+been acknowledged (the owner's decision of 2026-11-02, docs/engine-stage4.md 6.31): the receiver may be tuned by a scanner, a plugin, a page or a hand and the
+transmitter does not follow until the key is up. `TX_SET_FREQUENCY` and `TX_SET_SPLIT`, which exist to set it, answer `BUSY` with the reason while keyed; and
 `txPowerDb` is the setting, which is the board's readback once one is open,
 never the 0 dB a closed board would read as.
 
@@ -1593,7 +1596,9 @@ still gets the state, the figures and the flags. No coordinate is anywhere in it
 (`FOXAPI_RX_POSITION_SET`, `rxLatDeg`, `rxLonDeg`, 8.11.1), and the log and the sentence never carry one (PRIVACY.md).
 `FOXAPP_OP_CLEAR_STATUS` code **6** forgets a finished read (the reader's own `clearResult`: a no-op while it listens); a port or a
 baud edit sends it with code 1 (the refusal), in that order, and both land in one pass. Started and stopped with the existing
-`FOXAPI_OP_GPS` (start: `ival[0]` 1, `text` the port, `num[0]` the baud; stop: `ival[0]` 0). The serial ports the drop-down and the Serial ports
+`FOXAPI_OP_GPS` (start: `ival[0]` 1, `text` the port, `num[0]` the baud; stop: `ival[0]` 0). **A start is for LOCAL sessions only**: the text is opened as
+a name on this machine (the port layer opens a typed name exactly as it opens a port - a file, or on Windows a network path), and no remote session names one
+(`DENIED` at submit, and again where it is applied); a stop names nothing and is open to any session with the grant (docs/engine-stage4.md 6.31). The serial ports the drop-down and the Serial ports
 section list are the engine's, asked for with `FOXAPI_OP_SCAN_SERIAL_PORTS` and read from `SERIAL_PORTS` (the window used to walk the
 registry itself in four places; the engine's comment already said it did not).
 

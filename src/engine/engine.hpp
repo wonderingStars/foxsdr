@@ -2042,6 +2042,8 @@ private:
     bool healthSoundNoted_ = false;     // the output has played this session
     // What moved in the counters healthPoll() reads for the recoveries a signal thread or a vendor call's worker meets.
     cascade::core::health::RecoveryWatch recoveryWatch_;
+    // The counters recoveryWatch_ is fed from, as they stand now (the constructor takes the watch's baseline from them; healthPoll() feeds it).
+    cascade::core::health::RecoveryReadings recoveryReadings();
     // Once per pass: the output's first play, the watched radio's first samples, and the recoveries nothing else may count.
     void healthPoll();
     // Starts the samples watch for the radio just installed (kind: its driver key).
@@ -3437,8 +3439,10 @@ public:
     bool safePlugins() const { return safePlugins_; }
     // Reads the previous run's marker and the strike records from `settingsDir` (the folder of the settings file; empty for a hermetic run:
     // nothing read or kept), plans, and opens the marker for this run. BEFORE initialise() - the first scan is inside it. Once; a second call
-    // changes nothing. initialise() makes a hermetic call itself if nobody has.
-    void beginPluginContainment(const std::string& settingsDir);
+    // changes nothing. initialise() makes a hermetic call itself if nobody has. `settingsFile` is the settings file's name or path (empty: the default file):
+    // it names the marker and the store this program keeps beside it (core/plugin_marker.hpp markerFileNameFor), so two programs on two settings files in one
+    // folder do not read each other's marker (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31).
+    void beginPluginContainment(const std::string& settingsDir, const std::string& settingsFile = std::string());
     const cascade::core::Containment& pluginContainment() const { return containment_; }
     // The person's click: a plugin the guard switched off, or one skipped at this start, is allowed again and the folder is scanned afresh.
     // LOCAL only (FOXAPP_OP_PLUGIN_REENABLE refuses a remote session). `why` says what stopped it when it returns false.

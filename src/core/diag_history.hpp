@@ -141,6 +141,10 @@ struct ReportSummary {
     // is not part of reportSummaryLine, so nothing that prints a report gains a
     // field.
     std::int64_t writtenEpoch = 0;
+    // A freeze report's `thread:` word ("gui" for the window's frame loop, a worker's or "plugin-call" for the per-thread watchdog's reports of things the
+    // process recovered from); "" when the file does not say (an older report: the window's). Closed-list characters only. Read by core/exit_cause.cpp, which counts
+    // only the frame loop's freeze as how a session ended; not part of reportSummaryLine, so nothing that prints a report gains a field.
+    std::string thread;
 };
 
 struct ReportListing {

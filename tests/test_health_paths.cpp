@@ -316,7 +316,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
                                 "now.threadWedges = cascade::core::beats::Registry::wedgesFound()",
                                 "now.pluginFaults = pf.faults", "now.pluginQuarantines = pf.quarantines", "now.pluginWedges = pf.wedges",
                                 "now.pluginOveruses = pf.overruns",
-                                "recoveryWatch_.poll(now)", "cascade::core::health::drainRecovered()"}) {
+                                "recoveryWatch_.poll(recoveryReadings())", "recoveryWatch_.baseline(recoveryReadings())", "cascade::core::health::drainRecovered()"}) {
         if (window.find(reading) == std::string::npos) { std::printf("FAIL the engine's poll lacks %s\n", reading); }
         CHECK(window.find(reading) != std::string::npos);
     }

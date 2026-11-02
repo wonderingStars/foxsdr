@@ -29,6 +29,10 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -968,6 +972,9 @@ public:
     bool setGainDb(double) override { return true; }
     std::size_t write(const std::complex<float>* s, std::size_t n) override {
         if (!running_ || faulted_) { return 0; }
+        // (a radio that is busy with a block: the Pluto's write is a socket write that can take as long as the block does, and the TX thread makes it holding the
+        // transmitter's state lock - a test holds it here)
+        while (holdWrites.load(std::memory_order_relaxed) && running_) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
         std::lock_guard<std::mutex> lk(m_);
         all_.insert(all_.end(), s, s + n);
         if (faultAfter > 0 && static_cast<long long>(all_.size()) >= faultAfter) {
@@ -991,6 +998,7 @@ public:
 
     std::atomic<int> starts{0};
     std::atomic<int> stops{0};
+    std::atomic<bool> holdWrites{false};   // write() does not return while this is set
     bool refuseStart = false;
     long long faultAfter = 0;
 
@@ -1290,6 +1298,113 @@ void testTransmitterCap() {
     feeder.on = false;
 }
 
+// THE CAP IS ON THE CARRIER, NOT ON THE REQUEST (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). transmitter.hpp promises the plugin's key is
+// "never held longer than kLatchTimeout" and tick() calls it "one continuous key", but the cap's stamp was taken at EVERY rising edge of the request: a plugin that drops
+// active() for one drive and raises it again - inside one 10 ms block of the TX thread, which never sees it - restarted the cap while the carrier stayed up, and a
+// plugin that does it every 59 seconds was never cut. The stamp is now taken when a plugin episode begins - the first request after the carrier was down - and an
+// interruption that the radio did not see is not the end of it.
+void testTransmitterCapSurvivesBlips() {
+    std::printf("  the transmitter: a request that blips low and back while the carrier stays up does not restart the cap\n");
+    Transmitter tx;
+    auto link = std::make_shared<TxAudioLink>();
+    tx.setPluginLink(link);
+    auto sink = std::make_unique<CaptureSink>();
+    CaptureSink* const radio = sink.get();
+    tx.setSink(std::move(sink));
+    tx.setLatchTimeoutForTest(std::chrono::milliseconds(400));
+    Feeder feeder(link, 1000.0, 0.3f);
+    feeder.on = true;
+
+    tx.setPluginKey(true);
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(waitTicking(tx, [&] { return tx.pluginKeyed(); }, 2000));
+    bool cut = false;
+    int frames = 0;
+    while (std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(3000)) {
+        tx.setPluginKey(true);
+        // every fifth frame the plugin lets go and takes hold again in the same instant: the TX thread's 10 ms block check cannot see it
+        if (++frames % 5 == 0) {
+            tx.setPluginKey(false);
+            tx.setPluginKey(true);
+        }
+        tx.tick();
+        if (!tx.transmitting()) {
+            cut = true;
+            break;
+        }
+        sleepMs(2);
+    }
+    const double heldMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("    key held %.0f ms against a 400 ms cap, with a blip every fifth frame (the radio was keyed %d time(s))\n", heldMs, radio->starts.load());
+    CHECK(cut);
+    CHECK(radio->starts.load() == 1);   // one carrier throughout: none of the blips dropped it (a second key-down would be a new episode, and a new cap)
+    CHECK(heldMs >= 350.0);
+    CHECK(heldMs < 1500.0);
+    CHECK(tx.pluginFault());   // it was the CAP that ended it, not a release
+    CHECK(tx.pluginFaultReason().find("held the key") != std::string::npos);
+
+    // THE OTHER SIDE: a request that really lets go - the carrier goes down - and comes back is a new key with a new cap
+    tx.clearPluginFault();
+    tx.setPluginKey(true);
+    CHECK(waitTicking(tx, [&] { return tx.pluginKeyed(); }, 2000));
+    const auto t1 = std::chrono::steady_clock::now();
+    tickFor(tx, 250);
+    tx.setPluginKey(false);
+    CHECK(waitTicking(tx, [&] { return !tx.transmitting(); }, 2000));   // down: the episode is over
+    tx.setPluginKey(true);
+    CHECK(waitTicking(tx, [&] { return tx.pluginKeyed(); }, 2000));
+    const auto t2 = std::chrono::steady_clock::now();
+    tickFor(tx, 250);
+    if (!tx.pluginKeyed()) { std::printf("    the new key was cut: %s\n", tx.pluginFaultReason().c_str()); }
+    CHECK(tx.pluginKeyed());   // 250 ms into the NEW key, past 400 ms since the first one began: not cut
+    CHECK(!tx.pluginFault());
+    (void)t1;
+    (void)t2;
+    tx.setPluginKey(false);
+    waitTicking(tx, [&] { return !tx.transmitting(); }, 2000);
+    feeder.on = false;
+}
+
+// A PLUGIN'S REQUEST NEVER WAITS FOR THE TX THREAD (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). setPluginKey runs between the two stores of a plugin's
+// request - down, up - and the TX thread samples the request at every block. The TX thread holds the transmitter's state lock across a block's write (a real radio's takes as
+// long as the block does); a setPluginKey that took that lock would leave the request LOW for the length of the wait, and the carrier would drop on a blip. It takes none.
+// Here the radio's write is held, so the lock is held with it, and a blip from another thread has to complete regardless.
+void testTransmitterPluginRequestNeverWaitsForTheTxThread() {
+    std::printf("  the transmitter: a plugin's request is never made to wait for the TX thread's lock\n");
+    Transmitter tx;
+    auto link = std::make_shared<TxAudioLink>();
+    tx.setPluginLink(link);
+    auto sink = std::make_unique<CaptureSink>();
+    CaptureSink* const radio = sink.get();
+    tx.setSink(std::move(sink));
+    Feeder feeder(link, 1000.0, 0.3f);
+    feeder.on = true;
+    tx.setPluginKey(true);
+    CHECK(waitTicking(tx, [&] { return tx.pluginKeyed(); }, 2000));
+    tickFor(tx, 50);
+    radio->holdWrites = true;   // the TX thread's next write does not return...
+    sleepMs(60);                // ...and it is in it, holding the state lock
+    std::atomic<bool> done{false};
+    std::thread blip([&] {
+        tx.setPluginKey(false);
+        tx.setPluginKey(true);
+        done = true;
+    });
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
+    while (!done.load() && std::chrono::steady_clock::now() < until) { sleepMs(2); }
+    const bool finished = done.load();
+    if (!finished) { std::printf("    FAIL the plugin's request waited for the TX thread's lock\n"); }
+    CHECK(finished);
+    radio->holdWrites = false;   // let the radio go
+    blip.join();
+    tickFor(tx, 100);
+    CHECK(tx.pluginKeyed());     // and the carrier never went down
+    CHECK(radio->starts.load() == 1);
+    tx.setPluginKey(false);
+    waitTicking(tx, [&] { return !tx.transmitting(); }, 2000);
+    feeder.on = false;
+}
+
 void testTransmitterFaults() {
     std::printf("  the transmitter: a fault, the frozen window and a refusal cut the plugin's key\n");
     // A RADIO FAULT MID-TRANSMISSION.
@@ -1561,6 +1676,65 @@ void testTransmitterInputsAndRing() {
 
 }  // namespace
 
+// THE TX THREAD'S END IS PUBLISHED IN ORDER (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The TX thread ends by storing endedReleased_
+// ("I played the key down myself") and then run_ = false; tick() on the control thread loads run_ and then endedReleased_ - all RELAXED, with no lock shared
+// between the stores and the loads. On x86 that is accidentally right; on arm64 (the Pi, a stated target) tick() can see run_ == false with endedReleased_
+// still false and book a clean key-up as "the transmitter stopped on its own": a fault (the plugin's window closed, the latch marked, the panel amber). And tick()
+// looked at run_ TWICE, in two separate tests, so a thread that ended between the two was judged by a flag the second test never read, on any architecture. The
+// fix is the pairing - the thread's last store of run_ is a RELEASE, tick() loads it once with ACQUIRE and reads endedReleased_ only after - and it cannot be
+// seen from a test on a machine that does not reorder, so what is held here is the text of the pairing (UNVERIFIED on weakly-ordered hardware: nothing here ran on
+// one).
+std::string transmitterSource() {
+    const std::filesystem::path p = std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "core" / "transmitter.cpp";
+    std::ifstream in(p, std::ios::binary);
+    std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
+    return s;
+}
+
+std::string bodyAt(const std::string& src, const std::string& signature) {
+    const std::size_t at = src.find(signature);
+    if (at == std::string::npos) { return std::string(); }
+    const std::size_t end = src.find("\n}\n", at);
+    return end == std::string::npos ? std::string() : src.substr(at, end - at);
+}
+
+std::size_t occurrences(const std::string& hay, const std::string& needle) {
+    std::size_t n = 0;
+    for (std::size_t at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + needle.size())) { ++n; }
+    return n;
+}
+
+void testTransmitterEndIsPublishedInOrder() {
+    std::printf("  the thread's end is published in order (the text of the pairing)\n");
+    const std::string src = transmitterSource();
+    CHECK(!src.empty());
+    const std::string thread = bodyAt(src, "void Transmitter::threadBody() {");
+    CHECK(!thread.empty());
+    const std::size_t ended = thread.rfind("endedReleased_.store(");
+    const std::size_t runDown = thread.rfind("run_.store(false, ");
+    CHECK(ended != std::string::npos && runDown != std::string::npos);
+    CHECK(ended < runDown);   // the flag is written before the thing it is published by
+    const char* const release = "run_.store(false, std::memory_order_release)";
+    if (runDown == std::string::npos || thread.compare(runDown, std::strlen(release), release) != 0) {
+        std::printf("    the thread's last store of run_ is not a release\n");
+    }
+    CHECK(runDown != std::string::npos && thread.compare(runDown, std::strlen(release), release) == 0);
+
+    const std::string tick = bodyAt(src, "void Transmitter::tick() {");
+    CHECK(!tick.empty());
+    const std::size_t acquires = occurrences(tick, "run_.load(std::memory_order_acquire)");
+    const std::size_t relaxed = occurrences(tick, "run_.load(std::memory_order_relaxed)");
+    if (acquires != 1 || relaxed != 0) {
+        std::printf("    tick() loads run_ %zu time(s) with acquire and %zu with relaxed (wanted: once, acquire)\n", acquires, relaxed);
+    }
+    CHECK(acquires == 1);   // ONE look at whether the thread has ended, shared by both branches that judge how
+    CHECK(relaxed == 0);
+    const std::size_t firstAcquire = tick.find("run_.load(std::memory_order_acquire)");
+    const std::size_t firstFlag = tick.find("endedReleased_.load(");
+    CHECK(firstAcquire != std::string::npos && firstFlag != std::string::npos && firstAcquire < firstFlag);   // the flag is read after the acquire
+}
+
 int main() {
     cascade::core::DiagLog::instance().resetForTest();
     testAbiSurface();
@@ -1578,10 +1752,13 @@ int main() {
     testTransmitterPluginAudio();
     testTransmitterStallAndStop();
     testTransmitterCap();
+    testTransmitterCapSurvivesBlips();
+    testTransmitterPluginRequestNeverWaitsForTheTxThread();
     testTransmitterFaults();
     testTransmitterHandPrecedence();
     testSanitiser();
     testTransmitterHostileAudio();
     testTransmitterInputsAndRing();
+    testTransmitterEndIsPublishedInOrder();
     return testSummary("test_tx_audio");
 }

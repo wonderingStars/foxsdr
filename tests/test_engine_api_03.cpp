@@ -336,6 +336,8 @@ struct AppWindowTestAccess {
         e.addAllFailed_ = addAllFailed;
         e.testFault_ = std::string("text of deviceFault ") + std::string(900, 'f');
     }
+    // (batch A, the GPS lock) Applies the next command as a REMOTE session's, which the table never lets through to the engine - to reach the engine's own lock.
+    static void commandFromRemote(cascade::engine::Engine& e, bool on) { e.commandFromRemote_ = on; }
     static void clearStatusLines(cascade::engine::Engine& e) {
         for (std::string* t : {&e.sourceError_, &e.gpsRefusal_, &e.catalogError_, &e.bandPlanError_, &e.tuneMismatchNote_, &e.transmitError_,
                                &e.soundCardMissing_, &e.sdrPlayApiDetail_, &e.sdrPlayAdvice_, &e.recordNotice_, &e.recordError_, &e.presetNote_,
@@ -839,6 +841,21 @@ void testEveryListIsServed() {
     const FoxListItem tx = item(s, FOXAPI_LIST_TX_DEVICES, 0);
     CHECK_EQ(std::string(tx.detail), std::string("uri=ip:192.168.2.1"));
     CHECK((tx.flags & FOXAPI_ITEM_ACTIVE) == 0u);
+    // THE ADDRESS IS THIS MACHINE'S BUSINESS (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): the same value is fact.transmit.args, which is
+    // LOCAL only, and every other list that names something of this machine's blanks it for a REMOTE session. The entry is still there (a remote operator
+    // sees that a transmitter is configured, and whether it is open), the address is not.
+    {
+        Remote r(e);
+        CHECK(r.ok());
+        CHECK_EQ(count(r, FOXAPI_LIST_TX_DEVICES), 1);
+        const FoxListItem rtx = item(r, FOXAPI_LIST_TX_DEVICES, 0);
+        if (rtx.detail[0] != '\0') { std::printf("L: a REMOTE session read the transmitter's address: \"%s\"\n", rtx.detail); }
+        CHECK_EQ(std::string(rtx.detail), std::string());
+        CHECK_EQ(std::string(rtx.name), std::string("ADALM-Pluto"));
+        int32_t st = 0;
+        fact(r, "fact.transmit.args", &st);
+        CHECK_EQ(st, FOXAPI_DENIED);   // (the fact it is the twin of)
+    }
     // No plugins, no radio options on the generator.
     CHECK_EQ(count(s, FOXAPI_LIST_DECODERS), 0);
     CHECK_EQ(count(s, FOXAPI_LIST_DEVICE_OPTIONS), 0);
@@ -1066,6 +1083,59 @@ void testSerialPorts() {
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SCAN_SERIAL_PORTS)).result.status, FOXAPI_OK);
     CHECK(count(s, FOXAPI_LIST_SERIAL_PORTS) >= 0);
     CHECK_EQ(r.run(cmd(FOXAPI_OP_SCAN_SERIAL_PORTS)).status(), FOXAPI_DENIED);
+}
+
+// A REMOTE SESSION CANNOT START THE GPS READER (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). FOXAPI_OP_GPS opens its text as a serial
+// port, and the port layer opens a typed name exactly as it opens a port - a file, or a UNC path, on THIS machine (Windows: a name that starts with two
+// backslashes is an outbound SMB connection, with the user's credentials; a drive path is opened read-write and exclusively for the length of the read). The
+// table's rule is that no remote session names a path on this machine (API.md 5: SELECT_SOURCE "file:", the serial-port scan), and validate() had no case for
+// the op: a REMOTE session holding the SETTINGS grant could. The reader also has to be unreachable from the second lock, where the op is applied.
+void testGpsIsLocalOnly() {
+    engine_api_test::SerialEngine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    Remote r(e);
+    CHECK(r.ok());
+    // a remote START is refused at submit, with a reason that says why, whatever it names
+    // (names that open nothing on any machine, so that the run before the fix - which started the reader on them - does no harm: a reserved top-level name
+    // that never resolves, a device that does not exist, a path under a folder that does not exist)
+    for (const char* name : {"COM-no-such-port-a", "\\\\no-such-host.invalid\\share\\x", "\\\\.\\no-such-device", "Z:\\no-such-folder\\no-such-file", "/dev/no-such-tty"}) {
+        const testing::Outcome o = r.run(cmd(FOXAPI_OP_GPS, 4800.0, 1, name));
+        if (o.status() != FOXAPI_DENIED) { std::printf("  a remote GPS start naming \"%s\" answered %d\n", name, o.status()); }
+        CHECK_EQ(o.status(), FOXAPI_DENIED);
+        if (o.landed) { CHECK(std::string(o.result.message).find("remote") != std::string::npos); }
+    }
+    // ...and the reader never started: the entry is idle
+    const FoxListItem idle = item(s, FOXAPI_LIST_GPS, 0);
+    CHECK_EQ(idle.value[0], 0.0);
+    CHECK_EQ(std::string(idle.name), std::string());
+    // a remote STOP names nothing and is as harmless as it ever was
+    CHECK_EQ(r.run(cmd(FOXAPI_OP_GPS, 0.0, 0)).status(), FOXAPI_OK);
+    // the local session still starts it (the status is the reader's own account; the port need not exist)
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_GPS, 4800.0, 1, "COM-no-such-port")).result.status, FOXAPI_OK);
+    const FoxListItem started = item(s, FOXAPI_LIST_GPS, 0);
+    CHECK(started.value[0] != 0.0 || std::string(started.name) == "COM-no-such-port");
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_GPS, 0.0, 0)).result.status, FOXAPI_OK);
+}
+
+// THE SECOND LOCK ON A REMOTE GPS START (batch A). The table refuses it when it is submitted (testGpsIsLocalOnly above); the engine refuses it again where it is
+// applied, because the text is opened as a name on this machine. The two give the same answer - which is the point of a second one, and why neither can be told from
+// outside while the other stands - so this reaches the engine's by applying the command as a remote session's, which the table never lets through.
+void testGpsRemoteStartIsRefusedWhereItIsApplied() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    cascade::engine::Engine eng;
+    eng.configureApi(kHooks);
+    eng.initialise();
+    eng.controlPass();
+    Access::commandFromRemote(eng, true);
+    const FoxCommandResult refused = eng.applyCommand(cmd(FOXAPI_OP_GPS, 4800.0, 1, "COM-no-such-port-applied"), std::string());
+    Access::commandFromRemote(eng, false);
+    if (refused.status != FOXAPI_DENIED) { std::printf("  a remote GPS start applied by the engine answered %d\n", refused.status); }
+    CHECK_EQ(refused.status, FOXAPI_DENIED);
+    CHECK(std::string(refused.message).find("remote") != std::string::npos);
+    // the same command, applied as a local session's, is the reader's own business
+    const FoxCommandResult local = eng.applyCommand(cmd(FOXAPI_OP_GPS, 4800.0, 1, "COM-no-such-port-applied"), std::string());
+    CHECK_EQ(local.status, FOXAPI_OK);
+    CHECK_EQ(eng.applyCommand(cmd(FOXAPI_OP_GPS, 0.0, 0), std::string()).status, FOXAPI_OK);
 }
 
 void testDecoderLines() {
@@ -9769,6 +9839,8 @@ int main() {
     testScope();
     testNodeSpectrum();
     testSerialPorts();
+    testGpsIsLocalOnly();
+    testGpsRemoteStartIsRefusedWhereItIsApplied();
     testDecoderLines();
     testStore();
     testBiasTee();

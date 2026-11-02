@@ -271,13 +271,22 @@ double Transmitter::powerDb() const {
     return sink_ != nullptr ? sink_->gainDb() : 0.0;
 }
 
-bool Transmitter::setFrequencyHz(double hz) {
+Transmitter::Retune Transmitter::retuneHz(double hz) {
     std::lock_guard<std::mutex> lk(stateMutex_);
-    if (sink_ == nullptr) { return false; }
-    if (sink_->setCenterFrequencyHz(hz)) { return true; }
+    if (sink_ == nullptr) { return Retune::Failed; }
+    // FROZEN WHILE KEYED (the owner's decision of 2026-11-02; see the header). `transmitting_` is set at key-down and cleared only when the key-up has been
+    // acknowledged by tick() (keyUpLocked) - after the thread has played its tail and silenced the radio - so the tail counts as keyed without a second flag.
+    // Read under the lock that key-down and key-up take, so a retune cannot slip between the thread's start and the flag. Nothing is written to the sink,
+    // nothing is recorded as an error: a hold is not a failure.
+    if (transmitting_.load(std::memory_order_relaxed)) { return Retune::Held; }
+    if (sink_->setCenterFrequencyHz(hz)) { return Retune::Done; }
     setError(sink_->lastError());
-    return false;
+    return Retune::Failed;
 }
+
+bool Transmitter::setFrequencyHz(double hz) { return retuneHz(hz) == Retune::Done; }
+
+bool Transmitter::frequencyHeld() const { return transmitting_.load(std::memory_order_relaxed); }
 
 double Transmitter::frequencyHz() const {
     std::lock_guard<std::mutex> lk(stateMutex_);
@@ -361,11 +370,19 @@ void Transmitter::setPluginKey(bool on) {
     // be a one-frame interruption for a plugin that holds active() high for ever.
     if (pluginFault_.load(std::memory_order_relaxed)) { return; }
     if (!pluginKey_.load(std::memory_order_relaxed)) {
+        // THE CAP MEASURES THE CARRIER, NOT THE REQUEST (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The stamp used to be taken at every
+        // rising edge of the request, so a plugin that dropped active() for one drive and raised it again - while the radio stayed keyed - restarted the cap, and
+        // one that did it every 59 seconds was never cut: "never held longer than kLatchTimeout" was not true of the carrier. A rising edge starts a new episode
+        // only when the carrier is not the plugin's own continuing one: the radio is not keyed, or the plugin's key has not been part of this carrier (it joins
+        // one a hand is holding), or a hand is holding it now. (A carrier that really ended - the TX thread saw the key gone and played its ramp - is a new key
+        // with a new cap: keyUpLocked clears pluginInCarrier_.) No lock is taken here: this runs between the request's two stores, and a wait for the TX thread's
+        // block would turn the instant into a gap the TX thread can see.
+        const bool handsOn = pttHeld_.load(std::memory_order_relaxed) || latched_.load(std::memory_order_relaxed) ||
+                             remoteKeyed_.load(std::memory_order_relaxed);
+        const bool sameCarrier = transmitting_.load(std::memory_order_relaxed) && pluginInCarrier_.load(std::memory_order_relaxed) && !handsOn;
         // The stamp BEFORE the flag, so the cap never reads a stale one.
-        {
-            std::lock_guard<std::mutex> lk(stateMutex_);
-            pluginKeyedAt_ = std::chrono::steady_clock::now();
-        }
+        if (!sameCarrier) { pluginKeyedAtMs_.store(nowMs(), std::memory_order_relaxed); }
+        pluginInCarrier_.store(true, std::memory_order_relaxed);
         pluginKey_.store(true, std::memory_order_relaxed);
     }
 }
@@ -393,6 +410,7 @@ void Transmitter::clearPluginFault() {
 
 void Transmitter::cutPluginKey(const char* why) {
     pluginKey_.store(false, std::memory_order_relaxed);
+    pluginInCarrier_.store(false, std::memory_order_relaxed);   // (a plugin let back in by a new arming window begins a new episode)
     pluginFault_.store(true, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(errorMutex_);
     pluginFaultReason_ = why != nullptr ? why : "the plugin's key was cut";
@@ -530,9 +548,9 @@ void Transmitter::tick() {
         long long limitMs = 0;
         {
             std::lock_guard<std::mutex> lk(stateMutex_);
-            expired = (std::chrono::steady_clock::now() - pluginKeyedAt_) >= latchTimeout_;
             limitMs = static_cast<long long>(latchTimeout_.count());
         }
+        expired = (nowMs() - pluginKeyedAtMs_.load(std::memory_order_relaxed)) >= limitMs;
         if (expired) {
             char note[112];
             if (limitMs >= 1000) {
@@ -584,7 +602,12 @@ void Transmitter::tick() {
         keyUpLocked(nullptr);
         return;
     }
-    if (have && !run_.load(std::memory_order_relaxed) && endedReleased_.load(std::memory_order_relaxed)) {
+    // ONE LOOK AT WHETHER THE TX THREAD HAS ENDED, shared by the two branches that judge HOW (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The
+    // load is an ACQUIRE that pairs with the RELEASE store the thread ends with (threadBody): whatever it wrote before - endedReleased_ - is seen by a tick that
+    // sees the end. Two separate looks (one for each branch) let a thread that ended between them be judged "broke off" by a flag the second look never read; and
+    // relaxed, on a weakly-ordered CPU (the Pi), the end could be seen before the flag - a clean key-up booked as a fault.
+    const bool threadEnded = have && !run_.load(std::memory_order_acquire);
+    if (threadEnded && endedReleased_.load(std::memory_order_relaxed)) {
         // THE TX THREAD PLAYED THE KEY DOWN ITSELF, because nothing asserted
         // it any more - a PTT let go, a LATCH opened, a page closed, a remote
         // hold run out: key-up needs no tick (engine/stage3b), so the thread
@@ -598,7 +621,7 @@ void Transmitter::tick() {
         keyUpLocked(nullptr);
         return;
     }
-    if (have && !run_.load(std::memory_order_relaxed)) {
+    if (threadEnded) {
         // The TX thread let go on its own - a fault, or the dead-man's
         // handle. It has already silenced the radio; this is the bookkeeping
         // and the panel catching up with it.
@@ -669,6 +692,13 @@ bool Transmitter::keyDownLocked() {
     shortBlocks_.store(0, std::memory_order_relaxed);
     controlAliveMs_.store(nowMs(), std::memory_order_relaxed);
 
+    // A NEW CARRIER: the plugin's cap begins with it when the plugin is asking for the key (and a plugin that is not has no part in it).
+    if (pluginKey_.load(std::memory_order_relaxed)) {
+        pluginKeyedAtMs_.store(nowMs(), std::memory_order_relaxed);
+        pluginInCarrier_.store(true, std::memory_order_relaxed);
+    } else {
+        pluginInCarrier_.store(false, std::memory_order_relaxed);
+    }
     transmitting_.store(true, std::memory_order_relaxed);
     startThread();
     // The mode and the rate, never the frequency: what somebody transmits on
@@ -680,6 +710,7 @@ bool Transmitter::keyDownLocked() {
 
 void Transmitter::keyUpLocked(const char* reason) {
     transmitting_.store(false, std::memory_order_relaxed);
+    pluginInCarrier_.store(false, std::memory_order_relaxed);   // the carrier is over, and so is the plugin's episode in it
     modulator_.setKeyed(false);
     if (sink_ != nullptr) {
         // Idempotent, and usually a no-op: the TX thread silences the radio
@@ -1008,7 +1039,8 @@ void Transmitter::threadBody() {
     endedReleased_.store(rampedDown, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lk(waitMutex_);
-        run_.store(false, std::memory_order_relaxed);
+        // THE PUBLICATION: tick() loads run_ with ACQUIRE and reads endedReleased_ only after it (see tick()).
+        run_.store(false, std::memory_order_release);
         exited_ = true;
     }
     waitCv_.notify_all();

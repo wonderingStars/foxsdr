@@ -266,14 +266,17 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
     // it down, and the module is only still mapped because nothing may unmap it.
     if (fault::isQuarantined(slot)) { return; }
     const fault::Origin origin = faultOriginOf(lp.origin);
-    // THE CRASH-LOOP MARKER (core/plugin_marker.hpp): this plugin is inside create() from here to the end of this function.
-    const marker::Phase phaseBefore = marker::phaseOf(key);
-    marker::set(key, marker::Phase::Create, lp.version, origin);
+    // THE CRASH-LOOP MARKER (core/plugin_marker.hpp): this plugin is inside create() from here to the end of this function - a BRACKET, so that another thread
+    // building or destroying instances of the same plugin at the same time (the window's plugin UI, the unload) cannot leave the phase stuck in `create` by
+    // restoring the one it found (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The plugin rests in first-pass if THIS call made an instance.
+    marker::CallPhase inCreate(key, marker::Phase::Create, lp.version, origin);
     const std::size_t statusBegin = status_.size();
     // A plugin may declare both. Each declared capability gets its own
     // instance and its own stream, which is why this is two independent
     // blocks rather than an else-if.
     bool started = false;
+    // Whether THIS plugin made an audio processor instance (processors_ holds every plugin's, so its emptiness says nothing about this one).
+    bool madeProcessor = false;
 
     // THE HANDLE CASCADE_CAP_AUDIO_OUT RIDES ON. That table has no
     // create() of its own - the sound a decoder makes is the same object
@@ -502,6 +505,7 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
             p.title = lp.audioProcessor->title != nullptr ? lp.audioProcessor->title
                                                           : lp.name;
             processors_.push_back(std::move(p));
+            madeProcessor = true;
             // A ROW LIKE ANY DECODER'S, so the module reads FED on its
             // plate while its processor runs (isFeeding answers from these
             // rows) instead of "takes no signal" - which a module rewriting
@@ -541,9 +545,11 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
         status_[i].key = key;
     }
     statusGen_.fetch_add(1, std::memory_order_release);
-    // Out of create(): an instance exists and has not yet been fed (`first-pass`; the engine's pass promotes it to `running` once it has
-    // survived a few seconds), or none was made and the plugin is not in play at all.
-    marker::set(key, (started || !processors_.empty()) ? marker::Phase::FirstPass : phaseBefore, lp.version, origin);
+    // Out of create(): an instance of THIS plugin exists and has not yet been fed (`first-pass`; the engine's pass promotes it to `running` once it has survived a few
+    // seconds), or none was made and the plugin is not in play at all - the bracket puts it back where it rests. (The test used `!processors_.empty()`, which is every
+    // plugin's: while a noise filter ran, a decoder whose create() returned nothing was marked first-pass with no instance behind it, took a strike if the application
+    // died for its own reasons within five seconds, and was graduated off probation after them although it had never run.)
+    if (started || madeProcessor) { inCreate.settle(marker::Phase::FirstPass); }
 }
 
 bool PluginRunner::isFeeding(const std::string& pluginKey) const {

@@ -191,7 +191,12 @@ ExitVerdict classifyPreviousExit(const ReportListing& reports, std::int64_t prev
             if (reportReasonIsSurvivedFault(r.reason)) { continue; }
             return fromEndingReport(r);
         }
-        if ((r.kind == "hang" || r.kind == "stall") && freeze == nullptr) { freeze = &r; }
+        // ONLY THE FRAME LOOP'S FREEZE is how a session can have ended. The per-thread watchdog (6.27) and the plugin call budgets (6.28) file `hang-<pid>-w<N>` reports
+        // in this family for things the process recovered from - a worker that stopped beating and went on, a plugin call that overran - and the sentinel leaves those
+        // names out of "the freeze was never recovered" on purpose (sentinel.cpp hangNamePid). Read here as a session's end, a session that ran for hours after a
+        // recovered wedge and then ended with no report at all (power loss, a reset) was counted DIED - "a freeze report and no recovery" - and the beta-promotion gate's
+        // `died` count rose for a program that had not frozen. (Deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31.)
+        if ((r.kind == "hang" || r.kind == "stall") && freeze == nullptr && (r.thread.empty() || r.thread == "gui")) { freeze = &r; }
     }
     if (freeze != nullptr) {
         // THE WATCHDOG'S REPORT AND NOTHING AFTER IT. The sentinel files no ending of

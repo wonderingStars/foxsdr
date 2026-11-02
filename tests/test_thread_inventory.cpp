@@ -328,7 +328,8 @@ int main(int argc, char** argv) {
             continue;
         }
         const std::string code = liveCode(readFile(e.path()));
-        for (const char* seam : {"advanceClockForTest", "setBudgetOverrideForTest", "clearOverridesForTest", "resetWedgeFileCountForTest", "setBeatsOvershootMsForTest", "freezeClockForTest"}) {
+        for (const char* seam : {"advanceClockForTest", "setBudgetOverrideForTest", "clearOverridesForTest", "resetWedgeFileCountForTest", "setBeatsOvershootMsForTest", "freezeClockForTest",
+                                 "setBeatGapProbeForTest", "setWedgeCaptureDelayForTest"}) {
             if (code.find(seam) != std::string::npos) { std::printf("*** %s calls the test seam %s\n", rel.c_str(), seam); }
             CHECK(code.find(seam) == std::string::npos);
         }

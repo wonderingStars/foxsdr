@@ -347,6 +347,10 @@ public:
     void setBudgetOverrideForTest(Kind k, unsigned ms);
     void clearOverridesForTest();
     void advanceClockForTest(std::int64_t ms);
+    // TESTS ONLY: a function Registration::beat() calls BETWEEN ITS TWO STORES (the stamp and the clearing of a declared wait), where a monitor's poll
+    // can land. A test polls from it and shows the thread is never read late in that gap. nullptr takes it away. Nothing under src/ calls it
+    // (tests/test_thread_inventory.cpp scans for that, as for the seams above).
+    static void setBeatGapProbeForTest(void (*probe)());
     // While frozen the clock does not run by itself: it reads the instant it was frozen at plus whatever advanceClockForTest has added,
     // so a test can put a thread exactly one millisecond short of its budget without the real time its own thread spends between two
     // lines (a ThreadSanitizer build spends milliseconds) moving the boundary. Nesting is not supported; unfreeze before freezing again.

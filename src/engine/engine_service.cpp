@@ -11,7 +11,9 @@
 
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -55,6 +57,26 @@ EngineService::EngineService(ServiceOptions options) : options_(std::move(option
 }
 
 EngineService::~EngineService() { stopKeeper(); }
+
+std::string EngineService::settingsDirOf(const std::string& configPath) {
+    if (configPath.empty()) { return std::string(); }
+    const std::size_t cut = configPath.find_last_of("/\\");
+    // A directory part, as written (the folder the window host and every path the engine has always been given name): "C:\...\foxsdr\config.json".
+    if (cut == 2 && configPath[1] == ':') { return configPath.substr(0, 3); }   // "C:\config.json": the root keeps its separator ("C:" alone is the drive's current folder)
+    if (cut != std::string::npos && cut > 0) { return configPath.substr(0, cut); }
+    // No directory part - a bare file name, or a file at the root ("/x.json"): the folder the file is read from and written to. Resolved against the working
+    // directory NOW, so the folder named does not follow a later chdir.
+    std::error_code ec;
+    const std::filesystem::path absolute = std::filesystem::absolute(std::filesystem::path(configPath), ec);
+    if (ec) { return std::string(); }
+    return absolute.parent_path().string();
+}
+
+std::string EngineService::settingsFileNameOf(const std::string& configPath) {
+    if (configPath.empty()) { return std::string(); }
+    const std::size_t cut = configPath.find_last_of("/\\");
+    return cut == std::string::npos ? configPath : configPath.substr(cut + 1);
+}
 
 double EngineService::nowS() const {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - born_).count();
@@ -166,12 +188,21 @@ EngineService::Restored EngineService::restore() {
     // settings file, and a hermetic run (no file) keeps nothing. Safe mode refuses every plugin whatever the records say.
     engine_.setSafePlugins(options_.safePlugins);
     {
-        std::string settingsDir;
-        if (persistent()) {
-            const std::size_t cut = options_.configPath.find_last_of("/\\");
-            if (cut != std::string::npos) { settingsDir = options_.configPath.substr(0, cut); }
+        // (settingsDirOf: a settings file named without a directory is in the working directory, not nowhere - an empty folder is a hermetic run, and the
+        // breaker would have kept nothing; deep review of engine/stage4, batch A, docs/engine-stage4.md 6.31. The marker and the store are named by the file.)
+        std::string settingsDir = persistent() ? settingsDirOf(options_.configPath) : std::string();
+        std::string settingsFile = persistent() ? settingsFileNameOf(options_.configPath) : std::string();
+        // A PROGRAM THAT DOES NOT HOLD THE SETTINGS FILE'S LOCK KEEPS NO RECORD BESIDE IT (the window, best effort, started beside a program that has it: the lock is
+        // another program's, and so is the marker that sits with it). The marker is read, at open, as what the DEAD run left and then zeroed: a second live process
+        // would read the first one's slots as a crash's evidence (a strike for a plugin that is running fine) and wipe them (so the first one's own death would have no
+        // blame). This run is not protected by the breaker then, and says so; the other program's protection is untouched. (Deep review of engine/stage4, batch A.)
+        const cascade::core::ConfigLock::State lockState = lock_.state();
+        if (persistent() && (lockState == cascade::core::ConfigLock::State::Contended || lockState == cascade::core::ConfigLock::State::Unavailable)) {
+            cascade::core::diagLogf("plugins: the settings file is in use by another program, so this run keeps no crash-loop record beside it");
+            settingsDir.clear();
+            settingsFile.clear();
         }
-        engine_.beginPluginContainment(settingsDir);
+        engine_.beginPluginContainment(settingsDir, settingsFile);
     }
     engine_.initialise();
     writer_.bind(cascade::core::ConfigStore::writeFile);
@@ -188,12 +219,7 @@ EngineService::Restored EngineService::restore() {
             out.lastRunUnclean = !cfg.telemetryCleanExit;
             out.sourceKind = cfg.sourceKind;
             out.iqFilePath = cfg.iqFilePath;
-            {
-                std::string configDir;
-                const std::size_t cut = options_.configPath.find_last_of("/\\");
-                if (cut != std::string::npos) { configDir = options_.configPath.substr(0, cut); }
-                engine_.telemetryStartup(cfg, configDir);
-            }
+            engine_.telemetryStartup(cfg, settingsDirOf(options_.configPath));
             out.loaded = true;
             out.readback = engine_.configReadback();
         } else {
@@ -330,6 +356,11 @@ bool EngineService::start(std::string& why) {
     opt.period = std::chrono::milliseconds(16);
     opt.floor = std::chrono::milliseconds(2);
     opt.stepped = options_.stepped;
+    // THE SENTINEL'S HEARTBEAT (core/breadcrumb.hpp; deep review of engine/stage4, batch A, docs/engine-stage4.md 6.31): the watcher outside the process judges the
+    // host's FRAME LOOP. When a window follows that is the window's, drawn by the thread that draws, and this control thread - which beats its own watchdog every
+    // pass whatever the window is doing - must not stand in for it. A service no window follows (foxsdr-engine) has no frame loop but this pass, and the pass is
+    // what the watcher should judge.
+    opt.sentinelHeartbeat = !options_.frontEndFollows;
     opt.watchdogReportDir = reportDir;
     opt.diagnosticsDir = options_.diagnosticsDir;   // where the interface's half moves the control watchdog to when it switches Diagnostics on (shell retirement R5)
     if (!options_.stepped) { engine_.controlPass(); }   // a stepped run's first frame runs the pass's front part: that IS the first pass

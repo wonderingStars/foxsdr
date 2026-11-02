@@ -1,7 +1,10 @@
 // See thread_beats.hpp for what this is, who reads it, and why the budgets are what they are.
 //
 // THE MEMORY ORDERS, stated because this is cross-thread state and ThreadSanitizer is the judge:
-//   - a worker's beat(): `phase` is stored RELAXED and then `lastBeatMs` is stored with RELEASE;
+//   - a worker's beat(): `phase` is stored RELAXED, then `lastBeatMs` is stored with RELEASE, and only THEN is a declared wait
+//     cleared (RELEASE; deep review of engine/stage4, batch A: the wait used to be cleared first, and a poll between the two
+//     stores read "no wait" beside the stamp from BEFORE the wait - hours old for a thread that had sat in an uncapped
+//     accept - and called a thread that was waking up a wedge);
 //   - the monitor loads `lastBeatMs` with ACQUIRE and `phase` RELAXED afterwards, so a phase it reads is at least as new
 //     as the beat it read (it may be newer: a phase is a label, and a newer label for an older beat is still the
 //     thread's own); wait() stores `waitSinceMs` RELAXED and then `wait` with RELEASE, and the monitor loads `wait` with
@@ -55,6 +58,10 @@ std::atomic<bool> g_frozen{false};
 std::atomic<std::int64_t> g_frozenAtMs{0};
 std::atomic<std::uint64_t> g_wedgesFound{0};
 std::atomic<unsigned> g_budgetOverride[kKindCount] = {};
+std::atomic<void (*)()> g_beatGapProbe{nullptr};   // setBeatGapProbeForTest
+// When rearm() last ran, on clockMs(): the moment from which every call in flight counts its own time (CallScope::elapsedMs). The machine stopped, and a
+// call that spanned the stop was not slow.
+std::atomic<std::int64_t> g_lastRearmMs{0};
 
 // THE REGISTRY'S STATE IS LEAKED ON PURPOSE (core/leak_on_purpose.hpp, and the reason 74EEC22D taught: a worker reading statics the C
 // runtime has already destroyed). A detached worker - an abandoned disk job, a reader the pipeline gave up on - can finish after
@@ -174,10 +181,14 @@ Registration::~Registration() { Registry::instance().remove(slot_.get()); }
 void Registration::beat(const char* phase) noexcept {
     detail::Slot& s = *slot_;
     if (phase != nullptr) { s.phase.store(phase, std::memory_order_relaxed); }
-    // The wait is cleared BEFORE the beat is stamped: a monitor that still sees the wait sees a wait that is ending, and
-    // one that sees the stamp sees no wait.
-    if (s.wait.load(std::memory_order_relaxed) != nullptr) { s.wait.store(nullptr, std::memory_order_relaxed); }
+    // THE BEAT IS STAMPED BEFORE THE WAIT IS CLEARED (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). A monitor that looks between the two
+    // stores then sees a thread that is still in its wait - judged against the wait's own start and cap, an uncapped one never late - and not a thread with NO
+    // wait and the stamp it had BEFORE the wait: for a worker that has sat in a declared accept or job wait for hours that stamp is hours old, and it was
+    // reported as a wedge (the second look re-reads the same pair if the worker has not yet run its second store - preempted, or still in its store buffer on
+    // arm64). The only reading the new order can give that the old one could not is a wait past its own cap seen while its thread is waking, and that wait WAS late.
     s.lastBeatMs.store(clockMs(), std::memory_order_release);
+    if (void (*const probe)() = g_beatGapProbe.load(std::memory_order_relaxed)) { probe(); }   // (tests only: the gap between the two stores)
+    if (s.wait.load(std::memory_order_relaxed) != nullptr) { s.wait.store(nullptr, std::memory_order_release); }
 }
 
 void Registration::wait(const WaitSpec& w) noexcept {
@@ -220,7 +231,13 @@ CallScope::~CallScope() {
     if (index_ >= 0) { g_calls[index_].state.store(0, std::memory_order_release); }
 }
 
-std::int64_t CallScope::elapsedMs() const noexcept { return clockMs() - startMs_; }
+std::int64_t CallScope::elapsedMs() const noexcept {
+    // FROM THE LATER OF THE CALL'S START AND THE LAST REARM (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The machine stopped (a sleep, a
+    // paused VM) while this call was in flight: rearm() restarted the monitor's copy of the call's clock - the table's slot - so that nothing was reported, but
+    // this object's own start was left, and when the call returned, a few minutes later by the clock, its own end-of-call check read the whole sleep as
+    // slowness: an overrun, then a wedge, and the plugin was switched off for a laptop's lid.
+    return clockMs() - std::max(startMs_, g_lastRearmMs.load(std::memory_order_acquire));
+}
 
 bool CallScope::claimStage(int stage) noexcept {
     if (stage != 1 && stage != 2) { return false; }
@@ -379,6 +396,8 @@ void Registry::rearm() {
         copy = state().slots;
     }
     const std::int64_t now = clockMs();
+    // BEFORE the slots are rewritten: a call that returns while this runs measures from here, as the table's copy of it will from the next line.
+    g_lastRearmMs.store(now, std::memory_order_release);
     for (const auto& s : copy) {
         s->lastBeatMs.store(now, std::memory_order_release);
         s->waitSinceMs.store(now, std::memory_order_relaxed);
@@ -467,5 +486,7 @@ void Registry::freezeClockForTest(bool frozen) {
 }
 
 void Registry::advanceClockForTest(std::int64_t ms) { g_skewMs.fetch_add(ms, std::memory_order_relaxed); }
+
+void Registry::setBeatGapProbeForTest(void (*probe)()) { g_beatGapProbe.store(probe, std::memory_order_relaxed); }
 
 }  // namespace cascade::core::beats

@@ -76,6 +76,12 @@ int main() {
         CHECK(t.find("secret") == std::string::npos && t.find("0xC") == std::string::npos && t.find("0.99") == std::string::npos);
         // Lower case is the same id, upper-cased.
         CHECK(recentFaultsText(readable({report("crash", "abcdef0123456789")}, 1)) == "ABCDEF0123456789 crash");
+        // THE ISSUE REPORT (0.99.100, core/issue_report.hpp; deep review of engine/stage4, batch A) is a kind of its own, and the closed list names it: a
+        // pasted line that called it "unknown" sent a reader looking for a report nobody could read.
+        CHECK(recentFaultsText(readable({report("issue", "0123456789ABCDEF")}, 1)) == "0123456789ABCDEF issue");
+        CHECK(recentFaultsText(readable({report("issue", "0123456789ABCDEF"), report("hang", "FEDCBA9876543210")}, 2)) ==
+              "0123456789ABCDEF issue, FEDCBA9876543210 hang");
+        CHECK(onlyIdsAndKinds(recentFaultsText(readable({report("issue", "0123456789ABCDEF")}, 1))));
     }
     // THE LISTING IS THE NEWEST TEN: the rest are counted, not named.
     {
@@ -92,7 +98,7 @@ int main() {
             const std::string t = recentFaultsText(readable({report("crash", bad)}, 1));
             CHECK(t == "unsigned crash");
         }
-        // A kind that is not one of the three is "unknown", whatever the file said.
+        // A kind that is not one of the four (crash, hang, stall, issue) is "unknown", whatever the file said.
         CHECK(recentFaultsText(readable({report("C:\\evil", "0123456789ABCDEF")}, 1)) == "0123456789ABCDEF unknown");
         CHECK(recentFaultsText(readable({report("", "0123456789ABCDEF")}, 1)) == "0123456789ABCDEF unknown");
     }

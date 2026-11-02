@@ -30,6 +30,9 @@
 //   desc-wild-tables    the descriptor's capability table array points at unreadable memory
 //   entry-size          the decoder entry's tableSize is not sizeof the decoder table
 //   entry-dup           two entries claim the decoder capability
+//   settings-specs-wild the descriptor declares a settings form (CASCADE_CAP_SETTINGS_UI) whose spec array is readable for ONE spec and then runs
+//                       off the end of its page: the table is "static storage, valid for as long as the module is loaded", and this one lies
+//                       (batch A of the deep review, docs/engine-stage4.md 6.31: the host read it, unguarded, when it built the plugin's list)
 //
 // and FAULT_PROBE_LOG names a file each call is appended to ("create", "destroy", "poll_text", "poll_tracks", "poll_image", "process"), so a test can
 // prove a quarantined plugin is never called again. Unset, it writes nothing.
@@ -49,7 +52,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
+#include <sys/mman.h>
 #include <thread>
+#include <unistd.h>
 #endif
 
 #include "plugin_abi.h"
@@ -291,6 +296,34 @@ CascadePluginDesc kDesc = {
     kCapabilities,
 };
 
+// A pointer to `len` bytes that are readable and END exactly at an unreadable page (null where the platform gives no such page): what a table
+// "of four entries" is when only the first is really there.
+const void* edgeOfAPage(std::size_t len) {
+    static char* base = nullptr;
+    static std::size_t page = 0;
+    if (base == nullptr) {
+#if defined(_WIN32)
+        SYSTEM_INFO si;
+        ::GetSystemInfo(&si);
+        page = si.dwPageSize;
+        char* p = static_cast<char*>(::VirtualAlloc(nullptr, page * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        if (p == nullptr) { return nullptr; }
+        DWORD old = 0;
+        ::VirtualProtect(p + page, page, PAGE_NOACCESS, &old);
+        base = p;
+#else
+        page = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
+        void* p = ::mmap(nullptr, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) { return nullptr; }
+        ::mprotect(static_cast<char*>(p) + page, page, PROT_NONE);
+        base = static_cast<char*>(p);
+#endif
+        std::memset(base, 0, page);
+    }
+    if (len > page) { len = page; }
+    return base + page - len;
+}
+
 char g_name[160] = {0};
 #if defined(_WIN32)
 HINSTANCE g_self = nullptr;
@@ -332,10 +365,20 @@ extern "C" CASCADE_PLUGIN_EXPORT const CascadePluginDesc* cascade_plugin_query(u
     // THE CORRUPT DESCRIPTORS (load-time validation, docs 6.28): each hands back a descriptor the host must refuse without dying.
     static CascadePluginDesc bad;
     static CascadeCapabilityEntry badEntries[6];
-    if (has("desc-wild-name") || has("desc-wild-tables") || has("entry-size") || has("entry-dup")) {
+    static CascadeSettingsUiApi badSettings;
+    if (has("desc-wild-name") || has("desc-wild-tables") || has("entry-size") || has("entry-dup") || has("settings-specs-wild")) {
         bad = kDesc;
         std::memcpy(badEntries, kCapabilities, sizeof(kCapabilities));
         bad.capabilityTables = badEntries;
+        if (has("settings-specs-wild")) {
+            // a settings form of four specs, the first of which is readable and the rest of which are not
+            badSettings.structSize = static_cast<uint32_t>(sizeof(CascadeSettingsUiApi));
+            badSettings.count = 4u;
+            badSettings.specs = static_cast<const CascadeSettingSpec*>(edgeOfAPage(sizeof(CascadeSettingSpec)));
+            badEntries[4] = {CASCADE_CAP_SETTINGS_UI, static_cast<uint32_t>(sizeof(CascadeSettingsUiApi)), &badSettings};
+            bad.capabilityCount = 5;
+            bad.capabilities |= CASCADE_CAP_SETTINGS_UI;
+        }
         if (has("desc-wild-name")) { bad.name = reinterpret_cast<const char*>(static_cast<std::uintptr_t>(0x10)); }
         if (has("desc-wild-tables")) {
             bad.capabilityTables = reinterpret_cast<const CascadeCapabilityEntry*>(static_cast<std::uintptr_t>(0x10));

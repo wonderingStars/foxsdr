@@ -206,6 +206,23 @@ bool constantTimeEquals(const std::vector<std::uint8_t>& a,
     return constantTimeEquals(a.data(), b.data(), a.size());
 }
 
+bool constantTimeEqualsText(const std::string& a, const std::string& b) {
+    const std::size_t n = a.size() > b.size() ? a.size() : b.size();
+    // The lengths are part of the answer, folded in without a branch on their difference (the 64-bit difference is folded to one byte by or-ing its bytes).
+    std::uint64_t lenDiff = static_cast<std::uint64_t>(a.size()) ^ static_cast<std::uint64_t>(b.size());
+    unsigned char diff = 0;
+    for (int i = 0; i < 8; ++i) {
+        diff = static_cast<unsigned char>(diff | static_cast<unsigned char>(lenDiff & 0xFFu));
+        lenDiff >>= 8;
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+        const unsigned char ca = i < a.size() ? static_cast<unsigned char>(a[i]) : static_cast<unsigned char>(0);
+        const unsigned char cb = i < b.size() ? static_cast<unsigned char>(b[i]) : static_cast<unsigned char>(0);
+        diff = static_cast<unsigned char>(diff | (ca ^ cb));
+    }
+    return diff == 0;
+}
+
 // --- Randomness and digests --------------------------------------------------
 
 bool randomBytes(std::uint8_t* out, std::size_t n, std::string& error) {

@@ -200,6 +200,9 @@ std::string g_aId = "he-a";
 std::string g_bId = "he-b";
 int g_scenario = 0;
 std::string aMode(const char* mode) { return g_aId + ":" + mode; }
+// THE NAME THE LOG USES FOR A PLUGIN: its PUBLIC id (docs/engine-stage4.md 6.28 item 6, 6.31) - `site-` and a hash for a plugin that is not one of FoxSDR's own, as these
+// fixtures are not. The log ring is copied into every report, so a line that named the file's id would carry a private plugin's name out of the machine.
+std::string pubA() { return fault::publicIdOf(fault::slotFor(hostile::leafOf(g_aId))); }
 
 const cc::LoadedPlugin* pluginOf(Rig& r, const std::string& file) {
     for (const cc::LoadedPlugin& p : Access::plugins(r.eng)) {
@@ -245,7 +248,8 @@ void expectPutDown(Rig& r, const std::string& a, const std::string& b, const cha
     CHECK(r.item(a, it));
     CHECK((static_cast<int>(it.value[3]) & 8) != 0);
     CHECK(it.value[2] >= 2.0);
-    CHECK(logHas("plugin: " + g_aId + " was switched off for this session"));
+    CHECK(logHas("plugin: " + pubA() + " was switched off for this session"));
+    CHECK(pubA().rfind("site-", 0) == 0 && !logHas("plugin: " + g_aId + " was switched off for this session"));
     // the module stays mapped: its instances were leaked on purpose
     const cc::LoadedPlugin* lp = pluginOf(r, a);
     CHECK(lp != nullptr && lp->loaded && lp->nativeHandle != nullptr);
@@ -289,7 +293,7 @@ void testFaults() {
         hostile::setMode(nullptr);
         expectPutDown(r, a, b, "faulted", "create");
         CHECK(counted("pluginfault") == 1 && counted("pluginquarantine") == 1 && counted("pluginwedge") == 0 && counted("pluginoveruse") == 0);
-        CHECK(logHas("plugin: " + g_aId + " faulted in create"));
+        CHECK(logHas("plugin: " + pubA() + " faulted in create"));
         std::string viol;
         CHECK(hostile::violations(*pluginOf(r, a), &viol) == 0);
         CHECK(hostile::violations(*pluginOf(r, b)) == 0);
@@ -415,12 +419,12 @@ void testMisuse() {
     }
     CHECK(flood == 400 - cc::PluginApiCore::kLogQueue && wrong == 1 && bad == 5);
     // ...said ONCE each, in the log, by the engine's pass...
-    CHECK(logCount("plugin: " + g_aId + " broke a rule of the plugin API (flood)") == 1);
-    CHECK(logCount("plugin: " + g_aId + " broke a rule of the plugin API (wrong-thread)") == 1);
-    CHECK(logCount("plugin: " + g_aId + " broke a rule of the plugin API (bad-call)") == 1);
+    CHECK(logCount("plugin: " + pubA() + " broke a rule of the plugin API (flood)") == 1);
+    CHECK(logCount("plugin: " + pubA() + " broke a rule of the plugin API (wrong-thread)") == 1);
+    CHECK(logCount("plugin: " + pubA() + " broke a rule of the plugin API (bad-call)") == 1);
     (void)hostile::doOp(*lp, "bad-call");
     r.pump(3);
-    CHECK(logCount("plugin: " + g_aId + " broke a rule of the plugin API (bad-call)") == 1);   // not again
+    CHECK(logCount("plugin: " + pubA() + " broke a rule of the plugin API (bad-call)") == 1);   // not again
     // ...but it is not the anonymous ledger's business, and the plugin is not put down: the ABI has an answer for each and it was given
     CHECK(counted("pluginfault") == 0 && counted("pluginquarantine") == 0 && counted("pluginwedge") == 0 && counted("pluginoveruse") == 0);
     CHECK(!Access::isQuarantinedId(r.eng, g_aId));

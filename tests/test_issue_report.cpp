@@ -308,6 +308,62 @@ int main() {
         CHECK(expected == 5);
     }
 
+    // --- A WATCH BASELINED WHEN ITS OWNER STARTS COUNTS WHAT MOVES BEFORE ITS FIRST POLL (deep review of engine/stage4, batch A) ---------
+    // RecoveryWatch::poll took the FIRST reading for the baseline. The engine's first pass runs its plugin phase (a plugin that faults in create on every
+    // launch is absorbed there) BEFORE the health poll at the end of the same pass, so the one fault most worth reporting - the plugin that dies at every
+    // start - moved a counter before the first poll and was never counted, never reported. An owner that baselines at construction misses nothing.
+    {
+        issue::resetIssueReportsForTest();
+        for (const fs::path& p : issueFiles(dir)) { fs::remove(p, ec); }
+        CrashHandlerConfig on;
+        on.crashDir = dir.string();
+        on.enabled = true;
+        on.minidump = false;
+        on.exitAfterReport = false;
+        installCrashHandlers(on);
+        health::RecoveryReadings base;
+        base.pluginFaults = 3;                    // the process's own history before the engine existed: not news
+        health::RecoveryWatch started;
+        started.baseline(base);
+        health::RecoveryReadings now = base;
+        now.pluginFaults += 1;                    // ...a plugin faulted between the baseline and the first poll
+        now.pluginQuarantines += 1;
+        started.poll(now);                        // THE FIRST POLL
+        std::printf("  a watch baselined at start, first poll after a plugin fault: %zu issue file(s)\n", issueFiles(dir).size());
+        CHECK(issueFiles(dir).size() == 2);       // pluginfault and pluginquarantine, one report each
+        // ...and a watch nobody baselined keeps its old rule: its first poll is the baseline, whatever it reads
+        for (const fs::path& p : issueFiles(dir)) { fs::remove(p, ec); }
+        issue::resetIssueReportsForTest();
+        health::RecoveryWatch unstarted;
+        unstarted.poll(now);
+        CHECK(issueFiles(dir).empty());
+    }
+
+    // --- A WRITE THAT FAILS IS NOT A REPORT FILED (deep review of engine/stage4, batch A) ----------------------------------------------
+    // fileIssueReport set the once-a-session bit BEFORE it opened the file: a reports folder that was unwritable for a moment (a disk full, a synced
+    // folder that dropped, a scan holding it) lost the word for the rest of the session, however often the fault came back once the folder had.
+    {
+        issue::resetIssueReportsForTest();
+        const fs::path flaky = dir / "flaky";
+        fs::create_directories(flaky, ec);
+        CrashHandlerConfig on;
+        on.crashDir = flaky.string();
+        on.enabled = true;
+        on.minidump = false;
+        on.exitAfterReport = false;
+        installCrashHandlers(on);
+        CHECK(!activeCrashDir().empty());
+        fs::remove_all(flaky, ec);                                  // the folder drops away
+        CHECK(issue::fileIssueReport(Recovered::Audio).empty());    // nothing could be written
+        fs::create_directories(flaky, ec);                          // ...and it comes back
+        const std::string again = issue::fileIssueReport(Recovered::Audio);
+        std::printf("  the same word after the folder came back: %s\n", again.empty() ? "NOT filed" : "filed");
+        CHECK(!again.empty());                                      // the word was not spent on the failed write
+        CHECK(issueFiles(flaky).size() == 1);
+        CHECK(issue::fileIssueReport(Recovered::Audio).empty());    // and a report that DID get written is still once a session
+        CHECK(issueFiles(flaky).size() == 1);
+    }
+
     fs::remove_all(dir, ec);
     return testSummary("test_issue_report");
 }

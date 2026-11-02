@@ -20,9 +20,13 @@
 // so without changing the layout, which a test pins field by field.
 //
 // THE HOT PATH IS ALLOCATION-FREE AND LOCK-FREE. beat() is one steady-clock read
-// and two relaxed stores into a page that already exists. Every writer is the
-// application's one GUI thread; the few bits another thread could set are changed
-// with an atomic read-modify-write, so no update is ever lost.
+// and two relaxed stores into a page that already exists. The beat has ONE writer,
+// the host's frame loop - the window application's GUI thread, or, in a headless
+// service that has no window, the engine's control thread (HangWatchdog::
+// setSentinelHeartbeat; docs/engine-stage4.md 6.31). A second thread that beat
+// would not be a second frame loop: it would hide a wedged one. The few bits
+// another thread could set, and the count itself, are changed with an atomic
+// read-modify-write, so no update is ever lost.
 //
 // NO NAME, NO COLLISION. The block is an UNNAMED mapping handed to the watcher as
 // an inherited handle (Windows) or file descriptor (Linux): there is no object name
@@ -283,25 +287,33 @@ inline void setFrameScope(std::uint32_t scopePlusOne) noexcept {
     detail::at(b->frameScope).store(scopePlusOne, std::memory_order_relaxed);
 }
 
-// THE HEARTBEAT: called once per frame by the GUI thread, from
+// THE HEARTBEAT: called once per frame by the host's frame loop, from
 // HangWatchdog::heartbeat - the same call the freeze watchdog is built on, so
 // "silent" means to the watcher exactly what it means to the watchdog. The second
 // heartbeat is what ends AwaitingFirstFrame: by then the first frame has been
 // drawn to the end, so a death during it is still "before the first frame".
+//
+// WHO MAY CALL IT (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): the process's FRAME LOOP and nobody else. HangWatchdog::heartbeat makes
+// the call only for a watchdog that has been told it is that loop (HangWatchdog::setSentinelHeartbeat): the window's is, and so is the control thread's in a
+// host with no window; the control thread of a host WITH a window is not. A second thread that beat would not be a second frame loop - it would hide a
+// wedged one: the watcher's silence clock would read zero while the window was frozen (the ending filed Outside instead of Frozen), the "somebody is holding
+// the window" bit would be cleared within a pass of a drag starting, and the first frame would be ended early by the second beat of the wrong thread.
 inline void beat() noexcept {
     Block* b = g_block.load(std::memory_order_relaxed);
     if (b == nullptr) { return; }
-    // A BEAT BEFORE THE WINDOW IS SHOWN IS NOT A FRAME (shell retirement R8, 2026-10-28). The engine's control thread beats this too (its watchdog is a
-    // HangWatchdog like the window's), and since R8 it starts before the GL window exists - main.cpp starts the service, then runs the window - so its beats
-    // arrive while the phase is still Starting, BuildingApp or CreatingWindow. Counted, they used up the "second heartbeat" before AwaitingFirstFrame was
-    // entered and the phase never reached Running (a death an hour in was "before the first frame"; test_sentinel_app and test_exit_cause_app found it), and
-    // they kept the silence clock at zero through a window that never appeared (the start-up hang the sentinel exists to name). Ignored until the window
-    // is up, the count and the clock are what they were when the engine started after it.
+    // A BEAT BEFORE THE WINDOW IS SHOWN IS NOT A FRAME (shell retirement R8, 2026-10-28). The engine's control thread's watchdog is a HangWatchdog like the
+    // window's, and since R8 the thread starts before the GL window exists - main.cpp starts the service, then runs the window - so a beat from it arrived
+    // while the phase was still Starting, BuildingApp or CreatingWindow. Counted, it used up the "second heartbeat" before AwaitingFirstFrame was entered and
+    // the phase never reached Running (a death an hour in was "before the first frame"; test_sentinel_app and test_exit_cause_app found it), and kept the
+    // silence clock at zero through a window that never appeared (the start-up hang the sentinel exists to name). Ignored until the host says it is up, the
+    // count and the clock are what they were when the engine started after it. (That gate alone was not enough: it left the control thread beating once the
+    // window WAS up - which is why the control thread no longer beats in a host that has one.)
     if (detail::at(b->phase).load(std::memory_order_relaxed) < static_cast<std::uint32_t>(Phase::AwaitingFirstFrame)) { return; }
     detail::at(b->beatMs).store(nowMs(), std::memory_order_relaxed);
-    auto frames = detail::at(b->frames);
-    const std::uint64_t n = frames.load(std::memory_order_relaxed) + 1;
-    frames.store(n, std::memory_order_relaxed);
+    // THE COUNT IS ONE ATOMIC ADD (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): the block's comment has always promised that "no update
+    // is ever lost", and a load, an increment and a store are three steps. With the beat's one writer that was true; the engine's control thread used to beat
+    // too, from a second thread (the sentinel-heartbeat finding), and two beaters lost counts - which only made the first-frame test (`n == 2`) unreliable.
+    const std::uint64_t n = detail::at(b->frames).fetch_add(1, std::memory_order_relaxed) + 1;
     if (n == 2 && detail::at(b->phase).load(std::memory_order_relaxed) ==
                       static_cast<std::uint32_t>(Phase::AwaitingFirstFrame)) {
         setPhase(Phase::Running);

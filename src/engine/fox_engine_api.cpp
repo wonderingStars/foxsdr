@@ -46,6 +46,7 @@
 #include "core/receiver_tables.hpp"
 #include "net/status_compose.hpp"
 #include "net/web_audio.hpp"
+#include "net/web_auth.hpp"
 #include "source/tx_sink.hpp"
 #include "core/tune_control.hpp"
 
@@ -694,7 +695,13 @@ public:
         const std::int64_t now = steadyMs();
         std::lock_guard<std::mutex> lk(tokensMutex_);
         if (lockedUntilMs_ > now) { return FOXAPI_LIMIT; }
-        if (opt_.user.empty() || opt_.password.empty() || opt_.user != user || opt_.password != password) {
+        // THE CREDENTIAL IS COMPARED IN CONSTANT TIME, and both halves always are (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): `!=` leaves
+        // at the first differing byte, so the time a refusal took said how many leading characters were right - and a short-circuit between the user and the
+        // password said whether the user was. net::constantTimeEqualsText reads every byte of the longer string; `&` and not `&&` keeps the second compare from
+        // being skipped. (The web server's own login never did otherwise: net/web_auth.cpp.)
+        const bool userOk = !opt_.user.empty() && cascade::net::constantTimeEqualsText(opt_.user, user);
+        const bool passwordOk = !opt_.password.empty() && cascade::net::constantTimeEqualsText(opt_.password, password);
+        if (!(userOk & passwordOk)) {
             if (++loginFailures_ >= kLoginFailuresBeforeLockout) {
                 loginFailures_ = 0;
                 lockedUntilMs_ = now + opt_.loginLockoutMs;
@@ -719,7 +726,7 @@ public:
 
     int32_t logout(const char* token) {
         if (token == nullptr) { return FOXAPI_BAD_ARGUMENT; }
-        if (!opt_.token.empty() && opt_.token == token) { return FOXAPI_DENIED; }
+        if (!opt_.token.empty() && cascade::net::constantTimeEqualsText(opt_.token, token)) { return FOXAPI_DENIED; }   // (constant time: see login)
         bool live = false;
         {
             std::lock_guard<std::mutex> lk(tokensMutex_);
@@ -764,7 +771,7 @@ public:
     }
 
     bool tokenValid(const char* t) {
-        if (!opt_.token.empty() && opt_.token == t) { return true; }
+        if (!opt_.token.empty() && cascade::net::constantTimeEqualsText(opt_.token, t)) { return true; }   // (constant time: see login)
         bool expired = false;
         {
             std::lock_guard<std::mutex> lk(tokensMutex_);
@@ -1728,6 +1735,12 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
         case FOXAPI_OP_SCAN_SERIAL_PORTS:
             // The ports of THIS machine (API 0.3): LOCAL sessions only.
             return remote ? FOXAPI_DENIED : FOXAPI_OK;
+        case FOXAPI_OP_GPS:
+            // The reader opens its `text` as a serial port - and the port layer opens a typed name exactly as it opens a port: a file, or on Windows a UNC path
+            // (an outbound SMB connection, with the user's credentials) or a drive path (opened read-write and exclusively for the length of the read). That is a
+            // name on THIS machine, and no remote session names one (API.md 5: the file and address sources, the port scan above): a START is LOCAL only. A STOP
+            // names nothing, and is as harmless as it ever was. (Deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31.)
+            return (remote && c.ival[0] != 0) ? FOXAPI_DENIED : FOXAPI_OK;
         case FOXAPI_OP_TX_SET_MODE:
             return (c.ival[0] >= 0 && c.ival[0] <= FOXAPI_TX_MODE_LSB) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_TX_SET_FREQUENCY:
@@ -1798,6 +1811,9 @@ const char* ApiHostImpl::refusalText(const Pending& p) {
             }
             if (remote && p.cmd.op == FOXAPI_OP_SELECT_SOURCE) {
                 return "a remote session cannot name a file or an address on this machine";
+            }
+            if (remote && p.cmd.op == FOXAPI_OP_GPS) {
+                return "a remote session cannot name a serial port on this machine";
             }
             return "this session does not hold the grant for that";
         case FOXAPI_OUT_OF_RANGE: return "a value is outside what the engine accepts";
@@ -2274,6 +2290,11 @@ void ApiHostImpl::txPass() {
         }
         engine_.txPluginStep(lease);
     }
+    // THE TRANSMITTER IS ON THE DIAL BEFORE THE TICK THAT CAN KEY IT (the owner's decision of 2026-11-02, docs/engine-stage4.md 6.31). The transmit frequency is frozen from
+    // key-down, and the engine brings the transmitter onto the dial once a pass, at the END of it (pumpPublish) - after this tick. A batch that moves the dial and presses
+    // the key (a web client's two messages in one tick, a script) would otherwise key the radio while the transmitter was still on the dial's previous place, and the freeze
+    // would hold it there for the whole transmission: a carrier on a frequency nobody chose. A no-op unless the dial has moved; held, silently, once the radio is keyed.
+    engine_.followTransmitFrequency();
     tx.tick();
     engine_.txPluginAfterTick();
     if (rules_.keyed() && !tx.pttHeld() && !tx.latched() && !tx.remoteKeyed()) {
@@ -2635,7 +2656,9 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
             if (want(1)) {
                 it.id = 1;
                 copyText(it.name, "ADALM-Pluto");
-                copyText(it.detail, b->txArgs.c_str());
+                // The address is the transmitter's, on this machine's network: the same value as fact.transmit.args, which is LOCAL only, and every other list
+                // that names something of this machine's blanks it for a REMOTE session (deep review of engine/stage4, batch A; docs/api-0.3-additions.md 5.2).
+                if (local) { copyText(it.detail, b->txArgs.c_str()); }
                 if (b->txOpen) { it.flags |= FOXAPI_ITEM_ACTIVE; }
             }
             break;

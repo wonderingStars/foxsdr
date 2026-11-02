@@ -113,14 +113,9 @@ std::uint64_t fnv1a(const char* s) {
     return h;
 }
 
-std::string normaliseId(const std::string& key) {
-    std::string id = pluginRunId(key);
-    for (char& c : id) {
-        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
-    }
-    if (id.size() >= kIdBytes) { id.resize(kIdBytes - 1); }
-    return id;
-}
+// ONE ID, EVERYWHERE (core/plugin_run.hpp containmentId): the marker's slot, the strike record and this slot hold the same form, and so does everything that
+// looks one up.
+std::string normaliseId(const std::string& key) { return containmentId(key); }
 
 Slot* find(const char* id) {
     State& st = state();
@@ -176,7 +171,7 @@ bool quarantineSlot(Slot* s, Why why, Entry entry) {
     s->quarantines.fetch_add(1, std::memory_order_relaxed);
     st.quarantines.fetch_add(1, std::memory_order_relaxed);
     push(makeEvent(s, Event::Kind::Quarantine, entry, why, 0));
-    diagWarnf("plugin: %s is switched off for this session (%s in %s)", s->id, whyWord(why), entryWord(entry));
+    diagWarnf("plugin: %s is switched off for this session (%s in %s)", publicIdOf(s), whyWord(why), entryWord(entry));
     return true;
 }
 
@@ -187,7 +182,7 @@ void countFault(Slot* s, Entry entry, unsigned long code) {
         st.faults.fetch_add(1, std::memory_order_relaxed);
     }
     push(makeEvent(s, Event::Kind::Fault, entry, Why::Fault, code));
-    diagWarnf("plugin: %s faulted in %s (code 0x%08lX); the fault was absorbed and the session carries on", s->id, entryWord(entry),
+    diagWarnf("plugin: %s faulted in %s (code 0x%08lX); the fault was absorbed and the session carries on", publicIdOf(s), entryWord(entry),
               code);
 }
 
@@ -198,7 +193,7 @@ void countOverrun(Slot* s, Entry entry) {
         st.overruns.fetch_add(1, std::memory_order_relaxed);
     }
     push(makeEvent(s, Event::Kind::Overrun, entry, Why::None, 0));
-    diagWarnf("plugin: %s overran its budget in %s (%u ms)", s->id, entryWord(entry), effectiveBudget(entry));
+    diagWarnf("plugin: %s overran its budget in %s (%u ms)", publicIdOf(s), entryWord(entry), effectiveBudget(entry));
 }
 
 void countWedge(Slot* s, Entry entry) {
@@ -208,7 +203,7 @@ void countWedge(Slot* s, Entry entry) {
         st.wedges.fetch_add(1, std::memory_order_relaxed);
     }
     push(makeEvent(s, Event::Kind::Wedge, entry, Why::Wedge, 0));
-    diagWarnf("plugin: %s did not return from %s within %u ms", s->id, entryWord(entry), effectiveBudget(entry) * kWedgeFactor);
+    diagWarnf("plugin: %s did not return from %s within %u ms", publicIdOf(s), entryWord(entry), effectiveBudget(entry) * kWedgeFactor);
     (void)quarantineSlot(s, Why::Wedge, entry);
 }
 
@@ -316,6 +311,13 @@ void setIdentity(const std::string& pluginKeyOrId, const std::string& version, O
     s->pub.store(origin == Origin::Official ? s->id : s->hashed, std::memory_order_relaxed);
     s->modSize.store(moduleSize, std::memory_order_relaxed);
     s->modBase.store(reinterpret_cast<std::uintptr_t>(moduleBase), std::memory_order_release);
+}
+
+std::string publicIdFor(const std::string& containmentId, Origin origin) {
+    if (origin == Origin::Official) { return containmentId; }
+    char hashed[24] = {0};
+    std::snprintf(hashed, sizeof(hashed), "site-%08x", static_cast<unsigned>(fnv1a(containmentId.c_str()) & 0xFFFFFFFFu));
+    return std::string(hashed);
 }
 
 void clearModule(const std::string& pluginKeyOrId) {
@@ -482,7 +484,7 @@ bool quarantine(Slot* s, Why why, Entry entry) {
 bool release(Slot* s) {
     if (s == nullptr || s == &state().shared) { return false; }
     std::uint8_t was = s->why.exchange(0, std::memory_order_acq_rel);
-    if (was != 0) { diagLogf("plugin: %s is switched on again (re-enabled by the user)", s->id); }
+    if (was != 0) { diagLogf("plugin: %s is switched on again (re-enabled by the user)", publicIdOf(s)); }
     return was != 0;
 }
 
@@ -564,7 +566,7 @@ std::size_t noteUnloadTimeout() {
         s->wedges.fetch_add(1, std::memory_order_relaxed);
         state().wedges.fetch_add(1, std::memory_order_relaxed);
         push(makeEvent(s, Event::Kind::UnloadTimeout, static_cast<Entry>(s->lastEntry.load(std::memory_order_relaxed)), Why::None, 0));
-        diagWarnf("plugin: the unload handshake timed out with %s inside a call", s->id);
+        diagWarnf("plugin: the unload handshake timed out with %s inside a call", publicIdOf(s));
         ++charged;
     }
     return charged;

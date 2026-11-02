@@ -7,8 +7,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #if defined(_WIN32)
@@ -236,15 +238,29 @@ std::string fileIssueReport(Recovered word) {
         return std::string();
     }
     if ((g_filed.fetch_or(bit, std::memory_order_acq_rel) & bit) != 0) { return std::string(); }
+    // THE ONCE-A-SESSION BIT STANDS FOR A REPORT THAT WAS WRITTEN (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). It is taken above so that two
+    // threads meeting one word file one report, and it is GIVEN BACK if the file does not get written: a reports folder that is briefly unwritable (a full disk,
+    // a sync client's lock, a scanner) used to cost the word for the rest of the session, so the same fault met a minute later - folder recovered - was never
+    // reported, against the rule that every handled fault is.
+    const auto giveBack = [&] { g_filed.fetch_and(~bit, std::memory_order_acq_rel); };
 
     const std::string path = dir + "/issue-" + stamp() + "-" + std::to_string(processId()) + "-" +
                              std::to_string(g_seq.fetch_add(1u) + 1u) + ".txt";
     const std::string text = renderIssueReport(word);
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) { return std::string(); }
+    if (!out) {
+        giveBack();
+        return std::string();
+    }
     out.write(text.data(), static_cast<std::streamsize>(text.size()));
     out.flush();
-    if (!out) { return std::string(); }
+    if (!out) {
+        out.close();
+        std::error_code ec;
+        std::filesystem::remove(path, ec);   // (a half-written report is not a report)
+        giveBack();
+        return std::string();
+    }
     diagLogf("issue report written - %s (recovered.%s)", path.c_str(), health::recoveredWord(word));
     return path;
 }

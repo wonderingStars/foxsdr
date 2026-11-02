@@ -29,6 +29,7 @@
 #ifndef CASCADE_CORE_PLUGIN_RUN_HPP
 #define CASCADE_CORE_PLUGIN_RUN_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -55,6 +56,15 @@ bool parsePluginRun(const std::string& word, PluginRun& out);
 // plain "strip the last dot" would not guarantee for an id that contains a dot. A path is
 // accepted; only its last component is used. An empty id matches nothing, anywhere.
 std::string pluginRunId(const std::string& moduleFileOrId);
+
+// THE ID THE PLUGIN CONTAINMENT FILES A PLUGIN UNDER (plugin_marker.hpp, plugin_fault.hpp; docs/engine-stage4.md 6.28 and 6.31): the run id above,
+// lower-cased (ASCII, as NTFS names are) and cut to kContainmentIdMax characters - the width of a marker slot and of a fault slot (48 bytes with
+// the terminator). Everything that STORES a containment id (a marker slot, a strike record in plugin-faults.json, a fault slot, the engine's
+// quarantine list) holds this form, so everything that LOOKS ONE UP must ask in it: a lookup with the raw run id never finds a plugin whose id is
+// longer than the slot or written in capitals, and the crash-loop breaker and the quarantine then do nothing for it. Idempotent, like pluginRunId.
+// (The cut is plain, not hashed: two plugins whose ids share their first 47 characters share a slot, as they always did.)
+inline constexpr std::size_t kContainmentIdMax = 47;
+std::string containmentId(const std::string& moduleFileOrId);
 
 // HOW LONG A PLUGIN KEEPS RUNNING AFTER ITS LAST WANT DISAPPEARS: long enough that opening and
 // closing a window is not a create and a destroy each time, short enough that a plugin the

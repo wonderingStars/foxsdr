@@ -904,8 +904,8 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
     fault::Slot* const slot = fault::slotFor(modKey);
     // A plugin that was switched off this session gets no UI instance either.
     if (fault::isQuarantined(slot)) { return; }
-    const marker::Phase phaseBefore = marker::phaseOf(modKey);
-    marker::set(modKey, marker::Phase::Create, lp.version, faultOriginOf(lp.origin));
+    // A BRACKET (see PluginRunner::buildPluginLocked): this plugin is inside create() until the end of this function, and rests in first-pass if an instance was made.
+    marker::CallPhase inCreate(modKey, marker::Phase::Create, lp.version, faultOriginOf(lp.origin));
     bool createdAny = false;
     // Host services FIRST. The ABI says attach() runs before any other
     // capability's create(), so a tracker can read the receiver while
@@ -1039,7 +1039,7 @@ void PluginUi::buildPluginLocked(const LoadedPlugin& lp) {
     }
     // Out of create(): an instance exists and has not yet been polled (`first-pass`, promoted by the engine's pass), or none was made and the
     // plugin is back to the phase it was in.
-    marker::set(modKey, createdAny ? marker::Phase::FirstPass : phaseBefore, lp.version, faultOriginOf(lp.origin));
+    if (createdAny) { inCreate.settle(marker::Phase::FirstPass); }
 }
 
 // ---------------------------------------------------------------------------

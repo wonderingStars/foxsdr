@@ -363,6 +363,7 @@ void testHost() {
     copy("val-query" CASCADE_PROBE_SUFFIX);
     copy("val-wildname" CASCADE_PROBE_SUFFIX);
     copy("val-wildtables" CASCADE_PROBE_SUFFIX);
+    copy("val-wildspecs" CASCADE_PROBE_SUFFIX);
     copy("val-entrysize" CASCADE_PROBE_SUFFIX);
     copy("val-entrydup" CASCADE_PROBE_SUFFIX);
 
@@ -382,7 +383,7 @@ void testHost() {
     const fs::path aside = g_root / "aside";
     fs::create_directories(aside);
     for (const char* leaf : {"val-good" CASCADE_PROBE_SUFFIX, "val-dllmain" CASCADE_PROBE_SUFFIX, "val-query" CASCADE_PROBE_SUFFIX,
-                             "val-wildname" CASCADE_PROBE_SUFFIX, "val-wildtables" CASCADE_PROBE_SUFFIX,
+                             "val-wildname" CASCADE_PROBE_SUFFIX, "val-wildtables" CASCADE_PROBE_SUFFIX, "val-wildspecs" CASCADE_PROBE_SUFFIX,
                              "val-entrysize" CASCADE_PROBE_SUFFIX, "val-entrydup" CASCADE_PROBE_SUFFIX}) {
         fs::rename(dir / leaf, aside / leaf, ec);
     }
@@ -413,7 +414,7 @@ void testHost() {
 
     // the corrupt modules: each faults in its own way, with real code running, and each is refused with a verdict and the process is alive
     for (const char* leaf : {"val-good" CASCADE_PROBE_SUFFIX, "val-dllmain" CASCADE_PROBE_SUFFIX, "val-query" CASCADE_PROBE_SUFFIX,
-                             "val-wildname" CASCADE_PROBE_SUFFIX, "val-wildtables" CASCADE_PROBE_SUFFIX,
+                             "val-wildname" CASCADE_PROBE_SUFFIX, "val-wildtables" CASCADE_PROBE_SUFFIX, "val-wildspecs" CASCADE_PROBE_SUFFIX,
                              "val-entrysize" CASCADE_PROBE_SUFFIX, "val-entrydup" CASCADE_PROBE_SUFFIX}) {
         fs::rename(aside / leaf, dir / leaf, ec);
     }
@@ -436,6 +437,12 @@ void testHost() {
         {"val-query" CASCADE_PROBE_SUFFIX, "query-av", "", true},
         {"val-wildname" CASCADE_PROBE_SUFFIX, "desc-wild-name", "corrupt", true},
         {"val-wildtables" CASCADE_PROBE_SUFFIX, "desc-wild-tables", "corrupt", true},
+        // A SETTINGS TABLE WHOSE SPEC ARRAY RUNS OFF THE END OF ITS PAGE (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): the table's
+        // pointer is non-null and its count in range, so the validator accepted it, and the first READ of the array - the engine's list build, on the pass
+        // thread, long after the load, with no guard active - was an access violation in the host's own image: the process died, the crash handler found no
+        // plugin frame and no call in flight, and the breaker never heard of it (the same death on every launch). Now the array is read where the descriptor
+        // is, under the descriptor's guard: the module is refused with a verdict.
+        {"val-wildspecs" CASCADE_PROBE_SUFFIX, "settings-specs-wild", "corrupt", true},
         {"val-entrydup" CASCADE_PROBE_SUFFIX, "entry-dup", "", false},
     };
     for (const Case& c : cases) {

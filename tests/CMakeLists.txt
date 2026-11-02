@@ -690,7 +690,7 @@ foreach(_t IN ITEMS test_engine_main_version test_engine_main_args test_engine_m
                     test_engine_main_links_headless test_engine_main_config_roundtrip test_engine_main_clean_exit_marker
                     test_engine_main_damaged_config test_engine_main_second_instance_refused
                     test_engine_main_sigterm test_engine_main_sigterm_wedged test_engine_main_provision
-                    test_engine_main_password_not_in_argv test_tester_host_only)
+                    test_engine_main_password_not_in_argv test_tester_host_only test_engine_main_sentinel)
     if(TARGET ${_t})
         add_dependencies(${_t} foxsdr-engine cascade)
     endif()

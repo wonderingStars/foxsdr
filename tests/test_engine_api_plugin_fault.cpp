@@ -36,6 +36,8 @@
 #include "core/health_events.hpp"
 #include "core/plugin_fault.hpp"
 #include "core/plugin_marker.hpp"
+#include "core/diag_log.hpp"
+#include "core/plugin_run.hpp"
 #include "core/plugin_ui.hpp"
 #include "core/telemetry.hpp"
 #include "engine/engine.hpp"
@@ -94,6 +96,7 @@ struct AppWindowTestAccess {
     static void setRemote(Engine& e, bool on) { e.commandFromRemote_ = on; }
     static FoxCommandResult applyDirect(Engine& e, const FoxCommand& c) { return e.applyCommand(c, std::string()); }
     static bool isQuarantinedId(Engine& e, const std::string& id) { return e.pluginIsQuarantinedId(id); }
+    static bool isStopped(Engine& e, const std::string& key) { return e.pluginIsStopped(key); }
 };
 }  // namespace cascade::gui
 
@@ -481,7 +484,138 @@ void testStart() {
     marker::resetForTest();
 }
 
+// ---- E ----------------------------------------------------------------------------------------------------------------------------
+// ONE ID, ONE FORM (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The guard files a plugin's slot under its run id lower-cased and cut to
+// the slot's 47 characters, and the engine's quarantine list holds that form - but the engine looked it up by the plain run id (the plugin's own spelling, any
+// length): a plugin whose file is written in capitals, or whose id is longer than a slot, was quarantined by the guard (the guard refuses it a new instance) and
+// then NOT STOPPED anywhere else - the engine kept choosing it as the map's or the tracks' provider, and the host API did not report it STOPPED, so a thread it
+// had leaked from create() went on posting requests; and for the long id the pass could not even find the module (the ids never compared equal), so its
+// instances were not removed and the notice was never posted.
+void testOneIdForm() {
+    std::printf("  E: a plugin with a mixed-case or a long id is switched off everywhere, not only in the guard\n");
+    clearPlugins();
+    const std::string mixedId = "Eq-Mixed";
+    const std::string longId = "eq-long-decoder-name-for-a-satellite-modem-pipeline-xx";   // 54 characters: longer than a slot
+    CHECK(longId.size() > cc::kContainmentIdMax);
+    installProbe(mixedId.c_str());
+    installProbe(longId.c_str());
+    installProbe("eq-plain");
+    cascade::core::DiagLog::instance().resetForTest();   // (the ring below is this test's alone)
+    fault::resetForTest();
+    marker::resetForTest();
+    armLedger();
+    Rig r;
+    const std::string mixed = leafOf(mixedId.c_str());
+    const std::string longer = leafOf(longId.c_str());
+    const std::string plain = leafOf("eq-plain");
+    r.pin(mixed);
+    r.pin(longer);
+    r.pin(plain);
+    CHECK(r.runnerHas(mixed) && r.uiHas(mixed) && r.runnerHas(longer) && r.uiHas(longer) && r.runnerHas(plain) && r.uiHas(plain));
+
+    CHECK(fault::quarantine(fault::slotFor(mixed), fault::Why::Fault, fault::Entry::PollText));
+    CHECK(fault::quarantine(fault::slotFor(longer), fault::Why::Wedge, fault::Entry::PollText));
+    r.pump(4);
+
+    // both halves put down, through the one directive, for BOTH (the long one's module has to be FOUND for that)
+    if (r.runnerHas(longer) || r.uiHas(longer)) { std::printf("FAIL the long-id plugin's instances were not removed after the guard switched it off\n"); }
+    CHECK(!r.runnerHas(mixed) && !r.uiHas(mixed));
+    CHECK(!r.runnerHas(longer) && !r.uiHas(longer));
+    CHECK(r.runnerHas(plain) && r.uiHas(plain));   // the neighbour is untouched
+
+    // the engine answers "stopped" for them by the key the rest of the engine files them under
+    CHECK(Access::isQuarantinedId(r.eng, cc::pluginRunId(mixed)));          // (the plugin's own spelling: "Eq-Mixed")
+    CHECK(Access::isQuarantinedId(r.eng, cc::pluginRunId(longer)));         // (the whole id, past the slot's width)
+    CHECK(!Access::isQuarantinedId(r.eng, "eq-plain-x"));
+    CHECK(Access::isStopped(r.eng, mixed) && Access::isStopped(r.eng, longer) && !Access::isStopped(r.eng, plain));
+    // the host API core, the runner and the window's directive take the stop set as the plugins' own run ids
+    const std::vector<std::string> stopped = Access::stopped(r.eng);
+    if (std::find(stopped.begin(), stopped.end(), cc::pluginRunId(mixed)) == stopped.end()) {
+        std::printf("FAIL the stop set holds the guard's lower-case form, not the plugin's run id (%zu entries)\n", stopped.size());
+    }
+    CHECK(std::find(stopped.begin(), stopped.end(), cc::pluginRunId(mixed)) != stopped.end());
+    CHECK(std::find(stopped.begin(), stopped.end(), cc::pluginRunId(longer)) != stopped.end());
+    CHECK(std::find(stopped.begin(), stopped.end(), cc::pluginRunId(plain)) == stopped.end());
+    CHECK(r.eng.pluginApiShared()->isStopped(mixed));
+    CHECK(r.eng.pluginApiShared()->isStopped(longer));
+    CHECK(!r.eng.pluginApiShared()->isStopped(plain));
+    CHECK(Access::runner(r.eng).isStopped(mixed) && Access::runner(r.eng).isStopped(longer) && !Access::runner(r.eng).isStopped(plain));
+
+    // the rows say so, and the sentence is posted on the row of the long id too
+    for (const std::string& file : {mixed, longer}) {
+        FoxListItem it{};
+        CHECK(r.item(file, it));
+        CHECK((static_cast<int>(it.value[3]) & 8) != 0);
+        const std::string sentence = r.fact("plugin." + file + ".fault");
+        if (sentence.empty()) { std::printf("FAIL no fault sentence on the row of %s\n", file.c_str()); }
+        CHECK(!sentence.empty() && sentence.find("RE-ENABLE") != std::string::npos);
+        CHECK(r.fact("plugin." + file + ".notice") == sentence);
+    }
+
+    // the person's click finds them as well, and they are built afresh
+    for (const std::string& file : {mixed, longer}) {
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PLUGIN_REENABLE, 0.0, 0, file.c_str())).status(), FOXAPI_OK);
+        r.pump(4);
+        CHECK(!fault::isQuarantinedKey(file));
+        CHECK(!Access::isQuarantinedId(r.eng, cc::pluginRunId(file)));
+        CHECK(!Access::isStopped(r.eng, file));
+        CHECK(!r.eng.pluginApiShared()->isStopped(file));
+        r.pin(file);
+        CHECK(r.runnerHas(file) && r.uiHas(file));
+    }
+
+    // THE LOG NAMES THEM BY THE NAME THAT MAY LEAVE THE MACHINE (the plausible finding P1): the pass's lines about the switch-off and about the re-enable carry the
+    // public id - `site-` and a hash for a plugin that is not one of FoxSDR's own - not the file's id. The log ring is copied into every report.
+    {
+        bool sawOff = false;
+        bool sawOn = false;
+        for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+            const bool off = line.find("was switched off for this session") != std::string::npos;
+            const bool on = line.find("re-enabled by the user") != std::string::npos;
+            if (!off && !on) { continue; }
+            sawOff = sawOff || off;
+            sawOn = sawOn || on;
+            std::string lower = line;
+            for (char& c : lower) {
+                if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+            }
+            if (lower.find("eq-mixed") != std::string::npos || lower.find("eq-long-decoder") != std::string::npos) {
+                std::printf("FAIL the log names a plugin by its file's id: %s\n", line.c_str());
+            }
+            CHECK(lower.find("eq-mixed") == std::string::npos);
+            CHECK(lower.find("eq-long-decoder") == std::string::npos);
+            CHECK(line.find("site-") != std::string::npos);
+        }
+        CHECK(sawOff);
+        CHECK(sawOn);
+    }
+    armLedger();
+}
+
 }  // namespace
+
+// ---- F ----------------------------------------------------------------------------------------------------------------------------
+// THE RECOVERY WATCH'S BASELINE IS THE ENGINE'S CONSTRUCTION (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The watch took the first poll's reading for
+// its baseline, and the engine's first pass runs the plugin phase BEFORE the health poll at the end of the same pass: a plugin that is switched off in the first pass - the one
+// that faults in create() at every launch - moved a counter before the first poll and was never counted or reported. The engine takes the baseline when it is built.
+void testFaultMetBeforeTheFirstPollIsCounted() {
+    std::printf("  F: a plugin switched off before the engine's first health poll is counted\n");
+    fault::resetForTest();
+    marker::resetForTest();
+    armLedger();
+    // the process's own history before the engine exists is not news
+    CHECK(fault::quarantine(fault::slotFor("eq-before-1.0.0-abi3-win-x64.dll"), fault::Why::Fault, fault::Entry::PollText));
+    {
+        Engine eng;   // the watch's baseline is taken here
+        CHECK(fault::quarantine(fault::slotFor("eq-first-pass-1.0.0-abi3-win-x64.dll"), fault::Why::Fault, fault::Entry::Create));   // met after it, before its first poll
+        eng.configureApi(kHooks);
+        eng.initialise();
+        eng.controlPass();   // the first pass: its health poll is the last thing in it
+        if (counted("pluginquarantine") != 1u) { std::printf("    FAIL the first pass counted %u quarantine(s), wanted the one met after the engine was built\n", counted("pluginquarantine")); }
+        CHECK(counted("pluginquarantine") == 1u);
+    }
+    armLedger();
+}
 
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -503,6 +637,8 @@ int main(int argc, char** argv) {
     testLiveQuarantineAndReenable();
     testRealFaultInThePass();
     testStart();
+    testOneIdForm();
+    testFaultMetBeforeTheFirstPollIsCounted();
 
     fs::remove_all(g_scratch, ec);
     return check::finish("test_engine_api_plugin_fault");

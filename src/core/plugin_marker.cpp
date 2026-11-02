@@ -5,6 +5,12 @@
 // another thread holds is a deadlock. A blame racing a set() on the same slot can lose to it; the next start then sees the phase and not
 // the blame, which is the same evidence by another route (the slot was in play) - never a wrong accusation.
 //
+// THE MAPPING IS PINNED IN MEMORY (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). set() stores into the file mapping from inside a plugin's
+// create(), outside any guard. A page that memory pressure had trimmed from the working set, on a settings folder that has since gone away (a network share, a
+// removable drive), is read back in by that store - and an in-page error there is a fatal fault of the host, attributed to nobody. open() writes every page
+// (stampHeader) while the file is there and then locks them into the working set (VirtualLock / mlock): there is nothing left to page in. Where the lock cannot be
+// had, the old exposure remains and the log says so once.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_marker.hpp"
 
@@ -73,6 +79,11 @@ struct State {
     alignas(8) std::uint8_t memory[kFileBytes] = {};
     std::uint8_t* base = nullptr;  // the mapped view, or `memory`
     bool mapped = false;
+    bool pinned = false;           // the view is locked into the working set (keepResident)
+    // BRACKETS OPEN ON EACH SLOT (CallPhase) and the phase each rests in when the last of them closes - this process's memory, not the file's: the file's phase
+    // byte is the evidence and is unchanged. Guarded by `lock`, indexed like the slots, cleared with them.
+    std::uint16_t flight[kSlots] = {};
+    std::uint8_t resting[kSlots] = {};
     std::atomic<std::size_t> dropped{0};
     std::mutex ranMutex;
     std::set<std::string> ran;
@@ -107,28 +118,107 @@ std::uint32_t steadyMs32() noexcept {
 
 SlotRec* slots(State& st) { return reinterpret_cast<SlotRec*>(st.base + sizeof(Header)); }
 
-std::string normalise(const std::string& key) {
-    std::string id = pluginRunId(key);
-    for (char& c : id) {
-        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+// ONE ID, EVERYWHERE (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): the slot holds the containment id - lower-cased and cut to the slot's
+// 47 characters - and so does everything that looks one up (core/plugin_run.hpp containmentId).
+std::string normalise(const std::string& key) { return containmentId(key); }
+
+void resetBrackets(State& st) {
+    std::memset(st.flight, 0, sizeof st.flight);
+    std::memset(st.resting, 0, sizeof st.resting);
+}
+
+// The slot for `id`, or null. The lock is held.
+SlotRec* findLocked(State& st, const std::string& id, std::size_t& at) {
+    SlotRec* s = slots(st);
+    for (std::size_t i = 0; i < kSlots; ++i) {
+        if (s[i].used == 1 && std::strncmp(s[i].id, id.c_str(), kIdBytes) == 0) {
+            at = i;
+            return &s[i];
+        }
     }
-    if (id.size() >= kIdBytes) { id.resize(kIdBytes - 1); }
-    return id;
+    return nullptr;
+}
+
+// The slot for `id`, taking a free one when it has none; null when the table is full. The lock is held.
+SlotRec* takeLocked(State& st, const std::string& id, std::size_t& at) {
+    if (SlotRec* have = findLocked(st, id, at)) { return have; }
+    SlotRec* s = slots(st);
+    for (std::size_t i = 0; i < kSlots; ++i) {
+        if (s[i].used != 1) {
+            std::memset(&s[i], 0, sizeof s[i]);
+            std::memcpy(s[i].id, id.c_str(), std::min(id.size(), kIdBytes - 1));
+            s[i].used = 1;
+            st.flight[i] = 0;
+            st.resting[i] = 0;
+            at = i;
+            return &s[i];
+        }
+    }
+    return nullptr;
+}
+
+// What a store of `phase` writes into a slot (the lock is held).
+void applyLocked(SlotRec& r, Phase phase, const std::string& version, fault::Origin origin) {
+    if (!version.empty()) {
+        std::memset(r.version, 0, kVersionBytes);
+        std::memcpy(r.version, version.data(), std::min(version.size(), kVersionBytes - 1));
+    }
+    if (origin != fault::Origin::Unrecorded) { r.origin = static_cast<std::uint8_t>(origin); }
+    r.phase = static_cast<std::uint8_t>(phase);
+    // (the clock of first-pass; the low 32 bits of the steady clock in milliseconds, wrap-safe by unsigned subtraction)
+    if (phase == Phase::FirstPass) { r.spare = steadyMs32(); }
+}
+
+// The ids that reached RUNNING in this process (ranThisSession).
+void noteRan(State& st, const std::string& id) noexcept {
+    try {
+        std::lock_guard<std::mutex> g(st.ranMutex);
+        if (st.ran.size() < kSlots * 4) { st.ran.insert(id); }
+    } catch (...) {
+    }
+}
+
+// PINNED, SO THAT NOTHING OF IT IS EVER PAGED IN (see the head of this file): every page was written a moment ago by stampHeader, so each is resident and dirty,
+// and a locked page cannot be trimmed. A lock that the process's minimum working set cannot hold gets one more try with the minimum raised by the mapping's size.
+void keepResident(State& st) {
+    st.pinned = false;
+    if (!st.mapped || st.base == nullptr) { return; }
+#if defined(_WIN32)
+    if (::VirtualLock(st.base, kFileBytes) != 0) {
+        st.pinned = true;
+        return;
+    }
+    SIZE_T minWs = 0;
+    SIZE_T maxWs = 0;
+    if (::GetProcessWorkingSetSize(::GetCurrentProcess(), &minWs, &maxWs) != 0 &&
+        ::SetProcessWorkingSetSize(::GetCurrentProcess(), minWs + kFileBytes, maxWs + kFileBytes) != 0 && ::VirtualLock(st.base, kFileBytes) != 0) {
+        st.pinned = true;
+    }
+#else
+    st.pinned = ::mlock(st.base, kFileBytes) == 0;
+#endif
 }
 
 void unmap(State& st) {
 #if defined(_WIN32)
-    if (st.mapped && st.base != nullptr) { ::UnmapViewOfFile(st.base); }
+    if (st.mapped && st.base != nullptr) {
+        if (st.pinned) { ::VirtualUnlock(st.base, kFileBytes); }
+        ::UnmapViewOfFile(st.base);
+    }
     if (st.mapping != nullptr) { ::CloseHandle(st.mapping); }
     if (st.file != INVALID_HANDLE_VALUE) { ::CloseHandle(st.file); }
     st.mapping = nullptr;
     st.file = INVALID_HANDLE_VALUE;
 #else
-    if (st.mapped && st.base != nullptr) { ::munmap(st.base, kFileBytes); }
+    if (st.mapped && st.base != nullptr) {
+        if (st.pinned) { ::munlock(st.base, kFileBytes); }
+        ::munmap(st.base, kFileBytes);
+    }
     if (st.fd >= 0) { ::close(st.fd); }
     st.fd = -1;
 #endif
     st.mapped = false;
+    st.pinned = false;
     st.base = nullptr;
 }
 
@@ -250,6 +340,12 @@ std::vector<InPlay> open(const std::string& path) {
     }
     if (!st.mapped) { st.base = st.memory; }
     stampHeader(st);
+    resetBrackets(st);
+    // Pinned AFTER the stamp wrote every page (they are resident and dirty now), and before the first store a plugin's create() makes.
+    keepResident(st);
+    if (st.mapped && !st.pinned) {
+        diagWarnf("plugins: the crash-loop marker could not be pinned in memory; if the settings folder goes away while the program runs, a store into it can end the run");
+    }
     g_open.store(&st, std::memory_order_release);
     {
         std::lock_guard<std::mutex> g(st.ranMutex);
@@ -272,42 +368,15 @@ void set(const std::string& pluginKeyOrId, Phase phase, const std::string& versi
     if (id.empty()) { return; }
     {
         SpinLock lk(st.lock);
-        SlotRec* s = slots(st);
-        SlotRec* at = nullptr;
-        SlotRec* free = nullptr;
-        for (std::size_t i = 0; i < kSlots; ++i) {
-            if (s[i].used == 1) {
-                if (std::strncmp(s[i].id, id.c_str(), kIdBytes) == 0) { at = &s[i]; break; }
-            } else if (free == nullptr) {
-                free = &s[i];
-            }
-        }
-        if (at == nullptr) { at = free; }
+        std::size_t index = 0;
+        SlotRec* at = takeLocked(st, id, index);
         if (at == nullptr) {
             st.dropped.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        if (at->used != 1) {
-            std::memset(at, 0, sizeof *at);
-            std::memcpy(at->id, id.c_str(), std::min(id.size(), kIdBytes - 1));
-            at->used = 1;
-        }
-        if (!version.empty()) {
-            std::memset(at->version, 0, kVersionBytes);
-            std::memcpy(at->version, version.data(), std::min(version.size(), kVersionBytes - 1));
-        }
-        if (origin != fault::Origin::Unrecorded) { at->origin = static_cast<std::uint8_t>(origin); }
-        at->phase = static_cast<std::uint8_t>(phase);
-        // (the clock of first-pass; the low 32 bits of the steady clock in milliseconds, wrap-safe by unsigned subtraction)
-        if (phase == Phase::FirstPass) { at->spare = steadyMs32(); }
+        applyLocked(*at, phase, version, origin);
     }
-    if (phase == Phase::Running) {
-        try {
-            std::lock_guard<std::mutex> g(st.ranMutex);
-            if (st.ran.size() < kSlots * 4) { st.ran.insert(id); }
-        } catch (...) {
-        }
-    }
+    if (phase == Phase::Running) { noteRan(st, id); }
 }
 
 void clear(const std::string& pluginKeyOrId) noexcept {
@@ -325,6 +394,8 @@ void clear(const std::string& pluginKeyOrId) noexcept {
     for (std::size_t i = 0; i < kSlots; ++i) {
         if (s[i].used == 1 && std::strncmp(s[i].id, id.c_str(), kIdBytes) == 0) {
             std::memset(&s[i], 0, sizeof s[i]);
+            st.flight[i] = 0;
+            st.resting[i] = 0;
             return;
         }
     }
@@ -348,25 +419,76 @@ Phase phaseOf(const std::string& pluginKeyOrId) noexcept {
     return Phase::Idle;
 }
 
-CallPhase::CallPhase(const std::string& pluginKeyOrId, Phase during, const std::string& version, fault::Origin origin) noexcept
-    : before_(Phase::Idle) {
+namespace {
+
+// A BRACKET OPENS (CallPhase). The first one open on a slot remembers the phase the plugin was in around its calls; every one open makes the slot read as the
+// call. Returns whether a bracket was opened (a full table opens none, and the bracket then does nothing at its end).
+bool enterCall(const std::string& key, Phase during, const std::string& version, fault::Origin origin) noexcept {
+    State& st = state();
+    if (st.base == nullptr) { return false; }
+    std::string id;
+    try {
+        id = normalise(key);
+    } catch (...) {
+        return false;
+    }
+    if (id.empty()) { return false; }
+    SpinLock lk(st.lock);
+    std::size_t index = 0;
+    SlotRec* at = takeLocked(st, id, index);
+    if (at == nullptr) {
+        st.dropped.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (st.flight[index] == 0) { st.resting[index] = at->phase; }
+    if (st.flight[index] < 0xFFFFu) { ++st.flight[index]; }
+    applyLocked(*at, during, version, origin);
+    return true;
+}
+
+// A BRACKET CLOSES. The plugin goes back to the phase it RESTS in when the LAST bracket open on it closes - not to what this bracket happened to find: a
+// second bracket opened under the first would have found the first one's in-call phase and put it back for good. `settle` is the bracket's word on where the
+// plugin rests now (a create that made an instance rests in first-pass).
+void leaveCall(const std::string& key, bool hasSettled, Phase settled) noexcept {
+    State& st = state();
+    if (st.base == nullptr) { return; }
+    std::string id;
+    try {
+        id = normalise(key);
+    } catch (...) {
+        return;
+    }
+    if (id.empty()) { return; }
+    bool ran = false;
+    {
+        SpinLock lk(st.lock);
+        std::size_t index = 0;
+        SlotRec* at = findLocked(st, id, index);
+        if (at == nullptr || st.flight[index] == 0) { return; }   // the slot was freed (and maybe re-made) under the bracket: nothing of it is ours
+        if (hasSettled) { st.resting[index] = static_cast<std::uint8_t>(settled); }
+        if (--st.flight[index] != 0) { return; }
+        const Phase rest = static_cast<Phase>(st.resting[index]);
+        // (the slot stays, as a loaded module's idle one, so a crash can still be blamed on it)
+        applyLocked(*at, rest, std::string(), fault::Origin::Unrecorded);
+        ran = rest == Phase::Running;
+    }
+    if (ran) { noteRan(st, id); }
+}
+
+}  // namespace
+
+CallPhase::CallPhase(const std::string& pluginKeyOrId, Phase during, const std::string& version, fault::Origin origin) noexcept {
     try {
         key_ = pluginKeyOrId;
     } catch (...) {
         return;
     }
-    before_ = phaseOf(key_);
-    set(key_, during, version, origin);
+    if (!enterCall(key_, during, version, origin)) { key_.clear(); }
 }
 
 CallPhase::~CallPhase() {
     if (key_.empty()) { return; }
-    if (before_ == Phase::Idle) {
-        // It had a slot at best as a loaded module; keep that slot (so a crash can still be blamed on it) and drop only the phase.
-        set(key_, Phase::Idle);
-    } else {
-        set(key_, before_);
-    }
+    leaveCall(key_, hasSettled_, settled_);
 }
 
 void blame(const char* runId) noexcept {
@@ -387,6 +509,7 @@ void cleanShutdown() noexcept {
     if (st.base == nullptr) { return; }
     SpinLock lk(st.lock);
     std::memset(st.base + sizeof(Header), 0, kSlots * sizeof(SlotRec));
+    resetBrackets(st);
 }
 
 void promoteFirstPass(std::uint32_t nowMs, std::uint32_t afterMs) noexcept {
@@ -424,9 +547,15 @@ void resetForTest() {
     SpinLock lk(st.lock);
     unmap(st);
     std::memset(st.memory, 0, sizeof st.memory);
+    resetBrackets(st);
     st.dropped.store(0);
     std::lock_guard<std::mutex> g(st.ranMutex);
     st.ran.clear();
+}
+
+const void* viewForTest() {
+    State& st = state();
+    return st.mapped ? static_cast<const void*>(st.base) : nullptr;
 }
 
 }  // namespace marker
@@ -628,15 +757,46 @@ bool saveStore(const std::string& path, const std::vector<StrikeRecord>& records
 // Containment
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-void Containment::begin(const std::string& dir, bool safeMode, std::int64_t nowUnix) {
+namespace {
+
+// The part of a pair's names that follows the settings file: empty for the default file (config.json, or none), "-<name>" for any other.
+std::string settingsTag(const std::string& settingsFile) {
+    const std::size_t cut = settingsFile.find_last_of("/\\");
+    std::string name = cut == std::string::npos ? settingsFile : settingsFile.substr(cut + 1);
+    if (name.empty()) { return std::string(); }
+    for (char& c : name) {
+        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }   // (NTFS names are case-insensitive: A.json and a.json are one file)
+    }
+    if (name == "config.json") { return std::string(); }
+    static const char kJson[] = ".json";
+    if (name.size() >= sizeof kJson - 1 && name.compare(name.size() - (sizeof kJson - 1), sizeof kJson - 1, kJson) == 0) { name.resize(name.size() - (sizeof kJson - 1)); }
+    if (name.empty()) { name = "unnamed"; }
+    for (char& c : name) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_';
+        if (!ok) { c = '_'; }
+    }
+    if (name.size() > 40) { name.resize(40); }
+    return "-" + name;
+}
+
+}  // namespace
+
+std::string markerFileNameFor(const std::string& settingsFile) { return std::string("plugin-play") + settingsTag(settingsFile) + ".marker"; }
+std::string storeFileNameFor(const std::string& settingsFile) { return std::string("plugin-faults") + settingsTag(settingsFile) + ".json"; }
+
+void Containment::begin(const std::string& dir, bool safeMode, std::int64_t nowUnix, const std::string& settingsFile) {
     dir_ = dir;
+    settingsFile_ = settingsFile;
     safeMode_ = safeMode;
     started_ = true;
     plan_ = StartPlan{};
     records_.clear();
     namespace fs = std::filesystem;
-    const std::string markerPath = dir.empty() ? std::string() : (fs::path(dir) / marker::kFileName).string();
-    const std::string storePath = dir.empty() ? std::string() : (fs::path(dir) / kStoreFileName).string();
+    // THE PAIR IS NAMED BY THE SETTINGS FILE (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): the config lock is per settings file, so two
+    // programs on two settings files in one folder both hold a lock and used to share one marker and one store - each read the other's live slots as a dead
+    // predecessor's evidence (a strike for a plugin that was running fine) and zeroed them (so its own later crash had no blame).
+    const std::string markerPath = dir.empty() ? std::string() : (fs::path(dir) / markerFileNameFor(settingsFile)).string();
+    const std::string storePath = dir.empty() ? std::string() : (fs::path(dir) / storeFileNameFor(settingsFile)).string();
 
     std::vector<StrikeRecord> stored;
     if (!storePath.empty()) {
@@ -653,10 +813,20 @@ void Containment::begin(const std::string& dir, bool safeMode, std::int64_t nowU
     }
     plan_ = planStart(stored, previous, nowUnix);
     records_ = plan_.records;
-    for (const std::string& id : plan_.suspects) { diagWarnf("plugins: the last run did not end in order with %s in play", id.c_str()); }
+    // THE LOG NAMES A PLUGIN BY THE NAME THAT MAY LEAVE THE MACHINE (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): the log ring is copied
+    // into every report, and an id that is not an official plugin's - a hand-copied file, a stranger's from a site - is hashed there (core/plugin_fault.hpp
+    // publicIdFor). The marker says where each plugin came from; a record from an earlier run, or a slot with no origin, is not known to be official.
+    const auto loggable = [&](const std::string& id) {
+        fault::Origin origin = fault::Origin::Unrecorded;
+        for (const marker::InPlay& p : previous) {
+            if (p.id == id) { origin = p.origin; }
+        }
+        return fault::publicIdFor(id, origin);
+    };
+    for (const std::string& id : plan_.suspects) { diagWarnf("plugins: the last run did not end in order with %s in play", loggable(id).c_str()); }
     for (const StartNotice& n : plan_.notices) {
-        diagWarnf("plugins: %s %s (strike %u of 2) - %s", n.id.c_str(), n.permanent ? "is switched off until it is re-enabled" : "starts the next session switched off",
-                  n.strikes, n.phase.c_str());
+        diagWarnf("plugins: %s %s (strike %u of 2) - %s", loggable(n.id).c_str(),
+                  n.permanent ? "is switched off until it is re-enabled" : "starts the next session switched off", n.strikes, n.phase.c_str());
     }
     persist();
 }
@@ -688,10 +858,9 @@ bool Containment::gate(const std::string& pluginKeyOrId, Gate& out) const {
 }
 
 const StrikeRecord* Containment::recordOf(const std::string& pluginKeyOrId) const {
-    std::string id = pluginRunId(pluginKeyOrId);
-    for (char& c : id) {
-        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
-    }
+    // The records hold the containment id (the marker's slot form): asked for in that form, or a plugin whose id is longer than a slot, or written in capitals,
+    // is never found (deep review of engine/stage4, batch A: the breaker never matched one).
+    const std::string id = containmentId(pluginKeyOrId);
     for (const StrikeRecord& r : records_) {
         if (r.id == id) { return &r; }
     }
@@ -699,10 +868,7 @@ const StrikeRecord* Containment::recordOf(const std::string& pluginKeyOrId) cons
 }
 
 bool Containment::reenable(const std::string& pluginKeyOrId) {
-    std::string id = pluginRunId(pluginKeyOrId);
-    for (char& c : id) {
-        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
-    }
+    const std::string id = containmentId(pluginKeyOrId);
     for (StrikeRecord& r : records_) {
         if (r.id != id) { continue; }
         if (r.state == StrikeState::Probation) { return false; }   // already enabled
@@ -717,7 +883,7 @@ bool Containment::reenable(const std::string& pluginKeyOrId) {
 void Containment::persist() {
     if (dir_.empty()) { return; }
     std::string err;
-    const std::string path = (std::filesystem::path(dir_) / kStoreFileName).string();
+    const std::string path = (std::filesystem::path(dir_) / storeFileNameFor(settingsFile_)).string();
     if (!saveStore(path, records_, err)) { diagWarnf("plugins: %s", err.c_str()); }
 }
 

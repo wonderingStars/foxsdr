@@ -222,6 +222,13 @@ void parseReport(const std::string& text, ReportSummary& r) {
                 r.code = codeToken(value);
             } else if (key == "signature") {
                 r.signature = signatureToken(value);
+            } else if (key == "thread") {
+                // a closed-list word (the watchdog's thread names are lower-case words and hyphens); anything else is "unknown"
+                bool word = !value.empty() && value.size() <= 32;
+                for (const char c : value) {
+                    word = word && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-');
+                }
+                r.thread = word ? value : std::string("unknown");
             } else if (key == "stalled-ms" && parseInt(value, n)) {
                 r.stalledMs = n;
             }

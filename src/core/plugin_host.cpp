@@ -29,6 +29,7 @@
 // newer, and then the host would keep a plugin the updater calls stale.
 #include "core/plugin_repo.hpp"
 #include "core/plugin_run.hpp"
+#include "core/plugin_settings_ui.hpp"
 // For kTxAudioRateHz, the one rate CASCADE_CAP_TX_AUDIO's table is accepted at.
 #include "core/tx_audio.hpp"
 // For registerOwnModuleFolder: a plugin and the DLLs beside it are FoxSDR's own to load, so
@@ -276,7 +277,8 @@ std::string notLoadedSentence(const ModuleCheck& c) { return "Not loaded: " + c.
 void releaseModule(fault::Slot* slot, NativeModule m) {
     const fault::Outcome o = fault::call(slot, fault::Entry::Unload, [&] { closeModule(m); });
     if (o == fault::Outcome::Faulted) {
-        diagWarnf("plugin: %s faulted while its module was being unmapped; the module is left mapped", fault::idOf(slot));
+        // (the PUBLIC id: the log ring is copied into every report; deep review of engine/stage4, batch A, docs/engine-stage4.md 6.31)
+        diagWarnf("plugin: %s faulted while its module was being unmapped; the module is left mapped", fault::publicIdOf(slot));
     }
 }
 
@@ -438,6 +440,13 @@ LoadedPlugin loadOne(const fs::path& p, const PluginHost::LoadGate& gate) {
                              ? static_cast<const CascadeSettingsUiApi*>(
                                    findCapabilityTable(desc, CASCADE_CAP_SETTINGS_UI))
                              : nullptr;
+        // THE SETTINGS FORM IS READ ONCE HERE, UNDER THIS GUARD (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The validator checked that the
+        // table's pointer and count are usable; the spec array behind them, and the strings the specs point at, are the plugin's memory too, and the engine reads them
+        // when it builds the plugin's list - on the pass thread, long after the load, with no guard active and no plugin call in flight. A plugin that declares four
+        // specs and keeps one (or a pointer into nowhere) took the process down there with a report that named nobody, and the same death at every launch with no
+        // breaker. settingFieldsFrom is the very reader the engine will use later, so a table it cannot read to the end is a corrupt descriptor NOW: the fault is
+        // caught by this guard and the module is refused. (What it builds is thrown away; the form is drawn from the table, as ever.)
+        if (rec.settingsUi != nullptr) { (void)settingFieldsFrom(rec.settingsUi); }
         rec.basemap = (desc->capabilities & CASCADE_CAP_BASEMAP) != 0u
                           ? static_cast<const CascadeBasemapApi*>(
                                 findCapabilityTable(desc, CASCADE_CAP_BASEMAP))
@@ -1813,7 +1822,7 @@ void PluginHost::unloadAll() {
                 // A PLUGIN THAT FAULTED, THREW OR WEDGED IS NEVER UNMAPPED: its instances were leaked (nothing calls into it again) and a
                 // thread it started may still be running inside the image. One leaked module is the lesser harm; the next scan refuses to
                 // map the file again while the quarantine stands.
-                diagWarnf("plugin: %s is switched off, so its module is left mapped", fault::idOf(slot));
+                diagWarnf("plugin: %s is switched off, so its module is left mapped", fault::publicIdOf(slot));   // (the public id: see releaseModule)
                 fault::clearModule(key);
             } else {
                 marker::set(key, marker::Phase::Unload);

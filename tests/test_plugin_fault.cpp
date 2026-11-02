@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "core/crash_handler.hpp"
+#include "core/diag_log.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/plugin_calls.hpp"
 #include "core/plugin_fault.hpp"
@@ -417,6 +418,97 @@ void testLateReturnCountedByTheCallItself(Fixture& fx) {
     CHECK(t.overruns == 0 && t.wedges == 0 && t.faults == 0 && t.quarantines == 0);
 }
 
+// ---- F2 ---------------------------------------------------------------------------------------------------------------------------
+// A CALL THAT SPANNED A SLEEP IS NOT A WEDGE (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The lid closes while a plugin is inside
+// its get_tile; five minutes later the machine wakes, the hang watchdog sees its own poll arrive late and RE-ARMS the registry - every registration, and every
+// call in flight, starts its clock again - and the fetch then fails and returns. The call's own end judged the call by the clock it was CONSTRUCTED with, which
+// the re-arm never reached (it rewrote the table's copy), so ~300 s was "past four budgets": a wedge, a quarantine for the session and a hang count for a
+// plugin that did nothing. The call's elapsed time now starts at its start or at the last re-arm, whichever is later - the table's own rule, one clock.
+void testSleptCallIsNotAWedge() {
+    fault::resetForTest();
+    auto& reg = beats::Registry::instance();
+    fault::Slot* const slept = fault::slotFor("fault-slept");
+    const fault::Outcome o = fault::call(slept, fault::Entry::Create, [&] {
+        reg.advanceClockForTest(5LL * 60 * 1000);   // the machine sleeps for five minutes, in the middle of the call...
+        reg.rearm();                                // ...and the watchdog, waking, says nothing was late
+    });
+    CHECK(o == fault::Outcome::Ran);
+    const fault::Totals t = fault::totals();
+    if (t.wedges != 0 || t.overruns != 0 || t.quarantines != 0) {
+        std::printf("FAIL a call that spanned a sleep: %llu overrun(s), %llu wedge(s), %llu quarantine(s)\n", static_cast<unsigned long long>(t.overruns),
+                    static_cast<unsigned long long>(t.wedges), static_cast<unsigned long long>(t.quarantines));
+    }
+    CHECK(t.wedges == 0 && t.overruns == 0 && t.quarantines == 0);
+    CHECK(!fault::isQuarantined(slept));
+    // THE CONTROL: the same five minutes with nobody to re-arm (no watchdog looked) are what they always were - an overrun and a wedge, and the plugin is
+    // switched off. The re-arm excuses lost time; it does not excuse a call that really took that long.
+    fault::Slot* const slow = fault::slotFor("fault-slow-for-real");
+    const fault::Outcome o2 = fault::call(slow, fault::Entry::Create, [&] { reg.advanceClockForTest(5LL * 60 * 1000); });
+    CHECK(o2 == fault::Outcome::Ran);
+    CHECK(fault::totals().wedges == 1 && fault::totals().overruns == 1);
+    CHECK(fault::quarantineWhy(slow) == fault::Why::Wedge);
+    // a call that STARTS after a re-arm is judged from its own start
+    fault::resetForTest();
+    reg.rearm();
+    fault::Slot* const after = fault::slotFor("fault-after-rearm");
+    const fault::Outcome o3 = fault::call(after, fault::Entry::Create, [&] { reg.advanceClockForTest(5LL * 60 * 1000); });
+    CHECK(o3 == fault::Outcome::Ran);
+    CHECK(fault::totals().wedges == 1);
+}
+
+// ---- F3 ---------------------------------------------------------------------------------------------------------------------------
+// THE LOG NAMES A PLUGIN BY THE ID THAT MAY LEAVE THE MACHINE (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.28 item 6, 6.31). The rule has always
+// been that a plugin which is not one of FoxSDR's own is named `site-` and a hash wherever its name could leave the machine - in a report, in the upload. The log
+// ring is copied into every report (crash, freeze, issue) and the upload carries it, and its lines named the plugin by its raw id: a private plugin's file name
+// ("acme-private-decoder") went out beside a structured field that correctly said `site-1a2b3c4d`. The guard's own lines now carry the public id.
+void testLogsNameThePublicId() {
+    fault::resetForTest();
+    cascade::core::DiagLog::instance().resetForTest();
+    fault::setIdentity("acme-private-decoder", "1.0.0", fault::Origin::Site, nullptr, 0);
+    fault::setIdentity("pocsag-decoder", "1.0.2", fault::Origin::Official, nullptr, 0);
+    fault::Slot* const priv = fault::slotFor("acme-private-decoder-1.0.0-abi3-win-x64.dll");
+    fault::Slot* const open = fault::slotFor("pocsag-decoder-1.0.2-abi3-win-x64.dll");
+    auto& reg = beats::Registry::instance();
+    const char* const poll = fault::entryWord(fault::Entry::PollText);
+    // EVERY LINE the guard writes about a plugin, for each of the two: an overrun the monitor found; a fault the guard is told of (which switches the plugin off too);
+    // a re-enable; an unload handshake that timed out with a call in flight; a switch-off by hand of the host; and a wedge (the clock moves inside the call), which is
+    // a switch-off as well.
+    for (fault::Slot* const s : {priv, open}) {
+        fault::noteMonitorFinding(s, 1, poll);
+        fault::noteFault(s, fault::Entry::PollText, 0xC0000005ul);
+        CHECK(fault::isQuarantined(s));                       // (a fault the guard is told of switches the plugin off)
+        CHECK(fault::release(s));
+        std::size_t charged = 0;
+        (void)fault::call(s, fault::Entry::PollText, [&] { charged = fault::noteUnloadTimeout(); });
+        CHECK(charged == 1);
+        CHECK(fault::quarantine(s, fault::Why::Fault, fault::Entry::PollText));
+        CHECK(fault::release(s));
+        const fault::Outcome slow = fault::call(s, fault::Entry::Create, [&] { reg.advanceClockForTest(5LL * 60 * 1000); });
+        CHECK(slow == fault::Outcome::Ran);                   // (the wedge quarantined it)
+        CHECK(fault::isQuarantined(s));
+        CHECK(fault::release(s));
+    }
+    const std::string hashed = fault::publicIdOf(priv);
+    CHECK(hashed.rfind("site-", 0) == 0);
+    CHECK(std::string(fault::publicIdOf(open)) == "pocsag-decoder");
+    const std::vector<std::string> ring = cascade::core::DiagLog::instance().ringSnapshot();
+    for (const std::string& line : ring) {
+        if (line.find("acme-private-decoder") != std::string::npos) { std::printf("FAIL the log names a private plugin by its id: %s\n", line.c_str()); }
+        CHECK(line.find("acme-private-decoder") == std::string::npos);
+    }
+    // each shape of line is there, naming each plugin by the name that may leave the machine
+    const char* const shapes[] = {"faulted in", "overran its budget in", "did not return from", "is switched off for this session", "is switched on again",
+                                  "unload handshake timed out with"};
+    for (const char* shape : shapes) {
+        for (const std::string& id : {hashed, std::string("pocsag-decoder")}) {
+            bool seen = false;
+            for (const std::string& line : ring) { seen = seen || (line.find(shape) != std::string::npos && line.find(id) != std::string::npos); }
+            if (!seen) { std::printf("FAIL no log line \"%s\" names %s\n", shape, id.c_str()); }
+            CHECK(seen);
+        }
+    }
+}
+
 // ---- G ----------------------------------------------------------------------------------------------------------------------------
 void testConcurrency(Fixture& fx) {
     fault::resetForTest();
@@ -593,6 +685,8 @@ int main(int argc, char** argv) {
     testExceptionAcrossTheBoundary(fx);
     testBudgetNamedByTheMonitor(fx);
     testLateReturnCountedByTheCallItself(fx);
+    testSleptCallIsNotAWedge();
+    testLogsNameThePublicId();
     testConcurrency(fx);
     testAttribution();
     testGuardDeclinesHostFaults();

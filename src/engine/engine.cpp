@@ -96,6 +96,12 @@ Engine::Engine(EngineHost& host)
       pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
                                                 /*audioEnabled=*/true}),
       api_(std::make_unique<ApiHost>(*this, std::string())) {
+    // THE RECOVERY COUNTERS' BASELINE IS THIS MOMENT (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The watch used to take the first reading
+    // its first poll made as the baseline, which is right for counters that cannot move before the first frame and wrong for the plugin containment's and the
+    // per-thread watchdog's: the first pass runs the plugin phase (a plugin that faults in create() on every launch is absorbed THERE) before the health poll
+    // at the end of the same pass, so the poll's baseline swallowed the fault most worth reporting. What the process counted before this engine existed is not
+    // its news; everything after is.
+    recoveryWatch_.baseline(recoveryReadings());
     // THE RING A TRANSMITTING PLUGIN'S AUDIO ARRIVES THROUGH (host API level 2; stub campaign B13): the runner holds the writing end, the Transmitter the reading end, and neither holds
     // a pointer to the other. Harmless with no plugin: nothing writes, and nothing reads unless a plugin's key is the only key down.
     transmitter_.setPluginLink(txLink_);
@@ -3715,6 +3721,13 @@ void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledg
         }
         // (A site's plugin always carries the notice the install gate asks about: see pluginInstallBlockedReason.)
         r.hasNotice = !e.legalNotice.empty() || !e.source.empty();
+        // A PLUGIN FROM A SITE THE USER ADDED IS NEVER IN THE RUN, to fetch or to update (core/add_all_plan.hpp; the 0.99.74 rule). B3 moved the sites into this
+        // engine: their entries are in catalog_ with `source` set, and the rows were built without saying so - so the run this engine started disagreed with the
+        // key the window had lettered and counted from its own model (where a site row is third-party): a stranger's native module, which FoxSDR has not reviewed,
+        // was downloaded, checked against the site's own catalogue and loaded on the strength of the one box that acknowledges the OFFICIAL plugins' notices; and
+        // an already fitted one was replaced by whatever the site had published since, with no fresh consent. Each is fitted from its own page (the notice, the
+        // tick); this key does not touch them. (Deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31.)
+        r.thirdParty = !e.source.empty();
         r.blockedReason = pluginInstallBlockedReason(i, !acknowledgedId.empty() && key == acknowledgedId);
         r.blockedReasonIfAcknowledged = pluginInstallBlockedReason(i, true);
         rows.push_back(std::move(r));
@@ -4599,7 +4612,12 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // WHERE IT WOULD TRANSMIT (0.3): with SPLIT off that is the receiver's
     // dial, radio open or not - the pass follows it there (pumpPublish) - so
     // a page with no radio open still letters a frequency that is true.
-    r.txFrequencyHz = cascade::gui::txFrequencyHz(transmitSplit_, transmitSplitHz_, std::max(0.0, currentAbsoluteHz()));
+    // ...and while the radio is keyed it is where the radio IS: the frequency is held (core/transmitter.hpp), so what the dial or the split say it would
+    // do is not what it is doing - a panel that lettered the dial's frequency beside a carrier on another would be a lie about the one thing a transmitter
+    // must not lie about. (docs/api-0.3-additions.md 8.1; docs/engine-stage4.md 6.31.)
+    r.txFrequencyHz = transmitter_.frequencyHeld() && transmitter_.haveSink()
+                          ? transmitter_.frequencyHz()
+                          : cascade::gui::txFrequencyHz(transmitSplit_, transmitSplitHz_, std::max(0.0, currentAbsoluteHz()));
     // THE SETTING, which is the board's readback once one is open
     // (TX_SET_POWER reads it back) - never the 0 dB (full power) a closed
     // transmitter's sink-less powerDb() answers.
@@ -5361,7 +5379,17 @@ void Engine::followTransmitFrequency() {
     // would saturate the control connection and leave nothing for the
     // controls a hand is actually operating.
     if (std::fabs(want - transmitter_.frequencyHz()) < 1.0) { return; }
-    if (!transmitter_.setFrequencyHz(want)) { transmitError_ = transmitter_.lastError(); }
+    // THE FREQUENCY IS FROZEN WHILE KEYED (the owner's decision of 2026-11-02; core/transmitter.hpp retuneHz, docs/engine-stage4.md 6.31). This is the PASSIVE path
+    // - it follows the dial, nobody asked for a frequency - so a held retune is simply not made: no error, nothing to say. The receiver went where the scanner, the
+    // plugin, the page or the operator's hand took it; the transmitter follows once the key is up (the next pass that finds it so).
+    switch (transmitter_.retuneHz(want)) {
+        case cascade::core::Transmitter::Retune::Done:
+        case cascade::core::Transmitter::Retune::Held:
+            break;
+        case cascade::core::Transmitter::Retune::Failed:
+            transmitError_ = transmitter_.lastError();
+            break;
+    }
 }
 
 void Engine::removeBlockedPlugin(const std::string& fileName) {
@@ -7881,12 +7909,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
             return res;
         case FOXAPI_OP_TX_SET_FREQUENCY:
+            // THE FREQUENCY IS HELD WHILE KEYED (the owner's decision of 2026-11-02; core/transmitter.hpp): an operation that exists to SET the transmit frequency is
+            // refused, with the reason, rather than recorded and not done - the answer the page shows is the truth about the radio. Nothing is stored: said again
+            // after the key is up, it takes effect then.
+            if (transmitter_.frequencyHeld()) { return refuse(FOXAPI_BUSY, "the transmitter is keyed: its frequency is held until the key is released"); }
             // Where a SPLIT transmitter goes; with SPLIT off it follows the
             // receiver's dial and this is kept for when it is turned on.
             transmitSplitHz_ = c.num[0];
             followTransmitFrequency();
             return res;
         case FOXAPI_OP_TX_SET_SPLIT:
+            // SPLIT chooses which frequency the transmitter is on, so it is the same operation (see TX_SET_FREQUENCY): refused while keyed, in either direction.
+            if (transmitter_.frequencyHeld()) { return refuse(FOXAPI_BUSY, "the transmitter is keyed: its frequency is held until the key is released"); }
             transmitSplit_ = on;
             // Going INTO split starts from the frequency the command carries
             // (the page sends the receiver's dial), so the first thing that
@@ -7962,6 +7996,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_GPS:
             if (on) {
                 if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no serial port named"); }
+                // THE SECOND LOCK, where it is applied (the table refuses a REMOTE START at submit): the text is opened as a path on this machine.
+                if (commandFromRemote_) { return refuse(FOXAPI_DENIED, "a remote session cannot name a serial port on this machine"); }
                 gpsRefusal_.clear();
                 gpsReader_.start({text, static_cast<int>(c.num[0]),
                                   cascade::core::GpsReader::kDefaultTimeoutS});
@@ -8428,6 +8464,10 @@ void Engine::healthPoll() {
     // source or audio thread, and the cost is one atomic exchange and four relaxed
     // loads a pass.
     cascade::core::health::drainRecovered();
+    recoveryWatch_.poll(recoveryReadings());
+}
+
+cascade::core::health::RecoveryReadings Engine::recoveryReadings() {
     cascade::core::health::RecoveryReadings now;
     now.sourceThreadsAbandoned = static_cast<unsigned long long>(pipeline_.abandonedSourceThreads());
     now.vendorCallsAbandoned = cascade::source::SoapySource::driverCallsAbandoned();
@@ -8443,7 +8483,7 @@ void Engine::healthPoll() {
         now.pluginWedges = pf.wedges;
         now.pluginOveruses = pf.overruns;
     }
-    recoveryWatch_.poll(now);
+    return now;
 }
 
 void Engine::healthWatchSamples(const std::string& kind) {
@@ -9865,6 +9905,9 @@ void Engine::startControlThread(const ControlThreadOptions& options) {
     if (controlThread_.joinable()) { return; }
     txPluginStopping_.store(false, std::memory_order_seq_cst);   // a thread restarted after a stop may drive a plugin's key again (the window is closed)
     controlDiagDir_ = options.diagnosticsDir;
+    // THE SENTINEL'S HEARTBEAT IS THE FRAME LOOP'S, and this thread's is that only when no window follows (ControlThreadOptions::sentinelHeartbeat; deep review of
+    // engine/stage4, batch A, docs/engine-stage4.md 6.31): the watcher outside the process must not read this thread's 62 beats a second as a window that is alive.
+    controlWatchdog_.setSentinelHeartbeat(options.sentinelHeartbeat);
     controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
     {
         std::lock_guard<std::mutex> lk(controlExitMutex_);

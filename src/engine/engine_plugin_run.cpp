@@ -98,8 +98,20 @@ std::vector<std::string> Engine::stoppedPluginIds() const {
     }
     // ...and the ones the guard switched off: the runner, the API core and the interface's directive all take "stopped" as their one word for
     // "no instance of this plugin, anywhere".
-    for (const std::string& id : quarantinedIds_) {
-        if (std::find(out.begin(), out.end(), id) == out.end()) { out.push_back(id); }
+    //
+    // IN THE FORM THEY LOOK PLUGINS UP BY (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The quarantine set holds the guard's slot form
+    // (lower-cased, cut to the slot's width) but the stop sets are matched against the plugin's own run id - PluginStopSet is exact, as the user's stops are - so
+    // what is handed over is each fitted plugin's run id, spelled as the plugin spells it, for every quarantined id it answers to. (An id nobody fitted answers to
+    // is handed over as it is: nothing looks it up, and a plugin fitted later under it is found by the next call.)
+    for (const std::string& q : quarantinedIds_) {
+        bool named = false;
+        for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+            const std::string runId = cascade::core::pluginRunId(cascade::core::pluginKey(p));
+            if (cascade::core::containmentId(runId) != q) { continue; }
+            named = true;
+            if (std::find(out.begin(), out.end(), runId) == out.end()) { out.push_back(runId); }
+        }
+        if (!named && std::find(out.begin(), out.end(), q) == out.end()) { out.push_back(q); }
     }
     return out;
 }

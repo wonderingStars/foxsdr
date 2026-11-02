@@ -385,6 +385,54 @@ void testRearmAfterLostTime() {
     CHECK(reg.poll().wedged.empty());
 }
 
+// THE BEAT'S TWO STORES (deep review of engine/stage4, batch A). Registration::beat() used to clear a declared wait BEFORE it stamped the beat, and wait()
+// never stamps: so a monitor whose poll landed between the two stores read "no wait" and the stamp from BEFORE the wait - for a server that had sat in accept()
+// for hours, hours old - and accused a thread that was at that moment waking up. The look-again re-read sees the same pair while the worker is preempted
+// between its stores (and, on a weakly ordered CPU, store-buffered), so it was a report: a hang file and a Recovered::ThreadWedge for a healthy thread. The
+// stamp now comes FIRST and the wait is cleared after it (release), so a poll that sees no wait sees the beat. The probe is the seam that puts the poll in
+// the gap, exactly where the preemption would.
+beats::PollResult g_inGap;
+bool g_gapProbed = false;
+void pollInTheGap() {
+    g_inGap = beats::Registry::instance().poll();
+    g_gapProbed = true;
+}
+
+void testBeatNeverReadsLateBetweenItsStores() {
+    auto& reg = beats::Registry::instance();
+    const FrozenClock frozen;
+    {
+        beats::Registration r(beats::kThreadCatAccept);
+        r.beat("accept-loop");
+        r.wait(beats::kWaitAccept);                    // parked in accept(), with no cap: nobody connecting is idle, not wedged
+        reg.advanceClockForTest(48LL * 3600 * 1000);   // for two days
+        CHECK(reg.poll().wedged.empty());
+        g_inGap = beats::PollResult{};
+        g_gapProbed = false;
+        reg.setBeatGapProbeForTest(&pollInTheGap);
+        r.endWait("handle");                            // a client connects: the thread beats
+        reg.setBeatGapProbeForTest(nullptr);
+        CHECK(g_gapProbed);
+        if (!g_inGap.wedged.empty()) { std::printf("FAIL a poll between the beat's two stores accused \"%s\"\n", g_inGap.wedged[0].name.c_str()); }
+        CHECK(g_inGap.wedged.empty());
+        CHECK(g_inGap.recovered.empty());
+        CHECK(reg.poll().wedged.empty());               // and afterwards the thread is the live thread it is
+    }
+    // the same for a queue worker's ordinary beat after hours parked on its job wait
+    {
+        beats::Registration q(beats::kThreadImageFeed);
+        q.beat("idle");
+        q.wait(beats::kWaitJob);
+        reg.advanceClockForTest(10LL * 3600 * 1000);
+        g_gapProbed = false;
+        g_inGap = beats::PollResult{};
+        reg.setBeatGapProbeForTest(&pollInTheGap);
+        q.beat("job");
+        reg.setBeatGapProbeForTest(nullptr);
+        CHECK(g_gapProbed && g_inGap.wedged.empty() && g_inGap.recovered.empty());
+    }
+}
+
 void testRegistrationLifetime() {
     auto& reg = beats::Registry::instance();
     const FrozenClock frozen;  // the boundary tests below are exact: the clock runs only when the test advances it
@@ -681,6 +729,45 @@ void testLostTimeRearmsRegistrations() {
     fs::remove_all(dir, ec);
 }
 
+// A SLOW CAPTURE IS NOT LOST TIME (deep review of engine/stage4, batch A). The watchdog's poll interval was measured from the START of the previous
+// iteration's work, so the seconds that iteration spent writing a worker's hang report were part of the next interval - and a diagnostics folder on the SAME stalled
+// profile as the wedge (an offline network share is the commonest wedge there is: B19) takes seconds to write to. An interval past kPollMs + kBeatsOvershootMs
+// is "the machine slept": the registry was re-armed, the wedged thread "recovered" without ever beating, and a budget later it was reported AGAIN - a second
+// file (the cap is eight), a second Recovered::ThreadWedge - and every in-flight plugin call's clock started over. The interval is the WAIT's own now. (The
+// lateness threshold is lowered and the capture slowed by the seams so the case is seconds, not minutes.)
+void testSlowCaptureIsNotLostTime() {
+    auto& reg = beats::Registry::instance();
+    constexpr unsigned kBudget = 1000;
+    const fs::path dir = scratchDir("slowcapture");
+    HangWatchdog::resetWedgeFileCountForTest();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    HangWatchdog w;
+    w.setSuppressionForTest(HangWatchdog::SuppressionForTest::NeverSuppress);
+    w.setBeatsOvershootMsForTest(700);          // a poll more than 1.2 s after the last is lost time (the product's allowance is 2.5 s)
+    w.setWedgeCaptureDelayForTest(2000);        // and the report of a wedge takes two seconds to write
+    w.start(dir.string(), 600000);
+    reg.setBudgetOverrideForTest(beats::Kind::Disk, kBudget);
+    {
+        beats::Registration r(beats::kThreadDiskJob);
+        r.beat("write");                        // ...and never beats again: a real, lasting wedge
+        const auto until = Clock::now() + std::chrono::milliseconds(kBudget + 8 * HangWatchdog::kPollMs + 6000);
+        while (Clock::now() < until && reportsIn(dir) < 1) { sleepMs(10); }
+        CHECK(reportsIn(dir) == 1);
+        // the capture is over; the polls after it are ordinary polls. The wedge is reported and still going on: nothing is re-armed, nothing
+        // "recovers", nothing is filed again (the false re-arm filed the second report ~3.5 s after the first)
+        sleepMs(5500);
+        if (reportsIn(dir) != 1) { std::printf("FAIL %zu wedge reports for one wedge\n", reportsIn(dir)); }
+        CHECK(reportsIn(dir) == 1);
+        CHECK(beats::Registry::wedgesFound() >= 1);
+        r.beat("back");
+    }
+    w.stop();
+    reg.clearOverridesForTest();
+    fs::remove_all(dir, ec);
+}
+
 // A stuck machine wedges every thread at once: the FILES are capped at kMaxWedgeReports, the count and the log are not.
 void testWedgeFilesAreCapped() {
     namespace health = cascade::core::health;
@@ -938,6 +1025,7 @@ int main() {
     testDeclaredWaits();
     testAbandonedThreadIsNotReported();
     testRearmAfterLostTime();
+    testBeatNeverReadsLateBetweenItsStores();
     testRegistrationLifetime();
     testConcurrentRegistryUse();
     testWedgedWorkerOfEachKind();
@@ -945,6 +1033,7 @@ int main() {
     testWedgeFilesAreCapped();
     testLostTimeAndDebuggerNeverReport();
     testLostTimeRearmsRegistrations();
+    testSlowCaptureIsNotLostTime();
     testNoReportDirNoFile();
     testWedgeIsCountedInTheLedger();
     testDspWedgeWhileKeyedLeavesTheDeadManAlone();

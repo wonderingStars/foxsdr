@@ -9,6 +9,9 @@
 //   E  THE ENGINE'S HANDLE (Containment), across two simulated runs in one scratch folder: the gate, the notices, a re-enable, and safe mode
 //      (which refuses everything and changes no record).
 //   F  FIRST-PASS HAS A CLOCK.
+//   G  THE DEEP REVIEW OF engine/stage4, BATCH A (docs/engine-stage4.md 6.31): ONE ID EVERYWHERE (a plugin whose id is longer than a slot, or written in
+//      capitals, is found again by the gate, the record and the re-enable); BRACKETS THAT OVERLAP leave the phase where the plugin RESTS; TWO SETTINGS
+//      FILES IN ONE FOLDER keep a marker and a store of their own; and the marker's pages STAY IN THE WORKING SET when memory is trimmed.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -17,15 +20,20 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "core/diag_log.hpp"
+#include "core/plugin_fault.hpp"
 #include "core/plugin_marker.hpp"
+#include "core/plugin_run.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <psapi.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -495,7 +503,260 @@ void testContainment(const fs::path& dir) {
     marker::resetForTest();
 }
 
+// ---- G ----------------------------------------------------------------------------------------------------------------------------
+void testContainmentIdIsOneId(const fs::path& dir) {
+    namespace cc = cascade::core;
+    CHECK(cc::containmentId("Acme-Decoder-1.0.0-abi3-win-x64.dll") == "acme-decoder");
+    CHECK(cc::containmentId("acme-decoder") == "acme-decoder");
+    CHECK(cc::containmentId(cc::containmentId("ACME-Decoder-2.dll")) == cc::containmentId("ACME-Decoder-2.dll"));   // idempotent, as pluginRunId is
+    CHECK(cc::containmentId("").empty());
+    CHECK(cc::containmentId(std::string(60, 'q')).size() == cc::kContainmentIdMax);
+    CHECK(cc::containmentId(std::string(47, 'q')).size() == 47);
+    // the marker's slot holds this very form: a plugin that died inside create() comes back from the file under it
+    const std::string leaf = "Acme-Very-Long-Decoder-Name-For-A-Satellite-Modem-Pipeline-1.2.3-abi3-win-x64.dll";
+    CHECK(cc::pluginRunId(leaf).size() > cc::kContainmentIdMax);
+    const std::string path = (dir / "oneid.marker").string();
+    marker::resetForTest();
+    marker::open(path);
+    marker::set(leaf, Phase::Create, "1.2.3");
+    marker::resetForTest();
+    const std::vector<InPlay> before = marker::open(path);
+    CHECK(before.size() == 1 && before[0].id == cc::containmentId(leaf));
+    marker::cleanShutdown();
+    marker::resetForTest();
+}
+
+// A PLUGIN WHOSE ID IS LONGER THAN A SLOT IS FOUND AGAIN (batch A). The marker's slot and the strike record hold the id lower-cased and cut to 47 characters; the
+// gate and the re-enable looked the plugin up by the full lower-cased id, which is never equal to a cut one - so for a plugin installed from a site under a long
+// file name (the installer allows 128 characters) the breaker NEVER matched: it crashed the application in create() on every start, got its strikes, and was
+// loaded again at every start after - the loop the breaker exists to end.
+void testLongAndMixedCaseIdsAreFoundAgain(const fs::path& dir) {
+    const std::string settings = (dir / "settings-long").string();
+    fs::create_directories(settings);
+    const std::string leaf = "Acme-Very-Long-Decoder-Name-For-A-Satellite-Modem-Pipeline-1.2.3-abi3-win-x64.dll";
+    const std::string newer = "ACME-VERY-LONG-DECODER-NAME-FOR-A-SATELLITE-MODEM-PIPELINE-9.9.9-abi3-win-x64.dll";
+    marker::resetForTest();
+    {
+        Containment c;
+        c.begin(settings, false, 100);
+        marker::set(leaf, Phase::Create, "1.2.3");   // (no cleanShutdown: the process died inside create())
+    }
+    marker::resetForTest();
+    {
+        Containment c;
+        c.begin(settings, false, 200);
+        CHECK(c.notices().size() == 1);
+        Containment::Gate g;
+        const bool refused = c.gate(leaf, g);
+        if (!refused) { std::printf("FAIL the breaker did not match a plugin with a long id\n"); }
+        CHECK(refused);
+        CHECK(g.verdict == cascade::core::ModuleVerdict::Faulted);
+        CHECK(c.gate(newer, g));   // a newer file of the same plugin, written in capitals, is the same plugin
+        CHECK(c.recordOf(leaf) != nullptr);
+        if (c.recordOf(leaf) != nullptr) { CHECK(c.recordOf(leaf)->state == StrikeState::Suspect); }
+        CHECK(c.recordOf(newer) == c.recordOf(leaf));
+        CHECK(c.reenable(leaf));   // and the person's click finds it too
+        CHECK(!c.gate(leaf, g));
+        CHECK(c.recordOf(leaf) != nullptr);
+        if (c.recordOf(leaf) != nullptr) { CHECK(c.recordOf(leaf)->state == StrikeState::Probation && c.recordOf(leaf)->strikes == 1); }
+    }
+    marker::resetForTest();
+    {   // the record was kept in the store under the cut id, and the next start reads it back
+        Containment c;
+        c.begin(settings, false, 300);
+        CHECK(c.recordOf(leaf) != nullptr);
+        c.cleanShutdown();
+    }
+    marker::resetForTest();
+}
+
+// BRACKETS THAT OVERLAP (batch A). The runner (the engine's thread) and the plugin UI (the window's) can both be building instances of one plugin - the bounded
+// handshake that keeps them apart lapses when the window is minimised and a create() is slow - and two destroys of one plugin can overlap the same way. Each
+// bracket saved the phase it found and put it back: the second saved the FIRST one's in-call phase, and whichever ended last restored that - the plugin was left
+// in `create` or `unload` for good, so a later crash of the application for its own reasons put a strike on a plugin that was not in any call.
+void testOverlappingBracketsSettleWhereThePluginRests(const fs::path& dir) {
+    const std::string path = (dir / "overlap.marker").string();
+    marker::resetForTest();
+    marker::open(path);
+    // two destroys overlap: the plugin was running, and it is running again when both are over
+    marker::set("ov-a", Phase::Running);
+    {
+        auto a = std::make_unique<marker::CallPhase>("ov-a", Phase::Unload);
+        auto b = std::make_unique<marker::CallPhase>("ov-a", Phase::Unload);
+        CHECK(marker::phaseOf("ov-a") == Phase::Unload);
+        a.reset();
+        if (marker::phaseOf("ov-a") != Phase::Unload) { std::printf("FAIL the first bracket to end put the plugin out of its call while the second is still inside it (reads %s)\n", marker::phaseWord(marker::phaseOf("ov-a"))); }
+        CHECK(marker::phaseOf("ov-a") == Phase::Unload);   // b is still inside its call: the plugin is still in play
+        b.reset();
+        if (marker::phaseOf("ov-a") != Phase::Running) { std::printf("FAIL after two overlapping destroys the plugin reads %s\n", marker::phaseWord(marker::phaseOf("ov-a"))); }
+        CHECK(marker::phaseOf("ov-a") == Phase::Running);
+    }
+    // the same in the other order
+    marker::set("ov-b", Phase::Running);
+    {
+        auto a = std::make_unique<marker::CallPhase>("ov-b", Phase::Unload);
+        auto b = std::make_unique<marker::CallPhase>("ov-b", Phase::Unload);
+        b.reset();
+        CHECK(marker::phaseOf("ov-b") == Phase::Unload);
+        a.reset();
+        CHECK(marker::phaseOf("ov-b") == Phase::Running);
+    }
+    // two builds overlap and ONE of them made an instance: it rests in first-pass whichever ends first, and with none made it rests where it was
+    {
+        auto a = std::make_unique<marker::CallPhase>("ov-c", Phase::Create, "1.0.0");
+        auto b = std::make_unique<marker::CallPhase>("ov-c", Phase::Create, "1.0.0");
+        a->settle(Phase::FirstPass);
+        a.reset();
+        CHECK(marker::phaseOf("ov-c") == Phase::Create);
+        b.reset();
+        CHECK(marker::phaseOf("ov-c") == Phase::FirstPass);
+        auto c = std::make_unique<marker::CallPhase>("ov-d", Phase::Create);
+        auto d = std::make_unique<marker::CallPhase>("ov-d", Phase::Create);
+        d->settle(Phase::FirstPass);
+        c.reset();
+        d.reset();
+        CHECK(marker::phaseOf("ov-d") == Phase::FirstPass);
+        auto e = std::make_unique<marker::CallPhase>("ov-e", Phase::Create);
+        e.reset();   // made nothing: back to a loaded module's idle slot
+        CHECK(marker::phaseOf("ov-e") == Phase::Idle);
+    }
+    // a plain bracket on its own is what it always was
+    marker::set("ov-f", Phase::FirstPass);
+    {
+        marker::CallPhase one("ov-f", Phase::Unload);
+        CHECK(marker::phaseOf("ov-f") == Phase::Unload);
+    }
+    CHECK(marker::phaseOf("ov-f") == Phase::FirstPass);
+    // the first-pass clock still runs for a plugin that RESTS in first-pass after a bracket
+    {
+        marker::CallPhase one("ov-g", Phase::Create);
+        one.settle(Phase::FirstPass);
+    }
+    CHECK(marker::phaseOf("ov-g") == Phase::FirstPass);
+    marker::promoteFirstPass(0xFFFFFFFFu, 0);
+    CHECK(marker::phaseOf("ov-g") == Phase::Running);
+    marker::cleanShutdown();
+    marker::resetForTest();
+}
+
+// TWO SETTINGS FILES IN ONE FOLDER (batch A). The config lock is per settings file, so `foxsdr-engine --config a.json` beside `--config b.json` - the engine's own
+// refusal text advises exactly that - each hold their own lock, and they shared ONE marker and ONE store: the second start read the first's live slots as a dead
+// predecessor's evidence (a strike for a plugin running fine) and zeroed them (so the first's own later crash had no blame). The pair is named by the settings file.
+void testSettingsFilesKeepTheirOwnMarker(const fs::path& dir) {
+    namespace cc = cascade::core;
+    CHECK(cc::markerFileNameFor("") == "plugin-play.marker" && cc::storeFileNameFor("") == "plugin-faults.json");
+    CHECK(cc::markerFileNameFor("C:\\Users\\x\\config.json") == "plugin-play.marker");   // the default settings file keeps the names it has always had
+    CHECK(cc::markerFileNameFor("/home/x/CONFIG.JSON") == "plugin-play.marker");
+    CHECK(cc::markerFileNameFor("config.json") == "plugin-play.marker");
+    CHECK(cc::markerFileNameFor("D:/data/Second.json") == "plugin-play-second.marker");
+    CHECK(cc::storeFileNameFor("D:/data/Second.json") == "plugin-faults-second.json");
+    CHECK(cc::markerFileNameFor("we ird*.json") == "plugin-play-we_ird_.marker");
+    CHECK(cc::markerFileNameFor("a.cfg") == "plugin-play-a.cfg.marker");   // a name that is not .json keeps its extension: a.cfg and a.json differ
+    CHECK(cc::markerFileNameFor(std::string(100, 'z') + ".json").size() <= std::string("plugin-play-.marker").size() + 40);
+
+    const std::string settings = (dir / "settings-two").string();
+    fs::create_directories(settings);
+    marker::resetForTest();
+    {
+        Containment a;
+        a.begin(settings, false, 100, "a.json");
+        marker::set("bad", Phase::Create, "1.0.0");   // a.json's program dies inside create()
+    }
+    marker::resetForTest();
+    {
+        Containment b;
+        b.begin(settings, false, 150, "b.json");   // b.json's program starts in the same folder
+        if (!b.notices().empty()) { std::printf("FAIL a second settings file read the first one's marker as its own\n"); }
+        CHECK(b.notices().empty());
+    }
+    marker::resetForTest();
+    {
+        Containment a;
+        a.begin(settings, false, 200, "a.json");   // and a.json's own next start still finds its own evidence
+        CHECK(a.notices().size() == 1);
+        Containment::Gate g;
+        CHECK(a.gate("bad-1.0.0-abi3-win-x64.dll", g));
+    }
+    CHECK(fs::exists(fs::path(settings) / "plugin-play-a.marker") && fs::exists(fs::path(settings) / "plugin-play-b.marker"));
+    CHECK(fs::exists(fs::path(settings) / "plugin-faults-a.json"));
+    CHECK(!fs::exists(fs::path(settings) / "plugin-faults-b.json"));   // b has no strikes
+    CHECK(!fs::exists(fs::path(settings) / "plugin-play.marker") && !fs::exists(fs::path(settings) / "plugin-faults.json"));
+    marker::resetForTest();
+}
+
+#if defined(_WIN32)
+// THE MARKER'S PAGES DO NOT GO WITH A TRIMMED WORKING SET (batch A). The marker is a file mapping that is stored into from inside a plugin's create(), outside any
+// guard. When the settings folder is on a network share or a removable drive that goes away, a page that memory pressure had trimmed from the working set is read
+// back in by the next store - and an in-page error there is a fatal crash of the host, with nothing to attribute it to a plugin. The mapping is locked into the
+// working set when it is made (8 KiB): there is nothing to page back in. (A disconnect cannot be staged here; the premise of the failure - a trim - can.)
+void testMarkerPagesStayResident(const fs::path& dir) {
+    marker::resetForTest();
+    marker::open((dir / "resident.marker").string());
+    marker::set("resident", Phase::Running);
+    const void* view = marker::viewForTest();
+    CHECK(view != nullptr);
+    if (view != nullptr) {
+        ::EmptyWorkingSet(::GetCurrentProcess());   // what memory pressure does to a process's pages
+        PSAPI_WORKING_SET_EX_INFORMATION info[2] = {};
+        info[0].VirtualAddress = const_cast<void*>(view);
+        info[1].VirtualAddress = static_cast<char*>(const_cast<void*>(view)) + 4096;
+        CHECK(::QueryWorkingSetEx(::GetCurrentProcess(), info, sizeof(info)) != 0);
+        const bool first = info[0].VirtualAttributes.Valid != 0;
+        const bool second = info[1].VirtualAttributes.Valid != 0;
+        if (!first || !second) { std::printf("FAIL the marker's pages left the working set when it was trimmed (page 0 %d, page 1 %d)\n", first ? 1 : 0, second ? 1 : 0); }
+        CHECK(first && second);
+        // and a store still lands
+        marker::set("resident", Phase::Create);
+        CHECK(marker::phaseOf("resident") == Phase::Create);
+    }
+    marker::cleanShutdown();
+    marker::resetForTest();
+}
+#endif
+
 }  // namespace
+
+// THE START'S LINES NAME A PLUGIN BY THE NAME THAT MAY LEAVE THE MACHINE (the plausible finding P1 of batch A; docs/engine-stage4.md 6.31). The log ring is copied into every
+// report, and the lines the start writes about a dead run's suspect - "the last run did not end in order with X in play", "X starts the next session switched off" - named X
+// by its file's id: a stranger's private plugin, in a report that is uploaded. The marker says where each plugin came from; an official one keeps its own name, any other is
+// `site-` and a hash.
+void testStartLogLinesNameThePublicId(const fs::path& dir) {
+    namespace cc = cascade::core;
+    const fs::path settings = dir / "p1-start";
+    fs::create_directories(settings);
+    marker::resetForTest();
+    cc::DiagLog::instance().resetForTest();
+    {
+        Containment first;
+        first.begin(settings.string(), false, 1000);
+        // two plugins die inside create(): a stranger's, and one of FoxSDR's own
+        marker::set("acme-private-crasher-1.0.0-abi3-win-x64.dll", Phase::Create, "1.0.0", cc::fault::Origin::Site);
+        marker::set("pocsag-decoder-1.0.2-abi3-win-x64.dll", Phase::Create, "1.0.2", cc::fault::Origin::Official);
+    }
+    marker::resetForTest();   // (the process "ended" without an orderly stop: the marker is left as it was)
+    cc::DiagLog::instance().resetForTest();
+    {
+        Containment second;
+        second.begin(settings.string(), false, 2000);
+        CHECK(second.notices().size() == 2);
+    }
+    const std::string hashed = cc::fault::publicIdFor(cc::containmentId("acme-private-crasher-1.0.0-abi3-win-x64.dll"), cc::fault::Origin::Site);
+    CHECK(hashed.rfind("site-", 0) == 0);
+    bool order = false;
+    bool switchedOff = false;
+    bool officialNamed = false;
+    for (const std::string& line : cc::DiagLog::instance().ringSnapshot()) {
+        if (line.find("acme-private-crasher") != std::string::npos) { std::printf("FAIL the start names a private plugin by its id: %s\n", line.c_str()); }
+        CHECK(line.find("acme-private-crasher") == std::string::npos);
+        order = order || (line.find("did not end in order") != std::string::npos && line.find(hashed) != std::string::npos);
+        switchedOff = switchedOff || (line.find("starts the next session switched off") != std::string::npos && line.find(hashed) != std::string::npos);
+        officialNamed = officialNamed || (line.find("pocsag-decoder") != std::string::npos);
+    }
+    CHECK(order);
+    CHECK(switchedOff);
+    CHECK(officialNamed);   // an official plugin keeps its own name
+    marker::resetForTest();
+}
 
 int main() {
     const fs::path dir = fs::temp_directory_path() / ("foxsdr-test-plugin-marker-" + std::to_string(static_cast<unsigned long long>(
@@ -514,6 +775,14 @@ int main() {
     testMarkerFile(dir);
     testStore(dir);
     testContainment(dir);
+    testContainmentIdIsOneId(dir);
+    testLongAndMixedCaseIdsAreFoundAgain(dir);
+    testOverlappingBracketsSettleWhereThePluginRests(dir);
+    testSettingsFilesKeepTheirOwnMarker(dir);
+    testStartLogLinesNameThePublicId(dir);
+#if defined(_WIN32)
+    testMarkerPagesStayResident(dir);
+#endif
 
     fs::remove_all(dir, ec);
     return testSummary("test_plugin_marker");

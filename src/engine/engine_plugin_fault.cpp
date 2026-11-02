@@ -35,21 +35,9 @@
 
 namespace cascade::engine {
 
-namespace {
-
-std::string lowerId(const std::string& keyOrId) {
-    std::string id = cascade::core::pluginRunId(keyOrId);
-    for (char& c : id) {
-        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
-    }
-    return id;
-}
-
-}  // namespace
-
-void Engine::beginPluginContainment(const std::string& settingsDir) {
+void Engine::beginPluginContainment(const std::string& settingsDir, const std::string& settingsFile) {
     if (containment_.started()) { return; }
-    containment_.begin(settingsDir, safePlugins_, static_cast<std::int64_t>(std::time(nullptr)));
+    containment_.begin(settingsDir, safePlugins_, static_cast<std::int64_t>(std::time(nullptr)), settingsFile);
     ++pluginFaultGen_;
 }
 
@@ -73,12 +61,17 @@ void Engine::installPluginLoadGate() {
 }
 
 bool Engine::pluginIsQuarantinedId(const std::string& runId) const {
-    if (quarantinedIds_.empty()) { return false; }   // the settled pass: nothing to search
-    return std::find(quarantinedIds_.begin(), quarantinedIds_.end(), runId) != quarantinedIds_.end();
+    if (quarantinedIds_.empty()) { return false; }   // the settled pass: nothing to search (and nothing is built)
+    // THE SET HOLDS THE CONTAINMENT ID (the guard's slot form: lower-cased, cut to the slot's width) and is asked in whatever form the caller has - the plugin's
+    // own spelling, the file name, the id (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). Looked up by the plain run id, a plugin written in
+    // capitals or with an id longer than a slot was switched off by the guard and carried on everywhere else: still chosen as the map's provider, still reported
+    // as running, never in the stop sets.
+    const std::string id = cascade::core::containmentId(runId);
+    return std::find(quarantinedIds_.begin(), quarantinedIds_.end(), id) != quarantinedIds_.end();
 }
 
 std::string Engine::pluginFaultSentence(const std::string& pluginKey) const {
-    const std::string id = lowerId(pluginKey);
+    const std::string id = cascade::core::containmentId(pluginKey);
     if (!pluginIsQuarantinedId(id)) { return std::string(); }
     const cascade::core::fault::Slot* s = cascade::core::fault::slotFor(id);
     const cascade::core::fault::Why why = cascade::core::fault::quarantineWhy(s);
@@ -99,7 +92,8 @@ void Engine::applyPluginQuarantines() {
     // here, where a lock may be taken - the count itself was a relaxed atomic add on whatever thread the plugin called from. The counts stay
     // in fault::health(); the host has already refused the call with the ABI's own answer.
     for (const cascade::core::fault::MisuseNotice& note : cascade::core::fault::drainMisuseNotices()) {
-        cascade::core::diagWarnf("plugin: %s %s (%s); the call was refused or clamped and the session carries on", note.id.c_str(),
+        // (the PUBLIC id, like every line that names a plugin: the log ring is copied into every report; deep review of engine/stage4, batch A, docs/engine-stage4.md 6.31)
+        cascade::core::diagWarnf("plugin: %s %s (%s); the call was refused or clamped and the session carries on", note.publicId.c_str(),
                                  note.kind == cascade::core::fault::Misuse::HostReentry
                                      ? "was called by FoxSDR from inside a call into the same plugin, which the plugin ABI promises never to do"
                                      : "broke a rule of the plugin API",
@@ -115,14 +109,15 @@ void Engine::applyPluginQuarantines() {
         std::string moduleFile;
         for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
             const std::string key = cascade::core::pluginKey(p);
-            if (lowerId(key) == ev.id) {
+            if (cascade::core::containmentId(key) == ev.id) {
                 moduleFile = key;
                 break;
             }
         }
         if (std::find(quarantinedIds_.begin(), quarantinedIds_.end(), ev.id) == quarantinedIds_.end()) { quarantinedIds_.push_back(ev.id); }
         changed = true;
-        cascade::core::diagWarnf("plugin: %s was switched off for this session (%s in %s); its instances are being removed", ev.id.c_str(),
+        // (the PUBLIC id: the log ring is copied into every report, and an id that is not an official plugin's is hashed there)
+        cascade::core::diagWarnf("plugin: %s was switched off for this session (%s in %s); its instances are being removed", ev.publicId.c_str(),
                                  cascade::core::fault::whyWord(ev.why), cascade::core::fault::entryWord(ev.entry));
         if (moduleFile.empty()) { continue; }
         // B13: A PLUGIN THAT IS GOING AWAY ALWAYS UNKEYS - first, before anything of it is touched. (If it held the key, the transmitter is
@@ -147,7 +142,7 @@ void Engine::applyPluginQuarantines() {
 }
 
 bool Engine::reenablePlugin(const std::string& pluginKeyOrId, std::string& why) {
-    const std::string id = lowerId(pluginKeyOrId);
+    const std::string id = cascade::core::containmentId(pluginKeyOrId);
     if (id.empty()) {
         why = "no plugin named";
         return false;
@@ -165,14 +160,14 @@ bool Engine::reenablePlugin(const std::string& pluginKeyOrId, std::string& why) 
         changed = true;
     }
     for (auto it = pluginNotices_.begin(); it != pluginNotices_.end();) {
-        it = lowerId(it->first) == id ? pluginNotices_.erase(it) : std::next(it);
+        it = cascade::core::containmentId(it->first) == id ? pluginNotices_.erase(it) : std::next(it);
     }
     if (!changed) {
         why = "that plugin is not switched off";
         return false;
     }
     ++pluginFaultGen_;
-    cascade::core::diagLogf("plugin: %s re-enabled by the user", id.c_str());
+    cascade::core::diagLogf("plugin: %s re-enabled by the user", cascade::core::fault::publicIdOf(cascade::core::fault::slotFor(id)));
     // A full rescan: a plugin that was never mapped is mapped now, and one that was is built again over the stream it ran on.
     rescanPlugins();
     return true;

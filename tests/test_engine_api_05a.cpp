@@ -1080,6 +1080,46 @@ void testServerConfigRestore() {
     CHECK(!cascade::engine::parseServerConfigRequest(R"({"cat":{"port":1023}})", req, why));
 }
 
+// S8: THE PASSWORD IS PENDING BEFORE THE CONFIGURATION THAT SWITCHES THE SERVER ON CAN BE READ (deep review of engine/stage4, batch A; docs/engine-stage4.md
+// 6.31). reconcileWeb (the host's worker) reads the configuration and then the pending flag, and a pending password holds the restart back so the server
+// comes up WITH its record once - not first without it, which on a loopback bind is an open server for the length of a hash. apply() merged the new
+// configuration under the lock, released it, and only THEN started the hash and raised the flag: a worker already inside reconcileWeb could read the new
+// configuration in that gap with the flag still down. The flag is raised inside the same critical section now; the seam runs at the first instant the
+// merged configuration can be read, and the flag must be up by then.
+void testPasswordPendingBeforeTheConfigIsVisible() {
+    cascade::engine::ServerHost host;
+    host.setHosting(false);   // (no socket and no worker: the ORDER is the question)
+    bool sawEnabled = false;
+    bool pendingThen = false;
+    int calls = 0;
+    host.setAfterConfigForTest([&] {
+        ++calls;
+        sawEnabled = host.config().web.enabled;
+        pendingThen = host.passwordPending();
+    });
+    cascade::engine::ServerConfigRequest req;
+    req.webEnabled = true;
+    req.webPassword = std::string("correct horse battery staple");
+    const cascade::engine::ServerHost::Outcome out = host.apply(req);
+    CHECK_EQ(out.status, FOXAPI_OK);
+    CHECK_EQ(calls, 1);
+    CHECK(sawEnabled);   // (the premise: the new configuration WAS readable at that instant)
+    if (!pendingThen) { std::printf("S8: the new configuration was readable while the password was not yet pending\n"); }
+    CHECK(pendingThen);
+    CHECK(host.passwordPending());   // and it stays up until the record lands
+    // a request that names no password does not raise it
+    cascade::engine::ServerHost other;
+    other.setHosting(false);
+    other.setAfterConfigForTest([&] { pendingThen = other.passwordPending(); });
+    cascade::engine::ServerConfigRequest plain;
+    plain.webEnabled = true;
+    pendingThen = true;
+    (void)other.apply(plain);
+    CHECK(!pendingThen);
+    CHECK(!other.passwordPending());
+    host.shutdown();
+}
+
 // C: CAT's six figures, from what a CAT connection's own session reads, are the figures the window's snapshot read gave.
 void testCatRadioFromTheSession() {
     Rig r("testHooks=1", /*thread=*/false);
@@ -1127,5 +1167,6 @@ int main() {
     // S. SERVER_CONFIG
     testServerConfig();
     testServerConfigRestore();
+    testPasswordPendingBeforeTheConfigIsVisible();
     return check::finish("test_engine_api_05a");
 }
