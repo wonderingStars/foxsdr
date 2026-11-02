@@ -1,0 +1,212 @@
+// FoxSDR Slint front end - SECTIONS: the rows of the sections panel and their open body.
+//
+//   Section    .sec    a 36 px row (30 small, 25 dense): chevron, optional state dot, name, a chip at the right.
+//                      When `open` the row is followed by its body - the caller's children on the panel ground.
+//                      A Section's height is the row PLUS the body, so a VerticalLayout of Sections stacks with no
+//                      measuring by the caller. The row toggles nothing itself: `clicked` fires and the host flips
+//                      `open`. Do not set `height` on a Section: the component owns it.
+//   BodyRow    .rw     a body line: a cap label at the left, the caller's control at the right, 24 px at least.
+//   SelectKey  .btn    the "Tune step" picker: a 24 px key with the current value and a chevron; `clicked` and the
+//                      host opens a Menu under it.
+//
+// Measurements are the sheets' CSS (Workbench.dc.html: .sec, .chev, the open Radio body; Workbench-PluginKit.dc.html:
+// .sec.s, .dn .sec.s, .ld, .rw). The row's 1 px top rule sits INSIDE the row height (the kit's border-box), the way
+// PluginKit measures it.
+import { Theme } from "theme.slint";
+import { Chip, ChipTone, LampDot, LampState } from "chips.slint";
+import { TipTimer } from "tooltip.slint";
+
+export component Section inherits Rectangle {
+    in property <string> name;
+    in property <string> chip;                       // the status chip at the right; "" draws none
+    in property <ChipTone> tone: ChipTone.neutral;
+    in property <bool> open;                         // the body is shown and the row is tinted
+    in property <bool> first;                        // the first row of a panel has no top rule
+    in property <bool> small;                        // .sec.s: 30 px
+    in property <bool> dense;                        // .dn .sec.s: 25 px (wins over small)
+    in property <bool> show-dot;
+    in property <LampState> dot: LampState.off;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked();
+
+    // What a host or a test may read: the row's own height and the body's.
+    out property <length> row-height: root.dense ? Theme.section-dense-h : root.small ? Theme.section-sm-h : Theme.section-h;
+    out property <length> body-height: root.open ? body.preferred-height : 0px;
+
+    // The whole component: a VerticalLayout reads this as the row's fixed size, so the open body pushes the rows
+    // below it down.
+    height: root.row-height + root.body-height;
+
+    row := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.row-height;
+        background: root.open ? Theme.panel : transparent;
+        accessible-role: button;
+        accessible-label: root.name;
+        accessible-enabled: root.enabled;
+        accessible-expandable: true;
+        accessible-expanded: root.open;
+        accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+        // padding 0 10 0 8; the name starts where the body's left padding ends (8 + 14 + 8 = 30).
+        property <length> chip-w: root.chip != "" ? chip-box.width : 0px;
+        property <length> name-x: root.show-dot ? 46px : 30px;
+
+        // border-top: 1px solid line (the first row of a panel has none)
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: root.first ? 0px : Theme.hairline;
+            background: Theme.line;
+        }
+        // .chev: right when closed, down when open
+        Image {
+            x: 8px;
+            y: (parent.height - self.height) / 2;
+            width: 14px;
+            height: 14px;
+            image-fit: contain;
+            source: root.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg");
+            colorize: root.enabled ? Theme.muted : Theme.disabled;
+        }
+        if root.show-dot : LampDot {
+            x: 30px;
+            y: (parent.height - self.height) / 2;
+            state: root.dot;
+        }
+        // The name elides before it touches the chip (8 px of air).
+        Text {
+            x: parent.name-x;
+            y: 0px;
+            height: parent.height;
+            width: max(0px, parent.width - 10px - parent.chip-w - (root.chip != "" ? 8px : 0px) - self.x);
+            text: root.name;
+            color: root.enabled ? Theme.fg : Theme.disabled;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-body;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        chip-box := Chip {
+            x: parent.width - 10px - self.width;
+            y: (parent.height - self.height) / 2;
+            visible: root.chip != "";
+            label: root.chip;
+            tone: root.tone;
+        }
+        area := TouchArea {
+            mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+            clicked => { if (root.enabled) { root.clicked(); } }
+        }
+        TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: parent.height; }
+    }
+
+    // The open body: the panel ground, the sheet's padding (4 12 12 30), 10 px between lines, a rule underneath.
+    // The row's TouchArea ends with the row, so a click here never reaches `clicked`.
+    body-box := Rectangle {
+        x: 0px;
+        y: root.row-height;
+        width: root.width;
+        height: root.body-height;
+        visible: root.open;
+        background: Theme.panel;
+        body := VerticalLayout {
+            padding-left: 30px;
+            padding-top: 4px;
+            padding-right: 12px;
+            padding-bottom: 12px;
+            spacing: 10px;
+            @children
+        }
+        Rectangle {
+            x: 0px;
+            y: parent.height - Theme.hairline;
+            width: parent.width;
+            height: Theme.hairline;
+            background: Theme.line;
+        }
+    }
+}
+
+// A line of an open body: the cap at the left, the control (@children) at the right (.rw: align-items center, gap 8; the
+// children sit side by side with the sheet's usual 6 px between them). The row grows with a taller control.
+export component BodyRow inherits Rectangle {
+    in property <string> label;
+    min-height: Theme.field-h;
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: space-between;
+        Text {
+            text: root.label.to-uppercase();
+            color: Theme.muted;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-cap;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: Theme.cap-spacing;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 6px;
+                @children
+            }
+        }
+    }
+}
+
+// The picker look of the "Tune step" row: a select styled as .btn, 24 px high, 110 px at least; the host opens a
+// Menu on `clicked`.
+export component SelectKey inherits Rectangle {
+    in property <string> value;
+    in property <string> label;                      // the accessible name ("Tune step"); the value when empty
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked();
+
+    width: max(110px, 8px + val.preferred-width + 6px + 14px + 8px);
+    height: Theme.key-sm-h;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    background: !root.enabled ? Theme.key-disabled-bg : area.has-hover ? Theme.menu-hot : Theme.key-bg;
+    border-color: root.enabled ? Theme.key-line : Theme.key-line.with-alpha(0.5);
+    accessible-role: combobox;
+    accessible-label: root.label != "" ? root.label : root.value;
+    accessible-value: root.value;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    val := Text {
+        x: 8px;
+        y: 0px;
+        height: parent.height;
+        width: max(0px, parent.width - 8px - 6px - 14px - 8px);
+        text: root.value;
+        color: root.enabled ? Theme.key-fg : Theme.key-disabled-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        font-weight: Theme.weight-medium;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Image {
+        x: parent.width - 8px - self.width;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        image-fit: contain;
+        source: @image-url("icons/chevron-down.svg");
+        colorize: root.enabled ? Theme.key-fg : Theme.key-disabled-fg;
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: parent.height; }
+}

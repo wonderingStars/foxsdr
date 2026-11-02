@@ -60,9 +60,8 @@ void fillAsTheSheet(const slint::ComponentHandle<MainWindow>& ui) {
     ui->set_ribbon(model<BandSegment>({{0.f, 1.f, ss("2 m amateur"), slint::Color::from_argb_uint8(0, 0, 0, 0)}}));
     ui->set_bookmarks(model<BookmarkMark>({{0.63f, ss("GB3xx"), false}, {0.80f, ss("ISS APRS"), true}}));
     ui->set_marks(model<PluginMark>({{0.10f, 0.f, ss("APRS 144.800"), slint::Color::from_argb_uint8(0, 0, 0, 0), true}}));
-    ui->set_wf_marks(model<WfMark>({{0.10f, 0.f, ss("APRS 144.800"), slint::Color::from_argb_uint8(0, 0, 0, 0), true}}));
+    ui->set_wf_marks(model<PluginMark>({{0.10f, 0.f, ss("APRS 144.800"), slint::Color::from_argb_uint8(0, 0, 0, 0), true}}));
     ui->set_markers(model<UserMarker>({{0.306f, ss("M1 145.212 MHz")}}));
-    ui->set_wf_markers(model<WfMarker>({{0.306f, ss("M1 145.212 MHz")}}));
     ui->set_cursor_pos(0.5265f);
     ui->set_cursor_text(ss("145.212 MHz \xC2\xB7 -78.4 dB")); ui->set_cursor_visible(true);
     ui->set_split_ratio(424.f / 694.f);    // the sheet: spectrum 424, waterfall 270 of a 700 px centre with a 6 px splitter
@@ -105,10 +104,28 @@ int main() {
     ui->on_title_drag([&](float dx, float dy) { dragX = dx; dragY = dy; });
     ui->on_shortcut([&](slint::SharedString id) { shortcuts.push_back(std::string(id)); });
 
+    ui->window().show();   // what size does the window itself ask for? (the live window opened at its minimum height)
+    { const auto sz = ui->window().size(); std::printf("the window asks for %u x %u
+", sz.width, sz.height); }
     const std::uint32_t W = 1440, H = 900;
     Frame f = render(ui, W, H);
     CHECK(f.width == W && f.height == H);
     f.savePng(shotDir() + "main-screen.png");
+    // the strip's content does not fit the sheet's 1440 by the sheet's own numbers (counter 386 + eight mode keys 434 +
+    // three lanes of 120 + ...): below 1760 px the mode segment folds into one picker key, above it the eight keys show
+    {
+        CHECK(ui->get_compact_strip());
+        CHECK(f.countNear(690, 70, 860, 100, rgb(0x262a32), 6) > 800);        // the picker key's ground where the segment would be
+        Frame wide = render(ui, 1920, H);
+        wide.savePng(shotDir() + "main-screen-1920.png");
+        CHECK(!ui->get_compact_strip());
+        CHECK(wide.countNear(560, 50, 1000, 125, rgb(0xf5a524), 12) > 100); // the lit NFM key of the segment
+        // the BIAS TEE block is 120 px wide at the strip's right edge, and the lanes' slider tracks sit left of it
+        const int hazardLeft = wide.firstColNear(88, 1500, 1920, rgb(0x6b4d16));
+        CHECK(hazardLeft > 1920 - 16 - 120 - 12 && hazardLeft < 1920 - 16 - 120 + 12);
+        CHECK(wide.countNear(1200, 60, hazardLeft - 20, 110, rgb(0x2b2f37), 6) > 100);
+        f = render(ui, W, H);   // back to the sheet's size for the geometry below
+    }
 
     // ---- the regions, as the artboard places them ----
     const Rgb bg = rgb(0x15171b), strip = rgb(0x191c21), line = rgb(0x2b2f37), panelAlt = rgb(0x1a1d22), panel = rgb(0x1d2026), well = rgb(0x0d0f12), wellDeep = rgb(0x06070a);
@@ -135,8 +152,6 @@ int main() {
     // the counter plate ground somewhere in the frequency block, and a bright digit on it
     CHECK(f.countNear(180, 50, 560, 125, rgb(0x0f1114)) > 400);
     CHECK(f.countNear(180, 50, 560, 125, rgb(0xffb84d), 40) > 20);
-    // the mode segment: an accent key (NFM on) in the strip's middle
-    CHECK(f.countNear(560, 50, 1000, 125, rgb(0xf5a524), 12) > 100);
     // the first status chip carries the green lamp
     CHECK(f.countNear(4, 874, 40, 898, rgb(0x3ddc84), 30) > 3);
     // the ribbon along the top of the spectrum well

@@ -1,0 +1,292 @@
+// FoxSDR Slint front end - the slider family (phase 1, docs 6.36): Slider, LevelBar, SliderGroup.
+//
+// Built from the sheets' CSS (Workbench.dc.html, Workbench-PluginKit.dc.html), one class at a time:
+//   .sl       6px track, radius 3, ground slider-track
+//   .sl i     the fill, 0 to the value, same height and radius, slider-fill (slider-disabled-fill on .sl.dis)
+//   .sl b     the knob: 16px round, slider-knob (slider-disabled-knob), 2px ring slider-knob-ring, shadow 0 1px 3px.
+//             The kit sheet sets box-sizing: border-box, so the 16px INCLUDES the ring: 12px of knob colour inside it.
+//             The knob's centre sits at value x width, so it overhangs the track by 8px at both ends (the artboard's
+//             own look); the touch area covers the overhang so a press there still lands on the end of the track.
+//   lane      a column with 7px gaps: the caption row (the cap at the left; at the right the mono 600 readout and, for
+//             Gain and Squelch, an AUTO .btn 20px high, min-width 48, padding 0 8, 10px), the slider, a 10px hint line.
+//   .sl 4px   the Level bar under the Volume lane (LevelBar).
+//
+// Behaviour the artboards cannot show: a press on the track jumps the value there and a drag follows the pointer; a wheel
+// notch (60 logical px of delta-y, what the winit backend sends per wheel line; scrolling up raises) moves the value by
+// wheel-step (5 % of the range, the dials' rule) and smaller touchpad deltas move it proportionally; Left / Right do the
+// same when focused. Every move fires changed(float) with the new 0..1 value, and only when the position really changed.
+// A disabled slider ignores all of it (its tooltip still shows: the pointer may rest on it to find out why).
+//
+// WHO OWNS `value`. It is the host's number, and the slider never assigns it: in Slint an assignment from inside a component
+// replaces the binding the host put on the property, so a slider that wrote `value` would stop following `value: root.gain`
+// after the first drag. Instead the slider keeps the user's position in a state of its own and shows it until `value` next
+// changes, when it follows the host again. So `value: root.gain; changed(v) => { root.set-gain(v); }` is the pattern (the host
+// stores v and its binding moves the knob if it accepts, or leaves it where the user put it if it does not), and a slider with
+// no host at all still moves. `value <=> root.gain` also works, with a changed() handler that stores v.
+import { Theme } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+
+export component Slider inherits Rectangle {
+    in-out property <float> value: 0;           // 0..1 of the track: the host's number (never written from in here)
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <float> wheel-step: 0.05;       // one notch, one key press: 5 % of the range
+    in property <length> wheel-notch: 60px;     // the scroll delta that counts as one notch
+    out property <bool> dragging: touch.pressed;
+    callback changed(float);
+
+    property <length> reach: Theme.slider-knob-d / 2;      // how far the knob overhangs each end
+    property <float> local;                     // where the user last put it ...
+    property <bool> moved;                      // ... which counts until the host changes `value`
+    property <float> shown: Math.max(0.0, Math.min(1.0, root.moved ? root.local : root.value));
+    property <bool> keyboard;                   // the focus ring shows only for keyboard use, not after a click
+    property <bool> pointer-focus;
+
+    height: Theme.slider-track-h;
+    border-radius: self.height / 2;
+    background: Theme.slider-track;
+
+    accessible-role: slider;
+    accessible-value: Math.round(root.shown * 100) + " %";
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 1;
+    accessible-value-step: root.wheel-step;
+    accessible-action-increment => { if (root.enabled) { root.set-to(root.shown + root.wheel-step); } }
+    accessible-action-decrement => { if (root.enabled) { root.set-to(root.shown - root.wheel-step); } }
+
+    // the host moved `value` (or its binding did): whatever the user had set no longer counts
+    changed value => { root.moved = false; }
+
+    function set-to(v: float) {
+        let c = Math.max(0.0, Math.min(1.0, v));
+        if (c != root.shown) {
+            root.local = c;
+            root.moved = true;
+            root.changed(c);
+        }
+    }
+    // The pointer's x inside the touch area (which starts one overhang left of the track) as a 0..1 fraction of the track.
+    function from-x(px: length) -> float {
+        return root.width > 0px ? (px - root.reach) / root.width : 0.0;
+    }
+
+    // the fill
+    Rectangle {
+        x: 0px; y: 0px;
+        width: root.width * root.shown;
+        height: root.height;
+        border-radius: root.border-radius;
+        background: root.enabled ? Theme.slider-fill : Theme.slider-disabled-fill;
+    }
+    // the keyboard focus ring, round the knob
+    if fs.has-focus && root.keyboard : Rectangle {
+        x: root.width * root.shown - root.reach - 3px;
+        y: (root.height - self.height) / 2;
+        width: Theme.slider-knob-d + 6px;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: Theme.focus;
+    }
+    // the knob
+    Rectangle {
+        x: root.width * root.shown - root.reach;
+        y: (root.height - self.height) / 2;
+        width: Theme.slider-knob-d;
+        height: Theme.slider-knob-d;
+        border-radius: self.width / 2;
+        background: root.enabled ? Theme.slider-knob : Theme.slider-disabled-knob;
+        border-width: 2px;
+        border-color: Theme.slider-knob-ring;
+        drop-shadow-blur: Theme.shadows ? 3px : 0px;
+        drop-shadow-offset-y: Theme.shadows ? 1px : 0px;
+        drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.53) : transparent;
+    }
+
+    fs := FocusScope {
+        x: -root.reach;
+        y: (root.height - self.height) / 2;
+        width: root.width + 2 * root.reach;
+        height: Theme.slider-knob-d + 6px;
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == Key.LeftArrow) {
+                root.keyboard = true; root.pointer-focus = false;
+                root.set-to(root.value - root.wheel-step);
+                return accept;
+            }
+            if (e.text == Key.RightArrow) {
+                root.keyboard = true; root.pointer-focus = false;
+                root.set-to(root.value + root.wheel-step);
+                return accept;
+            }
+            return reject;
+        }
+        changed has-focus => {
+            // gained by Tab (no press) -> keyboard focus; gained by a press -> pointer focus; lost -> neither
+            root.keyboard = self.has-focus && !root.pointer-focus;
+            if (!self.has-focus) { root.pointer-focus = false; }
+        }
+        touch := TouchArea {
+            width: parent.width;
+            height: parent.height;
+            pointer-event(e) => {
+                if (root.enabled && e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                    root.keyboard = false;
+                    root.pointer-focus = true;
+                    fs.focus();
+                    root.set-to(root.from-x(self.mouse-x));
+                }
+            }
+            moved => {
+                if (root.enabled && self.pressed) { root.set-to(root.from-x(self.mouse-x)); }
+            }
+            scroll-event(e) => {
+                if (!root.enabled || e.delta-y == 0px) { return reject; }
+                root.set-to(root.value + e.delta-y / root.wheel-notch * root.wheel-step);
+                return accept;
+            }
+        }
+    }
+    TipTimer {
+        x: 0px; y: 0px;                          // unpositioned, Slint would centre it in the slider and the tip would open mid-track
+        hovered: touch.has-hover;
+        text: root.tooltip;
+        anchor-h: root.height + (root.reach - root.height / 2);   // the tip clears the knob
+    }
+}
+
+// The 4px bar under the Volume lane: the same ground as the slider, the level fill to the value.
+export component LevelBar inherits Rectangle {
+    in property <float> value;                  // 0..1
+    height: Theme.level-bar-h;
+    border-radius: self.height / 2;
+    background: Theme.slider-track;
+    accessible-role: progress-indicator;
+    accessible-value: Math.round(Math.max(0.0, Math.min(1.0, root.value)) * 100) + " %";
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 1;
+    Rectangle {
+        x: 0px; y: 0px;
+        width: root.width * Math.max(0.0, Math.min(1.0, root.value));
+        height: root.height;
+        border-radius: root.border-radius;
+        background: Theme.level-bar;
+    }
+}
+
+// One lane of the receiver strip: caption row, slider, hint line (7px apart), as the artboard's gain / squelch / volume grid.
+export component SliderGroup inherits Rectangle {
+    in property <string> caption;
+    in property <string> readout;
+    in property <string> hint;
+    in-out property <float> value;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <bool> has-auto;
+    in property <bool> auto-on;
+    in property <bool> auto-enabled: true;
+    in property <string> auto-label: "AUTO";    // translated by the host; the key keeps its min-width and grows with it
+    in property <string> auto-tooltip;
+    // The caption row is as high as its tallest cell: the AUTO key (20px) when there is one, else the 12px readout's line.
+    in property <length> caption-h: root.has-auto ? Theme.key-xs-h : 16px;
+    callback changed(float);
+    callback auto-clicked;
+
+    property <length> gap: 7px;
+    property <length> hint-h: 13px;
+
+    height: root.caption-h + root.gap + Theme.slider-track-h + root.gap + root.hint-h;
+
+    readout-text := Text {
+        x: (root.has-auto ? auto-key.x - 6px : root.width) - self.width;
+        y: 0px;
+        width: self.preferred-width;
+        height: root.caption-h;
+        text: root.readout;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        font-weight: Theme.weight-semibold;
+        color: Theme.fg;
+        vertical-alignment: center;
+    }
+    // the caption: the cap look (10px / 600 / 0.8px, upper-case, muted), elided before it can reach the readout
+    Text {
+        x: 0px; y: 0px;
+        width: Math.max(0px, readout-text.x - 6px);
+        height: root.caption-h;
+        text: root.caption.to-uppercase();
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        font-weight: Theme.weight-semibold;
+        letter-spacing: Theme.cap-spacing;
+        color: Theme.muted;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Slider {
+        x: 0px;
+        y: root.caption-h + root.gap;
+        width: root.width;
+        value <=> root.value;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        accessible-label: root.caption;
+        changed(v) => { root.changed(v); }
+    }
+    Text {
+        x: 0px;
+        y: root.caption-h + root.gap + Theme.slider-track-h + root.gap;
+        width: root.width;
+        height: root.hint-h;
+        text: root.hint;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-hint;
+        color: Theme.dim;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // the AUTO key, declared last so it is painted and hit-tested above the slider's touch area (the readout sits 6px to its left)
+    auto-key := Rectangle {
+        visible: root.has-auto;
+        x: root.width - self.width;
+        y: (root.caption-h - self.height) / 2;
+        width: Math.max(48px, auto-body.preferred-width);
+        height: Theme.key-xs-h;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        background: !root.auto-enabled ? Theme.key-disabled-bg
+                  : root.auto-on ? Theme.accent
+                  : auto-touch.has-hover ? Theme.menu-hot
+                  : Theme.key-bg;
+        border-color: !root.auto-enabled ? Theme.key-line.with-alpha(0.5)
+                    : root.auto-on ? Theme.accent
+                    : Theme.key-line;
+        accessible-role: button;
+        accessible-label: root.auto-label;
+        accessible-checkable: true;
+        accessible-checked: root.auto-on;
+        accessible-action-default => { if (root.auto-enabled) { root.auto-clicked(); } }
+        auto-body := HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            alignment: center;
+            Text {
+                text: root.auto-label;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-cap;
+                font-weight: Theme.weight-medium;
+                vertical-alignment: center;
+                color: !root.auto-enabled ? Theme.key-disabled-fg
+                     : root.auto-on ? Theme.accent-ink
+                     : Theme.key-fg;
+            }
+        }
+        auto-touch := TouchArea {
+            enabled: root.has-auto;
+            clicked => { if (root.auto-enabled) { root.auto-clicked(); } }
+        }
+        TipTimer { x: 0px; y: 0px; hovered: auto-touch.has-hover; text: root.auto-tooltip; anchor-h: parent.height; }
+    }
+}

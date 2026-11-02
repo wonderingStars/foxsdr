@@ -1,0 +1,171 @@
+// The fields specimen sheet: every kind of Field (text, number, bool, path, password), the error and disabled variants and
+// the Checkbox, each at an absolute, documented position, so tests/test_slint_fields.cpp can probe the pixels against the
+// PluginKit sheet's "Plugin settings" form. Window 500 x 830 on the Theme ground.
+//
+// A Field is a column: label row 24, gap 4, control 24 (so the input is y + 28 .. y + 52), then 4 + the note, then 4 + the
+// error line. The left column is 226 wide at x 16, the right at x 258; full-width rows are 468 wide at x 16. Fields are
+// placed with an explicit width and size their own height (the heights below are what the tested font settled on; the
+// rows are spaced so a font a pixel or two taller still clears the next one).
+//
+//   x,   y,   w,   h  - what                                                   (the root property the test reads)
+//   ---- row 1 --------------------------------------------------------------------------------------------------------
+//    16,  24, 226,  52 - TEXT "Callsign filter", placeholder "e.g. M0ABC"       (typed; edits, commits, last-value)
+//   258,  24, 226,  52 - NUMBER "Squelch offset" 3.5: mono, right-aligned
+//   ---- row 2 --------------------------------------------------------------------------------------------------------
+//    16, 104, 226,  69 - NUMBER "Squelch offset" 3,x with the error line "Not saved: that is not a number."
+//   258, 104, 226,  52 - BOOL "Log to file", checked                             (bool-checked; toggles, last-checked)
+//   ---- row 3: PATH ----------------------------------------------------------------------------------------------------
+//    16, 200, 468,  52 - PATH "Log file" C:\logs\aprs.txt + the small BROWSE FILES key at the right    (browses)
+//   ---- row 4: PASSWORD, hidden ------------------------------------------------------------------------------------------
+//    16, 276, 468,  69 - PASSWORD "API password": dots, the SHOW key, the note under it            (pw-revealed, pw-key-text)
+//   ---- row 5: PASSWORD, revealed -----------------------------------------------------------------------------------------
+//    16, 376, 468,  52 - the same, starting revealed: the text, the lit HIDE key
+//   ---- row 6: disabled ----------------------------------------------------------------------------------------------------
+//    16, 452, 226,  52 - TEXT "Callsign filter" M0ABC, disabled                  (dis-value)
+//   258, 452, 226,  52 - BOOL "Log to file", checked, disabled                    (dis-bool-checked)
+//    16, 512, 226,  52 - PATH "Log file" C:\logs\aprs.txt, disabled: its key does nothing    (dis-path-value)
+//   ---- rows 6b and 6c: the words a host hands in (a translation) -----------------------------------------------------------
+//   258, 512, 226,  52 - PATH "Fichier journal", kind-label CHEMIN, browse-text PARCOURIR    (fr-path-key-text, fr-path-kind-text)
+//    16, 572, 226,  52 - BOOL "Journaliser", kind-label BOOLEEN, on-text "oui", checked
+//   258, 572, 226,  52 - PASSWORD "Mot de passe", show-text AFFICHER, hide-text MASQUER       (fr-pass-key-text, fr-pass-revealed)
+//   ---- row 7 --------------------------------------------------------------------------------------------------------
+//    16, 652, 226,  52 - TEXT "Channel", max-length 4                             (limited)
+//   258, 652, 226,  52 - TEXT "Station" G4XYZ with a tooltip
+//   ---- row 8: Checkbox ---------------------------------------------------------------------------------------------
+//    16, 740, 226,  14 - Checkbox "Mute audio while running", checked            (cb-on-checked)
+//   258, 740, 226,  14 - Checkbox, unchecked                                       (cb-off-checked)
+//    16, 768, 226,  14 - Checkbox, checked, disabled
+//   258, 768, 226,  38 - Checkbox with a long label that wraps to three lines
+//    16, 796, 226,  14 - Checkbox, unchecked: the keyboard target (focus-checkbox())   (cb-key-checked)
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { Caption } from "../keys.slint";
+import { FieldKind, Field, Checkbox } from "../fields.slint";
+export { Theme, Skin, Workbench, FieldKind }
+
+export component FieldsSpecimen inherits Window {
+    width: 500px;
+    height: 830px;
+    background: Theme.bg;
+
+    // what the test observes
+    in-out property <int> edits;
+    in-out property <int> commits;
+    in-out property <int> toggles;
+    in-out property <int> browses;
+    in-out property <string> last-value;
+    in-out property <bool> last-checked;
+    in-out property <string> typed <=> f-text.value;
+    in-out property <string> limited <=> f-max.value;
+    in-out property <bool> pw-revealed <=> f-pass.revealed;
+    in-out property <bool> bool-checked <=> f-bool.checked;
+    in-out property <bool> cb-on-checked <=> cb-on.checked;
+    in-out property <bool> cb-off-checked <=> cb-off.checked;
+    in-out property <bool> cb-key-checked <=> cb-key.checked;
+    in-out property <bool> cb-dis-checked <=> cb-dis.checked;
+    in-out property <bool> dis-bool-checked <=> f-dis-bool.checked;
+    in-out property <string> dis-value <=> f-dis.value;
+    in-out property <string> dis-path-value <=> f-dis-path.value;
+    in-out property <bool> dis-path-revealed <=> f-dis-path.revealed;
+    out property <string> pw-key-text: f-pass.key-text;
+    out property <string> path-key-text: f-path.key-text;
+    out property <string> text-kind-text: f-text.kind-text;
+    out property <string> number-kind-text: f-num.kind-text;
+    out property <string> bool-kind-text: f-bool.kind-text;
+    out property <string> path-kind-text: f-path.kind-text;
+    out property <string> pass-kind-text: f-pass.kind-text;
+    out property <string> fr-path-kind-text: f-fr-path.kind-text;
+    out property <string> fr-path-key-text: f-fr-path.key-text;
+    out property <string> fr-pass-kind-text: f-fr-pass.kind-text;
+    out property <string> fr-pass-key-text: f-fr-pass.key-text;
+    in-out property <bool> fr-pass-revealed <=> f-fr-pass.revealed;
+    out property <bool> key-checkbox-focused: cb-key.has-focus;
+    // the heights the fields settled on, for the test to aim by
+    out property <length> text-h: f-text.height;
+    out property <length> err-h: f-err.height;
+    out property <length> path-h: f-path.height;
+    out property <length> pass-h: f-pass.height;
+    out property <length> cb-on-h: cb-on.height;
+    out property <length> cb-wrap-h: cb-wrap.height;
+    public function focus-checkbox() { cb-key.focus(); }
+    function edited-to(v: string) {
+        root.edits += 1;
+        root.last-value = v;
+    }
+    function committed-to(v: string) {
+        root.commits += 1;
+        root.last-value = v;
+    }
+    function toggled-to(v: bool) {
+        root.toggles += 1;
+        root.last-checked = v;
+    }
+
+    // ---- row captions ----
+    Caption { x: 16px; y: 6px; label: "text with a placeholder, number (mono, right)"; color: Theme.dim; }
+    Caption { x: 16px; y: 86px; label: "number with an error, bool"; color: Theme.dim; }
+    Caption { x: 16px; y: 182px; label: "path"; color: Theme.dim; }
+    Caption { x: 16px; y: 258px; label: "password: hidden, then revealed"; color: Theme.dim; }
+    Caption { x: 16px; y: 434px; label: "disabled: text, bool, path; words handed in: path, bool, password"; color: Theme.dim; }
+    Caption { x: 16px; y: 634px; label: "max-length 4, tooltip"; color: Theme.dim; }
+    Caption { x: 16px; y: 722px; label: "Checkbox: checked, unchecked, disabled, wrapping label, keyboard"; color: Theme.dim; }
+
+    // ---- row 1 ----
+    f-text := Field { x: 16px; y: 24px; width: 226px; label: "Callsign filter"; kind: FieldKind.text; placeholder: "e.g. M0ABC";
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } }
+    f-num := Field { x: 258px; y: 24px; width: 226px; label: "Squelch offset"; kind: FieldKind.number; value: "3.5";
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } }
+
+    // ---- row 2 ----
+    f-err := Field { x: 16px; y: 104px; width: 226px; label: "Squelch offset"; kind: FieldKind.number; value: "3,x";
+        error: "Not saved: that is not a number.";
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } }
+    f-bool := Field { x: 258px; y: 104px; width: 226px; label: "Log to file"; kind: FieldKind.bool; checked: true; tooltip: "Writes every frame to the log file";
+        toggled(v) => { root.toggled-to(v); } }
+
+    // ---- row 3 ----
+    f-path := Field { x: 16px; y: 200px; width: 468px; label: "Log file"; kind: FieldKind.path; value: "C:\\logs\\aprs.txt";
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } browse-clicked => { root.browses += 1; } }
+
+    // ---- rows 4 and 5 ----
+    f-pass := Field { x: 16px; y: 276px; width: 468px; label: "API password"; kind: FieldKind.password; value: "hunter2hunter2";
+        note: "Shown as dots. SHOW reveals the text and turns into HIDE (lit); never written to logs.";
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } }
+    f-pass2 := Field { x: 16px; y: 376px; width: 468px; label: "API password"; kind: FieldKind.password; value: "hunter2hunter2"; revealed: true; }
+
+    // ---- row 6 ----
+    f-dis := Field { x: 16px; y: 452px; width: 226px; label: "Callsign filter"; kind: FieldKind.text; value: "M0ABC"; enabled: false;
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } }
+    f-dis-bool := Field { x: 258px; y: 452px; width: 226px; label: "Log to file"; kind: FieldKind.bool; checked: true; enabled: false;
+        toggled(v) => { root.toggled-to(v); } }
+    f-dis-path := Field { x: 16px; y: 512px; width: 226px; label: "Log file"; kind: FieldKind.path; value: "C:\\logs\\aprs.txt"; enabled: false;
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } browse-clicked => { root.browses += 1; } }
+
+    // ---- rows 6b and 6c: the words a host hands in ----
+    f-fr-path := Field { x: 258px; y: 512px; width: 226px; label: "Fichier journal"; kind: FieldKind.path; value: "C:\\journal.txt";
+        kind-label: "CHEMIN"; browse-text: "PARCOURIR";
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } browse-clicked => { root.browses += 1; } }
+    f-fr-bool := Field { x: 16px; y: 572px; width: 226px; label: "Journaliser"; kind: FieldKind.bool; checked: true;
+        kind-label: "BOOLEEN"; on-text: "oui"; toggled(v) => { root.toggled-to(v); } }
+    f-fr-pass := Field { x: 258px; y: 572px; width: 226px; label: "Mot de passe"; kind: FieldKind.password; value: "hunter2";
+        kind-label: "MOT DE PASSE"; show-text: "AFFICHER"; hide-text: "MASQUER";
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } }
+
+    // ---- row 7 ----
+    f-max := Field { x: 16px; y: 652px; width: 226px; label: "Channel"; kind: FieldKind.text; max-length: 4;
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } }
+    f-tip := Field { x: 258px; y: 652px; width: 226px; label: "Station"; kind: FieldKind.text; value: "G4XYZ"; tooltip: "Letters and digits only";
+        edited(v) => { root.edited-to(v); } committed(v) => { root.committed-to(v); } }
+
+    // ---- row 8: Checkbox ----
+    cb-on := Checkbox { x: 16px; y: 740px; width: 226px; label: "Mute audio while running"; checked: true; tooltip: "Silences the sound while a decoder runs";
+        toggled(v) => { root.toggled-to(v); } }
+    cb-off := Checkbox { x: 258px; y: 740px; width: 226px; label: "Mute audio while running";
+        toggled(v) => { root.toggled-to(v); } }
+    cb-dis := Checkbox { x: 16px; y: 768px; width: 226px; label: "Mute audio while running"; checked: true; enabled: false;
+        toggled(v) => { root.toggled-to(v); } }
+    cb-wrap := Checkbox { x: 258px; y: 768px; width: 226px;
+        label: "this file is in the plugin folder and the host refused it - the Fitted modules tab prints why. Grant kept.";
+        checked: true; toggled(v) => { root.toggled-to(v); } }
+    cb-key := Checkbox { x: 16px; y: 796px; width: 226px; label: "Keyboard target";
+        toggled(v) => { root.toggled-to(v); } }
+}

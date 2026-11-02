@@ -1,0 +1,166 @@
+// The DIGITS family's specimen sheet (test_slint_digits.cpp): every Digit variant, and the FrequencyCounter in its
+// resting, editing, converter, tuner-switches-off and disabled states. Absolute positions, nothing overlapping.
+// The sheet is 440 x 600; captions are 9 px `dim` text in the gaps above each variant (tests keep out of them).
+//
+//     x    y    w    h   what
+//    20   22   34   52   Digit: value 5, nudges shown, tooltip "" (none)
+//    80   22   34   52   Digit: value 0, dim (a leading zero)
+//   140   22   34   52   Digit: value 7, show-nudges false (the wheel and the click still work)
+//   200   22   34   52   Digit: value 3, disabled
+//   260   22   34   52   Digit: value 9, the default tooltip "Scroll a digit to tune | click to type"
+//    20   96  397   84   FrequencyCounter A: 145.500000 MHz, leading-zeros 1, the static engraving, the default tooltip.
+//                        The host's side of the editor is wired here (edit-requested opens it, typed / edit-cancelled
+//                        close it), so click -> type -> Enter runs end to end.
+//    20  196  397   84   FrequencyCounter B: the same digits, editing true, editor-text "145.500000" (never closes by
+//                        itself: the test flips `editing-b`)
+//    20  296  397   84   FrequencyCounter C: converter-text "via Ham-It-Up 125.000 MHz LO", converter-warn true
+//    20  396  397   84   FrequencyCounter D: 7.074000 MHz, show-nudges false (the "Tuner switches" setting off)
+//    20  496  397   84   FrequencyCounter E: 14.074000 MHz, disabled
+//
+// What the test observes is surfaced on the root: nudges / last-dir / last-digit (a Digit reports no digit: -1 stays
+// until a counter fires), wheels, clicks, right-clicks, typed-text, cancels, edit-requests, menu-requests, and the
+// position (last-x, last-y) of the latest right-click or menu request. Counter A's digits (a model), leading-zeros,
+// show-nudges and enabled are root properties too (digits-a, leading-a, switches-a, enabled-a): the test changes them
+// the way the host does, at run time.
+import { Theme, Skin, Workbench, DigitFace } from "../theme.slint";
+import { Digit, FrequencyCounter } from "../digits.slint";
+export { Theme, Skin, Workbench, DigitFace }
+
+export component DigitsSpecimen inherits Window {
+    width: 440px;
+    height: 600px;
+    background: Theme.bg;
+
+    in-out property <int> nudges;
+    in-out property <int> last-dir;
+    in-out property <int> last-digit: -1;
+    in-out property <int> wheels;
+    in-out property <int> clicks;
+    in-out property <int> right-clicks;
+    in-out property <string> typed-text;
+    in-out property <int> cancels;
+    in-out property <int> edit-requests;
+    in-out property <int> menu-requests;
+    in-out property <length> last-x;                  // the position of the latest right-click / menu request
+    in-out property <length> last-y;
+    // counter A's other inputs, as the host drives them at run time
+    in-out property <[int]> digits-a: [0, 1, 4, 5, 5, 0, 0, 0, 0, 0];
+    in-out property <int> leading-a: 1;
+    in-out property <bool> switches-a: true;
+    in-out property <bool> enabled-a: true;
+    // the host's side of the typed editor
+    in-out property <bool> editing-a;
+    in-out property <string> editor-a: "145.500000";
+    in-out property <bool> editing-b: true;
+    in-out property <string> editor-b: "145.500000";
+    out property <bool> focused-a: counter-a.editor-focused;
+    out property <bool> focused-b: counter-b.editor-focused;
+
+    // ---- captions ----
+    for c[k] in ["value 5", "dim zero", "no switches", "disabled", "tooltip"] : Text {
+        x: 20px + k * 60px; y: 8px; width: 56px; height: 12px;
+        text: c; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-tiny;
+    }
+    for c[k] in ["A  145.500000 MHz, the engraving, click to type", "B  editing", "C  converter in warning colour", "D  tuner switches off", "E  disabled"] : Text {
+        x: 20px; y: 84px + k * 100px; width: 397px; height: 11px;
+        text: c; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-tiny;
+    }
+
+    // ---- Digits ----
+    Digit {
+        x: 20px; y: 22px; value: 5; place: "1 MHz"; tooltip: "";
+        nudge(dir) => { root.nudges += 1; root.last-dir = dir; }
+        wheel(dir) => { root.wheels += 1; root.last-dir = dir; }
+        clicked => { root.clicks += 1; }
+        right-clicked(px, py) => { root.right-clicks += 1; root.last-x = px; root.last-y = py; }
+    }
+    Digit {
+        x: 80px; y: 22px; value: 0; dim: true; place: "GHz";
+        nudge(dir) => { root.nudges += 1; root.last-dir = dir; }
+        wheel(dir) => { root.wheels += 1; root.last-dir = dir; }
+        clicked => { root.clicks += 1; }
+        right-clicked(px, py) => { root.right-clicks += 1; root.last-x = px; root.last-y = py; }
+    }
+    Digit {
+        x: 140px; y: 22px; value: 7; place: "10 kHz"; show-nudges: false;
+        nudge(dir) => { root.nudges += 1; root.last-dir = dir; }
+        wheel(dir) => { root.wheels += 1; root.last-dir = dir; }
+        clicked => { root.clicks += 1; }
+        right-clicked(px, py) => { root.right-clicks += 1; root.last-x = px; root.last-y = py; }
+    }
+    Digit {
+        x: 200px; y: 22px; value: 3; place: "100 Hz"; enabled: false;
+        nudge(dir) => { root.nudges += 1; root.last-dir = dir; }
+        wheel(dir) => { root.wheels += 1; root.last-dir = dir; }
+        clicked => { root.clicks += 1; }
+        right-clicked(px, py) => { root.right-clicks += 1; root.last-x = px; root.last-y = py; }
+    }
+    Digit {
+        x: 260px; y: 22px; value: 9; place: "1 kHz";
+        nudge(dir) => { root.nudges += 1; root.last-dir = dir; }
+        wheel(dir) => { root.wheels += 1; root.last-dir = dir; }
+        clicked => { root.clicks += 1; }
+        right-clicked(px, py) => { root.right-clicks += 1; root.last-x = px; root.last-y = py; }
+    }
+
+    // ---- FrequencyCounters ----
+    counter-a := FrequencyCounter {
+        x: 20px; y: 96px;
+        digits: root.digits-a;
+        leading-zeros: root.leading-a;
+        show-nudges: root.switches-a;
+        enabled: root.enabled-a;
+        editing: root.editing-a;
+        editor-text <=> root.editor-a;
+        nudge(d, dir) => { root.nudges += 1; root.last-digit = d; root.last-dir = dir; }
+        wheel(d, dir) => { root.wheels += 1; root.last-digit = d; root.last-dir = dir; }
+        edit-requested => { root.edit-requests += 1; root.editing-a = true; }
+        typed(t) => { root.typed-text = t; root.editing-a = false; }
+        edit-cancelled => { root.cancels += 1; root.editing-a = false; }
+        menu-requested(px, py) => { root.menu-requests += 1; root.last-x = px; root.last-y = py; }
+    }
+    counter-b := FrequencyCounter {
+        x: 20px; y: 196px;
+        digits: [0, 1, 4, 5, 5, 0, 0, 0, 0, 0];
+        leading-zeros: 1;
+        editing: root.editing-b;
+        editor-text <=> root.editor-b;
+        nudge(d, dir) => { root.nudges += 1; root.last-digit = d; root.last-dir = dir; }
+        wheel(d, dir) => { root.wheels += 1; root.last-digit = d; root.last-dir = dir; }
+        edit-requested => { root.edit-requests += 1; }
+        typed(t) => { root.typed-text = t; }
+        edit-cancelled => { root.cancels += 1; }
+        menu-requested(px, py) => { root.menu-requests += 1; root.last-x = px; root.last-y = py; }
+    }
+    FrequencyCounter {
+        x: 20px; y: 296px;
+        digits: [0, 1, 4, 5, 5, 0, 0, 0, 0, 0];
+        leading-zeros: 1;
+        converter-text: "via Ham-It-Up 125.000 MHz LO";
+        converter-warn: true;
+        nudge(d, dir) => { root.nudges += 1; root.last-digit = d; root.last-dir = dir; }
+        wheel(d, dir) => { root.wheels += 1; root.last-digit = d; root.last-dir = dir; }
+        edit-requested => { root.edit-requests += 1; }
+        menu-requested(px, py) => { root.menu-requests += 1; root.last-x = px; root.last-y = py; }
+    }
+    FrequencyCounter {
+        x: 20px; y: 396px;
+        digits: [0, 0, 0, 7, 0, 7, 4, 0, 0, 0];
+        leading-zeros: 3;
+        show-nudges: false;
+        nudge(d, dir) => { root.nudges += 1; root.last-digit = d; root.last-dir = dir; }
+        wheel(d, dir) => { root.wheels += 1; root.last-digit = d; root.last-dir = dir; }
+        edit-requested => { root.edit-requests += 1; }
+        menu-requested(px, py) => { root.menu-requests += 1; root.last-x = px; root.last-y = py; }
+    }
+    FrequencyCounter {
+        x: 20px; y: 496px;
+        digits: [0, 0, 1, 4, 0, 7, 4, 0, 0, 0];
+        leading-zeros: 2;
+        enabled: false;
+        nudge(d, dir) => { root.nudges += 1; root.last-digit = d; root.last-dir = dir; }
+        wheel(d, dir) => { root.wheels += 1; root.last-digit = d; root.last-dir = dir; }
+        edit-requested => { root.edit-requests += 1; }
+        menu-requested(px, py) => { root.menu-requests += 1; root.last-x = px; root.last-y = py; }
+    }
+}

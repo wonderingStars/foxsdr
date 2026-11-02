@@ -1,0 +1,276 @@
+// FoxSDR Slint front end - CARDS: the update, Store and team-message cards of the sections panel's foot, and the slim
+// sound-muted bar under the receiver strip (phase 1, wave 2): Card and Banner.
+//
+// Lifted from the sheets' CSS (Workbench-PluginKit.dc.html: .card, .card.wa, .card.er; Workbench.dc.html: the update card
+// at the panel foot, 10 px margin, 10 px padding, 8 px corners, 6 px gaps; Workbench-Menus.dc.html: the foot-card
+// variants) and the inventory rows of "Message from the FoxSDR team", "Update available", "Microsoft Store update" and
+// "Sound muted banner".
+//
+//   Card    a column with 6 px gaps inside a 1 px border and 10 px of padding (border-box, so the content starts 11 px in):
+//             title row    the title as a cap (amber; red when `critical`) and, at the right, a 10 px dim subtitle. The
+//                          title wraps when the two do not fit; the subtitle keeps its words (up to half the row).
+//             lines        each one an 11 px bullet ("·" and the words, which wrap under themselves), 2 px apart
+//             children     whatever the host puts inside (the "Receiver control" card holds Checkbox rows)
+//             key row      `primary-label` as an `on` key 26 px high that takes the row (`primary-on: false` is the
+//                          team message's plain "Seen"; a word too long for what the secondary leaves is elided),
+//                          `secondary-label` as a ghost key 26 px high, 72 px at least. A
+//                          `progress` from 0 to 1 replaces the primary key by a 6 px bar (the slider's track and fill)
+//                          with the label ("Downloading...") before it; -1 means no bar.
+//             note         10 px dim (the size note, "Downloaded and verified.")
+//             error        11 px red (the update error)
+//           `tone` picks the ground and line: neutral (card / line-strong), warn (card-warn / card-warn-line), err
+//           (card-err / card-err-line). `critical` only reddens the title: the sheet draws its critical variants on the
+//           err ground, so a host that wants that look passes `tone: CardTone.err` as well. A Card sizes its own height
+//           (its rows, wrapped at its width), so give it a width; read `preferred-height` to make room for it.
+//   Banner  the 28 px bar: the tone's ground and line, one line of 11 px text that elides (its tooltip is the whole
+//           sentence once it is shortened) and a small key at the right.
+import { Theme } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+import { Caption, Key } from "keys.slint";
+
+export enum CardTone { neutral, warn, err }
+
+export component Card inherits Rectangle {
+    // ---- what it says ----
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> critical;                    // the title in red
+    in property <CardTone> tone: CardTone.neutral;
+    in property <[string]> lines;
+    in property <string> primary-label;             // "" = no primary key
+    in property <string> secondary-label;           // "" = no secondary key
+    in property <float> progress: -1;               // 0..1 replaces the primary key by a bar; -1 = none
+    in property <string> note;
+    in property <string> error;
+    // ---- how it behaves ----
+    in property <bool> primary-enabled: true;
+    in property <bool> primary-on: true;            // false: a plain key (the team message's "Seen")
+    in property <string> primary-tooltip;
+    callback primary-clicked();
+    callback secondary-clicked();
+
+    property <float> shown: Math.max(0.0, Math.min(1.0, root.progress));
+    property <bool> has-keys: root.primary-label != "" || root.secondary-label != "" || root.progress >= 0;
+
+    height: body.preferred-height;
+    preferred-height: body.preferred-height;
+    border-radius: Theme.radius-panel;
+    border-width: Theme.hairline;
+    background: root.tone == CardTone.warn ? Theme.card-warn
+              : root.tone == CardTone.err ? Theme.card-err
+              : Theme.card;
+    border-color: root.tone == CardTone.warn ? Theme.card-warn-line
+                : root.tone == CardTone.err ? Theme.card-err-line
+                : Theme.line-strong;
+
+    accessible-role: groupbox;
+    accessible-label: root.title;
+
+    body := VerticalLayout {
+        padding: 10px + Theme.hairline;
+        spacing: 6px;
+
+        // The title row: .cap at the left, the 10 px dim subtitle at the right. The title wraps in what the subtitle
+        // leaves, so the row's height is the title's wrapped height. (Rows that come and go are Rectangles with an
+        // explicit height, never layouts: Slint 1.18 does not feed a repeated layout's width back into the height of
+        // the wrapped text inside it, and the card would come out a line short.)
+        if root.title != "" || root.subtitle != "" : Rectangle {
+            height: max(heading.preferred-height, hint.preferred-height);
+            hint := Text {
+                x: parent.width - self.width;
+                y: 0px;
+                width: min(self.preferred-width, parent.width / 2);
+                text: root.subtitle;
+                color: Theme.dim;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-hint;
+                horizontal-alignment: right;
+                vertical-alignment: top;
+                overflow: elide;
+                accessible-role: none;
+            }
+            heading := Caption {
+                x: 0px;
+                y: 0px;
+                width: max(0px, parent.width - (root.subtitle != "" ? hint.width + 8px : 0px));
+                label: root.title;
+                color: root.critical ? Theme.chip-err-fg : Theme.accent-soft;
+                wrap: word-wrap;
+                vertical-alignment: top;
+                accessible-role: none;
+            }
+        }
+
+        // The bullets: a dot, then the words, which wrap under themselves; 2 px between lines.
+        if root.lines.length > 0 : Rectangle {
+            height: bullets.preferred-height;
+            bullets := VerticalLayout {
+                spacing: 2px;
+                for line in root.lines : Rectangle {
+                    height: words.preferred-height;
+                    Text {
+                        x: 0px;
+                        y: 0px;
+                        width: 6px;
+                        text: "·";
+                        color: Theme.fg-soft;
+                        font-family: Theme.font-ui;
+                        font-size: Theme.font-small;
+                        font-weight: Theme.weight-semibold;
+                        horizontal-alignment: center;
+                        vertical-alignment: top;
+                        accessible-role: none;
+                    }
+                    words := Text {
+                        x: 10px;
+                        y: 0px;
+                        width: max(0px, parent.width - 10px);
+                        text: line;
+                        color: Theme.fg-soft;
+                        font-family: Theme.font-ui;
+                        font-size: Theme.font-small;
+                        wrap: word-wrap;
+                        vertical-alignment: top;
+                    }
+                }
+            }
+        }
+
+        @children
+
+        // the key row
+        if root.has-keys : HorizontalLayout {
+            spacing: 6px;
+            if root.progress < 0 && root.primary-label != "" : Key {
+                label: root.primary-label;
+                on: root.primary-on;
+                wide: true;
+                min-width: 0px;                     // beside the secondary a long word is elided, never pushed over the card's edge
+                height: 30px;
+                enabled: root.primary-enabled;
+                tooltip: root.primary-tooltip;
+                clicked => { root.primary-clicked(); }
+            }
+            // the download lane: the label, then the sheet's 6 px track with its fill, on the key row's 26 px
+            if root.progress >= 0 : Rectangle {
+                height: 26px;
+                horizontal-stretch: 1;
+                HorizontalLayout {
+                    spacing: 8px;
+                    if root.primary-label != "" : Text {
+                        text: root.primary-label;
+                        color: Theme.fg-soft;
+                        font-family: Theme.font-ui;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Rectangle {
+                            height: Theme.slider-track-h;
+                            border-radius: self.height / 2;
+                            background: Theme.slider-track;
+                            accessible-role: progress-indicator;
+                            accessible-label: root.primary-label;
+                            accessible-value: Math.round(root.shown * 100) + " %";
+                            accessible-value-minimum: 0;
+                            accessible-value-maximum: 1;
+                            Rectangle {
+                                x: 0px;
+                                width: parent.width * root.shown;
+                                height: parent.height;
+                                border-radius: parent.border-radius;
+                                background: Theme.slider-fill;
+                            }
+                        }
+                    }
+                }
+            }
+            if root.secondary-label != "" : Key {
+                label: root.secondary-label;
+                ghost: true;
+                min-w: 72px;
+                height: 26px;
+                clicked => { root.secondary-clicked(); }
+            }
+        }
+
+        if root.note != "" : Text {
+            text: root.note;
+            color: Theme.dim;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-hint;
+            wrap: word-wrap;
+        }
+        if root.error != "" : Text {
+            text: root.error;
+            color: Theme.chip-err-fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// The slim bar: 28 px, the tone's ground and line, one line of text and a small key.
+export component Banner inherits Rectangle {
+    in property <string> text;
+    in property <string> key-label;                 // "" = no key
+    in property <CardTone> tone: CardTone.warn;
+    in property <bool> enabled: true;               // the key
+    in property <string> key-tooltip;
+    callback key-clicked();
+
+    property <bool> shortened: words.preferred-width > words.width;
+
+    height: 28px;
+    background: root.tone == CardTone.warn ? Theme.card-warn
+              : root.tone == CardTone.err ? Theme.card-err
+              : Theme.card;
+    border-width: Theme.hairline;
+    border-color: root.tone == CardTone.warn ? Theme.card-warn-line
+                : root.tone == CardTone.err ? Theme.card-err-line
+                : Theme.line-strong;
+
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+
+    area := TouchArea {
+        width: parent.width;
+        height: parent.height;
+    }
+    HorizontalLayout {
+        padding-left: 10px + Theme.hairline;
+        padding-right: 6px + Theme.hairline;
+        spacing: 8px;
+        words := Text {
+            text: root.text;
+            color: Theme.fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+            accessible-role: none;
+        }
+        if root.key-label != "" : VerticalLayout {
+            alignment: center;
+            Key {
+                label: root.key-label;
+                small: true;
+                enabled: root.enabled;
+                tooltip: root.key-tooltip;
+                clicked => { root.key-clicked(); }
+            }
+        }
+    }
+    TipTimer {
+        x: 0px;
+        y: 0px;
+        hovered: area.has-hover && root.shortened;           // the whole sentence, once the bar has cut it short
+        text: root.text;
+        anchor-h: root.height;
+    }
+}

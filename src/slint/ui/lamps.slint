@@ -1,0 +1,293 @@
+// FoxSDR Slint front end - LAMPS: the state lamp, the status bar's card and the strip's divider.
+// Measurements are the Workbench sheets' CSS (Workbench.dc.html, Workbench-PluginKit.dc.html):
+//
+//   .lamp    inline-flex, align-items center, gap 6px, 10px / 600 / .06em, colour muted
+//   .lamp i  a 9px dot (the PluginKit sheet sets border-box, so the 1px border is INSIDE the 9px):
+//            off = lamp-off with a lamp-ring border; lit = the dot's colour with a 0 0 6px glow at 0x88 (53 %)
+//            and the caption in the matching lamp-<colour>-cap colour
+//
+// THE GLOW is a radial gradient, not `drop-shadow`: Slint's software renderer (the one the headless tests use,
+// and the fallback on a machine without a usable GPU) draws NO shadow for `drop-shadow-*` (checked by dumping
+// the pixels of a lit dot), so a drop-shadow glow would vanish exactly where it cannot be tested. A gradient
+// is drawn the same by every renderer. The stops are the CSS box-shadow's own profile: a Gaussian blur of
+// sigma 3px (blur radius 6px / 2) over the 9px disc, times 53 %, measured at the distance rho from the dot's
+// centre (A(rho) is that blurred disc's coverage, integrated numerically):
+//     rho   4.5    6.0    7.5    9.5    12
+//     A     .356   .209   .102   .029   0
+// Slint's `circle` gradient ends (100 %) at the box's corner, so with a 24px box (half-diagonal 16.97px) the
+// stops sit at rho / 16.97 = 26.5 / 35.4 / 44.2 / 56.0 / 70.7 %. Pixel check: one pixel outside the dot's edge
+// is +31 grey levels over the ground (CSS profile +32), two pixels +21 (+22), three +13 (+14), four +8 (+8).
+//   .sb      the status bar's card: height 28px, padding 0 10px, gap 6px, border-right 1px line;
+//   .sb .k   9px / 600 / .08em dim;  .sb .v 11px / 600;  the detail is a bare 12px span in dim
+//   divider  1px x 72px, line colour, between the receiver strip's groups
+//
+// StatusChip is as wide as its words: placed absolutely a bare Rectangle would take its parent's width, so
+// the width is computed from the three texts (the detail is cut to max-detail-w with an ellipsis) and the
+// chip also reports it to a layout it sits in. A click on a chip that has `lines` opens them in a panel
+// ABOVE it (the status bar is the window's foot), in the menu's ground and the knob ring's border.
+//
+// USING THEM (Slint layout facts that were measured, not assumed; test_slint_lamps.cpp pins each one)
+//   Lamp       in a layout it takes the row's height and centres its dot (BIAS TEE, the MASTER grid, the RCVR row);
+//              outside a layout give it `height: 13px` - Slint would otherwise stretch it to its parent. A lamp with
+//              a `tooltip` takes the pointer; one without lets clicks through to the key it sits in.
+//   StatusChip 28px high, as wide as its words, fixed in a layout. The tip (`tooltip`) opens BELOW the chip - TipTimer
+//              has no "above" - so at the window's foot it needs a different anchor. `lines` open above.
+//   VLine      a fixed 1 x line-h. A layout puts a fixed-size child at the TOP of its cross axis, so place it with an
+//              explicit `y` (an explicit y inside a layout is honoured) or inside a VerticalLayout { alignment: center; }.
+import { Theme } from "theme.slint";
+import { LampState } from "chips.slint";
+import { TipTimer } from "tooltip.slint";
+
+// ---------------------------------------------------------------------------------------------------------
+// Lamp - a 9px dot and an optional caption. Not clickable; `tooltip` explains what the lamp means.
+export component Lamp inherits Rectangle {
+    in property <string> caption;
+    in property <LampState> state: LampState.off;
+    in property <string> tooltip;
+
+    // The line box is 13px in the sheet (.wb line-height 1.3 on 10px type); the dot is centred in it.
+    private property <length> line-h: Math.round(Theme.font-cap / 1px * 1.3) * 1px;
+    private property <length> gap: 6px;
+    private property <bool> lit: root.state != LampState.off;
+    private property <bool> glows: root.lit && Theme.lamp-glow;
+    private property <color> tint: root.state == LampState.green ? Theme.lamp-green
+                                 : root.state == LampState.amber ? Theme.lamp-amber
+                                 : root.state == LampState.red ? Theme.lamp-red
+                                 : root.state == LampState.yellow ? Theme.lamp-yellow
+                                 : Theme.lamp-off;
+    private property <color> cap-tint: root.state == LampState.green ? Theme.lamp-green-cap
+                                     : root.state == LampState.amber ? Theme.lamp-amber-cap
+                                     : root.state == LampState.red ? Theme.lamp-red-cap
+                                     : root.state == LampState.yellow ? Theme.lamp-yellow-cap
+                                     : Theme.muted;
+
+    // Width is the lamp's own (fixed: a lamp never stretches sideways). The height is NOT declared: an explicit
+    // `height` is a fixed size, and a HorizontalLayout puts a fixed-size child at the TOP of its cross axis, so
+    // BIAS TEE's lamp would sit against the key's top edge. With only a minimum and a preferred height the layout
+    // stretches the lamp to the row and the dot centres itself in whatever height it is given. Placed without a
+    // layout, a lamp has no height of its own to take (Slint gives a Rectangle its parent's): set `height: 13px`.
+    private property <length> natural-h: max(Theme.lamp-dot, root.line-h);
+    width: Theme.lamp-dot + (root.caption == "" ? 0px : root.gap + label.preferred-width);
+    min-height: root.natural-h;
+    preferred-height: root.natural-h;
+    accessible-role: text;
+    accessible-label: root.caption != "" ? root.caption : root.tooltip;
+
+    // The glow sits under the dot, centred on it, and reaches 7.5px past its edge. Only a lit lamp has one, and
+    // only while the skin allows it (Theme.lamp-glow).
+    glow := Rectangle {
+        visible: root.glows;
+        x: dot.x + (Theme.lamp-dot - self.width) / 2;
+        y: dot.y + (Theme.lamp-dot - self.height) / 2;
+        width: 24px;
+        height: 24px;
+        background: @radial-gradient(circle,
+            root.tint.with-alpha(0.53 * 0.356) 0%,
+            root.tint.with-alpha(0.53 * 0.356) 26.5%,
+            root.tint.with-alpha(0.53 * 0.209) 35.4%,
+            root.tint.with-alpha(0.53 * 0.102) 44.2%,
+            root.tint.with-alpha(0.53 * 0.029) 56%,
+            root.tint.with-alpha(0) 70.7%);
+    }
+    dot := Rectangle {
+        x: 0px;
+        y: Math.floor((root.height - self.height) / 2px) * 1px;
+        width: Theme.lamp-dot;
+        height: Theme.lamp-dot;
+        border-radius: self.width / 2;
+        border-width: Theme.hairline;
+        background: root.tint;
+        border-color: root.lit ? root.tint : Theme.lamp-ring;
+    }
+    label := Text {
+        x: Theme.lamp-dot + root.gap;
+        y: 0px;
+        height: root.height;
+        text: root.caption;
+        color: root.cap-tint;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        font-weight: Theme.weight-semibold;
+        letter-spacing: 0.6px;
+        vertical-alignment: center;
+    }
+    // The hover watcher only exists to carry the tooltip: with none, the lamp must not swallow the clicks of
+    // the key it sits in (BIAS TEE has a bare lamp in its centre).
+    area := TouchArea {
+        enabled: root.tooltip != "";
+    }
+    // x / y are set on purpose: TipTimer is 0 x 0 and Slint centres an element that has a size but no position,
+    // which would open the tip half a component away from where it belongs.
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// StatusChip - one of the status bar's seven cards.
+export component StatusChip inherits Rectangle {
+    in property <string> key;
+    in property <string> value;
+    in property <string> detail;
+    in property <color> value-color: Theme.fg;
+    in property <LampState> lamp: LampState.off;
+    in property <bool> show-lamp;
+    in property <[string]> lines;                   // the detail lines a click expands
+    in property <length> max-detail-w: 320px;       // the detail is elided to this
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked;
+
+    private property <length> pad: 10px;
+    private property <length> gap: 6px;
+    private property <length> panel-pad-x: 12px;
+    private property <length> panel-pad-y: 8px;
+    private property <length> panel-max-w: 480px;
+    private property <length> panel-gap: 3px;
+    private property <length> panel-line-h: Math.round(Theme.font-small / 1px * 1.3) * 1px;
+    private property <bool> has-key: root.key != "";
+    private property <bool> has-value: root.value != "";
+    private property <bool> has-detail: root.detail != "";
+    // The parts flow left to right with a 6px gap BETWEEN the parts that exist (never a stray one after the last).
+    private property <length> lamp-x: root.pad;
+    private property <length> lamp-end: root.lamp-x + (root.show-lamp ? Theme.lamp-dot : 0px);
+    private property <length> key-x: root.lamp-end + ((root.show-lamp && root.has-key) ? root.gap : 0px);
+    private property <length> key-end: root.key-x + (root.has-key ? key-text.width : 0px);
+    private property <length> value-x: root.key-end + ((root.key-end > root.pad && root.has-value) ? root.gap : 0px);
+    private property <length> value-end: root.value-x + (root.has-value ? value-text.width : 0px);
+    private property <length> detail-x: root.value-end + ((root.value-end > root.pad && root.has-detail) ? root.gap : 0px);
+    private property <length> content-end: root.detail-x + (root.has-detail ? detail-text.width : 0px);
+    private property <color> key-tint: root.enabled ? Theme.dim : Theme.key-disabled-fg;
+    private property <color> value-tint: root.enabled ? root.value-color : Theme.key-disabled-fg;
+    private property <color> detail-tint: root.enabled ? Theme.dim : Theme.key-disabled-fg;
+
+    // The chip's own width, and the panel's height: a line is 1.3 x the type (the sheet's line-height) so the
+    // height is known from the line count alone - the panel opens ABOVE the chip and needs it to place itself.
+    out property <length> content-width: root.content-end + root.pad + Theme.hairline;
+    out property <length> panel-height: root.lines.length * root.panel-line-h
+                                      + max(root.lines.length - 1, 0) * root.panel-gap
+                                      + 2 * root.panel-pad-y;
+
+    width: root.content-width;
+    height: Theme.status-h;
+    background: !root.enabled ? Theme.key-disabled-bg
+              : (area.has-hover ? Theme.menu-hot : transparent);
+    accessible-role: button;
+    accessible-label: root.key + " " + root.value + (root.has-detail ? ", " + root.detail : "");
+    accessible-action-default => { root.activate(); }
+
+    function activate() {
+        if (!root.enabled) { return; }
+        root.clicked();
+        if (root.lines.length > 0) { panel.show(); }
+    }
+
+    if root.show-lamp : Lamp {
+        x: root.lamp-x;
+        y: 0px;
+        height: root.height;
+        state: root.lamp;
+    }
+    key-text := Text {
+        x: root.key-x;
+        y: 0px;
+        width: root.has-key ? self.preferred-width : 0px;
+        height: root.height;
+        text: root.key;
+        color: root.key-tint;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-tiny;
+        font-weight: Theme.weight-semibold;
+        letter-spacing: 0.7px;
+        vertical-alignment: center;
+    }
+    value-text := Text {
+        x: root.value-x;
+        y: 0px;
+        width: root.has-value ? self.preferred-width : 0px;
+        height: root.height;
+        text: root.value;
+        color: root.value-tint;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        font-weight: Theme.weight-semibold;
+        vertical-alignment: center;
+    }
+    detail-text := Text {
+        x: root.detail-x;
+        y: 0px;
+        width: root.has-detail ? min(self.preferred-width, root.max-detail-w) : 0px;
+        height: root.height;
+        text: root.detail;
+        color: root.detail-tint;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        font-weight: Theme.weight-medium;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+    // The right border: .sb { border-right: 1px solid line } - at half alpha while disabled.
+    Rectangle {
+        x: root.width - Theme.hairline;
+        y: 0px;
+        width: Theme.hairline;
+        height: root.height;
+        background: root.enabled ? Theme.line : Theme.line.with-alpha(0.5);
+    }
+
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.activate(); }
+    }
+    // x / y are set on purpose: TipTimer is 0 x 0 and Slint centres an element that has a size but no position,
+    // which would open the tip half a component away from where it belongs.
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+
+    // The expanded detail lines: a panel above the chip, flush with its left edge, as wide as its longest line
+    // (never narrower than the chip, never wider than panel-max-w: longer lines are elided). The height is known
+    // from the line count, which the placement above the chip needs. The panel is placed at x = y = 0 on purpose:
+    // an element with a size and no position is centred in its parent, and the popup is narrower than the panel.
+    panel := PopupWindow {
+        x: 0px;
+        y: -root.panel-height - 4px;
+        width: root.width;
+        height: root.panel-height;
+        close-policy: close-on-click;
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: min(root.panel-max-w, max(root.width, panel-col.preferred-width));
+            height: root.panel-height;
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 10px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 4px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            panel-col := VerticalLayout {
+                padding-left: root.panel-pad-x;
+                padding-right: root.panel-pad-x;
+                padding-top: root.panel-pad-y;
+                padding-bottom: root.panel-pad-y;
+                spacing: root.panel-gap;
+                for line in root.lines : Text {
+                    height: root.panel-line-h;
+                    text: line;
+                    color: Theme.fg-soft;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// VLine - the receiver strip's divider between its groups.
+export component VLine inherits Rectangle {
+    in property <length> line-h: 72px;
+    width: Theme.hairline;
+    height: root.line-h;
+    background: Theme.line;
+}

@@ -1,0 +1,79 @@
+// The command palette's specimen: the title bar's field at its sheet size, and the sheet it opens (a popup, opened by the
+// public function open-palette()), with four results of the four kinds. What the sheet reported is surfaced on the root
+// for tests/test_slint_palette.cpp.
+//
+//   x, y, w, h       what
+//   20, 20, 520, 26  CommandField - the field as the sheet draws it (Workbench.dc.html, the label in the title bar)
+//   30, 60, 640, 178 the CommandPalette's sheet once open: border 1, padding 8; the query row (39, 69, 622, 26); four
+//                    result rows of 32 px at y 101, 133, 165, 197 (SETTING, PLUGIN, FREQUENCY, BOOKMARK); `at-y` and
+//                    `rows` can be set to open it elsewhere or with more or fewer results
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { CommandField, CommandPalette, PaletteResult } from "../palette.slint";
+export { Theme, Skin, Workbench }
+export { PaletteResult }
+
+export component PaletteSpecimen inherits Window {
+    width: 700px;
+    height: 300px;
+    background: Theme.bg;
+
+    // what the test sets
+    in-out property <length> at-y: 60px;
+    in-out property <string> empty-text;
+    in-out property <int> max-rows: 8;
+    in-out property <[PaletteResult]> rows: [
+        { kind: "SETTING", title: "Tuner gain", detail: "Signal · Receiver", id: 101 },
+        { kind: "PLUGIN", title: "ADS-B aircraft", detail: "Decode · fitted", id: 202 },
+        { kind: "FREQUENCY", title: "145.500 MHz", detail: "NFM · 2 m calling", id: 303 },
+        { kind: "BOOKMARK", title: "Local repeater", detail: "145.725 MHz", id: 404 },
+    ];
+    in-out property <string> field-tooltip;
+    in-out property <bool> field-enabled: true;
+
+    // what the field and the sheet reported
+    in-out property <int> field-clicks;
+    in-out property <int> activations;
+    in-out property <int> last-id: -1;
+    in-out property <int> dismissals;
+    in-out property <int> query-changes;
+    in-out property <string> last-query;
+    out property <int> highlight <=> palette.highlighted;
+    in-out property <string> query <=> palette.query;
+
+    public function open-palette() {
+        palette.show();
+    }
+    public function close-palette() {
+        palette.close();
+    }
+
+    CommandField {
+        x: 20px;
+        y: 20px;
+        tooltip: root.field-tooltip;
+        enabled: root.field-enabled;
+        clicked => {
+            root.field-clicks += 1;
+        }
+    }
+    palette := CommandPalette {
+        x: 0px;
+        y: 0px;
+        at-x: 30px;
+        at-y: root.at-y;
+        results: root.rows;
+        empty-text: root.empty-text;
+        max-rows: root.max-rows;
+        query-changed(q) => {
+            root.query-changes += 1;
+            root.last-query = q;
+        }
+        activated(id) => {
+            root.activations += 1;
+            root.last-id = id;
+        }
+        dismissed => {
+            root.dismissals += 1;
+        }
+    }
+}

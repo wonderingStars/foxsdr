@@ -1,0 +1,184 @@
+// The spectrum family specimen: SpectrumView populated exactly as the SPECTRUM div of Workbench.dc.html (a
+// 424 px high well, plot at (44, 76, 980, 330)), plus the span mark of the Workbench-PluginKit.dc.html
+// "Mini spectrum - plugin marks" block. The sheet gives pixel positions; the component takes fractions of the
+// plot, so each one below is (sheet x - plot left) / 980.
+//
+//   x     y    w     h    what
+//   0     0    1024  424  SpectrumView, the whole sheet
+//   44    0    980   8    band-plan ribbon (one segment 0..1, "2 m amateur"); its name steps below the header
+//   52    14   -     14   header: caption, caveat, "PEAK HOLD" in the trace-peak colour
+//   ~890  12   ~110  34   peak block: cap, "-41.2 dBFS", "0.1 s ago" (right edge 16 px in)
+//   ~890  58   ~118  20   SPAN chip, right edge 16 px in
+//   0     70   44    336  dB ladder 0 / -20 / -40 / -60 / -80 / -100, centred on the ticks at y 76 + 66k
+//   44    76   980   330  plot: graticule at x 44 + 98k (k 0..9) and y 76 + 66k (k 0..4; the foot line is clipped)
+//   476   76   31    330  VFO band: edges x 476 and 506, dashed centre line x 491 (centre 447/980, half 15/980)
+//   142   76   1     330  point mark "APRS 144.800" (dashed 4 3), name at (142, 60)
+//   338   76   50    330  span mark "Packet band": tint between edges x 338 and 387, name at (338, 60)
+//   344   76   1     330  user marker M1 (dashed 3 4, 35 %); the sheet puts it at plot x 300
+//   560   76   1     330  cursor line; readout chip at (566, 120) "145.212 MHz · -78.4 dB"
+//   668   398  2     8    bookmark tick GB3xx, name at (660, 60); 828 / 398: ISS APRS, the favourite, with a guide
+//   40..922  408 -   16   frequency labels 144.6 .. 146.4 under the ticks, "MHz" at the right
+//   44    76   980   330  trace image (set by the test: 980 x 330, transparent but for one green row)
+//
+// The positions are the SHEET: the VFO band is centred on 447/980 (its rect x 432 + 15), the marker is at plot x 300
+// (300/980), the bookmark ticks at plot x 624 and 784. Every state the sheet does not show (ribbon size, the
+// Airband captions and channels, trace mode, show-vfo, show-peak, enabled, the segments) is an in-out property of
+// the root, for the test to flip.
+//
+// Interaction state is surfaced on the root so the test can read it: the last hover / click / double click /
+// right click / wheel positions as fractions, the band drag summed, the edge half-width, the counts and shifts.
+//
+// SpectrumResizeSpecimen, at the foot of this file, is the same well in a window of no fixed size (1024 x 424
+// preferred) with a small population: the resize test renders it at 800 x 300 and at the sheet size.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { SpectrumView, TraceMode, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, AirbandChannel } from "../spectrum.slint";
+export { Theme, Skin, Workbench, TraceMode, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, AirbandChannel }
+
+export component SpectrumSpecimen inherits Window {
+    width: 1024px;
+    height: 424px;
+    background: Theme.bg;
+
+    // what the test sets
+    in property <image> trace;
+    in-out property <int> ribbon-size: 1;
+    in-out property <[BandSegment]> bands: [{ from: 0.0, to: 1.0, label: "2 m amateur", color: transparent }];
+    in-out property <bool> show-vfo: true;
+    in-out property <bool> show-peak: true;
+    in-out property <bool> band-dragging;
+    in-out property <bool> cursor-visible: true;
+    in-out property <float> cursor-pos: 0.5265;
+    in-out property <bool> shift-held;
+    in-out property <bool> enabled: true;
+    in-out property <TraceMode> trace-mode: TraceMode.peak-hold;
+    in-out property <string> airband-block;
+    in-out property <string> airband-hearing;
+    in-out property <[AirbandChannel]> airband-channels;
+
+    // what the interactions leave behind
+    in-out property <float> hover-x: -2;
+    in-out property <float> hover-y: -2;
+    in-out property <int> hovers;
+    in-out property <int> clicks;
+    in-out property <float> click-x: -2;
+    in-out property <bool> click-shift;
+    in-out property <int> dclicks;
+    in-out property <float> dclick-x: -2;
+    in-out property <int> rclicks;
+    in-out property <float> rclick-x: -2;
+    in-out property <length> rclick-px: -2px;
+    in-out property <length> rclick-py: -2px;
+    in-out property <float> band-dx: 0;
+    in-out property <int> band-moves;
+    in-out property <float> edge-half: -2;
+    in-out property <int> edge-moves;
+    in-out property <int> wheels;
+    in-out property <float> wheel-x: -2;
+    in-out property <int> wheel-notches;
+    in-out property <bool> wheel-shift;
+    out property <int> zone: view.pointer-zone;
+    out property <string> tip: view.active-tooltip;
+    out property <bool> tip-shown: view.tip-shown;
+    out property <int> shape: view.pointer-shape == MouseCursor.move ? 1 : view.pointer-shape == MouseCursor.ew-resize ? 2 : 0;
+
+    view := SpectrumView {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        trace: root.trace;
+        trace-mode: root.trace-mode;
+        caption: "Spectrum · 4096 bin · EMA 0.35";
+        caveat: "average of the last frames, not the audio";
+        trace-mode-label: "Peak hold";
+        peak-text: "-41.2 dBFS";
+        peak-age: "0.1 s ago";
+        show-peak: root.show-peak;
+        span-text: "SPAN 2.400 MHz";
+        axis-unit: "MHz";
+        db-ticks: [
+            { pos: 0.0, label: "0" }, { pos: 0.2, label: "-20" }, { pos: 0.4, label: "-40" },
+            { pos: 0.6, label: "-60" }, { pos: 0.8, label: "-80" }, { pos: 1.0, label: "-100" },
+        ];
+        freq-ticks: [
+            { pos: 0.0, label: "144.6" }, { pos: 0.1, label: "144.8" }, { pos: 0.2, label: "145.0" },
+            { pos: 0.3, label: "145.2" }, { pos: 0.4, label: "145.4" }, { pos: 0.5, label: "145.6" },
+            { pos: 0.6, label: "145.8" }, { pos: 0.7, label: "146.0" }, { pos: 0.8, label: "146.2" },
+            { pos: 0.9, label: "146.4" },
+        ];
+        ribbon-size: root.ribbon-size;
+        bands: root.bands;
+        bookmarks: [
+            { pos: 0.63673, label: "GB3xx", favourite: false },
+            { pos: 0.8, label: "ISS APRS", favourite: true },
+        ];
+        plugin-marks: [
+            { pos: 0.1, width: 0.0, label: "APRS 144.800", color: transparent, dashed: true },
+            { pos: 0.3, width: 0.05, label: "Packet band", color: transparent, dashed: false },
+        ];
+        user-markers: [{ pos: 0.30612, label: "M1" }];
+        airband-channels: root.airband-channels;
+        airband-block: root.airband-block;
+        airband-hearing: root.airband-hearing;
+        show-vfo: root.show-vfo;
+        vfo-pos: 0.456122;
+        vfo-half: 0.015306;
+        band-dragging: root.band-dragging;
+        cursor-visible: root.cursor-visible;
+        cursor-pos: root.cursor-pos;
+        cursor-text: "145.212 MHz · -78.4 dB";
+        shift-held: root.shift-held;
+        enabled: root.enabled;
+        band-tooltip: "Drag to retune, Shift for free tuning";
+        edge-tooltip: "Drag to change the bandwidth";
+        off-band-tooltip: "Click to tune, double-click to see the full span";
+
+        hover(xf, yf) => { root.hover-x = xf; root.hover-y = yf; root.hovers += 1; }
+        clicked(xf, shift) => { root.clicks += 1; root.click-x = xf; root.click-shift = shift; }
+        double-clicked(xf) => { root.dclicks += 1; root.dclick-x = xf; }
+        right-clicked(xf, x, y) => { root.rclicks += 1; root.rclick-x = xf; root.rclick-px = x; root.rclick-py = y; }
+        band-dragged(dx) => { root.band-dx += dx; root.band-moves += 1; }
+        edge-dragged(half) => { root.edge-half = half; root.edge-moves += 1; }
+        wheel(xf, notches, shift) => { root.wheels += 1; root.wheel-x = xf; root.wheel-notches = notches; root.wheel-shift = shift; }
+    }
+}
+
+// The same well in a window of NO fixed size, for the resize test: the plot is x 44 .. the right edge and
+// y 76 .. height - 18 whatever the size, every position stays a fraction of it, and a picture the host painted at
+// another size is stretched over it. A small population: the geometry rules, not the whole sheet.
+export component SpectrumResizeSpecimen inherits Window {
+    preferred-width: 1024px;
+    preferred-height: 424px;
+    background: Theme.bg;
+    in property <image> trace;
+
+    SpectrumView {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        trace: root.trace;
+        trace-mode: TraceMode.peak-hold;
+        caption: "Spectrum · 4096 bin · EMA 0.35";
+        trace-mode-label: "Peak hold";
+        peak-text: "-41.2 dBFS";
+        peak-age: "0.1 s ago";
+        span-text: "SPAN 2.400 MHz";
+        axis-unit: "MHz";
+        db-ticks: [
+            { pos: 0.0, label: "0" }, { pos: 0.2, label: "-20" }, { pos: 0.4, label: "-40" },
+            { pos: 0.6, label: "-60" }, { pos: 0.8, label: "-80" }, { pos: 1.0, label: "-100" },
+        ];
+        freq-ticks: [
+            { pos: 0.0, label: "144.6" }, { pos: 0.1, label: "144.8" }, { pos: 0.2, label: "145.0" },
+            { pos: 0.3, label: "145.2" }, { pos: 0.4, label: "145.4" }, { pos: 0.5, label: "145.6" },
+            { pos: 0.6, label: "145.8" }, { pos: 0.7, label: "146.0" }, { pos: 0.8, label: "146.2" },
+            { pos: 0.9, label: "146.4" },
+        ];
+        ribbon-size: 1;
+        bands: [{ from: 0.0, to: 1.0, label: "2 m amateur", color: transparent }];
+        bookmarks: [{ pos: 0.5, label: "Net", favourite: true }];
+        vfo-pos: 0.3;
+        vfo-half: 0.02;
+    }
+}

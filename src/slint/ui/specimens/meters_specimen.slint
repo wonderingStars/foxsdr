@@ -1,0 +1,118 @@
+// The meter's specimen sheet (tests/test_slint_meters.cpp): every style and state at an absolute position on a
+// 880 x 670 ground. Each meter is 126 wide and 91 high: caption row 14, 3px, the 126 x 56 face, 4px, value row 14, so the
+// face of a meter at (x, y) is (x, y + 17, 126, 56). Interactive state the test observes is surfaced on the root.
+//
+//   x,   y - what                                                         (columns at x = 16, 166, 316, 466)
+//   row A  y = 16   the four styles at value 0.62 with a peak catch at 0.8
+//    16,  16  A1 classic      "CLASSIC"     "62 %"
+//   166,  16  A2 analogue     "ANALOGUE"    "62 %"
+//   316,  16  A3 led-ladder   "LED LADDER"  "62 %"
+//   466,  16  A4 peak         "PEAK METER"  "62 %"
+//   row B  y = 124  the same four with peak -1 (no catch)
+//    16, 124  B1 classic      166, 124  B2 analogue      316, 124  B3 led-ladder      466, 124  B4 peak
+//   row C  y = 232  needle directions and the scale's ends
+//    16, 232  C1 classic, value 0.0 (the needle lies to the left)
+//   166, 232  C2 classic, value 0.5 (straight up)
+//   316, 232  C3 classic, value 1.0 (to the right)
+//   466, 232  C4 analogue, value 0.5 (straight up, bold)
+//   row D  y = 340  scale labels and units (the deck's two meters, in the other styles)
+//    16, 340  D1 classic      "SAMPLE RATE" "2.400 MS/s" 0.24, labels 0 / 5 / 10, unit MS/s
+//   166, 340  D2 analogue     "VOLUME"      "-12.4 dB"   0.79, labels -60 / -30 / 0, unit dB
+//   316, 340  D3 led-ladder   "VOLUME"      "-12.4 dB"   0.50, peak 0.75, labels -60 / -30 / 0, unit dB
+//   466, 340  D4 peak         "VOLUME"      "-12.4 dB"   0.50, peak 0.75, labels -60 / -30 / 0, unit dB
+//   row E  y = 448  no reading and disabled
+//    16, 448  E1 classic, has-reading false ("--": no needle)
+//   166, 448  E2 classic, DISABLED (dimmed, no menu, no tooltip), value 0.62
+//   316, 448  E3 led-ladder, has-reading false, peak 0.5 (the catch alone)
+//   466, 448  E4 peak, DISABLED, value 0.62, peak 0.8
+//   row F  y = 556  the ends of the ladder and of the bar
+//    16, 556  F1 led-ladder, value 1.0, no peak (all twelve lit: 7 low, 3 mid, 2 high)
+//   166, 556  F2 led-ladder, value 0.0, peak 0.0 (nothing lit, the catch on the first segment)
+//   316, 556  F3 peak, value 1.0, peak 1.0 (a full bar through its three zones, the line at the right end)
+//   466, 556  F4 peak, value 0.0, peak 0.0 (an empty bar, the line at the left end)
+//   column G  x = 640  faces of another size
+//   640,  16  G1 classic, face 180 x 70 (the meter is 180 x 105), value 0.5
+//   640, 140  G2 peak, face 200 x 40 (the meter is 200 x 75), value 1.0, peak 0.5
+//   640, 240  G3 classic, caption "xxxx xxxx" in lower case: the caption row must come out exactly as G4's
+//   640, 348  G4 classic, caption "XXXX XXXX" in upper case
+//   640, 456  G5 classic, a caption and a value text far too long for the 126px face (both are elided to the meter's width)
+import { Theme, Skin, Workbench, MeterStyle } from "../theme.slint";
+import { Meter } from "../meters.slint";
+export { Theme, Skin, Workbench, MeterStyle }
+
+export component MetersSpecimen inherits Window {
+    width: 880px;
+    height: 670px;
+    background: Theme.bg;
+
+    // what the test observes
+    in-out property <int> menu-requests;
+    in-out property <int> last-from;         // which meter asked: 1 A1 ... 4 A4, 5 B1 ... 8 B4, 9 C1 ... 12 C4, 13 D1 ... 16 D4, 17 E1 ... 20 E4, 21 F1 ... 24 F4, 25 G1 ... 29 G5
+    in-out property <length> last-menu-x;
+    in-out property <length> last-menu-y;
+
+    function asked(from: int, x: length, y: length) {
+        root.menu-requests += 1;
+        root.last-from = from;
+        root.last-menu-x = x;
+        root.last-menu-y = y;
+    }
+
+    // row A: with the peak catch
+    Meter { x: 16px;  y: 16px; style: MeterStyle.classic;    caption: "Classic";    value-text: "62 %"; value: 0.62; peak: 0.8; menu-requested(x, y) => { root.asked(1, x, y); } }
+    Meter { x: 166px; y: 16px; style: MeterStyle.analogue;   caption: "Analogue";   value-text: "62 %"; value: 0.62; peak: 0.8; menu-requested(x, y) => { root.asked(2, x, y); } }
+    Meter { x: 316px; y: 16px; style: MeterStyle.led-ladder; caption: "LED ladder"; value-text: "62 %"; value: 0.62; peak: 0.8; menu-requested(x, y) => { root.asked(3, x, y); } }
+    Meter { x: 466px; y: 16px; style: MeterStyle.peak;       caption: "Peak meter"; value-text: "62 %"; value: 0.62; peak: 0.8; menu-requested(x, y) => { root.asked(4, x, y); } }
+    // row B: no peak
+    Meter { x: 16px;  y: 124px; style: MeterStyle.classic;    caption: "Classic";    value-text: "62 %"; value: 0.62; menu-requested(x, y) => { root.asked(5, x, y); } }
+    Meter { x: 166px; y: 124px; style: MeterStyle.analogue;   caption: "Analogue";   value-text: "62 %"; value: 0.62; menu-requested(x, y) => { root.asked(6, x, y); } }
+    Meter { x: 316px; y: 124px; style: MeterStyle.led-ladder; caption: "LED ladder"; value-text: "62 %"; value: 0.62; menu-requested(x, y) => { root.asked(7, x, y); } }
+    Meter { x: 466px; y: 124px; style: MeterStyle.peak;       caption: "Peak meter"; value-text: "62 %"; value: 0.62; menu-requested(x, y) => { root.asked(8, x, y); } }
+    // row C: needle directions
+    Meter { x: 16px;  y: 232px; style: MeterStyle.classic;  caption: "Value 0";   value-text: "0 %";   value: 0.0; menu-requested(x, y) => { root.asked(9, x, y); } }
+    Meter { x: 166px; y: 232px; style: MeterStyle.classic;  caption: "Value 0.5"; value-text: "50 %";  value: 0.5; menu-requested(x, y) => { root.asked(10, x, y); } }
+    Meter { x: 316px; y: 232px; style: MeterStyle.classic;  caption: "Value 1";   value-text: "100 %"; value: 1.0; menu-requested(x, y) => { root.asked(11, x, y); } }
+    Meter { x: 466px; y: 232px; style: MeterStyle.analogue; caption: "Value 0.5"; value-text: "50 %";  value: 0.5; menu-requested(x, y) => { root.asked(12, x, y); } }
+    // row D: scale labels and units
+    Meter {
+        x: 16px; y: 340px; style: MeterStyle.classic;
+        caption: "Sample rate"; value-text: "2.400 MS/s"; unit: "MS/s"; value: 0.24; scale-labels: ["0", "5", "10"];
+        menu-requested(x, y) => { root.asked(13, x, y); }
+    }
+    Meter {
+        x: 166px; y: 340px; style: MeterStyle.analogue;
+        caption: "Volume"; value-text: "-12.4 dB"; unit: "dB"; value: 0.79; scale-labels: ["-60", "-30", "0"];
+        menu-requested(x, y) => { root.asked(14, x, y); }
+    }
+    Meter {
+        x: 316px; y: 340px; style: MeterStyle.led-ladder;
+        caption: "Volume"; value-text: "-12.4 dB"; unit: "dB"; value: 0.5; peak: 0.75; scale-labels: ["-60", "-30", "0"];
+        menu-requested(x, y) => { root.asked(15, x, y); }
+    }
+    Meter {
+        x: 466px; y: 340px; style: MeterStyle.peak;
+        caption: "Volume"; value-text: "-12.4 dB"; unit: "dB"; value: 0.5; peak: 0.75; scale-labels: ["-60", "-30", "0"];
+        menu-requested(x, y) => { root.asked(16, x, y); }
+    }
+    // row E: no reading, disabled
+    Meter { x: 16px;  y: 448px; style: MeterStyle.classic;    caption: "No reading"; value-text: "--"; value: 0.62; has-reading: false; menu-requested(x, y) => { root.asked(17, x, y); } }
+    Meter { x: 166px; y: 448px; style: MeterStyle.classic;    caption: "Disabled";   value-text: "62 %"; value: 0.62; enabled: false; menu-requested(x, y) => { root.asked(18, x, y); } }
+    Meter { x: 316px; y: 448px; style: MeterStyle.led-ladder; caption: "No reading"; value-text: "--"; value: 0.62; peak: 0.5; has-reading: false; menu-requested(x, y) => { root.asked(19, x, y); } }
+    Meter { x: 466px; y: 448px; style: MeterStyle.peak;       caption: "Disabled";   value-text: "62 %"; value: 0.62; peak: 0.8; enabled: false; menu-requested(x, y) => { root.asked(20, x, y); } }
+    // row F: the ends of the ladder and the bar
+    Meter { x: 16px;  y: 556px; style: MeterStyle.led-ladder; caption: "All lit";    value-text: "100 %"; value: 1.0; menu-requested(x, y) => { root.asked(21, x, y); } }
+    Meter { x: 166px; y: 556px; style: MeterStyle.led-ladder; caption: "Catch only"; value-text: "0 %";   value: 0.0; peak: 0.0; menu-requested(x, y) => { root.asked(22, x, y); } }
+    Meter { x: 316px; y: 556px; style: MeterStyle.peak;       caption: "Full bar";   value-text: "100 %"; value: 1.0; peak: 1.0; menu-requested(x, y) => { root.asked(23, x, y); } }
+    Meter { x: 466px; y: 556px; style: MeterStyle.peak;       caption: "Empty bar";  value-text: "0 %";   value: 0.0; peak: 0.0; menu-requested(x, y) => { root.asked(24, x, y); } }
+    // column G: faces of another size
+    Meter { x: 640px; y: 16px;  style: MeterStyle.classic; caption: "Wide face"; value-text: "50 %";  value: 0.5; face-w: 180px; face-h: 70px; menu-requested(x, y) => { root.asked(25, x, y); } }
+    Meter { x: 640px; y: 140px; style: MeterStyle.peak;    caption: "Low face";  value-text: "100 %"; value: 1.0; peak: 0.5; face-w: 200px; face-h: 40px; menu-requested(x, y) => { root.asked(26, x, y); } }
+    // column G, lower: the caption's case, and words too long for the face (34 languages)
+    Meter { x: 640px; y: 240px; style: MeterStyle.classic; caption: "xxxx xxxx"; value-text: "0 %"; value: 0.3; menu-requested(x, y) => { root.asked(27, x, y); } }
+    Meter { x: 640px; y: 348px; style: MeterStyle.classic; caption: "XXXX XXXX"; value-text: "0 %"; value: 0.3; menu-requested(x, y) => { root.asked(28, x, y); } }
+    Meter {
+        x: 640px; y: 456px; style: MeterStyle.classic;
+        caption: "A caption far too long for a 126 pixel meter"; value-text: "-12345.678 megasamples per second"; value: 0.3;
+        menu-requested(x, y) => { root.asked(29, x, y); }
+    }
+}

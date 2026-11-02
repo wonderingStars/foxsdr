@@ -1,0 +1,162 @@
+// The phase-3 stubs' specimen: the five contracts side by side, every property of every one handed in from a property of
+// the root (so tests/test_slint_stubs.cpp can set each once - the compile is the check that the contract holds) and every
+// callback handled with the contract's signature.
+//
+//   x,   y,   w,   h    what
+//   10,  10, 220, 150   InstrumentFace  (cap "INSTRUMENT" + " · " + kind)
+//   250, 10, 220, 150   MapView         (cap "MAP")
+//   490, 10, 240, 150   GlobeView       (cap "GLOBE")
+//   10, 180, 330, 160   PatchCanvas     (cap "PATCH")
+//   360, 180, 370, 160  ScopeTube       (cap "SCOPE")
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { InstrumentFace, MapView, GlobeView, PatchCanvas, ScopeTube, TrackPoint, PatchNode, PatchWire } from "../stubs.slint";
+export { Theme, Skin, Workbench }
+export { TrackPoint, PatchNode, PatchWire }
+
+export component StubsSpecimen inherits Window {
+    width: 740px;
+    height: 350px;
+    background: Theme.bg;
+
+    // InstrumentFace
+    in-out property <string> face-kind: "METER";
+    in-out property <string> face-caption;
+    in-out property <float> face-value;
+    in-out property <float> face-min;
+    in-out property <float> face-max: 1;
+    in-out property <string> face-unit;
+    in-out property <float> face-needle;
+    // MapView
+    in-out property <float> map-lat;
+    in-out property <float> map-lon;
+    in-out property <float> map-zoom: 1;
+    in-out property <[TrackPoint]> map-tracks;
+    in-out property <int> map-followed: -1;
+    in-out property <int> map-target;
+    in-out property <float> map-pan-dx;
+    in-out property <float> map-pan-dy;
+    in-out property <int> map-zoom-notches;
+    // GlobeView
+    in-out property <float> globe-lat;
+    in-out property <float> globe-lon;
+    in-out property <[TrackPoint]> globe-tracks;
+    in-out property <bool> globe-terminator;
+    // PatchCanvas
+    in-out property <[PatchNode]> patch-nodes;
+    in-out property <[PatchWire]> patch-wires;
+    in-out property <int> patch-moved-id;
+    in-out property <float> patch-moved-x;
+    in-out property <float> patch-moved-y;
+    in-out property <int> patch-wire-from;
+    in-out property <int> patch-wire-from-port;
+    in-out property <int> patch-wire-to;
+    in-out property <int> patch-wire-to-port;
+    // ScopeTube
+    in-out property <image> scope-trace;
+    in-out property <string> scope-caption;
+    in-out property <float> scope-persistence;
+    // the tooltip every stub carries, like every interactive component
+    in-out property <string> stub-tooltip;
+    in-out property <bool> stub-enabled: true;
+
+    // Phase 1 fires none of the stubs' callbacks; these let the test call each with the contract's signature, through the
+    // handlers below (which is what the pages will do in phase 3).
+    public function fire-target(id: int) {
+        map.target-clicked(id);
+    }
+    public function fire-pan(dx: float, dy: float) {
+        map.panned(dx, dy);
+    }
+    public function fire-zoom(notches: int) {
+        map.zoomed(notches);
+    }
+    public function fire-node-moved(id: int, x: float, y: float) {
+        patch.node-moved(id, x, y);
+    }
+    public function fire-wire(from: int, from-port: int, to: int, to-port: int) {
+        patch.wire-requested(from, from-port, to, to-port);
+    }
+
+    InstrumentFace {
+        x: 10px;
+        y: 10px;
+        width: 220px;
+        height: 150px;
+        enabled: root.stub-enabled;
+        tooltip: root.stub-tooltip;
+        kind: root.face-kind;
+        caption: root.face-caption;
+        value: root.face-value;
+        min: root.face-min;
+        max: root.face-max;
+        unit: root.face-unit;
+        needle: root.face-needle;
+    }
+    map := MapView {
+        x: 250px;
+        y: 10px;
+        width: 220px;
+        height: 150px;
+        enabled: root.stub-enabled;
+        tooltip: root.stub-tooltip;
+        lat: root.map-lat;
+        lon: root.map-lon;
+        zoom: root.map-zoom;
+        tracks: root.map-tracks;
+        followed: root.map-followed;
+        target-clicked(id) => {
+            root.map-target = id;
+        }
+        panned(dx, dy) => {
+            root.map-pan-dx = dx;
+            root.map-pan-dy = dy;
+        }
+        zoomed(notches) => {
+            root.map-zoom-notches += notches;
+        }
+    }
+    GlobeView {
+        x: 490px;
+        y: 10px;
+        width: 240px;
+        height: 150px;
+        enabled: root.stub-enabled;
+        tooltip: root.stub-tooltip;
+        lat: root.globe-lat;
+        lon: root.globe-lon;
+        tracks: root.globe-tracks;
+        terminator: root.globe-terminator;
+    }
+    patch := PatchCanvas {
+        x: 10px;
+        y: 180px;
+        width: 330px;
+        height: 160px;
+        enabled: root.stub-enabled;
+        tooltip: root.stub-tooltip;
+        nodes: root.patch-nodes;
+        wires: root.patch-wires;
+        node-moved(id, x, y) => {
+            root.patch-moved-id = id;
+            root.patch-moved-x = x;
+            root.patch-moved-y = y;
+        }
+        wire-requested(from, from-port, to, to-port) => {
+            root.patch-wire-from = from;
+            root.patch-wire-from-port = from-port;
+            root.patch-wire-to = to;
+            root.patch-wire-to-port = to-port;
+        }
+    }
+    ScopeTube {
+        x: 360px;
+        y: 180px;
+        width: 370px;
+        height: 160px;
+        enabled: root.stub-enabled;
+        tooltip: root.stub-tooltip;
+        trace: root.scope-trace;
+        caption: root.scope-caption;
+        persistence: root.scope-persistence;
+    }
+}

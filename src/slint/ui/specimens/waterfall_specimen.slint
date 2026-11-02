@@ -1,0 +1,135 @@
+// The waterfall's specimen: the lower well of the Workbench sheet, populated exactly as the sheet draws it, with the
+// picture left to the test (it paints a 980 x 238 image and sets `picture`) and every observable state of the view
+// surfaced on the root so tests/test_slint_waterfall.cpp can read what the gestures did.
+//
+//   x, y, w, h       what
+//   0, 0, 1024, 270  WaterfallView filling the sheet: picture (44, 0, 980, 238), foot (44, 242, 966, 28), age strip
+//                    (0..44), strength key at the picture's top right, VFO at 0.44, a dashed plugin mark at 0.10,
+//                    user markers M1 0.306, M2 0.312 (touching M1: its tab goes one row up) and M3 0.80
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { WaterfallView, AgeTick } from "../waterfall.slint";
+import { PluginMark, UserMarker } from "../spectrum.slint";
+export { Theme, Skin, Workbench }
+export { AgeTick }
+export { PluginMark, UserMarker }
+
+export component WaterfallSpecimen inherits Window {
+    width: 1024px;
+    height: 270px;
+    background: Theme.bg;
+
+    // what the test sets
+    in-out property <image> picture;
+    in-out property <bool> key-manual: false;
+    in-out property <bool> show-key: true;
+    in-out property <bool> show-vfo: true;
+    in-out property <string> key-coverage;
+    in-out property <float> rail-pos: -1;
+    in-out property <float> gap-pos: -1;
+    in-out property <bool> cursor-visible: false;
+    in-out property <float> cursor-pos: -1;
+    in-out property <bool> view-enabled: true;
+    in-out property <length> view-w: 1024px;
+    in-out property <[PluginMark]> marks: [{ pos: 0.10, width: 0, label: "", color: transparent, dashed: true }];
+    in-out property <[UserMarker]> markers: [
+        { pos: 0.306, label: "M1 145.212 MHz" },
+        { pos: 0.312, label: "M2 145.230 MHz" },
+        { pos: 0.80, label: "M3 146.100 MHz" },
+    ];
+
+    // what the view reported
+    out property <length> key-x: wf.key-x;
+    out property <length> key-y: wf.key-y;
+    out property <length> key-w: wf.key-w;
+    out property <length> key-h: wf.key-h;
+    in-out property <float> hover-x: -2;
+    in-out property <float> hover-y: -2;
+    in-out property <float> click-x;
+    in-out property <bool> click-shift;
+    in-out property <float> pan-dx;
+    in-out property <float> rclick-x;
+    in-out property <length> rclick-px;
+    in-out property <length> rclick-py;
+    in-out property <float> wheel-x;
+    in-out property <bool> wheel-shift;
+    in-out property <int> clicks;
+    in-out property <int> dclicks;
+    in-out property <int> rclicks;
+    in-out property <int> wheels;
+    in-out property <int> wheel-notches;
+    in-out property <int> pans;
+    in-out property <int> marker-hover: -1;
+
+    wf := WaterfallView {
+        x: 0px;
+        y: 0px;
+        width: root.view-w;
+        height: parent.height;
+        enabled: root.view-enabled;
+        picture: root.picture;
+
+        age-ticks: [
+            { pos: 22.0 / 238.0, label: "now" },
+            { pos: 76.0 / 238.0, label: "10 s" },
+            { pos: 130.0 / 238.0, label: "20 s" },
+            { pos: 184.0 / 238.0, label: "30 s" },
+        ];
+        gap-pos: root.gap-pos;
+        gap-label-above: "12s";
+        gap-label-below: "2m03";
+
+        show-key: root.show-key;
+        key-labels: ["-110", "-80", "-50", "-20", "0"];
+        key-foot: "FLOOR -110 dB · CEILING 0 dB · auto";
+        key-manual: root.key-manual;
+        key-coverage: root.key-coverage;
+        rail-pos: root.rail-pos;
+        rail-label: "Range changed";
+
+        foot-left: "24 lines/s · 42 s of history";
+        foot-tuned: "145.500000 MHz";
+        foot-rest: " · NFM · decoding: APRS";
+
+        vfo-pos: 0.44;
+        show-vfo: root.show-vfo;
+        plugin-marks: root.marks;
+        user-markers: root.markers;
+        marker-tooltip: "M1 145.212 MHz · right-click for the marker menu";
+        tooltip: "Click to tune | wheel: zoom";
+        cursor-visible: root.cursor-visible;
+        cursor-pos: root.cursor-pos;
+        cursor-text: "145.212 MHz · -78.4 dB";
+
+        hover(x, y) => {
+            root.hover-x = x;
+            root.hover-y = y;
+        }
+        clicked(x, shift) => {
+            root.clicks += 1;
+            root.click-x = x;
+            root.click-shift = shift;
+        }
+        panned(dx) => {
+            root.pans += 1;
+            root.pan-dx = dx;
+        }
+        double-clicked => {
+            root.dclicks += 1;
+        }
+        right-clicked(x, px, py) => {
+            root.rclicks += 1;
+            root.rclick-x = x;
+            root.rclick-px = px;
+            root.rclick-py = py;
+        }
+        wheel(x, n, shift) => {
+            root.wheels += 1;
+            root.wheel-notches += n;
+            root.wheel-x = x;
+            root.wheel-shift = shift;
+        }
+        marker-hovered(i) => {
+            root.marker-hover = i;
+        }
+    }
+}

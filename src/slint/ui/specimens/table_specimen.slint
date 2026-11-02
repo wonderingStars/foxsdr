@@ -1,0 +1,87 @@
+// The Table family's specimen sheet (440 x 280). Every variant sits at an absolute position; nothing overlaps.
+//
+//   x    y    w    h   what
+//   10   10   420  160 the panel ground (Theme.panel, the torn-off window's body) behind the frame-log table
+//   10   10   420  160 Table: columns Time (78, mono) | Source (70) | Message (rest) | Level (56); heading 22 high at y 10..32;
+//                      9 body rows 24 high from y 32 (content 216 > viewport 138, so the body scrolls under the frozen heading)
+//                        row 0  group  "TODAY - MONDAY 2 NOVEMBER 2026" (one cell, spans every column, muted)
+//                        row 1  normal
+//                        row 2  warn,   band
+//                        row 3  good
+//                        row 4  muted,  band
+//                        row 5  normal, the SELECTED row (root.selected, default 5)
+//                        row 6  key tone
+//                        row 7  normal, band
+//                        row 8  normal
+//   10   180  300  80  the panel ground behind the empty table
+//   10   180  300  80  Table with no rows: heading, then "Nothing to show yet." in Theme.dim
+//
+// State the test reads: clicks / last-row (clicked), right-clicks / last-right-row / last-right-x / last-right-y (right-clicked).
+// State the test sets: selected (the selected row, -1 none), table-enabled, rows (the whole model), widths (column-widths).
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { RowTone, TableRow, Table } from "../table.slint";
+export { Theme, Skin, Workbench }
+export { RowTone, TableRow }
+
+export component TableSpecimen inherits Window {
+    width: 440px;
+    height: 280px;
+    background: Theme.bg;
+
+    in-out property <int> selected: 5;
+    in-out property <[length]> widths: [78px, 70px, 0px, 56px];
+    in-out property <[TableRow]> rows: [
+        { cells: ["TODAY - MONDAY 2 NOVEMBER 2026"], tone: RowTone.muted, band: false },
+        { cells: ["14:32:08", "M0ABC", "Position report 51.50N 000.07W", "INFO"], tone: RowTone.normal, band: false },
+        { cells: ["14:32:41", "G4XYZ", "Bad checksum, frame dropped", "WARN"], tone: RowTone.warn, band: true },
+        { cells: ["14:33:02", "M0ABC", "Message acknowledged", "GOOD"], tone: RowTone.good, band: false },
+        { cells: ["14:33:40", "ISS", "Digipeated, 2 hops", "MUTED"], tone: RowTone.muted, band: true },
+        { cells: ["14:34:11", "2E0FOX", "Whole row selectable (hovered)", "INFO"], tone: RowTone.normal, band: false },
+        { cells: ["14:34:52", "G0KEY", "A row in the key tone", "INFO"], tone: RowTone.key, band: false },
+        { cells: ["14:35:30", "M0ABC", "Position report 51.51N 000.08W", "INFO"], tone: RowTone.normal, band: true },
+        { cells: ["14:36:02", "G4XYZ", "Position report 51.52N 000.09W", "INFO"], tone: RowTone.normal, band: false },
+    ];
+    in-out property <bool> table-enabled: true;
+    in-out property <int> clicks;
+    in-out property <int> last-row: -1;
+    in-out property <int> right-clicks;
+    in-out property <int> last-right-row: -1;
+    in-out property <length> last-right-x;
+    in-out property <length> last-right-y;
+
+    Rectangle { x: 10px; y: 10px; width: 420px; height: 160px; background: Theme.panel; }
+    Table {
+        x: 10px;
+        y: 10px;
+        width: 420px;
+        height: 160px;
+        columns: ["Time", "Source", "Message", "Level"];
+        column-widths: root.widths;
+        mono-columns: [true, false, false, false];
+        empty-text: "Nothing to show yet.";
+        selected: root.selected;
+        enabled: root.table-enabled;
+        tooltip: "Click a row to select it, right-click for its menu";
+        rows: root.rows;
+        clicked(row) => { root.clicks += 1; root.last-row = row; }
+        right-clicked(row, x, y) => {
+            root.right-clicks += 1;
+            root.last-right-row = row;
+            root.last-right-x = x;
+            root.last-right-y = y;
+        }
+    }
+
+    Rectangle { x: 10px; y: 180px; width: 300px; height: 80px; background: Theme.panel; }
+    Table {
+        x: 10px;
+        y: 180px;
+        width: 300px;
+        height: 80px;
+        columns: ["Time", "Source", "Message", "Level"];
+        column-widths: [78px, 70px, 0px, 56px];
+        mono-columns: [true, false, false, false];
+        rows: [];
+        empty-text: "Nothing to show yet.";
+    }
+}

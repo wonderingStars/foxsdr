@@ -1,0 +1,187 @@
+// The tabs family's specimen sheet: every variant of Tab, WindowChrome, TornWindow and Splitter at an absolute position
+// (tests/test_slint_tabs.cpp renders it and probes the pixels against the artboards).
+//
+//   x,   y,    w,   h  - what
+//   16,  16,  >=96,  32 - Tab on ("RECEIVER"): fg label, 2 px accent underline
+//  146,  16,  >=96,  32 - Tab off ("PATCH"): muted label, no underline
+//  276,  16,  >=96,  32 - Tab torn-off ("SCOPE"): an amber dot before the label
+//  406,  16,  auto,  32 - Tab closable ("Frame log"): a 12 px close icon key after the label
+//  536,  16,  auto,  32 - Tab ghost ("+ Window"): dim label, no minimum width
+//   16,  72,  300,   30 - WindowChrome, "Frame log": Roll up, Maximise, Close keys at the right
+//   16, 112,  300,   30 - WindowChrome maximised: the middle key is Restore
+//   16, 152,  300,   30 - WindowChrome rolled up: the title and one Restore key
+//   16, 200,  400,    6 - Splitter (the specimen moves it as the real host does: its y follows `moved`)
+//   16, 232,  220,   30 - WindowChrome with a title too long for it: the title elides before the keys
+//  440,  72,  300,  200 - TornWindow with content (the specimen is its host: x, y follow `drag`, the size follows `resize`)
+//  440, 320,  300,  100 - TornWindow rolled up: of its 100 px only the 30 px chrome shows
+//
+// Interaction state is surfaced on the root: clicks / close-clicks / drag-outs / roll-ups / maximises / closes /
+// double-clicks, last-click (the instance that fired last), the sums of the drag offsets (drag-dx, drag-dy for the
+// plain chrome, which moves nothing; win-dx, win-dy for the torn window's chrome, which the window follows; resize-dx,
+// resize-dy; splitter-dy, which the bar follows)
+// and the last drag-out offset (pull-dx, pull-dy).
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { Tab, WindowChrome, TornWindow, Splitter } from "../tabs.slint";
+export { Theme, Skin, Workbench, ChipTone, LampState }
+
+export component TabsSpecimen inherits Window {
+    width: 800px;
+    height: 440px;
+    background: Theme.bg;
+
+    in-out property <int> clicks;
+    in-out property <int> close-clicks;
+    in-out property <int> drag-outs;
+    in-out property <int> roll-ups;
+    in-out property <int> maximises;
+    in-out property <int> closes;
+    in-out property <int> double-clicks;
+    in-out property <string> last-click;
+    in-out property <length> drag-dx;
+    in-out property <length> drag-dy;
+    in-out property <length> pull-dx;
+    in-out property <length> pull-dy;
+    in-out property <length> win-dx;
+    in-out property <length> win-dy;
+    in-out property <length> resize-dx;
+    in-out property <length> resize-dy;
+    in-out property <length> splitter-dy;
+    in-out property <bool> torn-maximised;
+    in-out property <bool> locked;                   // disables the off tab, the closable tab, the chrome, the torn window and the splitter
+
+    // measured, for the test
+    out property <length> w-on: tab-on.width;
+    out property <length> h-on: tab-on.height;
+    out property <length> w-off: tab-off.width;
+    out property <length> w-torn: tab-torn.width;
+    out property <length> w-close: tab-close.width;
+    out property <length> w-ghost: tab-ghost.width;
+    out property <length> h-chrome: chrome.height;
+    out property <length> h-split: split.height;
+    out property <length> frame-h: torn.frame-height;
+    out property <length> rolled-frame-h: rolled.frame-height;
+
+    tab-on := Tab {
+        x: 16px; y: 16px;
+        label: "RECEIVER";
+        on: true;
+        tooltip: "The receiver view";
+        clicked => { root.clicks += 1; root.last-click = "on"; }
+        close-clicked => { root.close-clicks += 1; }
+        drag-out(dx, dy) => { root.drag-outs += 1; root.pull-dx = dx; root.pull-dy = dy; }
+    }
+    tab-off := Tab {
+        x: 146px; y: 16px;
+        label: "PATCH";
+        enabled: !root.locked;
+        clicked => { root.clicks += 1; root.last-click = "off"; }
+        drag-out(dx, dy) => { root.drag-outs += 1; root.pull-dx = dx; root.pull-dy = dy; }
+    }
+    tab-torn := Tab {
+        x: 276px; y: 16px;
+        label: "SCOPE";
+        torn-off: true;
+        clicked => { root.clicks += 1; root.last-click = "torn"; }
+    }
+    tab-close := Tab {
+        x: 406px; y: 16px;
+        label: "Frame log";
+        closable: true;
+        enabled: !root.locked;
+        clicked => { root.clicks += 1; root.last-click = "close"; }
+        close-clicked => { root.close-clicks += 1; }
+    }
+    tab-ghost := Tab {
+        x: 536px; y: 16px;
+        label: "+ Window";
+        ghost: true;
+        clicked => { root.clicks += 1; root.last-click = "ghost"; }
+    }
+
+    chrome := WindowChrome {
+        x: 16px; y: 72px; width: 300px;
+        title: "Frame log";
+        tooltip: "Drag outside the main window to tear out";
+        enabled: !root.locked;
+        roll-up-clicked => { root.roll-ups += 1; root.last-click = "chrome"; }
+        maximise-clicked => { root.maximises += 1; root.last-click = "chrome"; }
+        close-clicked => { root.closes += 1; root.last-click = "chrome"; }
+        drag(dx, dy) => { root.drag-dx += dx; root.drag-dy += dy; }
+        double-clicked => { root.double-clicks += 1; root.last-click = "chrome"; }
+    }
+    chrome-max := WindowChrome {
+        x: 16px; y: 112px; width: 300px;
+        title: "Frame log";
+        maximised: true;
+        roll-up-clicked => { root.roll-ups += 1; root.last-click = "chrome-max"; }
+        maximise-clicked => { root.maximises += 1; root.last-click = "chrome-max"; }
+        close-clicked => { root.closes += 1; root.last-click = "chrome-max"; }
+    }
+    chrome-rolled := WindowChrome {
+        x: 16px; y: 152px; width: 300px;
+        title: "Frame log";
+        rolled-up: true;
+        roll-up-clicked => { root.roll-ups += 1; root.last-click = "chrome-rolled"; }
+        maximise-clicked => { root.maximises += 1; root.last-click = "chrome-rolled"; }
+        close-clicked => { root.closes += 1; root.last-click = "chrome-rolled"; }
+    }
+
+    chrome-long := WindowChrome {
+        x: 16px; y: 232px; width: 220px;
+        title: "Decoder output with a very long name";
+    }
+
+    split := Splitter {
+        x: 16px; y: 200px + root.splitter-dy; width: 400px;
+        tooltip: "Drag to resize the waterfall";
+        enabled: !root.locked;
+        moved(dy) => { root.splitter-dy += dy; }
+    }
+
+    torn := TornWindow {
+        x: 440px + root.win-dx;
+        y: 72px + root.win-dy;
+        width: 300px + root.resize-dx;
+        height: 200px + root.resize-dy;
+        title: "Frame log";
+        maximised: root.torn-maximised;
+        enabled: !root.locked;
+        roll-up-clicked => { root.roll-ups += 1; root.last-click = "torn"; }
+        maximise-clicked => { root.maximises += 1; root.last-click = "torn"; }
+        close-clicked => { root.closes += 1; root.last-click = "torn"; }
+        drag(dx, dy) => { root.win-dx += dx; root.win-dy += dy; }
+        double-clicked => { root.double-clicks += 1; root.last-click = "torn"; }
+        resize(dx, dy) => { root.resize-dx += dx; root.resize-dy += dy; }
+        VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            Rectangle {
+                height: 40px;
+                background: Theme.card;
+                Text {
+                    text: "Preset bar";
+                    color: Theme.fg-soft;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+            Rectangle { background: Theme.field; }
+        }
+    }
+    rolled := TornWindow {
+        x: 440px; y: 320px; width: 300px; height: 100px;
+        title: "Frame log";
+        rolled-up: true;
+        roll-up-clicked => { root.roll-ups += 1; root.last-click = "rolled"; }
+        maximise-clicked => { root.maximises += 1; root.last-click = "rolled"; }
+        close-clicked => { root.closes += 1; root.last-click = "rolled"; }
+        resize(dx, dy) => { root.resize-dx += dx; root.resize-dy += dy; }
+        VerticalLayout {
+            padding: 10px;
+            Rectangle { background: Theme.field; }
+        }
+    }
+}

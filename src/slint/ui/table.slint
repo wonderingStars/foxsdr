@@ -1,0 +1,221 @@
+// The Table - the plugin kit's `.tbl` (Workbench-PluginKit.dc.html) as a Slint component.
+//   .tbl th    10px / 600 / 0.6px upper-case, Theme.muted on Theme.strip, padding 4px 8px, 1px Theme.line-strong rule under it
+//   .tbl td    11px, padding 4px 8px, 1px Theme.line rule under every row, one line per row
+//   tr.bd td   Theme.card ground (a band row)
+//   tr.sel td  Theme.table-selected ground and Theme.accent-soft ink (the selected row, and the row under the pointer)
+//   .am .gn .dim   the warn / good / muted tones
+//
+// The heading row is FROZEN: it sits above the scrolling body, so a long table scrolls under it.
+//
+// Geometry in px: heading 22 (4 + 13 + 4 padding and text, then the 1px rule); body row Theme.table-row-h = 24 (4 + 15 + 4,
+// then the 1px rule, which is the LAST pixel row of the row). Column i is `column-widths[i]` wide, or, when that is 0 or
+// missing, an equal share of what the fixed columns leave. A row with ONE cell in a table of several columns is a GROUP row
+// (the sheet's "TODAY"): its text spans every column in the 10px letter-spaced face, coloured by its tone.
+//
+// The body scrolls in a std-widgets ScrollView (wheel, drag). The widget style would draw its bar in its own palette, so that bar is
+// switched off and a 6px thumb in Theme.knob-ring (the sheet's scroll thumb) is laid over the right edge instead; it can be dragged.
+// It overlays the rows rather than taking a column of its own, so the heading and the body keep the same column edges.
+//
+// clicked(row) on a left click; right-clicked(row, x, y) when the right button is released, x / y measured in the table. The row
+// under the pointer, the `selected` row and a row in the key tone all draw as the key tone. A disabled table (`enabled: false`)
+// neither lights its rows nor reports. The table has no ground of its own: it draws on whatever panel it sits in.
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+
+export enum RowTone { normal, warn, good, muted, key }
+
+export struct TableRow { cells: [string], tone: RowTone, band: bool }
+
+// One row's cells. The heading and every body row use the same cell constraints, so the columns line up.
+component TableCells inherits HorizontalLayout {
+    in property <[string]> columns;
+    in property <[string]> texts;
+    in property <[length]> widths;
+    in property <[bool]> mono;
+    in property <color> ink;
+    in property <bool> heading;
+    spacing: 0px;
+    for name[c] in root.columns : Rectangle {
+        min-width: root.widths[c] > 0px ? root.widths[c] : 0px;
+        preferred-width: root.widths[c] > 0px ? root.widths[c] : 0px;
+        max-width: root.widths[c] > 0px ? root.widths[c] : 100000px;
+        horizontal-stretch: root.widths[c] > 0px ? 0 : 1;
+        Text {
+            x: 8px;
+            y: 0px;
+            width: parent.width - 16px;
+            height: parent.height;
+            text: root.heading ? name.to-uppercase() : root.texts[c];
+            color: root.ink;
+            font-family: (root.mono[c] && !root.heading) ? Theme.font-mono : Theme.font-ui;
+            font-size: root.heading ? Theme.font-cap : Theme.font-small;
+            font-weight: root.heading ? Theme.weight-semibold : Theme.weight-regular;
+            letter-spacing: root.heading ? 0.6px : 0px;
+            horizontal-alignment: left;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+export component Table inherits Rectangle {
+    in property <[string]> columns;
+    in property <[TableRow]> rows;
+    in property <[length]> column-widths;      // 0 (or missing) = share the rest
+    in property <[bool]> mono-columns;
+    in-out property <int> selected: -1;        // -1 none; the selected row draws as the key tone
+    in property <string> empty-text;           // drawn under the heading while there are no rows
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked(int);
+    callback right-clicked(int, length, length);   // row, pointer position in the table
+
+    out property <length> head-h: 22px;
+    property <int> hot-row: -1;
+
+    clip: true;
+    accessible-role: table;
+
+    head := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: root.head-h;
+        background: Theme.strip;
+        TableCells {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height - Theme.hairline;
+            columns: root.columns;
+            texts: root.columns;
+            widths: root.column-widths;
+            mono: root.mono-columns;
+            ink: Theme.muted;
+            heading: true;
+        }
+        Rectangle {
+            x: 0px;
+            y: parent.height - Theme.hairline;
+            width: parent.width;
+            height: Theme.hairline;
+            background: Theme.line-strong;
+        }
+    }
+
+    body := ScrollView {
+        x: 0px;
+        y: root.head-h;
+        width: parent.width;
+        height: parent.height - root.head-h;
+        // The widget style draws its scroll bar in its own palette (a dark thumb on our dark ground): it is switched off and the
+        // bar below is drawn from Theme tokens.
+        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+        horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+        content-width: self.visible-width;
+        content-height: root.rows.length * Theme.table-row-h;
+        for row[r] in root.rows : rowbox := Rectangle {
+            property <bool> group: row.cells.length == 1 && root.columns.length > 1;
+            property <bool> key: row.tone == RowTone.key || r == root.selected || (root.enabled && touch.has-hover);
+            property <color> ink: key ? Theme.accent-soft
+                : row.tone == RowTone.warn ? Theme.chip-warn-fg
+                : row.tone == RowTone.good ? Theme.chip-good-fg
+                : row.tone == RowTone.muted ? Theme.dim
+                : Theme.fg;
+            x: 0px;
+            y: r * Theme.table-row-h;
+            width: body.visible-width;
+            height: Theme.table-row-h;
+            background: key ? Theme.table-selected : row.band ? Theme.card : transparent;
+            if rowbox.group : Text {
+                x: 8px;
+                y: 0px;
+                width: parent.width - 16px;
+                height: parent.height - Theme.hairline;
+                text: row.cells[0];
+                color: rowbox.ink;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-cap;
+                letter-spacing: Theme.cap-spacing;
+                horizontal-alignment: left;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if !rowbox.group : TableCells {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height - Theme.hairline;
+                columns: root.columns;
+                texts: row.cells;
+                widths: root.column-widths;
+                mono: root.mono-columns;
+                ink: rowbox.ink;
+                heading: false;
+            }
+            Rectangle {
+                x: 0px;
+                y: parent.height - Theme.hairline;
+                width: parent.width;
+                height: Theme.hairline;
+                background: Theme.line;
+            }
+            touch := TouchArea {
+                enabled: root.enabled;
+                clicked => { root.clicked(r); }
+                pointer-event(e) => {
+                    if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                        root.right-clicked(r, body.x + body.content-x + self.mouse-x, body.y + body.content-y + rowbox.y + self.mouse-y);
+                    }
+                }
+                changed has-hover => {
+                    if (self.has-hover) { root.hot-row = r; }
+                    else if (root.hot-row == r) { root.hot-row = -1; }
+                }
+            }
+        }
+    }
+
+    // The scroll bar: a 6px thumb (the sheet's scroll thumb: Theme.knob-ring, radius 3) laid over the right edge of the body,
+    // present only while the rows are taller than the body. Drag it, or use the wheel.
+    if body.content-height > body.visible-height : thumb := Rectangle {
+        property <length> travel: body.visible-height - self.height;
+        property <length> overflow: body.content-height - body.visible-height;
+        x: parent.width - 9px;
+        y: root.head-h + (overflow > 0px ? -body.content-y / overflow : 0) * travel;
+        width: 6px;
+        height: max(20px, body.visible-height * body.visible-height / body.content-height);
+        border-radius: 3px;
+        background: (grab.pressed || grab.has-hover) ? Theme.dim : Theme.knob-ring;
+        grab := TouchArea {
+            property <length> grab-y;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) { self.grab-y = self.mouse-y; }
+            }
+            moved => {
+                if (self.pressed && thumb.travel > 0px) {
+                    body.content-y = max(-thumb.overflow, min(0px, body.content-y - (self.mouse-y - self.grab-y) * (thumb.overflow / thumb.travel)));
+                }
+            }
+        }
+    }
+
+    if root.rows.length == 0 : Text {
+        x: 12px;
+        y: root.head-h + 6px;
+        width: parent.width - 24px;
+        text: root.empty-text;
+        color: Theme.dim;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        horizontal-alignment: left;
+        overflow: elide;
+    }
+
+    TipTimer {
+        hovered: root.hot-row >= 0;
+        text: root.tooltip;
+        anchor-h: root.height;
+    }
+}

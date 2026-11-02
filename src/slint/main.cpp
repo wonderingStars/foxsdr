@@ -101,6 +101,19 @@ bool isTheRealConfig(const std::string& path) {
 
 std::string fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof(b), f, v); return b; }
 slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+
+// Publishing a list model replaces every repeater item behind it, so a model is set only when its content changed:
+// each publisher keeps the signature of what it last sent; changed() says whether `sig` differs from the stored one.
+struct Signatures {
+    std::map<std::string, std::string> last;
+    bool changed(const std::string& key, const std::string& sig) {
+        auto it = last.find(key);
+        if (it != last.end() && it->second == sig) { return false; }
+        last[key] = sig;
+        return true;
+    }
+};
+std::string sigOf(const std::vector<Tick>& t) { std::string s; for (const auto& k : t) { s += fmt("%.6f|", k.frac) + k.label + ";"; } return s; }
 std::int64_t nowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
 constexpr std::uint32_t kSpecW = 1024, kSpecH = 340;   // the spectrum trace's painted resolution (image-fit fill scales it)
@@ -161,7 +174,7 @@ struct ListsSnapshot {
     unsigned fittedPlugins = 0;
 };
 
-enum class MenuKind { None, Counter, Trace, Marker, MarkerClear, TuneStep, App };
+enum class MenuKind { None, Counter, Trace, Marker, MarkerClear, TuneStep, App, Modes };
 enum class Face { Plain, Drum, Nixie };
 
 struct PaletteAction { std::string kind, title, detail; std::function<void()> run; };
@@ -241,6 +254,7 @@ int main(int argc, char** argv) {
     double hoverX = -1, hoverY = -1;
     std::vector<PaletteAction> paletteActions;
     std::string statusLineBand;
+    Signatures sigs;
 
     // ---- commands: every key becomes one submit() ----
     const auto submit = [&](FoxCommand c) {
@@ -438,6 +452,10 @@ int main(int argc, char** argv) {
                 for (std::size_t i = 0; i < steps.size(); ++i) { e.push_back(entry(MenuItemKind::Radio, 501 + static_cast<int>(i), steps[i].first, "", std::fabs(tuneStepHz - steps[i].second) < 1e-9)); }
                 break;
             }
+            case MenuKind::Modes:   // the compact strip's picker: the eight modes as radio items
+                e.push_back(entry(MenuItemKind::Heading, 0, "Mode"));
+                for (int m = 0; m < 8; ++m) { e.push_back(entry(MenuItemKind::Radio, 701 + m, modeName(demodOfIndex(m)), "", modeIndex(state.demodMode) == m)); }
+                break;
             case MenuKind::App:   // the top-level menu: About FoxSDR holds the AboutSlint widget the licence requires
                 e.push_back(entry(MenuItemKind::Item, 601, "About FoxSDR..."));
                 e.push_back(entry(MenuItemKind::Item, 602, "Key bindings", "F7"));
@@ -486,6 +504,7 @@ int main(int argc, char** argv) {
             case 602: bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(4); break;
             case 603: ui->invoke_shortcut(ss("screenshot")); break;
             case 604: slint::quit_event_loop(); break;
+            case 701: case 702: case 703: case 704: case 705: case 706: case 707: case 708: setMode(demodOfIndex(id - 701)); break;
             default:
                 if (id >= 501 && id <= 509) {
                     const double steps[9] = {1000, 5000, 6250, 9000, 10000, 12500, 25000, 50000, 100000};
@@ -514,6 +533,7 @@ int main(int argc, char** argv) {
     ui->on_edit_cancelled([&] { ui->set_editing(false); });
     ui->on_counter_menu_requested([&](float x, float y) { openMenu(MenuKind::Counter, x, y); });
     ui->on_mode_selected([&](int i) { setMode(demodOfIndex(i)); });
+    ui->on_mode_picker_requested([&](float x, float y) { openMenu(MenuKind::Modes, x, y); });
     ui->on_squelch_changed([&](float v) { setSquelch(squelchDbFromNorm(v)); });
     ui->on_squelch_auto_clicked([&] { setSquelch(squelchAuto(state.squelchDb) ? -85.0 : -200.0); });
     ui->on_volume_changed([&](float v) { setVolume(v); });
@@ -538,7 +558,7 @@ int main(int argc, char** argv) {
         const double lo = 3000.0, hi = std::max(lo, 0.9 * state.channelRateHz);
         FoxCommand c = op(FOXAPI_OP_SET_BANDWIDTH); c.num[0] = lo + (hi - lo) * v; submit(c);
     });
-    ui->on_tune_step_clicked([&](float x, float y) { openMenu(MenuKind::TuneStep, x + 64.f, y + 36.f + 104.f); });
+    ui->on_tune_step_clicked([&](float x, float y) { openMenu(MenuKind::TuneStep, x, y); });
     ui->on_follow_band_plan_toggled([&](bool v) { followBandPlan = v; });
     ui->on_team_message_seen([&] {});
     ui->on_update_primary_clicked([&] {});
@@ -694,7 +714,10 @@ int main(int argc, char** argv) {
         ui->set_maximised(ui->window().is_maximized());
         ui->set_tuned_text(ss(fmtMHz(state.tunedHz)));
         const auto d = digitsOf(state.tunedHz);
-        ui->set_digits(std::make_shared<slint::VectorModel<int>>(std::vector<int>(d.begin(), d.end())));
+        {
+            std::string sig; for (int v : d) { sig += static_cast<char>('0' + v); }
+            if (sigs.changed("digits", sig)) { ui->set_digits(std::make_shared<slint::VectorModel<int>>(std::vector<int>(d.begin(), d.end()))); }
+        }
         ui->set_leading_zeros(leadingZeros(d));
         ui->set_converter_text(ss(lists.converter ? "via " + lists.converterName : std::string()));
         ui->set_converter_warn(lists.converter);
@@ -741,7 +764,12 @@ int main(int argc, char** argv) {
 
         // the rail and the panel
         ui->set_bank_index(bankIndex);
-        ui->set_sections(std::make_shared<slint::VectorModel<SectionRow>>(sectionsFor(bankIndex)));
+        {
+            std::vector<SectionRow> rows = sectionsFor(bankIndex);
+            std::string sig = std::to_string(bankIndex) + ":";
+            for (const auto& r : rows) { sig += std::string(r.name) + "|" + std::string(r.chip) + "|" + std::to_string(static_cast<int>(r.tone)) + "|" + (r.open ? "1" : "0") + ";"; }
+            if (sigs.changed("sections", sig)) { ui->set_sections(std::make_shared<slint::VectorModel<SectionRow>>(std::move(rows))); }
+        }
         ui->set_bank_chip(ss(bankIndex == 0 ? (running ? "RECEIVING" : "STOPPED") : "--"));
         ui->set_bank_chip_tone(bankIndex == 0 && running ? ChipTone::Good : ChipTone::Neutral);
         const double lo = 3000.0, hi = std::max(lo + 1.0, 0.9 * state.channelRateHz);
@@ -765,7 +793,11 @@ int main(int argc, char** argv) {
         x.outputMeasured = outputRate.measured(); x.outputRate = outputRate.perSecond(); x.outputMeanS = outputRate.meanSeconds();
         x.recorderValue = lists.recorderValue; x.recorderDetail = lists.recorderDetail;
         std::vector<StatusCard> cards;
+        std::string cardSig;
         for (const auto& c : statusCards(state, x)) {
+            cardSig += c.key + "|" + c.value + "|" + c.detail + "|" + std::to_string(static_cast<int>(c.tone)) + "|" + (c.lampLit ? "L" : "-") + (c.lampRed ? "R" : "-");
+            for (const auto& l : c.lines) { cardSig += "/" + l; }
+            cardSig += ";";
             std::vector<slint::SharedString> lines;
             for (const auto& l : c.lines) { lines.push_back(ss(l)); }
             cards.push_back({ss(c.key), ss(c.value), ss(c.detail),
@@ -773,7 +805,7 @@ int main(int argc, char** argv) {
                              c.lampLit ? (c.lampRed ? LampState::Red : LampState::Green) : LampState::Off, c.lampShown,
                              std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(lines))});
         }
-        ui->set_status(std::make_shared<slint::VectorModel<StatusCard>>(std::move(cards)));
+        if (sigs.changed("status", cardSig)) { ui->set_status(std::make_shared<slint::VectorModel<StatusCard>>(std::move(cards))); }
 
         // the spectrum: only when the engine published a newer frame
         FoxSpectrumInfo info{}; info.structSize = sizeof(info);
@@ -809,7 +841,14 @@ int main(int argc, char** argv) {
             ui->set_span_text(ss(spanText(cur.spanHz)));
             const double history = fps > 0 ? kWfH / fps : 0.0;
             ui->set_waterfall_foot_left(ss(fps > 0 ? fmt("%.0f lines/s", fps) + " \xC2\xB7 " + fmt("%.0f s of history", history) : std::string()));
-            ui->set_age_ticks([&] { std::vector<AgeTick> ticks; for (const auto& tk : ageTicks(history, kWfH)) { ticks.push_back({static_cast<float>(tk.frac), ss(tk.label)}); } return std::make_shared<slint::VectorModel<AgeTick>>(std::move(ticks)); }());
+            {
+                const auto at = ageTicks(history, kWfH);
+                if (sigs.changed("age", sigOf(at))) {
+                    std::vector<AgeTick> ticks;
+                    for (const auto& tk : at) { ticks.push_back({static_cast<float>(tk.frac == 0.0 ? 22.0 / kWfH : tk.frac), ss(tk.label)}); }   // "now" sits under the Age caption, as the sheet draws it
+                    ui->set_age_ticks(std::make_shared<slint::VectorModel<AgeTick>>(std::move(ticks)));
+                }
+            }
             // the peak inside the passband
             const double lo = fracOf(state.tunedHz - state.bandwidthHz / 2.0, info.centreHz, info.spanHz), hi = fracOf(state.tunedHz + state.bandwidthHz / 2.0, info.centreHz, info.spanHz);
             const std::size_t p0 = static_cast<std::size_t>(std::clamp(lo, 0.0, 1.0) * frame.size()), p1 = std::max(p0 + 1, static_cast<std::size_t>(std::clamp(hi, 0.0, 1.0) * frame.size()));
@@ -824,10 +863,12 @@ int main(int argc, char** argv) {
         }
         // the axes and overlays follow the view every tick (a zoom or pan changes them without a new frame)
         {
-            std::vector<AxisTick> ft; for (const auto& tk : frequencyTicks(v.centreHz, v.spanHz, 980)) { ft.push_back({static_cast<float>(tk.frac), ss(tk.label)}); }
-            ui->set_freq_ticks(std::make_shared<slint::VectorModel<AxisTick>>(std::move(ft)));
-            std::vector<DbTick> dt; for (const auto& tk : dbTicks(state.dbMin, state.dbMax, 330)) { dt.push_back({static_cast<float>(tk.frac), ss(tk.label)}); }
-            ui->set_db_ticks(std::make_shared<slint::VectorModel<DbTick>>(std::move(dt)));
+            {
+                const auto fts = frequencyTicks(v.centreHz, v.spanHz, 980);
+                if (sigs.changed("freq", sigOf(fts))) { std::vector<AxisTick> ft; for (const auto& tk : fts) { ft.push_back({static_cast<float>(tk.frac), ss(tk.label)}); } ui->set_freq_ticks(std::make_shared<slint::VectorModel<AxisTick>>(std::move(ft))); }
+                const auto dts = dbTicks(state.dbMin, state.dbMax, 330);
+                if (sigs.changed("db", sigOf(dts))) { std::vector<DbTick> dt; for (const auto& tk : dts) { dt.push_back({static_cast<float>(tk.frac), ss(tk.label)}); } ui->set_db_ticks(std::make_shared<slint::VectorModel<DbTick>>(std::move(dt))); }
+            }
             ui->set_vfo_pos(frac(state.tunedHz));
             ui->set_vfo_half(static_cast<float>(v.spanHz > 0 ? state.bandwidthHz / 2.0 / v.spanHz : 0.0));
             ui->set_show_vfo(true);
@@ -837,12 +878,18 @@ int main(int argc, char** argv) {
                 if (f1 < 0 || f0 > 1) { continue; }
                 ribbon.push_back({static_cast<float>(std::clamp(f0, 0.0, 1.0)), static_cast<float>(std::clamp(f1, 0.0, 1.0)), ss(b.name), slint::Color::from_argb_uint8(0, 0, 0, 0)});
             }
-            ui->set_ribbon(std::make_shared<slint::VectorModel<BandSegment>>(std::move(ribbon)));
+            {
+                std::string sig; for (const auto& b : ribbon) { sig += fmt("%.5f|", b.from) + fmt("%.5f|", b.to) + std::string(b.label) + ";"; }
+                if (sigs.changed("ribbon", sig)) { ui->set_ribbon(std::make_shared<slint::VectorModel<BandSegment>>(std::move(ribbon))); }
+            }
             std::vector<BookmarkMark> bms;
             for (const auto& b : lists.bookmarks) { const double f = fracOf(b.hz, v.centreHz, v.spanHz); if (f >= 0 && f <= 1 && bms.size() < 64) { bms.push_back({static_cast<float>(f), ss(b.name), b.favourite}); } }
-            ui->set_bookmarks(std::make_shared<slint::VectorModel<BookmarkMark>>(std::move(bms)));
+            {
+                std::string sig; for (const auto& b : bms) { sig += fmt("%.5f|", b.pos) + std::string(b.label) + (b.favourite ? "*" : "") + ";"; }
+                if (sigs.changed("bookmarks", sig)) { ui->set_bookmarks(std::make_shared<slint::VectorModel<BookmarkMark>>(std::move(bms))); }
+            }
             std::vector<PluginMark> marks;
-            std::vector<WfMark> wfMarks;
+            std::vector<PluginMark> wfMarks;
             for (const auto& m : lists.marks) {
                 const double f = fracOf(m.hz, v.centreHz, v.spanHz);
                 const double w = m.span && v.spanHz > 0 ? m.widthHz / v.spanHz : 0.0;
@@ -852,24 +899,30 @@ int main(int argc, char** argv) {
                 marks.push_back({static_cast<float>(f), static_cast<float>(w), ss(m.name), colour, m.dashed});
                 if (!m.spectrumOnly) { wfMarks.push_back({static_cast<float>(f), static_cast<float>(w), ss(m.name), colour, m.dashed}); }
             }
-            ui->set_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::move(marks)));
-            ui->set_wf_marks(std::make_shared<slint::VectorModel<WfMark>>(std::move(wfMarks)));
+            {
+                std::string sig; for (const auto& m : marks) { sig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + std::string(m.label) + (m.dashed ? "d" : "") + ";"; }
+                std::string wsig; for (const auto& m : wfMarks) { wsig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + ";"; }
+                if (sigs.changed("marks", sig)) { ui->set_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::move(marks))); }
+                if (sigs.changed("wfmarks", wsig)) { ui->set_wf_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::move(wfMarks))); }
+            }
             std::vector<UserMarker> ums;
-            std::vector<WfMarker> wfums;
             for (const auto& m : lists.markers) {
                 const double f = fracOf(m.hz, v.centreHz, v.spanHz);
                 if (f < 0 || f > 1) { continue; }
                 const slint::SharedString label = ss("M" + std::to_string(m.id) + " " + fmt("%.3f MHz", m.hz / 1e6));
                 ums.push_back({static_cast<float>(f), label});
-                wfums.push_back({static_cast<float>(f), label});
             }
-            ui->set_markers(std::make_shared<slint::VectorModel<UserMarker>>(std::move(ums)));
-            ui->set_wf_markers(std::make_shared<slint::VectorModel<WfMarker>>(std::move(wfums)));
+            {
+                std::string sig; for (const auto& m : ums) { sig += fmt("%.5f|", m.pos) + std::string(m.label) + ";"; }
+                if (sigs.changed("markers", sig)) { ui->set_markers(std::make_shared<slint::VectorModel<UserMarker>>(std::move(ums))); }
+            }
             ui->set_marker_count(static_cast<int>(lists.markers.size()));
             ui->set_key_foot(ss("FLOOR " + fmt("%.0f dB", state.dbMin) + " \xC2\xB7 CEILING " + fmt("%.0f dB", state.dbMax) + (rangeManual ? " \xC2\xB7 manual" : " \xC2\xB7 auto")));
-            std::vector<slint::SharedString> keyLabels;
-            for (int i = 0; i < 5; ++i) { keyLabels.push_back(ss(fmt("%.0f", state.dbMin + (state.dbMax - state.dbMin) * i / 4.0))); }
-            ui->set_key_labels(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(keyLabels)));
+            {
+                std::vector<slint::SharedString> keyLabels; std::string sig;
+                for (int i = 0; i < 5; ++i) { keyLabels.push_back(ss(fmt("%.0f", state.dbMin + (state.dbMax - state.dbMin) * i / 4.0))); sig += std::string(keyLabels.back()) + ";"; }
+                if (sigs.changed("keylabels", sig)) { ui->set_key_labels(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(keyLabels))); }
+            }
             ui->set_waterfall_foot_tuned(ss(fmtMHz(state.tunedHz)));
             ui->set_waterfall_foot_rest(ss(" \xC2\xB7 " + waterfallFootRight(state, lists.decodersFed.empty() ? std::string() : lists.decodersFed.front())));
             if (hoverX >= 0) { ui->set_cursor_text(ss(cursorText(hzAtFrac(hoverX), dbAtFrac(hoverX)))); }
@@ -883,7 +936,9 @@ int main(int argc, char** argv) {
         }
     });
 
-    ui->run();
+    ui->show();
+    ui->window().set_size(slint::LogicalSize({1600.f, 900.f}));   // the design size: left to the layout, the window opened at its minimum height
+    slint::run_event_loop();
 
     tick.stop();
     std::fprintf(stderr, "foxsdr-slint: %d frames painted, %d buffer detaches (0 = every frame reused its buffer)\n", wells.frames, wells.detaches);

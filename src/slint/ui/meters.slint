@@ -1,0 +1,305 @@
+// FoxSDR Slint front end - the meter (phase 1, docs 6.36): one component, four faces.
+//
+// The deck's two meters (SAMPLE RATE "2.400 MS/s", scale 0-10 MS/s; VOLUME "-12.4 dB", floor -60 dB) have no Workbench
+// sheet - the IA moves them into the status bar and the Level line - but the face stays in the library for instruments and
+// plugins. What it is built from: BRIEF.md B.6, the inventory ("each meter has its own saved style", right-click menu,
+// hover hint "Right-click to change the meter style") and the app's own four faces (src/gui/meter_styles_math.hpp,
+// scope_view.cpp drawMeterFace*): every style draws the SAME 0..1 reading, so a style choice can never make a meter
+// disagree with itself.
+//
+//   a caption above (the cap look: 10px / 600 / 0.8px, upper-case), the 126 x 56 face, the value text below (mono 600)
+//   classic     a 180 degree arc scale in meter-ink with nine ticks (the last two in the alarm colour, as the app's) and a
+//               thin meter-needle pointer on a small hub
+//   analogue    the moving-coil VU: a continuous scale, a filled alarm wedge over the top 18 % of the travel, a bolder
+//               needle (3px against 1.8px) on a bigger hub - never mistaken for classic in a screenshot
+//   led-ladder  twelve segments, low (green) / mid (amber, segments 8-10) / high (red, the top two) by position, lit up to
+//               round(value x 12), the rest at 18 % of their colour; the catch segment (peak) in meter-peak
+//   peak        a horizontal bar on meter-ink at 18 %, filled low / mid / high at 7/12 and 10/12 of its length, with a
+//               meter-peak line (2px, a little taller than the bar) at the peak
+//   scale-labels: [string] are spread along the foot of the face (under the arc's two ends and its hub; flush under a
+//               bar's ends); the unit sits in the face's top-right corner. A reading of "none" (has-reading: false) draws
+//               the scale and a dim hub, never a needle at zero: a needle at rest would be a measurement.
+// Rotation: Rectangle has no rotation-angle in Slint 1.18, so ticks, arcs and needles are Path elements whose end points
+// are computed from the angle (0 = straight up, -90 degrees = the left end of the scale, +90 = the right).
+import { Theme, MeterStyle } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+
+export component Meter inherits Rectangle {
+    in property <MeterStyle> style: MeterStyle.classic;
+    in property <string> caption;
+    in property <string> value-text;
+    in property <string> unit;
+    in property <float> value;                  // 0..1 of the scale
+    in property <float> peak: -1;               // 0..1 of the scale; -1 = no peak catch (led-ladder and peak styles)
+    in property <[string]> scale-labels;
+    in property <bool> has-reading: true;
+    in property <bool> enabled: true;
+    in property <string> tooltip: "Right-click to change the meter style";
+    in property <length> face-w: 126px;
+    in property <length> face-h: 56px;
+    callback menu-requested(length, length);
+
+    // ---- layout of the whole meter: caption row, 3px, the face, 4px, the value row ----
+    property <length> cap-h: 14px;
+    property <length> val-h: 14px;
+    property <length> gap-top: 3px;
+    property <length> gap-bottom: 4px;
+    // ---- the reading, and what the face is made of ----
+    property <float> v: root.has-reading ? Math.max(0.0, Math.min(1.0, root.value)) : 0.0;
+    property <bool> arc: root.style == MeterStyle.classic || root.style == MeterStyle.analogue;
+    property <length> lbl-h: root.scale-labels.length > 0 ? 12px : 0px;           // the band for the scale labels
+    property <length> content-h: root.face-h - root.lbl-h;
+    // dial geometry (classic, analogue): the pivot, the scale's radius, the needle
+    property <length> px: root.face-w / 2;
+    property <length> py: root.face-h - root.lbl-h - 5px;
+    property <length> radius: Math.max(8px, Math.min(root.py - 6px, root.face-w / 2 - 8px));
+    property <angle> theta: (root.v - 0.5) * 180deg;
+    property <length> needle-r: root.style == MeterStyle.analogue ? root.radius * 0.9 : root.radius * 0.88;
+    // ladder geometry: 12 segments 8px wide with 2px gaps on the default face
+    property <length> led-pad-x: 4px;
+    property <length> led-gap: 2px;
+    property <length> led-seg-w: (root.face-w - 2 * root.led-pad-x - 11 * root.led-gap) / 12;
+    property <length> led-pad-y: 10px;
+    property <length> led-seg-h: Math.max(4px, root.content-h - 2 * root.led-pad-y);
+    property <float> lit: Math.round(root.v * 12);
+    property <float> catch-seg: root.peak >= 0 ? Math.max(0.0, Math.min(11.0, Math.round(root.peak * 12) - 1)) : -1.0;
+    // bar geometry (peak style)
+    property <length> bar-x: 4px;
+    property <length> bar-w: root.face-w - 8px;
+    property <length> bar-h: Math.max(6px, Math.round(root.content-h / 1px * 0.42) * 1px);
+    property <length> bar-y: Math.round((root.content-h - root.bar-h) / 2 / 1px) * 1px;
+
+    width: root.face-w;
+    height: root.cap-h + root.gap-top + root.face-h + root.gap-bottom + root.val-h;
+    opacity: root.enabled ? 1.0 : 0.45;
+
+    accessible-role: progress-indicator;
+    accessible-label: root.caption;
+    accessible-value: root.value-text;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 1;
+    accessible-description: root.tooltip;
+
+    // the caption, engraved above the face
+    Text {
+        x: 0px; y: 0px;
+        width: root.width;
+        height: root.cap-h;
+        text: root.caption.to-uppercase();
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        font-weight: Theme.weight-semibold;
+        letter-spacing: Theme.cap-spacing;
+        color: Theme.muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // the face
+    face := Rectangle {
+        x: 0px;
+        y: root.cap-h + root.gap-top;
+        width: root.face-w;
+        height: root.face-h;
+        background: Theme.meter-face;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        border-radius: Theme.radius;
+
+        // ---- classic and analogue: the scale ----
+        // the arc (classic: 1px; analogue: 1.4px, the continuous scale of a moving-coil meter)
+        Path {
+            visible: root.arc;
+            x: 0px; y: 0px; width: root.face-w; height: root.face-h;
+            viewbox-width: root.face-w / 1px; viewbox-height: root.face-h / 1px;
+            stroke: Theme.meter-ink;
+            stroke-width: root.style == MeterStyle.analogue ? 1.4px : 1px;
+            fill: transparent;
+            MoveTo { x: (root.px - root.radius) / 1px; y: root.py / 1px; }
+            ArcTo {
+                x: (root.px + root.radius) / 1px; y: root.py / 1px;
+                radius-x: root.radius / 1px; radius-y: root.radius / 1px;
+                sweep: true;
+            }
+        }
+        // classic: nine ticks, the last two in the alarm colour; the middle one and the two ends are longer
+        for i in 9: tick := Path {
+            visible: root.style == MeterStyle.classic;
+            property <angle> a: (i / 8 - 0.5) * 180deg;
+            property <length> r0: root.radius - (i == 0 || i == 4 || i == 8 ? 8px : 5px);
+            x: 0px; y: 0px; width: root.face-w; height: root.face-h;
+            viewbox-width: root.face-w / 1px; viewbox-height: root.face-h / 1px;
+            stroke: i >= 7 ? Theme.meter-led-high : Theme.meter-ink;
+            stroke-width: 1px;
+            fill: transparent;
+            MoveTo { x: (root.px + tick.r0 * Math.sin(tick.a)) / 1px; y: (root.py - tick.r0 * Math.cos(tick.a)) / 1px; }
+            LineTo { x: (root.px + root.radius * Math.sin(tick.a)) / 1px; y: (root.py - root.radius * Math.cos(tick.a)) / 1px; }
+        }
+        // analogue: the alarm wedge over the top 18 % of the travel (from 0.82 to 1.0), between 0.78 and 1.0 of the radius
+        Path {
+            visible: root.style == MeterStyle.analogue;
+            x: 0px; y: 0px; width: root.face-w; height: root.face-h;
+            viewbox-width: root.face-w / 1px; viewbox-height: root.face-h / 1px;
+            fill: Theme.meter-led-high.with-alpha(0.55);
+            stroke: transparent;
+            MoveTo {
+                x: (root.px + root.radius * Math.sin(57.6deg)) / 1px;
+                y: (root.py - root.radius * Math.cos(57.6deg)) / 1px;
+            }
+            ArcTo {
+                x: (root.px + root.radius) / 1px; y: root.py / 1px;
+                radius-x: root.radius / 1px; radius-y: root.radius / 1px;
+                sweep: true;
+            }
+            LineTo { x: (root.px + root.radius * 0.78) / 1px; y: root.py / 1px; }
+            ArcTo {
+                x: (root.px + root.radius * 0.78 * Math.sin(57.6deg)) / 1px;
+                y: (root.py - root.radius * 0.78 * Math.cos(57.6deg)) / 1px;
+                radius-x: root.radius * 0.78 / 1px; radius-y: root.radius * 0.78 / 1px;
+                sweep: false;
+            }
+            Close {}
+        }
+        // the needle: thin on classic, bold on analogue; none without a reading
+        Path {
+            visible: root.arc && root.has-reading;
+            x: 0px; y: 0px; width: root.face-w; height: root.face-h;
+            viewbox-width: root.face-w / 1px; viewbox-height: root.face-h / 1px;
+            stroke: Theme.meter-needle;
+            stroke-width: root.style == MeterStyle.analogue ? 3px : 1.8px;
+            stroke-line-cap: round;
+            fill: transparent;
+            MoveTo { x: root.px / 1px; y: root.py / 1px; }
+            LineTo {
+                x: (root.px + root.needle-r * Math.sin(root.theta)) / 1px;
+                y: (root.py - root.needle-r * Math.cos(root.theta)) / 1px;
+            }
+        }
+        // the hub
+        Rectangle {
+            visible: root.arc;
+            property <length> r: root.style == MeterStyle.analogue ? 4px : 3px;      // whole pixels: the pivot is a pixel centre
+            x: root.px - self.r; y: root.py - self.r;
+            width: 2 * self.r; height: 2 * self.r;
+            border-radius: self.r;
+            background: root.has-reading ? Theme.meter-ink : Theme.dim;
+        }
+
+        // ---- led-ladder: twelve segments ----
+        for i in 12: Rectangle {
+            visible: root.style == MeterStyle.led-ladder;
+            property <color> zone: i >= 10 ? Theme.meter-led-high : i >= 7 ? Theme.meter-led-mid : Theme.meter-led-low;
+            x: root.led-pad-x + i * (root.led-seg-w + root.led-gap);
+            y: root.led-pad-y;
+            width: root.led-seg-w;
+            height: root.led-seg-h;
+            border-radius: 1px;
+            background: i == root.catch-seg ? Theme.meter-peak
+                      : i < root.lit ? self.zone
+                      : self.zone.with-alpha(0.18);
+        }
+
+        // ---- peak: a horizontal bar and its peak line ----
+        Rectangle {
+            visible: root.style == MeterStyle.peak;
+            x: root.bar-x; y: root.bar-y; width: root.bar-w; height: root.bar-h;
+            border-radius: 1px;
+            background: Theme.meter-ink.with-alpha(0.18);       // the empty bar: the same "unlit" strength as an LED segment
+        }
+        Rectangle {
+            visible: root.style == MeterStyle.peak && root.v > 0;
+            x: root.bar-x; y: root.bar-y;
+            width: root.bar-w * Math.min(root.v, 7 / 12);
+            height: root.bar-h;
+            background: Theme.meter-led-low;
+        }
+        Rectangle {
+            visible: root.style == MeterStyle.peak && root.v > 7 / 12;
+            x: root.bar-x + root.bar-w * 7 / 12; y: root.bar-y;
+            width: root.bar-w * (Math.min(root.v, 10 / 12) - 7 / 12);
+            height: root.bar-h;
+            background: Theme.meter-led-mid;
+        }
+        Rectangle {
+            visible: root.style == MeterStyle.peak && root.v > 10 / 12;
+            x: root.bar-x + root.bar-w * 10 / 12; y: root.bar-y;
+            width: root.bar-w * (root.v - 10 / 12);
+            height: root.bar-h;
+            background: Theme.meter-led-high;
+        }
+        Rectangle {
+            visible: root.style == MeterStyle.peak && root.peak >= 0;
+            x: Math.round((root.bar-x + root.bar-w * Math.min(root.peak, 1.0)) / 1px) * 1px - 1px;
+            y: root.bar-y - 3px;
+            width: 2px;
+            height: root.bar-h + 6px;
+            background: Theme.meter-peak;
+        }
+
+        // ---- the scale labels, along the foot ----
+        for lbl[i] in root.scale-labels: Text {
+            property <float> n: root.scale-labels.length;
+            property <float> t: self.n > 1 ? i / (self.n - 1) : 0.5;
+            property <length> lo: root.arc ? root.px - root.radius : root.led-pad-x;
+            property <length> hi: root.arc ? root.px + root.radius : root.face-w - root.led-pad-x;
+            property <bool> flush: !root.arc && self.n > 1;
+            width: 40px;
+            height: root.lbl-h;
+            y: root.face-h - root.lbl-h - 1px;
+            x: self.flush && i == 0 ? self.lo
+             : self.flush && i == self.n - 1 ? self.hi - self.width
+             : self.lo + self.t * (self.hi - self.lo) - self.width / 2;
+            text: lbl;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-tiny;
+            color: Theme.dim;
+            horizontal-alignment: self.flush && i == 0 ? TextHorizontalAlignment.left
+                                : self.flush && i == self.n - 1 ? TextHorizontalAlignment.right
+                                : TextHorizontalAlignment.center;
+            vertical-alignment: center;
+        }
+        // the unit, in the top-right corner of the face
+        Text {
+            x: root.face-w - 4px - self.width; y: 3px;
+            width: Math.min(root.face-w / 2, self.preferred-width);
+            height: 12px;
+            text: root.unit;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-tiny;
+            color: Theme.dim;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+
+    // the value, in mono 600 under the face
+    Text {
+        x: 0px; y: root.cap-h + root.gap-top + root.face-h + root.gap-bottom;
+        width: root.width;
+        height: root.val-h;
+        text: root.value-text;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        font-weight: Theme.weight-semibold;
+        color: Theme.fg;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    touch := TouchArea {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        pointer-event(e) => {
+            if (root.enabled && e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                root.menu-requested(self.mouse-x, self.mouse-y);
+            }
+        }
+    }
+    TipTimer {
+        x: 0px; y: 0px;
+        hovered: touch.has-hover && root.enabled;
+        text: root.tooltip;
+        anchor-h: root.height;
+    }
+}

@@ -1,0 +1,361 @@
+// FoxSDR Slint front end - FIELDS: the Plugin settings form's controls (phase 1, wave 2): Field and Checkbox.
+//
+// Lifted from the PluginKit sheet's "Plugin settings" form (Workbench-PluginKit.dc.html): .rw (a label row), .lb, .in,
+// .in.err, .in.num, .ck, .n.rd, the PASSWORD block. Measurements are the sheet's, border-box: a 24 px input holds its
+// 1 px border INSIDE the 24, and its text starts 8 px inside the border (1 + 8 = 9 px from the edge).
+//
+//   Field     a column with 4 px gaps: the label row (24 px: the .lb label at the left, the kind as a cap at the right),
+//             the control (a 24 px input, a Checkbox "on", an input + a small BROWSE FILES key, an input + a small
+//             SHOW / HIDE key), an optional note (11 px dim) and the error line (11 px red, the .n.rd sentence). While
+//             `error != ""` the input's border turns red. A Field sizes itself: its height is the sum of its rows (the
+//             note and the error wrap at the field's width), so it stacks in a layout with no measuring; give it a width.
+//   Checkbox  the .ck row: a 14 px box (accent with a dark tick when checked, the field ground with a strong border when
+//             not) and an 11 px label that wraps at the row's width. Its height is the label's (14 px for one line); set a
+//             `height` to centre the box in a taller row (the form's BOOL row is 24 px).
+//
+// Behaviour the sheet cannot show: `edited` fires per change the user makes; `committed` fires on Enter, and on losing the
+// focus when something was edited since the last commit (so Enter then a click away commits once). `max-length` stops the
+// typing (a paste that would overrun it is refused whole). Number is NOT a filter: it only right-aligns in the mono face,
+// because "3,x" must be typeable for the host to answer "Not saved: that is not a number.". A click on a key or a
+// Checkbox leaves the keyboard focus where it was (the keys' rule), so SHOW can be pressed while typing a password.
+// A disabled field takes no typing, no focus and no click on its keys, and shows the kit's disabled look; its tooltip
+// still shows.
+import { Theme } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+import { Caption, Key } from "keys.slint";
+
+export enum FieldKind { text, number, bool, path, password }
+
+// .ck - the checkbox row.
+export component Checkbox inherits Rectangle {
+    in property <string> label;
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback toggled(bool);
+    out property <bool> has-focus: fs.has-focus;
+
+    property <length> box-d: 14px;                  // the native box
+    property <length> gap: 8px;                     // .ck gap
+    property <bool> hot: area.has-hover && root.enabled;
+    // a label of two lines or more keeps the box beside its first line; a single line is centred in the row
+    property <bool> multi-line: words.preferred-height > 20px;
+    property <length> box-y: root.multi-line ? 1px : (root.height - root.box-d) / 2;
+
+    height: max(root.box-d, words.preferred-height);
+
+    forward-focus: fs;
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-description: root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => { root.toggle(); }
+
+    function toggle() {
+        if (root.enabled) {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+
+    // the box: 2 px corners are the native checkbox's, the theme has no metric for them
+    Rectangle {
+        x: 0px;
+        y: root.box-y;
+        width: root.box-d;
+        height: root.box-d;
+        border-radius: 2px;
+        border-width: Theme.hairline;
+        background: !root.enabled ? Theme.key-disabled-bg
+                  : root.checked ? (root.hot ? Theme.accent-hover : Theme.accent)
+                  : Theme.field;
+        border-color: !root.enabled ? Theme.line-strong.with-alpha(0.5)
+                    : root.checked ? Theme.accent
+                    : Theme.line-strong;
+        if root.checked : Image {
+            x: 0px;
+            y: 0px;
+            width: root.box-d;
+            height: root.box-d;
+            source: @image-url("icons/check.svg");
+            image-fit: contain;
+            colorize: root.enabled ? Theme.accent-ink : Theme.key-disabled-fg;
+            accessible-role: none;
+        }
+    }
+    // the keyboard focus ring: 2 px, 1 px clear of the box
+    if fs.has-focus : Rectangle {
+        x: -3px;
+        y: root.box-y - 3px;
+        width: root.box-d + 6px;
+        height: root.box-d + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: 2px + 3px;
+    }
+    words := Text {
+        x: root.box-d + root.gap;
+        y: 0px;
+        width: max(0px, root.width - root.box-d - root.gap);
+        height: root.height;
+        text: root.label;
+        color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        wrap: word-wrap;
+        accessible-role: none;
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            if (event.text == Key.Space) { root.toggle(); return accept; }
+            return reject;
+        }
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.toggle(); }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// .in - the one-line input box: placeholder, caret, selection, the red border of .in.err, the focus ring of
+// .in:focus-visible. Private to this file; Field is the public face.
+component FieldInput inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> error;                       // the red border
+    in property <bool> mono;                        // .in.num and the password input
+    in property <bool> right;                       // .in.num: text-align right
+    in property <bool> hidden;                      // password dots
+    in property <bool> enabled: true;
+    in property <int> max-length: 0;                // 0 = no limit
+    in property <string> tooltip;
+    in property <string> name;                      // the accessible label
+    in property <string> help;                      // the accessible description
+    callback edited(string);
+    callback committed(string);
+    out property <bool> has-focus: input.has-focus;
+
+    property <length> pad: 8px + Theme.hairline;
+    property <string> last-ok;                      // the last text within max-length: what an overlong edit reverts to
+    property <bool> dirty;                          // edited since the last commit
+    property <color> edge: root.error ? Theme.lamp-red : Theme.line-strong;
+    property <color> ink: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+
+    height: Theme.field-h;
+    min-width: 0px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.enabled ? root.edge : root.edge.with-alpha(0.5);
+    background: root.enabled ? Theme.field : Theme.key-disabled-bg;
+
+    init => { root.last-ok = root.text; }
+    changed text => {
+        // the host wrote the text (a typed edit already moved last-ok): an in-limit write becomes the new revert point
+        if (root.max-length <= 0 || root.text.character-count <= root.max-length) { root.last-ok = root.text; }
+    }
+
+    // The input is a CHILD of the touch area. A TextInput takes every pointer move, so a touch area behind it (or beside
+    // it) never sees the pointer over the text and the tooltip would not come; as its parent the area keeps the hover,
+    // still lets the TextInput have the click (caret, selection), and takes the click on the padding around the text.
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
+        clicked => { if (root.enabled) { input.focus(); } }
+        if root.text == "" && root.placeholder != "" : Text {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            text: root.placeholder;
+            color: Theme.disabled;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        input := TextInput {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            text <=> root.text;
+            enabled: root.enabled;
+            read-only: !root.enabled;
+            single-line: true;
+            input-type: root.hidden ? InputType.password : InputType.text;
+            color: root.ink;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.name;
+            accessible-description: root.help;
+
+            edited => {
+                if (root.max-length > 0 && self.text.character-count > root.max-length) {
+                    root.text = root.last-ok;           // overlong: undo it, say nothing
+                } else {
+                    root.last-ok = self.text;
+                    root.dirty = true;
+                    root.edited(self.text);
+                }
+            }
+            accepted => {
+                root.dirty = false;
+                root.committed(self.text);
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.dirty) {
+                    root.dirty = false;
+                    root.committed(self.text);
+                }
+            }
+        }
+    }
+    // .in:focus-visible - 2 px, 1 px clear of the box
+    if input.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+export component Field inherits Rectangle {
+    // ---- what it says ----
+    in property <string> label;
+    in property <FieldKind> kind: FieldKind.text;
+    in-out property <string> value;                 // text, number, path and password
+    in-out property <bool> checked;                 // bool
+    in property <string> placeholder;
+    in property <string> error;                     // "" = none; otherwise the red line and the red border
+    in property <string> note;                      // an 11 px hint line under the input, above the error
+    in-out property <bool> revealed;                // password: the text instead of the dots; the key says HIDE and is lit
+    in property <int> max-length: 0;                // 0 = no limit
+    // ---- how it behaves ----
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    // ---- the words the field draws itself, so a host can hand in its translations ----
+    in property <string> kind-label;                // "" = TEXT / NUMBER / BOOL / PATH / PASSWORD
+    in property <string> on-text: "on";             // the BOOL row's Checkbox
+    in property <string> browse-text: "BROWSE FILES";
+    in property <string> show-text: "SHOW";
+    in property <string> hide-text: "HIDE";
+    callback edited(string);                        // each change the user makes
+    callback committed(string);                     // Enter, or the focus leaving after an edit
+    callback toggled(bool);                         // bool
+    callback browse-clicked();                      // path
+    // what is drawn in the two places whose words change with the state
+    out property <string> kind-text: root.kind-label != "" ? root.kind-label
+        : root.kind == FieldKind.text ? "TEXT"
+        : root.kind == FieldKind.number ? "NUMBER"
+        : root.kind == FieldKind.bool ? "BOOL"
+        : root.kind == FieldKind.path ? "PATH"
+        : "PASSWORD";
+    out property <string> key-text: root.kind == FieldKind.path ? root.browse-text
+        : root.kind == FieldKind.password ? (root.revealed ? root.hide-text : root.show-text)
+        : "";
+
+    height: col.preferred-height;
+    preferred-height: col.preferred-height;
+
+    col := VerticalLayout {
+        spacing: 4px;
+
+        // .rw - label at the left, kind at the right, 24 px
+        Rectangle {
+            height: Theme.field-h;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: root.label;
+                    color: root.enabled ? Theme.fg-soft : Theme.key-disabled-fg;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                    font-weight: Theme.weight-medium;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+                Caption { label: root.kind-text; }
+            }
+        }
+
+        // the control
+        HorizontalLayout {
+            spacing: 6px;
+            if root.kind == FieldKind.bool : Checkbox {
+                height: Theme.field-h;
+                label: root.on-text;
+                checked <=> root.checked;
+                enabled: root.enabled;
+                tooltip: root.tooltip;
+                accessible-label: root.label;
+                toggled(v) => { root.toggled(v); }
+            }
+            if root.kind != FieldKind.bool : FieldInput {
+                horizontal-stretch: 1;
+                text <=> root.value;
+                placeholder: root.placeholder;
+                error: root.error != "";
+                mono: root.kind == FieldKind.number || root.kind == FieldKind.password;
+                right: root.kind == FieldKind.number;
+                hidden: root.kind == FieldKind.password && !root.revealed;
+                enabled: root.enabled;
+                max-length: root.max-length;
+                tooltip: root.tooltip;
+                name: root.label;
+                help: root.error != "" ? root.error : root.note;
+                edited(v) => { root.edited(v); }
+                committed(v) => { root.committed(v); }
+            }
+            if root.kind == FieldKind.path : Key {
+                small: true;
+                label: root.key-text;
+                enabled: root.enabled;
+                clicked => { root.browse-clicked(); }
+            }
+            if root.kind == FieldKind.password : Key {
+                small: true;
+                label: root.key-text;
+                on: root.revealed;
+                enabled: root.enabled;
+                tooltip: root.revealed ? "Hide" : "Show";
+                accessible-label: root.revealed ? "Hide the password" : "Show the password";
+                clicked => { root.revealed = !root.revealed; }
+            }
+        }
+
+        // .n - the hint line
+        if root.note != "" : Text {
+            text: root.note;
+            color: Theme.dim;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+        // .n.rd - the error line: "Not saved: ..."
+        if root.error != "" : Text {
+            text: root.error;
+            color: Theme.chip-err-fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+    }
+}

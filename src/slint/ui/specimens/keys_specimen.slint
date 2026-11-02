@@ -1,0 +1,300 @@
+// The keys specimen sheet: every variant of Caption, Key, SegGroup / SegKey, RailKey and StopKey at an absolute,
+// documented position, so tests/test_slint_keys.cpp can probe the pixels against the Workbench CSS.
+// Window 800 x 720 on the Theme ground (which is also the ground of the rail), built from four sections (rows 1-3,
+// 4-6, 7-8, 9-10) that all sit at 0, 0. Hugging keys are placed with `width: self.preferred-width`, so their w is
+// the label width plus padding, never under the min-w of the key.
+//
+//   x,   y,   w,   h  - what                                   (the id a click leaves in last-clicked)
+//    16, 14 above each row (8 62 116 178 232 282 336 428 522 632), hug, hug - the ten row captions (Caption, dim)
+//   ---- row 1: Key, 30 high ------------------------------------------------------------------------------
+//    16,  24,  64,  30 - plain, label "OK": min width 64            (short)
+//   170,  24, hug,  30 - plain, "Download update"                    (long)
+//   324,  24, hug,  30 - latched toggle "LATCHED": click flips on   (latch)
+//   478,  24, hug,  30 - ghost                                       (ghost)
+//   632,  24, hug,  30 - danger                                      (danger)
+//   ---- row 2 ---------------------------------------------------------------------------------------------
+//    16,  78, hug,  30 - plate                                       (plate)
+//   170,  78, hug,  30 - disabled                                    (dis)
+//   324,  78, hug,  30 - disabled and on                             (dison)
+//   478,  78, hug,  30 - disabled ghost                              (disghost)
+//   632,  78, hug,  30 - right-click target                          (right)
+//   ---- row 3: hazard, BIAS TEE, 36 high, min width 120 ----------------------------------------------------
+//    16, 132, hug,  36 - lamp off; click lights the lamp             (bias)
+//   170, 132, hug,  36 - lamp amber                                  (bias-lit)
+//   324, 132, hug,  36 - disabled (no stripes)                       (bias-dis)
+//   ---- row 4: small, 24 high -----------------------------------------------------------------------------
+//    16, 194, hug,  24 - small "OK" (no min width)                   (sm)
+//   170, 194, hug,  24 - small on                                    (sm-on)
+//   324, 194, hug,  24 - small ghost                                 (sm-ghost)
+//   478, 194, hug,  24 - small plate                                 (sm-plate)
+//   632, 194, hug,  24 - small danger                                (sm-danger)
+//   ---- row 5: xs, 20 high --------------------------------------------------------------------------------
+//    16, 248, hug,  20 - xs "OK"                                     (xs)
+//   170, 248, hug,  20 - xs on                                       (xs-on)
+//   324, 248, hug,  20 - xs ghost                                    (xs-ghost)
+//   478, 248, hug,  20 - xs "AUTO", min width 48                     (xs-auto)
+//   632, 248, hug,  20 - xs disabled                                 (xs-dis)
+//   ---- row 6: icons ---------------------------------------------------------------------------------------
+//    16, 298,  30,  30 - icon-only ghost, close.svg at 12 px         (ico-close)
+//    56, 298,  30,  30 - icon-only plain, bell.svg at 16 px          (ico-bell)
+//    96, 298,  30,  30 - icon-only on, fold.svg at 18 px             (ico-on)
+//   136, 298,  30,  30 - icon-only disabled                          (ico-dis)
+//   176, 298,  24,  24 - icon-only small, search.svg at 12 px        (ico-sm)
+//   212, 302,  26,  22 - icon-only flat (window chrome), close.svg   (ico-flat)
+//   324, 298, hug,  30 - icon + label "BROWSE FILES"                 (ico-label)
+//   478, 298, hug,  30 - icon + label on, "APPLY"                    (ico-label-on)
+//   632, 298, hug,  30 - plain "FOCUS": the keyboard-focus target    (focus)
+//   ---- row 7: wide, in layouts (the grey plates are the parents of the layouts) --------------------------
+//    16, 352, 200,  66 - plate holding a VerticalLayout: a wide key 30 high, a wide small plate key 24 high
+//   232, 352, 280,  34 - plate holding a HorizontalLayout: a wide on key (26) and a ghost key, min width 72
+//   528, 352, 252,  38 - plate holding a HorizontalLayout: two wide keys, danger and disabled
+//   ---- row 8: SegGroup ------------------------------------------------------------------------------------
+//    16, 444, hug,  32 - group of keys from a `for` model, NFM WFM AM DSB USB CW LSB RAW (lit = mode)
+//    16, 482, hug,  32 - group of three explicit keys: NFM (sk-a), WFM (sk-b), AM disabled (sk-c)
+//   520, 444, hug,  28 - small group: Normal, Peak hold, Average (lit = trace)       (tr-a, tr-b, tr-c)
+//   520, 482, hug,  32 - group with a HorizontalLayout child: Auto, Manual           (nest-a, nest-b)
+//   ---- row 9: RailKey, StopKey, Caption -------------------------------------------------------------------
+//    16, 538,  56,  56 - rail key lit, SIGNAL F1, signal.svg        (rk-on; click selects it)
+//    80, 538,  56,  56 - rail key, DECODE F2, decode.svg            (rk-off)
+//   144, 538,  56,  56 - rail key without a hint, FOLD              (rk-fold)
+//   208, 538,  56,  56 - rail key disabled, TOOLS F3                (rk-dis)
+//   292, 534,  92,  64 - StopKey, running: STOP                     (stop-run; click flips running)
+//   396, 534,  92,  64 - StopKey, stopped: START                    (stop-idle)
+//   520, 540, hug, hug - Caption "Tuned frequency", upper-case, muted
+//   520, 560, hug, hug - the same Caption with upper off: narrower than the one above
+//   520, 580, hug, hug - Caption, colour overridden to fg
+//   ---- row 10: tooltips, with free ground below them ------------------------------------------------------
+//    16, 648, hug,  30 - plain with a tooltip                         (tip)
+//   170, 648, hug,  30 - disabled with a tooltip                      (tip-dis)
+//   324, 648, hug,  30 - plain without one                              (no-tip)
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { LampState } from "../chips.slint";
+import { Caption, Key, SegGroup, SegKey, RailKey, StopKey } from "../keys.slint";
+export { Theme, Skin, Workbench }
+
+// The sheet is built from sections, each a sub-component holding some rows: MSVC refuses a generated item-tree
+// function with more than 127 chained else-if branches (error C1061), and one window that holds every key of the
+// sheet makes one. A section reports every press to the window through `fired`.
+component KeysRowsA inherits Rectangle {
+    callback fired(string);
+    callback right-clicked(length, length);
+    public function focus-plate() { k-plate.focus(); }
+    in-out property <bool> latched;
+    in-out property <bool> bias;
+
+    Caption { x: 16px; y: 8px; label: "plain, min width 64, hugging, latched, ghost, danger"; color: Theme.dim; }
+    Caption { x: 16px; y: 62px; label: "plate, disabled, disabled on, disabled ghost, right-click"; color: Theme.dim; }
+    Caption { x: 16px; y: 116px; label: "hazard (bias tee: 36 high, min 120): lamp off, lamp lit, disabled"; color: Theme.dim; }
+
+    // ---- row 1 ----
+    Key { x: 16px; y: 24px; label: "OK"; width: self.preferred-width; clicked => { root.fired("short"); } }
+    Key { x: 170px; y: 24px; label: "Download update"; width: self.preferred-width; clicked => { root.fired("long"); } }
+    Key { x: 324px; y: 24px; label: "LATCHED"; on: root.latched; width: self.preferred-width;
+        clicked => { root.latched = !root.latched; root.fired("latch"); } }
+    Key { x: 478px; y: 24px; label: "GHOST"; ghost: true; width: self.preferred-width; clicked => { root.fired("ghost"); } }
+    Key { x: 632px; y: 24px; label: "DANGER"; danger: true; width: self.preferred-width; clicked => { root.fired("danger"); } }
+
+    // ---- row 2 ----
+    k-plate := Key { x: 16px; y: 78px; label: "PLATE"; plate: true; width: self.preferred-width; clicked => { root.fired("plate"); } }
+    Key { x: 170px; y: 78px; label: "DISABLED"; enabled: false; width: self.preferred-width; clicked => { root.fired("dis"); } }
+    Key { x: 324px; y: 78px; label: "DISABLED ON"; on: true; enabled: false; width: self.preferred-width; clicked => { root.fired("dison"); } }
+    Key { x: 478px; y: 78px; label: "GHOST OFF"; ghost: true; enabled: false; width: self.preferred-width; clicked => { root.fired("disghost"); } }
+    Key { x: 632px; y: 78px; label: "RIGHT CLICK"; width: self.preferred-width;
+        clicked => { root.fired("right"); }
+        right-clicked(px, py) => { root.right-clicked(px, py); } }
+
+    // ---- row 3: hazard ----
+    Key { x: 16px; y: 132px; label: "BIAS TEE"; hazard: true; show-lamp: true; min-w: 120px; height: 36px;
+        lamp: root.bias ? LampState.amber : LampState.off; width: self.preferred-width;
+        clicked => { root.bias = !root.bias; root.fired("bias"); } }
+    Key { x: 170px; y: 132px; label: "BIAS TEE"; hazard: true; show-lamp: true; lamp: LampState.amber; min-w: 120px; height: 36px;
+        width: self.preferred-width; clicked => { root.fired("bias-lit"); } }
+    Key { x: 324px; y: 132px; label: "BIAS TEE"; hazard: true; show-lamp: true; enabled: false; min-w: 120px; height: 36px;
+        width: self.preferred-width; clicked => { root.fired("bias-dis"); } }
+}
+
+component KeysRowsB inherits Rectangle {
+    callback fired(string);
+    public function focus-target() { k-focus.focus(); }
+
+    Caption { x: 16px; y: 178px; label: "small (24 high)"; color: Theme.dim; }
+    Caption { x: 16px; y: 232px; label: "xs (20 high)"; color: Theme.dim; }
+    Caption { x: 16px; y: 282px; label: "icon-only 30, 24 and flat 26 x 22, icon + label, focus target"; color: Theme.dim; }
+
+    // ---- row 4: small ----
+    Key { x: 16px; y: 194px; label: "OK"; small: true; width: self.preferred-width; clicked => { root.fired("sm"); } }
+    Key { x: 170px; y: 194px; label: "144.390 NA"; small: true; on: true; width: self.preferred-width; clicked => { root.fired("sm-on"); } }
+    Key { x: 324px; y: 194px; label: "+ Save"; small: true; ghost: true; width: self.preferred-width; clicked => { root.fired("sm-ghost"); } }
+    Key { x: 478px; y: 194px; label: "RESET"; small: true; plate: true; width: self.preferred-width; clicked => { root.fired("sm-plate"); } }
+    Key { x: 632px; y: 194px; label: "STOP"; small: true; danger: true; width: self.preferred-width; clicked => { root.fired("sm-danger"); } }
+
+    // ---- row 5: xs ----
+    Key { x: 16px; y: 248px; label: "OK"; xs: true; width: self.preferred-width; clicked => { root.fired("xs"); } }
+    Key { x: 170px; y: 248px; label: "145.800"; xs: true; on: true; width: self.preferred-width; clicked => { root.fired("xs-on"); } }
+    Key { x: 324px; y: 248px; label: "+ Save"; xs: true; ghost: true; width: self.preferred-width; clicked => { root.fired("xs-ghost"); } }
+    Key { x: 478px; y: 248px; label: "AUTO"; xs: true; min-w: 48px; width: self.preferred-width; clicked => { root.fired("xs-auto"); } }
+    Key { x: 632px; y: 248px; label: "Clear"; xs: true; enabled: false; width: self.preferred-width; clicked => { root.fired("xs-dis"); } }
+
+    // ---- row 6: icons ----
+    Key { x: 16px; y: 298px; icon: @image-url("../icons/close.svg"); icon-size: 12px; icon-only: true; ghost: true; tooltip: "Close";
+        width: self.preferred-width; clicked => { root.fired("ico-close"); } }
+    Key { x: 56px; y: 298px; icon: @image-url("../icons/bell.svg"); icon-size: 16px; icon-only: true; tooltip: "Notifications";
+        width: self.preferred-width; clicked => { root.fired("ico-bell"); } }
+    Key { x: 96px; y: 298px; icon: @image-url("../icons/fold.svg"); icon-only: true; on: true; tooltip: "Fold";
+        width: self.preferred-width; clicked => { root.fired("ico-on"); } }
+    Key { x: 136px; y: 298px; icon: @image-url("../icons/bell.svg"); icon-size: 16px; icon-only: true; enabled: false; tooltip: "Notifications";
+        width: self.preferred-width; clicked => { root.fired("ico-dis"); } }
+    Key { x: 176px; y: 298px; icon: @image-url("../icons/search.svg"); icon-size: 12px; icon-only: true; small: true; tooltip: "Search";
+        width: self.preferred-width; clicked => { root.fired("ico-sm"); } }
+    Key { x: 212px; y: 302px; icon: @image-url("../icons/close.svg"); icon-size: 12px; icon-only: true; flat: true; tooltip: "Close";
+        width: 26px; height: 22px; clicked => { root.fired("ico-flat"); } }
+    Key { x: 324px; y: 298px; icon: @image-url("../icons/browse.svg"); label: "BROWSE FILES"; width: self.preferred-width;
+        clicked => { root.fired("ico-label"); } }
+    Key { x: 478px; y: 298px; icon: @image-url("../icons/check.svg"); label: "APPLY"; on: true; width: self.preferred-width;
+        clicked => { root.fired("ico-label-on"); } }
+    k-focus := Key { x: 632px; y: 298px; label: "FOCUS"; width: self.preferred-width; clicked => { root.fired("focus"); } }
+}
+
+component KeysRowsC inherits Rectangle {
+    callback fired(string);
+    public function focus-seg() { sk-b.focus(); }
+    in-out property <int> mode;
+    in-out property <int> trace: 1;
+    // where the keys that are not placed by an absolute position ended up, for the test to aim at
+    out property <length> sk-b-x: sk-b.absolute-position.x;
+    out property <length> sk-c-x: sk-c.absolute-position.x;
+    out property <length> tr-b-x: tr-b.absolute-position.x;
+    out property <length> nest-b-x: nest-b.absolute-position.x;
+    out property <length> wide-v-w: wv1.width;
+    out property <length> wide-h-w: wh1.width;
+    out property <length> wide-h-x: wh1.absolute-position.x;
+    out property <length> ghost-h-x: wh2.absolute-position.x;
+    out property <length> ghost-h-w: wh2.width;
+    out property <length> wide2-a-w: ww1.width;
+    out property <length> wide2-b-w: ww2.width;
+
+    Caption { x: 16px; y: 336px; label: "wide: in a column, beside a ghost key, two together"; color: Theme.dim; }
+    Caption { x: 16px; y: 428px; label: "SegGroup (32 high, small 28 high)"; color: Theme.dim; }
+
+    // ---- row 7: wide ----
+    Rectangle { x: 16px; y: 352px; width: 200px; height: 66px; background: Theme.panel;
+        VerticalLayout { padding: 4px; spacing: 4px;
+            wv1 := Key { label: "WIDE"; wide: true; clicked => { root.fired("wide-v"); } }
+            Key { label: "WIDE SMALL"; wide: true; small: true; plate: true; clicked => { root.fired("wide-v-sm"); } }
+        } }
+    Rectangle { x: 232px; y: 352px; width: 280px; height: 34px; background: Theme.panel;
+        HorizontalLayout { padding: 4px; spacing: 4px;
+            wh1 := Key { label: "Download update"; on: true; wide: true; height: 26px; clicked => { root.fired("wide-h"); } }
+            wh2 := Key { label: "Not now"; ghost: true; min-w: 72px; height: 26px; clicked => { root.fired("ghost-h"); } }
+        } }
+    Rectangle { x: 528px; y: 352px; width: 252px; height: 38px; background: Theme.panel;
+        HorizontalLayout { padding: 4px; spacing: 4px;
+            ww1 := Key { label: "STOP"; danger: true; wide: true; clicked => { root.fired("wide-stop"); } }
+            ww2 := Key { label: "START"; enabled: false; wide: true; clicked => { root.fired("wide-start"); } }
+        } }
+
+    // ---- row 8: SegGroup ----
+    SegGroup { x: 16px; y: 444px;
+        for m[i] in ["NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"] : SegKey {
+            label: m; on: root.mode == i;
+            clicked => { root.mode = i; root.fired("mode-" + i); }
+        }
+    }
+    SegGroup { x: 16px; y: 482px;
+        SegKey { label: "NFM"; on: root.mode == 0; clicked => { root.mode = 0; root.fired("sk-a"); } }
+        sk-b := SegKey { label: "WFM"; on: root.mode == 1; clicked => { root.mode = 1; root.fired("sk-b"); } }
+        sk-c := SegKey { label: "AM"; enabled: false; clicked => { root.mode = 2; root.fired("sk-c"); } }
+    }
+    tr-group := SegGroup { x: 520px; y: 444px; small: true;
+        SegKey { label: "Normal"; small: tr-group.small; on: root.trace == 0; clicked => { root.trace = 0; root.fired("tr-a"); } }
+        tr-b := SegKey { label: "Peak hold"; small: tr-group.small; on: root.trace == 1; clicked => { root.trace = 1; root.fired("tr-b"); } }
+        SegKey { label: "Average"; small: tr-group.small; on: root.trace == 2; clicked => { root.trace = 2; root.fired("tr-c"); } }
+    }
+    SegGroup { x: 520px; y: 482px;
+        HorizontalLayout { spacing: 2px;
+            SegKey { label: "Auto"; on: true; min-w: 0px; clicked => { root.fired("nest-a"); } }
+            nest-b := SegKey { label: "Manual"; min-w: 0px; clicked => { root.fired("nest-b"); } }
+        }
+    }
+}
+
+component KeysRowsD inherits Rectangle {
+    callback fired(string);
+    public function focus-rail() { rk-on.focus(); }
+    public function focus-stop() { stop-run.focus(); }
+    in-out property <int> rail;
+    in-out property <bool> running: true;
+
+    Caption { x: 16px; y: 522px; label: "RailKey 56 x 56, StopKey 92 x 64, Caption"; color: Theme.dim; }
+    Caption { x: 16px; y: 632px; label: "tooltips: hold the pointer on a key"; color: Theme.dim; }
+
+    // ---- row 9: RailKey, StopKey, Caption ----
+    rk-on := RailKey { x: 16px; y: 538px; icon: @image-url("../icons/signal.svg"); caption: "SIGNAL"; hint: "F1"; on: root.rail == 0;
+        tooltip: "Signal path (F1)"; clicked => { root.rail = 0; root.fired("rk-on"); } }
+    RailKey { x: 80px; y: 538px; icon: @image-url("../icons/decode.svg"); caption: "DECODE"; hint: "F2"; on: root.rail == 1;
+        clicked => { root.rail = 1; root.fired("rk-off"); } }
+    RailKey { x: 144px; y: 538px; icon: @image-url("../icons/fold.svg"); caption: "FOLD"; on: root.rail == 2;
+        clicked => { root.rail = 2; root.fired("rk-fold"); } }
+    RailKey { x: 208px; y: 538px; icon: @image-url("../icons/tools.svg"); caption: "TOOLS"; hint: "F3"; enabled: false;
+        clicked => { root.rail = 3; root.fired("rk-dis"); } }
+    stop-run := StopKey { x: 292px; y: 534px; running: root.running; clicked => { root.running = !root.running; root.fired("stop-run"); } }
+    StopKey { x: 396px; y: 534px; running: false; clicked => { root.fired("stop-idle"); } }
+    Caption { x: 520px; y: 540px; label: "Tuned frequency"; }
+    Caption { x: 520px; y: 560px; label: "Tuned frequency"; upper: false; }
+    Caption { x: 520px; y: 580px; label: "Signal path"; color: Theme.fg; }
+
+    // ---- row 10: tooltips ----
+    Key { x: 16px; y: 648px; label: "TOOLTIP"; tooltip: "Hold the pointer here to see the tip"; width: self.preferred-width;
+        clicked => { root.fired("tip"); } }
+    Key { x: 170px; y: 648px; label: "UNAVAILABLE"; enabled: false; tooltip: "Not available: nothing to stop"; width: self.preferred-width;
+        clicked => { root.fired("tip-dis"); } }
+    Key { x: 324px; y: 648px; label: "NO TIP"; width: self.preferred-width; clicked => { root.fired("no-tip"); } }
+}
+
+export component KeysSpecimen inherits Window {
+    width: 800px;
+    height: 720px;
+    background: Theme.bg;
+
+    // what the test observes
+    in-out property <int> clicks;
+    in-out property <string> last-clicked;
+    in-out property <int> right-clicks;
+    in-out property <length> right-x;
+    in-out property <length> right-y;
+    in-out property <bool> latched;
+    in-out property <bool> bias;
+    in-out property <int> mode;
+    in-out property <int> trace: 1;
+    in-out property <int> rail;
+    in-out property <bool> running: true;
+    out property <length> sk-b-x: rows-c.sk-b-x;
+    out property <length> sk-c-x: rows-c.sk-c-x;
+    out property <length> tr-b-x: rows-c.tr-b-x;
+    out property <length> nest-b-x: rows-c.nest-b-x;
+    out property <length> wide-v-w: rows-c.wide-v-w;
+    out property <length> wide-h-w: rows-c.wide-h-w;
+    out property <length> wide-h-x: rows-c.wide-h-x;
+    out property <length> ghost-h-x: rows-c.ghost-h-x;
+    out property <length> ghost-h-w: rows-c.ghost-h-w;
+    out property <length> wide2-a-w: rows-c.wide2-a-w;
+    out property <length> wide2-b-w: rows-c.wide2-b-w;
+    public function focus-target() { rows-b.focus-target(); }
+    public function focus-plate() { rows-a.focus-plate(); }
+    public function focus-seg() { rows-c.focus-seg(); }
+    public function focus-rail() { rows-d.focus-rail(); }
+    public function focus-stop() { rows-d.focus-stop(); }
+    function fired(id: string) {
+        root.clicks += 1;
+        root.last-clicked = id;
+    }
+
+    rows-a := KeysRowsA { x: 0px; y: 0px; width: 800px; height: 720px; latched <=> root.latched; bias <=> root.bias;
+        fired(id) => { root.fired(id); }
+        right-clicked(px, py) => { root.right-clicks += 1; root.right-x = px; root.right-y = py; } }
+    rows-b := KeysRowsB { x: 0px; y: 0px; width: 800px; height: 720px; fired(id) => { root.fired(id); } }
+    rows-c := KeysRowsC { x: 0px; y: 0px; width: 800px; height: 720px; mode <=> root.mode; trace <=> root.trace;
+        fired(id) => { root.fired(id); } }
+    rows-d := KeysRowsD { x: 0px; y: 0px; width: 800px; height: 720px; rail <=> root.rail; running <=> root.running;
+        fired(id) => { root.fired(id); } }
+}

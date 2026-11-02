@@ -1,0 +1,375 @@
+// FoxSDR Slint front end - the DIGITS family: the tuned-frequency counter (docs 6.36, COMPONENTS.md).
+//
+//   Digit            .digit - a 34 x 52 column: nudge-up (10 px, the text "▲" 9 px), the numeral (30 px mono 600,
+//                    amber with a soft glow, or the dim leading-zero brown without), nudge-down. The nudges fire on
+//                    press and AUTO-REPEAT while held (first repeat after 400 ms, then every 80 ms); the wheel over
+//                    any part of the column steps the digit; a click on the numeral asks for the typed editor.
+//                    Theme.digit-face picks the figure's furniture: plain (bare numeral), drum (a .cell: field
+//                    ground, line border, radius 4) or nixie (a dark rounded glass tube and a stronger glow).
+//   FrequencyCounter the plate (.mono.row: field ground, 1 px line border, radius-panel, padding 2 x 8) with ten
+//                    Digits and a 22 px dot after digits 1, 4 and 7 (GHz . MHz . kHz . Hz), the engraved unit row
+//                    under it, the converter caption line under that, and the typed editor (a TextInput laid over
+//                    the figures while `editing`).
+//
+// THE GLOW. The sheet's `text-shadow: 0 0 10px` has no direct Slint 1.18 equivalent: `drop-shadow-*` is accepted on
+// Rectangle only (the compiler refuses it on Text) and the software renderer draws no box shadow at all. The glow is
+// therefore two rings of faint copies of the numeral in Theme.digit-glow (eight each, about 1 px and 3 px out) under
+// the real numeral: it shows in every renderer, the nixie face draws it stronger, and a skin whose glow is
+// transparent costs nothing (the copies are not instantiated).
+//
+// THE WHEEL. In Slint a positive scroll delta-y moves content toward its top (measured in 1.18.1 on a Flickable: a
+// delta-y of +20 took its content-y from -30 to -10), i.e. the wheel turning away from the user: "up", +1, as the
+// original counter steps up on ImGui's MouseWheel > 0. The DOM's deltaY has the opposite sign.
+//
+// ACCESSIBILITY. A Digit is a spinbox ("<place> digit", its numeral as the value): the increment and decrement actions
+// nudge, the default action asks for the editor; its two switches are buttons "Step <place> digit up" / "... down".
+// The counter is a group "Tuned frequency". (Checked once with the SDK's ElementHandle probe, which needs
+// SLINT_EMIT_DEBUG_INFO=1 at build time, so it is not part of the standing test.)
+//
+// GEOMETRY of the plate (the sheet's CSS, content-box): 1 px border + 8 px padding + ten 34 px columns + three dot
+// cells + the same again = 397 x 58. A 22 px mono dot advances 0.6 em = 13.2 px; the dot cell is rounded to 13 px so
+// every column lands on a whole pixel.
+import { Theme, DigitFace } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+
+export component Digit inherits Rectangle {
+    in property <int> value;
+    in property <bool> dim;
+    in property <string> place;                 // "10 MHz": the accessible labels read "Step 10 MHz digit up"
+    in property <bool> show-nudges: true;       // the "Tuner switches" setting; the wheel and the click keep working
+    in property <bool> enabled: true;
+    in property <string> tooltip: "Scroll a digit to tune | click to type";   // the host passes the translated text
+
+    callback nudge(int);                        // +1 / -1, on press and again while held
+    callback wheel(int);                        // +1 / -1, one per scroll event
+    callback clicked();                         // a click on the numeral: the host opens the typed editor
+    callback right-clicked(length, length);     // pointer position in the Digit
+
+    width: Theme.digit-w;
+    height: Theme.digit-h;
+    accessible-role: spinbox;
+    accessible-label: root.place != "" ? root.place + " digit" : "Digit";
+    accessible-value: root.value;
+    accessible-enabled: root.enabled;
+    accessible-action-increment => { if (root.enabled) { root.nudge(1); } }
+    accessible-action-decrement => { if (root.enabled) { root.nudge(-1); } }
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    // ---- private ----
+    property <bool> repeating;                  // the 400 ms hold has passed: the 80 ms repeat runs
+    property <int> held-dir: up-area.pressed ? 1 : (down-area.pressed ? -1 : 0);
+    property <bool> nixie: Theme.digit-face == DigitFace.nixie;
+    property <bool> glow-on: !root.dim && root.enabled && Theme.digit-glow.alpha > 0;
+    property <length> glow-reach: 1.25px;                   // the inner ring; the outer one lies 2.4 times as far
+    property <float> glow-fade: root.nixie ? 0.55 : 0.75;   // transparentize factor of an inner copy; nixie glows stronger
+    property <[{x: float, y: float}]> glow-dirs: [
+        {x: 1, y: 0}, {x: -1, y: 0}, {x: 0, y: 1}, {x: 0, y: -1},
+        {x: 0.7, y: 0.7}, {x: -0.7, y: 0.7}, {x: 0.7, y: -0.7}, {x: -0.7, y: -0.7},
+    ];
+    property <color> numeral-color: root.dim ? Theme.digit-dim : (root.enabled ? Theme.digit : Theme.key-disabled-fg);
+    // The numeral's band: between the nudge rows (the whole column when the nudges are hidden: the wheel and the
+    // click then work over the blank rows too).
+    property <length> band-y: root.show-nudges ? Theme.nudge-h : 0px;
+    property <length> band-h: root.show-nudges ? root.height - 2 * Theme.nudge-h : root.height;
+
+    // ---- the face: a drum cell (the kit's .cell) or a nixie tube behind the numeral ----
+    if Theme.digit-face == DigitFace.drum : Rectangle {
+        x: 2px; y: Theme.nudge-h + 1px; width: root.width - 4px; height: root.height - 2 * (Theme.nudge-h + 1px);
+        background: Theme.field;
+        border-width: Theme.hairline;
+        border-color: Theme.line;
+        border-radius: 4px;
+    }
+    if root.nixie : Rectangle {
+        x: 2px; y: Theme.nudge-h + 1px; width: root.width - 4px; height: root.height - 2 * (Theme.nudge-h + 1px);
+        background: Theme.well-deep;
+        border-width: Theme.hairline;
+        border-color: Theme.knob-ring;
+        border-radius: Theme.radius-panel;
+    }
+
+    // ---- the glow (two rings of faint copies), then the numeral over it ----
+    if root.glow-on : Rectangle {
+        for ring in [0, 1] : Rectangle {
+            for o in root.glow-dirs : Text {
+                x: o.x * (1 + ring * 1.4) * root.glow-reach; y: Theme.nudge-h + o.y * (1 + ring * 1.4) * root.glow-reach;
+                width: root.width; height: root.height - 2 * Theme.nudge-h;
+                text: root.value;
+                color: Theme.digit-glow.transparentize(root.glow-fade + ring * 0.1);
+                font-family: Theme.font-mono;
+                font-size: Theme.font-digit;
+                font-weight: Theme.weight-semibold;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+        }
+    }
+    Text {
+        x: 0px; y: Theme.nudge-h; width: root.width; height: root.height - 2 * Theme.nudge-h;
+        text: root.value;
+        color: root.numeral-color;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-digit;
+        font-weight: Theme.weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    // ---- the nudge rows ----
+    Text {
+        visible: root.show-nudges;
+        x: 0px; y: 0px; width: root.width; height: Theme.nudge-h;
+        text: "▲";
+        color: !root.enabled ? Theme.nudge.transparentize(0.5) : (up-area.pressed ? Theme.accent : (up-area.has-hover ? Theme.fg-soft : Theme.nudge));
+        font-family: Theme.font-ui;
+        font-size: Theme.font-tiny;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    Text {
+        visible: root.show-nudges;
+        x: 0px; y: root.height - Theme.nudge-h; width: root.width; height: Theme.nudge-h;
+        text: "▼";
+        color: !root.enabled ? Theme.nudge.transparentize(0.5) : (down-area.pressed ? Theme.accent : (down-area.has-hover ? Theme.fg-soft : Theme.nudge));
+        font-family: Theme.font-ui;
+        font-size: Theme.font-tiny;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    // ---- input: three stacked areas, each forwarding the wheel and the right button ----
+    numeral-area := TouchArea {
+        x: 0px; y: root.band-y; width: root.width; height: root.band-h;
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                root.right-clicked(self.x + self.mouse-x, self.y + self.mouse-y);
+            }
+        }
+        scroll-event(e) => {
+            if (e.delta-y == 0px) { return reject; }
+            root.wheel(e.delta-y > 0px ? 1 : -1);
+            return accept;
+        }
+    }
+    up-area := TouchArea {
+        x: 0px; y: 0px; width: root.width; height: Theme.nudge-h;
+        enabled: root.enabled && root.show-nudges;
+        mouse-cursor: pointer;
+        accessible-role: button;
+        accessible-label: root.place != "" ? "Step " + root.place + " digit up" : "Step digit up";
+        accessible-action-default => { if (root.enabled && root.show-nudges) { root.nudge(1); } }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.repeating = false;
+                root.nudge(1);
+            } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                root.right-clicked(self.x + self.mouse-x, self.y + self.mouse-y);
+            }
+        }
+        scroll-event(e) => {
+            if (e.delta-y == 0px) { return reject; }
+            root.wheel(e.delta-y > 0px ? 1 : -1);
+            return accept;
+        }
+    }
+    down-area := TouchArea {
+        x: 0px; y: root.height - Theme.nudge-h; width: root.width; height: Theme.nudge-h;
+        enabled: root.enabled && root.show-nudges;
+        mouse-cursor: pointer;
+        accessible-role: button;
+        accessible-label: root.place != "" ? "Step " + root.place + " digit down" : "Step digit down";
+        accessible-action-default => { if (root.enabled && root.show-nudges) { root.nudge(-1); } }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.repeating = false;
+                root.nudge(-1);
+            } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                root.right-clicked(self.x + self.mouse-x, self.y + self.mouse-y);
+            }
+        }
+        scroll-event(e) => {
+            if (e.delta-y == 0px) { return reject; }
+            root.wheel(e.delta-y > 0px ? 1 : -1);
+            return accept;
+        }
+    }
+
+    // ---- auto-repeat: 400 ms after the press, then every 80 ms, for as long as the switch is held ----
+    Timer {
+        interval: 400ms;
+        running: root.held-dir != 0 && !root.repeating && root.enabled && root.show-nudges;
+        triggered => { root.repeating = true; root.nudge(root.held-dir); }
+    }
+    Timer {
+        interval: 80ms;
+        running: root.held-dir != 0 && root.repeating && root.enabled && root.show-nudges;
+        triggered => { root.nudge(root.held-dir); }
+    }
+
+    TipTimer {
+        x: 0px; y: 0px;                         // Slint centres a sized child that has no x/y: the tip must hang from the corner
+        hovered: numeral-area.has-hover || up-area.has-hover || down-area.has-hover;
+        text: root.tooltip;
+        anchor-h: root.height;
+    }
+}
+
+export component FrequencyCounter inherits Rectangle {
+    in property <[int]> digits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];   // index 0 = GHz ... 9 = 1 Hz
+    in property <int> leading-zeros;                              // how many leading digits draw dim
+    in property <bool> show-nudges: true;
+    in property <bool> editing;                                   // the typed editor is open over the figures
+    in-out property <string> editor-text;                         // the editor's contents; the host seeds it
+    in property <string> converter-text;                          // "via <converter>": the caption in warning colour
+    in property <bool> converter-warn;
+    in property <bool> enabled: true;
+    in property <string> tooltip: "Scroll a digit to tune | click to type";   // shown under a figure; the host passes the translated text
+    out property <bool> editor-focused: input.has-focus;
+
+    callback nudge(int, int);                   // digit 0..9, +1 / -1
+    callback wheel(int, int);                   // digit 0..9, +1 / -1
+    callback edit-requested();                  // a click on a figure
+    callback typed(string);                     // Enter in the editor
+    callback edit-cancelled();                  // Esc, or the editor lost the keyboard focus
+    callback menu-requested(length, length);    // right-click anywhere on the plate, position in the counter
+
+    // ---- geometry: the sheet's `.mono.row` plate and the rows under it ----
+    property <length> bw: Theme.hairline;                       // the plate's border
+    property <length> pad-x: 8px;
+    property <length> pad-y: 2px;
+    property <length> dot-w: Math.round(Theme.font-counter-dot / 1px * 0.6) * 1px;
+    property <length> plate-w: 2 * root.bw + 2 * root.pad-x + 10 * Theme.digit-w + 3 * root.dot-w;
+    property <length> plate-h: 2 * root.bw + 2 * root.pad-y + Theme.digit-h;
+    property <length> unit-h: 12px;
+    property <length> caption-h: 12px;
+    property <[int]> group-first: [0, 1, 4, 7];                 // the first digit of GHz, MHz, kHz, Hz
+    property <[int]> group-size: [1, 3, 3, 3];
+    property <[string]> places: ["GHz", "100 MHz", "10 MHz", "1 MHz", "100 kHz", "10 kHz", "1 kHz", "100 Hz", "10 Hz", "1 Hz"];
+
+    // x of digit i: past the border and padding, i columns, and a dot cell for each of the dots before it
+    pure function digit-x(i: int) -> length {
+        return root.bw + root.pad-x + i * Theme.digit-w + ((i >= 1 ? 1 : 0) + (i >= 4 ? 1 : 0) + (i >= 7 ? 1 : 0)) * root.dot-w;
+    }
+
+    width: root.plate-w;
+    height: root.plate-h + 2px + root.unit-h + root.caption-h;
+    accessible-role: groupbox;
+    accessible-label: "Tuned frequency";
+
+    changed editing => {
+        if (root.editing) {
+            input.focus();
+            input.select-all();     // AutoSelectAll, as the counter's editor always was: typing replaces the seed
+        } else if (input.has-focus) {
+            input.clear-focus();
+        }
+    }
+
+    // ---- the plate ----
+    Rectangle {
+        x: 0px; y: 0px; width: root.plate-w; height: root.plate-h;
+        background: Theme.field;
+        border-width: root.bw;
+        border-color: Theme.line;
+        border-radius: Theme.radius-panel;
+    }
+    for g in [1, 4, 7] : Text {
+        x: root.digit-x(g) - root.dot-w; y: root.bw + root.pad-y; width: root.dot-w; height: Theme.digit-h;
+        text: ".";
+        color: Theme.knob-ring;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-counter-dot;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    // ---- right-click anywhere on the plate and the engraved rows (the Digits forward theirs) ----
+    TouchArea {
+        enabled: root.enabled && !root.editing;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                root.menu-requested(self.mouse-x, self.mouse-y);
+            }
+        }
+    }
+
+    // ---- the ten figures ----
+    for d[i] in root.digits : Digit {
+        x: root.digit-x(i); y: root.bw + root.pad-y;
+        value: d;
+        dim: i < root.leading-zeros;
+        place: root.places[i];
+        show-nudges: root.show-nudges;
+        enabled: root.enabled && !root.editing;
+        tooltip: root.tooltip;
+        nudge(dir) => { root.nudge(i, dir); }
+        wheel(dir) => { root.wheel(i, dir); }
+        clicked => { root.edit-requested(); }
+        right-clicked(px, py) => { root.menu-requested(root.digit-x(i) + px, root.bw + root.pad-y + py); }
+    }
+
+    // ---- the engraved rows under the plate ----
+    for u[k] in ["GHz", "MHz", "kHz", "Hz"] : Text {
+        x: root.digit-x(root.group-first[k]); y: root.plate-h + 2px;
+        width: root.group-size[k] * Theme.digit-w; height: root.unit-h;
+        text: u;
+        color: Theme.faint;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-tiny;
+        letter-spacing: 0.9px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    Text {
+        x: root.bw + root.pad-x; y: root.plate-h + 2px + root.unit-h;
+        width: root.plate-w - 2 * (root.bw + root.pad-x); height: root.caption-h;
+        text: root.converter-text != "" ? root.converter-text : "TYPE R-390   SER. 1157";
+        color: (root.converter-text != "" && root.converter-warn) ? Theme.chip-warn-fg : Theme.faint;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-tiny;
+        letter-spacing: 0.9px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: text;
+    }
+
+    // ---- the typed editor, over the figures while `editing` ----
+    Rectangle {
+        visible: root.editing;
+        x: root.digit-x(0); y: root.bw + root.pad-y;
+        width: root.digit-x(9) + Theme.digit-w - root.digit-x(0); height: Theme.digit-h;
+        background: Theme.field;
+        border-width: Theme.hairline;
+        border-color: input.has-focus ? Theme.focus : Theme.line-strong;
+        border-radius: Theme.radius;
+        input := TextInput {
+            x: 8px; y: 0px; width: parent.width - 16px; height: parent.height;
+            text <=> root.editor-text;
+            color: Theme.digit;
+            font-family: Theme.font-mono;
+            font-size: 22px;
+            font-weight: Theme.weight-semibold;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            vertical-alignment: center;
+            accessible-label: "Frequency in MHz";
+            accepted => { root.typed(self.text); }
+            key-pressed(e) => {
+                if (e.text == Key.Escape) { root.edit-cancelled(); return accept; }
+                return reject;
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.editing) { root.edit-cancelled(); }
+            }
+        }
+    }
+}

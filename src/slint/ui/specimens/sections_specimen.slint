@@ -1,0 +1,198 @@
+// The sections family's specimen sheet: every variant of Section, BodyRow and SelectKey at an absolute position
+// (tests/test_slint_sections.cpp renders it and probes the pixels against the artboards).
+//
+//   x,   y,   w,   h   - what
+//   16,  16, 296,  36  - Section, first row of a panel (no top rule), neutral chip "RECEIVER VIEW"
+//   16,  60, 296,  36  - Section closed, with a green state dot, good chip "RTL-SDR"
+//   16, 104, 296, 110  - Section OPEN (36 row + 74 body): warn chip "NFM"; body = BodyRow "Passband" + mono value,
+//                        BodyRow "Tune step" + SelectKey "12.5 kHz" (110 wide, 24 high at x 190, y 178)
+//   16, 222, 296,  30  - Section small (.sec.s), amber dot, chip "7 ROW"
+//   16, 260, 296,  25  - Section dense (.dn .sec.s), chip "IDLE"
+//   16, 293, 296,  36  - Section disabled (`enabled: false`), tooltip "Transmit needs a licence"
+//  340,  16, 296, 148  - the STACK: three Sections in a VerticalLayout (36 closed, 76 open with one BodyRow, 36 closed):
+//                        the open body pushes the third row down to y 16 + 112
+//  340, 200, 296,  30  - Section small with a long name and an err chip: the name elides before the chip
+//  340, 250, 110,  24  - SelectKey disabled ("25 kHz"): the disabled key look, never fires
+//  340, 290, 296,  36  - Section with no chip (`chip` empty): the name has the whole row
+//  340, 340, 296, 126  - Section OPEN with two BodyRows holding plain boxes: two 10 px boxes side by side, 6 px apart (centred in
+//                        the 24 px row), and a 40 px box (the row grows to 40)
+//
+// Interaction state is surfaced on the root: clicks / last-click (any Section's `clicked`), select-clicks, and
+// stack-open (the host flipping the stack's middle Section, as the real host does).
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { Section, BodyRow, SelectKey } from "../sections.slint";
+export { Theme, Skin, Workbench, ChipTone, LampState }
+
+export component SectionsSpecimen inherits Window {
+    width: 660px;
+    height: 480px;
+    background: Theme.bg;
+
+    in-out property <int> clicks;
+    in-out property <int> select-clicks;
+    in-out property <string> last-click;
+    in-out property <bool> stack-open: true;
+
+    // measured, for the test
+    out property <length> h-first: sec-first.height;
+    out property <length> h-dot: sec-dot.height;
+    out property <length> h-open: sec-open.height;
+    out property <length> h-small: sec-small.height;
+    out property <length> h-dense: sec-dense.height;
+    out property <length> h-disabled: sec-disabled.height;
+    out property <length> body-open: sec-open.body-height;
+    out property <length> select-w: select.width;
+    out property <length> select-h: select.height;
+    out property <length> select-off-w: select-off.width;
+    out property <length> h-boxes: sec-boxes.height;
+    out property <length> stack-y1: stack-1.y;
+    out property <length> stack-y2: stack-2.y;
+    out property <length> stack-y3: stack-3.y;
+    out property <length> stack-h2: stack-2.height;
+
+    sec-first := Section {
+        x: 16px; y: 16px; width: Theme.panel-w;
+        first: true;
+        name: "Patch";
+        chip: "RECEIVER VIEW";
+        clicked => { root.clicks += 1; root.last-click = "first"; }
+    }
+    sec-dot := Section {
+        x: 16px; y: 60px; width: Theme.panel-w;
+        name: "Source";
+        chip: "RTL-SDR";
+        tone: ChipTone.good;
+        show-dot: true;
+        dot: LampState.green;
+        clicked => { root.clicks += 1; root.last-click = "dot"; }
+    }
+    sec-open := Section {
+        x: 16px; y: 104px; width: Theme.panel-w;
+        name: "Radio";
+        chip: "NFM";
+        tone: ChipTone.warn;
+        open: true;
+        clicked => { root.clicks += 1; root.last-click = "open"; }
+        BodyRow {
+            label: "Passband";
+            Text {
+                text: "12.5 kHz";
+                color: Theme.fg;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+            }
+        }
+        BodyRow {
+            label: "Tune step";
+            select := SelectKey {
+                value: "12.5 kHz";
+                label: "Tune step";
+                tooltip: "Choose the tuning step";
+                clicked => { root.select-clicks += 1; }
+            }
+        }
+    }
+    sec-small := Section {
+        x: 16px; y: 222px; width: Theme.panel-w;
+        small: true;
+        name: "Frame log";
+        chip: "7 ROW";
+        tone: ChipTone.good;
+        show-dot: true;
+        dot: LampState.amber;
+        clicked => { root.clicks += 1; root.last-click = "small"; }
+    }
+    sec-dense := Section {
+        x: 16px; y: 260px; width: Theme.panel-w;
+        small: true;
+        dense: true;
+        name: "POCSAG pager";
+        chip: "IDLE";
+        clicked => { root.clicks += 1; root.last-click = "dense"; }
+    }
+    sec-disabled := Section {
+        x: 16px; y: 293px; width: Theme.panel-w;
+        name: "Transmit";
+        chip: "NO TX";
+        enabled: false;
+        tooltip: "Transmit needs a licence";
+        clicked => { root.clicks += 1; root.last-click = "disabled"; }
+    }
+
+    Rectangle {
+        x: 340px; y: 16px; width: Theme.panel-w; height: 148px;
+        VerticalLayout {
+            alignment: start;
+            stack-1 := Section {
+                first: true;
+                name: "Audio filters";
+                chip: "OFF";
+                clicked => { root.clicks += 1; root.last-click = "stack-1"; }
+            }
+            stack-2 := Section {
+                name: "Sinks";
+                chip: "OPEN";
+                tone: ChipTone.good;
+                open: root.stack-open;
+                clicked => { root.clicks += 1; root.last-click = "stack-2"; root.stack-open = !root.stack-open; }
+                BodyRow {
+                    label: "Output";
+                    Text {
+                        text: "Speakers";
+                        color: Theme.fg;
+                        font-family: Theme.font-ui;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            stack-3 := Section {
+                name: "Recorder";
+                chip: "OFF";
+                clicked => { root.clicks += 1; root.last-click = "stack-3"; }
+            }
+        }
+    }
+
+    select-off := SelectKey {
+        x: 340px; y: 250px;
+        value: "25 kHz";
+        enabled: false;
+        clicked => { root.select-clicks += 1; }
+    }
+
+    sec-nochip := Section {
+        x: 340px; y: 290px; width: Theme.panel-w;
+        name: "Frequency correction";
+        clicked => { root.clicks += 1; root.last-click = "nochip"; }
+    }
+
+    sec-boxes := Section {
+        x: 340px; y: 340px; width: Theme.panel-w;
+        name: "Boxes";
+        chip: "TEST";
+        open: true;
+        BodyRow {
+            label: "Short";
+            Rectangle { width: 20px; height: 10px; background: Theme.accent; }
+            Rectangle { width: 14px; height: 10px; background: Theme.lamp-red; }
+        }
+        BodyRow {
+            label: "Tall";
+            Rectangle { width: 20px; height: 40px; background: Theme.lamp-green; }
+        }
+    }
+
+    sec-long := Section {
+        x: 340px; y: 200px; width: Theme.panel-w;
+        small: true;
+        show-dot: true;
+        dot: LampState.red;
+        name: "APRS decoder (stopped: no windows, no rows, nothing to show)";
+        chip: "REFUSED";
+        tone: ChipTone.err;
+        clicked => { root.clicks += 1; root.last-click = "long"; }
+    }
+}

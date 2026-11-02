@@ -24,13 +24,13 @@ import { MenuItemKind, MenuEntry, Menu } from "menus.slint";
 import { Checkbox } from "fields.slint";
 import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
-import { AgeTick, WfMark, WfMarker, WaterfallView } from "waterfall.slint";
+import { AgeTick, WaterfallView } from "waterfall.slint";
 import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
 import { PatchCanvas, ScopeTube, PatchNode, PatchWire } from "stubs.slint";
 import { AboutSlint } from "std-widgets.slint";
 
 export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
-         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, AgeTick, WfMark, WfMarker, PaletteResult, PatchNode, PatchWire }
+         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, AgeTick, PaletteResult, PatchNode, PatchWire }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -68,7 +68,7 @@ component Sheet inherits Rectangle {
 export component MainWindow inherits Window {
     title: "FoxSDR";
     no-frame: true;
-    preferred-width: 1440px;
+    preferred-width: 1600px;   // the sheet is 1440 wide, but its strip does not fit 1440 by its own numbers (counter 386 + mode segment 434 + ...): 1600 gives the three lanes their width
     preferred-height: 900px;
     min-width: 624px;
     min-height: 400px;
@@ -145,8 +145,7 @@ export component MainWindow inherits Window {
     in property <int> ribbon-size: 1;
     in property <[BookmarkMark]> bookmarks: [];
     in property <[PluginMark]> marks: [];
-    in property <[WfMark]> wf-marks: [];             // the marks not flagged spectrum-only, in the waterfall's own struct
-    in property <[WfMarker]> wf-markers: [];
+    in property <[PluginMark]> wf-marks: [];         // the marks not flagged spectrum-only
     in property <[UserMarker]> markers: [];
     in property <string> cursor-text; in property <bool> cursor-visible; in property <float> cursor-pos;
     in property <string> band-tooltip: "Drag to move the tuned band · drag an edge to change the passband · Shift = free tuning";
@@ -183,6 +182,7 @@ export component MainWindow inherits Window {
     callback edit-cancelled;
     callback counter-menu-requested(length, length);
     callback mode-selected(int);
+    callback mode-picker-requested(length, length);   // the compact strip's mode picker: the host opens the eight modes as a menu
     callback gain-changed(float);
     callback gain-auto-clicked;
     callback squelch-changed(float);
@@ -238,6 +238,10 @@ export component MainWindow inherits Window {
     callback close-clicked;
     callback brand-clicked;                          // the app menu: About FoxSDR, Key bindings, Quit
     callback resize-drag(int, length, length);       // edge code (1 right, 2 bottom, 3 corner), dx, dy
+
+    // the strip's blocks need about 1750 px at the sheet's sizes (counter 386, eight mode keys 434, three lanes of 120):
+    // below that the mode segment folds into one picker key, as the deck scales down in the ImGui window
+    out property <bool> compact-strip: root.width < 1760px;
 
     // the one menu (counter, trace, marker, meter): the host sets menu-entries and opens it here
     public function open-menu(x: length, y: length) { menu.at-x = x; menu.at-y = y; menu.show(); }
@@ -344,11 +348,11 @@ export component MainWindow inherits Window {
         Rectangle {
             height: Theme.strip-h; background: Theme.strip;
             Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
-            HorizontalLayout {
-                padding-left: 16px; padding-right: 16px; spacing: 20px; alignment: start;
+            HorizontalLayout {   // stretch (the default): the lanes take the strip's slack, the other blocks keep their width
+                padding-left: 16px; padding-right: 16px; spacing: 14px;   // the sheet says 20; 14 lets the three lanes keep their captions at 1440
 
                 HorizontalLayout { // STOP + the four MASTER lamps
-                    spacing: 14px; alignment: center;
+                    spacing: 14px; alignment: center; horizontal-stretch: 0;
                     VerticalLayout { alignment: center; StopKey { running: root.running; tooltip: root.running ? "Stop the receiver" : "Start the receiver"; clicked => { root.stop-clicked(); } } }
                     GridLayout { spacing-horizontal: 14px; spacing-vertical: 6px; y: (parent.height - self.height) / 2;
                         Row { Lamp { caption: "RUN";  state: root.running  ? LampState.green : LampState.off; } Lamp { caption: "DEC";  state: root.decoding ? LampState.green : LampState.off; } }
@@ -358,7 +362,7 @@ export component MainWindow inherits Window {
                 VLine { y: (parent.height - 72px) / 2; }
 
                 VerticalLayout { // the tuned frequency
-                    spacing: 2px; alignment: center;
+                    spacing: 2px; alignment: center; horizontal-stretch: 0;
                     HorizontalLayout { alignment: space-between;
                         Caption { label: "Tuned frequency"; }
                         HorizontalLayout { spacing: 10px;
@@ -366,10 +370,10 @@ export component MainWindow inherits Window {
                             Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
                         }
                     }
-                    counter := FrequencyCounter {
+                    counter := FrequencyCounter {   // the caption slot under the figures: the converter line when one is active, else the sheet's tune hint
                         digits: root.digits; leading-zeros: root.leading-zeros; show-nudges: root.show-nudges;
                         editing: root.editing; editor-text <=> root.editor-text;
-                        converter-text: root.converter-text; converter-warn: root.converter-warn;
+                        converter-text: root.converter-text != "" ? root.converter-text : root.tune-hint; converter-warn: root.converter-warn;
                         tooltip: "Scroll a digit to tune | click to type";
                         nudge(d, dir) => { root.nudge(d, dir); }
                         wheel(d, dir) => { root.nudge(d, dir); }
@@ -378,26 +382,27 @@ export component MainWindow inherits Window {
                         edit-cancelled => { root.edit-cancelled(); }
                         menu-requested(x, y) => { root.counter-menu-requested(x, y); }
                     }
-                    HorizontalLayout { alignment: end; padding-right: 10px;
-                        Text { text: root.tune-hint; font-size: Theme.font-hint; color: Theme.dim; }
-                    }
                 }
                 VLine { y: (parent.height - 72px) / 2; }
 
-                VerticalLayout { // mode
-                    spacing: 6px; alignment: center;
+                VerticalLayout { // mode: the eight keys as a segment, or one picker when the strip is compact
+                    spacing: 6px; alignment: center; horizontal-stretch: 0;
                     Caption { label: "Mode"; }
-                    SegGroup {   // the eight mode keys, a radio group (accessible as eight buttons)
-                        HorizontalLayout { padding: 2px; spacing: 2px;
-                            for m[i] in root.modes : SegKey { label: m; on: i == root.mode-index; clicked => { root.mode-selected(i); } }
+                    HorizontalLayout { alignment: start;
+                        if !root.compact-strip : SegGroup {   // the eight mode keys, a radio group (accessible as eight buttons)
+                            HorizontalLayout { spacing: 2px;
+                                for m[i] in root.modes : SegKey { label: m; on: i == root.mode-index; clicked => { root.mode-selected(i); } }
+                            }
                         }
+                        if root.compact-strip : SelectKey { value: root.modes[root.mode-index]; tooltip: "Mode - the eight modes as a list (Ctrl+F ... Ctrl+R)";
+                            clicked => { root.mode-picker-requested(self.absolute-position.x, self.absolute-position.y + self.height); } }
                     }
-                    Text { text: root.mode-hint; font-size: Theme.font-hint; color: Theme.dim; }
+                    Text { text: root.mode-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; max-width: root.compact-strip ? 130px : 440px; }
                 }
                 VLine { y: (parent.height - 72px) / 2; }
 
-                HorizontalLayout { // gain / squelch / volume lanes
-                    spacing: 18px; horizontal-stretch: 1; alignment: stretch;
+                HorizontalLayout { // gain / squelch / volume lanes: the strip's slack is theirs
+                    spacing: 18px; horizontal-stretch: 1; alignment: stretch; min-width: 396px;   // three lanes of 120 at least; from about 1500 px the captions no longer elide
                     VerticalLayout { alignment: center; horizontal-stretch: 1;
                         SliderGroup { caption: "Gain"; readout: root.gain-text; hint: root.gain-hint; value: root.gain-norm; enabled: root.gain-enabled;
                             has-auto: true; auto-on: root.gain-auto; auto-enabled: root.gain-auto-enabled; auto-tooltip: root.gain-auto-tooltip; tooltip: root.gain-tooltip;
@@ -420,8 +425,8 @@ export component MainWindow inherits Window {
                 }
                 VLine { y: (parent.height - 72px) / 2; }
 
-                VerticalLayout { // antenna power: the BIAS TEE hazard key
-                    spacing: 6px; alignment: center;
+                VerticalLayout { // antenna power: the BIAS TEE hazard key, as wide as the key
+                    spacing: 6px; alignment: center; horizontal-stretch: 0; width: 120px;
                     Caption { label: "Antenna power"; }
                     HorizontalLayout { alignment: start;
                         Key { label: "BIAS TEE"; hazard: true; on: root.bias-tee-on; enabled: root.bias-tee-present; min-w: 120px; height: 36px;
@@ -429,7 +434,7 @@ export component MainWindow inherits Window {
                             tooltip: root.bias-tooltip; accessible-label: root.bias-tee-on ? "Bias tee on" : "Bias tee off - asks before switching on";
                             clicked => { if (root.bias-tee-on) { root.bias-tee-clicked(); } else { root.bias-question-open = true; } } }
                     }
-                    Text { text: root.bias-hint; font-size: Theme.font-hint; color: Theme.dim; }
+                    Text { text: root.bias-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
                 }
             }
         }
@@ -484,7 +489,7 @@ export component MainWindow inherits Window {
                                     Text { text: "Mode keys are on the receiver strip above (Ctrl+F … Ctrl+R)."; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
                                     BodyRow { label: "Passband"; Text { text: root.passband-text; font-family: Theme.font-mono; color: Theme.fg; vertical-alignment: center; } }
                                     Slider { value: root.passband-norm; accessible-label: "Passband"; changed(v) => { root.passband-changed(v); } }
-                                    BodyRow { label: "Tune step"; SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.x, self.y + self.height); } } }
+                                    BodyRow { label: "Tune step"; SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.absolute-position.x, self.absolute-position.y + self.height); } } }
                                     Checkbox { label: "Follow the band plan's mode when retuning"; checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
                                 }
                             }
@@ -567,7 +572,7 @@ export component MainWindow inherits Window {
                             rail-pos: root.wf-rail-pos;
                             foot-left: root.waterfall-foot-left; foot-tuned: root.waterfall-foot-tuned; foot-rest: root.waterfall-foot-rest;
                             vfo-pos: root.vfo-pos; show-vfo: root.show-vfo;
-                            plugin-marks: root.wf-marks; user-markers: root.wf-markers;
+                            plugin-marks: root.wf-marks; user-markers: root.markers;
                             cursor-text: root.cursor-text; cursor-visible: root.cursor-visible; cursor-pos: root.cursor-pos;
                             marker-tooltip: root.marker-tooltip; tooltip: root.waterfall-tooltip;
                             hover(x, y) => { root.waterfall-hover(x, y); }

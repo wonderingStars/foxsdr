@@ -1,0 +1,131 @@
+// The slider family's specimen sheet (tests/test_slint_sliders.cpp): every variant at an absolute position on a
+// 780 x 450 ground. Interactive state the test observes is surfaced on the root.
+//
+//   x,   y,   w,   h  - what
+//   40,  44, 200,   6 - Slider A: value 0.62 (knob centre x 164), enabled, tooltip "Drag, scroll or use the arrow keys"
+//   40,  94, 200,   6 - Slider B: value 0.29, enabled - the one the interaction checks drive (click, drag, wheel, keys)
+//   40, 144, 200,   6 - Slider C: value 0 (the knob overhangs the left end)
+//   40, 194, 200,   6 - Slider D: value 1 (the knob overhangs the right end)
+//   40, 244, 200,   6 - Slider E: value 0.62, DISABLED (its changes would still count: they must stay zero)
+//  300,  44, 200,   4 - LevelBar: value 0.55
+//  300,  94, 200,   4 - LevelBar: value 0
+//  300, 144, 200,   4 - LevelBar: value 1
+//    0, 280, 780, 170 - the receiver strip's ground (Theme.strip) under the lanes
+//   24, 296, 232,  53 - SliderGroup Gain: 0.62, "32 dB", AUTO off and enabled, hint, tooltips
+//  274, 296, 232,  53 - SliderGroup Squelch: 0.29, "-85 dB", AUTO on, hint
+//  524, 296, 232,  49 - SliderGroup Volume: 0.72, "0.72", no AUTO, no hint; its Level row sits in the hint slot:
+//  524, 332,  30,  13 -   "Level" text
+//  560, 336, 140,   4 -   LevelBar 0.55
+//  706, 332,  50,  13 -   "-12.4 dB" text
+//   24, 376, 232,  53 - SliderGroup Gain, DISABLED: slider disabled, AUTO disabled (auto-enabled false), AUTO off
+//  274, 376, 232,  53 - SliderGroup Squelch with a long word on AUTO ("AUTOMATIQUE"): the key grows to it
+//  524, 376, 232,  53 - SliderGroup "GAIN" in upper case: its caption row equals the disabled lane's "Gain" to the pixel
+// Above each slider and level bar (y - 24) a 10px label names it, for the person looking at the PNG.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { Slider, LevelBar, SliderGroup } from "../sliders.slint";
+export { Theme, Skin, Workbench }
+
+component Label inherits Text {
+    font-family: Theme.font-ui;
+    font-size: Theme.font-hint;
+    color: Theme.dim;
+    height: 13px;
+    vertical-alignment: center;
+}
+
+export component SlidersSpecimen inherits Window {
+    width: 780px;
+    height: 450px;
+    background: Theme.bg;
+
+    // what the test observes
+    in-out property <float> last-value;
+    in-out property <int> changes;
+    in-out property <int> backsteps;     // changed() calls whose value was LOWER than the previous call's
+    in-out property <int> auto-clicks;
+    in-out property <int> last-auto;     // which lane's AUTO key fired last: 1 Gain, 2 Squelch, 4 the disabled Gain, 5 the long word, 6 GAIN
+
+    function moved(v: float) {
+        if (v < root.last-value) { root.backsteps += 1; }
+        root.last-value = v;
+        root.changes += 1;
+    }
+
+    Label { x: 40px; y: 20px; width: 200px; text: "A  0.62 enabled, with tooltip"; }
+    Slider { x: 40px; y: 44px; width: 200px; value: 0.62; tooltip: "Drag, scroll or use the arrow keys"; accessible-label: "Specimen A"; }
+    Label { x: 40px; y: 70px; width: 200px; text: "B  0.29 enabled, driven by the test"; }
+    Slider { x: 40px; y: 94px; width: 200px; value: 0.29; accessible-label: "Specimen B"; changed(v) => { root.moved(v); } }
+    Label { x: 40px; y: 120px; width: 200px; text: "C  0.00"; }
+    Slider { x: 40px; y: 144px; width: 200px; value: 0; accessible-label: "Specimen C"; }
+    Label { x: 40px; y: 170px; width: 200px; text: "D  1.00"; }
+    Slider { x: 40px; y: 194px; width: 200px; value: 1; accessible-label: "Specimen D"; }
+    Label { x: 40px; y: 220px; width: 200px; text: "E  0.62 disabled"; }
+    Slider { x: 40px; y: 244px; width: 200px; value: 0.62; enabled: false; accessible-label: "Specimen E"; changed(v) => { root.moved(v); } }
+
+    Label { x: 300px; y: 20px; width: 200px; text: "level bar 0.55"; }
+    LevelBar { x: 300px; y: 44px; width: 200px; value: 0.55; }
+    Label { x: 300px; y: 70px; width: 200px; text: "level bar 0.00"; }
+    LevelBar { x: 300px; y: 94px; width: 200px; value: 0; }
+    Label { x: 300px; y: 120px; width: 200px; text: "level bar 1.00"; }
+    LevelBar { x: 300px; y: 144px; width: 200px; value: 1; }
+
+    Rectangle { x: 0px; y: 280px; width: 780px; height: 170px; background: Theme.strip; }
+
+    SliderGroup {
+        x: 24px; y: 296px; width: 232px;
+        caption: "Gain"; readout: "32 dB"; hint: "TUNER stage · RTL-SDR Blog V4";
+        value: 0.62; has-auto: true; auto-on: false;
+        tooltip: "Gain - drag the slider, or scroll over it";
+        auto-tooltip: "Let the receiver choose the gain";
+        changed(v) => { root.moved(v); }
+        auto-clicked => { root.auto-clicks += 1; root.last-auto = 1; }
+    }
+    SliderGroup {
+        x: 274px; y: 296px; width: 232px;
+        caption: "Squelch"; readout: "-85 dB"; hint: "Automatic: 8 dB above the noise floor";
+        value: 0.29; has-auto: true; auto-on: true;
+        changed(v) => { root.moved(v); }
+        auto-clicked => { root.auto-clicks += 1; root.last-auto = 2; }
+    }
+    SliderGroup {
+        x: 524px; y: 296px; width: 232px;
+        caption: "Volume"; readout: "0.72"; hint: "";
+        value: 0.72;
+        changed(v) => { root.moved(v); }
+    }
+    Label { x: 524px; y: 332px; width: 30px; text: "Level"; }
+    LevelBar { x: 560px; y: 336px; width: 140px; value: 0.55; }
+    Text {
+        x: 706px; y: 332px; width: 50px; height: 13px;
+        text: "-12.4 dB";
+        font-family: Theme.font-mono;
+        font-size: Theme.font-hint;
+        color: Theme.muted;
+        vertical-alignment: center;
+    }
+    SliderGroup {
+        x: 24px; y: 376px; width: 232px;
+        caption: "Gain"; readout: "32 dB"; hint: "Gain is set by the source";
+        value: 0.62; enabled: false; has-auto: true; auto-on: false; auto-enabled: false;
+        tooltip: "The source has no gain control";
+        auto-tooltip: "The source has no automatic gain";
+        changed(v) => { root.moved(v); }
+        auto-clicked => { root.auto-clicks += 1; root.last-auto = 4; }
+    }
+    // a longer word on the key (34 languages): the key grows to it, still right-aligned, and the readout makes room
+    SliderGroup {
+        x: 274px; y: 376px; width: 232px;
+        caption: "Squelch"; readout: "-85 dB"; hint: "A longer word grows the key, not the lane";
+        value: 0.29; has-auto: true; auto-on: false; auto-label: "AUTOMATIQUE";
+        changed(v) => { root.moved(v); }
+        auto-clicked => { root.auto-clicks += 1; root.last-auto = 5; }
+    }
+    // the same caption as the disabled lane's "Gain", written in upper case: the caption row must come out identical
+    SliderGroup {
+        x: 524px; y: 376px; width: 232px;
+        caption: "GAIN"; readout: "32 dB"; hint: "Upper case in the source";
+        value: 0.62; has-auto: true; auto-on: false;
+        changed(v) => { root.moved(v); }
+        auto-clicked => { root.auto-clicks += 1; root.last-auto = 6; }
+    }
+}

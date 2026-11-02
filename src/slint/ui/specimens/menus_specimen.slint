@@ -1,0 +1,201 @@
+// The Menus family's specimen sheet (600 x 380). Every variant sits at an absolute position; nothing overlaps.
+//
+//   x    y    w    h   what
+//   12   12   244  346 the menu ground (Theme.menu, 1px Theme.knob-ring border, Theme.radius-panel) behind the standalone rows
+//   17   17   234  21  MenuItem heading         "Display"
+//   17   38   234  26  MenuItem item            "Open file"          (tooltip set; clicks / last-click 1)
+//   17   64   234  26  MenuItem checked, on     "Peak hold"          (the tick; last-click 2)
+//   17   90   234  26  MenuItem checked, off    "Average"            (no tick; last-click 3)
+//   17   116  234  26  MenuItem radio, on       "Automatic"          (the accent dot; last-click 4)
+//   17   142  234  26  MenuItem radio, off      "Manual"             (the knob-ring ring; last-click 5)
+//   17   168  234  26  MenuItem submenu         "Average length"     (the chevron; last-click 6)
+//   17   194  234  26  MenuItem item with hint  "Drop marker here" / "145.2120 MHz"   (last-click 7)
+//   17   220  234  9   MenuItem separator       (the 1px Theme.line-strong rule on y 224, inset 2px each side)
+//   17   229  234  36  MenuItem slider          "Floor" / "-110 dB", value 0.4: track x 27..207 on y 252..257 (row-slider)
+//   17   265  234  36  MenuItem slider, disabled "Ceiling" / "0 dB", value 0.9: track on y 288..293
+//   17   301  234  26  MenuItem item, disabled  "Reset trace"        (last-click 8, never fires)
+//   17   327  234  26  MenuItem item, forced hot "Marker list"       (last-click 9; Theme.menu-hot without a hover)
+//   300  16   --   --  the Menu panel, opened by open-menu(): top-left at (300, 16), 320 high, 12 entries from y 21:
+//                        heading 21 | item 26 | checked on 26 | checked off 26 | radio on 26 | radio off 26 | submenu 26 |
+//                        separator 9 | slider 36 | slider disabled 36 | item disabled 26 | item with hint 26   (ids 0..11)
+//
+// State the test reads: activations / last-id (activated), slider-changes / last-slider-id / last-slider (slider-changed),
+// submenu-requests / last-submenu-id / last-submenu-x / last-submenu-y (submenu-requested), hovered-id (item-hovered), clicks /
+// last-click / row-slider (the standalone rows). open-submenu-id, keep-open-on-radio, menu-x / menu-y (at-x / at-y, default 300 / 16)
+// and `entries` feed the Menu and can be replaced.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { MenuItemKind, MenuEntry, MenuItem, Menu } from "../menus.slint";
+export { Theme, Skin, Workbench }
+export { MenuItemKind, MenuEntry }
+
+export component MenusSpecimen inherits Window {
+    width: 600px;
+    height: 380px;
+    background: Theme.bg;
+
+    in-out property <[MenuEntry]> entries: [
+        { kind: MenuItemKind.heading, id: 0, label: "Display", enabled: true },
+        { kind: MenuItemKind.item, id: 1, label: "Open file", enabled: true },
+        { kind: MenuItemKind.checked, id: 2, label: "Peak hold", checked: true, enabled: true },
+        { kind: MenuItemKind.checked, id: 3, label: "Average", enabled: true },
+        { kind: MenuItemKind.radio, id: 4, label: "Automatic", checked: true, enabled: true },
+        { kind: MenuItemKind.radio, id: 5, label: "Manual", enabled: true },
+        { kind: MenuItemKind.submenu, id: 6, label: "Average length", enabled: true },
+        { kind: MenuItemKind.separator, id: 7, enabled: true },
+        { kind: MenuItemKind.slider, id: 8, label: "Floor", hint: "-110 dB", value: 0.4, enabled: true },
+        { kind: MenuItemKind.slider, id: 9, label: "Ceiling", hint: "0 dB", value: 0.9, enabled: false },
+        { kind: MenuItemKind.item, id: 10, label: "Reset trace", enabled: false },
+        { kind: MenuItemKind.item, id: 11, label: "Drop marker here", hint: "145.2120 MHz", enabled: true },
+    ];
+    in-out property <length> menu-x: 300px;
+    in-out property <length> menu-y: 16px;
+    in-out property <int> open-submenu-id: -1;
+    in-out property <bool> keep-open-on-radio: false;
+
+    in-out property <int> activations;
+    in-out property <int> last-id: -1;
+    in-out property <int> slider-changes;
+    in-out property <int> last-slider-id: -1;
+    in-out property <float> last-slider;
+    in-out property <int> submenu-requests;
+    in-out property <int> last-submenu-id: -1;
+    in-out property <length> last-submenu-x;
+    in-out property <length> last-submenu-y;
+    in-out property <int> hovered-id: -1;
+    in-out property <int> clicks;
+    in-out property <int> last-click: -1;
+    in-out property <float> row-slider: -1;
+
+    public function open-menu() { menu.show(); }
+    public function close-menu() { menu.close(); }
+
+    Rectangle {
+        x: 12px;
+        y: 12px;
+        width: 244px;
+        height: 346px;
+        background: Theme.menu;
+        border-width: Theme.hairline;
+        border-color: Theme.knob-ring;
+        border-radius: Theme.radius-panel;
+    }
+    MenuItem { x: 17px; y: 17px; width: 234px; kind: MenuItemKind.heading; label: "Display"; }
+    MenuItem {
+        x: 17px;
+        y: 38px;
+        width: 234px;
+        gutter: 20px;
+        label: "Open file";
+        tooltip: "Choose a file to open";
+        clicked => { root.clicks += 1; root.last-click = 1; }
+    }
+    MenuItem {
+        x: 17px;
+        y: 64px;
+        width: 234px;
+        kind: MenuItemKind.checked;
+        checked: true;
+        label: "Peak hold";
+        clicked => { root.clicks += 1; root.last-click = 2; }
+    }
+    MenuItem {
+        x: 17px;
+        y: 90px;
+        width: 234px;
+        kind: MenuItemKind.checked;
+        label: "Average";
+        clicked => { root.clicks += 1; root.last-click = 3; }
+    }
+    MenuItem {
+        x: 17px;
+        y: 116px;
+        width: 234px;
+        kind: MenuItemKind.radio;
+        checked: true;
+        label: "Automatic";
+        clicked => { root.clicks += 1; root.last-click = 4; }
+    }
+    MenuItem {
+        x: 17px;
+        y: 142px;
+        width: 234px;
+        kind: MenuItemKind.radio;
+        label: "Manual";
+        clicked => { root.clicks += 1; root.last-click = 5; }
+    }
+    MenuItem {
+        x: 17px;
+        y: 168px;
+        width: 234px;
+        gutter: 20px;
+        kind: MenuItemKind.submenu;
+        label: "Average length";
+        clicked => { root.clicks += 1; root.last-click = 6; }
+    }
+    MenuItem {
+        x: 17px;
+        y: 194px;
+        width: 234px;
+        gutter: 20px;
+        label: "Drop marker here";
+        hint: "145.2120 MHz";
+        clicked => { root.clicks += 1; root.last-click = 7; }
+    }
+    MenuItem { x: 17px; y: 220px; width: 234px; kind: MenuItemKind.separator; }
+    MenuItem {
+        x: 17px;
+        y: 229px;
+        width: 234px;
+        kind: MenuItemKind.slider;
+        label: "Floor";
+        hint: "-110 dB";
+        value: 0.4;
+        changed(v) => { root.row-slider = v; }
+    }
+    MenuItem {
+        x: 17px;
+        y: 265px;
+        width: 234px;
+        kind: MenuItemKind.slider;
+        label: "Ceiling";
+        hint: "0 dB";
+        value: 0.9;
+        enabled: false;
+        changed(v) => { root.row-slider = v; }
+    }
+    MenuItem {
+        x: 17px;
+        y: 301px;
+        width: 234px;
+        gutter: 20px;
+        label: "Reset trace";
+        enabled: false;
+        clicked => { root.clicks += 1; root.last-click = 8; }
+    }
+    MenuItem {
+        x: 17px;
+        y: 327px;
+        width: 234px;
+        gutter: 20px;
+        label: "Marker list";
+        hot: true;
+        clicked => { root.clicks += 1; root.last-click = 9; }
+    }
+
+    menu := Menu {
+        at-x: root.menu-x;
+        at-y: root.menu-y;
+        entries: root.entries;
+        open-submenu: root.open-submenu-id;
+        keep-open-on-radio: root.keep-open-on-radio;
+        activated(id) => { root.activations += 1; root.last-id = id; }
+        slider-changed(id, v) => { root.slider-changes += 1; root.last-slider-id = id; root.last-slider = v; }
+        submenu-requested(id, x, y) => {
+            root.submenu-requests += 1;
+            root.last-submenu-id = id;
+            root.last-submenu-x = x;
+            root.last-submenu-y = y;
+        }
+        item-hovered(id) => { root.hovered-id = id; }
+    }
+}

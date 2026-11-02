@@ -1,0 +1,287 @@
+// The menu family - the plugin kit's `.menu`, `.mi`, `.msep` and `.mh` (Workbench-PluginKit.dc.html, Workbench-Menus.dc.html).
+//
+//   .menu   Theme.menu ground, 1px Theme.knob-ring border, Theme.radius-panel, padding 4px (inside the border), shadow, min width 180
+//   .mi     Theme.menu-item-h (26) high, padding 0 10, Theme.radius-menu-item, 12px Theme.fg; hot = Theme.menu-hot; disabled = Theme.disabled
+//           hint 11px Theme.muted, right-aligned, 16px away from the label
+//   .msep   1px Theme.line-strong rule, margin 4px 2px            (a 9px row)
+//   .mh     heading: padding 4px 10px, 10px / 600 / 0.8px upper-case Theme.muted   (a 21px row)
+//   slider  the Display block Floor / Ceiling: a caption row (11px label, mono value hint) above a 180px track   (a 36px row)
+//
+// Row heights in px: item, checked, radio, submenu 26 | separator 9 | heading 21 | slider 36.
+// A `checked` or `radio` row draws its mark in a 20px column at the left (a 12px icon and 8px of air); a Menu that holds any such
+// row gives EVERY item row that column, so the labels line up.
+//
+// MenuEntry is a plain struct: a field left out of a literal is false / 0 / "", so write `enabled: true` on every row that acts.
+//
+// Menu is a zero-sized component that holds a PopupWindow (a PopupWindow cannot be a component root). Put it anywhere in the window
+// and call show(): the panel opens with its top-left corner at (at-x, at-y), measured in the frame of the Menu's parent (the window,
+// for a Menu placed in it) whatever x / y the Menu itself has. A click outside closes it; so does activating a row (a radio too,
+// unless `keep-open-on-radio` is set, which is how the Display block behaves). The host owns every value: a slider row reports
+// slider-changed and shows `value` again once released, a checked or radio row reports activated and the host redraws its entries.
+// A submenu row only ASKS: submenu-requested(id, x, y) gives the corner (same frame as at-x / at-y) where its panel should open,
+// with its first row level with the parent row; the host opens a second Menu there. `open-submenu` is the id whose panel is open
+// (that row stays lit); item-hovered(id) says the pointer moved onto another row (the host closes the submenu).
+import { Theme } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+
+export enum MenuItemKind { item, checked, radio, submenu, separator, heading, slider }
+
+export struct MenuEntry { kind: MenuItemKind, id: int, label: string, hint: string, checked: bool, enabled: bool, value: float }
+
+export component MenuItem inherits Rectangle {
+    in property <MenuItemKind> kind: MenuItemKind.item;
+    in property <string> label;
+    in property <string> hint;                 // right-aligned (a slider readout)
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <bool> hot;                    // drawn hot whatever the pointer does: its submenu is open
+    in property <float> value;                 // slider: 0..1
+    in property <length> gutter: (kind == MenuItemKind.checked || kind == MenuItemKind.radio) ? 20px : 0px;
+    in property <string> tooltip;
+    callback clicked;                          // an enabled item, checked, radio or submenu row was clicked
+    callback changed(float);                   // slider: pressed or dragged to this fraction
+    callback hovered;                          // the pointer came onto an item, checked, radio or submenu row
+
+    property <bool> pickable: kind == MenuItemKind.item || kind == MenuItemKind.checked || kind == MenuItemKind.radio || kind == MenuItemKind.submenu;
+    property <bool> is-heading: kind == MenuItemKind.heading;
+    property <bool> is-slider: kind == MenuItemKind.slider;
+    property <length> pad: 10px;
+    property <length> chevron-w: kind == MenuItemKind.submenu ? 14px : 0px;
+    property <length> right-w: hint-text.preferred-width + ((chevron-w > 0px && hint-text.preferred-width > 0px) ? 6px : 0px) + chevron-w;
+    property <length> row-h: kind == MenuItemKind.separator ? 8px + Theme.hairline
+        : is-heading ? 21px
+        : is-slider ? 36px
+        : Theme.menu-item-h;
+    property <bool> lit: pickable && enabled && (hot || touch.has-hover);
+
+    height: row-h;
+    preferred-width: kind == MenuItemKind.separator ? 0px
+        : is-slider ? max(2 * pad + 180px, pad + label-text.preferred-width + (right-w > 0px ? 16px + right-w : 0px) + pad)
+        : is-heading ? pad + label-text.preferred-width + pad
+        : pad + gutter + label-text.preferred-width + (right-w > 0px ? 16px + right-w : 0px) + pad;
+    background: lit ? Theme.menu-hot : transparent;
+    border-radius: Theme.radius-menu-item;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-checkable: root.kind == MenuItemKind.checked || root.kind == MenuItemKind.radio;
+    accessible-checked: root.checked;
+    accessible-action-default => { if (root.pickable && root.enabled) { root.clicked(); } }
+
+    // the mark column: a tick, or a 6px dot (accent when on, a Theme.knob-ring ring when off)
+    if root.kind == MenuItemKind.checked && root.checked : Image {
+        source: @image-url("icons/check.svg");
+        colorize: root.enabled ? Theme.fg : Theme.disabled;
+        x: root.pad;
+        y: (parent.height - self.height) / 2;
+        width: 12px;
+        height: 12px;
+    }
+    if root.kind == MenuItemKind.radio : Rectangle {
+        x: root.pad + 3px;
+        y: (parent.height - self.height) / 2;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.checked ? (root.enabled ? Theme.accent : Theme.disabled) : transparent;
+        border-width: root.checked ? 0px : Theme.hairline;
+        border-color: Theme.knob-ring;
+    }
+
+    label-text := Text {
+        x: root.pad + ((root.is-heading || root.is-slider) ? 0px : root.gutter);
+        y: root.is-heading ? 4px : root.is-slider ? 2px : 0px;
+        height: root.is-heading ? 13px : root.is-slider ? 16px : parent.height;
+        width: max(0px, root.width - self.x - (root.right-w > 0px ? 16px + root.right-w : 0px) - root.pad);
+        text: root.is-heading ? root.label.to-uppercase() : root.kind == MenuItemKind.separator ? "" : root.label;
+        color: root.is-heading ? Theme.muted
+            : root.is-slider ? (root.enabled ? Theme.muted : Theme.disabled)
+            : root.enabled ? Theme.fg : Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: root.is-heading ? Theme.font-cap : root.is-slider ? Theme.font-small : Theme.font-body;
+        font-weight: root.is-heading ? Theme.weight-semibold : Theme.weight-regular;
+        letter-spacing: root.is-heading ? Theme.cap-spacing : 0px;
+        horizontal-alignment: left;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    hint-text := Text {
+        x: root.width - root.pad - root.chevron-w - ((root.chevron-w > 0px && self.width > 0px) ? 6px : 0px) - self.width;
+        y: root.is-slider ? 2px : 0px;
+        height: root.is-slider ? 16px : parent.height;
+        width: self.preferred-width;
+        text: (root.pickable || root.is-slider) ? root.hint : "";
+        color: (root.is-slider && !root.enabled) ? Theme.disabled : Theme.muted;
+        font-family: root.is-slider ? Theme.font-mono : Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+    }
+
+    if root.kind == MenuItemKind.submenu : Image {
+        source: @image-url("icons/chevron-right.svg");
+        colorize: Theme.muted;
+        x: root.width - root.pad - self.width;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+    }
+
+    if root.kind == MenuItemKind.separator : Rectangle {
+        x: 2px;
+        y: 4px;
+        width: parent.width - 4px;
+        height: Theme.hairline;
+        background: Theme.line-strong;
+    }
+
+    // the slider block: the track sits 10px in, 180px long, centred in a 16px zone under the caption row, so the 16px knob
+    // never leaves the row. Pressed or dragged, the knob follows the pointer; released, it goes back to `value` (the host owns it).
+    if root.is-slider : slblock := Rectangle {
+        property <float> shown: grab.pressed ? clamp((grab.mouse-x - 8px) / 180px, 0, 1) : clamp(root.value, 0, 1);
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        track := Rectangle {
+            x: root.pad;
+            y: 23px;
+            width: 180px;
+            height: Theme.slider-track-h;
+            border-radius: Theme.slider-track-h / 2;
+            background: Theme.slider-track;
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width * slblock.shown;
+                height: parent.height;
+                border-radius: parent.border-radius;
+                background: root.enabled ? Theme.slider-fill : Theme.slider-disabled-fill;
+            }
+        }
+        Rectangle {
+            x: track.x + track.width * slblock.shown - self.width / 2;
+            y: track.y + (track.height - self.height) / 2;
+            width: Theme.slider-knob-d;
+            height: Theme.slider-knob-d;
+            border-radius: self.width / 2;
+            background: root.enabled ? Theme.slider-knob : Theme.slider-disabled-knob;
+            border-width: 2px;
+            border-color: Theme.slider-knob-ring;
+            drop-shadow-blur: Theme.shadows ? 3px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 1px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.53) : transparent;
+        }
+        grab := TouchArea {
+            x: root.pad - 8px;
+            y: 18px;
+            width: 180px + 16px;
+            height: 16px;
+            enabled: root.enabled;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                    root.changed(clamp((self.mouse-x - 8px) / 180px, 0, 1));
+                }
+            }
+            moved => {
+                if (self.pressed) { root.changed(clamp((self.mouse-x - 8px) / 180px, 0, 1)); }
+            }
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.pickable;
+        clicked => { if (root.enabled) { root.clicked(); } }
+        changed has-hover => { if (self.has-hover) { root.hovered(); } }
+    }
+
+    TipTimer {
+        hovered: touch.has-hover && root.enabled;
+        text: root.tooltip;
+        anchor-h: root.height;
+    }
+}
+
+export component Menu {
+    in property <[MenuEntry]> entries;
+    in property <length> at-x;
+    in property <length> at-y;
+    in property <int> open-submenu: -1;        // the id whose submenu is open: that row stays hot
+    in property <bool> keep-open-on-radio: false;
+    callback activated(int);                   // an enabled item / checked / radio row was clicked
+    callback slider-changed(int, float);       // a slider row was pressed or dragged to this fraction
+    callback submenu-requested(int, length, length);   // a submenu row was hovered or clicked: where its panel opens
+    callback item-hovered(int);                // the pointer moved onto an item, checked, radio or submenu row
+
+    width: 0px;
+    height: 0px;
+
+    public function show() { popup.show(); }
+    public function close() { popup.close(); }
+
+    // 4px padding plus the 1px border: the rows start 5px inside the panel
+    property <length> inset: 4px + Theme.hairline;
+    // the mark column every item row shares: as wide as the widest any entry asks for (a VerticalLayout is as wide as its widest child)
+    property <length> mark-w: marks.preferred-width;
+
+    marks := VerticalLayout {
+        width: 0px;
+        height: 0px;
+        for entry in root.entries : Rectangle {
+            preferred-width: (entry.kind == MenuItemKind.checked || entry.kind == MenuItemKind.radio) ? 20px : 0px;
+            height: 0px;
+        }
+    }
+
+    popup := PopupWindow {
+        // at-x / at-y are in the frame of the Menu's parent: take off the Menu's own position (an element with no x / y of its
+        // own is centred in its parent), so the panel opens where the host said wherever the Menu itself was put
+        x: root.at-x - root.x;
+        y: root.at-y - root.y;
+        close-policy: close-on-click-outside;
+        panel := Rectangle {
+            // the popup takes its size from this element's layout info, so the 180px minimum is stated there (a plain `width` would
+            // leave the popup as narrow as the rows and the panel centred, hanging out of it, in a menu of short labels)
+            preferred-width: max(180px, list.preferred-width);
+            preferred-height: list.preferred-height;
+            min-width: 180px;
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 28px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            list := VerticalLayout {
+                padding: root.inset;
+                spacing: 0px;
+                alignment: start;
+                for e[i] in root.entries : item := MenuItem {
+                    kind: e.kind;
+                    label: e.label;
+                    hint: e.hint;
+                    checked: e.checked;
+                    enabled: e.enabled;
+                    value: e.value;
+                    gutter: (e.kind == MenuItemKind.item || e.kind == MenuItemKind.checked || e.kind == MenuItemKind.radio || e.kind == MenuItemKind.submenu) ? root.mark-w : 0px;
+                    hot: e.kind == MenuItemKind.submenu && e.id == root.open-submenu;
+                    clicked => {
+                        if (e.kind == MenuItemKind.submenu) {
+                            root.submenu-requested(e.id, root.at-x + panel.width, root.at-y + item.y - root.inset);
+                        } else {
+                            root.activated(e.id);
+                            if (!(e.kind == MenuItemKind.radio && root.keep-open-on-radio)) { popup.close(); }
+                        }
+                    }
+                    changed(v) => { root.slider-changed(e.id, v); }
+                    hovered => {
+                        if (e.kind == MenuItemKind.submenu && e.enabled) {
+                            root.submenu-requested(e.id, root.at-x + panel.width, root.at-y + item.y - root.inset);
+                        } else {
+                            root.item-hovered(e.id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

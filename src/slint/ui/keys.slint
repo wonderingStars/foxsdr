@@ -1,0 +1,430 @@
+// FoxSDR Slint front end - THE KEYS: Caption, Key, SegGroup, SegKey, RailKey, StopKey.
+//
+// Lifted from the Workbench sheets' CSS (Workbench.dc.html and Workbench-PluginKit.dc.html): .cap, .btn and its
+// modifiers, .seg, .rb, and the STOP dome. Everything Theme has a token for is read from Theme; the few lengths it
+// has no metric for (the 6 px gap, the 18 px glyph box, the 92 x 64 dome, the 23 px stripe tile) are literals
+// taken from the sheet.
+//
+// HOW A KEY SIZES ITSELF (read this before placing one)
+//   * A labelled Key is as wide as its words plus its padding and never narrower than `min-w` (64 px; 0 for small
+//     and xs). It reports that width as its min-, preferred- and max-width, so in a layout it hugs its label (the
+//     sheet's inline-flex) and a longer translation simply makes it wider.
+//   * `wide: true` lifts the max-width and adds a stretch factor: the key fills a VerticalLayout's column and takes
+//     the rest of a HorizontalLayout's row (the sheet's width:100% and flex:1).
+//   * Placed at an absolute x / y (no layout) a Slint Rectangle takes its parent's size, so a hugging key placed
+//     that way needs `width: self.preferred-width;` (a `wide` key placed that way fills its parent, which is what
+//     wide means there). An explicit `width` or `height` always wins, in a layout too (a 26 x 22 window button).
+//   * Heights: key 30, small 24, xs 20 (Theme.key-h, key-sm-h, key-xs-h). Override `height` for the odd one out
+//     (BIAS TEE is 36).
+//
+// WHICH LOOK WINS when flags are combined. Border and text: disabled, then on, then danger, hazard, plate, plain.
+// Ground: disabled, then on (accent), then the hover, then ghost / plate / flat / hazard (none of their own), then
+// danger, then plain. `flat` also takes the border away (a window-chrome button). A hazard key ignores `on`: its lamp
+// carries the state, and its stripes stay.
+//
+// Slint has no property inheritance, so SegGroup.small only sets the height of the group itself; give each SegKey
+// the same `small`. Slint has no dashed border either: a disabled key border is drawn at half alpha instead.
+import { Theme } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+import { LampState } from "chips.slint";
+
+// What the four keys share. The focus scope: Space or Enter press the key, and a click never takes the focus (a key
+// must not steal it from whatever is being typed into). The focus ring: the sheet's :focus-visible outline, 2 px of
+// Theme.focus with 1 px clear of the key.
+component KeyScope inherits FocusScope {
+    callback pressed();
+    focus-on-click: false;
+    focus-on-tab-navigation: true;
+    key-pressed(event) => {
+        if (event.text == Key.Space || event.text == Key.Return) { root.pressed(); return accept; }
+        return reject;
+    }
+}
+
+component FocusRing inherits Rectangle {
+    in property <length> key-w;
+    in property <length> key-h;
+    in property <length> key-radius;
+    x: -3px;
+    y: -3px;
+    width: root.key-w + 6px;
+    height: root.key-h + 6px;
+    border-width: 2px;
+    border-color: Theme.focus;
+    border-radius: root.key-radius + 3px;
+}
+
+// .cap - the engraved caption over a group of controls: 10 px / 600 / 0.8 px, upper-case, muted.
+export component Caption inherits Text {
+    in property <string> label;
+    in property <bool> upper: true;
+    text: root.upper ? root.label.to-uppercase() : root.label;
+    color: Theme.muted;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-cap;
+    font-weight: Theme.weight-semibold;
+    letter-spacing: Theme.cap-spacing;
+    vertical-alignment: center;
+}
+
+// .btn - the key. Plain, latched (`on`), ghost, danger, hazard, plate, small, xs, icon-only, wide, disabled, with an
+// icon and / or a lamp dot before the label.
+export component Key inherits Rectangle {
+    // ---- what it says ----
+    in property <string> label;
+    in property <image> icon;
+    in property <length> icon-size: 18px;              // 12 px for the window controls, 16 px for the bell
+    in property <bool> show-lamp;                      // the BIAS TEE lamp: a 9 px dot before the label
+    in property <LampState> lamp: LampState.off;
+    // ---- how it looks ----
+    in property <bool> on;
+    in property <bool> ghost;
+    in property <bool> danger;
+    in property <bool> hazard;
+    in property <bool> plate;
+    in property <bool> flat;
+    in property <bool> small;
+    in property <bool> xs;
+    in property <bool> icon-only;                      // square, no label: set accessible-label (or tooltip)
+    in property <bool> wide;
+    // ---- how it behaves ----
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> min-w: root.xs || root.small ? 0px : Theme.key-min-w;
+    callback clicked();
+    callback right-clicked(length, length);            // pointer position inside the key
+    out property <bool> has-focus: fs.has-focus;
+
+    // ---- the look, resolved ----
+    property <bool> hot: area.has-hover && root.enabled;
+    property <bool> lit: root.on && !root.hazard;
+    property <length> pad: root.xs ? 8px : root.small ? 10px : Theme.key-pad;
+    property <length> hug-w: root.icon-only ? root.height : max(root.min-w, body.preferred-width);
+    property <length> stripe-tile: 23px;               // 8 px diagonal bands, one tile continuing the next
+    property <int> stripe-cols: Math.ceil(root.width / root.stripe-tile);
+    property <int> stripe-rows: Math.ceil(root.height / root.stripe-tile);
+    property <color> line-color: root.lit ? Theme.accent
+                               : root.danger ? Theme.danger-line
+                               : root.hazard ? Theme.hazard-line
+                               : root.plate ? Theme.plate-line
+                               : Theme.key-line;
+    property <color> text-color: !root.enabled ? Theme.key-disabled-fg
+                               : root.lit ? Theme.accent-ink
+                               : root.danger ? Theme.danger-fg
+                               : root.plate ? Theme.plate-fg
+                               : Theme.key-fg;
+    // an icon-only key draws its glyph in fg-soft, as the sheet's window buttons do
+    property <color> glyph-color: !root.enabled ? Theme.key-disabled-fg
+                                : root.icon-only && !root.lit && !root.danger && !root.plate ? Theme.fg-soft
+                                : root.text-color;
+    property <color> lamp-color: root.lamp == LampState.green ? Theme.lamp-green
+                               : root.lamp == LampState.amber ? Theme.lamp-amber
+                               : root.lamp == LampState.red ? Theme.lamp-red
+                               : root.lamp == LampState.yellow ? Theme.lamp-yellow
+                               : Theme.lamp-off;
+
+    height: root.xs ? Theme.key-xs-h : root.small ? Theme.key-sm-h : Theme.key-h;
+    min-width: root.hug-w;
+    preferred-width: root.hug-w;
+    max-width: root.wide ? 16777215px : root.hug-w;
+    horizontal-stretch: root.wide ? 1 : 0;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.flat ? transparent : root.enabled ? root.line-color : root.line-color.with-alpha(0.5);
+    background: !root.enabled ? (root.flat ? transparent : Theme.key-disabled-bg)
+              : root.lit ? (root.hot ? Theme.accent-hover : Theme.accent)
+              : root.hot && !root.hazard ? (root.danger ? Theme.danger-line : Theme.menu-hot)
+              : root.flat || root.ghost || root.plate || root.hazard ? transparent
+              : root.danger ? Theme.danger-bg
+              : Theme.key-bg;
+
+    forward-focus: fs;
+    accessible-role: button;
+    accessible-label: root.label != "" ? root.label : root.tooltip;
+    accessible-description: root.label != "" ? root.tooltip : "";
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    // the hazard ground: 8 px bands of key-bg and hazard-stripe at 135 degrees, inside the border. One gradient
+    // cannot hold the bands for every key width, so the ground is tiled: each tile is a 23 px square whose
+    // gradient ends exactly where the next tile's begins (and the software renderer paints quarter stops cleanly).
+    if root.hazard && root.enabled : Rectangle {
+        x: Theme.hairline; y: Theme.hairline;
+        width: root.width - 2 * Theme.hairline; height: root.height - 2 * Theme.hairline;
+        border-radius: max(0px, Theme.radius - Theme.hairline);
+        clip: true;
+        background: Theme.key-bg;
+        for k in root.stripe-cols * root.stripe-rows : Rectangle {
+            x: Math.mod(k, root.stripe-cols) * root.stripe-tile;
+            y: Math.floor(k / root.stripe-cols) * root.stripe-tile;
+            width: root.stripe-tile; height: root.stripe-tile;
+            background: @linear-gradient(135deg,
+                Theme.key-bg 0%, Theme.key-bg 25%, Theme.hazard-stripe 25%, Theme.hazard-stripe 50%,
+                Theme.key-bg 50%, Theme.key-bg 75%, Theme.hazard-stripe 75%, Theme.hazard-stripe 100%);
+        }
+        if root.hot : Rectangle { background: Theme.menu-hot.with-alpha(0.35); }
+    }
+
+    body := HorizontalLayout {
+        padding-left: root.icon-only ? 0px : root.pad + Theme.hairline;
+        padding-right: root.icon-only ? 0px : root.pad + Theme.hairline;
+        spacing: 6px;
+        alignment: center;
+        if root.show-lamp : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: Theme.lamp-dot; height: Theme.lamp-dot;
+                border-radius: Theme.lamp-dot / 2;
+                border-width: Theme.hairline;
+                background: root.lamp-color;
+                border-color: root.lamp == LampState.off ? Theme.lamp-ring : root.lamp-color;
+                drop-shadow-blur: Theme.lamp-glow && root.lamp != LampState.off ? 6px : 0px;
+                drop-shadow-color: root.lamp-color.with-alpha(0.53);
+            }
+        }
+        if root.icon.width > 0 : VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: root.icon-size; height: root.icon-size;
+                image-fit: contain;
+                colorize: root.glyph-color;
+                accessible-role: none;
+            }
+        }
+        if root.label != "" && !root.icon-only : Text {
+            text: root.label;
+            color: root.text-color;
+            font-family: Theme.font-ui;
+            font-size: root.xs ? Theme.font-cap : root.small ? Theme.font-small : Theme.font-body;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+
+    // the focus ring shows only while the key holds the keyboard focus
+    if fs.has-focus : FocusRing { key-w: root.width; key-h: root.height; key-radius: Theme.radius; }
+
+    fs := KeyScope { enabled: root.enabled; pressed => { root.clicked(); } }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+        pointer-event(event) => {
+            if (root.enabled && event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                root.right-clicked(self.mouse-x, self.mouse-y);
+            }
+        }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// .seg - the ground a row of SegKeys sits in: panel-alt, a line-strong border, 2 px of padding and 2 px between the
+// keys. Put SegKeys straight inside, or inside a HorizontalLayout that carries no padding of its own.
+export component SegGroup inherits Rectangle {
+    in property <bool> small;
+    height: (root.small ? Theme.seg-sm-h : Theme.seg-h) + 2 * (2px + Theme.hairline);
+    width: inner.preferred-width;
+    background: Theme.panel-alt;
+    border-width: Theme.hairline;
+    border-color: Theme.line-strong;
+    border-radius: Theme.radius-seg;
+    inner := HorizontalLayout {
+        padding: 2px + Theme.hairline;
+        spacing: 2px;
+        alignment: start;
+        @children
+    }
+}
+
+// .seg .btn - a key inside a SegGroup: borderless, 26 px (small 22), the lit one on accent.
+export component SegKey inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> small;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> min-w: root.small ? 0px : Theme.seg-key-min-w;
+    callback clicked();
+    out property <bool> has-focus: fs.has-focus;
+
+    property <bool> hot: area.has-hover && root.enabled;
+    property <length> pad: root.small ? 8px : 10px;
+    property <length> hug-w: max(root.min-w, body.preferred-width);
+
+    height: root.small ? Theme.seg-sm-h : Theme.seg-h;
+    min-width: root.hug-w;
+    preferred-width: root.hug-w;
+    max-width: root.hug-w;
+    border-radius: Theme.radius-seg-key;
+    background: !root.enabled ? (root.on ? Theme.key-disabled-bg : transparent)
+              : root.on ? (root.hot ? Theme.accent-hover : Theme.accent)
+              : root.hot ? Theme.menu-hot
+              : transparent;
+
+    forward-focus: fs;
+    accessible-role: radio-button;
+    accessible-label: root.label;
+    accessible-description: root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    body := HorizontalLayout {
+        padding-left: root.pad; padding-right: root.pad;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: !root.enabled ? Theme.key-disabled-fg : root.on ? Theme.accent-ink : Theme.fg-soft;
+            font-family: Theme.font-ui;
+            font-size: root.small ? Theme.font-small : Theme.font-body;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+    if fs.has-focus : FocusRing { key-w: root.width; key-h: root.height; key-radius: Theme.radius-seg-key; }
+    fs := KeyScope { enabled: root.enabled; pressed => { root.clicked(); } }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// .rb - an icon-rail key: 56 x 56, an 18 px icon, a 9 px caption and an 8 px F-key hint; lit it sits on the menu
+// ground with an accent icon and caption.
+export component RailKey inherits Rectangle {
+    in property <image> icon;
+    in property <string> caption;
+    in property <string> hint;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked();
+    out property <bool> has-focus: fs.has-focus;
+
+    property <bool> hot: area.has-hover && root.enabled;
+    property <color> ink: !root.enabled ? Theme.key-disabled-fg : root.on ? Theme.accent : Theme.muted;
+
+    width: Theme.rail-key;
+    height: Theme.rail-key;
+    border-radius: Theme.radius-panel;
+    background: root.on && root.enabled ? Theme.menu : root.hot ? Theme.panel : transparent;
+
+    forward-focus: fs;
+    accessible-role: button;
+    accessible-label: root.caption;
+    accessible-description: root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        if root.icon.width > 0 : Rectangle {
+            height: 18px;
+            Image {
+                x: (parent.width - self.width) / 2;
+                source: root.icon;
+                width: 18px; height: 18px;
+                image-fit: contain;
+                colorize: root.ink;
+                accessible-role: none;
+            }
+        }
+        Text {
+            text: root.caption;
+            color: root.ink;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-tiny;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: 0.4px;
+            horizontal-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        if root.hint != "" : Text {
+            text: root.hint;
+            color: Theme.faint;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-micro;
+            horizontal-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+    if fs.has-focus : FocusRing { key-w: root.width; key-h: root.height; key-radius: Theme.radius-panel; }
+    fs := KeyScope { enabled: root.enabled; pressed => { root.clicked(); } }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// The transport dome: 92 x 64, the sheet's STOP key. A 12 px rounded square in danger-glyph over the word (12 px /
+// 600 / 0.7 px): STOP while the receiver runs, START while it is stopped. The two words are properties so the host
+// can hand in its translations.
+export component StopKey inherits Rectangle {
+    in property <bool> running;
+    in property <bool> enabled: true;
+    in property <string> stop-text: "STOP";
+    in property <string> start-text: "START";
+    in property <string> tooltip: root.running ? "Stop the receiver" : "Start the receiver";
+    callback clicked();
+    out property <bool> has-focus: fs.has-focus;
+
+    property <bool> hot: area.has-hover && root.enabled;
+
+    width: 92px;
+    height: 64px;
+    border-radius: Theme.radius-dome;
+    border-width: Theme.hairline;
+    border-color: root.enabled ? Theme.danger-strong-line : Theme.danger-strong-line.with-alpha(0.5);
+    background: !root.enabled ? Theme.key-disabled-bg : root.hot ? Theme.danger-line : Theme.danger-bg;
+
+    forward-focus: fs;
+    accessible-role: button;
+    accessible-label: root.running ? "Stop the receiver (Ctrl+F2)" : "Start the receiver (Ctrl+F2)";
+    accessible-description: root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        Rectangle {
+            height: 18px;
+            Rectangle {
+                x: (parent.width - 12px) / 2; y: 3px;
+                width: 12px; height: 12px;
+                border-radius: 2px;
+                background: root.enabled ? Theme.danger-glyph : Theme.key-disabled-fg;
+            }
+        }
+        Text {
+            text: root.running ? root.stop-text : root.start-text;
+            color: root.enabled ? Theme.danger-fg : Theme.key-disabled-fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-body;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: 0.7px;
+            horizontal-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+    if fs.has-focus : FocusRing { key-w: root.width; key-h: root.height; key-radius: Theme.radius-dome; }
+    fs := KeyScope { enabled: root.enabled; pressed => { root.clicked(); } }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}

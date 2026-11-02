@@ -1,0 +1,202 @@
+// The lamps family's specimen sheet (lamps.slint): every variant at an absolute position, none overlapping.
+// test_slint_lamps.cpp renders it headless and probes the pixels against Workbench.dc.html's .lamp / .sb CSS.
+// Widths of anything with text are the typeface's business (Inter is not installed on the test machine), so the
+// table gives x / y / height; the sheet reports the widths that matter on the root (w-*, lamp-*).
+//
+//   x,   y,   w,    h   what
+//   16,  16,  auto, 13  Lamp, off, "MUTE" (lamp-off dot, lamp-ring border, muted caption)
+//   96,  16,  auto, 13  Lamp, green, "RUN", with a tooltip (hover test)
+//   176, 16,  auto, 13  Lamp, amber, "RCVR"
+//   256, 16,  auto, 13  Lamp, red, "FAIL"
+//   336, 16,  auto, 13  Lamp, yellow, "NEW"
+//   416, 16,  9,    13  Lamp, green, no caption (the dot alone; the glow probe)
+//   456, 16,  9,    13  Lamp, off, no caption
+//   500, 8,   1,    72  VLine, default line-h
+//   520, 8,   1,    32  VLine, line-h 32
+//   560, 16,  100,  30  a key (TouchArea) with a bare Lamp over it: the lamp must not swallow the click
+//   680, 16,  140,  36  BIAS TEE as main.slint builds it: a bare Lamp and a label in a HorizontalLayout (the lamp must
+//                       stretch to the key's height and centre its dot, not sit against the top edge)
+//   16,  48,  auto, 32  the MASTER block: RUN DEC / MUTE FAIL in a GridLayout (14 / 6 gaps), as the strip lays them
+//   140, 84,  auto, 13  rulers: bare Text "MUTE" "RUN" "RCVR" "FAIL" "NEW" at x 140, 200, 260, 320, 380 (the lamp
+//                       captions as the CSS sets them; the test lays each lamp's caption over its ruler)
+//   0,   104, 840,  28  status bar row; StatusChip DECODERS (value in chip-good-fg, tooltip), x = 4
+//   0,   136, 840,  28  row; StatusChip SINK, detail elided at max-detail-w 160
+//   0,   168, 840,  28  row; the same SINK, max-detail-w 1000 (not elided: the width reference)
+//   0,   200, 840,  28  row; the same SINK without a detail (x 4), then single-part chips at x 110 (key SINK only),
+//                       200 (value OPEN only) and 300 (the long detail only): the padding and the gap from the widths
+//   0,   232, 840,  28  row; a DISABLED StatusChip with lines (x 4), and the RECEIVER chip without its detail (x 220)
+//   0,   264, 840,  28  row; three StatusChips laid by a HorizontalLayout from a model (for ...), as main.slint does
+//   0,   296, 840,  28  row; StatusChip RECEIVER with a green lamp, a long detail and 5 lines (click opens them)
+//   0,   336, 840,  28  row; rulers: bare Text "SINK" (x 20, the .sb .k look), "OPEN" (x 120, .sb .v) and the long
+//                       detail (x 220), each as the CSS sets it
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { LampState } from "../chips.slint";
+import { Lamp, StatusChip, VLine } from "../lamps.slint";
+export { Theme, Skin, Workbench, LampState }
+
+export component LampsSpecimen inherits Window {
+    width: 840px;
+    height: 372px;
+    background: Theme.bg;
+
+    // what the sheet reports to the test
+    in-out property <int> clicks;           // every StatusChip click
+    in-out property <int> last-clicked;     // which row's chip (1 DECODERS, 2 SINK elided, 5 disabled, 7 RECEIVER)
+    in-out property <int> key-clicks;       // clicks that reached the key under the bare lamp
+    out property <length> lamp-h: lamp-green.height;
+    out property <length> lamp-green-w: lamp-green.width;
+    out property <length> lamp-mute-w: lamp-mute.width;
+    out property <length> lamp-bare-w: lamp-bare-on.width;
+    out property <length> lamp-bare-off-w: lamp-bare-off.width;
+    out property <length> w-decoders: decoders.width;
+    out property <length> w-sink-elided: sink-elided.width;
+    out property <length> w-sink-full: sink-full.width;
+    out property <length> w-sink-bare: sink-bare.width;
+    out property <length> w-disabled: disabled-chip.width;
+    out property <length> w-receiver: receiver.width;
+    out property <length> w-receiver-bare: receiver-bare.width;
+    out property <length> w-key-only: chip-key.width;
+    out property <length> w-value-only: chip-value.width;
+    out property <length> w-detail-only: chip-detail.width;
+    out property <length> h-receiver: receiver.height;
+    out property <length> panel-h: receiver.panel-height;
+    out property <length> master-h: master.height;
+    out property <length> master-w: master.width;
+
+    property <[{key: string, value: string, detail: string, lamp: LampState, show-lamp: bool, good: bool}]> bar: [
+        { key: "RECEIVER", value: "RUNNING", detail: "RTL-SDR Blog V4 · ANT RX · GAIN 32 dB · PPM 0.0 · 2.400 MS/s", lamp: LampState.green, show-lamp: true, good: false },
+        { key: "DECODERS", value: "2 running", detail: "of 5 fitted, 1 idle", lamp: LampState.off, show-lamp: false, good: true },
+        { key: "SINK", value: "OPEN", detail: "", lamp: LampState.off, show-lamp: false, good: true },
+    ];
+
+    // ---- lamps ----
+    // (a lamp placed outside a layout is given its height: Slint would otherwise stretch it to the sheet)
+    lamp-mute := Lamp { x: 16px;  y: 16px; height: 13px; caption: "MUTE"; state: LampState.off; }
+    lamp-green := Lamp { x: 96px;  y: 16px; height: 13px; caption: "RUN";  state: LampState.green; tooltip: "The receiver is running"; }
+    Lamp { x: 176px; y: 16px; height: 13px; caption: "RCVR"; state: LampState.amber; }
+    Lamp { x: 256px; y: 16px; height: 13px; caption: "FAIL"; state: LampState.red; }
+    Lamp { x: 336px; y: 16px; height: 13px; caption: "NEW";  state: LampState.yellow; }
+    lamp-bare-on := Lamp { x: 416px; y: 16px; height: 13px; state: LampState.green; }
+    lamp-bare-off := Lamp { x: 456px; y: 16px; height: 13px; state: LampState.off; }
+
+    // ---- dividers ----
+    VLine { x: 500px; y: 8px; }
+    VLine { x: 520px; y: 8px; line-h: 32px; }
+
+    // ---- a key with a bare lamp over its TouchArea (BIAS TEE) ----
+    Rectangle {
+        x: 560px; y: 16px; width: 100px; height: 30px;
+        background: Theme.key-bg; border-width: Theme.hairline; border-color: Theme.key-line; border-radius: Theme.radius;
+        TouchArea { clicked => { root.key-clicks += 1; } }
+        Lamp { x: 40px; y: 8px; height: 13px; state: LampState.amber; }
+    }
+
+    // ---- BIAS TEE as the main screen builds it: a 36px key whose HorizontalLayout holds a bare lamp and the label ----
+    Rectangle {
+        x: 680px; y: 16px; width: 140px; height: 36px;
+        background: Theme.key-bg; border-width: Theme.hairline; border-color: Theme.hazard-line; border-radius: Theme.radius;
+        HorizontalLayout {
+            padding-left: 14px; padding-right: 14px; spacing: 6px; alignment: center;
+            Lamp { state: LampState.amber; }
+            Text { text: "BIAS TEE"; color: Theme.key-fg; font-family: Theme.font-ui; font-size: Theme.font-body; font-weight: Theme.weight-medium; vertical-alignment: center; }
+        }
+    }
+
+    // ---- the MASTER block, as the receiver strip lays it ----
+    master := Rectangle {
+        x: 16px; y: 48px;
+        width: grid.preferred-width;
+        height: grid.preferred-height;
+        grid := GridLayout {
+            spacing-horizontal: 14px;
+            spacing-vertical: 6px;
+            Row { Lamp { caption: "RUN";  state: LampState.green; } Lamp { caption: "DEC";  state: LampState.green; } }
+            Row { Lamp { caption: "MUTE"; state: LampState.off; }   Lamp { caption: "FAIL"; state: LampState.off; } }
+        }
+    }
+
+    // ---- status bar rows: the strip colour behind each ----
+    Rectangle { x: 0px; y: 104px; width: 840px; height: 28px; background: Theme.strip; }
+    Rectangle { x: 0px; y: 136px; width: 840px; height: 28px; background: Theme.strip; }
+    Rectangle { x: 0px; y: 168px; width: 840px; height: 28px; background: Theme.strip; }
+    Rectangle { x: 0px; y: 200px; width: 840px; height: 28px; background: Theme.strip; }
+    Rectangle { x: 0px; y: 232px; width: 840px; height: 28px; background: Theme.strip; }
+    Rectangle { x: 0px; y: 264px; width: 840px; height: 28px; background: Theme.strip; }
+    Rectangle { x: 0px; y: 296px; width: 840px; height: 28px; background: Theme.strip; }
+
+    decoders := StatusChip {
+        x: 4px; y: 104px;
+        key: "DECODERS"; value: "2 running"; detail: "of 5 fitted, 1 idle";
+        value-color: Theme.chip-good-fg;
+        tooltip: "Decoders fed by the receiver";
+        clicked => { root.clicks += 1; root.last-clicked = 1; }
+    }
+    sink-elided := StatusChip {
+        x: 4px; y: 136px;
+        key: "SINK"; value: "OPEN"; detail: "Speakers (Realtek) · playing NFM · 48 kHz stereo";
+        value-color: Theme.chip-good-fg;
+        max-detail-w: 160px;
+        clicked => { root.clicks += 1; root.last-clicked = 2; }
+    }
+    sink-full := StatusChip {
+        x: 4px; y: 168px;
+        key: "SINK"; value: "OPEN"; detail: "Speakers (Realtek) · playing NFM · 48 kHz stereo";
+        value-color: Theme.chip-good-fg;
+        max-detail-w: 1000px;
+    }
+    sink-bare := StatusChip {
+        x: 4px; y: 200px;
+        key: "SINK"; value: "OPEN"; detail: "";
+        value-color: Theme.chip-good-fg;
+    }
+    // ---- single-part chips: the padding (10) and the gap (6) from the widths, each word's colour on its own ----
+    chip-key := StatusChip { x: 110px; y: 200px; key: "SINK"; }
+    chip-value := StatusChip { x: 200px; y: 200px; value: "OPEN"; value-color: Theme.chip-good-fg; }
+    chip-detail := StatusChip { x: 300px; y: 200px; detail: "Speakers (Realtek) · playing NFM · 48 kHz stereo"; max-detail-w: 1000px; }
+
+    // ---- rulers: bare Text set straight from the sheet's CSS. The test lays a lamp's caption (or a chip's word) over
+    // the ruler's pixels: the same size, weight, spacing, colour and position give the same pixels, whatever the
+    // typeface, so nothing is asserted about glyph shapes or widths. Lamp captions: 10px / 600 / .06em at x + 15.
+    Text { x: 140px; y: 84px; height: 13px; text: "MUTE"; color: Theme.muted;           font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: 0.6px; vertical-alignment: center; }
+    Text { x: 200px; y: 84px; height: 13px; text: "RUN";  color: Theme.lamp-green-cap;  font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: 0.6px; vertical-alignment: center; }
+    Text { x: 260px; y: 84px; height: 13px; text: "RCVR"; color: Theme.lamp-amber-cap;  font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: 0.6px; vertical-alignment: center; }
+    Text { x: 320px; y: 84px; height: 13px; text: "FAIL"; color: Theme.lamp-red-cap;    font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: 0.6px; vertical-alignment: center; }
+    Text { x: 380px; y: 84px; height: 13px; text: "NEW";  color: Theme.lamp-yellow-cap; font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: 0.6px; vertical-alignment: center; }
+    // Chip words, on a strip row of their own: .sb .k 9px / 600 / .08em dim, .sb .v 11px / 600, the detail 12px / 500 dim
+    Rectangle { x: 0px; y: 336px; width: 840px; height: 28px; background: Theme.strip; }
+    Text { x: 20px;  y: 336px; height: 28px; text: "SINK"; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold; letter-spacing: 0.7px; vertical-alignment: center; }
+    Text { x: 120px; y: 336px; height: 28px; text: "OPEN"; color: Theme.chip-good-fg; font-family: Theme.font-ui; font-size: Theme.font-small; font-weight: Theme.weight-semibold; vertical-alignment: center; }
+    Text { x: 220px; y: 336px; height: 28px; text: "Speakers (Realtek) · playing NFM · 48 kHz stereo"; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-body; font-weight: Theme.weight-medium; vertical-alignment: center; }
+
+    receiver-bare := StatusChip {
+        x: 220px; y: 232px;
+        key: "RECEIVER"; value: "RUNNING"; lamp: LampState.green; show-lamp: true;
+    }
+    disabled-chip := StatusChip {
+        x: 4px; y: 232px;
+        key: "RECORDER"; value: "off"; detail: "no file open";
+        lines: ["Recording is not available"];
+        enabled: false;
+        tooltip: "Recording is not available";
+        clicked => { root.clicks += 1; root.last-clicked = 5; }
+    }
+    Rectangle {
+        x: 0px; y: 264px; width: 840px; height: 28px;
+        HorizontalLayout {
+            padding-left: 4px;
+            spacing: 0px;
+            alignment: start;
+            for c[i] in root.bar : StatusChip {
+                key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp;
+                value-color: c.good ? Theme.chip-good-fg : Theme.fg;
+            }
+        }
+    }
+    receiver := StatusChip {
+        x: 4px; y: 296px;
+        key: "RECEIVER"; value: "RUNNING"; detail: "RTL-SDR Blog V4 · ANT RX · GAIN 32 dB · PPM 0.0 · 2.400 MS/s";
+        lamp: LampState.green; show-lamp: true;
+        lines: ["RTL-SDR Blog V4", "Antenna: ANT RX", "Gain: 32 dB (tuner stage)", "Frequency correction: PPM 0.0", "Sample rate: 2.400 MS/s"];
+        clicked => { root.clicks += 1; root.last-clicked = 7; }
+    }
+}

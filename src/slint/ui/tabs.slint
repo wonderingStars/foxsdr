@@ -1,0 +1,369 @@
+// FoxSDR Slint front end - TABS: the tab, the torn-off window's chrome and frame, and the splitter.
+//
+//   Tab           .tab    a 32 px tab, 96 px at least: label, optional amber "torn off" dot before it, optional close
+//                         key after it, a 2 px accent underline when `on`. Pressing and pulling DOWN more than 24 px
+//                         fires `drag-out` once (the tear-off gesture); the release after it is not a click.
+//   WindowChrome  .wt     the 30 px title strip of a torn-off window: the title (upper-case, elided), then the Roll up,
+//                         Maximise (Restore when maximised) and Close keys. Rolled up, only the Restore key is left.
+//   TornWindow    .win    the window frame: panel ground, knob-ring border, rounded, a chrome on top, the caller's
+//                         content below, a hatched resize grip bottom-right. Rolled up it collapses to the chrome.
+//   Splitter              the 6 px bar between the spectrum and the waterfall.
+//
+// DRAG SEMANTICS. drag, resize and moved are main.slint's title-drag idiom: on every pointer move while the left button is
+// down they report the pointer's offset from the point where the press began, in the component's own coordinates (drag-out
+// reports the same offset, once). The host moves the window, the grip's corner or the splitter by that offset on each call
+// (set_position(pos + offset), `waterfall-h -= dy`): the thing follows the pointer, so the pointer stays on the same spot of
+// it and every call after the first carries only the new travel - the offsets then sum to the pointer's travel. A host that
+// moves nothing sees the offsets grow from the press.
+//
+// Measurements are the sheets' CSS (Workbench.dc.html: .tab, the tab row, the splitter; Workbench-PluginKit.dc.html:
+// .win, .wt, .grip, .tab with a gap of 6).
+import { Theme } from "theme.slint";
+import { LampDot, LampState } from "chips.slint";
+import { TipTimer } from "tooltip.slint";
+
+// A TouchArea that reports a left-button drag as the pointer's offset from the press (see DRAG SEMANTICS). Private.
+component DragArea inherits TouchArea {
+    in property <bool> active: true;                 // false: the drag reports nothing
+    callback dragged(length, length);
+    out property <length> travel;                    // the sum of |offset| over this press's moves: 0 for a click that stayed put
+    pointer-event(e) => {
+        if (e.kind == PointerEventKind.down) { self.travel = 0px; }
+    }
+    moved => {
+        if (self.pressed && root.active) {
+            let dx = self.mouse-x - self.pressed-x;
+            let dy = self.mouse-y - self.pressed-y;
+            self.travel += abs(dx) + abs(dy);
+            root.dragged(dx, dy);
+        }
+    }
+}
+
+// A transparent icon key: the chrome's three (26 x 22) and a tab's close key. Private to this file.
+component IconKey inherits Rectangle {
+    in property <image> icon;
+    in property <length> icon-size: 12px;
+    in property <color> tint: Theme.fg-soft;
+    in property <color> hot-tint: Theme.fg;
+    in property <string> label;                      // the accessible name
+    in property <string> tooltip;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    border-radius: Theme.radius;
+    background: area.has-hover && root.enabled ? Theme.menu-hot : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.icon-size;
+        height: root.icon-size;
+        image-fit: contain;
+        source: root.icon;
+        colorize: !root.enabled ? Theme.disabled : area.has-hover ? root.hot-tint : root.tint;
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+export component Tab inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> torn-off;                     // the tab's window is torn off: an amber dot before the label
+    in property <bool> closable;                     // a close key after the label
+    in property <bool> ghost;                        // the "+ Window" tab: no minimum width, dim label
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked();
+    callback close-clicked();
+    callback drag-out(length, length);               // the offset from the press, once, past 24 px downward
+
+    // padding 0 16, a 6 px gap between the dot, the label and the close key, 96 px at least (the group is centred)
+    property <length> group-w: (root.torn-off ? Theme.lamp-dot-sm + 6px : 0px) + lbl.preferred-width + (root.closable ? 6px + 16px : 0px);
+    property <length> group-x: (root.width - root.group-w) / 2;
+
+    height: Theme.tab-h;
+    width: max(root.ghost ? 0px : 96px, 16px + root.group-w + 16px);
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    // the 2 px underline (border-bottom); transparent when the tab is not on
+    Rectangle {
+        x: 0px;
+        y: parent.height - 2px;
+        width: parent.width;
+        height: 2px;
+        background: root.on ? Theme.accent : transparent;
+    }
+    if root.torn-off : LampDot {
+        x: root.group-x;
+        y: (parent.height - 2px - self.height) / 2;
+        state: LampState.amber;
+    }
+    lbl := Text {
+        x: root.group-x + (root.torn-off ? Theme.lamp-dot-sm + 6px : 0px);
+        y: 0px;
+        width: self.preferred-width;
+        height: parent.height - 2px;
+        text: root.label;
+        color: !root.enabled ? Theme.disabled : root.on ? Theme.fg : root.ghost ? Theme.dim : Theme.muted;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        font-weight: Theme.weight-medium;
+        vertical-alignment: center;
+    }
+    area := TouchArea {
+        property <bool> pulled;                      // a drag-out has already fired for this press
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) { self.pulled = false; }
+        }
+        moved => {
+            if (self.pressed && root.enabled && !self.pulled && self.mouse-y - self.pressed-y > 24px) {
+                self.pulled = true;
+                root.drag-out(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+            }
+        }
+        clicked => { if (root.enabled && !self.pulled) { root.clicked(); } }
+    }
+    if root.closable : IconKey {
+        x: lbl.x + lbl.width + 6px;
+        y: (parent.height - 2px - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        icon: @image-url("icons/close.svg");
+        tint: Theme.muted;
+        enabled: root.enabled;
+        label: @tr("Close {}", root.label);
+        clicked => { root.close-clicked(); }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: parent.height; }
+}
+
+export component WindowChrome inherits Rectangle {
+    in property <string> title;
+    in property <bool> rolled-up;                    // the chrome alone, with a Restore key (the Roll up key toggles)
+    in property <bool> maximised;                    // the middle key is Restore
+    in property <bool> enabled: true;
+    in property <string> tooltip;                    // on the strip ("drag outside the main window to tear out")
+    in property <length> radius-top: 0px;            // a TornWindow rounds the chrome's corners to its own
+    in property <length> radius-bottom: 0px;
+    callback roll-up-clicked();
+    callback maximise-clicked();
+    callback close-clicked();
+    callback drag(length, length);                   // the pointer's offset from the press, on every move while pressed
+    callback double-clicked();
+
+    // padding 0 4 0 12, 4 px between the 26 x 22 keys
+    property <length> key-w: 26px;
+    property <length> key-h: 22px;
+    property <length> keys-left: root.rolled-up ? root.width - 4px - root.key-w : root.width - 4px - 3 * root.key-w - 2 * 4px;
+
+    height: Theme.win-title-h;
+    background: Theme.menu;
+    border-top-left-radius: root.radius-top;
+    border-top-right-radius: root.radius-top;
+    border-bottom-left-radius: root.radius-bottom;
+    border-bottom-right-radius: root.radius-bottom;
+
+    // border-bottom: 1px solid line-strong (the rolled-up chrome has none: the window's own border closes it)
+    Rectangle {
+        x: 0px;
+        y: parent.height - Theme.hairline;
+        width: parent.width;
+        height: root.rolled-up ? 0px : Theme.hairline;
+        background: Theme.line-strong;
+    }
+    strip := DragArea {
+        active: root.enabled;
+        dragged(dx, dy) => { root.drag(dx, dy); }
+        // a press that has travelled more than 3 px is a drag, not the second half of a double click
+        double-clicked => { if (root.enabled && self.travel <= 3px) { root.double-clicked(); } }
+    }
+    // .t: 11 px / 600 / .08em, upper-case, elided before the first key (4 px of air)
+    Text {
+        x: 12px;
+        y: 0px;
+        width: max(0px, root.keys-left - 4px - self.x);
+        height: parent.height;
+        text: root.title.to-uppercase();
+        color: Theme.fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        font-weight: Theme.weight-semibold;
+        letter-spacing: Theme.cap-spacing;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    IconKey {
+        x: root.keys-left;
+        y: (parent.height - root.key-h) / 2;
+        width: root.key-w;
+        height: root.key-h;
+        enabled: root.enabled;
+        icon: root.rolled-up ? @image-url("icons/restore.svg") : @image-url("icons/rollup.svg");
+        label: root.rolled-up ? @tr("Restore") : @tr("Roll up");
+        tooltip: root.rolled-up ? @tr("Restore") : @tr("Roll up");
+        clicked => { root.roll-up-clicked(); }
+    }
+    if !root.rolled-up : IconKey {
+        x: root.keys-left + root.key-w + 4px;
+        y: (parent.height - root.key-h) / 2;
+        width: root.key-w;
+        height: root.key-h;
+        enabled: root.enabled;
+        icon: root.maximised ? @image-url("icons/restore.svg") : @image-url("icons/maximise.svg");
+        label: root.maximised ? @tr("Restore") : @tr("Maximise");
+        tooltip: root.maximised ? @tr("Restore") : @tr("Maximise");
+        clicked => { root.maximise-clicked(); }
+    }
+    if !root.rolled-up : IconKey {
+        x: root.keys-left + 2 * (root.key-w + 4px);
+        y: (parent.height - root.key-h) / 2;
+        width: root.key-w;
+        height: root.key-h;
+        enabled: root.enabled;
+        icon: @image-url("icons/close.svg");
+        label: @tr("Close");
+        tooltip: @tr("Close");
+        clicked => { root.close-clicked(); }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: strip.has-hover; text: root.tooltip; anchor-h: parent.height; }
+}
+
+export component TornWindow inherits Rectangle {
+    in property <string> title;
+    in property <bool> rolled-up;                    // the chrome alone: 30 px of the window show
+    in property <bool> maximised;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback roll-up-clicked();
+    callback maximise-clicked();
+    callback close-clicked();
+    callback drag(length, length);
+    callback double-clicked();
+    callback resize(length, length);                 // the grip: the pointer's offset from the press, on every move while pressed
+
+    out property <length> frame-height: frame.height;
+
+    // The window: the caller sets this component's size; rolled up, the frame shrinks to the chrome and the rest of
+    // the area stays empty. The corners are round, but the software renderer clips children to a rectangle, so the
+    // chrome rounds its own top corners and the border is drawn last, over everything.
+    frame := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.rolled-up ? Theme.win-title-h : root.height;
+        background: Theme.panel;
+        border-radius: Theme.radius-panel;
+        clip: true;
+        drop-shadow-blur: Theme.shadows ? 28px : 0px;
+        drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+        drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.73) : transparent;
+
+        property <color> grip-clear: Theme.nudge.with-alpha(0.0);
+
+        WindowChrome {
+            x: Theme.hairline;
+            y: Theme.hairline;
+            width: parent.width - 2 * Theme.hairline;
+            title: root.title;
+            rolled-up: root.rolled-up;
+            maximised: root.maximised;
+            enabled: root.enabled;
+            tooltip: root.tooltip;
+            radius-top: Theme.radius-panel - Theme.hairline;
+            radius-bottom: root.rolled-up ? Theme.radius-panel - Theme.hairline : 0px;
+            roll-up-clicked => { root.roll-up-clicked(); }
+            maximise-clicked => { root.maximise-clicked(); }
+            close-clicked => { root.close-clicked(); }
+            drag(dx, dy) => { root.drag(dx, dy); }
+            double-clicked => { root.double-clicked(); }
+        }
+        // .win is a flex column: the caller's blocks stack under the chrome inside the border
+        VerticalLayout {
+            x: Theme.hairline;
+            y: Theme.hairline + Theme.win-title-h;
+            width: parent.width - 2 * Theme.hairline;
+            height: max(0px, parent.height - 2 * Theme.hairline - Theme.win-title-h);
+            visible: !root.rolled-up;
+            @children
+        }
+        // .grip: 12 x 12 at right 3, bottom 3, a 135 degree hatch of 1 px lines every 4 px
+        Rectangle {
+            x: parent.width - 3px - 12px;
+            y: parent.height - 3px - 12px;
+            width: 12px;
+            height: 12px;
+            visible: !root.rolled-up && !root.maximised;
+            background: @linear-gradient(135deg,
+                parent.grip-clear 0%, parent.grip-clear 17.68%, Theme.nudge 17.68%, Theme.nudge 23.57%,
+                parent.grip-clear 23.57%, parent.grip-clear 41.25%, Theme.nudge 41.25%, Theme.nudge 47.14%,
+                parent.grip-clear 47.14%, parent.grip-clear 64.82%, Theme.nudge 64.82%, Theme.nudge 70.71%,
+                parent.grip-clear 70.71%, parent.grip-clear 88.39%, Theme.nudge 88.39%, Theme.nudge 94.28%,
+                parent.grip-clear 94.28%, parent.grip-clear 100%);
+        }
+        DragArea {
+            x: parent.width - 16px;
+            y: parent.height - 16px;
+            width: 16px;
+            height: 16px;
+            visible: !root.rolled-up && !root.maximised;
+            active: root.enabled;
+            mouse-cursor: root.enabled ? MouseCursor.nwse-resize : MouseCursor.default;
+            dragged(dx, dy) => { root.resize(dx, dy); }
+        }
+        // border: 1px solid knob-ring, over the chrome and the content
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            background: transparent;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+        }
+    }
+}
+
+export component Splitter inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback moved(length);                          // the pointer's offset from the press, on every move while pressed
+
+    height: Theme.splitter-h;
+    background: Theme.panel;
+    accessible-role: slider;
+    accessible-label: @tr("Resize");
+    accessible-enabled: root.enabled;
+
+    // border-top / border-bottom: 1px solid line (inside the 6 px)
+    Rectangle { x: 0px; y: 0px; width: parent.width; height: Theme.hairline; background: Theme.line; }
+    Rectangle { x: 0px; y: parent.height - Theme.hairline; width: parent.width; height: Theme.hairline; background: Theme.line; }
+    // the grip: 48 x 2, knob-ring, accent while the pointer is on the bar or pulling it
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 48px;
+        height: 2px;
+        border-radius: 1px;
+        background: root.enabled && (area.has-hover || area.pressed) ? Theme.accent : Theme.knob-ring;
+    }
+    area := DragArea {
+        active: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.ns-resize : MouseCursor.default;
+        dragged(dx, dy) => { root.moved(dy); }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: parent.height; }
+}

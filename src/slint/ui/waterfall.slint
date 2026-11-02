@@ -1,0 +1,547 @@
+// FoxSDR Slint front end - the WATERFALL: the lower well of the receiver view (Workbench.dc.html, the div after the
+// splitter: 270 px high, ground well-deep). Everything is drawn from the sheet's CSS and the inventory's "Waterfall
+// panel" / "Mouse gestures on the waterfall" / "Waterfall markers drawn on the plots" tables.
+//
+//   x, y, w, h (the sheet at 1024 x 270)       what
+//   44, 0, width - 44, height - 32 (980 x 238) the picture (host-painted image, filled), marks and markers over it
+//   0, 0, 44, ...                              the age strip: cap "Age" at (6, 4), tick labels at x 8, the gap break
+//   right 14, top 10 (picture-relative)        the strength key plate: title (+ MANUAL chip), 180 px ramp, labels, foot
+//   44, height - 28, width - 58, 28            the foot: hairline on top, foot-left | foot-tuned + foot-rest
+//
+// Positions that come from a frequency (vfo-pos, marks, markers, hover) are FRACTIONS 0..1 of the picture width, and
+// the age ticks and rails fractions of its height: the host does the arithmetic (a float cannot hold a frequency in Hz).
+//
+// STACKING THE MARKER TABS needs a loop Slint does not have (each tab's row depends on the rows of the tabs before it), so
+// it is a short unrolled chain of `lane` properties: tab k goes on the lowest of 3 rows whose last tab ends before it
+// starts (src/gui/freq_marker_layout.hpp's rule: the markers arrive left to right, a tab that touches goes up a row, a
+// 4th row keeps the line and loses the tab). Tab widths are ESTIMATED from the label's length (the real chip is drawn at
+// its own width), and only the first 24 markers can carry a tab or be hovered (the hover is the same kind of chain).
+//
+// THE TIP is drawn inline in the shared TooltipFace, 600 ms after the pointer came to rest (it stays while the pointer moves
+// less than 6 px and goes when a button goes down), NOT through TipTimer: a TipTimer tip is a PopupWindow, and while one is open
+// Slint hands it every pointer event, so this view saw the pointer leave and the first press after the tip appeared - the click
+// that tunes - was lost. (spectrum.slint does the same for the same reason.)
+//
+// GESTURES (the inventory's "Mouse gestures on the waterfall"): a left press released within 450 ms and 4 px of travel is a
+// click; the second press of a double-click is neither a tune nor a pan; past 4 px of travel the press is a pan (a step per
+// move); the right button reports on release, never while the left is panning; the wheel is one `wheel` per event with
+// round(delta-y / 120) notches, at least one, wheel UP positive (Slint's delta-y is positive for a wheel turned up).
+import { Theme } from "theme.slint";
+import { Chip, ChipTone } from "chips.slint";
+import { TooltipFace } from "tooltip.slint";
+import { PluginMark, UserMarker } from "spectrum.slint";
+
+export struct AgeTick { pos: float, label: string }
+
+// Where the last tab of each of the three rows ends (plus the gap), and the row the tab just placed took (-1: none).
+struct TabLane { t0: length, t1: length, t2: length, row: int }
+
+// The marker nearest to the pointer so far (-1: none) and how far it is.
+struct MarkerHit { index: int, dist: length }
+
+// A 1 px vertical line: solid, or dashed as a column of short rectangles (Slint has no dashed borders).
+component WfLine inherits Rectangle {
+    in property <color> tint;
+    in property <bool> dashed;
+    width: Theme.hairline;
+    background: root.dashed ? transparent : root.tint;
+    for i in (root.dashed ? ceil(root.height / 6px) : 0) : Rectangle {
+        y: i * 6px;
+        width: parent.width;
+        height: min(3px, root.height - self.y);
+        background: root.tint;
+    }
+}
+
+export component WaterfallView inherits Rectangle {
+    // ---- the picture and its frame ----
+    in property <image> picture;
+    out property <length> gutter-w: 44px;          // the age strip's width; the spectrum's plot starts at the same x
+    out property <length> foot-h: 28px;            // the foot band under the picture (4 px of bare well between them)
+
+    // ---- the age strip (left gutter) ----
+    in property <string> age-caption: "Age";
+    in property <[AgeTick]> age-ticks;             // pos: 0..1 of the picture height = the label's TOP edge
+    in property <float> gap-pos: -1;               // the reception-gap break: a rail across the gutter at this height, -1 none
+    in property <string> gap-label-above;          // the age of the row above the break
+    in property <string> gap-label-below;          // ...and of the row below it
+
+    // ---- the strength key (top right of the picture) ----
+    in property <bool> show-key: true;
+    in property <string> key-title: "Strength";
+    in property <[string]> key-labels;             // the dB scale, spread under the ramp
+    in property <string> key-foot;                 // "FLOOR -110 dB · CEILING 0 dB · auto"
+    in property <bool> key-manual;                 // the floor and ceiling are the user's own: a MANUAL chip beside the title
+    in property <string> key-manual-label: "MANUAL";
+    in property <string> key-coverage;             // how many newest rows the key is true for after a range change; "" none
+    out property <length> key-x: pic.x + key.x;    // the plate's rectangle in this view (zero size while it is not drawn)
+    out property <length> key-y: key.y;
+    out property <length> key-w: key.visible ? key.width : 0px;
+    out property <length> key-h: key.visible ? key.height : 0px;
+
+    // ---- the range-changed rail (across the picture where the floor and ceiling changed) ----
+    in property <float> rail-pos: -1;              // 0..1 of the picture height, -1 none
+    in property <string> rail-label;
+
+    // ---- the foot ----
+    in property <string> foot-left;                // "24 lines/s · 42 s of history"
+    in property <string> foot-tuned;               // "145.500000 MHz" in the accent
+    in property <string> foot-rest;                // " · NFM · decoding: APRS"
+
+    // ---- lines over the picture ----
+    in property <float> vfo-pos;
+    in property <bool> show-vfo: true;
+    in property <[PluginMark]> plugin-marks;
+    in property <[UserMarker]> user-markers;         // left to right; each is a dashed line and a tab "M1 145.212 MHz"
+    in property <string> marker-tooltip;           // the host's words for the marker under the pointer (marker-hovered >= 0)
+
+    // ---- the cursor ----
+    in property <bool> cursor-visible;
+    in property <string> cursor-text;              // the host formats it
+    in property <float> cursor-pos: -1;            // 0..1 of the picture width; -1 follows this view's own pointer
+
+    // ---- interaction ----
+    in property <bool> enabled: true;
+    in property <string> tooltip;                  // the gesture help, shown after the pointer rests (not over a marker)
+    out property <string> active-tooltip: root.marker-hover >= 0 ? root.marker-tooltip : root.tooltip;
+    out property <bool> tip-shown;                 // the rest tip is up
+    out property <bool> panning: root.pressing && root.moved-past;
+    out property <int> marker-hover: root.hit23.index;   // the marker under the pointer (-1 none), as marker-hovered reports it
+    callback hover(xfrac: float, yfrac: float);    // over the picture; -1, -1 when the pointer leaves
+    callback clicked(xfrac: float, shift: bool);   // on release, unless held 450 ms or moved past 4 px
+    callback panned(dxfrac: float);                // per move after 4 px of travel: the pointer's step, 1.0 = the picture's width
+    callback double-clicked;
+    callback right-clicked(xfrac: float, x: length, y: length);   // x, y in this view
+    callback wheel(xfrac: float, notches: int, shift: bool);   // notches > 0 for a wheel turned UP (delta-y > 0), as on the spectrum
+    callback marker-hovered(index: int);
+
+    accessible-role: image;
+    accessible-label: "Waterfall";
+    background: Theme.well-deep;
+    clip: true;
+
+    // ---- gesture state ----
+    private property <bool> pressing;             // the left button is down on the picture
+    private property <bool> moved-past;           // travelled past 4 px, or the second press of a double-click: a pan, not a click
+    private property <bool> held-long;            // held 450 ms: not a click
+    private property <length> press-x;
+    private property <length> last-x;
+    private property <length> last-click-x;
+    private property <bool> was-inside;
+    private property <length> rest-x;                 // where it came to rest, picture coordinates
+    private property <length> rest-y;
+    private property <{x: length, y: length, inside: bool}> pointer: { x: area.mouse-x, y: area.mouse-y, inside: area.has-hover };
+
+    // ---- geometry ----
+    private property <length> pic-w: max(0px, root.width - root.gutter-w);
+    private property <length> pic-h: max(0px, root.height - root.foot-h - 4px);
+    private property <length> tab-h: 18px;        // the sheet's marker tab
+    private property <length> tab-pitch: 20px;    // one row up = a tab and 2 px
+    private property <length> cursor-x: false ? root.cursor-pos * root.pic-w : (area.has-hover ? area.mouse-x : -1px);
+    private property <length> rail-y: round(root.rail-pos * root.pic-h / 1px) * 1px;
+    private property <bool> rail-shown: root.rail-pos >= 0 && root.rail-pos <= 1 && root.rail-y < root.pic-h - 2px
+        && (!key.visible || root.rail-y > key.y + key.height + 6px);
+
+    // A plugin's colour: transparent means the theme's mark colour at the sheet's 60 % (#d4b06099); any other keeps at least 0x60 of alpha.
+    pure function mark-colour(c: color) -> color {
+        if (c.alpha == 0) { return Theme.mark.with-alpha(0.6); }
+        return c.with-alpha(max(c.alpha, 96) / 255);
+    }
+    // One wheel event is round(delta-y / 120) notches, at least one; a wheel turned up (delta-y > 0) is positive.
+    pure function notches-of(dy: length) -> int {
+        if (round(dy / 120px) != 0) { return round(dy / 120px); }
+        return dy > 0px ? 1 : -1;
+    }
+
+    // ---- marker tab stacking ----
+    pure function tab-w(k: int) -> length { return root.user-markers[k].label.character-count * 6.5px + 18px; }
+    pure function tab-left(k: int) -> length {
+        return max(0px, min(root.pic-w - root.tab-w(k), root.user-markers[k].pos * root.pic-w - root.tab-w(k) / 2));
+    }
+    pure function lane-next(s: TabLane, k: int) -> TabLane {
+        if (k >= root.user-markers.length || root.user-markers[k].pos < 0 || root.user-markers[k].pos > 1
+            || root.tab-w(k) > root.pic-w) {
+            return { t0: s.t0, t1: s.t1, t2: s.t2, row: -1 };
+        }
+        // the rows there is room for: at most 3, and never more than half the picture's height
+        let rows = min(3, floor(root.pic-h / (2 * root.tab-pitch)));
+        let l = root.tab-left(k);
+        let r = l + root.tab-w(k) + 3px;
+        if (rows > 0 && l >= s.t0) { return { t0: r, t1: s.t1, t2: s.t2, row: 0 }; }
+        if (rows > 1 && l >= s.t1) { return { t0: s.t0, t1: r, t2: s.t2, row: 1 }; }
+        if (rows > 2 && l >= s.t2) { return { t0: s.t0, t1: s.t1, t2: r, row: 2 }; }
+        return { t0: s.t0, t1: s.t1, t2: s.t2, row: -1 };
+    }
+    // the chain: lane k is where the rows stand after marker k; tab-rows[k] is the row marker k's tab took
+    private property <TabLane> lane0: root.lane-next({ t0: -100px, t1: -100px, t2: -100px, row: -1 }, 0);
+    private property <TabLane> lane1: root.lane-next(root.lane0, 1);
+    private property <TabLane> lane2: root.lane-next(root.lane1, 2);
+    private property <TabLane> lane3: root.lane-next(root.lane2, 3);
+    private property <TabLane> lane4: root.lane-next(root.lane3, 4);
+    private property <TabLane> lane5: root.lane-next(root.lane4, 5);
+    private property <TabLane> lane6: root.lane-next(root.lane5, 6);
+    private property <TabLane> lane7: root.lane-next(root.lane6, 7);
+    private property <TabLane> lane8: root.lane-next(root.lane7, 8);
+    private property <TabLane> lane9: root.lane-next(root.lane8, 9);
+    private property <TabLane> lane10: root.lane-next(root.lane9, 10);
+    private property <TabLane> lane11: root.lane-next(root.lane10, 11);
+    private property <TabLane> lane12: root.lane-next(root.lane11, 12);
+    private property <TabLane> lane13: root.lane-next(root.lane12, 13);
+    private property <TabLane> lane14: root.lane-next(root.lane13, 14);
+    private property <TabLane> lane15: root.lane-next(root.lane14, 15);
+    private property <TabLane> lane16: root.lane-next(root.lane15, 16);
+    private property <TabLane> lane17: root.lane-next(root.lane16, 17);
+    private property <TabLane> lane18: root.lane-next(root.lane17, 18);
+    private property <TabLane> lane19: root.lane-next(root.lane18, 19);
+    private property <TabLane> lane20: root.lane-next(root.lane19, 20);
+    private property <TabLane> lane21: root.lane-next(root.lane20, 21);
+    private property <TabLane> lane22: root.lane-next(root.lane21, 22);
+    private property <TabLane> lane23: root.lane-next(root.lane22, 23);
+    private property <[int]> tab-rows: [root.lane0.row, root.lane1.row, root.lane2.row, root.lane3.row, root.lane4.row, root.lane5.row, root.lane6.row, root.lane7.row, root.lane8.row, root.lane9.row, root.lane10.row, root.lane11.row, root.lane12.row, root.lane13.row, root.lane14.row, root.lane15.row, root.lane16.row, root.lane17.row, root.lane18.row, root.lane19.row, root.lane20.row, root.lane21.row, root.lane22.row, root.lane23.row];
+
+    // ---- the marker under the pointer: the one whose tab the pointer is over, else whose line is within 4 px, the nearest ----
+    pure function lane-row(k: int) -> int { return k < root.tab-rows.length ? root.tab-rows[k] : -1; }
+    pure function tab-y(row: int) -> length { return root.pic-h - 4px - root.tab-h - row * root.tab-pitch; }
+    // How far the pointer is from marker k's grab zone (0 over its tab); -1 when it is not on it.
+    pure function hit-dist(k: int) -> length {
+        if (k >= root.user-markers.length || !area.has-hover || root.pressing) { return -1px; }
+        let pos = root.user-markers[k].pos;
+        if (pos < 0 || pos > 1) { return -1px; }
+        if (root.lane-row(k) >= 0) {
+            let l = root.tab-left(k);
+            let y = root.tab-y(root.lane-row(k));
+            if (area.mouse-x >= l && area.mouse-x <= l + root.tab-w(k) && area.mouse-y >= y && area.mouse-y <= y + root.tab-h) { return 0px; }
+        }
+        let d = abs(area.mouse-x - pos * root.pic-w);
+        return d <= 4px ? d : -1px;
+    }
+    pure function hit-next(s: MarkerHit, k: int) -> MarkerHit {
+        let d = root.hit-dist(k);
+        if (d >= 0px && (s.index < 0 || d < s.dist)) { return { index: k, dist: d }; }
+        return s;
+    }
+    private property <MarkerHit> hit0: root.hit-next({ index: -1, dist: 0px }, 0);
+    private property <MarkerHit> hit1: root.hit-next(root.hit0, 1);
+    private property <MarkerHit> hit2: root.hit-next(root.hit1, 2);
+    private property <MarkerHit> hit3: root.hit-next(root.hit2, 3);
+    private property <MarkerHit> hit4: root.hit-next(root.hit3, 4);
+    private property <MarkerHit> hit5: root.hit-next(root.hit4, 5);
+    private property <MarkerHit> hit6: root.hit-next(root.hit5, 6);
+    private property <MarkerHit> hit7: root.hit-next(root.hit6, 7);
+    private property <MarkerHit> hit8: root.hit-next(root.hit7, 8);
+    private property <MarkerHit> hit9: root.hit-next(root.hit8, 9);
+    private property <MarkerHit> hit10: root.hit-next(root.hit9, 10);
+    private property <MarkerHit> hit11: root.hit-next(root.hit10, 11);
+    private property <MarkerHit> hit12: root.hit-next(root.hit11, 12);
+    private property <MarkerHit> hit13: root.hit-next(root.hit12, 13);
+    private property <MarkerHit> hit14: root.hit-next(root.hit13, 14);
+    private property <MarkerHit> hit15: root.hit-next(root.hit14, 15);
+    private property <MarkerHit> hit16: root.hit-next(root.hit15, 16);
+    private property <MarkerHit> hit17: root.hit-next(root.hit16, 17);
+    private property <MarkerHit> hit18: root.hit-next(root.hit17, 18);
+    private property <MarkerHit> hit19: root.hit-next(root.hit18, 19);
+    private property <MarkerHit> hit20: root.hit-next(root.hit19, 20);
+    private property <MarkerHit> hit21: root.hit-next(root.hit20, 21);
+    private property <MarkerHit> hit22: root.hit-next(root.hit21, 22);
+    private property <MarkerHit> hit23: root.hit-next(root.hit22, 23);
+    changed marker-hover => {
+        root.tip-shown = false;
+        rest.restart();
+        root.marker-hovered(self.marker-hover);
+    }
+    // The rest tip: shown 600 ms after the pointer came to rest, kept while it moves less than 6 px, gone when it leaves.
+    changed pointer => {
+        if (!area.has-hover) {
+            root.tip-shown = false;
+            root.was-inside = false;
+        } else if (!root.was-inside || abs(area.mouse-x - root.rest-x) > 6px || abs(area.mouse-y - root.rest-y) > 6px) {
+            root.was-inside = true;
+            root.rest-x = area.mouse-x;
+            root.rest-y = area.mouse-y;
+            root.tip-shown = false;
+            rest.restart();
+        }
+    }
+
+    // ---- gestures ----
+    function xfrac(x: length) -> float { return root.pic-w > 0px ? max(0.0, min(1.0, x / root.pic-w)) : 0.0; }
+    function press-begin(x: length) {
+        root.pressing = true;
+        root.press-x = x;
+        root.last-x = x;
+        root.held-long = false;
+        root.moved-past = false;
+        if (dbl.running && abs(x - root.last-click-x) <= 6px) {
+            // The second press of a double-click is neither a tune nor, until it travels, a pan: the first press already tuned.
+            dbl.running = false;
+            root.moved-past = true;
+            root.double-clicked();
+        } else {
+            root.last-click-x = x;
+            // (restart() only re-arms a timer that is running: a stopped one is started by running = true)
+            if (dbl.running) { dbl.restart(); } else { dbl.running = true; }
+        }
+        if (hold.running) { hold.restart(); } else { hold.running = true; }
+    }
+    function press-move(x: length) {
+        if (!root.moved-past && abs(x - root.press-x) > 4px) { root.moved-past = true; }
+        if (root.moved-past && x != root.last-x) { root.panned((x - root.last-x) / root.pic-w); }
+        root.last-x = x;
+    }
+    function press-end(x: length, shift: bool) {
+        hold.running = false;
+        if (!root.pressing) { return; }
+        root.pressing = false;
+        if (!root.moved-past && !root.held-long) { root.clicked(root.xfrac(x), shift); }
+        root.moved-past = false;
+    }
+    hold := Timer { interval: 450ms; running: false; triggered => { root.held-long = true; self.running = false; } }
+    dbl := Timer { interval: 500ms; running: false; triggered => { self.running = false; } }
+
+    // ================= the age strip =================
+    Text {
+        x: 6px; y: 4px;
+        text: root.age-caption.to-uppercase();
+        font-family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold;
+        letter-spacing: Theme.cap-spacing * 0.9;
+        color: Theme.dim;
+    }
+    for t in root.age-ticks : Text {
+        x: 8px; y: t.pos * root.pic-h;
+        width: max(0px, root.gutter-w - 10px);
+        overflow: elide;
+        text: t.label;
+        font-family: Theme.font-mono; font-size: Theme.font-cap;
+        color: Theme.dim;
+    }
+    // ================= the picture =================
+    pic := Rectangle {
+        x: root.gutter-w; y: 0px;
+        width: root.pic-w; height: root.pic-h;
+        clip: true;
+
+        Image { width: parent.width; height: parent.height; source: root.picture; image-fit: fill; }
+
+        // plugin marks: a point is a 1 px line, a span (width > 0) a tinted band with an edge line each side
+        for pm in root.plugin-marks : Rectangle {
+            property <color> tint: root.mark-colour(pm.color);
+            property <bool> span: pm.width > 0;
+            property <float> lo: max(0.0, pm.pos);
+            property <float> hi: self.span ? min(1.0, pm.pos + pm.width) : pm.pos;
+            visible: self.span ? self.hi > self.lo : (pm.pos >= 0 && pm.pos <= 1);
+            x: self.lo * root.pic-w; y: 0px;
+            width: max(Theme.hairline, (self.hi - self.lo) * root.pic-w); height: root.pic-h;
+            if self.span : Rectangle { background: pm.color.alpha == 0 ? Theme.mark-fill : pm.color.with-alpha(0.14); }
+            WfLine { x: 0px; height: parent.height; tint: parent.tint; dashed: pm.dashed; }
+            if self.span : WfLine { x: parent.width - Theme.hairline; height: parent.height; tint: parent.tint; dashed: pm.dashed; }
+        }
+
+        // user marker lines: dashed, ivory, 60 % (the spectrum's are 35 %)
+        for m in root.user-markers : WfLine {
+            visible: m.pos >= 0 && m.pos <= 1;
+            x: m.pos * root.pic-w; y: 0px; height: root.pic-h;
+            tint: Theme.marker.with-alpha(0.6);
+            dashed: true;
+        }
+
+        // the range-changed rail, with its label on a plate under it at the right
+        if root.rail-shown : Rectangle {
+            y: root.rail-y;
+            width: parent.width; height: 20px;
+            Rectangle { y: 0px; width: parent.width; height: Theme.hairline; background: Theme.accent-soft; }
+            if root.rail-label != "" && parent.width > 200px : Rectangle {
+                x: parent.width - self.width; y: Theme.hairline;
+                width: rail-text.preferred-width + 20px; height: 14px;
+                background: Theme.wf-key-bg;
+                border-width: Theme.hairline; border-color: Theme.line;
+                rail-text := Text {
+                    width: parent.width; height: parent.height;
+                    text: root.rail-label.to-uppercase();
+                    font-family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold;
+                    letter-spacing: Theme.cap-spacing * 0.9;
+                    color: Theme.muted;
+                    horizontal-alignment: center; vertical-alignment: center;
+                }
+            }
+        }
+
+        // the marker tabs
+        for m[i] in root.user-markers : Chip {
+            visible: root.lane-row(i) >= 0 && m.pos >= 0 && m.pos <= 1;
+            label: m.label;
+            mono: true;
+            height: root.tab-h;
+            x: max(0px, min(root.pic-w - self.width, m.pos * root.pic-w - self.width / 2));
+            y: root.tab-y(max(0, root.lane-row(i)));
+        }
+
+        // the VFO line, over the markers
+        if root.show-vfo : Rectangle {
+            x: root.vfo-pos * root.pic-w; y: 0px;
+            width: Theme.hairline; height: root.pic-h;
+            background: Theme.wf-vfo;
+        }
+
+        // the cursor
+        if root.cursor-visible && root.cursor-x >= 0px : Rectangle {
+            x: root.cursor-x; y: 0px;
+            width: Theme.hairline; height: root.pic-h;
+            background: Theme.cursor;
+        }
+
+        // the strength key
+        key := Rectangle {
+            visible: root.show-key && self.width <= parent.width * 0.46 && self.height <= parent.height * 0.6;
+            x: parent.width - 14px - self.width; y: 10px;
+            width: kbox.preferred-width; height: kbox.preferred-height;
+            background: Theme.wf-key-bg;
+            border-width: Theme.hairline; border-color: Theme.line; border-radius: Theme.radius-panel;
+            kbox := VerticalLayout {
+                padding-left: 10px + Theme.hairline; padding-right: 10px + Theme.hairline;
+                padding-top: 8px + Theme.hairline; padding-bottom: 8px + Theme.hairline;
+                spacing: 5px;
+                HorizontalLayout {
+                    spacing: 8px; alignment: start;
+                    Text {
+                        text: root.key-title.to-uppercase();
+                        font-family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold;
+                        letter-spacing: Theme.cap-spacing * 0.9;
+                        color: Theme.muted; vertical-alignment: center;
+                    }
+                    if root.key-manual : Chip { label: root.key-manual-label; tone: ChipTone.warn; small: true; }
+                }
+                Rectangle {
+                    height: 8px; min-width: 180px; preferred-width: 180px;
+                    border-radius: 2px;
+                    background: @linear-gradient(90deg, Theme.wf-floor 0%, Theme.wf-mid 25%, Theme.wf-high 50%, Theme.wf-hot 75%, Theme.wf-peak 100%);
+                }
+                HorizontalLayout {
+                    alignment: space-between;
+                    for l in root.key-labels : Text {
+                        text: l;
+                        font-family: Theme.font-mono; font-size: Theme.font-tiny; color: Theme.muted;
+                    }
+                }
+                Text { text: root.key-foot; font-family: Theme.font-mono; font-size: Theme.font-tiny; color: Theme.muted; }
+                if root.key-coverage != "" : Text {
+                    text: root.key-coverage;
+                    font-family: Theme.font-mono; font-size: Theme.font-tiny; color: Theme.accent-soft;
+                }
+            }
+        }
+
+        // the cursor's readout, 6 px to the right of its line (to the left where it would run off the picture)
+        if root.cursor-visible && root.cursor-x >= 0px && root.cursor-text != "" : Rectangle {
+            width: cursor-label.preferred-width + 16px; height: 18px;
+            x: root.cursor-x + 6px + self.width > parent.width ? root.cursor-x - 6px - self.width : root.cursor-x + 6px;
+            y: area.has-hover ? max(0px, min(root.pic-h - self.height, area.mouse-y - self.height - 8px)) : 6px;
+            background: Theme.cursor-chip-bg;
+            border-width: Theme.hairline; border-color: Theme.cursor-chip-line; border-radius: Theme.radius-chip;
+            cursor-label := Text {
+                width: parent.width; height: parent.height;
+                text: root.cursor-text;
+                font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.fg;
+                horizontal-alignment: center; vertical-alignment: center;
+            }
+        }
+
+        // ---- input: one TouchArea over the whole picture ----
+        area := TouchArea {
+            width: parent.width; height: parent.height;
+            enabled: root.enabled;
+            mouse-cursor: root.panning ? MouseCursor.grabbing : MouseCursor.default;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.move) {
+                    if (root.pressing) { root.press-move(self.mouse-x); }
+                    root.hover(root.xfrac(self.mouse-x), self.height > 0px ? max(0.0, min(1.0, self.mouse-y / self.height)) : 0.0);
+                } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                    root.press-begin(self.mouse-x);
+                } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                    root.press-end(self.mouse-x, e.modifiers.shift);
+                } else if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                    // on release, so the menu the host opens under the pointer is not handed the press that opened it
+                    if (!root.panning) { root.right-clicked(root.xfrac(self.mouse-x), root.gutter-w + self.mouse-x, self.mouse-y); }
+                } else if (e.kind == PointerEventKind.cancel) {
+                    hold.running = false;
+                    root.pressing = false;
+                    root.moved-past = false;
+                }
+            }
+            scroll-event(e) => {
+                if (e.delta-y == 0px) { return EventResult.reject; }
+                // the Shift slide is not for a hand that is panning (a plain wheel is)
+                if (e.modifiers.shift && root.panning) { return EventResult.accept; }
+                root.wheel(root.xfrac(self.mouse-x), root.notches-of(e.delta-y), e.modifiers.shift);
+                return EventResult.accept;
+            }
+            changed has-hover => { if (!self.has-hover) { root.hover(-1, -1); } }
+            changed pressed => {
+                root.tip-shown = false;               // a button going down or up hides the tip and restarts the wait
+                rest.restart();
+            }
+        }
+    }
+
+    // ================= the reception-gap break =================
+    // a rail across the strip (overhanging the picture by 5 px), the two ages either side.
+    // (An element with no area draws none of its children, so the break's box is 40 px high with the rail in its middle.)
+    if root.gap-pos >= 0 && root.gap-pos <= 1 : Rectangle {
+        x: 0px; y: root.gap-pos * root.pic-h - 20px;
+        width: root.gutter-w + 5px; height: 40px;
+        Rectangle { y: 20px; width: parent.width; height: Theme.hairline; background: Theme.knob-ring; }
+        Text {
+            x: 8px; y: 20px - self.height - 2px;
+            width: max(0px, root.gutter-w - 10px);
+            overflow: elide;
+            text: root.gap-label-above;
+            font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.dim;
+        }
+        Text {
+            x: 8px; y: 23px;
+            width: max(0px, root.gutter-w - 10px);
+            overflow: elide;
+            text: root.gap-label-below;
+            font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.dim;
+        }
+    }
+
+    // ================= the foot =================
+    Rectangle {
+        x: root.gutter-w; y: parent.height - root.foot-h;
+        width: max(0px, parent.width - root.gutter-w - 14px); height: root.foot-h;
+        Rectangle { y: 0px; width: parent.width; height: Theme.hairline; background: Theme.line; }
+        HorizontalLayout {
+            padding-top: Theme.hairline; spacing: 12px;
+            Text {
+                text: root.foot-left;
+                font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.muted;
+                vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
+            }
+            HorizontalLayout {
+                spacing: 0px;
+                Text {
+                    text: root.foot-tuned;
+                    font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.accent-soft;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.foot-rest;
+                    font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.muted;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // ================= the rest tip =================
+    rest := Timer {
+        interval: 600ms;
+        running: area.has-hover && !area.pressed && root.active-tooltip != "" && !root.tip-shown;
+        triggered => { root.tip-shown = true; }
+    }
+    if root.tip-shown && root.active-tooltip != "" : TooltipFace {
+        text: root.active-tooltip;
+        x: max(2px, min(root.gutter-w + root.rest-x, root.width - self.width - 4px));
+        y: root.rest-y + 22px + self.height > root.height - 4px ? root.rest-y - self.height - 8px : root.rest-y + 22px;
+    }
+}

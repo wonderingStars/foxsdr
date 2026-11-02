@@ -1,0 +1,643 @@
+// FoxSDR Slint front end - SPECTRUM: SpectrumView, the top well of the main screen, with every overlay.
+// Measurements are the SPECTRUM div of Workbench.dc.html and the "Mini spectrum - plugin marks" block of
+// Workbench-PluginKit.dc.html (a 424 px high well on #0d0f12; everything inside is absolutely placed):
+//
+//   plot       left 44 (gutter-w), top 76 (plot-top), right edge, bottom 18 px (axis-h) above the well's foot:
+//              980 x 330 on the sheet. A hairline at every db-tick / freq-tick the host passes (the sheet has one
+//              every 33 / 98 px: ten dB ticks, ten frequency ticks; only some of them carry a label).
+//   ribbon     left 44, right 0, top 0, 8 / 13 / 20 px; the segment's name 10 px under it
+//   header     left 52, top 14, 14 px gaps: caption (.cap, fg-soft), caveat (10 px dim), trace-mode label (9 px cap)
+//   peak block right 16, top 12, right-aligned: cap 9 px, mono 16 px / 600 figure, its 10 px age
+//   SPAN chip  right 16, top 58, mono
+//   dB ladder  10 px mono, right-aligned in the 44 px gutter, centred on each tick
+//   freq axis  10 px mono, centred under each tick in the axis band, the unit at the right
+//   VFO band   fill between the edges, 1 px edges, a dashed centre line (2 on, 3 off)
+//   marks      point = 1 px line (dash 4 3), span = tint + edge lines; label 10 px at y 60 at the line's x
+//   bookmarks  2 x 8 tick at the plot's foot, names 10 px at y 60 and 8 px left of the tick
+//   markers    1 px line, dash 3 4, 35 % alpha
+//   cursor     1 px line over the plot, the readout chip 6 px to its right at y 120
+//
+// EVERY POSITION that comes from a frequency or a dB arrives as a FRACTION 0..1 of the plot width (or height):
+// Slint floats are 32 bit, a frequency in Hz does not survive them, so the host does the arithmetic. Lines are
+// snapped to whole logical pixels so a 1 px line is one crisp pixel column at scale 1; a line at position p
+// covers the column that STARTS at p (the sheet's own ticks and the cursor line are placed that way).
+//
+// THE PLOT IS THE INTERACTION ZONE. Every callback fires only for the pointer over the plot rectangle (the
+// header, ladder, ribbon and axis band take no input: "marks never take a click"); hover reports (-1, -1)
+// when the pointer is not over it. A press inside the VFO band moves it (band-dragged: the pointer's travel as a
+// fraction of the plot width, per move); a press within 6 px of a band edge resizes it (edge-dragged: the new
+// half-width as a fraction, symmetric about the centre, per move); a press elsewhere is a click (clicked,
+// double-clicked), reported at the press position. A wheel notch is round(delta-y / 120), at least one per
+// event: wheel up is +1 (Slint's delta-y is positive for wheel up). Shift comes from the event's modifiers,
+// else from `shift-held`.
+//
+// TOOLTIPS are the three strings band-tooltip / edge-tooltip / off-band-tooltip (tooltip when the last is empty),
+// chosen by where the pointer rests. The tip is drawn INLINE in the shared TooltipFace, 600 ms after the pointer
+// came to rest, and hides when it moves more than 6 px or a button goes down. It is NOT shown through TipTimer:
+// a TipTimer tip is a PopupWindow, and while one is open Slint hands it every pointer event, so this plot saw the
+// pointer leave (hover(-1, -1), the cursor readout blinking) and the first press after the tip appeared was lost.
+//
+// Draw order, bottom to top: graticule, airband channels, VFO band, trace image, plugin marks, bookmark ticks,
+// user markers, cursor line (all clipped to the plot); then the ribbon with its names, the dB ladder, the
+// frequency labels, the header, the peak block, the SPAN chip, the cursor chip, the bookmark / mark names, the tip.
+//
+// When a band name would sit under the header (the sheet puts the name of the 2 m band on top of the caveat text)
+// it steps down one line below the header, as the real app does; a name that fits to the right of the header
+// stays right under the ribbon. Airband: channels are drawn under the VFO band, the two captions on the row
+// under the header; the host hides the band and the peak block (show-vfo, show-peak) while it listens.
+import { Theme } from "theme.slint";
+import { Chip } from "chips.slint";
+import { TooltipFace } from "tooltip.slint";
+
+export struct AxisTick { pos: float, label: string }              // pos 0..1 of the plot width
+export struct DbTick { pos: float, label: string }                // pos 0..1 of the plot height, 0 = top
+export struct BandSegment { from: float, to: float, label: string, color: color }   // transparent -> Theme.bandplan
+export struct BookmarkMark { pos: float, label: string, favourite: bool }
+export struct PluginMark { pos: float, width: float, label: string, color: color, dashed: bool }   // width 0 = a point
+export struct UserMarker { pos: float, label: string }            // the spectrum draws the line only; the label is the waterfall tab
+// One channel of the airband block on the air: a bright band while its squelch is open, a faint one while shut.
+export struct AirbandChannel { from: float, to: float, open: bool }
+export enum TraceMode { normal, peak-hold, average }
+
+// A vertical dashed line: a column of short rectangles, because Slint has no dashed borders.
+component DashColumn inherits Rectangle {
+    in property <length> dash: 4px;
+    in property <length> gap: 3px;
+    in property <color> tint;
+    for i in Math.ceil(root.height / (root.dash + root.gap)) : Rectangle {
+        x: 0px;
+        y: i * (root.dash + root.gap);
+        width: root.width;
+        height: Math.min(root.dash, root.height - self.y);
+        background: root.tint;
+    }
+}
+
+// A 1 px vertical line, solid or dashed. The caller sets x, y and height.
+component Hair inherits Rectangle {
+    in property <color> tint;
+    in property <bool> dashed;
+    in property <length> dash: 4px;
+    in property <length> gap: 3px;
+    width: 1px;
+    if !root.dashed : Rectangle { background: root.tint; }
+    if root.dashed : DashColumn { dash: root.dash; gap: root.gap; tint: root.tint; }
+}
+
+export component SpectrumView inherits Rectangle {
+    // ---- the sheet's geometry ----
+    out property <length> gutter-w: 44px;
+    out property <length> plot-top: 76px;
+    out property <length> axis-h: 18px;
+    out property <length> plot-w: Math.max(0px, root.width - root.gutter-w);
+    out property <length> plot-h: Math.max(0px, root.height - root.plot-top - root.axis-h);
+
+    // ---- what the host feeds it ----
+    in property <image> trace;                       // painted by the host over a transparent ground, fills the plot
+    in property <TraceMode> trace-mode: TraceMode.normal;
+    in property <string> caption;                    // "Spectrum · 4096 bin · EMA 0.35"
+    in property <string> caveat;                     // "average of the last frames, not the audio"
+    in property <string> trace-mode-label;           // "Peak hold" / "Average": shown unless the mode is normal
+    in property <string> peak-caption: "Peak in passband";
+    in property <string> peak-text;                  // "-41.2 dBFS"
+    in property <string> peak-age;                   // "0.1 s ago"
+    in property <bool> show-peak: true;              // false while the Airband monitor listens
+    in property <string> span-text;                  // "SPAN 2.400 MHz"
+    in property <string> axis-unit;                  // "MHz"
+    in property <[DbTick]> db-ticks;
+    in property <[AxisTick]> freq-ticks;
+    in property <int> ribbon-size;                   // 0 none, 1 small (8 px), 2 medium (13), 3 large (20)
+    in property <[BandSegment]> bands;
+    in property <[BookmarkMark]> bookmarks;
+    in property <[PluginMark]> plugin-marks;
+    in property <[UserMarker]> user-markers;
+    in property <[AirbandChannel]> airband-channels;
+    in property <string> airband-block;              // "AIRBAND · block 2", under the header at the left
+    in property <string> airband-hearing;            // "hearing 118.700", amber, after it
+    in property <bool> show-vfo: true;               // false while the Airband monitor listens: no band, no grabs
+    in property <float> vfo-pos;                     // the band's CENTRE, 0..1 of the plot width
+    in property <float> vfo-half;                    // half its width, 0..1 of the plot width
+    in property <bool> band-dragging;                // the host's own drag state: a brighter fill
+    in property <bool> cursor-visible;
+    in property <float> cursor-pos;                  // 0..1 of the plot width
+    in property <string> cursor-text;                // the host formats it: "145.212 MHz · -78.4 dB"
+    in property <bool> shift-held;                   // for platforms whose pointer events carry no modifiers
+    in property <bool> enabled: true;
+    in property <string> tooltip;                    // the off-band tip when off-band-tooltip is empty
+    in property <string> band-tooltip;
+    in property <string> edge-tooltip;
+    in property <string> off-band-tooltip;
+
+    callback hover(float, float);                    // xfrac, yfrac over the plot; (-1, -1) on leave
+    callback clicked(float, bool);                   // xfrac, shift
+    callback double-clicked(float);                  // xfrac (only off the band)
+    callback right-clicked(float, length, length);   // xfrac, pointer position in this component
+    callback band-dragged(float);                    // dxfrac, per pointer move
+    callback edge-dragged(float);                    // the new half-width fraction, per pointer move
+    callback wheel(float, int, bool);                // xfrac, notches (wheel up +), shift
+
+    // ---- what the host (and the tests) may read back ----
+    out property <int> pointer-zone: root.area-zone();                  // 0 elsewhere, 1 on the band, 2 on an edge
+    out property <string> active-tooltip: root.pointer-zone == 1 ? root.band-tooltip
+        : root.pointer-zone == 2 ? root.edge-tooltip
+        : root.off-band-tooltip != "" ? root.off-band-tooltip : root.tooltip;
+    out property <bool> tip-shown;                                       // the rest tip is up
+    out property <MouseCursor> pointer-shape: root.pointer-zone == 1 ? MouseCursor.move
+        : root.pointer-zone == 2 ? MouseCursor.ew-resize : MouseCursor.default;
+
+    // ---- private ----
+    property <length> ribbon-h: root.ribbon-size <= 0 ? 0px : root.ribbon-size == 1 ? 8px : root.ribbon-size == 2 ? 13px : 20px;
+    property <length> edge-zone: 6px;                                   // the edge hit zone
+    property <length> band-l: root.snap(root.plot-w * (root.vfo-pos - root.vfo-half));   // plot coordinates
+    property <length> band-r: root.snap(root.plot-w * (root.vfo-pos + root.vfo-half));
+    property <int> press-zone;                                          // set at a left press: 0 off the band, 1 band, 2 left edge, 3 right edge
+    property <bool> press-off-band;
+    property <bool> press-shift;
+    property <length> press-x;
+    property <length> last-x;
+    property <float> press-half;
+    property <int> rest-ticks;                                          // 50 ms timer ticks the pointer has rested
+    property <bool> was-inside;
+    property <length> rest-x;                                           // where it came to rest, plot coordinates
+    property <length> rest-y;
+    property <{x: length, y: length, inside: bool}> pointer: { x: area.mouse-x, y: area.mouse-y, inside: area.has-hover };
+
+    background: Theme.well;
+    clip: true;
+    accessible-role: image;
+    accessible-label: root.caption != "" ? root.caption : "Spectrum";
+
+    pure function snap(v: length) -> length {
+        return Math.round(v / 1px) * 1px;
+    }
+    // 0 elsewhere, 1 on the band, 2 left edge, 3 right edge, for a pointer x in plot coordinates.
+    pure function zone-at(x: length) -> int {
+        if (!root.show-vfo || !root.enabled) { return 0; }
+        if (Math.abs(x - root.band-l) <= root.edge-zone || Math.abs(x - root.band-r) <= root.edge-zone) {
+            return Math.abs(x - root.band-l) <= Math.abs(x - root.band-r) ? 2 : 3;
+        }
+        if (x > root.band-l && x < root.band-r) { return 1; }
+        return 0;
+    }
+    // The zone the pointer is in (or the drag in progress), collapsed to 0 / 1 / 2.
+    pure function area-zone() -> int {
+        if (area.pressed) { return root.press-zone == 1 ? 1 : root.press-zone >= 2 ? 2 : 0; }
+        if (!area.has-hover) { return 0; }
+        return root.zone-at(area.mouse-x) == 1 ? 1 : root.zone-at(area.mouse-x) >= 2 ? 2 : 0;
+    }
+    pure function notches-of(dy: length) -> int {
+        if (Math.round(dy / 120px) != 0) { return Math.round(dy / 120px); }
+        return dy > 0px ? 1 : -1;
+    }
+    // A plugin's colour: transparent means the theme's mark colour; any other keeps at least 0x60 of alpha.
+    pure function mark-colour(c: color) -> color {
+        if (c.alpha == 0) { return Theme.mark; }
+        return c.with-alpha(Math.max(c.alpha, 96) / 255);
+    }
+    pure function mark-fill(c: color) -> color {
+        if (c.alpha == 0) { return Theme.mark-fill; }
+        return c.with-alpha(0.14);
+    }
+
+    // =====================================================================================================
+    // THE PLOT: everything inside is in plot coordinates and clipped to it.
+    plot := Rectangle {
+        x: root.gutter-w;
+        y: root.plot-top;
+        width: root.plot-w;
+        height: root.plot-h;
+        clip: true;
+
+        // graticule: a hairline at every dB tick and every frequency tick
+        for t in root.db-ticks : Rectangle {
+            x: 0px;
+            y: root.snap(root.plot-h * t.pos);
+            width: parent.width;
+            height: 1px;
+            background: Theme.graticule;
+        }
+        for t in root.freq-ticks : Rectangle {
+            x: root.snap(root.plot-w * t.pos);
+            y: 0px;
+            width: 1px;
+            height: parent.height;
+            background: Theme.graticule;
+        }
+
+        // airband channels: bright while the squelch is open, faint while shut
+        for ch in root.airband-channels : Rectangle {
+            property <length> lx: root.snap(root.plot-w * Math.clamp(ch.from, 0, 1));
+            property <length> rx: root.snap(root.plot-w * Math.clamp(ch.to, 0, 1));
+            x: self.lx;
+            y: 0px;
+            width: Math.max(1px, self.rx - self.lx);
+            height: parent.height;
+            background: ch.open ? Theme.trace-live.with-alpha(0.28) : Theme.trace-live.with-alpha(0.07);
+            Rectangle { x: 0px; width: 1px; background: ch.open ? Theme.trace-live : Theme.trace-live.with-alpha(0.25); }
+            Rectangle { x: parent.width - 1px; width: 1px; background: ch.open ? Theme.trace-live : Theme.trace-live.with-alpha(0.25); }
+        }
+
+        // the VFO band: fill, two 1 px edges, a dashed centre line
+        if root.show-vfo : Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            Rectangle {
+                x: root.band-l;
+                y: 0px;
+                width: Math.max(0px, root.band-r - root.band-l);
+                height: parent.height;
+                background: (root.band-dragging || root.press-zone != 0) ? Theme.vfo.with-alpha(0.27) : Theme.vfo-fill;
+            }
+            Rectangle { x: root.band-l; y: 0px; width: 1px; height: parent.height; background: Theme.vfo; }
+            Rectangle { x: root.band-r; y: 0px; width: 1px; height: parent.height; background: Theme.vfo; }
+            DashColumn {
+                x: root.snap((root.band-l + root.band-r) / 2);
+                y: 0px;
+                width: 1px;
+                height: parent.height;
+                dash: 2px;
+                gap: 3px;
+                tint: Theme.vfo;
+            }
+        }
+
+        // the trace: the host paints it (graticule excluded) over a transparent ground
+        Image {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            source: root.trace;
+            image-fit: fill;
+        }
+
+        // plugin marks: a point is a 1 px line (dashed when flagged), a span a tint between two edge lines
+        for m in root.plugin-marks : Rectangle {
+            property <color> line-tint: root.mark-colour(m.color);
+            property <length> lx: root.snap(root.plot-w * m.pos);
+            property <length> rx: root.snap(root.plot-w * (m.pos + m.width));
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            if m.width > 0 : Rectangle {
+                x: parent.lx;
+                y: 0px;
+                width: Math.max(0px, parent.rx - parent.lx);
+                height: parent.height;
+                background: root.mark-fill(m.color);
+            }
+            Hair { x: parent.lx; y: 0px; height: parent.height; tint: parent.line-tint; dashed: m.dashed; }
+            if m.width > 0 : Hair { x: parent.rx; y: 0px; height: parent.height; tint: parent.line-tint; dashed: m.dashed; }
+        }
+
+        // bookmark ticks (2 x 8, just above the axis); a favourite also draws a hairline guide up the plot
+        for b in root.bookmarks : Rectangle {
+            property <length> lx: root.snap(root.plot-w * b.pos);
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            if b.favourite : Rectangle {
+                x: parent.lx;
+                y: 0px;
+                width: 1px;
+                height: parent.height - 8px;
+                background: Theme.bookmark-tick.with-alpha(0.35);
+            }
+            Rectangle { x: parent.lx; y: parent.height - 8px; width: 2px; height: 8px; background: Theme.bookmark-tick; }
+        }
+
+        // user markers M<n>: a faint dashed line through the trace
+        for u in root.user-markers : DashColumn {
+            x: root.snap(root.plot-w * u.pos);
+            y: 0px;
+            width: 1px;
+            height: parent.height;
+            dash: 3px;
+            gap: 4px;
+            tint: Theme.marker.with-alpha(0.35);
+        }
+
+        // the cursor line
+        if root.cursor-visible : Rectangle {
+            x: root.snap(root.plot-w * root.cursor-pos);
+            y: 0px;
+            width: 1px;
+            height: parent.height;
+            background: Theme.cursor;
+        }
+    }
+
+    // =====================================================================================================
+    // the band-plan ribbon along the top of the well, from the plot left edge to the right edge
+    for seg in root.bands : Rectangle {
+        property <length> lx: root.gutter-w + root.snap(root.plot-w * Math.clamp(seg.from, 0, 1));
+        property <length> rx: root.gutter-w + root.snap(root.plot-w * Math.clamp(seg.to, 0, 1));
+        x: self.lx;
+        y: 0px;
+        width: Math.max(0px, self.rx - self.lx);
+        height: root.ribbon-h;
+        background: seg.color.alpha == 0 ? Theme.bandplan : seg.color;
+    }
+    // each segment name, 10 px under the ribbon and inside its own segment; a name that would sit under
+    // the header steps down a line below it (the ribbon is far thinner than the header row)
+    for seg in root.bands : Text {
+        property <length> lx: root.gutter-w + root.snap(root.plot-w * Math.clamp(seg.from, 0, 1));
+        property <length> rx: root.gutter-w + root.snap(root.plot-w * Math.clamp(seg.to, 0, 1));
+        property <bool> under-header: header.width > 0px && self.x < header.x + header.width + 8px && self.x + self.width > header.x - 4px;
+        visible: root.ribbon-h > 0px && seg.label != "" && self.rx - self.lx >= 24px;
+        x: self.lx + 4px;
+        y: self.under-header ? header.y + header.height + 1px : root.ribbon-h + 2px;
+        width: Math.max(0px, Math.min(self.preferred-width, self.rx - self.lx - 6px));
+        height: 13px;
+        text: seg.label;
+        overflow: elide;
+        vertical-alignment: center;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        color: Theme.bandplan-fg;
+    }
+
+    // the dB ladder: right-aligned in the gutter, centred on each tick
+    for t in root.db-ticks : Text {
+        x: 0px;
+        y: root.plot-top + root.snap(root.plot-h * t.pos) - 7px;
+        width: root.gutter-w - 6px;
+        height: 14px;
+        text: t.label;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-cap;
+        color: Theme.axis-fg;
+    }
+
+    // the frequency axis: centred under each tick in the axis band, kept inside the well
+    for t in root.freq-ticks : Text {
+        x: Math.clamp(root.gutter-w + root.snap(root.plot-w * t.pos) - self.width / 2, 2px, root.width - self.width - 2px);
+        y: root.height - root.axis-h + 3px;
+        height: 14px;
+        text: t.label;
+        vertical-alignment: center;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-cap;
+        color: Theme.axis-fg;
+    }
+    if root.axis-unit != "" : Text {
+        x: root.width - self.width - 4px;
+        y: root.height - root.axis-h + 3px;
+        height: 14px;
+        text: root.axis-unit;
+        vertical-alignment: center;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        color: Theme.axis-fg;
+    }
+
+    // the header row at (52, 14): caption, caveat, trace-mode label
+    header := Rectangle {
+        x: 52px;
+        y: 14px;
+        width: header-row.preferred-width;
+        height: 14px;
+        header-row := HorizontalLayout {
+            spacing: 14px;
+            alignment: start;
+            if root.caption != "" : Text {
+                text: root.caption.to-uppercase();
+                vertical-alignment: center;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-cap;
+                font-weight: Theme.weight-semibold;
+                letter-spacing: Theme.cap-spacing;
+                color: Theme.fg-soft;
+            }
+            if root.caveat != "" : Text {
+                text: root.caveat;
+                vertical-alignment: center;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-cap;
+                color: Theme.dim;
+            }
+            if root.trace-mode != TraceMode.normal && root.trace-mode-label != "" : Text {
+                text: root.trace-mode-label.to-uppercase();
+                vertical-alignment: center;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-tiny;
+                font-weight: Theme.weight-semibold;
+                letter-spacing: Theme.font-tiny * 0.08;
+                color: root.trace-mode == TraceMode.peak-hold ? Theme.trace-peak : Theme.trace-average;
+            }
+        }
+    }
+
+    // the airband captions, on the row under the header: the block on the air and what is being heard
+    if root.airband-block != "" || root.airband-hearing != "" : HorizontalLayout {
+        x: 52px;
+        y: 44px;
+        height: 14px;
+        width: root.width - 52px - 16px;
+        spacing: 8px;
+        alignment: start;
+        Text {
+            text: root.airband-block.to-uppercase();
+            vertical-alignment: center;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-cap;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: Theme.cap-spacing;
+            color: Theme.muted;
+        }
+        Text {
+            text: root.airband-hearing;
+            vertical-alignment: center;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-cap;
+            font-weight: Theme.weight-semibold;
+            color: Theme.accent-soft;
+        }
+    }
+
+    // the peak block, right-aligned 16 px from the right at y 12: cap, then the figure and its age
+    if root.show-peak && (root.peak-text != "" || root.peak-age != "") : Rectangle {
+        x: 0px;
+        y: 12px;
+        width: root.width - 16px;
+        height: 34px;
+        Text {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: 12px;
+            text: root.peak-caption.to-uppercase();
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-tiny;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: Theme.font-tiny * 0.08;
+            color: Theme.muted;
+        }
+        HorizontalLayout {
+            x: 0px;
+            y: 12px;
+            width: parent.width;
+            height: 22px;
+            spacing: 6px;
+            alignment: end;
+            Text {
+                text: root.peak-text;
+                vertical-alignment: bottom;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-readout;
+                font-weight: Theme.weight-semibold;
+                color: Theme.accent-soft;
+            }
+            Text {
+                text: root.peak-age;
+                vertical-alignment: bottom;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-cap;
+                color: Theme.dim;
+            }
+        }
+    }
+
+    // the SPAN chip, right 16, top 58 (it overlaps the top two pixels of the plot, as on the sheet)
+    if root.span-text != "" : Chip {
+        label: root.span-text;
+        mono: true;
+        x: root.width - 16px - self.width;
+        y: 58px;
+    }
+
+    // the cursor readout chip, 6 px right of the line (left of it when it would leave the well)
+    if root.cursor-visible && root.cursor-text != "" : Chip {
+        property <length> line-x: root.gutter-w + root.snap(root.plot-w * root.cursor-pos);
+        label: root.cursor-text;
+        mono: true;
+        background: Theme.cursor-chip-bg;
+        border-color: Theme.cursor-chip-line;
+        y: root.plot-top + 44px;
+        x: self.line-x + 6px + self.width > root.width - 2px ? self.line-x - 6px - self.width : self.line-x + 6px;
+    }
+
+    // plugin mark names and bookmark names, 10 px at y 60 (above the plot)
+    for m in root.plugin-marks : Text {
+        visible: m.label != "";
+        x: root.gutter-w + root.snap(root.plot-w * m.pos);
+        y: 60px;
+        height: 14px;
+        text: m.label;
+        vertical-alignment: center;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        color: root.mark-colour(m.color);
+    }
+    for b in root.bookmarks : Text {
+        visible: b.label != "";
+        x: root.gutter-w + root.snap(root.plot-w * b.pos) - 8px;
+        y: 60px;
+        height: 14px;
+        text: b.label;
+        vertical-alignment: center;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        color: Theme.bookmark;
+    }
+
+    // =====================================================================================================
+    // the interaction zone: the plot rectangle
+    area := TouchArea {
+        x: root.gutter-w;
+        y: root.plot-top;
+        width: root.plot-w;
+        height: root.plot-h;
+        enabled: root.enabled;
+        mouse-cursor: root.pointer-shape;
+
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.press-shift = e.modifiers.shift || root.shift-held;
+                root.press-x = self.pressed-x;
+                root.last-x = self.pressed-x;
+                root.press-half = root.vfo-half;
+                root.press-zone = root.zone-at(self.pressed-x);
+                root.press-off-band = root.press-zone == 0;
+            } else if (e.kind == PointerEventKind.up) {
+                if (e.button == PointerEventButton.right) {
+                    if (root.press-zone == 0 && self.mouse-x >= 0px && self.mouse-x < self.width && self.mouse-y >= 0px && self.mouse-y < self.height && root.plot-w > 0px) {
+                        root.right-clicked(self.mouse-x / root.plot-w, self.x + self.mouse-x, self.y + self.mouse-y);
+                    }
+                } else if (e.button == PointerEventButton.left) {
+                    root.press-zone = 0;
+                }
+            } else if (e.kind == PointerEventKind.cancel) {
+                root.press-zone = 0;
+            }
+        }
+        moved => {
+            if (root.plot-w <= 0px) { return; }
+            if (root.press-zone == 1) {
+                root.band-dragged((self.mouse-x - root.last-x) / root.plot-w);
+                root.last-x = self.mouse-x;
+            } else if (root.press-zone >= 2) {
+                root.edge-dragged(Math.max(0, root.press-half + (root.press-zone == 3 ? 1 : -1) * (self.mouse-x - root.press-x) / root.plot-w));
+            }
+        }
+        clicked => {
+            if (root.press-off-band && root.plot-w > 0px) { root.clicked(self.pressed-x / root.plot-w, root.press-shift); }
+        }
+        double-clicked => {
+            if (root.press-off-band && root.plot-w > 0px) { root.double-clicked(self.pressed-x / root.plot-w); }
+        }
+        changed pressed => {
+            root.tip-shown = false;                 // a button going down or up hides the tip and restarts the wait
+            root.rest-ticks = 0;
+        }
+        scroll-event(e) => {
+            if (e.delta-y == 0px || root.plot-w <= 0px) { return reject; }
+            root.wheel(self.mouse-x / root.plot-w, root.notches-of(e.delta-y), e.modifiers.shift || root.shift-held);
+            return accept;
+        }
+    }
+
+    // hover reports (-1, -1 on leave) and the rest tip. One tracker covers the position AND the entering / leaving,
+    // so a re-entry at the very same spot still reports. The tip is shown 600 ms after the pointer came to rest and
+    // stays while it moves less than 6 px; a bigger move hides it and starts the countdown again, at the new spot.
+    changed pointer => {
+        if (!area.has-hover) {
+            root.hover(-1, -1);
+            root.tip-shown = false;
+            root.was-inside = false;
+        } else if (root.plot-w > 0px && root.plot-h > 0px) {
+            root.hover(area.mouse-x / root.plot-w, area.mouse-y / root.plot-h);
+            if (!root.was-inside || Math.abs(area.mouse-x - root.rest-x) > 6px || Math.abs(area.mouse-y - root.rest-y) > 6px) {
+                root.was-inside = true;
+                root.rest-x = area.mouse-x;
+                root.rest-y = area.mouse-y;
+                root.rest-ticks = 0;
+                root.tip-shown = false;
+            }
+        }
+    }
+    Timer {
+        interval: 50ms;
+        running: area.has-hover && !area.pressed && root.active-tooltip != "" && !root.tip-shown;
+        triggered => {
+            root.rest-ticks += 1;                                           // the 13th tick is 600 to 650 ms after the rest began
+            if (root.rest-ticks >= 13) { root.tip-shown = true; }
+        }
+    }
+
+    // The tip is drawn inline, in the shared tooltip face, NOT through TipTimer: an open PopupWindow takes the
+    // pointer events, so the plot saw the pointer leave and the first press after the tip appeared was lost.
+    if root.tip-shown && root.active-tooltip != "" : TooltipFace {
+        text: root.active-tooltip;
+        x: Math.max(2px, Math.min(root.gutter-w + root.rest-x, root.width - self.width - 4px));
+        y: root.plot-top + root.rest-y + 22px + self.height > root.height - 4px ? root.plot-top + root.rest-y - self.height - 8px : root.plot-top + root.rest-y + 22px;
+    }
+}

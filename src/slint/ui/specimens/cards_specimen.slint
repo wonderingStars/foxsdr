@@ -1,0 +1,134 @@
+// The cards specimen sheet: the Card variants of the sections panel's foot (the update card as Workbench.dc.html draws it,
+// release notes with the size note, a download in progress, the "Receiver control" warning card, the team message, a
+// critical update on the err ground, a disabled primary, the long Store headline) and the sound-muted Banner in each tone,
+// at absolute, documented positions, so tests/test_slint_cards.cpp can probe the pixels. Window 640 x 764 on the Theme
+// ground. Cards are 276 wide (the 296 px panel less the sheet's 10 px margins) and size their own height; the heights they
+// settle on are the out properties (the h column is what the tested font gave), and the gaps below leave room for a font a
+// pixel or two taller. Inside a card the content starts 11 px in (1 border + 10 padding), so its inner width is 254.
+//
+//   x,   y,   w,   h  - what                                                   (the id a click leaves in last-clicked)
+//   ---- left column ---------------------------------------------------------------------------------------------------
+//    16,  16, 276,  77 - update card as the sheet: title, "you run 0.99.104", Download update (on, fills) + Not now   (upd)
+//    16, 112, 276, 155 - the same with 3 release notes, the size note and a tooltip on the primary               (notes)
+//    16, 296, 276, 160 - warn card "Receiver control": a line, two Checkbox children, a note                    (warn)
+//    16, 480, 276, 124 - team message: 2 bullets (the second wraps), a plain full-width "Seen" key                (team)
+//   ---- right column --------------------------------------------------------------------------------------------------
+//   348,  16, 276, 129 - download in progress: lines, "Downloading..." beside a bar at prog-progress, Not now, a note   (prog)
+//   348, 168, 276, 128 - critical update on the err tone: red title, a line, the keys, the error line              (err)
+//   348, 332, 276,  66 - disabled primary (an update check is pending) with a tooltip, no subtitle; the secondary's
+//                        word is short ("No"), so its key shows the 72 px minimum                                    (dis)
+//   348, 422, 276, 118 - the long Store headline wrapping to three lines beside its subtitle, one on key            (store)
+//   348, 556, 276,  66 - a primary word too long to fit beside "Not now": the key keeps the row, the word is elided     (long)
+//   ---- banners (28 high) ----------------------------------------------------------------------------------------------
+//    16, 652, 608,  28 - warn: "Sound muted by APRS" + the small key "Stop plugin" and its tooltip               (ban-warn)
+//    16, 688, 400,  28 - warn, a sentence too long for the bar: elided, its tooltip is the whole sentence        (ban-long)
+//   428, 688, 196,  28 - err tone: red ground and line, no key
+//    16, 724, 300,  28 - neutral tone with a key, enabled by ban-enabled                                          (ban-plain)
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { Caption } from "../keys.slint";
+import { Checkbox } from "../fields.slint";
+import { CardTone, Card, Banner } from "../cards.slint";
+export { Theme, Skin, Workbench, CardTone }
+
+export component CardsSpecimen inherits Window {
+    width: 640px;
+    height: 764px;
+    background: Theme.bg;
+
+    // what the test observes (and sets)
+    in-out property <int> primaries;
+    in-out property <int> secondaries;
+    in-out property <int> banner-clicks;
+    in-out property <int> toggles;
+    in-out property <string> last-clicked;
+    in-out property <float> prog-progress: 0.4;
+    in-out property <bool> ban-enabled: true;
+    out property <length> upd-h: upd.height;
+    out property <length> notes-h: notes.height;
+    out property <length> warn-h: warn.height;
+    out property <length> team-h: team.height;
+    out property <length> prog-h: prog.height;
+    out property <length> err-h: err.height;
+    out property <length> dis-h: dis.height;
+    out property <length> store-h: store.height;
+    out property <length> long-h: long.height;
+    out property <length> upd-preferred-h: upd.preferred-height;
+    out property <length> notes-preferred-h: notes.preferred-height;
+    function primary(id: string) {
+        root.primaries += 1;
+        root.last-clicked = id;
+    }
+    function secondary(id: string) {
+        root.secondaries += 1;
+        root.last-clicked = id;
+    }
+
+    // ---- captions ----
+    Caption { x: 16px; y: 0px; label: "update, notes, warn, team message"; color: Theme.dim; }
+    Caption { x: 348px; y: 0px; label: "progress, err, disabled, Store"; color: Theme.dim; }
+    Caption { x: 16px; y: 636px; label: "Banner: warn, elided, err, neutral"; color: Theme.dim; }
+
+    // ---- left column ----
+    upd := Card { x: 16px; y: 16px; width: 276px;
+        title: "FoxSDR 0.99.105 is available"; subtitle: "you run 0.99.104";
+        primary-label: "Download update"; secondary-label: "Not now";
+        primary-clicked => { root.primary("upd"); } secondary-clicked => { root.secondary("upd"); } }
+    notes := Card { x: 16px; y: 112px; width: 276px;
+        title: "FoxSDR 0.99.105 is available"; subtitle: "you are running 0.99.104";
+        lines: ["Fixes a crash when the Airspy is unplugged", "Faster waterfall on 4K displays", "New: Plugin store tab"];
+        primary-label: "Download update"; secondary-label: "Not now"; primary-tooltip: "Download and verify the update";
+        note: "38.2 MB, verified against its published checksum before anything runs";
+        primary-clicked => { root.primary("notes"); } secondary-clicked => { root.secondary("notes"); } }
+    warn := Card { x: 16px; y: 296px; width: 276px; tone: CardTone.warn;
+        title: "Receiver control";
+        lines: ["\"APRS / AX.25 Packet Decoder\" asked to tune the receiver and was refused."];
+        note: "Grants stay until you revoke them.";
+        Checkbox { checked: true; label: "this file is in the plugin folder and the host refused it - the Fitted modules tab prints why. Grant kept.";
+            toggled(v) => { root.toggles += 1; } }
+        Checkbox { checked: true; label: "no module of this name is fitted here - grant kept"; toggled(v) => { root.toggles += 1; } } }
+    team := Card { x: 16px; y: 480px; width: 276px;
+        title: "Message from the FoxSDR team"; subtitle: "2 Nov 2026";
+        lines: ["The Plugin store now lists 43 plugins.", "Tell us which SDRs you want supported next, using Request a feature."];
+        primary-label: "Seen"; primary-on: false;
+        primary-clicked => { root.primary("team"); } }
+
+    // ---- right column ----
+    prog := Card { x: 348px; y: 16px; width: 276px;
+        title: "FoxSDR 0.99.105 is available"; subtitle: "you are running 0.99.104";
+        lines: ["Fixes a crash when the Airspy is unplugged", "Faster waterfall on 4K displays"];
+        primary-label: "Downloading..."; progress: root.prog-progress; secondary-label: "Not now";
+        note: "17.6 of 38.2 MB";
+        primary-clicked => { root.primary("prog"); } secondary-clicked => { root.secondary("prog"); } }
+    err := Card { x: 348px; y: 168px; width: 276px; tone: CardTone.err; critical: true;
+        title: "Important update: FoxSDR 0.99.105"; subtitle: "you are running 0.99.104";
+        lines: ["Update before 12 Nov: the catalogue address changes."];
+        primary-label: "Download update"; secondary-label: "Not now";
+        error: "could not reach foxsdr.com";
+        primary-clicked => { root.primary("err"); } secondary-clicked => { root.secondary("err"); } }
+    dis := Card { x: 348px; y: 332px; width: 276px;
+        title: "FoxSDR 0.99.105 is available";
+        primary-label: "Download update"; primary-enabled: false; primary-tooltip: "Waiting for the update check to finish";
+        secondary-label: "No";
+        primary-clicked => { root.primary("dis"); } secondary-clicked => { root.secondary("dis"); } }
+    store := Card { x: 348px; y: 422px; width: 276px;
+        title: "FoxSDR update available from the Microsoft Store"; subtitle: "you are running 0.99.104";
+        primary-label: "Install from the Microsoft Store";
+        note: "Windows will ask you to confirm, and FoxSDR may close while the update installs.";
+        primary-clicked => { root.primary("store"); } }
+    long := Card { x: 348px; y: 556px; width: 276px;
+        title: "Update";
+        primary-label: "Install from the Microsoft Store"; secondary-label: "Not now";
+        primary-clicked => { root.primary("long"); } secondary-clicked => { root.secondary("long"); } }
+
+    // ---- banners ----
+    ban-warn := Banner { x: 16px; y: 652px; width: 608px; text: "Sound muted by APRS"; key-label: "Stop plugin";
+        key-tooltip: "Stop the plugin that muted the sound";
+        key-clicked => { root.banner-clicks += 1; root.last-clicked = "ban-warn"; } }
+    ban-long := Banner { x: 16px; y: 688px; width: 400px; key-label: "Stop plugin";
+        text: "Sound muted by APRS decoder, FT8 decoder, POCSAG pager, ADS-B Aircraft Decoder and 3 more plugins";
+        key-clicked => { root.banner-clicks += 1; root.last-clicked = "ban-long"; } }
+    ban-err := Banner { x: 428px; y: 688px; width: 196px; tone: CardTone.err; text: "Sound muted by APRS"; }
+    ban-plain := Banner { x: 16px; y: 724px; width: 300px; tone: CardTone.neutral; text: "Sound muted by APRS"; key-label: "Stop plugin";
+        enabled: root.ban-enabled;
+        key-clicked => { root.banner-clicks += 1; root.last-clicked = "ban-plain"; } }
+}

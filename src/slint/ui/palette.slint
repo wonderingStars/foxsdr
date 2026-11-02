@@ -1,0 +1,332 @@
+// FoxSDR Slint front end - the COMMAND PALETTE: the field in the title bar (Workbench.dc.html, the label 520 x 26 in the
+// middle of the 36 px bar) and the sheet it opens.
+//
+//   CommandField    520 x 26   panel ground, line border, radius; search icon 14 px dim at x 11, the placeholder 12 px dim,
+//                              the shortcut badge ("Ctrl K": mono 10 px, 1 px line-strong box, radius 4) at the right
+//   CommandPalette  640 x ...  the sheet, in a PopupWindow held inside a zero-sized component (a PopupWindow cannot be a
+//                              component's root): 1 px knob-ring border, radius-panel, padding 8; a 26 px query row on
+//                              field, then up to 8 result rows of 32 px (kind chip | title 12 px | detail 11 px dim)
+//
+// The host owns the words and the search: it sets `query` (before show(), if it wants the sheet to open on a phrase) and
+// `results` (the rows for the query it was told of by `query-changed`), and acts on `activated(id)`. Up / Down move the
+// highlight (and wrap), Enter activates it, Esc dismisses; a click on a row activates it, a click outside the sheet closes
+// it (Slint gives a popup no "closed" callback, so that close is silent: only Esc says `dismissed`). The sheet opens at
+// (at-x, at-y) in the coordinates of the CommandPalette element, which therefore sits at the top-left of the area it opens over.
+import { Theme } from "theme.slint";
+import { Chip } from "chips.slint";
+import { TipTimer } from "tooltip.slint";
+
+export struct PaletteResult { kind: string, title: string, detail: string, id: int }
+
+export component CommandField inherits Rectangle {
+    in property <string> placeholder: "Find a setting, plugin, frequency or bookmark…";
+    in property <string> shortcut: "Ctrl K";
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked;
+
+    width: 520px;
+    height: 26px;
+    background: Theme.panel;
+    border-width: Theme.hairline;
+    border-color: Theme.line;
+    border-radius: Theme.radius;
+    accessible-role: button;
+    accessible-label: root.placeholder + " (" + root.shortcut + ")";
+    accessible-action-default => {
+        if (root.enabled) { root.clicked(); }
+    }
+
+    // the sheet's padding is 0 10 inside the 1 px border
+    Image {
+        x: 10px + Theme.hairline;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        source: @image-url("icons/search.svg");
+        colorize: Theme.dim;
+    }
+    Text {
+        x: 10px + Theme.hairline + 14px + 8px;
+        y: 0px;
+        width: max(0px, badge.x - 8px - self.x);
+        height: parent.height;
+        text: root.placeholder;
+        color: Theme.dim;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    badge := Rectangle {
+        x: parent.width - 10px - Theme.hairline - self.width;
+        y: (parent.height - self.height) / 2;
+        width: badge-text.preferred-width + 12px;
+        height: badge-text.preferred-height + 4px;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        border-radius: 4px;
+        badge-text := Text {
+            x: 6px;
+            y: 2px;
+            text: root.shortcut;
+            color: Theme.fg;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-cap;
+        }
+    }
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+    TipTimer {
+        x: 0px;
+        y: 0px;
+        hovered: area.has-hover;
+        text: root.tooltip;
+        anchor-h: root.height;
+    }
+}
+
+export component CommandPalette {
+    in property <length> at-x;
+    in property <length> at-y;
+    in property <string> placeholder: "Find a setting, plugin, frequency or bookmark…";
+    in property <string> empty-text;                   // shown in a row of its own when the query has no results; "" shows none
+    in property <int> max-rows: 8;                     // the list is at most this many rows high; more results scroll
+    in-out property <string> query;
+    in property <[PaletteResult]> results;
+    in-out property <int> highlighted: 0;
+    callback query-changed(text: string);
+    callback activated(id: int);
+    callback dismissed;
+
+    x: 0px;
+    y: 0px;
+    width: 0px;
+    height: 0px;
+
+    public function show() {
+        root.highlighted = 0;
+        popup.show();
+    }
+    public function close() {
+        popup.close();
+    }
+
+    private property <int> visible-rows: min(root.results.length, max(1, root.max-rows));
+    private property <length> list-h: root.results.length > 0 ? root.visible-rows * 32px : (root.empty-text != "" ? 32px : 0px);
+    private property <length> panel-h: root.list-h > 0px ? 41px + root.list-h + 9px : 44px;
+    // A popup clips what it draws to its own rectangle, so the sheet's shadow needs room: the popup is the sheet plus this
+    // much all round, and a click on that margin closes it like any click outside the sheet.
+    private property <length> pad: Theme.shadows ? 24px : 0px;
+
+    // the host may answer a keystroke with fewer rows than the highlight was on
+    changed results => {
+        if (root.highlighted >= root.results.length) {
+            root.highlighted = root.results.length > 0 ? root.results.length - 1 : 0;
+        }
+    }
+
+    popup := PopupWindow {
+        x: root.at-x - root.pad;
+        y: root.at-y - root.pad;
+        width: 640px + 2 * root.pad;
+        height: root.panel-h + 2 * root.pad;
+        close-policy: close-on-click-outside;
+
+        TouchArea {
+            clicked => {
+                popup.close();
+            }
+        }
+        panel := Rectangle {
+            x: root.pad;
+            y: root.pad;
+            width: 640px;
+            height: root.panel-h;
+            background: Theme.panel;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 18px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 8px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+
+            TouchArea { }   // a click on the sheet's blank parts is not a click outside it
+
+            function move-highlight(step: int) {
+                let n = root.results.length;
+                if (n > 0) {
+                    root.highlighted = step > 0 ? (root.highlighted + 1 >= n ? 0 : root.highlighted + 1)
+                                                : (root.highlighted - 1 < 0 ? n - 1 : root.highlighted - 1);
+                    // keep the highlighted row in the list's window
+                    if (root.highlighted * 32px < -list.content-y) {
+                        list.content-y = -(root.highlighted * 32px);
+                    } else if ((root.highlighted + 1) * 32px > -list.content-y + list.height) {
+                        list.content-y = list.height - (root.highlighted + 1) * 32px;
+                    }
+                }
+            }
+            function activate(row: int) {
+                if (row >= 0 && row < root.results.length) {
+                    root.activated(root.results[row].id);
+                    popup.close();
+                }
+            }
+
+            // the query row
+            Rectangle {
+                x: 9px;
+                y: 9px;
+                width: parent.width - 18px;
+                height: 26px;
+                background: Theme.field;
+                border-radius: Theme.radius;
+                Text {
+                    x: 10px;
+                    y: 0px;
+                    width: parent.width - 20px;
+                    height: parent.height;
+                    visible: root.query == "";
+                    text: root.placeholder;
+                    color: Theme.dim;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-body;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                input := TextInput {
+                    x: 10px;
+                    y: 0px;
+                    width: parent.width - 20px;
+                    height: parent.height;
+                    text <=> root.query;
+                    color: Theme.fg;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-body;
+                    vertical-alignment: center;
+                    selection-background-color: Theme.accent;
+                    selection-foreground-color: Theme.accent-ink;
+                    accessible-label: root.placeholder;
+                    init => {
+                        self.focus();
+                    }
+                    edited => {
+                        root.highlighted = 0;
+                        root.query-changed(self.text);
+                    }
+                    key-pressed(e) => {
+                        if (e.text == Key.DownArrow) {
+                            panel.move-highlight(1);
+                            return EventResult.accept;
+                        }
+                        if (e.text == Key.UpArrow) {
+                            panel.move-highlight(-1);
+                            return EventResult.accept;
+                        }
+                        if (e.text == Key.Return) {
+                            panel.activate(root.highlighted);
+                            return EventResult.accept;
+                        }
+                        if (e.text == Key.Escape) {
+                            root.dismissed();
+                            popup.close();
+                            return EventResult.accept;
+                        }
+                        return EventResult.reject;
+                    }
+                }
+            }
+
+            // the results
+            list := Flickable {
+                x: 9px;
+                y: 41px;
+                width: parent.width - 18px;
+                height: root.list-h;
+                content-height: root.results.length * 32px;
+                for r[i] in root.results : Rectangle {
+                    x: 0px;
+                    y: i * 32px;
+                    width: list.width;
+                    height: 32px;
+                    background: i == root.highlighted ? Theme.menu-hot : transparent;
+                    border-radius: Theme.radius-menu-item;
+                    accessible-role: list-item;
+                    accessible-label: r.kind + " " + r.title + " " + r.detail;
+                    accessible-action-default => {
+                        panel.activate(i);
+                    }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 10px;
+                        Rectangle {
+                            // the kind column: as wide as the widest chip needs, at least 96 px, so the titles line up
+                            min-width: 96px;
+                            preferred-width: max(96px, kind-chip.width);
+                            horizontal-stretch: 0;
+                            kind-chip := Chip {
+                                x: 0px;
+                                y: (parent.height - self.height) / 2;
+                                label: r.kind;
+                            }
+                        }
+                        Text {
+                            text: r.title;
+                            color: Theme.fg;
+                            font-family: Theme.font-ui;
+                            font-size: Theme.font-body;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: r.detail;
+                            color: Theme.dim;
+                            font-family: Theme.font-ui;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            overflow: elide;
+                            max-width: 260px;
+                        }
+                    }
+                    TouchArea {
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.move && root.highlighted != i) {
+                                root.highlighted = i;
+                            }
+                        }
+                        clicked => {
+                            panel.activate(i);
+                        }
+                    }
+                }
+            }
+            if root.results.length == 0 && root.empty-text != "" : Text {
+                x: 19px;
+                y: 41px;
+                width: parent.width - 38px;
+                height: 32px;
+                text: root.empty-text;
+                color: Theme.dim;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            // the border, over the rows so a highlighted row never covers it
+            Rectangle {
+                width: parent.width;
+                height: parent.height;
+                border-width: Theme.hairline;
+                border-color: Theme.knob-ring;
+                border-radius: Theme.radius-panel;
+            }
+        }
+    }
+}
