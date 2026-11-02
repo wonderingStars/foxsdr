@@ -36,6 +36,15 @@ std::string fmtKHz(double hz);                             // "12.5 kHz"
 std::string spanText(double hz);                           // "SPAN 2.400 MHz" (GHz / MHz / kHz / Hz by size)
 std::string cursorText(double hz, double db);              // "145.212 MHz · -78.4 dB"
 std::string axisUnit(double spanHz);                       // the frequency axis's unit word
+// The typed editor's entry: "145.5", "145.5 MHz", "145500 kHz", "145500000", "7,074" -> Hz. A bare number under
+// 100 000 is MHz, else Hz. False for anything that is not a frequency.
+bool parseFrequencyHz(const std::string& text, double& hz);
+// The click-to-tune snap: the nearest multiple of the mode's step (no snap when shift is held or step <= 0).
+double snapToStep(double hz, double stepHz, bool shift);
+// The zoom window: a new span about a fixed point (the pointer's fraction), kept inside the full span.
+struct ViewWindow { double centreHz; double spanHz; };
+ViewWindow zoomAbout(ViewWindow view, double fullCentreHz, double fullSpanHz, double factor, double aboutFrac, double minSpanHz);
+ViewWindow panBy(ViewWindow view, double fullCentreHz, double fullSpanHz, double dFrac);
 
 // ---- the strip's dials as sliders ----
 double squelchNorm(double squelchDb);                      // -120..0 dB -> 0..1; the table's -200 (always open) sits at 0
@@ -101,6 +110,7 @@ struct HostExtras {
     std::string gainText;                                  // "32 dB", "AUTO", "N/A"
     std::string antenna;                                   // "" when the radio has one antenna
     double ppm = 0.0;
+    bool havePpm = false;                                  // the table does not publish the correction yet: shown only when known
     int webPort = 0;
     std::string webBind;
     std::string webRefused;                                // the refusal sentence, "" none

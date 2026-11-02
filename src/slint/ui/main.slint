@@ -1,403 +1,633 @@
-// FoxSDR Slint front end - THE MAIN SCREEN (spike).
-// project/Workbench.dc.html, 1440 x 900, top to bottom: title bar 36 | receiver strip 104 |
-// body (icon rail 64 | sections panel 296 | centre: tab row 32, spectrum, splitter 6, waterfall 270) | status bar 28.
-// Everything the strip and bar show is a property the C++ host fills from the C API table once per frame;
-// every key is a callback the host turns into a submit() on the table. The spectrum and waterfall are
-// Image wells the host paints (SharedPixelBuffer -> Image) - the handover's "surfaces fed by a renderer".
+// FoxSDR Slint front end - THE MAIN SCREEN (phase 1 of the port, docs/engine-stage4.md 6.36).
+//
+// Workbench.dc.html, 1440 x 900, top to bottom: title bar 36 | receiver strip 104 | (sound-muted banner 28 when
+// a plugin mutes) | body (icon rail 64 | sections panel 296 | centre: tab row 32, spectrum, splitter 6,
+// waterfall 270) | status bar 28. Everything shown is a property the C++ host fills from the C API table
+// (read_state / read_list / read_spectrum once per tick); every key, gesture and shortcut is a callback the host
+// turns into a submit() on the table. The window is frameless on every platform (the IA's 36 px title bar) and
+// the host moves, sizes, minimises and maximises it from the chrome callbacks.
+//
+// The inventory (main-window-frame, spectrum-waterfall) is walked row by row in docs/slint-port-tick.md: every
+// row is here, relocated here as the Workbench IA says (deck meters into the status bar and the level line,
+// mode keys onto the strip, status cards into the status bar), or deferred with its reason in that list.
 
-import { Theme } from "theme.slint";
-import { Caption, Key, SegGroup, SegKey, Lamp, LampState, Chip, ChipTone, Digit, Slider, Section, Tab, RailKey, StatusChip, VLine } from "components.slint";
+import { Theme, Skin, Workbench, DigitFace, MeterStyle } from "theme.slint";
+import { Chip, LampDot, ChipTone, LampState } from "chips.slint";
+import { TipTimer } from "tooltip.slint";
+import { Caption, Key, SegGroup, SegKey, RailKey, StopKey } from "keys.slint";
+import { Lamp, StatusChip, VLine } from "lamps.slint";
+import { FrequencyCounter } from "digits.slint";
+import { Slider, LevelBar, SliderGroup } from "sliders.slint";
+import { Section, BodyRow, SelectKey } from "sections.slint";
+import { Tab, Splitter } from "tabs.slint";
+import { MenuItemKind, MenuEntry, Menu } from "menus.slint";
+import { Checkbox } from "fields.slint";
+import { Card, Banner, CardTone } from "cards.slint";
+import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
+import { AgeTick, WfMark, WfMarker, WaterfallView } from "waterfall.slint";
+import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
+import { PatchCanvas, ScopeTube, PatchNode, PatchWire } from "stubs.slint";
+import { AboutSlint } from "std-widgets.slint";
 
-export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool }
-export struct StatusCard { key: string, value: string, detail: string, good: bool, warn: bool, lamp: LampState, show-lamp: bool }
+export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
+         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, AgeTick, WfMark, WfMarker, PaletteResult, PatchNode, PatchWire }
+
+export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
+export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
+
+// A centred sheet on a dimmed backdrop: the IA's dialog form. Used here for the bias-tee question and the
+// About dialog; the companion dialogs (phase 3) reuse it.
+component Sheet inherits Rectangle {
+    in property <string> title;
+    in property <length> sheet-w: 460px;
+    callback dismissed;
+    background: Theme.backdrop;
+    TouchArea { clicked => { root.dismissed(); } }
+    panel := Rectangle {
+        width: root.sheet-w;
+        height: body.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.panel;
+        border-width: Theme.hairline;
+        border-color: Theme.knob-ring;
+        border-radius: Theme.radius-panel;
+        drop-shadow-blur: Theme.shadows ? 28px : 0px;
+        drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+        drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+        TouchArea { }   // swallows the click so the backdrop does not dismiss
+        body := VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            Text { text: root.title; font-size: 13px; font-weight: Theme.weight-semibold; color: Theme.fg; font-family: Theme.font-ui; }
+            @children
+        }
+    }
+}
 
 export component MainWindow inherits Window {
     title: "FoxSDR";
+    no-frame: true;
     preferred-width: 1440px;
     preferred-height: 900px;
+    min-width: 624px;
+    min-height: 400px;
     background: Theme.bg;
     default-font-family: Theme.font-ui;
-    default-font-size: 12px;
+    default-font-size: Theme.font-body;
+    forward-focus: keys;                         // the shortcuts' FocusScope holds the focus unless a field takes it
 
-    // ---- state the host publishes (read_state, once per frame) ----
+    // ===================== what the host publishes =====================
     in property <string> version: "0.99.100";
-    in property <bool> running;                     // receiver RUN
-    in property <bool> decoding;                    // DEC
-    in property <bool> muted;                       // MUTE
-    in property <bool> failed;                      // FAIL
-    in property <bool> rcvr-held;                   // the amber RCVR lamp (a plugin holds receiver control)
+    in property <bool> maximised;
+    in property <int> notifications;                 // bell badge count
+    in property <string> notifications-tooltip: "Notifications";
+    // receiver strip
+    in property <bool> running;
+    in property <bool> decoding;
+    in property <bool> muted;
+    in property <bool> failed;
     in property <string> tuned-text: "145.500000 MHz";
-    in property <[int]> digits: [0, 1,4,5, 5,0,0, 0,0,0];   // GHz . MHz x3 . kHz x3 . Hz x3
-    in property <int> leading-zeros: 1;              // how many leading digits draw dim
+    in property <[int]> digits: [0, 1, 4, 5, 5, 0, 0, 0, 0, 0];
+    in property <int> leading-zeros: 1;
+    in property <bool> show-nudges: true;
+    in-out property <bool> editing;                  // the typed frequency editor is open
+    in-out property <string> editor-text;
+    in property <string> converter-text;             // "" = the static engraving
+    in property <bool> converter-warn;
     in property <string> tune-hint: "Scroll a digit to tune · click to type (T) · no converter";
-    in property <[string]> modes: ["NFM","WFM","AM","DSB","USB","CW","LSB","RAW"];
+    in property <[string]> modes: ["NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"];
     in property <int> mode-index: 0;
     in property <string> mode-hint: "Passband 12.5 kHz · step 12.5 kHz · more in Signal › Radio";
-    in property <float> gain-norm: 0.62;   in property <string> gain-text: "32 dB";     in property <bool> gain-auto;
-    in property <string> gain-hint: "TUNER stage";
-    in property <float> squelch-norm: 0.29; in property <string> squelch-text: "-85 dB"; in property <bool> squelch-auto: true;
-    in property <string> squelch-hint: "Automatic: 8 dB above the noise floor";
-    in property <float> volume-norm: 0.72; in property <string> volume-text: "0.72";
-    in property <float> level-norm: 0.55;  in property <string> level-text: "-12.4 dB";
-    in property <bool> bias-tee-on;
-    in property <string> bias-hint: "Off · 4.5 V on the cable · asks first";
-    in property <int> bank-index: 0;                 // SIGNAL DECODE TOOLS EXTEND SYSTEM
-    in property <string> bank-title: "Signal path";
+    in property <float> gain-norm; in property <string> gain-text: "N/A"; in property <bool> gain-auto; in property <bool> gain-enabled; in property <bool> gain-auto-enabled;
+    in property <string> gain-hint: "no gain stage"; in property <string> gain-tooltip; in property <string> gain-auto-tooltip;
+    in property <float> squelch-norm; in property <string> squelch-text: "open"; in property <bool> squelch-auto: true; in property <string> squelch-hint; in property <string> squelch-auto-tooltip;
+    in property <float> volume-norm; in property <string> volume-text: "0.00";
+    in property <float> level-norm; in property <string> level-text: "--";
+    in property <bool> bias-tee-present; in property <bool> bias-tee-on; in property <string> bias-hint: "No bias tee on this radio";
+    in property <string> bias-tooltip: "Sends about 4.5 V up the antenna cable to power an amplifier at the mast. Leave it off unless you have one: equipment that is not expecting power on the connector can be damaged by it.";
+    in-out property <bool> bias-question-open;      // "Turn on the bias tee?" sheet
+    in property <string> bias-question-text;
+    in property <string> muted-by;                   // "" = no banner
+    // rail + sections panel
+    in-out property <int> bank-index: 0;             // SIGNAL DECODE TOOLS EXTEND SYSTEM
+    in-out property <bool> rail-folded;
+    in property <[string]> bank-titles: ["Signal path", "Decode", "Tools", "Extend", "System"];
     in property <string> bank-chip: "RECEIVING";
-    in property <[SectionRow]> sections: [
-        { name: "Patch", chip: "RECEIVER VIEW", tone: ChipTone.neutral, open: false },
-        { name: "Source", chip: "RTL-SDR", tone: ChipTone.good, open: false },
-        { name: "Radio", chip: "NFM", tone: ChipTone.warn, open: true },
-        { name: "Audio filters", chip: "OFF", tone: ChipTone.neutral, open: false },
-        { name: "Sinks", chip: "OPEN", tone: ChipTone.good, open: false },
-        { name: "Transmit", chip: "NO TX", tone: ChipTone.neutral, open: false },
-        { name: "Recorder", chip: "OFF", tone: ChipTone.neutral, open: false },
-        { name: "Frequency correction", chip: "0.0 PPM", tone: ChipTone.neutral, open: false },
-    ];
-    in property <string> source-line: "RTL-SDR Blog V4 · 2 m amateur";
-    in property <string> rate-line: "2.400 MS/s · ch 12.5 kHz · underruns 0";
-    in property <int> view-index: 0;                 // RECEIVER PATCH SCOPE
-    in property <string> spectrum-caption: "Spectrum · 4096 bin · EMA 0.35";
-    in property <string> peak-text: "-41.2 dBFS";
-    in property <string> peak-age: "0.1 s ago";
-    in property <string> span-text: "SPAN 2.400 MHz";
-    in property <image> spectrum-image;             // painted by the host
-    in property <image> waterfall-image;            // painted by the host
-    in property <string> waterfall-foot-left: "24 lines/s · 42 s of history";
-    in property <string> waterfall-foot-right: "NFM · decoding: APRS";
-    in property <[StatusCard]> status: [
-        { key: "RECEIVER", value: "RUNNING", detail: "RTL-SDR Blog V4 · ANT RX · GAIN 32 dB · PPM 0.0 · 2.400 MS/s", good: false, warn: false, lamp: LampState.green, show-lamp: true },
-        { key: "DECODERS", value: "2 running", detail: "of 5 fitted, 1 idle", good: true, warn: false, lamp: LampState.off, show-lamp: false },
-        { key: "OUTPUT", value: "3.2 /s", detail: "2.0 s mean", good: false, warn: true, lamp: LampState.off, show-lamp: false },
-        { key: "SINK", value: "OPEN", detail: "Speakers (Realtek) · playing NFM", good: true, warn: false, lamp: LampState.off, show-lamp: false },
-        { key: "RECORDER", value: "off", detail: "no file open", good: false, warn: false, lamp: LampState.off, show-lamp: false },
-        { key: "WEB", value: "port 8080", detail: "0.0.0.0", good: false, warn: false, lamp: LampState.off, show-lamp: false },
-        { key: "UNDERRUNS", value: "0", detail: "none starved", good: false, warn: false, lamp: LampState.off, show-lamp: false },
-    ];
+    in property <ChipTone> bank-chip-tone: ChipTone.good;
+    in property <[SectionRow]> sections: [];
+    in property <float> passband-norm; in property <string> passband-text: "12.5 kHz";
+    in property <string> tune-step-text: "12.5 kHz";
+    in-out property <bool> follow-band-plan: true;
+    in property <bool> team-message-shown; in property <string> team-message-date; in property <[string]> team-message-lines; in property <bool> team-message-important;
+    in property <bool> update-shown; in property <string> update-headline; in property <bool> update-critical; in property <[string]> update-notes;
+    in property <string> update-primary: "Download update"; in property <float> update-progress: -1; in property <string> update-note; in property <string> update-error;
+    in property <string> source-line: "Signal generator";
+    in property <string> rate-line: "2.000 MS/s · ch 200.0 kHz · underruns 0";
+    in property <string> converter-line;             // "" = none (the rail footer's warning line)
+    // centre
+    in-out property <int> view-index: 0;             // RECEIVER PATCH SCOPE
+    in property <[string]> window-tabs: [];          // docked page / plugin windows (phase 3 fills it)
+    in property <int> trace-mode: 1;                 // 0 normal 1 peak hold 2 average
+    in property <bool> range-manual;
+    in property <int> marker-count;
+    in property <bool> band-plan-on: true;
+    in property <string> spectrum-caption: "Spectrum";
+    in property <string> spectrum-caveat: "average of the last frames, not the audio";
+    in property <string> peak-text; in property <string> peak-age; in property <bool> show-peak;
+    in property <string> span-text: "SPAN 2.000 MHz";
+    in property <image> trace-image;
+    in property <[DbTick]> db-ticks: [];
+    in property <[AxisTick]> freq-ticks: [];
+    in property <string> axis-unit: "MHz";
+    in property <float> vfo-pos: 0.5; in property <float> vfo-half: 0.01; in property <bool> show-vfo: true;
+    in property <[BandSegment]> ribbon: [];
+    in property <int> ribbon-size: 1;
+    in property <[BookmarkMark]> bookmarks: [];
+    in property <[PluginMark]> marks: [];
+    in property <[WfMark]> wf-marks: [];             // the marks not flagged spectrum-only, in the waterfall's own struct
+    in property <[WfMarker]> wf-markers: [];
+    in property <[UserMarker]> markers: [];
+    in property <string> cursor-text; in property <bool> cursor-visible; in property <float> cursor-pos;
+    in property <string> band-tooltip: "Drag to move the tuned band · drag an edge to change the passband · Shift = free tuning";
+    in property <string> edge-tooltip: "Drag to change the passband";
+    in property <string> off-band-tooltip: "Click to tune here · double-click for the full span · wheel to zoom · Shift+wheel to slide the band · right-click for the trace menu";
+    in-out property <float> split-ratio: 0.6;        // spectrum share of the centre height (0.1 .. 0.9)
+    in property <image> waterfall-image;
+    in property <[AgeTick]> age-ticks: [];
+    in property <string> waterfall-foot-left;
+    in property <string> waterfall-foot-tuned;
+    in property <string> waterfall-foot-rest;
+    in property <[string]> key-labels: ["-110", "-80", "-50", "-20", "0"];
+    in property <string> key-foot: "FLOOR -110 dB · CEILING 0 dB · auto";
+    in property <string> key-coverage;
+    in property <bool> show-strength-key: true;
+    in property <float> wf-rail-pos: -1;
+    in property <string> marker-tooltip;
+    in property <string> waterfall-tooltip: "Click to tune here · drag to pan · wheel to zoom · right-click for the marker menu";
+    // status bar
+    in property <[StatusCard]> status: [];
+    // menus + palette + about
+    in property <[MenuEntry]> menu-entries: [];      // the host fills these, then calls open-menu
+    in property <[PaletteResult]> palette-results: [];
+    in-out property <string> palette-query;
+    in property <bool> preview: true;                // shipped as a labelled PREVIEW beside the ImGui window (the title-bar chip)
+    in-out property <bool> about-open;               // About FoxSDR, from the brand menu: holds the AboutSlint widget the Royalty-free licence requires
+    in property <string> about-text;
 
-    // ---- what the operator does (the host submits each on the table) ----
+    // ===================== what the operator does =====================
     callback stop-clicked;
-    callback nudge(int, int);            // digit index 0..9, +1 / -1
+    callback nudge(int, int);                        // digit 0..9, +1 / -1 (and the wheel)
+    callback edit-requested;
+    callback typed(string);
+    callback edit-cancelled;
+    callback counter-menu-requested(length, length);
     callback mode-selected(int);
-    callback gain-changed(float);        // 0..1 of the slider
+    callback gain-changed(float);
     callback gain-auto-clicked;
     callback squelch-changed(float);
     callback squelch-auto-clicked;
     callback volume-changed(float);
-    callback bias-tee-clicked;
+    callback bias-tee-clicked;                       // on -> off at once; off -> on opens the question
+    callback bias-tee-confirmed;
+    callback stop-muting-plugin;
     callback bank-selected(int);
     callback section-clicked(int);
+    callback passband-changed(float);
+    callback tune-step-clicked(length, length);
+    callback follow-band-plan-toggled(bool);
+    callback team-message-seen;
+    callback update-primary-clicked;
+    callback update-dismissed;
     callback view-selected(int);
+    callback window-tab-selected(int);
+    callback window-tab-closed(int);
+    callback add-window-clicked;
+    callback trace-mode-selected(int);
+    callback range-manual-selected(bool);
+    callback markers-clicked;
+    callback band-plan-toggled;
+    callback zoom(int);                              // -1 out, +1 in, 0 full span
+    callback spectrum-hover(float, float);
+    callback spectrum-clicked(float, bool);
+    callback spectrum-double-clicked(float);
+    callback spectrum-menu-requested(float, length, length);
+    callback band-dragged(float);
+    callback edge-dragged(float);
+    callback spectrum-wheel(float, int, bool);
+    callback waterfall-hover(float, float);
+    callback waterfall-clicked(float, bool);
+    callback waterfall-panned(float);
+    callback waterfall-double-clicked;
+    callback waterfall-menu-requested(float, length, length);
+    callback waterfall-wheel(float, int, bool);
+    callback marker-hovered(int);
     callback status-clicked(int);
-    callback palette-requested;
+    callback feature-request-clicked;
+    callback bug-report-clicked;
+    callback menu-activated(int);
+    callback menu-slider-changed(int, float);
+    callback palette-query-changed(string);
+    callback palette-activated(int);
+    callback shortcut(string);                       // the key table's config id: startStop, mute, volumeUp, ...
+    callback title-drag(length, length);
+    callback title-double-clicked;
+    callback system-menu-requested(length, length);
+    callback minimise-clicked;
+    callback maximise-clicked;
+    callback close-clicked;
+    callback brand-clicked;                          // the app menu: About FoxSDR, Key bindings, Quit
+    callback resize-drag(int, length, length);       // edge code (1 right, 2 bottom, 3 corner), dx, dy
+
+    // the one menu (counter, trace, marker, meter): the host sets menu-entries and opens it here
+    public function open-menu(x: length, y: length) { menu.at-x = x; menu.at-y = y; menu.show(); }
+    public function open-palette() { palette.show(); }
+
+    // ===================== keyboard: the default bindings, dispatched by config id =====================
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.F2 && e.modifiers.control) { root.shortcut("startStop"); return accept; }
+            if (e.text == Key.F1 && !e.modifiers.control) { root.shortcut("bankSignal"); return accept; }
+            if (e.text == Key.F2 && !e.modifiers.control) { root.shortcut("bankDecode"); return accept; }
+            if (e.text == Key.F3) { root.shortcut("bankView"); return accept; }
+            if (e.text == Key.F4) { root.shortcut("bankExtend"); return accept; }
+            if (e.text == Key.F5) { root.shortcut("bankSystem"); return accept; }
+            if (e.text == Key.F7) { root.shortcut("openSettings"); return accept; }
+            if (e.text == Key.F11) { root.shortcut("fullscreen"); return accept; }
+            if (e.text == Key.F12) { root.shortcut("screenshot"); return accept; }
+            if (e.text == Key.Escape) { root.shortcut("escape"); return accept; }
+            if (e.text == Key.UpArrow && e.modifiers.control) { root.shortcut("tuneStepUp"); return accept; }
+            if (e.text == Key.DownArrow && e.modifiers.control) { root.shortcut("tuneStepDown"); return accept; }
+            if (e.text == Key.PageUp && e.modifiers.control && e.modifiers.shift) { root.shortcut("squelchUp"); return accept; }
+            if (e.text == Key.PageDown && e.modifiers.control && e.modifiers.shift) { root.shortcut("squelchDown"); return accept; }
+            if (e.text == Key.PageUp && e.modifiers.control) { root.shortcut("tuneSpanUp"); return accept; }
+            if (e.text == Key.PageDown && e.modifiers.control) { root.shortcut("tuneSpanDown"); return accept; }
+            if (e.text == Key.Delete && e.modifiers.control) { root.shortcut("zoomReset"); return accept; }
+            if (e.modifiers.control) {
+                if (e.text == "f" && e.modifiers.shift) { root.shortcut("modeWfm"); return accept; }
+                if (e.text == "F" && e.modifiers.shift) { root.shortcut("modeWfm"); return accept; }
+                if (e.text == "f") { root.shortcut("modeNfm"); return accept; }
+                if (e.text == "a") { root.shortcut("modeAm"); return accept; }
+                if (e.text == "d") { root.shortcut("modeDsb"); return accept; }
+                if (e.text == "u") { root.shortcut("modeUsb"); return accept; }
+                if (e.text == "c") { root.shortcut("modeCw"); return accept; }
+                if (e.text == "l") { root.shortcut("modeLsb"); return accept; }
+                if (e.text == "r") { root.shortcut("modeRaw"); return accept; }
+                if (e.text == "w") { root.shortcut("screenshot"); return accept; }
+                if (e.text == "k") { root.open-palette(); return accept; }
+                if (e.text == "+" || e.text == "=") { root.shortcut(e.text == "=" ? "uiSizeUp" : "zoomIn"); return accept; }
+                if (e.text == "-") { root.shortcut("zoomOut"); return accept; }
+                if (e.text == "0") { root.shortcut("uiSizeAuto"); return accept; }
+                return reject;
+            }
+            if (e.text == "m" || e.text == "M") { root.shortcut("mute"); return accept; }
+            if (e.text == "+" || e.text == "=") { root.shortcut("volumeUp"); return accept; }
+            if (e.text == "-") { root.shortcut("volumeDown"); return accept; }
+            if (e.text == "t" || e.text == "T") { root.shortcut("quickTune"); return accept; }
+            if (e.text == "R" && e.modifiers.shift) { root.shortcut("record"); return accept; }
+            return reject;
+        }
+    }
 
     VerticalLayout {
         spacing: 0px;
 
         // ===================== TITLE BAR (36) =====================
-        Rectangle {
-            height: 36px; background: Theme.bg;
-            Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
+        title-bar := Rectangle {
+            height: Theme.title-h; background: Theme.bg;
+            Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
+            drag := TouchArea {
+                // press-drag the empty bar to move the window; double-click toggles maximise; right-click asks for the system menu
+                moved => { if (self.pressed) { root.title-drag(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); } }
+                double-clicked => { root.title-double-clicked(); }
+                pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) { root.system-menu-requested(self.mouse-x, self.mouse-y); } }
+            }
             HorizontalLayout {
                 padding-left: 12px; padding-right: 8px; spacing: 12px;
-                HorizontalLayout { // brand
-                    min-width: 220px; spacing: 8px; alignment: start;
-                    Rectangle { width: 18px; height: 18px; y: (parent.height - 18px) / 2;
-                        Path { commands: "M 3 14 L 9 3 L 15 14 Z"; fill: Theme.accent; viewbox-width: 18; viewbox-height: 18; }
+                Rectangle { // brand: the app menu opens from it (About FoxSDR carries the Slint attribution the licence requires)
+                    min-width: 220px;
+                    brand := HorizontalLayout {
+                        spacing: 8px; alignment: start;
+                        Image { source: @image-url("icons/fox.svg"); width: 18px; height: 18px; y: (parent.height - 18px) / 2; }
+                        Text { text: "FoxSDR"; font-weight: Theme.weight-semibold; color: Theme.fg; vertical-alignment: center; accessible-role: button; accessible-label: "FoxSDR " + root.version + " menu"; }
+                        Text { text: root.version; font-family: Theme.font-mono; color: Theme.muted; vertical-alignment: center; }
+                        if root.preview : VerticalLayout { alignment: center;
+                            Chip { label: "SLINT PREVIEW"; tone: ChipTone.warn; tooltip: "A preview of the Slint window: it works on a copy of your settings and never writes the real ones."; }
+                        }
+                        Text { text: "Fox & Schirmyver · Type 71 Mk II"; font-size: Theme.font-micro; letter-spacing: 1px; color: Theme.faint; font-weight: Theme.weight-semibold; vertical-alignment: center; }
                     }
-                    Text { text: "FoxSDR"; font-weight: 600; color: Theme.fg; vertical-alignment: center; }
-                    Text { text: root.version; font-family: Theme.font-mono; color: Theme.muted; vertical-alignment: center; }
-                    Text { text: "Fox & Schirmyver · Type 71 Mk II"; font-size: 8px; letter-spacing: 1px; color: Theme.faint; font-weight: 600; vertical-alignment: center; }
+                    TouchArea { x: 0; width: min(brand.preferred-width, parent.width); clicked => { root.brand-clicked(); } }
                 }
-                Rectangle { // command palette
+                Rectangle { // command palette field, centred
                     HorizontalLayout { alignment: center;
-                        Rectangle {
-                            width: 520px; height: 26px; y: (parent.height - 26px) / 2;
-                            background: Theme.panel; border-width: 1px; border-color: Theme.line; border-radius: Theme.radius;
-                            HorizontalLayout { padding-left: 10px; padding-right: 10px; spacing: 8px;
-                                Text { text: "⌕"; color: Theme.dim; vertical-alignment: center; }
-                                Text { text: "Find a setting, plugin, frequency or bookmark…"; color: Theme.dim; vertical-alignment: center; horizontal-stretch: 1; }
-                                Rectangle { border-width: 1px; border-color: Theme.line-strong; border-radius: 4px; width: 42px; height: 16px; y: (parent.height - 16px) / 2;
-                                    Text { text: "Ctrl K"; font-size: 10px; font-family: Theme.font-mono; color: Theme.fg; horizontal-alignment: center; vertical-alignment: center; }
-                                }
-                            }
-                            TouchArea { clicked => { root.palette-requested(); } }
+                        VerticalLayout { alignment: center;
+                            CommandField { clicked => { root.open-palette(); } }
                         }
                     }
                 }
-                HorizontalLayout { // window keys
+                HorizontalLayout { // notifications + window keys
                     min-width: 220px; spacing: 4px; alignment: end;
-                    Key { label: "bell"; ghost: true; min-w: 30px; }
-                    Key { label: "—"; ghost: true; min-w: 30px; }
-                    Key { label: "▢"; ghost: true; min-w: 30px; }
-                    Key { label: "✕"; ghost: true; min-w: 30px; }
+                    VerticalLayout { alignment: center;
+                        Rectangle { width: 30px; height: 30px;
+                            Key { icon: @image-url("icons/bell.svg"); icon-only: true; ghost: true; accessible-label: root.notifications-tooltip; tooltip: root.notifications-tooltip; clicked => { root.bank-selected(4); } }
+                            if root.notifications > 0 : Rectangle { x: 18px; y: 4px; width: 8px; height: 8px; border-radius: 4px; background: Theme.accent; }
+                        }
+                    }
+                    VerticalLayout { alignment: center; Key { icon: @image-url("icons/minimise.svg"); icon-only: true; ghost: true; accessible-label: "Minimise"; tooltip: "Minimise"; clicked => { root.minimise-clicked(); } } }
+                    VerticalLayout { alignment: center; Key { icon: root.maximised ? @image-url("icons/restore.svg") : @image-url("icons/maximise.svg"); icon-only: true; ghost: true; accessible-label: root.maximised ? "Restore" : "Maximise"; tooltip: root.maximised ? "Restore" : "Maximise"; clicked => { root.maximise-clicked(); } } }
+                    VerticalLayout { alignment: center; Key { icon: @image-url("icons/close.svg"); icon-only: true; ghost: true; accessible-label: "Close"; tooltip: "Close"; clicked => { root.close-clicked(); } } }
                 }
             }
         }
 
         // ===================== RECEIVER STRIP (104) =====================
         Rectangle {
-            height: 104px; background: Theme.strip;
-            Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
+            height: Theme.strip-h; background: Theme.strip;
+            Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
             HorizontalLayout {
                 padding-left: 16px; padding-right: 16px; spacing: 20px; alignment: start;
 
-                HorizontalLayout { // STOP + lamps
+                HorizontalLayout { // STOP + the four MASTER lamps
                     spacing: 14px; alignment: center;
-                    stop := Rectangle {
-                        width: 92px; height: 64px; y: (parent.height - 64px) / 2;
-                        border-radius: 10px; border-width: 1px; border-color: Theme.danger-line; background: Theme.danger-bg;
-                        VerticalLayout { alignment: center; spacing: 2px;
-                            Rectangle { width: 18px; height: 18px; HorizontalLayout { alignment: center; Rectangle { width: 12px; height: 12px; border-radius: 2px; background: Theme.danger-glyph; } } }
-                            Text { text: root.running ? "STOP" : "START"; font-size: 12px; font-weight: 600; letter-spacing: 0.7px; color: Theme.danger-fg; horizontal-alignment: center; }
-                        }
-                        TouchArea { clicked => { root.stop-clicked(); } }
-                    }
-                    GridLayout { spacing: 6px; y: (parent.height - self.height) / 2;
+                    VerticalLayout { alignment: center; StopKey { running: root.running; tooltip: root.running ? "Stop the receiver" : "Start the receiver"; clicked => { root.stop-clicked(); } } }
+                    GridLayout { spacing-horizontal: 14px; spacing-vertical: 6px; y: (parent.height - self.height) / 2;
                         Row { Lamp { caption: "RUN";  state: root.running  ? LampState.green : LampState.off; } Lamp { caption: "DEC";  state: root.decoding ? LampState.green : LampState.off; } }
                         Row { Lamp { caption: "MUTE"; state: root.muted    ? LampState.amber : LampState.off; } Lamp { caption: "FAIL"; state: root.failed   ? LampState.red   : LampState.off; } }
                     }
                 }
                 VLine { y: (parent.height - 72px) / 2; }
 
-                VerticalLayout { // frequency
+                VerticalLayout { // the tuned frequency
                     spacing: 2px; alignment: center;
                     HorizontalLayout { alignment: space-between;
-                        Caption { text: "Tuned frequency"; }
+                        Caption { label: "Tuned frequency"; }
                         HorizontalLayout { spacing: 10px;
-                            Lamp { caption: "RCVR"; state: root.rcvr-held ? LampState.amber : LampState.off; }
-                            Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: 11px; color: Theme.accent-soft; vertical-alignment: center; }
+                            Lamp { caption: "RCVR"; state: root.running ? LampState.amber : LampState.off; }
+                            Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
                         }
                     }
-                    Rectangle { // the counter
-                        background: Theme.counter; border-width: 1px; border-color: Theme.line; border-radius: Theme.radius-panel;
-                        HorizontalLayout { padding-left: 8px; padding-right: 8px; padding-top: 2px; padding-bottom: 2px; spacing: 0px;
-                            for d[i] in root.digits : HorizontalLayout { spacing: 0px;
-                                if i == 1 || i == 4 || i == 7 : Text { text: "."; color: Theme.knob-ring; font-size: 22px; vertical-alignment: center; }
-                                Digit { value: d; dim: i < root.leading-zeros; up => { root.nudge(i, 1); } down => { root.nudge(i, -1); } }
-                            }
-                        }
+                    counter := FrequencyCounter {
+                        digits: root.digits; leading-zeros: root.leading-zeros; show-nudges: root.show-nudges;
+                        editing: root.editing; editor-text <=> root.editor-text;
+                        converter-text: root.converter-text; converter-warn: root.converter-warn;
+                        tooltip: "Scroll a digit to tune | click to type";
+                        nudge(d, dir) => { root.nudge(d, dir); }
+                        wheel(d, dir) => { root.nudge(d, dir); }
+                        edit-requested => { root.edit-requested(); }
+                        typed(t) => { root.typed(t); }
+                        edit-cancelled => { root.edit-cancelled(); }
+                        menu-requested(x, y) => { root.counter-menu-requested(x, y); }
                     }
-                    HorizontalLayout { padding-left: 10px; padding-right: 10px; alignment: space-between;
-                        Text { text: "GHz                MHz                     kHz                     Hz"; font-family: Theme.font-mono; font-size: 9px; letter-spacing: 1px; color: Theme.faint; }
-                        Text { text: root.tune-hint; font-size: 10px; color: Theme.dim; }
+                    HorizontalLayout { alignment: end; padding-right: 10px;
+                        Text { text: root.tune-hint; font-size: Theme.font-hint; color: Theme.dim; }
                     }
                 }
                 VLine { y: (parent.height - 72px) / 2; }
 
                 VerticalLayout { // mode
                     spacing: 6px; alignment: center;
-                    Caption { text: "Mode"; }
-                    SegGroup {
+                    Caption { label: "Mode"; }
+                    SegGroup {   // the eight mode keys, a radio group (accessible as eight buttons)
                         HorizontalLayout { padding: 2px; spacing: 2px;
                             for m[i] in root.modes : SegKey { label: m; on: i == root.mode-index; clicked => { root.mode-selected(i); } }
                         }
                     }
-                    Text { text: root.mode-hint; font-size: 10px; color: Theme.dim; }
+                    Text { text: root.mode-hint; font-size: Theme.font-hint; color: Theme.dim; }
                 }
                 VLine { y: (parent.height - 72px) / 2; }
 
-                GridLayout { // gain / squelch / volume
-                    spacing: 18px; horizontal-stretch: 1; y: (parent.height - self.height) / 2;
-                    Row {
-                        VerticalLayout { spacing: 7px;
-                            HorizontalLayout { alignment: space-between;
-                                Caption { text: "Gain"; }
-                                HorizontalLayout { spacing: 6px;
-                                    Text { text: root.gain-text; font-family: Theme.font-mono; font-weight: 600; vertical-alignment: center; color: Theme.fg; }
-                                    Key { label: "AUTO"; on: root.gain-auto; key-height: 20px; min-w: 48px; font-px: 10px; clicked => { root.gain-auto-clicked(); } }
-                                }
-                            }
-                            Slider { value: root.gain-norm; changed(v) => { root.gain-changed(v); } }
-                            Text { text: root.gain-hint; font-size: 10px; color: Theme.dim; }
-                        }
-                        VerticalLayout { spacing: 7px;
-                            HorizontalLayout { alignment: space-between;
-                                Caption { text: "Squelch"; }
-                                HorizontalLayout { spacing: 6px;
-                                    Text { text: root.squelch-text; font-family: Theme.font-mono; font-weight: 600; vertical-alignment: center; color: Theme.fg; }
-                                    Key { label: "AUTO"; on: root.squelch-auto; key-height: 20px; min-w: 48px; font-px: 10px; clicked => { root.squelch-auto-clicked(); } }
-                                }
-                            }
-                            Slider { value: root.squelch-norm; changed(v) => { root.squelch-changed(v); } }
-                            Text { text: root.squelch-hint; font-size: 10px; color: Theme.dim; }
-                        }
-                        VerticalLayout { spacing: 7px;
-                            HorizontalLayout { alignment: space-between;
-                                Caption { text: "Volume"; }
-                                Text { text: root.volume-text; font-family: Theme.font-mono; font-weight: 600; vertical-alignment: center; color: Theme.fg; }
-                            }
-                            Slider { value: root.volume-norm; changed(v) => { root.volume-changed(v); } }
-                            HorizontalLayout { spacing: 6px;
-                                Text { text: "Level"; font-size: 10px; color: Theme.dim; vertical-alignment: center; }
-                                Rectangle { height: 4px; border-radius: 2px; background: Theme.line; horizontal-stretch: 1; y: (parent.height - 4px) / 2;
-                                    Rectangle { x: 0; width: parent.width * root.level-norm; height: 4px; border-radius: 2px; background: Theme.lamp-green; }
-                                }
-                                Text { text: root.level-text; font-family: Theme.font-mono; font-size: 10px; color: Theme.muted; vertical-alignment: center; }
-                            }
+                HorizontalLayout { // gain / squelch / volume lanes
+                    spacing: 18px; horizontal-stretch: 1; alignment: stretch;
+                    VerticalLayout { alignment: center; horizontal-stretch: 1;
+                        SliderGroup { caption: "Gain"; readout: root.gain-text; hint: root.gain-hint; value: root.gain-norm; enabled: root.gain-enabled;
+                            has-auto: true; auto-on: root.gain-auto; auto-enabled: root.gain-auto-enabled; auto-tooltip: root.gain-auto-tooltip; tooltip: root.gain-tooltip;
+                            changed(v) => { root.gain-changed(v); } auto-clicked => { root.gain-auto-clicked(); } }
+                    }
+                    VerticalLayout { alignment: center; horizontal-stretch: 1;
+                        SliderGroup { caption: "Squelch"; readout: root.squelch-text; hint: root.squelch-hint; value: root.squelch-norm;
+                            has-auto: true; auto-on: root.squelch-auto; auto-enabled: true; auto-tooltip: root.squelch-auto-tooltip; tooltip: "Squelch - drag the slider, or scroll over it";
+                            changed(v) => { root.squelch-changed(v); } auto-clicked => { root.squelch-auto-clicked(); } }
+                    }
+                    VerticalLayout { alignment: center; horizontal-stretch: 1; spacing: 7px;
+                        SliderGroup { caption: "Volume"; readout: root.volume-text; hint: ""; value: root.volume-norm; has-auto: false; tooltip: "Volume - drag the slider, or scroll over it";
+                            changed(v) => { root.volume-changed(v); } }
+                        HorizontalLayout { spacing: 6px;   // the VOLUME meter, relocated under the volume slider (Workbench IA 2)
+                            Text { text: "Level"; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
+                            VerticalLayout { alignment: center; horizontal-stretch: 1; LevelBar { value: root.level-norm; } }
+                            Text { text: root.level-text; font-family: Theme.font-mono; font-size: Theme.font-hint; color: Theme.muted; vertical-alignment: center; }
                         }
                     }
                 }
                 VLine { y: (parent.height - 72px) / 2; }
 
-                VerticalLayout { // bias tee (hazard)
+                VerticalLayout { // antenna power: the BIAS TEE hazard key
                     spacing: 6px; alignment: center;
-                    Caption { text: "Antenna power"; }
-                    Rectangle {
-                        height: 36px; min-width: 120px; border-radius: Theme.radius; border-width: 1px; border-color: Theme.hazard-line;
-                        background: root.bias-tee-on ? Theme.accent : Theme.hazard-stripe;
-                        HorizontalLayout { padding-left: 14px; padding-right: 14px; spacing: 6px; alignment: center;
-                            Lamp { caption: ""; state: root.bias-tee-on ? LampState.amber : LampState.off; }
-                            Text { text: "BIAS TEE"; font-weight: 500; color: root.bias-tee-on ? Theme.accent-ink : Theme.fg; vertical-alignment: center; }
-                        }
-                        TouchArea { clicked => { root.bias-tee-clicked(); } }
+                    Caption { label: "Antenna power"; }
+                    HorizontalLayout { alignment: start;
+                        Key { label: "BIAS TEE"; hazard: true; on: root.bias-tee-on; enabled: root.bias-tee-present; min-w: 120px; height: 36px;
+                            show-lamp: true; lamp: root.bias-tee-on ? LampState.amber : LampState.off;
+                            tooltip: root.bias-tooltip; accessible-label: root.bias-tee-on ? "Bias tee on" : "Bias tee off - asks before switching on";
+                            clicked => { if (root.bias-tee-on) { root.bias-tee-clicked(); } else { root.bias-question-open = true; } } }
                     }
-                    Text { text: root.bias-hint; font-size: 10px; color: Theme.dim; }
+                    Text { text: root.bias-hint; font-size: Theme.font-hint; color: Theme.dim; }
                 }
             }
         }
+
+        // the sound-muted banner (a slim bar under the strip, Workbench IA 7)
+        if root.muted-by != "" : Banner { text: "Sound muted by " + root.muted-by; key-label: "Stop plugin"; tone: CardTone.warn; key-clicked => { root.stop-muting-plugin(); } }
 
         // ===================== BODY =====================
         HorizontalLayout {
             spacing: 0px;
 
             Rectangle { // ICON RAIL (64)
-                width: 64px; background: Theme.bg;
-                Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
-                VerticalLayout { padding-top: 8px; padding-bottom: 8px; spacing: 4px; alignment: start;
-                    RailKey { caption: "SIGNAL"; hint: "F1"; on: root.bank-index == 0; clicked => { root.bank-selected(0); } }
-                    RailKey { caption: "DECODE"; hint: "F2"; on: root.bank-index == 1; clicked => { root.bank-selected(1); } }
-                    RailKey { caption: "TOOLS";  hint: "F3"; on: root.bank-index == 2; clicked => { root.bank-selected(2); } }
-                    RailKey { caption: "EXTEND"; hint: "F4"; on: root.bank-index == 3; clicked => { root.bank-selected(3); } }
-                    RailKey { caption: "SYSTEM"; hint: "F5"; on: root.bank-index == 4; clicked => { root.bank-selected(4); } }
+                width: Theme.rail-w; background: Theme.bg;
+                Rectangle { x: parent.width - Theme.hairline; width: Theme.hairline; height: parent.height; background: Theme.line; }
+                VerticalLayout { padding-top: 8px; padding-bottom: 8px; spacing: 4px;
+                    RailKey { icon: @image-url("icons/signal.svg"); caption: "SIGNAL"; hint: "F1"; on: root.bank-index == 0; tooltip: "SIGNAL PATH  (F1)"; clicked => { root.bank-selected(0); } }
+                    RailKey { icon: @image-url("icons/decode.svg"); caption: "DECODE"; hint: "F2"; on: root.bank-index == 1; tooltip: "DECODE  (F2)"; clicked => { root.bank-selected(1); } }
+                    RailKey { icon: @image-url("icons/tools.svg");  caption: "TOOLS";  hint: "F3"; on: root.bank-index == 2; tooltip: "TOOLS  (F3)"; clicked => { root.bank-selected(2); } }
+                    RailKey { icon: @image-url("icons/extend.svg"); caption: "EXTEND"; hint: "F4"; on: root.bank-index == 3; tooltip: "EXTEND  (F4)"; clicked => { root.bank-selected(3); } }
+                    RailKey { icon: @image-url("icons/system.svg"); caption: "SYSTEM"; hint: "F5"; on: root.bank-index == 4; tooltip: "SYSTEM  (F5)"; clicked => { root.bank-selected(4); } }
                     Rectangle { vertical-stretch: 1; }
-                    RailKey { caption: "FOLD"; hint: ""; }
+                    RailKey { icon: root.rail-folded ? @image-url("icons/unfold.svg") : @image-url("icons/fold.svg"); caption: root.rail-folded ? "SHOW" : "FOLD"; hint: "";
+                        tooltip: root.rail-folded ? "Show the Function Select panel" : "Fold the Function Select panel away to give the main view its width";
+                        clicked => { root.rail-folded = !root.rail-folded; } }
                 }
             }
 
-            Rectangle { // SECTIONS PANEL (296)
-                width: 296px; background: Theme.panel-alt;
-                Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.line; }
-                VerticalLayout { spacing: 0px;
+            Rectangle { // SECTIONS PANEL (296, folds to 0)
+                width: root.rail-folded ? 0px : Theme.panel-w; clip: true; background: Theme.panel-alt;
+                animate width { duration: 160ms; easing: ease-out; }
+                VerticalLayout { spacing: 0px; width: Theme.panel-w;
                     Rectangle { height: 40px;
-                        Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
+                        Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
                         HorizontalLayout { padding-left: 12px; padding-right: 12px; alignment: space-between;
-                            Caption { text: root.bank-title; color: Theme.fg; }
-                            VerticalLayout { alignment: center; Chip { label: root.bank-chip; tone: ChipTone.good; } }
+                            Caption { label: root.bank-titles[root.bank-index]; color: Theme.fg; }
+                            VerticalLayout { alignment: center; Chip { label: root.bank-chip; tone: root.bank-chip-tone; } }
                         }
                     }
-                    VerticalLayout { spacing: 0px; vertical-stretch: 1; alignment: start;
-                        for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; clicked => { root.section-clicked(i); } }
-                    }
-                    Rectangle { // update card slot
-                        height: 78px;
-                        Rectangle { x: 10px; y: 0; width: parent.width - 20px; height: 68px; border-radius: 8px; background: Theme.card; border-width: 1px; border-color: Theme.line-strong;
-                            VerticalLayout { padding: 10px; spacing: 6px;
-                                HorizontalLayout { alignment: space-between;
-                                    Caption { text: "FoxSDR 0.99.105 is available"; color: Theme.accent-soft; }
-                                    Text { text: "you run " + root.version; font-size: 10px; color: Theme.dim; vertical-alignment: center; }
-                                }
-                                HorizontalLayout { spacing: 6px;
-                                    Key { label: "Download update"; on: true; key-height: 26px; horizontal-stretch: 1; }
-                                    Key { label: "Not now"; ghost: true; key-height: 26px; min-w: 72px; }
+                    Flickable { vertical-stretch: 1; viewport-height: list.preferred-height;
+                        list := VerticalLayout { spacing: 0px; alignment: start;
+                            if root.team-message-shown : Rectangle { height: team.preferred-height + 10px;
+                                team := Card { x: 10px; y: 10px; width: parent.width - 20px; title: "Message from the FoxSDR team"; subtitle: root.team-message-date; critical: root.team-message-important; lines: root.team-message-lines; primary-label: "Seen"; primary-clicked => { root.team-message-seen(); } }
+                            }
+                            if root.update-shown : Rectangle { height: upd.preferred-height + 10px;
+                                upd := Card { x: 10px; y: 10px; width: parent.width - 20px; title: root.update-headline; subtitle: "you are running " + root.version; critical: root.update-critical; lines: root.update-notes;
+                                    primary-label: root.update-primary; secondary-label: "Not now"; progress: root.update-progress; note: root.update-note; error: root.update-error;
+                                    primary-clicked => { root.update-primary-clicked(); } secondary-clicked => { root.update-dismissed(); } }
+                            }
+                            for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; clicked => { root.section-clicked(i); }
+                                // the Radio section's open body (the sheet's); the other bodies are the banks of phase 3
+                                if i == 2 : VerticalLayout { spacing: 10px;
+                                    Text { text: "Mode keys are on the receiver strip above (Ctrl+F … Ctrl+R)."; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
+                                    BodyRow { label: "Passband"; Text { text: root.passband-text; font-family: Theme.font-mono; color: Theme.fg; vertical-alignment: center; } }
+                                    Slider { value: root.passband-norm; accessible-label: "Passband"; changed(v) => { root.passband-changed(v); } }
+                                    BodyRow { label: "Tune step"; SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.x, self.y + self.height); } } }
+                                    Checkbox { label: "Follow the band plan's mode when retuning"; checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
                                 }
                             }
                         }
                     }
                     Rectangle { height: 44px;
-                        Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.line; }
+                        Rectangle { y: 0; height: Theme.hairline; width: parent.width; background: Theme.line; }
                         VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 8px; spacing: 2px;
-                            Text { text: root.source-line; font-size: 10px; color: Theme.dim; }
-                            Text { text: root.rate-line; font-size: 10px; color: Theme.dim; font-family: Theme.font-mono; }
+                            Text { text: root.source-line; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+                            Text { text: root.converter-line != "" ? root.converter-line : root.rate-line; font-size: Theme.font-hint; color: root.converter-line != "" ? Theme.chip-warn-fg : Theme.dim; font-family: Theme.font-mono; overflow: elide; }
                         }
                     }
                 }
+                Rectangle { x: parent.width - Theme.hairline; width: Theme.hairline; height: parent.height; background: Theme.line; }   // over the rows
             }
 
-            VerticalLayout { // CENTRE
+            centre := VerticalLayout { // CENTRE
                 spacing: 0px; horizontal-stretch: 1;
                 Rectangle { // tab row + spectrum toolbar (32)
-                    height: 32px;
-                    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
+                    height: Theme.tab-h;
+                    Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
                     HorizontalLayout { padding-left: 8px; padding-right: 8px; alignment: space-between;
                         HorizontalLayout { spacing: 0px;
-                            Tab { label: "RECEIVER"; on: root.view-index == 0; clicked => { root.view-selected(0); } }
-                            Tab { label: "PATCH";    on: root.view-index == 1; clicked => { root.view-selected(1); } }
-                            Tab { label: "SCOPE";    on: root.view-index == 2; clicked => { root.view-selected(2); } }
-                            Tab { label: "+ Window"; min-w: 0px; }
+                            Tab { label: "RECEIVER"; on: root.view-index == 0; tooltip: "Shows the receiver: the spectrum, the waterfall and its status. Leaving the patch view stops a running patch and gives the receiver its radio back."; clicked => { root.view-selected(0); } }
+                            Tab { label: "PATCH";    on: root.view-index == 1; tooltip: "Opens the patch canvas: radios, channels, decoders and displays wired together by hand. Drag from a port to wire it. A connection that cannot carry what the port produces is refused, and says why."; clicked => { root.view-selected(1); } }
+                            Tab { label: "SCOPE";    on: root.view-index == 2; tooltip: "The scope: an instrument fills the centre."; clicked => { root.view-selected(2); } }
+                            for w[i] in root.window-tabs : Tab { label: w; on: root.view-index == 3 + i; closable: true; clicked => { root.window-tab-selected(i); } close-clicked => { root.window-tab-closed(i); } }
+                            Tab { label: "+ Window"; tooltip: "Open a decoder window as a tab"; clicked => { root.add-window-clicked(); } }
                         }
                         HorizontalLayout { spacing: 6px; alignment: end;
-                            Caption { text: "Trace"; font-size: 9px; }
-                            SegGroup { HorizontalLayout { padding: 2px; spacing: 2px; SegKey { label: "Normal"; min-w: 0px; } SegKey { label: "Peak hold"; on: true; min-w: 0px; } SegKey { label: "Average"; min-w: 0px; } } }
-                            Caption { text: "Range"; font-size: 9px; }
-                            SegGroup { HorizontalLayout { padding: 2px; spacing: 2px; SegKey { label: "Auto"; on: true; min-w: 0px; } SegKey { label: "Manual"; min-w: 0px; } } }
-                            Key { label: "Markers  3"; ghost: true; key-height: 24px; }
-                            Key { label: "Band plan"; ghost: true; key-height: 24px; }
-                            SegGroup { HorizontalLayout { padding: 2px; spacing: 2px; SegKey { label: "−"; min-w: 26px; } SegKey { label: "+"; min-w: 26px; } SegKey { label: "Full span"; min-w: 0px; } } }
+                            VerticalLayout { alignment: center; Caption { label: "Trace"; font-size: Theme.font-tiny; } }
+                            VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
+                                SegKey { label: "Normal"; small: true; min-w: 0px; on: root.trace-mode == 0; clicked => { root.trace-mode-selected(0); } }
+                                SegKey { label: "Peak hold"; small: true; min-w: 0px; on: root.trace-mode == 1; clicked => { root.trace-mode-selected(1); } }
+                                SegKey { label: "Average"; small: true; min-w: 0px; on: root.trace-mode == 2; clicked => { root.trace-mode-selected(2); } } } } }
+                            VerticalLayout { alignment: center; Caption { label: "Range"; font-size: Theme.font-tiny; } }
+                            VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
+                                SegKey { label: "Auto"; small: true; min-w: 0px; on: !root.range-manual; tooltip: "Automatic: the standard window, -110 to 0 dB on the receiver"; clicked => { root.range-manual-selected(false); } }
+                                SegKey { label: "Manual"; small: true; min-w: 0px; on: root.range-manual; tooltip: "Manual: the Floor and Ceiling of the Display block"; clicked => { root.range-manual-selected(true); } } } } }
+                            VerticalLayout { alignment: center; HorizontalLayout { spacing: 0px;
+                                Key { label: "Markers"; ghost: true; small: true; min-w: 0px; tooltip: "List the markers dropped on the waterfall"; clicked => { root.markers-clicked(); } }
+                                VerticalLayout { alignment: center; Chip { label: root.marker-count; small: true; } } } }
+                            VerticalLayout { alignment: center; Key { label: "Band plan"; ghost: !root.band-plan-on; on: root.band-plan-on; small: true; min-w: 0px; tooltip: "Show the band-plan ribbon on the spectrum"; clicked => { root.band-plan-toggled(); } } }
+                            VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
+                                SegKey { label: "−"; small: true; min-w: 26px; tooltip: "Zoom out (Ctrl -)"; clicked => { root.zoom(-1); } }
+                                SegKey { label: "+"; small: true; min-w: 26px; tooltip: "Zoom in (Ctrl +)"; clicked => { root.zoom(1); } }
+                                SegKey { label: "Full span"; small: true; min-w: 0px; tooltip: "Back to the full span (Ctrl Delete)"; clicked => { root.zoom(0); } } } } }
                         }
                     }
                 }
-                Rectangle { // SPECTRUM well
-                    vertical-stretch: 1; background: Theme.well;
-                    Image { source: root.spectrum-image; width: parent.width; height: parent.height; image-fit: fill; }
-                    HorizontalLayout { x: 52px; y: 14px; spacing: 14px;
-                        Caption { text: root.spectrum-caption; color: Theme.fg-soft; }
-                        Text { text: "average of the last frames, not the audio"; font-size: 10px; color: Theme.dim; vertical-alignment: center; }
-                        Caption { text: "Peak hold"; color: Theme.trace-peak; font-size: 9px; }
-                    }
-                    VerticalLayout { x: parent.width - 16px - self.width; y: 12px; alignment: start;
-                        Caption { text: "Peak in passband"; font-size: 9px; horizontal-alignment: right; }
-                        HorizontalLayout { spacing: 4px; alignment: end;
-                            Text { text: root.peak-text; font-family: Theme.font-mono; font-size: 16px; font-weight: 600; color: Theme.accent-soft; }
-                            Text { text: root.peak-age; font-size: 10px; color: Theme.dim; vertical-alignment: bottom; }
+                Rectangle { // the view: RECEIVER (spectrum + splitter + waterfall), PATCH, SCOPE
+                    vertical-stretch: 1;
+                    if root.view-index == 0 : VerticalLayout { spacing: 0px;
+                        spectrum := SpectrumView {
+                            vertical-stretch: 1;
+                            height: max(120px, (parent.height - Theme.splitter-h) * root.split-ratio);
+                            trace: root.trace-image; db-ticks: root.db-ticks; freq-ticks: root.freq-ticks; axis-unit: root.axis-unit;
+                            caption: root.spectrum-caption; caveat: root.spectrum-caveat;
+                            trace-mode: root.trace-mode == 1 ? TraceMode.peak-hold : root.trace-mode == 2 ? TraceMode.average : TraceMode.normal;
+                            trace-mode-label: root.trace-mode == 1 ? "Peak hold" : root.trace-mode == 2 ? "Average" : "";
+                            peak-text: root.peak-text; peak-age: root.peak-age; show-peak: root.show-peak; span-text: root.span-text;
+                            vfo-pos: root.vfo-pos; vfo-half: root.vfo-half; show-vfo: root.show-vfo;
+                            bands: root.ribbon; ribbon-size: root.band-plan-on ? root.ribbon-size : 0;
+                            bookmarks: root.bookmarks; plugin-marks: root.marks; user-markers: root.markers;
+                            cursor-text: root.cursor-text; cursor-visible: root.cursor-visible; cursor-pos: root.cursor-pos;
+                            band-tooltip: root.band-tooltip; edge-tooltip: root.edge-tooltip; off-band-tooltip: root.off-band-tooltip;
+                            hover(x, y) => { root.spectrum-hover(x, y); }
+                            clicked(x, shift) => { root.spectrum-clicked(x, shift); }
+                            double-clicked(x) => { root.spectrum-double-clicked(x); }
+                            right-clicked(x, px, py) => { root.spectrum-menu-requested(x, px, py); }
+                            band-dragged(dx) => { root.band-dragged(dx); }
+                            edge-dragged(h) => { root.edge-dragged(h); }
+                            wheel(x, n, shift) => { root.spectrum-wheel(x, n, shift); }
+                        }
+                        Splitter { moved(dy) => { root.split-ratio = max(0.1, min(0.9, root.split-ratio + dy / max(1px, parent.height - Theme.splitter-h))); } }
+                        WaterfallView {
+                            vertical-stretch: 1;
+                            picture: root.waterfall-image; age-ticks: root.age-ticks;
+                            show-key: root.show-strength-key; key-labels: root.key-labels; key-foot: root.key-foot; key-manual: root.range-manual; key-coverage: root.key-coverage;
+                            rail-pos: root.wf-rail-pos;
+                            foot-left: root.waterfall-foot-left; foot-tuned: root.waterfall-foot-tuned; foot-rest: root.waterfall-foot-rest;
+                            vfo-pos: root.vfo-pos; show-vfo: root.show-vfo;
+                            plugin-marks: root.wf-marks; user-markers: root.wf-markers;
+                            cursor-text: root.cursor-text; cursor-visible: root.cursor-visible; cursor-pos: root.cursor-pos;
+                            marker-tooltip: root.marker-tooltip; tooltip: root.waterfall-tooltip;
+                            hover(x, y) => { root.waterfall-hover(x, y); }
+                            clicked(x, shift) => { root.waterfall-clicked(x, shift); }
+                            panned(dx) => { root.waterfall-panned(dx); }
+                            double-clicked => { root.waterfall-double-clicked(); }
+                            right-clicked(x, px, py) => { root.waterfall-menu-requested(x, px, py); }
+                            wheel(x, n, shift) => { root.waterfall-wheel(x, n, shift); }
+                            marker-hovered(i) => { root.marker-hovered(i); }
                         }
                     }
-                    Chip { x: parent.width - 16px - self.width; y: 58px; label: root.span-text; mono: true; }
-                }
-                Rectangle { // SPLITTER (6)
-                    height: 6px; background: Theme.panel;
-                    Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.line; }
-                    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
-                    Rectangle { width: 48px; height: 2px; border-radius: 1px; background: Theme.knob-ring; x: (parent.width - 48px) / 2; y: 2px; }
-                }
-                Rectangle { // WATERFALL well (270)
-                    height: 270px; background: Theme.well-deep; clip: true;
-                    Image { source: root.waterfall-image; x: 44px; y: 0; width: parent.width - 44px; height: 238px; image-fit: fill; }
-                    Caption { x: 6px; y: 4px; text: "Age"; font-size: 9px; }
-                    Text { x: 8px; y: 22px;  text: "now";  font-family: Theme.font-mono; font-size: 10px; color: Theme.dim; }
-                    Text { x: 8px; y: 76px;  text: "10 s"; font-family: Theme.font-mono; font-size: 10px; color: Theme.dim; }
-                    Text { x: 8px; y: 130px; text: "20 s"; font-family: Theme.font-mono; font-size: 10px; color: Theme.dim; }
-                    Text { x: 8px; y: 184px; text: "30 s"; font-family: Theme.font-mono; font-size: 10px; color: Theme.dim; }
-                    Rectangle { // foot
-                        x: 44px; y: parent.height - 28px; width: parent.width - 44px - 14px; height: 28px;
-                        Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.line; }
-                        HorizontalLayout { alignment: space-between;
-                            Text { text: root.waterfall-foot-left; font-family: Theme.font-mono; font-size: 10px; color: Theme.muted; vertical-alignment: center; }
-                            HorizontalLayout { spacing: 4px;
-                                Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: 10px; color: Theme.accent-soft; vertical-alignment: center; }
-                                Text { text: " · " + root.waterfall-foot-right; font-family: Theme.font-mono; font-size: 10px; color: Theme.muted; vertical-alignment: center; }
-                            }
-                        }
-                    }
+                    if root.view-index == 1 : PatchCanvas { }
+                    if root.view-index == 2 : ScopeTube { caption: "Scope"; }
                 }
             }
         }
 
         // ===================== STATUS BAR (28) =====================
         Rectangle {
-            height: 28px; background: Theme.strip;
-            Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.line; }
+            height: Theme.status-h; background: Theme.strip;
+            Rectangle { y: 0; height: Theme.hairline; width: parent.width; background: Theme.line; }
             HorizontalLayout { padding-left: 4px; spacing: 0px; alignment: start;
                 for c[i] in root.status : StatusChip {
-                    key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp;
-                    value-color: c.good ? Theme.chip-good-fg : (c.warn ? Theme.accent-soft : Theme.fg);
+                    key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp; lines: c.lines;
+                    value-color: c.tone == ChipTone.good ? Theme.chip-good-fg : c.tone == ChipTone.warn ? Theme.accent-soft : c.tone == ChipTone.err ? Theme.chip-err-fg : Theme.fg;
+                    tooltip: c.detail;
                     clicked => { root.status-clicked(i); }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                Key { label: "Request a feature"; ghost: true; key-height: 24px; min-w: 0px; }
-                Key { label: "Report a bug / dislike"; ghost: true; key-height: 24px; min-w: 0px; }
+                VerticalLayout { alignment: center; Key { label: "Request a feature"; ghost: true; small: true; min-w: 0px; tooltip: "Ask for a feature"; clicked => { root.feature-request-clicked(); } } }
+                VerticalLayout { alignment: center; Key { label: "Report a bug / dislike"; ghost: true; small: true; min-w: 0px; tooltip: "Report a problem"; clicked => { root.bug-report-clicked(); } } }
                 Rectangle { width: 8px; }
             }
         }
+    }
+
+    // ===================== frameless window: the resize edges =====================
+    Rectangle { x: parent.width - 6px; y: 0; width: 6px; height: parent.height - 12px; TouchArea { mouse-cursor: ew-resize; moved => { if (self.pressed) { root.resize-drag(1, self.mouse-x - self.pressed-x, 0); } } } }
+    Rectangle { x: 0; y: parent.height - 6px; width: parent.width - 12px; height: 6px; TouchArea { mouse-cursor: ns-resize; moved => { if (self.pressed) { root.resize-drag(2, 0, self.mouse-y - self.pressed-y); } } } }
+    Rectangle { x: parent.width - 12px; y: parent.height - 12px; width: 12px; height: 12px; TouchArea { mouse-cursor: nwse-resize; moved => { if (self.pressed) { root.resize-drag(3, self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); } } } }
+
+    // ===================== overlays =====================
+    menu := Menu { entries: root.menu-entries; activated(id) => { root.menu-activated(id); } slider-changed(id, v) => { root.menu-slider-changed(id, v); } }
+    palette := CommandPalette { at-x: (root.width - 640px) / 2; at-y: 48px; query <=> root.palette-query; results: root.palette-results;
+        query-changed(q) => { root.palette-query-changed(q); } activated(id) => { root.palette-activated(id); } }
+
+    if root.bias-question-open : Sheet { title: "Turn on the bias tee?"; dismissed => { root.bias-question-open = false; }
+        Text { text: root.bias-question-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
+        Text { text: root.bias-tooltip; wrap: word-wrap; color: Theme.chip-warn-fg; font-size: Theme.font-small; }
+        HorizontalLayout { spacing: 8px; alignment: end;
+            Key { label: "Turn it on"; clicked => { root.bias-question-open = false; root.bias-tee-confirmed(); } }
+            Key { label: "Cancel"; on: true; clicked => { root.bias-question-open = false; } }
+        }
+    }
+    if root.about-open : Sheet { title: "About FoxSDR"; sheet-w: 520px; dismissed => { root.about-open = false; }
+        Text { text: "FoxSDR " + root.version + (root.preview ? " · Slint preview" : ""); color: Theme.fg; font-size: Theme.font-small; }
+        Text { text: root.about-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
+        // The Slint Royalty-free licence 2.0 requires this widget in an About dialog reachable from the top-level menu
+        // (the brand menu above) in every distributed build; it is never behind a switch.
+        AboutSlint { }
+        HorizontalLayout { alignment: end; Key { label: "Close"; clicked => { root.about-open = false; } } }
     }
 }

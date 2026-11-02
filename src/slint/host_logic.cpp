@@ -104,6 +104,56 @@ std::string spanText(double hz) {
 std::string cursorText(double hz, double db) { return fmt("%.3f MHz", hz / 1e6) + kDot + fmt("%.1f dB", db); }
 std::string axisUnit(double) { return "MHz"; }
 
+bool parseFrequencyHz(const std::string& text, double& hz) {
+    std::string digits;
+    std::string unit;
+    bool seenDot = false;
+    for (char ch : text) {
+        if (ch >= '0' && ch <= '9') { digits += ch; }
+        else if (ch == '.' && !seenDot) { digits += ch; seenDot = true; }
+        else if (ch == ',' && !seenDot) { digits += '.'; seenDot = true; }   // a decimal comma
+        else if (ch == ' ' || ch == '\t' || ch == '_' || ch == '\'') { continue; }
+        else if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) { unit += static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+        else { return false; }
+    }
+    if (digits.empty() || digits == ".") { return false; }
+    const double value = std::strtod(digits.c_str(), nullptr);
+    if (!(value >= 0.0)) { return false; }
+    double scale = 0.0;
+    if (unit.empty()) { scale = value < 100000.0 ? 1e6 : 1.0; }
+    else if (unit == "ghz") { scale = 1e9; }
+    else if (unit == "mhz" || unit == "m") { scale = 1e6; }
+    else if (unit == "khz" || unit == "k") { scale = 1e3; }
+    else if (unit == "hz") { scale = 1.0; }
+    else { return false; }
+    hz = value * scale;
+    return hz > 0.0 && hz < 1e11;
+}
+
+double snapToStep(double hz, double stepHz, bool shift) {
+    if (shift || !(stepHz > 0.0)) { return hz; }
+    return std::round(hz / stepHz) * stepHz;
+}
+
+ViewWindow zoomAbout(ViewWindow v, double fullCentre, double fullSpan, double factor, double aboutFrac, double minSpan) {
+    if (!(fullSpan > 0.0)) { return v; }
+    if (!(v.spanHz > 0.0)) { v = {fullCentre, fullSpan}; }
+    const double fixedHz = hzAt(std::clamp(aboutFrac, 0.0, 1.0), v.centreHz, v.spanHz);
+    double span = std::clamp(v.spanHz / std::max(1e-9, factor), std::max(1.0, minSpan), fullSpan);
+    double centre = fixedHz - (std::clamp(aboutFrac, 0.0, 1.0) - 0.5) * span;
+    const double lo = fullCentre - fullSpan / 2.0 + span / 2.0, hi = fullCentre + fullSpan / 2.0 - span / 2.0;
+    centre = std::clamp(centre, std::min(lo, hi), std::max(lo, hi));
+    return {centre, span};
+}
+
+ViewWindow panBy(ViewWindow v, double fullCentre, double fullSpan, double dFrac) {
+    if (!(fullSpan > 0.0) || !(v.spanHz > 0.0)) { return v; }
+    double centre = v.centreHz - dFrac * v.spanHz;
+    const double lo = fullCentre - fullSpan / 2.0 + v.spanHz / 2.0, hi = fullCentre + fullSpan / 2.0 - v.spanHz / 2.0;
+    centre = std::clamp(centre, std::min(lo, hi), std::max(lo, hi));
+    return {centre, v.spanHz};
+}
+
 // ---- dials ----
 double squelchNorm(double db) { return squelchAuto(db) ? 0.0 : std::clamp((db + 120.0) / 120.0, 0.0, 1.0); }
 double squelchDbFromNorm(double norm) { return -120.0 + 120.0 * std::clamp(norm, 0.0, 1.0); }
@@ -271,12 +321,12 @@ std::vector<StatusCardModel> statusCards(const FoxReceiverState& s, const HostEx
         else { c.value = "STOPPED"; }
         const std::string ant = x.antenna.empty() ? std::string() : ("ANT " + x.antenna);
         const std::string gain = x.gainText.empty() ? std::string() : ("GAIN " + x.gainText);
-        const std::string ppm = fmt("PPM %.1f", x.ppm);
+        const std::string ppm = x.havePpm ? fmt("PPM %.1f", x.ppm) : std::string();
         c.detail = joinDot({s.deviceName, ant, gain, ppm, fmtRate(s.sampleRateHz)});
         c.lines = {s.deviceName};
         if (!x.antenna.empty()) { c.lines.push_back("ANTENNA " + x.antenna); }
         if (!x.gainText.empty()) { c.lines.push_back(x.gainText == "AUTO" ? std::string("GAIN AUTO - AGC ON") : "GAIN " + x.gainText); }
-        c.lines.push_back(ppm);
+        if (x.havePpm) { c.lines.push_back(ppm); }
         c.lines.push_back(fmtRate(s.sampleRateHz));
         if (faulted && s.faultMessage[0] != '\0') { c.lines.push_back(s.faultMessage); }
         cards.push_back(c);

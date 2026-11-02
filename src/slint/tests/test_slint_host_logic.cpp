@@ -87,6 +87,47 @@ int main() {
         CHECK(spanText(2.4e6) == "SPAN 2.400 MHz");
         CHECK(spanText(240e3) == "SPAN 240.0 kHz");
         CHECK(spanText(1.2e9) == "SPAN 1.200 GHz");
+
+        // the typed editor's entry
+        double hz = 0;
+        CHECK(parseFrequencyHz("145.5", hz) && hz == 145.5e6);               // a bare number is MHz
+        CHECK(parseFrequencyHz("145.500 MHz", hz) && hz == 145.5e6);
+        CHECK(parseFrequencyHz("145500 kHz", hz) && hz == 145.5e6);
+        CHECK(parseFrequencyHz("145500000", hz) && hz == 145.5e6);          // ...unless it is too big to be MHz
+        CHECK(parseFrequencyHz("7,074", hz) && hz == 7.074e6);               // a decimal comma
+        CHECK(parseFrequencyHz("1.2 GHz", hz) && hz == 1.2e9);
+        CHECK(parseFrequencyHz(" 14 313 Hz ", hz) && hz == 14313.0);
+        CHECK(!parseFrequencyHz("", hz));
+        CHECK(!parseFrequencyHz("abc", hz));
+        CHECK(!parseFrequencyHz("145.5 furlongs", hz));
+        CHECK(!parseFrequencyHz("-7", hz));
+        CHECK(!parseFrequencyHz("0", hz));
+        CHECK(!parseFrequencyHz("1.2.3", hz));
+
+        // the click-to-tune snap and the zoom window
+        CHECK_NEAR(snapToStep(145'506'000, 12500, false), 145'500'000, 0);
+        CHECK_NEAR(snapToStep(145'506'300, 12500, false), 145'512'500, 0);
+        CHECK_NEAR(snapToStep(145'506'300, 12500, true), 145'506'300, 0);     // Shift = exact
+        CHECK_NEAR(snapToStep(145'506'300, 0, false), 145'506'300, 0);
+        ViewWindow v{0, 0};
+        v = zoomAbout(v, 145.5e6, 2.4e6, 1.3, 0.5, 2400);                     // from the full span, about the centre
+        CHECK_NEAR(v.spanHz, 2.4e6 / 1.3, 1e-6);
+        CHECK_NEAR(v.centreHz, 145.5e6, 1e-6);
+        const double edgeHz = hzAt(0.9, 145.5e6, 2.4e6);
+        ViewWindow w = zoomAbout({145.5e6, 2.4e6}, 145.5e6, 2.4e6, 2.0, 0.9, 2400);  // about a point near the right edge: it stays put
+        CHECK_NEAR(hzAt(0.9, w.centreHz, w.spanHz), edgeHz, 1e-3);
+        CHECK_NEAR(w.spanHz, 1.2e6, 1e-6);
+        ViewWindow out = zoomAbout({145.5e6, 1.0e6}, 145.5e6, 2.4e6, 1.0 / 1.3, 0.5, 2400); // zooming out never leaves the full span
+        CHECK_NEAR(out.spanHz, 1.3e6, 1e-6);
+        ViewWindow full = zoomAbout({145.5e6, 2.3e6}, 145.5e6, 2.4e6, 1.0 / 1.3, 0.5, 2400);
+        CHECK_NEAR(full.spanHz, 2.4e6, 1e-6);
+        CHECK_NEAR(full.centreHz, 145.5e6, 1e-6);
+        ViewWindow floor = zoomAbout({145.5e6, 3000}, 145.5e6, 2.4e6, 2.0, 0.5, 2400);
+        CHECK_NEAR(floor.spanHz, 2400, 1e-9);                                 // the zoom floor: sample rate / 1000
+        ViewWindow p = panBy({145.5e6, 1.0e6}, 145.5e6, 2.4e6, -0.25);        // pan right by a quarter of the view
+        CHECK_NEAR(p.centreHz, 145.75e6, 1e-6);
+        ViewWindow clamped = panBy({145.5e6, 1.0e6}, 145.5e6, 2.4e6, -5.0);
+        CHECK_NEAR(clamped.centreHz, 145.5e6 + 1.2e6 - 0.5e6, 1e-6);          // stops at the right edge of the full span
     }
 
     // ---- the strip's dials as sliders ----
@@ -222,6 +263,7 @@ int main() {
         x.gainText = "32 dB";
         x.antenna = "RX";
         x.ppm = 0.0;
+        x.havePpm = true;
         x.webPort = 8080;
         x.webBind = "0.0.0.0";
         auto cards = statusCards(s, x);

@@ -41,7 +41,9 @@ export component TipTimer {
     in property <length> anchor-h;          // the parent's height: the tip opens 6px under it
     in property <length> anchor-x: 0px;
     out property <bool> shown;
-    width: 0px; height: 0px;
+    // zero-sized at the parent's origin, so the tip's offsets count from the parent's top-left (an unplaced
+    // element would sit at the parent's centre and open the tip half a key off)
+    x: 0px; y: 0px; width: 0px; height: 0px;
     tip := PopupWindow {
         x: root.anchor-x; y: root.anchor-h + 6px;
         close-policy: no-auto-close;

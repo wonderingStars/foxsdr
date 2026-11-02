@@ -197,10 +197,26 @@ Source: "POSTINSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
 ; Authored from public regulatory allocations; INFORMATIONAL, not a licensing
 ; reference. See src/core/band_plan.hpp for the provenance note.
 Source: "..\resources\bandplans\*.json"; DestDir: "{app}\resources\bandplans"; Flags: ignoreversion
+; THE SLINT PREVIEW (docs/engine-stage4.md 6.36), only when ISCC is run with /DWithSlintPreview: foxsdr-slint.exe
+; and its runtime slint_cpp.dll land in a folder of their own, {app}\preview, with their own Start-menu entry.
+; Launching it is the opt-in; it works on a copy of the user's settings (%APPDATA%\foxsdr\slint-preview\) and
+; never writes the real ones. The payload contract above is untouched: the two files are built into
+; build\src\slint\Release by CASCADE_BUILD_SLINT, not into build\Release, and this block is off by default.
+#ifdef WithSlintPreview
+  #define SlintDir AddBackslash(SourcePath) + "..\build\src\slint\Release"
+  #if !FileExists(SlintDir + "\foxsdr-slint.exe") || !FileExists(SlintDir + "\slint_cpp.dll")
+    #pragma error "foxsdr-slint.exe and slint_cpp.dll not found in build\src\slint\Release — configure with CASCADE_BUILD_SLINT=ON and the Slint SDK on CMAKE_PREFIX_PATH, build foxsdr-slint, or drop /DWithSlintPreview"
+  #endif
+Source: "{#SlintDir}\foxsdr-slint.exe"; DestDir: "{app}\preview"; Flags: ignoreversion
+Source: "{#SlintDir}\slint_cpp.dll"; DestDir: "{app}\preview"; Flags: ignoreversion
+#endif
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"
 Name: "{group}\Hardware setup notes"; Filename: "{app}\POSTINSTALL.txt"
+#ifdef WithSlintPreview
+Name: "{group}\{#AppName} Slint preview"; Filename: "{app}\preview\foxsdr-slint.exe"; WorkingDir: "{app}\preview"; Comment: "Start the Slint window preview of {#AppName} (works on a copy of your settings)"
+#endif
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"; Tasks: desktopicon
 

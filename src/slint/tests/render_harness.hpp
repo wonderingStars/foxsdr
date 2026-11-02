@@ -1,4 +1,4 @@
-// The headless render harness for the Slint front end (docs/engine-stage4.md 6.35).
+// The headless render harness for the Slint front end (docs/engine-stage4.md 6.36).
 //
 // Fidelity is TESTED, not eyeballed: a test builds a component (a specimen sheet, or the main screen),
 // renders it with Slint's software renderer into a pixel buffer - no OS window, no GPU, no foreground

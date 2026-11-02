@@ -1,4 +1,4 @@
-# The Slint front end's tests (docs/engine-stage4.md 6.35): headless renders of every component specimen and
+# The Slint front end's tests (docs/engine-stage4.md 6.36): headless renders of every component specimen and
 # of the main screen, probed against the artboards, plus the host's own logic. They need ONLY the Slint SDK -
 # not the engine - so this directory configures on its own as well as under the root build:
 #
