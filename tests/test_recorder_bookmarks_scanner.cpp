@@ -175,6 +175,15 @@ struct AppWindowTestAccess {
             return iq != ((a.uiState_.flags & FOXAPI_RX_RECORDING_IQ) != 0u) || audio != ((a.uiState_.flags & FOXAPI_RX_RECORDING_AUDIO) != 0u);
         });
     }
+    // THE WORKER'S NOTE PUBLISHED, the disk-job twin of takeStateStale (stub campaign B19). A disk worker's outcome is its note (finishBookmarkImport, and the
+    // export path, set bookmarkImportNote_), and statusText() copies that into statusLines_.bookmarkNote only on a pass. The FREE-RUNNING pass can collect the
+    // job - setting the note - in the gap between this look's first publish and the diskJobsOut test below: the job is then no longer out, no second look is made,
+    // and the window's note stays one publish behind (empty, or the previous import's). Native that gap is microseconds wide; test_recorder_bookmarks_scanner_free
+    // hit it about one run in ten (the IMPORT_FILE check at H's end read no "Could not import"). As with takeStateStale, the look loops until the published note
+    // catches up - bounded; inline and stepped publish the note on the same step that collects the job, so this is false right after any look there.
+    static bool importNoteStale(AppWindow& a) {
+        return passseam::read<bool>(th::engine(a), [&] { return a.statusLines_.bookmarkNote != th::engine(a).bookmarkImportNote_; });
+    }
     static void look(AppWindow& a, bool scannerTick = false) {
         lookOnce(a, scannerTick);
         // The file of a take this look just asked for opens on a worker: wait for it, then look again, so the take is armed and published
@@ -184,7 +193,9 @@ struct AppWindowTestAccess {
             settleRecordStarts(a);
             lookOnce(a, false);
         }
-        if (diskJobsOut(a)) {
+        // The disk workers' twin: wait while a job is out, AND for one more look when the free pass collected the job (and set its note) after the look above, so
+        // the worker's note is published and not left one pass behind (importNoteStale). settleDiskJobs is a no-op in that second case; the look is what matters.
+        for (int again = 0; again < 20 && (diskJobsOut(a) || importNoteStale(a)); ++again) {
             settleDiskJobs(a);
             lookOnce(a, false);
         }
