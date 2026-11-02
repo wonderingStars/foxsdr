@@ -28,11 +28,33 @@
 namespace cascade::gui {
 
 enum class ViewportDecision {
-    Enabled,         // torn-off pages get their own windows: the normal answer
-    SingleEnvVar,    // FOXSDR_SINGLE_VIEWPORT is set
-    ProbeFailed,     // the startup probe could not get a second shared context
-    RuntimeFailure,  // one was refused while the application was running
+    Enabled,              // torn-off pages get their own windows: the normal answer
+    SingleEnvVar,         // FOXSDR_SINGLE_VIEWPORT is set
+    ProbeFailed,          // the startup probe could not get a second shared context
+    RuntimeFailure,       // refused while running, and refused often enough to stay off
+    RuntimeFailureRetry,  // refused while running; tear-off will be offered again
 };
+
+// HOW MANY REFUSALS A SESSION GETS BEFORE TEAR-OFF STAYS OFF. Both field
+// reports of the mid-session refusal (2026-10-29, two Intel UHD machines)
+// carried Win32 error 0xc00705aa under the GLFW 65543 - the NTSTATUS wrapping
+// of ERROR_NO_SYSTEM_RESOURCES, a transient shortage, in one log two seconds
+// after the display came back from 13 minutes off - not a driver that cannot
+// share a context at all (the startup probe, which stays sticky, catches that
+// machine). So a refusal rests the feature rather than ends it: the first two
+// are retried after a wait, the third is taken as the machine's answer.
+inline constexpr int kViewportRefusalsBeforePermanent = 3;
+
+// The wait before tear-off is offered again, by how many refusals the session
+// has had: a minute after the first (a display waking or a GPU reset has long
+// settled), ten after the second (twice was not bad luck), and below zero -
+// never - once the count says it is permanent.
+inline double viewportRetryDelaySec(int refusalsThisSession) {
+    if (refusalsThisSession <= 0 || refusalsThisSession >= kViewportRefusalsBeforePermanent) {
+        return -1.0;
+    }
+    return refusalsThisSession == 1 ? 60.0 : 600.0;
+}
 
 // The whole decision, pure.
 //
@@ -45,14 +67,20 @@ enum class ViewportDecision {
 // run behaves the same on every machine. A failed probe beats the runtime
 // count because with viewports never enabled the count can never rise. And a
 // runtime failure is last because it is the only one that can arrive after the
-// first frame.
+// first frame - `refusalsThisSession` (how many times the session has been
+// refused, this one included) is what decides whether that failure rests the
+// feature or ends it.
 inline ViewportDecision viewportDecision(const char* singleEnv, bool probeMadeASecondContext,
-                                         int creationFailures) {
+                                         int creationFailures, int refusalsThisSession) {
     if (singleEnv != nullptr && singleEnv[0] != '\0' && singleEnv[0] != '0') {
         return ViewportDecision::SingleEnvVar;
     }
     if (!probeMadeASecondContext) { return ViewportDecision::ProbeFailed; }
-    if (creationFailures > 0) { return ViewportDecision::RuntimeFailure; }
+    if (creationFailures > 0) {
+        return refusalsThisSession < kViewportRefusalsBeforePermanent
+                   ? ViewportDecision::RuntimeFailureRetry
+                   : ViewportDecision::RuntimeFailure;
+    }
     return ViewportDecision::Enabled;
 }
 
@@ -75,6 +103,9 @@ inline const char* viewportDecisionLine(ViewportDecision d) {
         case ViewportDecision::RuntimeFailure:
             return "viewports: the display could not create a second OpenGL context (GLFW 65543) "
                    "- every page stays inside the main window for this session";
+        case ViewportDecision::RuntimeFailureRetry:
+            return "viewports: the display could not create a second OpenGL context (GLFW 65543) "
+                   "- every page stays inside the main window, and tear-off will be offered again";
     }
     return nullptr;
 }

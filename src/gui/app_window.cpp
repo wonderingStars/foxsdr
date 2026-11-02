@@ -119,6 +119,9 @@
 #include "gui/display_power.hpp"
 #include "gui/display_query_episode.hpp"
 #include "core/issue_report.hpp"
+// What this process holds of what the system hands out in limited numbers
+// (0.99.103): the `resources:` line.
+#include "core/process_resources.hpp"
 #include "gui/present_grace.hpp"
 #include "gui/software_gl.hpp"
 #include "gui/win_frame.hpp"
@@ -824,6 +827,37 @@ using GlGetStringFn = const unsigned char* (*)(unsigned int);
 const char* glString(GlGetStringFn fn, unsigned int name) {
     return fn != nullptr ? reinterpret_cast<const char*>(fn(name)) : nullptr;
 }
+
+// THE TORN-OFF WINDOWS, DRAWN AND SWAPPED ONE BY ONE AND TIMED (0.99.103). This
+// is ImGui::RenderPlatformWindowsDefault (imgui.cpp) with a clock around each
+// call: two passes over the secondary viewports, every window's draw and then
+// every window's swap, exactly as ImGui does it - the swaps are kept together
+// after the draws so that no window waits on its vertical sync before the next
+// one has been drawn. What it adds is one charge per window per pass to the
+// frame timer's `window-draw` and `window-swap` parts, by viewport id, so a slow
+// `render` frame names the torn-off window that took the time (the 2026-10-29
+// tester log: 81 minutes of half-second render frames, and no way to say whether
+// the torn-off map or the main window was the half). Kept beside ImGui's own:
+// when imgui.cpp's version changes shape, this follows it.
+void renderTornOffWindowsTimed(cascade::core::FrameTimer& timer) {
+    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    for (int i = 1; i < pio.Viewports.Size; ++i) {
+        ImGuiViewport* vp = pio.Viewports[i];
+        if ((vp->Flags & ImGuiViewportFlags_IsMinimized) != 0) { continue; }
+        const std::int64_t at = timer.nanos();
+        if (pio.Platform_RenderWindow) { pio.Platform_RenderWindow(vp, nullptr); }
+        if (pio.Renderer_RenderWindow) { pio.Renderer_RenderWindow(vp, nullptr); }
+        timer.noteRenderPart(cascade::core::RenderPart::WindowDraw, timer.nanos() - at, vp->ID);
+    }
+    for (int i = 1; i < pio.Viewports.Size; ++i) {
+        ImGuiViewport* vp = pio.Viewports[i];
+        if ((vp->Flags & ImGuiViewportFlags_IsMinimized) != 0) { continue; }
+        const std::int64_t at = timer.nanos();
+        if (pio.Platform_SwapBuffers) { pio.Platform_SwapBuffers(vp, nullptr); }
+        if (pio.Renderer_SwapBuffers) { pio.Renderer_SwapBuffers(vp, nullptr); }
+        timer.noteRenderPart(cascade::core::RenderPart::WindowSwap, timer.nanos() - at, vp->ID);
+    }
+}
 }  // namespace
 
 int AppWindow::run(int frames) {
@@ -1128,7 +1162,7 @@ int AppWindow::run(int frames) {
     // drag. See gui/viewport_policy.hpp.
     const bool viewportProbeOk = probeSecondGlContext(window);
     viewportDecision_ = cascade::gui::viewportDecision(std::getenv("FOXSDR_SINGLE_VIEWPORT"),
-                                                       viewportProbeOk, 0);
+                                                       viewportProbeOk, 0, 0);
     if (cascade::gui::viewportsEnabled(viewportDecision_)) {
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     } else if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
@@ -1227,6 +1261,9 @@ int AppWindow::run(int frames) {
     glfwShowWindow(window);
     cascade::core::diagLogf("window: window shown; the Dear ImGui backends are up");
     glUp_ = true;   // from here closeWindow() has the GL context, ImGui and GLFW to take down (shell retirement R8)
+    // The baseline the later `resources:` lines are read against (0.99.103).
+    resourcesSaidAt_ = glfwGetTime();
+    sayResources("at start-up");
     // The window is up. Everything from here to the end of the first frame - the receiver, the watchdog, the config save, the first draw -
     // is still start-up to the sentinel; the second heartbeat (HangWatchdog::heartbeat) ends it.
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::AwaitingFirstFrame);
@@ -1572,6 +1609,14 @@ int AppWindow::run(int frames) {
         cascade::core::breadcrumb::setActivity(cascade::core::breadcrumb::kOpeningRadio,
                                                (uiState_.flags & FOXAPI_RX_DEVICE_OPENING) != 0u);
         if (rendered % 300 == 0) { cascade::core::sentinelPoll(); }
+        // ...and every ten minutes, what this process holds (0.99.103): the one
+        // trend line a session that runs out of GDI objects, handles or video
+        // memory leaves behind. On the sentinel's cadence, so the clock is read
+        // once in 300 frames, not every frame.
+        if (rendered % 300 == 0 && glfwGetTime() - resourcesSaidAt_ >= kResourcesLineGapS) {
+            resourcesSaidAt_ = glfwGetTime();
+            sayResources("ten minutes on");
+        }
 
         // A MODAL WINDOW LOOP INSIDE THE PUMP is a person holding the window, not a slow frame: the pump does not return until they let go.
         const unsigned modalLoopsBefore = cascade::gui::frame::modalLoopCount();
@@ -1950,15 +1995,49 @@ int AppWindow::run(int frames) {
         // system window of its own - so a window is actually asked for and refused. What follows is the application's real fallback, end to
         // end: tests/test_viewport_fallback_app.
         if (frames >= 0) {
-            static const long refuseAt = [] {
+            // A comma-separated list since the retry (2026-10-29): one refusal proves
+            // the fallback, a second and third prove the rest-and-retry policy's cap.
+            static const std::vector<long> refuseAt = [] {
+                std::vector<long> at;
                 const char* v = std::getenv("FOXSDR_TEST_VIEWPORT_REFUSE_AT");
-                return (v != nullptr && v[0] != '\0') ? std::atol(v) : -1L;
+                while (v != nullptr && *v != '\0') {
+                    char* end = nullptr;
+                    const long n = std::strtol(v, &end, 10);
+                    if (end == v) { break; }
+                    at.push_back(n);
+                    v = (*end == ',') ? end + 1 : end;
+                }
+                return at;
             }();
-            if (refuseAt >= 0 && static_cast<long>(rendered) == refuseAt) {
-                ImGui_ImplGlfw_FailNextViewportWindowForTest();
+            // ...and FOXSDR_TEST_VIEWPORT_PROBE_AT draws the same probe WITHOUT arming a
+            // refusal: after a retry re-enables tear-off, a window actually asked for and
+            // GRANTED is what proves the feature is back (a refusal would raise the
+            // backend's count and log a second refusal, which the test asserts against).
+            static const std::vector<long> probeAt = [] {
+                std::vector<long> at;
+                const char* v = std::getenv("FOXSDR_TEST_VIEWPORT_PROBE_AT");
+                while (v != nullptr && *v != '\0') {
+                    char* end = nullptr;
+                    const long n = std::strtol(v, &end, 10);
+                    if (end == v) { break; }
+                    at.push_back(n);
+                    v = (*end == ',') ? end + 1 : end;
+                }
+                return at;
+            }();
+            bool probeFrame = false;
+            for (const long at : refuseAt) {
+                if (static_cast<long>(rendered) == at) {
+                    ImGui_ImplGlfw_FailNextViewportWindowForTest();
+                }
+                probeFrame = probeFrame || (static_cast<long>(rendered) >= at &&
+                                            static_cast<long>(rendered) < at + 3);
             }
-            if (refuseAt >= 0 && static_cast<long>(rendered) >= refuseAt &&
-                static_cast<long>(rendered) < refuseAt + 3 &&
+            for (const long at : probeAt) {
+                probeFrame = probeFrame || (static_cast<long>(rendered) >= at &&
+                                            static_cast<long>(rendered) < at + 3);
+            }
+            if (probeFrame &&
                 (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
                 const ImGuiViewport* mv = ImGui::GetMainViewport();
                 ImGuiWindowClass probeClass;
@@ -2004,6 +2083,10 @@ int AppWindow::run(int frames) {
         frameScope.to(cascade::core::FrameScope::Other);
         if (!scriptTracePath_.empty()) { traceScriptFrame(static_cast<long>(rendered)); }
         frameScope.to(cascade::core::FrameScope::Render);
+        // THE PARTS OF RENDER (0.99.103, core/frame_timing.hpp RenderPart): the scope
+        // is one, and a slow frame in it names which of these took the time. Timed
+        // on the timer's own clock, around calls that are not scopes of their own.
+        std::int64_t renderPartAt = frameTimer.nanos();
         ImGui::Render();
         int fbWidth = 0;
         int fbHeight = 0;
@@ -2013,18 +2096,23 @@ int AppWindow::run(int frames) {
         glClear(GL_COLOR_BUFFER_BIT);
         // Drawn only while the display is on; the frame itself (ImGui::Render above) is still ended, so the interface's state moves on.
         if (!displayPause.paused()) { ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData()); }
+        frameTimer.noteRenderPart(cascade::core::RenderPart::MainDraw,
+                                  frameTimer.nanos() - renderPartAt);
 
         // The torn-off windows are rendered here, each into its own operating
         // system window and GL context. The current context has to be saved
-        // and restored around it: RenderPlatformWindowsDefault leaves whichever
+        // and restored around it: the platform-window render leaves whichever
         // platform window it drew last current, and the next frame's
         // glClear/RenderDrawData above would then paint the main UI into it. UpdatePlatformWindows runs every frame whatever the display is
         // doing - ImGui's NewFrame asserts that it did - but nothing is drawn into, or presented from, a torn-off window while the display
         // is off.
         if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0) {
             GLFWwindow* const restore = glfwGetCurrentContext();
+            renderPartAt = frameTimer.nanos();
             ImGui::UpdatePlatformWindows();
-            if (!displayPause.paused()) { ImGui::RenderPlatformWindowsDefault(); }
+            frameTimer.noteRenderPart(cascade::core::RenderPart::WindowsUpdate,
+                                      frameTimer.nanos() - renderPartAt);
+            if (!displayPause.paused()) { renderTornOffWindowsTimed(frameTimer); }
             glfwMakeContextCurrent(restore);
 
             // DID THE DRIVER JUST REFUSE ONE? UpdatePlatformWindows is where a
@@ -2034,33 +2122,77 @@ int AppWindow::run(int frames) {
             // later inside the backend (0.95.0, "crash cascade.exe @
             // glfwGetWin32Window"). The backend counts the refusal instead of
             // using the nullptr, and this is the application reading the
-            // count: viewports go off for the rest of the session, so the page
-            // is merged back into this window on the next frame and the log
-            // says what happened. The probe at startup catches the machine
-            // that never allows it; this catches the one that stops allowing
-            // it - a GPU reset, a display change, an adapter switch.
+            // count: viewports go off, so the page is merged back into this
+            // window on the next frame and the log says what happened. The
+            // probe at startup catches the machine that never allows it; this
+            // catches the one that stops allowing it - a GPU reset, a display
+            // change, an adapter switch. The count is monotonic (it survives a
+            // backend restart on purpose), so what fires here is it RISING
+            // past what this loop has already answered - which is also what
+            // lets a refusal met again after a retry be seen as a new one.
             const int failures = ImGui_ImplGlfw_ViewportWindowCreationFailures();
-            if (failures > 0) {
+            if (failures > viewportFailuresSeen_) {
+                viewportFailuresSeen_ = failures;
+                ++viewportRefusals_;
                 viewportDecision_ = cascade::gui::viewportDecision(
-                    std::getenv("FOXSDR_SINGLE_VIEWPORT"), true, failures);
+                    std::getenv("FOXSDR_SINGLE_VIEWPORT"), true, failures, viewportRefusals_);
                 ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
+                // What the process held, and how many windows the session had
+                // already made, at the moment the driver said it had no more
+                // (0.99.103): the two lines that tell a leak from a driver.
+                sayResources("at the refusal");
+                sayWindowsMadeBeforeRefusal();
                 if (const char* why = cascade::gui::viewportDecisionLine(viewportDecision_)) {
                     cascade::core::diagWarnf("%s", why);
                 }
                 // ...AND COUNTED (0.99.100, `recovered.viewport`, core/health_events.hpp). The
                 // program carries on, so no crash, freeze or sentinel report ever says this
                 // happened: two Intel UHD machines had it through October 2026 and the
-                // website saw nothing. Once a session by nature - viewports stay off - and
-                // reached once, because the flag above is cleared and this block is inside
-                // the ViewportsEnable test. The window's thread, so noteRecovered may lock.
+                // website saw nothing. Once a session (the ledger's own rule), however many
+                // refusals the session has. The window's thread, so noteRecovered may lock.
                 cascade::core::health::noteRecovered(cascade::core::health::Recovered::Viewport);
                 // ...AND THE PAGES THAT WERE THEIR OWN WINDOWS ARE BROUGHT INSIDE. ImGui keeps each one where it was beside this window, which
                 // for a page that opened past its right edge is past its right edge still - a 140 px strip with its rail off the top (the
                 // 2026-10-27 tester report). Every page is checked for the next few frames: the move into this window's viewport takes ImGui
                 // a frame or two, and the check is idempotent.
                 pagesFitFrames_ = 4;
+                // ...AND RESTED RATHER THAN ENDED (gui/viewport_policy.hpp: both 2026-10-29
+                // field reports were ERROR_NO_SYSTEM_RESOURCES, a transient - one of them
+                // two seconds after the display came back from 13 minutes off). The first
+                // two refusals arm a retry; the third leaves the deadline 0, and the line
+                // above has already said "for this session". The override is for the
+                // bounded test runs (tests/test_viewport_fallback_app), where a wall-clock
+                // minute would be the whole run many times over.
+                static const double testRetrySec = [] {
+                    const char* v = std::getenv("FOXSDR_TEST_VIEWPORT_RETRY_SEC");
+                    return (v != nullptr && v[0] != '\0') ? std::atof(v) : -1.0;
+                }();
+                const double delaySec = cascade::gui::viewportRetryDelaySec(viewportRefusals_);
+                viewportRetryAtSec_ =
+                    delaySec >= 0.0
+                        ? ImGui::GetTime() + (testRetrySec >= 0.0 ? testRetrySec : delaySec)
+                        : 0.0;
             }
+        } else if (viewportRetryAtSec_ > 0.0 && ImGui::GetTime() >= viewportRetryAtSec_) {
+            // TEAR-OFF COMES BACK. The wait armed above has passed: offer separate
+            // windows again, and say so with the refusal count, so a log that later
+            // shows a second refusal reads as a story and not a repetition. Nothing
+            // else needs undoing - a page the fallback brought inside stays where it
+            // is until the user tears it off again, and a page still positioned
+            // outside gets its window back on the next UpdatePlatformWindows. If the
+            // driver refuses that one too, the rising count above fires again.
+            viewportRetryAtSec_ = 0.0;
+            viewportDecision_ = cascade::gui::ViewportDecision::Enabled;
+            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+            cascade::core::diagLogf(
+                "viewports: torn-off pages are offered again after the refusal (%d of %d this "
+                "session)",
+                viewportRefusals_, cascade::gui::kViewportRefusalsBeforePermanent);
         }
+        // Which pages are their own windows now, said once per change (0.99.103) -
+        // after the refusal above, so the frame that turned viewports off is the
+        // frame the ledger says every page came back inside.
+        noteTornOffWindows();
 
         // SCOPE MODE IS SUPPOSED TO COVER THE WHOLE APPLICATION, NOT JUST
         // THIS WINDOW. Switching what this window draws alone left a user's
@@ -2160,7 +2292,7 @@ int AppWindow::run(int frames) {
 
                 // THE TORN-OFF WINDOWS TOO. Each is its own GL window with
                 // its own framebuffer, already presented by
-                // RenderPlatformWindowsDefault above, so their picture is read
+                // renderTornOffWindowsTimed above, so their picture is read
                 // from the FRONT buffer of each. One file per viewport,
                 // suffixed -vp<n>, so a store or a map dragged onto another
                 // screen is photographed with the same key as the bench.
@@ -3257,6 +3389,8 @@ void AppWindow::drawUi() {
     // THE CRASH SWEEP, once, on the first look that can answer whose install id it carries (the facts are the engine's
     // after its first publish, which this frame has just made); armed by run().
     if (crashUploadStartPending_ && crashUploadStart()) { crashUploadStartPending_ = false; }
+    // ...AND, FROM THEN ON, AN ISSUE REPORT THE ENGINE'S PASS HAS FILED IS SENT NOW, not at the next start (0.99.101).
+    crashUploadPoll();
     // WHEN THE GUI TOOK DELIVERY of the spectrum frame readSpectrum just took, which
     // is what the spectrum's "HEARD n s AGO" line reports. SpectrumFrame carries a
     // sequence number and no timestamp, so the closest honest measurement available is
@@ -9874,6 +10008,94 @@ void AppWindow::separateWindowAnchor(int slot, float& x, float& y) {
     y = mv->Pos.y + 60.0f + stagger;
 }
 
+// THE TORN-OFF WINDOWS ImGui HAS RIGHT NOW, handed to the ledger (0.99.103). Every
+// secondary viewport that got its operating system window - never the main one,
+// never a viewport whose window was refused. The monitor's name is read through
+// the window library only for a monitor that is in its list THIS frame: ImGui's
+// backend keeps its previous monitor list while a monitor is being reconfigured
+// (imgui_impl_glfw.cpp, "Preserve existing monitor list"), and the handle in a
+// kept entry may be one the library has already freed - which is exactly the
+// moment the tester's logs are about.
+void AppWindow::noteTornOffWindows() {
+    // With viewports off (the developer switch, a failed probe, a refusal this
+    // frame) there is nothing outside: ImGui destroys the windows at its next
+    // NewFrame, and the ledger is told now. Nothing to compare when it already
+    // knows that.
+    const bool enabled = (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0;
+    if (!enabled && tornOffLedger_.outside() == 0) { return; }
+    const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    cascade::gui::TornOffWindow windows[cascade::gui::TornOffLedger::kMax];
+    int n = 0;
+    int monitorCount = 0;
+    GLFWmonitor** const monitors = enabled ? glfwGetMonitors(&monitorCount) : nullptr;
+    for (int i = 1; enabled && i < pio.Viewports.Size && n < cascade::gui::TornOffLedger::kMax;
+         ++i) {
+        const ImGuiViewportP* vp = static_cast<const ImGuiViewportP*>(pio.Viewports[i]);
+        if (vp == nullptr || vp->PlatformHandle == nullptr) { continue; }
+        cascade::gui::TornOffWindow& w = windows[n++];
+        w.id = vp->ID;
+        // A tooltip, menu or popup past a page's own window is given a window of
+        // its own by ImGui, and taken away a frame after it goes: counted by the
+        // ledger, never listed (see torn_off_ledger.hpp, "POP-UPS ARE WINDOWS TOO").
+        w.popup = vp->Window != nullptr &&
+                  (vp->Window->Flags & (ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_Popup |
+                                        ImGuiWindowFlags_ChildMenu)) != 0;
+        const char* name = vp->Window != nullptr ? vp->Window->Name : "";
+        const char* cut = std::strstr(name, "###");
+        w.name = name;
+        w.nameLen = cut != nullptr ? static_cast<int>(cut - name) : static_cast<int>(std::strlen(name));
+        w.x = vp->Pos.x;
+        w.y = vp->Pos.y;
+        w.w = vp->Size.x;
+        w.h = vp->Size.y;
+        w.monitors = pio.Monitors.Size;
+        w.monitor = (vp->PlatformMonitor >= 0 && vp->PlatformMonitor < pio.Monitors.Size)
+                        ? vp->PlatformMonitor
+                        : -1;
+        if (w.monitor >= 0) {
+            const ImGuiPlatformMonitor& m = pio.Monitors[w.monitor];
+            w.dpiScale = m.DpiScale;
+            for (int k = 0; k < monitorCount; ++k) {
+                if (monitors != nullptr && m.PlatformHandle == monitors[k]) {
+                    w.monitorName = glfwGetMonitorName(monitors[k]);
+                    break;
+                }
+            }
+        }
+    }
+    std::vector<std::string> lines;
+    const int pagesBefore = tornOffLedger_.ownWindows() + tornOffLedger_.outside();
+    if (tornOffLedger_.update(windows, n, glfwGetTime(), lines) > 0) {
+        for (const std::string& line : lines) { cascade::core::diagLogf("%s", line.c_str()); }
+        // The resources line follows a PAGE's window coming or going, not a pop-up's
+        // summary: a tooltip blinking every second must not cost a DXGI query each.
+        if (tornOffLedger_.ownWindows() + tornOffLedger_.outside() != pagesBefore) {
+            sayResources(tornOffLedger_.outside() > 0 ? "with a page in its own window"
+                                                      : "with every page in the main window");
+        }
+    }
+}
+
+// WHAT THE SESSION HAD MADE BY THE TIME THE DRIVER REFUSED (0.99.103): the counts
+// that decide whether a refusal is "the first context of the session" or the
+// thousandth. ImGui's own counter is every platform window it ever created -
+// pages and pop-ups - and it is read here, on the window's thread, from the
+// context the window owns.
+void AppWindow::sayWindowsMadeBeforeRefusal() {
+    const ImGuiContext* ctx = ImGui::GetCurrentContext();
+    cascade::core::diagLogf(
+        "viewports: before the refusal this session - %d page window%s, %d pop-up window%s over them, "
+        "%d platform windows created in all",
+        tornOffLedger_.ownWindows(), tornOffLedger_.ownWindows() == 1 ? "" : "s",
+        tornOffLedger_.popupsMade(), tornOffLedger_.popupsMade() == 1 ? "" : "s",
+        ctx != nullptr ? ctx->PlatformWindowsCreatedCount : -1);
+}
+
+void AppWindow::sayResources(const char* when) {
+    cascade::core::diagLogf(
+        "%s", cascade::core::processResourcesLine(cascade::core::readProcessResources(), when).c_str());
+}
+
 // WITH SEPARATE WINDOWS OFF, NO PAGE IS LEFT WHERE IT CANNOT BE SEEN.
 //
 // The anchor above overhangs the main window on purpose, and a page that was its own window
@@ -14257,24 +14479,12 @@ void AppWindow::drawPluginWindows() {
         if (!page.open) { continue; }
         uiNotePanel("map");
         testerUsage_->noteFeature("map");
-        // PLACED SO IT DOES NOT FIT INSIDE THE APPLICATION WINDOW, which is
-        // what makes ImGui give it a real operating system window rather than
-        // merging it into the main one. There is no "always be a separate
-        // window" flag; the rule is that a window which fits inside the main
-        // viewport gets merged into it, so the way to ask for a window of its
-        // own is to start it overhanging the edge. Anchored just inside the
-        // right edge rather than flung off to one side, so it appears next to
-        // the radio instead of somewhere the user has to hunt for it - and
-        // only on first use, so moving or docking it afterwards sticks.
-        // ...WHICH IS NO LONGER ENOUGH ON ITS OWN once a saved size is
-        // restored: a window that FITS inside the main viewport is merged into
-        // it, and a map restored to a modest size on a large main window would
-        // silently stop being its own window. NoAutoMerge says outright what
-        // the overhang was only implying, and is what makes restoring an
-        // arbitrary rectangle safe.
-        ImGuiWindowClass mapClass;
-        mapClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
-        ImGui::SetNextWindowClass(&mapClass);
+        // A map opens inside the main window (0.99.104, master's 454efce6). Opening a map used to
+        // force a second native window/shared GL context (NoAutoMerge, and an anchor that overhung
+        // the main window's edge). The field reports' refused contexts happen on that path; merely
+        // decoding ADS-B never needs it. A deliberate drag can still tear the page off. The page
+        // is placed by pageOpenInsideStaggered below and, on the frame it appears, is put in the
+        // main viewport (SetNextWindowViewport).
         // ...AND THE SAVED RECTANGLE ONLY COUNTS IF IT IS STILL SOMEWHERE.
         // The config sanitizer checks the numbers are sane; it cannot know
         // what monitors exist. A geometry saved on a display that has since
@@ -14309,11 +14519,13 @@ void AppWindow::drawPluginWindows() {
         float dy = 0.0f;
         // The page's index is the anchor slot, so several fresh pages cascade
         // instead of stacking exactly on top of one another.
-        separateWindowAnchor(static_cast<int>(pageIndex), dx, dy);
         float dw = 0.0f;
         float dh = 0.0f;
         mapDefaultSize(dw, dh);
-        mapPlaceDefaultRect(dx, dy, dw, dh, workAreas);
+        const ImGuiViewport* mainForMap = ImGui::GetMainViewport();
+        pageOpenInsideStaggered(mainForMap->Pos.x, mainForMap->Pos.y,
+                                mainForMap->Size.x, mainForMap->Size.y,
+                                dw, dh, static_cast<int>(pageIndex), dx, dy, dw, dh);
         if (page.w > 0 && page.h > 0 &&
             mapGeometryOnScreen(page.x, page.y, page.w, page.h, workAreas)) {
             // ...AND NO BIGGER THAN WHAT FITS WHERE IT SITS. A rectangle saved
@@ -14334,14 +14546,8 @@ void AppWindow::drawPluginWindows() {
                 ImVec2(static_cast<float>(page.w), static_cast<float>(page.h)),
                 ImGuiCond_FirstUseEver);
         } else {
-            // THE DEFAULT RECTANGLE, POSITION INCLUDED. The anchor overhangs
-            // the main window on purpose, but it knows nothing about the
-            // monitor: with a height derived from the screen the bottom - and
-            // the resize grip with it - fell off the work area whenever the
-            // main window sat low, and that rectangle was then persisted and
-            // restored verbatim. Measured at (1248,491) 1120x1168 against a
-            // 1392 px work area. See mapPlaceDefaultRect. Computed above,
-            // because a reset needs the same rectangle.
+            // An unsaved page uses the contained default, also used by the
+            // window-size reset. Opening below fits saved rectangles too.
             ImGui::SetNextWindowPos(ImVec2(dx, dy), ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowSize(ImVec2(dw, dh), ImGuiCond_FirstUseEver);
         }
@@ -14363,6 +14569,24 @@ void AppWindow::drawPluginWindows() {
         std::string titleBuf;
         cascade::core::formatUtf8(titleBuf, tr("%s Map"), pageIdent.c_str());
         const std::string pageTitle = titleBuf + "###mapPage:" + pageIdent;
+        const ImGuiWindow* previous = ImGui::FindWindowByName(pageTitle.c_str());
+        if (previous == nullptr || !previous->WasActive) {
+            const ImGuiViewport* main = ImGui::GetMainViewport();
+            float x, y, w, h;
+            // A live window remembers its OUTER size. The saved page size is
+            // read while the body child is current; reusing it here would
+            // subtract the cabinet margins on every close/reopen.
+            const ImVec2 want = previous != nullptr
+                                    ? previous->SizeFull
+                                    : ImVec2(page.w > 0 ? static_cast<float>(page.w) : dw,
+                                             page.h > 0 ? static_cast<float>(page.h) : dh);
+            pageOpenInsideStaggered(main->Pos.x, main->Pos.y, main->Size.x, main->Size.y,
+                                    want.x, want.y, static_cast<int>(pageIndex), x, y, w, h);
+            ImGui::SetNextWindowViewport(main->ID);
+            ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
+        }
+
         // NO WINDOW PADDING ON THE SATELLITE PAGE, because its content is a
         // CABINET: the brass has to reach the frame the operating system drew,
         // and a four-pixel border of ImGui's window background all the way
@@ -21104,6 +21328,14 @@ std::string AppWindow::currentDiagnosticsBundle(bool freshHistory) {
     // The pipeline ring's whole session (0.99.86): the engine's pass publishes the two counters (core::setRingCounters), drops
     // first for the reason closeDspMinute gives; the window may not reach the pipeline itself.
     cascade::core::ringCounters(in.ringDroppedSamples, in.sourceSamplesRead);
+    // The ring itself (GitHub issue 6, the 0.99.90 report; master 0.99.101): its depth, the fullest it has been this session and the longest
+    // one DSP block took - the maxima of the minutes closed so far and of the minute still open, published by the pass beside the two
+    // counters above (core::setRingFigures; the window may not reach the pipeline that master's bundle read them from).
+    const cascade::core::RingFigures ring = cascade::core::ringFigures();
+    in.ringCapacitySamples = ring.capacitySamples;
+    in.ringCapacityMs = ring.capacityMs;
+    in.ringHighWaterSamples = ring.highWaterSamples;
+    in.dspBlockLongestMs = static_cast<double>(ring.dspBlockLongestNs) / 1.0e6;
     // The end of the previous session's log and the reports on this machine (0.99.62). Not included, and not read, while diagnostics are
     // off.
     in.history = diagHistoryForBundle(freshHistory);
@@ -21419,6 +21651,9 @@ bool AppWindow::crashUploadStart() {
     p.installId = installId;
     p.enabled = true;
     p.state = crashUploadState_;
+    // Whatever was filed before this moment is in the folder this sweep is about to
+    // list, so it is not a reason for another one.
+    (void)cascade::core::issue::takeNewlyFiled();
     crashUploader_.start(p);
     crashUploadSwept_ = true;
     return true;
@@ -21442,6 +21677,30 @@ void AppWindow::crashUploadFinish() {
             cascade::core::diagLogf("crash upload: %s", n.c_str());
         }
     }
+}
+
+void AppWindow::crashUploadPoll() {
+    // AN ISSUE REPORT IS SENT IN THE SESSION THAT WROTE IT (0.99.101; master's AppWindow::crashUploadPoll, carried in the 0.99.104 merge). A crash report
+    // waits for the next start because the process that wrote it was dying; an issue report (core/issue_report.hpp) is written by a healthy thread of a
+    // session that carries on, and the person who met the fault may never open FoxSDR again - on the first morning the kind existed, every report on the
+    // feed had waited for a restart, and the sessions that never had one were never heard from. So the folder is swept again, on the same thread and
+    // under the same switch, dedup and daily limits as at start-up, as soon as the sweep before it has finished: one atomic exchange a frame, and nothing
+    // more while nothing was filed.
+    //
+    // WHAT DIFFERS HERE. Master filed from the window's own recovery poll and swept from the same function. The recovery poll is the ENGINE's pass here
+    // (RecoveryWatch::poll on the pass thread, which files the report where it counts the word), and the sweep is the window's (the uploader, the policy
+    // state and the install id are the interface's half), so the window asks once a frame whether the pass has filed anything: the counter is
+    // process-wide (issue::takeNewlyFiled), and a file counts only once it is on disk (a failed write is not a reason to sweep - issue_report.cpp).
+    const unsigned filed = cascade::core::issue::takeNewlyFiled();
+    // The start-up sweep (armed by run(), started by the first look that can answer) lists the folder when it starts, with everything filed so far in it:
+    // nothing is wanted on top of it, and what was counted before it starts is spent.
+    if (crashUploadStartPending_) { return; }
+    if (filed != 0) { crashUploadWanted_ = true; }
+    if (!crashUploadWanted_ || crashUploader_.running()) { return; }
+    crashUploadWanted_ = false;
+    crashUploadFinish();  // joins the finished thread, journals its state, logs its notes
+    // False is "the engine has not published the telemetry switch yet" (the sweep's install id is read from it): the sweep is still wanted.
+    if (!crashUploadStart()) { crashUploadWanted_ = true; }
 }
 
 // THE INTERFACE'S HALF OF THE CONFIGURATION, from the live state into `cfg` (core/config_halves.hpp names its fields; the test holds this function to that list).

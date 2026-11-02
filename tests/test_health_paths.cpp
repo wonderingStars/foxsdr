@@ -298,6 +298,10 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"TakeHeader", "src/engine/engine.cpp", 1},
         {"SentinelGone", "src/core/sentinel_host_win.cpp", 2}, {"SentinelGone", "src/core/sentinel_host_posix.cpp", 2},
         {"DisplayWatch", "src/gui/win_frame.cpp", 1},
+        // Counted by the poll like the others it watches, but its issue report is the DSP
+        // minute's, behind the share floor (0.99.102): the one direct use is that filing - master's
+        // AppWindow::closeDspMinute, the engine's Engine::closeDspMinute here (the 0.99.104 merge).
+        {"RingDrop", "src/engine/engine.cpp", 1},
     };
     // The nine counters a poll reads (the fifth, the per-thread watchdog's, 6.27; the last four, the plugin containment's, 6.28): named in the poll, where the readings are made - the engine's pass since the extraction (the window
     // no longer holds a pipeline to read them from).
@@ -320,7 +324,9 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         if (window.find(reading) == std::string::npos) { std::printf("FAIL the engine's poll lacks %s\n", reading); }
         CHECK(window.find(reading) != std::string::npos);
     }
-    const std::set<std::string> watched = {"SrcThread", "VendorCall", "RingDrop", "DspExc", "ThreadWedge", "PluginFault", "PluginQuarantine", "PluginWedge", "PluginOveruse"};
+    // The words the poll both counts AND files, with no direct use anywhere (RingDrop is counted by the poll too, but filed by the DSP minute
+    // - so it is in the table above; the 0.99.102 change). The eight: three of master's, the per-thread watchdog's and the plugin containment's four.
+    const std::set<std::string> watched = {"SrcThread", "VendorCall", "DspExc", "ThreadWedge", "PluginFault", "PluginQuarantine", "PluginWedge", "PluginOveruse"};
     CHECK(words.size() + watched.size() == health::kRecoveredCount);
     // scan the whole tree for uses outside the vocabulary's own files
     std::map<std::string, std::map<std::string, int>> found;   // word -> file -> count
@@ -351,7 +357,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
             std::printf(" (expected %s x%d)\n", s.file, s.count);
         }
     }
-    // ...and nothing else is counted that the table does not know (the watched nine have no direct use at all), and no file counts a word the
+    // ...and nothing else is counted that the table does not know (the watched eight have no direct use at all), and no file counts a word the
     // table does not list for it (master 0.99.100).
     std::size_t known = 0;
     for (const auto& kv : found) {

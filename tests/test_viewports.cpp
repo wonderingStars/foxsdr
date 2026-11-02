@@ -75,7 +75,7 @@ std::string lineOf(ViewportDecision d) {
 // --- 1. the decision, which needs no display ------------------------------
 
 void testTheHealthyMachineGetsViewports() {
-    const ViewportDecision d = viewportDecision(nullptr, true, 0);
+    const ViewportDecision d = viewportDecision(nullptr, true, 0, 0);
     CHECK(d == ViewportDecision::Enabled);
     CHECK(viewportsEnabled(d));
     // Nothing to explain, so nothing is logged: a line here would appear on
@@ -87,21 +87,21 @@ void testTheDeveloperSwitchWinsOverEverything() {
     // Set, and set to something that is not "0" or empty. The self-capture
     // depends on this behaving identically on every machine, so the switch is
     // read before the probe and before the failure count.
-    CHECK(viewportDecision("1", true, 0) == ViewportDecision::SingleEnvVar);
-    CHECK(viewportDecision("1", false, 7) == ViewportDecision::SingleEnvVar);
-    CHECK(viewportDecision("yes", true, 0) == ViewportDecision::SingleEnvVar);
-    CHECK(!viewportsEnabled(viewportDecision("1", true, 0)));
+    CHECK(viewportDecision("1", true, 0, 0) == ViewportDecision::SingleEnvVar);
+    CHECK(viewportDecision("1", false, 7, 3) == ViewportDecision::SingleEnvVar);
+    CHECK(viewportDecision("yes", true, 0, 0) == ViewportDecision::SingleEnvVar);
+    CHECK(!viewportsEnabled(viewportDecision("1", true, 0, 0)));
 
     // ...and the three spellings of "not set", which is the reading the
     // application has always used. `set FOXSDR_SINGLE_VIEWPORT=0` must not
     // quietly disable the feature it looks like it is enabling.
-    CHECK(viewportDecision(nullptr, true, 0) == ViewportDecision::Enabled);
-    CHECK(viewportDecision("", true, 0) == ViewportDecision::Enabled);
-    CHECK(viewportDecision("0", true, 0) == ViewportDecision::Enabled);
+    CHECK(viewportDecision(nullptr, true, 0, 0) == ViewportDecision::Enabled);
+    CHECK(viewportDecision("", true, 0, 0) == ViewportDecision::Enabled);
+    CHECK(viewportDecision("0", true, 0, 0) == ViewportDecision::Enabled);
 }
 
 void testAFailedProbeTurnsViewportsOffBeforeTheFirstPageIsDrawn() {
-    const ViewportDecision d = viewportDecision(nullptr, false, 0);
+    const ViewportDecision d = viewportDecision(nullptr, false, 0, 0);
     CHECK(d == ViewportDecision::ProbeFailed);
     CHECK(!viewportsEnabled(d));
     const std::string line = lineOf(d);
@@ -112,11 +112,25 @@ void testAFailedProbeTurnsViewportsOffBeforeTheFirstPageIsDrawn() {
     if (line.empty()) { std::printf("     no line for a failed probe\n"); }
 }
 
-void testARefusalWhileRunningTurnsThemOffForTheSession() {
-    const ViewportDecision d = viewportDecision(nullptr, true, 1);
-    CHECK(d == ViewportDecision::RuntimeFailure);
-    CHECK(!viewportsEnabled(d));
-    const std::string line = lineOf(d);
+void testARefusalWhileRunningRestsTearOffAndTheThirdEndsIt() {
+    // The first two refusals REST the feature (2026-10-29: both field reports
+    // carried ERROR_NO_SYSTEM_RESOURCES, a transient), and their line promises
+    // the retry rather than the session.
+    const ViewportDecision first = viewportDecision(nullptr, true, 1, 1);
+    CHECK(first == ViewportDecision::RuntimeFailureRetry);
+    CHECK(!viewportsEnabled(first));
+    const std::string restLine = lineOf(first);
+    CHECK(restLine.find("65543") != std::string::npos);
+    CHECK(restLine.find("offered again") != std::string::npos);
+    CHECK(restLine.find("for this session") == std::string::npos);
+    if (restLine.empty()) { std::printf("     no line for a rested refusal\n"); }
+    CHECK(viewportDecision(nullptr, true, 2, 2) == ViewportDecision::RuntimeFailureRetry);
+
+    // The third is taken as the machine's answer: off for the session.
+    const ViewportDecision third = viewportDecision(nullptr, true, 3, 3);
+    CHECK(third == ViewportDecision::RuntimeFailure);
+    CHECK(!viewportsEnabled(third));
+    const std::string line = lineOf(third);
     CHECK(line.find("65543") != std::string::npos);
     CHECK(line.find("for this session") != std::string::npos);
     if (line.empty()) { std::printf("     no line for a runtime refusal\n"); }
@@ -124,7 +138,18 @@ void testARefusalWhileRunningTurnsThemOffForTheSession() {
     // A probe that failed still reports the probe, not the count: with
     // viewports never enabled the count could not have risen, so reporting it
     // would name the wrong cause.
-    CHECK(viewportDecision(nullptr, false, 3) == ViewportDecision::ProbeFailed);
+    CHECK(viewportDecision(nullptr, false, 3, 3) == ViewportDecision::ProbeFailed);
+}
+
+void testTheRetryWaitsAMinuteThenTenThenNever() {
+    using cascade::gui::kViewportRefusalsBeforePermanent;
+    using cascade::gui::viewportRetryDelaySec;
+    CHECK(viewportRetryDelaySec(1) == 60.0);
+    CHECK(viewportRetryDelaySec(2) == 600.0);
+    // The cap, and the values no caller should produce, all mean "never".
+    CHECK(viewportRetryDelaySec(kViewportRefusalsBeforePermanent) < 0.0);
+    CHECK(viewportRetryDelaySec(0) < 0.0);
+    CHECK(viewportRetryDelaySec(7) < 0.0);
 }
 
 // --- 2. the backend guard, which needs a window ---------------------------
@@ -268,7 +293,8 @@ int main() {
     testTheHealthyMachineGetsViewports();
     testTheDeveloperSwitchWinsOverEverything();
     testAFailedProbeTurnsViewportsOffBeforeTheFirstPageIsDrawn();
-    testARefusalWhileRunningTurnsThemOffForTheSession();
+    testARefusalWhileRunningRestsTearOffAndTheThirdEndsIt();
+    testTheRetryWaitsAMinuteThenTenThenNever();
 
     // The backend half needs a real GL window, exactly as app_smoke does. A
     // failure to get one is reported as a failure rather than skipped: this

@@ -461,6 +461,9 @@ foreach(src ${CASCADE_TESTS})
         # bank up, and reads from the UI census whether the plugin's settings row is folded (0.99.74).
         add_dependencies(${name} settings_ui_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:settings_ui_fixture>")
+    elseif(name STREQUAL "test_map_open_inside_app")
+        add_dependencies(${name} track_probe_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
     elseif(name STREQUAL "test_unplaced_list_app")
         # Runs the real cascade.exe (built first) with the track fixture fitted and its map page opened
         # by FOXSDR_OPEN_MAP, and reads the target list's heading and rows from the UI census: aircraft
@@ -953,6 +956,13 @@ set_tests_properties(engine_link_check PROPERTIES
 if(TEST test_theme_census)
     set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
 endif()
+# The throughput bench runs the real pipeline for about 70 s of wall clock: the DSP
+# chain's ceiling at five rates and in four modes, then the tester's bursting source
+# at three rates and three silences (GitHub issue 6; the 0.99.101 merge, master's line,
+# guarded like its neighbours).
+if(TEST test_pipeline_throughput)
+    set_tests_properties(test_pipeline_throughput PROPERTIES TIMEOUT 300)
+endif()
 # The reference's transmit safety suite, ported, runs its rules at the real
 # timers (holds of 2 s, keep-alives of 1-2 s, a re-arm of 1 s, over and over):
 # about 95 s here. The merge sweep is 5450 cases of one pass each (about 40 s;
@@ -1351,7 +1361,10 @@ if(CASCADE_SANITIZE_ENABLED)
         "app_selftest|it measures the CW sidetone of the built-in generator through the real pipeline and the instrumented DSP thread falls behind the clock (ring overflow drops samples) so the tone reads 773 Hz instead of 700 with no sanitizer report"
         "test_patch_audio|its pipeline cases measure tone levels against a real-time source and the instrumented DSP thread falls behind the clock (ring overflow drops samples, the patch's own ring starves) so levels fail with no sanitizer report"
         "test_pipeline_audio_lead|it reads the drift matcher's correction while a pipeline plays to the real output, and the instrumented DSP thread falls behind the clock (sink underruns un-prime the ring, where the matcher holds) so the correction is never seen to move, with no sanitizer report"
-        "test_plugin_audio|its takeover case measures the length of a changeover in the real pipeline's audio against a real-time source and the instrumented DSP thread falls behind the clock: the fade read 68 frames where it is 240 with no sanitizer report (1896 of its 1897 checks passed, so this one is a loss of coverage worth revisiting)")
+        "test_plugin_audio|its takeover case measures the length of a changeover in the real pipeline's audio against a real-time source and the instrumented DSP thread falls behind the clock: the fade read 68 frames where it is 240 with no sanitizer report (1896 of its 1897 checks passed, so this one is a loss of coverage worth revisiting)"
+        # The 0.99.101 ring change (GitHub issue 6; master's line, here in the filtered list): the throughput bench measures the DSP chain's ceiling
+        # against the wall clock and drives the real pipeline from a bursting source paced by it.
+        "test_pipeline_throughput|it measures the DSP thread's ceiling against the wall clock and drives the real pipeline from a real-time bursting source (GitHub issue 6), and the instrumented DSP thread falls behind the clock (ring overflow drops samples) so both measurements fail with no sanitizer report")
     set(CASCADE_SANITIZE_EXCLUDED_TESTS)
     foreach(_entry ${_cascade_san_excluded_master})
         string(REPLACE "|" ";" _parts "${_entry}")
@@ -1505,6 +1518,7 @@ set(CASCADE_GUI_TESTS
     test_plugin_pathpick_app
     test_plugin_store_app
     test_problem_report_app
+    test_popup_stays_inside
     test_radio_setup_app
     test_rail_fold_app
     test_receiver_layout_app
@@ -1530,6 +1544,7 @@ set(CASCADE_GUI_TESTS
     test_typed_band_mode_app
     test_ui_scale_app
     test_unplaced_list_app
+    test_map_open_inside_app
     test_viewport_fallback_app
     test_viewports
     test_window_platform_app

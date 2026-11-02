@@ -206,6 +206,21 @@ struct AppWindowTestAccess {
                            std::shared_ptr<cascade::core::patch::AudioDest> d) {
         passseam::on(th::engine(a), [&] { th::engine(a).patchDests_.emplace_back(id, std::move(d)); });
     }
+    // What a rescan (a store install's, a changed folder's) leaves for the minute
+    // poll: the count that it BEGAN. The real rescanPlugins restarts the receiver
+    // and reopens the sink, which would race this test's hand-driven callbacks, so
+    // the section drives the mark and a source scan (9b) holds the real function to
+    // the increment. (Master's pluginRescans_ is the engine's pluginScans_ here: the same
+    // count, taken at the same place - the 0.99.104 merge.)
+    static void noteRescan(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).pluginScans_; }); }
+    // A stop that stopped something, as stopReceiver counts it (the real stop also
+    // joins the pipeline's threads, which this harness never starts), the real
+    // stopReceiver for the stop-of-a-stopped-receiver case, and the count itself.
+    static void noteStop(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).receiverStops_; }); }
+    static void stopReal(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).stopReceiver("the test"); }); }
+    static std::uint64_t stops(AppWindow& a) {
+        return passseam::read<std::uint64_t>(th::engine(a), [&] { return th::engine(a).receiverStops_; });
+    }
 };
 
 }  // namespace cascade::gui
@@ -512,7 +527,143 @@ int main() {
             CHECK(speaker->lead == 120);
             CHECK(file->leadMs() == 0);
             CHECK(file->starvedCallbacks() == 0u);
+
+            // --- 9b. A MINUTE THAT RELOADED PLUGINS IS NOT JUDGED (0.99.102) --------------------
+            // The 2026-10-29 field report: a user installing plugins from the store -
+            // nine rescans in a minute, 27 starved callbacks from those deliberate
+            // stalls of the window's thread - and the buffer raised to 960 ms, a
+            // second of latency the machine had not earned. A minute in which a
+            // rescan began steps nothing, for the receiver's sink or a speaker's,
+            // counts nothing, and says why; the quiet run neither grows nor resets.
+            CHECK(Access::leadNow(app) == 120);
+            const int raisedBefore = logLinesWith("audio: buffer raised to");
+            Access::noteRescan(app);                  // a store install's rescan began
+            starve(out, 5);                           // the stall's own starvation
+            speaker->starved += 50;                   // and the speaker's
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) == 120);       // no raise for the receiver...
+            CHECK(speaker->lead == 120);              // ...or the speaker
+            CHECK(Access::config(app).audioBufferAutoMs == 0);   // nothing remembered
+            CHECK(logLinesWith("audio: buffer raised to") == raisedBefore);
+            CHECK(logLinesWith("audio: buffer kept at 120 ms - the starved callbacks came "
+                               "in a minute that reloaded plugins") == 1);
+            // And the minute is NEUTRAL to the quiet run: ten quiet minutes, a
+            // reloading minute that starved (which used to reset the run - and
+            // raise), then the five that complete the quarter hour step the
+            // lead down exactly as if the reload had not happened.
+            starve(out, 3);
+            Access::closeMinute(app);                 // a real bad minute still raises
+            CHECK(Access::leadNow(app) == 240);
+            primeAndPlay(out);
+            for (int m = 0; m < 10; ++m) { Access::closeMinute(app); }
+            CHECK(Access::leadNow(app) == 240);       // ten quiet minutes: not enough
+            Access::noteRescan(app);
+            playUntilStarved(out);                    // the quiet run's priming fill is still
+                                                      // queued: play it dry (its one starved
+                                                      // callback lands in the reloading minute)
+            starve(out, 2);
+            Access::closeMinute(app);                 // the reloading minute: sits out
+            CHECK(Access::leadNow(app) == 240);
+            primeAndPlay(out);                        // the starve left the sink unprimed
+            for (int m = 0; m < 5; ++m) { Access::closeMinute(app); }
+            CHECK(Access::leadNow(app) == 120);       // 10 + 5 quiet: the step comes on time
+            CHECK(Access::notice(app) == "Audio buffer lowered to 120 ms after 15 quiet minutes.");
+
+            // CODE, NOT A PROMISE (the section-12 pattern): the mark the seam above
+            // drives is really fed by rescanPlugins - counted before any work, early
+            // return included - and really consumed at the end of the first load, so
+            // the session's first minute is still judged. (The engine's, since the
+            // extraction: src/engine/engine.cpp, read as LF whatever the checkout's
+            // line ends are; master read AppWindow::rescanPlugins and the constructor.)
+            std::string src = stripComments(
+                readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp"));
+            src.erase(std::remove(src.begin(), src.end(), '\r'), src.end());
+            const std::size_t fn = src.find("void Engine::rescanPlugins()");
+            CHECK(fn != std::string::npos);
+            const std::size_t bump = src.find("++pluginScans_;", fn);
+            const std::size_t firstReturn = src.find("return", fn);
+            CHECK(bump != std::string::npos);
+            CHECK(firstReturn == std::string::npos || bump < firstReturn);
+            const std::size_t first = src.find("void Engine::initialise()");
+            CHECK(first != std::string::npos);
+            CHECK(src.find("audioRescansAtLogStart_ = pluginScans_;", first) != std::string::npos);
+            // ...and the minute reads the same counter against the same mark.
+            const std::size_t minuteFn = src.find("void Engine::closeAudioMinute(");
+            CHECK(minuteFn != std::string::npos &&
+                  src.find("pluginScans_ != audioRescansAtLogStart_", minuteFn) != std::string::npos);
+
+            // --- 9c. A USER'S STOP IS NOT THE MACHINE FALLING BEHIND (0.99.102) ----------------
+            // The same day's feed: a Store install raised its buffer to 240 ms after
+            // three STOP presses in one minute - each stop of a running receiver
+            // starves the sink's last callback once, and three met the threshold by
+            // themselves. One starved callback per stop is discounted from the raise.
+            playUntilStarved(out);                    // the quiet run's fill, played dry...
+            Access::closeMinute(app);                 // ...and its one starved callback closed out
+            CHECK(Access::leadNow(app) == 120);
+            const int raisedBeforeStops = logLinesWith("audio: buffer raised to");
+            for (int s = 0; s < 3; ++s) { Access::noteStop(app); }
+            starve(out, 3);                           // exactly the three the stops cost
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) == 120);       // not a raise
+            CHECK(logLinesWith("audio: buffer raised to") == raisedBeforeStops);
+            CHECK(logLinesWith("audio: buffer kept at 120 ms - 3 of the 3 starved callbacks "
+                               "came with receiver stops") == 1);
+            // Starvation BEYOND the stops counts in full: one stop, four starved, is
+            // three of the machine's own - a raise, and the sentence says three.
+            Access::noteStop(app);
+            starve(out, 4);
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) == 240);
+            CHECK(logLinesWith("audio: buffer raised to") == raisedBeforeStops + 1);
+            CHECK(Access::notice(app) == kRaisedTo240By3);
+            // A stop of a receiver that was not running stops nothing and starves
+            // nobody, so it is not counted (it would hide a real starved callback).
+            const std::uint64_t stopsBefore = Access::stops(app);
+            Access::stopReal(app);
+            CHECK(Access::stops(app) == stopsBefore);
+            CHECK(logLinesWith("receiver: stop requested by the test; the receiver was not running") == 1);
+            // CODE, NOT A PROMISE: the real stop counts, guarded by `running`.
+            const std::size_t stopFn = src.find("void Engine::stopReceiver(const char* who)");
+            CHECK(stopFn != std::string::npos);
+            const std::size_t stopEnd = src.find("\n}", stopFn);
+            CHECK(stopEnd != std::string::npos);
+            if (stopFn != std::string::npos && stopEnd != std::string::npos) {
+                const std::string body = src.substr(stopFn, stopEnd - stopFn);
+                CHECK(body.find("if (running) { ++receiverStops_; }") != std::string::npos);
+            }
         }
+    }
+
+    // --- 9d. THE DISCOUNTED MINUTES COUNT NO HEALTH WORD (the 0.99.104 merge: bde914f6's and 8c0a4f41's discounts against the ledger) -------------
+    // `recovered.audiolead` is once a session, so a ledger that has already counted it (section 3 did) cannot show that a minute did not: this block
+    // starts the ledger afresh (the same file: sections 10 and 11 read it after this) and builds a window of its own. A minute whose starved callbacks
+    // are all the user's own stops, and a minute that reloaded plugins, neither deepen the buffer nor remember a depth nor count the word; the first
+    // minute that really is behind does, once. (It is the health count that decides what the feed and the usage record say, which is why the
+    // discounts are held against it and not only against the log line.)
+    {
+        ledger->reset();
+        ledger->arm(ledgerFile, installId, false);
+        CHECK(countOf(ledger->counts(), "recovered.audiolead") == 0);
+        th::TestWindow fresh;
+        cascade::sink::AudioOut& out = Access::audio(fresh);
+        out.close();   // no device thread may read the ring while the test makes callbacks
+        CHECK(Access::leadNow(fresh) == 120);
+        for (int s = 0; s < 3; ++s) { Access::noteStop(fresh); }
+        starve(out, 3);                                            // exactly the three the stops cost
+        Access::closeMinute(fresh);
+        CHECK(Access::leadNow(fresh) == 120);
+        CHECK(countOf(ledger->counts(), "recovered.audiolead") == 0);
+        CHECK(Access::config(fresh).audioBufferAutoMs == 0);
+        Access::noteRescan(fresh);                                 // a store install's rescan began
+        starve(out, 5);                                            // the stall's own starvation
+        Access::closeMinute(fresh);
+        CHECK(Access::leadNow(fresh) == 120);
+        CHECK(countOf(ledger->counts(), "recovered.audiolead") == 0);
+        CHECK(Access::config(fresh).audioBufferAutoMs == 0);
+        starve(out, 3);                                            // a minute that really is behind
+        Access::closeMinute(fresh);
+        CHECK(Access::leadNow(fresh) == 240);
+        CHECK(countOf(ledger->counts(), "recovered.audiolead") == 1);
     }
 
     // --- 10. THE SAVED SETTING comes back: a fixed one is applied at start-up -----------------------

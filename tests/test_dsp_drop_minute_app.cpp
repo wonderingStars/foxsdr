@@ -16,6 +16,11 @@
 // app_window.cpp. Section 4 gains the step that a window cannot take: the bundle shows what the engine's pass last published, so
 // the test runs the poll (the pass does this every pass) before it asks.
 //
+// 0.99.104 MERGE (master 0.99.101 / 0.99.102): the minute's second line (the ring's high water, the writes cut, the longest DSP block),
+// the feed row behind the 0.05% floor and the bundle's dsp-ring line come with master's expectations unchanged. The engine files the row
+// (Engine::closeDspMinute, section 5 reads it there), and the pass publishes the ring's four figures beside the two counters
+// (core::setRingFigures / ringFigures; the poll before the bundle in section 4 covers both).
+//
 // WHAT IS PINNED HERE, through the real AppWindow:
 //   1. a minute in which nothing was dropped writes NOTHING, however much was read;
 //   2. a minute in which the DSP side stalled writes ONE line, with the pipeline's
@@ -61,8 +66,10 @@
 #include <unistd.h>
 #endif
 
+#include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/issue_report.hpp"
 #include "core/pipeline.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
@@ -129,6 +136,9 @@ std::string stripComments(const std::string& text) {
 }
 
 const char* kNeedle = "samples dropped between the source and the DSP in the last minute";
+// The second line a lost minute writes (GitHub issue 6, the 0.99.90 report): what
+// the loss looked like.
+const char* kRingNeedle = "dsp: ring high water ";
 
 // The log lines that are the minute's drop line.
 std::vector<std::string> dropLines() {
@@ -137,6 +147,22 @@ std::vector<std::string> dropLines() {
         if (line.find(kNeedle) != std::string::npos) { out.push_back(line); }
     }
     return out;
+}
+
+// ...and the lines that are its second line.
+std::vector<std::string> ringLines() {
+    std::vector<std::string> out;
+    for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+        if (line.find(kRingNeedle) != std::string::npos) { out.push_back(line); }
+    }
+    return out;
+}
+
+// The number that follows `key` in `line`, or -1.
+long long numberAfter(const std::string& line, const char* key) {
+    const std::size_t at = line.find(key);
+    if (at == std::string::npos) { return -1; }
+    return std::atoll(line.c_str() + at + std::strlen(key));
 }
 
 // Self-paced, and only as generous as the test lets it be: each read hands over
@@ -255,7 +281,64 @@ int main() {
                       droppedShareText(18446744073709551615ULL, 18446744073709551615ULL).c_str());
         std::printf("the longest minute line is %zu characters\n", std::strlen(longest));
         CHECK(std::strlen(longest) < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
+        // ...AND THE SECOND LINE a lost minute writes, at its widest: the share is at
+        // most three digits, the other three figures uint64.
+        char widest[cascade::core::DiagLog::kLineBytes * 2] = {};
+        std::snprintf(widest, sizeof(widest),
+                      "%s100%% of %llu samples, %llu writes cut, longest DSP block %llu ms", kRingNeedle,
+                      18446744073709551615ULL, 18446744073709551615ULL, 18446744073709551615ULL);
+        std::printf("the longest second line is %zu characters\n", std::strlen(widest));
+        CHECK(std::strlen(widest) < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
     }
+
+    // --- 0b. THE SEVERITY FLOOR FOR A FEED ROW (0.99.102), by itself -------------------
+    // The feed's first day of `ringdrop` rows: six start-of-stream blips of a few
+    // milliseconds, "under 0.01%". A minute is worth a row at 0.05% of its input.
+    {
+        using cascade::core::kRingDropReportShare;
+        using cascade::core::ringDropWorthAReport;
+        const std::uint64_t minute = 2048000ULL * 60;          // 2.048 MS/s for a minute
+        CHECK(kRingDropReportShare == 0.0005);
+        CHECK(!ringDropWorthAReport(7168, minute));            // the field blip: 3.5 ms
+        CHECK(!ringDropWorthAReport(1, minute));
+        CHECK(!ringDropWorthAReport(0, minute));               // nothing lost
+        CHECK(!ringDropWorthAReport(5, 0));                    // nothing read: no share
+        CHECK(!ringDropWorthAReport(0, 0));
+        const std::uint64_t floor = minute / 2000;             // exactly 0.05%
+        CHECK(!ringDropWorthAReport(floor - 1, minute));
+        CHECK(ringDropWorthAReport(floor, minute));            // the boundary is in
+        CHECK(ringDropWorthAReport(848000, minute));           // GitHub issue 6's 0.69%
+        CHECK(ringDropWorthAReport(3, 2));                     // more dropped than read
+    }
+
+    // CAPTURE ON, so a minute that files the `ringdrop` report writes a file this test
+    // can count (core/issue_report.hpp: capture off files nothing, and says nothing).
+    const fs::path reports = g_scratch / "reports";
+    {
+        std::error_code ec;
+        fs::create_directories(reports, ec);
+        cascade::core::CrashHandlerConfig on;
+        on.crashDir = reports.string();
+        on.enabled = true;
+        on.minidump = false;
+        on.exitAfterReport = false;
+        cascade::core::installCrashHandlers(on);
+        CHECK(!cascade::core::activeCrashDir().empty());
+        cascade::core::issue::resetIssueReportsForTest();
+    }
+    auto ringdropReports = [&] {
+        std::size_t n = 0;
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(reports, ec)) {
+            const std::string name = e.path().filename().string();
+            if (name.rfind("issue-", 0) != 0 || name.size() < 4 ||
+                name.compare(name.size() - 4, 4, ".txt") != 0) {
+                continue;
+            }
+            if (readFile(e.path()).find("reason: issue: ringdrop - ") != std::string::npos) { ++n; }
+        }
+        return n;
+    };
 
     th::TestWindow app;
     cascade::core::Pipeline& p = Access::pipeline(app);
@@ -271,6 +354,7 @@ int main() {
     // test took the pipeline is not this test's minute.
     Access::closeDspMinute(app);
     const std::size_t linesAtStart = dropLines().size();
+    const std::size_t ringLinesAtStart = ringLines().size();
 
     // --- 1. A CLEAN MINUTE: samples read, none dropped - nothing written ----------------
     {
@@ -286,6 +370,8 @@ int main() {
         CHECK(p.ringDroppedSamples() == droppedBefore);
         Access::closeDspMinute(app);
         CHECK(dropLines().size() == linesAtStart);
+        CHECK(ringLines().size() == ringLinesAtStart);   // no second line without a first
+        CHECK(ringdropReports() == 0);                   // and no feed row
     }
 
     // --- 2. THE DSP SIDE STALLS: one line, the pipeline's own count, its share ----------
@@ -324,6 +410,10 @@ int main() {
         // builds is longer than 65536.
         CHECK(stalledDropped <= grant - ring + 65536);
         CHECK(stalledDropped >= grant - ring - 65536);
+        // The block that waited on the held mutex is recorded when it ENDS, on the
+        // DSP thread, which the holder's release has only just let go: give it the
+        // moment it needs before the minute is closed, or its 3 s lands in the next.
+        CHECK(waitFor([&] { return p.dspBlockLongestNs() >= 2500000000ULL; }));
 
         Access::closeDspMinute(app);
         const std::vector<std::string> lines = dropLines();
@@ -336,6 +426,29 @@ int main() {
             CHECK(line.find(want) != std::string::npos);
             CHECK(line.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
         }
+        // THE SECOND LINE (GitHub issue 6, the 0.99.90 report): the ring filled to
+        // the brim while the DSP thread was held, so its high water is 100% of the
+        // ring's own capacity; at least one write was cut; and the longest DSP block
+        // is the block that waited on the held mutex - the 3 s hold, give or take
+        // the scheduler, and nothing like the microseconds a block normally takes.
+        const std::vector<std::string> ring2 = ringLines();
+        CHECK(ring2.size() == ringLinesAtStart + 1);
+        if (!ring2.empty()) {
+            const std::string& line = ring2.back();
+            std::printf("the second line: %s\n", line.c_str());
+            CHECK(line.find(std::string(kRingNeedle) + "100% of " + std::to_string(ring) + " samples, ") !=
+                  std::string::npos);
+            CHECK(numberAfter(line, " samples, ") >= 1);   // writes cut
+            const long long blockMs = numberAfter(line, "longest DSP block ");
+            CHECK(blockMs >= 2500);
+            CHECK(blockMs <= 10000);
+            CHECK(line.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
+        }
+        // THE FEED ROW (0.99.102): a minute that lost two rings of three is far over
+        // the 0.05% floor, so the `ringdrop` issue report is filed - by this minute
+        // close, not by the health poll, which now only counts.
+        CHECK(cascade::core::ringDropWorthAReport(stalledDropped, read));
+        CHECK(ringdropReports() == 1);
     }
 
     // --- 3. THE NEXT CLEAN MINUTE IS SILENT AGAIN ---------------------------------------
@@ -352,9 +465,11 @@ int main() {
         CHECK(p.ringDroppedSamples() == droppedBefore);
         Access::closeDspMinute(app);
         CHECK(dropLines().size() == linesAtStart + 1);
+        CHECK(ringLines().size() == ringLinesAtStart + 1);   // and no second line either
         // ...and a minute with nothing at all in it is silent too.
         Access::closeDspMinute(app);
         CHECK(dropLines().size() == linesAtStart + 1);
+        CHECK(ringdropReports() == 1);                   // once a session, and no new row
     }
 
     // --- 4. THE BUNDLE carries the running total and what was read ----------------------
@@ -371,6 +486,15 @@ int main() {
         CHECK(bundle.find(want) != std::string::npos);
         CHECK(bundle.find("\ndsp-dropped: ") < bundle.find("--- log ---"));
         CHECK(dropped >= stalledDropped);
+        // ...AND THE RING ITSELF (GitHub issue 6, the 0.99.90 report): the real ring's
+        // depth, in samples and in milliseconds of the 2 MS/s source (262), the
+        // session's high water - the stall filled it - and the stalled block, still
+        // the session's longest, to a tenth of a millisecond.
+        const std::string ringWant = "\ndsp-ring: " + std::to_string(ring) + " samples (262 ms), high water 100%, longest DSP block ";
+        std::printf("bundle wants:%s\n", ringWant.c_str());
+        CHECK(bundle.find(ringWant) != std::string::npos);
+        CHECK(numberAfter(bundle, "longest DSP block ") >= 2500);
+        CHECK(bundle.find("\ndsp-ring: ") < bundle.find("--- log ---"));
     }
 
     // --- 5. THE FRAME LOOP closes the minute once a minute, on its own clock ------------
@@ -407,6 +531,28 @@ int main() {
         if (audioBody != std::string::npos && audioEnd != std::string::npos) {
             CHECK(srcText.substr(audioBody, audioEnd - audioBody).find("closeDspMinute") ==
                   std::string::npos);
+        }
+        // THE ROW IS THE MINUTE'S, BEHIND THE FLOOR (0.99.102): closeDspMinute files the
+        // report only inside the ringDropWorthAReport test, and the health poll's
+        // ring branch counts without filing.
+        const std::size_t closeFn = srcText.find("void Engine::closeDspMinute()");
+        const std::size_t closeEnd = closeFn == std::string::npos ? closeFn : srcText.find("\n}", closeFn);
+        CHECK(closeFn != std::string::npos && closeEnd != std::string::npos);
+        if (closeFn != std::string::npos && closeEnd != std::string::npos) {
+            const std::string body = srcText.substr(closeFn, closeEnd - closeFn);
+            const std::size_t floor = body.find("if (cascade::core::ringDropWorthAReport(dropped, read))");
+            const std::size_t file = body.find("fileIssueReport(cascade::core::health::Recovered::RingDrop)");
+            CHECK(floor != std::string::npos && file != std::string::npos && floor < file);
+        }
+        const std::string health = stripComments(
+            readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "core" / "health_events.cpp"));
+        const std::size_t watch = health.find("void RecoveryWatch::poll(");
+        const std::size_t watchEnd = watch == std::string::npos ? watch : health.find("\n}", watch);
+        CHECK(watch != std::string::npos && watchEnd != std::string::npos);
+        if (watch != std::string::npos && watchEnd != std::string::npos) {
+            const std::string body = health.substr(watch, watchEnd - watch);
+            CHECK(body.find("tokenRecovered(Recovered::RingDrop)") != std::string::npos);
+            CHECK(body.find("fileIssueReport(Recovered::RingDrop)") == std::string::npos);
         }
     }
 

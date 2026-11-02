@@ -1087,7 +1087,10 @@ private:
     void pollDspMinute();
     // A MINUTE OF THE PIPELINE'S RING HAS CLOSED: one log line if the source thread read samples the ring had no room for in the
     // minute just ended - `dsp: 412000 samples dropped between the source and the DSP in the last minute (0.17%)`, the share being of
-    // the minute's input - and nothing for a minute that lost none. Takes no clock, so a test closes minutes at will.
+    // the minute's input - and nothing for a minute that lost none. Takes no clock, so a test closes minutes at will. Since master's 0.99.101 /
+    // 0.99.102 (the 0.99.104 merge) it also writes the second line (`dsp: ring high water 100% of 1048576 samples, 14 writes cut, longest DSP
+    // block 3 ms`), takes the minute's two marks whether or not anything was lost, and files the `ringdrop` issue report for a minute that
+    // lost at least kRingDropReportShare of what it read (core/diag_report.hpp) - the poll counts the word, the minute files the row.
     void closeDspMinute();
     // The audio buffer setting (FOXAPP_OP_SET_AUDIO_BUFFER and the restore): an invalid value is AUTOMATIC.
     void setAudioBufferMs(int ms);
@@ -1118,11 +1121,30 @@ private:
     std::size_t audioRingLowWaterFrames_ = SIZE_MAX;
     std::uint64_t audioUnderrunsAtLogStart_ = 0;
     std::uint64_t audioPrimingAtLogStart_ = 0;
-    // The pipeline ring's minute (pollDspMinute / closeDspMinute): its own clock, and the two monotonic pipeline counters as they
-    // stood when it last closed.
+    // A MINUTE THAT RELOADED PLUGINS IS NOT JUDGED (master 0.99.102, 8c0a4f41; the 0.99.104 merge). The 2026-10-29 field report: 27 starved
+    // callbacks during nine store installs in one minute raised the buffer to 960 ms - a deliberate stall of the thread that reloads, read as
+    // "this computer fell behind", costing a second of audio latency for the next quarter hour. pluginScans_ (declared further down, with the
+    // lists' fingerprint) already counts every rescanPlugins() before any work, early return included - master's pluginRescans_ is this
+    // counter, so there is no second one; the mark is where it stood when the minute opened. The first load (Engine::initialise) is consumed
+    // into the mark right after it, so the session's first minute is still judged on its own figures.
+    std::uint64_t audioRescansAtLogStart_ = 0;
+    // A USER'S STOP IS NOT THE MACHINE FALLING BEHIND (master 0.99.102, bde914f6): each stop of a running receiver starves the sink's last
+    // callback once, and three stops in a minute met the raise threshold on their own. receiverStops_ counts them (stopReceiver, running
+    // stops only); the mark is where the count stood when the minute opened. closeAudioMinute subtracts the minute's stops from its starved
+    // callbacks before judging a raise - one callback per stop, never below zero. The pass thread's, like closeAudioMinute.
+    std::uint64_t receiverStops_ = 0;
+    std::uint64_t audioStopsAtLogStart_ = 0;
+    // The pipeline ring's minute (pollDspMinute / closeDspMinute): its own clock, and the monotonic pipeline counters as they stood when
+    // it last closed (the drop and read counts, and - master 0.99.101 - the writes that were cut).
     double lastDspLogSec_ = 0.0;
     std::uint64_t dspDroppedAtMinute_ = 0;
     std::uint64_t dspReadAtMinute_ = 0;
+    std::uint64_t dspCutAtMinute_ = 0;
+    // The session's maxima of the two marks closeDspMinute takes each minute (the ring's high water, the longest DSP block), for the
+    // bundle's dsp-ring line; publishRingFigures() adds the minute still open to them and publishes (core::setRingFigures).
+    std::size_t dspRingHighWaterSession_ = 0;
+    std::uint64_t dspBlockLongestNsSession_ = 0;
+    void publishRingFigures();
 
     // Moves the VFO so the tuned frequency lands on wantAbsHz, snapping to the
     // mode's raster unless the caller says otherwise, and clamping the band

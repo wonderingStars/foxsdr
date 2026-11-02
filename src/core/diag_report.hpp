@@ -274,6 +274,21 @@ const char* diagContextRaw(int& lenOut);
 void setRingCounters(std::uint64_t dropped, std::uint64_t read);
 void ringCounters(std::uint64_t& dropped, std::uint64_t& read);
 
+// THE RING ITSELF, FOR THE BUNDLE'S dsp-ring LINE (master 0.99.101, GitHub issue 6; re-expressed in the 0.99.104 merge the way the two counters
+// above were in the 0.99.90 one). On master the window read these four figures from the pipeline when it built a bundle; here the pipeline is
+// the engine's, so the engine's pass publishes them (Engine::publishRingFigures) and the window's bundle reads them (ringFigures): a
+// process-wide value the engine writes and a reader copies, with no lock. The four are independent diagnostics (a depth, the same depth in
+// milliseconds of the source's rate, the fullest the ring has been this session, the longest DSP block), so no order between them matters.
+// All zero before the first publish: the bundle then prints `dsp-ring: (none)`, as master's does for a session with no ring.
+struct RingFigures {
+    std::uint64_t capacitySamples = 0;
+    double capacityMs = 0.0;
+    std::uint64_t highWaterSamples = 0;
+    std::uint64_t dspBlockLongestNs = 0;
+};
+void setRingFigures(const RingFigures& f);
+RingFigures ringFigures();
+
 // ---------------------------------------------------------------------------
 // The window's state, as the GUI thread last saw it
 // ---------------------------------------------------------------------------
@@ -429,6 +444,16 @@ struct DiagBundleInput {
     // service line: printed as `dsp-dropped: 324608 of 2400000000 samples (0.01%)`.
     std::uint64_t ringDroppedSamples = 0;
     std::uint64_t sourceSamplesRead = 0;
+    // THE RING ITSELF (GitHub issue 6, the 0.99.90 report): its depth in samples
+    // and in milliseconds of the source's rate, the fullest it has been this
+    // session, and the longest the DSP thread spent on one block. Sizes and
+    // times, nothing about the signal. Printed as `dsp-ring: 1048576 samples
+    // (262 ms), high water 61%, longest DSP block 4.0 ms`; "(none)" while no
+    // ring exists (a capacity of 0).
+    std::uint64_t ringCapacitySamples = 0;
+    double ringCapacityMs = 0.0;
+    std::uint64_t ringHighWaterSamples = 0;
+    double dspBlockLongestMs = 0.0;
     // THE SESSIONS BEFORE THIS ONE (0.99.62): the end of the previous session's
     // log and one line per crash or freeze report on the machine, written after
     // the current log under headings of their own. `history.included` false -
@@ -453,6 +478,21 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in);
 // nothing lost - and a share over 100% (two counters read a moment apart) is
 // capped at "100.00%". Empty when nothing was read: there is no share to give.
 std::string droppedShareText(std::uint64_t dropped, std::uint64_t read);
+
+// THE SEVERITY FLOOR FOR A RINGDROP FEED ROW (2026-10-29). The issue-report
+// pipeline filed `ringdrop` on the first dropped sample of a session, and its
+// first day on the feed was six rows from five installs, every one a start-of-
+// stream blip of a few milliseconds ("under 0.01%" - 7168 samples, 3.5 ms at
+// 2.048 MS/s) that nobody could hear and no decoder noticed, while the loss
+// GitHub issue 6 was about ran at 0.69% of a minute. A minute is worth a row
+// when it lost at least this share of what it read: twenty times the blip,
+// a tenth of the real fault. The log line and the ledger count are not gated
+// - they are for the reader of one machine's story, and a count is not a row.
+inline constexpr double kRingDropReportShare = 0.0005;  // 0.05% of the minute's samples
+inline bool ringDropWorthAReport(std::uint64_t dropped, std::uint64_t read) {
+    if (dropped == 0 || read == 0) { return false; }  // nothing lost, or no share to judge
+    return static_cast<double>(dropped) >= static_cast<double>(read) * kRingDropReportShare;
+}
 
 // THE FIELD INVENTORY, in the same spirit as TelemetryReport's: PRIVACY.md
 // documents what a bundle contains field by field, and a test asserts the

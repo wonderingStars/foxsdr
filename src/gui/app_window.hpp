@@ -123,6 +123,9 @@ struct GLFWwindow;
 #include "core/device_scan_plan.hpp"
 #include "core/source_fallback.hpp"
 #include "gui/viewport_policy.hpp"
+// Which pages are their own windows right now, and the lines that say when that
+// changes (0.99.103).
+#include "gui/torn_off_ledger.hpp"
 // CoverageMap, TrackSortKey: the pure arithmetic behind the map's three
 // receiver-relative features. Header-only and ImGui-free, so including it here
 // keeps app_window.hpp usable from the tests (see the note below).
@@ -2676,6 +2679,11 @@ private:
     bool crashUploadStartPending_ = false;
     bool crashUploadStart();
     void crashUploadFinish();
+    // AN ISSUE REPORT IS SENT IN THE SESSION THAT WROTE IT (0.99.101): polled once a
+    // frame beside the recovery poll. A report filed since the last sweep starts the
+    // next one as soon as the last has finished.
+    bool crashUploadWanted_ = false;
+    void crashUploadPoll();
 
     // --- REQUEST A FEATURE (see core/feature_request.hpp) -------------------
     //
@@ -2890,6 +2898,18 @@ private:
     // glfwGetWin32Window" report that made it necessary. Kept as state rather
     // than re-derived because the sentence has to be logged exactly once.
     cascade::gui::ViewportDecision viewportDecision_ = cascade::gui::ViewportDecision::Enabled;
+    // THE REFUSAL IS RESTED, NOT FINAL (see kViewportRefusalsBeforePermanent in
+    // gui/viewport_policy.hpp: both 2026-10-29 field reports were the NTSTATUS
+    // of ERROR_NO_SYSTEM_RESOURCES, a transient). The backend's failure count
+    // is monotonic and survives a backend restart on purpose, so the frame
+    // loop keeps the value it has already answered (viewportFailuresSeen_) and
+    // reacts to the count RISING, not to it being nonzero. viewportRefusals_
+    // is how many times this session has been refused; viewportRetryAtSec_ is
+    // the frame-clock moment tear-off is offered again, 0 when nothing is
+    // waiting (never armed for the startup probe or the developer switch).
+    int viewportFailuresSeen_ = 0;
+    int viewportRefusals_ = 0;
+    double viewportRetryAtSec_ = 0.0;
 
     // PAGES BROUGHT INSIDE WHEN SEPARATE WINDOWS ARE OFF (gui/page_geometry.hpp, pageFitInside). With separate windows off, every top-level
     // page that is not wholly inside the main window is moved and shrunk into it: all of them for a few frames after the driver refuses a
@@ -2898,6 +2918,24 @@ private:
     // many more frames check every page.
     void fitPagesIntoMainWindow();
     int pagesFitFrames_ = 0;
+
+    // THE TORN-OFF WINDOWS, LOGGED AS THEY COME AND GO (0.99.103, gui/torn_off_ledger.hpp):
+    // after UpdatePlatformWindows each frame the ledger is handed every secondary
+    // viewport that has its operating system window, and says in the log which page
+    // was torn off onto which monitor, and when it came back. noteTornOffWindows is
+    // the frame loop's call; the ledger is the memory between frames.
+    void noteTornOffWindows();
+    void sayWindowsMadeBeforeRefusal();
+    cascade::gui::TornOffLedger tornOffLedger_;
+
+    // WHAT THIS PROCESS HOLDS (0.99.103, core/process_resources.hpp): one `resources:`
+    // line at start-up, at every tear-off and merge-back, at a refusal of a second GL
+    // context, and every kResourcesLineGapS of the session - so a session that runs
+    // out of something says what was running out. resourcesSaidAt_ is the window
+    // clock (glfwGetTime) of the last timed line.
+    static constexpr double kResourcesLineGapS = 600.0;
+    void sayResources(const char* when);
+    double resourcesSaidAt_ = 0.0;
 
     // --- THE WINDOW FRAMES, ON THE METAL (0.78.0) ------------------------------
     //

@@ -33,7 +33,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <limits>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -939,6 +942,36 @@ int main() {
         // A negative row against a populated list is the startup state (no
         // device chosen yet) and resolves the same way as a lost one.
         CHECK(clampDeviceRow(-1, five) == 1);
+    }
+
+    // --- A STREAM THAT WOULD NOT ABORT IS NOT CLOSED (0.99.102, crash 62DCA) -----
+    // An exit-time access violation in ucrtbase called only from wdmaud.drv - the
+    // WMME driver completing a buffer into a WAVEHDR Pa_CloseStream had already
+    // freed, the one app-adjacent window the analysis found. The guard cannot be
+    // driven here (nothing makes a real device's abort fail on demand), so this
+    // holds the code to it, the way the minute tests hold their call sites: in
+    // closeLocked, Pa_AbortStream's result is kept, compared to paNoError, and
+    // the function returns before any Pa_CloseStream when it is not.
+    {
+        std::ifstream in(std::string(CASCADE_SOURCE_DIR) + "/src/sink/audio_out.cpp", std::ios::binary);
+        const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const std::size_t fn = src.find("void AudioOut::closeLocked()");
+        CHECK(fn != std::string::npos);
+        const std::size_t end = fn == std::string::npos ? fn : src.find("\n}", fn);
+        CHECK(end != std::string::npos);
+        if (fn != std::string::npos && end != std::string::npos) {
+            const std::string body = src.substr(fn, end - fn);
+            const std::size_t kept = body.find("= Pa_AbortStream(");
+            // The exact guard, not a fragment: `if (false && abortErr != paNoError)`
+            // keeps every fragment and guards nothing (the break-it check that
+            // found this scan too loose).
+            const std::size_t judged = body.find("if (abortErr != paNoError) {");
+            const std::size_t bail = body.find("return;", judged);
+            const std::size_t close = body.find("Pa_CloseStream(");
+            CHECK(kept != std::string::npos);
+            CHECK(judged != std::string::npos && judged > kept);
+            CHECK(bail != std::string::npos && close != std::string::npos && bail < close);
+        }
     }
 
     return testSummary("test_audio_out");

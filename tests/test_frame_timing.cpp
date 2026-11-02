@@ -384,6 +384,148 @@ int main() {
                              "700 ms") == 1);
     }
 
+    // --- THE PARTS OF RENDER (0.99.103): a slow render frame names which part -----
+    {
+        // The names: fixed lower-case words, unique, one per part.
+        std::set<std::string> seen;
+        for (int i = 0; i < kRenderPartCount; ++i) {
+            const std::string n = renderPartName(static_cast<RenderPart>(i));
+            CHECK(!n.empty());
+            CHECK(seen.insert(n).second);
+            for (char c : n) { CHECK((c >= 'a' && c <= 'z') || c == '-'); }
+        }
+        CHECK(std::strcmp(renderPartName(RenderPart::WindowSwap), "window-swap") == 0);
+        CHECK(renderPartIsOneWindow(RenderPart::WindowDraw) &&
+              renderPartIsOneWindow(RenderPart::WindowSwap));
+        CHECK(!renderPartIsOneWindow(RenderPart::MainDraw) &&
+              !renderPartIsOneWindow(RenderPart::WindowsUpdate));
+
+        // The parts are measured on the timer's clock, the way the frame loop does
+        // it: a mark before the call, the difference after. A torn-off window's
+        // swap of 440 ms, beside a 12 ms main draw and a second window's 3 ms:
+        // the frame is 455 ms in render, and the line names the swap AND the
+        // window, by the id the tear-off line gave it.
+        Rig r;
+        r.frame(100, [&] {
+            FrameScopeGuard g(r.t, FrameScope::Render);
+            std::int64_t at = r.t.nanos();
+            advanceMs(12);
+            r.t.noteRenderPart(RenderPart::MainDraw, r.t.nanos() - at);
+            at = r.t.nanos();
+            advanceMs(0);
+            r.t.noteRenderPart(RenderPart::WindowsUpdate, r.t.nanos() - at);
+            at = r.t.nanos();
+            advanceMs(3);
+            r.t.noteRenderPart(RenderPart::WindowDraw, r.t.nanos() - at, 0x11111111u);
+            at = r.t.nanos();
+            advanceMs(2);
+            r.t.noteRenderPart(RenderPart::WindowDraw, r.t.nanos() - at, 0x8a3f2b1cu);
+            at = r.t.nanos();
+            advanceMs(3);
+            r.t.noteRenderPart(RenderPart::WindowSwap, r.t.nanos() - at, 0x11111111u);
+            at = r.t.nanos();
+            advanceMs(440);
+            r.t.noteRenderPart(RenderPart::WindowSwap, r.t.nanos() - at, 0x8a3f2b1cu);
+        });
+        CHECK(r.t.renderPartNanos(RenderPart::MainDraw) == 12 * kMs);
+        CHECK(r.t.renderPartNanos(RenderPart::WindowDraw) == 5 * kMs);
+        CHECK(r.t.renderPartNanos(RenderPart::WindowSwap) == 443 * kMs);
+        r.t.finish();
+        CHECK(r.t.counts().count[static_cast<int>(FrameScope::Render)][0] == 1);
+        CHECK(countLinesWith("frame: 460 ms, 460 ms of it in render; largest part: window-swap 440 ms "
+                             "(torn-off window 0x8a3f2b1c of 2)") == 1);
+        for (const Line& l : g_lines) { CHECK(onlyFixedWords(l.text)); }
+        for (const Line& l : g_lines) { CHECK(l.text.size() < DiagLog::kLineBytes); }
+
+        // THE LARGEST SINGLE WINDOW, not the windows' total: three windows of 150 ms
+        // each are 450 ms of window-draw, and a main draw of 200 ms still wins -
+        // nothing one window did was 200 ms.
+        Rig s;
+        s.frame(100, [&] {
+            FrameScopeGuard g(s.t, FrameScope::Render);
+            std::int64_t at = s.t.nanos();
+            advanceMs(200);
+            s.t.noteRenderPart(RenderPart::MainDraw, s.t.nanos() - at);
+            for (std::uint32_t id = 1; id <= 3; ++id) {
+                at = s.t.nanos();
+                advanceMs(150);
+                s.t.noteRenderPart(RenderPart::WindowDraw, s.t.nanos() - at, id);
+            }
+            for (std::uint32_t id = 1; id <= 3; ++id) {
+                at = s.t.nanos();
+                advanceMs(1);
+                s.t.noteRenderPart(RenderPart::WindowSwap, s.t.nanos() - at, id);
+            }
+        });
+        s.t.finish();
+        CHECK(countLinesWith("of it in render; largest part: main-draw 200 ms (3 torn off)") == 1);
+
+        // No torn-off window: no window clause at all.
+        Rig u;
+        u.frame(100, [&] {
+            FrameScopeGuard g(u.t, FrameScope::Render);
+            const std::int64_t at = u.t.nanos();
+            advanceMs(300);
+            u.t.noteRenderPart(RenderPart::MainDraw, u.t.nanos() - at);
+        });
+        u.t.finish();
+        CHECK(countLinesWith("frame: 300 ms, 300 ms of it in render; largest part: main-draw 300 ms") == 1);
+        CHECK(countLinesWith("torn off") == 0);
+
+        // The parts are a breakdown of `render`, nothing else: a slow frame whose
+        // scope is the rail says nothing about them, however large they were.
+        Rig v;
+        v.frame(100, [&] {
+            { FrameScopeGuard g(v.t, FrameScope::Rail); advanceMs(500); }
+            FrameScopeGuard g(v.t, FrameScope::Render);
+            const std::int64_t at = v.t.nanos();
+            advanceMs(100);
+            v.t.noteRenderPart(RenderPart::WindowSwap, v.t.nanos() - at, 0x5u);
+        });
+        v.t.finish();
+        CHECK(countLinesWith("frame: 600 ms, 500 ms of it in rail") == 1);
+        CHECK(countLinesWith("largest part") == 0);
+
+        // A render frame whose parts saw none of the time - the stall hook holds
+        // the thread at the scope's entry, inside no part - names no part: "largest
+        // part: main-draw 0 ms" would be noise.
+        Rig w;
+        w.slowIn(100, FrameScope::Render, 300);
+        w.t.finish();
+        CHECK(countLinesWith("frame: 300 ms, 300 ms of it in render") == 1);
+        CHECK(countLinesWith("largest part") == 0);
+
+        // Each frame starts with empty parts: the previous frame's 440 ms swap is
+        // not this frame's.
+        Rig x;
+        x.frame(100, [&] {
+            FrameScopeGuard g(x.t, FrameScope::Render);
+            const std::int64_t at = x.t.nanos();
+            advanceMs(440);
+            x.t.noteRenderPart(RenderPart::WindowSwap, x.t.nanos() - at, 0x7u);
+        });
+        x.frame(101, [&] {
+            FrameScopeGuard g(x.t, FrameScope::Render);
+            CHECK(x.t.renderPartNanos(RenderPart::WindowSwap) == 0);
+            const std::int64_t at = x.t.nanos();
+            advanceMs(300);
+            x.t.noteRenderPart(RenderPart::MainDraw, x.t.nanos() - at);
+        });
+        x.t.finish();
+        // Both logged: the first, 31 s gap or not, is the scope's first line; the
+        // second is within 30 s of it and so is counted, not written.
+        CHECK(countLinesWith("largest part: window-swap 440 ms (torn-off window 0x00000007 of 1)") == 1);
+        CHECK(x.t.counts().count[static_cast<int>(FrameScope::Render)][0] == 2);
+
+        // The process's own timer forgets them on reset.
+        FrameTimer& t = frameTimer();
+        t.resetForTest();
+        t.beginFrame(5);
+        t.noteRenderPart(RenderPart::MainDraw, 7 * kMs);
+        t.resetForTest();
+        CHECK(t.renderPartNanos(RenderPart::MainDraw) == 0);
+    }
+
     // --- NOT COUNTED: a frame the window was not being shown for ---------------
     {
         Rig r;

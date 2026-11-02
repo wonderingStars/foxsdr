@@ -815,6 +815,29 @@ void ringCounters(std::uint64_t& dropped, std::uint64_t& read) {
     read = g_ringRead.load(std::memory_order_acquire);
 }
 
+namespace {
+std::atomic<std::uint64_t> g_ringCapacitySamples{0};
+std::atomic<double> g_ringCapacityMs{0.0};
+std::atomic<std::uint64_t> g_ringHighWaterSamples{0};
+std::atomic<std::uint64_t> g_dspBlockLongestNs{0};
+}  // namespace
+
+void setRingFigures(const RingFigures& f) {
+    g_ringCapacitySamples.store(f.capacitySamples, std::memory_order_release);
+    g_ringCapacityMs.store(f.capacityMs, std::memory_order_release);
+    g_ringHighWaterSamples.store(f.highWaterSamples, std::memory_order_release);
+    g_dspBlockLongestNs.store(f.dspBlockLongestNs, std::memory_order_release);
+}
+
+RingFigures ringFigures() {
+    RingFigures f;
+    f.capacitySamples = g_ringCapacitySamples.load(std::memory_order_acquire);
+    f.capacityMs = g_ringCapacityMs.load(std::memory_order_acquire);
+    f.highWaterSamples = g_ringHighWaterSamples.load(std::memory_order_acquire);
+    f.dspBlockLongestNs = g_dspBlockLongestNs.load(std::memory_order_acquire);
+    return f;
+}
+
 const char* diagContextRaw(int& lenOut) {
     lenOut = g_contextLen.load(std::memory_order_acquire);
     if (lenOut < 0) { lenOut = 0; }
@@ -1030,6 +1053,8 @@ const std::vector<std::string>& bundleFieldNames() {
         "log-lines-total", "sdrplay-service",
         // Samples the pipeline's ring had no room for, of those read (0.99.86).
         "dsp-dropped",
+        // The ring's depth, its high water and the longest DSP block (GitHub issue 6).
+        "dsp-ring",
         // The sound path (0.99.61): see DiagAudio.
         "audio-output", "volume", "audio-muted", "squelch",
         // The patch page's radios, by driver kind (0.99.62): see
@@ -1149,6 +1174,25 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
         const std::string share = droppedShareText(in.ringDroppedSamples, in.sourceSamplesRead);
         if (!share.empty()) { v += " (" + share + ")"; }
         kv("dsp-dropped", v);
+    }
+    // THE RING ITSELF (GitHub issue 6, the 0.99.90 report): how deep, how full it
+    // has been and the longest the DSP thread spent on one block - what says
+    // whether a loss was the ring too shallow for a run of late samples or the
+    // DSP side stalling, and how near the edge a session that lost nothing came.
+    // Sizes and times, nothing about the signal (PRIVACY.md).
+    {
+        std::string v;
+        if (in.ringCapacitySamples != 0) {
+            const std::uint64_t pct =
+                std::min<std::uint64_t>(100, in.ringHighWaterSamples * 100 / in.ringCapacitySamples);
+            char ms[32];
+            std::snprintf(ms, sizeof(ms), "%.0f", in.ringCapacityMs);
+            char block[32];
+            std::snprintf(block, sizeof(block), "%.1f", in.dspBlockLongestMs);
+            v = std::to_string(in.ringCapacitySamples) + " samples (" + ms + " ms), high water " +
+                std::to_string(pct) + "%, longest DSP block " + block + " ms";
+        }
+        kv("dsp-ring", v);
     }
 
     out += "\n--- log ---\n";

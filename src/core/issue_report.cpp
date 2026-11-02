@@ -69,7 +69,7 @@ constexpr const char* kSentences[health::kRecoveredCount] = {
     "the audio buffer was made deeper because this computer fell behind",
     // Viewport
     "the graphics driver refused a second window for a page torn off the main one, and every "
-    "page is kept inside the main window for the rest of the session",
+    "page is kept inside the main window instead",
     // ReaderLeak
     "a radio driver's reader did not stop when asked and was let go; the radio is left to the "
     "operating system until FoxSDR is restarted",
@@ -138,6 +138,8 @@ std::atomic<std::uint64_t> g_filed{0};
 std::atomic<std::uint64_t> g_pending{0};
 // The sequence field of the file name, so two words filed in one second are two files.
 std::atomic<unsigned> g_seq{0};
+// The reports written and not yet taken by takeNewlyFiled(): the window's cue to sweep.
+std::atomic<unsigned> g_newlyFiled{0};
 
 std::string stamp() {
     const std::time_t t = std::time(nullptr);
@@ -262,8 +264,11 @@ std::string fileIssueReport(Recovered word) {
         return std::string();
     }
     diagLogf("issue report written - %s (recovered.%s)", path.c_str(), health::recoveredWord(word));
+    g_newlyFiled.fetch_add(1u, std::memory_order_acq_rel);
     return path;
 }
+
+unsigned takeNewlyFiled() { return g_newlyFiled.exchange(0u, std::memory_order_acq_rel); }
 
 void filePendingIssueReports() {
     if (activeCrashDir().empty()) { return; }
@@ -276,6 +281,7 @@ void filePendingIssueReports() {
 void resetIssueReportsForTest() {
     g_filed.store(0ull, std::memory_order_release);
     g_pending.store(0ull, std::memory_order_release);
+    g_newlyFiled.store(0u, std::memory_order_release);
 }
 
 }  // namespace cascade::core::issue

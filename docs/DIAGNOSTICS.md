@@ -618,12 +618,21 @@ the panel:
   65543) - every page stays inside the main window`, written once at startup
   when the probe FoxSDR makes before enabling torn-off pages is refused; or
   `viewports: the display could not create a second OpenGL context (GLFW
-  65543) - every page stays inside the main window for this session`, written
-  the first time the driver refuses one while running. Either means torn-off
-  pages are off and everything is drawn inside the main window — which is a
-  restriction, not a fault, and is what 0.95.0 took an access violation
-  instead of doing. `viewports: single (FOXSDR_SINGLE_VIEWPORT set)` is the
-  developer switch and means the same thing on purpose.
+  65543) - every page stays inside the main window, and tear-off will be
+  offered again`, written when the driver refuses one while running. Either
+  means torn-off pages are off and everything is drawn inside the main window
+  — which is a restriction, not a fault, and is what 0.95.0 took an access
+  violation instead of doing. A mid-session refusal RESTS the feature rather
+  than ending it (0.99.102 — both 2026-10-29 field reports carried Win32
+  error 0xc00705aa, ERROR_NO_SYSTEM_RESOURCES, a transient shortage, one of
+  them two seconds after the display came back from 13 minutes off): a minute
+  after the first refusal, and ten after a second, the log says `viewports:
+  torn-off pages are offered again after the refusal (N of 3 this session)`
+  and tearing a page off works again. A third refusal is taken as the
+  machine's answer, and the line ends `for this session` instead. `viewports:
+  single (FOXSDR_SINGLE_VIEWPORT set)` is the developer switch and means
+  pages stay inside for the whole run on purpose; so does a startup-probe
+  refusal, which is the machine that never allows a second context at all.
   **And no page is left outside the main window.** Through 0.99.96 a page that had
   been its own window kept its place beside the main window when separate windows
   went off, and every page opens overhanging the main window's right edge on
@@ -840,7 +849,7 @@ The sites that are counted:
 | `reopen` | `AppWindow::reopenAfterDriverFault`, a SoapySDR driver fault answered by reopening the radio | the window's thread |
 | `srcthread` | `Pipeline::quiesceSourceThreadLocked`'s abandonment, read as `abandonedSourceThreads()` | the poll |
 | `vendorcall` | `SoapySource::driverCallsAbandoned()`, a vendor call let go after `kVendorCallWait` | the poll |
-| `ringdrop` | `Pipeline::ringDroppedSamples()`, the source ring full | the poll |
+| `ringdrop` | `Pipeline::ringDroppedSamples()`, the source ring full - counted by the poll; the issue report is filed by `Engine::closeDspMinute` (master's `AppWindow::closeDspMinute`) only for a minute that lost at least 0.05% of its samples (`ringDropWorthAReport`, 0.99.102) | the poll (the count), the engine's pass (the report) |
 | `dspexc` | `Pipeline::dspThreadExceptions()`, the DSP thread's catch blocks | the poll |
 | `cfgsave` | `AppWindow::pollConfigWriter`, the settings write that failed | the window's thread |
 | `enumchild` | `soapy_enum_proc.cpp`, a scan child that died and was contained | the scan's worker |
@@ -1638,7 +1647,7 @@ wherever they were called from.
 | `dialogs` | the dialogs and menus drawn at the top level |
 | `polls` | the once-a-frame polls of workers and files (sources, sound, updates, the catalogue, telemetry, the tester link) and the scanner and airband drivers |
 | `saves` | deferred saves: bookmarks, markers and the settings file |
-| `render` | `ImGui::Render`, the GL draw, the torn-off windows' own draw |
+| `render` | `ImGui::Render`, the GL draw, the torn-off windows' own draw and swap - with its **parts** named when it is the slow one, see below (0.99.103) |
 | `present` | `glfwSwapBuffers` - on a vsynced window, mostly waiting for the display |
 | `recorder` | starting, stopping and arming a recording (nested: counted here whatever called it) |
 | `plugins-reload` | unloading every plugin and loading them again (nested, likewise) |
@@ -1674,6 +1683,91 @@ whoever reads them next (`cascade: frame timing:`, below).
   session - recorder 2/0/0, plugins-reload 0/1/0 (250 ms to 1 s / 1 s to 5 s / 5
   s or more, by scope)`. Fixed words and numbers only - never a plugin's name, a
   file, a path, a frequency or a device.
+- **A slow frame in `render` names the part of `render` (0.99.103).** The
+  2026-10-29 tester log (an Intel UHD 630 laptop docked to a second monitor) had
+  81 minutes of `frame: 450 ms, 442 ms of it in render` and could not say which
+  half of `render` it was: the main window's draw, or the torn-off pages'
+  windows, which `render` draws and swaps too - and if a window, which one. The
+  frame loop now times four **parts** of that one scope on the timer's clock
+  (`RenderPart`, `FrameTimer::noteRenderPart`): `main-draw` (`ImGui::Render` and
+  the main window's GL draw), `windows-update` (`ImGui::UpdatePlatformWindows`,
+  where torn-off windows are created, moved and destroyed - and where a driver
+  refuses one), `window-draw` and `window-swap` (one torn-off window's each; the
+  loop is FoxSDR's own copy of `ImGui::RenderPlatformWindowsDefault`,
+  `renderTornOffWindowsTimed` in `gui/app_window.cpp`, with a clock around every
+  call). When a slow frame's scope is `render` the line adds the largest part -
+  a whole part for the first two, the **largest single window** for the other
+  two, by the viewport id the tear-off line gave it: `frame: 455 ms, 455 ms of
+  it in render; largest part: window-swap 440 ms (torn-off window 0x8a3f2b1c of
+  2)`, or `; largest part: main-draw 400 ms (2 torn off)`. A render frame whose
+  parts saw none of the time (the `FOXSDR_FRAME_STALL` hook holds the thread at
+  the scope's entry, inside no part) names none. The parts are a breakdown of one
+  scope: the scopes still add up to the frame on their own, and nothing in the
+  table or the usage record changes. `tests/test_frame_timing.cpp` holds the
+  line's words.
+- **Every page that gets a window of its own, and every one that comes back
+  (0.99.103).** A window that works was never logged - only the refusal, and the
+  page brought back inside after it - so the same tester log could not say
+  whether a page had its own window during those 81 minutes, on which monitor,
+  or how many windows the session had made before the driver refused one. After
+  `UpdatePlatformWindows` each frame the frame loop hands `TornOffLedger`
+  (`gui/torn_off_ledger.hpp`, pure, `tests/test_torn_off_ledger.cpp`) every
+  secondary viewport that has its operating system window, and the ledger says
+  once per change: `viewports: page "ADS-B Map" in its own window 0x8a3f2b1c -
+  1026x699 at 588,202 on monitor 2 of 2 (DELL U2720Q, 100%); window 3 this
+  session, 1 outside` and `viewports: page "ADS-B Map" back in the main window
+  (window 0x8a3f2b1c gone); 0 outside`. "In its own window", not "torn off",
+  because a page need not be torn off to have one: the map, store and
+  fitted-modules pages are `ImGuiViewportFlags_NoAutoMerge` and are their own
+  operating system window and shared GL context from the frame they open,
+  wherever they sit. The monitor is the one ImGui placed the window on (its
+  model name as GLFW reports it, read only for a monitor that is in GLFW's list
+  that frame - the backend keeps a stale list while a monitor is being
+  reconfigured, and a handle in it may already be freed); `on no monitor the
+  interface could place (2 listed)` when it could not. The ledger follows at
+  most 16 windows and keeps 27 characters of a page's name and 20 of a
+  monitor's, so that the widest line (187 characters) fits the log's 192-byte
+  line with its counts intact. On the frame a refusal turns viewports off, every
+  page it followed is said to be back inside.
+- **Pop-up windows are counted, not listed (0.99.103).** A tooltip, menu or
+  popup that protrudes past a page's own window is given a window and shared GL
+  context of *its own* by ImGui (`Begin`, "Late create viewport if we don't
+  fit"), inside `UpdatePlatformWindows` - and destroyed one frame after the
+  pop-up goes. Over a map page an aircraft tooltip can do that every time a
+  target drifts under the pointer: one wglCreateContextAttribsARB and one
+  wglDeleteContext per blink, in the `render` scope, only while a page has its
+  own window and never while every page is inside. A read-only code hunt
+  (2026-10-29, five readers and two skeptics per suspect) found that to be the
+  one mechanism of this codebase that fits the tester's shape; whether it is
+  what the laptop does, the next log says. One line per blink would push the
+  whole log out of its ring in exactly those sessions, so the ledger counts them
+  and writes one summary at most every 30 s: `viewports: 41 pop-up windows (a
+  tooltip or menu past a page's own window, each a window and GL context of its
+  own while it shows) since the last line; 42 this session`. At a refusal the
+  frame loop adds the session's totals beside the `resources:` line:
+  `viewports: before the refusal this session - 2 page windows, 412 pop-up
+  windows over them, 415 platform windows created in all` - the last from
+  ImGui's own `PlatformWindowsCreatedCount`, so a refusal reads as the first
+  context of the session or the four-hundredth.
+- **What the process holds, as a line (0.99.103, `core/process_resources.hpp`,
+  `tests/test_process_resources.cpp`).** The refusal the same laptop reports is
+  Win32 error `0xc00705aa` - 1450, `ERROR_NO_SYSTEM_RESOURCES` - and its earlier
+  sessions show pages torn off successfully before a later request was refused:
+  something ran out, and the log could not say whether FoxSDR used it up. So the
+  log now carries `resources: gdi 412, user 97, handles 1234, memory 812 MB,
+  video 356 of 3900 MB - at start-up`: this process's GDI and USER objects
+  (Windows allows 10,000 of each a process by default, and every window needs
+  some of both), its kernel handles, its private commit, and its own video
+  memory in use and budget as Windows' graphics kernel accounts it
+  (`IDXGIAdapter3::QueryVideoMemoryInfo`, for every API the process draws with,
+  on the adapter it uses the most of; DXGI is loaded by name, so a machine
+  without it reads `video ? of ? MB`). Written once the window is shown, at every
+  tear-off and merge-back (`with a page torn off` / `with the pages inside`),
+  `at the refusal`, and `ten minutes on` for the rest of the session - about
+  twenty lines of a three-hour session's 256. A field that could not be read is
+  `?`, in place, so the line's shape is the same on every machine. On Linux the
+  handles are open file descriptors and the memory the resident set; the GUI and
+  video fields are `?`. Every number is this process's own.
 - The **diagnostics bundle** (Copy diagnostics, and what a bug report attaches):
   one line, `slow-frames: recorder 2/0/0, plugins-reload 0/1/0`, or `none`. It is
   listed in PRIVACY.md's table and compared with it, both ways, by
@@ -2317,6 +2411,48 @@ the drop count, read first, never runs ahead of its read). A share too small for
 two decimals is `under 0.01%`, never `0.00%`. The bundle carries the session's
 total as `dsp-dropped: 324608 of 2400000000 samples (0.01%)`.
 
+**The feed row has a floor (0.99.102).** The `ringdrop` issue report used to be
+filed by the health poll on the first dropped sample of a session, and its first
+day on the feed (2026-10-29) was six rows from five installs, every one a
+start-of-stream blip of a few milliseconds - 7168 samples, 3.5 ms at 2.048 MS/s,
+"under 0.01%" - that nobody could hear, while the loss GitHub issue 6 was about
+ran at 0.69% of a minute. The report is now filed by `closeDspMinute`, for a
+minute that lost at least **0.05%** of what it read (`ringDropWorthAReport`,
+core/diag_report.hpp: twenty times the blip, a tenth of the real fault), once a
+session as before. The log line above and the ledger count `recovered.ringdrop`
+are not gated: they are the reader's record of one machine, and a count is not
+a row.
+
+**What the loss looked like (0.99.101, the 0.99.90 report on the same issue).** A
+lost minute writes a second line straight after the first:
+
+    dsp: ring high water 100% of 1048576 samples, 14 writes cut, longest DSP block 3 ms
+
+The three figures are `Pipeline::ringCutWrites` (one write per source read, so
+twenty big holes and eight hundred tiny ones read differently),
+`Pipeline::takeRingHighWaterSamples` (always the whole ring in a minute that lost
+something; its value is in the bundle, for the minutes that did not) and
+`Pipeline::takeDspBlockLongestNs`, the longest one block took on the DSP thread
+from the spectrum estimate to the end of the audio chain. A long block is a stall
+on the DSP side - something holding `audioMutex_`, a slow machine; a block of
+microseconds beside drops means the samples arrived late from the source and all
+at once. The bundle carries the session's maxima as `dsp-ring: 1048576 samples
+(262 ms), high water 61%, longest DSP block 4.0 ms`, the depth in milliseconds
+of the source's rate.
+
+That report is also why the ring is now a quarter of a second deep
+(`ringCapacityFor`, pipeline.cpp; capped at 8388608 samples, 64 MB) where it was
+four 10 ms chunks: the tester's SDRplay service handed its samples over in runs,
+with 20 to 43 ms of silence between them (825 reads a minute waited their whole
+20 ms bound for nothing), and the source thread's "1 ms" back-off after such a
+read - 15.6 ms on a Windows machine that has not asked for a finer timer, as the
+DSP thread's idle sleep is - stacked onto the silence past the 65 ms ring. The
+back-off is now skipped after a read that itself waited; a read that returns 0
+without blocking (a dead handle) is still backed off, so the hot spin it exists
+for cannot return. `tests/test_pipeline_throughput.cpp` drives the real pipeline
+from a source that behaves as that service did and pins zero loss at the tester's
+rate and silence, beside the DSP chain's measured ceiling.
+
 **Reading it beside the SDRplay lines:** service gaps or link-ring overflows mean
 samples were lost before FoxSDR had them; a `dsp:` drop line means FoxSDR had
 them and its own processing could not keep up - a slow machine, or something
@@ -2516,6 +2652,30 @@ the fill to a fixed 160 ms. A deeper lead alone would have been bled back down t
   effect at the next re-prime: a ring that is already playing is not stopped, the
   matcher simply steers it to the new target; the next underrun is followed by silence
   until the new lead is queued - about the step's worth, once.
+- **A minute that reloaded plugins is not judged** (0.99.102). A rescan
+  (`Engine::rescanPlugins` - a store install, remove or update, or a changed plugins
+  folder; counted by `pluginScans_`) deliberately stalls the thread that reloads for as long as the loader and the
+  plugins' own `destroy()` take, and a 2026-10-29 field report showed what the judgment
+  made of that: nine installs in 55 s, 27 starved callbacks, and a buffer raised to
+  960 ms - a second of latency the machine had not earned. A minute in which a rescan
+  began steps **nothing**, in either direction, for the receiver's sink and every patch
+  speaker: no raise, no `recovered.audiolead`, and the quiet run neither grows nor
+  resets - the judgment resumes with the next minute's own figures (a machine that is
+  genuinely behind starves on in minutes that reloaded nothing, and is caught then).
+  The starvation digest is still written, followed by **`audio: buffer kept at <N> ms -
+  the starved callbacks came in a minute that reloaded plugins`**. The first plugin
+  load (`Engine::initialise`) is consumed as soon as it is done, so the session's first
+  minute is still judged on its own figures.
+- **A user's stop is not the machine falling behind** (0.99.102, the same day's feed: a
+  Store install raised its buffer to 240 ms after three STOP presses in one minute - each
+  stop of a running receiver starves the sink's last callback once, and three met the
+  threshold by themselves). `Engine::stopReceiver` counts the stops that stopped
+  something, and `closeAudioMinute` subtracts the minute's stops from its starved
+  callbacks - one per stop, never below zero - before deciding a raise, so starvation
+  beyond the stops still counts in full; a raise that the discount prevented is said:
+  **`audio: buffer kept at <N> ms - <S> of the <T> starved callbacks came with receiver
+  stops`**. The quiet run is untouched (a stop leaves the sink unprimed, which already
+  keeps the minute from counting as quiet).
 - Each step writes **`audio: buffer raised to <N> ms after <N> starved callbacks in a
   minute`** (a patch speaker's carries ` (patch speaker)` at the end), shows
   "Audio buffer raised to 240 ms: this computer fell behind 5 times in the last
@@ -5296,7 +5456,18 @@ them is why the code is shaped the way it is:
    once; it cannot safely allocate, lock, or open a socket, and `WinHttpOpen`
    does all three. Phase 1 writes to disk from the handler *on purpose*. The
    send happens on the **next start**, from a healthy process — which is also
-   the only moment there is a user to ask.
+   the only moment there is a user to ask. An **issue report** (0.99.101) is
+   the exception, because it is written by a healthy thread of a session that
+   carries on: `AppWindow::crashUploadPoll()` sweeps the folder again as soon
+   as one is filed (`issue::takeNewlyFiled()` is the cue, `CrashUploader::
+   running()` says the previous sweep is over), under the same switch, dedup
+   and daily limits. A person who met a fault and never opened FoxSDR again
+   was never heard from before this. (On the engine-extraction branch the report is
+   filed by the engine's pass, where the word is counted, and the sweep is the
+   window's: it asks `takeNewlyFiled()` once a frame in its look, and waits for the
+   start-up sweep to have started first. A headless `foxsdr-engine` has no uploader
+   by design, as before (the crash-report sweep is window-only: survey O6, no UI has
+   consented): it files issue reports and sweeps nothing.)
 2. **Never block or delay the application, including shutdown.** The sweep runs
    on a background thread armed with the frame loop; the live WinHTTP request
    handle is published to an atomic, and `AppWindow::crashUploadFinish()` closes

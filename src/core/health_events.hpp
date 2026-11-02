@@ -99,7 +99,8 @@ enum class Recovered : std::uint8_t {
     SdrLost,     // the SDRplay API session was lost and shut for the session
     AudioLead,   // the audio buffer was deepened because this computer fell behind (0.99.73)
     Viewport,    // the driver refused a second OpenGL context mid-session; every page is kept
-                 // inside the main window for the rest of the session (0.99.100)
+                 // inside the main window, and tear-off rests before it is offered
+                 // again (0.99.100; rested rather than ended since 0.99.102)
     // THE SURVEY OF 2026-10-28 (0.99.100): the handled faults that were logged and never
     // counted, each now a word and therefore an issue report (core/issue_report.hpp).
     ReaderLeak,    // a native radio's reader (or Pluto's writer) thread did not stop and was let go

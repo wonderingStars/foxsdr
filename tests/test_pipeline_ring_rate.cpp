@@ -2,7 +2,8 @@
 // SOURCE's rate - not at the rate the pipeline happened to be constructed at.
 //
 // THE DEFECT. The ring was sized once, in the constructor, for
-// cfg.sampleRateHz (the app always builds it at 2 MS/s: 131072 samples), while
+// cfg.sampleRateHz (the app always builds it at 2 MS/s: 131072 samples then,
+// 524288 since the ring became a quarter of a second deep for GitHub issue 6), while
 // the source thread sizes each read at 10 ms of the SOURCE's own rate. A
 // 20 MS/s source (a HackRF menu rate, or simply a 20 MS/s recording) hands the
 // ring 200000 samples per read; SpscRing::write accepts only what fits, so
@@ -117,12 +118,12 @@ cascade::core::Pipeline::Config appConfig() {
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    // The construction-time ring, for reference: 4 x 10 ms at 2 MS/s = 80000,
-    // rounded up to a power of two.
+    // The construction-time ring, for reference: a quarter of a second at
+    // 2 MS/s = 500000, rounded up to a power of two (ringCapacityFor).
     {
         cascade::core::Pipeline p(appConfig());
         std::printf("construction ring capacity: %zu\n", p.ringCapacity());
-        CHECK(p.ringCapacity() == 131072u);
+        CHECK(p.ringCapacity() == 524288u);
         CHECK(p.ringDroppedSamples() == 0u);
     }
 
@@ -141,6 +142,10 @@ int main() {
                     static_cast<unsigned long long>(dropped), raw->firstReadSize());
         CHECK(dropped == 0u);
         CHECK(p.ringCapacity() >= 4u * kWideChunk);
+        // A quarter of a second of 20 MS/s is 5 million samples, so this is the
+        // ring's ceiling (kRingMaxSamples, 64 MB) - and the ceiling still holds
+        // 400 ms of it.
+        CHECK(p.ringCapacity() == 8388608u);
         p.stop();
         CHECK(!p.faulted());
     }
@@ -178,13 +183,13 @@ int main() {
         }));
 
         // [R3] And back to the 2 MS/s generator: the ring returns to its
-        // 2 MS/s size. A ring left at the 20 MS/s size would hold 0.5 s of
-        // 2 MS/s samples, so a DSP thread that falls behind would lag by
-        // half a second instead of 65 ms before anything is dropped.
+        // 2 MS/s size. A ring left at the 20 MS/s size would hold over four
+        // seconds of 2 MS/s samples, so a DSP thread that falls behind would
+        // lag by seconds instead of a quarter of one before anything is dropped.
         p.setSource(nullptr);
         CHECK(p.running());
         std::printf("[R3] back to the 2 MS/s generator: ring %zu\n", p.ringCapacity());
-        CHECK(p.ringCapacity() == 131072u);
+        CHECK(p.ringCapacity() == 524288u);
         const std::uint64_t seqBack = f.seq;
         CHECK(waitFor([&] {
             p.getLatestFrame(f);
@@ -195,24 +200,39 @@ int main() {
     }
 
     // [R4] A SLOWER source never SHRINKS the ring below its construction
-    // size. Sized purely from a 250 kHz source's rate the ring would be 16384
-    // samples - 65 ms at that rate, but far less slack than the 131072 every
-    // source slower than the construction rate has always had, and
+    // size. Sized purely from a 250 kHz source's rate the ring would be 65536
+    // samples - a quarter of a second at that rate, but an eighth of the
+    // 524288 every source slower than the construction rate gets, and
     // test_source_swap's 400 kHz conservation check lost samples to exactly
-    // that shrink on a loaded machine. The floor keeps every such source
+    // such a shrink on a loaded machine. The floor keeps every such source
     // where it was; only a source whose read would not fit gets more.
     {
         cascade::core::Pipeline p(appConfig());
         p.start();
         p.setSource(std::make_unique<OneChunkWideSource>(250000.0));
         std::printf("[R4] live setSource to 250 kHz: ring %zu\n", p.ringCapacity());
-        CHECK(p.ringCapacity() == 131072u);
+        CHECK(p.ringCapacity() == 524288u);
         p.stop();
         auto slow = std::make_unique<OneChunkWideSource>(250000.0);
         p.setSource(std::move(slow));
         p.start();
         std::printf("[R4] start() at 250 kHz: ring %zu\n", p.ringCapacity());
-        CHECK(p.ringCapacity() == 131072u);
+        CHECK(p.ringCapacity() == 524288u);
+        p.stop();
+        CHECK(!p.faulted());
+    }
+
+    // [R5] THE TESTER'S RATE (GitHub issue 6, the 0.99.90 report): an RSPduo at
+    // 4 MS/s gets a ring of at least a quarter of a second - 1000000 samples,
+    // rounded up to 1048576 - where it used to get 262144 (65 ms), which the
+    // SDRplay service's 43 ms silences plus two 15.6 ms timer sleeps overran.
+    {
+        cascade::core::Pipeline p(appConfig());
+        p.setSource(std::make_unique<OneChunkWideSource>(4000000.0));
+        p.start();
+        std::printf("[R5] start() at 4 MS/s: ring %zu\n", p.ringCapacity());
+        CHECK(p.ringCapacity() >= 1000000u);
+        CHECK(p.ringCapacity() == 1048576u);
         p.stop();
         CHECK(!p.faulted());
     }

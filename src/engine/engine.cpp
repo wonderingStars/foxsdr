@@ -42,6 +42,7 @@
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
+#include "core/issue_report.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 #include "core/image_write.hpp"
@@ -671,6 +672,35 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
     audioPrimingAtLogStart_ = primingNow;
     audioRingLowWaterFrames_ = ringFramesNow;  // next minute's mark starts here
 
+    // A MINUTE THAT RELOADED PLUGINS IS NOT JUDGED (2026-10-29 field report: a
+    // user installing plugins from the store, nine rescans in 55 s, each a
+    // deliberate ~300 ms stall of the thread that reloads - and 27 starved
+    // callbacks read as "this computer fell behind", raising the buffer to
+    // 960 ms, a second of added latency the next quarter hour then had to earn
+    // back down; master 0.99.102, 8c0a4f41). The stall is application-paced
+    // work, not the machine's pace, so such a minute neither raises the lead
+    // nor counts toward - nor against - the quiet run: the marks above are
+    // taken as always, and the judgment resumes with the next minute's own
+    // figures. A machine that is genuinely behind is still caught: its
+    // starvation continues into minutes that reloaded nothing. pluginScans_
+    // counts every rescanPlugins(), before any work, early return included.
+    const bool pluginsReloadedThisMinute = pluginScans_ != audioRescansAtLogStart_;
+    audioRescansAtLogStart_ = pluginScans_;
+
+    // ...AND NEITHER IS THE USER'S OWN STOP (the same field day; master
+    // 0.99.102, bde914f6): each stop of a running receiver starves the sink's
+    // last callback once, and three STOP presses in one minute met the raise
+    // threshold by themselves. One starved callback per stop is discounted from
+    // the RAISE decision only - never below zero, so starvation beyond the stops
+    // counts in full. The quiet run is untouched: a stop leaves the sink
+    // unprimed, which already keeps such a minute from counting as quiet, and a
+    // starved callback still resets the run exactly as the step-down policy
+    // argues it should.
+    const std::uint64_t stopsThisMinute =
+        receiverStops_ >= audioStopsAtLogStart_ ? receiverStops_ - audioStopsAtLogStart_ : 0;
+    audioStopsAtLogStart_ = receiverStops_;
+    const std::uint64_t starvedBeyondStops = starved > stopsThisMinute ? starved - stopsThisMinute : 0;
+
     // THE BUFFER THAT DEEPENS ITSELF (0.99.73) AND EASES BACK (0.99.83). The
     // 12CF report - 110 to 126 starved callbacks every minute at a fixed 120 ms
     // - is the case: when a minute closes with three or more, the lead steps up
@@ -690,44 +720,66 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
         return shown;
     };
     const int leadMs = cascade::sink::audioLeadMs(out.leadFrames());
-    const int nextMs = cascade::sink::nextAudioLead(starved, leadMs, audioBufferMs_);
-    if (nextMs > leadMs) {
-        out.setLeadFrames(cascade::sink::audioLeadFrames(nextMs));
-        audioLeadNote_ = AudioLeadNote::kRaised;
-        audioLeadNoteMs_ = nextMs;
-        audioLeadNoteCount_ = sayRaised(nextMs, starved, "");
-        audioLeadQuietMinutes_ = 0;   // whatever run there was ended in a raise
-        // REMEMBERED FOR THE NEXT LAUNCH: a computer that fell behind this often is slow every time,
-        // and starting at 120 ms again costs the same bad minutes at every start. Only the
-        // receiver's own raise is kept (the patch speakers are seeded from it when they are made),
-        // and only in AUTOMATIC - nextAudioLead never raises a fixed setting. Saved by the normal
-        // config save, as audioBufferAutoMs; audioBufferMs itself stays 0, because a raise is the
-        // session's and not a choice.
-        audioBufferAutoMs_ = nextMs;
+    if (pluginsReloadedThisMinute) {
+        // Say why nothing steps, but only when there is something not to step
+        // on: a reloading minute that starved nobody has no news.
+        if (starved > 0) {
+            cascade::core::diagLogf(
+                "audio: buffer kept at %d ms - the starved callbacks came in a minute that "
+                "reloaded plugins",
+                leadMs);
+        }
     } else {
-        // THE WAY BACK DOWN (0.99.83). A quiet minute is one the sink PLAYED
-        // through (primed at its close - an idle sink proves nothing; stopping
-        // the radio starves the last callback, which resets the run anyway) and
-        // starved nobody. A quarter hour of them in a row lowers the lead one
-        // rung, and the remembered depth with it - at the 120 ms floor there is
-        // nothing left to remember, so the memory is 0 again. Why a lead comes
-        // back down at all, against the old "a machine that fell behind once
-        // will again": sink/audio_out.hpp, the policy comment.
-        audioLeadQuietMinutes_ =
-            starved == 0 && out.primed()
-                ? std::min(audioLeadQuietMinutes_ + 1, cascade::sink::kAudioLeadQuietMinutesToStepDown)
-                : 0;
-        const int downMs = cascade::sink::audioLeadAfterQuietMinutes(audioLeadQuietMinutes_, leadMs,
-                                                                     audioBufferMs_);
-        if (downMs < leadMs) {
-            out.setLeadFrames(cascade::sink::audioLeadFrames(downMs));
-            cascade::core::diagLogf("audio: buffer lowered to %d ms after %d quiet minutes", downMs,
-                                    audioLeadQuietMinutes_);
-            audioLeadNote_ = AudioLeadNote::kLowered;
-            audioLeadNoteMs_ = downMs;
-            audioLeadNoteCount_ = audioLeadQuietMinutes_;
-            audioLeadQuietMinutes_ = 0;   // the next rung needs a quarter hour of its own
-            audioBufferAutoMs_ = downMs == 120 ? 0 : downMs;
+        const int nextMs = cascade::sink::nextAudioLead(starvedBeyondStops, leadMs, audioBufferMs_);
+        if (nextMs == leadMs && starvedBeyondStops < starved &&
+            starved >= static_cast<std::uint64_t>(cascade::sink::kAudioLeadStarvedPerMinute)) {
+            // The discount is why nothing steps; say so, or the digest above
+            // reads as a raise the code forgot.
+            cascade::core::diagLogf(
+                "audio: buffer kept at %d ms - %llu of the %llu starved callbacks came with "
+                "receiver stops",
+                leadMs, static_cast<unsigned long long>(starved - starvedBeyondStops),
+                static_cast<unsigned long long>(starved));
+        }
+        if (nextMs > leadMs) {
+            out.setLeadFrames(cascade::sink::audioLeadFrames(nextMs));
+            audioLeadNote_ = AudioLeadNote::kRaised;
+            audioLeadNoteMs_ = nextMs;
+            audioLeadNoteCount_ = sayRaised(nextMs, starvedBeyondStops, "");
+            audioLeadQuietMinutes_ = 0;   // whatever run there was ended in a raise
+            // REMEMBERED FOR THE NEXT LAUNCH: a computer that fell behind this often is slow every time,
+            // and starting at 120 ms again costs the same bad minutes at every start. Only the
+            // receiver's own raise is kept (the patch speakers are seeded from it when they are made),
+            // and only in AUTOMATIC - nextAudioLead never raises a fixed setting. Saved by the normal
+            // config save, as audioBufferAutoMs; audioBufferMs itself stays 0, because a raise is the
+            // session's and not a choice.
+            audioBufferAutoMs_ = nextMs;
+        } else {
+            // THE WAY BACK DOWN (0.99.83). A quiet minute is one the sink PLAYED
+            // through (primed at its close - an idle sink proves nothing; stopping
+            // the radio starves the last callback, which resets the run anyway) and
+            // starved nobody. A quarter hour of them in a row lowers the lead one
+            // rung, and the remembered depth with it - at the 120 ms floor there is
+            // nothing left to remember, so the memory is 0 again. Why a lead comes
+            // back down at all, against the old "a machine that fell behind once
+            // will again": sink/audio_out.hpp, the policy comment.
+            audioLeadQuietMinutes_ =
+                starved == 0 && out.primed()
+                    ? std::min(audioLeadQuietMinutes_ + 1,
+                               cascade::sink::kAudioLeadQuietMinutesToStepDown)
+                    : 0;
+            const int downMs = cascade::sink::audioLeadAfterQuietMinutes(audioLeadQuietMinutes_,
+                                                                         leadMs, audioBufferMs_);
+            if (downMs < leadMs) {
+                out.setLeadFrames(cascade::sink::audioLeadFrames(downMs));
+                cascade::core::diagLogf("audio: buffer lowered to %d ms after %d quiet minutes",
+                                        downMs, audioLeadQuietMinutes_);
+                audioLeadNote_ = AudioLeadNote::kLowered;
+                audioLeadNoteMs_ = downMs;
+                audioLeadNoteCount_ = audioLeadQuietMinutes_;
+                audioLeadQuietMinutes_ = 0;   // the next rung needs a quarter hour of its own
+                audioBufferAutoMs_ = downMs == 120 ? 0 : downMs;
+            }
         }
     }
 
@@ -744,6 +796,9 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
         const std::uint64_t before = was == patchStarvedAtMinute_.end() ? total : was->second;
         const std::uint64_t minute = total >= before ? total - before : 0;
         patchStarvedAtMinute_[node] = total;
+        // The reloading minute sits out here too, after the mark above is
+        // taken - or next minute would inherit this one's starvation.
+        if (pluginsReloadedThisMinute) { continue; }
         const int speakerMs = dest->leadMs();
         const int speakerNext = cascade::sink::nextAudioLead(minute, speakerMs, audioBufferMs_);
         if (speakerNext > speakerMs) {
@@ -780,17 +835,34 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
 }
 
 void Engine::pollDspMinute() {
-    // The bundle's copy of the counters (core::setRingCounters): every pass, two loads and two stores, drop count first.
+    // The bundle's copy of the counters (core::setRingCounters) and of the ring itself (core::setRingFigures): every pass, two loads and two
+    // stores for the counters - drop count first - and the figures beside them.
     {
         const std::uint64_t droppedNow = pipeline_.ringDroppedSamples();
         const std::uint64_t readNow = pipeline_.sourceSamplesRead();
         cascade::core::setRingCounters(droppedNow, readNow);
+        publishRingFigures();
     }
     const double now = clockS();
     if (now - lastDspLogSec_ >= 60.0) {
         lastDspLogSec_ = now;
         closeDspMinute();
     }
+}
+
+// THE RING ITSELF, FOR THE BUNDLE'S dsp-ring LINE (GitHub issue 6, the 0.99.90 report; master 0.99.101, d776bc58, where the window read these
+// from the pipeline when it built a bundle - here the pipeline is the engine's, so the pass publishes them like the counters beside them):
+// the ring's depth in samples and in milliseconds of the source's rate, the fullest it has been this session, and the longest the DSP thread
+// spent on one block - the maxima of the minutes closed so far and of the minute still open. Sizes and times, nothing about the signal.
+void Engine::publishRingFigures() {
+    cascade::core::RingFigures f;
+    f.capacitySamples = pipeline_.ringCapacity();
+    const double sourceRate = pipeline_.activeSource().sampleRateHz();
+    const double ringRate = sourceRate > 0.0 ? sourceRate : pipeline_.inputRateHz();
+    f.capacityMs = ringRate > 0.0 ? 1000.0 * static_cast<double>(f.capacitySamples) / ringRate : 0.0;
+    f.highWaterSamples = std::max<std::uint64_t>(dspRingHighWaterSession_, pipeline_.ringHighWaterSamples());
+    f.dspBlockLongestNs = std::max(dspBlockLongestNsSession_, pipeline_.dspBlockLongestNs());
+    cascade::core::setRingFigures(f);
 }
 
 void Engine::closeDspMinute() {
@@ -800,10 +872,21 @@ void Engine::closeDspMinute() {
     // lives as long as the engine; the guards are for marks that ever got ahead.
     const std::uint64_t droppedNow = pipeline_.ringDroppedSamples();
     const std::uint64_t readNow = pipeline_.sourceSamplesRead();
+    const std::uint64_t cutNow = pipeline_.ringCutWrites();
     const std::uint64_t dropped = droppedNow >= dspDroppedAtMinute_ ? droppedNow - dspDroppedAtMinute_ : 0;
     const std::uint64_t read = readNow >= dspReadAtMinute_ ? readNow - dspReadAtMinute_ : 0;
+    const std::uint64_t cut = cutNow >= dspCutAtMinute_ ? cutNow - dspCutAtMinute_ : 0;
     dspDroppedAtMinute_ = droppedNow;
     dspReadAtMinute_ = readNow;
+    dspCutAtMinute_ = cutNow;
+    // THE MINUTE'S TWO MARKS, taken whether or not anything was lost, so a bad
+    // minute's figures are its own and not the session's. The session keeps its
+    // own maxima for the bundle's dsp-ring line.
+    const std::size_t highWater = pipeline_.takeRingHighWaterSamples();
+    const std::uint64_t blockNs = pipeline_.takeDspBlockLongestNs();
+    dspRingHighWaterSession_ = std::max(dspRingHighWaterSession_, highWater);
+    dspBlockLongestNsSession_ = std::max(dspBlockLongestNsSession_, blockNs);
+    publishRingFigures();
     // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it. 94
     // characters at the widest a uint64 can make it - inside the log's line
     // (DiagLog::kLineBytes), which a cut line would be masked whole by the scrub.
@@ -812,6 +895,28 @@ void Engine::closeDspMinute() {
     cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)",
                             static_cast<unsigned long long>(dropped),
                             share.empty() ? "share unknown" : share.c_str());
+    // THE FEED ROW, behind the severity floor (core/diag_report.hpp,
+    // ringDropWorthAReport): a minute that lost a hearable share files the
+    // `ringdrop` issue report, once a session; a start-of-stream blip does
+    // not. The ledger still counts every drop (RecoveryWatch) - a count is
+    // not a row. (Master 0.99.102, bde914f6: AppWindow::closeDspMinute there; the
+    // pass thread here, a healthy thread, so the report may lock.)
+    if (cascade::core::ringDropWorthAReport(dropped, read)) {
+        cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
+    }
+    // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
+    // many writes, how full the ring got, and the longest one block took on the
+    // DSP thread. A long block is a stall on the DSP side; a short one beside
+    // drops is a run of samples arriving late from the source and all at once.
+    // The high water is 100% in any minute that lost something - its value is in
+    // the bundle, for the minutes that did not. 112 characters at the widest.
+    const std::size_t capacity = pipeline_.ringCapacity();
+    const std::size_t pct = capacity == 0 ? 0 : std::min<std::size_t>(100, highWater * 100 / capacity);
+    cascade::core::diagLogf("dsp: ring high water %llu%% of %llu samples, %llu writes cut, longest DSP block %llu ms",
+                            static_cast<unsigned long long>(pct),
+                            static_cast<unsigned long long>(capacity),
+                            static_cast<unsigned long long>(cut),
+                            static_cast<unsigned long long>(blockNs / 1000000u));
 }
 
 void Engine::setAudioBufferMs(int ms) {
@@ -5719,6 +5824,15 @@ void Engine::stopReceiver(const char* who) {
     // the fault left behind. Joins within ~10 ms, an acceptable one-off hitch
     // on the GUI thread for a Stop.
     pipeline_.stop();
+    // A stop leaves the sink open with nothing feeding it, so its last
+    // callback starves - an expected cost of the user's own action, not the
+    // machine falling behind. Counted for closeAudioMinute's discount (the
+    // 2026-10-29 field report: three STOP presses in one minute = exactly the
+    // three starved callbacks that raise the buffer; master 0.99.102,
+    // bde914f6). Only a stop that stopped something: a stop of a stopped
+    // receiver starves nobody, and counting it would hide a real starved
+    // callback. This is the pass's thread, the one that closes minutes.
+    if (running) { ++receiverStops_; }
 }
 
 void Engine::endTakesOnFault() {
@@ -9237,6 +9351,10 @@ void Engine::initialise() {
     beginPluginContainment(std::string());
     installPluginLoadGate();
     rescanPlugins();
+    // The first load is consumed here, not judged later: closeAudioMinute discounts a minute in which a rescan began, and the scan above
+    // would otherwise discount the session's whole first minute - whose starvation, with priming already excluded at the sink, is the
+    // machine's own doing (master 0.99.102, 8c0a4f41: the constructor's rescanPlugins() and the mark taken right after it).
+    audioRescansAtLogStart_ = pluginScans_;
     // THE FIRST SCAN IS DONE: the copies a session before this one could not delete (a module was mapped) are deleted now if this scan still
     // finds them superseded, and the store opens with the catalogue the last good read kept - no request is made (stub campaign B3; both run
     // before the first pass, like the scan beside them).

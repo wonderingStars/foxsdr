@@ -13,7 +13,9 @@
 //   uploadable  core/crash_upload.cpp parses it as its own kind, with the reason and the log
 //               and no stack, and the file name is one its sweep opens;
 //   survived    the sentinel's rules never take it for the record of a death;
-//   every word  has a sentence and a distinct signature.
+//   every word  has a sentence and a distinct signature;
+//   sent now    takeNewlyFiled() counts each file written and nothing else, once (0.99.101:
+//               the window's cue to sweep the folder in the session that wrote it).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/issue_report.hpp"
@@ -144,6 +146,8 @@ int main() {
         // ...and flushing what waits writes nothing either while capture is off.
         issue::filePendingIssueReports();
         CHECK(issueFiles(dir).empty());
+        // Nothing written, nothing to send.
+        CHECK(issue::takeNewlyFiled() == 0);
     }
 
     // --- A WORD MET BEFORE CAPTURE WAS ARMED IS FILED ONCE IT IS (start-up words) -----------
@@ -158,14 +162,19 @@ int main() {
         issue::filePendingIssueReports();   // the Viewport met above, while off
         const std::vector<fs::path> pending = issueFiles(dir);
         CHECK(pending.size() == 1);
+        // The cue to sweep: the one file, counted once, then taken.
+        CHECK(issue::takeNewlyFiled() == 1);
+        CHECK(issue::takeNewlyFiled() == 0);
         if (pending.size() == 1) {
             const std::string text = readFile(pending[0]);
             CHECK(text.find("\nreason: " + issue::issueReason(Recovered::Viewport) + "\n") != std::string::npos);
         }
-        // Filed once: a second flush, or the word again, writes nothing more.
+        // Filed once: a second flush, or the word again, writes nothing more...
         issue::filePendingIssueReports();
         CHECK(issue::fileIssueReport(Recovered::Viewport).empty());
         CHECK(issueFiles(dir).size() == 1);
+        // ...and is not a reason to sweep again.
+        CHECK(issue::takeNewlyFiled() == 0);
         for (const fs::path& p : pending) { fs::remove(p, ec); }
     }
     issue::resetIssueReportsForTest();
@@ -239,10 +248,13 @@ int main() {
         // Another word is another file.
         CHECK(!issue::fileIssueReport(Recovered::Audio).empty());
         CHECK(issueFiles(dir).size() == 2);
-        // ...and after the reset a test can file the first again.
+        // Two files written since the last take, the refused word counted once: two.
+        CHECK(issue::takeNewlyFiled() == 2);
+        // ...and after the reset a test can file the first again, and that counts afresh.
         issue::resetIssueReportsForTest();
         CHECK(!issue::fileIssueReport(Recovered::Viewport).empty());
         CHECK(issueFiles(dir).size() == 3);
+        CHECK(issue::takeNewlyFiled() == 1);
     }
 
     // --- THE ENGINE-EXTRACTION BRANCH'S FIVE WORDS ARE REPORTED TOO (the 0.99.100 merge) ----------------
@@ -328,15 +340,62 @@ int main() {
         health::RecoveryReadings now = base;
         now.pluginFaults += 1;                    // ...a plugin faulted between the baseline and the first poll
         now.pluginQuarantines += 1;
+        (void)issue::takeNewlyFiled();            // (a fresh count)
         started.poll(now);                        // THE FIRST POLL
         std::printf("  a watch baselined at start, first poll after a plugin fault: %zu issue file(s)\n", issueFiles(dir).size());
         CHECK(issueFiles(dir).size() == 2);       // pluginfault and pluginquarantine, one report each
+        // ...and each of those is a cue for the in-session sweep (master 0.99.101, merged in 0.99.104): the baseline fix and the sweep's cue
+        // are one chain - a fault the first poll now catches is a report the window sends in the session that wrote it.
+        CHECK(issue::takeNewlyFiled() == 2);
+        CHECK(issue::takeNewlyFiled() == 0);
         // ...and a watch nobody baselined keeps its old rule: its first poll is the baseline, whatever it reads
         for (const fs::path& p : issueFiles(dir)) { fs::remove(p, ec); }
         issue::resetIssueReportsForTest();
         health::RecoveryWatch unstarted;
         unstarted.poll(now);
         CHECK(issueFiles(dir).empty());
+        CHECK(issue::takeNewlyFiled() == 0);      // nothing filed, nothing to send
+    }
+
+    // --- THE POLL COUNTS A RING DROP AND DOES NOT FILE IT (master 0.99.102, bde914f6 - merged with batch A's baseline in the 0.99.104 merge) -----
+    // The feed's first day of `ringdrop` rows was six start-of-stream blips of a few milliseconds. The poll still COUNTS every drop (the ledger is the
+    // reader's record of one machine, and a count is not a row); the ROW is the DSP minute's, behind a 0.05% floor (Engine::closeDspMinute, held by
+    // test_dsp_drop_minute_app). Batch A's baseline is why this needs saying here: a watch baselined when the engine is built counts the drops of the
+    // very first pass too - the blip at the start of a stream - and that count must not become a row on the way.
+    {
+        issue::resetIssueReportsForTest();
+        for (const fs::path& p : issueFiles(dir)) { fs::remove(p, ec); }
+        CrashHandlerConfig on;
+        on.crashDir = dir.string();
+        on.enabled = true;
+        on.minidump = false;
+        on.exitAfterReport = false;
+        installCrashHandlers(on);
+        CHECK(!activeCrashDir().empty());
+        // A ledger of its own, in memory: counting is on (armed, allowed), and nothing is written to a file.
+        auto ledger = health::globalLedger();
+        ledger->reset();
+        ledger->arm(std::string(), "0123456789abcdef0123456789abcdef", false);
+        CHECK(ledger->armed());
+        health::RecoveryReadings base;
+        health::RecoveryWatch started;
+        started.baseline(base);
+        health::RecoveryReadings now = base;
+        now.ringDroppedSamples += 7168;           // the field blip: 3.5 ms at 2.048 MS/s, the first pass of a stream
+        (void)issue::takeNewlyFiled();
+        started.poll(now);                        // THE FIRST POLL
+        const health::Counts counts = ledger->counts();
+        const auto it = counts.find("recovered.ringdrop");
+        std::printf("  a ring drop met before the first poll: counted %u, %zu issue file(s)\n", it == counts.end() ? 0u : it->second,
+                    issueFiles(dir).size());
+        CHECK(it != counts.end() && it->second == 1u);   // counted...
+        CHECK(issueFiles(dir).empty());                  // ...and not a row
+        CHECK(issue::takeNewlyFiled() == 0);             // ...and not a reason to sweep
+        // ...the row is filed only through the DSP minute's own call, once a session, and that is a cue like any other
+        CHECK(!issue::fileIssueReport(Recovered::RingDrop).empty());
+        CHECK(issueFiles(dir).size() == 1);
+        CHECK(issue::takeNewlyFiled() == 1);
+        ledger->reset();
     }
 
     // --- A WRITE THAT FAILS IS NOT A REPORT FILED (deep review of engine/stage4, batch A) ----------------------------------------------
@@ -354,14 +413,20 @@ int main() {
         installCrashHandlers(on);
         CHECK(!activeCrashDir().empty());
         fs::remove_all(flaky, ec);                                  // the folder drops away
+        (void)issue::takeNewlyFiled();                              // (a fresh count: what earlier blocks wrote is not this block's)
         CHECK(issue::fileIssueReport(Recovered::Audio).empty());    // nothing could be written
+        // ...AND THE IN-SESSION SWEEP'S CUE (master 0.99.101, a33a9d5f; merged with the above in the 0.99.104 merge) COUNTS A FILE ON DISK AND
+        // NOTHING ELSE: a write that failed is not a report to send, so it must not start a sweep either.
+        CHECK(issue::takeNewlyFiled() == 0);
         fs::create_directories(flaky, ec);                          // ...and it comes back
         const std::string again = issue::fileIssueReport(Recovered::Audio);
         std::printf("  the same word after the folder came back: %s\n", again.empty() ? "NOT filed" : "filed");
         CHECK(!again.empty());                                      // the word was not spent on the failed write
         CHECK(issueFiles(flaky).size() == 1);
+        CHECK(issue::takeNewlyFiled() == 1);                        // ...and the report that did get written is one cue, not two
         CHECK(issue::fileIssueReport(Recovered::Audio).empty());    // and a report that DID get written is still once a session
         CHECK(issueFiles(flaky).size() == 1);
+        CHECK(issue::takeNewlyFiled() == 0);                        // a refused repeat is not a reason to sweep again
     }
 
     fs::remove_all(dir, ec);
