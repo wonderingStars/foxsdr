@@ -551,7 +551,7 @@ jobs:
             $p = Start-Process -FilePath $exe -ArgumentList '--version' -RedirectStandardOutput $out -RedirectStandardError "$out.err" -Wait -PassThru -NoNewWindow
             $line = (Get-Content $out | Where-Object { $_.Trim() -ne '' } | Select-Object -First 1)
             "$rel exit $($p.ExitCode): $line"
-            if ($p.ExitCode -ne 0 -or $line.Trim() -ne "FoxSDR $env:CASCADE_VERSION") { throw "$rel: expected 'FoxSDR $env:CASCADE_VERSION'" }
+            if ($p.ExitCode -ne 0 -or $line.Trim() -ne "FoxSDR $env:CASCADE_VERSION") { throw "${rel}: expected 'FoxSDR $env:CASCADE_VERSION'" }
           }
 
       - name: Find Inno Setup and the VC redistributable

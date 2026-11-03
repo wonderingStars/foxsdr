@@ -53,6 +53,21 @@
 #include "test_check.hpp"
 
 namespace emt = engine_main_test;
+
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+
+namespace {
+// The instance scope carries this process's id so parallel ctest copies never share one.
+std::string scopePid() {
+#if defined(_WIN32)
+    return std::to_string(::GetCurrentProcessId());
+#else
+    return std::to_string(static_cast<long>(::getpid()));
+#endif
+}
+}  // namespace
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
@@ -466,7 +481,7 @@ void testWindowSendsAndMarks() {
     std::ofstream(script, std::ios::binary | std::ios::trunc) << "6 sleep 5000\n10 sleep 5000\n14 sleep 5000\n";
     emt::setEnv("CASCADE_CONFIG_TEST", cfg.string());
     emt::setEnv("FOXSDR_INPUT_SCRIPT", script.string());
-    emt::setEnv("FOXSDR_INSTANCE_SCOPE", "tho-" + std::to_string(::GetCurrentProcessId()));
+    emt::setEnv("FOXSDR_INSTANCE_SCOPE", "tho-" + scopePid());
     emt::setEnv("FOXSDR_SINGLE_VIEWPORT", "1");
     emt::setEnv("FOXSDR_FAKE_PACKAGE", "none");
 
@@ -546,7 +561,7 @@ void testWindowIgnoresRefusals() {
     std::ofstream(script, std::ios::binary | std::ios::trunc) << "6 sleep 5000\n10 sleep 5000\n14 sleep 5000\n";
     emt::setEnv("CASCADE_CONFIG_TEST", cfg.string());
     emt::setEnv("FOXSDR_INPUT_SCRIPT", script.string());
-    emt::setEnv("FOXSDR_INSTANCE_SCOPE", "tho-r-" + std::to_string(::GetCurrentProcessId()));
+    emt::setEnv("FOXSDR_INSTANCE_SCOPE", "tho-r-" + scopePid());
     emt::setEnv("FOXSDR_SINGLE_VIEWPORT", "1");
     emt::setEnv("FOXSDR_FAKE_PACKAGE", "none");
     std::atomic<bool> stop{false};
