@@ -1,0 +1,1848 @@
+// FoxSDR Slint front end - THE SYSTEM BANK'S BODIES (phase 3, bank 2 of 4): the open bodies under the SYSTEM rows - Display, Language & country, Updates,
+// Serial ports (with the shared GPS row), Key bindings, Diagnostics, Usage reporting, Beta tester - and the two report pages, Request a feature and
+// Report a bug or dislike (one component, kind-driven). The design: specs/SCREENS.md A5 / A5b (the column and the closed sections' contents) and F1 (the
+// pages), artboards/Workbench-Banks.dc.html (the SYSTEM column) and Workbench-Dialogs.dc.html (the two pages); the parity list is
+// inventory/extend-system-store-patch.txt (lines 287-1380); the wording is the ImGui window's (aw = app_window.cpp drawDiagnosticsSection and the sections
+// before it, app_window_language.cpp, app_window_report.cpp), so the catalogue entries apply for free.
+//
+// THE PATTERN IS THE SIGNAL BANK'S (signal_bank.slint): this file declares the structs the host fills, one global of every gesture (SystemEvents) and the
+// bodies; each body is a VerticalLayout the Section's fold shows (the bank column's width less the Section's padding: 254 px), and every callback of a body
+// forwards to the global unless the instance overrides it (the specimen does, to count them). The host owns every value: a tick shows the model's value
+// and a click asks (`toggled(v)`, `picked(i)`, `committed(t)`); the model changes when the host has done it or refused it.
+//
+// THE PIECES ARE COPIED, NOT SHARED. signal_bank.slint keeps its small pieces (Line, Note, Tick, LineInput, DropKey, SliderRow, the sheet frame) private, so
+// this file carries the same ones under the same names, with the few additions the SYSTEM bodies need: a filter field in a dropdown's list (the Country
+// list), a masked LineInput (the tester code), a multi-line TextBox (the report pages). `SelectItem` is the SIGNAL bank's, imported.
+//
+// THE KEY CAPTURE. A key cap is a pill of ONE width (112 px, mono 9 px). A click asks `keys-capture(id)`; the host sets that row's `capturing` and the cap
+// takes the keyboard focus, shows "Press a key..." and turns the next key event into the chord text the config stores ("Ctrl+Shift+PageUp": the modifiers
+// in the order Ctrl, Shift, Alt, then the key's name from src/gui/key_bindings.cpp) and calls `keys-captured(id, chord)`. Esc leaves (keys-cancel),
+// Backspace clears (keys-clear(id)); a click on the listening cap, or the focus going elsewhere, leaves it too. A modifier key alone is not a chord: the cap
+// goes on listening.
+//
+// Rows are 24 px (Theme.field-h) with 6 px between them, the artboard's .rw and .sbd gap. Nothing here asks for more than the column: texts wrap or elide,
+// rows give their width away (rule 11; tests/test_slint_system.cpp measures it).
+import { Theme } from "theme.slint";
+import { Chip, ChipTone } from "chips.slint";
+import { Caption, Key } from "keys.slint";
+import { Checkbox } from "fields.slint";
+import { Slider } from "sliders.slint";
+import { SelectKey } from "sections.slint";
+import { TipTimer } from "tooltip.slint";
+import { SelectItem } from "signal_bank.slint";
+
+// The models. The contract's fields come first in each; the ADDED ones are the ImGui window's own words and states that the contract left out (the host,
+// system_logic.hpp, already carries most of them under these names). A host label that is "" falls back to the body's own @tr word.
+export struct DisplayModel {
+    scales: [SelectItem], scale-index: int, themes: [SelectItem], theme-index: int,
+    db-min: float, db-min-text: string, db-max: float, db-max-text: string,                  // db-min / db-max: 0..1 of the slider's track; the text is the host's figure
+    freq-displays: [SelectItem], freq-display-index: int, figures: [SelectItem], figures-index: int,
+    tuner-switches: bool, enlarge-readings: bool,
+    icon-px: float, icon-text: string, trail-px: float, trail-text: string,                  // 0..1 and the host's "48 px"
+    band-plan: bool, band-sizes: [SelectItem], band-size-index: int, band-colours: [SelectItem], band-colour-index: int,
+    regions: [SelectItem], region-index: int, plan-status: string, plan-status-tone: ChipTone,
+    region-preview: string,                            // ADDED: the Region box's closed text (the plan's name, or "(all installed)" while region-index is -1)
+    scale-tooltip: string, switches-tooltip: string, icon-tooltip: string, trail-tooltip: string,   // ADDED: the ImGui hints (translated)
+}
+
+export struct LanguageModel {
+    languages: [SelectItem], language-index: int, machine-hint: string,
+    suggest-label: string,                             // "USE DEUTSCH": the key that switches to the country's language; "" hides it (callback language-suggest)
+    countries: [SelectItem], country-index: int, country-filter: string,
+    country-hint: string,                              // the filter field's placeholder ("Type to narrow the list")
+    plan-line: string,                                 // ADDED: "Band plan: United Kingdom" (the plan the country implies); "" none
+    plan-changed-hint: string,                         // ADDED: "This overrides the current band plan"
+    translation-label: string,                         // ADDED: "SUGGEST A BETTER TRANSLATION", shown with the machine hint (callback language-translation)
+    language-text: string, country-text: string,       // ADDED: the two boxes' closed texts (the chosen row may be filtered out of the list: country-index -1)
+}
+
+export struct UpdatesModel {
+    check-at-startup: bool, channel-index: int,        // 0 stable, 1 beta
+    channel-help: string, privacy: string, version-line: string, team-message: string, status-line: string, status-tone: ChipTone,
+    check-label: string, stable-label: string, beta-label: string,   // ADDED: the host's words for the tick and the two radios
+    packaged: bool,                                    // ADDED: a Microsoft Store copy has no channel radios and no help
+    show-again: bool, show-again-label: string,        // ADDED: the small "Show it again" key (offered while an update is offered and its banner was dismissed)
+}
+
+export struct GpsRow {
+    ports: [SelectItem], port-index: int, bauds: [SelectItem], baud-index: int, listening: bool, key-label: string, status: string, status-tone: ChipTone,
+    satellites: string,
+    key-enabled: bool,                                 // ADDED: the key is live (a port is named, or a read is running: Stop)
+    refusal: string,                                   // ADDED: the GPS fix the position rule refused (the amber line under the status)
+}
+
+export struct SerialPortsModel {
+    intro: string, empty-line: string, ports: [string], gps: GpsRow, gps-note: string,
+    refresh-label: string, column-label: string, gps-heading: string,   // ADDED: "Refresh", "Port", "GPS receiver"
+    gps-hint: string,                                  // ADDED: "or read it from a GPS receiver on a serial port:" (under the rule)
+}
+
+export struct KeyRow { id: string, action: string, chord: string, capturing: bool, clash: string }
+export struct KeyGroup { heading: string, rows: [KeyRow] }
+export struct KeyBindingsModel {
+    help: string, reset-label: string, groups: [KeyGroup], footer: string, changed: bool,
+    prompt: string,                                    // ADDED: what a listening cap says ("Press a key...")
+}
+
+export struct DiagnosticsModel {
+    explanation: string, record: bool, what-open: bool, what-text: string, minidump: bool, log-path: string, reports-path: string,
+    offer: string,                                     // the "did not close normally last time" sentence while the offer is due (an amber note on top); "" none
+    record-label: string, minidump-label: string, what-label: string,   // ADDED: the host's words for the two ticks and the disclosure key
+    sent-text: string,                                 // ADDED: "Sent: ... NEVER sent: ... Off means off: ..." (under the Record tick)
+    dump-note: string,                                 // ADDED: "A memory dump can contain file names..." (under the dump tick)
+    ledger: bool, ledger-note: string,                 // ADDED: "Show the pointer ledger across the top of the window" and its help
+    bundle-status: string,                             // ADDED: the line under Copy diagnostics ("Copied to the clipboard.")
+    sdrplay-text: string,                              // ADDED: "For SDRplay owners: ..." ; "" hides the whole SDRplay block
+    sdrplay-enabled: bool, sdrplay-status: string,     // ADDED: the Run key's state, and its status / "FoxSDR has the SDRplay radio open" line
+}
+
+export struct UsageModel {
+    disclosure: string, send: bool, install-id-line: string, what-label: string, privacy-label: string, payload: [string], what-open: bool, what-text: string,
+    state-line: string, send-label: string,            // ADDED: the sentence under the tick ("Off. Nothing is transmitted.") and the tick's own words
+}
+
+export struct TesterModel {
+    shown: bool, explanation: string, linked-line: string, code-line: string, invalid-line: string, code-draft: string, use-label: string,
+    sent-open: bool, sent-preview: string,
+    field-shown: bool,                                 // ADDED: the code box and its key (no app token, and no token or an invalid one)
+    error-line: string,                                // ADDED: "that does not look like a tester code or link"
+    sent-text: string,                                 // ADDED: the "What is sent" sentence
+    field-label: string, unlink-label: string, remove-label: string, show-label: string, hide-label: string,   // ADDED: the host's words
+}
+
+export struct ReportPageModel {
+    shown: bool, kind: int, title: string, text: string, attach: bool,
+    attach-note: string,                               // the "what is sent" sentence (by contact and by log), above SEND
+    evidence: [string], preview-open: bool, preview-text: string,
+    send-enabled: bool, refusal: string, no-email-note: string, sent-line: string,
+    sent-tone: ChipTone,                               // ADDED: the tone of `sent-line` (sending amber, sent green, failed red)
+    prompt: string,                                    // ADDED: the question over the box (the host words it by kind and by what is chosen); "" = the kind's own
+    counter: string,                                   // ADDED: "0 / 100000 characters"
+    contact: string, contact-label: string,            // ADDED: the optional email or callsign and its caption
+    kind-question: string, problem-kinds: [SelectItem], problem-kind-index: int,   // ADDED: the bug page's "What are you reporting?" radios (-1: neither chosen)
+    recognised-line: string,                           // ADDED: the green "A report was recognised and attached as ..." line
+    probe-shown: bool, probe-on: bool, probe-label: string,   // ADDED: "Attach the SDRplay diagnostic too" (offered only after a probe ran)
+    attach-label: string, preview-label: string, send-label: string,   // ADDED: the host's words for the two ticks and the key
+    local-only-line: string,                           // ADDED: the newest report's reason and where its file is (while the preview is open)
+}
+
+// EVERY GESTURE OF THE BODIES, as one global the host wires (ui->global<SystemEvents>().on_...). Index arguments are positions in the model's lists.
+export global SystemEvents {
+    callback display-scale(int);
+    callback display-theme(int);
+    callback display-db-min(float);                // 0..1
+    callback display-db-max(float);
+    callback display-freq-display(int);
+    callback display-figures(int);
+    callback display-tuner-switches(bool);
+    callback display-enlarge(bool);
+    callback display-icon-px(float);               // 0..1
+    callback display-trail-px(float);
+    callback display-band-plan(bool);
+    callback display-band-size(int);
+    callback display-band-colour(int);
+    callback display-region(int);
+    callback language-selected(int);
+    callback language-suggest();                   // USE <LANGUAGE>: switch to the country's language
+    callback language-translation();               // ADDED: SUGGEST A BETTER TRANSLATION (opens the bug page with the box prefilled)
+    callback country-filter(string);               // each edit of the filter field; "" when a country is picked (the list is whole again)
+    callback country-selected(int);                // a position in `countries` as the host last published it (row 0 is "Not set" when the filter is empty)
+    callback updates-check(bool);
+    callback updates-channel(int);
+    callback updates-team-message();
+    callback updates-show-again();                 // ADDED: the small "Show it again" key
+    callback serial-refresh();
+    callback gps-port(int);
+    callback gps-baud(int);
+    callback gps-toggle();
+    callback keys-reset();
+    callback keys-capture(string);                 // the row's id: its cap was pressed
+    callback keys-captured(string, string);        // the id and the chord text: "Ctrl+Shift+PageUp"
+    callback keys-cancel();
+    callback keys-clear(string);                   // the id: Backspace on the listening cap
+    callback diag-record(bool);
+    callback diag-minidump(bool);
+    callback diag-what(bool);
+    callback diag-open-log();
+    callback diag-open-reports();
+    callback diag-ledger(bool);                    // ADDED: the pointer-ledger tick
+    callback diag-copy();                          // ADDED: Copy diagnostics
+    callback diag-sdrplay();                       // ADDED: Run SDRplay diagnostic
+    callback usage-send(bool);
+    callback usage-what(bool);
+    callback usage-privacy();
+    callback tester-unlink();
+    callback tester-remove-code();
+    callback tester-code-committed(string);
+    callback tester-use();
+    callback tester-show-sent(bool);
+    callback report-open(int);                     // 0 feature, 1 bug: the main window's keys call it; the page itself never does
+    callback report-text(string);                  // each edit of the message box
+    callback report-contact(string);               // ADDED: each edit of the contact field
+    callback report-kind(int);                     // ADDED: a position in `problem-kinds` (the bug page's two radios)
+    callback report-attach(bool);
+    callback report-probe(bool);                   // ADDED: "Attach the SDRplay diagnostic too"
+    callback report-preview(bool);
+    callback report-send();
+    callback report-closed();
+    callback about-open();
+}
+
+// ================================================ the pieces the bodies are made of ================================================
+
+// The label of an item of a list, "" when the index is off the list (the closed text of a dropdown).
+global Pick {
+    pure public function label(items: [SelectItem], i: int) -> string {
+        return i >= 0 && i < items.length ? items[i].label : "";
+    }
+}
+
+// A row of a body: 24 px (.rw min-height), the children side by side 8 px apart.
+component Line inherits Rectangle {
+    in property <length> gap: 8px;
+    height: Theme.field-h;
+    HorizontalLayout {
+        spacing: root.gap;
+        @children
+    }
+}
+
+// Keeps a fixed-height child (a 20 px key, a 14 px box) in the middle of a Line.
+component Mid inherits VerticalLayout {
+    alignment: center;
+}
+
+// A sentence of a body: 11 px, wrapped, dim unless a tone says otherwise (the sheet's .n, .n.am, .n.rd, .n.gn).
+component Note inherits Text {
+    in property <ChipTone> tone: ChipTone.neutral;
+    min-width: 0px;
+    wrap: word-wrap;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-small;
+    color: root.tone == ChipTone.err ? Theme.chip-err-fg
+         : root.tone == ChipTone.warn ? Theme.chip-warn-fg
+         : root.tone == ChipTone.good ? Theme.chip-good-fg
+         : Theme.dim;
+}
+
+// Mono text that may break anywhere (a path, an id, a payload line): dim, 11 px.
+component MonoNote inherits Text {
+    min-width: 0px;
+    wrap: char-wrap;
+    font-family: Theme.font-mono;
+    font-size: Theme.font-small;
+    color: Theme.dim;
+}
+
+// The .lb label of a row: 11 px / 500, fg-soft, elided before it can widen the row.
+component RowLabel inherits Text {
+    min-width: 0px;
+    overflow: elide;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-small;
+    font-weight: Theme.weight-medium;
+    color: Theme.fg-soft;
+    vertical-alignment: center;
+}
+
+// A figure of a row: the mono 11 px readout.
+component Readout inherits Text {
+    min-width: 0px;
+    overflow: elide;
+    font-family: Theme.font-mono;
+    font-size: Theme.font-small;
+    color: Theme.fg;
+    vertical-alignment: center;
+}
+
+// The .ck checkbox, driven by the host's value: the Checkbox keeps its own `checked` after a press, so the model's value is pushed back into it every
+// time the user presses and every time the model changes (a refusal leaves the box where it was).
+component Tick inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback toggled(bool);
+
+    in property <length> row-h: Theme.field-h;          // the row it sits in: the box is centred in it (a longer label makes the row taller)
+    height: max(root.row-h, box.height);
+    min-width: 0px;
+    preferred-width: box.preferred-width;
+    changed on => { box.checked = root.on; }
+    box := Checkbox {
+        x: 0px;
+        y: (root.height - self.height) / 2;
+        width: root.width;
+        label: root.label;
+        checked: root.on;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        toggled(v) => {
+            root.toggled(v);
+            box.checked = root.on;
+        }
+    }
+}
+
+// A radio button (the update channel): 14 px ring, the accent dot when chosen.
+component RadioChoice inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback chosen();
+
+    height: Theme.field-h;                              // the row it sits in: the ring is centred in it
+    min-width: 0px;
+    preferred-width: 14px + 8px + words.preferred-width;
+    accessible-role: radio-button;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.chosen(); } }
+
+    Rectangle {
+        x: 0px;
+        y: (root.height - 14px) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        border-width: Theme.hairline;
+        background: !root.enabled ? Theme.key-disabled-bg : root.on ? Theme.accent : Theme.field;
+        border-color: !root.enabled ? Theme.line-strong.with-alpha(0.5) : root.on ? Theme.accent : Theme.line-strong;
+        if root.on : Rectangle {
+            x: 4px;
+            y: 4px;
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: root.enabled ? Theme.accent-ink : Theme.key-disabled-fg;
+        }
+    }
+    words := Text {
+        x: 22px;
+        y: 0px;
+        width: max(0px, root.width - 22px);
+        height: root.height;
+        text: root.label;
+        color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.chosen(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// The one-line input of a body (.in, 24 px): shows `value` (the host's text), commits on Enter and on the focus leaving after an edit. `hidden` masks it (the
+// tester code), `edited` reports each keystroke (the Country filter), `grab-focus` takes the keyboard when the field appears (a popup's filter field).
+component LineInput inherits Rectangle {
+    in property <string> value;
+    in property <string> placeholder;
+    in property <bool> mono;
+    in property <bool> right;
+    in property <bool> enabled: true;
+    in property <bool> error;
+    in property <bool> hidden;
+    in property <bool> grab-focus;
+    in property <string> tooltip;
+    in property <string> name;                          // the accessible label
+    callback committed(string);
+    callback edited(string);
+    out property <bool> has-focus: input.has-focus;
+    out property <string> text: input.text;
+
+    property <length> pad: 8px + Theme.hairline;
+    property <bool> dirty;                              // edited since the last commit
+
+    height: Theme.field-h;
+    min-width: 0px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.enabled ? (root.error ? Theme.lamp-red : Theme.line-strong) : Theme.line-strong.with-alpha(0.5);
+    background: root.enabled ? Theme.field : Theme.key-disabled-bg;
+
+    property <bool> grabbed;                            // `grab-focus` has been served
+    init => {
+        input.text = root.value;
+        if (root.grab-focus) { input.focus(); }
+    }
+    // a field that appears in a popup has no window to take the keyboard from at its init: it asks once, a moment later
+    Timer {
+        interval: 30ms;
+        running: root.grab-focus && !root.grabbed;
+        triggered => {
+            input.focus();
+            root.grabbed = true;
+        }
+    }
+    changed value => {
+        input.text = root.value;
+        root.dirty = false;
+    }
+
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
+        clicked => { if (root.enabled) { input.focus(); } }
+        if input.text == "" && root.placeholder != "" : Text {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            text: root.placeholder;
+            color: Theme.disabled;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        input := TextInput {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            enabled: root.enabled;
+            read-only: !root.enabled;
+            single-line: true;
+            input-type: root.hidden ? InputType.password : InputType.text;
+            color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.name;
+            edited => {
+                root.dirty = true;
+                root.edited(self.text);
+            }
+            accepted => {
+                root.dirty = false;
+                root.committed(self.text);
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.dirty) {
+                    root.dirty = false;
+                    root.committed(self.text);
+                }
+            }
+        }
+    }
+    if input.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// The multi-line box of the report pages (.in with a textarea): the host's text, each edit reported, scrolls to the caret when the text outgrows it.
+component TextBox inherits Rectangle {
+    in property <string> value;
+    in property <string> placeholder;
+    in property <bool> enabled: true;
+    in property <string> name;                          // the accessible label
+    callback edited(string);
+    out property <bool> has-focus: ti.has-focus;
+    out property <string> text: ti.text;
+
+    height: 64px;
+    min-width: 0px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: Theme.line-strong;
+    background: root.enabled ? Theme.field : Theme.key-disabled-bg;
+
+    init => { ti.text = root.value; }
+    changed value => {
+        if (ti.text != root.value) { ti.text = root.value; }
+    }
+
+    TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
+        clicked => { if (root.enabled) { ti.focus(); } }
+    }
+    if ti.text == "" && root.placeholder != "" : Text {
+        x: 8px + Theme.hairline;
+        y: 5px;
+        width: max(0px, root.width - 16px - 2 * Theme.hairline);
+        text: root.placeholder;
+        color: Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        overflow: elide;
+        accessible-role: none;
+    }
+    fl := Flickable {
+        x: 8px + Theme.hairline;
+        y: 5px;
+        width: root.width - 16px - 2 * Theme.hairline;
+        height: root.height - 10px;
+        content-width: self.width;
+        content-height: max(self.height, ti.preferred-height);
+        ti := TextInput {
+            x: 0px;
+            y: 0px;
+            width: fl.width;
+            height: max(fl.height, self.preferred-height);
+            enabled: root.enabled;
+            read-only: !root.enabled;
+            single-line: false;
+            wrap: word-wrap;
+            color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.name;
+            edited => { root.edited(self.text); }
+            cursor-position-changed(p) => {
+                if (p.y + fl.content-y < 0px) { fl.content-y = -p.y; }
+                else if (p.y + 16px + fl.content-y > fl.height) { fl.content-y = fl.height - p.y - 16px; }
+            }
+        }
+    }
+    if ti.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+}
+
+// One row of a dropdown's list: the tick of the chosen one, the label, the dim note at the right; a greyed row cannot be picked.
+component DropRow inherits Rectangle {
+    in property <SelectItem> item;
+    in property <bool> chosen;
+    callback activated();
+    height: Theme.menu-item-h;
+    border-radius: Theme.radius-menu-item;
+    background: root.item.enabled && row-area.has-hover ? Theme.menu-hot : transparent;
+    accessible-role: list-item;
+    accessible-label: root.item.label;
+    accessible-enabled: root.item.enabled;
+    if root.chosen : Image {
+        x: 5px;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        source: @image-url("icons/check.svg");
+        image-fit: contain;
+        colorize: Theme.accent;
+    }
+    Text {
+        x: 26px;
+        y: 0px;
+        width: max(0px, parent.width - 26px - 8px - (root.item.note != "" ? note-text.preferred-width + 8px : 0px));
+        height: parent.height;
+        text: root.item.label;
+        color: root.item.enabled ? Theme.fg : Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    note-text := Text {
+        x: parent.width - 8px - self.width;
+        y: 0px;
+        width: self.preferred-width;
+        height: parent.height;
+        visible: root.item.note != "";
+        text: root.item.note;
+        color: Theme.dim;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+    }
+    row-area := TouchArea {
+        mouse-cursor: root.item.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.item.enabled) { root.activated(); } }
+    }
+}
+
+// A dropdown: the SelectKey's look and a list of `items` it opens itself under the key. With `filter` the list has a text field above it (the Country list):
+// each edit calls `filter-edited(text)`, the host answers with a shorter `items`, and a pick calls `filter-edited("")` so the next opening shows the whole list.
+component DropKey inherits Rectangle {
+    in property <string> value;                         // the closed text
+    in property <[SelectItem]> items;
+    in property <int> selected: -1;
+    in property <string> label;                         // the accessible name
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> popup-min-w: 150px;
+    in property <bool> filter;
+    in property <string> filter-value;
+    in property <string> filter-placeholder;
+    callback picked(int);
+    callback filter-edited(string);
+
+    property <length> pad: 4px + Theme.hairline;
+    property <length> head-h: root.filter ? Theme.field-h + 6px : 0px;
+    property <length> popup-w: max(root.width, root.popup-min-w);
+    property <length> list-h: min(root.items.length * Theme.menu-item-h, 330px);
+    property <length> popup-h: root.list-h + root.head-h + 2 * root.pad;
+
+    height: Theme.key-sm-h;
+    min-width: 0px;
+    preferred-width: 110px;
+
+    SelectKey {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        value: root.value;
+        label: root.label;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        clicked => { if (root.items.length > 0 || root.filter) { popup.show(); } }
+    }
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: root.popup-w;
+        height: root.popup-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 28px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            if root.filter : LineInput {
+                x: root.pad;
+                y: root.pad;
+                width: root.popup-w - 2 * root.pad;
+                value: root.filter-value;
+                placeholder: root.filter-placeholder;
+                name: root.filter-placeholder;
+                grab-focus: true;
+                edited(t) => { root.filter-edited(t); }
+            }
+            // a short list is plain rows (a Flickable holds a press back for a moment: the click of a quick pick would be late), a long one scrolls
+            if root.items.length * Theme.menu-item-h <= root.list-h : Rectangle {
+                x: root.pad;
+                y: root.pad + root.head-h;
+                width: root.popup-w - 2 * root.pad;
+                height: root.list-h;
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: parent.width;
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        if (root.filter) { root.filter-edited(""); }
+                        popup.close();
+                    }
+                }
+            }
+            if root.items.length * Theme.menu-item-h > root.list-h : Flickable {
+                x: root.pad;
+                y: root.pad + root.head-h;
+                width: root.popup-w - 2 * root.pad;
+                height: root.list-h;
+                content-width: self.width;
+                content-height: root.items.length * Theme.menu-item-h;
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: root.popup-w - 2 * root.pad;
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        if (root.filter) { root.filter-edited(""); }
+                        popup.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A slider row: the name (84 px wide here: "Aircraft icons" must not be cut), the slider (8 px of air each side for the knob's overhang), the readout. 24 px.
+component SliderRow inherits Rectangle {
+    in property <string> label;
+    in property <string> readout;
+    in property <float> value;                          // 0..1
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> label-w: 84px;
+    callback changed(float);
+    height: Theme.field-h;
+    HorizontalLayout {
+        spacing: 0px;
+        RowLabel { width: root.label-w; text: root.label; color: root.enabled ? Theme.fg-soft : Theme.disabled; }
+        VerticalLayout {
+            alignment: center;
+            padding-left: 8px;
+            padding-right: 8px;
+            Slider {
+                value: root.value;
+                enabled: root.enabled;
+                tooltip: root.tooltip;
+                accessible-label: root.label;
+                changed(v) => { root.changed(v); }
+            }
+        }
+        Readout { width: 56px; text: root.readout; horizontal-alignment: right; color: root.enabled ? Theme.fg : Theme.disabled; }
+    }
+}
+
+// A centred sheet on a dimmed backdrop (the IA's dialog form, as main.slint's Sheet): fills the element it is placed in; a click on the backdrop dismisses.
+component SheetFrame inherits Rectangle {
+    in property <string> title;
+    in property <length> sheet-w: 440px;
+    in property <length> sheet-h: 0px;                  // 0: as high as the content wants
+    in property <length> pad: 12px;
+    in property <length> gap: 10px;
+    callback dismissed();
+
+    background: Theme.backdrop;
+    TouchArea { clicked => { root.dismissed(); } }
+    panel := Rectangle {
+        width: min(root.sheet-w, root.width - 24px);
+        height: root.sheet-h > 0px ? min(root.sheet-h, root.height - 24px) : min(content.preferred-height + Theme.win-title-h + 3 * Theme.hairline, root.height - 24px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.panel;
+        border-width: Theme.hairline;
+        border-color: Theme.knob-ring;
+        border-radius: Theme.radius-panel;
+        drop-shadow-blur: Theme.shadows ? 28px : 0px;
+        drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+        drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+        clip: true;
+        TouchArea { }   // swallows the click so the backdrop does not dismiss
+        // the title strip (.wt): menu ground, a rule under it, the title as a cap, a close key at the right
+        Rectangle {
+            x: Theme.hairline;
+            y: Theme.hairline;
+            width: parent.width - 2 * Theme.hairline;
+            height: Theme.win-title-h;
+            background: Theme.menu;
+            Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line-strong; }
+            Text {
+                x: 12px;
+                y: 0px;
+                width: max(0px, parent.width - 12px - 40px);
+                height: parent.height;
+                text: root.title.to-uppercase();
+                color: Theme.fg;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-small;
+                font-weight: Theme.weight-semibold;
+                letter-spacing: 0.8px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Key {
+                x: parent.width - 4px - 26px;
+                y: (parent.height - 22px) / 2;
+                width: 26px;
+                height: 22px;
+                icon-only: true;
+                flat: true;
+                icon: @image-url("icons/close.svg");
+                icon-size: 12px;
+                tooltip: @tr("Close");
+                accessible-label: @tr("Close");
+                clicked => { root.dismissed(); }
+            }
+        }
+        content := VerticalLayout {
+            x: Theme.hairline;
+            y: Theme.win-title-h + Theme.hairline;
+            width: parent.width - 2 * Theme.hairline;
+            height: parent.height - Theme.win-title-h - 2 * Theme.hairline;
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: root.pad;
+            padding-bottom: root.pad;
+            spacing: root.gap;
+            alignment: start;
+            @children
+        }
+    }
+}
+
+// ================================================ Display ================================================
+
+export component DisplayBody inherits VerticalLayout {
+    in property <DisplayModel> model;
+
+    callback display-scale(int);
+    display-scale(a) => { SystemEvents.display-scale(a); }
+    callback display-theme(int);
+    display-theme(a) => { SystemEvents.display-theme(a); }
+    callback display-db-min(float);
+    display-db-min(a) => { SystemEvents.display-db-min(a); }
+    callback display-db-max(float);
+    display-db-max(a) => { SystemEvents.display-db-max(a); }
+    callback display-freq-display(int);
+    display-freq-display(a) => { SystemEvents.display-freq-display(a); }
+    callback display-figures(int);
+    display-figures(a) => { SystemEvents.display-figures(a); }
+    callback display-tuner-switches(bool);
+    display-tuner-switches(a) => { SystemEvents.display-tuner-switches(a); }
+    callback display-enlarge(bool);
+    display-enlarge(a) => { SystemEvents.display-enlarge(a); }
+    callback display-icon-px(float);
+    display-icon-px(a) => { SystemEvents.display-icon-px(a); }
+    callback display-trail-px(float);
+    display-trail-px(a) => { SystemEvents.display-trail-px(a); }
+    callback display-band-plan(bool);
+    display-band-plan(a) => { SystemEvents.display-band-plan(a); }
+    callback display-band-size(int);
+    display-band-size(a) => { SystemEvents.display-band-size(a); }
+    callback display-band-colour(int);
+    display-band-colour(a) => { SystemEvents.display-band-colour(a); }
+    callback display-region(int);
+    display-region(a) => { SystemEvents.display-region(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // <content>
+    Line {
+        RowLabel { text: @tr("Interface size"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: Pick.label(root.model.scales, root.model.scale-index);
+            items: root.model.scales;
+            selected: root.model.scale-index;
+            label: @tr("Interface size");
+            popup-min-w: 200px;
+            tooltip: root.model.scale-tooltip;
+            picked(i) => { root.display-scale(i); }
+        }
+    }
+    Line {
+        RowLabel { text: @tr("Theme"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: Pick.label(root.model.themes, root.model.theme-index);
+            items: root.model.themes;
+            selected: root.model.theme-index;
+            label: @tr("Theme");
+            popup-min-w: 200px;
+            picked(i) => { root.display-theme(i); }
+        }
+    }
+    SliderRow { label: @tr("Min dB"); readout: root.model.db-min-text; value: root.model.db-min; changed(v) => { root.display-db-min(v); } }
+    SliderRow { label: @tr("Max dB"); readout: root.model.db-max-text; value: root.model.db-max; changed(v) => { root.display-db-max(v); } }
+    Line {
+        RowLabel { text: @tr("Frequency display"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: Pick.label(root.model.freq-displays, root.model.freq-display-index);
+            items: root.model.freq-displays;
+            selected: root.model.freq-display-index;
+            label: @tr("Frequency display");
+            picked(i) => { root.display-freq-display(i); }
+        }
+    }
+    Line {
+        RowLabel { text: @tr("Counter figures"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: Pick.label(root.model.figures, root.model.figures-index);
+            items: root.model.figures;
+            selected: root.model.figures-index;
+            label: @tr("Counter figures");
+            picked(i) => { root.display-figures(i); }
+        }
+    }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("Tuner switches");
+            on: root.model.tuner-switches;
+            tooltip: root.model.switches-tooltip;
+            toggled(v) => { root.display-tuner-switches(v); }
+        }
+    }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Enlarge every reading"); on: root.model.enlarge-readings; toggled(v) => { root.display-enlarge(v); } } }
+    SliderRow {
+        label: @tr("Aircraft icons");
+        readout: root.model.icon-text;
+        value: root.model.icon-px;
+        tooltip: root.model.icon-tooltip;
+        changed(v) => { root.display-icon-px(v); }
+    }
+    SliderRow {
+        label: @tr("Trail width");
+        readout: root.model.trail-text;
+        value: root.model.trail-px;
+        tooltip: root.model.trail-tooltip;
+        changed(v) => { root.display-trail-px(v); }
+    }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Band plan"); on: root.model.band-plan; toggled(v) => { root.display-band-plan(v); } } }
+    if root.model.band-plan : Line {
+        gap: 6px;
+        DropKey {
+            horizontal-stretch: 1;
+            value: Pick.label(root.model.band-sizes, root.model.band-size-index);
+            items: root.model.band-sizes;
+            selected: root.model.band-size-index;
+            label: @tr("Size");
+            popup-min-w: 110px;
+            picked(i) => { root.display-band-size(i); }
+        }
+        DropKey {
+            horizontal-stretch: 1;
+            value: Pick.label(root.model.band-colours, root.model.band-colour-index);
+            items: root.model.band-colours;
+            selected: root.model.band-colour-index;
+            label: @tr("Colour");
+            popup-min-w: 110px;
+            picked(i) => { root.display-band-colour(i); }
+        }
+    }
+    if root.model.band-plan && root.model.regions.length > 1 : Line {
+        RowLabel { text: @tr("Region"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: root.model.region-preview != "" ? root.model.region-preview : Pick.label(root.model.regions, root.model.region-index);
+            items: root.model.regions;
+            selected: root.model.region-index;
+            label: @tr("Region");
+            popup-min-w: 220px;
+            picked(i) => { root.display-region(i); }
+        }
+    }
+    if root.model.band-plan && root.model.plan-status != "" : Note { text: root.model.plan-status; tone: root.model.plan-status-tone; }
+    // </content>
+}
+
+// ================================================ Language & country ================================================
+
+export component LanguageBody inherits VerticalLayout {
+    in property <LanguageModel> model;
+
+    callback language-selected(int);
+    language-selected(a) => { SystemEvents.language-selected(a); }
+    callback language-suggest();
+    language-suggest() => { SystemEvents.language-suggest(); }
+    callback language-translation();
+    language-translation() => { SystemEvents.language-translation(); }
+    callback country-filter(string);
+    country-filter(a) => { SystemEvents.country-filter(a); }
+    callback country-selected(int);
+    country-selected(a) => { SystemEvents.country-selected(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // <content>
+    Line {
+        RowLabel { text: @tr("Language"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: root.model.language-text != "" ? root.model.language-text : Pick.label(root.model.languages, root.model.language-index);
+            items: root.model.languages;
+            selected: root.model.language-index;
+            label: @tr("Language");
+            popup-min-w: 200px;
+            picked(i) => { root.language-selected(i); }
+        }
+    }
+    if root.model.machine-hint != "" : Note { text: root.model.machine-hint; tone: ChipTone.warn; }
+    if root.model.machine-hint != "" && root.model.translation-label != "" : Rectangle {
+        height: Theme.key-sm-h;
+        clip: true;
+        Key {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            small: true;
+            label: root.model.translation-label;
+            clicked => { root.language-translation(); }
+        }
+    }
+    Line {
+        RowLabel { text: @tr("Country"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: root.model.country-text != "" ? root.model.country-text : Pick.label(root.model.countries, root.model.country-index);
+            items: root.model.countries;
+            selected: root.model.country-index;
+            label: @tr("Country");
+            popup-min-w: 250px;
+            filter: true;
+            filter-value: root.model.country-filter;
+            filter-placeholder: root.model.country-hint != "" ? root.model.country-hint : @tr("type a country or code");
+            picked(i) => { root.country-selected(i); }
+            filter-edited(t) => { root.country-filter(t); }
+        }
+    }
+    if root.model.plan-line != "" : Note { text: root.model.plan-line; color: Theme.fg-soft; }
+    if root.model.plan-changed-hint != "" : Note { text: root.model.plan-changed-hint; }
+    if root.model.suggest-label != "" : Rectangle {
+        height: Theme.key-sm-h;
+        clip: true;
+        Key {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            small: true;
+            label: root.model.suggest-label;
+            clicked => { root.language-suggest(); }
+        }
+    }
+    // </content>
+}
+
+// ================================================ Updates ================================================
+
+export component UpdatesBody inherits VerticalLayout {
+    in property <UpdatesModel> model;
+
+    callback updates-check(bool);
+    updates-check(a) => { SystemEvents.updates-check(a); }
+    callback updates-channel(int);
+    updates-channel(a) => { SystemEvents.updates-channel(a); }
+    callback updates-team-message();
+    updates-team-message() => { SystemEvents.updates-team-message(); }
+    callback updates-show-again();
+    updates-show-again() => { SystemEvents.updates-show-again(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    property <bool> channels: root.model.channel-index >= 0 && !root.model.packaged;   // a Store copy has no channels
+
+    // <content>
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: root.model.check-label != "" ? root.model.check-label : @tr("Check for updates at startup");
+            on: root.model.check-at-startup;
+            toggled(v) => { root.updates-check(v); }
+        }
+    }
+    if root.channels : Line {
+        RadioChoice { horizontal-stretch: 1; label: root.model.stable-label != "" ? root.model.stable-label : @tr("Stable releases"); on: root.model.channel-index == 0; chosen => { root.updates-channel(0); } }
+    }
+    if root.channels : Line {
+        RadioChoice { horizontal-stretch: 1; label: root.model.beta-label != "" ? root.model.beta-label : @tr("Every release (beta)"); on: root.model.channel-index == 1; chosen => { root.updates-channel(1); } }
+    }
+    if root.channels && root.model.channel-help != "" : Note { text: root.model.channel-help; }
+    if root.model.privacy != "" : Note { text: root.model.privacy; }
+    if root.model.version-line != "" : Note { text: root.model.version-line; color: Theme.fg-soft; }
+    if root.model.team-message != "" : Rectangle {
+        height: team-note.preferred-height;
+        accessible-role: button;
+        accessible-label: root.model.team-message;
+        accessible-action-default => { root.updates-team-message(); }
+        team-note := Note {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            text: root.model.team-message;
+            color: team-area.has-hover ? Theme.fg : Theme.accent-soft;
+        }
+        team-area := TouchArea {
+            mouse-cursor: MouseCursor.pointer;
+            clicked => { root.updates-team-message(); }
+        }
+    }
+    if root.model.status-line != "" : Note { text: root.model.status-line; tone: root.model.status-tone; }
+    if root.model.show-again && root.model.show-again-label != "" : Line {
+        Mid { Key { label: root.model.show-again-label; small: true; min-w: 0px; clicked => { root.updates-show-again(); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    // </content>
+}
+
+// ================================================ Serial ports and the shared GPS row ================================================
+
+// The GPS receiver row (SCREENS A3b, shared with the Radar section, the scope's empty state and the map bars): the port and baud dropdowns, the read /
+// stop key (lit while listening), the status line and the satellites line.
+export component GpsRowView inherits VerticalLayout {
+    in property <GpsRow> gps;
+
+    callback gps-port(int);
+    gps-port(a) => { SystemEvents.gps-port(a); }
+    callback gps-baud(int);
+    gps-baud(a) => { SystemEvents.gps-baud(a); }
+    callback gps-toggle();
+    gps-toggle() => { SystemEvents.gps-toggle(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // <content>
+    Line {
+        DropKey {
+            horizontal-stretch: 1;
+            value: Pick.label(root.gps.ports, root.gps.port-index);
+            items: root.gps.ports;
+            selected: root.gps.port-index;
+            label: @tr("GPS serial port");
+            popup-min-w: 120px;
+            picked(i) => { root.gps-port(i); }
+        }
+        DropKey {
+            width: 84px;
+            value: Pick.label(root.gps.bauds, root.gps.baud-index);
+            items: root.gps.bauds;
+            selected: root.gps.baud-index;
+            label: @tr("Baud rate");
+            popup-min-w: 100px;
+            picked(i) => { root.gps-baud(i); }
+        }
+    }
+    Rectangle {
+        height: Theme.key-sm-h;
+        clip: true;
+        Key {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            small: true;
+            on: root.gps.listening;
+            enabled: root.gps.key-enabled;
+            label: root.gps.key-label;
+            clicked => { root.gps-toggle(); }
+        }
+    }
+    if root.gps.status != "" : Note { text: root.gps.status; tone: root.gps.status-tone; }
+    if root.gps.satellites != "" : Note { text: root.gps.satellites; }
+    if root.gps.refusal != "" : Note { text: root.gps.refusal; tone: ChipTone.warn; }
+    // </content>
+}
+
+export component SerialPortsBody inherits VerticalLayout {
+    in property <SerialPortsModel> model;
+
+    callback serial-refresh();
+    serial-refresh() => { SystemEvents.serial-refresh(); }
+    callback gps-port(int);
+    gps-port(a) => { SystemEvents.gps-port(a); }
+    callback gps-baud(int);
+    gps-baud(a) => { SystemEvents.gps-baud(a); }
+    callback gps-toggle();
+    gps-toggle() => { SystemEvents.gps-toggle(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // <content>
+    if root.model.intro != "" : Note { text: root.model.intro; }
+    Line {
+        Mid { Key { label: root.model.refresh-label != "" ? root.model.refresh-label : @tr("Refresh"); small: true; min-w: 0px; clicked => { root.serial-refresh(); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if root.model.ports.length == 0 : Note { text: root.model.empty-line; }
+    // the one-column table of the ports (the kit's .tbl look: a frozen heading on the strip ground, 24 px rows with a hairline under each)
+    if root.model.ports.length > 0 : VerticalLayout {
+        spacing: 0px;
+        Rectangle {
+            height: 22px;
+            background: Theme.strip;
+            Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line-strong; }
+            Text {
+                x: 8px;
+                width: max(0px, parent.width - 16px);
+                height: parent.height;
+                text: (root.model.column-label != "" ? root.model.column-label : @tr("Port")).to-uppercase();
+                color: Theme.muted;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-cap;
+                font-weight: Theme.weight-semibold;
+                letter-spacing: 0.6px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        for p[i] in root.model.ports : Rectangle {
+            height: Theme.table-row-h;
+            Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
+            Text {
+                x: 8px;
+                width: max(0px, parent.width - 16px);
+                height: parent.height - Theme.hairline;
+                text: p;
+                color: Theme.fg;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+    VerticalLayout {
+        spacing: 4px;
+        Rectangle { height: Theme.hairline; background: Theme.line-strong; }
+        Caption { label: root.model.gps-heading != "" ? root.model.gps-heading : @tr("GPS receiver"); }
+    }
+    if root.model.gps-hint != "" : Note { text: root.model.gps-hint; }
+    GpsRowView {
+        gps: root.model.gps;
+        gps-port(i) => { root.gps-port(i); }
+        gps-baud(i) => { root.gps-baud(i); }
+        gps-toggle() => { root.gps-toggle(); }
+    }
+    if root.model.gps-note != "" : Note { text: root.model.gps-note; }
+    // </content>
+}
+
+// ================================================ Key bindings ================================================
+
+// One key cap: a pill of ONE width for every row (112 px), the chord in mono 9 px, "Press a key..." in the amber tone while listening. See the file header.
+component KeyCap inherits Rectangle {
+    in property <string> chord;
+    in property <bool> capturing;
+    in property <string> name;                          // the action, for the accessible label
+    in property <string> prompt;                        // what a listening cap says ("" = Press a key...)
+    callback pressed();
+    callback cancelled();
+    callback cleared();
+    callback captured(string);
+
+    // the name of a pressed key in the chord text, "" for a key a chord cannot use (the table is src/gui/key_bindings.cpp's kKeys; the physical Equal key is "Plus")
+    pure function key-name(t: string) -> string {
+        let u = t.to-uppercase();
+        if (u == "A") { return "A"; }   // not-translated: chord key names (the config text form)
+        if (u == "B") { return "B"; }   // not-translated: chord key names (the config text form)
+        if (u == "C") { return "C"; }   // not-translated: chord key names (the config text form)
+        if (u == "D") { return "D"; }   // not-translated: chord key names (the config text form)
+        if (u == "E") { return "E"; }   // not-translated: chord key names (the config text form)
+        if (u == "F") { return "F"; }   // not-translated: chord key names (the config text form)
+        if (u == "G") { return "G"; }   // not-translated: chord key names (the config text form)
+        if (u == "H") { return "H"; }   // not-translated: chord key names (the config text form)
+        if (u == "I") { return "I"; }   // not-translated: chord key names (the config text form)
+        if (u == "J") { return "J"; }   // not-translated: chord key names (the config text form)
+        if (u == "K") { return "K"; }   // not-translated: chord key names (the config text form)
+        if (u == "L") { return "L"; }   // not-translated: chord key names (the config text form)
+        if (u == "M") { return "M"; }   // not-translated: chord key names (the config text form)
+        if (u == "N") { return "N"; }   // not-translated: chord key names (the config text form)
+        if (u == "O") { return "O"; }   // not-translated: chord key names (the config text form)
+        if (u == "P") { return "P"; }   // not-translated: chord key names (the config text form)
+        if (u == "Q") { return "Q"; }   // not-translated: chord key names (the config text form)
+        if (u == "R") { return "R"; }   // not-translated: chord key names (the config text form)
+        if (u == "S") { return "S"; }   // not-translated: chord key names (the config text form)
+        if (u == "T") { return "T"; }   // not-translated: chord key names (the config text form)
+        if (u == "U") { return "U"; }   // not-translated: chord key names (the config text form)
+        if (u == "V") { return "V"; }   // not-translated: chord key names (the config text form)
+        if (u == "W") { return "W"; }   // not-translated: chord key names (the config text form)
+        if (u == "X") { return "X"; }   // not-translated: chord key names (the config text form)
+        if (u == "Y") { return "Y"; }   // not-translated: chord key names (the config text form)
+        if (u == "Z") { return "Z"; }   // not-translated: chord key names (the config text form)
+        if (t == "0") { return "0"; }   // not-translated: chord key names (the config text form)
+        if (t == "1") { return "1"; }   // not-translated: chord key names (the config text form)
+        if (t == "2") { return "2"; }   // not-translated: chord key names (the config text form)
+        if (t == "3") { return "3"; }   // not-translated: chord key names (the config text form)
+        if (t == "4") { return "4"; }   // not-translated: chord key names (the config text form)
+        if (t == "5") { return "5"; }   // not-translated: chord key names (the config text form)
+        if (t == "6") { return "6"; }   // not-translated: chord key names (the config text form)
+        if (t == "7") { return "7"; }   // not-translated: chord key names (the config text form)
+        if (t == "8") { return "8"; }   // not-translated: chord key names (the config text form)
+        if (t == "9") { return "9"; }   // not-translated: chord key names (the config text form)
+        if (t == "!") { return "1"; }   // not-translated: chord key names (the config text form)
+        if (t == "@") { return "2"; }   // not-translated: chord key names (the config text form)
+        if (t == "#") { return "3"; }   // not-translated: chord key names (the config text form)
+        if (t == "$") { return "4"; }   // not-translated: chord key names (the config text form)
+        if (t == "%") { return "5"; }   // not-translated: chord key names (the config text form)
+        if (t == "^") { return "6"; }   // not-translated: chord key names (the config text form)
+        if (t == "&") { return "7"; }   // not-translated: chord key names (the config text form)
+        if (t == "*") { return "8"; }   // not-translated: chord key names (the config text form)
+        if (t == "(") { return "9"; }   // not-translated: chord key names (the config text form)
+        if (t == ")") { return "0"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F1) { return "F1"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F2) { return "F2"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F3) { return "F3"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F4) { return "F4"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F5) { return "F5"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F6) { return "F6"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F7) { return "F7"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F8) { return "F8"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F9) { return "F9"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F10) { return "F10"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F11) { return "F11"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F12) { return "F12"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Tab) { return "Tab"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Backtab) { return "Tab"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.LeftArrow) { return "Left"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.RightArrow) { return "Right"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.UpArrow) { return "Up"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.DownArrow) { return "Down"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.PageUp) { return "PageUp"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.PageDown) { return "PageDown"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Home) { return "Home"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.End) { return "End"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Insert) { return "Insert"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Delete) { return "Delete"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Space) { return "Space"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Return) { return "Enter"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Menu) { return "Menu"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.CapsLock) { return "CapsLock"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.ScrollLock) { return "ScrollLock"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Pause) { return "Pause"; }   // not-translated: chord key names (the config text form)
+        if (t == "-") { return "Minus"; }   // not-translated: chord key names (the config text form)
+        if (t == "_") { return "Minus"; }   // not-translated: chord key names (the config text form)
+        if (t == "=") { return "Plus"; }   // not-translated: chord key names (the config text form)
+        if (t == "+") { return "Plus"; }   // not-translated: chord key names (the config text form)
+        if (t == ",") { return "Comma"; }   // not-translated: chord key names (the config text form)
+        if (t == "<") { return "Comma"; }   // not-translated: chord key names (the config text form)
+        if (t == ".") { return "Period"; }   // not-translated: chord key names (the config text form)
+        if (t == ">") { return "Period"; }   // not-translated: chord key names (the config text form)
+        if (t == "/") { return "Slash"; }   // not-translated: chord key names (the config text form)
+        if (t == "?") { return "Slash"; }   // not-translated: chord key names (the config text form)
+        if (t == ";") { return "Semicolon"; }   // not-translated: chord key names (the config text form)
+        if (t == ":") { return "Semicolon"; }   // not-translated: chord key names (the config text form)
+        if (t == "[") { return "LeftBracket"; }   // not-translated: chord key names (the config text form)
+        if (t == "{") { return "LeftBracket"; }   // not-translated: chord key names (the config text form)
+        if (t == "]") { return "RightBracket"; }   // not-translated: chord key names (the config text form)
+        if (t == "}") { return "RightBracket"; }   // not-translated: chord key names (the config text form)
+        if (t == "`") { return "GraveAccent"; }   // not-translated: chord key names (the config text form)
+        if (t == "~") { return "GraveAccent"; }   // not-translated: chord key names (the config text form)
+        if (t == "'") { return "Apostrophe"; }   // not-translated: chord key names (the config text form)
+        if (t == "\"") { return "Apostrophe"; }   // not-translated: chord key names (the config text form)
+        if (t == "\\") { return "Backslash"; }   // not-translated: chord key names (the config text form)
+        if (t == "|") { return "Backslash"; }   // not-translated: chord key names (the config text form)
+        return "";
+    }
+    pure function is-modifier(t: string) -> bool {
+        return t == Key.Shift || t == Key.ShiftR || t == Key.Control || t == Key.ControlR || t == Key.Alt || t == Key.AltGr || t == Key.Meta || t == Key.MetaR;
+    }
+
+    width: 112px;
+    height: Theme.chip-h;
+    border-radius: Theme.radius-chip;
+    border-width: Theme.hairline;
+    background: root.capturing ? Theme.chip-warn-bg : area.has-hover ? Theme.menu-hot : Theme.chip-bg;
+    border-color: root.capturing ? Theme.chip-warn-line : Theme.chip-line;
+    accessible-role: button;
+    accessible-label: root.name + " " + (root.chord == "" ? @tr("None") : root.chord);
+    accessible-action-default => { root.pressed(); }
+
+    // The keyboard. The host tells a row it is listening (`capturing`): the cap asks for the keyboard at once, and, being made already listening (the host
+    // publishes whole models) with no window to take it from at its init, asks again every 30 ms until it has it. The keyboard going to another place
+    // afterwards ends the listening 80 ms later - not at once: the host moves the listening from one row to another in more than one step, and the
+    // row it leaves must have been told by then.
+    property <bool> armed;                              // the cap has had the keyboard since it began listening
+    property <bool> told;                               // the host has been told the cap lost it
+    init => { if (root.capturing) { fs.focus(); } }
+    changed capturing => {
+        root.armed = false;
+        root.told = false;
+        if (root.capturing) { fs.focus(); }
+        else if (fs.has-focus) { fs.clear-focus(); }
+    }
+    Timer {
+        interval: 30ms;
+        running: root.capturing && !root.armed && !fs.has-focus;
+        triggered => { fs.focus(); }
+    }
+    Timer {
+        interval: 80ms;
+        running: root.capturing && root.armed && !fs.has-focus && !root.told;
+        triggered => {
+            root.told = true;
+            root.cancelled();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(e) => {
+            if (!root.capturing) { return reject; }
+            if (e.text == Key.Escape) { root.cancelled(); return accept; }
+            if (e.text == Key.Backspace) { root.cleared(); return accept; }
+            if (root.is-modifier(e.text)) { return accept; }
+            let n = root.key-name(e.text);
+            if (n == "") { return accept; }
+            root.captured((e.modifiers.control ? "Ctrl+" : "") + (e.modifiers.shift || e.text == Key.Backtab ? "Shift+" : "") + (e.modifiers.alt ? "Alt+" : "") + n);   // not-translated: the chord text
+            return accept;
+        }
+        changed has-focus => { if (self.has-focus) { root.armed = true; } }
+    }
+    Text {
+        x: 4px;
+        y: 0px;
+        width: parent.width - 8px;
+        height: parent.height;
+        text: root.capturing ? (root.prompt != "" ? root.prompt : @tr("Press a key...")) : root.chord == "" ? @tr("None") : root.chord;
+        color: root.capturing ? Theme.chip-warn-fg : root.chord == "" ? Theme.dim : Theme.chip-fg;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-tiny;
+        font-weight: Theme.weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    // the keyboard is on this cap: the focus ring, 1 px clear of the pill
+    if fs.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius-chip + 3px;
+    }
+    area := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { if (root.capturing) { root.cancelled(); } else { root.pressed(); } }
+    }
+}
+
+// One action: its name at the left, the cap at the right; the clash note under it in the rust tone.
+component KeyRowView inherits VerticalLayout {
+    in property <KeyRow> info;
+    in property <string> prompt;
+    callback pressed();
+    callback cancelled();
+    callback cleared();
+    callback captured(string);
+    spacing: 6px;
+    Rectangle {
+        height: Theme.field-h;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                text: root.info.action;
+                color: Theme.fg;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            VerticalLayout {
+                alignment: center;
+                KeyCap {
+                    prompt: root.prompt;
+                    name: root.info.action;
+                    chord: root.info.chord;
+                    capturing: root.info.capturing;
+                    pressed => { root.pressed(); }
+                    cancelled => { root.cancelled(); }
+                    cleared => { root.cleared(); }
+                    captured(c) => { root.captured(c); }
+                }
+            }
+        }
+    }
+    if root.info.clash != "" : Note { text: root.info.clash; tone: ChipTone.err; }
+}
+
+export component KeyBindingsBody inherits VerticalLayout {
+    in property <KeyBindingsModel> model;
+
+    callback keys-reset();
+    keys-reset() => { SystemEvents.keys-reset(); }
+    callback keys-capture(string);
+    keys-capture(a) => { SystemEvents.keys-capture(a); }
+    callback keys-captured(string, string);
+    keys-captured(a, b) => { SystemEvents.keys-captured(a, b); }
+    callback keys-cancel();
+    keys-cancel() => { SystemEvents.keys-cancel(); }
+    callback keys-clear(string);
+    keys-clear(a) => { SystemEvents.keys-clear(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // <content>
+    if root.model.help != "" : Note { text: root.model.help; }
+    for g[gi] in root.model.groups : VerticalLayout {
+        spacing: 6px;
+        // the heading: the first group's shares its line with the Reset key; the later ones are a thin rule with the heading under it
+        if gi == 0 : Line {
+            Caption { horizontal-stretch: 1; label: g.heading; vertical-alignment: center; }
+            Mid { Key { label: root.model.reset-label; xs: true; clicked => { root.keys-reset(); } } }
+        }
+        if gi > 0 : VerticalLayout {
+            spacing: 4px;
+            Rectangle { height: Theme.hairline; background: Theme.line-strong; }
+            Caption { label: g.heading; }
+        }
+        for r in g.rows : KeyRowView {
+            info: r;
+            prompt: root.model.prompt;
+            pressed => { root.keys-capture(r.id); }
+            cancelled => { root.keys-cancel(); }
+            cleared => { root.keys-clear(r.id); }
+            captured(c) => { root.keys-captured(r.id, c); }
+        }
+    }
+    if root.model.footer != "" : Note { text: root.model.footer; }
+    // </content>
+}
+
+// ================================================ Diagnostics ================================================
+
+export component DiagnosticsBody inherits VerticalLayout {
+    in property <DiagnosticsModel> model;
+
+    callback diag-record(bool);
+    diag-record(a) => { SystemEvents.diag-record(a); }
+    callback diag-minidump(bool);
+    diag-minidump(a) => { SystemEvents.diag-minidump(a); }
+    callback diag-what(bool);
+    diag-what(a) => { SystemEvents.diag-what(a); }
+    callback diag-open-log();
+    diag-open-log() => { SystemEvents.diag-open-log(); }
+    callback diag-open-reports();
+    diag-open-reports() => { SystemEvents.diag-open-reports(); }
+    callback diag-ledger(bool);
+    diag-ledger(a) => { SystemEvents.diag-ledger(a); }
+    callback diag-copy();
+    diag-copy() => { SystemEvents.diag-copy(); }
+    callback diag-sdrplay();
+    diag-sdrplay() => { SystemEvents.diag-sdrplay(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // <content>
+    if root.model.offer != "" : Note { text: root.model.offer; tone: ChipTone.warn; }
+    if root.model.explanation != "" : Note { text: root.model.explanation; }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: root.model.record-label != "" ? root.model.record-label : @tr("Record crashes and freezes, and send the report next time");
+            on: root.model.record;
+            toggled(v) => { root.diag-record(v); }
+        }
+    }
+    if root.model.sent-text != "" : Note { text: root.model.sent-text; }
+    Line {
+        Mid { Key { label: root.model.what-label != "" ? root.model.what-label : @tr("What exactly is in a report?"); xs: true; clicked => { root.diag-what(!root.model.what-open); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if root.model.what-open && root.model.what-text != "" : Note { text: root.model.what-text; }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: root.model.minidump-label != "" ? root.model.minidump-label : @tr("Also write a full memory dump beside a crash report");
+            on: root.model.minidump;
+            toggled(v) => { root.diag-minidump(v); }
+        }
+    }
+    if root.model.dump-note != "" : Note { text: root.model.dump-note; }
+    if root.model.log-path != "" : MonoNote { text: root.model.log-path; }
+    if root.model.reports-path != "" : MonoNote { text: root.model.reports-path; }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Show the pointer ledger across the top of the window"); on: root.model.ledger; toggled(v) => { root.diag-ledger(v); } } }
+    if root.model.ledger-note != "" : Note { text: root.model.ledger-note; }
+    Line {
+        Mid { Key { label: @tr("Copy diagnostics"); small: true; min-w: 0px; clicked => { root.diag-copy(); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    Line {
+        Mid { Key { label: @tr("Open reports folder"); small: true; min-w: 0px; clicked => { root.diag-open-reports(); } } }
+        Mid { Key { label: @tr("Open the log"); small: true; min-w: 0px; clicked => { root.diag-open-log(); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if root.model.bundle-status != "" : Note { text: root.model.bundle-status; }
+    if root.model.sdrplay-text != "" : Rectangle { height: Theme.hairline; background: Theme.line; }
+    if root.model.sdrplay-text != "" : Note { text: root.model.sdrplay-text; }
+    if root.model.sdrplay-text != "" : Line {
+        Mid { Key { label: @tr("Run SDRplay diagnostic"); small: true; min-w: 0px; enabled: root.model.sdrplay-enabled; clicked => { root.diag-sdrplay(); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if root.model.sdrplay-text != "" && root.model.sdrplay-status != "" : Note { text: root.model.sdrplay-status; }
+    // </content>
+}
+
+// ================================================ Usage reporting ================================================
+
+export component UsageBody inherits VerticalLayout {
+    in property <UsageModel> model;
+
+    callback usage-send(bool);
+    usage-send(a) => { SystemEvents.usage-send(a); }
+    callback usage-what(bool);
+    usage-what(a) => { SystemEvents.usage-what(a); }
+    callback usage-privacy();
+    usage-privacy() => { SystemEvents.usage-privacy(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // <content>
+    if root.model.disclosure != "" : Note { text: root.model.disclosure; }
+    Line { Tick { horizontal-stretch: 1; label: root.model.send-label != "" ? root.model.send-label : @tr("Send anonymous usage reports"); on: root.model.send; toggled(v) => { root.usage-send(v); } } }
+    if root.model.state-line != "" : Note { text: root.model.state-line; }
+    if root.model.install-id-line != "" : MonoNote { text: root.model.install-id-line; }
+    Line {
+        Mid { Key { label: root.model.what-label; xs: true; clicked => { root.usage-what(!root.model.what-open); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    Line {
+        Mid { Key { label: root.model.privacy-label; xs: true; clicked => { root.usage-privacy(); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if root.model.what-open && root.model.what-text != "" : Note { text: root.model.what-text; }
+    if root.model.what-open && root.model.payload.length > 0 : Rectangle {
+        height: payload-col.preferred-height;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        border-color: Theme.line;
+        background: Theme.field;
+        payload-col := VerticalLayout {
+            padding: 6px;
+            spacing: 3px;
+            for p in root.model.payload : MonoNote { text: p; font-size: Theme.font-cap; color: Theme.fg-soft; }
+        }
+    }
+    // </content>
+}
+
+// ================================================ Beta tester ================================================
+
+export component TesterBody inherits VerticalLayout {
+    in property <TesterModel> model;
+    in-out property <bool> revealed;                    // the code field shows its text instead of dots
+
+    callback tester-unlink();
+    tester-unlink() => { SystemEvents.tester-unlink(); }
+    callback tester-remove-code();
+    tester-remove-code() => { SystemEvents.tester-remove-code(); }
+    callback tester-code-committed(string);
+    tester-code-committed(a) => { SystemEvents.tester-code-committed(a); }
+    callback tester-use();
+    tester-use() => { SystemEvents.tester-use(); }
+    callback tester-show-sent(bool);
+    tester-show-sent(a) => { SystemEvents.tester-show-sent(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // <content>
+    if root.model.explanation != "" : Note { text: root.model.explanation; }
+    if root.model.linked-line != "" : Line {
+        Readout { horizontal-stretch: 1; text: root.model.linked-line; font-family: Theme.font-ui; }
+        Mid { Key { label: root.model.unlink-label != "" ? root.model.unlink-label : @tr("Unlink"); xs: true; clicked => { root.tester-unlink(); } } }
+    }
+    if root.model.code-line != "" : Line {
+        Readout { horizontal-stretch: 1; text: root.model.code-line; font-family: Theme.font-ui; }
+        Mid { Key { label: root.model.remove-label != "" ? root.model.remove-label : @tr("Remove code"); xs: true; clicked => { root.tester-remove-code(); } } }
+    }
+    if root.model.invalid-line != "" : Note { text: root.model.invalid-line; tone: ChipTone.err; }
+    if root.model.error-line != "" : Note { text: root.model.error-line; tone: ChipTone.err; }
+    if root.model.field-shown : VerticalLayout {
+        spacing: 6px;
+        Line {
+            code := LineInput {
+                horizontal-stretch: 1;
+                mono: true;
+                hidden: !root.revealed;
+                value: root.model.code-draft;
+                placeholder: root.model.field-label != "" ? root.model.field-label : @tr("Tester code");
+                name: root.model.field-label != "" ? root.model.field-label : @tr("Tester code");
+                committed(t) => { root.tester-code-committed(t); }
+            }
+            Mid { Key {
+                label: root.revealed ? @tr("Hide").to-uppercase() : @tr("SHOW");
+                small: true;
+                min-w: 0px;
+                on: root.revealed;
+                tooltip: root.revealed ? @tr("Hide") : @tr("Show");
+                accessible-label: root.revealed ? @tr("Hide the password") : @tr("Show the password");
+                clicked => { root.revealed = !root.revealed; }
+            } }
+        }
+        Rectangle {
+            height: Theme.key-sm-h;
+            clip: true;
+            Key {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                small: true;
+                label: root.model.use-label != "" ? root.model.use-label : @tr("Use this code");
+                clicked => {
+                    root.tester-code-committed(code.text);
+                    root.tester-use();
+                }
+            }
+        }
+    }
+    if root.model.sent-text != "" : Note { text: root.model.sent-text; }
+    Line {
+        Mid { Key {
+            label: root.model.sent-open ? (root.model.hide-label != "" ? root.model.hide-label : @tr("Hide what is sent")) : (root.model.show-label != "" ? root.model.show-label : @tr("Show what is sent"));
+            xs: true;
+            clicked => { root.tester-show-sent(!root.model.sent-open); }
+        } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if root.model.sent-open : Rectangle {
+        height: preview.preferred-height + 12px;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        background: Theme.field;
+        preview := MonoNote {
+            x: 8px;
+            y: 6px;
+            width: parent.width - 16px;
+            text: root.model.sent-preview;
+            font-size: Theme.font-cap;
+            color: Theme.fg-soft;
+        }
+    }
+    // </content>
+}
+
+// ================================================ the two report pages ================================================
+
+// Request a feature (kind 0) and Report a bug or dislike (kind 1): artboard F, one component. A sheet over the whole element it is placed in; the host
+// opens it with `report-open(kind)` and sets `shown`; the close key and the backdrop call `report-closed()`.
+export component ReportSheet inherits Rectangle {
+    in property <ReportPageModel> model;
+
+    callback report-text(string);
+    report-text(a) => { SystemEvents.report-text(a); }
+    callback report-contact(string);
+    report-contact(a) => { SystemEvents.report-contact(a); }
+    callback report-kind(int);
+    report-kind(a) => { SystemEvents.report-kind(a); }
+    callback report-attach(bool);
+    report-attach(a) => { SystemEvents.report-attach(a); }
+    callback report-probe(bool);
+    report-probe(a) => { SystemEvents.report-probe(a); }
+    callback report-preview(bool);
+    report-preview(a) => { SystemEvents.report-preview(a); }
+    callback report-send();
+    report-send() => { SystemEvents.report-send(); }
+    callback report-closed();
+    report-closed() => { SystemEvents.report-closed(); }
+
+    property <bool> bug: root.model.kind == 1;
+
+    // <content>
+    if root.model.shown : SheetFrame {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        title: root.model.title;
+        sheet-w: 440px;
+        pad: 8px;
+        gap: 6px;
+        dismissed => { root.report-closed(); }
+        // the bug page asks first what is being reported: two radios, neither chosen when the page opens
+        if root.bug && root.model.problem-kinds.length > 0 : Text {
+            min-width: 0px;
+            text: root.model.kind-question != "" ? root.model.kind-question : @tr("What are you reporting?");
+            wrap: word-wrap;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            color: Theme.fg;
+        }
+        if root.bug && root.model.problem-kinds.length > 0 : Line {
+            gap: 16px;
+            for k[ki] in root.model.problem-kinds : RadioChoice {
+                label: k.label;
+                on: ki == root.model.problem-kind-index;
+                chosen => { root.report-kind(ki); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Text {
+            min-width: 0px;
+            text: root.model.prompt != "" ? root.model.prompt : root.bug ? @tr("What went wrong, and what were you doing when it did?") : @tr("What would you like FoxSDR to do?");
+            wrap: word-wrap;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            color: Theme.fg;
+        }
+        message := TextBox {
+            height: root.bug ? 64px : 56px;
+            value: root.model.text;
+            name: root.model.prompt != "" ? root.model.prompt : root.bug ? @tr("What went wrong, and what were you doing when it did?") : @tr("What would you like FoxSDR to do?");
+            edited(t) => { root.report-text(t); }
+        }
+        if root.model.counter != "" : Readout { text: root.model.counter; color: Theme.dim; height: 14px; }
+        if root.bug && root.model.recognised-line != "" : Note { text: root.model.recognised-line; tone: ChipTone.good; }
+        Text {
+            min-width: 0px;
+            text: root.model.contact-label != "" ? root.model.contact-label : @tr("Email or callsign (optional)");
+            wrap: word-wrap;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            color: Theme.dim;
+        }
+        LineInput {
+            value: root.model.contact;
+            name: root.model.contact-label != "" ? root.model.contact-label : @tr("Email or callsign (optional)");
+            edited(t) => { root.report-contact(t); }
+            committed(t) => { root.report-contact(t); }
+        }
+        if root.model.no-email-note != "" : Note { text: root.model.no-email-note; tone: ChipTone.warn; }
+        if root.bug : Tick { label: root.model.attach-label != "" ? root.model.attach-label : @tr("Attach the diagnostics log"); on: root.model.attach; toggled(v) => { root.report-attach(v); } }
+        if root.bug && root.model.attach && root.model.evidence.length > 0 : VerticalLayout {
+            spacing: 2px;
+            for line in root.model.evidence : MonoNote { text: line; font-size: Theme.font-cap; }
+        }
+        if root.bug && root.model.attach && root.model.probe-shown : Tick { label: root.model.probe-label != "" ? root.model.probe-label : @tr("Attach the SDRplay diagnostic too"); on: root.model.probe-on; toggled(v) => { root.report-probe(v); } }
+        if root.bug && root.model.attach : Tick { label: root.model.preview-label != "" ? root.model.preview-label : @tr("Show what will be sent"); on: root.model.preview-open; toggled(v) => { root.report-preview(v); } }
+        if root.bug && root.model.attach && root.model.preview-open : Rectangle {
+            height: 140px;
+            border-radius: Theme.radius;
+            border-width: Theme.hairline;
+            border-color: Theme.line-strong;
+            background: Theme.field;
+            clip: true;
+            Flickable {
+                x: 8px;
+                y: 4px;
+                width: parent.width - 16px;
+                height: parent.height - 8px;
+                content-width: self.width;
+                content-height: max(self.height, shown-text.preferred-height);
+                shown-text := MonoNote {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    text: root.model.preview-text;
+                    font-size: Theme.font-cap;
+                    color: Theme.fg-soft;
+                    accessible-role: text;
+                    accessible-label: root.model.preview-label != "" ? root.model.preview-label : @tr("Show what will be sent");
+                }
+            }
+        }
+        if root.bug && root.model.attach && root.model.preview-open && root.model.local-only-line != "" : Note { text: root.model.local-only-line; }
+        if root.model.attach-note != "" : Note { text: root.model.attach-note; }
+        Rectangle {
+            height: Theme.key-sm-h;
+            clip: true;
+            Key {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                small: true;
+                label: root.model.send-label != "" ? root.model.send-label : @tr("SEND");
+                enabled: root.model.send-enabled && message.text != "";
+                clicked => { root.report-send(); }
+            }
+        }
+        if root.model.refusal != "" : Note { text: root.model.refusal; }
+        if root.model.sent-line != "" : Note { text: root.model.sent-line; tone: root.model.sent-tone; }
+    }
+    // </content>
+}

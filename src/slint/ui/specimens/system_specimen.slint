@@ -1,0 +1,468 @@
+// The SYSTEM bank specimen sheet (1240 x 2560): every body of ui/system_bank.slint inside the REAL Section it is shown under (296 wide: the body is 254 px,
+// the Section's own padding 30 / 12), on the sample models below, so tests/test_slint_system.cpp can probe the pixels against the Banks artboard
+// (artboards/Workbench-Banks.dc.html: the SYSTEM column A5 and its closed sections A5b) and press the controls with real pointer and key events.
+// Four columns of stacked Sections (each Section's y is the one above's y + height + 10, so the stack holds whatever height the typefaces settle on);
+// the two report pages sit under them, each over a stage of its own.
+//
+//   column x      Section (296 wide, small = 30 px row)                              model            what it shows
+//   A  10   a1    Display / BAND PLAN ON    interface size, theme, Min / Max dB, frequency display, counter figures, the two ticks, the icon and trail
+//                                           sliders, the band plan tick, Size + Colour, Region, the green plan status         m-display
+//          a2    Display / BAND PLAN ON    default-forwarding to SystemEvents; the error variant: tuner switches off, enlarged readings, the red status   m-display-err
+//   B  316  b1    Language & country / DEUTSCH  Language, the amber machine hint, SUGGEST A BETTER TRANSLATION, Country, the plan line, the override hint, USE DEUTSCH   m-lang
+//          b2    Updates / UP TO DATE      the tick, the Stable / Beta radios (Stable lit), help, privacy, version, the team message, the green status    m-upd-ok
+//          b3    Updates / UPDATE          Beta lit, the amber status line, Show it again                                                                m-upd-new
+//          b4    Serial ports / 2          intro, Refresh, the one-column table of two ports, the GPS receiver rule, the GPS row (listening), the note   m-ser
+//          b5    Serial ports / NONE       default-forwarding: the empty line, the GPS row not listening                                                  m-ser-none
+//   C  622  c1    Key bindings / CHANGED    help, Receiver (+ Reset) with four rows - one listening, one clashing - then Mode with two rows, the footer   m-keys
+//          c2    Key bindings / DEFAULT    default-forwarding to SystemEvents, nothing listening                                                         m-keys-plain
+//   D  928  d1    Diagnostics / ON          the amber offer, explanation, the tick, the sent text, the disclosure (open), the dump tick and note, paths, ledger, keys, SDRplay   m-diag
+//          d2    Usage reporting / ON      disclosure, the tick, the install id, the two keys, the payload list                                         m-usage-on
+//          d3    Usage reporting / OFF     the off line only                                                                                              m-usage-off
+//          d4    Beta tester / LINKED      explanation, Linked to ... + Unlink, the sent text and the masked preview (open)                              m-tester-linked
+//          d5    Beta tester / UNLINKED    the invalid-code line (red), the masked field + SHOW, Use this code, Show what is sent                         m-tester-open
+//   pages: feature-stage (10, pages-y, 500 x 420) holds ReportSheet kind 0; bug-stage (520, pages-y, 520 x 820) holds ReportSheet kind 1
+//   probes: p1..p9 (254-wide layout cells, below the window's last row) hold bare bodies and report the cell's width (rule 11)
+//
+// What the test reads: `Rec` counts and names every callback of the bodies with an override, the sections' y and heights are out properties, and the plain
+// (default-forwarding) bodies are watched through the SystemEvents global.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { Section } from "../sections.slint";
+import { TipLayer } from "../tooltip.slint";
+import { SelectItem } from "../signal_bank.slint";
+import { DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel, UsageModel, TesterModel, ReportPageModel, SystemEvents, DisplayBody, LanguageBody, UpdatesBody, GpsRowView, SerialPortsBody, KeyBindingsBody, DiagnosticsBody, UsageBody, TesterBody, ReportSheet } from "../system_bank.slint";
+export { Theme, Skin, Workbench, ChipTone, LampState, SelectItem, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel, UsageModel, TesterModel, ReportPageModel, SystemEvents }
+
+// What the bodies with an override report: the callback's name and its arguments, joined with a space.
+export global Rec {
+    in-out property <int> events;
+    in-out property <string> last;
+    in-out property <string> last-args;
+    callback fired(string, string);
+    public function rec(name: string, args: string) {
+        Rec.events += 1;
+        Rec.last = name;
+        Rec.last-args = args;
+        Rec.fired(name, args);
+    }
+}
+
+component SpecDisplay inherits DisplayBody {
+    display-scale(a) => { Rec.rec("display-scale", "" + a); }
+    display-theme(a) => { Rec.rec("display-theme", "" + a); }
+    display-db-min(a) => { Rec.rec("display-db-min", "" + a); }
+    display-db-max(a) => { Rec.rec("display-db-max", "" + a); }
+    display-freq-display(a) => { Rec.rec("display-freq-display", "" + a); }
+    display-figures(a) => { Rec.rec("display-figures", "" + a); }
+    display-tuner-switches(a) => { Rec.rec("display-tuner-switches", a ? "1" : "0"); }
+    display-enlarge(a) => { Rec.rec("display-enlarge", a ? "1" : "0"); }
+    display-icon-px(a) => { Rec.rec("display-icon-px", "" + a); }
+    display-trail-px(a) => { Rec.rec("display-trail-px", "" + a); }
+    display-band-plan(a) => { Rec.rec("display-band-plan", a ? "1" : "0"); }
+    display-band-size(a) => { Rec.rec("display-band-size", "" + a); }
+    display-band-colour(a) => { Rec.rec("display-band-colour", "" + a); }
+    display-region(a) => { Rec.rec("display-region", "" + a); }
+}
+
+component SpecLanguage inherits LanguageBody {
+    language-selected(a) => { Rec.rec("language-selected", "" + a); }
+    language-suggest() => { Rec.rec("language-suggest", ""); }
+    language-translation() => { Rec.rec("language-translation", ""); }
+    country-filter(a) => { Rec.rec("country-filter", a); }
+    country-selected(a) => { Rec.rec("country-selected", "" + a); }
+}
+
+component SpecUpdates inherits UpdatesBody {
+    updates-check(a) => { Rec.rec("updates-check", a ? "1" : "0"); }
+    updates-channel(a) => { Rec.rec("updates-channel", "" + a); }
+    updates-team-message() => { Rec.rec("updates-team-message", ""); }
+    updates-show-again() => { Rec.rec("updates-show-again", ""); }
+}
+
+component SpecSerial inherits SerialPortsBody {
+    serial-refresh() => { Rec.rec("serial-refresh", ""); }
+    gps-port(a) => { Rec.rec("gps-port", "" + a); }
+    gps-baud(a) => { Rec.rec("gps-baud", "" + a); }
+    gps-toggle() => { Rec.rec("gps-toggle", ""); }
+}
+
+component SpecKeys inherits KeyBindingsBody {
+    keys-reset() => { Rec.rec("keys-reset", ""); }
+    keys-capture(a) => { Rec.rec("keys-capture", a); }
+    keys-captured(a, b) => { Rec.rec("keys-captured", a + " " + b); }
+    keys-cancel() => { Rec.rec("keys-cancel", ""); }
+    keys-clear(a) => { Rec.rec("keys-clear", a); }
+}
+
+component SpecDiag inherits DiagnosticsBody {
+    diag-record(a) => { Rec.rec("diag-record", a ? "1" : "0"); }
+    diag-minidump(a) => { Rec.rec("diag-minidump", a ? "1" : "0"); }
+    diag-what(a) => { Rec.rec("diag-what", a ? "1" : "0"); }
+    diag-open-log() => { Rec.rec("diag-open-log", ""); }
+    diag-open-reports() => { Rec.rec("diag-open-reports", ""); }
+    diag-ledger(a) => { Rec.rec("diag-ledger", a ? "1" : "0"); }
+    diag-copy() => { Rec.rec("diag-copy", ""); }
+    diag-sdrplay() => { Rec.rec("diag-sdrplay", ""); }
+}
+
+component SpecUsage inherits UsageBody {
+    usage-send(a) => { Rec.rec("usage-send", a ? "1" : "0"); }
+    usage-what(a) => { Rec.rec("usage-what", a ? "1" : "0"); }
+    usage-privacy() => { Rec.rec("usage-privacy", ""); }
+}
+
+component SpecTester inherits TesterBody {
+    tester-unlink() => { Rec.rec("tester-unlink", ""); }
+    tester-remove-code() => { Rec.rec("tester-remove-code", ""); }
+    tester-code-committed(a) => { Rec.rec("tester-code-committed", a); }
+    tester-use() => { Rec.rec("tester-use", ""); }
+    tester-show-sent(a) => { Rec.rec("tester-show-sent", a ? "1" : "0"); }
+}
+
+component SpecReport inherits ReportSheet {
+    report-text(a) => { Rec.rec("report-text", a); }
+    report-contact(a) => { Rec.rec("report-contact", a); }
+    report-kind(a) => { Rec.rec("report-kind", "" + a); }
+    report-attach(a) => { Rec.rec("report-attach", a ? "1" : "0"); }
+    report-probe(a) => { Rec.rec("report-probe", a ? "1" : "0"); }
+    report-preview(a) => { Rec.rec("report-preview", a ? "1" : "0"); }
+    report-send() => { Rec.rec("report-send", ""); }
+    report-closed() => { Rec.rec("report-closed", ""); }
+}
+
+export component SystemSpecimen inherits Window {
+    width: 1240px;
+    height: 2560px;
+    background: Theme.bg;
+
+    // ---- the geometry the test reads ----
+    out property <length> a1-y: a1.y;
+    out property <length> a1-body-h: a1.body-height;
+    out property <length> a2-y: a2.y;
+    out property <length> a2-body-h: a2.body-height;
+    out property <length> b1-y: b1.y;
+    out property <length> b1-body-h: b1.body-height;
+    out property <length> b2-y: b2.y;
+    out property <length> b2-body-h: b2.body-height;
+    out property <length> b3-y: b3.y;
+    out property <length> b3-body-h: b3.body-height;
+    out property <length> b4-y: b4.y;
+    out property <length> b4-body-h: b4.body-height;
+    out property <length> b5-y: b5.y;
+    out property <length> b5-body-h: b5.body-height;
+    out property <length> c1-y: c1.y;
+    out property <length> c1-body-h: c1.body-height;
+    out property <length> c2-y: c2.y;
+    out property <length> c2-body-h: c2.body-height;
+    out property <length> d1-y: d1.y;
+    out property <length> d1-body-h: d1.body-height;
+    out property <length> d2-y: d2.y;
+    out property <length> d2-body-h: d2.body-height;
+    out property <length> d3-y: d3.y;
+    out property <length> d3-body-h: d3.body-height;
+    out property <length> d4-y: d4.y;
+    out property <length> d4-body-h: d4.body-height;
+    out property <length> d5-y: d5.y;
+    out property <length> d5-body-h: d5.body-height;
+    out property <length> pages-y: max(max(a2.y + a2.height, b5.y + b5.height), max(c2.y + c2.height, d5.y + d5.height)) + 24px;
+    out property <length> probe-y: root.height + 10px;
+    out property <length> p1-w: p1.width;
+    out property <length> p2-w: p2.width;
+    out property <length> p3-w: p3.width;
+    out property <length> p4-w: p4.width;
+    out property <length> p5-w: p5.width;
+    out property <length> p6-w: p6.width;
+    out property <length> p7-w: p7.width;
+    out property <length> p8-w: p8.width;
+    out property <length> p9-w: p9.width;
+
+    // ---- the sample models (the test may change them) ----
+    in-out property <DisplayModel> m-display: {
+        scales: [
+            { label: "Auto (125% here)", id: "auto", enabled: true, note: "" },
+            { label: "100%", id: "100", enabled: true, note: "" },
+            { label: "125%", id: "125", enabled: true, note: "" },
+            { label: "150%", id: "150", enabled: true, note: "" },
+            { label: "175%", id: "175", enabled: true, note: "" },
+            { label: "200%", id: "200", enabled: true, note: "" },
+            { label: "250%", id: "250", enabled: true, note: "" },
+        ],
+        scale-index: 0,
+        themes: [
+            { label: "Today's bench", id: "workbench", enabled: true, note: "" },
+            { label: "Bench Classic XL", id: "classic", enabled: true, note: "" },
+            { label: "Night Watch", id: "night", enabled: true, note: "" },
+            { label: "Glass Cockpit", id: "glass", enabled: true, note: "" },
+            { label: "Daylight Lab", id: "daylight", enabled: true, note: "" },
+            { label: "Field Radio", id: "field", enabled: true, note: "" },
+        ],
+        theme-index: 0,
+        db-min: 0.357, db-min-text: "-110", db-max: 0.833, db-max-text: "0",
+        freq-displays: [
+            { label: "Nixie tubes", id: "nixie", enabled: true, note: "" },
+            { label: "Neon", id: "neon", enabled: true, note: "" },
+            { label: "Plain", id: "plain", enabled: true, note: "" },
+        ],
+        freq-display-index: 0,
+        figures: [
+            { label: "Normal size", id: "normal", enabled: true, note: "" },
+            { label: "Enlarged figures", id: "enlarged", enabled: true, note: "" },
+        ],
+        figures-index: 0,
+        tuner-switches: true, enlarge-readings: false,
+        icon-px: 0.4, icon-text: "48 px", trail-px: 0.1, trail-text: "4 px",
+        band-plan: true,
+        band-sizes: [
+            { label: "Small", id: "", enabled: true, note: "" },
+            { label: "Medium", id: "", enabled: true, note: "" },
+            { label: "Large", id: "", enabled: true, note: "" },
+        ],
+        band-size-index: 1,
+        band-colours: [
+            { label: "Coloured", id: "", enabled: true, note: "" },
+            { label: "Plain", id: "", enabled: true, note: "" },
+        ],
+        band-colour-index: 0,
+        regions: [
+            { label: "United Kingdom", id: "uk", enabled: true, note: "" },
+            { label: "ITU Region 1", id: "itu1", enabled: true, note: "" },
+            { label: "ITU Region 2", id: "itu2", enabled: true, note: "" },
+        ],
+        region-index: 0,
+        plan-status: "UK band plan loaded", plan-status-tone: ChipTone.good,
+        scale-tooltip: "How large everything is drawn.",
+    };
+    in-out property <DisplayModel> m-display-err: {
+        scales: [{ label: "Auto (125% here)", id: "auto", enabled: true, note: "" }, { label: "100%", id: "100", enabled: true, note: "" }],
+        scale-index: 1,
+        themes: [{ label: "Night Watch", id: "night", enabled: true, note: "" }, { label: "Field Radio", id: "field", enabled: true, note: "" }],
+        theme-index: 0,
+        db-min: 0.0, db-min-text: "-160", db-max: 1.0, db-max-text: "20",
+        freq-displays: [{ label: "Neon", id: "neon", enabled: true, note: "" }], freq-display-index: 0,
+        figures: [{ label: "Enlarged figures", id: "enlarged", enabled: true, note: "" }], figures-index: 0,
+        tuner-switches: false, enlarge-readings: true,
+        icon-px: 1.0, icon-text: "96 px", trail-px: 0.0, trail-text: "1 px",
+        band-plan: true,
+        band-sizes: [{ label: "Large", id: "", enabled: true, note: "" }], band-size-index: 0,
+        band-colours: [{ label: "Plain", id: "", enabled: true, note: "" }], band-colour-index: 0,
+        regions: [{ label: "Germany", id: "de", enabled: true, note: "" }, { label: "Austria", id: "at", enabled: true, note: "" }], region-index: 0,
+        plan-status: "The band plan file could not be read: bandplan-de.json", plan-status-tone: ChipTone.err,
+    };
+    in-out property <LanguageModel> m-lang: {
+        languages: [
+            { label: "Automatic", id: "", enabled: true, note: "" },
+            { label: "English", id: "en", enabled: true, note: "" },
+            { label: "Deutsch", id: "de", enabled: true, note: "" },
+            { label: "Français", id: "fr", enabled: true, note: "" },
+            { label: "Español", id: "es", enabled: true, note: "" },
+            { label: "Magyar", id: "hu", enabled: false, note: "(no font)" },
+        ],
+        language-index: 2,
+        machine-hint: "This translation was machine-made", translation-label: "SUGGEST A BETTER TRANSLATION", suggest-label: "USE DEUTSCH",
+        countries: [
+            { label: "Not set", id: "", enabled: true, note: "" },
+            { label: "United Kingdom", id: "GB", enabled: true, note: "GB" },
+            { label: "Germany", id: "DE", enabled: true, note: "DE" },
+            { label: "France", id: "FR", enabled: true, note: "FR" },
+            { label: "Spain", id: "ES", enabled: true, note: "ES" },
+            { label: "Italy", id: "IT", enabled: true, note: "IT" },
+            { label: "Ireland", id: "IE", enabled: true, note: "IE" },
+            { label: "Netherlands", id: "NL", enabled: true, note: "NL" },
+            { label: "Belgium", id: "BE", enabled: true, note: "BE" },
+            { label: "Austria", id: "AT", enabled: true, note: "AT" },
+            { label: "Switzerland", id: "CH", enabled: true, note: "CH" },
+            { label: "Poland", id: "PL", enabled: true, note: "PL" },
+            { label: "Norway", id: "NO", enabled: true, note: "NO" },
+        ],
+        country-index: 1, country-filter: "",
+        country-hint: "Type to narrow the list", plan-line: "Band plan: United Kingdom", plan-changed-hint: "This overrides the current band plan",
+    };
+    in-out property <UpdatesModel> m-upd-ok: {
+        check-at-startup: true, channel-index: 0,
+        channel-help: "Stable releases are announced on the website. Beta releases come out as soon as they pass the tests and may have rough edges.",
+        privacy: "Checking sends nothing about you: FoxSDR asks foxsdr.com for the latest version number and compares it here.",
+        version-line: "FoxSDR 0.99.105", team-message: "1 message from the FoxSDR team",
+        status-line: "You are up to date", status-tone: ChipTone.good,
+        packaged: false, show-again: false,
+    };
+    in-out property <UpdatesModel> m-upd-new: {
+        check-at-startup: true, channel-index: 1,
+        channel-help: "Every release, beta ones included, as soon as it is published.",
+        privacy: "Checking sends nothing about you.",
+        version-line: "FoxSDR 0.99.105",
+        status-line: "FoxSDR 0.99.106 is available", status-tone: ChipTone.warn, show-again: true, show-again-label: "Show it again",
+    };
+    in-out property <SerialPortsModel> m-ser: {
+        intro: "The serial ports on this computer. A GPS receiver on one of them can tell FoxSDR where it is.",
+        empty-line: "No serial ports found",
+        ports: ["COM3", "COM7"],
+        gps: {
+            ports: [{ label: "COM3", id: "COM3", enabled: true, note: "" }, { label: "COM7", id: "COM7", enabled: true, note: "" }], port-index: 0,
+            bauds: [{ label: "4800", id: "", enabled: true, note: "" }, { label: "9600", id: "", enabled: true, note: "" }, { label: "19200", id: "", enabled: true, note: "" }], baud-index: 1,
+            listening: true, key-label: "Stop", status: "Waiting for a fix... 6 s", status-tone: ChipTone.warn, satellites: "7 satellites in view", key-enabled: true,
+            refusal: "The GPS fix was refused by the position rule (off the globe, or 0,0).",
+        },
+        gps-note: "The position goes to the map and the Radar section.",
+        gps-hint: "or read it from a GPS receiver on a serial port:",
+    };
+    in-out property <SerialPortsModel> m-ser-none: {
+        intro: "The serial ports on this computer.", empty-line: "No serial ports found", ports: [],
+        gps: {
+            ports: [], port-index: -1, bauds: [{ label: "9600", id: "", enabled: true, note: "" }], baud-index: 0,
+            listening: false, key-label: "Read position from GPS", status: "", status-tone: ChipTone.neutral, satellites: "", key-enabled: true,
+        },
+        gps-note: "",
+    };
+    in-out property <KeyBindingsModel> m-keys: {
+        help: "Click a key, then press the new chord. Esc leaves it, Backspace clears it.", reset-label: "Reset to defaults", changed: true,
+        groups: [
+            { heading: "Receiver", rows: [
+                { id: "startStop", action: "Start / stop the receiver", chord: "Ctrl+F2", capturing: false, clash: "" },
+                { id: "mute", action: "Mute the sound", chord: "M", capturing: false, clash: "" },
+                { id: "squelchUp", action: "Squelch up", chord: "Ctrl+Shift+PageUp", capturing: true, clash: "" },
+                { id: "squelchDown", action: "Squelch down", chord: "Ctrl+Shift+PageDown", capturing: false, clash: "Same chord as \"Mode CW\"" },
+            ] },
+            { heading: "Mode", rows: [
+                { id: "modeCw", action: "Mode CW", chord: "Ctrl+Shift+PageDown", capturing: false, clash: "" },
+                { id: "modeAm", action: "Mode AM", chord: "Ctrl+A", capturing: false, clash: "" },
+            ] },
+        ],
+        footer: "32 actions, 1 clash",
+    };
+    in-out property <KeyBindingsModel> m-keys-plain: {
+        help: "Click a key, then press the new chord.", reset-label: "Reset to defaults", changed: false,
+        groups: [{ heading: "Receiver", rows: [
+            { id: "startStop", action: "Start / stop the receiver", chord: "Ctrl+F2", capturing: false, clash: "" },
+            { id: "volumeUp", action: "Volume up", chord: "Plus", capturing: false, clash: "" },
+        ] }],
+        footer: "32 actions, 0 clashes",
+    };
+    // the rule-11 probe's own model: the same rows with nothing listening (two listening caps would fight for the keyboard)
+    in-out property <KeyBindingsModel> m-keys-probe: {
+        help: "Click a key, then press the new chord. Esc leaves it, Backspace clears it.", reset-label: "Reset to defaults", changed: true,
+        groups: [
+            { heading: "Receiver", rows: [
+                { id: "startStop", action: "Start / stop the receiver", chord: "Ctrl+F2", capturing: false, clash: "" },
+                { id: "squelchDown", action: "Squelch down", chord: "Ctrl+Shift+PageDown", capturing: false, clash: "Same chord as \"Mode CW\"" },
+            ] },
+        ],
+        footer: "32 actions, 1 clash",
+    };
+    in-out property <DiagnosticsModel> m-diag: {
+        offer: "FoxSDR did not close normally last time.",
+        explanation: "If FoxSDR crashes or freezes, it writes a report on THIS machine. With this switch on, that report is also sent to us the NEXT time you open FoxSDR.",
+        sent-text: "Sent: the version and build, what failed and where. NEVER sent: a frequency you tuned to. Off means off.",
+        record: true, what-open: true,
+        what-text: "version  commit  os  arch  mode  source  sample rate. NEVER a frequency, never anything decoded, never your position.",
+        minidump: false, dump-note: "A memory dump can contain file names, window titles and received signal data. It is written LOCALLY ONLY.",
+        log-path: "Log: C:\\Users\\fox\\AppData\\Local\\FoxSDR\\logs\\foxsdr.log", reports-path: "Reports: C:\\Users\\fox\\AppData\\Local\\FoxSDR\\reports",
+        ledger: false, ledger-note: "For a click that lands away from the control it was aimed at.",
+        bundle-status: "Copied to the clipboard.",
+        sdrplay-text: "For SDRplay owners: steps the RSP through every sample rate, band, LNA state and antenna once, and writes one text file you can attach to a bug report.",
+        sdrplay-enabled: true, sdrplay-status: "",
+    };
+    in-out property <UsageModel> m-usage-on: {
+        disclosure: "FoxSDR can send a small anonymous report: which version, which radio family, how long it ran.",
+        send: true, state-line: "Two messages are sent: one when FoxSDR starts, one when it ends.", install-id-line: "Install id 3f9a-77c1-0b2e (random, made on this computer)",
+        what-label: "What exactly is sent?", privacy-label: "Privacy policy (foxsdr.com)",
+        what-open: true, what-text: "Each report carries only:",
+        payload: ["version and build, Windows version", "how long each session ran", "which radio family was open, never a serial number", "which plugins ran, by name"],
+    };
+    in-out property <UsageModel> m-usage-off: {
+        disclosure: "FoxSDR can send a small anonymous report.", send: false, state-line: "Off. Nothing is transmitted.", install-id-line: "",
+        what-label: "What exactly is sent?", privacy-label: "Privacy policy (foxsdr.com)", what-open: false, payload: [],
+    };
+    in-out property <TesterModel> m-tester-linked: {
+        shown: true, explanation: "This build reports to the FoxSDR team under your tester name.",
+        linked-line: "Linked to Alex T.", code-line: "", invalid-line: "", use-label: "", field-shown: false,
+        sent-text: "What is sent: your tester name and the install id, with each report.",
+        sent-open: true, sent-preview: "{ \"tester\": \"A*** T***\", \"install\": \"3f9a-****\" }",
+    };
+    in-out property <TesterModel> m-tester-open: {
+        shown: true, explanation: "Paste the code or link the FoxSDR team gave you.",
+        linked-line: "", code-line: "A tester code is set.", invalid-line: "That code was not recognised.", error-line: "That does not look like a tester code or link.", code-draft: "ab12cd34", use-label: "Use this code", field-shown: true,
+        sent-text: "", sent-open: false, sent-preview: "",
+    };
+    in-out property <ReportPageModel> m-feature: {
+        shown: true, kind: 0, title: "Request a feature", text: "", counter: "0 / 100000 characters", contact: "",
+        no-email-note: "Without an email address we cannot reply or tell you when this is added.",
+        attach-note: "Sends your message above, the FoxSDR version, and whether this is a feature request.",
+        send-enabled: false, refusal: "(type a request first)", sent-line: "Thank you - your request was sent.", sent-tone: ChipTone.good,
+    };
+    in-out property <ReportPageModel> m-bug: {
+        shown: true, kind: 1, title: "Report a bug or dislike", text: "", counter: "0 / 100000 characters", contact: "alex@",
+        recognised-line: "A report was recognised and attached as FoxSDR report 0412",
+        kind-question: "What are you reporting?",
+        problem-kinds: [{ label: "Something is broken (bug)", id: "bug", enabled: true, note: "" }, { label: "Something I dislike", id: "dislike", enabled: true, note: "" }],
+        problem-kind-index: -1,
+        local-only-line: "Kept on this computer: report-0412.txt in the reports folder.",
+        no-email-note: "Without an email address we cannot reply or tell you when this is fixed.",
+        attach: true,
+        evidence: ["FoxSDR 0.99.105 | Windows 11", "RTL-SDR Blog V4 | 2.400 MS/s", "3 plugins running"],
+        probe-shown: true, probe-on: false,
+        preview-open: true, preview-text: "FoxSDR 0.99.105 | Windows 11 | RTL-SDR Blog V4 | 2.400 MS/s\nlog: 412 lines, the last at 14:05:11",
+        attach-note: "Sends whether this is a bug or a dislike, your message above, the contact line below it and the log.",
+        send-enabled: true, refusal: "(write what went wrong first)", sent-line: "Sending...", sent-tone: ChipTone.warn,
+    };
+
+    // ============================ column A (x 10) ============================
+    a1 := Section { x: 10px; y: 10px; width: 296px; small: true; open: true; name: "Display"; chip: "BAND PLAN ON"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecDisplay { model: root.m-display; } }
+    a2 := Section { x: 10px; y: a1.y + a1.height + 10px; width: 296px; small: true; open: true; name: "Display"; chip: "BAND PLAN ON"; tone: ChipTone.good;
+        DisplayBody { model: root.m-display-err; } }
+
+    // ============================ column B (x 316) ============================
+    b1 := Section { x: 316px; y: 10px; width: 296px; small: true; open: true; name: "Language & country"; chip: "DEUTSCH"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecLanguage { model: root.m-lang; } }
+    b2 := Section { x: 316px; y: b1.y + b1.height + 10px; width: 296px; small: true; open: true; name: "Updates"; chip: "UP TO DATE";
+        SpecUpdates { model: root.m-upd-ok; } }
+    b3 := Section { x: 316px; y: b2.y + b2.height + 10px; width: 296px; small: true; open: true; name: "Updates"; chip: "UPDATE"; tone: ChipTone.warn;
+        SpecUpdates { model: root.m-upd-new; } }
+    b4 := Section { x: 316px; y: b3.y + b3.height + 10px; width: 296px; small: true; open: true; name: "Serial ports"; chip: "2";
+        SpecSerial { model: root.m-ser; } }
+    b5 := Section { x: 316px; y: b4.y + b4.height + 10px; width: 296px; small: true; open: true; name: "Serial ports"; chip: "NONE";
+        SerialPortsBody { model: root.m-ser-none; } }
+
+    // ============================ column C (x 622) ============================
+    c1 := Section { x: 622px; y: 10px; width: 296px; small: true; open: true; name: "Key bindings"; chip: "CHANGED"; tone: ChipTone.warn;
+        SpecKeys { model: root.m-keys; } }
+    c2 := Section { x: 622px; y: c1.y + c1.height + 10px; width: 296px; small: true; open: true; name: "Key bindings"; chip: "DEFAULT";
+        KeyBindingsBody { model: root.m-keys-plain; } }
+
+    // ============================ column D (x 928) ============================
+    d1 := Section { x: 928px; y: 10px; width: 296px; small: true; open: true; name: "Diagnostics"; chip: "ON"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecDiag { model: root.m-diag; } }
+    d2 := Section { x: 928px; y: d1.y + d1.height + 10px; width: 296px; small: true; open: true; name: "Usage reporting"; chip: "ON"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecUsage { model: root.m-usage-on; } }
+    d3 := Section { x: 928px; y: d2.y + d2.height + 10px; width: 296px; small: true; open: true; name: "Usage reporting"; chip: "OFF";
+        SpecUsage { model: root.m-usage-off; } }
+    d4 := Section { x: 928px; y: d3.y + d3.height + 10px; width: 296px; small: true; open: true; name: "Beta tester"; chip: "LINKED"; tone: ChipTone.warn; show-dot: true; dot: LampState.yellow;
+        SpecTester { model: root.m-tester-linked; } }
+    d5 := Section { x: 928px; y: d4.y + d4.height + 10px; width: 296px; small: true; open: true; name: "Beta tester"; chip: "INVALID"; tone: ChipTone.err; show-dot: true; dot: LampState.red;
+        SpecTester { model: root.m-tester-open; } }
+
+    // ============================ the two report pages ============================
+    feature-stage := Rectangle { x: 10px; y: root.pages-y; width: 500px; height: 420px; background: Theme.bg; clip: true;
+        SpecReport { x: 0px; y: 0px; width: parent.width; height: parent.height; model: root.m-feature;
+            report-text(t) => {
+                Rec.rec("report-text", t);
+                root.m-feature.send-enabled = t != "";
+            }
+        } }
+    bug-stage := Rectangle { x: 520px; y: root.pages-y; width: 520px; height: 820px; background: Theme.bg; clip: true;
+        SpecReport { x: 0px; y: 0px; width: parent.width; height: parent.height; model: root.m-bug; } }
+
+    // ============================ rule 11: bare bodies in a 254-wide cell ============================
+    // (the cell's width, if a body asks for more than 254 px, would be wider)
+    HorizontalLayout { x: 10px; y: root.probe-y; width: 254px; height: 20px; p1 := Rectangle { DisplayBody { model: root.m-display; } } }
+    HorizontalLayout { x: 280px; y: root.probe-y; width: 254px; height: 20px; p2 := Rectangle { LanguageBody { model: root.m-lang; } } }
+    HorizontalLayout { x: 550px; y: root.probe-y; width: 254px; height: 20px; p3 := Rectangle { UpdatesBody { model: root.m-upd-new; } } }
+    HorizontalLayout { x: 820px; y: root.probe-y; width: 254px; height: 20px; p4 := Rectangle { SerialPortsBody { model: root.m-ser; } } }
+    HorizontalLayout { x: 10px; y: root.probe-y + 40px; width: 254px; height: 20px; p5 := Rectangle { KeyBindingsBody { model: root.m-keys-probe; } } }
+    HorizontalLayout { x: 280px; y: root.probe-y + 40px; width: 254px; height: 20px; p6 := Rectangle { DiagnosticsBody { model: root.m-diag; } } }
+    HorizontalLayout { x: 550px; y: root.probe-y + 40px; width: 254px; height: 20px; p7 := Rectangle { UsageBody { model: root.m-usage-on; } } }
+    HorizontalLayout { x: 820px; y: root.probe-y + 40px; width: 254px; height: 20px; p8 := Rectangle { TesterBody { model: root.m-tester-open; } } }
+    HorizontalLayout { x: 10px; y: root.probe-y + 80px; width: 254px; height: 20px; p9 := Rectangle { GpsRowView { gps: root.m-ser.gps; } } }
+
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

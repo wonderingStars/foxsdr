@@ -66,6 +66,7 @@
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
 #include "signatures.hpp"
+#include "system_publish.hpp"
 
 #include "main.h"  // generated from ui/main.slint by slint_target_sources
 
@@ -333,7 +334,9 @@ int main(int argc, char** argv) {
     bool followBandPlan = true;
     int bankIndex = 0;
     if (const char* bankEnv = std::getenv("FOXSDR_SLINT_BANK")) { bankIndex = std::clamp(std::atoi(bankEnv), 0, 4); }   // a bounded run's self-capture: the bank to show
-    std::map<int, std::set<int>> openSections{{0, {1, 2, 4}}};   // SIGNAL's Source, Radio and Sinks rows open (Audio filters and Recorder closed), as the ImGui window
+    // SIGNAL's Source, Radio and Sinks rows open (Audio filters and Recorder closed), as the ImGui window; SYSTEM's Display and Key bindings (the LOGICAL rows of
+    // the contract: 0 Display ... 5 Key bindings ... 9 About - the rail's positions differ only while the Beta tester row is hidden)
+    std::map<int, std::set<int>> openSections{{0, {1, 2, 4}}, {4, {0, 5}}};
     // A bounded run's self-capture: FOXSDR_SLINT_SECTIONS=<bank>:<i,j,k>[;<bank>:<i,j,k>] sets the open rows of a bank (next to FOXSDR_SLINT_BANK).
     if (const char* sectionsEnv = std::getenv("FOXSDR_SLINT_SECTIONS")) {
         std::string spec = sectionsEnv;
@@ -366,6 +369,25 @@ int main(int argc, char** argv) {
     std::vector<PaletteAction> paletteActions;
     std::string statusLineBand;
     Signatures sigs;
+
+    // THE SYSTEM BANK'S BODIES (system_publish.hpp): Display, Language & country, Updates, Serial ports, Key bindings, Diagnostics, Usage reporting, Beta tester and the
+    // two report pages, published from system_logic's reads over the interface half the duties hold (once a tick, after the signal bank's) and wired to the effects
+    // system_logic names. A bounded run sends and opens nothing.
+    foxsdr::slintsystem::SystemPublisher::Hooks systemHooks;
+    systemHooks.updateCardChanged = [&] { applyUpdateCard(); };
+    systemHooks.rangeManual = [&] { rangeManual = true; ui->set_range_manual(true); };
+    foxsdr::slintsystem::SystemPublisher systemBank(*ui, kit, duties, world, api, session, bounded.bounded(), systemHooks);
+    systemBank.setLastRunUnclean(restored.lastRunUnclean);
+    systemBank.wire();
+    for (const int row : openSections[4]) { systemBank.sectionOpened(row); }   // a section that starts open asks for what it shows (the Serial ports scan)
+    // A bounded run's self-captures (never set in a release): the Language dropdown picks <code> at tick 60 (the whole path, re-published in that language), and
+    // FOXSDR_SLINT_REPORT opens the bug page ("feature" or "0" opens the feature request page instead).
+    std::string languageChangeCapture;
+    if (const char* e = std::getenv("FOXSDR_SLINT_LANGUAGE_CHANGE"); e != nullptr && e[0] != '\0') { languageChangeCapture = e; }
+    if (const char* e = std::getenv("FOXSDR_SLINT_REPORT"); e != nullptr && e[0] != '\0') {
+        systemBank.raiseReportForCapture((std::string(e) == "feature" || std::string(e) == "0") ? 0 : 1);
+    }
+    int captureTicks = 0;
 
     // ---- commands: every key becomes one submit() ----
     const auto submit = [&](FoxCommand c) {
@@ -486,16 +508,26 @@ int main(int argc, char** argv) {
                 add(0, "Web access", lists.webListening ? "PORT " + std::to_string(lists.webPort) : "OFF", lists.webListening ? ChipTone::Good : ChipTone::Neutral);
                 add(1, "CAT", lists.catListening ? "PORT " + std::to_string(lists.catPort) : "OFF", lists.catListening ? ChipTone::Good : ChipTone::Neutral);
                 break;
-            default:
-                add(0, "Display", "--", ChipTone::Neutral);
-                add(1, "Language", "EN", ChipTone::Neutral);
-                add(2, "Updates", "--", ChipTone::Neutral);
-                add(3, "Serial ports", "--", ChipTone::Neutral);
-                add(4, "Key bindings", "--", ChipTone::Neutral);
-                add(5, "Diagnostics", "--", ChipTone::Neutral);
-                add(6, "Usage reporting", "--", ChipTone::Neutral);
-                add(7, "About", running ? "" : "", ChipTone::Neutral);
+            default: {
+                // THE SYSTEM BANK, in the contract's order (main.slint places the bodies by these indices): 0 Display, 1 Language & country, 2 Frequency correction,
+                // 3 Updates, 4 Serial ports, 5 Key bindings, 6 Diagnostics, 7 Usage reporting, 8 Beta tester (only while the tester feature is on), 9 About.
+                // The chips are the host's (system_logic: the models' own words); row 2's is the SIGNAL family's ppm chip.
+                static const char* const names[10] = {"Display", "Language & country", "Frequency correction", "Updates", "Serial ports", "Key bindings", "Diagnostics", "Usage reporting", "Beta tester", "About"};
+                for (int logical = 0; logical < 10; ++logical) {
+                    if (logical == 8 && !systemBank.testerShown()) { continue; }
+                    std::string chip = logical == 9 ? "" : "--";
+                    ChipTone tone = ChipTone::Neutral;
+                    if (logical == 2) {
+                        const auto f = signalBank.face(7);
+                        if (f.valid) { chip = f.chip; tone = f.tone; }
+                    } else if (logical != 9) {
+                        const auto f = systemBank.face(logical);
+                        if (f.valid) { chip = f.chip; tone = f.tone; }
+                    }
+                    rows.push_back({ss(cascade::i18n::tr(names[logical])), ss(chip), tone, logical != 9 && openSections[4].count(logical) > 0, LampState::Off, false});
+                }
                 break;
+            }
         }
         return rows;
     };
@@ -618,7 +650,7 @@ int main(int argc, char** argv) {
             case 404: copyMarkers(); break;
             case 406: submit(op(FOXAPP_OP_MARKER_CLEAR)); break;
             case 601: ui->set_about_open(true); break;
-            case 602: bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(4); break;
+            case 602: bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(5); break;
             case 603: ui->invoke_shortcut(ss("screenshot")); break;
             case 604: slint::quit_event_loop(); break;
             case 701: case 702: case 703: case 704: case 705: case 706: case 707: case 708: setMode(demodOfIndex(id - 701)); break;
@@ -666,9 +698,12 @@ int main(int argc, char** argv) {
     // ---- rail + panel ----
     ui->on_bank_selected([&](int i) { bankIndex = std::clamp(i, 0, 4); ui->set_bank_index(bankIndex); });
     ui->on_section_clicked([&](int i) {
-        if (bankIndex == 4 && i == 7) { ui->set_about_open(true); return; }
+        // SYSTEM's rail position -> its logical row: the Beta tester row (8) is absent while the tester feature is off, which moves About up one place.
+        int row = i;
+        if (bankIndex == 4 && i >= 8 && !systemBank.testerShown()) { row = i + 1; }
+        if (bankIndex == 4 && row == 9) { ui->set_about_open(true); return; }   // About opens its sheet and never folds
         auto& open = openSections[bankIndex];
-        if (open.count(i)) { open.erase(i); } else { open.insert(i); }
+        if (open.count(row)) { open.erase(row); } else { open.insert(row); if (bankIndex == 4) { systemBank.sectionOpened(row); } }
     });
     ui->on_passband_changed([&](float v) {
         const double lo = 3000.0, hi = std::max(lo, 0.9 * state.channelRateHz);
@@ -722,8 +757,9 @@ int main(int argc, char** argv) {
         }
     });
     ui->on_status_clicked([&](int) {});
-    ui->on_feature_request_clicked([&] { std::fprintf(stderr, "foxsdr-slint: the feature-request page is a companion screen (phase 3)\n"); });
-    ui->on_bug_report_clicked([&] { std::fprintf(stderr, "foxsdr-slint: the problem-report page is a companion screen (phase 3)\n"); });
+    // The status bar's two keys open the SYSTEM bank's report sheet through the report-open effect (system_publish.cpp: applyReportOpen -> the page of that kind).
+    ui->on_feature_request_clicked([&] { ui->global<SystemEvents>().invoke_report_open(0); });
+    ui->on_bug_report_clicked([&] { ui->global<SystemEvents>().invoke_report_open(1); });
 
     // ---- the command palette ----
     const auto rebuildPalette = [&](const std::string& query) {
@@ -741,7 +777,11 @@ int main(int argc, char** argv) {
         for (const auto& bm : lists.bookmarks) { const auto id = bm.id; add("BOOKMARK", bm.name, fmtMHz(bm.hz), [=] { FoxCommand c = op(FOXAPI_OP_BOOKMARK_TUNE); c.ival[0] = static_cast<int64_t>(id); submit(c); }); }
         for (const auto& pl : lists.pluginNames) { add("PLUGIN", pl, "fitted module", [=, &bankIndex] { bankIndex = 1; ui->set_bank_index(1); }); }
         const char* settings[] = {"Display", "Key bindings", "Updates", "Language", "Diagnostics", "Usage reporting", "Serial ports"};
-        for (int i = 0; i < 7; ++i) { const int row = i == 0 ? 0 : i == 1 ? 4 : i == 2 ? 2 : i == 3 ? 1 : i == 4 ? 5 : i == 5 ? 6 : 3; add("SETTING", settings[i], "System bank", [=, &bankIndex, &openSections] { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(row); }); }
+        // the contract's logical rows of bank 4, in the order of `settings`: Display 0, Key bindings 5, Updates 3, Language 1, Diagnostics 6, Usage reporting 7, Serial ports 4
+        static const int kRowOf[7] = {0, 5, 3, 1, 6, 7, 4};
+        for (int i = 0; i < 7; ++i) { const int row = kRowOf[i]; add("SETTING", settings[i], "System bank", [=, &bankIndex, &openSections, &systemBank] { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(row); systemBank.sectionOpened(row); }); }
+        add("PAGE", "Request a feature", "send a request to the FoxSDR team", [&] { systemBank.openReport(0); });
+        add("PAGE", "Report a bug / dislike", "send a report to the FoxSDR team", [&] { systemBank.openReport(1); });
         add("ABOUT", "About FoxSDR", "version, licences", [&] { ui->set_about_open(true); });
         if (paletteActions.size() > 12) { paletteActions.resize(12); }
         std::vector<PaletteResult> results;
@@ -787,7 +827,7 @@ int main(int argc, char** argv) {
         else if (id == "bankSignal") { bankIndex = 0; ui->set_bank_index(0); } else if (id == "bankDecode") { bankIndex = 1; ui->set_bank_index(1); }
         else if (id == "bankView") { bankIndex = 2; ui->set_bank_index(2); } else if (id == "bankExtend") { bankIndex = 3; ui->set_bank_index(3); }
         else if (id == "bankSystem") { bankIndex = 4; ui->set_bank_index(4); }
-        else if (id == "openSettings") { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(4); }
+        else if (id == "openSettings") { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(5); }
         else if (id == "escape") { ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); }
         else if (id == "uiSizeUp" || id == "uiSizeAuto") { std::fprintf(stderr, "foxsdr-slint: the interface size is phase 2's (%s)\n", id.c_str()); }
         else { std::fprintf(stderr, "foxsdr-slint: shortcut %s is not bound here\n", id.c_str()); }
@@ -1060,6 +1100,9 @@ int main(int argc, char** argv) {
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         publisher.publish(state);
         signalBank.publish(state);
+        systemBank.publish(state);
+        // the bounded run's self-capture of the language path: at tick 60 the Language dropdown picks the code (save, setLanguage, bundled translation, re-publish)
+        if (!languageChangeCapture.empty() && ++captureTicks == 60) { systemBank.languageChangeForCapture(languageChangeCapture); }
     };
 
     // THE TICK = THE FRAME: the screen's reads, then the housekeeping (the sentinel's beat, the senders, the sweep, the update check), then the
@@ -1113,6 +1156,7 @@ int main(int argc, char** argv) {
         // What the kit holds at the end of a bounded run: the evidence that the port answered on this thread.
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", kitLine.c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", signalBank.summaryLine().c_str());
+        std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", systemBank.summaryLine().c_str());
         for (const auto& r : kit.lists().rows) {
             std::fprintf(stderr, "foxsdr-slint: plugin %-40s caps=0x%04x %s%s%s file=%s\n", r.name.c_str(), r.caps, r.loaded ? "loaded" : "REFUSED",
                          r.stopped ? " stopped" : "", r.asleep ? " asleep" : "", r.file.c_str());

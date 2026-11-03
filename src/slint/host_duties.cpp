@@ -336,6 +336,8 @@ void HostDuties::poll(const TickInput& in) {
 
     if (sweepArmed_ && !sweepRunning_) { trySweepStart(); }
     pollUpdate();
+    // A saved half the coalescing gap held back goes now that the gap has passed (saveInterfaceHalf).
+    if (halfHeld_ && ticks_ - halfSentTick_ >= kInterfaceSendGapTicks) { (void)sendHeldHalf(); }
 }
 
 void HostDuties::trySweepStart() {
@@ -522,7 +524,7 @@ void HostDuties::handBackSettings() {
     // ONLY A HALF THE ENGINE SERVED, and only when the sweep moved its memory. A half built from defaults would put the defaults over the
     // engine's copy of every window rectangle and switch; this window changes nothing else of the half, so what it hands back is what it was
     // handed with the crash-upload limiter's memory brought up to date.
-    if (!ifaceServed_ || samePolicy(crashState_, crashAtStart_)) { return; }
+    if (!ifaceServed_ || (samePolicy(crashState_, crashAtStart_) && !halfHeld_)) { return; }
     core::AppConfig half = iface_;
     half.crashUploadRecent = core::encodePolicyRecent(crashState_);
     half.crashUploadWindowStart = crashState_.windowStart;
@@ -532,7 +534,87 @@ void HostDuties::handBackSettings() {
         const std::string line = "config: the last half of the settings was not taken by the engine; the file keeps the half the engine last had";
         w_.say(line);
         w_.diag(line);
+    } else {
+        halfHeld_ = false;
     }
+}
+
+// ---- the SYSTEM bank's door ---------------------------------------------------------------------------------------------------
+bool HostDuties::sendHeldHalf() {
+    halfSentTick_ = ticks_;   // (the clock of the attempt: a refused one is not retried every tick)
+    if (!w_.submitInterfaceHalf(core::serializeInterfaceHalf(iface_))) {
+        if (!halfSendWarned_) {
+            halfSendWarned_ = true;
+            const std::string line = "config: the interface's half of the settings was not taken by the engine; asking again later";
+            w_.say(line);
+            w_.diag(line);
+        }
+        return false;
+    }
+    halfHeld_ = false;
+    return true;
+}
+
+bool HostDuties::saveInterfaceHalf(const core::AppConfig& half) {
+    const bool diagnosticsFlipped = half.diagnosticsEnabled != iface_.diagnosticsEnabled;
+    iface_ = half;
+    if (!ifaceServed_) {
+        // Kept for the window, never handed over: see the declaration.
+        if (!halfSendWarned_) {
+            halfSendWarned_ = true;
+            w_.say("settings: the engine did not serve the interface's half of them, so a change made now is kept for this run and not saved");
+        }
+        return false;
+    }
+    halfHeld_ = true;
+    if (!diagnosticsFlipped && ticks_ - halfSentTick_ < kInterfaceSendGapTicks) { return false; }   // poll() sends it when the gap has passed
+    return sendHeldHalf();
+}
+
+void HostDuties::diagnosticsChanged() {
+    w_.applyDiagnosticsSwitches(iface_.diagnosticsEnabled, iface_.diagnosticsMinidump);
+    w_.diag(std::string("diagnostics: recording ") + (iface_.diagnosticsEnabled ? "on" : "off") + ", memory dump " + (iface_.diagnosticsMinidump ? "on" : "off"));
+}
+
+void HostDuties::updateSettingChanged() {
+    if (!iface_.updateCheckEnabled) {
+        // Off means off immediately: the answer is discarded, and none is asked for again this launch.
+        update_ = core::UpdateInfo{};
+        updateError_.clear();
+        refreshCard();
+        return;
+    }
+    // A check already IN FLIGHT is left alone: it is about to deliver the very answer a re-tick or a channel change is asking for.
+    if (updatePending_) { return; }
+    update_ = core::UpdateInfo{};
+    updateError_.clear();
+    updateAsked_ = false;
+    const UpdatePlan plan = updatePlanFor(cfg_.frames >= 0, w_.manifestSeam(), w_.inPackage(), iface_.updateCheckEnabled);
+    w_.say(updatePlanLine(plan));
+    if (plan == UpdatePlan::Run) { startUpdateCheck(); }
+    refreshCard();
+}
+
+void HostDuties::updateShowAgain() {
+    updateDismissed_ = false;
+    refreshCard();
+}
+
+UpdateStatus HostDuties::updateStatus() const {
+    UpdateStatus s;
+    s.enabled = iface_.updateCheckEnabled;
+    s.packaged = w_.inPackage();
+    s.started = updateAsked_;
+    s.pending = updatePending_;
+    s.newer = update_.newer;
+    s.critical = update_.critical;
+    s.dismissed = updateDismissed_;
+    s.newVersion = update_.version;
+    s.error = updateError_;
+    for (const core::TeamMessage& m : update_.messages) {
+        if (std::find(iface_.messagesSeen.begin(), iface_.messagesSeen.end(), m.id) == iface_.messagesSeen.end()) { ++s.unseenMessages; }
+    }
+    return s;
 }
 
 void HostDuties::closed() {

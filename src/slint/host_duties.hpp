@@ -160,6 +160,22 @@ struct UpdateCardModel {
 };
 UpdateCardModel updateCardFor(const UpdateView& view);
 
+// What the Updates section of the SYSTEM bank says that the card does not (app_window_updates.cpp drawUpdatesSection): whether the check has been asked and is
+// still out, the offered version, the check's failure ("last check did not complete: ..."; the card never shows one), the dismissed banner, and the team messages the
+// Seen list has not covered. system_logic.hpp's UpdatesFacts is its copy (the logic does not include this header); the Store flow's facts are the duties' deferred ones.
+struct UpdateStatus {
+    bool enabled = false;
+    bool packaged = false;
+    bool started = false;       // a check has been asked this launch (or since the last re-tick)
+    bool pending = false;       // ...and its answer has not come
+    bool newer = false;
+    bool critical = false;
+    bool dismissed = false;
+    std::string newVersion;     // the version offered, when newer
+    std::string error;          // a check's or a download's failure
+    int unseenMessages = 0;
+};
+
 // ---- the seam ---------------------------------------------------------------------------------------------------------------
 struct DownloadOutcome {
     bool ok = false;
@@ -267,6 +283,29 @@ public:
 
     AboutFacts about() const;
     int ticks() const { return ticks_; }
+
+    // ---- the SYSTEM bank's door (src/slint/system_logic.hpp, docs 6.39) --------------------------------------------------------------------------------
+    // The interface's half of the settings as the host holds it: read from fact.config.interface at start, changed by saveInterfaceHalf. The bank's models are
+    // computed from it and every control that changes a setting hands the changed half back.
+    const cascade::core::AppConfig& interfaceHalf() const { return iface_; }
+    // A CHANGED HALF: kept in memory at once (the window shows it whether or not the engine takes it), and handed to the engine as FOXAPP_OP_INTERFACE_CONFIG's
+    // document - the whole half, as flushInterfaceHalf and sendInterfaceHalf do (app_window.cpp 2484, 21805). Coalesced as sendInterfaceHalf coalesces: at most one
+    // document per kInterfaceSendGapTicks (a slider dragged every tick must not fill the session's queue), except that a flip of the Diagnostics switch goes at
+    // once ("off means off" must not wait). What the gap holds back is sent by poll() when the gap has passed, and finish() sends whatever is still held. A half
+    // the engine did not serve at start (a run with no settings file, or a document that did not parse) is never handed over: it would put the defaults over the
+    // engine's copy of every window rectangle and switch (handBackSettings' rule). Returns true when the half was taken by the engine now.
+    bool saveInterfaceHalf(const cascade::core::AppConfig& half);
+    // The Diagnostics switches changed (saveInterfaceHalf has already kept them): the crash handler's capture is armed or disarmed with the user's minidump
+    // choice (applyDiagnosticsEnabled's setCrashCaptureEnabled). Not the sweep: a report is sent the NEXT time FoxSDR opens.
+    void diagnosticsChanged();
+    // The Updates tick or the channel changed (saveInterfaceHalf has already kept them): off discards the answer; on - or another channel - asks again, as a re-tick
+    // does, unless a check is already in flight (its answer is the one wanted) or the plan says nobody is asked (a Store copy, a bounded run).
+    void updateSettingChanged();
+    // "Show it again": the dismissed update card comes back.
+    void updateShowAgain();
+    UpdateStatus updateStatus() const;
+    // The coalescing gap, in ticks (0.25 s at the 33 ms tick; app_window.hpp kInterfaceSendGapS).
+    static constexpr int kInterfaceSendGapTicks = 8;
     const cascade::core::UploadPolicyState& crashMemory() const { return crashState_; }
     bool sweepRunning() const { return sweepRunning_; }
 
@@ -278,6 +317,7 @@ private:
     void startInstaller();
     void refreshCard();
     void handBackSettings();
+    bool sendHeldHalf();
 
     DutyWorld& w_;
     std::function<void()> requestClose_;
@@ -286,6 +326,9 @@ private:
     // The interface's half as the engine served it, and the crash-upload memory decoded from it.
     cascade::core::AppConfig iface_;
     bool ifaceServed_ = false;
+    bool halfHeld_ = false;            // a saved half the gap has held back (or the engine refused): sent by poll(), and by finish()
+    int halfSentTick_ = -1000;         // the tick of the last attempt to send one
+    bool halfSendWarned_ = false;
     cascade::core::UploadPolicyState crashAtStart_;
     cascade::core::UploadPolicyState crashState_;
 

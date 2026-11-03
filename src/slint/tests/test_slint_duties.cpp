@@ -1270,6 +1270,216 @@ int main() {
         CHECK(!early.newSignatureInFile);
     }
 
+    // ---- the SYSTEM bank's door (docs 6.39): the half the bank reads and saves, the diagnostics switches, the update check re-asked ----
+    {
+        const auto docOf = [](const std::string& document) {
+            core::AppConfig parsed;
+            std::string error;
+            CHECK(core::parseInterfaceHalf(document, parsed, error));
+            return parsed;
+        };
+        FakeWorld w;
+        HostDuties d(w, [] {});
+        w.facts["fact.config.interface"] = interfaceDoc(true, true);
+        d.start(interactive());
+        CHECK(d.interfaceHalf().diagnosticsEnabled && d.interfaceHalf().updateCheckEnabled && d.interfaceHalf().uiTheme == "today");
+        CHECK(w.submitted.empty());
+
+        // the first save goes at once: the whole half, with the one change in it
+        core::AppConfig half = d.interfaceHalf();
+        half.uiTheme = "night";
+        CHECK(d.saveInterfaceHalf(half));
+        CHECK(w.submitted.size() == 1);
+        CHECK(d.interfaceHalf().uiTheme == "night");
+        CHECK(docOf(w.submitted.back()).uiTheme == "night" && docOf(w.submitted.back()).diagnosticsEnabled);
+        // a second inside the gap is kept and held: the next poll that is a gap later sends it, with both changes
+        half.interfaceScale = "150";
+        CHECK(!d.saveInterfaceHalf(half));
+        CHECK(w.submitted.size() == 1 && d.interfaceHalf().interfaceScale == "150");
+        for (int i = 0; i < HostDuties::kInterfaceSendGapTicks - 2; ++i) { d.poll({}); }
+        CHECK(w.submitted.size() == 1);
+        d.poll({});
+        d.poll({});
+        CHECK(w.submitted.size() == 2);
+        CHECK(docOf(w.submitted.back()).interfaceScale == "150" && docOf(w.submitted.back()).uiTheme == "night");
+        for (int i = 0; i < HostDuties::kInterfaceSendGapTicks * 2; ++i) { d.poll({}); }
+        CHECK(w.submitted.size() == 2);   // nothing held, nothing sent
+        // a slider dragged every tick sends once per gap, and the last value is never lost
+        for (int i = 0; i < 30; ++i) {
+            half.dbMin = -150.f + static_cast<float>(i);
+            (void)d.saveInterfaceHalf(half);
+            d.poll({});
+        }
+        const std::size_t afterDrag = w.submitted.size();
+        CHECK(afterDrag >= 4 && afterDrag <= 2 + 30 / HostDuties::kInterfaceSendGapTicks + 3);   // about one document per gap, not thirty
+        for (int i = 0; i < HostDuties::kInterfaceSendGapTicks * 3; ++i) { d.poll({}); }
+        CHECK(docOf(w.submitted.back()).dbMin == -121.f);
+        // the Diagnostics switch is not made to wait
+        half.dbMin = -100.f;
+        CHECK(d.saveInterfaceHalf(half));   // the gap has passed: at once
+        const std::size_t before = w.submitted.size();
+        half.dbMin = -99.f;
+        CHECK(!d.saveInterfaceHalf(half));  // inside the gap: held
+        CHECK(w.submitted.size() == before);
+        half.diagnosticsEnabled = false;
+        CHECK(d.saveInterfaceHalf(half));   // a flip of the switch goes at once, with everything held
+        CHECK(w.submitted.size() == before + 1 && !docOf(w.submitted.back()).diagnosticsEnabled && docOf(w.submitted.back()).dbMin == -99.f);
+        // what is still held when the loop ends goes with the exit's last half
+        half.uiTheme = "glass";
+        (void)d.saveInterfaceHalf(half);
+        const std::size_t beforeFinish = w.submitted.size();
+        d.finish();
+        CHECK(w.submitted.size() == beforeFinish + 1 && docOf(w.submitted.back()).uiTheme == "glass");
+        // ...and nothing is sent twice
+        FakeWorld q;
+        HostDuties e(q, [] {});
+        q.facts["fact.config.interface"] = interfaceDoc(true, true);
+        e.start(interactive());
+        e.finish();
+        CHECK(q.submitted.empty());   // nothing changed, the sweep's memory did not move: nothing to hand back
+    }
+    {
+        // a half the engine did not serve is kept for the window and never handed over (the defaults would go over the engine's copy)
+        FakeWorld w;
+        HostDuties d(w, [] {});
+        DutyStart hermetic = bounded(3);
+        hermetic.configPath.clear();
+        hermetic.configLoaded = false;
+        d.start(hermetic);
+        core::AppConfig half = d.interfaceHalf();
+        half.uiTheme = "field";
+        CHECK(!d.saveInterfaceHalf(half));
+        CHECK(d.interfaceHalf().uiTheme == "field");
+        CHECK(w.submitted.empty() && anyContains(w.said, "kept for this run and not saved"));
+        d.finish();
+        CHECK(w.submitted.empty());
+        // an engine that refuses the document is asked again a gap later, and the refusal is said once
+        FakeWorld r;
+        HostDuties f(r, [] {});
+        r.facts["fact.config.interface"] = interfaceDoc(true, true);
+        f.start(interactive());
+        r.submitOk = false;
+        core::AppConfig h2 = f.interfaceHalf();
+        h2.uiTheme = "daylight";
+        CHECK(!f.saveInterfaceHalf(h2));
+        CHECK(r.submitted.size() == 1);
+        for (int i = 0; i < HostDuties::kInterfaceSendGapTicks * 3; ++i) { f.poll({}); }
+        CHECK(r.submitted.size() >= 3 && countOf(r.said, "config: the interface's half of the settings was not taken by the engine; asking again later") == 1);
+        r.submitOk = true;
+        for (int i = 0; i < HostDuties::kInterfaceSendGapTicks; ++i) { f.poll({}); }
+        const std::size_t taken = r.submitted.size();
+        for (int i = 0; i < HostDuties::kInterfaceSendGapTicks * 2; ++i) { f.poll({}); }
+        CHECK(r.submitted.size() == taken);   // taken: no longer held
+    }
+    {
+        // the diagnostics switches reach the crash handler with the user's minidump choice
+        FakeWorld w;
+        HostDuties d(w, [] {});
+        w.facts["fact.config.interface"] = interfaceDoc(true, true);
+        d.start(interactive());
+        core::AppConfig half = d.interfaceHalf();
+        half.diagnosticsEnabled = true;
+        half.diagnosticsMinidump = true;
+        (void)d.saveInterfaceHalf(half);
+        d.diagnosticsChanged();
+        CHECK(countOf(w.calls, "applyDiagnosticsSwitches:1:1") == 1);
+        CHECK(anyContains(w.diagged, "diagnostics: recording on, memory dump on"));
+        half.diagnosticsEnabled = false;
+        (void)d.saveInterfaceHalf(half);
+        d.diagnosticsChanged();
+        CHECK(countOf(w.calls, "applyDiagnosticsSwitches:0:1") == 1);
+    }
+    {
+        // the Updates tick and the channel: off discards the answer, on asks again, another channel asks again, a check in flight is left alone
+        FakeWorld w;
+        HostDuties d(w, [] {});
+        w.facts["fact.config.interface"] = interfaceDoc(true, true);
+        d.start(interactive());
+        CHECK(countOf(w.calls, "updateCheckStart:0.99.104:") == 1);
+        UpdateStatus s = d.updateStatus();
+        CHECK(s.enabled && s.started && s.pending && !s.newer && !s.packaged && s.unseenMessages == 0);
+        core::AppConfig half = d.interfaceHalf();
+        half.updateChannel = "beta";
+        (void)d.saveInterfaceHalf(half);
+        d.updateSettingChanged();   // the first check is still out: its answer is the one wanted
+        CHECK(countOf(w.calls, "updateCheckStart:0.99.104:beta") == 0);
+        // the answer comes: an update, two team messages (one already marked Seen)
+        core::UpdateInfo info = newerInfo();
+        core::TeamMessage m1, m2;
+        m1.id = "m1";
+        m1.lines = {"hello"};
+        m2.id = "m2";
+        m2.lines = {"again"};
+        info.messages = {m1, m2};
+        w.checkReady = true;
+        w.checkOutcome.ok = true;
+        w.checkOutcome.info = info;
+        half = d.interfaceHalf();
+        half.messagesSeen = {"m1"};
+        (void)d.saveInterfaceHalf(half);
+        d.poll({});
+        s = d.updateStatus();
+        CHECK(s.started && !s.pending && s.newer && s.critical && s.newVersion == "9.9.9" && s.error.empty() && s.unseenMessages == 1 && !s.dismissed);
+        CHECK(d.card().shown);
+        // "Not now" hides the card; "Show it again" brings it back
+        d.updateDismissed();
+        CHECK(d.updateStatus().dismissed && !d.card().shown);
+        d.updateShowAgain();
+        CHECK(!d.updateStatus().dismissed && d.card().shown);
+        // the channel changed with nothing in flight: the answer is dropped and the check is asked again, for the channel chosen
+        d.updateSettingChanged();
+        CHECK(countOf(w.calls, "updateCheckStart:0.99.104:beta") == 1);
+        s = d.updateStatus();
+        CHECK(s.pending && !s.newer && s.newVersion.empty() && !d.card().shown);
+        // off: the answer is discarded and nobody is asked
+        w.checkReady = true;
+        w.checkOutcome.ok = true;
+        w.checkOutcome.info = info;
+        d.poll({});
+        CHECK(d.updateStatus().newer);
+        half = d.interfaceHalf();
+        half.updateCheckEnabled = false;
+        (void)d.saveInterfaceHalf(half);
+        d.updateSettingChanged();
+        CHECK(!d.updateStatus().enabled && !d.updateStatus().newer && !d.card().shown && countOf(w.calls, "updateCheckStart:0.99.104:beta") == 1);
+        // on again: a re-tick asks again
+        half.updateCheckEnabled = true;
+        (void)d.saveInterfaceHalf(half);
+        d.updateSettingChanged();
+        CHECK(countOf(w.calls, "updateCheckStart:0.99.104:beta") == 2 && d.updateStatus().pending);
+        // a check that failed is said in the status (the card never shows it)
+        w.checkReady = true;
+        w.checkOutcome.ok = false;
+        w.checkOutcome.error = "no route";
+        d.poll({});
+        s = d.updateStatus();
+        CHECK(!s.pending && s.started && s.error == "no route" && !d.card().shown);
+
+        // a Store copy and a bounded run ask nobody, however often the tick is toggled
+        FakeWorld p;
+        p.packaged = true;
+        HostDuties e(p, [] {});
+        p.facts["fact.config.interface"] = interfaceDoc(true, true);
+        e.start(interactive());
+        core::AppConfig ph = e.interfaceHalf();
+        ph.updateCheckEnabled = false;
+        (void)e.saveInterfaceHalf(ph);
+        e.updateSettingChanged();
+        ph.updateCheckEnabled = true;
+        (void)e.saveInterfaceHalf(ph);
+        e.updateSettingChanged();
+        CHECK(countOf(p.calls, "updateCheckStart:0.99.104:") == 0 && e.updateStatus().packaged && !e.updateStatus().pending);
+        FakeWorld b;
+        HostDuties f(b, [] {});
+        b.facts["fact.config.interface"] = interfaceDoc(true, true);
+        f.start(bounded(30));
+        core::AppConfig bh = f.interfaceHalf();
+        bh.updateChannel = "beta";
+        (void)f.saveInterfaceHalf(bh);
+        f.updateSettingChanged();
+        CHECK(countOf(b.calls, "updateCheckStart:0.99.104:beta") == 0);
+    }
+
     std::error_code cleanup;
     fs::remove_all(scratchDir(), cleanup);
     return testSummary("test_slint_duties");

@@ -2047,16 +2047,234 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 | 1385 | Reading line | readout | DEFERRED | not found in signal_bank.slint: reading_line is a host extra with no field in the Slint ImportDialogModel |
 | 1386 | Cancel | button | PRESENT | Key -> import-closed (local) |
 
-# Counts (the whole file: phase 1, phase 2 and the SIGNAL bank of phase 3)
+# Phase 3: the SYSTEM bank (docs 6.40) - `inventory/extend-system-store-patch.txt` lines 287-1380 walked row by row
+
+Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt` (FoxSDR 0.99.104; lines 287-1380: Display, Language & country, Frequency correction, Updates and its banner, Serial ports, Key bindings, Diagnostics with its two dialogs, Usage reporting, Beta tester with its link prompt, and the two full-page screens Request a feature and Report a bug or dislike; 137 rows) against the SYSTEM bank of the Slint window: the bodies of `src/slint/ui/system_bank.slint` (`DisplayBody`, `LanguageBody`, `UpdatesBody`, `SerialPortsBody` with `GpsRowView`, `KeyBindingsBody`, `DiagnosticsBody`, `UsageBody`, `TesterBody`, `ReportSheet`), their effects (`src/slint/system_logic.hpp`, the callbacks-to-effects table in its header) and the places `src/slint/ui/main.slint` puts them (bank 4, rows 0-8: Display, Language & country, Frequency correction, Updates, Serial ports, Key bindings, Diagnostics, Usage reporting, Beta tester; row 9, About, opens the About sheet; `ReportSheet` is an overlay shown by `report-page.shown`). The status words are phase 1's: **PRESENT** = the family draws it and its callback has an effect in `system_logic` (a saved setting, an op, a local state change or a report; the note names the component and the effect), **RELOCATED** = it lives elsewhere in the Slint window (the Section row, the update Card the host duties draw, the status bar's keys, the Frequency correction body shared with SIGNAL), **DEFERRED** = not drawn, drawn without an effect, or saved but not applied, with the reason. A control whose status could not be established from the files is DEFERRED with "not found in system_bank.slint". The Display theme's six looks all map onto the one Workbench skin today, so a pick is saved and not applied; the interface size is saved and nothing in the tree applies it (unverified whether it will be live or at the next start). The chips of the seven sections below Frequency correction are described in the inventory's headings, not as rows: they are `SystemModels.chips` (system_logic), and the SYSTEM rows of `main.cpp` (`sectionsFor`) still draw the earlier eight names with a static '--' chip, so the ten rows `main.slint` places the bodies under (and the About row at index 9) wait for the publisher. The family also draws controls the inventory does not list: the 'Open the log' key (Diagnostics) and the SHOW / HIDE key on the tester code. The 'Updates footnotes' row at inventory line 1586 belongs to the Plugin store's Updates tab, not to this bank, and is not ticked here. The host's publisher (`system_publish`, named in `main.slint`) was not in the tree when this part was ticked: PRESENT here means drawn and given an effect in `system_logic`, not seen working in the window.
+
+## SYSTEM bank — Display
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1387 | Section chip | readout + lamp | RELOCATED | the Section row 'Display' of bank 4 carries the chip (PLAN / PLAIN) and the lamp (lit while the overlay draws): system_logic readSystem fills SystemModels.chips[0]; main.cpp sectionsFor still draws a static '--' chip and no dot until the SYSTEM publisher feeds the rows |
+| 1388 | Interface size | dropdown/combo | DEFERRED | DisplayBody DropKey (Auto + six steps) -> display-scale -> applyDisplayScale: save interfaceScale, apply Scale (uiscale::setChoice); the value is saved but nothing in the Slint window reads the factor (main.cpp logs the Ctrl+= chords as phase 2's) and the publisher is not in the tree, so whether it would apply live or only at the next start is unverified |
+| 1389 | Interface size tooltip | tooltip | PRESENT | the DropKey's tooltip (scale-tooltip, the ImGui hint through tr()) |
+| 1390 | Theme | dropdown/combo | DEFERRED | DropKey of the six looks -> display-theme -> applyDisplayTheme: save uiTheme plus the preset's counter and readings sizes, apply Skin = the key; Workbench is the only Skin in theme.slint, so the look is saved, not applied (phase-1 rows 147-152) |
+| 1391 | Min dB | slider | PRESENT | SliderRow (readout db-min-text) -> display-db-min (0..1 of the track) -> applyDisplayDbMin: save dbMin / dbMax with the other end pushed back (clampManualRange) and waterfallRangeMode manual, op FOXAPI_OP_SET_DISPLAY_RANGE; the publisher maps track to dB (unverified) |
+| 1392 | Max dB | slider | PRESENT | SliderRow -> display-db-max -> applyDisplayDbMax: the same save and FOXAPI_OP_SET_DISPLAY_RANGE with the ceiling as the end that was moved |
+| 1393 | Frequency display | dropdown/combo | PRESENT | DropKey Nixie / Neon / Plain -> display-freq-display -> applyDisplayFreqDisplay: save tunerDisplayStyle; the strip's face is main.cpp applyFace, driven by the counter menu (row 155) and not read back from the saved half yet (unverified until the publisher) |
+| 1394 | Counter figures | dropdown/combo | DEFERRED | DropKey Normal size / Enlarged figures -> applyDisplayFigures: save counterScale; the Slint counter has no scale (main.cpp logs the request as phase 2's, phase-1 row 156) |
+| 1395 | Tuner switches | checkbox | PRESENT | Tick with the tooltip (switches-tooltip) -> display-tuner-switches -> applyDisplayTunerSwitches: save counterSwitches; the nudge arrows follow main.cpp showNudges (counter menu, row 157), which does not read the saved half yet (unverified) |
+| 1396 | Enlarge every reading | checkbox | DEFERRED | Tick -> display-enlarge -> applyDisplayEnlarge: save readingsScale 1.4 / 1.0; no Slint readout scales with it (phase-1 row 158) |
+| 1397 | Aircraft icons | slider | PRESENT | SliderRow 16-96 px (icon-text '48 px', icon-tooltip) -> display-icon-px -> applyDisplayIconPx: save aircraftIconPx and pull mapTrailWidthPx down to the wingspan; the right-click reset is not drawn (Slider has no right-click gesture) although the tooltip still says 'Right-click to put it back' |
+| 1398 | Trail width | slider | PRESENT | SliderRow (trail-text, trail-tooltip) -> display-trail-px -> applyDisplayTrailPx: save mapTrailWidthPx (1 .. the icon's wingspan, trail_max a host extra with no Slint field); right-click reset not drawn, as above |
+| 1399 | Band plan | checkbox | PRESENT | Tick -> display-band-plan -> applyDisplayBandPlan: save bandPlanOverlay; always drawn |
+| 1400 | Size (band plan) | dropdown/combo | PRESENT | DropKey Small / Medium / Large, on one line with Colour, drawn only while Band plan is ticked -> display-band-size -> applyDisplayBandSize: save bandPlanSize |
+| 1401 | Colour (band plan) | dropdown/combo | PRESENT | DropKey Classic / Vivid / Mono, beside Size, drawn only while Band plan is ticked -> display-band-colour -> applyDisplayBandColour: save bandPlanPalette |
+| 1402 | Region | dropdown/combo (searchless list) | PRESENT | DropKey drawn only with the overlay ticked and more than one plan (regions.length > 1); closed text region-preview or '(all installed)' -> display-region -> applyDisplayRegion: op FOXAPI_OP_SET_BAND_PLAN with the plan id, nothing for the plan in force |
+| 1403 | Plan status | readout | PRESENT | Note plan-status in its tone (red for the error) while the overlay is ticked |
+
+## SYSTEM bank — Language & country
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1404 | Language | dropdown/combo | PRESENT | LanguageBody DropKey (Automatic first, each language by its own name, undrawable ones greyed through SelectItem.enabled) -> language-selected -> applyLanguageSelected: save language, apply Language (setLanguage + select_bundled_translation); closed text language-text |
+| 1405 | Machine-translation hint | readout | PRESENT | amber Note machine-hint, only while the language in force is flagged machine |
+| 1406 | SUGGEST A BETTER TRANSLATION | button | PRESENT | small Key (translation-label), drawn with the hint -> language-translation -> applyLanguageTranslationReport: local, opens the bug page with the draft 'Translation (<code>): ' unless the person has one (the page itself: rows of 'Report a bug or dislike') |
+| 1407 | Country | dropdown/combo (tall) | PRESENT | DropKey with a filter field above its list -> country-selected -> applyCountrySelected: save country and op FOXAPI_OP_SET_BAND_PLAN for the country's plan when it is not the one in force; closed text country-text |
+| 1408 | Country filter | text field | PRESENT | LineInput at the top of the open list (grab-focus, placeholder country-hint) -> country-filter on each edit (local, ReadOptions::country_filter); a pick sends country-filter('') so the list is whole again |
+| 1409 | Not set | list item | PRESENT | the first row of the countries list while the filter is empty (built by the host) -> country-selected -> country saved as '', the band plan left alone |
+| 1410 | Band-plan line | readout | PRESENT | Note plan-line ('Band plan: <name>') once a country is chosen |
+| 1411 | Plan-changed hint | readout | PRESENT | Note plan-changed-hint (host extra; ReadOptions::plan_changed_note says when) |
+| 1412 | USE <LANGUAGE> | button | PRESENT | small Key (suggest-label, 'USE <LANGUAGE>') -> language-suggest -> applyLanguageSuggest: save language = the country's catalogue, apply Language; not drawn when the label is empty |
+
+## SYSTEM bank — Frequency correction
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1413 | Section chip | readout | RELOCATED | the Section row 'Frequency correction' (row 2 of bank 4 in main.slint); its chip (OFF / ON / PPM +1.5) and lamp are the SIGNAL publisher's ppm model (signal_logic ppm_chip), SystemModels.chips leaves it empty; main.cpp's SYSTEM row list has no such row yet |
+| 1414 | PPM frequency correction | checkbox | RELOCATED | FrequencyCorrectionBody at SYSTEM row 2 of main.slint, the SIGNAL family's body on the same source-model (row 1286) |
+| 1415 | Not-applicable note | readout | RELOCATED | the same body (row 1287) |
+| 1416 | Whose-radio line | readout | RELOCATED | the same body (row 1288) |
+| 1417 | PPM value | number field | RELOCATED | the same body (row 1289) |
+| 1418 | How-applied note | readout | RELOCATED | the same body (row 1290) |
+| 1419 | Refusal note | readout | RELOCATED | the same body (row 1291) |
+
+## SYSTEM bank — Updates
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1420 | Check for updates at startup | checkbox | PRESENT | UpdatesBody Tick (check-label carries the Store copy's wording) -> updates-check -> applyUpdatesCheck: save updateCheckEnabled, apply UpdateCheck (HostDuties::updateSettingChanged: off discards the answer, on asks again) |
+| 1421 | Stable releases | radio | PRESENT | RadioChoice -> updates-channel(0) -> applyUpdatesChannel: save updateChannel stable, re-check when the check is on; not drawn for a Store copy (packaged) |
+| 1422 | Every release (beta) | radio | PRESENT | RadioChoice -> updates-channel(1) -> applyUpdatesChannel: save updateChannel beta, re-check when the check is on; not drawn for a Store copy |
+| 1423 | Channel help | readout | PRESENT | Note channel-help; not drawn for a Store copy |
+| 1424 | Privacy text | readout | PRESENT | Note privacy (the foxsdr.com and the Microsoft Store wordings) |
+| 1425 | Version line | readout | PRESENT | Note version-line ('this build: x'; a Store copy adds 'package: ...') |
+| 1426 | Team message count | readout | PRESENT | Note team-message ('N message(s) from the FoxSDR team': site copy, check on, unseen > 0, the count from HostDuties::updateStatus), pressable -> updates-team-message (local); the cards it should bring forward are deferred (rows below), so the press shows nothing |
+| 1427 | Status line | readout | PRESENT | Note status-line in its tone (amber update, red important): checking is off / checking... / <version> is available / up to date / last check did not complete: <error>; the Store copy's 'the Microsoft Store has an update' needs the Store flow's facts, which the duties defer |
+| 1428 | Show it again | button (small) | PRESENT | small Key (show-again-label) -> updates-show-again -> applyUpdatesShowAgain: apply UpdateShowAgain (HostDuties::updateShowAgain); drawn only while an update is offered and its card was dismissed |
+
+## SYSTEM bank — Update banner and team messages (top of the rail column, every bank)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1429 | Team message card | card | DEFERRED | the Card exists in main.slint, but the host duties leave the team message cards out: main.cpp keeps team_message_shown false (phase-1 row 87) |
+| 1430 | Seen | button | DEFERRED | on_team_message_seen is an empty lambda in main.cpp and the Seen list (the interface half's messagesSeen) is not written by the Slint host (phase-1 row 88) |
+| 1431 | Update banner (site) | card | RELOCATED | the update Card at the foot of the sections panel, drawn by the host duties (updateCardFor / applyUpdateCard); phase-1 rows 89-91 |
+| 1432 | Download update | button | RELOCATED | the Card's primary key with the progress bar and the size note (phase-1 rows 92-93) |
+| 1433 | Install now and restart | button | RELOCATED | the Card's primary key after the verified download (phase-1 row 94) |
+| 1434 | Open foxsdr.com | button | RELOCATED | the Card's primary key on a non-Windows build (phase-1 row 95) |
+| 1435 | Not now | button (small) | RELOCATED | the Card's secondary key (update-dismissed; phase-1 row 96); Show it again in the Updates body brings the Card back |
+| 1436 | Update banner (Store) | card | DEFERRED | the duties hide the Card for a Store copy (updateCardFor: packaged) and log the Store flow as deferred (UpdatePlan::StoreDeferred); no Store banner is drawn |
+| 1437 | Install from the Microsoft Store | button | DEFERRED | the Store's install flow is deferred in host_duties (phase-1 row 102); no key, and UpdatesFacts carries no Store facts |
+
+## SYSTEM bank — Serial ports
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1438 | Intro | readout | PRESENT | Note intro |
+| 1439 | Refresh | button | PRESENT | small Key -> serial-refresh -> opSerialRefresh: FOXAPI_OP_SCAN_SERIAL_PORTS (the answer is the SERIAL_PORTS list changing) |
+| 1440 | Empty state | readout | PRESENT | Note empty-line, drawn when the list is empty; system_logic leaves it '' until the scan has answered |
+| 1441 | Port list | table (1 column, borders, row bg) | PRESENT | one-column table drawn directly in SerialPortsBody (frozen 'Port' heading on the strip ground, 24 px mono rows with a hairline under each); the model is [string] |
+| 1442 | GPS receiver | readout (separator) | PRESENT | the rule, the caption and GpsRowView: port DropKey -> gps-port (save gpsPort, clear the two GPS status slots with FOXAPP_OP_CLEAR_STATUS), baud DropKey -> gps-baud (save gpsBaud), the lit read / Stop key -> gps-toggle (FOXAPI_OP_GPS start with port and baud, or stop), then the status, satellites and refusal lines; the Radar section, scope and map-bar copies of the row are other bodies' and not part of this bank |
+| 1443 | GPS note | readout | PRESENT | Note gps-note |
+
+## SYSTEM bank — Key bindings
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1444 | Help text | readout | PRESENT | Note help |
+| 1445 | Reset to defaults | button | PRESENT | xs Key on the first group's heading line -> keys-reset -> applyKeysReset: save keyBindings = {} (the stock table), the capture ends |
+| 1446 | Group heading | readout | PRESENT | Caption per group (the first beside Reset, later ones under a thin rule), a new heading each time the group changes as readKeyBindings builds them |
+| 1447 | Action name | readout | PRESENT | Text per KeyRow (action), 32 rows from the host's copy of the action table (system_logic kActions, held equal to gui/key_bindings.cpp by test_slint_host_system) |
+| 1448 | Key cap (one per action) | key (momentary, capture) | PRESENT | KeyCap, one 112 px pill for every row: press -> keys-capture(id) -> local capture (applyKeysCapture); 'Press a key...' while listening; the next chord -> keys-captured -> applyKeysCaptured: save keyBindings; Esc -> keys-cancel, Backspace -> keys-clear, a second press cancels. Two limits: a Ctrl+Alt chord cannot be captured (Slint on Windows delivers it without modifiers), and the root FocusScope of main.slint still dispatches the stock chords only, so a saved rebinding is not honoured until it reads the table |
+| 1449 | Clash note | readout | PRESENT | red Note 'also <action>' under the row (clash from clashOf); the ImGui rule 'first in list wins at dispatch' has nothing to act on yet, because dispatch ignores the table (previous row) |
+| 1450 | Footer | readout | PRESENT | Note footer: the ImGui hint (F12 always saves a screenshot, Esc always cancels); the counts 'N actions, M clashes' ride in system_logic (action_count, clash_count) but the Slint KeyBindingsModel has no field for them |
+
+## SYSTEM bank — Diagnostics
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1451 | Explanation | readout | PRESENT | DiagnosticsBody Note explanation |
+| 1452 | Record crashes and freezes, and send the report next time | checkbox | PRESENT | Tick -> diag-record -> applyDiagRecord: save diagnosticsEnabled, apply Diagnostics (HostDuties::diagnosticsChanged arms or disarms the crash capture; the half goes out at once) |
+| 1453 | What is / is not sent | readout | PRESENT | Note sent-text under the Record tick |
+| 1454 | Also write a full memory dump beside a crash report | checkbox | PRESENT | Tick -> diag-minidump -> applyDiagMinidump: save diagnosticsMinidump, apply Diagnostics; the dump-note sits under it |
+| 1455 | Log path | readout | PRESENT | MonoNote log-path ('Log: <path>' or 'Log: off ...'); the family adds an 'Open the log' key -> diag-open-log (local, applyDiagOpenLog) that the inventory does not list |
+| 1456 | Reports path | readout | PRESENT | MonoNote reports-path ('Reports: <path>' or '(unavailable)') |
+| 1457 | Show the pointer ledger across the top of the window | checkbox | DEFERRED | Tick drawn (diag-ledger, ledger, ledger-note) but system_logic has no effect or field for it: the pointer ledger is window-bound state of the ImGui build (header comment: not covered) |
+| 1458 | Copy diagnostics | button | DEFERRED | small Key drawn (diag-copy, bundle-status) but system_logic has no effect for it: the clipboard and the diagnostics bundle are window-bound (header comment: not covered) |
+| 1459 | Open reports folder | button | PRESENT | small Key -> diag-open-reports -> applyDiagOpenReports: local, opens the folder (text = reports_path) |
+| 1460 | SDRplay intro | readout | DEFERRED | not found in system_bank.slint as a host source: sdrplay-text is a Slint field with no counterpart in system_logic's DiagnosticsModel, so the whole block (rule, text, key, status) stays hidden |
+| 1461 | Run SDRplay diagnostic | button | DEFERRED | the Key (diag-sdrplay, sdrplay-enabled) is drawn only with sdrplay-text and has no effect in system_logic; no probe dialog follows (rows below) |
+| 1462 | What exactly is in a report? | button (small) | PRESENT | xs Key -> diag-what -> applyDiagWhat: local flag shared with Usage reporting's what-open |
+| 1463 | Report field list | readout | PRESENT | Note what-text while the flag is open |
+
+## SYSTEM bank — SDRplay diagnostic dialog (window, 520 px, closable)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1464 | Warning text | readout | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog or bias confirmation is drawn (the Run SDRplay diagnostic key has no effect in system_logic, whose header lists the probe and its sheet as window-bound and not covered) |
+| 1465 | Also test the bias tee | checkbox | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
+| 1466 | Bias confirmation | dialog (inline) | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
+| 1467 | Yes, switch it on | button | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
+| 1468 | Cancel (bias) | button | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
+| 1469 | Run the diagnostic | button | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
+| 1470 | Cancel | button | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
+
+## SYSTEM bank — "FoxSDR did not close normally last time" dialog (520 px)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1471 | Dialog | dialog | RELOCATED | an amber Note at the top of the Diagnostics body (DiagnosticsModel.offer, set while ReadOptions::last_run_unclean and diagnostics are on); no window at start-up, the duties write a log line instead (host_duties.hpp) |
+| 1472 | Copy diagnostics | button | DEFERRED | the body's Copy diagnostics key has no effect (see the Diagnostics block) |
+| 1473 | Open reports folder | button | RELOCATED | the Diagnostics body's Open reports folder key (PRESENT there), which sits under the offer note |
+| 1474 | Not now | button | DEFERRED | not found in system_bank.slint: the offer note has no key or callback to dismiss it; it shows for as long as the offer is due |
+
+## SYSTEM bank — Usage reporting
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1475 | Disclosure | readout | PRESENT | UsageBody Note disclosure |
+| 1476 | Send anonymous usage reports | checkbox | PRESENT | Tick -> usage-send -> applyUsageSend: op FOXAPP_OP_TELEMETRY_CONSENT (grant ADMIN); the tick shows the value asked for until the fact says it |
+| 1477 | Install id | readout | PRESENT | MonoNote install-id-line ('Install id: <id>'), only while on |
+| 1478 | Off line | readout | PRESENT | Note state-line: 'Off. Nothing is transmitted.' while off (the same field carries the two-messages sentence while on) |
+| 1479 | What exactly is sent? | button (small) | PRESENT | xs Key (what-label) -> usage-what -> applyUsageWhat: local flag shared with Diagnostics |
+| 1480 | Privacy policy (foxsdr.com) | button (small) | PRESENT | xs Key (privacy-label) -> usage-privacy -> applyUsagePrivacy: local, opens core::kPrivacyPolicyUrl; the URL tooltip is not drawn (privacy_url has no Slint field) |
+| 1481 | Payload list | readout | PRESENT | what-text Note and a field-ground box of the payload paragraphs, both while the flag is open |
+
+## SYSTEM bank — Beta tester
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1482 | Explanation | readout | PRESENT | TesterBody Note explanation; the section is shown only when the host says so (TesterModel.shown / tester_revealed) |
+| 1483 | Linked to | readout | PRESENT | Readout linked-line ('Linked to <name>', '(no name set)' when empty) while an app token is set |
+| 1484 | Unlink | button (small) | PRESENT | xs Key beside it -> tester-unlink -> applyTesterUnlink: save testerAppToken and its name = '' |
+| 1485 | Code line | readout | PRESENT | Readout code-line ('Code: abcd....wxyz', masked) while a legacy portal token is set |
+| 1486 | Remove code | button (small) | PRESENT | xs Key beside it -> tester-remove-code -> applyTesterRemoveCode: save testerToken = '', invalid flag off, the app token and its name cleared with it |
+| 1487 | Invalid-code message | readout | PRESENT | red Note invalid-line (the red error-line beside it is the sentence for a paste that is no code) |
+| 1488 | Tester code | text field (masked) | PRESENT | masked mono LineInput (hidden) with a SHOW / HIDE key that the inventory does not list; Enter or focus loss -> tester-code-committed (local draft); drawn when field-shown |
+| 1489 | Use this code | button | PRESENT | small Key: commits the draft, then tester-use -> applyTesterUse: a 32-hex portal token or a whole link is saved as testerToken; a 40-hex app token only reaches Local::TesterResolve because the Link prompt is deferred (rows below); anything else gives the error sentence |
+| 1490 | What is sent | readout | PRESENT | Note sent-text |
+| 1491 | Show / Hide what is sent | button (small) | PRESENT | xs Key, label swaps -> tester-show-sent -> applyTesterShowSent (local flag) |
+| 1492 | Preview | readout | DEFERRED | the box is drawn and shows 'Nothing - no code is set.' and the queue line, but the masked JSON of the session's record comes from the tester usage recorder, which the Slint host leaves out (tester_preview_json stays empty), so a linked tester sees an empty preview |
+
+## SYSTEM bank — "Link this FoxSDR?" window (460 px, closable)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1493 | Question | dialog | DEFERRED | not found in system_bank.slint: no Link prompt sheet; tester-use stops at Local::TesterResolve, and the confirm-by-name flow and its link poll are left out of the host duties |
+| 1494 | Link | button | DEFERRED | not found in system_bank.slint: no Link prompt sheet; tester-use stops at Local::TesterResolve, and the confirm-by-name flow and its link poll are left out of the host duties |
+| 1495 | Not now | button | DEFERRED | not found in system_bank.slint: no Link prompt sheet; tester-use stops at Local::TesterResolve, and the confirm-by-name flow and its link poll are left out of the host duties |
+
+## SYSTEM bank — Full-page screens: Request a feature (page)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1496 | REQUEST A FEATURE key | button (rail/status column) | RELOCATED | the status bar's 'Request a feature' key in main.slint (feature-request-clicked); the page is ReportSheet kind 0 (report-open(0)); main.cpp's handler only logs 'companion screen (phase 3)' as read, so the key opens nothing until the publisher raises the sheet |
+| 1497 | Prompt | readout | PRESENT | ReportSheet Text over the box (prompt) |
+| 1498 | Message box | text field (multiline) | PRESENT | TextBox (multi-line, follows the caret) -> report-text on each edit (local draft); not greyed while sending (the Slint model has no sending field) and a fixed 56 px high, not shrinking with the window |
+| 1499 | Counter | readout | PRESENT | Readout counter ('n / 100000 characters') |
+| 1500 | Contact | text field | PRESENT | LineInput with its caption (contact-label) -> report-contact on each edit and on commit (local draft) |
+| 1501 | No-email warning | readout | PRESENT | amber Note no-email-note |
+| 1502 | What is sent | readout | PRESENT | Note attach-note (the two sentences, by contact) |
+| 1503 | SEND | button (120 px) | PRESENT | Key (send-label) live when send-enabled and the box holds text -> report-send -> applyReportSend: a ReportSend for FeatureRequestSender, nothing unless the verdict is 'can send'; the reason '(write at least ...)' is the refusal Note under the key |
+| 1504 | Status line | readout | PRESENT | Note sent-line in sent-tone (Sending... amber, Thank you green, failure red, cool-down amber); clearing the box on success while keeping the contact is the host's draft handling (unverified) |
+
+## SYSTEM bank — Full-page screens: Report a bug or dislike (page)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1505 | REPORT A BUG / DISLIKE key | button (status column) | RELOCATED | the status bar's 'Report a bug / dislike' key in main.slint (bug-report-clicked) and Language's SUGGEST A BETTER TRANSLATION key; the page is ReportSheet kind 1 (report-open(1)); main.cpp's handler only logs as read, as for the feature key |
+| 1506 | Kind question | readout | PRESENT | Text kind-question ('What are you reporting?'), bug page only |
+| 1507 | Kind: bug | radio | PRESENT | RadioChoice (problem-kinds[0]) -> report-kind(0) -> applyReportKind: local, the attach box follows the kind's default (ticked); neither is chosen when the page opens (problem-kind-index -1) |
+| 1508 | Kind: dislike | radio | PRESENT | RadioChoice beside it (problem-kinds[1]) -> report-kind(1) -> applyReportKind: local, the attach box unticked |
+| 1509 | Prompt | readout | PRESENT | Text over the box; the host words it by kind (bug or dislike) |
+| 1510 | Message box | text field (multiline) | PRESENT | TextBox, 64 px -> report-text on each edit (local draft); not greyed while sending, as on the feature page |
+| 1511 | Counter | readout | PRESENT | Readout counter |
+| 1512 | Pasted-report detector | readout | PRESENT | green Note recognised-line ('A report was recognised and attached as <class>') |
+| 1513 | Contact | text field | PRESENT | LineInput with its caption -> report-contact (local draft) |
+| 1514 | No-email warning | readout | PRESENT | amber Note no-email-note |
+| 1515 | Attach the diagnostics log | checkbox | PRESENT | Tick (bug page only) -> report-attach -> applyReportAttach (local); default follows the kind |
+| 1516 | Attach the SDRplay diagnostic too | checkbox | PRESENT | Tick, drawn when probe-shown (attach ticked and a probe report exists) -> report-probe -> applyReportProbe (local); no probe can run in the Slint window (Run SDRplay diagnostic is deferred), so it is never offered in practice |
+| 1517 | Show what will be sent | checkbox | PRESENT | Tick, drawn while attach is ticked -> report-preview -> applyReportPreview (local) |
+| 1518 | Attachment preview | text field (read-only, multiline, 140 px) | PRESENT | 140 px field-ground box with a Flickable of mono Text (preview-text): scrolls and is read-only, but it is Text, so the attachment cannot be selected or copied from it |
+| 1519 | Local-only explanation | readout | PRESENT | Note local-only-line (the newest report's reason and where the file is) while the preview is open |
+| 1520 | What is sent | readout | PRESENT | Note attach-note, the four variants of problemSentence (log x contact) |
+| 1521 | SEND | button (120 px) | PRESENT | Key -> report-send -> applyReportSend: a ReportSend for ProblemReportSendFlow; the wrapped reason is the refusal Note under the key |
+| 1522 | Status line | readout | PRESENT | Note sent-line in sent-tone |
+| 1523 | Log-dropped note | readout | PRESENT | no note of its own: the sentence rides in sent-line after 'Thank you - your report was sent.' (green, not amber) |
+
+# Counts (the whole file: phase 1, phase 2 and the SIGNAL and SYSTEM banks of phase 3)
 
 | Status | Rows |
 |---|---|
-| PRESENT | 1199 |
-| RELOCATED | 71 |
-| DEFERRED | 116 |
+| PRESENT | 1294 |
+| RELOCATED | 88 |
+| DEFERRED | 141 |
 | TODO (unclassified) | 0 |
-| Total | 1386 |
+| Total | 1523 |
 
 Phase 2 alone: PRESENT 888, RELOCATED 34, DEFERRED 13, total 935.
 
 Phase 3, the SIGNAL bank alone: PRESENT 122, RELOCATED 17, DEFERRED 37, total 176.
+
+Phase 3, the SYSTEM bank alone: PRESENT 95, RELOCATED 17, DEFERRED 25, total 137.

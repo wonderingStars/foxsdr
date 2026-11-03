@@ -94,7 +94,32 @@ foreach(src ${_foxsdr_slint_test_sources})
         if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../${unit}_compositor.cpp")
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../${unit}_compositor.cpp")
         endif()
+        if(unit STREQUAL "system")
+            # The SYSTEM bank's logic (docs 6.39) quotes the core's pure units rather than copying them: the grants of the SIGNAL family's commands, the
+            # country table, the feature-request and problem-report rules, the tester-code rules and the serial-port name rule. None of them includes ImGui.
+            list(APPEND _extra
+                "${CMAKE_CURRENT_SOURCE_DIR}/../signal_logic.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/countries.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/feature_request.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/problem_report.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/pasted_report.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/tester_usage.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/serial_port.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/system_core_stubs.cpp")
+        endif()
         foxsdr_slint_logic_test(${name} ${_extra})
+        if(unit STREQUAL "system")
+            target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
+            if(MSVC)
+                target_compile_options(${name} PRIVATE /utf-8)
+                target_compile_definitions(${name} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+            endif()
+            if(WIN32)
+                target_link_libraries(${name} PRIVATE winhttp)
+            endif()
+        endif()
     elseif(family STREQUAL "house_rules")
         foxsdr_slint_logic_test(${name})
     elseif(family STREQUAL "main_screen")
