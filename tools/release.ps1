@@ -19,13 +19,20 @@
 #                 application) is built in the same two passes, hashed and held to the same
 #                 version line; the MSIX stays cascade.exe's.
 #   installer     ISCC (SlintIsApp=1: foxsdr-slint.exe + slint_cpp.dll are the application,
-#                 cascade.exe the "classic window"), then the installer's name, size and hash.
+#                 cascade.exe the "classic window"; -ClassicInstaller builds SlintIsApp=0, cascade.exe
+#                 alone), then the installer's name, size and hash.
 #   msix          build-msix.ps1 with the Store identity, then the package's own
 #                 manifest (name, publisher, version) and the exe inside it.
-#   install-test  silent per-user install, the installed exe against the built one,
+#   install-test  silent per-user install, the installed exes against the built ones,
 #                 --version, --selftest, a bounded --frames run, silent uninstall, and
 #                 every install-log file (including shortcuts) and generated uninstaller
 #                 gone, registry/URL handler gone; only user plugins may remain in {app}.
+#                 By default it expects the Slint application: foxsdr-slint.exe and
+#                 slint_cpp.dll installed (hashes = the build's), foxsdr-slint.exe --version,
+#                 a bounded --frames 60 run printing "60 of 60 ticks" and, under
+#                 FOXSDR_LANGUAGE=fr, "language fr (bundled)", and the "FoxSDR (classic
+#                 window)" Start-menu entry. -ClassicInstaller expects today's classic payload
+#                 and asserts the Slint files are absent.
 #   ci            find the GitHub Actions run for HEAD, wait for it, download its
 #                 artifacts, check every file, write the five hashes into the notes.
 #   symbols       mirror the Windows and Linux symbols to the NAS, append the index
@@ -75,6 +82,10 @@ param(
     # the install test refuses to run over an existing install.
     [switch] $AllowReplaceInstalled,
     [switch] $KeepInstalled,
+    # The installer step builds (ISCC /DSlintIsApp=0) and the install-test step expects the CLASSIC installer: cascade.exe the
+    # application, no Slint files (and it asserts they are absent). Off, the default: /DSlintIsApp=1 and the install test expects the
+    # Slint application (foxsdr-slint.exe + slint_cpp.dll, cascade.exe beside them as the "classic window").
+    [switch] $ClassicInstaller,
 
     [string] $ReleaseRoot = 'C:\Users\steve\foxsdr-build',
     [string] $BuildDir = '',
@@ -545,7 +556,8 @@ function Step-Build {
     $slintSub = Get-PeSubsystem $slintExe
     Write-Result 'INFO' 'foxsdr-slint.exe subsystem' $slintSub
     $slintSha = $slintHashes[1]
-    Write-Result 'PASS' 'foxsdr-slint.exe' ('{0:N0} bytes, sha256 {1}; slint_cpp.dll sha256 {2}' -f (Get-Item -LiteralPath $slintExe).Length, $slintSha, (Get-Sha256 $slintDll))
+    $slintDllSha = Get-Sha256 $slintDll
+    Write-Result 'PASS' 'foxsdr-slint.exe' ('{0:N0} bytes, sha256 {1}; slint_cpp.dll sha256 {2}' -f (Get-Item -LiteralPath $slintExe).Length, $slintSha, $slintDllSha)
 
     # The engine's own version line: read the same way, and it must be the same line. A console
     # program, so its output needs no redirected-handle care, but it goes through the same helper.
@@ -628,7 +640,7 @@ function Step-Build {
     $size = (Get-Item -LiteralPath $exe).Length
     Write-Result 'PASS' 'cascade.exe' ('{0:N0} bytes, sha256 {1}' -f $size, $exeSha)
     Write-Result 'PASS' 'softgl' (($softPins.Keys | ForEach-Object { $_ + ' ' + $softSha[$_] }) -join '; ')
-    Set-StepDone 'build' @{ 'msix-in\cascade.exe' = $exeSha; 'msix-in\SoapySDR.dll' = $dllSha; 'msix-in\softgl\opengl32.dll' = $softSha['opengl32.dll']; 'msix-in\softgl\libgallium_wgl.dll' = $softSha['libgallium_wgl.dll'] } @{ exeSha256 = $exeSha; dllSha256 = $dllSha; softglOpengl32Sha256 = $softSha['opengl32.dll']; softglGalliumSha256 = $softSha['libgallium_wgl.dll']; size = $size; buildId = $buildId; subsystem = $sub; versionLine = $line.Trim(); slintExeSha256 = $slintSha }
+    Set-StepDone 'build' @{ 'msix-in\cascade.exe' = $exeSha; 'msix-in\SoapySDR.dll' = $dllSha; 'msix-in\softgl\opengl32.dll' = $softSha['opengl32.dll']; 'msix-in\softgl\libgallium_wgl.dll' = $softSha['libgallium_wgl.dll'] } @{ exeSha256 = $exeSha; dllSha256 = $dllSha; softglOpengl32Sha256 = $softSha['opengl32.dll']; softglGalliumSha256 = $softSha['libgallium_wgl.dll']; size = $size; buildId = $buildId; subsystem = $sub; versionLine = $line.Trim(); slintExeSha256 = $slintSha; slintDllSha256 = $slintDllSha }
     return 'done'
 }
 
@@ -636,13 +648,25 @@ function Step-Build {
 # installer
 # ---------------------------------------------------------------------------
 
+# True when the recorded step was made in the flavour (-ClassicInstaller or not) now asked for. A record without the key is from
+# before the switch existed, when the installer was always the Slint one.
+function Test-StepFlavour([string]$Step) {
+    $info = Get-StepInfo $Step
+    $recorded = $false
+    if ($null -ne $info -and $info.ContainsKey('classicInstaller')) { $recorded = [bool]$info['classicInstaller'] }
+    return ($recorded -eq [bool]$ClassicInstaller)
+}
+
 function Step-Installer {
     $RC = $script:RC
     $v = $RC.Version
     $setup = Join-Path $RC.Dist $RC.InstallerName
     if (-not $Force -and -not $script:Ctx.DryRun -and (Test-StepDone 'installer')) {
-        Write-Result 'SKIP' 'installer' ('already done: ' + (Get-FileInfoLine $setup))
-        return 'skipped'
+        if (Test-StepFlavour 'installer') {
+            Write-Result 'SKIP' 'installer' ('already done: ' + (Get-FileInfoLine $setup))
+            return 'skipped'
+        }
+        Write-Result 'INFO' 'installer' 'the recorded installer is the other flavour (-ClassicInstaller changed); building it again'
     }
     Assert-StepDone 'build' 'installer'
     $iscc = Find-Iscc
@@ -657,8 +681,21 @@ function Step-Installer {
     # into paths by MSYS. The switches are the ones `ISCC /?` prints.
     # SlintIsApp=1 is the .iss default, passed anyway so the release does not change if that default ever does:
     # the Slint window (foxsdr-slint.exe + slint_cpp.dll from build\src\slint\Release) is the application and
-    # cascade.exe ships beside it as the "classic window".
-    $isccArgs = @(('/O' + $RC.Dist), ('/DBuildDir=' + (Join-Path $RC.BuildDir 'Release')), ('/DSlintIsApp=1'), ('/DSlintDir=' + (Join-Path $RC.BuildDir 'src\slint\Release')), ('/DVcCrtDir=' + $VcCrtDir), (Join-Path $RC.Repo 'installer\cascade.iss'))
+    # cascade.exe ships beside it as the "classic window". -ClassicInstaller passes SlintIsApp=0 (cascade.exe the
+    # application, no Slint files; SlintDir is not read then, so it is not passed).
+    if ($ClassicInstaller) {
+        $slintArgs = @('/DSlintIsApp=0')
+    } else {
+        $slintArgs = @('/DSlintIsApp=1', ('/DSlintDir=' + (Join-Path $RC.BuildDir 'src\slint\Release')))
+    }
+    $isccArgs = @(('/O' + $RC.Dist), ('/DBuildDir=' + (Join-Path $RC.BuildDir 'Release'))) + $slintArgs + @(('/DVcCrtDir=' + $VcCrtDir), (Join-Path $RC.Repo 'installer\cascade.iss'))
+    if ($script:Ctx.DryRun) {
+        if ($ClassicInstaller) {
+            Write-Plan 'installer flavour' 'classic (-ClassicInstaller): ISCC /DSlintIsApp=0, cascade.exe the application, no Slint files'
+        } else {
+            Write-Plan 'installer flavour' 'Slint application: ISCC /DSlintIsApp=1, foxsdr-slint.exe + slint_cpp.dll the application, cascade.exe the classic window'
+        }
+    }
     $r = Invoke-Planned -What 'iscc' -File $iscc -Arguments $isccArgs -TimeoutSec 900 -WorkDir $RC.Repo
     if ($null -eq $r) { Write-Plan 'check' ('the installer ' + $RC.InstallerName + ' exists, with its size and sha256'); return 'done' }
     Assert-Check ($r.ExitCode -eq 0 -and $r.Output -match 'Successful compile') 'ISCC exit code' ([string]$r.ExitCode) ('see ' + $script:Ctx.LogPath)
@@ -669,7 +706,7 @@ function Step-Installer {
     $sig = (Get-AuthenticodeSignature -LiteralPath $setup).Status
     Write-Result 'INFO' 'installer signature' ($sig.ToString() + ' (the installer is not code-signed; SmartScreen will say so)')
     Write-Result 'PASS' 'installer' ('{0:N0} bytes, sha256 {1}' -f $size, $sha)
-    Set-StepDone 'installer' @{ ('dist\' + $RC.InstallerName) = $sha } @{ size = $size; sha256 = $sha }
+    Set-StepDone 'installer' @{ ('dist\' + $RC.InstallerName) = $sha } @{ size = $size; sha256 = $sha; classicInstaller = [bool]$ClassicInstaller }
     return 'done'
 }
 
@@ -802,7 +839,7 @@ function Get-InstalledState {
     return $found
 }
 
-function Get-InstallTestFiles([string]$LogPath, [string]$InstallDir) {
+function Get-InstallTestFiles([string]$LogPath, [string]$InstallDir, [bool]$SlintApp = $true) {
     Assert-Check (Test-Path -LiteralPath $LogPath -PathType Leaf) 'install log valid' $LogPath 'missing install log; cannot verify which files Setup installed'
     $text = [System.IO.File]::ReadAllText($LogPath)
     $stamp = '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s+'
@@ -821,9 +858,14 @@ function Get-InstallTestFiles([string]$LogPath, [string]$InstallDir) {
         $files += $path
     }
     # A success marker without a payload manifest must not pass vacuously.
-    foreach ($name in @('cascade.exe', 'SoapySDR.dll', 'softgl\opengl32.dll', 'softgl\libgallium_wgl.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'POSTINSTALL.txt', 'unins000.exe')) {
+    $required = @('cascade.exe', 'SoapySDR.dll', 'softgl\opengl32.dll', 'softgl\libgallium_wgl.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'POSTINSTALL.txt', 'unins000.exe')
+    # The Slint application (installer\cascade.iss, SlintIsApp): its exe, its runtime, and the classic window's own Start-menu entry
+    # (a shortcut outside {app}, so it is only ever evidenced by the log, and the disappearance check then covers it).
+    if ($SlintApp) { $required += @('foxsdr-slint.exe', 'slint_cpp.dll') }
+    foreach ($name in $required) {
         if ($files -notcontains (Join-Path $InstallDir $name)) { $valid = $false }
     }
+    if ($SlintApp -and @($files | Where-Object { [System.IO.Path]::GetFileName($_) -eq 'FoxSDR (classic window).lnk' }).Count -eq 0) { $valid = $false }
     Assert-Check $valid 'install log valid' ($files.Count.ToString() + ' file records') 'expected timestamped absolute file paths, the core payload and Installation process succeeded; read verify\install.log'
     # Inno generates its .dat separately from normal Dest filename records.
     return @($files + (Join-Path $InstallDir 'unins000.dat') | Sort-Object -Unique)
@@ -877,8 +919,11 @@ function Step-InstallTest {
     $installDir = Join-Path $env:LOCALAPPDATA 'Programs\FoxSDR'
     $guid = 'B3D4A7E2-6C51-4F8B-9A0D-2E7F5C8B1A64'
     if (-not $Force -and -not $script:Ctx.DryRun -and (Test-StepDone 'install-test')) {
-        Write-Result 'SKIP' 'install-test' 'already passed for this commit'
-        return 'skipped'
+        if (Test-StepFlavour 'install-test') {
+            Write-Result 'SKIP' 'install-test' 'already passed for this commit'
+            return 'skipped'
+        }
+        Write-Result 'INFO' 'install-test' 'the recorded pass is for the other installer flavour (-ClassicInstaller changed); running it again'
     }
     Assert-StepDone 'installer' 'install-test'
     Assert-StepDone 'build' 'install-test'
@@ -903,6 +948,14 @@ function Step-InstallTest {
         Write-Plan 'check' 'installed cascade.exe and SoapySDR.dll have the sha256 of the built files; the other payload files are present'
         Write-Plan 'check' 'installed cascade.exe --version prints "FoxSDR <version>" (read from redirected pipes, so a windows-subsystem exe works)'
         Write-Plan 'check' 'installed cascade.exe --selftest prints "selftest PASS", and --frames 60 exits 0 having rendered 60 frames, with scratch APPDATA/LOCALAPPDATA/CASCADE_CONFIG_TEST'
+        if ($ClassicInstaller) {
+            Write-Plan 'check' 'classic installer (-ClassicInstaller): cascade.exe is the application and the installer carries no Slint files: foxsdr-slint.exe, slint_cpp.dll and the FoxSDR (classic window) entry are asserted absent (disk and install log)'
+        } else {
+            Write-Plan 'check' 'installed foxsdr-slint.exe and slint_cpp.dll have the sha256 of the built files (build state slintExeSha256 / slintDllSha256); cascade.exe stays installed beside them as the classic window'
+            Write-Plan 'check' 'installed foxsdr-slint.exe --version prints "FoxSDR <version>" (read from redirected pipes, so a windows-subsystem exe works)'
+            Write-Plan 'check' 'installed foxsdr-slint.exe --frames 60 with FOXSDR_LANGUAGE=fr and scratch APPDATA/LOCALAPPDATA/USERPROFILE/HOME/CASCADE_CONFIG_TEST exits 0, prints "60 of 60 ticks" and "language fr (bundled)" (the translations are inside the installed exe)'
+            Write-Plan 'check' 'the install log must record foxsdr-slint.exe, slint_cpp.dll and the Start-menu entry "FoxSDR (classic window)"; all three must be gone after the uninstall'
+        }
         Write-Result 'DRY' 'uninstall' (Format-CommandLine (Join-Path $installDir 'unins000.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG=' + (Join-Path $RC.Verify 'uninstall.log'))))
         Write-Plan 'check' ('validate install.log; poll every recorded installed file (including shortcuts outside the app), unins000.exe/.dat, uninstall keys and foxsdr: handlers until gone; only an unlogged plugins directory may remain under ' + $installDir)
         return 'done'
@@ -918,21 +971,34 @@ function Step-InstallTest {
     } else {
         Write-Result 'PASS' 'nothing installed before the test' ($installDir + ' absent, no uninstall key in HKCU/HKLM')
     }
-    foreach ($d in @($scratch, $env1['APPDATA'], $env1['LOCALAPPDATA'])) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
+    # The Slint window's bounded run: the same scratch tree plus a scratch profile (USERPROFILE and HOME, so nothing it resolves from the
+    # user's profile is the real one) and French, which only a binary with the bundled translations inside can honour.
+    $envSlint = @{}
+    foreach ($k in @($env1.Keys)) { $envSlint[$k] = $env1[$k] }
+    $envSlint['USERPROFILE'] = Join-Path $scratch 'userprofile'
+    $envSlint['HOME'] = Join-Path $scratch 'userprofile'
+    $envSlint['FOXSDR_LANGUAGE'] = 'fr'
+    foreach ($d in @($scratch, $env1['APPDATA'], $env1['LOCALAPPDATA'], $envSlint['USERPROFILE'])) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
     [System.IO.File]::WriteAllText($env1['CASCADE_CONFIG_TEST'], '{"telemetryEnabled": false, "updateCheckEnabled": false}' + "`r`n", (Get-Utf8NoBom))
+    if ($ClassicInstaller) {
+        Write-Result 'INFO' 'install test flavour' 'classic installer: cascade.exe is the application, no Slint files expected'
+    } else {
+        Write-Result 'INFO' 'install test flavour' 'Slint application: foxsdr-slint.exe + slint_cpp.dll installed, cascade.exe beside them as the classic window'
+    }
 
     $buildInfo = Get-StepInfo 'build'
     $installed = $false
     $ur = $null
     # Still attempt cleanup if log validation or a later application check fails.
     $installedFiles = @('cascade.exe', 'unins000.exe', 'unins000.dat' | ForEach-Object { Join-Path $installDir $_ })
+    if (-not $ClassicInstaller) { $installedFiles += @('foxsdr-slint.exe', 'slint_cpp.dll' | ForEach-Object { Join-Path $installDir $_ }) }
     $cleanup = $null
     try {
         $r = Invoke-Planned -What 'install' -File $setup -Arguments $instArgs -TimeoutSec 600
         # Setup exit codes (jrsoftware.org/ishelp/topic_setupexitcodes.htm): 0 is success.
         Assert-Check ($r.ExitCode -eq 0) 'installer exit code' ([string]$r.ExitCode) 'Setup returned non-zero (1 failed to initialise, 3 fatal while preparing, 4 fatal during install, 5 cancelled, 7/8 cannot proceed); read verify\install.log'
         $installed = $true
-        $installedFiles = @(Get-InstallTestFiles (Join-Path $RC.Verify 'install.log') $installDir)
+        $installedFiles = @(Get-InstallTestFiles (Join-Path $RC.Verify 'install.log') $installDir (-not $ClassicInstaller))
         $exe = Join-Path $installDir 'cascade.exe'
         Assert-Check (Test-Path -LiteralPath $exe) 'installed cascade.exe' $exe 'the installer reported success but the file is not there'
         $instSha = Get-Sha256 $exe
@@ -942,6 +1008,22 @@ function Step-InstallTest {
         foreach ($pair in @(@('opengl32.dll', 'softglOpengl32Sha256'), @('libgallium_wgl.dll', 'softglGalliumSha256'))) {
             $instSoft = Get-Sha256 (Join-Path $installDir ('softgl\' + $pair[0]))
             Assert-Check ($instSoft -eq $buildInfo[$pair[1]]) ('installed softgl\' + $pair[0] + ' = built') $instSoft 'the installer carries a different software renderer'
+        }
+        $slintExe = Join-Path $installDir 'foxsdr-slint.exe'
+        if ($ClassicInstaller) {
+            # The classic installer carries none of the Slint window: not in the install log, not on disk.
+            $slintLogged = @($installedFiles | Where-Object { @('foxsdr-slint.exe', 'slint_cpp.dll', 'FoxSDR (classic window).lnk') -contains [System.IO.Path]::GetFileName($_) })
+            $slintOnDisk = @('foxsdr-slint.exe', 'slint_cpp.dll' | Where-Object { Test-Path -LiteralPath (Join-Path $installDir $_) })
+            Assert-Check ($slintLogged.Count + $slintOnDisk.Count -eq 0) 'classic installer installs no Slint files' 'none of foxsdr-slint.exe, slint_cpp.dll, the FoxSDR (classic window) entry' ('found: ' + ((@($slintLogged) + @($slintOnDisk)) -join ', ') + '; the installer was built with the Slint application (SlintIsApp=1), so run the installer step with -ClassicInstaller too')
+        } else {
+            Assert-Check ($buildInfo.ContainsKey('slintExeSha256') -and $buildInfo.ContainsKey('slintDllSha256')) 'build state records the Slint hashes' 'slintExeSha256, slintDllSha256' 'the recorded build predates them; run tools\release.ps1 -Steps build -Force'
+            Assert-Check (Test-Path -LiteralPath $slintExe) 'installed foxsdr-slint.exe' $slintExe 'the installer reported success but the Slint application is not there (SlintIsApp)'
+            $slintDllPath = Join-Path $installDir 'slint_cpp.dll'
+            Assert-Check (Test-Path -LiteralPath $slintDllPath) 'installed slint_cpp.dll' $slintDllPath 'the Slint window cannot start without its runtime'
+            $instSlint = Get-Sha256 $slintExe
+            Assert-Check ($instSlint -eq $buildInfo['slintExeSha256']) 'installed foxsdr-slint.exe = built foxsdr-slint.exe' ('installed ' + $instSlint + ' / built ' + $buildInfo['slintExeSha256']) 'the installer carries a different foxsdr-slint.exe from the one that was built and hashed'
+            $instSlintDll = Get-Sha256 $slintDllPath
+            Assert-Check ($instSlintDll -eq $buildInfo['slintDllSha256']) 'installed slint_cpp.dll = built slint_cpp.dll' ('installed ' + $instSlintDll + ' / built ' + $buildInfo['slintDllSha256']) 'the installer carries a different slint_cpp.dll from the one that was built and hashed'
         }
         $missing = @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'POSTINSTALL.txt', 'unins000.exe') | Where-Object { -not (Test-Path -LiteralPath (Join-Path $installDir $_)) }
         Assert-Check (@($missing).Count -eq 0) 'installed payload files' 'CRT, licences, notes, uninstaller' ('missing: ' + (@($missing) -join ', '))
@@ -967,6 +1049,23 @@ function Step-InstallTest {
         Assert-Check ($fr.ExitCode -eq 0 -and -not $fr.TimedOut) 'installed cascade.exe --frames 60 exit code' ([string]$fr.ExitCode) ('timed out: ' + $fr.TimedOut)
         $rendered = [regex]::Match($fr.Output, 'rendered (\d+) frames')
         Assert-Check ($rendered.Success -and $rendered.Groups[1].Value -eq '60') '--frames 60 rendered' ($rendered.Value) 'the bounded run must say it rendered exactly 60 frames'
+        if (-not $ClassicInstaller) {
+            # The installed Slint application: a windows-subsystem exe like cascade.exe, so the same redirected-pipe helper reads its output.
+            Write-Result 'INFO' 'installed foxsdr-slint.exe subsystem' (Get-PeSubsystem $slintExe)
+            $svr = Invoke-Exe -File $slintExe -Arguments @('--version') -TimeoutSec 60 -Env $envSlint
+            $svl = ($svr.StdOut -split "`r?`n" | Where-Object { $_.Trim() -ne '' } | Select-Object -First 1)
+            if ($null -eq $svl) { $svl = '' }
+            Assert-Check ($svr.ExitCode -eq 0 -and $svl.Trim() -eq ('FoxSDR ' + $v)) 'installed foxsdr-slint.exe --version' ('"' + $svl.Trim() + '" exit ' + $svr.ExitCode) ('expected "FoxSDR ' + $v + '", the line cascade.exe prints')
+            # A bounded run: 60 ticks and exit 0. FOXSDR_LANGUAGE=fr must come back as "language fr (bundled)": the window prints
+            # "not bundled" or falls to english when the .po catalogues are not compiled into the exe that was installed.
+            $sfr = Invoke-Exe -File $slintExe -Arguments @('--frames', '60') -TimeoutSec 180 -Env $envSlint -WorkDir $installDir
+            Assert-Check ($sfr.ExitCode -eq 0 -and -not $sfr.TimedOut) 'installed foxsdr-slint.exe --frames 60 exit code' ([string]$sfr.ExitCode) ('timed out: ' + $sfr.TimedOut)
+            $sticks = [regex]::Match($sfr.Output, 'foxsdr-slint: bounded run: 60 of 60 ticks')
+            Assert-Check $sticks.Success 'foxsdr-slint --frames 60 ticks' ($(if ($sticks.Success) { $sticks.Value } else { 'no "60 of 60 ticks" line' })) 'the bounded run must say it ran exactly 60 of 60 ticks'
+            $slang = [regex]::Match($sfr.Output, 'foxsdr-slint: language (.+)')
+            $slangText = $(if ($slang.Success) { $slang.Groups[1].Value.Trim() } else { 'no language line' })
+            Assert-Check ($slang.Success -and $slangText -eq 'fr (bundled)') 'foxsdr-slint language fr bundled' $slangText 'FOXSDR_LANGUAGE=fr must report "language fr (bundled)": the installed foxsdr-slint.exe does not carry the bundled translations'
+        }
         $cfgAfter = [System.IO.File]::ReadAllText($env1['CASCADE_CONFIG_TEST'])
         Assert-Check ($cfgAfter -match '"telemetryEnabled"\s*:\s*false') 'test run left usage reporting off' 'scratch config still says telemetryEnabled false' 'the run would have sent a usage report'
         Assert-Check (-not (@(Get-ChildItem -LiteralPath $env1['LOCALAPPDATA'] -Filter 'telemetry-sent-*' -Recurse -ErrorAction SilentlyContinue).Count -gt 0)) 'no usage-sent marker from the test run' '' 'a telemetry-sent marker appeared under the scratch LOCALAPPDATA'
