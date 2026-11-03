@@ -8,7 +8,7 @@ plugins from an in-app catalogue. Most radios are driven by FoxSDR's
 own drivers, so nothing else has to be installed. The whole interface can be
 served to a browser on your own network.
 
-The current Windows release is **0.99.104**; map pages open inside the main window, with manual tear-off still available.
+The current Windows release is **0.99.105**; the new FoxSDR window, built with Slint, is the application, with the previous window kept as "FoxSDR (classic window)".
 Linux downloads remain on **0.99.103** until their new packages are verified.
 
 FoxSDR is in open beta (October 2026). Free for
