@@ -60,7 +60,7 @@ export component WaterfallView inherits Rectangle {
     out property <length> foot-h: 28px;            // the foot band under the picture (4 px of bare well between them)
 
     // ---- the age strip (left gutter) ----
-    in property <string> age-caption: "Age";
+    in property <string> age-caption: @tr("AGE");
     in property <[AgeTick]> age-ticks;             // pos: 0..1 of the picture height = the label's TOP edge
     in property <float> gap-pos: -1;               // the reception-gap break: a rail across the gutter at this height, -1 none
     in property <string> gap-label-above;          // the age of the row above the break
@@ -68,11 +68,11 @@ export component WaterfallView inherits Rectangle {
 
     // ---- the strength key (top right of the picture) ----
     in property <bool> show-key: true;
-    in property <string> key-title: "Strength";
+    in property <string> key-title: @tr("Strength");
     in property <[string]> key-labels;             // the dB scale, spread under the ramp
     in property <string> key-foot;                 // "FLOOR -110 dB · CEILING 0 dB · auto"
     in property <bool> key-manual;                 // the floor and ceiling are the user's own: a MANUAL chip beside the title
-    in property <string> key-manual-label: "MANUAL";
+    in property <string> key-manual-label: @tr("MANUAL");
     in property <string> key-coverage;             // how many newest rows the key is true for after a range change; "" none
     out property <length> key-x: pic.x + key.x;    // the plate's rectangle in this view (zero size while it is not drawn)
     out property <length> key-y: key.y;
@@ -116,7 +116,7 @@ export component WaterfallView inherits Rectangle {
     callback marker-hovered(index: int);
 
     accessible-role: image;
-    accessible-label: "Waterfall";
+    accessible-label: @tr("Waterfall");
     background: Theme.well-deep;
     clip: true;
 

@@ -167,7 +167,7 @@ component SettingSlot inherits Rectangle {
 export component PluginSettingsForm inherits Rectangle {
     in property <[SettingField]> fields;
     in-out property <bool> open;                       // the fold line toggles it
-    in property <string> title: "Plugin settings";
+    in property <string> title: @tr("Plugin settings");
     in property <bool> enabled: true;
     in property <string> tooltip;                      // the fold line's sentence
     callback committed(int, string);                   // the field's id and the text, on Enter or on losing the focus
@@ -300,19 +300,19 @@ export component GrantKeys inherits Rectangle {
     in property <string> tune-tooltip;
     in property <string> settings-tooltip;
     in property <string> transmit-tooltip;
-    in property <string> grant-tune-text: "GRANT RECEIVER CONTROL";
-    in property <string> revoke-tune-text: "REVOKE RECEIVER CONTROL";
-    in property <string> grant-settings-text: "GRANT RADIO SETTINGS";
-    in property <string> revoke-settings-text: "REVOKE RADIO SETTINGS";
-    in property <string> grant-transmit-text: "GRANT TRANSMIT";
-    in property <string> revoke-transmit-text: "REVOKE TRANSMIT";
+    in property <string> grant-tune-text: @tr("GRANT RECEIVER CONTROL");
+    in property <string> revoke-tune-text: @tr("REVOKE RECEIVER CONTROL");
+    in property <string> grant-settings-text: @tr("GRANT RADIO SETTINGS");
+    in property <string> revoke-settings-text: @tr("REVOKE RADIO SETTINGS");
+    in property <string> grant-transmit-text: @tr("GRANT TRANSMIT");
+    in property <string> revoke-transmit-text: @tr("REVOKE TRANSMIT");
     callback tune-toggled(bool);
     callback settings-toggled(bool);
     callback transmit-toggled(bool);
 
     height: col.preferred-height;
     accessible-role: groupbox;
-    accessible-label: "Grants";
+    accessible-label: @tr("Grants");
 
     col := VerticalLayout {
         spacing: 6px;
@@ -368,9 +368,9 @@ export struct StaleGrant { file: string, refused: bool, granted: bool }
 export component ReceiverControlCard inherits Rectangle {
     in property <string> refusal;
     in property <[StaleGrant]> stale;
-    in property <string> title: "Receiver control";
-    in property <string> refused-sentence: "this file is in the plugin folder and the host refused it - the Fitted modules tab prints why. Grant kept.";
-    in property <string> missing-sentence: "no module of this name is fitted here - grant kept";
+    in property <string> title: @tr("Receiver control");
+    in property <string> refused-sentence: @tr("this file is in the plugin folder and the host refused it - the Fitted modules tab prints why. Grant kept.");
+    in property <string> missing-sentence: @tr("no module of this name is fitted here - grant kept");
     in property <bool> enabled: true;
     in property <string> tooltip;
     callback grant-toggled(int, bool);
@@ -550,7 +550,7 @@ export component StateChips inherits Rectangle {
 
     height: root.row-count <= 0 ? 0px : root.row-count * Theme.chip-h + (root.row-count - 1) * 6px;
     accessible-role: groupbox;
-    accessible-label: "State filter";
+    accessible-label: @tr("State filter");
 
     Rectangle {
         visible: false;
@@ -593,20 +593,20 @@ export component RunKeys inherits Rectangle {
     in property <bool> mutes;
     in property <bool> mute-shown;
     in property <bool> enabled: true;
-    in property <string> stop-text: "STOP";
-    in property <string> start-text: "START";
-    in property <string> mute-text: "Mute audio while running";
-    in property <string> stop-tooltip: "Stop this decoder. It stays fitted and keeps its presets; nothing else is touched. Start it again with this key or with one of its presets.";
-    in property <string> idle-tooltip: "This decoder is idle: nothing is using it, so it is not running. It starts by itself when you open its window or the Decoder output window. START keeps it running all the time.";
-    in property <string> start-tooltip: "Start this decoder again. It begins decoding as soon as the receiver is on a frequency it can use.";
-    in property <string> mute-tooltip: "Silence the speakers and the web audio stream while this plugin is actually decoding and the receiver is on one of its presets. A stopped or idle plugin silences nothing. The volume setting is not touched.";
+    in property <string> stop-text: @tr("STOP");
+    in property <string> start-text: @tr("START");
+    in property <string> mute-text: @tr("Mute audio while running");
+    in property <string> stop-tooltip: @tr("Stop this decoder. It stays fitted and keeps its presets; nothing else is touched. Start it again with this key or with one of its presets.");
+    in property <string> idle-tooltip: @tr("This decoder is idle: nothing is using it, so it is not running. It starts by itself when you open its window or the Decoder output window. START keeps it running all the time.");
+    in property <string> start-tooltip: @tr("Start this decoder again. It begins decoding as soon as the receiver is on a frequency it can use.");
+    in property <string> mute-tooltip: @tr("Silence the speakers and the web audio stream while this plugin is actually decoding and the receiver is on one of its presets. A stopped or idle plugin silences nothing. The volume setting is not touched.");
     out property <string> key-tooltip: root.offers-stop ? root.stop-tooltip : root.idle ? root.idle-tooltip : root.start-tooltip;
     callback run-clicked();
     callback mute-toggled(bool);
 
     height: col.preferred-height;
     accessible-role: groupbox;
-    accessible-label: "Decoder";
+    accessible-label: @tr("Decoder");
 
     col := VerticalLayout {
         spacing: 6px;

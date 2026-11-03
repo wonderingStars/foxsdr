@@ -297,7 +297,7 @@ component PagePrelude inherits VerticalLayout {
     callback setting-toggled(int, int, bool);
     callback browse-clicked(int, int);
     spacing: 0px;
-    if root.page.has-presets : PresetBar { presets: root.page.presets; save-label: "+ Save";
+    if root.page.has-presets : PresetBar { presets: root.page.presets; save-label: @tr("+ Save");
         pressed(i) => { root.preset-pressed(root.index, i); } forgot(i) => { root.preset-forgot(root.index, i); } save-clicked => { root.save-clicked(root.index); } }
     if root.page.has-settings : PluginSettingsForm { fields: root.page.fields;
         committed(id, text) => { root.setting-committed(root.index, id, text); }
@@ -323,22 +323,22 @@ component MapToolbar inherits VerticalLayout {
     spacing: 4px;
     padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px;
     HorizontalLayout { spacing: 8px; alignment: start;
-        Key { label: "Fit"; small: true; min-w: 0px; tooltip: "Centre and zoom on every target"; clicked => { root.fit(root.index); } }
-        Key { label: root.map.pick-armed ? "Click the map..." : "Set RX here"; small: true; min-w: 0px; on: root.map.pick-armed; tooltip: "The next click on the map sets the receiver position"; clicked => { root.set-rx(root.index); } }
+        Key { label: @tr("Fit"); small: true; min-w: 0px; tooltip: @tr("Centre and zoom on every target"); clicked => { root.fit(root.index); } }
+        Key { label: root.map.pick-armed ? @tr("Click the map...") : @tr("Set RX here"); small: true; min-w: 0px; on: root.map.pick-armed; tooltip: @tr("The next click on the map sets the receiver position"); clicked => { root.set-rx(root.index); } }
         Text { text: root.map.rx-text; font-size: Theme.font-small; color: root.map.rx-known ? Theme.fg-soft : Theme.dim; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }
         Text { text: root.map.count-text; font-size: Theme.font-small; color: Theme.muted; vertical-alignment: center; }
-        Checkbox { width: 118px; label: "On screen only"; checked: root.map.on-screen-only; tooltip: "Lists only the targets inside the map you are looking at."; toggled(v) => { root.on-screen(root.index, v); } }
+        Checkbox { width: 118px; label: @tr("On screen only"); checked: root.map.on-screen-only; tooltip: @tr("Lists only the targets inside the map you are looking at."); toggled(v) => { root.on-screen(root.index, v); } }
     }
     HorizontalLayout { spacing: 10px; alignment: start;
-        Checkbox { width: 86px; label: "Coverage"; checked: root.map.coverage-on; tooltip: "Furthest any target has been plotted, per 5 degrees of bearing, from the receiver position, this session only."; toggled(v) => { root.coverage(root.index, v); } }
-        Checkbox { width: 66px; label: "Trails"; checked: root.map.trails-on; tooltip: "Draw the lines plugins publish: flight trails, predicted ground tracks and footprints."; toggled(v) => { root.trails(root.index, v); } }
-        Checkbox { width: 124px; label: "Altitude colours"; checked: root.map.alt-colours; enabled: root.map.trails-on; tooltip: root.map.trails-on ? "Colour each part of a trail by the altitude observed there." : "Turn Trails on to colour them by altitude."; toggled(v) => { root.alt-colours(root.index, v); } }
-        Key { label: "Reset coverage"; small: true; min-w: 0px; enabled: !root.map.coverage-empty; clicked => { root.reset-coverage(root.index); } }
+        Checkbox { width: 86px; label: @tr("Coverage"); checked: root.map.coverage-on; tooltip: @tr("Furthest any target has been plotted, per 5 degrees of bearing, from the receiver position, this session only."); toggled(v) => { root.coverage(root.index, v); } }
+        Checkbox { width: 66px; label: @tr("Trails"); checked: root.map.trails-on; tooltip: @tr("Draw the lines plugins publish: flight trails, predicted ground tracks and footprints."); toggled(v) => { root.trails(root.index, v); } }
+        Checkbox { width: 124px; label: @tr("Altitude colours"); checked: root.map.alt-colours; enabled: root.map.trails-on; tooltip: root.map.trails-on ? @tr("Colour each part of a trail by the altitude observed there.") : @tr("Turn Trails on to colour them by altitude."); toggled(v) => { root.alt-colours(root.index, v); } }
+        Key { label: @tr("Reset coverage"); small: true; min-w: 0px; enabled: !root.map.coverage-empty; clicked => { root.reset-coverage(root.index); } }
         Text { text: root.map.coverage-status; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }
         if root.map.following != "" : Text { text: root.map.following; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
-        if root.map.following != "" : Key { label: "Stop following"; small: true; min-w: 0px; clicked => { root.stop-following(root.index); } }
+        if root.map.following != "" : Key { label: @tr("Stop following"); small: true; min-w: 0px; clicked => { root.stop-following(root.index); } }
     }
 }
 
@@ -470,9 +470,9 @@ export component PageBody inherits Rectangle {
         if root.page.kind == 1 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
             for b[bi] in root.page.bars : HorizontalLayout { spacing: 6px; padding-left: 10px; padding-right: 10px; padding-top: 4px; padding-bottom: 4px;
                 Text { text: b.name; font-size: Theme.font-small; color: Theme.dim; vertical-alignment: center; }
-                PresetBar { presets: b.presets; save-label: "+ Save"; pressed(i) => { root.bar-preset-pressed(root.index, bi, i); } save-clicked => { root.bar-save-clicked(root.index, bi); } }
+                PresetBar { presets: b.presets; save-label: @tr("+ Save"); pressed(i) => { root.bar-preset-pressed(root.index, bi, i); } save-clicked => { root.bar-save-clicked(root.index, bi); } }
             }
-            LogView { vertical-stretch: 1; lines: root.page.lines; follow: root.page.follow; count-text: root.page.count-text; empty-text: "Listening...";
+            LogView { vertical-stretch: 1; lines: root.page.lines; follow: root.page.follow; count-text: root.page.count-text; empty-text: @tr("Listening...");
                 clear-clicked => { root.log-clear(root.index); } follow-toggled(v) => { root.log-follow(root.index, v); } }
         }
         // 2 picture
@@ -498,11 +498,11 @@ export component PageBody inherits Rectangle {
             HorizontalLayout { spacing: 0px; vertical-stretch: 1;
                 VerticalLayout { width: 260px; spacing: 4px;
                     HorizontalLayout { spacing: 6px; padding-left: 8px; padding-right: 8px;
-                        Text { text: "Sort"; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
-                        Key { label: root.page.map.sort-label; small: true; min-w: 0px; tooltip: "Order the list. Distance and bearing are measured from the RX position."; clicked => { root.map-sort-clicked(root.index); } }
-                        Key { label: root.page.map.sort-ascending ? "Up" : "Down"; small: true; min-w: 0px; tooltip: root.page.map.sort-ascending ? "Smallest first - click to reverse" : "Largest first - click to reverse"; clicked => { root.map-sort-dir(root.index); } }
+                        Text { text: @tr("Sort"); font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
+                        Key { label: root.page.map.sort-label; small: true; min-w: 0px; tooltip: @tr("Order the list. Distance and bearing are measured from the RX position."); clicked => { root.map-sort-clicked(root.index); } }
+                        Key { label: root.page.map.sort-ascending ? @tr("Up") : @tr("Down"); small: true; min-w: 0px; tooltip: root.page.map.sort-ascending ? @tr("Smallest first - click to reverse") : @tr("Largest first - click to reverse"); clicked => { root.map-sort-dir(root.index); } }
                     }
-                    Table { vertical-stretch: 1; columns: root.page.map.list-columns; rows: root.page.map.list-rows; column-widths: root.page.map.list-widths; empty-text: "No targets. Decoded aircraft, ships and stations appear here.";
+                    Table { vertical-stretch: 1; columns: root.page.map.list-columns; rows: root.page.map.list-rows; column-widths: root.page.map.list-widths; empty-text: @tr("No targets. Decoded aircraft, ships and stations appear here.");
                         clicked(r) => { root.map-list-clicked(root.index, r); } row-pressed(r) => { root.map-list-double-clicked(root.index, r); } }
                 }
                 MapPane { horizontal-stretch: 1; base: root.page.map.base; targets: root.page.map.targets; legend: root.page.map.legend; scale-text: root.page.map.scale-text;
@@ -598,11 +598,11 @@ export component DecodeBank inherits VerticalLayout {
 
     for r[i] in root.rows : VerticalLayout { spacing: 0px;
         if r.kind == 1 : VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 6px; padding-bottom: 6px;
-            Field { label: "Catalogue"; kind: FieldKind.text; value: root.url; placeholder: "catalogue index.json URL"; tooltip: "Where the catalogue is read from: an https URL or a local index.json path. It replaces the FoxSDR catalogue.";
+            Field { label: @tr("Catalogue"); kind: FieldKind.text; value: root.url; placeholder: @tr("catalogue index.json URL"); tooltip: @tr("Where the catalogue is read from: an https URL or a local index.json path. It replaces the FoxSDR catalogue.");
                 committed(t) => { root.url-committed(t); } }
         }
         if r.kind == 2 : VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 4px; padding-bottom: 6px;
-            Card { title: "Disabled"; critical: true; lines: [r.note]; primary-label: r.key-label; secondary-label: r.key2-label; note: r.key-label == "" ? "Open the plugin store with the key above to fetch the update." : "";
+            Card { title: @tr("Disabled"); critical: true; lines: [r.note]; primary-label: r.key-label; secondary-label: r.key2-label; note: r.key-label == "" ? @tr("Open the plugin store with the key above to fetch the update.") : "";
                 primary-clicked => { root.row-key(i); } secondary-clicked => { root.row-key2(i); } }
         }
         if r.kind == 10 : Rectangle { height: note.preferred-height + 8px;
@@ -617,7 +617,7 @@ export component DecodeBank inherits VerticalLayout {
                 if root.lines-text != "" : Text { text: root.lines-text; font-size: Theme.font-hint; color: Theme.dim; }
                 if root.tail-note != "" : Text { text: root.tail-note; font-size: Theme.font-hint; color: Theme.dim; wrap: word-wrap; }
                 if root.cost-note != "" : Text { text: root.cost-note; font-size: Theme.font-small; color: Theme.chip-warn-fg; wrap: word-wrap; }
-                if root.stop-all-label != "" : Key { label: root.stop-all-label; wide: true; danger: true; tooltip: "Stop every decoder that is being fed right now. Nothing is removed and nothing you already stopped is started; press a decoder's preset to start it again."; clicked => { root.stop-all(); } }
+                if root.stop-all-label != "" : Key { label: root.stop-all-label; wide: true; danger: true; tooltip: @tr("Stop every decoder that is being fed right now. Nothing is removed and nothing you already stopped is started; press a decoder's preset to start it again."); clicked => { root.stop-all(); } }
                 for e[ei] in root.entries : VerticalLayout { spacing: 6px;
                     if e.show-group : Caption { label: e.group; color: Theme.accent-soft; }
                     Text { text: e.name; font-size: 13px; font-weight: Theme.weight-semibold; color: Theme.fg; wrap: word-wrap; }

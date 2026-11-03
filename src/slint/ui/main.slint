@@ -72,7 +72,7 @@ component Sheet inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
-    title: "FoxSDR";
+    title: "FoxSDR";   // not-translated: the product name
     no-frame: true;
     // THE WINDOW'S SIZE. The desktop backend sized the window from the layout and opened it at its 400 px minimum
     // whatever preferred-height said (docs 6.36); an explicit size opens as asked, so the size is a pair of properties:
@@ -94,13 +94,13 @@ export component MainWindow inherits Window {
     in property <string> version: "0.99.100";
     in property <bool> maximised;
     in property <int> notifications;                 // bell badge count
-    in property <string> notifications-tooltip: "Notifications";
+    in property <string> notifications-tooltip: @tr("Notifications");
     // receiver strip
     in property <bool> running;
     in property <bool> decoding;
     in property <bool> muted;
     in property <bool> failed;
-    in property <string> tuned-text: "145.500000 MHz";
+    in property <string> tuned-text: "145.500000 MHz";   // not-translated: sample data the host replaces
     in property <[int]> digits: [0, 1, 4, 5, 5, 0, 0, 0, 0, 0];
     in property <int> leading-zeros: 1;
     in property <bool> show-nudges: true;
@@ -108,35 +108,35 @@ export component MainWindow inherits Window {
     in-out property <string> editor-text;
     in property <string> converter-text;             // "" = the static engraving
     in property <bool> converter-warn;
-    in property <string> tune-hint: "Scroll a digit to tune · click to type (T) · no converter";
-    in property <[string]> modes: ["NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"];
+    in property <string> tune-hint: @tr("Scroll a digit to tune · click to type (T) · no converter");
+    in property <[string]> modes: ["NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"];   // not-translated: mode names are radio vocabulary
     in property <int> mode-index: 0;
-    in property <string> mode-hint: "Passband 12.5 kHz · step 12.5 kHz · more in Signal › Radio";
+    in property <string> mode-hint: "Passband 12.5 kHz · step 12.5 kHz · more in Signal › Radio";   // not-translated: sample data the host replaces
     in property <float> gain-norm; in property <string> gain-text: "N/A"; in property <bool> gain-auto; in property <bool> gain-enabled; in property <bool> gain-auto-enabled;
-    in property <string> gain-hint: "no gain stage"; in property <string> gain-tooltip; in property <string> gain-auto-tooltip;
-    in property <float> squelch-norm; in property <string> squelch-text: "open"; in property <bool> squelch-auto: true; in property <string> squelch-hint; in property <string> squelch-auto-tooltip;
+    in property <string> gain-hint: @tr("no gain stage"); in property <string> gain-tooltip; in property <string> gain-auto-tooltip;
+    in property <float> squelch-norm; in property <string> squelch-text: @tr("open"); in property <bool> squelch-auto: true; in property <string> squelch-hint; in property <string> squelch-auto-tooltip;
     in property <float> volume-norm; in property <string> volume-text: "0.00";
     in property <float> level-norm; in property <string> level-text: "--";
-    in property <bool> bias-tee-present; in property <bool> bias-tee-on; in property <string> bias-hint: "No bias tee on this radio";
-    in property <string> bias-tooltip: "Sends about 4.5 V up the antenna cable to power an amplifier at the mast. Leave it off unless you have one: equipment that is not expecting power on the connector can be damaged by it.";
+    in property <bool> bias-tee-present; in property <bool> bias-tee-on; in property <string> bias-hint: @tr("No bias tee on this radio");
+    in property <string> bias-tooltip: @tr("Sends about 4.5 V up the antenna cable to power an amplifier at the mast. Leave it off unless you have one: equipment that is not expecting power on the connector can be damaged by it.");
     in-out property <bool> bias-question-open;      // "Turn on the bias tee?" sheet
     in property <string> bias-question-text;
     in property <string> muted-by;                   // "" = no banner
     // rail + sections panel
     in-out property <int> bank-index: 0;             // SIGNAL DECODE TOOLS EXTEND SYSTEM
     in-out property <bool> rail-folded;
-    in property <[string]> bank-titles: ["Signal path", "Decode", "Tools", "Extend", "System"];
-    in property <string> bank-chip: "RECEIVING";
+    in property <[string]> bank-titles: [@tr("SIGNAL PATH"), @tr("DECODE"), @tr("TOOLS"), @tr("EXTEND"), @tr("SYSTEM")];
+    in property <string> bank-chip: @tr("RECEIVING");
     in property <ChipTone> bank-chip-tone: ChipTone.good;
     in property <[SectionRow]> sections: [];
-    in property <float> passband-norm; in property <string> passband-text: "12.5 kHz";
-    in property <string> tune-step-text: "12.5 kHz";
+    in property <float> passband-norm; in property <string> passband-text: "12.5 kHz";   // not-translated: sample data (a value with its unit) the host replaces
+    in property <string> tune-step-text: "12.5 kHz";   // not-translated: sample data (a value with its unit) the host replaces
     in-out property <bool> follow-band-plan: true;
     in property <bool> team-message-shown; in property <string> team-message-date; in property <[string]> team-message-lines; in property <bool> team-message-important;
     in property <bool> update-shown; in property <string> update-headline; in property <bool> update-critical; in property <[string]> update-notes;
-    in property <string> update-primary: "Download update"; in property <float> update-progress: -1; in property <string> update-note; in property <string> update-error;
-    in property <string> source-line: "Signal generator";
-    in property <string> rate-line: "2.000 MS/s · ch 200.0 kHz · underruns 0";
+    in property <string> update-primary: @tr("Download update"); in property <float> update-progress: -1; in property <string> update-note; in property <string> update-error;
+    in property <string> source-line: @tr("Signal generator");
+    in property <string> rate-line: "2.000 MS/s · ch 200.0 kHz · underruns 0";   // not-translated: sample data (a rate with its units) the host replaces
     in property <string> converter-line;             // "" = none (the rail footer's warning line)
     // centre
     in-out property <int> view-index: 0;             // RECEIVER PATCH SCOPE
@@ -162,14 +162,14 @@ export component MainWindow inherits Window {
     in property <bool> range-manual;
     in property <int> marker-count;
     in property <bool> band-plan-on: true;
-    in property <string> spectrum-caption: "Spectrum";
-    in property <string> spectrum-caveat: "average of the last frames, not the audio";
+    in property <string> spectrum-caption: @tr("Spectrum");
+    in property <string> spectrum-caveat: @tr("average of the last frames, not the audio");
     in property <string> peak-text; in property <string> peak-age; in property <bool> show-peak;
-    in property <string> span-text: "SPAN 2.000 MHz";
+    in property <string> span-text: "SPAN 2.000 MHz";   // not-translated: sample data (a span with its unit) the host replaces
     in property <image> trace-image;
     in property <[DbTick]> db-ticks: [];
     in property <[AxisTick]> freq-ticks: [];
-    in property <string> axis-unit: "MHz";
+    in property <string> axis-unit: "MHz";   // not-translated: a frequency unit
     in property <float> vfo-pos: 0.5; in property <float> vfo-half: 0.01; in property <bool> show-vfo: true;
     in property <[BandSegment]> ribbon: [];
     in property <int> ribbon-size: 1;
@@ -178,9 +178,9 @@ export component MainWindow inherits Window {
     in property <[PluginMark]> wf-marks: [];         // the marks not flagged spectrum-only
     in property <[UserMarker]> markers: [];
     in property <string> cursor-text; in property <bool> cursor-visible; in property <float> cursor-pos;
-    in property <string> band-tooltip: "Drag to move the tuned band · drag an edge to change the passband · Shift = free tuning";
-    in property <string> edge-tooltip: "Drag to change the passband";
-    in property <string> off-band-tooltip: "Click to tune here · double-click for the full span · wheel to zoom · Shift+wheel to slide the band · right-click for the trace menu";
+    in property <string> band-tooltip: @tr("Drag to move the tuned band · drag an edge to change the passband · Shift = free tuning");
+    in property <string> edge-tooltip: @tr("Drag to change the passband");
+    in property <string> off-band-tooltip: @tr("Click to tune here · double-click for the full span · wheel to zoom · Shift+wheel to slide the band · right-click for the trace menu");
     in-out property <float> split-ratio: 0.6;        // spectrum share of the centre height (0.1 .. 0.9)
     in property <image> waterfall-image;
     in property <[AgeTick]> age-ticks: [];
@@ -188,12 +188,12 @@ export component MainWindow inherits Window {
     in property <string> waterfall-foot-tuned;
     in property <string> waterfall-foot-rest;
     in property <[string]> key-labels: ["-110", "-80", "-50", "-20", "0"];
-    in property <string> key-foot: "FLOOR -110 dB · CEILING 0 dB · auto";
+    in property <string> key-foot: "FLOOR -110 dB · CEILING 0 dB · auto";   // not-translated: sample data the host replaces
     in property <string> key-coverage;
     in property <bool> show-strength-key: true;
     in property <float> wf-rail-pos: -1;
     in property <string> marker-tooltip;
-    in property <string> waterfall-tooltip: "Click to tune here · drag to pan · wheel to zoom · right-click for the marker menu";
+    in property <string> waterfall-tooltip: @tr("Click to tune here · drag to pan · wheel to zoom · right-click for the marker menu");
     // status bar
     in property <[StatusCard]> status: [];
     // menus + palette + about
@@ -278,45 +278,45 @@ export component MainWindow inherits Window {
     // ===================== keyboard: the default bindings, dispatched by config id =====================
     keys := FocusScope {
         key-pressed(e) => {
-            if (e.text == Key.F2 && e.modifiers.control) { root.shortcut("startStop"); return accept; }
-            if (e.text == Key.F1 && !e.modifiers.control) { root.shortcut("bankSignal"); return accept; }
-            if (e.text == Key.F2 && !e.modifiers.control) { root.shortcut("bankDecode"); return accept; }
-            if (e.text == Key.F3) { root.shortcut("bankView"); return accept; }
-            if (e.text == Key.F4) { root.shortcut("bankExtend"); return accept; }
-            if (e.text == Key.F5) { root.shortcut("bankSystem"); return accept; }
-            if (e.text == Key.F7) { root.shortcut("openSettings"); return accept; }
-            if (e.text == Key.F11) { root.shortcut("fullscreen"); return accept; }
-            if (e.text == Key.F12) { root.shortcut("screenshot"); return accept; }
-            if (e.text == Key.Escape) { root.shortcut("escape"); return accept; }
-            if (e.text == Key.UpArrow && e.modifiers.control) { root.shortcut("tuneStepUp"); return accept; }
-            if (e.text == Key.DownArrow && e.modifiers.control) { root.shortcut("tuneStepDown"); return accept; }
-            if (e.text == Key.PageUp && e.modifiers.control && e.modifiers.shift) { root.shortcut("squelchUp"); return accept; }
-            if (e.text == Key.PageDown && e.modifiers.control && e.modifiers.shift) { root.shortcut("squelchDown"); return accept; }
-            if (e.text == Key.PageUp && e.modifiers.control) { root.shortcut("tuneSpanUp"); return accept; }
-            if (e.text == Key.PageDown && e.modifiers.control) { root.shortcut("tuneSpanDown"); return accept; }
-            if (e.text == Key.Delete && e.modifiers.control) { root.shortcut("zoomReset"); return accept; }
+            if (e.text == Key.F2 && e.modifiers.control) { root.shortcut("startStop"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.F1 && !e.modifiers.control) { root.shortcut("bankSignal"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.F2 && !e.modifiers.control) { root.shortcut("bankDecode"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.F3) { root.shortcut("bankView"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.F4) { root.shortcut("bankExtend"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.F5) { root.shortcut("bankSystem"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.F7) { root.shortcut("openSettings"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.F11) { root.shortcut("fullscreen"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.F12) { root.shortcut("screenshot"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.Escape) { root.shortcut("escape"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.UpArrow && e.modifiers.control) { root.shortcut("tuneStepUp"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.DownArrow && e.modifiers.control) { root.shortcut("tuneStepDown"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.PageUp && e.modifiers.control && e.modifiers.shift) { root.shortcut("squelchUp"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.PageDown && e.modifiers.control && e.modifiers.shift) { root.shortcut("squelchDown"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.PageUp && e.modifiers.control) { root.shortcut("tuneSpanUp"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.PageDown && e.modifiers.control) { root.shortcut("tuneSpanDown"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == Key.Delete && e.modifiers.control) { root.shortcut("zoomReset"); return accept; }   // not-translated: host shortcut id (the key table's config id)
             if (e.modifiers.control) {
-                if (e.text == "f" && e.modifiers.shift) { root.shortcut("modeWfm"); return accept; }
-                if (e.text == "F" && e.modifiers.shift) { root.shortcut("modeWfm"); return accept; }
-                if (e.text == "f") { root.shortcut("modeNfm"); return accept; }
-                if (e.text == "a") { root.shortcut("modeAm"); return accept; }
-                if (e.text == "d") { root.shortcut("modeDsb"); return accept; }
-                if (e.text == "u") { root.shortcut("modeUsb"); return accept; }
-                if (e.text == "c") { root.shortcut("modeCw"); return accept; }
-                if (e.text == "l") { root.shortcut("modeLsb"); return accept; }
-                if (e.text == "r") { root.shortcut("modeRaw"); return accept; }
-                if (e.text == "w") { root.shortcut("screenshot"); return accept; }
+                if (e.text == "f" && e.modifiers.shift) { root.shortcut("modeWfm"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "F" && e.modifiers.shift) { root.shortcut("modeWfm"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "f") { root.shortcut("modeNfm"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "a") { root.shortcut("modeAm"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "d") { root.shortcut("modeDsb"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "u") { root.shortcut("modeUsb"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "c") { root.shortcut("modeCw"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "l") { root.shortcut("modeLsb"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "r") { root.shortcut("modeRaw"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "w") { root.shortcut("screenshot"); return accept; }   // not-translated: host shortcut id (the key table's config id)
                 if (e.text == "k") { root.open-palette(); return accept; }
-                if (e.text == "+" || e.text == "=") { root.shortcut(e.text == "=" ? "uiSizeUp" : "zoomIn"); return accept; }
-                if (e.text == "-") { root.shortcut("zoomOut"); return accept; }
-                if (e.text == "0") { root.shortcut("uiSizeAuto"); return accept; }
+                if (e.text == "+" || e.text == "=") { root.shortcut(e.text == "=" ? "uiSizeUp" : "zoomIn"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "-") { root.shortcut("zoomOut"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+                if (e.text == "0") { root.shortcut("uiSizeAuto"); return accept; }   // not-translated: host shortcut id (the key table's config id)
                 return reject;
             }
-            if (e.text == "m" || e.text == "M") { root.shortcut("mute"); return accept; }
-            if (e.text == "+" || e.text == "=") { root.shortcut("volumeUp"); return accept; }
-            if (e.text == "-") { root.shortcut("volumeDown"); return accept; }
-            if (e.text == "t" || e.text == "T") { root.shortcut("quickTune"); return accept; }
-            if (e.text == "R" && e.modifiers.shift) { root.shortcut("record"); return accept; }
+            if (e.text == "m" || e.text == "M") { root.shortcut("mute"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == "+" || e.text == "=") { root.shortcut("volumeUp"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == "-") { root.shortcut("volumeDown"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == "t" || e.text == "T") { root.shortcut("quickTune"); return accept; }   // not-translated: host shortcut id (the key table's config id)
+            if (e.text == "R" && e.modifiers.shift) { root.shortcut("record"); return accept; }   // not-translated: host shortcut id (the key table's config id)
             return reject;
         }
     }
@@ -341,12 +341,12 @@ export component MainWindow inherits Window {
                     brand := HorizontalLayout {
                         spacing: 8px; alignment: start;
                         Image { source: @image-url("icons/fox.svg"); width: 18px; height: 18px; y: (parent.height - 18px) / 2; }
-                        Text { text: "FoxSDR"; font-weight: Theme.weight-semibold; color: Theme.fg; vertical-alignment: center; accessible-role: button; accessible-label: "FoxSDR " + root.version + " menu"; }
+                        Text { text: "FoxSDR"; font-weight: Theme.weight-semibold; color: Theme.fg; vertical-alignment: center; accessible-role: button; accessible-label: @tr("FoxSDR {} menu", root.version); }   // not-translated: the product name
                         Text { text: root.version; font-family: Theme.font-mono; color: Theme.muted; vertical-alignment: center; }
                         if root.preview : VerticalLayout { alignment: center;
-                            Chip { label: "SLINT PREVIEW"; tone: ChipTone.warn; tooltip: "A preview of the Slint window: it works on a copy of your settings and never writes the real ones."; }
+                            Chip { label: @tr("SLINT PREVIEW"); tone: ChipTone.warn; tooltip: @tr("A preview of the Slint window: it works on a copy of your settings and never writes the real ones."); }
                         }
-                        Text { text: "Fox & Schirmyver · Type 71 Mk II"; font-size: Theme.font-micro; letter-spacing: 1px; color: Theme.faint; font-weight: Theme.weight-semibold; vertical-alignment: center; }
+                        Text { text: "Fox & Schirmyver · Type 71 Mk II"; font-size: Theme.font-micro; letter-spacing: 1px; color: Theme.faint; font-weight: Theme.weight-semibold; vertical-alignment: center; }   // not-translated: the maker's engraved legend (a brand line), not a sentence
                     }
                     TouchArea { x: 0; width: min(brand.preferred-width, parent.width); clicked => { root.brand-clicked(); } }
                 }
@@ -365,9 +365,9 @@ export component MainWindow inherits Window {
                             if root.notifications > 0 : Rectangle { x: 18px; y: 4px; width: 8px; height: 8px; border-radius: 4px; background: Theme.accent; }
                         }
                     }
-                    VerticalLayout { alignment: center; Key { icon: @image-url("icons/minimise.svg"); icon-only: true; ghost: true; accessible-label: "Minimise"; tooltip: "Minimise"; clicked => { root.minimise-clicked(); } } }
-                    VerticalLayout { alignment: center; Key { icon: root.maximised ? @image-url("icons/restore.svg") : @image-url("icons/maximise.svg"); icon-only: true; ghost: true; accessible-label: root.maximised ? "Restore" : "Maximise"; tooltip: root.maximised ? "Restore" : "Maximise"; clicked => { root.maximise-clicked(); } } }
-                    VerticalLayout { alignment: center; Key { icon: @image-url("icons/close.svg"); icon-only: true; ghost: true; accessible-label: "Close"; tooltip: "Close"; clicked => { root.close-clicked(); } } }
+                    VerticalLayout { alignment: center; Key { icon: @image-url("icons/minimise.svg"); icon-only: true; ghost: true; accessible-label: @tr("Minimise"); tooltip: @tr("Minimise"); clicked => { root.minimise-clicked(); } } }
+                    VerticalLayout { alignment: center; Key { icon: root.maximised ? @image-url("icons/restore.svg") : @image-url("icons/maximise.svg"); icon-only: true; ghost: true; accessible-label: root.maximised ? @tr("Restore") : @tr("Maximise"); tooltip: root.maximised ? @tr("Restore") : @tr("Maximise"); clicked => { root.maximise-clicked(); } } }
+                    VerticalLayout { alignment: center; Key { icon: @image-url("icons/close.svg"); icon-only: true; ghost: true; accessible-label: @tr("Close"); tooltip: @tr("Close"); clicked => { root.close-clicked(); } } }
                 }
             }
         }
@@ -381,10 +381,10 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout { // STOP + the four MASTER lamps
                     spacing: 14px; alignment: center; horizontal-stretch: 0;
-                    VerticalLayout { alignment: center; StopKey { running: root.running; tooltip: root.running ? "Stop the receiver" : "Start the receiver"; clicked => { root.stop-clicked(); } } }
+                    VerticalLayout { alignment: center; StopKey { running: root.running; tooltip: root.running ? @tr("Stop the receiver") : @tr("Start the receiver"); clicked => { root.stop-clicked(); } } }
                     GridLayout { spacing-horizontal: 14px; spacing-vertical: 6px; y: (parent.height - self.height) / 2;
-                        Row { Lamp { caption: "RUN";  state: root.running  ? LampState.green : LampState.off; } Lamp { caption: "DEC";  state: root.decoding ? LampState.green : LampState.off; } }
-                        Row { Lamp { caption: "MUTE"; state: root.muted    ? LampState.amber : LampState.off; } Lamp { caption: "FAIL"; state: root.failed   ? LampState.red   : LampState.off; } }
+                        Row { Lamp { caption: @tr("RUN");  state: root.running  ? LampState.green : LampState.off; } Lamp { caption: @tr("DEC");  state: root.decoding ? LampState.green : LampState.off; } }
+                        Row { Lamp { caption: @tr("MUTE"); state: root.muted    ? LampState.amber : LampState.off; } Lamp { caption: @tr("FAIL"); state: root.failed   ? LampState.red   : LampState.off; } }
                     }
                 }
                 VLine { y: (parent.height - 72px) / 2; }
@@ -392,9 +392,9 @@ export component MainWindow inherits Window {
                 VerticalLayout { // the tuned frequency
                     spacing: 2px; alignment: center; horizontal-stretch: 0;
                     HorizontalLayout { alignment: space-between;
-                        Caption { label: "Tuned frequency"; }
+                        Caption { label: @tr("Tuned frequency"); }
                         HorizontalLayout { spacing: 10px;
-                            Lamp { caption: "RCVR"; state: root.running ? LampState.amber : LampState.off; }
+                            Lamp { caption: @tr("RCVR"); state: root.running ? LampState.amber : LampState.off; }
                             Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
                         }
                     }
@@ -402,7 +402,7 @@ export component MainWindow inherits Window {
                         digits: root.digits; leading-zeros: root.leading-zeros; show-nudges: root.show-nudges;
                         editing: root.editing; editor-text <=> root.editor-text;
                         converter-text: root.converter-text != "" ? root.converter-text : root.tune-hint; converter-warn: root.converter-warn;
-                        tooltip: "Scroll a digit to tune | click to type";
+                        tooltip: @tr("Scroll a digit to tune  |  click to type");
                         nudge(d, dir) => { root.nudge(d, dir); }
                         wheel(d, dir) => { root.nudge(d, dir); }
                         edit-requested => { root.edit-requested(); }
@@ -415,14 +415,14 @@ export component MainWindow inherits Window {
 
                 VerticalLayout { // mode: the eight keys as a segment, or one picker when the strip is compact
                     spacing: 6px; alignment: center; horizontal-stretch: 0;
-                    Caption { label: "Mode"; }
+                    Caption { label: @tr("Mode"); }
                     HorizontalLayout { alignment: start;
                         if !root.compact-strip : SegGroup {   // the eight mode keys, a radio group (accessible as eight buttons)
                             HorizontalLayout { spacing: 2px;
                                 for m[i] in root.modes : SegKey { label: m; on: i == root.mode-index; clicked => { root.mode-selected(i); } }
                             }
                         }
-                        if root.compact-strip : SelectKey { value: root.modes[root.mode-index]; tooltip: "Mode - the eight modes as a list (Ctrl+F ... Ctrl+R)";
+                        if root.compact-strip : SelectKey { value: root.modes[root.mode-index]; tooltip: @tr("Mode - the eight modes as a list (Ctrl+F ... Ctrl+R)");
                             clicked => { root.mode-picker-requested(self.absolute-position.x, self.absolute-position.y + self.height); } }
                     }
                     Text { text: root.mode-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; max-width: root.compact-strip ? 130px : 440px; }
@@ -432,20 +432,20 @@ export component MainWindow inherits Window {
                 HorizontalLayout { // gain / squelch / volume lanes: the strip's slack is theirs
                     spacing: 18px; horizontal-stretch: 1; alignment: stretch; min-width: 396px;   // three lanes of 120 at least; from about 1500 px the captions no longer elide
                     VerticalLayout { alignment: center; horizontal-stretch: 1;
-                        SliderGroup { caption: "Gain"; readout: root.gain-text; hint: root.gain-hint; value: root.gain-norm; enabled: root.gain-enabled;
+                        SliderGroup { caption: @tr("Gain"); readout: root.gain-text; hint: root.gain-hint; value: root.gain-norm; enabled: root.gain-enabled;
                             has-auto: true; auto-on: root.gain-auto; auto-enabled: root.gain-auto-enabled; auto-tooltip: root.gain-auto-tooltip; tooltip: root.gain-tooltip;
                             changed(v) => { root.gain-changed(v); } auto-clicked => { root.gain-auto-clicked(); } }
                     }
                     VerticalLayout { alignment: center; horizontal-stretch: 1;
-                        SliderGroup { caption: "Squelch"; readout: root.squelch-text; hint: root.squelch-hint; value: root.squelch-norm;
-                            has-auto: true; auto-on: root.squelch-auto; auto-enabled: true; auto-tooltip: root.squelch-auto-tooltip; tooltip: "Squelch - drag the slider, or scroll over it";
+                        SliderGroup { caption: @tr("Squelch"); readout: root.squelch-text; hint: root.squelch-hint; value: root.squelch-norm;
+                            has-auto: true; auto-on: root.squelch-auto; auto-enabled: true; auto-tooltip: root.squelch-auto-tooltip; tooltip: @tr("Squelch - drag the slider, or scroll over it");
                             changed(v) => { root.squelch-changed(v); } auto-clicked => { root.squelch-auto-clicked(); } }
                     }
                     VerticalLayout { alignment: center; horizontal-stretch: 1; spacing: 7px;
-                        SliderGroup { caption: "Volume"; readout: root.volume-text; hint: ""; value: root.volume-norm; has-auto: false; tooltip: "Volume - drag the slider, or scroll over it";
+                        SliderGroup { caption: @tr("VOLUME"); readout: root.volume-text; hint: ""; value: root.volume-norm; has-auto: false; tooltip: @tr("Volume - drag the slider, or scroll over it");
                             changed(v) => { root.volume-changed(v); } }
                         HorizontalLayout { spacing: 6px;   // the VOLUME meter, relocated under the volume slider (Workbench IA 2)
-                            Text { text: "Level"; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
+                            Text { text: @tr("Level"); font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
                             VerticalLayout { alignment: center; horizontal-stretch: 1; LevelBar { value: root.level-norm; } }
                             Text { text: root.level-text; font-family: Theme.font-mono; font-size: Theme.font-hint; color: Theme.muted; vertical-alignment: center; }
                         }
@@ -455,11 +455,11 @@ export component MainWindow inherits Window {
 
                 VerticalLayout { // antenna power: the BIAS TEE hazard key, as wide as the key
                     spacing: 6px; alignment: center; horizontal-stretch: 0; width: 120px;
-                    Caption { label: "Antenna power"; }
+                    Caption { label: @tr("Antenna power"); }
                     HorizontalLayout { alignment: start;
-                        Key { label: "BIAS TEE"; hazard: true; on: root.bias-tee-on; enabled: root.bias-tee-present; min-w: 120px; height: 36px;
+                        Key { label: @tr("BIAS TEE"); hazard: true; on: root.bias-tee-on; enabled: root.bias-tee-present; min-w: 120px; height: 36px;
                             show-lamp: true; lamp: root.bias-tee-on ? LampState.amber : LampState.off;
-                            tooltip: root.bias-tooltip; accessible-label: root.bias-tee-on ? "Bias tee on" : "Bias tee off - asks before switching on";
+                            tooltip: root.bias-tooltip; accessible-label: root.bias-tee-on ? @tr("Bias tee on") : @tr("Bias tee off - asks before switching on");
                             clicked => { if (root.bias-tee-on) { root.bias-tee-clicked(); } else { root.bias-question-open = true; } } }
                     }
                     Text { text: root.bias-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
@@ -468,7 +468,7 @@ export component MainWindow inherits Window {
         }
 
         // the sound-muted banner (a slim bar under the strip, Workbench IA 7)
-        if root.muted-by != "" : Banner { text: "Sound muted by " + root.muted-by; key-label: "Stop plugin"; tone: CardTone.warn; key-clicked => { root.stop-muting-plugin(); } }
+        if root.muted-by != "" : Banner { text: @tr("Sound muted by {}", root.muted-by); key-label: @tr("Stop plugin"); tone: CardTone.warn; key-clicked => { root.stop-muting-plugin(); } }
 
         // ===================== BODY =====================
         HorizontalLayout {
@@ -478,14 +478,14 @@ export component MainWindow inherits Window {
                 width: Theme.rail-w; background: Theme.bg;
                 Rectangle { x: parent.width - Theme.hairline; width: Theme.hairline; height: parent.height; background: Theme.line; }
                 VerticalLayout { padding-top: 8px; padding-bottom: 8px; spacing: 4px;
-                    RailKey { icon: @image-url("icons/signal.svg"); caption: "SIGNAL"; hint: "F1"; on: root.bank-index == 0; tooltip: "SIGNAL PATH  (F1)"; clicked => { root.bank-selected(0); } }
-                    RailKey { icon: @image-url("icons/decode.svg"); caption: "DECODE"; hint: "F2"; on: root.bank-index == 1; tooltip: "DECODE  (F2)"; clicked => { root.bank-selected(1); } }
-                    RailKey { icon: @image-url("icons/tools.svg");  caption: "TOOLS";  hint: "F3"; on: root.bank-index == 2; tooltip: "TOOLS  (F3)"; clicked => { root.bank-selected(2); } }
-                    RailKey { icon: @image-url("icons/extend.svg"); caption: "EXTEND"; hint: "F4"; on: root.bank-index == 3; tooltip: "EXTEND  (F4)"; clicked => { root.bank-selected(3); } }
-                    RailKey { icon: @image-url("icons/system.svg"); caption: "SYSTEM"; hint: "F5"; on: root.bank-index == 4; tooltip: "SYSTEM  (F5)"; clicked => { root.bank-selected(4); } }
+                    RailKey { icon: @image-url("icons/signal.svg"); caption: @tr("SIGNAL"); hint: "F1"; on: root.bank-index == 0; tooltip: @tr("SIGNAL PATH  (F1)"); clicked => { root.bank-selected(0); } }
+                    RailKey { icon: @image-url("icons/decode.svg"); caption: @tr("DECODE"); hint: "F2"; on: root.bank-index == 1; tooltip: @tr("DECODE  (F2)"); clicked => { root.bank-selected(1); } }
+                    RailKey { icon: @image-url("icons/tools.svg");  caption: @tr("TOOLS");  hint: "F3"; on: root.bank-index == 2; tooltip: @tr("TOOLS  (F3)"); clicked => { root.bank-selected(2); } }
+                    RailKey { icon: @image-url("icons/extend.svg"); caption: @tr("EXTEND"); hint: "F4"; on: root.bank-index == 3; tooltip: @tr("EXTEND  (F4)"); clicked => { root.bank-selected(3); } }
+                    RailKey { icon: @image-url("icons/system.svg"); caption: @tr("SYSTEM"); hint: "F5"; on: root.bank-index == 4; tooltip: @tr("SYSTEM  (F5)"); clicked => { root.bank-selected(4); } }
                     Rectangle { vertical-stretch: 1; }
-                    RailKey { icon: root.rail-folded ? @image-url("icons/unfold.svg") : @image-url("icons/fold.svg"); caption: root.rail-folded ? "SHOW" : "FOLD"; hint: "";
-                        tooltip: root.rail-folded ? "Show the Function Select panel" : "Fold the Function Select panel away to give the main view its width";
+                    RailKey { icon: root.rail-folded ? @image-url("icons/unfold.svg") : @image-url("icons/fold.svg"); caption: root.rail-folded ? @tr("SHOW") : @tr("FOLD"); hint: "";
+                        tooltip: root.rail-folded ? @tr("Show the Function Select panel") : @tr("Fold the Function Select panel away to give the main view its width");
                         clicked => { root.rail-folded = !root.rail-folded; } }
                 }
             }
@@ -504,11 +504,11 @@ export component MainWindow inherits Window {
                     Flickable { vertical-stretch: 1; viewport-height: list.preferred-height;
                         list := VerticalLayout { spacing: 0px; alignment: start;
                             if root.team-message-shown : Rectangle { height: team.preferred-height + 10px;
-                                team := Card { x: 10px; y: 10px; width: parent.width - 20px; title: "Message from the FoxSDR team"; subtitle: root.team-message-date; critical: root.team-message-important; lines: root.team-message-lines; primary-label: "Seen"; primary-clicked => { root.team-message-seen(); } }
+                                team := Card { x: 10px; y: 10px; width: parent.width - 20px; title: @tr("Message from the FoxSDR team"); subtitle: root.team-message-date; critical: root.team-message-important; lines: root.team-message-lines; primary-label: @tr("Seen"); primary-clicked => { root.team-message-seen(); } }
                             }
                             if root.update-shown : Rectangle { height: upd.preferred-height + 10px;
-                                upd := Card { x: 10px; y: 10px; width: parent.width - 20px; title: root.update-headline; subtitle: "you are running " + root.version; critical: root.update-critical; lines: root.update-notes;
-                                    primary-label: root.update-primary; secondary-label: "Not now"; progress: root.update-progress; note: root.update-note; error: root.update-error;
+                                upd := Card { x: 10px; y: 10px; width: parent.width - 20px; title: root.update-headline; subtitle: @tr("you are running {}", root.version); critical: root.update-critical; lines: root.update-notes;
+                                    primary-label: root.update-primary; secondary-label: @tr("Not now"); progress: root.update-progress; note: root.update-note; error: root.update-error;
                                     primary-clicked => { root.update-primary-clicked(); } secondary-clicked => { root.update-dismissed(); } }
                             }
                             // the DECODE bank is the plugin kit's (pages.slint): its rows, drawers and keys come from the host's kit models
@@ -519,11 +519,11 @@ export component MainWindow inherits Window {
                                 for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; clicked => { root.section-clicked(i); }
                                     // the Radio section's open body (the sheet's); the other bodies are the banks of phase 3
                                     VerticalLayout { spacing: i == 2 ? 10px : 0px;
-                                        if i == 2 : Text { text: "Mode keys are on the receiver strip above (Ctrl+F … Ctrl+R)."; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
-                                        if i == 2 : BodyRow { label: "Passband"; Text { text: root.passband-text; font-family: Theme.font-mono; color: Theme.fg; vertical-alignment: center; } }
-                                        if i == 2 : Slider { value: root.passband-norm; accessible-label: "Passband"; changed(v) => { root.passband-changed(v); } }
-                                        if i == 2 : BodyRow { label: "Tune step"; SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.absolute-position.x, self.absolute-position.y + self.height); } } }
-                                        if i == 2 : Checkbox { label: "Follow the band plan's mode when retuning"; checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
+                                        if i == 2 : Text { text: @tr("Mode keys are on the receiver strip above (Ctrl+F … Ctrl+R)."); font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
+                                        if i == 2 : BodyRow { label: @tr("Passband"); Text { text: root.passband-text; font-family: Theme.font-mono; color: Theme.fg; vertical-alignment: center; } }
+                                        if i == 2 : Slider { value: root.passband-norm; accessible-label: @tr("Passband"); changed(v) => { root.passband-changed(v); } }
+                                        if i == 2 : BodyRow { label: @tr("Tune step"); SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.absolute-position.x, self.absolute-position.y + self.height); } } }
+                                        if i == 2 : Checkbox { label: @tr("Follow the band plan's mode when retuning"); checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
                                     }
                                 }
                             }
@@ -547,31 +547,31 @@ export component MainWindow inherits Window {
                     Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
                     HorizontalLayout { padding-left: 8px; padding-right: 8px; alignment: space-between;
                         HorizontalLayout { spacing: 0px;
-                            Tab { label: "RECEIVER"; on: root.view-index == 0; tooltip: "Shows the receiver: the spectrum, the waterfall and its status. Leaving the patch view stops a running patch and gives the receiver its radio back."; clicked => { root.view-selected(0); } }
-                            Tab { label: "PATCH";    on: root.view-index == 1; tooltip: "Opens the patch canvas: radios, channels, decoders and displays wired together by hand. Drag from a port to wire it. A connection that cannot carry what the port produces is refused, and says why."; clicked => { root.view-selected(1); } }
-                            Tab { label: "SCOPE";    on: root.view-index == 2; tooltip: "The scope: an instrument fills the centre."; clicked => { root.view-selected(2); } }
+                            Tab { label: @tr("RECEIVER"); on: root.view-index == 0; tooltip: @tr("Shows the receiver: the spectrum, the waterfall and its status. Leaving the patch view stops a running patch and gives the receiver its radio back."); clicked => { root.view-selected(0); } }
+                            Tab { label: @tr("PATCH");    on: root.view-index == 1; tooltip: @tr("Opens the patch canvas: radios, channels, decoders and displays wired together by hand. Drag from a port to wire it. A connection that cannot carry what the port produces is refused, and says why."); clicked => { root.view-selected(1); } }
+                            Tab { label: @tr("SCOPE");    on: root.view-index == 2; tooltip: @tr("The scope: an instrument fills the centre."); clicked => { root.view-selected(2); } }
                             for p[i] in root.pages : Tab { label: p.title; on: root.view-index == 3 + i; torn-off: p.torn; closable: true; tooltip: p.chip;
                                 clicked => { KitEvents.page-tab-selected(i); } close-clicked => { KitEvents.page-tab-closed(i); } drag-out(dx, dy) => { KitEvents.page-tab-torn(i, dx, dy); } }
-                            Tab { label: "+ Window"; tooltip: "Open a decoder window as a tab"; clicked => { root.add-window-clicked(); } }
+                            Tab { label: @tr("+ Window"); tooltip: @tr("Open a decoder window as a tab"); clicked => { root.add-window-clicked(); } }
                         }
                         HorizontalLayout { spacing: 6px; alignment: end;
-                            VerticalLayout { alignment: center; Caption { label: "Trace"; font-size: Theme.font-tiny; } }
+                            VerticalLayout { alignment: center; Caption { label: @tr("Trace"); font-size: Theme.font-tiny; } }
                             VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
-                                SegKey { label: "Normal"; small: true; min-w: 0px; on: root.trace-mode == 0; clicked => { root.trace-mode-selected(0); } }
-                                SegKey { label: "Peak hold"; small: true; min-w: 0px; on: root.trace-mode == 1; clicked => { root.trace-mode-selected(1); } }
-                                SegKey { label: "Average"; small: true; min-w: 0px; on: root.trace-mode == 2; clicked => { root.trace-mode-selected(2); } } } } }
-                            VerticalLayout { alignment: center; Caption { label: "Range"; font-size: Theme.font-tiny; } }
+                                SegKey { label: @tr("Normal"); small: true; min-w: 0px; on: root.trace-mode == 0; clicked => { root.trace-mode-selected(0); } }
+                                SegKey { label: @tr("Peak hold"); small: true; min-w: 0px; on: root.trace-mode == 1; clicked => { root.trace-mode-selected(1); } }
+                                SegKey { label: @tr("Average"); small: true; min-w: 0px; on: root.trace-mode == 2; clicked => { root.trace-mode-selected(2); } } } } }
+                            VerticalLayout { alignment: center; Caption { label: @tr("Range"); font-size: Theme.font-tiny; } }
                             VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
-                                SegKey { label: "Auto"; small: true; min-w: 0px; on: !root.range-manual; tooltip: "Automatic: the standard window, -110 to 0 dB on the receiver"; clicked => { root.range-manual-selected(false); } }
-                                SegKey { label: "Manual"; small: true; min-w: 0px; on: root.range-manual; tooltip: "Manual: the Floor and Ceiling of the Display block"; clicked => { root.range-manual-selected(true); } } } } }
+                                SegKey { label: @tr("Auto"); small: true; min-w: 0px; on: !root.range-manual; tooltip: @tr("Automatic: the standard window, -110 to 0 dB on the receiver"); clicked => { root.range-manual-selected(false); } }
+                                SegKey { label: @tr("Manual"); small: true; min-w: 0px; on: root.range-manual; tooltip: @tr("Manual: the Floor and Ceiling of the Display block"); clicked => { root.range-manual-selected(true); } } } } }
                             VerticalLayout { alignment: center; HorizontalLayout { spacing: 0px;
-                                Key { label: "Markers"; ghost: true; small: true; min-w: 0px; tooltip: "List the markers dropped on the waterfall"; clicked => { root.markers-clicked(); } }
+                                Key { label: @tr("Markers"); ghost: true; small: true; min-w: 0px; tooltip: @tr("List the markers dropped on the waterfall"); clicked => { root.markers-clicked(); } }
                                 VerticalLayout { alignment: center; Chip { label: root.marker-count; small: true; } } } }
-                            VerticalLayout { alignment: center; Key { label: "Band plan"; ghost: !root.band-plan-on; on: root.band-plan-on; small: true; min-w: 0px; tooltip: "Show the band-plan ribbon on the spectrum"; clicked => { root.band-plan-toggled(); } } }
+                            VerticalLayout { alignment: center; Key { label: @tr("Band plan"); ghost: !root.band-plan-on; on: root.band-plan-on; small: true; min-w: 0px; tooltip: @tr("Show the band-plan ribbon on the spectrum"); clicked => { root.band-plan-toggled(); } } }
                             VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
-                                SegKey { label: "−"; small: true; min-w: 26px; tooltip: "Zoom out (Ctrl -)"; clicked => { root.zoom(-1); } }
-                                SegKey { label: "+"; small: true; min-w: 26px; tooltip: "Zoom in (Ctrl +)"; clicked => { root.zoom(1); } }
-                                SegKey { label: "Full span"; small: true; min-w: 0px; tooltip: "Back to the full span (Ctrl Delete)"; clicked => { root.zoom(0); } } } } }
+                                SegKey { label: "−"; small: true; min-w: 26px; tooltip: @tr("Zoom out (Ctrl -)"); clicked => { root.zoom(-1); } }
+                                SegKey { label: "+"; small: true; min-w: 26px; tooltip: @tr("Zoom in (Ctrl +)"); clicked => { root.zoom(1); } }
+                                SegKey { label: @tr("Full span"); small: true; min-w: 0px; tooltip: @tr("Back to the full span (Ctrl Delete)"); clicked => { root.zoom(0); } } } } }
                         }
                     }
                 }
@@ -584,7 +584,7 @@ export component MainWindow inherits Window {
                             trace: root.trace-image; db-ticks: root.db-ticks; freq-ticks: root.freq-ticks; axis-unit: root.axis-unit;
                             caption: root.spectrum-caption; caveat: root.spectrum-caveat;
                             trace-mode: root.trace-mode == 1 ? TraceMode.peak-hold : root.trace-mode == 2 ? TraceMode.average : TraceMode.normal;
-                            trace-mode-label: root.trace-mode == 1 ? "Peak hold" : root.trace-mode == 2 ? "Average" : "";
+                            trace-mode-label: root.trace-mode == 1 ? @tr("Peak hold") : root.trace-mode == 2 ? @tr("Average") : "";
                             peak-text: root.peak-text; peak-age: root.peak-age; show-peak: root.show-peak; span-text: root.span-text;
                             vfo-pos: root.vfo-pos; vfo-half: root.vfo-half; show-vfo: root.show-vfo;
                             bands: root.ribbon; ribbon-size: root.band-plan-on ? root.ribbon-size : 0;
@@ -620,7 +620,7 @@ export component MainWindow inherits Window {
                         }
                     }
                     if root.view-index == 1 : PatchCanvas { }
-                    if root.view-index == 2 : ScopeTube { caption: "Scope"; }
+                    if root.view-index == 2 : ScopeTube { caption: @tr("Scope"); }
                     // a docked page of the plugin kit (its body reaches the host through the KitEvents global)
                     if root.view-index >= 3 && root.view-index - 3 < root.pages.length && !root.pages[root.view-index - 3].torn : PageBody { page: root.pages[root.view-index - 3]; index: root.view-index - 3; }
                 }
@@ -639,8 +639,8 @@ export component MainWindow inherits Window {
                     clicked => { root.status-clicked(i); }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                VerticalLayout { alignment: center; Key { label: "Request a feature"; ghost: true; small: true; min-w: 0px; tooltip: "Ask for a feature"; clicked => { root.feature-request-clicked(); } } }
-                VerticalLayout { alignment: center; Key { label: "Report a bug / dislike"; ghost: true; small: true; min-w: 0px; tooltip: "Report a problem"; clicked => { root.bug-report-clicked(); } } }
+                VerticalLayout { alignment: center; Key { label: @tr("Request a feature"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Ask for a feature"); clicked => { root.feature-request-clicked(); } } }
+                VerticalLayout { alignment: center; Key { label: @tr("Report a bug / dislike"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Report a problem"); clicked => { root.bug-report-clicked(); } } }
                 Rectangle { width: 8px; }
             }
         }
@@ -653,7 +653,7 @@ export component MainWindow inherits Window {
 
     // ===================== the torn-off pages: in-window TornWindows over the screen (an OS-level window is a later step) =====================
     for p[i] in root.pages : Rectangle { x: 0; y: 0; width: 0px; height: 0px;
-        if p.torn : TornWindow { x: p.tx; y: p.ty; width: p.tw; height: p.th; title: p.title; rolled-up: p.rolled; tooltip: "Drag to move; double-click to dock the page back as a tab";
+        if p.torn : TornWindow { x: p.tx; y: p.ty; width: p.tw; height: p.th; title: p.title; rolled-up: p.rolled; tooltip: @tr("Drag to move; double-click to dock the page back as a tab");
             roll-up-clicked => { KitEvents.page-chrome-rollup(i); } maximise-clicked => { KitEvents.page-chrome-dock(i); } close-clicked => { KitEvents.page-chrome-close(i); }
             drag(dx, dy) => { KitEvents.page-chrome-drag(i, dx, dy); } double-clicked => { KitEvents.page-chrome-dock(i); } resize(dx, dy) => { KitEvents.page-chrome-resize(i, dx, dy); }
             PageBody { page: p; index: i; }
@@ -666,29 +666,29 @@ export component MainWindow inherits Window {
         query-changed(q) => { root.palette-query-changed(q); } activated(id) => { root.palette-activated(id); } }
 
     // the "Sound is muted" question (app_window.cpp 16365): asked once when the receiver tunes off a muting plugin's preset
-    if root.mute-question-open : Sheet { title: "Sound is muted"; dismissed => { root.mute-question-open = false; KitEvents.mute-keep-clicked(); }
+    if root.mute-question-open : Sheet { title: @tr("Sound is muted"); dismissed => { root.mute-question-open = false; KitEvents.mute-keep-clicked(); }
         Text { text: root.mute-question-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
         HorizontalLayout { spacing: 8px; alignment: end;
             Key { label: root.mute-stop-label; clicked => { root.mute-question-open = false; KitEvents.mute-stop-clicked(); } }
-            Key { label: "Keep it running"; on: true; clicked => { root.mute-question-open = false; KitEvents.mute-keep-clicked(); } }
+            Key { label: @tr("Keep it running"); on: true; clicked => { root.mute-question-open = false; KitEvents.mute-keep-clicked(); } }
         }
     }
-    if root.bias-question-open : Sheet { title: "Turn on the bias tee?"; dismissed => { root.bias-question-open = false; }
+    if root.bias-question-open : Sheet { title: @tr("Turn on the bias tee?"); dismissed => { root.bias-question-open = false; }
         Text { text: root.bias-question-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
         Text { text: root.bias-tooltip; wrap: word-wrap; color: Theme.chip-warn-fg; font-size: Theme.font-small; }
         HorizontalLayout { spacing: 8px; alignment: end;
-            Key { label: "Turn it on"; clicked => { root.bias-question-open = false; root.bias-tee-confirmed(); } }
-            Key { label: "Cancel"; on: true; clicked => { root.bias-question-open = false; } }
+            Key { label: @tr("Turn it on"); clicked => { root.bias-question-open = false; root.bias-tee-confirmed(); } }
+            Key { label: @tr("Cancel"); on: true; clicked => { root.bias-question-open = false; } }
         }
     }
-    if root.about-open : Sheet { title: "About FoxSDR"; sheet-w: 520px; dismissed => { root.about-open = false; }
-        Text { text: "FoxSDR " + root.version + (root.preview ? " · Slint preview" : ""); color: Theme.fg; font-size: Theme.font-small; }
+    if root.about-open : Sheet { title: @tr("About FoxSDR"); sheet-w: 520px; dismissed => { root.about-open = false; }
+        Text { text: root.preview ? @tr("FoxSDR {} · Slint preview", root.version) : @tr("FoxSDR {}", root.version); color: Theme.fg; font-size: Theme.font-small; }
         Text { text: root.about-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
         // The Slint Royalty-free licence 2.0 requires this widget in an About dialog reachable from the top-level menu
         // (the brand menu above) in every distributed build; it is never behind a switch.
-        Text { text: "Typefaces: Inter (The Inter Project Authors) and JetBrains Mono (JetBrains), both under the SIL Open Font License 1.1; the licence texts travel with the fonts in third_party/fonts. Built with Slint:"; wrap: word-wrap; color: Theme.dim; font-size: Theme.font-hint; }
+        Text { text: @tr("Typefaces: Inter (The Inter Project Authors) and JetBrains Mono (JetBrains), both under the SIL Open Font License 1.1; the licence texts travel with the fonts in third_party/fonts. Built with Slint:"); wrap: word-wrap; color: Theme.dim; font-size: Theme.font-hint; }
         AboutSlint { }
-        HorizontalLayout { alignment: end; Key { label: "Close"; clicked => { root.about-open = false; } } }
+        HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { root.about-open = false; } } }
     }
     // ===================== the tip layer: LAST, so a tooltip draws over the pages, the torn-off windows and the sheets =====================
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }

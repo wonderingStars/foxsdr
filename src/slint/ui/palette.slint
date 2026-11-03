@@ -19,8 +19,8 @@ import { PopupTipTimer } from "tooltip.slint";
 export struct PaletteResult { kind: string, title: string, detail: string, id: int }
 
 export component CommandField inherits Rectangle {
-    in property <string> placeholder: "Find a setting, plugin, frequency or bookmark…";
-    in property <string> shortcut: "Ctrl K";
+    in property <string> placeholder: @tr("Find a setting, plugin, frequency or bookmark…");
+    in property <string> shortcut: "Ctrl K";   // not-translated: a keyboard chord, as engraved on the badge
     in property <bool> enabled: true;
     in property <string> tooltip;
     callback clicked;
@@ -93,7 +93,7 @@ export component CommandField inherits Rectangle {
 export component CommandPalette {
     in property <length> at-x;
     in property <length> at-y;
-    in property <string> placeholder: "Find a setting, plugin, frequency or bookmark…";
+    in property <string> placeholder: @tr("Find a setting, plugin, frequency or bookmark…");
     in property <string> empty-text;                   // shown in a row of its own when the query has no results; "" shows none
     in property <int> max-rows: 8;                     // the list is at most this many rows high; more results scroll
     in-out property <string> query;

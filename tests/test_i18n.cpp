@@ -348,16 +348,106 @@ std::vector<std::string> extractKeys(const std::string& src) {
     return keys;
 }
 
+// THE SLINT WINDOW'S KEYS. A .slint file marks a word with @tr("English text") (Slint's own syntax; the
+// build bundles the catalogues as gettext files made by tools/slint-po.py, keyed by that text, with no
+// translation context), so the same rule holds: the key is the literal right after "@tr(", with Slint's
+// escapes decoded (\\ \" \n \t \u{hex}); a plural form `"one" | "many" % n` gives both literals, and a
+// context form `"ctx" => "text"` (which the build does not use) the text after the arrow. Comments are
+// skipped and "@tr" inside a string is not a call. The specimens (ui/specimens/, the test sheets) are not
+// shipped and are not scanned. tools/i18n_keys.py mirrors this, line for line.
+bool readSlintString(const std::string& s, std::size_t& i, std::string& out) {
+    if (i >= s.size() || s[i] != '"') { return false; }
+    ++i;
+    out.clear();
+    while (i < s.size() && s[i] != '"') {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            const char d = s[i + 1];
+            if (d == 'n') { out += '\n'; i += 2; continue; }
+            if (d == 't') { out += '\t'; i += 2; continue; }
+            if (d == 'u' && i + 2 < s.size() && s[i + 2] == '{') {
+                const std::size_t close = s.find('}', i + 3);
+                if (close == std::string::npos) { return false; }
+                unsigned cp = 0;
+                for (std::size_t h = i + 3; h < close; ++h) {
+                    const int v = hexVal(s[h]);
+                    if (v < 0) { return false; }
+                    cp = cp * 16 + static_cast<unsigned>(v);
+                }
+                appendUtf8(out, cp);
+                i = close + 1;
+                continue;
+            }
+            out += d;
+            i += 2;
+            continue;
+        }
+        out += s[i++];
+    }
+    if (i >= s.size()) { return false; }
+    ++i;  // the closing quote
+    return true;
+}
+
+std::vector<std::string> extractSlintKeys(const std::string& src) {
+    std::vector<std::string> keys;
+    std::size_t i = 0;
+    const auto skipSpace = [&]() { while (i < src.size() && std::isspace(static_cast<unsigned char>(src[i]))) { ++i; } };
+    while (i < src.size()) {
+        const char c = src[i];
+        if (c == '/' && i + 1 < src.size() && src[i + 1] == '/') {
+            while (i < src.size() && src[i] != '\n') { ++i; }
+            continue;
+        }
+        if (c == '/' && i + 1 < src.size() && src[i + 1] == '*') {
+            const std::size_t e = src.find("*/", i + 2);
+            i = e == std::string::npos ? src.size() : e + 2;
+            continue;
+        }
+        if (c == '"') {
+            std::string skipped;
+            if (!readSlintString(src, i, skipped)) { break; }
+            continue;
+        }
+        if (src.compare(i, 4, "@tr(") != 0) { ++i; continue; }
+        i += 4;
+        skipSpace();
+        std::string first;
+        if (!readSlintString(src, i, first)) { continue; }
+        skipSpace();
+        if (src.compare(i, 2, "=>") == 0) {  // a context: the key is the text after the arrow
+            i += 2;
+            skipSpace();
+            if (!readSlintString(src, i, first)) { continue; }
+            skipSpace();
+        }
+        if (!first.empty()) { keys.push_back(first); }
+        if (i < src.size() && src[i] == '|') {  // a plural: the second form is a key too
+            ++i;
+            skipSpace();
+            std::string second;
+            if (readSlintString(src, i, second) && !second.empty()) { keys.push_back(second); }
+        }
+    }
+    return keys;
+}
+
+bool isSpecimenPath(const fs::path& p) {
+    for (const auto& part : p) { if (part == "specimens") { return true; } }
+    return false;
+}
+
 std::set<std::string> sourceKeys(const fs::path& src) {
     std::set<std::string> keys;
     std::error_code ec;
     for (fs::recursive_directory_iterator it(src, ec), end; !ec && it != end; it.increment(ec)) {
         if (!it->is_regular_file()) { continue; }
         const std::string ext = it->path().extension().string();
-        if (ext != ".cpp" && ext != ".hpp" && ext != ".h") { continue; }
+        const bool slint = ext == ".slint";
+        if (!slint && ext != ".cpp" && ext != ".hpp" && ext != ".h") { continue; }
+        if (slint && isSpecimenPath(it->path())) { continue; }
         std::string text;
         if (!readExact(it->path(), text)) { continue; }
-        for (std::string& k : extractKeys(text)) { keys.insert(std::move(k)); }
+        for (std::string& k : slint ? extractSlintKeys(text) : extractKeys(text)) { keys.insert(std::move(k)); }
     }
     return keys;
 }

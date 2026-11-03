@@ -9,7 +9,9 @@
 #include <filesystem>
 
 #include "core/diag_log.hpp"
+#include "core/i18n.hpp"
 #include "core/image_write.hpp"
+#include "core/utf8_text.hpp"
 #include "core/plugin_calls.hpp"
 
 namespace foxsdr::slintkit {
@@ -441,7 +443,7 @@ void PluginKit::editSetting(const std::string& file, const SettingSpec& f, const
 
 std::string PluginKit::savePicture(const std::string& plugin) {
     const cascade::core::HostImage* img = imageOf(plugin);
-    if (img == nullptr || img->width == 0u) { return "Nothing to save yet."; }
+    if (img == nullptr || img->width == 0u) { return cascade::i18n::tr("Nothing to save yet."); }
     std::filesystem::path dir = std::filesystem::path(env_.configPath).parent_path() / "pictures";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
@@ -452,8 +454,8 @@ std::string PluginKit::savePicture(const std::string& plugin) {
     std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&t));
     const std::string path = (dir / (name + "-" + stamp + ".bmp")).string();
     std::string err;
-    if (!cascade::core::writeBmp24(*img, path, err)) { return err.empty() ? "The picture could not be saved." : err; }
-    return "Saved " + path;
+    if (!cascade::core::writeBmp24(*img, path, err)) { return err.empty() ? std::string(cascade::i18n::tr("The picture could not be saved.")) : err; }
+    return cascade::core::formatText(cascade::i18n::tr("Saved %s"), path.c_str());
 }
 
 }  // namespace foxsdr::slintkit

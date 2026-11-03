@@ -9,6 +9,8 @@
 #include <cstring>
 #include <ctime>
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/instrument_beacon_math.hpp"
 #include "gui/instrument_meter_math.hpp"
 #include "gui/instrument_teleprinter_math.hpp"
@@ -48,8 +50,7 @@ std::string keyOfFile(const std::string& moduleFile) {
     return s;
 }
 
-std::string fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof(b), f, v); return b; }
-std::string fmtN(const char* f, long long v) { char b[64]; std::snprintf(b, sizeof(b), f, v); return b; }
+std::string fmtN(const char* f, long long v) { std::string s; cascade::core::formatUtf8(s, f, v); return s; }   // a std::string, never a fixed buffer (test_i18n)
 
 void entry(FoxListItem& it) { it = FoxListItem{}; it.structSize = sizeof(it); }
 
@@ -323,14 +324,14 @@ FittedState fittedState(const PluginRow& m, bool receiverRunning) {
 
 const char* fittedStateWord(FittedState s) {
     switch (s) {
-        case FittedState::Fed: return "FED";
-        case FittedState::NotFed: return "NOT DECODING";
-        case FittedState::NoSignal: return "TAKES NO SIGNAL";
-        case FittedState::Stopped: return "STOPPED";
-        case FittedState::Refused: return "REFUSED";
-        case FittedState::Idle: return "IDLE";
+        case FittedState::Fed: return cascade::i18n::tr("FED");
+        case FittedState::NotFed: return cascade::i18n::tr("NOT DECODING");
+        case FittedState::NoSignal: return cascade::i18n::tr("TAKES NO SIGNAL");
+        case FittedState::Stopped: return cascade::i18n::tr("STOPPED");
+        case FittedState::Refused: return cascade::i18n::tr("REFUSED");
+        case FittedState::Idle: return cascade::i18n::tr("IDLE");
     }
-    return "UNKNOWN";
+    return cascade::i18n::tr("UNKNOWN");
 }
 
 int fittedStateIndex(FittedState s) {
@@ -349,44 +350,45 @@ bool fittedOffersStart(const PluginRow& m) { return m.stopped || m.asleep; }
 
 std::string fittedStateSentence(const PluginRow& m, bool receiverRunning) {
     switch (fittedState(m, receiverRunning)) {
-        case FittedState::Refused: return m.error.empty() ? std::string("The host refused this file and recorded no reason.") : m.error;
+        case FittedState::Refused: return m.error.empty() ? std::string(cascade::i18n::tr("The host refused this file and recorded no reason.")) : m.error;
         case FittedState::Stopped:
-            return "You stopped this module. It stays installed and its code stays mapped, and it is given no decoders, no map targets and no "
-                   "panels of its own until you start it again.";
+            return cascade::i18n::tr("You stopped this module. It stays installed and its code stays mapped, and it is given no decoders, no map targets and no "
+                   "panels of its own until you start it again.");
         case FittedState::NoSignal:
-            return "Fitted, and it takes no signal. This module declares no decoder, so nothing is routed to it and nothing should be - it works "
-                   "through the capabilities listed above.";
-        case FittedState::Fed: return "Fitted and being fed. The receiver is running and this module has a decoder matched to the rate it is producing.";
+            return cascade::i18n::tr("Fitted, and it takes no signal. This module declares no decoder, so nothing is routed to it and nothing should be - it works "
+                   "through the capabilities listed above.");
+        case FittedState::Fed: return cascade::i18n::tr("Fitted and being fed. The receiver is running and this module has a decoder matched to the rate it is producing.");
         case FittedState::Idle:
-            return "Fitted, and idle. Nothing is using this module, so it is not running and costs nothing. It starts by itself when you open its "
+            return cascade::i18n::tr("Fitted, and idle. Nothing is using this module, so it is not running and costs nothing. It starts by itself when you open its "
                    "window, its map or the output it writes to, and goes quiet again 30 seconds after you finish with it. Tick KEEP RUNNING to have "
-                   "it run all the time.";
+                   "it run all the time.");
         case FittedState::NotFed: break;
     }
     const std::string& detail = !m.idleDetail.empty() ? m.idleDetail : m.idle;
     if (!receiverRunning) {
         if (m.fed) {
-            return "Fitted, and fed nothing because the receiver is stopped. It has a decoder matched to the rate the receiver is set to, so "
-                   "starting the receiver is all this needs.";
+            return cascade::i18n::tr("Fitted, and fed nothing because the receiver is stopped. It has a decoder matched to the rate the receiver is set to, so "
+                   "starting the receiver is all this needs.");
         }
-        if (!detail.empty()) { return "Fitted, and fed nothing because the receiver is stopped. There is a second reason as well: " + detail; }
-        return "Fitted, and fed nothing because the receiver is stopped.";
+        if (!detail.empty()) { return cascade::core::formatText(cascade::i18n::tr("Fitted, and fed nothing because the receiver is stopped. There is a second reason as well: %s"), detail.c_str()); }
+        return cascade::i18n::tr("Fitted, and fed nothing because the receiver is stopped.");
     }
     if (!detail.empty()) { return detail; }
-    return "Fitted, and not being fed. No reason was recorded for it.";
+    return cascade::i18n::tr("Fitted, and not being fed. No reason was recorded for it.");
 }
 
 std::string fittedVerdictLine(bool receiverRunning, const std::string& directory) {
-    std::string s = receiverRunning ? "The receiver is running, so a module with a matched decoder is being fed."
-                                    : "The receiver is stopped, so NOTHING is being fed to any module however it is set.";
-    s += directory.empty() ? " No directory has been scanned yet." : " Read from " + directory + ".";
+    std::string s = receiverRunning ? cascade::i18n::tr("The receiver is running, so a module with a matched decoder is being fed.")
+                                    : cascade::i18n::tr("The receiver is stopped, so NOTHING is being fed to any module however it is set.");
+    s += ' ';
+    s += directory.empty() ? std::string(cascade::i18n::tr("No directory has been scanned yet.")) : cascade::core::formatText(cascade::i18n::tr("Read from %s."), directory.c_str());
     return s;
 }
 
 std::string abiText(std::uint32_t abi, std::uint32_t thisBuild) {
-    if (abi == 0u) { return "not recorded"; }
-    if (abi == thisBuild) { return fmtN("%lld, matches this build", abi); }
-    return fmtN("%lld", abi) + fmtN(", this build needs %lld", thisBuild);
+    if (abi == 0u) { return cascade::i18n::tr("not recorded"); }
+    if (abi == thisBuild) { return cascade::core::formatText(cascade::i18n::tr("%u, matches this build"), static_cast<unsigned>(abi)); }
+    return cascade::core::formatText(cascade::i18n::tr("%u, this build needs %u"), static_cast<unsigned>(abi), static_cast<unsigned>(thisBuild));
 }
 
 std::string fittedDateText(std::int64_t unixSeconds) {
@@ -399,32 +401,32 @@ std::string fittedDateText(std::int64_t unixSeconds) {
     if (localtime_r(&tt, &tmv) == nullptr) { return std::string(); }
 #endif
     char b[48];
-    std::strftime(b, sizeof(b), "fitted %Y-%m-%d", &tmv);
-    return b;
+    std::strftime(b, sizeof(b), "%Y-%m-%d", &tmv);
+    return cascade::core::formatText(cascade::i18n::tr("fitted %s"), b);
 }
 
 std::vector<ReachRow> reachRows(std::uint32_t caps) {
     struct Cap { std::uint32_t bit; const char* key; const char* detail; bool outward; };
     static const Cap kCaps[] = {
-        {CASCADE_CAP_DECODER, "TEXT DECODER", "Takes the demodulated audio and writes lines into the Decoder output.", false},
-        {CASCADE_CAP_IQ_DECODER, "I/Q DECODER", "Takes the raw band from the radio and decodes it itself.", false},
-        {CASCADE_CAP_IMAGE_DECODER, "PICTURE DECODER", "Produces pictures the host shows in a window of its own.", false},
-        {CASCADE_CAP_TRACK_SOURCE, "TRACK SOURCE", "Reports positions the host draws on a map page.", false},
-        {CASCADE_CAP_PANEL, "PANEL", "Publishes rows the host draws as a table of its own.", false},
-        {CASCADE_CAP_HOST_CLIENT, "HOST CLIENT", "Reads the receiver and may ask to tune it (the receiver-control grant decides).", true},
-        {CASCADE_CAP_PRESET, "PRESETS", "Offers the frequencies it works on as keys.", false},
-        {CASCADE_CAP_BASEMAP, "BASEMAP", "Supplies map tiles under every map page, with their attribution.", true},
-        {CASCADE_CAP_TRACK_INFO, "TRACK INFO", "Looks up who a target is (registration, type, operator).", true},
-        {CASCADE_CAP_INSTRUMENT, "INSTRUMENT", "Feeds a face the host draws as equipment.", false},
-        {CASCADE_CAP_AUDIO_OUT, "AUDIO OUT", "Takes the receiver's audio.", true},
-        {CASCADE_CAP_AUDIO_PROCESSOR, "AUDIO PROCESSOR", "Sits in the audio chain and changes what you hear.", true},
-        {CASCADE_CAP_SETTINGS_UI, "SETTINGS FORM", "Declares fields the host draws and stores for it.", false},
-        {CASCADE_CAP_RECEIVER_LOCATOR, "RECEIVER LOCATOR", "May read the receiver position you set.", true},
-        {CASCADE_CAP_TX_AUDIO, "TRANSMIT AUDIO", "Hands audio to the transmitter under an operator-armed grant.", true},
-        {CASCADE_CAP_IMAGE_INPUT, "PICTURE INPUT", "Takes a click on its own picture.", false},
+        {CASCADE_CAP_DECODER, FOX_TR_NOOP("TEXT DECODER"), FOX_TR_NOOP("Takes the demodulated audio and writes lines into the Decoder output."), false},
+        {CASCADE_CAP_IQ_DECODER, FOX_TR_NOOP("I/Q DECODER"), FOX_TR_NOOP("Takes the raw band from the radio and decodes it itself."), false},
+        {CASCADE_CAP_IMAGE_DECODER, FOX_TR_NOOP("PICTURE DECODER"), FOX_TR_NOOP("Produces pictures the host shows in a window of its own."), false},
+        {CASCADE_CAP_TRACK_SOURCE, FOX_TR_NOOP("TRACK SOURCE"), FOX_TR_NOOP("Reports positions the host draws on a map page."), false},
+        {CASCADE_CAP_PANEL, FOX_TR_NOOP("PANEL"), FOX_TR_NOOP("Publishes rows the host draws as a table of its own."), false},
+        {CASCADE_CAP_HOST_CLIENT, FOX_TR_NOOP("HOST CLIENT"), FOX_TR_NOOP("Reads the receiver and may ask to tune it (the receiver-control grant decides)."), true},
+        {CASCADE_CAP_PRESET, FOX_TR_NOOP("PRESETS"), FOX_TR_NOOP("Offers the frequencies it works on as keys."), false},
+        {CASCADE_CAP_BASEMAP, FOX_TR_NOOP("BASEMAP"), FOX_TR_NOOP("Supplies map tiles under every map page, with their attribution."), true},
+        {CASCADE_CAP_TRACK_INFO, FOX_TR_NOOP("TRACK INFO"), FOX_TR_NOOP("Looks up who a target is (registration, type, operator)."), true},
+        {CASCADE_CAP_INSTRUMENT, FOX_TR_NOOP("INSTRUMENT"), FOX_TR_NOOP("Feeds a face the host draws as equipment."), false},
+        {CASCADE_CAP_AUDIO_OUT, FOX_TR_NOOP("AUDIO OUT"), FOX_TR_NOOP("Takes the receiver's audio."), true},
+        {CASCADE_CAP_AUDIO_PROCESSOR, FOX_TR_NOOP("AUDIO PROCESSOR"), FOX_TR_NOOP("Sits in the audio chain and changes what you hear."), true},
+        {CASCADE_CAP_SETTINGS_UI, FOX_TR_NOOP("SETTINGS FORM"), FOX_TR_NOOP("Declares fields the host draws and stores for it."), false},
+        {CASCADE_CAP_RECEIVER_LOCATOR, FOX_TR_NOOP("RECEIVER LOCATOR"), FOX_TR_NOOP("May read the receiver position you set."), true},
+        {CASCADE_CAP_TX_AUDIO, FOX_TR_NOOP("TRANSMIT AUDIO"), FOX_TR_NOOP("Hands audio to the transmitter under an operator-armed grant."), true},
+        {CASCADE_CAP_IMAGE_INPUT, FOX_TR_NOOP("PICTURE INPUT"), FOX_TR_NOOP("Takes a click on its own picture."), false},
     };
     std::vector<ReachRow> out;
-    for (const Cap& c : kCaps) { if ((caps & c.bit) != 0u) { out.push_back({c.key, c.detail, c.outward}); } }
+    for (const Cap& c : kCaps) { if ((caps & c.bit) != 0u) { out.push_back({cascade::i18n::tr(c.key), cascade::i18n::tr(c.detail), c.outward}); } }
     return out;
 }
 
@@ -441,40 +443,40 @@ bool capsOfferKeepRunning(std::uint32_t caps) {
 
 std::string txPlateSentence(std::uint32_t bits, bool armed) {
     const bool asked = (bits & kTxBitAsked) != 0u, granted = (bits & kTxBitGranted) != 0u;
-    if ((bits & kTxBitStopped) != 0u) { return "Its transmit audio stopped for good: it reported a permanent error."; }
-    if ((bits & kTxBitOnAir) != 0u) { return "ON AIR: the transmitter is keyed for it."; }
-    if ((bits & kTxBitWaiting) != 0u) { return "Allowed and waiting: another plugin holds the transmitter."; }
-    if (granted) { return armed ? "ARMED: it will be keyed when it asks, until the window closes." : "Allowed to transmit, but you have not armed plugins on the TRANSMIT page, so it cannot."; }
-    if (asked) { return "It has asked to transmit and is not allowed to."; }
+    if ((bits & kTxBitStopped) != 0u) { return cascade::i18n::tr("Its transmit audio stopped for good: it reported a permanent error."); }
+    if ((bits & kTxBitOnAir) != 0u) { return cascade::i18n::tr("ON AIR: the transmitter is keyed for it."); }
+    if ((bits & kTxBitWaiting) != 0u) { return cascade::i18n::tr("Allowed and waiting: another plugin holds the transmitter."); }
+    if (granted) { return armed ? cascade::i18n::tr("ARMED: it will be keyed when it asks, until the window closes.") : cascade::i18n::tr("Allowed to transmit, but you have not armed plugins on the TRANSMIT page, so it cannot."); }
+    if (asked) { return cascade::i18n::tr("It has asked to transmit and is not allowed to."); }
     (void)kTxBitDeclared; (void)kTxBitHolder;
     return std::string();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 std::string imageChip(const cascade::core::HostImage* img, bool asleep) {
-    if (img == nullptr || img->width == 0u) { return asleep ? "IDLE" : "WAIT"; }
-    return img->complete ? "IMG" : "RX";
+    if (img == nullptr || img->width == 0u) { return asleep ? cascade::i18n::tr("IDLE") : cascade::i18n::tr("WAIT"); }
+    return img->complete ? cascade::i18n::tr("IMG") : "RX";   // not-translated: RX is radio vocabulary
 }
 std::string panelChip(const cascade::core::HostPanel* p) {
-    if (p == nullptr) { return "IDLE"; }
-    return fmtN("%lld ROW", static_cast<long long>(p->rows.size()));
+    if (p == nullptr) { return cascade::i18n::tr("IDLE"); }
+    return cascade::core::formatText(cascade::i18n::tr("%d ROW"), static_cast<int>(p->rows.size()));
 }
 std::string instrumentChip(const cascade::core::HostInstrument* in, bool unread) {
-    if (in == nullptr) { return "IDLE"; }
+    if (in == nullptr) { return cascade::i18n::tr("IDLE"); }
     char out[24] = {0};
-    if (unread) { return "NEW"; }
-    if (!in->have) { return "WAIT"; }
+    if (unread) { return cascade::i18n::tr("NEW"); }
+    if (!in->have) { return cascade::i18n::tr("WAIT"); }
     const CascadeInstrumentState& s = in->state;
     switch (in->kind) {
-        case CASCADE_INSTRUMENT_PAGER: return fmtN("%lld MSG", std::llround(s.values[0]));
+        case CASCADE_INSTRUMENT_PAGER: return cascade::core::formatText(cascade::i18n::tr("%lld MSG"), static_cast<long long>(std::llround(s.values[0])));
         case CASCADE_INSTRUMENT_TELEPRINTER: cascade::gui::teleprinter::chipWord(s.text[0], s.values[0], out, sizeof out); return out;
         case CASCADE_INSTRUMENT_TONE_ALERT:
-            return (s.flags & CASCADE_INSTRUMENT_FLAG_ALERT) != 0u ? "ALERT" : fmtN("%lld LOG", static_cast<long long>(in->rows.size()));
+            return (s.flags & CASCADE_INSTRUMENT_FLAG_ALERT) != 0u ? std::string(cascade::i18n::tr("ALERT")) : cascade::core::formatText(cascade::i18n::tr("%lld LOG"), static_cast<long long>(in->rows.size()));
         case CASCADE_INSTRUMENT_BEACON:
             cascade::gui::beacon::chipWord((s.flags & CASCADE_INSTRUMENT_FLAG_ALERT) != 0u, s.values[1], static_cast<int>(in->rows.size()), out, sizeof out);
             return out;
         case CASCADE_INSTRUMENT_NAV_BEARING:
-            return (s.flags & CASCADE_INSTRUMENT_FLAG_LOCK) != 0u ? fmtN("%03lld", std::llround(s.values[0]) % 360) : "NAV";
+            return (s.flags & CASCADE_INSTRUMENT_FLAG_LOCK) != 0u ? fmtN("%03lld", std::llround(s.values[0]) % 360) : std::string(cascade::i18n::tr("NAV"));
         case CASCADE_INSTRUMENT_FAX: return s.text[0][0] != '\0' ? std::string(s.text[0]) : "FAX";
         case CASCADE_INSTRUMENT_METER: cascade::gui::meter::chipWord(in->have, in->rows.size(), out, sizeof out); return out;
         case CASCADE_INSTRUMENT_WEATHER_CONSOLE: cascade::gui::wxface::chipWord(s.values[6], s.values, out, sizeof out); return out;
@@ -482,8 +484,8 @@ std::string instrumentChip(const cascade::core::HostInstrument* in, bool unread)
     }
 }
 std::string fittedChipWord(std::size_t fed, std::size_t decoders) { return fmtN("%lld/", static_cast<long long>(fed)) + fmtN("%lld", static_cast<long long>(decoders)); }
-std::string decodersChipWord(std::size_t fed) { return fmtN("%lld FED", static_cast<long long>(fed)); }
-std::string targetsChipWord(std::size_t visible) { return fmtN("%lld TGT", static_cast<long long>(visible)); }
+std::string decodersChipWord(std::size_t fed) { return cascade::core::formatText(cascade::i18n::tr("%zu FED"), fed); }
+std::string targetsChipWord(std::size_t visible) { return cascade::core::formatText(cascade::i18n::tr("%d TGT"), static_cast<int>(visible)); }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 std::string windowKey(const char* kind, const std::string& plugin, const std::string& title) {
@@ -529,15 +531,18 @@ bool presetLit(const Preset& p, double deviceCentreHz, double tunedHz) {
 }
 
 std::string presetTooltip(const PluginRow& r, const Preset& p, bool lit) {
-    if (p.mine) { return lit ? "Already tuned to your preset for " + r.name + ". Right-click to forget it." : "Tune to your preset for " + r.name + ". Right-click to forget it."; }
-    if (lit) { return "Already tuned to this preset of " + r.name + "."; }
-    const std::string mhz = fmt("%.4f MHz", p.hz / 1.0e6);
-    if ((r.caps & (CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_PANEL)) != 0u) { return "Tune to " + mhz + ", start this plugin and open its windows"; }
-    if ((r.caps & CASCADE_CAP_DECODER) != 0u) { return "Tune to " + mhz + ", start this plugin and open the Decoder output window"; }
-    return "Tune to " + mhz + " and start this plugin";
+    if (p.mine) {
+        return lit ? cascade::core::formatText(cascade::i18n::tr("Already tuned to your preset for %s. Right-click to forget it."), r.name.c_str())
+                   : cascade::core::formatText(cascade::i18n::tr("Tune to your preset for %s. Right-click to forget it."), r.name.c_str());
+    }
+    if (lit) { return cascade::core::formatText(cascade::i18n::tr("Already tuned to this preset of %s."), r.name.c_str()); }
+    const double mhz = p.hz / 1.0e6;
+    if ((r.caps & (CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_PANEL)) != 0u) { return cascade::core::formatText(cascade::i18n::tr("Tune to %.4f MHz, start this plugin and open its windows"), mhz); }
+    if ((r.caps & CASCADE_CAP_DECODER) != 0u) { return cascade::core::formatText(cascade::i18n::tr("Tune to %.4f MHz, start this plugin and open the Decoder output window"), mhz); }
+    return cascade::core::formatText(cascade::i18n::tr("Tune to %.4f MHz and start this plugin"), mhz);
 }
 
-std::string presetSaveLabel(double tunedHz) { return "+ Save " + fmt("%.4f MHz", tunedHz / 1.0e6) + " as a preset"; }
+std::string presetSaveLabel(double tunedHz) { return cascade::core::formatText(cascade::i18n::tr("+ Save %.4f MHz as a preset"), tunedHz / 1.0e6); }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 Verdict verdictFromAnswer(int status, double applied0) {
@@ -556,12 +561,12 @@ Verdict verdictFromAnswer(int status, double applied0) {
 const char* verdictSentence(Verdict v) {
     switch (v) {
         case Verdict::Accepted: return "";
-        case Verdict::TooLong: return "Not saved: longer than this field allows.";
-        case Verdict::NotANumber: return "Not saved: that is not a number.";
-        case Verdict::BadText: return "Not saved: it holds a character a setting cannot.";
-        case Verdict::StoreFull: return "Not saved: the plugin's settings are full.";
-        case Verdict::StoreError: return "Not saved: the store refused it.";
-        case Verdict::Refused: return "Not saved: this field is not one the host can store.";
+        case Verdict::TooLong: return cascade::i18n::tr("Not saved: longer than this field allows.");
+        case Verdict::NotANumber: return cascade::i18n::tr("Not saved: that is not a number.");
+        case Verdict::BadText: return cascade::i18n::tr("Not saved: it holds a character a setting cannot.");
+        case Verdict::StoreFull: return cascade::i18n::tr("Not saved: the plugin's settings are full.");
+        case Verdict::StoreError: return cascade::i18n::tr("Not saved: the store refused it.");
+        case Verdict::Refused: return cascade::i18n::tr("Not saved: this field is not one the host can store.");
     }
     return "";
 }
@@ -650,16 +655,22 @@ bool fitView(const std::vector<cascade::core::HostTrack>& tracks, double& centre
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-std::string imageTitle(const std::string& plugin) { return plugin + " image"; }
-std::string mapTitle(const std::string& plugin) { return plugin + " map"; }
+std::string imageTitle(const std::string& plugin) { return cascade::core::formatText(cascade::i18n::tr("%s image"), plugin.c_str()); }
+std::string mapTitle(const std::string& plugin) { return cascade::core::formatText(cascade::i18n::tr("%s map"), plugin.c_str()); }
 
 std::string countText(std::size_t shown, std::size_t total, std::size_t unplaced) {
-    const auto n = [](std::size_t v) { return fmtN("%lld", static_cast<long long>(v)); };
-    std::string s;
-    if (shown < total) { s = n(shown) + " of " + n(total) + " targets"; }
-    else { s = n(total) + (total == 1 ? " target" : " targets"); }
-    if (unplaced > 0) { s += ", " + n(unplaced) + " heard without a position"; }
-    return s;
+    // the ImGui window's six sentences, whole, so each translates as a sentence (a plural is its own key)
+    const int sh = static_cast<int>(shown), to = static_cast<int>(total), un = static_cast<int>(unplaced);
+    if (shown < total) {
+        return unplaced > 0 ? cascade::core::formatText(cascade::i18n::tr("%d of %d targets, %d heard without a position"), sh, to, un)
+                            : cascade::core::formatText(cascade::i18n::tr("%d of %d targets"), sh, to);
+    }
+    if (total == 1) {
+        return unplaced > 0 ? cascade::core::formatText(cascade::i18n::tr("%d target, %d heard without a position"), to, un)
+                            : cascade::core::formatText(cascade::i18n::tr("%d target"), to);
+    }
+    return unplaced > 0 ? cascade::core::formatText(cascade::i18n::tr("%d targets, %d heard without a position"), to, un)
+                        : cascade::core::formatText(cascade::i18n::tr("%d targets"), to);
 }
 
 }  // namespace foxsdr::slintkit

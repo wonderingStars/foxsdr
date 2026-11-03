@@ -22,13 +22,13 @@ export struct PresetKeyModel { label: string, lit: bool, mine: bool, tooltip: st
 
 export component PresetBar inherits Rectangle {
     in property <[PresetKeyModel]> presets;
-    in property <string> save-label: "+ Save";      // the column form says "+ Save 145.5000 MHz as a preset"
+    in property <string> save-label: @tr("+ Save");      // the column form says "+ Save 145.5000 MHz as a preset"
     in property <bool> column;                      // the rail form
     in property <string> note;                      // the green result note under the keys (column form only); "" draws none
     in property <int> columns: 4;                   // keys to a row in the row form (the + Save key counts as one)
     in property <bool> enabled: true;
     in property <string> tooltip;                   // the + Save key's sentence
-    in property <string> forget-tooltip: "Forget this preset";
+    in property <string> forget-tooltip: @tr("Forget this preset");
     callback pressed(int);
     callback forgot(int);
     callback save-clicked();
@@ -39,7 +39,7 @@ export component PresetBar inherits Rectangle {
 
     height: body.preferred-height;
     accessible-role: groupbox;
-    accessible-label: "Presets";
+    accessible-label: @tr("Presets");
 
     // ONE column of lines. The row form's lines are rows of keys; the column form's are single keys, a key with its x key, the note
     // and the save key. Whichever form is not asked for iterates over nothing, so it takes no height.
@@ -153,7 +153,7 @@ export component PlateKeys inherits Rectangle {
 
     height: root.rows <= 0 ? 0px : root.rows * Theme.key-sm-h + (root.rows - 1) * 6px;
     accessible-role: groupbox;
-    accessible-label: "Commands";
+    accessible-label: @tr("Commands");
 
     for i in root.count : Key {
         x: Math.mod(i, root.cols) * (root.cell-w + 6px);

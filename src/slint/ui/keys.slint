@@ -374,9 +374,9 @@ export component RailKey inherits Rectangle {
 export component StopKey inherits Rectangle {
     in property <bool> running;
     in property <bool> enabled: true;
-    in property <string> stop-text: "STOP";
-    in property <string> start-text: "START";
-    in property <string> tooltip: root.running ? "Stop the receiver" : "Start the receiver";
+    in property <string> stop-text: @tr("STOP");
+    in property <string> start-text: @tr("START");
+    in property <string> tooltip: root.running ? @tr("Stop the receiver") : @tr("Start the receiver");
     callback clicked();
     out property <bool> has-focus: fs.has-focus;
 
@@ -391,7 +391,7 @@ export component StopKey inherits Rectangle {
 
     forward-focus: fs;
     accessible-role: button;
-    accessible-label: root.running ? "Stop the receiver (Ctrl+F2)" : "Start the receiver (Ctrl+F2)";
+    accessible-label: root.running ? @tr("Stop the receiver (Ctrl+F2)") : @tr("Start the receiver (Ctrl+F2)");
     accessible-description: root.tooltip;
     accessible-enabled: root.enabled;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }

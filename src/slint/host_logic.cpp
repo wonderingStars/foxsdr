@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "host_logic.hpp"
 
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -12,10 +15,12 @@ namespace {
 
 const char* const kDot = " \xC2\xB7 ";   // the IA's middle dot between clauses
 
+// Into a std::string, never a fixed buffer: a format that comes back from tr() may be longer than the English
+// (tests/test_i18n.cpp scans for snprintf into a sizeof-bounded buffer and refuses it).
 std::string fmt(const char* f, double v) {
-    char b[64];
-    std::snprintf(b, sizeof(b), f, v);
-    return b;
+    std::string s;
+    cascade::core::formatUtf8(s, f, v);
+    return s;
 }
 
 std::string joinDot(const std::vector<std::string>& parts) {
@@ -96,10 +101,10 @@ std::string fmtMHz(double hz) { return fmt("%.6f MHz", hz / 1e6); }
 std::string fmtRate(double hz) { return hz > 0.0 ? fmt("%.3f MS/s", hz / 1e6) : std::string("--"); }
 std::string fmtKHz(double hz) { return fmt("%.1f kHz", hz / 1e3); }
 std::string spanText(double hz) {
-    if (hz >= 1e9) { return "SPAN " + fmt("%.3f GHz", hz / 1e9); }
-    if (hz >= 1e6) { return "SPAN " + fmt("%.3f MHz", hz / 1e6); }
-    if (hz >= 1e3) { return "SPAN " + fmt("%.1f kHz", hz / 1e3); }
-    return "SPAN " + fmt("%.0f Hz", hz);
+    if (hz >= 1e9) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), fmt("%.3f GHz", hz / 1e9).c_str()); }
+    if (hz >= 1e6) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), fmt("%.3f MHz", hz / 1e6).c_str()); }
+    if (hz >= 1e3) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), fmt("%.1f kHz", hz / 1e3).c_str()); }
+    return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), fmt("%.0f Hz", hz).c_str());
 }
 std::string cursorText(double hz, double db) { return fmt("%.3f MHz", hz / 1e6) + kDot + fmt("%.1f dB", db); }
 std::string axisUnit(double) { return "MHz"; }
@@ -209,7 +214,7 @@ double hzAt(double frac, double centreHz, double spanHz) { return centreHz - spa
 
 std::vector<Tick> ageTicks(double historySeconds, double heightPx, double minPitchPx) {
     std::vector<Tick> out;
-    out.push_back({0.0, "now"});
+    out.push_back({0.0, cascade::i18n::tr("now")});
     if (!(historySeconds > 0.0) || !(heightPx > 0.0)) { return out; }
     const double minStep = minPitchPx * historySeconds / heightPx;   // the step whose labels are minPitchPx apart
     double step = 0.0;
@@ -314,18 +319,19 @@ std::vector<StatusCardModel> statusCards(const FoxReceiverState& s, const HostEx
 
     {   // RECEIVER
         StatusCardModel c;
-        c.key = "RECEIVER";
+        c.key = cascade::i18n::tr("RECEIVER");
         c.lampShown = true;
-        if (faulted) { c.value = "FAULT"; c.tone = CardTone::Err; c.lampLit = true; c.lampRed = true; }
-        else if (running) { c.value = "RUNNING"; c.tone = CardTone::Good; c.lampLit = true; }
-        else { c.value = "STOPPED"; }
-        const std::string ant = x.antenna.empty() ? std::string() : ("ANT " + x.antenna);
-        const std::string gain = x.gainText.empty() ? std::string() : ("GAIN " + x.gainText);
+        if (faulted) { c.value = cascade::i18n::tr("FAULT"); c.tone = CardTone::Err; c.lampLit = true; c.lampRed = true; }
+        else if (running) { c.value = cascade::i18n::tr("RUNNING"); c.tone = CardTone::Good; c.lampLit = true; }
+        else { c.value = cascade::i18n::tr("STOPPED"); }
+        const std::string ant = x.antenna.empty() ? std::string() : cascade::core::formatText(cascade::i18n::tr("ANT %s"), x.antenna.c_str());
+        const std::string gain = x.gainText.empty() ? std::string() : cascade::core::formatText(cascade::i18n::tr("GAIN %s"), x.gainText.c_str());
         const std::string ppm = x.havePpm ? fmt("PPM %.1f", x.ppm) : std::string();
         c.detail = joinDot({s.deviceName, ant, gain, ppm, fmtRate(s.sampleRateHz)});
         c.lines = {s.deviceName};
-        if (!x.antenna.empty()) { c.lines.push_back("ANTENNA " + x.antenna); }
-        if (!x.gainText.empty()) { c.lines.push_back(x.gainText == "AUTO" ? std::string("GAIN AUTO - AGC ON") : "GAIN " + x.gainText); }
+        if (!x.antenna.empty()) { c.lines.push_back(cascade::core::formatText(cascade::i18n::tr("ANTENNA %s"), x.antenna.c_str())); }
+        // x.gainText is compared with the English "AUTO" (and main.cpp compares gainText() with "N/A"): those two words stay English upstream
+        if (!x.gainText.empty()) { c.lines.push_back(x.gainText == "AUTO" ? std::string(cascade::i18n::tr("GAIN AUTO - AGC ON")) : cascade::core::formatText(cascade::i18n::tr("GAIN %s"), x.gainText.c_str())); }
         if (x.havePpm) { c.lines.push_back(ppm); }
         c.lines.push_back(fmtRate(s.sampleRateHz));
         if (faulted && s.faultMessage[0] != '\0') { c.lines.push_back(s.faultMessage); }
@@ -333,89 +339,90 @@ std::vector<StatusCardModel> statusCards(const FoxReceiverState& s, const HostEx
     }
     {   // DECODERS
         StatusCardModel c;
-        c.key = "DECODERS";
+        c.key = cascade::i18n::tr("DECODERS");
         const unsigned fitted = s.decodersFitted, runningN = s.decodersRunning, matched = s.decodersMatched;
+        const auto z = [](unsigned v) { return static_cast<std::size_t>(v); };
         if (runningN > 0) {
-            c.value = std::to_string(runningN) + " running";
+            c.value = cascade::core::formatText(cascade::i18n::tr("%zu running"), z(runningN));
             c.tone = CardTone::Good;
             const unsigned idle = matched > runningN ? matched - runningN : 0;
-            c.detail = "of " + std::to_string(fitted) + " fitted" + (idle > 0 ? ", " + std::to_string(idle) + " idle" : std::string());
+            c.detail = idle > 0 ? cascade::core::formatText(cascade::i18n::tr("of %zu fitted, %zu idle"), z(fitted), z(idle)) : cascade::core::formatText(cascade::i18n::tr("of %zu fitted"), z(fitted));
         } else {
-            c.value = std::to_string(matched) + " ready";
-            if (!running) { c.detail = "of " + std::to_string(fitted) + " fitted - receiver stopped"; }
-            else { c.detail = "of " + std::to_string(fitted) + " fitted" + (matched > 0 ? ", " + std::to_string(matched) + " not fed" : std::string()); }
+            c.value = cascade::core::formatText(cascade::i18n::tr("%zu ready"), z(matched));
+            if (!running) { c.detail = cascade::core::formatText(cascade::i18n::tr("of %zu fitted - receiver stopped"), z(fitted)); }
+            else { c.detail = matched > 0 ? cascade::core::formatText(cascade::i18n::tr("of %zu fitted, %zu not fed"), z(fitted), z(matched)) : cascade::core::formatText(cascade::i18n::tr("of %zu fitted"), z(fitted)); }
         }
         c.lines = {c.detail};
         cards.push_back(c);
     }
     {   // OUTPUT
         StatusCardModel c;
-        c.key = "OUTPUT";
-        if (!running) { c.value = "--"; c.detail = "the receiver is stopped"; }
-        else if (s.decodersRunning == 0) { c.value = "--"; c.detail = "no decoder is running"; }
-        else if (!x.outputMeasured) { c.value = "--"; c.detail = "measuring"; }
-        else { c.value = fmt("%.1f /s", x.outputRate); c.detail = fmt("output lines, %.1f s mean", x.outputMeanS); c.tone = CardTone::Warn; }
+        c.key = cascade::i18n::tr("OUTPUT");
+        if (!running) { c.value = "--"; c.detail = cascade::i18n::tr("the receiver is stopped"); }
+        else if (s.decodersRunning == 0) { c.value = "--"; c.detail = cascade::i18n::tr("no decoder is running"); }
+        else if (!x.outputMeasured) { c.value = "--"; c.detail = cascade::i18n::tr("measuring"); }
+        else { c.value = fmt("%.1f /s", x.outputRate); c.detail = cascade::core::formatText(cascade::i18n::tr("output lines, %.1f s mean"), x.outputMeanS); c.tone = CardTone::Warn; }
         c.lines = {c.detail};
         cards.push_back(c);
     }
     {   // SINK
         StatusCardModel c;
-        c.key = "SINK";
+        c.key = cascade::i18n::tr("SINK");
         const bool open = (s.flags & FOXAPI_RX_SINK_OPEN) != 0;
         const bool muted = (s.flags & FOXAPI_RX_MUTED) != 0 || s.audioMutedBy[0] != '\0';
         const bool opening = (s.audioFlags & FOXAPI_AUDIO_OPENING) != 0;
         const bool everOpened = (s.audioFlags & FOXAPI_AUDIO_EVER_OPENED) != 0;
-        if (opening) { c.value = "OPENING"; c.detail = "waiting for the output device"; c.lines = {c.detail}; }
+        if (opening) { c.value = cascade::i18n::tr("OPENING"); c.detail = cascade::i18n::tr("waiting for the output device"); c.lines = {c.detail}; }
         else if (open) {
-            c.value = muted ? "MUTED" : "OPEN";
+            c.value = muted ? cascade::i18n::tr("MUTED") : cascade::i18n::tr("OPEN");
             c.tone = muted ? CardTone::Warn : CardTone::Good;
-            const std::string playing = s.audioPlayingPlugin[0] != '\0' ? std::string("playing: ") + s.audioPlayingPlugin : std::string("playing ") + modeName(s.demodMode);
+            const std::string playing = s.audioPlayingPlugin[0] != '\0' ? cascade::core::formatText(cascade::i18n::tr("playing: %s"), s.audioPlayingPlugin) : cascade::core::formatText(cascade::i18n::tr("playing %s"), modeName(s.demodMode));
             c.detail = joinDot({s.sinkName, playing});
             c.lines = {s.sinkName};
-            if (s.audioMutedBy[0] != '\0') { c.lines.push_back(std::string("by ") + s.audioMutedBy); }
-            if (s.audioPlayingPlugin[0] != '\0') { c.lines.push_back(std::string("for ") + s.audioPlayingPlugin); }
+            if (s.audioMutedBy[0] != '\0') { c.lines.push_back(cascade::core::formatText(cascade::i18n::tr("by %s"), s.audioMutedBy)); }
+            if (s.audioPlayingPlugin[0] != '\0') { c.lines.push_back(cascade::core::formatText(cascade::i18n::tr("for %s"), s.audioPlayingPlugin)); }
             c.lines.push_back(playing);
-        } else if (!running) { c.value = "STOPPED"; c.detail = s.sinkName; c.lines = {s.sinkName}; }
-        else if (everOpened) { c.value = "STOPPED"; c.tone = CardTone::Err; c.detail = "the output stream stopped"; c.lines = {c.detail}; }
-        else { c.value = "NO DEVICE"; c.tone = CardTone::Err; c.detail = "no output device was opened"; c.lines = {c.detail}; }
+        } else if (!running) { c.value = cascade::i18n::tr("STOPPED"); c.detail = s.sinkName; c.lines = {s.sinkName}; }
+        else if (everOpened) { c.value = cascade::i18n::tr("STOPPED"); c.tone = CardTone::Err; c.detail = cascade::i18n::tr("the output stream stopped"); c.lines = {c.detail}; }
+        else { c.value = cascade::i18n::tr("NO DEVICE"); c.tone = CardTone::Err; c.detail = cascade::i18n::tr("no output device was opened"); c.lines = {c.detail}; }
         cards.push_back(c);
     }
     {   // RECORDER
         StatusCardModel c;
-        c.key = "RECORDER";
+        c.key = cascade::i18n::tr("RECORDER");
         const bool iq = (s.flags & FOXAPI_RX_RECORDING_IQ) != 0, audio = (s.flags & FOXAPI_RX_RECORDING_AUDIO) != 0;
         if (iq || audio) {
-            c.value = !x.recorderValue.empty() ? x.recorderValue : (iq && audio ? "IQ + AUDIO" : iq ? "IQ" : "AUDIO");
+            c.value = !x.recorderValue.empty() ? x.recorderValue : (iq && audio ? cascade::i18n::tr("IQ + AUDIO") : iq ? "IQ" : cascade::i18n::tr("AUDIO"));   // "IQ" is radio vocabulary, not translated
             c.detail = x.recorderDetail;
             c.tone = CardTone::Err;
-        } else { c.value = "off"; c.detail = "no file open"; }
+        } else { c.value = cascade::i18n::tr("off"); c.detail = cascade::i18n::tr("no file open"); }
         c.lines = {c.detail};
         cards.push_back(c);
     }
     {   // WEB
         StatusCardModel c;
-        c.key = "WEB";
-        if (!x.webRefused.empty()) { c.value = "REFUSED"; c.detail = x.webRefused; c.tone = CardTone::Err; }
-        else if (s.flags & FOXAPI_RX_WEB_LISTENING) { c.value = "port " + std::to_string(x.webPort); c.detail = x.webBind; }
-        else { c.value = "off"; c.detail = "not listening"; }
+        c.key = cascade::i18n::tr("WEB");
+        if (!x.webRefused.empty()) { c.value = cascade::i18n::tr("REFUSED"); c.detail = x.webRefused; c.tone = CardTone::Err; }
+        else if (s.flags & FOXAPI_RX_WEB_LISTENING) { c.value = cascade::core::formatText(cascade::i18n::tr("port %d"), x.webPort); c.detail = x.webBind; }
+        else { c.value = cascade::i18n::tr("off"); c.detail = cascade::i18n::tr("not listening"); }
         c.lines = {c.detail};
         cards.push_back(c);
     }
     {   // UNDERRUNS
         StatusCardModel c;
-        c.key = "UNDERRUNS";
+        c.key = cascade::i18n::tr("UNDERRUNS");
         c.value = std::to_string(s.audioUnderruns);
-        if (s.audioUnderruns == 0) { c.detail = "no callback has starved yet"; c.lines = {c.detail}; }
+        if (s.audioUnderruns == 0) { c.detail = cascade::i18n::tr("no callback has starved yet"); c.lines = {c.detail}; }
         else {
             c.tone = CardTone::Err;
-            c.detail = "starved callbacks, since start";
+            c.detail = cascade::i18n::tr("starved callbacks, since start");
             c.lines = {c.detail};
             if (s.audioRateHz > 0.0 && s.audioRingCapacityFrames > 0) {
-                c.lines.push_back("ring " + fmt("%.0f", 1000.0 * static_cast<double>(s.audioRingFrames) / s.audioRateHz) + " of " +
-                                  fmt("%.0f", 1000.0 * static_cast<double>(s.audioRingCapacityFrames) / s.audioRateHz) + " ms");
+                c.lines.push_back(cascade::core::formatText(cascade::i18n::tr("ring %.0f of %.0f ms"), 1000.0 * static_cast<double>(s.audioRingFrames) / s.audioRateHz,
+                                      1000.0 * static_cast<double>(s.audioRingCapacityFrames) / s.audioRateHz));
             }
             if (s.audioPluginGaps > 0 || s.audioPlayingPlugin[0] != '\0') {
-                c.lines.push_back("plugin gaps " + std::to_string(s.audioPluginGaps) + ", " + std::to_string(s.audioPluginGapFrames) + " frames");
+                c.lines.push_back(cascade::core::formatText(cascade::i18n::tr("plugin gaps %llu, %llu frames"), static_cast<unsigned long long>(s.audioPluginGaps), static_cast<unsigned long long>(s.audioPluginGapFrames)));
             }
         }
         cards.push_back(c);
@@ -445,23 +452,23 @@ void OutputRate::reset() { samples_.clear(); }
 
 // ---- lines and hints ----
 std::string rateLine(const FoxReceiverState& s) {
-    return joinDot({fmtRate(s.sampleRateHz), "ch " + fmtKHz(s.channelRateHz), "underruns " + std::to_string(s.audioUnderruns)});
+    return joinDot({fmtRate(s.sampleRateHz), cascade::core::formatText(cascade::i18n::tr("ch %s"), fmtKHz(s.channelRateHz).c_str()), cascade::core::formatText(cascade::i18n::tr("underruns %llu"), static_cast<unsigned long long>(s.audioUnderruns))});
 }
 std::string sourceLine(const FoxReceiverState& s, const std::string& band) { return joinDot({s.deviceName, band}); }
 std::string modeHint(const FoxReceiverState& s) {
-    return joinDot({"Passband " + fmtKHz(s.bandwidthHz), "step " + fmtKHz(modeStepHz(s.demodMode)), "more in Signal \xE2\x80\xBA Radio"});
+    return joinDot({cascade::core::formatText(cascade::i18n::tr("Passband %s"), fmtKHz(s.bandwidthHz).c_str()), cascade::core::formatText(cascade::i18n::tr("step %s"), fmtKHz(modeStepHz(s.demodMode)).c_str()), cascade::i18n::tr("more in Signal \xE2\x80\xBA Radio")});
 }
 std::string tuneHint(bool converterActive) {
-    return converterActive ? std::string("Scroll a digit to tune") + kDot + "click to type (T)"
-                           : std::string("Scroll a digit to tune") + kDot + "click to type (T)" + kDot + "no converter";
+    return converterActive ? std::string(cascade::i18n::tr("Scroll a digit to tune \xC2\xB7 click to type (T)"))
+                           : std::string(cascade::i18n::tr("Scroll a digit to tune \xC2\xB7 click to type (T) \xC2\xB7 no converter"));
 }
 std::string biasHint(bool present, bool on) {
-    if (!present) { return "No bias tee on this radio"; }
-    return on ? std::string("On") + kDot + "4.5 V on the cable" : std::string("Off") + kDot + "4.5 V on the cable" + kDot + "asks first";
+    if (!present) { return cascade::i18n::tr("No bias tee on this radio"); }
+    return on ? std::string(cascade::i18n::tr("On \xC2\xB7 4.5 V on the cable")) : std::string(cascade::i18n::tr("Off \xC2\xB7 4.5 V on the cable \xC2\xB7 asks first"));
 }
 std::string waterfallFootRight(const FoxReceiverState& s, const std::string& decoder) {
-    if (!(s.flags & FOXAPI_RX_RUNNING)) { return "STOPPED"; }
-    return joinDot({modeName(s.demodMode), decoder.empty() ? std::string("receiving") : "decoding: " + decoder});
+    if (!(s.flags & FOXAPI_RX_RUNNING)) { return cascade::i18n::tr("STOPPED"); }
+    return joinDot({modeName(s.demodMode), decoder.empty() ? std::string(cascade::i18n::tr("receiving")) : cascade::core::formatText(cascade::i18n::tr("decoding: %s"), decoder.c_str())});
 }
 
 }  // namespace foxsdr::slinthost

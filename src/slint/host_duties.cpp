@@ -18,6 +18,8 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
+#include "core/i18n.hpp"
+#include "core/utf8_text.hpp"
 #include "core/package_identity.hpp"
 #include "core/sentinel.hpp"
 
@@ -47,9 +49,7 @@ bool samePolicy(const core::UploadPolicyState& a, const core::UploadPolicyState&
 
 // The phrase for the size of an offered installer, as the ImGui banner words it (drawUpdateBanner).
 std::string sizeNote(std::uint64_t bytes) {
-    char buf[96];
-    std::snprintf(buf, sizeof(buf), "%.1f MB, verified against its published checksum before anything runs", static_cast<double>(bytes) / 1.0e6);
-    return buf;
+    return cascade::core::formatText(cascade::i18n::tr("%.1f MB, verified against its published checksum before anything runs"), static_cast<double>(bytes) / 1.0e6);
 }
 
 #if defined(_WIN32)
@@ -213,32 +213,32 @@ UpdateCardModel updateCardFor(const UpdateView& v) {
     c.shown = true;
     c.critical = v.info.critical;
     // Amber for an ordinary update, red for one that fixes a build which could not do its job: the server's `critical` flag.
-    c.headline = v.info.critical ? "Important update: FoxSDR " + v.info.version : "FoxSDR " + v.info.version + " is available";
+    c.headline = v.info.critical ? cascade::core::formatText(cascade::i18n::tr("Important update: FoxSDR %s"), v.info.version.c_str()) : cascade::core::formatText(cascade::i18n::tr("%s is available"), ("FoxSDR " + v.info.version).c_str());
     // WHAT IT FIXES, in the author's words, for every release between the one running and the one offered: a version, then its lines.
     for (const core::ReleaseNote& n : v.info.notes) {
-        c.notes.push_back(n.version + (n.critical ? "  (important)" : ""));
+        c.notes.push_back(n.version + (n.critical ? std::string(cascade::i18n::tr("  (important)")) : std::string()));
         for (const std::string& line : n.notes) { c.notes.push_back(line); }
     }
     if (!v.installerHere) {
-        c.note = "There is no in-app updater for Linux yet - download it from foxsdr.com.";
-        c.primary = "Open foxsdr.com";
+        c.note = cascade::i18n::tr("There is no in-app updater for Linux yet - download it from foxsdr.com.");
+        c.primary = cascade::i18n::tr("Open foxsdr.com");
     } else {
         switch (v.stage) {
             case UpdateStage::Idle:
-                c.primary = "Download update";
+                c.primary = cascade::i18n::tr("Download update");
                 if (v.info.sizeBytes > 0) { c.note = sizeNote(v.info.sizeBytes); }
                 break;
             case UpdateStage::Downloading:
-                c.primary = "Downloading...";
+                c.primary = cascade::i18n::tr("Downloading...");
                 c.progress = std::clamp(v.progress, 0.f, 1.f);
                 break;
             case UpdateStage::Ready:
                 // Downloaded AND verified. Running it closes this window, which the key says outright: an installer cannot replace a
                 // binary that is still running.
-                c.primary = "Install now and restart";
-                c.note = "Downloaded and verified.";
+                c.primary = cascade::i18n::tr("Install now and restart");
+                c.note = cascade::i18n::tr("Downloaded and verified.");
                 break;
-            case UpdateStage::Installing: c.primary = "Starting the installer..."; break;
+            case UpdateStage::Installing: c.primary = cascade::i18n::tr("Starting the installer..."); break;
         }
     }
     c.error = v.error;

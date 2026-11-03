@@ -80,10 +80,10 @@ global Fmt {
     }
     // a signed offset in hertz: "+40 Hz", "-23 Hz", "0 Hz"
     pure public function hz-signed(v: float) -> string {
-        if (v > 9999) { return ">+9999 Hz"; }
-        if (v < -9999) { return "<-9999 Hz"; }
+        if (v > 9999) { return ">+9999 Hz"; }   // not-translated: unit
+        if (v < -9999) { return "<-9999 Hz"; }   // not-translated: unit
         let r = Math.round(v);
-        return r == 0 ? "0 Hz" : (r > 0 ? "+" : "-") + Math.abs(r) + " Hz";
+        return r == 0 ? "0 Hz" : (r > 0 ? "+" : "-") + Math.abs(r) + " Hz";   // not-translated: unit
     }
     // degrees into [0, 360) and into (-180, +180]
     pure public function m360(d: float) -> float { return Math.mod(d, 360); }
@@ -395,7 +395,7 @@ export component Compass inherits Rectangle {
         stroke-width: 1.5px;
         fill: transparent;
     }
-    for lbl[i] in ["N", "3", "6", "E", "12", "15", "S", "21", "24", "W", "30", "33"] : Text {
+    for lbl[i] in [@tr("N"), "3", "6", @tr("E"), "12", "15", @tr("S"), "21", "24", @tr("W"), "30", "33"] : Text {
         x: 75px + 50px * Math.sin(i * 30deg) - 12px;
         y: 75px - 50px * Math.cos(i * 30deg) - 7px;
         width: 24px;
@@ -1038,11 +1038,11 @@ component TeleprinterFace inherits Rectangle {
     property <length> rw: root.stacked ? root.width - 24px : root.width - 12px - 294px;
     property <length> col-w: Math.min((root.rw - 6px) / 2, 100px);
     // REG / FLT / LBL / MODE / BLK tokens, whole (a token never breaks: a no-break space inside it), two spaces apart
-    property <string> heading: root.have ? (root.state.texts[0] != "" ? "REG\u{a0}" + root.state.texts[0] + "  " : "")
-        + (root.state.texts[1] != "" ? "FLT\u{a0}" + root.state.texts[1] + "  " : "")
-        + (root.state.texts[2] != "" ? "LBL\u{a0}" + root.state.texts[2] + "  " : "")
-        + (root.state.texts[3] != "" ? "MODE\u{a0}" + root.state.texts[3] + "  " : "")
-        + (root.state.texts[4] != "" ? "BLK\u{a0}" + root.state.texts[4] : "") : "";
+    property <string> heading: root.have ? (root.state.texts[0] != "" ? "REG\u{a0}" + root.state.texts[0] + "  " : "")   // not-translated: ACARS field names (protocol vocabulary)
+        + (root.state.texts[1] != "" ? "FLT\u{a0}" + root.state.texts[1] + "  " : "")   // not-translated: ACARS field names (protocol vocabulary)
+        + (root.state.texts[2] != "" ? "LBL\u{a0}" + root.state.texts[2] + "  " : "")   // not-translated: ACARS field names (protocol vocabulary)
+        + (root.state.texts[3] != "" ? "MODE\u{a0}" + root.state.texts[3] + "  " : "")   // not-translated: ACARS field names (protocol vocabulary)
+        + (root.state.texts[4] != "" ? "BLK\u{a0}" + root.state.texts[4] : "") : "";   // not-translated: ACARS field names (protocol vocabulary)
     property <bool> have-print: root.have && (root.state.texts[0] != "" || root.state.texts[1] != "" || root.state.texts[2] != "" || root.newest != "");
     property <int> printed: root.have && root.state.values[0] >= 0 ? Math.min(9999, Math.round(root.state.values[0])) : -1;
     property <[LampSpec]> lamp-specs: [
@@ -1099,7 +1099,7 @@ component ToneAlertFace inherits Rectangle {
     property <string> code: root.have ? root.state.texts[0] : "";
     property <string> result: root.have ? root.state.texts[2] : "";
     property <string> result-up: root.result.to-uppercase();
-    property <color> result-ink: root.result-up == "MATCHED" ? Theme.chip-good-fg : root.result-up == "UNMATCHED" ? Theme.accent-soft : Theme.fg-soft;
+    property <color> result-ink: root.result-up == "MATCHED" ? Theme.chip-good-fg : root.result-up == "UNMATCHED" ? Theme.accent-soft : Theme.fg-soft;   // not-translated: compared with the plugin-sent word, byte for byte
     property <bool> sec-a: root.have && root.state.values[2] > 0;
     property <bool> sec-b: root.have && root.state.values[3] > 0;
     BigLamp { x: 22px; y: 8px; lit: root.alert-on; }
@@ -1126,7 +1126,7 @@ component ToneAlertFace inherits Rectangle {
         y: 8px;
         width: root.rw;
         height: 24px;
-        text: root.tone-a ? root.hz-a.to-fixed(1) + " Hz" : "--";
+        text: root.tone-a ? root.hz-a.to-fixed(1) + " Hz" : "--";   // not-translated: unit
         color: root.tone-a ? Theme.accent-soft : Theme.dim;
         font-family: Theme.font-mono;
         font-size: Theme.font-body;
@@ -1140,7 +1140,7 @@ component ToneAlertFace inherits Rectangle {
         y: 50px;
         width: root.rw;
         height: 24px;
-        text: root.tone-b ? root.hz-b.to-fixed(1) + " Hz" : "--";
+        text: root.tone-b ? root.hz-b.to-fixed(1) + " Hz" : "--";   // not-translated: unit
         color: root.tone-b ? Theme.accent-soft : Theme.dim;
         font-family: Theme.font-mono;
         font-size: Theme.font-body;
@@ -1318,7 +1318,7 @@ component FaxFace inherits Rectangle {
     property <bool> stacked: root.width < 420px;
     property <bool> have: root.state.have;
     property <string> phase-word: root.have ? root.state.texts[0] : "";
-    property <int> phase: root.phase-word == "IDLE" ? 0 : root.phase-word == "START" ? 1 : root.phase-word == "PHASING" ? 2 : root.phase-word == "PICTURE" ? 3 : root.phase-word == "STOP" ? 4 : -1;
+    property <int> phase: root.phase-word == "IDLE" ? 0 : root.phase-word == "START" ? 1 : root.phase-word == "PHASING" ? 2 : root.phase-word == "PICTURE" ? 3 : root.phase-word == "STOP" ? 4 : -1;   // not-translated: compared with the plugin-sent phase word, byte for byte
     property <bool> measured: root.phase >= 2;
     property <float> lines: root.have ? root.state.values[2] : 0;
     property <bool> have-lines: root.have && root.lines > 0;
@@ -1416,8 +1416,8 @@ component BeaconFace inherits Rectangle {
     property <bool> have-id: root.have && root.state.texts[0] != "";
     // hertz while it is a hertz-sized number, kilohertz from ten thousand, held at 999.9 kHz (instrument_beacon_math.hpp formatError)
     property <string> err-text: !root.have-err ? ""
-        : Math.abs(root.state.values[0]) < 9999.5 ? (root.state.values[0] > 0 ? "+" : "-") + Math.round(Math.abs(root.state.values[0])) + " Hz"
-        : (root.state.values[0] > 0 ? "+" : "-") + (Math.round(Math.min(Math.abs(root.state.values[0]), 999900) / 100) / 10).to-fixed(1) + " kHz";
+        : Math.abs(root.state.values[0]) < 9999.5 ? (root.state.values[0] > 0 ? "+" : "-") + Math.round(Math.abs(root.state.values[0])) + " Hz"   // not-translated: unit
+        : (root.state.values[0] > 0 ? "+" : "-") + (Math.round(Math.min(Math.abs(root.state.values[0]), 999900) / 100) / 10).to-fixed(1) + " kHz";   // not-translated: unit
     property <[string]> caps: [@tr("Country"), @tr("Protocol"), @tr("Position")];
     HorizontalLayout {
         x: 12px;
@@ -1512,9 +1512,9 @@ component MeterFace inherits Rectangle {
     property <length> rx: root.stacked ? 12px : 254px;
     property <length> ry: root.stacked ? 8px + 101px + 12px : 8px;
     property <string> comm: root.have ? root.state.texts[1].to-uppercase() : "";
-    property <bool> electric: root.comm.starts-with("ELECTRIC");
-    property <bool> gas: root.comm.starts-with("GAS");
-    property <bool> water: root.comm.starts-with("WATER");
+    property <bool> electric: root.comm.starts-with("ELECTRIC");   // not-translated: compared with the plugin-sent commodity word, byte for byte
+    property <bool> gas: root.comm.starts-with("GAS");   // not-translated: compared with the plugin-sent commodity word, byte for byte
+    property <bool> water: root.comm.starts-with("WATER");   // not-translated: compared with the plugin-sent commodity word, byte for byte
     property <float> reading: root.state.values[0];
     property <bool> reading-ok: root.have && root.reading >= 0 && root.reading <= 99999999;
     property <bool> over: root.have && root.reading > 99999999;
@@ -1541,7 +1541,7 @@ component MeterFace inherits Rectangle {
         text: root.reading-ok ? Fmt.pad-n(root.reading, root.digits) : "";
         ghost: !root.reading-ok;
         ghost-text: "88888888";
-        unit: root.electric ? "kWh" : @tr("UNITS");
+        unit: root.electric ? "kWh" : @tr("UNITS");   // not-translated: unit
         unit-dim: !root.reading-ok;
     }
     HorizontalLayout {
@@ -1647,7 +1647,7 @@ component WeatherFace inherits Rectangle {
             y: 26px;
             width: chn.width - 18px;
             dim: !chn.valid;
-            text: !chn.valid ? "-- . - C" : chn.over ? (chn.temp < 0 ? "LLL" : "HHH") : (chn.tenths == 0 ? "0.0" : (chn.tenths / 10).to-fixed(1)) + " C";
+            text: !chn.valid ? "-- . - C" : chn.over ? (chn.temp < 0 ? "LLL" : "HHH") : (chn.tenths == 0 ? "0.0" : (chn.tenths / 10).to-fixed(1)) + " C";   // not-translated: the LCD out-of-range convention, not words
         }
         PaleLcd {
             x: 8px + Theme.hairline;

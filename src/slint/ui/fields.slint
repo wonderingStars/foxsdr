@@ -258,21 +258,21 @@ export component Field inherits Rectangle {
     in property <string> tooltip;
     // ---- the words the field draws itself, so a host can hand in its translations ----
     in property <string> kind-label;                // "" = TEXT / NUMBER / BOOL / PATH / PASSWORD
-    in property <string> on-text: "on";             // the BOOL row's Checkbox
-    in property <string> browse-text: "BROWSE FILES";
-    in property <string> show-text: "SHOW";
-    in property <string> hide-text: "HIDE";
+    in property <string> on-text: @tr("on");             // the BOOL row's Checkbox
+    in property <string> browse-text: @tr("BROWSE FILES");
+    in property <string> show-text: @tr("SHOW");
+    in property <string> hide-text: @tr("Hide").to-uppercase();
     callback edited(string);                        // each change the user makes
     callback committed(string);                     // Enter, or the focus leaving after an edit
     callback toggled(bool);                         // bool
     callback browse-clicked();                      // path
     // what is drawn in the two places whose words change with the state
     out property <string> kind-text: root.kind-label != "" ? root.kind-label
-        : root.kind == FieldKind.text ? "TEXT"
-        : root.kind == FieldKind.number ? "NUMBER"
-        : root.kind == FieldKind.bool ? "BOOL"
-        : root.kind == FieldKind.path ? "PATH"
-        : "PASSWORD";
+        : root.kind == FieldKind.text ? @tr("TEXT")
+        : root.kind == FieldKind.number ? @tr("NUMBER")
+        : root.kind == FieldKind.bool ? @tr("BOOL")
+        : root.kind == FieldKind.path ? @tr("PATH")
+        : @tr("Password").to-uppercase();
     out property <string> key-text: root.kind == FieldKind.path ? root.browse-text
         : root.kind == FieldKind.password ? (root.revealed ? root.hide-text : root.show-text)
         : "";
@@ -342,8 +342,8 @@ export component Field inherits Rectangle {
                 label: root.key-text;
                 on: root.revealed;
                 enabled: root.enabled;
-                tooltip: root.revealed ? "Hide" : "Show";
-                accessible-label: root.revealed ? "Hide the password" : "Show the password";
+                tooltip: root.revealed ? @tr("Hide") : @tr("Show");
+                accessible-label: root.revealed ? @tr("Hide the password") : @tr("Show the password");
                 clicked => { root.revealed = !root.revealed; }
             }
         }

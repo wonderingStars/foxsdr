@@ -208,17 +208,112 @@ def extract_keys(src):
     return keys
 
 
+# --- the Slint window's keys (tests/test_i18n.cpp: readSlintString, extractSlintKeys) ---
+#
+# A .slint file marks a word with @tr("English text"); the build bundles the
+# catalogues as gettext files made by tools/slint-po.py, keyed by that text with
+# no translation context, so the key is the literal right after "@tr(" with
+# Slint's escapes decoded (\\ \" \n \t \u{hex}); a plural `"one" | "many" % n`
+# gives both literals and a context `"ctx" => "text"` the text after the arrow.
+# Comments are skipped, "@tr" inside a string is not a call, and the specimens
+# (ui/specimens/, the test sheets) are not shipped and not scanned.
+
+def read_slint_string(s, i):
+    """The literal starting at s[i] == '"'; returns (text, index after it) or (None, i)."""
+    if i >= len(s) or s[i] != '"':
+        return None, i
+    i += 1
+    out = []
+    n = len(s)
+    while i < n and s[i] != '"':
+        if s[i] == '\\' and i + 1 < n:
+            d = s[i + 1]
+            if d == 'n':
+                out.append('\n'); i += 2; continue
+            if d == 't':
+                out.append('\t'); i += 2; continue
+            if d == 'u' and i + 2 < n and s[i + 2] == '{':
+                close = s.find('}', i + 3)
+                if close < 0:
+                    return None, i
+                try:
+                    out.append(chr(int(s[i + 3:close], 16)))
+                except ValueError:
+                    return None, i
+                i = close + 1
+                continue
+            out.append(d); i += 2; continue
+        out.append(s[i]); i += 1
+    if i >= n:
+        return None, i
+    return ''.join(out), i + 1
+
+
+def extract_slint_keys(src):
+    keys = []
+    i = 0
+    n = len(src)
+
+    def skip_space(i):
+        while i < n and src[i].isspace():
+            i += 1
+        return i
+
+    while i < n:
+        c = src[i]
+        if c == '/' and i + 1 < n and src[i + 1] == '/':
+            while i < n and src[i] != '\n':
+                i += 1
+            continue
+        if c == '/' and i + 1 < n and src[i + 1] == '*':
+            e = src.find('*/', i + 2)
+            i = n if e < 0 else e + 2
+            continue
+        if c == '"':
+            skipped, i2 = read_slint_string(src, i)
+            if skipped is None:
+                break
+            i = i2
+            continue
+        if not src.startswith('@tr(', i):
+            i += 1
+            continue
+        i = skip_space(i + 4)
+        first, i = read_slint_string(src, i)
+        if first is None:
+            continue
+        i = skip_space(i)
+        if src.startswith('=>', i):
+            i = skip_space(i + 2)
+            first, i = read_slint_string(src, i)
+            if first is None:
+                continue
+            i = skip_space(i)
+        if first:
+            keys.append(first)
+        if i < n and src[i] == '|':
+            i = skip_space(i + 1)
+            second, i = read_slint_string(src, i)
+            if second:
+                keys.append(second)
+    return keys
+
+
 def source_keys(root=SRC):
     keys = set()
     for dirpath, _, files in os.walk(root):
         for f in files:
-            if os.path.splitext(f)[1] not in ('.cpp', '.hpp', '.h'):
+            ext = os.path.splitext(f)[1]
+            slint = ext == '.slint'
+            if not slint and ext not in ('.cpp', '.hpp', '.h'):
+                continue
+            if slint and 'specimens' in dirpath.replace('\\', '/').split('/'):
                 continue
             with open(os.path.join(dirpath, f), 'rb') as fh:
                 # Read as UTF-8 with surrogateescape so a stray byte survives
                 # into the key exactly as the C++ reader sees it.
                 text = fh.read().decode('utf-8', 'surrogateescape')
-            keys.update(extract_keys(text))
+            keys.update(extract_slint_keys(text) if slint else extract_keys(text))
     return keys
 
 

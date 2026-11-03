@@ -51,8 +51,11 @@
 
 #include "foxsdr_api.h"
 #include "core/app_commands.hpp"
+#include "core/config_halves.hpp"
 #include "core/diag_log.hpp"
+#include "core/i18n.hpp"
 #include "core/version.hpp"
+#include "core/utf8_text.hpp"
 #include "engine/engine_service.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/process_boot.hpp"
@@ -74,7 +77,7 @@ std::string lower(std::string s) {
     return s;
 }
 
-std::string fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof(b), f, v); return b; }
+std::string fmt(const char* f, double v) { std::string s; cascade::core::formatUtf8(s, f, v); return s; }   // a std::string, never a fixed buffer (test_i18n)
 slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
 
 // (Signatures - publish a model only when its content changed - is signatures.hpp, shared with the plugin kit's publisher.)
@@ -244,6 +247,32 @@ int main(int argc, char** argv) {
     }
 
     auto ui = MainWindow::create();
+
+    // THE INTERFACE LANGUAGE, as the ImGui window applies it (gui/app_window_language.cpp applyPendingLanguage): the stored `language`
+    // setting - "auto" follows the operating system, anything else is a code from resources/lang - read from the interface's half the
+    // engine serves (fact.config.interface; only when there is a settings file and it loaded, otherwise AppConfig's default, "auto"),
+    // FOXSDR_LANGUAGE over it for this run only (a capture and test seam, never written back), and cascade::i18n::setLanguage's answer
+    // is the code in force. The words themselves are the .po files tools/slint-po.py makes from the same catalogues and the Slint
+    // compiler bundles (src/slint/CMakeLists.txt), chosen with select_bundled_translation, which Slint only allows once a component
+    // exists - hence here, before the first show(). English is the source text and has no .po: nothing is selected for it.
+    // FOXSDR_LANG_FILE (a translator's catalogue from disk) is NOT honoured: the bundle is compiled in, so a file read here could not
+    // reach a single word on this window and the log line would claim a language the screen does not show.
+    {
+        std::string languageSetting = "auto";
+        if (!configPath.empty() && restored.loaded) {
+            std::string document, error;
+            cascade::core::AppConfig half;
+            if (world.fact("fact.config.interface", document) && !document.empty() && cascade::core::parseInterfaceHalf(document, half, error)) {
+                languageSetting = half.language;
+            }
+        }
+        if (const char* env = std::getenv("FOXSDR_LANGUAGE"); env != nullptr && env[0] != '\0') { languageSetting = env; }
+        const std::string inForce = cascade::i18n::setLanguage(languageSetting);
+        const char* how = "english";
+        if (inForce != "en") { how = slint::select_bundled_translation(inForce) ? "bundled" : "not bundled"; }
+        std::fprintf(stderr, "foxsdr-slint: language %s (%s)\n", inForce.c_str(), how);
+    }
+
     ui->set_version(ss(cascade::versionString()));
     ui->set_preview(false);   // this window boots as the host now; the property stays for a labelled beta
     ui->set_about_text(ss(aboutText(duties.about())));

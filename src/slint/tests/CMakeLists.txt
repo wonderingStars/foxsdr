@@ -48,11 +48,26 @@ function(foxsdr_slint_ui_test name slint_file)
     set_tests_properties(${name} PROPERTIES LABELS "slint")
 endfunction()
 
+# The interface-language lookup (src/core/i18n.cpp, the engine's own, with its compiled-in catalogues): the host's sentences go through
+# cascade::i18n::tr(), which hands its argument back while English is in force, so the logic tests below keep comparing English.
+# Built once as a library so the three host tests share one compile of the 35 MB catalogue header.
+add_library(slint_i18n STATIC "${FOXSDR_REPO_ROOT}/src/core/i18n.cpp")
+target_compile_features(slint_i18n PUBLIC cxx_std_20)
+target_include_directories(slint_i18n PUBLIC "${FOXSDR_REPO_ROOT}/src")
+target_include_directories(slint_i18n SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
+if(MSVC)
+    target_compile_options(slint_i18n PRIVATE /utf-8)
+    target_compile_definitions(slint_i18n PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+endif()
+
 # A logic test: no Slint at all - the host's pure functions, or a scan of the sources. Extra arguments after the
 # name are more sources; FOXSDR_LOGIC_TEST_ARGS_<name> are its command-line arguments.
 function(foxsdr_slint_logic_test name)
     add_executable(${name} ${name}.cpp ${ARGN})
     target_compile_features(${name} PRIVATE cxx_std_20)
+    if(name MATCHES "^test_slint_host_")
+        target_link_libraries(${name} PRIVATE slint_i18n)
+    endif()
     target_include_directories(${name} PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/.."
         "${FOXSDR_REPO_ROOT}/src"

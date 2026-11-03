@@ -103,8 +103,8 @@ export component MapPane inherits Rectangle {
     in property <bool> zoom-out-enabled: true;
     in property <bool> pick-armed;                   // the next click is a position: the crosshair
     in property <string> hover-text;                 // the host's words for the target `hovered` named: shown as the tip
-    in property <string> zoom-in-label: "Zoom in";
-    in property <string> zoom-out-label: "Zoom out";
+    in property <string> zoom-in-label: @tr("Zoom in");
+    in property <string> zoom-out-label: @tr("Zoom out");
     in property <bool> enabled: true;
 
     // ---- what it reports ----
@@ -128,7 +128,7 @@ export component MapPane inherits Rectangle {
     background: Theme.well;
     clip: true;
     accessible-role: image;
-    accessible-label: "Map";
+    accessible-label: @tr("Map");
 
     // ---- gesture state ----
     private property <bool> pressing;
@@ -403,7 +403,7 @@ export component MapPane inherits Rectangle {
         border-color: Theme.line;
         border-radius: Theme.radius-panel;
         accessible-role: list;
-        accessible-label: "Legend";
+        accessible-label: @tr("Legend");
         legend-rows := VerticalLayout {
             padding-left: 9px + Theme.hairline;
             padding-right: 9px + Theme.hairline;

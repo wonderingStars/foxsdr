@@ -9,7 +9,9 @@
 #include <cstring>
 #include <functional>
 
+#include "core/i18n.hpp"
 #include "core/plugin_ui_data.hpp"
+#include "core/utf8_text.hpp"
 #include "gui/track_metrics.hpp"
 
 namespace foxsdr::slintkit {
@@ -17,7 +19,7 @@ namespace foxsdr::slintkit {
 namespace {
 
 slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
-std::string fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof(b), f, v); return b; }
+std::string fmt(const char* f, double v) { std::string s; cascade::core::formatUtf8(s, f, v); return s; }   // a std::string, never a fixed buffer (test_i18n)
 std::string n(std::size_t v) { return std::to_string(v); }
 std::int64_t clockMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 std::string h(const std::string& s) { return std::to_string(std::hash<std::string>{}(s)); }
@@ -53,7 +55,6 @@ cascade::gui::TrackKind kindOf(std::uint32_t kind) {
     return kind == CASCADE_TRACK_SATELLITE ? cascade::gui::TrackKind::Satellite : kind == CASCADE_TRACK_VESSEL ? cascade::gui::TrackKind::Vessel
          : kind == CASCADE_TRACK_AIRCRAFT ? cascade::gui::TrackKind::Aircraft : cascade::gui::TrackKind::Other;
 }
-const char* identity(const char* s) { return s; }
 
 // The table rows a panel or an instrument's memory publishes: heading and separator rows keep their kind; a row that asks to be a key and
 // whose command the plugin registered is pressable (core/plugin_ui_data.hpp's rule).
@@ -164,7 +165,7 @@ void KitPublisher::openWindowsFor(const PluginRow& r, bool withOutput) {
         openPage("instrument:" + r.name + "|" + title, 4, r.name, r.file, title);
     }
     if (withOutput && (r.caps & CASCADE_CAP_DECODER) != 0u && (r.caps & (CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_PANEL)) == 0u) {
-        openPage("output", 1, "", "", "Decoder output");
+        openPage("output", 1, "", "", cascade::i18n::tr("Decoder output"));
     }
 }
 
@@ -292,7 +293,7 @@ void KitPublisher::fillOutput(PageTab& t, std::string& sig) {
     }
     sig += "L" + n(ring.size()) + (ring.empty() ? "" : std::to_string(ring.back().id));
     t.lines = model(std::move(lines));
-    t.count_text = ss(n(ring.size()) + (ring.size() == 1 ? " line" : " lines"));
+    t.count_text = ss(cascade::core::formatText(ring.size() == 1 ? cascade::i18n::tr("%d line") : cascade::i18n::tr("%d lines"), static_cast<int>(ring.size())));
     std::vector<DecoderBar> bars;
     for (const PluginRow& r : kit_.lists().rows) {
         if (!r.loaded || r.stopped || r.presets.empty() || (r.caps & CASCADE_CAP_DECODER) == 0u) { continue; }
@@ -310,13 +311,13 @@ void KitPublisher::fillPicture(const Page& p, PageTab& t, std::string& sig) {
     t.have = img != nullptr && img->width > 0u;
     t.picture = pictureImage(p.plugin);
     if (t.have) {
-        t.status = ss(n(img->width) + "x" + n(img->height) + (img->complete ? "  complete  frame " : "  receiving...  frame ") + std::to_string(img->sequence));
+        t.status = ss(cascade::core::formatText(img->complete ? cascade::i18n::tr("%ux%u  complete  frame %llu") : cascade::i18n::tr("%ux%u  receiving...  frame %llu"), static_cast<unsigned>(img->width), static_cast<unsigned>(img->height), static_cast<unsigned long long>(img->sequence)));
         t.interactive = img->interactive;
         t.pic_w = static_cast<int>(img->width);
         t.pic_h = static_cast<int>(img->height);
         sig += "P" + std::to_string(img->revision) + (img->complete ? "c" : "r");
     } else {
-        t.status = ss("Waiting for the first image...");
+        t.status = ss(cascade::i18n::tr("Waiting for the first image..."));
         t.interactive = false;
         t.pic_w = 0; t.pic_h = 0;
         sig += "P0";
@@ -340,7 +341,7 @@ void KitPublisher::fillPanel(const Page& p, PageTab& t, std::string& sig) {
     t.rows = model(std::move(rows));
     std::vector<float> widths(p.widths.begin(), p.widths.end());
     t.widths = model(std::move(widths));
-    t.empty_text = ss(panel == nullptr ? (r != nullptr && r->asleep ? "Idle: nothing is using this plugin yet." : "Nothing to show yet.") : "Nothing to show yet.");
+    t.empty_text = ss(panel == nullptr ? (r != nullptr && r->asleep ? cascade::i18n::tr("Idle: nothing is using this plugin yet.") : cascade::i18n::tr("Nothing to show yet.")) : cascade::i18n::tr("Nothing to show yet."));
 }
 
 void KitPublisher::fillInstrument(const Page& p, PageTab& t, std::string& sig) {
@@ -389,7 +390,7 @@ void KitPublisher::fillInstrument(const Page& p, PageTab& t, std::string& sig) {
     t.inst = s;
     std::vector<float> widths(p.widths.begin(), p.widths.end());
     t.widths = model(std::move(widths));
-    t.empty_text = ss("Nothing to show yet.");
+    t.empty_text = ss(cascade::i18n::tr("Nothing to show yet."));
 }
 
 void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& state, std::string& sig) {
@@ -518,8 +519,8 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
         const cascade::core::HostTrack& tr = *mine[row.source];
         TableRow t2{};
         std::string note;
-        if (!cascade::core::trackHasPosition(tr.t)) { note = cascade::gui::unplacedRowNote(tr.t.altM, kindOf(tr.t.kind), identity); }
-        else if (cascade::core::trackIsEstimated(tr.t)) { note = cascade::gui::estimatedRowNote(identity); }
+        if (!cascade::core::trackHasPosition(tr.t)) { note = cascade::gui::unplacedRowNote(tr.t.altM, kindOf(tr.t.kind), cascade::i18n::tr); }
+        else if (cascade::core::trackIsEstimated(tr.t)) { note = cascade::gui::estimatedRowNote(cascade::i18n::tr); }
         else if (std::isfinite(row.distanceKm)) { note = fmt("%.0f km ", row.distanceKm) + fmt("%03.0f", row.bearingDeg); }
         t2.cells = model(std::vector<slint::SharedString>{ss(row.label), ss(row.id), ss(note)});
         t2.kind = RowKind::Cells;
@@ -533,7 +534,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     for (const cascade::core::HostTrack& tr : kit_.unplacedTracks()) {
         if (tr.plugin != p.plugin || !cascade::core::trackPresentation(tr.t).visible) { continue; }
         TableRow t2{};
-        t2.cells = model(std::vector<slint::SharedString>{ss(tr.t.label[0] != '\0' ? std::string(tr.t.label) : std::string(tr.t.id)), ss(tr.t.id), ss(cascade::gui::unplacedRowNote(tr.t.altM, kindOf(tr.t.kind), identity))});
+        t2.cells = model(std::vector<slint::SharedString>{ss(tr.t.label[0] != '\0' ? std::string(tr.t.label) : std::string(tr.t.id)), ss(tr.t.id), ss(cascade::gui::unplacedRowNote(tr.t.altM, kindOf(tr.t.kind), cascade::i18n::tr))});
         t2.kind = RowKind::Cells;
         t2.tone = RowTone::Muted;
         t2.band = (listRows.size() % 2u) == 1u;
@@ -543,7 +544,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
         listRows.push_back(std::move(t2));
     }
     m.targets = model(std::move(targets));
-    m.list_columns = model(std::vector<slint::SharedString>{ss("Callsign"), ss("ID"), ss("Note")});
+    m.list_columns = model(std::vector<slint::SharedString>{ss(cascade::i18n::tr("Callsign")), ss(cascade::i18n::tr("ID")), ss(cascade::i18n::tr("Note"))});
     m.list_rows = model(std::move(listRows));
     m.list_widths = model(std::vector<float>{90.f, 80.f, 0.f});
     m.count_text = ss(countText(rows.size(), placed, unplaced));
@@ -560,23 +561,23 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
         m.scale_frac = static_cast<float>(pick / mpp / s.w);
         m.scale_text = ss(pick >= 1000 ? fmt("%.0f km", pick / 1000) : fmt("%.0f m", pick));
     }
-    m.attribution = ss(tiles ? bm.attribution() : "Coastline: Natural Earth (public domain)");
+    m.attribution = ss(tiles ? bm.attribution() : cascade::i18n::tr("Coastline: Natural Earth (public domain)"));
     m.zoom_in = pg != nullptr && pg->spanDeg > slintmap::TileCompositor::kMinSpanDeg;
     m.zoom_out = pg != nullptr && pg->spanDeg < slintmap::TileCompositor::kMaxSpanDeg;
     m.pick_armed = s.pickArmed;
     m.hover_text = ss(s.hoverText);
-    m.following = ss(pg != nullptr && !pg->followedId.empty() ? "following " + pg->followedId : std::string());
+    m.following = ss(pg != nullptr && !pg->followedId.empty() ? cascade::core::formatText(cascade::i18n::tr("following %s"), pg->followedId.c_str()) : std::string());
     m.coverage_on = s.coverageOn;
     m.trails_on = s.trailsOn;
     m.alt_colours = s.altColours;
     m.on_screen_only = s.onScreenOnly;
     m.coverage_empty = kit_.coverage().empty();
-    m.coverage_status = ss(!home ? "set the RX position to measure coverage" : kit_.coverage().empty() ? "nothing heard yet"
-                           : n(static_cast<std::size_t>(kit_.coverage().filledBuckets())) + " of " + n(static_cast<std::size_t>(cascade::gui::CoverageMap::kBuckets)) + " bearings, best " + fmt("%.0f km", kit_.coverage().peakKm()));
+    m.coverage_status = ss(!home ? std::string(cascade::i18n::tr("set the RX position to measure coverage")) : kit_.coverage().empty() ? std::string(cascade::i18n::tr("nothing heard yet"))
+                           : cascade::core::formatText(cascade::i18n::tr("%d of %d bearings, best %.0f km"), static_cast<int>(kit_.coverage().filledBuckets()), static_cast<int>(cascade::gui::CoverageMap::kBuckets), kit_.coverage().peakKm()));
     m.sort_label = ss(cascade::gui::trackSortKeyName(cascade::gui::trackSortKeyForMenuIndex(s.sortKey)));
     m.sort_ascending = s.sortAscending;
     m.rx_known = home;
-    m.rx_text = ss(home ? "RX " + fmt("%.4f", state.rxLatDeg) + " " + fmt("%.4f", state.rxLonDeg) : "no receiver position: Set RX here, then click the map");
+    m.rx_text = ss(home ? "RX " + fmt("%.4f", state.rxLatDeg) + " " + fmt("%.4f", state.rxLonDeg) : std::string(cascade::i18n::tr("no receiver position: Set RX here, then click the map")));
     sig += std::string(m.count_text) + std::string(m.following) + std::string(m.coverage_status) + (s.pickArmed ? "P" : "") + s.hoverText + std::string(m.scale_text) + std::string(m.attribution);
     sig += std::to_string(s.coverageOn) + std::to_string(s.trailsOn) + std::to_string(s.altColours) + std::to_string(s.onScreenOnly) + std::to_string(s.sortKey) + std::to_string(s.sortAscending);
     t.map = m;
@@ -613,10 +614,10 @@ void KitPublisher::fillFitted(PageTab& t, const FoxReceiverState& state, std::st
         m.dot = lampOfState(st);
         std::string note;
         ChipTone noteTone = ChipTone::Neutral;
-        if (!r.loaded) { note = r.error.empty() ? "The host refused this file and recorded no reason." : r.error; noteTone = ChipTone::Err; }
+        if (!r.loaded) { note = r.error.empty() ? std::string(cascade::i18n::tr("The host refused this file and recorded no reason.")) : r.error; noteTone = ChipTone::Err; }
         else if (!r.integrity.empty()) { note = r.integrity; noteTone = ChipTone::Err; }
         else if (!r.notice.empty()) { note = r.notice; noteTone = r.noticeLevel >= CASCADE_LOG_ERROR ? ChipTone::Err : ChipTone::Warn; }
-        else if (r.originWord == "orphan") { note = "Not installed from the plugin store."; noteTone = ChipTone::Warn; }
+        else if (r.originWord == "orphan") { note = cascade::i18n::tr("Not installed from the plugin store."); noteTone = ChipTone::Warn; }
         m.note = ss(note);
         m.note_tone = noteTone;
         m.can_stop = r.loaded;
@@ -624,16 +625,16 @@ void KitPublisher::fillFitted(PageTab& t, const FoxReceiverState& state, std::st
         m.can_remove = true;
         const bool armed = armedRemove_ == r.file && nowMs_ - armedAtMs_ < 5000;
         m.armed = armed;
-        m.remove_label = ss(armed ? "CONFIRM" : r.originWord == "orphan" ? "REMOVE FILE" : "REMOVE");
+        m.remove_label = ss(armed ? cascade::i18n::tr("CONFIRM") : r.originWord == "orphan" ? cascade::i18n::tr("REMOVE FILE") : cascade::i18n::tr("REMOVE"));
         sig += r.file + std::string(m.state) + note + (armed ? "A" : "") + ";";
         rows.push_back(std::move(m));
     }
     f.rows = model(std::move(rows));
-    static const char* kChipWords[6] = {"FED", "IDLE", "NOT DECODING", "TAKES NO SIGNAL", "STOPPED", "REFUSED"};
+    static const char* kChipWords[6] = {FOX_TR_NOOP("FED"), FOX_TR_NOOP("IDLE"), FOX_TR_NOOP("NOT DECODING"), FOX_TR_NOOP("TAKES NO SIGNAL"), FOX_TR_NOOP("STOPPED"), FOX_TR_NOOP("REFUSED")};
     std::vector<StateChipModel> chips;
     for (int i = 0; i < 6; ++i) {
         StateChipModel c{};
-        c.label = ss(kChipWords[i]);
+        c.label = ss(cascade::i18n::tr(kChipWords[i]));
         c.count = counts[static_cast<std::size_t>(i)];
         c.tone = i == 0 ? ChipTone::Good : i == 2 ? ChipTone::Warn : i == 5 ? ChipTone::Err : ChipTone::Neutral;
         c.lamp = c.count > 0 && (i == 0 || i == 2 || i == 5) ? (i == 0 ? LampState::Green : i == 2 ? LampState::Amber : LampState::Red) : LampState::Off;
@@ -644,12 +645,12 @@ void KitPublisher::fillFitted(PageTab& t, const FoxReceiverState& state, std::st
     f.chips = model(std::move(chips));
     f.search = ss(fittedSearch_);
     // the verdict sentence and, beside it, the folder (the component joins them with a middle dot: no folder twice)
-    f.verdict = ss(running ? "The receiver is running, so a module with a matched decoder is being fed." : "The receiver is stopped, so NOTHING is being fed to any module however it is set.");
-    f.directory = ss(kit_.lists().pluginDir.empty() ? std::string("No directory has been scanned yet.") : "read from " + kit_.lists().pluginDir);
+    f.verdict = ss(running ? cascade::i18n::tr("The receiver is running, so a module with a matched decoder is being fed.") : cascade::i18n::tr("The receiver is stopped, so NOTHING is being fed to any module however it is set."));
+    f.directory = ss(kit_.lists().pluginDir.empty() ? std::string(cascade::i18n::tr("No directory has been scanned yet.")) : cascade::core::formatText(cascade::i18n::tr("read from %s"), kit_.lists().pluginDir.c_str()));
     f.report = ss(kit_.lists().installReport);
     f.error = ss(kit_.lists().installError);
-    f.empty_text = ss(kit_.lists().rows.empty() ? "No module the host can load was found in the folder above, so nothing is fitted. The plugin store is where one is fitted from."
-                                                 : "Every fitted module is hidden by the keys above. Press one to show it again.");
+    f.empty_text = ss(kit_.lists().rows.empty() ? cascade::i18n::tr("No module the host can load was found in the folder above, so nothing is fitted. The plugin store is where one is fitted from.")
+                                                 : cascade::i18n::tr("Every fitted module is hidden by the keys above. Press one to show it again."));
     f.cleanup_label = ss("");
     sig += std::string(f.verdict) + std::string(f.report) + std::string(f.error) + fittedSearch_;
     t.fitted = f;
@@ -661,7 +662,7 @@ void KitPublisher::fillModule(const Page& p, PageTab& t, const FoxReceiverState&
     m.file = ss(p.file);
     if (r == nullptr) {
         m.name = ss(p.title);
-        m.sentence = ss("This module is no longer fitted.");
+        m.sentence = ss(cascade::i18n::tr("This module is no longer fitted."));
         t.module = m;
         sig += "gone";
         return;
@@ -669,7 +670,7 @@ void KitPublisher::fillModule(const Page& p, PageTab& t, const FoxReceiverState&
     const bool running = (state.flags & FOXAPI_RX_RUNNING) != 0u;
     const FittedState st = fittedState(*r, running);
     m.name = ss(r->caps != 0u ? r->name : r->file);
-    m.maker_line = ss((r->author.empty() ? std::string("maker not stated") : r->author) + (r->version.empty() ? "" : "  \xC2\xB7  version " + r->version));
+    m.maker_line = ss((r->author.empty() ? std::string(cascade::i18n::tr("maker not stated")) : r->author) + (r->version.empty() ? std::string() : "  \xC2\xB7  " + cascade::core::formatText(cascade::i18n::tr("version %s"), r->version.c_str())));
     m.state_word = ss(fittedStateWord(st));
     m.state_tone = toneOfState(st);
     m.lamp = lampOfState(st);
@@ -682,8 +683,8 @@ void KitPublisher::fillModule(const Page& p, PageTab& t, const FoxReceiverState&
     const bool txGranted = (r->txBits & 32u) != 0u;
     m.transmit_shown = r->loaded && ((r->txBits & 2u) != 0u || txGranted);
     m.transmit_on = txGranted;
-    m.settings_note = ss(m.settings_shown ? "Radio settings lets this module change the mode, bandwidth, squelch, gains, sample rate, volume and mute, and start or stop the receiver. It is separate from receiver control." : "");
-    m.transmit_note = ss(m.transmit_shown ? "The transmit grant alone keys nothing: ARM FOR PLUGINS on the TRANSMIT page must be open as well (5, 15 or 60 minutes)." : "");
+    m.settings_note = ss(m.settings_shown ? cascade::i18n::tr("Radio settings lets this module change the mode, bandwidth, squelch, gains, sample rate, volume and mute, and start or stop the receiver. It is separate from receiver control.") : "");
+    m.transmit_note = ss(m.transmit_shown ? cascade::i18n::tr("The transmit grant alone keys nothing: ARM FOR PLUGINS on the TRANSMIT page must be open as well (5, 15 or 60 minutes).") : "");
     m.tx_state = ss(r->loaded ? txPlateSentence(r->txBits, kit_.lists().txArmed) : "");
     m.tx_hot = (r->txBits & 64u) != 0u;
     std::vector<slint::SharedString> commands;
@@ -691,41 +692,41 @@ void KitPublisher::fillModule(const Page& p, PageTab& t, const FoxReceiverState&
     m.commands = model(std::move(commands));
     std::vector<ReachRowModel> reach;
     for (const ReachRow& row : reachRows(r->caps)) { ReachRowModel x; x.key = ss(row.key); x.detail = ss(row.detail); x.outward = row.outward; reach.push_back(std::move(x)); }
-    m.reach_lead = ss(r->loaded ? "Declared by the maker, not enforced. A fitted module is loaded into this application's own process and runs with every privilege the application has: there is no sandbox and no permission model. This list is what the module says it PROVIDES, not a limit on what it can take."
-                                : "Not known here, and nothing is routed to it: the host refused the file before a descriptor was read.");
+    m.reach_lead = ss(r->loaded ? cascade::i18n::tr("Declared by the maker, not enforced. A fitted module is loaded into this application's own process and runs with every privilege the application has: there is no sandbox and no permission model. This list is what the module says it PROVIDES, not a limit on what it can take.")
+                                : cascade::i18n::tr("Not known here, and nothing is routed to it: the host refused the file before a descriptor was read."));
     m.reach = model(std::move(reach));
     m.reach_note = ss(!r->loaded ? "" : (r->caps & (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_TX_AUDIO)) != 0u
-                      ? "The tune grant above, the radio-settings grant and the transmit grant are the only permissions this console does enforce: without them every request to retune, to change the receiver's settings, or to transmit, is refused. Nothing else in the list is a gate."
-                      : "The only permissions this console enforces are the per-module tune, radio-settings and transmit grants, and this module asks for none of them. Nothing else in the list is a gate.");
+                      ? cascade::i18n::tr("The tune grant above, the radio-settings grant and the transmit grant are the only permissions this console does enforce: without them every request to retune, to change the receiver's settings, or to transmit, is refused. Nothing else in the list is a gate.")
+                      : cascade::i18n::tr("The only permissions this console enforces are the per-module tune, radio-settings and transmit grants, and this module asks for none of them. Nothing else in the list is a gate."));
     m.sentence = ss(fittedStateSentence(*r, running));
     m.refused = st == FittedState::Refused;
     m.fault = ss(r->fault);
     m.keep_shown = r->loaded && !r->stopped && capsOfferKeepRunning(r->caps);
     m.keep_running = r->runMode == 1;
-    m.orphan = ss(r->originWord == "orphan" ? "This file was not installed from the plugin store - it has no install record and the catalogue cannot update it." : "");
+    m.orphan = ss(r->originWord == "orphan" ? cascade::i18n::tr("This file was not installed from the plugin store - it has no install record and the catalogue cannot update it.") : "");
     m.integrity = ss(r->integrity);
-    m.origin = ss(r->originWord == "site" ? "Installed from " + r->originSite + ", not from the FoxSDR catalogue."
-                  : r->originWord == "removed-site" ? "Installed from " + r->originSite + ", a site you removed. It gets no updates." : "");
+    m.origin = ss(r->originWord == "site" ? cascade::core::formatText(cascade::i18n::tr("Installed from %s, not from the FoxSDR catalogue."), r->originSite.c_str())
+                  : r->originWord == "removed-site" ? cascade::core::formatText(cascade::i18n::tr("Installed from %s, a site you removed. It gets no updates."), r->originSite.c_str()) : std::string());
     m.notice = ss(r->loaded ? r->notice : "");
     m.notice_err = r->noticeLevel >= CASCADE_LOG_ERROR;
-    m.file_path = ss(r->path.empty() ? "not recorded" : r->path);
+    m.file_path = ss(r->path.empty() ? std::string(cascade::i18n::tr("not recorded")) : r->path);
     m.abi_text = ss(abiText(r->abiVersion, static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION)));
     m.fitted_text = ss(fittedDateText(r->fittedAtUnix));
-    m.catalogue_note = ss(r->hasRecord && !r->catalogueKey.empty() ? "Catalogue entry: " + r->catalogueKey + " (the store's pictures and description come with a later beta)" : "");
+    m.catalogue_note = ss(r->hasRecord && !r->catalogueKey.empty() ? cascade::core::formatText(cascade::i18n::tr("Catalogue entry: %s (the store's pictures and description come with a later beta)"), r->catalogueKey.c_str()) : std::string());
     sig += std::string(m.state_word) + std::string(m.sentence) + std::string(m.tx_state) + std::string(m.notice) + std::to_string(r->tuneAllowed) + std::to_string(r->settingsAllowed) + std::to_string(r->txBits) + std::to_string(r->runMode) + std::to_string(r->commands.size());
     t.module = m;
 }
 
 DetailsModel KitPublisher::detailsModel(const FoxReceiverState& state, std::string& sig) {
     DetailsModel d{};
-    d.chip = ss(detailsId_.empty() ? "NONE" : detailsId_.substr(0, 10));
+    d.chip = ss(detailsId_.empty() ? std::string(cascade::i18n::tr("NONE")) : detailsId_.substr(0, 10));
     d.lamp = LampState::Off;
     d.gone = false;
     d.can_go = false;
     d.following = false;
     std::vector<DetailLine> lines;
     if (detailsId_.empty()) {
-        d.empty_hint = ss("No target chosen. Click a target in the map's list, press its Details button, or follow one - it will be shown here.");
+        d.empty_hint = ss(cascade::i18n::tr("No target chosen. Click a target in the map's list, press its Details button, or follow one - it will be shown here."));
         d.heading = ss("");
         sig += "none";
     } else {
@@ -817,18 +818,19 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
     t.details.lines = model(std::vector<DetailLine>{});
     sig = p.id + (p.torn ? "T" : "") + fmt("%.0f", p.tx) + fmt("%.0f", p.ty) + fmt("%.0f", p.tw) + fmt("%.0f", p.th) + (p.rolled ? "r" : "") + (p.follow ? "f" : "");
     const PluginRow* r = rowOf(p);
+    bool chipIdle = false;   // the chip says IDLE or WAIT (decided from the state: the words themselves are translated)
     switch (p.kind) {
         case 1: fillOutput(t, sig); break;
-        case 2: fillPrelude(p, t, sig); fillPicture(p, t, sig); t.chip = ss(imageChip(kit_.imageOf(p.plugin), r != nullptr && r->asleep)); break;
-        case 3: fillPrelude(p, t, sig); fillPanel(p, t, sig); t.chip = ss(panelChip(kit_.panelOf(p.plugin, p.title))); break;
-        case 4: fillPrelude(p, t, sig); fillInstrument(p, t, sig); t.chip = ss(instrumentChip(kit_.instrumentOf(p.plugin, p.title), false)); break;
+        case 2: { fillPrelude(p, t, sig); fillPicture(p, t, sig); const auto* img = kit_.imageOf(p.plugin); chipIdle = img == nullptr || img->width == 0u; t.chip = ss(imageChip(img, r != nullptr && r->asleep)); } break;
+        case 3: { fillPrelude(p, t, sig); fillPanel(p, t, sig); const auto* panel = kit_.panelOf(p.plugin, p.title); chipIdle = panel == nullptr; t.chip = ss(panelChip(panel)); } break;
+        case 4: { fillPrelude(p, t, sig); fillInstrument(p, t, sig); const auto* in = kit_.instrumentOf(p.plugin, p.title); chipIdle = in == nullptr || !in->have; t.chip = ss(instrumentChip(in, false)); } break;
         case 5: fillPrelude(p, t, sig); fillMap(p, t, state, sig); { MapPage* pg = findMapPage(kit_.mapPages(), p.plugin); t.chip = ss(targetsChipWord(pg != nullptr ? pg->visibleCount : 0)); } break;
         case 6: fillFitted(t, state, sig); break;
         case 7: fillModule(p, t, state, sig); break;
         case 8: fillDetails(t, state, sig); break;
         default: break;
     }
-    t.chip_tone = std::string(t.chip) == "IDLE" || std::string(t.chip) == "WAIT" || std::string(t.chip).empty() ? ChipTone::Neutral : ChipTone::Good;
+    t.chip_tone = chipIdle || std::string(t.chip) == "IDLE" || std::string(t.chip) == "WAIT" || std::string(t.chip).empty() ? ChipTone::Neutral : ChipTone::Good;   // the engine's own chip words (teleprinter, beacon, meter, weather) stay English
     sig += std::string(t.chip);
     return t;
 }
@@ -872,38 +874,39 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
     };
     std::size_t fed = 0, decoders = 0, refused = 0;
     for (const PluginRow& r : k.rows) { if (!r.loaded) { ++refused; continue; } if (r.decoder) { ++decoders; if (r.fed && running) { ++fed; } } }
-    add(0, "store", "Plugin store", "LATER", ChipTone::Neutral, LampState::Off, true, false, false, "The plugin store comes with a later beta of this window.");
+    add(0, "store", cascade::i18n::tr("Plugin store"), cascade::i18n::tr("LATER"), ChipTone::Neutral, LampState::Off, true, false, false, cascade::i18n::tr("The plugin store comes with a later beta of this window."));
     add(1, "url", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "");
     if (!k.enforceError.empty()) { add(10, "enforce", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", k.enforceError, ChipTone::Err); }
     for (const BlockedRow& b : k.blocked) {
         const bool armed = armedRemove_ == "blocked:" + b.file && nowMs_ - armedAtMs_ < 5000;
-        add(2, b.file, b.file, "", ChipTone::Err, LampState::Red, true, false, true, "", b.message, ChipTone::Err, b.id.empty() ? "" : "Update", armed ? "Confirm delete" : "Remove");
+        add(2, b.file, b.file, "", ChipTone::Err, LampState::Red, true, false, true, "", b.message, ChipTone::Err, b.id.empty() ? "" : cascade::i18n::tr("Update"), armed ? cascade::i18n::tr("Confirm delete") : cascade::i18n::tr("Remove"));
     }
-    add(3, "fitted", refused > 0 ? "Plugins (" + n(refused) + " refused)" : "Plugins", fittedChipWord(fed, decoders), fed > 0 ? ChipTone::Good : ChipTone::Neutral, fed > 0 ? LampState::Green : LampState::Off, true, findPage("fitted") != nullptr, true,
-        "Opens the fitted modules page: what is installed, which modules are being fed, which were refused and why, and the keys that start, stop and remove them. Start tunes the radio to the decoder's first preset unless it is already there.");
-    if (refused > 0) { add(10, "refusednote", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", n(refused) + (refused == 1 ? " module was found and refused. The page says why." : " modules were found and refused. The page says why."), ChipTone::Err); }
-    add(4, "plugins", "Turn on and off plugins", decodersChipWord(fed), fed > 0 ? ChipTone::Good : ChipTone::Neutral, fed > 0 ? LampState::Green : LampState::Off, true, decodeOpen_["plugins"], true, "");
-    add(5, "details", "Target details", detailsId_.empty() ? "NONE" : detailsId_.substr(0, 10), ChipTone::Neutral, LampState::Off, true, decodeOpen_["details"], true, "");
+    add(3, "fitted", refused > 0 ? cascade::core::formatText(cascade::i18n::tr("Plugins (%zu refused)"), refused) : std::string(cascade::i18n::tr("Plugins")), fittedChipWord(fed, decoders), fed > 0 ? ChipTone::Good : ChipTone::Neutral, fed > 0 ? LampState::Green : LampState::Off, true, findPage("fitted") != nullptr, true,
+        cascade::i18n::tr("Opens the fitted modules page: what is installed, which modules are being fed, which were refused and why, and the keys that start, stop and remove them. Start tunes the radio to the decoder's first preset unless it is already there."));
+    if (refused > 0) { add(10, "refusednote", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", cascade::core::formatText(refused == 1 ? cascade::i18n::tr("%zu module was found and refused. The page says why.") : cascade::i18n::tr("%zu modules were found and refused. The page says why."), refused), ChipTone::Err); }
+    add(4, "plugins", cascade::i18n::tr("Turn on and off plugins"), decodersChipWord(fed), fed > 0 ? ChipTone::Good : ChipTone::Neutral, fed > 0 ? LampState::Green : LampState::Off, true, decodeOpen_["plugins"], true, "");
+    add(5, "details", cascade::i18n::tr("Target details"), detailsId_.empty() ? std::string(cascade::i18n::tr("NONE")) : detailsId_.substr(0, 10), ChipTone::Neutral, LampState::Off, true, decodeOpen_["details"], true, "");
     bool anyMap = false;
     for (const MapPage& pg : kit_.mapPages()) {
         anyMap = true;
         add(6, pg.plugin, mapTitle(pg.plugin), targetsChipWord(pg.visibleCount), pg.visibleCount > 0 ? ChipTone::Good : ChipTone::Neutral, pg.open ? LampState::Green : LampState::Off, true, pg.open, true,
-            pg.satellite ? "Opens the satellites window: receiver position, overlays, trail style, coverage, the target register and the map. Opening it also tunes and starts the plugin, just like its preset."
-                         : "Opens this plugin's map: its targets and their trails, the receiver position and the coverage overlay. Nothing opens it for you - opening it also tunes and starts the plugin, just like its preset.");
+            pg.satellite ? cascade::i18n::tr("Opens the satellites window: receiver position, overlays, trail style, coverage, the target register and the map. Opening it also tunes and starts the plugin, just like its preset.")
+                         : cascade::i18n::tr("Opens this plugin's map: its targets and their trails, the receiver position and the coverage overlay. Nothing opens it for you - opening it also tunes and starts the plugin, just like its preset."));
     }
     if (!anyMap) {
-        add(6, "", "Target maps", "NONE", ChipTone::Neutral, LampState::Off, true, false, false, "");
+        add(6, "", cascade::i18n::tr("Target maps"), cascade::i18n::tr("NONE"), ChipTone::Neutral, LampState::Off, true, false, false, "");
         bool anyTracker = false;
         for (const PluginRow& r : k.rows) { if (r.loaded && (r.caps & CASCADE_CAP_TRACK_SOURCE) != 0u) { anyTracker = true; } }
-        add(10, "mapnote", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", anyTracker ? "A tracker is fitted and stopped or asleep: start it, or open its map from a preset." : "A tracker plugin reports the positions a map draws - install one from the plugin store.", ChipTone::Neutral);
+        add(10, "mapnote", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", anyTracker ? cascade::i18n::tr("A tracker is fitted and stopped or asleep: start it, or open its map from a preset.") : cascade::i18n::tr("A tracker plugin reports the positions a map draws - install one from the plugin store."), ChipTone::Neutral);
     }
-    const char* kRowTip = "Opens this plugin's window. Nothing opens it for you; close it from its key and it stays closed - opening it also tunes and starts the decoder, just like its preset.";
+    const char* kRowTip = cascade::i18n::tr("Opens this plugin's window. Nothing opens it for you; close it from its key and it stays closed - opening it also tunes and starts the decoder, just like its preset.");
     for (const PluginRow& r : k.rows) {
         if (!r.loaded || r.stopped) { continue; }
         if ((r.caps & CASCADE_CAP_IMAGE_DECODER) != 0u) {
             const bool open = findPage("image:" + r.name) != nullptr;
-            const std::string chip = imageChip(kit_.imageOf(r.name), r.asleep);
-            add(7, r.name, imageTitle(r.name), chip, chip == "IMG" || chip == "RX" ? ChipTone::Good : ChipTone::Neutral, open ? LampState::Green : LampState::Off, true, open, true, kRowTip);
+            const auto* img = kit_.imageOf(r.name);
+            const std::string chip = imageChip(img, r.asleep);
+            add(7, r.name, imageTitle(r.name), chip, img != nullptr && img->width != 0u ? ChipTone::Good : ChipTone::Neutral, open ? LampState::Green : LampState::Off, true, open, true, kRowTip);
         }
         if ((r.caps & CASCADE_CAP_PANEL) != 0u) {
             const cascade::core::HostPanel* panel = kit_.panelOf(r.name, std::string());
@@ -918,13 +921,13 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
             const bool open = findPage("instrument:" + r.name + "|" + title) != nullptr;
             const bool unread = in != nullptr && in->have && kit_.instrumentSeen(key) != in->state.seq;
             const std::string chip = instrumentChip(in, unread);
-            add(9, r.name + "|" + title, title, chip, unread ? ChipTone::Warn : chip == "WAIT" || chip == "IDLE" ? ChipTone::Neutral : ChipTone::Good, unread ? LampState::Yellow : open ? LampState::Green : LampState::Off, true, open, true, kRowTip);
+            add(9, r.name + "|" + title, title, chip, unread ? ChipTone::Warn : in == nullptr || !in->have || chip == "WAIT" || chip == "IDLE" ? ChipTone::Neutral : ChipTone::Good, unread ? LampState::Yellow : open ? LampState::Green : LampState::Off, true, open, true, kRowTip);
         }
     }
     for (const cascade::core::HostInstrument& in : kit_.instruments()) {
         if (in.plugin != "Demonstration") { continue; }
         const bool open = findPage("instrument:" + in.plugin + "|" + in.title) != nullptr;
-        add(9, in.plugin + "|" + in.title, in.title + " (DEMO)", instrumentChip(&in, false), ChipTone::Warn, open ? LampState::Green : LampState::Off, true, open, true, kRowTip);
+        add(9, in.plugin + "|" + in.title, cascade::core::formatText(cascade::i18n::tr("%s (DEMO)"), in.title.c_str()), instrumentChip(&in, false), ChipTone::Warn, open ? LampState::Green : LampState::Off, true, open, true, kRowTip);
     }
     if (sigs_.changed("decode-rows", sig)) { ui_.set_decode_rows(model(std::move(rows))); }
 
@@ -942,7 +945,7 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
         PluginEntry e{};
         e.file = ss(r.file);
         e.name = ss(r.name);
-        e.group = ss(grouped ? (r.category.empty() ? "OTHER" : r.category) : "");
+        e.group = ss(grouped ? (r.category.empty() ? std::string(cascade::i18n::tr("OTHER")) : r.category) : "");
         e.show_group = grouped && std::string(e.group) != lastGroup;
         lastGroup = e.group;
         e.presets = presetModel(r, state, true, esig);
@@ -972,22 +975,22 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
         if ((r.caps & CASCADE_CAP_DECODER) != 0u && r.asleep) { anyTextIdle = true; }
     }
     std::string decodeNote;
-    if (decoders == 0) { decodeNote = "No fitted module carries a decoder of any kind, so there is nothing here to decode with. The Plugin store row above is where one is fitted from."; }
-    else if (!running) { decodeNote = "Nothing is decoding: the receiver is stopped."; }
-    else if (!anyRunning) { decodeNote = "No decoder is running."; }
+    if (decoders == 0) { decodeNote = cascade::i18n::tr("No fitted module carries a decoder of any kind, so there is nothing here to decode with. The Plugin store row above is where one is fitted from."); }
+    else if (!running) { decodeNote = cascade::i18n::tr("Nothing is decoding: the receiver is stopped."); }
+    else if (!anyRunning) { decodeNote = cascade::i18n::tr("No decoder is running."); }
     ui_.set_decode_note(ss(decodeNote));
     const bool outputOffered = !kit_.decoderLines().empty() || anyRunning || anyTextIdle;
-    ui_.set_output_key_label(ss(!outputOffered ? "" : findPage("output") != nullptr ? "Hide decoder output" : "Show decoder output"));
-    ui_.set_lines_text(ss(state.decoderLinesTotal > 0 ? std::to_string(state.decoderLinesTotal) + (state.decoderLinesTotal == 1 ? " line decoded" : " lines decoded") : ""));
-    ui_.set_tail_note(ss(kit_.decoderLines().size() >= 500 ? "The window holds the newest 500 lines." : ""));
-    ui_.set_cost_note(ss(runningNow >= 2 ? n(runningNow) + " decoders are running at once. They share one machine, and several at a time is what makes the audio stutter." : ""));
-    ui_.set_stop_all_label(ss(runningNow >= 2 ? "STOP ALL " + n(runningNow) + " RUNNING" : ""));
-    ui_.set_empty_entries_text(ss(railRows.empty() ? "No fitted module publishes a preset or is fed a signal." : ""));
+    ui_.set_output_key_label(ss(!outputOffered ? "" : findPage("output") != nullptr ? cascade::i18n::tr("Hide decoder output") : cascade::i18n::tr("Show decoder output")));
+    ui_.set_lines_text(ss(state.decoderLinesTotal > 0 ? cascade::core::formatText(state.decoderLinesTotal == 1 ? cascade::i18n::tr("%llu line decoded") : cascade::i18n::tr("%llu lines decoded"), static_cast<unsigned long long>(state.decoderLinesTotal)) : std::string()));
+    ui_.set_tail_note(ss(kit_.decoderLines().size() >= 500 ? cascade::core::formatText(cascade::i18n::tr("The window holds the newest %d lines."), 500) : std::string()));
+    ui_.set_cost_note(ss(runningNow >= 2 ? cascade::core::formatText(cascade::i18n::tr("%d decoders are running at once. They share one machine, and several at a time is what makes the audio stutter."), static_cast<int>(runningNow)) : std::string()));
+    ui_.set_stop_all_label(ss(runningNow >= 2 ? cascade::core::formatText(cascade::i18n::tr("STOP ALL %d RUNNING"), static_cast<int>(runningNow)) : std::string()));
+    ui_.set_empty_entries_text(ss(railRows.empty() ? cascade::i18n::tr("No fitted module publishes a preset or is fed a signal.") : ""));
     // the Receiver control card
     std::string refusal;
     if (!k.lastDenied.empty()) {
         const PluginRow* d = rowByFile(k.rows, k.lastDenied);
-        refusal = "\"" + (d != nullptr ? d->name : k.lastDenied) + "\" asked to tune the receiver and was refused.";
+        refusal = cascade::core::formatText(cascade::i18n::tr("\"%s\" asked to tune the receiver and was refused."), (d != nullptr ? d->name : k.lastDenied).c_str());
     }
     ui_.set_refusal(ss(refusal));
     std::vector<::StaleGrant> stale;
@@ -1006,9 +1009,13 @@ void KitPublisher::publishMuteQuestion() {
     if (muteQuestionOpen_ && (!k.muteKeptRunning || k.muteCauses.empty())) { muteQuestionOpen_ = false; }
     if (muteQuestionOpen_) {
         std::string who;
-        for (std::size_t i = 0; i < muteNames_.size(); ++i) { who += (i == 0 ? "" : i + 1 == muteNames_.size() ? " and " : ", ") + muteNames_[i]; }
-        ui_.set_mute_question_text(ss(who + " is still running and is muting the audio. Stop it so sound resumes?"));
-        ui_.set_mute_stop_label(ss("Stop " + who + " and resume sound"));
+        for (std::size_t i = 0; i < muteNames_.size(); ++i) {
+            if (i == 0) { who = muteNames_[i]; }
+            else if (i + 1 == muteNames_.size()) { who = cascade::core::formatText(cascade::i18n::tr("%s and %s"), who.c_str(), muteNames_[i].c_str()); }
+            else { who += ", " + muteNames_[i]; }
+        }
+        ui_.set_mute_question_text(ss(cascade::core::formatText(cascade::i18n::tr("%s is still running and is muting the audio. Stop it so sound resumes?"), who.c_str())));
+        ui_.set_mute_stop_label(ss(cascade::core::formatText(cascade::i18n::tr("Stop %s and resume sound"), who.c_str())));
     }
     ui_.set_mute_question_open(muteQuestionOpen_);
 }
@@ -1038,9 +1045,9 @@ void KitPublisher::publish(const FoxReceiverState& state) {
             if (id.empty()) { continue; }
             const std::size_t colon = id.find(':');
             const std::string kind = id.substr(0, colon), arg = colon == std::string::npos ? std::string() : id.substr(colon + 1);
-            if (kind == "output") { openPage("output", 1, "", "", "Decoder output"); }
-            else if (kind == "fitted") { openPage("fitted", 6, "", "", "Fitted modules"); }
-            else if (kind == "details") { openPage("details", 8, "", "", "Target details"); }
+            if (kind == "output") { openPage("output", 1, "", "", cascade::i18n::tr("Decoder output")); }
+            else if (kind == "fitted") { openPage("fitted", 6, "", "", cascade::i18n::tr("Fitted modules")); }
+            else if (kind == "details") { openPage("details", 8, "", "", cascade::i18n::tr("Target details")); }
             else if (kind == "module") { const PluginRow* r = rowByFile(kit_.lists().rows, arg); if (r != nullptr) { openPage(id, 7, r->name, r->file, r->name); } }
             else {
                 const std::size_t bar = arg.find('|');
@@ -1077,7 +1084,7 @@ void KitPublisher::wire() {
         const std::string id(r.id);
         const PluginRow* row = nullptr;
         switch (r.kind) {
-            case 3: if (findPage("fitted") != nullptr) { closePage("fitted"); } else { openPage("fitted", 6, "", "", "Fitted modules"); showPage("fitted"); } break;
+            case 3: if (findPage("fitted") != nullptr) { closePage("fitted"); } else { openPage("fitted", 6, "", "", cascade::i18n::tr("Fitted modules")); showPage("fitted"); } break;
             case 4: decodeOpen_["plugins"] = !decodeOpen_["plugins"]; break;
             case 5: decodeOpen_["details"] = !decodeOpen_["details"]; break;
             case 6: {
@@ -1120,7 +1127,7 @@ void KitPublisher::wire() {
         else { armedRemove_ = key; armedAtMs_ = nowMs_; }
     });
     ui_.global<::KitEvents>().on_decode_url_committed([this](slint::SharedString url) { kit_.setCatalogueUrl(std::string(url)); });
-    ui_.global<::KitEvents>().on_decode_output_clicked([this] { if (findPage("output") != nullptr) { closePage("output"); } else { openPage("output", 1, "", "", "Decoder output"); showPage("output"); } });
+    ui_.global<::KitEvents>().on_decode_output_clicked([this] { if (findPage("output") != nullptr) { closePage("output"); } else { openPage("output", 1, "", "", cascade::i18n::tr("Decoder output")); showPage("output"); } });
     ui_.global<::KitEvents>().on_decode_stop_all([this] {
         std::vector<std::string> keys;
         const bool running = (state_.flags & FOXAPI_RX_RUNNING) != 0u;
@@ -1141,13 +1148,13 @@ void KitPublisher::wire() {
         const PluginRow* r = entryRow(e);
         if (r == nullptr || i < 0 || i >= static_cast<int>(r->presets.size())) { return; }
         kit_.forgetPreset(r->file, r->presets[static_cast<std::size_t>(i)]);
-        presetNote_ = "Forgot a preset for " + r->name;
+        presetNote_ = cascade::core::formatText(cascade::i18n::tr("Forgot a preset for %s"), r->name.c_str());
     });
     ui_.global<::KitEvents>().on_decode_entry_save([this, entryRow](int e) {
         const PluginRow* r = entryRow(e);
         if (r == nullptr) { return; }
         kit_.savePreset(r->file);
-        presetNote_ = "Saved " + fmt("%.4f MHz", state_.tunedHz / 1e6) + " as a preset for " + r->name;
+        presetNote_ = cascade::core::formatText(cascade::i18n::tr("Saved %.4f MHz as a preset for %s"), state_.tunedHz / 1e6, r->name.c_str());
     });
     ui_.global<::KitEvents>().on_decode_entry_run([this, entryRow](int e) { const PluginRow* r = entryRow(e); if (r != nullptr) { kit_.startStop(r->file, !r->stopped && !r->asleep); } });
     ui_.global<::KitEvents>().on_decode_entry_mute([this, entryRow](int e, bool on) { const PluginRow* r = entryRow(e); if (r != nullptr) { kit_.setMute(r->file, on); } });
@@ -1206,7 +1213,7 @@ void KitPublisher::wire() {
         p.torn = true;
         if (currentPage() == i) { ui_.set_view_index(0); }
     });
-    ui_.on_add_window_clicked([this] { openPage("output", 1, "", "", "Decoder output"); showPage("output"); });
+    ui_.on_add_window_clicked([this] { openPage("output", 1, "", "", cascade::i18n::tr("Decoder output")); showPage("output"); });
     ui_.global<::KitEvents>().on_page_chrome_close([this](int i) { if (i >= 0 && i < static_cast<int>(pages_.size())) { closePage(pages_[static_cast<std::size_t>(i)].id); } });
     ui_.global<::KitEvents>().on_page_chrome_rollup([this](int i) { if (i >= 0 && i < static_cast<int>(pages_.size())) { pages_[static_cast<std::size_t>(i)].rolled = !pages_[static_cast<std::size_t>(i)].rolled; } });
     ui_.global<::KitEvents>().on_page_chrome_dock([this](int i) { if (i >= 0 && i < static_cast<int>(pages_.size())) { pages_[static_cast<std::size_t>(i)].torn = false; ui_.set_view_index(3 + i); } });
@@ -1422,7 +1429,7 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_page_fitted_reset_windows([this](int) { for (Page& p : pages_) { p.tx = 60.f; p.ty = 40.f; p.tw = 720.f; p.th = 520.f; p.widths.clear(); } });
     ui_.global<::KitEvents>().on_page_fitted_cleanup([](int) {});
     // a module's page
-    ui_.global<::KitEvents>().on_page_module_back([this, page](int i) { Page* p = page(i); if (p == nullptr) { return; } const std::string id = p->id; openPage("fitted", 6, "", "", "Fitted modules"); showPage("fitted"); closePage(id); });
+    ui_.global<::KitEvents>().on_page_module_back([this, page](int i) { Page* p = page(i); if (p == nullptr) { return; } const std::string id = p->id; openPage("fitted", 6, "", "", cascade::i18n::tr("Fitted modules")); showPage("fitted"); closePage(id); });
     ui_.global<::KitEvents>().on_page_module_run([this, page](int i) { Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr; if (r != nullptr && r->loaded) { kit_.startStop(r->file, !fittedOffersStart(*r)); } });
     ui_.global<::KitEvents>().on_page_module_grant([this, page](int i, int kind, bool on) { Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr; if (r != nullptr) { kit_.setGrant(r->file, kind, on); } });
     ui_.global<::KitEvents>().on_page_module_command([this, page](int i, int c) {

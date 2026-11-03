@@ -49,7 +49,51 @@ target_include_directories(foxsdr-slint PRIVATE
     "${CMAKE_SOURCE_DIR}/third_party/glfw/deps")   # stb_image_write for the screenshot key
 # Fonts and icons are compiled INTO the executable (the SDK default would embed a path on this machine).
 set_property(TARGET foxsdr-slint PROPERTY SLINT_EMBED_RESOURCES embed-files)
+
+# THE 33 LANGUAGES, through Slint's bundled translations. The ImGui window's catalogues (resources/lang/<code>.json, keyed by the
+# English text) are the one source of the words: tools/slint-po.py reads every @tr(...) in ui/ (not the specimens' test sheets), looks
+# each one up in each catalogue and writes <build>/translations/<code>/LC_MESSAGES/foxsdr-slint.po, and the Slint compiler bundles those
+# into the executable (--bundle-translations), so a translation is compiled in exactly as the ImGui window's catalogues are and no
+# packager has a loose file to leave out. SLINT_NO_DEFAULT_TRANSLATION_CONTEXT is ON because the .po files carry no msgctxt: the
+# compiler would otherwise key every string on its component name and no catalogue entry would ever match. The domain is the target's
+# own name, foxsdr-slint, which is the file name the generator writes. Without Python the window is built English-only (the bundle
+# property is left unset; select_bundled_translation then answers "not bundled"), said once here at configure time.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    set(foxsdr_slint_po_dir "${CMAKE_CURRENT_BINARY_DIR}/translations")
+    set(foxsdr_slint_po_stamp "${foxsdr_slint_po_dir}/translations.stamp")
+    # CONFIGURE_DEPENDS: a catalogue or a .slint file added later re-runs the glob (and so this command's DEPENDS) at the next build.
+    file(GLOB foxsdr_slint_catalogues CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/resources/lang/*.json")
+    file(GLOB_RECURSE foxsdr_slint_ui_files CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.slint")
+    list(FILTER foxsdr_slint_ui_files EXCLUDE REGEX "/ui/specimens/")
+    # The generator touches the stamp only when a .po's bytes changed (or the stamp is missing), so an edit to a catalogue or a .slint
+    # file that changes no foxsdr-slint string leaves the stamp alone and the Slint compiler below does not run again.
+    add_custom_command(
+        OUTPUT "${foxsdr_slint_po_stamp}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/slint-po.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/ui" "${CMAKE_SOURCE_DIR}/resources/lang" "${foxsdr_slint_po_dir}"
+                --stamp "${foxsdr_slint_po_stamp}" --quiet
+        DEPENDS "${CMAKE_SOURCE_DIR}/tools/slint-po.py" ${foxsdr_slint_catalogues} ${foxsdr_slint_ui_files}
+        COMMENT "foxsdr-slint: translations from resources/lang"
+        VERBATIM)
+    add_custom_target(foxsdr-slint-translations DEPENDS "${foxsdr_slint_po_stamp}")
+    add_dependencies(foxsdr-slint foxsdr-slint-translations)
+    set_property(TARGET foxsdr-slint PROPERTY SLINT_BUNDLE_TRANSLATIONS "${foxsdr_slint_po_dir}")
+    set_property(TARGET foxsdr-slint PROPERTY SLINT_NO_DEFAULT_TRANSLATION_CONTEXT ON)
+else()
+    message(STATUS "foxsdr-slint: Python 3 not found - the window is built English-only (no bundled translations)")
+endif()
+
 slint_target_sources(foxsdr-slint ui/main.slint)
+if(Python3_Interpreter_FOUND)
+    # THE LIMIT. slint_target_sources registers the generated header's command with DEPENDS on the compiler and main.slint only (its
+    # depfile adds the imported .slint files, never the .po files it bundles) and the macro offers no hook for more. A changed
+    # translation would therefore not re-run the compiler. add_custom_command(... APPEND DEPENDS) may add inputs to a command made
+    # earlier in the SAME directory scope, which this is, so main.h also depends on the stamp. What it cannot do: the compiler is
+    # still run on ALL of main.slint when a single word changes (the header is one unit), and the dependency exists only for a
+    # build through this CMake - running slint-compiler by hand knows nothing of it.
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/main.h" APPEND DEPENDS "${foxsdr_slint_po_stamp}")
+endif()
 foxsdr_slint_copy_dll(foxsdr-slint)
 
 # The render and host-logic tests (ctest label `slint`); see tests/CMakeLists.txt.
@@ -70,3 +114,10 @@ target_include_directories(test_slint_duties PRIVATE
 target_compile_definitions(test_slint_duties PRIVATE FOXSDR_SLINT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME test_slint_duties COMMAND test_slint_duties)
 set_tests_properties(test_slint_duties PROPERTIES LABELS "slint" TIMEOUT 120)
+
+# The translation generator's own tests (tools/test_slint_po.py): temp-dir fixtures, nothing of the build tree. -I keeps the
+# interpreter out of the current directory and the user's site-packages (the script is standard-library only).
+if(Python3_Interpreter_FOUND)
+    add_test(NAME test_slint_po COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/test_slint_po.py")
+    set_tests_properties(test_slint_po PROPERTIES LABELS "slint" TIMEOUT 60)
+endif()

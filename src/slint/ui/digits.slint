@@ -38,7 +38,7 @@ export component Digit inherits Rectangle {
     in property <string> place;                 // "10 MHz": the accessible labels read "Step 10 MHz digit up"
     in property <bool> show-nudges: true;       // the "Tuner switches" setting; the wheel and the click keep working
     in property <bool> enabled: true;
-    in property <string> tooltip: "Scroll a digit to tune | click to type";   // the host passes the translated text
+    in property <string> tooltip: @tr("Scroll a digit to tune  |  click to type");   // the host passes the translated text
 
     callback nudge(int);                        // +1 / -1, on press and again while held
     callback wheel(int);                        // +1 / -1, one per scroll event
@@ -48,7 +48,7 @@ export component Digit inherits Rectangle {
     width: Theme.digit-w;
     height: Theme.digit-h;
     accessible-role: spinbox;
-    accessible-label: root.place != "" ? root.place + " digit" : "Digit";
+    accessible-label: root.place != "" ? @tr("{} digit", root.place) : @tr("Digit");
     accessible-value: root.value;
     accessible-enabled: root.enabled;
     accessible-action-increment => { if (root.enabled) { root.nudge(1); } }
@@ -162,7 +162,7 @@ export component Digit inherits Rectangle {
         enabled: root.enabled && root.show-nudges;
         mouse-cursor: pointer;
         accessible-role: button;
-        accessible-label: root.place != "" ? "Step " + root.place + " digit up" : "Step digit up";
+        accessible-label: root.place != "" ? @tr("Step {} digit up", root.place) : @tr("Step digit up");
         accessible-action-default => { if (root.enabled && root.show-nudges) { root.nudge(1); } }
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
@@ -183,7 +183,7 @@ export component Digit inherits Rectangle {
         enabled: root.enabled && root.show-nudges;
         mouse-cursor: pointer;
         accessible-role: button;
-        accessible-label: root.place != "" ? "Step " + root.place + " digit down" : "Step digit down";
+        accessible-label: root.place != "" ? @tr("Step {} digit down", root.place) : @tr("Step digit down");
         accessible-action-default => { if (root.enabled && root.show-nudges) { root.nudge(-1); } }
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
@@ -229,7 +229,7 @@ export component FrequencyCounter inherits Rectangle {
     in property <string> converter-text;                          // "via <converter>": the caption in warning colour
     in property <bool> converter-warn;
     in property <bool> enabled: true;
-    in property <string> tooltip: "Scroll a digit to tune | click to type";   // shown under a figure; the host passes the translated text
+    in property <string> tooltip: @tr("Scroll a digit to tune  |  click to type");   // shown under a figure; the host passes the translated text
     out property <bool> editor-focused: input.has-focus;
 
     callback nudge(int, int);                   // digit 0..9, +1 / -1
@@ -250,7 +250,7 @@ export component FrequencyCounter inherits Rectangle {
     property <length> caption-h: 12px;
     property <[int]> group-first: [0, 1, 4, 7];                 // the first digit of GHz, MHz, kHz, Hz
     property <[int]> group-size: [1, 3, 3, 3];
-    property <[string]> places: ["GHz", "100 MHz", "10 MHz", "1 MHz", "100 kHz", "10 kHz", "1 kHz", "100 Hz", "10 Hz", "1 Hz"];
+    property <[string]> places: ["GHz", "100 MHz", "10 MHz", "1 MHz", "100 kHz", "10 kHz", "1 kHz", "100 Hz", "10 Hz", "1 Hz"];   // not-translated: frequency units
 
     // x of digit i: past the border and padding, i columns, and a dot cell for each of the dots before it
     pure function digit-x(i: int) -> length {
@@ -260,7 +260,7 @@ export component FrequencyCounter inherits Rectangle {
     width: root.plate-w;
     height: root.plate-h + 2px + root.unit-h + root.caption-h;
     accessible-role: groupbox;
-    accessible-label: "Tuned frequency";
+    accessible-label: @tr("Tuned frequency");
 
     changed editing => {
         if (root.editing) {
@@ -316,7 +316,7 @@ export component FrequencyCounter inherits Rectangle {
     }
 
     // ---- the engraved rows under the plate ----
-    for u[k] in ["GHz", "MHz", "kHz", "Hz"] : Text {
+    for u[k] in ["GHz", "MHz", "kHz", "Hz"] : Text {   // not-translated: frequency units
         x: root.digit-x(root.group-first[k]); y: root.plate-h + 2px;
         width: root.group-size[k] * Theme.digit-w; height: root.unit-h;
         text: u;
@@ -331,7 +331,7 @@ export component FrequencyCounter inherits Rectangle {
     Text {
         x: root.bw + root.pad-x; y: root.plate-h + 2px + root.unit-h;
         width: root.plate-w - 2 * (root.bw + root.pad-x); height: root.caption-h;
-        text: root.converter-text != "" ? root.converter-text : "TYPE R-390   SER. 1157";
+        text: root.converter-text != "" ? root.converter-text : "TYPE R-390   SER. 1157";   // not-translated: the counter plate's engraved model legend, not a sentence
         color: (root.converter-text != "" && root.converter-warn) ? Theme.chip-warn-fg : Theme.faint;
         font-family: Theme.font-mono;
         font-size: Theme.font-tiny;
@@ -361,7 +361,7 @@ export component FrequencyCounter inherits Rectangle {
             selection-background-color: Theme.accent;
             selection-foreground-color: Theme.accent-ink;
             vertical-alignment: center;
-            accessible-label: "Frequency in MHz";
+            accessible-label: @tr("Frequency in MHz");
             accepted => { root.typed(self.text); }
             key-pressed(e) => {
                 if (e.text == Key.Escape) { root.edit-cancelled(); return accept; }

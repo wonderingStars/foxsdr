@@ -52,10 +52,10 @@ export component LogView inherits Rectangle {
     in property <[LogLine]> lines;                       // newest last
     in-out property <bool> follow: true;
     in property <string> count-text;                     // "128 lines"
-    in property <string> empty-text: "Listening...";
+    in property <string> empty-text: @tr("Listening...");
     // ---- the words it draws itself, so a host can hand in its translations ----
-    in property <string> follow-text: "Follow";
-    in property <string> clear-text: "Clear";
+    in property <string> follow-text: @tr("Follow");
+    in property <string> clear-text: @tr("Clear");
     // ---- how it behaves ----
     in property <bool> enabled: true;                    // the bar's two controls; the log itself always scrolls
     in property <string> tooltip;                        // shown while the pointer rests over the log
@@ -237,8 +237,8 @@ export component PicturePane inherits Rectangle {
     in property <bool> save-enabled: true;               // false while a save is being written
     in property <string> save-note;                      // the outcome of the last save, dim, after the key
     // ---- the words it draws itself ----
-    in property <string> waiting-text: "Waiting for the first image...";
-    in property <string> save-text: "Save as BMP";
+    in property <string> waiting-text: @tr("Waiting for the first image...");
+    in property <string> save-text: @tr("Save as BMP");
     // ---- how it behaves ----
     in property <bool> enabled: true;
     in property <string> tooltip;                        // shown while the pointer rests on a picture that takes clicks
@@ -440,12 +440,12 @@ export component TargetDetails inherits Rectangle {
     in property <bool> mono-lines: false;                // the lines in the mono face (the padded labels of the host's lines line up)
     in property <length> side-min-w: 330px;              // from this width the keys are a 120 px column at the right of the lines; narrower, a row under them
     // ---- the words it draws itself ----
-    in property <string> title-text: "Target details";
-    in property <string> go-text: "Go to on map";
-    in property <string> follow-text: "Follow";
-    in property <string> stop-text: "Stop following";
-    in property <string> close-text: "Close";
-    in property <string> gone-text: "No longer being reported.";
+    in property <string> title-text: @tr("Target details");
+    in property <string> go-text: @tr("Go to on map");
+    in property <string> follow-text: @tr("Follow");
+    in property <string> stop-text: @tr("Stop following");
+    in property <string> close-text: @tr("Close");
+    in property <string> gone-text: @tr("No longer being reported.");
     // ---- how it behaves ----
     in property <bool> enabled: true;
     in property <string> tooltip;

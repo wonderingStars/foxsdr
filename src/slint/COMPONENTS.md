@@ -41,6 +41,7 @@ Each family also owns `ui/specimens/<family>_specimen.slint` and `tests/test_sli
 7. **Structs and enums** a test or the host needs are `export`ed and re-exported from the specimen file (`export { Theme, Skin, Workbench, ChipTone } from "../chips.slint";` style), or the generated C++ cannot name them.
 8. **Model-driven lists** take `[T]` properties and draw with `for`; nothing is drawn from a fixed count.
 9. Lengths that come from a measurement in Hz or dB arrive as **fractions 0..1** (`float`) of the component's width or height: Slint floats are 32-bit, a frequency in Hz does not survive them (the host does the arithmetic).
+10. **Every word a user reads goes through `@tr`.** `@tr("English text")`, or `@tr("... {} ...", value)` for a sentence with a value in it (never a concatenation of translated pieces); the msgid is the English text itself, with no translation context, so where the ImGui window says the same thing use ITS wording and the catalogue entry applies for free (`resources/lang/<code>.json` keys are the English). What stays bare is a host id or kind, a unit or radio vocabulary (Hz, dB, mode and protocol names, I/Q), a typeface name, or sample data the host replaces, and each such line carries a trailing `// not-translated: <reason>`. `tests/test_slint_house_rules.cpp` rule 5 refuses any other string literal with two consecutive letters (specimens apart: they are test sheets, never shipped).
 
 ## Specimens and tests
 

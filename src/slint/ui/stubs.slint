@@ -45,7 +45,7 @@ component StubPlate inherits Rectangle {
         y: 0px;
         width: parent.width;
         height: parent.height;
-        text: "phase 3";
+        text: @tr("phase 3");
         color: Theme.dim;
         font-family: Theme.font-ui;
         font-size: Theme.font-small;
@@ -72,7 +72,7 @@ export component InstrumentFace inherits StubPlate {
     in property <float> max;
     in property <string> unit;
     in property <float> needle;
-    cap: root.kind == "" ? "INSTRUMENT" : "INSTRUMENT · " + root.kind;
+    cap: root.kind == "" ? @tr("INSTRUMENT") : @tr("INSTRUMENT · {}", root.kind);
 }
 
 export component MapView inherits StubPlate {
@@ -84,7 +84,7 @@ export component MapView inherits StubPlate {
     callback target-clicked(id: int);
     callback panned(dx: float, dy: float);
     callback zoomed(notches: int);
-    cap: "MAP";
+    cap: @tr("MAP");
 }
 
 export component GlobeView inherits StubPlate {
@@ -92,7 +92,7 @@ export component GlobeView inherits StubPlate {
     in property <float> lon;
     in property <[TrackPoint]> tracks;
     in property <bool> terminator;
-    cap: "GLOBE";
+    cap: @tr("GLOBE");
 }
 
 export component PatchCanvas inherits StubPlate {
@@ -100,12 +100,12 @@ export component PatchCanvas inherits StubPlate {
     in property <[PatchWire]> wires;
     callback node-moved(id: int, x: float, y: float);
     callback wire-requested(from: int, from-port: int, to: int, to-port: int);
-    cap: "PATCH";
+    cap: @tr("PATCH");
 }
 
 export component ScopeTube inherits StubPlate {
     in property <image> trace;
     in property <string> caption;
     in property <float> persistence;
-    cap: "SCOPE";
+    cap: @tr("SCOPE");
 }

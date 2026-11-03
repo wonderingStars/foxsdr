@@ -34,7 +34,7 @@ export component Meter inherits Rectangle {
     in property <[string]> scale-labels;
     in property <bool> has-reading: true;
     in property <bool> enabled: true;
-    in property <string> tooltip: "Right-click to change the meter style";
+    in property <string> tooltip: @tr("Right-click to change the meter style");
     in property <length> face-w: 126px;
     in property <length> face-h: 56px;
     callback menu-requested(length, length);

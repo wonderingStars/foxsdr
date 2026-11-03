@@ -185,7 +185,7 @@ export component SliderGroup inherits Rectangle {
     in property <bool> has-auto;
     in property <bool> auto-on;
     in property <bool> auto-enabled: true;
-    in property <string> auto-label: "AUTO";    // translated by the host; the key keeps its min-width and grows with it
+    in property <string> auto-label: @tr("AUTO");    // translated by the host; the key keeps its min-width and grows with it
     in property <string> auto-tooltip;
     // The caption row is as high as its tallest cell: the AUTO key (20px) when there is one, else the 12px readout's line.
     in property <length> caption-h: root.has-auto ? Theme.key-xs-h : 16px;

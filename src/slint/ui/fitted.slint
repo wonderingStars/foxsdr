@@ -171,9 +171,9 @@ component FittedRowLine inherits Rectangle {
     in property <FittedRowModel> m;
     in property <string> heading;
     in property <bool> enabled: true;
-    in property <string> stop-text: "STOP";
-    in property <string> start-text: "START";
-    in property <string> confirm-text: "CONFIRM";
+    in property <string> stop-text: @tr("STOP");
+    in property <string> start-text: @tr("START");
+    in property <string> confirm-text: @tr("CONFIRM");
     in property <string> remove-tooltip;
     callback clicked();
     callback double-clicked();
@@ -338,15 +338,15 @@ export component FittedModules inherits Rectangle {
     in property <string> cleanup-note;                // the old copies, beside the key
     in property <string> cleanup-report;              // what the last clean-up did (green), under the key
     in property <bool> enabled: true;
-    in property <string> search-placeholder: "Search fitted modules";
-    in property <string> scan-text: "SCAN AGAIN";
-    in property <string> reset-text: "RESET WINDOW SIZES";
-    in property <string> stop-text: "STOP";
-    in property <string> start-text: "START";
-    in property <string> confirm-text: "CONFIRM";
+    in property <string> search-placeholder: @tr("Search fitted modules");
+    in property <string> scan-text: @tr("SCAN AGAIN");
+    in property <string> reset-text: @tr("RESET WINDOW SIZES");
+    in property <string> stop-text: @tr("STOP");
+    in property <string> start-text: @tr("START");
+    in property <string> confirm-text: @tr("CONFIRM");
     in property <string> scan-tooltip;
-    in property <string> reset-tooltip: "Puts every decoder, panel, instrument and map window back to its default size and position.";
-    in property <string> remove-tooltip: "Removing deletes the file and nothing else. The stop, the receiver-control, radio-settings and transmit grants and the mute setting are all remembered against this module's FILE NAME, and any map page's position and the module's own settings against the name the module calls itself, so fitting this same file again finds every one of them as it was. A build that arrives under a different file name is a different key, and starts from the defaults, apart from its own settings.";
+    in property <string> reset-tooltip: @tr("Puts every decoder, panel, instrument and map window back to its default size and position.");
+    in property <string> remove-tooltip: @tr("Removing deletes the file and nothing else. The stop, the receiver-control, radio-settings and transmit grants and the mute setting are all remembered against this module's FILE NAME, and any map page's position and the module's own settings against the name the module calls itself, so fitting this same file again finds every one of them as it was. A build that arrives under a different file name is a different key, and starts from the defaults, apart from its own settings.");
     callback row-clicked(int);
     callback row-double-clicked(int);
     callback run-clicked(int);
@@ -371,7 +371,7 @@ export component FittedModules inherits Rectangle {
     property <length> bar-h: 8px + Theme.field-h + 8px + (root.two-rows ? chips-view.height + 8px : 0px);
 
     accessible-role: groupbox;
-    accessible-label: "Fitted modules";
+    accessible-label: @tr("Fitted modules");
 
     // ---- the top bar: the strip ground, a rule under it ----
     Rectangle {
@@ -643,16 +643,16 @@ export component ModulePage inherits Rectangle {
     in property <string> catalogue-note;              // the place of the catalogue body (the store is a later beta)
     in property <bool> enabled: true;
     // ---- the words and the sentences the page draws itself ----
-    in property <string> back-text: "< FITTED";
-    in property <string> stop-text: "STOP";
-    in property <string> start-text: "START";
-    in property <string> reach-title: "WHAT THIS MODULE REACHES";
-    in property <string> why-title: "WHY IT IS NOT RUNNING";
-    in property <string> reenable-text: "RE-ENABLE";
-    in property <string> keep-text: "Keep running";
-    in property <string> keep-tooltip: "Ticked, this module runs all the time, as every module used to. Unticked, it runs only while something is using it - its window or map, the radar scope, a patch, the Decoder output window - and goes quiet 30 seconds after.";
-    in property <string> file-text: "FILE";
-    in property <string> abi-key-text: "PLUGIN ABI";
+    in property <string> back-text: @tr("< FITTED");
+    in property <string> stop-text: @tr("STOP");
+    in property <string> start-text: @tr("START");
+    in property <string> reach-title: @tr("WHAT THIS MODULE REACHES");
+    in property <string> why-title: @tr("WHY IT IS NOT RUNNING");
+    in property <string> reenable-text: @tr("RE-ENABLE");
+    in property <string> keep-text: @tr("Keep running");
+    in property <string> keep-tooltip: @tr("Ticked, this module runs all the time, as every module used to. Unticked, it runs only while something is using it - its window or map, the radar scope, a patch, the Decoder output window - and goes quiet 30 seconds after.");
+    in property <string> file-text: @tr("FILE");
+    in property <string> abi-key-text: @tr("PLUGIN ABI");
     callback back-clicked();
     callback run-clicked();
     callback tune-toggled(bool);

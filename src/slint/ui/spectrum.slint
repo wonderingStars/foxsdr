@@ -98,7 +98,7 @@ export component SpectrumView inherits Rectangle {
     in property <string> caption;                    // "Spectrum · 4096 bin · EMA 0.35"
     in property <string> caveat;                     // "average of the last frames, not the audio"
     in property <string> trace-mode-label;           // "Peak hold" / "Average": shown unless the mode is normal
-    in property <string> peak-caption: "Peak in passband";
+    in property <string> peak-caption: @tr("PEAK IN PASSBAND");
     in property <string> peak-text;                  // "-41.2 dBFS"
     in property <string> peak-age;                   // "0.1 s ago"
     in property <bool> show-peak: true;              // false while the Airband monitor listens
@@ -165,7 +165,7 @@ export component SpectrumView inherits Rectangle {
     background: Theme.well;
     clip: true;
     accessible-role: image;
-    accessible-label: root.caption != "" ? root.caption : "Spectrum";
+    accessible-label: root.caption != "" ? root.caption : @tr("Spectrum");
 
     pure function snap(v: length) -> length {
         return Math.round(v / 1px) * 1px;
