@@ -64,6 +64,7 @@
 #include "host_duties.hpp"
 #include "host_logic.hpp"
 #include "kit_publish.hpp"
+#include "patch_publish.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
 #include "signatures.hpp"
@@ -440,6 +441,16 @@ int main(int argc, char** argv) {
     const bool extendProbe = std::getenv("FOXSDR_SLINT_EXTEND_PROBE") != nullptr;
     int extendProbeTicks = 0;
 
+    // THE PATCH PAGE (patch_publish.hpp): the band, the canvas and the inspector of view 1 and the Patch presets page of kind 10, published from patch_logic's reads (once a tick,
+    // BEFORE the kit's publish, so the presets page is built from this tick's model) and wired to the calls patch_logic names. The page's commands (the draft's graph, the
+    // view-shown flag) go through the kit's submit; a bounded run sends only those two (the rest are logged by op and not sent). FOXSDR_SLINT_VIEW=patch starts on the patch view;
+    // FOXSDR_SLINT_OPEN=patch-presets (the kit's openFromEnv) opens the presets page; FOXSDR_SLINT_PATCH_PROBE=1 runs the scripted pointer pass of a bounded run (patch_publish.cpp).
+    foxsdr::slintpatch::PatchPublisher patchBank(*ui, kit, publisher, duties, api, session, bounded.bounded());
+    patchBank.wire();
+    if (const char* e = std::getenv("FOXSDR_SLINT_VIEW"); e != nullptr && lower(e) == "patch") { ui->set_view_index(1); }
+    patchBank.setViewShown(ui->get_view_index() == 1);   // the engine starts out believing "showing": the first tick offers the truth
+    if (std::getenv("FOXSDR_SLINT_PATCH_PROBE") != nullptr) { patchBank.enableProbe(); }
+
     // ---- commands: every key becomes one submit() ----
     const auto submit = [&](FoxCommand c) {
         c.structSize = sizeof(c);
@@ -778,7 +789,7 @@ int main(int argc, char** argv) {
     ui->on_update_dismissed([&] { duties.updateDismissed(); applyUpdateCard(); });
 
     // ---- centre ----
-    ui->on_view_selected([&](int i) { ui->set_view_index(i); });
+    ui->on_view_selected([&](int i) { ui->set_view_index(i); patchBank.setViewShown(i == 1); });
     // (the page tabs, the "+ Window" tab, the torn windows and every page body are the plugin kit's: kit_publish.cpp wires them)
     ui->on_trace_mode_selected([&](int i) { traceMode = i; ui->set_trace_mode(i); resetTrace(traceState); });
     ui->on_range_manual_selected([&](bool manual) { rangeManual = manual; ui->set_range_manual(manual); if (!manual) { setDisplayRange(-110, 0); } });
@@ -1156,6 +1167,7 @@ int main(int argc, char** argv) {
         for (int32_t i = 0; i < got; ++i) {
             toolsBank.onAnswer(r[i]);   // the answers the airband section waits for (an airport's rows, a preset's chunks, Listen, Export, Remove)
             extendBank.onAnswer(r[i]);  // a SERVER_CONFIG's (Web access and CAT control): a refusal becomes the web box's red line
+            patchBank.onAnswer(r[i]);   // the draft's SET_GRAPH (its commit is settled by this answer) and the radio scan's
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
 
@@ -1163,6 +1175,8 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
+        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); }   // an answer the kit's own poll took first: the draft waits for it
+        patchBank.publish(state);    // before the kit's pages too: the Patch presets page of kind 10 is built from the model this hands over
         // THE MAP'S LOOK, from the interface half each tick (SYSTEM > Display saves it there): the aircraft icon size, the trail width and the trail style, bounded
         // as the classic window bounds them (map_compositor.hpp mapLookOf). The kit republishes the maps only when the look changed.
         publisher.setMapLook(foxsdr::slintmap::mapLookOf(duties.interfaceHalf().aircraftIconPx, duties.interfaceHalf().mapTrailWidthPx, duties.interfaceHalf().mapTrailStyle));
@@ -1245,6 +1259,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", systemBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", toolsBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", extendBank.summaryLine().c_str());
+        std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", patchBank.summaryLine().c_str());
         for (const auto& r : kit.lists().rows) {
             std::fprintf(stderr, "foxsdr-slint: plugin %-40s caps=0x%04x %s%s%s file=%s\n", r.name.c_str(), r.caps, r.loaded ? "loaded" : "REFUSED",
                          r.stopped ? " stopped" : "", r.asleep ? " asleep" : "", r.file.c_str());

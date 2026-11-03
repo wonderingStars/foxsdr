@@ -11,7 +11,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 2 | Title rail | Top strip of the cabinet; replaces the OS title bar (Windows only) | PRESENT | the 36 px custom title bar on every platform (main.slint title-bar) |
 | 3 | Deck (toolbar) | Directly under the rail, full width | RELOCATED | the 104 px receiver strip |
 | 4 | FUNCTION SELECT rail | Left column under the deck | RELOCATED | the 64 px icon rail + the 296 px sections panel |
-| 5 | Centre | Between rail and status column: spectrum, waterfall, pages (, aw.cpp:13463) - inventoried elsewhere. Replaced by the Patch canvas when the PATCH view key is pressed (, aw.cpp:4761) | PRESENT | tab row + spectrum + splitter + waterfall; PATCH and SCOPE tabs show the phase-3 stubs |
+| 5 | Centre | Between rail and status column: spectrum, waterfall, pages (, aw.cpp:13463) - inventoried elsewhere. Replaced by the Patch canvas when the PATCH view key is pressed (, aw.cpp:4761) | PRESENT | tab row + spectrum + splitter + waterfall; the PATCH tab is the PatchPage (rows 1888 to 1963), the SCOPE tab still shows the phase-3 stub |
 | 6 | STATUS column | Right column under the deck | RELOCATED | the 28 px status bar of seven chips |
 | 7 | Scope mode | Replaces rail + centre + status column; the deck stays. Entered from a radar/instrument;  leaves it when nothing is being typed and no popup is open (, aw.cpp:20136, Esc at ~20160) - inventoried elsewhere | PRESENT | the SCOPE tab; the instrument face is a phase-3 stub |
 | 8 | Floating windows | Plugin windows, pages, markers, import dialog etc. are separate top-level ImGui windows drawn over the root (, aw.cpp:21884; dialogs list at aw.cpp:4770-4782) | RELOCATED | pages and plugin windows dock as tabs or tear off (Tab, TornWindow, WindowChrome built; phase-3 content) |
@@ -125,7 +125,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 66 | Bank group caption | readout | PRESENT | the panel's head caption |
 | 67 | Bank curtain | readout (animation) | DEFERRED | the enamel fade is the ImGui window's; the panel width animates on fold instead (cosmetic) |
 | 68 | View key RECEIVER | key (latched, 2-way) | RELOCATED | the RECEIVER tab of the tab row (Workbench IA 4) |
-| 69 | View key PATCH | key (latched, 2-way) | RELOCATED | the PATCH tab (the canvas is the phase-3 stub) |
+| 69 | View key PATCH | key (latched, 2-way) | RELOCATED | the PATCH tab; its page is PatchPage (patch_page.slint, rows 1888 to 1963) |
 | 70 | Sections area | list | PRESENT | the bank's rows with state chips in a Flickable; the Radio body is drawn (passband, tune step, band-plan checkbox), the SIGNAL bank's bodies are drawn (phase 3); TOOLS, EXTEND and SYSTEM remain |
 | 71 | Rail footer | readout | PRESENT | two-line footer: source · band (FOXAPI_LIST_BAND_PLAN), rate · channel · underruns; the converter line replaces line 2 in warning colour |
 | 72 | Radio section mode keys | (not here) | RELOCATED | the eight mode keys are the strip's segmented control (Workbench IA 2) from 1760 px of window width; below that they fold into one picker key that opens the same eight as a menu (the sheet's strip does not fit 1440 by its own numbers); the Radio body says so; Ctrl+F .. Ctrl+R stay |
@@ -2605,7 +2605,7 @@ Subtotal: PRESENT 88, RELOCATED 75, DEFERRED 89, total 252 (rows 1524 to 1775).
 
 Every control of `inventory/extend-system-store-patch.txt` (FoxSDR 0.99.104) outside the SYSTEM part (lines 287-1379, ticked above in rows 1387 to 1523): lines 86-286 (the EXTEND bank: Web access, CAT control), 1380-1776 (the Plugin store window), 1777-2001 (the Fitted modules window, its module page and the retired rows), 2002-2492 (the Patch row and canvas) and 2493-2599 (the Patch presets page); 188 rows. The inventory file blanks every label string it quotes, so the wording is not compared here (the family's wording is the ImGui window's own, `app_window.cpp` `drawWebSection` / `drawCatSection` and `plugin_store_view.cpp`). The EXTEND bank and the store are `src/slint/ui/extend_bank.slint` (`WebBody`, `CatBody`, `StorePage` with its top bar, SITES panel, Browse grid with `StoreCardView` and `CardGrid`, foot, Updates pane with `UpdateRowView`, clean-up panel and plugin page), their effects (`src/slint/extend_logic.hpp`, the callbacks-to-effects table in its header) and the places `src/slint/ui/main.slint` and `pages.slint` put them (bank 3, rows 0 and 1: Web access and CAT; the store is the body of a `PageTab` of kind 9, `PageTab.store`, `StorePage`). The status words are phase 1's: **PRESENT** = the family draws it and its callback has an effect in `extend_logic` (an op, a local change the publisher keeps as a draft, or both; the note names the component and the effect), **RELOCATED** = it lives elsewhere in the Slint window (the Section row `main.cpp` draws, the DECODE bank's catalogue field and Disabled cards, the kit's fitted page and module page of phase 2, the tab row), **DEFERRED** = not drawn, drawn without an effect, or drawn wrongly, with the reason. A control whose status could not be established from the files is DEFERRED with "not found in" and the file. The host's publisher was being written when this part was ticked: `extend_publish.hpp` had just appeared (no `.cpp`, and `extend_publish` is in no source list of `src/slint/CMakeLists.txt`), and `kit_publish.cpp` had begun to carry the page (`blankStore`, `fillStore`, `setStoreModel`, the DECODE bank's Plugin store row opening page kind 9; the phase-2 rows 278 to 280 are not edited here). PRESENT here therefore means drawn and given an effect in `extend_logic`, not seen working in the window; the two EXTEND Section rows are still the ones `main.cpp` (`sectionsFor`, case 3) draws, with a chip of 'PORT n' or 'OFF' and no lamp.
 
-The departures the family's header states, as they bear on the rows: UPDATE ALL sends FOXAPP_OP_STORE_ADD_ALL with ival[1] = 1 (updates only), as the ImGui key does, and not FOXAPI_OP_STORE_UPDATE_ALL (0x0805), whose engine handler starts the whole ADD ALL run; the family has no REMOVE for an installed plugin (the ImGui store window has none; REMOVE is the Fitted modules page's key); CANCEL (`store-cancel`) and the maker's notice tick (`store-plugin-notice`) are callbacks the family ADDED to the contract; the amber `StoreCard.key-tooltip`, `StoreSite.status`, `add-reason`, `site-error` and the plugin page's `picture-index`, `pictures-note`, `notice`, `reach-lead` are ADDED fields. The Fitted modules window (31 rows: top bar and list, module page, retired rows) is not built in `extend_bank.slint`: its rows are RELOCATED to the plugin kit's fitted page and module page (phase 2, docs 6.38, rows 378 to 406) and the DECODE bank's Disabled cards (rows 281 to 288), with the phase-2 row number named; where the phase-2 row is itself DEFERRED the row here is DEFERRED. The 'Updates footnotes' row (inventory line 1586) is the store's and is ticked here. The inventory's RECEIVER / PATCH view keys (line 1995) sit inside the Fitted modules line range but belong to the Patch view; they are ticked first in the Patch block. The DECODE bank's own Plugin store row (phase 2 rows 278 to 280), the 'Entry:' paragraphs and the 'Not covered / uncertain' notes (inventory lines 2593 to 2599) are not control rows and are not ticked here. Not wired anywhere in the family: Esc on a plugin page returns to the list (the 'Entry' paragraph and the '< BROWSE' row; no Esc handling in `extend_bank.slint` or `pages.slint`), the framed screenshot strip and its arrows, the hatched unknown values of the facts grid, and the store's narrow top bar and its too-narrow and too-small messages. The whole Patch view (rail entry, top band, information pane, canvas, node faces, inspector drawer) and the PATCH PRESETS page are bespoke: the patch canvas is bespoke - next allowance (`PatchCanvas` in `stubs.slint` is a stub plate with `nodes`, `wires`, `node-moved` and `wire-requested` and no face), and the presets page opens only from the patch view.
+The departures the family's header states, as they bear on the rows: UPDATE ALL sends FOXAPP_OP_STORE_ADD_ALL with ival[1] = 1 (updates only), as the ImGui key does, and not FOXAPI_OP_STORE_UPDATE_ALL (0x0805), whose engine handler starts the whole ADD ALL run; the family has no REMOVE for an installed plugin (the ImGui store window has none; REMOVE is the Fitted modules page's key); CANCEL (`store-cancel`) and the maker's notice tick (`store-plugin-notice`) are callbacks the family ADDED to the contract; the amber `StoreCard.key-tooltip`, `StoreSite.status`, `add-reason`, `site-error` and the plugin page's `picture-index`, `pictures-note`, `notice`, `reach-lead` are ADDED fields. The Fitted modules window (31 rows: top bar and list, module page, retired rows) is not built in `extend_bank.slint`: its rows are RELOCATED to the plugin kit's fitted page and module page (phase 2, docs 6.38, rows 378 to 406) and the DECODE bank's Disabled cards (rows 281 to 288), with the phase-2 row number named; where the phase-2 row is itself DEFERRED the row here is DEFERRED. The 'Updates footnotes' row (inventory line 1586) is the store's and is ticked here. The inventory's RECEIVER / PATCH view keys (line 1995) sit inside the Fitted modules line range but belong to the Patch view; they are ticked first in the Patch block. The DECODE bank's own Plugin store row (phase 2 rows 278 to 280), the 'Entry:' paragraphs and the 'Not covered / uncertain' notes (inventory lines 2593 to 2599) are not control rows and are not ticked here. Not wired anywhere in the family: Esc on a plugin page returns to the list (the 'Entry' paragraph and the '< BROWSE' row; no Esc handling in `extend_bank.slint` or `pages.slint`), the framed screenshot strip and its arrows, the hatched unknown values of the facts grid, and the store's narrow top bar and its too-narrow and too-small messages. The Patch view (top band, information pane, canvas, node faces, inspector drawer) is `PatchPage` in `patch_page.slint` and the PATCH PRESETS page is `PatchPresetsPage` there, as page kind 10 of the kit (`pages.slint`); the host is `patch_logic.hpp` / `patch_logic.cpp` (the draft, the canvas interaction, the models, one method per callback) and `patch_publish` is the wiring. Three rows stay DEFERRED: the Spectrum face (row 1924), the Map face (row 1925) and the Map inspector's Fit to targets / Whole world keys (row 1940): the nodes exist, move, wire, resize and close, and their faces draw the window's sentences.
 
 ## EXTEND bank — Web access (EXTEND rail row, F4 bank)
 
@@ -2768,117 +2768,117 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1888 | START/STOP dome | button | DEFERRED | the patch canvas is bespoke - next allowance; the patch band's dome, which opens the patch's own radios, is not drawn (the receiver strip's StopKey, row 16, is the main window's) |
-| 1889 | ALL OFF | button (red) | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1890 | PRESETS | button | DEFERRED | the patch canvas is bespoke - next allowance; the key that opens the Patch presets page is not drawn |
-| 1891 | Run readout | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1892 | Part keys (7) | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1893 | Decoders row | readout + buttons | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1894 | No-decoder note | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1895 | Blueprints | dropdown/combo (tall) | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1896 | Blueprint note | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1888 | START/STOP dome | button | PRESENT | PatchBand run Key (label run-label START/STOP, danger while PatchModel.running, tooltip run-tooltip) -> run-clicked -> PatchPage::run-clicked -> PatchEvents.run-clicked -> patch_logic PatchPage::runClicked = opRun -> FOXAPI_OP_PATCH_RUN (0x0902, 1 when stopped, 0 when running) |
+| 1889 | ALL OFF | button (red) | PRESENT | PatchBand ALL OFF danger Key -> all-off-clicked -> PatchEvents.all-off-clicked -> PatchPage::allOffClicked = opAllOff -> FOXAPI_OP_PATCH_ALL_OFF (0x0903) |
+| 1890 | PRESETS | button | PRESENT | PatchBand PRESETS Key (on while PatchModel.presets-open) -> presets-clicked -> PatchEvents.presets-clicked; the publisher opens and closes the kit's page kind 10 'patch-presets' (PatchPresetsPage over PageTab.patch-presets) |
+| 1891 | Run readout | readout | PRESENT | PatchModel.run-line / run-line-lit: the Lamp and its caption on their own row under the transport keys |
+| 1892 | Part keys (7) | button | PRESENT | PatchModel.parts: seven PartKey (label, kind 0..6, enabled, tooltip; a disabled key keeps its tooltip) in a FlowRow -> part-pressed(kind) -> PatchPage::partPressed |
+| 1893 | Decoders row | readout + buttons | PRESENT | PatchModel.decoders: one DecoderKey per PATCH_PARTS row (label, index, tooltip) in a FlowRow after the 'Decoders' caption -> decoder-pressed(index) -> PatchPage::decoderPressed |
+| 1894 | No-decoder note | readout | PRESENT | PatchModel.no-decoders, the dim wrapped sentence after the 'Decoders' caption while decoders is empty |
+| 1895 | Blueprints | dropdown/combo (tall) | PRESENT | PatchModel.blueprints-shown / blueprints (SelectItem, note = row tooltip) in a DropKey whose closed text is the fixed placeholder; opening fires blueprints-opened -> PatchPage::blueprintsOpened, a pick fires blueprint-picked(index) -> PatchPage::blueprintPicked |
+| 1896 | Blueprint note | readout | PRESENT | PatchModel.blueprint-note under the Blueprints row, dim and wrapped |
 
 ## Patch — information pane (top-right of the band)
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1897 | Verdict | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1898 | Channel level | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1899 | Plan summary | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1900 | Selection / help | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1901 | Node problems | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1897 | Verdict | readout | PRESENT | InfoModel.runnable / verdict: one Chip, good when runnable, err otherwise (PatchModel.info) |
+| 1898 | Channel level | readout | PRESENT | InfoModel.level-line in the information pane (amber) |
+| 1899 | Plan summary | readout | PRESENT | InfoModel.plan-line in the information pane (muted mono) |
+| 1900 | Selection / help | readout | PRESENT | InfoModel.none-selected + help (the three sentences), or selection + folded-note (shown while the inspector is folded) |
+| 1901 | Node problems | readout | PRESENT | InfoModel.problems: one ProblemLine per line (text, advisory: rust or dim) |
 
 ## Patch — canvas (patch_view.cpp)
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1902 | Canvas | drag/gesture | DEFERRED | the patch canvas is bespoke - next allowance; PatchCanvas (stubs.slint) is a stub plate with the nodes and wires properties and the node-moved and wire-requested callbacks, with no grid, pan or zoom |
-| 1903 | Zoom out key | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1904 | Zoom in key | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1905 | Fit | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1906 | Node (plate) | node/wire (patch) | DEFERRED | the patch canvas is bespoke - next allowance; the stub's PatchNode struct is the contract only |
-| 1907 | Close key | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1908 | Resize grip | drag/gesture | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1909 | Ports | node/wire (patch) | DEFERRED | the patch canvas is bespoke - next allowance; the stub's wire-requested callback is the contract only |
-| 1910 | Wire | node/wire (patch) | DEFERRED | the patch canvas is bespoke - next allowance; the stub's PatchWire struct is the contract only |
-| 1911 | Refusal bubble | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1912 | Delete key | key (keyboard) | DEFERRED | the patch canvas is bespoke - next allowance; not wired |
-| 1913 | Node readouts | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1902 | Canvas | drag/gesture | PRESENT | PatchCanvasView over CanvasModel (zoom, grid-step / grid-ox / grid-oy, nodes, wires, ghost): one TouchArea -> canvas-pressed / canvas-moved / canvas-released / canvas-left, scroll -> canvas-wheel(x, y, notches-x, notches-y, ctrl, shift) -> patch_logic PatchCanvas press / move / release / wheel over the PatchDraft (pan, zoom, drag, select) |
+| 1903 | Zoom out key | button | PRESENT | PatchCanvasView key '-' -> zoom-step(false) -> PatchCanvas::zoomStep (CanvasModel.keys-shown hides the three keys when the canvas is too small) |
+| 1904 | Zoom in key | button | PRESENT | PatchCanvasView key '+' -> zoom-step(true) -> PatchCanvas::zoomStep |
+| 1905 | Fit | button | PRESENT | PatchCanvasView key Fit -> fit -> PatchPage::fit -> PatchCanvas::fit |
+| 1906 | Node (plate) | node/wire (patch) | PRESENT | CanvasNode (id, kind, kind-caption, name, x / y / w / h, selected, blocked, fault, active) drawn by CanvasNodeView; moved by a drag of the header or body (canvas-pressed / canvas-moved on the draft) |
+| 1907 | Close key | button | PRESENT | CanvasNode.hot-close draws the close key; the press is canvas-pressed (pressTarget CloseKey) -> PatchCanvas::press removes the node from the draft |
+| 1908 | Resize grip | drag/gesture | PRESENT | CanvasNode.hot-grip draws the brass corner and sets the nwse-resize cursor; the drag is canvas-moved with Interaction.resizeNode (resizeNodeTo) |
+| 1909 | Ports | node/wire (patch) | PRESENT | CanvasNode.inputs / outputs: PortDot (x, y, tone); a drag from a port is canvas-pressed -> canvas-moved -> canvas-released and Graph::connect on the draft |
+| 1910 | Wire | node/wire (patch) | PRESENT | CanvasModel.wires: CanvasWire (path, tone, selected) as Path elements under the nodes, and CanvasModel.ghost for the wire being dragged; a click on a wire selects it in PatchCanvas::press |
+| 1911 | Refusal bubble | readout | PRESENT | CanvasModel.refusal (Refusal shown, text, x, y): the rust bubble at the pointer; the host clears it after 2.5 s |
+| 1912 | Delete key | key (keyboard) | PRESENT | PatchCanvasView FocusScope: the Delete key -> canvas-delete -> PatchPage::canvasDelete -> PatchCanvas::deleteKey |
+| 1913 | Node readouts | readout | PRESENT | CanvasNode.reading / reading-tone / reading2: the node's own readout lines on its plate |
 
 ## Patch — node faces (drawn over the plate)
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1914 | Radio ON/OFF | button (small) | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1915 | Radio device label | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1916 | Radio centre | number field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1917 | Centre note | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1918 | Radio status | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1919 | Channel frequency | number field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1920 | Demod mode | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1921 | Demod squelch | checkbox + slider + readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1922 | Speaker face | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1923 | Text-out face | list | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1924 | Spectrum face | readout + trace + waterfall | DEFERRED | the patch canvas is bespoke - next allowance; the main window's spectrum and waterfall are not placed on a node |
-| 1925 | Map face | readout + chart | DEFERRED | the patch canvas is bespoke - next allowance; the kit's MapPane is not placed on a node |
-| 1926 | Decoder face | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1914 | Radio ON/OFF | button (small) | PRESENT | FaceModel.radio-switch / radio-switch-label: the small ON/OFF Key on the Radio face -> face-switch(node) -> PatchPage::faceSwitch |
+| 1915 | Radio device label | readout | PRESENT | FaceModel.device-label on the Radio face |
+| 1916 | Radio centre | number field | PRESENT | FaceModel.centre-text: the LineInput on the Radio face, Enter or focus-out -> face-centre(node, mhz) -> PatchPage::faceCentre |
+| 1917 | Centre note | readout | PRESENT | FaceModel.centre-note under the centre field (amber) |
+| 1918 | Radio status | readout | PRESENT | FaceModel.lines on the Radio face (FaceLine text, tone) |
+| 1919 | Channel frequency | number field | PRESENT | FaceModel.freq-text: the LineInput on the Channel face -> face-freq(node, mhz) -> PatchPage::faceFreq |
+| 1920 | Demod mode | dropdown/combo | PRESENT | FaceModel.mode-index: the mode DropKey on the Demod face -> face-mode(node, index) -> PatchPage::faceMode |
+| 1921 | Demod squelch | checkbox + slider + readout | PRESENT | FaceModel.squelch-on / squelch-norm / squelch-text and gate-shown / gate-text / gate-word / gate-lit on the Demod face -> face-squelch-on(node, on) / face-squelch(node, norm) -> PatchPage::faceSquelchOn / faceSquelch |
+| 1922 | Speaker face | readout | PRESENT | FaceModel.lines and lines-after plus level-shown / level-norm (the level bar) on an audio Sink face |
+| 1923 | Text-out face | list | PRESENT | FaceModel.lines on a text-out Sink face (the recent lines) |
+| 1924 | Spectrum face | readout + trace + waterfall | DEFERRED | the Spectrum face (the main window's spectrum on a node) is bespoke - next allowance; the node exists, moves, wires, resizes and closes, its face draws the sentence 'Wire the radio or a channel here to see its spectrum.' or 'No spectrum yet - its radio is not running.' and an empty well |
+| 1925 | Map face | readout + chart | DEFERRED | the Map face (the kit's MapPane on a node) is bespoke - next allowance; the node exists, moves, wires, resizes and closes, its face draws the window's own sentences (the target counts) and an empty well |
+| 1926 | Decoder face | readout | PRESENT | FaceModel.have-picture / picture and lines on a Decoder face |
 
 ## Patch — inspector drawer (right of the canvas; appears when a node is selected)
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1927 | Fold key | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1928 | Kind caption + Name | readout + text field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1929 | Radio: Device | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1930 | Radio: Look for radios | button (small) | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1931 | Radio: Centre (MHz) | number field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1932 | Radio: Sample rate | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1933 | Radio: live readout | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1934 | Channel: Frequency (MHz) | number field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1935 | Demod: Mode + Squelch | dropdown/combo + squelch controls | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1936 | Decoder: Plugin | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1937 | Decoder: info | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1938 | Decoder: Plugin settings | list (form) | DEFERRED | the patch canvas is bespoke - next allowance; the kit's PluginSettingsForm is not placed in the inspector |
-| 1939 | Map: input count | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1940 | Map: Fit to targets / Whole world | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1941 | Map: help | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1942 | Speaker: Sound goes to | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1943 | Speaker: readouts | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1944 | Text out: help | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1945 | Other kinds | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1946 | Size | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1947 | Smaller / Larger | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1948 | Default size | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1949 | Resize hint | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
-| 1950 | Remove this node | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1927 | Fold key | button | PRESENT | PatchInspector fold Key ('>>' open, '<<' in the 24 px strip) -> inspector-fold -> PatchPage::inspectorFold (PatchModel.inspector-folded) |
+| 1928 | Kind caption + Name | readout + text field | PRESENT | InspectorModel.kind-caption and the Name LineInput (every keystroke) -> inspector-name(text) -> PatchPage::inspectorName |
+| 1929 | Radio: Device | dropdown/combo | PRESENT | InspectorRadio.device-items / device-index / device-label in a DropKey; opening fires inspector-device-opened, a pick inspector-device(index) -> PatchPage::inspectorDevice |
+| 1930 | Radio: Look for radios | button (small) | PRESENT | InspectorRadio.looking / look-enabled: the 'Look for radios' Key -> inspector-look -> PatchPage::inspectorLook -> FOXAPP_OP_PATCH_LOOK_FOR_RADIOS + FOXAPI_OP_SCAN_DEVICES |
+| 1931 | Radio: Centre (MHz) | number field | PRESENT | InspectorRadio.centre-text / centre-note: LineInput, Enter or focus-out -> inspector-centre(mhz) -> PatchPage::inspectorCentre |
+| 1932 | Radio: Sample rate | dropdown/combo | PRESENT | InspectorRadio.rate-items / rate-index, or rate-fixed / rate-fixed-text while a recording sets the rate -> inspector-rate(index) -> PatchPage::inspectorRate |
+| 1933 | Radio: live readout | readout | PRESENT | InspectorRadio.lines: the live readout and the 'Up to N radios' note |
+| 1934 | Channel: Frequency (MHz) | number field | PRESENT | InspectorModel.freq-text: LineInput -> inspector-freq(mhz) -> PatchPage::inspectorFreq |
+| 1935 | Demod: Mode + Squelch | dropdown/combo + squelch controls | PRESENT | InspectorModel.mode-index and squelch-on / squelch-norm / squelch-text / gate-* -> inspector-mode(index) / inspector-squelch-on(on) / inspector-squelch(norm) -> PatchPage::inspectorMode / inspectorSquelchOn / inspectorSquelch |
+| 1936 | Decoder: Plugin | dropdown/combo | PRESENT | InspectorDecoder.plugin-items / plugin-index / plugin-label in a DropKey -> inspector-plugin(index) -> PatchPage::inspectorPlugin |
+| 1937 | Decoder: info | readout | PRESENT | InspectorDecoder.feed-note, fed (amber lines) and shown-note |
+| 1938 | Decoder: Plugin settings | list (form) | PRESENT | InspectorDecoder.settings / has-settings: the kit's PluginSettingsForm (forms.slint) placed in the inspector, committed(id, text) -> inspector-setting(id, text) -> PatchEvents.inspector-setting (answered by the publisher over the kit's setting write; patch_logic has no inspectorSetting) |
+| 1939 | Map: input count | readout | PRESENT | InspectorModel.map-wired and map-sources (InspectorMapSource count, name) on the Map inspector |
+| 1940 | Map: Fit to targets / Whole world | button | DEFERRED | the Map face (the kit's MapPane on a node) is bespoke - next allowance; the inspector's Fit to targets / Whole world keys are drawn by the window only while a MapView exists, so they stay with the face |
+| 1941 | Map: help | readout | PRESENT | InspectorModel.map-help, kept verbatim from the window; it names the chart's keys and wheel, which exist only once the Map face does (row 1940) |
+| 1942 | Speaker: Sound goes to | dropdown/combo | PRESENT | InspectorSink.items / index / label in a DropKey (audio-sink) -> inspector-sink(index) -> PatchPage::inspectorSink |
+| 1943 | Speaker: readouts | readout | PRESENT | InspectorSink.lines and files-note |
+| 1944 | Text out: help | readout | PRESENT | InspectorModel.help on a text-out Sink |
+| 1945 | Other kinds | readout | PRESENT | InspectorModel.help = 'This node has nothing to set yet.' for a Display node; the artboard's 'Other kinds' card is not a window feature |
+| 1946 | Size | readout | PRESENT | the 'Size' caption in the inspector, for every node kind |
+| 1947 | Smaller / Larger | button | PRESENT | the Smaller / Larger Keys -> inspector-size(0) / inspector-size(1) -> PatchPage::inspectorSize |
+| 1948 | Default size | button | PRESENT | the Default size Key -> inspector-size(2) -> PatchPage::inspectorSize |
+| 1949 | Resize hint | readout | PRESENT | the dim sentence 'Or drag the brass corner at the part's bottom right.' under the size keys |
+| 1950 | Remove this node | button | PRESENT | the danger Key 'Remove this node' -> inspector-remove -> PatchPage::inspectorRemove |
 
 ## Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing)
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1951 | Preset list | list | DEFERRED | the presets page opens only from the patch view (the PRESETS key of the patch band), and the patch canvas is bespoke - next allowance; the page is not drawn |
-| 1952 | LOAD | button | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1953 | SAVE AS... | button | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1954 | RENAME | button | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1955 | DELETE | button | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1956 | Name field | text field | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1957 | SAVE / RENAME | button | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1958 | CANCEL | button | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1959 | Result note | readout | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1960 | Replace preset? | dialog (modal) | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1961 | REPLACE / CANCEL | button | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1962 | Delete preset? | dialog (modal) | DEFERRED | the presets page opens only from the patch view; not drawn |
-| 1963 | DELETE / CANCEL | button | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1951 | Preset list | list | PRESENT | PatchPresetsPage as PageTab kind 10 'patch-presets' (pages.slint PageBody, PageTab.patch-presets), opened by the PRESETS key (row 1890): PatchPresetsModel.rows (PresetRow text, previous, selected) and empty-shown; click -> presets-row(index) -> PatchPage::presetsRow, double-click -> presets-row-activated(index) -> PatchPage::presetsRowActivated |
+| 1952 | LOAD | button | PRESENT | PatchPresetsPage LOAD Key (load-enabled) -> presets-load -> PatchPage::presetsLoad |
+| 1953 | SAVE AS... | button | PRESENT | PatchPresetsPage SAVE AS... Key -> presets-save-as -> PatchPage::presetsSaveAs (opens the name row, edit 1) |
+| 1954 | RENAME | button | PRESENT | PatchPresetsPage RENAME Key (rename-enabled) -> presets-rename -> PatchPage::presetsRename (opens the name row, edit 2) |
+| 1955 | DELETE | button | PRESENT | PatchPresetsPage DELETE Key (delete-enabled) -> presets-delete -> PatchPage::presetsDelete (asks the Delete preset? question) |
+| 1956 | Name field | text field | PRESENT | PatchPresetsModel.name-draft: the name LineInput while edit != 0, every keystroke -> presets-name(text) -> PatchPage::presetsName, Enter -> presets-go |
+| 1957 | SAVE / RENAME | button | PRESENT | the name row's SAVE (edit 1) or RENAME (edit 2) Key -> presets-go -> PatchPage::presetsGo |
+| 1958 | CANCEL | button | PRESENT | the name row's CANCEL Key -> presets-cancel -> PatchPage::presetsCancel |
+| 1959 | Result note | readout | PRESENT | PatchPresetsModel.note / note-good under the keys |
+| 1960 | Replace preset? | dialog (modal) | PRESENT | PatchPresetsModel.ask-replace / replace-text: the 'Replace preset?' panel over the page (nothing else takes input while it is up) |
+| 1961 | REPLACE / CANCEL | button | PRESENT | the question's REPLACE / CANCEL Keys -> presets-replace(true / false) -> PatchPage::presetsReplace |
+| 1962 | Delete preset? | dialog (modal) | PRESENT | PatchPresetsModel.ask-delete / delete-text: the 'Delete preset?' panel over the page |
+| 1963 | DELETE / CANCEL | button | PRESENT | the question's DELETE / CANCEL Keys -> presets-delete-confirm(true / false) -> PatchPage::presetsDeleteConfirm |
 
-Subtotal: PRESENT 69, RELOCATED 35, DEFERRED 84, total 188 (rows 1776 to 1963).
+Subtotal: PRESENT 142, RELOCATED 35, DEFERRED 11, total 188 (rows 1776 to 1963).
 
 # Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM, TOOLS and EXTEND banks of phase 3)
 
 | Status | Rows |
 |---|---|
-| PRESENT | 1454 |
+| PRESENT | 1527 |
 | RELOCATED | 198 |
-| DEFERRED | 311 |
+| DEFERRED | 238 |
 | TODO (unclassified) | 0 |
 | Total | 1963 |
 
@@ -2890,4 +2890,4 @@ Phase 3, the SYSTEM bank alone: PRESENT 95, RELOCATED 17, DEFERRED 25, total 137
 
 Phase 3, the TOOLS bank and the map rows alone: PRESENT 88, RELOCATED 75, DEFERRED 89, total 252.
 
-Phase 3, the EXTEND bank, the Plugin store, the Fitted modules window and the patch rows alone: PRESENT 69, RELOCATED 35, DEFERRED 84, total 188.
+Phase 3, the EXTEND bank, the Plugin store, the Fitted modules window and the patch rows alone: PRESENT 142, RELOCATED 35, DEFERRED 11, total 188.

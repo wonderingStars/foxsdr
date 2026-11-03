@@ -1,21 +1,18 @@
-// FoxSDR Slint front end - the PHASE-3 CONTRACTS: the five components the pages will draw in phase 3 (an instrument face,
-// the map, the globe, the patch canvas, the scope tube). Phase 1 only fixes their properties and callbacks, so the host and
+// FoxSDR Slint front end - the PHASE-3 CONTRACTS: the components the pages will draw in phase 3 (an instrument face,
+// the map, the globe, the scope tube; the patch canvas became ui/patch_page.slint's PatchPage). Phase 1 only fixes their properties and callbacks, so the host and
 // the pages can be written against them now; each is drawn as a well-coloured panel with a cap that names it and the words
 // "phase 3". Nothing here fires a callback yet.
 //
 //   InstrumentFace  kind, caption, value, min, max, unit, needle
 //   MapView         lat, lon, zoom, tracks, followed;  target-clicked(int), panned(float, float), zoomed(int)
 //   GlobeView       lat, lon, tracks, terminator
-//   PatchCanvas     nodes, wires;  node-moved(int, float, float), wire-requested(int, int, int, int)
 //   ScopeTube       trace, caption, persistence
 import { Theme } from "theme.slint";
 import { TipTimer } from "tooltip.slint";
 
 export struct TrackPoint { id: int, lat: float, lon: float, heading: float, label: string }
-export struct PatchNode { id: int, x: float, y: float, name: string, kind: string, active: bool, fault: bool }
-export struct PatchWire { from: int, from-port: int, to: int, to-port: int }
 
-// What the five share: the well, its line, the cap naming it, and the words "phase 3".
+// What the four share: the well, its line, the cap naming it, and the words "phase 3".
 component StubPlate inherits Rectangle {
     in property <string> cap;
     in property <bool> enabled: true;
@@ -93,14 +90,6 @@ export component GlobeView inherits StubPlate {
     in property <[TrackPoint]> tracks;
     in property <bool> terminator;
     cap: @tr("GLOBE");
-}
-
-export component PatchCanvas inherits StubPlate {
-    in property <[PatchNode]> nodes;
-    in property <[PatchWire]> wires;
-    callback node-moved(id: int, x: float, y: float);
-    callback wire-requested(from: int, from-port: int, to: int, to-port: int);
-    cap: @tr("PATCH");
 }
 
 export component ScopeTube inherits StubPlate {

@@ -125,6 +125,9 @@ public:
     OpenWindows& open() { return open_; }
     SettingsEdits& edits() { return edits_; }
     KitEvents takeEvents();                           // drained once a tick by the publisher
+    // The answers the kit's own poll took that are not its settings edits' (a graph commit's, the radio scan's): main.cpp polls first each tick, but an answer that lands between
+    // that poll and the kit's is taken here, and the patch publisher's draft machine waits for exactly such an answer, so they are kept (the newest 64) and handed on.
+    std::vector<FoxCommandResult> takeUnclaimedResults();
     const FoxReceiverState& state() const { return state_; }
     std::uint64_t instrumentSeen(const std::string& key) const;
     void markInstrumentSeen(const std::string& key, std::uint32_t seq);
@@ -180,6 +183,7 @@ private:
     OpenWindows open_;
     SettingsEdits edits_;
     KitEvents events_;
+    std::vector<FoxCommandResult> unclaimed_;
     FoxReceiverState state_{};
     cascade::core::PluginUiFrontEnd frontEnd_;
     std::string useSent_;

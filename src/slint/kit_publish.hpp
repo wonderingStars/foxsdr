@@ -59,6 +59,16 @@ public:
     // Opens the store page and shows it (the DECODE row's key, a bounded run's FOXSDR_SLINT_OPEN=store).
     void openStorePage();
 
+    // THE PATCH PRESETS PAGE (kind 10, id "patch-presets"; docs 6.44), the same seam as the store's. The KIT owns the page - its PageTab, its tab, its tear-off; the PATCH publisher
+    // (patch_publish.*) computes the whole ::PatchPresetsModel and hands it over (setPatchPresetsModel), reads whether the page is up (patchPresetsView) and opens and closes it
+    // from the band's PRESETS key. The ImGui window keeps this page a floating window (440 x 460, app_window_patch_presets.cpp), so it OPENS TORN OFF: the patch view stays the one
+    // showing (a docked page would take the centre, and the engine stops a running patch the moment the patch view is not showing). Dock it from its chrome to make it a tab.
+    enum class PatchPresetsView { Closed, Docked, Shown };
+    PatchPresetsView patchPresetsView() const;
+    void setPatchPresetsModel(const ::PatchPresetsModel& model);
+    void openPatchPresetsPage();
+    void closePatchPresetsPage();
+
 private:
     struct Page {
         std::string id;            // "output", "image:<name>", "panel:<name>", "instrument:<name>|<title>", "map:<name>", "fitted", "module:<file>", "details"
@@ -116,6 +126,7 @@ private:
     void fillModule(const Page& p, PageTab& t, const FoxReceiverState& state, std::string& sig);
     void fillDetails(PageTab& t, const FoxReceiverState& state, std::string& sig);
     void fillStore(PageTab& t, std::string& sig);
+    void fillPatchPresets(PageTab& t, std::string& sig);
     DetailsModel detailsModel(const FoxReceiverState& state, std::string& sig);
     void publishDecodeBank(const FoxReceiverState& state);
     void publishPages(const FoxReceiverState& state);
@@ -148,6 +159,8 @@ private:
     bool muteQuestionOpen_ = false;
     std::string catalogueUrl_;
     ::StoreModel storeModel_{};                       // what the EXTEND publisher last handed over for the page of kind 9
+    ::PatchPresetsModel patchPresetsModel_{};         // what the PATCH publisher last handed over for the page of kind 10
+    std::uint64_t patchPresetsRevision_ = 0;
     std::uint64_t storeRevision_ = 0;                 // moves with each handed-over model: the page's signature
     std::string storeChip_;                           // the DECODE row's chip ("" until the EXTEND publisher's first read: the row says IDLE, the word nothing has been asked)
     ::ChipTone storeChipTone_ = ::ChipTone::Neutral;

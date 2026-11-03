@@ -49,6 +49,17 @@ const ::StoreModel& blankStoreModel() {
     return kBlank;
 }
 
+// The same for the Patch presets page (kind 10): the row list present and empty.
+::PatchPresetsModel blankPatchPresets() {
+    ::PatchPresetsModel p{};
+    p.rows = model(std::vector<::PresetRow>{});
+    return p;
+}
+const ::PatchPresetsModel& blankPatchPresetsModel() {
+    static const ::PatchPresetsModel kBlank = blankPatchPresets();
+    return kBlank;
+}
+
 ChipTone toneOfState(FittedState s) {
     switch (s) {
         case FittedState::Fed: return ChipTone::Good;
@@ -102,7 +113,7 @@ std::vector<TableRow> tableRows(const std::vector<CascadePanelRow>& rows, std::s
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-KitPublisher::KitPublisher(MainWindow& ui, PluginKit& kit) : ui_(ui), kit_(kit), pagesModel_(std::make_shared<slint::VectorModel<PageTab>>()), storeModel_(blankStore()) {
+KitPublisher::KitPublisher(MainWindow& ui, PluginKit& kit) : ui_(ui), kit_(kit), pagesModel_(std::make_shared<slint::VectorModel<PageTab>>()), storeModel_(blankStore()), patchPresetsModel_(blankPatchPresets()) {
     ui_.set_pages(pagesModel_);
 }
 KitPublisher::~KitPublisher() = default;
@@ -815,6 +826,36 @@ void KitPublisher::fillStore(PageTab& t, std::string& sig) {
     sig += "S" + std::to_string(storeRevision_);
 }
 
+// The Patch presets page (kind 10): the model the PATCH publisher handed over, whole; its signature is the hand-over's revision.
+void KitPublisher::fillPatchPresets(PageTab& t, std::string& sig) {
+    t.patch_presets = patchPresetsModel_;
+    sig += "P" + std::to_string(patchPresetsRevision_);
+}
+
+KitPublisher::PatchPresetsView KitPublisher::patchPresetsView() const {
+    for (std::size_t i = 0; i < pages_.size(); ++i) {
+        if (pages_[i].id != "patch-presets") { continue; }
+        return pages_[i].torn || currentPage() == static_cast<int>(i) ? PatchPresetsView::Shown : PatchPresetsView::Docked;
+    }
+    return PatchPresetsView::Closed;
+}
+
+void KitPublisher::setPatchPresetsModel(const ::PatchPresetsModel& model) {
+    patchPresetsModel_ = model;
+    ++patchPresetsRevision_;
+}
+
+// Opens the page TORN OFF at the window's own size (the ImGui window is a floating 440 x 460) and leaves the patch view showing; an open page is left as it is.
+void KitPublisher::openPatchPresetsPage() {
+    if (findPage("patch-presets") != nullptr) { return; }
+    Page& p = openPage("patch-presets", 10, "", "", cascade::i18n::tr("PATCH PRESETS"));
+    p.torn = true;
+    p.tw = 440.f;
+    p.th = 460.f;
+}
+
+void KitPublisher::closePatchPresetsPage() { closePage("patch-presets"); }
+
 KitPublisher::StoreView KitPublisher::storeView() const {
     for (std::size_t i = 0; i < pages_.size(); ++i) {
         if (pages_[i].id != "store") { continue; }
@@ -870,6 +911,7 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
     t.module.reach = model(std::vector<ReachRowModel>{});
     t.details.lines = model(std::vector<DetailLine>{});
     t.store = blankStoreModel();
+    t.patch_presets = blankPatchPresetsModel();
     sig = p.id + (p.torn ? "T" : "") + fmt("%.0f", p.tx) + fmt("%.0f", p.ty) + fmt("%.0f", p.tw) + fmt("%.0f", p.th) + (p.rolled ? "r" : "") + (p.follow ? "f" : "");
     const PluginRow* r = rowOf(p);
     bool chipIdle = false;   // the chip says IDLE or WAIT (decided from the state: the words themselves are translated)
@@ -883,6 +925,7 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
         case 7: fillModule(p, t, state, sig); break;
         case 8: fillDetails(t, state, sig); break;
         case 9: fillStore(t, sig); break;
+        case 10: fillPatchPresets(t, sig); break;
         default: break;
     }
     t.chip_tone = p.kind == 9 ? storeChipTone_ : chipIdle || std::string(t.chip) == "IDLE" || std::string(t.chip) == "WAIT" || std::string(t.chip).empty() ? ChipTone::Neutral : ChipTone::Good;   // the engine's own chip words (teleprinter, beacon, meter, weather) stay English
@@ -1111,6 +1154,7 @@ void KitPublisher::publish(const FoxReceiverState& state) {
             else if (kind == "fitted") { openPage("fitted", 6, "", "", cascade::i18n::tr("Fitted modules")); }
             else if (kind == "details") { openPage("details", 8, "", "", cascade::i18n::tr("Target details")); }
             else if (kind == "store") { openPage("store", 9, "", "", cascade::i18n::tr("PLUGIN STORE")); }
+            else if (kind == "patch-presets") { openPatchPresetsPage(); }
             else if (kind == "module") { const PluginRow* r = rowByFile(kit_.lists().rows, arg); if (r != nullptr) { openPage(id, 7, r->name, r->file, r->name); } }
             else {
                 const std::size_t bar = arg.find('|');

@@ -32,7 +32,6 @@ struct Rect { int x, y, w, h; const char* name; };
 const Rect kInstrument{10, 10, 220, 150, "InstrumentFace"};
 const Rect kMap{250, 10, 220, 150, "MapView"};
 const Rect kGlobe{490, 10, 240, 150, "GlobeView"};
-const Rect kPatch{10, 180, 330, 160, "PatchCanvas"};
 const Rect kScope{360, 180, 370, 160, "ScopeTube"};
 
 // The right-most column holding ink in the rows [y0, y1) of [x0, x1) - how wide the text there is, whatever the typeface.
@@ -92,7 +91,7 @@ int main() {
 
     Frame f = render(ui, kW, kH);
     CHECK(f.width == kW && f.height == kH);
-    for (const Rect& r : {kInstrument, kMap, kGlobe, kPatch, kScope}) { checkPanel(f, r); }
+    for (const Rect& r : {kInstrument, kMap, kGlobe, kScope}) { checkPanel(f, r); }
     // the five do not touch: the sheet's ground runs between them
     CHECK(f.near(240, 80, kBg) && f.near(480, 80, kBg) && f.near(120, 170, kBg) && f.near(350, 260, kBg));
     f.savePng(shotDir() + "stubs-specimen.png");
@@ -112,10 +111,9 @@ int main() {
     Frame caps = render(ui, kW, kH);
     const int capMap = inkRight(caps, kMap.x + 8, kMap.y + 6, kMap.x + kMap.w - 8, kMap.y + 22, kWell) - kMap.x;
     const int capGlobe = inkRight(caps, kGlobe.x + 8, kGlobe.y + 6, kGlobe.x + kGlobe.w - 8, kGlobe.y + 22, kWell) - kGlobe.x;
-    const int capPatch = inkRight(caps, kPatch.x + 8, kPatch.y + 6, kPatch.x + kPatch.w - 8, kPatch.y + 22, kWell) - kPatch.x;
     const int capScope = inkRight(caps, kScope.x + 8, kScope.y + 6, kScope.x + kScope.w - 8, kScope.y + 22, kWell) - kScope.x;
-    CHECK(capMap > 10 && capMap < 70 && capGlobe > capMap && capPatch > capMap && capScope > capMap);   // MAP is the shortest word
-    CHECK(capGlobe < 90 && capPatch < 90 && capScope < 90);
+    CHECK(capMap > 10 && capMap < 70 && capGlobe > capMap && capScope > capMap);   // MAP is the shortest word
+    CHECK(capGlobe < 90 && capScope < 90);
     // the cap's ink is the sheet's muted caption colour, brighter than "phase 3"
     {
         int brightest = 0;
@@ -154,24 +152,6 @@ int main() {
     ui->set_globe_terminator(true);
     CHECK(ui->get_globe_lat() == -33.9f && ui->get_globe_lon() == 151.2f && ui->get_globe_terminator());
     CHECK(ui->get_globe_tracks()->row_count() == 1 && ui->get_globe_tracks()->row_data(0)->label == "ISS");
-    // PatchCanvas: nodes, wires
-    {
-        PatchNode a;
-        a.id = 1; a.x = 0.1f; a.y = 0.2f; a.name = "Tuner"; a.kind = "source"; a.active = true; a.fault = false;
-        PatchNode b;
-        b.id = 2; b.x = 0.6f; b.y = 0.5f; b.name = "Demod"; b.kind = "decoder"; b.active = false; b.fault = true;
-        ui->set_patch_nodes(std::make_shared<slint::VectorModel<PatchNode>>(std::vector<PatchNode>{a, b}));
-        PatchWire w;
-        w.from = 1; w.from_port = 0; w.to = 2; w.to_port = 1;
-        ui->set_patch_wires(std::make_shared<slint::VectorModel<PatchWire>>(std::vector<PatchWire>{w}));
-    }
-    CHECK(ui->get_patch_nodes()->row_count() == 2 && ui->get_patch_wires()->row_count() == 1);
-    {
-        const auto n = ui->get_patch_nodes()->row_data(1);
-        CHECK(n.has_value() && n->id == 2 && n->name == "Demod" && n->kind == "decoder" && !n->active && n->fault && n->x == 0.6f && n->y == 0.5f);
-        const auto w = ui->get_patch_wires()->row_data(0);
-        CHECK(w.has_value() && w->from == 1 && w->from_port == 0 && w->to == 2 && w->to_port == 1);
-    }
     // ScopeTube: trace, caption, persistence
     {
         slint::SharedPixelBuffer<slint::Rgba8Pixel> trace(64, 32);
@@ -184,7 +164,7 @@ int main() {
     CHECK(ui->get_scope_caption() == "CH1" && ui->get_scope_persistence() == 0.8f);
     // the callbacks have the contract's signatures: the specimen's handlers compiled against them, nothing has fired by itself,
     // and each, called the way a page will call it, reaches its handler with its arguments
-    CHECK(ui->get_map_target() == 0 && ui->get_map_zoom_notches() == 0 && ui->get_patch_moved_id() == 0 && ui->get_patch_wire_from() == 0);
+    CHECK(ui->get_map_target() == 0 && ui->get_map_zoom_notches() == 0);
     ui->invoke_fire_target(12);
     CHECK(ui->get_map_target() == 12);
     ui->invoke_fire_pan(0.25f, -0.5f);
@@ -192,14 +172,10 @@ int main() {
     ui->invoke_fire_zoom(-2);
     ui->invoke_fire_zoom(3);
     CHECK(ui->get_map_zoom_notches() == 1);
-    ui->invoke_fire_node_moved(2, 0.75f, 0.125f);
-    CHECK(ui->get_patch_moved_id() == 2 && ui->get_patch_moved_x() == 0.75f && ui->get_patch_moved_y() == 0.125f);
-    ui->invoke_fire_wire(1, 0, 2, 1);
-    CHECK(ui->get_patch_wire_from() == 1 && ui->get_patch_wire_from_port() == 0 && ui->get_patch_wire_to() == 2 && ui->get_patch_wire_to_port() == 1);
 
     // a stub with every property set is still a panel: the same rectangles, the same caps
     Frame set = render(ui, kW, kH);
-    for (const Rect& r : {kInstrument, kMap, kGlobe, kPatch, kScope}) { checkPanel(set, r); }
+    for (const Rect& r : {kInstrument, kMap, kGlobe, kScope}) { checkPanel(set, r); }
     set.savePng(shotDir() + "stubs-specimen-set.png");
 
     // ---- the tooltip every stub carries (the contract's "interactive" rule): shown under the stub after the pointer rests ----

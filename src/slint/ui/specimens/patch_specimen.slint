@@ -1,0 +1,352 @@
+// The PATCH page specimen sheet (1260 x 1130): the Patch page (ui/patch_page.slint's PatchPage) in two widths, and the Patch presets page in three states, on the sample
+// models below, so tests/test_slint_patch.cpp can probe the pixels against the PatchScope artboard (artboards/Workbench-PatchScope.dc.html) and press the controls with
+// real pointer and key events. The sample patch is the one the contract names: Radio -> Channel -> Demod -> Speaker wired, the Radio selected, the Demod blocked, a refusal
+// shown; below them a picture Decoder, a text Sink with its lines, a Display and a Map; five loose wires of the five port tones and one selected, to read the strokes.
+//
+//   x     y      w x h        what it shows
+//   10    10     1100 x 640   (pg) PatchPage, override-recording to Rec: band (transport, run line, seven part keys, decoders, blueprints, note, information pane), the
+//                             canvas with the eight nodes and the inspector (Radio) at its right                                                  m-patch m-canvas m-inspector
+//   10    660    520 x 420    (pgn) PatchPage, default-forwarding to PatchEvents, at a narrow width: the part keys wrap in their FlowRow, a Radio key greyed (five radios)
+//   540   660    440 x 460    (pr) PatchPresetsPage, override-recording: three presets and the previous-patch row, the four keys, the note                m-presets
+//   990   660    254 x 460    (prn) PatchPresetsPage, default-forwarding, 254 px wide: the name row open and the Replace question up, long German strings m-presets-narrow
+//   probes: p1 (a 254-wide layout cell below the sheet) holds the bare presets page with the longest words and reports the cell's width (rule 11)
+//
+// What the test reads: `Rec` counts and names every callback of the components with an override; the page's measurements are out properties; the plain
+// (default-forwarding) components are watched through the PatchEvents global. The models are in-out, the test changes them.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { TipLayer } from "../tooltip.slint";
+import { SelectItem } from "../signal_bank.slint";
+import { SettingKind, SettingField } from "../forms.slint";
+import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio, InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents, PatchPage, PatchPresetsPage } from "../patch_page.slint";
+export { Theme, Skin, Workbench, ChipTone, LampState, SelectItem, SettingKind, SettingField, FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio, InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents }
+
+// What the components with an override report: the callback's name and its arguments, joined with a space.
+export global Rec {
+    in-out property <int> events;
+    in-out property <string> last;
+    in-out property <string> last-args;
+    callback fired(string, string);
+    public function rec(name: string, args: string) {
+        Rec.events += 1;
+        Rec.last = name;
+        Rec.last-args = args;
+        Rec.fired(name, args);
+    }
+}
+
+component SpecPatch inherits PatchPage {
+    run-clicked() => { Rec.rec("run-clicked", ""); }
+    all-off-clicked() => { Rec.rec("all-off-clicked", ""); }
+    presets-clicked() => { Rec.rec("presets-clicked", ""); }
+    part-pressed(a) => { Rec.rec("part-pressed", "" + a); }
+    decoder-pressed(a) => { Rec.rec("decoder-pressed", "" + a); }
+    blueprints-opened() => { Rec.rec("blueprints-opened", ""); }
+    blueprint-picked(a) => { Rec.rec("blueprint-picked", "" + a); }
+    canvas-size(a, b) => { Rec.rec("canvas-size", "" + a / 1px + " " + "" + b / 1px); }
+    canvas-pressed(a, b, c) => { Rec.rec("canvas-pressed", "" + a / 1px + " " + "" + b / 1px + " " + "" + c); }
+    canvas-moved(a, b) => { Rec.rec("canvas-moved", "" + a / 1px + " " + "" + b / 1px); }
+    canvas-released(a, b, c) => { Rec.rec("canvas-released", "" + a / 1px + " " + "" + b / 1px + " " + "" + c); }
+    canvas-left() => { Rec.rec("canvas-left", ""); }
+    canvas-wheel(a, b, c, d, e, f) => { Rec.rec("canvas-wheel", "" + a / 1px + " " + "" + b / 1px + " " + "" + c + " " + "" + d + " " + (e ? "1" : "0") + " " + (f ? "1" : "0")); }
+    zoom-step(a) => { Rec.rec("zoom-step", (a ? "1" : "0")); }
+    fit() => { Rec.rec("fit", ""); }
+    canvas-delete() => { Rec.rec("canvas-delete", ""); }
+    face-switch(a) => { Rec.rec("face-switch", "" + a); }
+    face-centre(a, b) => { Rec.rec("face-centre", "" + a + " " + b); }
+    face-freq(a, b) => { Rec.rec("face-freq", "" + a + " " + b); }
+    face-mode(a, b) => { Rec.rec("face-mode", "" + a + " " + "" + b); }
+    face-squelch-on(a, b) => { Rec.rec("face-squelch-on", "" + a + " " + (b ? "1" : "0")); }
+    face-squelch(a, b) => { Rec.rec("face-squelch", "" + a + " " + "" + b); }
+    inspector-fold() => { Rec.rec("inspector-fold", ""); }
+    inspector-name(a) => { Rec.rec("inspector-name", a); }
+    inspector-device-opened() => { Rec.rec("inspector-device-opened", ""); }
+    inspector-device(a) => { Rec.rec("inspector-device", "" + a); }
+    inspector-look() => { Rec.rec("inspector-look", ""); }
+    inspector-centre(a) => { Rec.rec("inspector-centre", a); }
+    inspector-rate(a) => { Rec.rec("inspector-rate", "" + a); }
+    inspector-freq(a) => { Rec.rec("inspector-freq", a); }
+    inspector-mode(a) => { Rec.rec("inspector-mode", "" + a); }
+    inspector-squelch-on(a) => { Rec.rec("inspector-squelch-on", (a ? "1" : "0")); }
+    inspector-squelch(a) => { Rec.rec("inspector-squelch", "" + a); }
+    inspector-plugin(a) => { Rec.rec("inspector-plugin", "" + a); }
+    inspector-setting(a, b) => { Rec.rec("inspector-setting", "" + a + " " + b); }
+    inspector-sink(a) => { Rec.rec("inspector-sink", "" + a); }
+    inspector-size(a) => { Rec.rec("inspector-size", "" + a); }
+    inspector-remove() => { Rec.rec("inspector-remove", ""); }
+}
+
+component SpecPresets inherits PatchPresetsPage {
+    presets-row(a) => { Rec.rec("presets-row", "" + a); }
+    presets-row-activated(a) => { Rec.rec("presets-row-activated", "" + a); }
+    presets-load() => { Rec.rec("presets-load", ""); }
+    presets-save-as() => { Rec.rec("presets-save-as", ""); }
+    presets-rename() => { Rec.rec("presets-rename", ""); }
+    presets-delete() => { Rec.rec("presets-delete", ""); }
+    presets-name(a) => { Rec.rec("presets-name", a); }
+    presets-go() => { Rec.rec("presets-go", ""); }
+    presets-cancel() => { Rec.rec("presets-cancel", ""); }
+    presets-replace(a) => { Rec.rec("presets-replace", (a ? "1" : "0")); }
+    presets-delete-confirm(a) => { Rec.rec("presets-delete-confirm", (a ? "1" : "0")); }
+}
+
+export component PatchSpecimen inherits Window {
+    width: 1260px;
+    height: 1130px;
+    background: Theme.bg;
+
+    // ---- the geometry the test reads ----
+    out property <length> band-h: pg.band-height;
+    out property <length> info-w: pg.info-width;
+    out property <length> left-w: pg.left-width;
+    out property <length> canvas-w: pg.canvas-w;
+    out property <length> canvas-h: pg.canvas-h;
+    out property <length> canvas-oy: pg.canvas-oy;
+    out property <length> inspector-x: pg.inspector-x;
+    out property <length> inspector-w: pg.inspector-w;
+    out property <length> transport-y: pg.transport-y;
+    out property <length> readout-y: pg.readout-y;
+    out property <length> parts-y: pg.parts-y;
+    out property <length> decoders-y: pg.decoders-y;
+    out property <length> decoders-x0: pg.decoders-x0;
+    out property <length> blueprints-y: pg.blueprints-y;
+    out property <length> blueprint-note-y: pg.blueprint-note-y;
+    out property <int> part-rows: pg.part-rows;
+    out property <int> decoder-rows: pg.decoder-rows;
+    out property <length> inspector-name-y: pg.inspector-name-y;
+    out property <length> inspector-block-y: pg.inspector-block-y;
+    out property <length> inspector-size-y: pg.inspector-size-y;
+    out property <length> inspector-default-y: pg.inspector-default-y;
+    out property <length> inspector-remove-y: pg.inspector-remove-y;
+    out property <length> n-band-h: pgn.band-height;
+    out property <length> n-info-w: pgn.info-width;
+    out property <length> n-canvas-oy: pgn.canvas-oy;
+    out property <length> n-canvas-w: pgn.canvas-w;
+    out property <length> n-canvas-h: pgn.canvas-h;
+    out property <length> n-transport-y: pgn.transport-y;
+    out property <length> n-readout-y: pgn.readout-y;
+    out property <length> n-parts-y: pgn.parts-y;
+    out property <length> n-decoders-y: pgn.decoders-y;
+    out property <length> n-decoders-x0: pgn.decoders-x0;
+    out property <int> n-part-rows: pgn.part-rows;
+    out property <int> n-decoder-rows: pgn.decoder-rows;
+    out property <length> pr-list-y: pr.list-y;
+    out property <length> pr-list-h: pr.list-h;
+    out property <length> pr-keys-y: pr.keys-y;
+    out property <length> pr-name-y: pr.name-y;
+    out property <length> pr-note-y: pr.note-y;
+    out property <length> prn-list-y: prn.list-y;
+    out property <length> prn-list-h: prn.list-h;
+    out property <length> prn-keys-y: prn.keys-y;
+    out property <length> prn-name-y: prn.name-y;
+    out property <length> prn-note-y: prn.note-y;
+    out property <length> prn-modal-x: prn.modal-x;
+    out property <length> prn-modal-y: prn.modal-y;
+    out property <length> prn-modal-w: prn.modal-w;
+    out property <length> prn-modal-h: prn.modal-h;
+    out property <length> prn-modal-keys-y: prn.modal-keys-y;
+    out property <length> prn-modal-yes-x: prn.modal-yes-x;
+    out property <length> prn-modal-no-x: prn.modal-no-x;
+    out property <length> probe-y: root.height + 10px;
+    out property <length> p1-w: p1.width;
+
+    public function focus-presets-name() { pr.focus-name(); }
+
+    // ---- the sample models (the test may change them) ----
+    in-out property <PatchModel> m-patch: {
+        running: true, run-label: "STOP",
+        run-tooltip: "Stop the patch: every patch radio closes, recordings are\nfinished, and the receiver gets its radio back.",
+        run-line: "RUNNING - 1 of 1 radio open", run-line-lit: true, presets-open: false, tab-chip: "RUNNING", tab-chip-tone: ChipTone.good,
+        parts: [
+            { label: "Radio", kind: 0, enabled: true, tooltip: "" },
+            { label: "Channel", kind: 1, enabled: true, tooltip: "" },
+            { label: "Demod", kind: 2, enabled: true, tooltip: "" },
+            { label: "Spectrum", kind: 3, enabled: true, tooltip: "" },
+            { label: "Speaker", kind: 4, enabled: true, tooltip: "" },
+            { label: "Text out", kind: 5, enabled: true, tooltip: "" },
+            { label: "Map", kind: 6, enabled: true, tooltip: "" },
+        ],
+        decoders: [
+            { label: "ADS-B", index: 0, tooltip: "ADS-B\nI/Q input, needs a fixed rate\nWire it from a channel (or the radio itself)." },
+            { label: "AIS", index: 1, tooltip: "AIS\nI/Q input, any rate\nWire it from a channel (or the radio itself)." },
+            { label: "APRS", index: 2, tooltip: "APRS\nAudio input, any rate\nWire it from a demodulator." },
+            { label: "WEFAX (picture)", index: 3, tooltip: "WEFAX\nAudio input, needs a fixed rate\nWire it from a demodulator." },
+            { label: "RTTY (I/Q)", index: 4, tooltip: "RTTY\nI/Q input, any rate\nWire it from a channel (or the radio itself)." },
+            { label: "RTTY (audio)", index: 5, tooltip: "RTTY\nAudio input, any rate\nWire it from a demodulator." },
+        ],
+        no-decoders: "", blueprints-shown: true,
+        blueprints: [
+            { label: "ADS-B Aircraft Decoder", id: "0", enabled: true, note: "1090.0000 MHz" },
+            { label: "Listen to the tower: Heathrow", id: "1", enabled: true, note: "TWR 118.500\nTWR 118.700" },
+            { label: "APRS (picture)", id: "2", enabled: true, note: "144.8000 MHz" },
+        ],
+        blueprint-note: "Placed \"ADS-B Aircraft Decoder\". Press START to run it.",
+        info: {
+            runnable: true, verdict: "This patch can run.", level-line: "-61.4 dB on this channel", plan-line: "1 channel(s), decimate by 8",
+            none-selected: false, help: [], selection: "RADIO  Radio", folded-note: "",
+            problems: [{ text: "no frequency set", advisory: false }, { text: "nothing is listening to this", advisory: true }],
+        },
+        inspector-shown: true, inspector-folded: false,
+    };
+    in-out property <CanvasModel> m-canvas: {
+        zoom: 1.0, faces-live: true, grid-step: 26px, grid-ox: 6px, grid-oy: 14px, keys-shown: true, ghost: "",
+        refusal: { shown: true, text: "those two carry different things", x: 340px, y: 380px },
+        wires: [
+            { path: "M 220 95 C 235 95 235 70 250 70", tone: 0, selected: false },
+            { path: "M 430 70 C 445 70 445 90 460 90", tone: 0, selected: true },
+            { path: "M 660 90 C 675 90 675 75 690 75", tone: 1, selected: false },
+            { path: "M 20 400 L 120 400", tone: 0, selected: false },
+            { path: "M 20 414 L 120 414", tone: 1, selected: false },
+            { path: "M 20 428 L 120 428", tone: 2, selected: false },
+            { path: "M 20 442 L 120 442", tone: 3, selected: false },
+            { path: "M 20 456 L 120 456", tone: 4, selected: false },
+            { path: "M 160 428 L 300 428", tone: 1, selected: true },
+        ],
+        nodes: [
+            { id: 1, kind: 0, kind-caption: "RADIO", name: "Radio", x: 20px, y: 20px, w: 200px, h: 150px, selected: true, blocked: false, fault: false, active: true,
+              hot-close: false, hot-grip: false, inputs: [], outputs: [{ x: 220px, y: 95px, tone: 0 }], reading: "", reading-tone: 0, reading2: "",
+              face: { radio-switch: 2, radio-switch-label: "ON", device-label: "RTL-SDR #0", centre-text: "100.100000", centre-note: "A radio cannot tune to 0 Hz", freq-text: "",
+                      mode-index: 0, squelch-on: false, squelch-norm: 0, squelch-text: "", gate-shown: false, gate-text: "", gate-word: "", gate-lit: false,
+                      level-shown: false, level-norm: 0, have-picture: false, lines: [{ text: "2.400 MS/s", tone: 2 }], lines-after: [] } },
+            { id: 2, kind: 1, kind-caption: "CHANNEL", name: "Channel", x: 250px, y: 20px, w: 180px, h: 100px, selected: false, blocked: false, fault: false, active: false,
+              hot-close: true, hot-grip: false, inputs: [{ x: 250px, y: 70px, tone: 0 }], outputs: [{ x: 430px, y: 70px, tone: 0 }], reading: "-62 dB", reading-tone: 2, reading2: "",
+              face: { radio-switch: 0, radio-switch-label: "", device-label: "", centre-text: "", centre-note: "", freq-text: "100.100000",
+                      mode-index: 0, squelch-on: false, squelch-norm: 0, squelch-text: "", gate-shown: false, gate-text: "", gate-word: "", gate-lit: false,
+                      level-shown: false, level-norm: 0, have-picture: false, lines: [], lines-after: [] } },
+            { id: 3, kind: 2, kind-caption: "DEMOD", name: "Demod", x: 460px, y: 20px, w: 200px, h: 140px, selected: false, blocked: true, fault: false, active: false,
+              hot-close: false, hot-grip: false, inputs: [{ x: 460px, y: 90px, tone: 0 }], outputs: [{ x: 660px, y: 90px, tone: 1 }], reading: "", reading-tone: 0, reading2: "",
+              face: { radio-switch: 0, radio-switch-label: "", device-label: "", centre-text: "", centre-note: "", freq-text: "",
+                      mode-index: 1, squelch-on: true, squelch-norm: 0.5, squelch-text: "-60 dB", gate-shown: true, gate-text: "-48 dB", gate-word: "open", gate-lit: true,
+                      level-shown: false, level-norm: 0, have-picture: false, lines: [], lines-after: [] } },
+            { id: 4, kind: 5, kind-caption: "SINK", name: "Speaker", x: 690px, y: 20px, w: 190px, h: 110px, selected: false, blocked: false, fault: false, active: false,
+              hot-close: false, hot-grip: true, inputs: [{ x: 690px, y: 75px, tone: 1 }], outputs: [], reading: "", reading-tone: 0, reading2: "",
+              face: { radio-switch: 0, radio-switch-label: "", device-label: "", centre-text: "", centre-note: "", freq-text: "",
+                      mode-index: 0, squelch-on: false, squelch-norm: 0, squelch-text: "", gate-shown: false, gate-text: "", gate-word: "", gate-lit: false,
+                      level-shown: true, level-norm: 0.6, have-picture: false,
+                      lines: [{ text: "Demod", tone: 3 }, { text: "The speakers", tone: 1 }], lines-after: [{ text: "the device went away", tone: 4 }] } },
+            { id: 5, kind: 3, kind-caption: "DECODER", name: "APRS", x: 20px, y: 190px, w: 200px, h: 150px, selected: false, blocked: false, fault: false, active: false,
+              hot-close: false, hot-grip: false, inputs: [{ x: 20px, y: 265px, tone: 1 }], outputs: [{ x: 220px, y: 265px, tone: 2 }], reading: "3 lines", reading-tone: 2, reading2: "N0CALL>APRS: test",
+              face: { radio-switch: 0, radio-switch-label: "", device-label: "", centre-text: "", centre-note: "", freq-text: "",
+                      mode-index: 0, squelch-on: false, squelch-norm: 0, squelch-text: "", gate-shown: false, gate-text: "", gate-word: "", gate-lit: false,
+                      level-shown: false, level-norm: 0, picture: @image-url("../icons/fox.svg"), have-picture: true, lines: [], lines-after: [] } },
+            { id: 6, kind: 5, kind-caption: "SINK", name: "Text out", x: 250px, y: 190px, w: 260px, h: 110px, selected: false, blocked: false, fault: false, active: false,
+              hot-close: false, hot-grip: false, inputs: [{ x: 250px, y: 245px, tone: 2 }], outputs: [], reading: "", reading-tone: 0, reading2: "",
+              face: { radio-switch: 0, radio-switch-label: "", device-label: "", centre-text: "", centre-note: "", freq-text: "",
+                      mode-index: 0, squelch-on: false, squelch-norm: 0, squelch-text: "", gate-shown: false, gate-text: "", gate-word: "", gate-lit: false,
+                      level-shown: false, level-norm: 0, have-picture: false,
+                      lines: [{ text: "APRS: first decoded line", tone: 0 }, { text: "APRS: second decoded line", tone: 0 }, { text: "APRS: newest decoded line", tone: 0 }], lines-after: [] } },
+            { id: 7, kind: 4, kind-caption: "DISPLAY", name: "Spectrum", x: 540px, y: 190px, w: 160px, h: 100px, selected: false, blocked: false, fault: false, active: false,
+              hot-close: false, hot-grip: false, inputs: [{ x: 540px, y: 240px, tone: 0 }], outputs: [], reading: "", reading-tone: 0, reading2: "",
+              face: { radio-switch: 0, radio-switch-label: "", device-label: "", centre-text: "", centre-note: "", freq-text: "",
+                      mode-index: 0, squelch-on: false, squelch-norm: 0, squelch-text: "", gate-shown: false, gate-text: "", gate-word: "", gate-lit: false,
+                      level-shown: false, level-norm: 0, have-picture: false, lines: [{ text: "No spectrum yet - its radio is not running.", tone: 1 }], lines-after: [] } },
+            { id: 8, kind: 6, kind-caption: "MAP", name: "Map", x: 730px, y: 190px, w: 140px, h: 100px, selected: false, blocked: false, fault: true, active: false,
+              hot-close: false, hot-grip: false, inputs: [{ x: 730px, y: 240px, tone: 4 }], outputs: [], reading: "", reading-tone: 0, reading2: "",
+              face: { radio-switch: 0, radio-switch-label: "", device-label: "", centre-text: "", centre-note: "", freq-text: "",
+                      mode-index: 0, squelch-on: false, squelch-norm: 0, squelch-text: "", gate-shown: false, gate-text: "", gate-word: "", gate-lit: false,
+                      level-shown: false, level-norm: 0, have-picture: false, lines: [{ text: "no targets yet", tone: 2 }], lines-after: [] } },
+        ],
+    };
+    in-out property <InspectorModel> m-inspector: {
+        shown: true, folded: false, node: 1, kind: 0, kind-caption: "RADIO", name: "Radio",
+        radio: {
+            device-items: [
+                { label: "RTL-SDR #0 (R820T)", id: "rtl:0", enabled: true, note: "" },
+                { label: "SDRplay RSPduo  (used by Radio 2)", id: "sdrplay:1", enabled: false, note: "" },
+                { label: "Signal generator", id: "siggen", enabled: true, note: "" },
+            ],
+            device-index: 0, device-label: "RTL-SDR #0 (R820T)", looking: false, look-enabled: true, centre-text: "100.100000", centre-note: "A radio cannot tune to 0 Hz",
+            rate-items: [
+                { label: "1.000 MS/s", id: "", enabled: true, note: "" }, { label: "2.000 MS/s", id: "", enabled: true, note: "" },
+                { label: "2.400 MS/s", id: "", enabled: true, note: "" }, { label: "3.000 MS/s", id: "", enabled: true, note: "" },
+            ],
+            rate-index: 2, rate-label: "2.400 MS/s", rate-fixed: false, rate-fixed-text: "",
+            lines: [{ text: "running 2.400 MS/s", tone: 2 }, { text: "at 100.100000 MHz", tone: 2 }, { text: "Up to 5 radios, each its own device.", tone: 1 }],
+        },
+        freq-text: "100.100000", mode-index: 1, squelch-on: true, squelch-norm: 0.5, squelch-text: "-60 dB", gate-shown: true, gate-text: "-48 dB", gate-word: "open", gate-lit: true,
+        decoder: {
+            plugin-items: [{ label: "ADS-B", id: "0", enabled: true, note: "adsb.dll" }, { label: "AIS", id: "1", enabled: true, note: "ais.dll" }], plugin-index: 0, plugin-label: "ADS-B",
+            feed-note: "I/Q - wire it from a channel, or from the radio for the whole band input.", fed: ["fed 2400000 Hz", "centred on 1090.000000 MHz"],
+            shown-note: "Wire its output to a Text out part to read what it decodes in the Decoder output window.",
+            settings: [{ id: 7, key: "gain", label: "Gain", kind: SettingKind.number, value: "12", checked: false, placeholder: "", max-length: 8, error: "", pending: false }], has-settings: true,
+        },
+        map-wired: "2 of 5 inputs wired", map-sources: [{ count: "12", name: "ADS-B" }, { count: "3", name: "AIS" }],
+        map-help: "Wire the map output of up to 5 decoders here - aircraft from one radio, ships from another - and they share this map.",
+        sink: {
+            items: [{ label: "A WAV file", id: "wav", enabled: true, note: "" }, { label: "An MP3 file (needs Windows)", id: "mp3", enabled: false, note: "" }, { label: "The speakers", id: "speakers", enabled: true, note: "" }],
+            index: 2, label: "The speakers", lines: [{ text: "Speakers (Realtek)", tone: 2 }, { text: "1.2 s", tone: 2 }], files-note: "Files go in C:\\Recordings, one per speaker, named after it.",
+        },
+        audio-sink: true, help: "This node has nothing to set yet.",
+    };
+
+    // the narrow page: the Radio key greyed (five radios), a long run line
+    in-out property <PatchModel> m-narrow: {
+        running: false, run-label: "START", run-tooltip: "Start the patch: every radio switched on opens.", run-line: "STOPPED - 0 of 5 radios switched on", run-line-lit: false,
+        presets-open: true, tab-chip: "5 NODES", tab-chip-tone: ChipTone.neutral,
+        parts: [
+            { label: "Radio", kind: 0, enabled: false, tooltip: "A patch has at most 5 radios." },
+            { label: "Channel", kind: 1, enabled: true, tooltip: "" },
+            { label: "Demod", kind: 2, enabled: true, tooltip: "" },
+            { label: "Spectrum", kind: 3, enabled: true, tooltip: "" },
+            { label: "Speaker", kind: 4, enabled: true, tooltip: "" },
+            { label: "Text out", kind: 5, enabled: true, tooltip: "" },
+            { label: "Map", kind: 6, enabled: true, tooltip: "" },
+        ],
+        decoders: [
+            { label: "ADS-B", index: 0, tooltip: "ADS-B\nI/Q input, needs a fixed rate\nWire it from a channel (or the radio itself)." },
+            { label: "AIS", index: 1, tooltip: "AIS" }, { label: "APRS", index: 2, tooltip: "APRS" }, { label: "ACARS", index: 3, tooltip: "ACARS" },
+            { label: "POCSAG", index: 4, tooltip: "POCSAG" }, { label: "WEFAX (picture)", index: 5, tooltip: "WEFAX" }, { label: "RTTY (I/Q)", index: 6, tooltip: "RTTY" },
+            { label: "RTTY (audio)", index: 7, tooltip: "RTTY" },
+        ],
+        no-decoders: "", blueprints-shown: true, blueprints: [{ label: "ADS-B Aircraft Decoder", id: "0", enabled: true, note: "1090.0000 MHz" }],
+        blueprint-note: "Placed \"ADS-B\". It has no preset frequency - type one in before pressing START.",
+        info: {
+            runnable: false, verdict: "This patch cannot run yet.", level-line: "", plan-line: "", none-selected: true,
+            help: ["Nothing selected.", "Click a node to set what it does. Drag from one port to another to wire them; drag a node by its title bar to move it. Delete removes whatever is selected.",
+                   "Drag empty canvas or scroll to move round the patch. Ctrl+scroll or the + and - keys zoom; Fit shows every node."],
+            selection: "", folded-note: "", problems: [],
+        },
+        inspector-shown: false, inspector-folded: false,
+    };
+    in-out property <CanvasModel> m-canvas-narrow: {
+        zoom: 1.0, faces-live: true, grid-step: 0px, grid-ox: 0px, grid-oy: 0px, keys-shown: true, ghost: "", refusal: { shown: false, text: "", x: 0px, y: 0px }, wires: [], nodes: [],
+    };
+    in-out property <InspectorModel> m-inspector-narrow: { shown: false, folded: false, node: 0, kind: 0, kind-caption: "", name: "", audio-sink: false, help: "" };
+
+    in-out property <PatchPresetsModel> m-presets: {
+        rows: [
+            { text: "(previous patch)", previous: true, selected: false },
+            { text: "Airband watch", previous: false, selected: false },
+            { text: "ADS-B plus map", previous: false, selected: true },
+            { text: "Marine VHF", previous: false, selected: false },
+        ],
+        empty-shown: false, load-enabled: true, rename-enabled: true, delete-enabled: false, edit: 0, name-draft: "", note: "Saved \"ADS-B plus map\".", note-good: true,
+        ask-replace: false, replace-text: "A preset called \"ADS-B plus map\" already exists.\nReplace it with the patch on the canvas?", ask-delete: false,
+        delete-text: "Delete the preset \"ADS-B plus map\"? This cannot be undone.",
+    };
+    in-out property <PatchPresetsModel> m-presets-narrow: {
+        rows: [
+            { text: "(vorheriger Patch)", previous: true, selected: false },
+            { text: "Flugfunk-Ueberwachung mit allen Dekodern und der Karte", previous: false, selected: true },
+        ],
+        empty-shown: false, load-enabled: true, rename-enabled: true, delete-enabled: true, edit: 1, name-draft: "Flugfunk-Ueberwachung", note: "Ein anderes Preset traegt bereits diesen Namen.", note-good: false,
+        ask-replace: true, replace-text: "Ein Preset namens \"Flugfunk-Ueberwachung\" ist bereits vorhanden.\nSoll es durch den Patch auf der Arbeitsflaeche ersetzt werden?", ask-delete: false,
+        delete-text: "",
+    };
+    in-out property <PatchPresetsModel> m-presets-long: {
+        rows: [{ text: "Flugfunk-Ueberwachung mit allen Dekodern und der Karte", previous: false, selected: true }],
+        empty-shown: false, load-enabled: true, rename-enabled: true, delete-enabled: true, edit: 2, name-draft: "Flugfunk-Ueberwachung", note: "Dieses Preset kann nicht gespeichert werden, weil der Patch zu gross ist (ueber 256 KB).", note-good: false,
+        ask-replace: false, replace-text: "", ask-delete: false, delete-text: "",
+    };
+
+    // ---- the sheet ----
+    pg := SpecPatch { x: 10px; y: 10px; width: 1100px; height: 640px; model: root.m-patch; canvas: root.m-canvas; inspector: root.m-inspector; }
+    pgn := PatchPage { x: 10px; y: 660px; width: 520px; height: 420px; model: root.m-narrow; canvas: root.m-canvas-narrow; inspector: root.m-inspector-narrow; }
+    pr := SpecPresets { x: 540px; y: 660px; width: 440px; height: 460px; model: root.m-presets; }
+    prn := PatchPresetsPage { x: 990px; y: 660px; width: 254px; height: 460px; model: root.m-presets-narrow; }
+
+    // the rule-11 probe: the bare presets page in a 254 px cell asks for no more than 254 px
+    HorizontalLayout { x: 10px; y: root.probe-y; width: 254px; height: 20px; p1 := Rectangle { PatchPresetsPage { model: root.m-presets-long; } } }
+
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

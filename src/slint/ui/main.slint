@@ -39,11 +39,13 @@ import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
 import { AgeTick, WaterfallView } from "waterfall.slint";
 import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
-import { PatchCanvas, ScopeTube, PatchNode, PatchWire } from "stubs.slint";
+import { ScopeTube } from "stubs.slint";
+import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
+         InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents, PatchPage } from "patch_page.slint";
 import { AboutSlint } from "std-widgets.slint";
 
 export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
-         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, AgeTick, PaletteResult, PatchNode, PatchWire,
+         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, AgeTick, PaletteResult,
          KitEvents, DecodeRow, PluginEntry, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow,
@@ -52,7 +54,9 @@ export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, Men
          SystemEvents, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
          UsageModel, TesterModel, ReportPageModel,
          ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow, MarkersModel,
-         ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel }
+         ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
+         FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
+         InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -156,6 +160,10 @@ export component MainWindow inherits Window {
     in property <string> converter-line;             // "" = none (the rail footer's warning line)
     // centre
     in-out property <int> view-index: 0;             // RECEIVER PATCH SCOPE
+    // THE PATCH PAGE (phase 3, docs 6.44): the band, the canvas and the inspector of view 1, filled by the host (patch_publish.cpp)
+    in property <PatchModel> patch-model;
+    in property <CanvasModel> canvas-model;
+    in property <InspectorModel> inspector-model;
     // the plugin kit (pages.slint): the docked and torn-off pages, the DECODE bank's rows and drawers, the "Sound is muted" question
     in property <[PageTab]> pages: [];
     // THE SIGNAL BANK (phase 3, docs 6.39): the bodies under the rows of bank 0, filled by the host (signal_publish.cpp)
@@ -700,7 +708,7 @@ export component MainWindow inherits Window {
                             marker-hovered(i) => { root.marker-hovered(i); }
                         }
                     }
-                    if root.view-index == 1 : PatchCanvas { }
+                    if root.view-index == 1 : PatchPage { model: root.patch-model; canvas: root.canvas-model; inspector: root.inspector-model; }
                     if root.view-index == 2 : ScopeTube { caption: @tr("Scope"); }
                     // a docked page of the plugin kit (its body reaches the host through the KitEvents global)
                     if root.view-index >= 3 && root.view-index - 3 < root.pages.length && !root.pages[root.view-index - 3].torn : PageBody { page: root.pages[root.view-index - 3]; index: root.view-index - 3; }

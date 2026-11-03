@@ -5,7 +5,8 @@
 // the page's content changed; the main screen shows the current page's body in the centre and a torn page's in a TornWindow.
 //
 // Page kinds (PageTab.kind): 1 Decoder output, 2 picture, 3 panel, 4 instrument, 5 map, 6 Fitted modules, 7 a module's page,
-// 8 Target details, 9 the Plugin store (extend_bank.slint's StorePage over PageTab.store; its gestures go to ExtendEvents). DECODE bank row kinds
+// 8 Target details, 9 the Plugin store (extend_bank.slint's StorePage over PageTab.store; its gestures go to ExtendEvents), 10 the Patch presets page
+// (patch_page.slint's PatchPresetsPage over PageTab.patch-presets; its gestures go to PatchEvents). DECODE bank row kinds
 // (DecodeRow.kind): 0 Plugin store (the row that opens page kind 9), 1 the catalogue URL
 // field, 2 a retired plugin's row (Update / Remove), 3 Plugins (opens Fitted modules), 4 the "Turn on and off plugins" drawer,
 // 5 the "Target details" drawer, 6 a map page row, 7 a picture row, 8 a panel row, 9 an instrument row, 10 a note line.
@@ -24,6 +25,7 @@ import { FittedRowModel, FittedModules, ReachRowModel, ModulePage } from "fitted
 import { InstrumentState, InstrumentFace } from "instruments.slint";
 import { MapTarget, LegendRow, MapPane } from "map.slint";
 import { StoreModel, StorePage } from "extend_bank.slint";
+import { PatchPresetsModel, PatchPresetsPage } from "patch_page.slint";
 
 export { PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow }
@@ -287,6 +289,8 @@ export struct PageTab {
     details: DetailsModel,
     // 9 Plugin store
     store: StoreModel,
+    // 10 Patch presets (NOT `presets`, which is the plugin preset keys' field)
+    patch-presets: PatchPresetsModel,
 }
 
 // The bar every plugin page starts with: the presets and the settings fold (the order of the ImGui window's four loops).
@@ -537,6 +541,8 @@ export component PageBody inherits Rectangle {
             reenable-clicked => { root.module-reenable(root.index); } keep-toggled(v) => { root.module-keep(root.index, v); } }
         // 9 the Plugin store (extend_bank.slint): its gestures reach the host through ExtendEvents, not through this body's callbacks
         if root.page.kind == 9 : StorePage { vertical-stretch: 1; model: root.page.store; }
+        // 10 the Patch presets page (patch_page.slint): its gestures reach the host through PatchEvents
+        if root.page.kind == 10 : PatchPresetsPage { vertical-stretch: 1; model: root.page.patch-presets; }
         // 8 Target details
         if root.page.kind == 8 : VerticalLayout { padding: 10px; alignment: start;
             TargetDetails { heading: root.page.details.heading; chip: root.page.details.chip; lamp: root.page.details.lamp; lines: root.page.details.lines; gone: root.page.details.gone;

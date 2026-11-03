@@ -132,8 +132,25 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/plugin_store_reasons.cpp")
         endif()
+        if(unit STREQUAL "patch")
+            # The PATCH page's logic (phase 3, the patch allowance) quotes the core's pure units rather than copying them: the grants of the SIGNAL family's commands, the airport table
+            # (airband_data, for the tower blueprints), the presets' rules (patch_presets with the diagnostic log it reports a dropped entry to). patch_graph, patch_io, patch_plan,
+            # patch_draft, patch_blueprints, patch_devices, patch_device_label, freq_converter and gui/patch_view_math.hpp are header-only and pure (no imgui.h).
+            list(APPEND _extra
+                "${CMAKE_CURRENT_SOURCE_DIR}/../signal_logic.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/airband_data.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/patch_presets.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp")
+        endif()
         foxsdr_slint_logic_test(${name} ${_extra})
         if(unit STREQUAL "tools")
+            target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
+            if(MSVC)
+                target_compile_options(${name} PRIVATE /utf-8)
+                target_compile_definitions(${name} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+            endif()
+        endif()
+        if(unit STREQUAL "patch")
             target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
             if(MSVC)
                 target_compile_options(${name} PRIVATE /utf-8)

@@ -348,7 +348,15 @@ void PluginKit::pollResults() {
             std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message);
             events_.notices.push_back(std::string("refused: ") + r[i].message);
         }
+        unclaimed_.push_back(r[i]);
+        if (unclaimed_.size() > 64u) { unclaimed_.erase(unclaimed_.begin()); }
     }
+}
+
+std::vector<FoxCommandResult> PluginKit::takeUnclaimedResults() {
+    std::vector<FoxCommandResult> out = std::move(unclaimed_);
+    unclaimed_.clear();
+    return out;
 }
 
 KitEvents PluginKit::takeEvents() {

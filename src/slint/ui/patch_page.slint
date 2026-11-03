@@ -1,0 +1,2289 @@
+// FoxSDR Slint front end - THE PATCH PAGE (phase 3, the patch allowance): the canvas of nodes and wires, the transport and information band above it, the
+// inspector at its right, and the Patch presets page (PageTab kind 10). The design: specs/SCREENS.md E1, artboards/Workbench-PatchScope.dc.html (the left half:
+// the tab row, a 176 px band with a 424 px transport column and the information pane beside it, a canvas with the 190 px inspector at its right, the presets page);
+// the contract between this file and the host is slint-patch-contract.md (the structs, PatchEvents, every component, the sizes and tones, the parity map for
+// docs/slint-port-tick.md rows 1888-1963); the wording is THE IMGUI WINDOW'S (app_window.cpp drawPatchView / drawPatchFaces, app_window_patch*.cpp, gui/patch_view.cpp),
+// so the catalogue entries apply for free. The artboard's bracketed strings are [proposed] and differ from the window's words; the window's are used.
+//
+// THE PATTERN IS THE BANKS': this file declares the structs the host fills, one global of every gesture (PatchEvents) and the components. PatchPage and
+// PatchPresetsPage declare a callback for every gesture and forward it to the global unless an instance overrides it (the specimen does, to count them);
+// the pieces inside them take plain callbacks and their page forwards. The host owns every value; a control shows the model's value and a click ASKS.
+// THE POINTER IS ONE STREAM (canvas-pressed / -moved / -released in canvas-local pixels): the host hit-tests with patch_view_math.hpp over the draft, because a hit
+// test made from the UI's element rectangles disagrees with the drawn port by a few pixels. The UI hands the host pixels; the host hands the UI the geometry
+// it drew from. The face widgets are real Slint widgets laid over the canvas AFTER its TouchArea, so a press on one never reaches canvas-pressed.
+//
+// THE PIECES ARE COPIED, NOT SHARED, a fifth time (Note, LineInput, DropRow, DropKey; see extend_bank.slint). The additions this file needs: `LineInput.suffix` and
+// `.font-size` (the face's " MHz" box), `DropKey.opened` and `.max-popup-h` (the blueprints' tall list, the device list's refresh), `FlowPlacer` (Slint has no
+// wrapping layout: a chain of eight-slot blocks places the keys of a FlowRow from their estimated widths, the window's keyWraps rule).
+//
+// CHOICES WHERE THE CONTRACT LEFT A QUESTION (each follows the rule it states):
+//  - The canvas keys are a small SegGroup: the library's 22 px keys in its 3 px frame make 28 px, 2 px apart (not the contract's 24 and 4).
+//  - The Radio switch Key is tinted by a Rectangle behind a ghost Key (the library's Key has no ground colour of its own).
+//  - Zoom scales the node (the host sends pixels), the header, the strokes and the face's TEXT (0.92 * font-small * z); the controls (Key, DropKey, Checkbox, Slider,
+//    LineInput) keep their natural size and font, because Slint has no scale transform and the library's controls draw their own text.
+//  - The plugin settings form keeps the kit's own fold line "Plugin settings" (open) instead of a separate caption over it (open question 14).
+//  - A FlowRow places a key from ESTIMATED widths: characters * 7 px + 28 (a small key: 2 * Theme.key-pad) or + 20 (an xs key). The contract's 6 px a character cut
+//    "Demod" and "ADS-B" short in the embedded Inter; a longer translation still elides inside its key. At most 64 keys are placed (eight blocks of eight).
+//  - The folded inspector strip (24 px) holds an icon-only fold key (one chevron, icons/fold.svg): the key's own text "<<" does not fit 24 px. Open, the key reads ">>".
+//  - PatchModel.inspector-shown / inspector-folded decide the page's layout; InspectorModel.shown / folded are the same facts and are not read. PatchModel.tab-chip
+//    and tab-chip-tone are the main window's tab row, not drawn here.
+//  - The mouse cursor is nwse-resize while any of the first 32 nodes has hot-grip (Slint has no `any` over a model).
+//  - A double click on a preset row is Slint's: its `clicked` fires on both releases and `double-clicked` after the second, so the host sees presets-row,
+//    presets-row, presets-row-activated (the selection twice is harmless).
+//  - A text sink is told from an audio sink by its input port's tone (2 = text), because FaceModel carries no flag for it.
+import { Theme } from "theme.slint";
+import { Chip, ChipTone, LampState } from "chips.slint";
+import { Caption, Key, SegGroup, SegKey } from "keys.slint";
+import { Lamp } from "lamps.slint";
+import { Checkbox } from "fields.slint";
+import { Slider } from "sliders.slint";
+import { SelectKey } from "sections.slint";
+import { TipTimer, PopupTipTimer } from "tooltip.slint";
+import { SelectItem } from "signal_bank.slint";
+import { SettingField, PluginSettingsForm } from "forms.slint";
+
+// A line of a face or of an inspector's readout: tone 0 plain (fg-soft), 1 muted (dim), 2 amber (a number or a note), 3 phosphor (what the radio received), 4 rust (a fault).
+export struct FaceLine { text: string, tone: int }
+
+// ---- the band ----
+export struct PartKey { label: string, kind: int, enabled: bool, tooltip: string }            // the seven fixed keys; kind 0..6 in the order of app_window.cpp kParts
+export struct DecoderKey { label: string, index: int, tooltip: string }                       // one per visible PATCH_PARTS row; index = that row
+export struct ProblemLine { text: string, advisory: bool }
+export struct InfoModel { runnable: bool, verdict: string, level-line: string, plan-line: string, none-selected: bool, help: [string], selection: string, folded-note: string, problems: [ProblemLine] }
+export struct PatchModel {
+    running: bool, run-label: string, run-tooltip: string, run-line: string, run-line-lit: bool, presets-open: bool, tab-chip: string, tab-chip-tone: ChipTone,
+    parts: [PartKey], decoders: [DecoderKey], no-decoders: string, blueprints-shown: bool, blueprints: [SelectItem], blueprint-note: string, info: InfoModel,
+    inspector-shown: bool, inspector-folded: bool,
+}
+
+// ---- the canvas ----
+export struct PortDot { x: length, y: length, tone: int }                                      // canvas-local pixels, the dot's centre; tone 0 I/Q, 1 audio, 2 text, 3 control, 4 track
+export struct FaceModel {
+    radio-switch: int, radio-switch-label: string, device-label: string, centre-text: string, centre-note: string,                  // Radio; switch 0 off, 1 on and waiting, 2 open
+    freq-text: string,                                                                                                              // Channel
+    mode-index: int, squelch-on: bool, squelch-norm: float, squelch-text: string, gate-shown: bool, gate-text: string, gate-word: string, gate-lit: bool,   // Demod
+    level-shown: bool, level-norm: float,                                                                                           // audio Sink: the level bar
+    picture: image, have-picture: bool,                                                                                             // picture Decoder
+    lines: [FaceLine], lines-after: [FaceLine],                                                                                     // every kind: the readouts under the controls; lines-after = under the level bar
+}
+export struct CanvasNode {
+    id: int, kind: int, kind-caption: string, name: string, x: length, y: length, w: length, h: length, selected: bool, blocked: bool, fault: bool, active: bool,
+    hot-close: bool, hot-grip: bool, inputs: [PortDot], outputs: [PortDot], reading: string, reading-tone: int, reading2: string, face: FaceModel,
+}                                                                                              // kind = core NodeKind: 0 Radio 1 Channel 2 Demod 3 Decoder 4 Display 5 Sink 6 Map
+export struct CanvasWire { path: string, tone: int, selected: bool }                           // path = SVG commands "M x y C x y x y x y" in canvas-local pixels; tone = the source output's port type
+export struct Refusal { shown: bool, text: string, x: length, y: length }                      // x, y = the bubble's top-left
+export struct CanvasModel { zoom: float, faces-live: bool, grid-step: length, grid-ox: length, grid-oy: length, nodes: [CanvasNode], wires: [CanvasWire], ghost: string, refusal: Refusal, keys-shown: bool }
+
+// ---- the inspector ----
+export struct InspectorRadio {
+    device-items: [SelectItem], device-index: int, device-label: string, looking: bool, look-enabled: bool, centre-text: string, centre-note: string,
+    rate-items: [SelectItem], rate-index: int, rate-label: string, rate-fixed: bool, rate-fixed-text: string, lines: [FaceLine],
+}
+export struct InspectorDecoder { plugin-items: [SelectItem], plugin-index: int, plugin-label: string, feed-note: string, fed: [string], shown-note: string, settings: [SettingField], has-settings: bool }
+export struct InspectorMapSource { count: string, name: string }
+export struct InspectorSink { items: [SelectItem], index: int, label: string, lines: [FaceLine], files-note: string }
+export struct InspectorModel {
+    shown: bool, folded: bool, node: int, kind: int, kind-caption: string, name: string, radio: InspectorRadio, freq-text: string,
+    mode-index: int, squelch-on: bool, squelch-norm: float, squelch-text: string, gate-shown: bool, gate-text: string, gate-word: string, gate-lit: bool,
+    decoder: InspectorDecoder, map-wired: string, map-sources: [InspectorMapSource], map-help: string, sink: InspectorSink, audio-sink: bool, help: string,
+}
+
+// ---- the presets page ----
+export struct PresetRow { text: string, previous: bool, selected: bool }
+export struct PatchPresetsModel {
+    rows: [PresetRow], empty-shown: bool, load-enabled: bool, rename-enabled: bool, delete-enabled: bool, edit: int, name-draft: string, note: string, note-good: bool,   // edit: 0 none, 1 SAVE AS, 2 RENAME
+    ask-replace: bool, replace-text: string, ask-delete: bool, delete-text: string,
+}
+
+// EVERY GESTURE OF THE PAGE AND OF THE PRESETS PAGE, as one global the host wires (ui->global<PatchEvents>().on_...). Positions are canvas-local pixels, the origin the
+// canvas' top-left; button 0 left, 1 right, 2 middle. A face gesture carries the node id; the inspector's act on the selected node.
+export global PatchEvents {
+    callback run-clicked();
+    callback all-off-clicked();
+    callback presets-clicked();
+    callback part-pressed(int);                        // kind 0..6
+    callback decoder-pressed(int);                     // the PATCH_PARTS row
+    callback blueprints-opened();
+    callback blueprint-picked(int);
+    callback canvas-size(length, length);
+    callback canvas-pressed(length, length, int);
+    callback canvas-moved(length, length);
+    callback canvas-released(length, length, int);
+    callback canvas-left();
+    callback canvas-wheel(length, length, float, float, bool, bool);   // x, y, notches-x, notches-y, ctrl, shift
+    callback zoom-step(bool);                          // true = in
+    callback fit();
+    callback canvas-delete();
+    callback face-switch(int);
+    callback face-centre(int, string);
+    callback face-freq(int, string);
+    callback face-mode(int, int);
+    callback face-squelch-on(int, bool);
+    callback face-squelch(int, float);
+    callback inspector-fold();
+    callback inspector-name(string);
+    callback inspector-device-opened();
+    callback inspector-device(int);
+    callback inspector-look();
+    callback inspector-centre(string);
+    callback inspector-rate(int);
+    callback inspector-freq(string);
+    callback inspector-mode(int);
+    callback inspector-squelch-on(bool);
+    callback inspector-squelch(float);
+    callback inspector-plugin(int);
+    callback inspector-setting(int, string);
+    callback inspector-sink(int);
+    callback inspector-size(int);                      // 0 Smaller, 1 Larger, 2 Default size
+    callback inspector-remove();
+    callback presets-row(int);
+    callback presets-row-activated(int);
+    callback presets-load();
+    callback presets-save-as();
+    callback presets-rename();
+    callback presets-delete();
+    callback presets-name(string);
+    callback presets-go();
+    callback presets-cancel();
+    callback presets-replace(bool);
+    callback presets-delete-confirm(bool);
+}
+
+
+// ================================================ the pieces the components are made of ================================================
+
+// The ink of a line in a tone (FaceLine.tone) and the colour of a port or a wire by its type (core PortType order: I/Q, audio, text, control, track).
+global PInk {
+    pure public function line(t: int) -> color {
+        return t == 1 ? Theme.dim : t == 2 ? Theme.chip-warn-fg : t == 3 ? Theme.chip-good-fg : t == 4 ? Theme.chip-err-fg : Theme.fg-soft;
+    }
+    pure public function port(t: int) -> color {
+        return t == 1 ? Theme.lamp-amber : t == 2 ? Theme.fg : t == 3 ? Theme.focus : t == 4 ? Theme.bookmark : Theme.lamp-green;
+    }
+    pure public function button(b: PointerEventButton) -> int {
+        return b == PointerEventButton.left ? 0 : b == PointerEventButton.right ? 1 : b == PointerEventButton.middle ? 2 : -1;
+    }
+}
+
+// The eight demodulator names of the window's kModeNames (core/receiver_tables.hpp): radio vocabulary, never translated.
+global ModeNames {
+    out property <[SelectItem]> items: [{ label: "NFM", id: "0", enabled: true, note: "" }, { label: "WFM", id: "1", enabled: true, note: "" }, { label: "AM", id: "2", enabled: true, note: "" }, { label: "DSB", id: "3", enabled: true, note: "" }, { label: "USB", id: "4", enabled: true, note: "" }, { label: "CW", id: "5", enabled: true, note: "" }, { label: "LSB", id: "6", enabled: true, note: "" }, { label: "RAW", id: "7", enabled: true, note: "" }];   // not-translated: demodulation modes, radio vocabulary
+    pure public function name(i: int) -> string {
+        return i >= 0 && i < root.items.length ? root.items[i].label : "";
+    }
+}
+
+// A sentence: 11 px, wrapped, dim unless an `ink` says otherwise. The words are a Text of an explicit width inside a Rectangle whose height is the Text's: a wrapped
+// Text that is itself a layout child is measured before its width is known and loses its last line when its layout is nested. `wrap-w` is the width the words wrap
+// at, NOT the width a layout gives the Note. Empty words take no height. `nowrap` cuts the line at the edge of whatever clips it (a text sink's lines).
+component Note inherits Rectangle {
+    in property <string> text;
+    in property <color> ink: Theme.dim;
+    in property <length> wrap-w;
+    in property <length> size: Theme.font-small;
+    in property <int> weight: Theme.weight-regular;
+    in property <bool> mono;
+    in property <bool> nowrap;
+    min-width: 0px;
+    height: root.text == "" ? 0px : words.preferred-height;
+    words := Text {
+        x: 0px;
+        y: 0px;
+        width: root.wrap-w > 0px ? root.wrap-w : root.width;
+        text: root.text;
+        wrap: root.nowrap ? TextWrap.no-wrap : TextWrap.word-wrap;
+        font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+        font-size: root.size;
+        font-weight: root.weight;
+        color: root.ink;
+    }
+}
+
+// The label over a field: 11 px, muted, elided before it can widen the row.
+component PLabel inherits Text {
+    min-width: 0px;
+    height: 14px;
+    overflow: elide;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-small;
+    color: Theme.muted;
+    vertical-alignment: center;
+}
+
+// The .ck checkbox, driven by the host's value: the Checkbox keeps its own `checked` after a press, so the model's value is pushed back into it every time the user
+// presses and every time the model changes (a refusal leaves the box where it was).
+component Tick inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> row-h: Theme.field-h;
+    callback toggled(bool);
+
+    height: max(root.row-h, box.height);
+    min-width: 0px;
+    preferred-width: box.preferred-width;
+    changed on => { box.checked = root.on; }
+    box := Checkbox {
+        x: 0px;
+        y: (root.height - self.height) / 2;
+        width: root.width;
+        label: root.label;
+        checked: root.on;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        toggled(v) => {
+            root.toggled(v);
+            box.checked = root.on;
+        }
+    }
+}
+
+// The one-line input (.in, 24 px): shows `value` (the host's text), commits on Enter and on the focus leaving after an edit. `edited` reports each keystroke.
+// `suffix` is a unit drawn after the figure (" MHz"), `font-size` lets a face scale the text with its zoom, `focus-input()` takes the keyboard.
+component LineInput inherits Rectangle {
+    in property <string> value;
+    in property <string> placeholder;
+    in property <bool> mono;
+    in property <bool> right;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <string> name;                          // the accessible label
+    in property <string> suffix;
+    in property <length> font-size: Theme.font-small;
+    callback committed(string);
+    callback edited(string);
+    callback accepted(string);
+    out property <bool> has-focus: input.has-focus;
+    out property <string> text: input.text;
+
+    property <length> pad: 8px + Theme.hairline;
+    property <length> suffix-w: root.suffix == "" ? 0px : sfx.preferred-width + 2px;
+    property <bool> dirty;                              // edited since the last commit
+
+    public function focus-input() { input.focus(); }
+
+    height: Theme.field-h;
+    min-width: 0px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.enabled ? Theme.line-strong : Theme.line-strong.with-alpha(0.5);
+    background: root.enabled ? Theme.field : Theme.key-disabled-bg;
+
+    init => { input.text = root.value; }
+    changed value => {
+        input.text = root.value;
+        root.dirty = false;
+    }
+
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
+        clicked => { if (root.enabled) { input.focus(); } }
+        if input.text == "" && root.placeholder != "" : Text {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            text: root.placeholder;
+            color: Theme.disabled;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: root.font-size;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        input := TextInput {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad - root.suffix-w);
+            height: root.height;
+            enabled: root.enabled;
+            read-only: !root.enabled;
+            single-line: true;
+            color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: root.font-size;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.name;
+            edited => {
+                root.dirty = true;
+                root.edited(self.text);
+            }
+            accepted => {
+                root.dirty = false;
+                root.committed(self.text);
+                root.accepted(self.text);
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.dirty) {
+                    root.dirty = false;
+                    root.committed(self.text);
+                }
+            }
+        }
+        sfx := Text {
+            x: root.width - root.pad - self.width;
+            y: 0px;
+            width: self.preferred-width;
+            height: root.height;
+            visible: root.suffix != "";
+            text: root.suffix;
+            color: Theme.dim;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: root.font-size;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+    if input.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// One row of a dropdown's list: the tick of the chosen one, the label; a greyed row cannot be picked. The row's `note` is its tooltip (a plugin's module key, a
+// blueprint's frequency or tower channels).
+component DropRow inherits Rectangle {
+    in property <SelectItem> item;
+    in property <bool> chosen;
+    callback activated();
+    height: Theme.menu-item-h;
+    border-radius: Theme.radius-menu-item;
+    background: root.item.enabled && row-area.has-hover ? Theme.menu-hot : transparent;
+    accessible-role: list-item;
+    accessible-label: root.item.label;
+    accessible-enabled: root.item.enabled;
+    if root.chosen : Image {
+        x: 5px;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        source: @image-url("icons/check.svg");
+        image-fit: contain;
+        colorize: Theme.accent;
+    }
+    Text {
+        x: 26px;
+        y: 0px;
+        width: max(0px, parent.width - 26px - 8px);
+        height: parent.height;
+        text: root.item.label;
+        color: root.item.enabled ? Theme.fg : Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    row-area := TouchArea {
+        mouse-cursor: root.item.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.item.enabled) { root.activated(); } }
+    }
+    PopupTipTimer { x: 0px; y: 0px; hovered: row-area.has-hover; text: root.item.note; anchor-h: root.height; }
+}
+
+// A dropdown: the SelectKey's look and a list of `items` it opens itself under the key. `opened` fires on the press that opens it (the host builds or refreshes the
+// list from it; the list shows when it has rows by then). `max-popup-h` caps the list: 330 px, or the blueprints' 20 rows.
+component DropKey inherits Rectangle {
+    in property <string> value;                         // the closed text
+    in property <[SelectItem]> items;
+    in property <int> selected: -1;
+    in property <string> label;                         // the accessible name
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> popup-min-w: 150px;
+    in property <length> max-popup-h: 330px;
+    callback picked(int);
+    callback opened();
+
+    property <length> popup-w: max(root.width, root.popup-min-w);
+    property <length> popup-h: min(root.items.length * Theme.menu-item-h + 2 * (4px + Theme.hairline), root.max-popup-h);
+
+    height: Theme.key-sm-h;
+    min-width: 0px;
+    preferred-width: 110px;
+
+    SelectKey {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        value: root.value;
+        label: root.label;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        clicked => {
+            root.opened();
+            if (root.items.length > 0) { popup.show(); }
+        }
+    }
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: root.popup-w;
+        height: root.popup-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 28px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            // a short list is plain rows (a Flickable holds a press back for a moment: the click of a quick pick would be late), a long one scrolls
+            if root.items.length * Theme.menu-item-h <= root.popup-h : Rectangle {
+                x: 4px + Theme.hairline;
+                y: 4px + Theme.hairline;
+                width: root.popup-w - 2 * (4px + Theme.hairline);
+                height: root.popup-h - 2 * (4px + Theme.hairline);
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: parent.width;
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        popup.close();
+                    }
+                }
+            }
+            if root.items.length * Theme.menu-item-h > root.popup-h : Flickable {
+                x: 4px + Theme.hairline;
+                y: 4px + Theme.hairline;
+                width: root.popup-w - 2 * (4px + Theme.hairline);
+                height: root.popup-h - 2 * (4px + Theme.hairline);
+                content-width: self.width;
+                content-height: root.items.length * Theme.menu-item-h;
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: root.popup-w - 2 * (4px + Theme.hairline);
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        popup.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A scrolling body: the content is placed inside it (a Flickable, not interactive: a press is never held back), the wheel moves it (a TouchArea under the content
+// takes the wheel where nothing above it does), a thumb shows and drags when the content is taller than the body.
+component Scroller inherits Rectangle {
+    in property <length> content-height;
+    in property <bool> reset;                           // flips to bring the body back to the top
+    out property <length> scrolled: -fl.content-y;
+    clip: true;
+    changed reset => { fl.content-y = 0px; }
+    function scroll-to(y: length) {
+        fl.content-y = max(-max(0px, root.content-height - root.height), min(0px, y));
+    }
+    fl := Flickable {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        content-width: root.width;
+        content-height: max(root.content-height, root.height);
+        interactive: false;
+        TouchArea {
+            x: 0px;
+            y: 0px;
+            width: fl.content-width;
+            height: fl.content-height;
+            scroll-event(e) => {
+                if (e.delta-y == 0px || root.content-height <= root.height) { return EventResult.reject; }
+                root.scroll-to(fl.content-y + e.delta-y);
+                return EventResult.accept;
+            }
+        }
+        @children
+    }
+    if root.content-height > root.height : thumb := Rectangle {
+        property <length> travel: root.height - self.height;
+        property <length> overflow: root.content-height - root.height;
+        x: root.width - 7px;
+        y: (overflow > 0px ? -fl.content-y / overflow : 0) * travel;
+        width: 5px;
+        height: max(20px, root.height * root.height / root.content-height);
+        border-radius: 2.5px;
+        background: (grab.pressed || grab.has-hover) ? Theme.dim : Theme.knob-ring;
+        grab := TouchArea {
+            property <length> grab-y;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) { self.grab-y = self.mouse-y; }
+            }
+            moved => {
+                if (self.pressed && thumb.travel > 0px) {
+                    root.scroll-to(fl.content-y - (self.mouse-y - self.grab-y) * (thumb.overflow / thumb.travel));
+                }
+            }
+        }
+    }
+}
+
+// Eight slots of the KeyFlow chain (extend_bank.slint's KeyFlow, generalised): the right edge of the last key placed and its row come in, each slot places one key
+// by the window's keyWraps rule (lineEnd + gap + itemW > rightEdge wraps to x 0 of the next row) and passes them on. A key is placed only when the model has it.
+component FlowBlock inherits Rectangle {
+    in property <[DecoderKey]> items;
+    in property <int> base;
+    in property <length> avail;
+    in property <length> gap;
+    in property <length> cw;                            // an estimated character
+    in property <length> pad;                           // the key's padding, both sides
+    in property <length> cx-in;                         // the right edge of the last key placed; negative = none on this row yet (the first never wraps)
+    in property <int> cr-in;
+    out property <length> cx-out: root.e7;
+    out property <int> cr-out: root.c7;
+    width: 0px;
+    height: 0px;
+
+    property <bool> p0: root.base + 0 < root.items.length;
+    property <length> w0: root.p0 ? min(root.avail, root.items[root.base + 0].label.character-count * root.cw + root.pad) : 0px;
+    property <bool> wr0: root.p0 && root.cx-in >= 0px && root.cx-in + root.gap + root.w0 > root.avail;
+    property <length> x0: root.wr0 ? 0px : root.cx-in + root.gap;
+    property <int> r0: root.cr-in + (root.wr0 ? 1 : 0);
+    property <length> e0: root.p0 ? root.x0 + root.w0 : root.cx-in;
+    property <int> c0: root.p0 ? root.r0 : root.cr-in;
+
+    property <bool> p1: root.base + 1 < root.items.length;
+    property <length> w1: root.p1 ? min(root.avail, root.items[root.base + 1].label.character-count * root.cw + root.pad) : 0px;
+    property <bool> wr1: root.p1 && root.e0 >= 0px && root.e0 + root.gap + root.w1 > root.avail;
+    property <length> x1: root.wr1 ? 0px : root.e0 + root.gap;
+    property <int> r1: root.c0 + (root.wr1 ? 1 : 0);
+    property <length> e1: root.p1 ? root.x1 + root.w1 : root.e0;
+    property <int> c1: root.p1 ? root.r1 : root.c0;
+
+    property <bool> p2: root.base + 2 < root.items.length;
+    property <length> w2: root.p2 ? min(root.avail, root.items[root.base + 2].label.character-count * root.cw + root.pad) : 0px;
+    property <bool> wr2: root.p2 && root.e1 >= 0px && root.e1 + root.gap + root.w2 > root.avail;
+    property <length> x2: root.wr2 ? 0px : root.e1 + root.gap;
+    property <int> r2: root.c1 + (root.wr2 ? 1 : 0);
+    property <length> e2: root.p2 ? root.x2 + root.w2 : root.e1;
+    property <int> c2: root.p2 ? root.r2 : root.c1;
+
+    property <bool> p3: root.base + 3 < root.items.length;
+    property <length> w3: root.p3 ? min(root.avail, root.items[root.base + 3].label.character-count * root.cw + root.pad) : 0px;
+    property <bool> wr3: root.p3 && root.e2 >= 0px && root.e2 + root.gap + root.w3 > root.avail;
+    property <length> x3: root.wr3 ? 0px : root.e2 + root.gap;
+    property <int> r3: root.c2 + (root.wr3 ? 1 : 0);
+    property <length> e3: root.p3 ? root.x3 + root.w3 : root.e2;
+    property <int> c3: root.p3 ? root.r3 : root.c2;
+
+    property <bool> p4: root.base + 4 < root.items.length;
+    property <length> w4: root.p4 ? min(root.avail, root.items[root.base + 4].label.character-count * root.cw + root.pad) : 0px;
+    property <bool> wr4: root.p4 && root.e3 >= 0px && root.e3 + root.gap + root.w4 > root.avail;
+    property <length> x4: root.wr4 ? 0px : root.e3 + root.gap;
+    property <int> r4: root.c3 + (root.wr4 ? 1 : 0);
+    property <length> e4: root.p4 ? root.x4 + root.w4 : root.e3;
+    property <int> c4: root.p4 ? root.r4 : root.c3;
+
+    property <bool> p5: root.base + 5 < root.items.length;
+    property <length> w5: root.p5 ? min(root.avail, root.items[root.base + 5].label.character-count * root.cw + root.pad) : 0px;
+    property <bool> wr5: root.p5 && root.e4 >= 0px && root.e4 + root.gap + root.w5 > root.avail;
+    property <length> x5: root.wr5 ? 0px : root.e4 + root.gap;
+    property <int> r5: root.c4 + (root.wr5 ? 1 : 0);
+    property <length> e5: root.p5 ? root.x5 + root.w5 : root.e4;
+    property <int> c5: root.p5 ? root.r5 : root.c4;
+
+    property <bool> p6: root.base + 6 < root.items.length;
+    property <length> w6: root.p6 ? min(root.avail, root.items[root.base + 6].label.character-count * root.cw + root.pad) : 0px;
+    property <bool> wr6: root.p6 && root.e5 >= 0px && root.e5 + root.gap + root.w6 > root.avail;
+    property <length> x6: root.wr6 ? 0px : root.e5 + root.gap;
+    property <int> r6: root.c5 + (root.wr6 ? 1 : 0);
+    property <length> e6: root.p6 ? root.x6 + root.w6 : root.e5;
+    property <int> c6: root.p6 ? root.r6 : root.c5;
+
+    property <bool> p7: root.base + 7 < root.items.length;
+    property <length> w7: root.p7 ? min(root.avail, root.items[root.base + 7].label.character-count * root.cw + root.pad) : 0px;
+    property <bool> wr7: root.p7 && root.e6 >= 0px && root.e6 + root.gap + root.w7 > root.avail;
+    property <length> x7: root.wr7 ? 0px : root.e6 + root.gap;
+    property <int> r7: root.c6 + (root.wr7 ? 1 : 0);
+    property <length> e7: root.p7 ? root.x7 + root.w7 : root.e6;
+    property <int> c7: root.p7 ? root.r7 : root.c6;
+
+    pure public function x-of(k: int) -> length {
+        return k == 0 ? root.x0 : k == 1 ? root.x1 : k == 2 ? root.x2 : k == 3 ? root.x3 : k == 4 ? root.x4 : k == 5 ? root.x5 : k == 6 ? root.x6 : root.x7;
+    }
+
+    pure public function w-of(k: int) -> length {
+        return k == 0 ? root.w0 : k == 1 ? root.w1 : k == 2 ? root.w2 : k == 3 ? root.w3 : k == 4 ? root.w4 : k == 5 ? root.w5 : k == 6 ? root.w6 : root.w7;
+    }
+
+    pure public function r-of(k: int) -> int {
+        return k == 0 ? root.r0 : k == 1 ? root.r1 : k == 2 ? root.r2 : k == 3 ? root.r3 : k == 4 ? root.r4 : k == 5 ? root.r5 : k == 6 ? root.r6 : root.r7;
+    }
+
+}
+
+// A FlowRow: the keys of `items` placed left to right from their estimated widths (characters * cw + pad), wrapping under themselves. `lead` = a caption stands before
+// the first key (the first key then wraps like any other, from `first-x`); without it the first key goes at x 0. It draws nothing: the caller places a Key at
+// x-of(i), r-of(i) * (key height + gap) with w-of(i). Rows are counted from 0; `last-row` is the row of the last key. At most 64 keys are placed.
+component FlowPlacer inherits Rectangle {
+    in property <[DecoderKey]> items;
+    in property <length> avail;
+    in property <length> gap: 4px;
+    in property <length> cw: 7px;
+    in property <length> pad: 20px;
+    in property <bool> lead;
+    in property <length> first-x: 0px;
+    out property <int> last-row: b7.cr-out;
+    width: 0px;
+    height: 0px;
+
+    b0 := FlowBlock { items: root.items; base: 0; avail: root.avail; gap: root.gap; cw: root.cw; pad: root.pad; cx-in: root.lead ? root.first-x - root.gap : -root.gap; cr-in: 0; }
+    b1 := FlowBlock { items: root.items; base: 8; avail: root.avail; gap: root.gap; cw: root.cw; pad: root.pad; cx-in: b0.cx-out; cr-in: b0.cr-out; }
+    b2 := FlowBlock { items: root.items; base: 16; avail: root.avail; gap: root.gap; cw: root.cw; pad: root.pad; cx-in: b1.cx-out; cr-in: b1.cr-out; }
+    b3 := FlowBlock { items: root.items; base: 24; avail: root.avail; gap: root.gap; cw: root.cw; pad: root.pad; cx-in: b2.cx-out; cr-in: b2.cr-out; }
+    b4 := FlowBlock { items: root.items; base: 32; avail: root.avail; gap: root.gap; cw: root.cw; pad: root.pad; cx-in: b3.cx-out; cr-in: b3.cr-out; }
+    b5 := FlowBlock { items: root.items; base: 40; avail: root.avail; gap: root.gap; cw: root.cw; pad: root.pad; cx-in: b4.cx-out; cr-in: b4.cr-out; }
+    b6 := FlowBlock { items: root.items; base: 48; avail: root.avail; gap: root.gap; cw: root.cw; pad: root.pad; cx-in: b5.cx-out; cr-in: b5.cr-out; }
+    b7 := FlowBlock { items: root.items; base: 56; avail: root.avail; gap: root.gap; cw: root.cw; pad: root.pad; cx-in: b6.cx-out; cr-in: b6.cr-out; }
+    pure public function x-of(i: int) -> length {
+        return i < 8 ? b0.x-of(i - 0) : i < 16 ? b1.x-of(i - 8) : i < 24 ? b2.x-of(i - 16) : i < 32 ? b3.x-of(i - 24) : i < 40 ? b4.x-of(i - 32) : i < 48 ? b5.x-of(i - 40) : i < 56 ? b6.x-of(i - 48) : i < 64 ? b7.x-of(i - 56) : 0px;
+    }
+
+    pure public function w-of(i: int) -> length {
+        return i < 8 ? b0.w-of(i - 0) : i < 16 ? b1.w-of(i - 8) : i < 24 ? b2.w-of(i - 16) : i < 32 ? b3.w-of(i - 24) : i < 40 ? b4.w-of(i - 32) : i < 48 ? b5.w-of(i - 40) : i < 56 ? b6.w-of(i - 48) : i < 64 ? b7.w-of(i - 56) : 0px;
+    }
+
+    pure public function r-of(i: int) -> int {
+        return i < 8 ? b0.r-of(i - 0) : i < 16 ? b1.r-of(i - 8) : i < 24 ? b2.r-of(i - 16) : i < 32 ? b3.r-of(i - 24) : i < 40 ? b4.r-of(i - 32) : i < 48 ? b5.r-of(i - 40) : i < 56 ? b6.r-of(i - 48) : i < 64 ? b7.r-of(i - 56) : 0;
+    }
+
+}
+
+
+// ================================================ the band ================================================
+
+// The transport column and the information pane (the artboard's 176 px band). Everything is placed by x / y from running sums, nothing asks a parent for a width
+// (rule 11); the column is clipped at its right edge. `needed-height` is what the band wants: its content, never under 96 px (kPatchInfoMinH).
+component PatchBand inherits Rectangle {
+    in property <PatchModel> model;
+    callback run-clicked();
+    callback all-off-clicked();
+    callback presets-clicked();
+    callback part-pressed(int);
+    callback decoder-pressed(int);
+    callback blueprints-opened();
+    callback blueprint-picked(int);
+
+    // the information pane's width: clamp(page * 0.42, 300, 560), never more than half the page (patchInfoPaneWidth)
+    out property <length> info-width: min(root.width / 2, max(300px, min(560px, root.width * 0.42)));
+    out property <length> left-width: root.width - root.info-width - 8px;
+    property <length> avail: max(0px, root.left-width - 20px);
+    property <length> x0: 10px;
+
+    // the transport: run, ALL OFF, PRESETS; PRESETS drops under the others when the three do not fit
+    property <bool> wrap3: run.width + 6px + alloff.width + 6px + presets.width > root.avail;
+    out property <length> transport-y: 8px;
+    property <length> transport-h: root.wrap3 ? 2 * Theme.key-h + 6px : Theme.key-h;
+    out property <length> readout-y: root.transport-y + root.transport-h + 6px;
+    out property <length> parts-y: root.readout-y + 13px + 6px;
+    property <int> part-n: root.model.parts.length;
+    out property <int> part-rows: root.part-n == 0 ? 0 : part-flow.last-row + 1;
+    property <length> parts-h: root.part-rows == 0 ? 0px : root.part-rows * Theme.key-sm-h + (root.part-rows - 1) * 4px;
+    out property <length> decoders-y: root.parts-y + root.parts-h + 6px;
+    // the decoders' caption, then the keys; with none, the host's sentence
+    out property <length> decoders-x0: root.x0 + dcap.width + 6px;
+    out property <int> decoder-rows: root.model.decoders.length == 0 ? 1 : dec-flow.last-row + 1;
+    property <length> no-dec-h: root.model.decoders.length == 0 ? nodec.height : 0px;
+    property <length> decoders-h: root.model.decoders.length == 0 ? max(Theme.key-xs-h, root.no-dec-h) : root.decoder-rows * Theme.key-xs-h + (root.decoder-rows - 1) * 4px;
+    out property <length> blueprints-y: root.model.blueprints-shown ? root.decoders-y + root.decoders-h + 6px : -1px;
+    out property <length> blueprint-note-y: (root.model.blueprints-shown ? root.blueprints-y + Theme.key-sm-h : root.decoders-y + root.decoders-h) + 6px;
+    property <length> bottom: root.model.blueprint-note != "" ? root.blueprint-note-y + bnote.height : root.model.blueprints-shown ? root.blueprints-y + Theme.key-sm-h : root.decoders-y + root.decoders-h;
+    out property <length> needed-height: max(96px, root.bottom + 8px);
+
+    background: Theme.strip;
+    clip: true;
+
+    // ---- the left column ----
+    left := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.left-width;
+        height: root.height;
+        clip: true;
+
+        run := Key {
+            x: root.x0;
+            y: root.transport-y;
+            width: self.preferred-width;
+            min-w: 84px;
+            label: root.model.run-label != "" ? root.model.run-label : root.model.running ? @tr("STOP") : @tr("START");
+            danger: root.model.running;
+            on: !root.model.running;
+            tooltip: root.model.run-tooltip;
+            clicked => { root.run-clicked(); }
+        }
+        alloff := Key {
+            x: root.x0 + run.width + 6px;
+            y: root.transport-y;
+            width: min(150px, max(60px, root.avail - run.width - 6px));
+            min-width: 0px;
+            label: @tr("ALL OFF");
+            danger: true;
+            tooltip: @tr("Switch every radio off and stop the patch. START switches\nthem all on again.");
+            clicked => { root.all-off-clicked(); }
+        }
+        presets := Key {
+            x: root.wrap3 ? root.x0 : alloff.x + alloff.width + 6px;
+            y: root.wrap3 ? root.transport-y + Theme.key-h + 6px : root.transport-y;
+            width: self.preferred-width;
+            min-w: 84px;
+            label: @tr("PRESETS");
+            on: root.model.presets-open;
+            tooltip: @tr("Save the patch on the canvas under a name, or load one you saved.\nLoading stops a running patch; the one loaded waits for START.");
+            clicked => { root.presets-clicked(); }
+        }
+        // the run readout: a lamp, lit and green while the patch runs
+        Rectangle {
+            x: root.x0;
+            y: root.readout-y;
+            width: root.avail;
+            height: 13px;
+            clip: true;
+            Lamp {
+                x: 0px;
+                y: 0px;
+                height: 13px;
+                caption: root.model.run-line;
+                state: root.model.run-line-lit ? LampState.green : LampState.off;
+            }
+        }
+        // the seven part keys
+        part-flow := FlowPlacer {
+            avail: root.avail;
+            pad: 2 * Theme.key-pad;
+            items: [
+                { label: root.model.parts[0].label, index: 0, tooltip: "" }, { label: root.model.parts[1].label, index: 1, tooltip: "" },
+                { label: root.model.parts[2].label, index: 2, tooltip: "" }, { label: root.model.parts[3].label, index: 3, tooltip: "" },
+                { label: root.model.parts[4].label, index: 4, tooltip: "" }, { label: root.model.parts[5].label, index: 5, tooltip: "" },
+                { label: root.model.parts[6].label, index: 6, tooltip: "" },
+            ];
+        }
+        for p[i] in root.model.parts : Key {
+            x: root.x0 + part-flow.x-of(i);
+            y: root.parts-y + part-flow.r-of(i) * (Theme.key-sm-h + 4px);
+            width: part-flow.w-of(i);
+            min-width: 0px;
+            small: true;
+            min-w: 0px;
+            label: p.label;
+            enabled: p.enabled;
+            tooltip: p.tooltip;
+            clicked => { root.part-pressed(p.kind); }
+        }
+        // the decoders row
+        dcap := Caption {
+            x: root.x0;
+            y: root.decoders-y;
+            width: min(self.preferred-width, root.avail / 2);
+            height: Theme.key-xs-h;
+            label: @tr("Decoders");
+        }
+        dec-flow := FlowPlacer {
+            avail: root.avail;
+            pad: 20px;
+            lead: true;
+            first-x: dcap.width + 6px;
+            items: root.model.decoders;
+        }
+        for d[i] in root.model.decoders : Key {
+            visible: i < 64;
+            x: root.x0 + dec-flow.x-of(i);
+            y: root.decoders-y + dec-flow.r-of(i) * (Theme.key-xs-h + 4px);
+            width: dec-flow.w-of(i);
+            min-width: 0px;
+            xs: true;
+            min-w: 0px;
+            label: d.label;
+            tooltip: d.tooltip;
+            clicked => { root.decoder-pressed(d.index); }
+        }
+        nodec := Note {
+            x: root.x0 + dcap.width + 6px;
+            y: root.decoders-y + 3px;
+            visible: root.model.decoders.length == 0;
+            wrap-w: max(0px, root.avail - dcap.width - 6px);
+            text: root.model.decoders.length == 0 ? root.model.no-decoders : "";
+        }
+        // the blueprints
+        bcap := Caption {
+            x: root.x0;
+            y: root.blueprints-y;
+            visible: root.model.blueprints-shown;
+            width: min(self.preferred-width, root.avail / 2);
+            height: Theme.key-sm-h;
+            label: @tr("Blueprints");
+        }
+        bdrop := DropKey {
+            x: root.x0 + bcap.width + 6px;
+            y: root.blueprints-y;
+            visible: root.model.blueprints-shown;
+            width: max(120px, min(340px, root.avail - bcap.width - 6px));
+            value: @tr("Pick a plugin to place its whole workflow");
+            label: @tr("Blueprints");
+            items: root.model.blueprints;
+            selected: -1;
+            popup-min-w: 260px;
+            max-popup-h: 20 * Theme.menu-item-h + 2 * (4px + Theme.hairline);
+            opened => { root.blueprints-opened(); }
+            picked(i) => { root.blueprint-picked(i); }
+        }
+        bnote := Note {
+            x: root.x0;
+            y: root.blueprint-note-y;
+            wrap-w: root.avail;
+            text: root.model.blueprint-note;
+        }
+    }
+
+    // ---- the information pane ----
+    info := Rectangle {
+        x: root.width - root.info-width;
+        y: 0px;
+        width: root.info-width;
+        height: root.height;
+        clip: true;
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: Theme.hairline;
+            height: parent.height;
+            background: Theme.line;
+        }
+        Scroller {
+            x: Theme.hairline;
+            y: 0px;
+            width: parent.width - Theme.hairline;
+            height: parent.height;
+            content-height: col.preferred-height + 16px;
+            col := VerticalLayout {
+                x: 10px - Theme.hairline;
+                y: 8px;
+                width: root.info-width - 20px;
+                spacing: 4px;
+                alignment: start;
+                // the verdict, one whole sentence: good when the patch can run, err when it cannot
+                Rectangle {
+                    height: Theme.chip-h;
+                    clip: true;
+                    Chip {
+                        x: 0px;
+                        y: 0px;
+                        label: root.model.info.verdict;
+                        tone: root.model.info.runnable ? ChipTone.good : ChipTone.err;
+                    }
+                }
+                if root.model.info.level-line != "" : Note { wrap-w: root.info-width - 20px; text: root.model.info.level-line; ink: Theme.chip-warn-fg; }
+                if root.model.info.plan-line != "" : Note { wrap-w: root.info-width - 20px; text: root.model.info.plan-line; ink: Theme.muted; mono: true; }
+                // nothing selected: the three help sentences; a node selected: its kind and name, the folded-inspector note, its problems
+                if root.model.info.none-selected : VerticalLayout {
+                    spacing: 4px;
+                    for h in root.model.info.help : Note { wrap-w: root.info-width - 20px; text: h; }
+                }
+                if !root.model.info.none-selected && root.model.info.selection != "" : Note { wrap-w: root.info-width - 20px; text: root.model.info.selection; ink: Theme.fg; }
+                if !root.model.info.none-selected && root.model.info.folded-note != "" : Note { wrap-w: root.info-width - 20px; text: root.model.info.folded-note; }
+                if !root.model.info.none-selected : VerticalLayout {
+                    spacing: 4px;
+                    for pr in root.model.info.problems : Note { wrap-w: root.info-width - 20px; text: pr.text; ink: pr.advisory ? Theme.dim : Theme.chip-err-fg; }
+                }
+            }
+        }
+    }
+}
+
+// ================================================ the canvas ================================================
+
+// One face (the controls and readouts of a node). Placed by the node at the well's origin plus (5z, 4z) - (5z, 22z) for a Channel, whose reading line sits above its
+// box - and as wide as the well less 10z. Text scales with z; the controls keep their natural size (see the header). A face is cut at its own edge.
+component FaceView inherits Rectangle {
+    in property <CanvasNode> node;
+    in property <float> zoom;
+    callback face-switch(int);
+    callback face-centre(int, string);
+    callback face-freq(int, string);
+    callback face-mode(int, int);
+    callback face-squelch-on(int, bool);
+    callback face-squelch(int, float);
+
+    property <length> u: 1px * root.zoom;
+    property <length> fs: Theme.font-small * 0.92 * root.zoom;
+    property <bool> text-sink: root.node.kind == 5 && root.node.inputs.length > 0 && root.node.inputs[0].tone == 2;
+    property <bool> switch-on: root.node.face.radio-switch != 0;
+    clip: true;
+
+    VerticalLayout {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        spacing: 3 * root.u;
+        alignment: start;
+
+        // RADIO: the switch at the left with the device beside it, the centre box, its note
+        if root.node.kind == 0 : HorizontalLayout {
+            spacing: 4 * root.u;
+            Rectangle {
+                width: max(34px, 40 * root.u);
+                height: Theme.key-sm-h;
+                if root.node.face.radio-switch != 0 : Rectangle {
+                    border-radius: Theme.radius;
+                    background: root.node.face.radio-switch == 2 ? Theme.lamp-green.with-alpha(0.45) : Theme.lamp-amber.with-alpha(0.35);
+                }
+                Key {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    min-width: 0px;
+                    small: true;
+                    min-w: 0px;
+                    ghost: root.node.face.radio-switch != 0;
+                    label: root.node.face.radio-switch-label;
+                    tooltip: root.switch-on ? @tr("This radio is switched on. Press to close it alone - the rest\nof the patch keeps running.") : @tr("This radio is switched off. Press to switch it on; it opens\nwhile the patch is running.");
+                    clicked => { root.face-switch(root.node.id); }
+                }
+            }
+            Note { wrap-w: max(0px, root.width - max(34px, 40 * root.u) - 4 * root.u); text: root.node.face.device-label; ink: Theme.fg-soft; size: root.fs; }
+        }
+        if root.node.kind == 0 : LineInput {
+            mono: true;
+            right: true;
+            suffix: " MHz";   // not-translated: a unit
+            font-size: root.fs;
+            value: root.node.face.centre-text;
+            name: @tr("Centre (MHz)");
+            tooltip: @tr("The radio's centre. Type a frequency and press Enter.");
+            committed(t) => { root.face-centre(root.node.id, t); }
+        }
+        if root.node.kind == 0 && root.node.face.centre-note != "" : Note { wrap-w: root.width; text: root.node.face.centre-note; ink: Theme.chip-warn-fg; size: root.fs; }
+
+        // CHANNEL: the frequency box
+        if root.node.kind == 1 : LineInput {
+            mono: true;
+            right: true;
+            suffix: " MHz";   // not-translated: a unit
+            font-size: root.fs;
+            value: root.node.face.freq-text;
+            name: @tr("Frequency (MHz)");
+            tooltip: @tr("Type a frequency and press Enter.");
+            committed(t) => { root.face-freq(root.node.id, t); }
+        }
+
+        // DEMOD: the mode, the squelch tick and slider, the gate
+        if root.node.kind == 2 : DropKey {
+            value: ModeNames.name(root.node.face.mode-index);
+            items: ModeNames.items;
+            selected: root.node.face.mode-index;
+            label: @tr("Mode");
+            popup-min-w: 80px;
+            picked(i) => { root.face-mode(root.node.id, i); }
+        }
+        if root.node.kind == 2 : Tick {
+            row-h: 16px;
+            label: @tr("Squelch");
+            on: root.node.face.squelch-on;
+            tooltip: @tr("Silences this demodulator's sound while the channel is quieter\nthan the threshold - so a speaker or a recording hears signals,\nnot the noise between them. Decoders are still given every sample.");
+            toggled(v) => { root.face-squelch-on(root.node.id, v); }
+        }
+        if root.node.kind == 2 && root.node.face.squelch-on : Rectangle {
+            height: 16px;
+            Slider {
+                x: 8px;
+                y: 5px;
+                width: max(0px, parent.width - 8px - 8px - 48px - 4px);
+                value: root.node.face.squelch-norm;
+                changed(v) => { root.face-squelch(root.node.id, v); }
+            }
+            Text {
+                x: parent.width - 48px;
+                y: 0px;
+                width: 48px;
+                height: 16px;
+                text: root.node.face.squelch-text;
+                font-family: Theme.font-mono;
+                font-size: root.fs;
+                color: Theme.fg-soft;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        if root.node.kind == 2 && root.node.face.gate-shown : Rectangle {
+            height: 16px;
+            Text {
+                x: 0px;
+                y: 0px;
+                width: 56px;
+                height: 16px;
+                text: root.node.face.gate-text;
+                font-family: Theme.font-mono;
+                font-size: root.fs;
+                color: Theme.chip-warn-fg;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                x: 62px;
+                y: 0px;
+                width: max(0px, parent.width - 62px);
+                height: 16px;
+                text: root.node.face.gate-word;
+                font-size: root.fs;
+                font-family: Theme.font-ui;
+                color: root.node.face.gate-lit ? Theme.chip-good-fg : Theme.dim;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        // every kind: the readouts under the controls (a text sink's lines are cut at the face's edge, never wrapped), then an audio sink's level bar and its errors
+        for l in root.node.face.lines : Note { wrap-w: root.width; text: l.text; ink: PInk.line(l.tone); size: root.fs; nowrap: root.text-sink; }
+        if root.node.kind == 5 && !root.text-sink && root.node.face.level-shown : Rectangle {
+            height: 5 * root.u;
+            background: Theme.slider-track;
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width * max(0.0, min(1.0, root.node.face.level-norm));
+                height: parent.height;
+                background: Theme.level-bar;
+            }
+        }
+        for l in root.node.face.lines-after : Note { wrap-w: root.width; text: l.text; ink: PInk.line(l.tone); size: root.fs; }
+    }
+}
+
+// One node: its plate, header, close key, grip, well, readings, face and ports, all by the model's x / y / w / h and z (the host sends pixels; the zoom scales the
+// header, the strokes and the face's text). LATER NODES ARE ON TOP: the canvas draws them in model order and their opaque plates cover earlier faces.
+component CanvasNodeView inherits Rectangle {
+    in property <CanvasNode> node;
+    in property <float> zoom;
+    in property <bool> faces-live;
+    callback face-switch(int);
+    callback face-centre(int, string);
+    callback face-freq(int, string);
+    callback face-mode(int, int);
+    callback face-squelch-on(int, bool);
+    callback face-squelch(int, float);
+
+    property <length> u: 1px * root.zoom;
+    property <length> close-x: root.width - 4 * root.u - 14 * root.u;
+    property <length> text-room: max(0px, root.close-x - 2px);
+    property <bool> face-shown: root.faces-live && root.width - 22 * root.u >= 40px;
+
+    // the plate
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        border-radius: Theme.radius-panel;
+        background: Theme.panel;
+        clip: true;
+
+        // the header: 22z of key-bg; the name left, the kind as a cap after it, both short of the close key
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: 22 * root.u;
+            background: Theme.key-bg;
+        }
+        if 11 * root.u >= 5px : Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: 22 * root.u;
+            name-text := Text {
+                x: 6 * root.u;
+                y: 0px;
+                width: min(self.preferred-width, max(0px, root.text-room - 6 * root.u));
+                height: parent.height;
+                text: root.node.name;
+                font-family: Theme.font-ui;
+                font-size: 11 * root.u;
+                font-weight: Theme.weight-semibold;
+                color: Theme.fg;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                x: 6 * root.u + name-text.width + 6 * root.u;
+                y: 0px;
+                width: max(0px, root.text-room - self.x);
+                height: parent.height;
+                text: root.node.kind-caption.to-uppercase();
+                font-family: Theme.font-ui;
+                font-size: 10 * root.u;
+                font-weight: Theme.weight-semibold;
+                color: Theme.muted;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        // the close key: an X of two 1.4z lines, muted; fg while hot (the press itself is canvas-pressed)
+        if root.zoom >= 0.5 : Path {
+            x: root.close-x;
+            y: 4 * root.u;
+            width: 14 * root.u;
+            height: 14 * root.u;
+            viewbox-width: 14;
+            viewbox-height: 14;
+            commands: "M 3.5 3.5 L 10.5 10.5 M 10.5 3.5 L 3.5 10.5";
+            stroke: root.node.hot-close ? Theme.fg : Theme.muted;
+            stroke-width: 1.4px * root.zoom;
+        }
+        // the well: (6z, 20z) to (w - 6z, h - 16z), it stops above the grip
+        Rectangle {
+            x: 6 * root.u;
+            y: 20 * root.u;
+            width: max(0px, root.width - 12 * root.u);
+            height: max(0px, root.height - 36 * root.u);
+            background: Theme.well;
+            border-radius: Theme.radius;
+        }
+        // a picture decoder's picture, fitted and centred, aspect kept
+        if root.node.kind == 3 && root.node.face.have-picture && root.face-shown : Image {
+            x: 4 * root.u;
+            y: 20 * root.u;
+            width: max(0px, root.width - 8 * root.u);
+            height: max(0px, root.height - 24 * root.u);
+            source: root.node.face.picture;
+            image-fit: contain;
+        }
+        // the readings: the channel's level or a decoder's line count in amber, its newest line in phosphor
+        if 13 * root.u >= 6px && root.node.reading != "" : Text {
+            x: 11 * root.u;
+            y: 23 * root.u;
+            width: max(0px, root.width - 22 * root.u);
+            text: root.node.reading;
+            font-family: Theme.font-ui;
+            font-size: 13 * root.u;
+            color: PInk.line(root.node.reading-tone);
+            overflow: elide;
+        }
+        if 13 * root.u >= 6px && root.node.reading2 != "" : Rectangle {
+            x: 11 * root.u;
+            y: 23 * root.u + 1.35 * 13 * root.u;
+            width: max(0px, root.width - 21 * root.u);
+            height: max(0px, root.height - 36 * root.u - 3 * root.u - 1.35 * 13 * root.u);
+            clip: true;
+            Text {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                text: root.node.reading2;
+                wrap: word-wrap;
+                font-family: Theme.font-ui;
+                font-size: 0.92 * 13 * root.u;
+                color: Theme.chip-good-fg;
+            }
+        }
+        // the face
+        if root.face-shown : FaceView {
+            x: 11 * root.u;
+            y: 20 * root.u + (root.node.kind == 1 ? 22 * root.u : 4 * root.u);
+            width: max(0px, root.width - 22 * root.u);
+            height: max(0px, root.height - 36 * root.u - (root.node.kind == 1 ? 22 * root.u : 4 * root.u));
+            node: root.node;
+            zoom: root.zoom;
+            face-switch(a) => { root.face-switch(a); }
+            face-centre(a, b) => { root.face-centre(a, b); }
+            face-freq(a, b) => { root.face-freq(a, b); }
+            face-mode(a, b) => { root.face-mode(a, b); }
+            face-squelch-on(a, b) => { root.face-squelch-on(a, b); }
+            face-squelch(a, b) => { root.face-squelch(a, b); }
+        }
+        // the grip: a right triangle with its legs along the bottom and right edges, accent-soft; fg while hot
+        Path {
+            x: root.width - 2 * root.u - 12 * root.u;
+            y: root.height - 2 * root.u - 12 * root.u;
+            width: 12 * root.u;
+            height: 12 * root.u;
+            viewbox-width: 12;
+            viewbox-height: 12;
+            commands: "M 12 0 L 12 12 L 0 12 Z";
+            fill: root.node.hot-grip ? Theme.fg : Theme.accent-soft;
+        }
+    }
+    // the outline over the children: 1 px line-strong, 2 px ivory while selected, 2 px red over it while blocked (a blocking plan problem)
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        border-radius: Theme.radius-panel;
+        border-width: root.node.selected || root.node.blocked ? 2px : 1px;
+        border-color: root.node.blocked ? Theme.lamp-red : root.node.selected ? Theme.fg : Theme.line-strong;
+    }
+    // the ports: radius 4z at each dot, with a 1 px ring of `line`, on top of the plate's edge
+    for p in root.node.inputs : Rectangle {
+        x: p.x - root.node.x - 4 * root.u - Theme.hairline;
+        y: p.y - root.node.y - 4 * root.u - Theme.hairline;
+        width: 8 * root.u + 2 * Theme.hairline;
+        height: 8 * root.u + 2 * Theme.hairline;
+        border-radius: self.width / 2;
+        border-width: Theme.hairline;
+        border-color: Theme.line;
+        background: PInk.port(p.tone);
+    }
+    for p in root.node.outputs : Rectangle {
+        x: p.x - root.node.x - 4 * root.u - Theme.hairline;
+        y: p.y - root.node.y - 4 * root.u - Theme.hairline;
+        width: 8 * root.u + 2 * Theme.hairline;
+        height: 8 * root.u + 2 * Theme.hairline;
+        border-radius: self.width / 2;
+        border-width: Theme.hairline;
+        border-color: Theme.line;
+        background: PInk.port(p.tone);
+    }
+}
+
+// The canvas: a well, a grid, a TouchArea that hands the host the pointer as one stream, the wires, the nodes, the three keys and the refusal bubble. It is NOT a layout:
+// every child is placed by x / y from the model. The face widgets sit over the TouchArea, so a press on one is theirs.
+component PatchCanvasView inherits Rectangle {
+    in property <CanvasModel> model;
+    callback canvas-pressed(length, length, int);
+    callback canvas-moved(length, length);
+    callback canvas-released(length, length, int);
+    callback canvas-left();
+    callback canvas-wheel(length, length, float, float, bool, bool);
+    callback zoom-step(bool);
+    callback fit();
+    callback canvas-delete();
+    callback face-switch(int);
+    callback face-centre(int, string);
+    callback face-freq(int, string);
+    callback face-mode(int, int);
+    callback face-squelch-on(int, bool);
+    callback face-squelch(int, float);
+
+    property <int> grid-cols: root.model.grid-step > 0px ? Math.ceil((root.width - root.model.grid-ox) / root.model.grid-step) + 1 : 0;
+    property <int> grid-rows: root.model.grid-step > 0px ? Math.ceil((root.height - root.model.grid-oy) / root.model.grid-step) + 1 : 0;
+    // the resize cursor while any node's grip is hot (Slint has no `any` over a model: the first 32 nodes are looked at; an index past the end reads the default, false)
+    property <[CanvasNode]> ns: root.model.nodes;
+    property <bool> grip-hot: root.ns[0].hot-grip || root.ns[1].hot-grip || root.ns[2].hot-grip || root.ns[3].hot-grip
+        || root.ns[4].hot-grip || root.ns[5].hot-grip || root.ns[6].hot-grip || root.ns[7].hot-grip
+        || root.ns[8].hot-grip || root.ns[9].hot-grip || root.ns[10].hot-grip || root.ns[11].hot-grip
+        || root.ns[12].hot-grip || root.ns[13].hot-grip || root.ns[14].hot-grip || root.ns[15].hot-grip
+        || root.ns[16].hot-grip || root.ns[17].hot-grip || root.ns[18].hot-grip || root.ns[19].hot-grip
+        || root.ns[20].hot-grip || root.ns[21].hot-grip || root.ns[22].hot-grip || root.ns[23].hot-grip
+        || root.ns[24].hot-grip || root.ns[25].hot-grip || root.ns[26].hot-grip || root.ns[27].hot-grip
+        || root.ns[28].hot-grip || root.ns[29].hot-grip || root.ns[30].hot-grip || root.ns[31].hot-grip;
+
+    background: Theme.well-deep;
+    clip: true;
+
+    // the grid: 1 px lines of line-faint from the host's origin, none while grid-step is 0
+    for k in root.grid-cols : Rectangle {
+        x: root.model.grid-ox + k * root.model.grid-step;
+        y: 0px;
+        width: Theme.hairline;
+        height: root.height;
+        background: Theme.line-faint;
+    }
+    for k in root.grid-rows : Rectangle {
+        x: 0px;
+        y: root.model.grid-oy + k * root.model.grid-step;
+        width: root.width;
+        height: Theme.hairline;
+        background: Theme.line-faint;
+    }
+    // the pointer: one stream (press, move, release in canvas-local pixels), the wheel in notches (120 px = one, fractional for a touchpad), Delete only
+    fs := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        key-pressed(e) => {
+            if (e.text == Key.Delete) {
+                root.canvas-delete();
+                return accept;
+            }
+            return reject;
+        }
+        area := TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            mouse-cursor: root.grip-hot ? MouseCursor.nwse-resize : MouseCursor.default;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.move) {
+                    root.canvas-moved(self.mouse-x, self.mouse-y);
+                } else if (e.kind == PointerEventKind.down && PInk.button(e.button) >= 0) {
+                    fs.focus();
+                    root.canvas-pressed(self.mouse-x, self.mouse-y, PInk.button(e.button));
+                } else if (e.kind == PointerEventKind.up && PInk.button(e.button) >= 0) {
+                    root.canvas-released(self.mouse-x, self.mouse-y, PInk.button(e.button));
+                }
+            }
+            scroll-event(e) => {
+                root.canvas-wheel(self.mouse-x, self.mouse-y, e.delta-x / 120px, e.delta-y / 120px, e.modifiers.control, e.modifiers.shift);
+                return EventResult.accept;
+            }
+            changed has-hover => {
+                if (!self.has-hover && !self.pressed) { root.canvas-left(); }
+            }
+        }
+    }
+    // the wires, under the nodes: stroke by the source output's type, 1.8 px * zoom; the selected one fg and 3 px; then the ghost being dragged
+    for w in root.model.wires : Path {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        commands: w.path;
+        stroke: w.selected ? Theme.fg : PInk.port(w.tone);
+        stroke-width: (w.selected ? 3px : 1.8px) * root.model.zoom;
+    }
+    Path {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        visible: root.model.ghost != "";
+        commands: root.model.ghost;
+        stroke: Theme.dim;
+        stroke-width: 1.6px * root.model.zoom;
+    }
+    // the nodes, in model order (later is on top)
+    for n in root.model.nodes : CanvasNodeView {
+        x: n.x;
+        y: n.y;
+        width: n.w;
+        height: n.h;
+        node: n;
+        zoom: root.model.zoom;
+        faces-live: root.model.faces-live;
+        face-switch(a) => { root.face-switch(a); }
+        face-centre(a, b) => { root.face-centre(a, b); }
+        face-freq(a, b) => { root.face-freq(a, b); }
+        face-mode(a, b) => { root.face-mode(a, b); }
+        face-squelch-on(a, b) => { root.face-squelch-on(a, b); }
+        face-squelch(a, b) => { root.face-squelch(a, b); }
+    }
+    // the canvas keys, bottom right, 10 px in; hidden while the host says the canvas is too small for them
+    keys := SegGroup {
+        x: root.width - 10px - self.width;
+        y: root.height - 10px - self.height;
+        visible: root.model.keys-shown;
+        small: true;
+        SegKey {
+            small: true;
+            min-w: 28px;
+            label: "\u{2212}";
+            tooltip: @tr("Zoom out (Ctrl+scroll also zooms)");
+            clicked => { root.zoom-step(false); }
+        }
+        SegKey {
+            small: true;
+            min-w: 28px;
+            label: "+";
+            tooltip: @tr("Zoom in (Ctrl+scroll also zooms)");
+            clicked => { root.zoom-step(true); }
+        }
+        SegKey {
+            small: true;
+            min-w: 44px;
+            label: @tr("Fit");
+            tooltip: @tr("Show every node on the canvas");
+            clicked => { root.fit(); }
+        }
+    }
+    // the refusal bubble: rust on the error card, at the host's x, y
+    if root.model.refusal.shown : Rectangle {
+        x: root.model.refusal.x;
+        y: root.model.refusal.y;
+        width: bubble.preferred-width + 12px;
+        height: bubble.preferred-height + 6px;
+        background: Theme.card-err;
+        border-width: Theme.hairline;
+        border-color: Theme.lamp-red;
+        border-radius: Theme.radius-panel;
+        bubble := Text {
+            x: 6px;
+            y: 3px;
+            text: root.model.refusal.text;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            color: Theme.chip-err-fg;
+        }
+    }
+}
+
+// ================================================ the inspector ================================================
+
+component PatchInspector inherits Rectangle {
+    in property <InspectorModel> model;
+    in property <bool> folded;
+    callback inspector-fold();
+    callback inspector-name(string);
+    callback inspector-device-opened();
+    callback inspector-device(int);
+    callback inspector-look();
+    callback inspector-centre(string);
+    callback inspector-rate(int);
+    callback inspector-freq(string);
+    callback inspector-mode(int);
+    callback inspector-squelch-on(bool);
+    callback inspector-squelch(float);
+    callback inspector-plugin(int);
+    callback inspector-setting(int, string);
+    callback inspector-sink(int);
+    callback inspector-size(int);
+    callback inspector-remove();
+
+    in-out property <bool> form-open: true;
+    // where things are, relative to the inspector (the page re-exports them): the name box, the kind's block, the Size row, Default size, Remove this node
+    out property <length> name-y: name-field.absolute-position.y - root.absolute-position.y;
+    out property <length> block-y: block.absolute-position.y - root.absolute-position.y;
+    out property <length> size-y: size-row.absolute-position.y - root.absolute-position.y;
+    out property <length> default-y: default-key.absolute-position.y - root.absolute-position.y;
+    out property <length> remove-y: remove-key.absolute-position.y - root.absolute-position.y;
+    property <length> iw: root.width - 16px;
+    property <int> kind: root.model.kind;
+
+    background: Theme.panel-alt;
+    clip: true;
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: Theme.hairline;
+        height: root.height;
+        background: Theme.line;
+    }
+
+    // the folded strip: 24 px, the fold key centred (one chevron: the key's own text would not fit)
+    strip := Rectangle {
+        visible: root.folded;
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        Key {
+            x: (root.width - self.width) / 2;
+            y: 8px;
+            width: self.preferred-width;
+            xs: true;
+            icon-only: true;
+            icon: @image-url("icons/fold.svg");
+            icon-size: 12px;
+            tooltip: @tr("Open the inspector: the selected node's settings");
+            accessible-label: @tr("Open the inspector: the selected node's settings");
+            clicked => { root.inspector-fold(); }
+        }
+    }
+    body := Scroller {
+        visible: !root.folded;
+        x: Theme.hairline;
+        y: 0px;
+        width: root.width - Theme.hairline;
+        height: root.height;
+        content-height: col.preferred-height + 16px;
+        col := VerticalLayout {
+            x: 8px - Theme.hairline;
+            y: 8px;
+            width: root.iw;
+            spacing: 6px;
+            alignment: start;
+            // the kind caption and the fold key
+            Rectangle {
+                height: Theme.key-xs-h;
+                Caption {
+                    x: 0px;
+                    y: 0px;
+                    width: max(0px, parent.width - 34px);
+                    height: parent.height;
+                    label: root.model.kind-caption;
+                    color: Theme.fg;
+                }
+                Key {
+                    x: parent.width - self.width;
+                    y: 0px;
+                    width: self.preferred-width;
+                    xs: true;
+                    min-w: 20px;
+                    label: ">>";
+                    tooltip: @tr("Fold the inspector away to give the canvas its width");
+                    accessible-label: @tr("Fold the inspector away to give the canvas its width");
+                    clicked => { root.inspector-fold(); }
+                }
+            }
+            Rectangle {
+                height: Theme.hairline;
+                background: Theme.line;
+            }
+            PLabel { text: @tr("Name"); }
+            name-field := LineInput {
+                value: root.model.name;
+                name: @tr("Name");
+                edited(t) => { root.inspector-name(t); }
+            }
+            // the block of the node's kind
+            block := VerticalLayout {
+                spacing: 6px;
+                alignment: start;
+                // RADIO
+                if root.kind == 0 : VerticalLayout {
+                    spacing: 6px;
+                    PLabel { text: @tr("Device"); }
+                    DropKey {
+                        value: root.model.radio.device-label;
+                        items: root.model.radio.device-items;
+                        selected: root.model.radio.device-index;
+                        label: @tr("Device");
+                        popup-min-w: 190px;
+                        opened => { root.inspector-device-opened(); }
+                        picked(i) => { root.inspector-device(i); }
+                    }
+                    Rectangle {
+                        height: Theme.key-sm-h;
+                        clip: true;
+                        look := Key {
+                            x: 0px;
+                            y: 0px;
+                            small: true;
+                            min-w: 0px;
+                            label: @tr("Look for radios");
+                            enabled: root.model.radio.look-enabled;
+                            clicked => { root.inspector-look(); }
+                        }
+                        if root.model.radio.looking : Text {
+                            x: look.width + 8px;
+                            y: 0px;
+                            height: parent.height;
+                            text: @tr("looking...");
+                            font-family: Theme.font-ui;
+                            font-size: Theme.font-small;
+                            color: Theme.dim;
+                            vertical-alignment: center;
+                        }
+                    }
+                    PLabel { text: @tr("Centre (MHz)"); }
+                    LineInput {
+                        mono: true;
+                        right: true;
+                        value: root.model.radio.centre-text;
+                        name: @tr("Centre (MHz)");
+                        committed(t) => { root.inspector-centre(t); }
+                    }
+                    if root.model.radio.centre-note != "" : Note { wrap-w: root.iw; text: root.model.radio.centre-note; ink: Theme.chip-warn-fg; }
+                    PLabel { text: @tr("Sample rate"); }
+                    if !root.model.radio.rate-fixed : DropKey {
+                        value: root.model.radio.rate-label;
+                        items: root.model.radio.rate-items;
+                        selected: root.model.radio.rate-index;
+                        label: @tr("Sample rate");
+                        picked(i) => { root.inspector-rate(i); }
+                    }
+                    if root.model.radio.rate-fixed : Note { wrap-w: root.iw; text: root.model.radio.rate-fixed-text; ink: Theme.chip-warn-fg; mono: true; }
+                    if root.model.radio.rate-fixed : Note { wrap-w: root.iw; text: @tr("The recording sets the rate."); }
+                    for l in root.model.radio.lines : Note { wrap-w: root.iw; text: l.text; ink: PInk.line(l.tone); }
+                }
+                // CHANNEL
+                if root.kind == 1 : VerticalLayout {
+                    spacing: 6px;
+                    PLabel { text: @tr("Frequency (MHz)"); }
+                    LineInput {
+                        mono: true;
+                        right: true;
+                        value: root.model.freq-text;
+                        name: @tr("Frequency (MHz)");
+                        committed(t) => { root.inspector-freq(t); }
+                    }
+                }
+                // DEMOD
+                if root.kind == 2 : VerticalLayout {
+                    spacing: 6px;
+                    PLabel { text: @tr("Mode"); }
+                    DropKey {
+                        value: ModeNames.name(root.model.mode-index);
+                        items: ModeNames.items;
+                        selected: root.model.mode-index;
+                        label: @tr("Mode");
+                        popup-min-w: 80px;
+                        picked(i) => { root.inspector-mode(i); }
+                    }
+                    Tick {
+                        row-h: 16px;
+                        label: @tr("Squelch");
+                        on: root.model.squelch-on;
+                        tooltip: @tr("Silences this demodulator's sound while the channel is quieter\nthan the threshold - so a speaker or a recording hears signals,\nnot the noise between them. Decoders are still given every sample.");
+                        toggled(v) => { root.inspector-squelch-on(v); }
+                    }
+                    if root.model.squelch-on : Rectangle {
+                        height: 16px;
+                        Slider {
+                            x: 8px;
+                            y: 5px;
+                            width: max(0px, parent.width - 8px - 8px - 48px - 4px);
+                            value: root.model.squelch-norm;
+                            changed(v) => { root.inspector-squelch(v); }
+                        }
+                        Text {
+                            x: parent.width - 48px;
+                            y: 0px;
+                            width: 48px;
+                            height: 16px;
+                            text: root.model.squelch-text;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            color: Theme.fg-soft;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    if root.model.gate-shown : Rectangle {
+                        height: 16px;
+                        Text {
+                            x: 0px;
+                            y: 0px;
+                            width: 56px;
+                            height: 16px;
+                            text: root.model.gate-text;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            color: Theme.chip-warn-fg;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Text {
+                            x: 62px;
+                            y: 0px;
+                            width: max(0px, parent.width - 62px);
+                            height: 16px;
+                            text: root.model.gate-word;
+                            font-family: Theme.font-ui;
+                            font-size: Theme.font-small;
+                            color: root.model.gate-lit ? Theme.chip-good-fg : Theme.dim;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+                // DECODER
+                if root.kind == 3 : VerticalLayout {
+                    spacing: 6px;
+                    PLabel { text: @tr("Plugin"); }
+                    DropKey {
+                        value: root.model.decoder.plugin-label;
+                        items: root.model.decoder.plugin-items;
+                        selected: root.model.decoder.plugin-index;
+                        label: @tr("Plugin");
+                        popup-min-w: 190px;
+                        picked(i) => { root.inspector-plugin(i); }
+                    }
+                    if root.model.decoder.feed-note != "" : Note { wrap-w: root.iw; text: root.model.decoder.feed-note; }
+                    for l in root.model.decoder.fed : Note { wrap-w: root.iw; text: l; ink: Theme.chip-warn-fg; }
+                    if root.model.decoder.shown-note != "" : Note { wrap-w: root.iw; text: root.model.decoder.shown-note; }
+                    if root.model.decoder.has-settings : Rectangle {
+                        height: Theme.hairline;
+                        background: Theme.line;
+                    }
+                    if root.model.decoder.has-settings : PluginSettingsForm {
+                        fields: root.model.decoder.settings;
+                        open <=> root.form-open;
+                        committed(id, t) => { root.inspector-setting(id, t); }
+                    }
+                }
+                // MAP
+                if root.kind == 6 : VerticalLayout {
+                    spacing: 6px;
+                    Note { wrap-w: root.iw; text: root.model.map-wired; ink: Theme.fg-soft; }
+                    for s in root.model.map-sources : Rectangle {
+                        height: 14px;
+                        clip: true;
+                        Text {
+                            x: 0px;
+                            y: 0px;
+                            width: 30px;
+                            height: parent.height;
+                            text: s.count;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-small;
+                            color: Theme.chip-warn-fg;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            x: 36px;
+                            y: 0px;
+                            width: max(0px, parent.width - 36px);
+                            height: parent.height;
+                            text: s.name;
+                            font-family: Theme.font-ui;
+                            font-size: Theme.font-small;
+                            color: Theme.fg;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    Note { wrap-w: root.iw; text: root.model.map-help; }
+                }
+                // SINK: an audio one chooses where the sound goes; a text one says what it shows
+                if root.kind == 5 && root.model.audio-sink : VerticalLayout {
+                    spacing: 6px;
+                    PLabel { text: @tr("Sound goes to"); }
+                    DropKey {
+                        value: root.model.sink.label;
+                        items: root.model.sink.items;
+                        selected: root.model.sink.index;
+                        label: @tr("Sound goes to");
+                        popup-min-w: 190px;
+                        picked(i) => { root.inspector-sink(i); }
+                    }
+                    for l in root.model.sink.lines : Note { wrap-w: root.iw; text: l.text; ink: PInk.line(l.tone); }
+                    if root.model.sink.files-note != "" : Note { wrap-w: root.iw; text: root.model.sink.files-note; }
+                }
+                // a text sink, a Display and anything else: one dim sentence
+                if (root.kind == 5 && !root.model.audio-sink) || root.kind == 4 || root.kind < 0 || root.kind > 6 : Note { wrap-w: root.iw; text: root.model.help; }
+            }
+            // the Size block, for every kind
+            Rectangle {
+                height: Theme.hairline;
+                background: Theme.line;
+            }
+            Caption {
+                height: 14px;
+                label: @tr("Size");
+            }
+            size-row := HorizontalLayout {
+                spacing: 6px;
+                Key {
+                    wide: true;
+                    small: true;
+                    min-width: 0px;
+                    label: @tr("Smaller");
+                    clicked => { root.inspector-size(0); }
+                }
+                Key {
+                    wide: true;
+                    small: true;
+                    min-width: 0px;
+                    label: @tr("Larger");
+                    clicked => { root.inspector-size(1); }
+                }
+            }
+            default-key := Key {
+                wide: true;
+                small: true;
+                min-width: 0px;
+                label: @tr("Default size");
+                clicked => { root.inspector-size(2); }
+            }
+            Note { wrap-w: root.iw; text: @tr("Or drag the brass corner at the part's bottom right."); }
+            Rectangle {
+                height: Theme.hairline;
+                background: Theme.line;
+            }
+            remove-key := Key {
+                wide: true;
+                small: true;
+                min-width: 0px;
+                danger: true;
+                label: @tr("Remove this node");
+                clicked => { root.inspector-remove(); }
+            }
+        }
+    }
+}
+
+// ================================================ the page ================================================
+
+// The Patch page: the band over the canvas and the inspector, a 1 px rule between the band and the rest. Everything is placed by x / y from running sums
+// (rule 11). The canvas is as wide as the page less the inspector and the 8 px gap (never under 160 px); the page reports its canvas rectangle with canvas-size on
+// every change (the host places new parts and fits views from it).
+export component PatchPage inherits Rectangle {
+    in property <PatchModel> model;
+    in property <CanvasModel> canvas;
+    in property <InspectorModel> inspector;
+
+    callback run-clicked();
+    run-clicked() => { PatchEvents.run-clicked(); }
+    callback all-off-clicked();
+    all-off-clicked() => { PatchEvents.all-off-clicked(); }
+    callback presets-clicked();
+    presets-clicked() => { PatchEvents.presets-clicked(); }
+    callback part-pressed(int);
+    part-pressed(a) => { PatchEvents.part-pressed(a); }
+    callback decoder-pressed(int);
+    decoder-pressed(a) => { PatchEvents.decoder-pressed(a); }
+    callback blueprints-opened();
+    blueprints-opened() => { PatchEvents.blueprints-opened(); }
+    callback blueprint-picked(int);
+    blueprint-picked(a) => { PatchEvents.blueprint-picked(a); }
+    callback canvas-size(length, length);
+    canvas-size(a, b) => { PatchEvents.canvas-size(a, b); }
+    callback canvas-pressed(length, length, int);
+    canvas-pressed(a, b, c) => { PatchEvents.canvas-pressed(a, b, c); }
+    callback canvas-moved(length, length);
+    canvas-moved(a, b) => { PatchEvents.canvas-moved(a, b); }
+    callback canvas-released(length, length, int);
+    canvas-released(a, b, c) => { PatchEvents.canvas-released(a, b, c); }
+    callback canvas-left();
+    canvas-left() => { PatchEvents.canvas-left(); }
+    callback canvas-wheel(length, length, float, float, bool, bool);
+    canvas-wheel(a, b, c, d, e, f) => { PatchEvents.canvas-wheel(a, b, c, d, e, f); }
+    callback zoom-step(bool);
+    zoom-step(a) => { PatchEvents.zoom-step(a); }
+    callback fit();
+    fit() => { PatchEvents.fit(); }
+    callback canvas-delete();
+    canvas-delete() => { PatchEvents.canvas-delete(); }
+    callback face-switch(int);
+    face-switch(a) => { PatchEvents.face-switch(a); }
+    callback face-centre(int, string);
+    face-centre(a, b) => { PatchEvents.face-centre(a, b); }
+    callback face-freq(int, string);
+    face-freq(a, b) => { PatchEvents.face-freq(a, b); }
+    callback face-mode(int, int);
+    face-mode(a, b) => { PatchEvents.face-mode(a, b); }
+    callback face-squelch-on(int, bool);
+    face-squelch-on(a, b) => { PatchEvents.face-squelch-on(a, b); }
+    callback face-squelch(int, float);
+    face-squelch(a, b) => { PatchEvents.face-squelch(a, b); }
+    callback inspector-fold();
+    inspector-fold() => { PatchEvents.inspector-fold(); }
+    callback inspector-name(string);
+    inspector-name(a) => { PatchEvents.inspector-name(a); }
+    callback inspector-device-opened();
+    inspector-device-opened() => { PatchEvents.inspector-device-opened(); }
+    callback inspector-device(int);
+    inspector-device(a) => { PatchEvents.inspector-device(a); }
+    callback inspector-look();
+    inspector-look() => { PatchEvents.inspector-look(); }
+    callback inspector-centre(string);
+    inspector-centre(a) => { PatchEvents.inspector-centre(a); }
+    callback inspector-rate(int);
+    inspector-rate(a) => { PatchEvents.inspector-rate(a); }
+    callback inspector-freq(string);
+    inspector-freq(a) => { PatchEvents.inspector-freq(a); }
+    callback inspector-mode(int);
+    inspector-mode(a) => { PatchEvents.inspector-mode(a); }
+    callback inspector-squelch-on(bool);
+    inspector-squelch-on(a) => { PatchEvents.inspector-squelch-on(a); }
+    callback inspector-squelch(float);
+    inspector-squelch(a) => { PatchEvents.inspector-squelch(a); }
+    callback inspector-plugin(int);
+    inspector-plugin(a) => { PatchEvents.inspector-plugin(a); }
+    callback inspector-setting(int, string);
+    inspector-setting(a, b) => { PatchEvents.inspector-setting(a, b); }
+    callback inspector-sink(int);
+    inspector-sink(a) => { PatchEvents.inspector-sink(a); }
+    callback inspector-size(int);
+    inspector-size(a) => { PatchEvents.inspector-size(a); }
+    callback inspector-remove();
+    inspector-remove() => { PatchEvents.inspector-remove(); }
+
+
+    property <length> insp-w: root.model.inspector-shown ? (root.model.inspector-folded ? 24px : 190px) : 0px;
+    property <length> insp-gap: root.model.inspector-shown ? 8px : 0px;
+    // what the page measures, for a host or a test to aim by (x / y within the page)
+    out property <length> band-height: band.needed-height;
+    out property <length> info-width: band.info-width;
+    out property <length> left-width: band.left-width;
+    out property <length> canvas-ox: 0px;
+    out property <length> canvas-oy: root.band-height + Theme.hairline;
+    out property <length> canvas-w: max(160px, root.width - root.insp-w - root.insp-gap);
+    out property <length> canvas-h: max(0px, root.height - root.canvas-oy);
+    out property <length> inspector-x: root.width - root.insp-w;
+    out property <length> inspector-w: root.insp-w;
+    out property <length> transport-y: band.transport-y;
+    out property <length> readout-y: band.readout-y;
+    out property <length> parts-y: band.parts-y;
+    out property <length> decoders-y: band.decoders-y;
+    out property <length> decoders-x0: band.decoders-x0;
+    out property <length> blueprints-y: band.blueprints-y;
+    out property <length> blueprint-note-y: band.blueprint-note-y;
+    out property <int> part-rows: band.part-rows;
+    out property <int> decoder-rows: band.decoder-rows;
+    out property <length> inspector-name-y: insp.name-y;
+    out property <length> inspector-block-y: insp.block-y;
+    out property <length> inspector-size-y: insp.size-y;
+    out property <length> inspector-default-y: insp.default-y;
+    out property <length> inspector-remove-y: insp.remove-y;
+
+    background: Theme.bg;
+    clip: true;
+    accessible-role: groupbox;
+    accessible-label: @tr("PATCH");
+
+    init => { root.canvas-size(root.canvas-w, root.canvas-h); }
+    changed canvas-w => { root.canvas-size(root.canvas-w, root.canvas-h); }
+    changed canvas-h => { root.canvas-size(root.canvas-w, root.canvas-h); }
+
+    band := PatchBand {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.band-height;
+        model: root.model;
+        run-clicked => { root.run-clicked(); }
+        all-off-clicked => { root.all-off-clicked(); }
+        presets-clicked => { root.presets-clicked(); }
+        part-pressed(a) => { root.part-pressed(a); }
+        decoder-pressed(a) => { root.decoder-pressed(a); }
+        blueprints-opened => { root.blueprints-opened(); }
+        blueprint-picked(a) => { root.blueprint-picked(a); }
+    }
+    Rectangle {
+        x: 0px;
+        y: root.band-height;
+        width: root.width;
+        height: Theme.hairline;
+        background: Theme.line;
+    }
+    cv := PatchCanvasView {
+        x: root.canvas-ox;
+        y: root.canvas-oy;
+        width: root.canvas-w;
+        height: root.canvas-h;
+        model: root.canvas;
+        canvas-pressed(a, b, c) => { root.canvas-pressed(a, b, c); }
+        canvas-moved(a, b) => { root.canvas-moved(a, b); }
+        canvas-released(a, b, c) => { root.canvas-released(a, b, c); }
+        canvas-left => { root.canvas-left(); }
+        canvas-wheel(a, b, c, d, e, g) => { root.canvas-wheel(a, b, c, d, e, g); }
+        zoom-step(a) => { root.zoom-step(a); }
+        fit => { root.fit(); }
+        canvas-delete => { root.canvas-delete(); }
+        face-switch(a) => { root.face-switch(a); }
+        face-centre(a, b) => { root.face-centre(a, b); }
+        face-freq(a, b) => { root.face-freq(a, b); }
+        face-mode(a, b) => { root.face-mode(a, b); }
+        face-squelch-on(a, b) => { root.face-squelch-on(a, b); }
+        face-squelch(a, b) => { root.face-squelch(a, b); }
+    }
+    insp := PatchInspector {
+        x: root.inspector-x;
+        y: root.canvas-oy;
+        width: root.insp-w;
+        height: root.canvas-h;
+        visible: root.model.inspector-shown;
+        folded: root.model.inspector-folded;
+        model: root.inspector;
+        inspector-fold => { root.inspector-fold(); }
+        inspector-name(a) => { root.inspector-name(a); }
+        inspector-device-opened => { root.inspector-device-opened(); }
+        inspector-device(a) => { root.inspector-device(a); }
+        inspector-look => { root.inspector-look(); }
+        inspector-centre(a) => { root.inspector-centre(a); }
+        inspector-rate(a) => { root.inspector-rate(a); }
+        inspector-freq(a) => { root.inspector-freq(a); }
+        inspector-mode(a) => { root.inspector-mode(a); }
+        inspector-squelch-on(a) => { root.inspector-squelch-on(a); }
+        inspector-squelch(a) => { root.inspector-squelch(a); }
+        inspector-plugin(a) => { root.inspector-plugin(a); }
+        inspector-setting(a, b) => { root.inspector-setting(a, b); }
+        inspector-sink(a) => { root.inspector-sink(a); }
+        inspector-size(a) => { root.inspector-size(a); }
+        inspector-remove => { root.inspector-remove(); }
+    }
+}
+
+// ================================================ the presets page ================================================
+
+// The body of PageTab kind 10 (the page chrome, the tear-off and the roll-up are the kit's): the list of presets, LOAD / SAVE AS... / RENAME / DELETE, the name row
+// while saving or renaming, the host's note, and the two questions as panels over the page. Placed by x / y, nothing asks a parent for a width.
+export component PatchPresetsPage inherits Rectangle {
+    in property <PatchPresetsModel> model;
+
+    callback presets-row(int);
+    presets-row(a) => { PatchEvents.presets-row(a); }
+    callback presets-row-activated(int);
+    presets-row-activated(a) => { PatchEvents.presets-row-activated(a); }
+    callback presets-load();
+    presets-load() => { PatchEvents.presets-load(); }
+    callback presets-save-as();
+    presets-save-as() => { PatchEvents.presets-save-as(); }
+    callback presets-rename();
+    presets-rename() => { PatchEvents.presets-rename(); }
+    callback presets-delete();
+    presets-delete() => { PatchEvents.presets-delete(); }
+    callback presets-name(string);
+    presets-name(a) => { PatchEvents.presets-name(a); }
+    callback presets-go();
+    presets-go() => { PatchEvents.presets-go(); }
+    callback presets-cancel();
+    presets-cancel() => { PatchEvents.presets-cancel(); }
+    callback presets-replace(bool);
+    presets-replace(a) => { PatchEvents.presets-replace(a); }
+    callback presets-delete-confirm(bool);
+    presets-delete-confirm(a) => { PatchEvents.presets-delete-confirm(a); }
+
+
+    in-out property <int> last-edit;                    // the edit the name row last showed: a row that opens takes the keyboard
+    property <length> pad: 8px;
+    property <length> iw: max(0px, root.width - 2 * root.pad);
+    property <bool> editing: root.model.edit != 0;
+    property <bool> asking: root.model.ask-replace || root.model.ask-delete;
+    property <bool> wide: root.width >= 360px;
+    property <int> key-rows: keys-flow.last-row + 1;
+    property <length> keys-h: root.key-rows * Theme.key-xs-h + (root.key-rows - 1) * 4px;
+    property <length> name-h: root.wide ? Theme.field-h : Theme.field-h + 4px + Theme.key-xs-h;
+    property <length> name-w: max(120px, root.iw / 2);
+    property <bool> note-shown: root.model.note != "";
+
+    // what the page measures, for a host or a test to aim by (x / y within the page)
+    out property <length> list-y: root.pad;
+    out property <length> list-h: max(40px, root.height - 2 * root.pad - (6px + root.keys-h) - (root.editing ? 6px + root.name-h : 0px) - (root.note-shown ? 6px + note.height : 0px));
+    out property <length> keys-y: root.list-y + root.list-h + 6px;
+    out property <length> name-y: root.editing ? root.keys-y + root.keys-h + 6px : -1px;
+    out property <length> note-y: root.note-shown ? (root.editing ? root.name-y + root.name-h : root.keys-y + root.keys-h) + 6px : -1px;
+    out property <length> modal-x: panel.x;
+    out property <length> modal-y: panel.y;
+    out property <length> modal-w: panel.width;
+    out property <length> modal-h: panel.height;
+    out property <length> modal-keys-y: yes-key.absolute-position.y - root.absolute-position.y;
+    out property <length> modal-yes-x: yes-key.absolute-position.x - root.absolute-position.x;
+    out property <length> modal-no-x: no-key.absolute-position.x - root.absolute-position.x;
+
+    public function focus-name() { name-field.focus-input(); }
+    changed model => {
+        if (root.model.edit != 0 && root.last-edit == 0) { name-field.focus-input(); }
+        root.last-edit = root.model.edit;
+    }
+
+    background: Theme.panel;
+    clip: true;
+    accessible-role: groupbox;
+    accessible-label: @tr("PATCH PRESETS");
+
+    // ---- the list: a card with a 1 px border, rows of 25 px ----
+    Rectangle {
+        x: root.pad;
+        y: root.list-y;
+        width: root.iw;
+        height: root.list-h;
+        background: Theme.card;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        Scroller {
+            x: Theme.hairline;
+            y: Theme.hairline;
+            width: parent.width - 2 * Theme.hairline;
+            height: parent.height - 2 * Theme.hairline;
+            content-height: root.model.rows.length * Theme.section-dense-h;
+            for r[i] in root.model.rows : Rectangle {
+                x: 0px;
+                y: i * Theme.section-dense-h;
+                width: parent.width;
+                height: Theme.section-dense-h;
+                background: r.selected ? Theme.table-selected : transparent;
+                Text {
+                    x: 8px;
+                    y: 0px;
+                    width: max(0px, parent.width - 16px);
+                    height: parent.height;
+                    text: r.text;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                    color: r.selected ? Theme.accent-soft : r.previous ? Theme.muted : Theme.fg-soft;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                row-area := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.presets-row(i); }
+                    double-clicked => { root.presets-row-activated(i); }
+                }
+                TipTimer { x: 0px; y: 0px; hovered: row-area.has-hover; text: r.previous ? @tr("The patch the last load replaced. Load it to undo that load.") : ""; anchor-h: parent.height; }
+            }
+        }
+        if root.model.empty-shown : Note {
+            x: 8px;
+            y: 6px;
+            wrap-w: max(0px, parent.width - 16px);
+            text: @tr("No presets yet. SAVE AS... keeps the patch on the canvas under a name.");
+        }
+    }
+
+    // ---- LOAD, SAVE AS..., RENAME, DELETE: xs keys that wrap ----
+    keys-flow := FlowPlacer {
+        avail: root.iw;
+        pad: 20px;
+        items: [{ label: "LOAD", index: 0, tooltip: "" }, { label: "SAVE AS...", index: 1, tooltip: "" }, { label: "RENAME", index: 2, tooltip: "" }, { label: "DELETE", index: 3, tooltip: "" }];   // not-translated: only their length is read, for the layout
+    }
+    Key {
+        x: root.pad + keys-flow.x-of(0);
+        y: root.keys-y + keys-flow.r-of(0) * (Theme.key-xs-h + 4px);
+        width: keys-flow.w-of(0);
+        min-width: 0px;
+        xs: true;
+        min-w: 0px;
+        label: @tr("LOAD");
+        enabled: root.model.load-enabled;
+        clicked => { root.presets-load(); }
+    }
+    Key {
+        x: root.pad + keys-flow.x-of(1);
+        y: root.keys-y + keys-flow.r-of(1) * (Theme.key-xs-h + 4px);
+        width: keys-flow.w-of(1);
+        min-width: 0px;
+        xs: true;
+        min-w: 0px;
+        label: @tr("SAVE AS...");
+        clicked => { root.presets-save-as(); }
+    }
+    Key {
+        x: root.pad + keys-flow.x-of(2);
+        y: root.keys-y + keys-flow.r-of(2) * (Theme.key-xs-h + 4px);
+        width: keys-flow.w-of(2);
+        min-width: 0px;
+        xs: true;
+        min-w: 0px;
+        label: @tr("RENAME");
+        enabled: root.model.rename-enabled;
+        clicked => { root.presets-rename(); }
+    }
+    Key {
+        x: root.pad + keys-flow.x-of(3);
+        y: root.keys-y + keys-flow.r-of(3) * (Theme.key-xs-h + 4px);
+        width: keys-flow.w-of(3);
+        min-width: 0px;
+        xs: true;
+        min-w: 0px;
+        label: @tr("DELETE");
+        enabled: root.model.delete-enabled;
+        clicked => { root.presets-delete(); }
+    }
+
+    // ---- the name row while saving or renaming ----
+    Rectangle {
+        visible: root.editing;
+        x: 0px;
+        y: root.editing ? root.name-y : -100px;
+        width: root.width;
+        height: root.name-h;
+        Caption {
+            x: root.pad;
+            y: 0px;
+            width: 40px;
+            height: Theme.field-h;
+            label: @tr("Name");
+        }
+        name-field := LineInput {
+            x: root.pad + 40px;
+            y: 0px;
+            width: root.name-w;
+            value: root.model.name-draft;
+            name: @tr("Name");
+            edited(t) => { root.presets-name(t); }
+            accepted(t) => { root.presets-go(); }
+        }
+        // SAVE (edit 1) or RENAME (edit 2), and CANCEL: after the box, or under it when the page is narrow
+        go-key := Key {
+            x: root.wide ? root.pad + 40px + root.name-w + 6px : root.pad;
+            y: root.wide ? 2px : Theme.field-h + 4px;
+            width: (root.model.edit == 2 ? 6 : 4) * 7px + 20px;
+            min-width: 0px;
+            xs: true;
+            min-w: 0px;
+            label: root.model.edit == 2 ? @tr("RENAME") : @tr("SAVE");
+            clicked => { root.presets-go(); }
+        }
+        Key {
+            x: go-key.x + go-key.width + 4px;
+            y: go-key.y;
+            width: 6 * 7px + 20px;
+            min-width: 0px;
+            xs: true;
+            min-w: 0px;
+            label: @tr("CANCEL");
+            clicked => { root.presets-cancel(); }
+        }
+    }
+
+    // ---- the host's note: dim, green after a success ----
+    note := Note {
+        x: root.pad;
+        y: root.note-shown ? root.note-y : -100px;
+        wrap-w: root.iw;
+        text: root.model.note;
+        ink: root.model.note-good ? Theme.chip-good-fg : Theme.dim;
+    }
+
+    // ---- the two questions: a panel over the page, a backdrop that takes every press ----
+    Rectangle {
+        visible: root.asking;
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: Theme.backdrop;
+        modal-scope := FocusScope {
+            key-pressed(e) => { return accept; }
+        }
+        TouchArea { }
+        panel := Rectangle {
+            width: min(290px, root.width - 16px);
+            height: mcol.preferred-height + 20px;
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 28px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            accessible-role: groupbox;
+            accessible-label: root.model.ask-delete ? @tr("Delete preset?") : @tr("Replace preset?");
+            TouchArea { }
+            mcol := VerticalLayout {
+                x: 10px;
+                y: 10px;
+                width: parent.width - 20px;
+                spacing: 6px;
+                alignment: start;
+                Note { wrap-w: parent.width; text: root.model.ask-delete ? @tr("Delete preset?") : @tr("Replace preset?"); ink: Theme.fg; size: Theme.font-body; weight: Theme.weight-semibold; }
+                Note { wrap-w: parent.width; text: root.model.ask-delete ? root.model.delete-text : root.model.replace-text; ink: Theme.fg-soft; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    yes-key := Key {
+                        small: true;
+                        on: !root.model.ask-delete;
+                        danger: root.model.ask-delete;
+                        label: root.model.ask-delete ? @tr("DELETE") : @tr("REPLACE");
+                        clicked => {
+                            if (root.model.ask-delete) { root.presets-delete-confirm(true); } else { root.presets-replace(true); }
+                        }
+                    }
+                    no-key := Key {
+                        small: true;
+                        label: @tr("CANCEL");
+                        clicked => {
+                            if (root.model.ask-delete) { root.presets-delete-confirm(false); } else { root.presets-replace(false); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    changed asking => { if (root.asking) { modal-scope.focus(); } }
+}
