@@ -83,6 +83,11 @@ core::SettingEditResult settingVerdictFromAnswer(int status, double applied0) {
     return status == FOXAPI_NOT_FOUND ? core::SettingEditResult::Refused : core::SettingEditResult::StoreError;
 }
 
+int settingBoxFlags(std::uint32_t kind) {
+    // A PASSWORD box shows dots and keeps its text off the clipboard; every other kind draws plain.
+    return kind == CASCADE_SETTING_PASSWORD ? static_cast<int>(ImGuiInputTextFlags_Password) : 0;
+}
+
 std::string settingFieldStateKey(const char* scope, const std::string& pluginName,
                                  const std::string& key) {
     // \x1f (unit separator) cannot occur in a store key, and a plugin name
@@ -188,7 +193,8 @@ int drawPluginSettingsForm(SettingsEditSink& sink, const std::string& pluginName
             if (!fs.editing && !follow) { fillBuffer(fs.buf, shown); }
             ImGui::TextUnformatted(f.label.c_str());
             ImGui::SetNextItemWidth(browse ? -keyWidth : -FLT_MIN);
-            ImGui::InputTextWithHint("##v", f.placeholder.c_str(), fs.buf.data(), fs.buf.size());
+            ImGui::InputTextWithHint("##v", f.placeholder.c_str(), fs.buf.data(), fs.buf.size(),
+                                     static_cast<ImGuiInputTextFlags>(settingBoxFlags(f.kind)));
             fs.editing = ImGui::IsItemActive();
             if (cascade::gui::census::enabled()) {
                 // WHERE THE BOX IS, so a scripted click can focus it (tests/test_plugin_pathpick_app).

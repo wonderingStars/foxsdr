@@ -162,6 +162,12 @@ int drawPluginSettingsForm(SettingsEditSink& sink, const std::string& pluginName
 // null; "" for Accepted.
 const char* settingEditMessage(core::SettingEditResult r);
 
+// THE BOX'S INPUT FLAGS BY KIND (0.99.105): a PASSWORD field is drawn masked
+// (ImGuiInputTextFlags_Password - the characters show as dots and never reach
+// the clipboard); every other kind draws plain (0). The one decision the kind
+// changes in this file, held by the tests without drawing.
+int settingBoxFlags(std::uint32_t kind);
+
 // The key a field's state is kept under (exposed for the tests).
 std::string settingFieldStateKey(const char* scope, const std::string& pluginName,
                                  const std::string& key);

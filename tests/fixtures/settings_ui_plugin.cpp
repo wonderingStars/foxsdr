@@ -66,6 +66,12 @@ const CascadeSettingSpec kSpecs[] = {
      CASCADE_SETTING_NUMBER, 0u, "watts", "5"},
     {static_cast<uint32_t>(sizeof(CascadeSettingSpec)), "tool_path", "Tool path",
      CASCADE_SETTING_PATH, 260u, "C:\\tools\\tool.exe", ""},
+    // A PASSWORD field (0.99.105): stored as TEXT is, drawn masked. The fixture's text line
+    // below says only how many bytes it holds - a plugin that echoed the value would be the
+    // leak the kind exists to prevent. It sits BEFORE the checkbox: the widget test clicks
+    // the checkbox as the form's last drawn item.
+    {static_cast<uint32_t>(sizeof(CascadeSettingSpec)), "secret", "Password",
+     CASCADE_SETTING_PASSWORD, 32u, "", ""},
     {static_cast<uint32_t>(sizeof(CascadeSettingSpec)), "report", "Report spots",
      CASCADE_SETTING_BOOL, 0u, "", ""},
     {static_cast<uint32_t>(sizeof(CascadeSettingSpec)), "future", "From a later host", 99u, 0u,
@@ -114,16 +120,25 @@ int32_t pollText(void* handle, char* buf, size_t cap) {
             char power[64];
             char report[64];
             char tool[300];
+            char secret[64];
             readSetting("callsign", "", call, sizeof(call));
             readSetting("power", "5", power, sizeof(power));
             readSetting("report", "", report, sizeof(report));
             readSetting("tool_path", "", tool, sizeof(tool));
+            readSetting("secret", "", secret, sizeof(secret));
             char toolPart[320] = "";
             if (tool[0] != '\0') { std::snprintf(toolPart, sizeof(toolPart), " tool=%s", tool); }
+            // The secret's LENGTH proves the plugin received it; the value itself never leaves the plugin.
+            char secretPart[40] = "";
+            if (secret[0] != '\0') {
+                size_t bytes = 0;
+                while (secret[bytes] != '\0') { ++bytes; }
+                std::snprintf(secretPart, sizeof(secretPart), " secret=%u bytes", static_cast<unsigned>(bytes));
+            }
             const int n = std::snprintf(s->line, sizeof(s->line),
-                                        "SETTINGS seq=%llu callsign=%s power=%s report=%s%s\n",
+                                        "SETTINGS seq=%llu callsign=%s power=%s report=%s%s%s\n",
                                         static_cast<unsigned long long>(seq), call, power,
-                                        report, toolPart);
+                                        report, toolPart, secretPart);
             s->len = n > 0 ? static_cast<size_t>(n) : 0u;
             if (s->len >= sizeof(s->line)) { s->len = sizeof(s->line) - 1u; }
             s->read = 0;

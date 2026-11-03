@@ -149,9 +149,14 @@ std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api) {
         if (s.structSize != static_cast<std::uint32_t>(sizeof(CascadeSettingSpec))) { continue; }
         // PATH (0.99.74) is TEXT for everything this file decides: a file's
         // location is stored as the text of the path. What differs - the
-        // BROWSE key - is drawn by gui/plugin_settings_form.cpp.
+        // BROWSE key - is drawn by gui/plugin_settings_form.cpp. PASSWORD
+        // (0.99.105, the Slint window's first release) is TEXT the same way:
+        // what differs is the masked box, the form's again, and that the
+        // value is never shown or logged by the host (the save line names
+        // the key and the byte count only: engine/engine_plugin_settings.cpp).
         if (s.kind != CASCADE_SETTING_TEXT && s.kind != CASCADE_SETTING_NUMBER &&
-            s.kind != CASCADE_SETTING_BOOL && s.kind != CASCADE_SETTING_PATH) {
+            s.kind != CASCADE_SETTING_BOOL && s.kind != CASCADE_SETTING_PATH &&
+            s.kind != CASCADE_SETTING_PASSWORD) {
             continue;  // a later host's kind: skipped, never refused
         }
         const std::string key(s.key, boundedLength(s.key, CASCADE_SETTING_KEY_CHARS));
@@ -172,7 +177,8 @@ std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api) {
         }
         switch (s.kind) {
             case CASCADE_SETTING_TEXT:
-            case CASCADE_SETTING_PATH: {
+            case CASCADE_SETTING_PATH:
+            case CASCADE_SETTING_PASSWORD: {
                 std::size_t m = s.maxLength;
                 if (m == 0u) { m = 1u; }
                 if (m > CASCADE_SETTING_VALUE_BYTES - 1u) { m = CASCADE_SETTING_VALUE_BYTES - 1u; }
@@ -206,6 +212,7 @@ SettingEditResult prepareSettingEdit(const SettingField& f, const std::string& t
     switch (f.kind) {
         case CASCADE_SETTING_TEXT:
         case CASCADE_SETTING_PATH:
+        case CASCADE_SETTING_PASSWORD:
             if (typed.size() > f.maxLength) { return SettingEditResult::TooLong; }
             if (!isCleanLine(typed)) { return SettingEditResult::BadText; }
             stored = typed;

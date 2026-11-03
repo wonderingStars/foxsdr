@@ -333,6 +333,31 @@ void testFields() {
         CHECK(pf[4].defaultValue.empty());
     }
 
+    // [Q1] A PASSWORD field (0.99.105, the Slint window's first release: the design's finding 7,
+    // the Winlink password drawn in clear) is a field with TEXT's rules - the limit clamped the
+    // same way, the placeholder kept, a default only if the field could hold it - and kind 4.
+    // What differs, the masked box, is the form's (gui/plugin_settings_form.cpp). A kind beyond
+    // it (5) is STILL a later host's: skipped, never refused - adding one kind must not open
+    // the door to every number.
+    CascadeSettingSpec secretSpecs[5] = {
+        spec("secret", "Password", CASCADE_SETTING_PASSWORD, 32, "", ""),
+        spec("huge", "Huge", CASCADE_SETTING_PASSWORD, 99999u, "", ""),
+        spec("tiny", "Tiny", CASCADE_SETTING_PASSWORD, 0u, "", ""),
+        spec("preset", "Preset", CASCADE_SETTING_PASSWORD, 20, "type it", "hunter2"),
+        spec("later", "Later", CASCADE_SETTING_PASSWORD + 1u, 20, "", ""),  // kind 5: skipped
+    };
+    CascadeSettingsUiApi uiQ{static_cast<std::uint32_t>(sizeof(CascadeSettingsUiApi)), 5u,
+                             secretSpecs};
+    const std::vector<SettingField> qf = cascade::core::settingFieldsFrom(&uiQ);
+    CHECK(qf.size() == 4u);
+    if (qf.size() == 4u) {
+        CHECK(qf[0].key == "secret" && qf[0].kind == CASCADE_SETTING_PASSWORD &&
+              qf[0].maxLength == 32u && qf[0].label == "Password" && qf[0].defaultValue.empty());
+        CHECK(qf[1].maxLength == CASCADE_SETTING_VALUE_BYTES - 1u);
+        CHECK(qf[2].maxLength == 1u);
+        CHECK(qf[3].placeholder == "type it" && qf[3].defaultValue == "hunter2");
+    }
+
     // Whole-table faults: nothing, not a crash.
     CHECK(cascade::core::settingFieldsFrom(nullptr).empty());
     CascadeSettingsUiApi z = ui;
@@ -353,6 +378,8 @@ void testFields() {
 // The number a plugin built for 0.99.74 writes into CascadeSettingSpec::kind. It is part of the
 // ABI: a plugin compiled with 3 meaning "path" must still mean it in every later host.
 static_assert(CASCADE_SETTING_PATH == 3u, "CASCADE_SETTING_PATH is ABI: it is 3");
+// The number a plugin built for 0.99.105 writes for a password field: ABI the same way.
+static_assert(CASCADE_SETTING_PASSWORD == 4u, "CASCADE_SETTING_PASSWORD is ABI: it is 4");
 
 SettingEditResult prep(const SettingField& f, const std::string& in, std::string& out) {
     return cascade::core::prepareSettingEdit(f, in, out);
@@ -392,6 +419,27 @@ void testEdits() {
     CHECK(prep(path, "C:\\Users\\Zo\xC3\xAB\\a.exe", out) == SettingEditResult::Accepted);  // "Zoë"
     CHECK(prep(path, "C:\\Users\\Zo\xC3", out) == SettingEditResult::BadText);  // cut sequence
     CHECK(prep(path, "/usr/bin/nrsc5", out) == SettingEditResult::Accepted && out == "/usr/bin/nrsc5");
+
+    // A PASSWORD is stored as a TEXT is (0.99.105): as typed, at most maxLength bytes of clean
+    // UTF-8, cleared by an empty edit; what the kind changes is the box, which is masked.
+    SettingField secret;
+    secret.key = "secret";
+    secret.kind = CASCADE_SETTING_PASSWORD;
+    secret.maxLength = 8;
+    CHECK(prep(secret, "hunter2", out) == SettingEditResult::Accepted && out == "hunter2");
+    CHECK(prep(secret, "hunter22", out) == SettingEditResult::Accepted && out == "hunter22");  // == limit
+    CHECK(prep(secret, "hunter222", out) == SettingEditResult::TooLong && out.empty());       // limit + 1
+    CHECK(prep(secret, "", out) == SettingEditResult::Accepted && out.empty());  // cleared, not deleted
+    CHECK(prep(secret, "a\tb", out) == SettingEditResult::BadText);
+    CHECK(prep(secret, "a\nb", out) == SettingEditResult::BadText);
+    CHECK(prep(secret, "\xC3", out) == SettingEditResult::BadText);  // cut sequence
+    CHECK(prep(secret, "p\xC3\xA4ss", out) == SettingEditResult::Accepted);  // "päss", 5 bytes
+    // The box: masked for a password, plain for every other kind (the form's one decision).
+    CHECK(cascade::gui::settingBoxFlags(CASCADE_SETTING_PASSWORD) == ImGuiInputTextFlags_Password);
+    CHECK(cascade::gui::settingBoxFlags(CASCADE_SETTING_TEXT) == 0 &&
+          cascade::gui::settingBoxFlags(CASCADE_SETTING_NUMBER) == 0 &&
+          cascade::gui::settingBoxFlags(CASCADE_SETTING_BOOL) == 0 &&
+          cascade::gui::settingBoxFlags(CASCADE_SETTING_PATH) == 0);
 
     SettingField num;
     num.key = "power";
@@ -1122,19 +1170,23 @@ void testRealModule(const char* dir) {
     CHECK(rec->settingsUi != nullptr);
     CHECK(rec->decoder != nullptr && rec->hostClient != nullptr);
     const std::vector<SettingField> fields = cascade::core::settingFieldsFrom(rec->settingsUi);
-    // Seven entries declared; the later-kind, later-size and repeated ones are
-    // skipped - the form still has its four (a PATH, from 0.99.74, is one of them:
-    // before it, this host skipped kind 3 and the form had three).
-    CHECK(fields.size() == 4u);
+    // Eight entries declared; the later-kind, later-size and repeated ones are
+    // skipped - the form has its five (a PATH, from 0.99.74, is one of them: before
+    // it, this host skipped kind 3 and the form had three; a PASSWORD, from
+    // 0.99.105, is another: before it, this host skipped kind 4 and the form had four).
+    CHECK(fields.size() == 5u);
     const SettingField* call = fieldByKey(fields, "callsign");
     const SettingField* power = fieldByKey(fields, "power");
     const SettingField* report = fieldByKey(fields, "report");
     const SettingField* tool = fieldByKey(fields, "tool_path");
-    CHECK(call != nullptr && power != nullptr && report != nullptr && tool != nullptr);
-    if (call == nullptr || power == nullptr || report == nullptr || tool == nullptr) { return; }
+    const SettingField* secret = fieldByKey(fields, "secret");
+    CHECK(call != nullptr && power != nullptr && report != nullptr && tool != nullptr && secret != nullptr);
+    if (call == nullptr || power == nullptr || report == nullptr || tool == nullptr || secret == nullptr) { return; }
     CHECK(call->maxLength == 12u && call->placeholder == "e.g. G4ABC");
     CHECK(tool->kind == CASCADE_SETTING_PATH && tool->maxLength == 260u &&
           tool->placeholder == "C:\\tools\\tool.exe");
+    CHECK(secret->kind == CASCADE_SETTING_PASSWORD && secret->maxLength == 32u &&
+          secret->label == "Password" && secret->defaultValue.empty());
 
     {
         PluginUi ui;

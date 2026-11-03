@@ -203,8 +203,9 @@ void testListAndFacts() {
     CHECK(remote.ok());
     passes(d.eng, 3);
 
-    // Four fields the host can store (the fixture declares seven: a later host's kind, a later host's entry size and a repeated key are skipped).
-    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_SETTINGS), 4);
+    // Five fields the host can store (the fixture declares eight: a later host's kind, a later host's entry size and a repeated key are skipped;
+    // the fifth is the PASSWORD field of 0.99.105, listed with kind 4 - a client draws it masked).
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_SETTINGS), 5);
     struct Want {
         const char* key;
         const char* label;
@@ -217,9 +218,10 @@ void testListAndFacts() {
         {"callsign", "Callsign", CASCADE_SETTING_TEXT, 12.0, "e.g. G4ABC", ""},
         {"power", "Power (W)", CASCADE_SETTING_NUMBER, static_cast<double>(cascade::core::kMaxNumberChars), "watts", "5"},
         {"tool_path", "Tool path", CASCADE_SETTING_PATH, 260.0, "C:\\tools\\tool.exe", ""},
+        {"secret", "Password", CASCADE_SETTING_PASSWORD, 32.0, "", ""},
         {"report", "Report spots", CASCADE_SETTING_BOOL, 1.0, "", ""},
     };
-    for (int32_t i = 0; i < 4; ++i) {
+    for (int32_t i = 0; i < 5; ++i) {
         const FoxListItem it = item(s, FOXAPI_LIST_PLUGIN_SETTINGS, static_cast<uint32_t>(i));
         const std::string id = std::to_string(it.id);
         CHECK_EQ(it.id, static_cast<uint64_t>(i + 1));
@@ -231,7 +233,7 @@ void testListAndFacts() {
         CHECK_EQ(spec, std::string(want[i].key) + '\x1F' + want[i].placeholder);
         CHECK_EQ(fact(s, "plugin.setting." + id), std::string(want[i].value));
     }
-    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_SETTINGS), 4);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_SETTINGS), 5);
 
     // LOCAL ONLY: what a person types into a box is the local operator's.
     CHECK_EQ(count(remote, FOXAPI_LIST_PLUGIN_SETTINGS), FOXAPI_DENIED);
@@ -421,7 +423,7 @@ void testSettled() {
     const uint64_t listSeq = s.state().listSeq;
     for (int i = 0; i < 25; ++i) { d.eng.controlPass(); }
     CHECK_EQ(s.state().listSeq, listSeq);
-    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_SETTINGS), 4);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_SETTINGS), 5);  // the fixture's five storable fields (PASSWORD since 0.99.105)
     std::printf("E5: a settled engine's listSeq does not move\n");
 }
 

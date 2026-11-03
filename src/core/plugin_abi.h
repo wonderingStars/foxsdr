@@ -1966,6 +1966,7 @@ typedef struct CascadeHostApi {
 #define CASCADE_SETTING_NUMBER 1u /* a numeric field; stored as decimal text */
 #define CASCADE_SETTING_BOOL 2u   /* a checkbox/toggle; stored as "1" or "" */
 #define CASCADE_SETTING_PATH 3u   /* a file path: a text box plus a BROWSE key that opens the host's file dialog (hosts from 0.99.74; older hosts skip the field) */
+#define CASCADE_SETTING_PASSWORD 4u /* a secret typed as text - a password, a key, a token: stored exactly as a TEXT field is (up to maxLength clean UTF-8 bytes), but drawn as a MASKED box, and never shown, echoed or logged by the host (hosts from 0.99.105, the first with the Slint window; older hosts skip the field - so a plugin that needs the field on older hosts declares TEXT) */
 
 typedef struct CascadeSettingSpec {
     /* sizeof(CascadeSettingSpec) as the PLUGIN compiled it. Checked; an

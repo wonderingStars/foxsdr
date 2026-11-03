@@ -211,12 +211,13 @@ void testTable(AppWindow& a) {
     if (lists.sets.size() != 1u) { return; }
     const cascade::gui::PluginSettingsSet& set = lists.sets[0];
     CHECK(set.file == kFile);
-    CHECK(set.fields.size() == 4u && set.ids.size() == 4u);
-    if (set.fields.size() != 4u) { return; }
-    const char* const keys[4] = {"callsign", "power", "tool_path", "report"};
-    const char* const labels[4] = {"Callsign", "Power (W)", "Tool path", "Report spots"};
-    const std::uint32_t kinds[4] = {CASCADE_SETTING_TEXT, CASCADE_SETTING_NUMBER, CASCADE_SETTING_PATH, CASCADE_SETTING_BOOL};
-    for (std::size_t i = 0; i < 4; ++i) {
+    // Five since the PASSWORD kind (0.99.105): the fixture's fifth storable field, drawn masked.
+    CHECK(set.fields.size() == 5u && set.ids.size() == 5u);
+    if (set.fields.size() != 5u) { return; }
+    const char* const keys[5] = {"callsign", "power", "tool_path", "secret", "report"};
+    const char* const labels[5] = {"Callsign", "Power (W)", "Tool path", "Password", "Report spots"};
+    const std::uint32_t kinds[5] = {CASCADE_SETTING_TEXT, CASCADE_SETTING_NUMBER, CASCADE_SETTING_PATH, CASCADE_SETTING_PASSWORD, CASCADE_SETTING_BOOL};
+    for (std::size_t i = 0; i < 5; ++i) {
         CHECK(set.fields[i].key == keys[i]);
         CHECK(set.fields[i].label == labels[i]);
         CHECK(set.fields[i].kind == kinds[i]);
