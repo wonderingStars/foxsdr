@@ -106,4 +106,6 @@ const Row kRows[] = {
     {"src/source/soundcard_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
     {"src/usb/bounded_walk.hpp", 1, 0, 0, 0, "",
      "the bounded USB walk's worker: abandoned past its own bound by design, the walk being a call that may never return - NOT COVERED by this batch (a known gap)"},
+    {"src/slint/host_duties.cpp", 0, 2, 0, 0, "",
+     "the Slint window's update download (core::downloadUpdate over WinHTTP, its own timeouts, a cancel flag the future's destructor sets) and the one-shot launch of the downloaded installer; the same gap as app_window.cpp's - NOT COVERED by this batch (a known gap)"},
 };

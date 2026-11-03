@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -311,7 +312,10 @@ std::string readFile(const std::filesystem::path& p) {
     std::ifstream in(p, std::ios::binary);
     std::ostringstream ss;
     ss << in.rdbuf();
-    return ss.str();
+    // a checkout with core.autocrlf (the OneDrive worktrees) has CRLF line ends: the scans below look for "\n}\n"
+    std::string text = ss.str();
+    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+    return text;
 }
 
 // Is `at` on a line of code rather than inside a // comment?
