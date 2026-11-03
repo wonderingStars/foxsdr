@@ -19,6 +19,7 @@ import { Caption } from "../keys.slint";
 import { ChipTone, LampState } from "../chips.slint";
 import { StateChipModel } from "../forms.slint";
 import { FittedRowModel, FittedModules, ReachRowModel, ModulePage } from "../fitted.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, ChipTone, LampState, StateChipModel, FittedRowModel, ReachRowModel }
 
 export component FittedSpecimen inherits Window {
@@ -257,4 +258,5 @@ export component FittedSpecimen inherits Window {
             { key: "Track source", detail: "Publishes the positions it decodes.", outward: false },
         ];
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

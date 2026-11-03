@@ -25,6 +25,7 @@
 // and `entries` feed the Menu and can be replaced.
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { MenuItemKind, MenuEntry, MenuItem, Menu } from "../menus.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench }
 export { MenuItemKind, MenuEntry }
 
@@ -198,4 +199,5 @@ export component MenusSpecimen inherits Window {
         }
         item-hovered(id) => { root.hovered-id = id; }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

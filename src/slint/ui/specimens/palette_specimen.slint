@@ -9,6 +9,7 @@
 //                    `rows` can be set to open it elsewhere or with more or fewer results
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { CommandField, CommandPalette, PaletteResult } from "../palette.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench }
 export { PaletteResult }
 
@@ -75,4 +76,5 @@ export component PaletteSpecimen inherits Window {
             root.dismissals += 1;
         }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

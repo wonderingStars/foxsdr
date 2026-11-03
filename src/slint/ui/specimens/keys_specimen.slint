@@ -70,6 +70,7 @@
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { LampState } from "../chips.slint";
 import { Caption, Key, SegGroup, SegKey, RailKey, StopKey } from "../keys.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench }
 
 // The sheet is built from sections, each a sub-component holding some rows: MSVC refuses a generated item-tree
@@ -297,4 +298,5 @@ export component KeysSpecimen inherits Window {
         fired(id) => { root.fired(id); } }
     rows-d := KeysRowsD { x: 0px; y: 0px; width: 800px; height: 720px; rail <=> root.rail; running <=> root.running;
         fired(id) => { root.fired(id); } }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

@@ -7,7 +7,7 @@ This is the API every family is built to and `main.slint` composes against. Name
 | File | Holds | Owner |
 |---|---|---|
 | `ui/theme.slint` | `Skin`, `Theme`, `Workbench`, `DigitFace`, `MeterStyle` | integrator — nobody else edits |
-| `ui/tooltip.slint` | `TooltipFace`, `TipTimer` | integrator |
+| `ui/tooltip.slint` | `TooltipFace`, `TipState`, `TipTimer`, `TipLayer`, `PopupTipTimer` | integrator |
 | `ui/chips.slint` | `ChipTone`, `LampState`, `Chip`, `LampDot` | integrator |
 | `ui/icons/*.svg` | the artboard's icons (white strokes, use `colorize`) | integrator (ask for more by name) |
 | `ui/keys.slint` | `Caption`, `Key`, `SegGroup`, `SegKey`, `RailKey`, `StopKey` | keys agent |
@@ -34,7 +34,7 @@ Each family also owns `ui/specimens/<family>_specimen.slint` and `tests/test_sli
 
 1. **Only `Theme` tokens.** No colour literal, no typeface name, no size that `Theme` already has (`Theme.key-h`, `Theme.chip-h`, ...). `tests/test_slint_house_rules.cpp` fails the build of the library otherwise. Sizes the theme has no metric for (a 92×64 STOP dome, a 180 px ramp) are literal lengths in the component, taken from the artboard.
 2. **Nothing drawn from nowhere**: import `Theme` from `"theme.slint"` in every file.
-3. **Every interactive component** has `in property <bool> enabled: true;`, `in property <string> tooltip;` shown through `TipTimer`, `accessible-role` and `accessible-label` (default: its label), and never acts while disabled. Disabled look (the kit's `.btn[disabled]`): `Theme.key-disabled-bg` ground, `Theme.key-disabled-fg` text, border at half alpha (Slint has no dashed border).
+3. **Every interactive component** has `in property <bool> enabled: true;`, `in property <string> tooltip;` shown through `TipTimer` (it writes the global `TipState`; the window's last element `TipLayer` draws the tip, so the click that follows a tip is not swallowed as a `PopupWindow` tip swallowed it; only a component that lives INSIDE a `PopupWindow` uses `PopupTipTimer`), `accessible-role` and `accessible-label` (default: its label), and never acts while disabled. Disabled look (the kit's `.btn[disabled]`): `Theme.key-disabled-bg` ground, `Theme.key-disabled-fg` text, border at half alpha (Slint has no dashed border).
 4. **Labelled keys keep ~40 % spare width** over their English string (34 languages): `min-width` from the theme and the artboard's padding, never a width that hugs the text.
 5. **No emoji.** Glyphs are the SVG icons under `ui/icons/` (`Image { source: @image-url("icons/close.svg"); colorize: Theme.fg-soft; }`) or plain text; the digit nudge arrows are the text "▲" / "▼" as on the sheet.
 6. **Callbacks** are verbs in the past tense or the event: `clicked`, `changed(float)`, `nudge(int)`, `selected(int)`, `toggled(bool)`, `menu-requested(length, length)` (pointer position in the component), `right-clicked(length, length)`.
@@ -44,7 +44,7 @@ Each family also owns `ui/specimens/<family>_specimen.slint` and `tests/test_sli
 
 ## Specimens and tests
 
-- `ui/specimens/<family>_specimen.slint` exports `component <Family>Specimen inherits Window` with an explicit `width`/`height` and `background: Theme.bg;`, every variant at an **absolute** `x`/`y` (no layout at the top level), none overlapping, and a table in the file's header comment: `x, y, w, h — what`. Interactive state the test must observe is surfaced on the specimen root (`in-out property <int> clicks;`, `in-out property <bool> latched;`, `callback fired(string);`).
+- `ui/specimens/<family>_specimen.slint` exports `component <Family>Specimen inherits Window` with an explicit `width`/`height` and `background: Theme.bg;`, a `TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }` as its LAST element, every variant at an **absolute** `x`/`y` (no layout at the top level), none overlapping, and a table in the file's header comment: `x, y, w, h — what`. Interactive state the test must observe is surfaced on the specimen root (`in-out property <int> clicks;`, `in-out property <bool> latched;`, `callback fired(string);`).
 - `tests/test_slint_<family>.cpp` uses the harness (`render_harness.hpp`): `installHeadlessPlatform()`, `auto ui = <Family>Specimen::create();`, `Frame f = render(ui, W, H);`, probes with `f.near / rowNear / colNear / countNear / countInk / firstRowNear`, interactions with `click / press / release / moveTo / scroll / keyTap / ctrlTap`, `settle(ms)` for timers, `f.savePng(shotDir() + "<family>-specimen.png")`, `CHECK(...)` from `test_check.hpp`, `return testSummary("test_slint_<family>");`. At least one geometry check (height, width, border position) and one colour check per variant, and one interaction check per callback. The typefaces are the embedded Inter and JetBrains Mono (third_party/fonts): assert **ink in a region** (`countInk`) and sizes from the artboard, never pixel positions computed from a glyph width.
 - Build and run in a directory of your own, never the shared `build/`:
   ```

@@ -1,12 +1,21 @@
-// The one tooltip. Every interactive component carries `in property <string> tooltip` and shows it through
-// this popup after the pointer has rested on it: the Workbench IA gives window keys, deck keys, lamps and
-// gestures their explanatory sentences, and the inventory lists each one. The delay and look are shared so a
-// skin changes them in one place (Theme.menu / Theme.knob-ring / Theme.fg-soft).
+// The one tooltip. Every interactive component carries `in property <string> tooltip` and shows it after the
+// pointer has rested on it: the Workbench IA gives window keys, deck keys, lamps and gestures their explanatory
+// sentences, and the inventory lists each one. The delay and look are shared so a skin changes them in one place
+// (Theme.menu / Theme.knob-ring / Theme.fg-soft).
+//
+// THE TIP LAYER. A tip is NOT a PopupWindow: Slint 1.18.1 makes a PopupWindow modal, so the first click after a
+// tip appeared was eaten by the popup (measured in phase 1 by the spectrum family; the plugin kit's dense key
+// panels suffered most). A TipTimer instead writes the global TipState (what to say, where, who asked), and ONE
+// TipLayer, the LAST element of every Window, draws the TooltipFace from it. The layer has no TouchArea, so the
+// click goes through to the key under the pointer.
 //
 // Use, INSIDE the component, after the TouchArea it watches:
 //   area := TouchArea { ... }
-//   TipTimer { hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
-// (A PopupWindow cannot be a component's root, so the popup lives inside TipTimer.)
+//   TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+// and, once per Window, as its last element:
+//   TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+// Inside a PopupWindow (a Menu's items, the palette's rows) the layer would sit UNDER the popup: those few use
+// PopupTipTimer, the old popup-in-a-popup, which has the same properties.
 import { Theme } from "theme.slint";
 
 // The tip's face, for anything that wants to draw one in a popup of its own.
@@ -34,15 +43,90 @@ export component TooltipFace inherits Rectangle {
     }
 }
 
-// Opens the tip below its parent after 600 ms of hover and closes it when the pointer leaves.
+// The one tip on screen: written by the TipTimer that asked, drawn by the TipLayer.
+export global TipState {
+    in-out property <bool> shown;
+    in-out property <length> x;
+    in-out property <length> y;
+    in-out property <string> text;
+    in-out property <int> owner;          // the id of the TipTimer that opened the tip (0 = none)
+    in-out property <int> next-id;        // the counter each TipTimer takes its id from when it is created
+    in-out property <int> beat;           // the owner bumps it while it lives; the layer hides a tip whose owner went away
+}
+
+// Opens the tip below its parent after 600 ms of hover and closes it when the pointer leaves. Writes TipState
+// (the TipLayer draws it). Sits at its parent's origin (x: 0 y: 0, zero-sized), so its absolute-position is the
+// parent's.
 export component TipTimer {
     in property <bool> hovered;
     in property <string> text;
     in property <length> anchor-h;          // the parent's height: the tip opens 6px under it
     in property <length> anchor-x: 0px;
+    // true while THIS timer's tip is the one on screen
+    out property <bool> shown: TipState.shown && TipState.owner == root.my-id;
+    // the owner id: the next number of the global counter, taken once when the instance is created
+    private property <int> my-id;
+    x: 0px; y: 0px; width: 0px; height: 0px;
+    init => {
+        TipState.next-id += 1;
+        root.my-id = TipState.next-id;
+    }
+    Timer {
+        interval: 600ms;
+        running: root.hovered && root.text != "" && !root.shown;
+        triggered => {
+            TipState.text = root.text;
+            TipState.x = root.absolute-position.x + root.anchor-x;
+            TipState.y = root.absolute-position.y + root.anchor-h + 6px;
+            TipState.owner = root.my-id;
+            TipState.beat += 1;
+            TipState.shown = true;
+        }
+    }
+    // while this timer owns the tip it vouches for it; a parent that is removed while hovered (a sheet that closes
+    // under the pointer) stops vouching and the layer takes the tip down
+    Timer {
+        interval: 150ms;
+        running: root.shown;
+        triggered => { TipState.beat += 1; }
+    }
+    changed hovered => {
+        if (!self.hovered && root.shown) { TipState.shown = false; }
+    }
+}
+
+// The layer: the LAST element of a Window, zero-sized at its origin, drawing the tip over everything (torn-off
+// pages and sheets included). `win-w` / `win-h` are the window's size, which a component cannot read itself.
+// No TouchArea: the pointer events go through to what is under the tip.
+export component TipLayer {
+    in property <length> win-w;
+    in property <length> win-h;
+    private property <int> seen-beat: -1;
+    x: 0px; y: 0px; width: 0px; height: 0px;
+    if TipState.shown : TooltipFace {
+        text: TipState.text;
+        x: max(0px, min(TipState.x, root.win-w - self.width));
+        y: max(0px, min(TipState.y, root.win-h - self.height));
+    }
+    Timer {
+        interval: 400ms;
+        running: TipState.shown;
+        triggered => {
+            if (TipState.beat == root.seen-beat) { TipState.shown = false; }
+            root.seen-beat = TipState.beat;
+        }
+    }
+}
+
+// The legacy popup tip, for a TipTimer that lives inside a PopupWindow (a Menu's items, the palette's rows): the
+// TipLayer is under a popup, so such a tip is a popup of its own. Same properties as TipTimer. Being a PopupWindow it
+// is modal (it eats the click that follows it); menu rows and palette rows close their popup on a click anyway.
+export component PopupTipTimer {
+    in property <bool> hovered;
+    in property <string> text;
+    in property <length> anchor-h;          // the parent's height: the tip opens 6px under it
+    in property <length> anchor-x: 0px;
     out property <bool> shown;
-    // zero-sized at the parent's origin, so the tip's offsets count from the parent's top-left (an unplaced
-    // element would sit at the parent's centre and open the tip half a key off)
     x: 0px; y: 0px; width: 0px; height: 0px;
     tip := PopupWindow {
         x: root.anchor-x; y: root.anchor-h + 6px;

@@ -31,6 +31,7 @@
 // Above each slider and level bar (y - 24) a 10px label names it, for the person looking at the PNG.
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { Slider, LevelBar, SliderGroup } from "../sliders.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench }
 
 component Label inherits Text {
@@ -149,4 +150,5 @@ export component SlidersSpecimen inherits Window {
     SliderGroup { x: 660px; y: 48px; width: 106px; caption: "Squelch"; readout: "-85 dB"; hint: "Automatic"; value: 0.29; has-auto: true; auto-on: true; }
     SliderGroup { x: 524px; y: 128px; width: 130px; caption: "Squelch"; readout: "-85 dB"; hint: "Automatic"; value: 0.29; has-auto: true; auto-on: true; }
     SliderGroup { x: 524px; y: 208px; width: 120px; caption: "Volume"; readout: "0.72"; hint: ""; value: 0.72; }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

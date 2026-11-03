@@ -32,6 +32,7 @@
 // preferred) with a small population: the resize test renders it at 800 x 300 and at the sheet size.
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { SpectrumView, TraceMode, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, AirbandChannel } from "../spectrum.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, TraceMode, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, AirbandChannel }
 
 export component SpectrumSpecimen inherits Window {
@@ -141,6 +142,7 @@ export component SpectrumSpecimen inherits Window {
         edge-dragged(half) => { root.edge-half = half; root.edge-moves += 1; }
         wheel(xf, notches, shift) => { root.wheels += 1; root.wheel-x = xf; root.wheel-notches = notches; root.wheel-shift = shift; }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }
 
 // The same well in a window of NO fixed size, for the resize test: the plot is x 44 .. the right edge and
@@ -181,4 +183,5 @@ export component SpectrumResizeSpecimen inherits Window {
         vfo-pos: 0.3;
         vfo-half: 0.02;
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

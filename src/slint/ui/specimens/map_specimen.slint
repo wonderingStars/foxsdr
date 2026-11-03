@@ -18,6 +18,7 @@
 // a Window's own width does not follow the platform's, so the pane is sized by properties, as the waterfall's specimen does).
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { MapPane, MapTarget, LegendRow } from "../map.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench }
 export { MapTarget, LegendRow }
 
@@ -143,4 +144,5 @@ export component MapSpecimen inherits Window {
             root.resized-h = h;
         }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

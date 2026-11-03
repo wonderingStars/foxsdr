@@ -22,6 +22,18 @@ using std::chrono::milliseconds;
 
 namespace {
 
+// Prints the numbers behind a failed check, so a red run says what was measured.
+#define CHECKV(cond, ...)                         \
+    do {                                          \
+        const bool ok_ = static_cast<bool>(cond); \
+        CHECK(ok_);                               \
+        if (!ok_) {                               \
+            std::printf("      ");                \
+            std::printf(__VA_ARGS__);             \
+            std::printf("\n");                    \
+        }                                         \
+    } while (0)
+
 constexpr int kW = 800;
 constexpr int kH = 720;
 
@@ -815,6 +827,35 @@ int main() {
         g = shot();
         CHECK(band(g, noTip) == 0);
         away();
+    }
+
+    // --- the click after a tip: the tip is drawn by the window's TipLayer (no TouchArea), not a modal PopupWindow, so the first
+    //     click on the key whose tip is showing REGISTERS (Slint 1.18.1: a PopupWindow ate the click that followed it) ---
+    {
+        Scope scope("click after the tip");
+        const Box tipKey = measure(f, 16, 648, 30, kKeyLine);
+        const auto band = [&](const Frame& g) { return g.countNear(tipKey.x - 4, tipKey.y + tipKey.h + 4, tipKey.x + 260, tipKey.y + tipKey.h + 44, kMenu, 3); };
+        away();
+        const int before = ui->get_clicks();
+        moveTo(win, float(tipKey.midX()), float(tipKey.midY()));
+        settle(milliseconds(700));
+        Frame g = shot();
+        CHECK(band(g) > 500);                                               // the tip is up, in the menu colour ...
+        int firstRow = -1;
+        for (int y = tipKey.y + tipKey.h; y < tipKey.y + tipKey.h + 40 && firstRow < 0; ++y) {
+            if (!g.near(tipKey.x + 20, y, kBg, 3)) { firstRow = y; }
+        }
+        CHECK(firstRow == tipKey.y + tipKey.h + 6);                         // ... 6 px under the key, where the popup had it
+        CHECK(g.near(tipKey.x + 20, firstRow, kLampRing, 4));               // its rim in knob-ring
+        // ONE click on the SAME key, with the tip still showing: no second try
+        press(win, float(tipKey.midX()), float(tipKey.midY()));
+        release(win, float(tipKey.midX()), float(tipKey.midY()));
+        settle();
+        CHECKV(ui->get_clicks() == before + 1 && last() == "tip", "the first click after the tip registered: clicks %d (was %d), last '%s'", ui->get_clicks(), before, last().c_str());
+        away();
+        settle(milliseconds(30));
+        g = shot();
+        CHECK(band(g) == 0);                                                // the pointer left: the tip is gone
     }
 
     // --- the hazard key under the pointer: both stripe colours take a tint of menu-hot, the bands stay ---

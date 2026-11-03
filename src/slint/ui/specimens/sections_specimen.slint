@@ -22,6 +22,7 @@
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { ChipTone, LampState } from "../chips.slint";
 import { Section, BodyRow, SelectKey } from "../sections.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, ChipTone, LampState }
 
 export component SectionsSpecimen inherits Window {
@@ -195,4 +196,5 @@ export component SectionsSpecimen inherits Window {
         tone: ChipTone.err;
         clicked => { root.clicks += 1; root.last-click = "long"; }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

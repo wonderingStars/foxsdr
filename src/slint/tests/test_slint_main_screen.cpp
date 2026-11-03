@@ -9,6 +9,7 @@
 
 #include "main.h"
 
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -16,6 +17,18 @@
 using namespace foxsdr::slinttest;
 
 namespace {
+
+// Prints the numbers behind a failed check, so a red run says what was measured.
+#define CHECKV(cond, ...)                         \
+    do {                                          \
+        const bool ok_ = static_cast<bool>(cond); \
+        CHECK(ok_);                               \
+        if (!ok_) {                               \
+            std::printf("      ");                \
+            std::printf(__VA_ARGS__);             \
+            std::printf("\n");                    \
+        }                                         \
+    } while (0)
 
 slint::SharedString ss(const char* s) { return slint::SharedString(s); }
 
@@ -171,6 +184,27 @@ int main() {
     CHECK(maximises == 1);
     click(ui->window(), 1349, 18);                      // Minimise
     CHECK(minimises == 1);
+    // the tip layer: a tip over a title-bar key renders (the menu ground under the key, 6 px below it), and the click that
+    // follows it still reaches the key - the PopupWindow tip ate that click (Slint 1.18.1)
+    {
+        const Rgb menu = rgb(0x262a32);
+        const auto tipPixels = [&](const Frame& g) { return g.countNear(1300, 38, 1440, 90, menu, 3); };
+        moveTo(ui->window(), 700, 500);
+        settle(std::chrono::milliseconds(30));
+        const Frame none = renderAt(W, H);
+        const int bare = tipPixels(none);               // the strip's own keys are menu-coloured too: the tip is the difference
+        moveTo(ui->window(), 1349, 18);
+        settle(std::chrono::milliseconds(700));
+        const Frame tip = renderAt(W, H);
+        CHECKV(tipPixels(tip) - bare > 300, "the Minimise tip's ground under the title bar: %d pixels (before: %d)", tipPixels(tip), bare);
+        tip.savePng(shotDir() + "main-screen-title-tip.png");
+        press(ui->window(), 1349, 18); release(ui->window(), 1349, 18);
+        settle();
+        CHECKV(minimises == 2, "the click after the tip minimised: %d minimises", minimises);
+        moveTo(ui->window(), 700, 500);
+        settle(std::chrono::milliseconds(30));
+        CHECKV(tipPixels(renderAt(W, H)) == bare, "the tip is gone: %d pixels (bare: %d)", tipPixels(renderAt(W, H)), bare);   // the pointer left
+    }
     // diagnostics for the geometry the click targets depend on (the typeface decides the brand's and the tabs' widths)
     {
         int railInkTop = -1, railInkBottom = -1;

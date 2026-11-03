@@ -24,6 +24,7 @@
 // the way the host does, at run time.
 import { Theme, Skin, Workbench, DigitFace } from "../theme.slint";
 import { Digit, FrequencyCounter } from "../digits.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, DigitFace }
 
 export component DigitsSpecimen inherits Window {
@@ -163,4 +164,5 @@ export component DigitsSpecimen inherits Window {
         edit-requested => { root.edit-requests += 1; }
         menu-requested(px, py) => { root.menu-requests += 1; root.last-x = px; root.last-y = py; }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

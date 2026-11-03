@@ -35,6 +35,7 @@
 //           UNKNOWN kind (99): the generic face, under its own title.
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { InstrumentFace, InstrumentState } from "../instruments.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, InstrumentState }
 
 // The artboard's .tile around one face: panel ground, line border, radius 8; the face sits inside the 1px border.
@@ -266,4 +267,5 @@ export component InstrumentsSpecimen inherits Window {
         }
         WideExtra { x: 0px; y: 0px; width: parent.width; height: parent.height; state: root.st-future; }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

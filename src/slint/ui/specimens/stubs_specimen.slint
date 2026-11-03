@@ -10,6 +10,7 @@
 //   360, 180, 370, 160  ScopeTube       (cap "SCOPE")
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { InstrumentFace, MapView, GlobeView, PatchCanvas, ScopeTube, TrackPoint, PatchNode, PatchWire } from "../stubs.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench }
 export { TrackPoint, PatchNode, PatchWire }
 
@@ -159,4 +160,5 @@ export component StubsSpecimen inherits Window {
         caption: root.scope-caption;
         persistence: root.scope-persistence;
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

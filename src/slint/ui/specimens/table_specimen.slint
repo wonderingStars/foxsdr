@@ -33,6 +33,7 @@
 // column-widths, two-way: a column drag writes into it).
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { RowTone, RowKind, TableRow, Table } from "../table.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench }
 export { RowTone, RowKind, TableRow }
 
@@ -135,4 +136,5 @@ export component TableSpecimen inherits Window {
         clicked(row) => { root.c-clicks += 1; root.c-last-row = row; }
         row-pressed(row) => { root.presses += 1; root.last-press-row = row; }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

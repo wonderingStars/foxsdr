@@ -13,7 +13,7 @@
 
 import { Theme, Skin, Workbench, DigitFace, MeterStyle } from "theme.slint";
 import { Chip, LampDot, ChipTone, LampState } from "chips.slint";
-import { TipTimer } from "tooltip.slint";
+import { TipTimer, TipLayer } from "tooltip.slint";
 import { Caption, Key, SegGroup, SegKey, RailKey, StopKey } from "keys.slint";
 import { Lamp, StatusChip, VLine } from "lamps.slint";
 import { FrequencyCounter } from "digits.slint";
@@ -690,4 +690,6 @@ export component MainWindow inherits Window {
         AboutSlint { }
         HorizontalLayout { alignment: end; Key { label: "Close"; clicked => { root.about-open = false; } } }
     }
+    // ===================== the tip layer: LAST, so a tooltip draws over the pages, the torn-off windows and the sheets =====================
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

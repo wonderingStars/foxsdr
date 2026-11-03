@@ -2,6 +2,7 @@
 // reach the pixels, that text renders headlessly, and that a second filling installed through `Theme.skin`
 // changes the picture with no component change (test_slint_theme.cpp).
 import { Theme, Skin, Workbench, DigitFace } from "../theme.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, DigitFace }
 
 export component ThemeSpecimen inherits Window {
@@ -12,4 +13,5 @@ export component ThemeSpecimen inherits Window {
     Rectangle { x: 110px; y: 10px; width: 80px; height: 30px; background: Theme.panel; border-width: 1px; border-color: Theme.line-strong; }
     Text { x: 10px; y: 60px; width: 220px; height: 40px; text: "FoxSDR 0.99.100"; color: Theme.fg; font-family: Theme.font-ui; font-size: 16px; vertical-alignment: center; }
     Rectangle { x: 200px; y: 100px; width: 20px; height: Theme.hairline; background: Theme.line; }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

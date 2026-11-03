@@ -21,6 +21,7 @@
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { Caption } from "../keys.slint";
 import { PresetKeyModel, PresetBar, PlateKeys } from "../presets.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, PresetKeyModel }
 
 export component PresetsSpecimen inherits Window {
@@ -153,4 +154,5 @@ export component PresetsSpecimen inherits Window {
         labels: ["RESET", "CLEAR LOG"];
         pressed(i) => { root.plated-by("G", i); }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

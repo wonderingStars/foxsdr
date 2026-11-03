@@ -40,6 +40,7 @@
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { Caption } from "../keys.slint";
 import { FieldKind, Field, Checkbox } from "../fields.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, FieldKind }
 
 export component FieldsSpecimen inherits Window {
@@ -169,4 +170,5 @@ export component FieldsSpecimen inherits Window {
         checked: true; toggled(v) => { root.toggled-to(v); } }
     cb-key := Checkbox { x: 16px; y: 796px; width: 226px; label: "Keyboard target";
         toggled(v) => { root.toggled-to(v); } }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

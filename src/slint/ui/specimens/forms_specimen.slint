@@ -34,6 +34,7 @@ import { Theme, Skin, Workbench } from "../theme.slint";
 import { Caption } from "../keys.slint";
 import { ChipTone, LampState } from "../chips.slint";
 import { SettingKind, SettingField, PluginSettingsForm, GrantKeys, StaleGrant, ReceiverControlCard, StateChipModel, StateChips, RunKeys } from "../forms.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, SettingKind, SettingField, StaleGrant, StateChipModel, ChipTone, LampState }
 
 export component FormsSpecimen inherits Window {
@@ -285,4 +286,5 @@ export component FormsSpecimen inherits Window {
         run-clicked => { root.ran-by("K4"); }
         mute-toggled(v) => { root.muted-by("K4", v); }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

@@ -22,7 +22,7 @@
 // with its first row level with the parent row; the host opens a second Menu there. `open-submenu` is the id whose panel is open
 // (that row stays lit); item-hovered(id) says the pointer moved onto another row (the host closes the submenu).
 import { Theme } from "theme.slint";
-import { TipTimer } from "tooltip.slint";
+import { PopupTipTimer } from "tooltip.slint";
 
 export enum MenuItemKind { item, checked, radio, submenu, separator, heading, slider }
 
@@ -194,7 +194,7 @@ export component MenuItem inherits Rectangle {
         changed has-hover => { if (self.has-hover) { root.hovered(); } }
     }
 
-    TipTimer {
+    PopupTipTimer {
         hovered: touch.has-hover && root.enabled;
         text: root.tooltip;
         anchor-h: root.height;

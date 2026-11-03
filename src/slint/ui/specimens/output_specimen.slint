@@ -41,6 +41,7 @@
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { LampState } from "../chips.slint";
 import { LineTone, LogLine, LogView, PicturePane, DetailLine, TargetDetails } from "../output.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench }
 export { LineTone, LogLine, DetailLine }
 
@@ -306,4 +307,5 @@ export component OutputSpecimen inherits Window {
         follow-clicked => { root.f-follow += 1; }
         close-clicked => { root.f-close += 1; }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

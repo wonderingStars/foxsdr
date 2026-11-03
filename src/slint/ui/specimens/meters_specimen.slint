@@ -38,6 +38,7 @@
 //   640, 456  G5 classic, a caption and a value text far too long for the 126px face (both are elided to the meter's width)
 import { Theme, Skin, Workbench, MeterStyle } from "../theme.slint";
 import { Meter } from "../meters.slint";
+import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, MeterStyle }
 
 export component MetersSpecimen inherits Window {
@@ -115,4 +116,5 @@ export component MetersSpecimen inherits Window {
         caption: "A caption far too long for a 126 pixel meter"; value-text: "-12345.678 megasamples per second"; value: 0.3;
         menu-requested(x, y) => { root.asked(29, x, y); }
     }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }
