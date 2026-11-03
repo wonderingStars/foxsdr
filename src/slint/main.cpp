@@ -59,6 +59,8 @@
 #include "engine/window_service_options.hpp"
 #include "host_duties.hpp"
 #include "host_logic.hpp"
+#include "plugin_kit.hpp"
+#include "signatures.hpp"
 
 #include "main.h"  // generated from ui/main.slint by slint_target_sources
 
@@ -74,17 +76,7 @@ std::string lower(std::string s) {
 std::string fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof(b), f, v); return b; }
 slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
 
-// Publishing a list model replaces every repeater item behind it, so a model is set only when its content changed:
-// each publisher keeps the signature of what it last sent; changed() says whether `sig` differs from the stored one.
-struct Signatures {
-    std::map<std::string, std::string> last;
-    bool changed(const std::string& key, const std::string& sig) {
-        auto it = last.find(key);
-        if (it != last.end() && it->second == sig) { return false; }
-        last[key] = sig;
-        return true;
-    }
-};
+// (Signatures - publish a model only when its content changed - is signatures.hpp, shared with the plugin kit's publisher.)
 std::string sigOf(const std::vector<Tick>& t) { std::string s; for (const auto& k : t) { s += fmt("%.6f|", k.frac) + k.label + ";"; } return s; }
 std::int64_t nowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -203,7 +195,8 @@ int main(int argc, char** argv) {
     FoxSessionParams p{};
     p.structSize = sizeof(p);
     p.flags = FOXAPI_SESSION_LOCAL | FOXAPI_SESSION_FRAME;   // FRAME: our heartbeat kicks the free-running pass, as the window's does
-    p.grants = FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS;
+    // The plugin kit's grants too (docs 6.37): TRANSMIT for the transmit grant key, ADMIN for the retired-plugin rows and the catalogue URL.
+    p.grants = FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS | FOXAPI_GRANT_TRANSMIT | FOXAPI_GRANT_ADMIN;
     p.clientName = "FoxSDR Slint interface";
     p.clientVersion = cascade::versionString();
     FoxSession* session = nullptr;
@@ -211,6 +204,16 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "foxsdr-slint: open_session failed\n");
         return 1;
     }
+    // The two events the window asks to be told (API 0.3 8.7, 8.14): the receiver tuned off a muting plugin's preset (the "Sound is muted"
+    // question), and a plugin's preset was applied (its windows open). The kit drains them once a tick.
+    (void)api->subscribe(session, FOXAPI_EVENT_MASK(FOXAPI_EVENT_MUTE_TUNE_AWAY) | FOXAPI_EVENT_MASK(FOXAPI_EVENT_PRESET_APPLIED));
+
+    // THE PLUGIN KIT'S PORT, attached on this thread after the restore and BEFORE the start (src/main.cpp: the engine replays its current
+    // directive to a late attach, and a control thread already running would race it). Without the extension the kit stands on a null port
+    // and the window has no plugin windows, as the ImGui window has none then.
+    foxsdr::slintkit::PluginKit kit({api, handle, session, configPath});
+    const bool kitAttached = kit.attach();
+    if (!kitAttached) { std::fprintf(stderr, "foxsdr-slint: no plugin UI extension - no plugin windows in this session\n"); }
 
     // THE ENGINE STARTS HERE: the receiver (a real session), the usage heartbeat, the settings forced to disk once with the unclean-exit
     // marker false, the first pass, the control thread and the keeper thread. A start that fails is stopped all the same (src/main.cpp): the
@@ -740,7 +743,8 @@ int main(int argc, char** argv) {
     const auto onTick = [&] {
         (void)api->heartbeat(session);
         if (api->read_state(session, &state) < 0) { return; }
-        if (state.listSeq != lastListSeq) { lastListSeq = state.listSeq; refreshLists(); }
+        const bool listMoved = state.listSeq != lastListSeq;
+        if (listMoved) { lastListSeq = state.listSeq; refreshLists(); }
         const bool running = (state.flags & FOXAPI_RX_RUNNING) != 0;
 
         // the strip
@@ -975,6 +979,11 @@ int main(int argc, char** argv) {
         for (int32_t i = 0; i < got; ++i) {
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
+
+        // THE PLUGIN KIT'S DUTIES (plugin_kit.hpp): the directive, the poll, the pictures, the lists when they moved, the front end's facts,
+        // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
+        kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
+        for (const auto& line : kit.takeEvents().notices) { std::fprintf(stderr, "foxsdr-slint: %s\n", line.c_str()); }
     };
 
     // THE TICK = THE FRAME: the screen's reads, then the housekeeping (the sentinel's beat, the senders, the sweep, the update check), then the
@@ -1006,11 +1015,18 @@ int main(int argc, char** argv) {
     // release, the clean-exit marker; then the window's last two steps. The session is closed last: a session closed before the stop would
     // drop the half that finish() queued.
     duties.finish();
+    // The kit's own release of everything borrowed from the modules (the basemap and track-info tables, every instance) on this thread,
+    // before the service's stop unmaps them (app_window.cpp 2339: release and disconnect precede stop()).
+    kit.release();
     service.stop();
     duties.closed();
     api->close_session(session);
 
     if (bounded.bounded()) {
+        // What the kit holds at the end of a bounded run: the evidence that the port answered on this thread.
+        std::fprintf(stderr, "foxsdr-slint: bounded run: kit attached=%d plugins=%zu tracks=%zu panels=%zu instruments=%zu pictures=%zu lines=%zu map pages=%zu\n",
+                     kitAttached ? 1 : 0, kit.lists().rows.size(), kit.tracks().size(), kit.panels().size(), kit.instruments().size(),
+                     kit.images().size(), kit.decoderLines().size(), kit.mapPages().size());
         // What the window itself holds at the end of a bounded run: the evidence that the duties' results reached its properties.
         std::string about(ui->get_about_text());
         std::replace(about.begin(), about.end(), '\n', '|');

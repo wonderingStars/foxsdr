@@ -55,6 +55,7 @@ function(foxsdr_slint_logic_test name)
     target_compile_features(${name} PRIVATE cxx_std_20)
     target_include_directories(${name} PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/.."
+        "${FOXSDR_REPO_ROOT}/src"
         "${FOXSDR_REPO_ROOT}/tests"
         "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api")
     add_test(NAME ${name} COMMAND ${name} ${FOXSDR_LOGIC_TEST_ARGS_${name}})
@@ -68,7 +69,17 @@ foreach(src ${_foxsdr_slint_test_sources})
     get_filename_component(name "${src}" NAME_WE)
     string(REGEX REPLACE "^test_slint_" "" family "${name}")
     if(family MATCHES "^host_")
-        foxsdr_slint_logic_test(${name} "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp")
+        # test_slint_host_<x>.cpp compiles the host's logic and, when one exists, the kit unit of that name (the plugin kit,
+        # docs 6.37): ../<x>_logic.cpp (kit_logic for host_kit) or ../<x>_compositor.cpp (map_compositor for host_map).
+        string(REGEX REPLACE "^host_" "" unit "${family}")
+        set(_extra "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp")
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../${unit}_logic.cpp")
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../${unit}_logic.cpp")
+        endif()
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../${unit}_compositor.cpp")
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../${unit}_compositor.cpp")
+        endif()
+        foxsdr_slint_logic_test(${name} ${_extra})
     elseif(family STREQUAL "house_rules")
         foxsdr_slint_logic_test(${name})
     elseif(family STREQUAL "main_screen")

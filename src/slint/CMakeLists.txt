@@ -19,7 +19,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/SlintDll.cmake")
 # menu (the window's brand menu > About FoxSDR). It is built into every build of this window - a distributed
 # build without it would breach the licence - so it is not an option here.
 
-add_executable(foxsdr-slint main.cpp host_logic.cpp host_duties.cpp)
+# THE PLUGIN KIT (docs 6.37): kit_logic (the pure rules), plugin_kit (the port, the duties, the commands), map_compositor (the map's
+# picture), kit_publish (the page models). The track-info cache is the ImGui window's own GL-free class, compiled in here rather than
+# copied (src/gui/track_info_cache.cpp includes nothing of ImGui); the basemap client is the kit's, because BasemapCache calls GL.
+add_executable(foxsdr-slint main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp
+    "${CMAKE_SOURCE_DIR}/src/gui/track_info_cache.cpp")
 target_compile_features(foxsdr-slint PRIVATE cxx_std_20)
 # The engine (EngineService, the C API table) is the same library the ImGui window and foxsdr-engine use; the
 # window itself only ever talks to the table.
