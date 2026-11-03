@@ -57,4 +57,4 @@ Verification:
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.106.exe`:**
-`TBD`
+`90e9c501ea64818dae7f3ceb6fbb2109a28ce59d299579c312b475a1344b77f0`
