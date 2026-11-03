@@ -376,93 +376,98 @@ export component MainWindow inherits Window {
         Rectangle {
             height: Theme.strip-h; background: Theme.strip;
             Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
-            HorizontalLayout {   // stretch (the default): the lanes take the strip's slack, the other blocks keep their width
-                padding-left: 16px; padding-right: 16px; spacing: 14px;   // the sheet says 20; 14 lets the three lanes keep their captions at 1440
+            // THE ROW HOLDS ITS WIDTH (6.38.3): a layout's minimum width travels up through every parent that has no width of its own,
+            // and the receiver strip asks for more than the window when the catalogue's words are longer than the English ones (French, German).
+            // A Rectangle with a width of its own stops that climb (tests/test_slint_constraints.cpp), and clips what still does not fit.
+            Rectangle { x: 0; y: 0; width: parent.width; height: parent.height; clip: true;
+                HorizontalLayout {   // stretch (the default): the lanes take the strip's slack, the other blocks keep their width
+                    padding-left: 16px; padding-right: 16px; spacing: 14px;   // the sheet says 20; 14 lets the three lanes keep their captions at 1440
 
-                HorizontalLayout { // STOP + the four MASTER lamps
-                    spacing: 14px; alignment: center; horizontal-stretch: 0;
-                    VerticalLayout { alignment: center; StopKey { running: root.running; tooltip: root.running ? @tr("Stop the receiver") : @tr("Start the receiver"); clicked => { root.stop-clicked(); } } }
-                    GridLayout { spacing-horizontal: 14px; spacing-vertical: 6px; y: (parent.height - self.height) / 2;
-                        Row { Lamp { caption: @tr("RUN");  state: root.running  ? LampState.green : LampState.off; } Lamp { caption: @tr("DEC");  state: root.decoding ? LampState.green : LampState.off; } }
-                        Row { Lamp { caption: @tr("MUTE"); state: root.muted    ? LampState.amber : LampState.off; } Lamp { caption: @tr("FAIL"); state: root.failed   ? LampState.red   : LampState.off; } }
-                    }
-                }
-                VLine { y: (parent.height - 72px) / 2; }
-
-                VerticalLayout { // the tuned frequency
-                    spacing: 2px; alignment: center; horizontal-stretch: 0;
-                    HorizontalLayout { alignment: space-between;
-                        Caption { label: @tr("Tuned frequency"); }
-                        HorizontalLayout { spacing: 10px;
-                            Lamp { caption: @tr("RCVR"); state: root.running ? LampState.amber : LampState.off; }
-                            Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
+                    HorizontalLayout { // STOP + the four MASTER lamps
+                        spacing: 14px; alignment: center; horizontal-stretch: 0;
+                        VerticalLayout { alignment: center; StopKey { running: root.running; tooltip: root.running ? @tr("Stop the receiver") : @tr("Start the receiver"); clicked => { root.stop-clicked(); } } }
+                        GridLayout { spacing-horizontal: 14px; spacing-vertical: 6px; y: (parent.height - self.height) / 2;
+                            Row { Lamp { caption: @tr("RUN");  state: root.running  ? LampState.green : LampState.off; } Lamp { caption: @tr("DEC");  state: root.decoding ? LampState.green : LampState.off; } }
+                            Row { Lamp { caption: @tr("MUTE"); state: root.muted    ? LampState.amber : LampState.off; } Lamp { caption: @tr("FAIL"); state: root.failed   ? LampState.red   : LampState.off; } }
                         }
                     }
-                    counter := FrequencyCounter {   // the caption slot under the figures: the converter line when one is active, else the sheet's tune hint
-                        digits: root.digits; leading-zeros: root.leading-zeros; show-nudges: root.show-nudges;
-                        editing: root.editing; editor-text <=> root.editor-text;
-                        converter-text: root.converter-text != "" ? root.converter-text : root.tune-hint; converter-warn: root.converter-warn;
-                        tooltip: @tr("Scroll a digit to tune  |  click to type");
-                        nudge(d, dir) => { root.nudge(d, dir); }
-                        wheel(d, dir) => { root.nudge(d, dir); }
-                        edit-requested => { root.edit-requested(); }
-                        typed(t) => { root.typed(t); }
-                        edit-cancelled => { root.edit-cancelled(); }
-                        menu-requested(x, y) => { root.counter-menu-requested(x, y); }
-                    }
-                }
-                VLine { y: (parent.height - 72px) / 2; }
+                    VLine { y: (parent.height - 72px) / 2; }
 
-                VerticalLayout { // mode: the eight keys as a segment, or one picker when the strip is compact
-                    spacing: 6px; alignment: center; horizontal-stretch: 0;
-                    Caption { label: @tr("Mode"); }
-                    HorizontalLayout { alignment: start;
-                        if !root.compact-strip : SegGroup {   // the eight mode keys, a radio group (accessible as eight buttons)
-                            HorizontalLayout { spacing: 2px;
-                                for m[i] in root.modes : SegKey { label: m; on: i == root.mode-index; clicked => { root.mode-selected(i); } }
+                    VerticalLayout { // the tuned frequency
+                        spacing: 2px; alignment: center; horizontal-stretch: 0;
+                        HorizontalLayout { alignment: space-between;
+                            Caption { label: @tr("Tuned frequency"); }
+                            HorizontalLayout { spacing: 10px;
+                                Lamp { caption: @tr("RCVR"); state: root.running ? LampState.amber : LampState.off; }
+                                Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
                             }
                         }
-                        if root.compact-strip : SelectKey { value: root.modes[root.mode-index]; tooltip: @tr("Mode - the eight modes as a list (Ctrl+F ... Ctrl+R)");
-                            clicked => { root.mode-picker-requested(self.absolute-position.x, self.absolute-position.y + self.height); } }
-                    }
-                    Text { text: root.mode-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; max-width: root.compact-strip ? 130px : 440px; }
-                }
-                VLine { y: (parent.height - 72px) / 2; }
-
-                HorizontalLayout { // gain / squelch / volume lanes: the strip's slack is theirs
-                    spacing: 18px; horizontal-stretch: 1; alignment: stretch; min-width: 396px;   // three lanes of 120 at least; from about 1500 px the captions no longer elide
-                    VerticalLayout { alignment: center; horizontal-stretch: 1;
-                        SliderGroup { caption: @tr("Gain"); readout: root.gain-text; hint: root.gain-hint; value: root.gain-norm; enabled: root.gain-enabled;
-                            has-auto: true; auto-on: root.gain-auto; auto-enabled: root.gain-auto-enabled; auto-tooltip: root.gain-auto-tooltip; tooltip: root.gain-tooltip;
-                            changed(v) => { root.gain-changed(v); } auto-clicked => { root.gain-auto-clicked(); } }
-                    }
-                    VerticalLayout { alignment: center; horizontal-stretch: 1;
-                        SliderGroup { caption: @tr("Squelch"); readout: root.squelch-text; hint: root.squelch-hint; value: root.squelch-norm;
-                            has-auto: true; auto-on: root.squelch-auto; auto-enabled: true; auto-tooltip: root.squelch-auto-tooltip; tooltip: @tr("Squelch - drag the slider, or scroll over it");
-                            changed(v) => { root.squelch-changed(v); } auto-clicked => { root.squelch-auto-clicked(); } }
-                    }
-                    VerticalLayout { alignment: center; horizontal-stretch: 1; spacing: 7px;
-                        SliderGroup { caption: @tr("VOLUME"); readout: root.volume-text; hint: ""; value: root.volume-norm; has-auto: false; tooltip: @tr("Volume - drag the slider, or scroll over it");
-                            changed(v) => { root.volume-changed(v); } }
-                        HorizontalLayout { spacing: 6px;   // the VOLUME meter, relocated under the volume slider (Workbench IA 2)
-                            Text { text: @tr("Level"); font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
-                            VerticalLayout { alignment: center; horizontal-stretch: 1; LevelBar { value: root.level-norm; } }
-                            Text { text: root.level-text; font-family: Theme.font-mono; font-size: Theme.font-hint; color: Theme.muted; vertical-alignment: center; }
+                        counter := FrequencyCounter {   // the caption slot under the figures: the converter line when one is active, else the sheet's tune hint
+                            digits: root.digits; leading-zeros: root.leading-zeros; show-nudges: root.show-nudges;
+                            editing: root.editing; editor-text <=> root.editor-text;
+                            converter-text: root.converter-text != "" ? root.converter-text : root.tune-hint; converter-warn: root.converter-warn;
+                            tooltip: @tr("Scroll a digit to tune  |  click to type");
+                            nudge(d, dir) => { root.nudge(d, dir); }
+                            wheel(d, dir) => { root.nudge(d, dir); }
+                            edit-requested => { root.edit-requested(); }
+                            typed(t) => { root.typed(t); }
+                            edit-cancelled => { root.edit-cancelled(); }
+                            menu-requested(x, y) => { root.counter-menu-requested(x, y); }
                         }
                     }
-                }
-                VLine { y: (parent.height - 72px) / 2; }
+                    VLine { y: (parent.height - 72px) / 2; }
 
-                VerticalLayout { // antenna power: the BIAS TEE hazard key, as wide as the key
-                    spacing: 6px; alignment: center; horizontal-stretch: 0; width: 120px;
-                    Caption { label: @tr("Antenna power"); }
-                    HorizontalLayout { alignment: start;
-                        Key { label: @tr("BIAS TEE"); hazard: true; on: root.bias-tee-on; enabled: root.bias-tee-present; min-w: 120px; height: 36px;
-                            show-lamp: true; lamp: root.bias-tee-on ? LampState.amber : LampState.off;
-                            tooltip: root.bias-tooltip; accessible-label: root.bias-tee-on ? @tr("Bias tee on") : @tr("Bias tee off - asks before switching on");
-                            clicked => { if (root.bias-tee-on) { root.bias-tee-clicked(); } else { root.bias-question-open = true; } } }
+                    VerticalLayout { // mode: the eight keys as a segment, or one picker when the strip is compact
+                        spacing: 6px; alignment: center; horizontal-stretch: 0;
+                        Caption { label: @tr("Mode"); }
+                        HorizontalLayout { alignment: start;
+                            if !root.compact-strip : SegGroup {   // the eight mode keys, a radio group (accessible as eight buttons)
+                                HorizontalLayout { spacing: 2px;
+                                    for m[i] in root.modes : SegKey { label: m; on: i == root.mode-index; clicked => { root.mode-selected(i); } }
+                                }
+                            }
+                            if root.compact-strip : SelectKey { value: root.modes[root.mode-index]; tooltip: @tr("Mode - the eight modes as a list (Ctrl+F ... Ctrl+R)");
+                                clicked => { root.mode-picker-requested(self.absolute-position.x, self.absolute-position.y + self.height); } }
+                        }
+                        Text { text: root.mode-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; max-width: root.compact-strip ? 130px : 440px; }
                     }
-                    Text { text: root.bias-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+                    VLine { y: (parent.height - 72px) / 2; }
+
+                    HorizontalLayout { // gain / squelch / volume lanes: the strip's slack is theirs
+                        spacing: 18px; horizontal-stretch: 1; alignment: stretch; min-width: 396px;   // three lanes of 120 at least; from about 1500 px the captions no longer elide
+                        VerticalLayout { alignment: center; horizontal-stretch: 1;
+                            SliderGroup { caption: @tr("Gain"); readout: root.gain-text; hint: root.gain-hint; value: root.gain-norm; enabled: root.gain-enabled;
+                                has-auto: true; auto-on: root.gain-auto; auto-enabled: root.gain-auto-enabled; auto-tooltip: root.gain-auto-tooltip; tooltip: root.gain-tooltip;
+                                changed(v) => { root.gain-changed(v); } auto-clicked => { root.gain-auto-clicked(); } }
+                        }
+                        VerticalLayout { alignment: center; horizontal-stretch: 1;
+                            SliderGroup { caption: @tr("Squelch"); readout: root.squelch-text; hint: root.squelch-hint; value: root.squelch-norm;
+                                has-auto: true; auto-on: root.squelch-auto; auto-enabled: true; auto-tooltip: root.squelch-auto-tooltip; tooltip: @tr("Squelch - drag the slider, or scroll over it");
+                                changed(v) => { root.squelch-changed(v); } auto-clicked => { root.squelch-auto-clicked(); } }
+                        }
+                        VerticalLayout { alignment: center; horizontal-stretch: 1; spacing: 7px;
+                            SliderGroup { caption: @tr("VOLUME"); readout: root.volume-text; hint: ""; value: root.volume-norm; has-auto: false; tooltip: @tr("Volume - drag the slider, or scroll over it");
+                                changed(v) => { root.volume-changed(v); } }
+                            HorizontalLayout { spacing: 6px;   // the VOLUME meter, relocated under the volume slider (Workbench IA 2)
+                                Text { text: @tr("Level"); font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
+                                VerticalLayout { alignment: center; horizontal-stretch: 1; LevelBar { value: root.level-norm; } }
+                                Text { text: root.level-text; font-family: Theme.font-mono; font-size: Theme.font-hint; color: Theme.muted; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                    VLine { y: (parent.height - 72px) / 2; }
+
+                    VerticalLayout { // antenna power: the BIAS TEE hazard key, as wide as the key
+                        spacing: 6px; alignment: center; horizontal-stretch: 0; width: 120px;
+                        Caption { label: @tr("Antenna power"); }
+                        HorizontalLayout { alignment: start;
+                            Key { label: @tr("BIAS TEE"); hazard: true; on: root.bias-tee-on; enabled: root.bias-tee-present; min-w: 120px; height: 36px;
+                                show-lamp: true; lamp: root.bias-tee-on ? LampState.amber : LampState.off;
+                                tooltip: root.bias-tooltip; accessible-label: root.bias-tee-on ? @tr("Bias tee on") : @tr("Bias tee off - asks before switching on");
+                                clicked => { if (root.bias-tee-on) { root.bias-tee-clicked(); } else { root.bias-question-open = true; } } }
+                        }
+                        Text { text: root.bias-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+                    }
                 }
             }
         }
@@ -545,33 +550,38 @@ export component MainWindow inherits Window {
                 Rectangle { // tab row + spectrum toolbar (32)
                     height: Theme.tab-h;
                     Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
-                    HorizontalLayout { padding-left: 8px; padding-right: 8px; alignment: space-between;
-                        HorizontalLayout { spacing: 0px;
-                            Tab { label: @tr("RECEIVER"); on: root.view-index == 0; tooltip: @tr("Shows the receiver: the spectrum, the waterfall and its status. Leaving the patch view stops a running patch and gives the receiver its radio back."); clicked => { root.view-selected(0); } }
-                            Tab { label: @tr("PATCH");    on: root.view-index == 1; tooltip: @tr("Opens the patch canvas: radios, channels, decoders and displays wired together by hand. Drag from a port to wire it. A connection that cannot carry what the port produces is refused, and says why."); clicked => { root.view-selected(1); } }
-                            Tab { label: @tr("SCOPE");    on: root.view-index == 2; tooltip: @tr("The scope: an instrument fills the centre."); clicked => { root.view-selected(2); } }
-                            for p[i] in root.pages : Tab { label: p.title; on: root.view-index == 3 + i; torn-off: p.torn; closable: true; tooltip: p.chip;
-                                clicked => { KitEvents.page-tab-selected(i); } close-clicked => { KitEvents.page-tab-closed(i); } drag-out(dx, dy) => { KitEvents.page-tab-torn(i, dx, dy); } }
-                            Tab { label: @tr("+ Window"); tooltip: @tr("Open a decoder window as a tab"); clicked => { root.add-window-clicked(); } }
-                        }
-                        HorizontalLayout { spacing: 6px; alignment: end;
-                            VerticalLayout { alignment: center; Caption { label: @tr("Trace"); font-size: Theme.font-tiny; } }
-                            VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
-                                SegKey { label: @tr("Normal"); small: true; min-w: 0px; on: root.trace-mode == 0; clicked => { root.trace-mode-selected(0); } }
-                                SegKey { label: @tr("Peak hold"); small: true; min-w: 0px; on: root.trace-mode == 1; clicked => { root.trace-mode-selected(1); } }
-                                SegKey { label: @tr("Average"); small: true; min-w: 0px; on: root.trace-mode == 2; clicked => { root.trace-mode-selected(2); } } } } }
-                            VerticalLayout { alignment: center; Caption { label: @tr("Range"); font-size: Theme.font-tiny; } }
-                            VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
-                                SegKey { label: @tr("Auto"); small: true; min-w: 0px; on: !root.range-manual; tooltip: @tr("Automatic: the standard window, -110 to 0 dB on the receiver"); clicked => { root.range-manual-selected(false); } }
-                                SegKey { label: @tr("Manual"); small: true; min-w: 0px; on: root.range-manual; tooltip: @tr("Manual: the Floor and Ceiling of the Display block"); clicked => { root.range-manual-selected(true); } } } } }
-                            VerticalLayout { alignment: center; HorizontalLayout { spacing: 0px;
-                                Key { label: @tr("Markers"); ghost: true; small: true; min-w: 0px; tooltip: @tr("List the markers dropped on the waterfall"); clicked => { root.markers-clicked(); } }
-                                VerticalLayout { alignment: center; Chip { label: root.marker-count; small: true; } } } }
-                            VerticalLayout { alignment: center; Key { label: @tr("Band plan"); ghost: !root.band-plan-on; on: root.band-plan-on; small: true; min-w: 0px; tooltip: @tr("Show the band-plan ribbon on the spectrum"); clicked => { root.band-plan-toggled(); } } }
-                            VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
-                                SegKey { label: "−"; small: true; min-w: 26px; tooltip: @tr("Zoom out (Ctrl -)"); clicked => { root.zoom(-1); } }
-                                SegKey { label: "+"; small: true; min-w: 26px; tooltip: @tr("Zoom in (Ctrl +)"); clicked => { root.zoom(1); } }
-                                SegKey { label: @tr("Full span"); small: true; min-w: 0px; tooltip: @tr("Back to the full span (Ctrl Delete)"); clicked => { root.zoom(0); } } } } }
+                    // THE ROW HOLDS ITS WIDTH (6.38.3): a layout's minimum width travels up through every parent that has no width of its own,
+                    // and the tab row and the spectrum toolbar asks for more than the window when the catalogue's words are longer than the English ones (French, German).
+                    // A Rectangle with a width of its own stops that climb (tests/test_slint_constraints.cpp), and clips what still does not fit.
+                    Rectangle { x: 0; y: 0; width: parent.width; height: parent.height; clip: true;
+                        HorizontalLayout { padding-left: 8px; padding-right: 8px; alignment: space-between;
+                            HorizontalLayout { spacing: 0px;
+                                Tab { label: @tr("RECEIVER"); on: root.view-index == 0; tooltip: @tr("Shows the receiver: the spectrum, the waterfall and its status. Leaving the patch view stops a running patch and gives the receiver its radio back."); clicked => { root.view-selected(0); } }
+                                Tab { label: @tr("PATCH");    on: root.view-index == 1; tooltip: @tr("Opens the patch canvas: radios, channels, decoders and displays wired together by hand. Drag from a port to wire it. A connection that cannot carry what the port produces is refused, and says why."); clicked => { root.view-selected(1); } }
+                                Tab { label: @tr("SCOPE");    on: root.view-index == 2; tooltip: @tr("The scope: an instrument fills the centre."); clicked => { root.view-selected(2); } }
+                                for p[i] in root.pages : Tab { label: p.title; on: root.view-index == 3 + i; torn-off: p.torn; closable: true; tooltip: p.chip;
+                                    clicked => { KitEvents.page-tab-selected(i); } close-clicked => { KitEvents.page-tab-closed(i); } drag-out(dx, dy) => { KitEvents.page-tab-torn(i, dx, dy); } }
+                                Tab { label: @tr("+ Window"); tooltip: @tr("Open a decoder window as a tab"); clicked => { root.add-window-clicked(); } }
+                            }
+                            HorizontalLayout { spacing: 6px; alignment: end;
+                                VerticalLayout { alignment: center; Caption { label: @tr("Trace"); font-size: Theme.font-tiny; } }
+                                VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
+                                    SegKey { label: @tr("Normal"); small: true; min-w: 0px; on: root.trace-mode == 0; clicked => { root.trace-mode-selected(0); } }
+                                    SegKey { label: @tr("Peak hold"); small: true; min-w: 0px; on: root.trace-mode == 1; clicked => { root.trace-mode-selected(1); } }
+                                    SegKey { label: @tr("Average"); small: true; min-w: 0px; on: root.trace-mode == 2; clicked => { root.trace-mode-selected(2); } } } } }
+                                VerticalLayout { alignment: center; Caption { label: @tr("Range"); font-size: Theme.font-tiny; } }
+                                VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
+                                    SegKey { label: @tr("Auto"); small: true; min-w: 0px; on: !root.range-manual; tooltip: @tr("Automatic: the standard window, -110 to 0 dB on the receiver"); clicked => { root.range-manual-selected(false); } }
+                                    SegKey { label: @tr("Manual"); small: true; min-w: 0px; on: root.range-manual; tooltip: @tr("Manual: the Floor and Ceiling of the Display block"); clicked => { root.range-manual-selected(true); } } } } }
+                                VerticalLayout { alignment: center; HorizontalLayout { spacing: 0px;
+                                    Key { label: @tr("Markers"); ghost: true; small: true; min-w: 0px; tooltip: @tr("List the markers dropped on the waterfall"); clicked => { root.markers-clicked(); } }
+                                    VerticalLayout { alignment: center; Chip { label: root.marker-count; small: true; } } } }
+                                VerticalLayout { alignment: center; Key { label: @tr("Band plan"); ghost: !root.band-plan-on; on: root.band-plan-on; small: true; min-w: 0px; tooltip: @tr("Show the band-plan ribbon on the spectrum"); clicked => { root.band-plan-toggled(); } } }
+                                VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
+                                    SegKey { label: "−"; small: true; min-w: 26px; tooltip: @tr("Zoom out (Ctrl -)"); clicked => { root.zoom(-1); } }
+                                    SegKey { label: "+"; small: true; min-w: 26px; tooltip: @tr("Zoom in (Ctrl +)"); clicked => { root.zoom(1); } }
+                                    SegKey { label: @tr("Full span"); small: true; min-w: 0px; tooltip: @tr("Back to the full span (Ctrl Delete)"); clicked => { root.zoom(0); } } } } }
+                            }
                         }
                     }
                 }
@@ -631,17 +641,22 @@ export component MainWindow inherits Window {
         Rectangle {
             height: Theme.status-h; background: Theme.strip;
             Rectangle { y: 0; height: Theme.hairline; width: parent.width; background: Theme.line; }
-            HorizontalLayout { padding-left: 4px; spacing: 0px; alignment: start;
-                for c[i] in root.status : StatusChip {
-                    key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp; lines: c.lines; max-detail-w: 364px;
-                    value-color: c.tone == ChipTone.good ? Theme.chip-good-fg : c.tone == ChipTone.warn ? Theme.accent-soft : c.tone == ChipTone.err ? Theme.chip-err-fg : Theme.fg;
-                    tooltip: c.detail;
-                    clicked => { root.status-clicked(i); }
+            // THE ROW HOLDS ITS WIDTH (6.38.3): a layout's minimum width travels up through every parent that has no width of its own,
+            // and the status bar asks for more than the window when the catalogue's words are longer than the English ones (French, German).
+            // A Rectangle with a width of its own stops that climb (tests/test_slint_constraints.cpp), and clips what still does not fit.
+            Rectangle { x: 0; y: 0; width: parent.width; height: parent.height; clip: true;
+                HorizontalLayout { padding-left: 4px; spacing: 0px; alignment: start;
+                    for c[i] in root.status : StatusChip {
+                        key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp; lines: c.lines; max-detail-w: 364px;
+                        value-color: c.tone == ChipTone.good ? Theme.chip-good-fg : c.tone == ChipTone.warn ? Theme.accent-soft : c.tone == ChipTone.err ? Theme.chip-err-fg : Theme.fg;
+                        tooltip: c.detail;
+                        clicked => { root.status-clicked(i); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    VerticalLayout { alignment: center; Key { label: @tr("Request a feature"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Ask for a feature"); clicked => { root.feature-request-clicked(); } } }
+                    VerticalLayout { alignment: center; Key { label: @tr("Report a bug / dislike"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Report a problem"); clicked => { root.bug-report-clicked(); } } }
+                    Rectangle { width: 8px; }
                 }
-                Rectangle { horizontal-stretch: 1; }
-                VerticalLayout { alignment: center; Key { label: @tr("Request a feature"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Ask for a feature"); clicked => { root.feature-request-clicked(); } } }
-                VerticalLayout { alignment: center; Key { label: @tr("Report a bug / dislike"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Report a problem"); clicked => { root.bug-report-clicked(); } } }
-                Rectangle { width: 8px; }
             }
         }
     }

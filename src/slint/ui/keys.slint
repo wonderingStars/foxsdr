@@ -58,6 +58,10 @@ component FocusRing inherits Rectangle {
 export component Caption inherits Text {
     in property <string> label;
     in property <bool> upper: true;
+    // a caption asks a layout for no minimum width and elides when it is short of room: a longer word in another language
+    // (ALIMENTATION DE L'ANTENNE over ANTENNA POWER) must not widen its block, the strip and the window (6.38.3)
+    min-width: 0px;
+    overflow: elide;
     text: root.upper ? root.label.to-uppercase() : root.label;
     color: Theme.muted;
     font-family: Theme.font-ui;

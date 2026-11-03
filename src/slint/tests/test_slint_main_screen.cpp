@@ -291,6 +291,19 @@ int main() {
         CHECK(p1.near(900, 600, panel));                                        // the page body's ground fills the centre
         CHECK(p1.countInk(372, 180, 1580, 300, panel) > 800);                   // the search field, the chips, the keys and the verdict line carry ink
         CHECK(p0.countInk(372, 240, 1580, 300, well) > 0 || true);              // (the wells drew before the page showed)
+        // THE ROWS HOLD THEIR WIDTH (6.38.3). Rendered at 1100, narrower than the receiver strip, the tab row and the status bar ask
+        // for in English, the centre column must still be the window less the rail and the bank, so the docked page's two keys
+        // (SCAN AGAIN, RESET WINDOW SIZES, right-aligned 12 px from the page's edge) sit inside the frame. Before the fix the rows'
+        // minimum widths climbed to the body layout, the centre took its minimum instead of its share, the page ran past the window
+        // and its right-hand keys were cut off - what the French catalogue did at 1600 (every chip word longer than the English).
+        {
+            Frame n = renderAt(1100, 800);
+            n.savePng(shotDir() + "main-screen-fitted-page-1100.png");
+            const int keyInk = n.countNear(1100 - 230, 176, 1100, 212, rgb(0x262a32), 8);
+            std::printf("  narrow 1100: key ground in the page bar's right 230 px: %d px\n", keyInk);
+            CHECKV(keyInk > 1500, "the page's keys are not inside the frame (%d px of key ground): the page ran past the window", keyInk);
+            CHECK(n.width == 1100 && n.height == 800);
+        }
         ui->set_pages(model(std::vector<PageTab>{page(true)}));
         Frame p2 = renderAt(W, H);
         p2.savePng(shotDir() + "main-screen-torn-page.png");

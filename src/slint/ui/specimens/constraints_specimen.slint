@@ -1,0 +1,57 @@
+// The constraints specimen (900 x 600): how a layout's MINIMUM WIDTH travels up through the elements around it. A page of the
+// plugin kit sits in a layout cell of the main window; when a layout somewhere inside it (a row of chips measured for its natural
+// width, a toolbar, a key cluster) asks for more than the cell, Slint widens the cell rather than clip it, the page grows past the
+// window and its right-hand keys are cut off - seen first with the French catalogue, whose chip words are longer than the English
+// ones (docs/engine-stage4.md 6.38.3). Each row below puts a 1200 px layout inside a 300 px cell behind a different wrapper and
+// exposes the cell's actual width, so tests/test_slint_constraints.cpp can say which wrappers hold the line. The house rule the
+// test enforces: a measuring layout is wrapped the way row C is.
+//
+//   y - row                                                                                        (the root property the test reads)
+//    0 - A: Rectangle { width: 0px; height: 0px } holding the layout                                 a-w
+//  100 - B: the same with clip: true                                                                  b-w
+//  200 - C: the layout inside a Flickable of 0 x 0 (a Flickable's constraints are its own)            c-w
+//  300 - D: the bare layout as the cell's child                                                       d-w
+//  400 - E: a layout whose width is its own preferred-width (a key cluster)                           e-w
+//  500 - F: a Rectangle whose width is bound to a measured natural-width                             f-w
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { TipLayer } from "../tooltip.slint";
+export { Theme, Skin, Workbench }
+
+component Wide inherits HorizontalLayout {
+    spacing: 0px;
+    for i in 6 : Rectangle { width: 200px; height: 10px; background: Theme.accent; }
+}
+
+export component ConstraintsSpecimen inherits Window {
+    width: 900px;
+    height: 600px;
+    background: Theme.bg;
+
+    out property <length> a-w: a.width;
+    out property <length> b-w: b.width;
+    out property <length> c-w: c.width;
+    out property <length> d-w: d.width;
+    out property <length> e-w: e.width;
+    out property <length> f-w: f.width;
+    out property <length> measured: cm.preferred-width;   // what the measuring row of C reports: 1200
+
+    HorizontalLayout { x: 0px; y: 0px; width: 300px; height: 100px;
+        a := Rectangle { Rectangle { x: 0px; y: 0px; width: 0px; height: 0px; Wide { } } }
+    }
+    HorizontalLayout { x: 0px; y: 100px; width: 300px; height: 100px;
+        b := Rectangle { Rectangle { x: 0px; y: 0px; width: 0px; height: 0px; clip: true; Wide { } } }
+    }
+    HorizontalLayout { x: 0px; y: 200px; width: 300px; height: 100px;
+        c := Rectangle { Flickable { x: 0px; y: 0px; width: 0px; height: 0px; cm := Wide { } } }
+    }
+    HorizontalLayout { x: 0px; y: 300px; width: 300px; height: 100px;
+        d := Rectangle { Wide { } }
+    }
+    HorizontalLayout { x: 0px; y: 400px; width: 300px; height: 100px;
+        e := Rectangle { Wide { x: 0px; y: 0px; width: self.preferred-width; height: 10px; } }
+    }
+    HorizontalLayout { x: 0px; y: 500px; width: 300px; height: 100px;
+        f := Rectangle { Rectangle { x: 0px; y: 0px; width: fm.preferred-width; height: 10px; Rectangle { x: 0px; y: 0px; width: 0px; height: 0px; fm := Wide { } } } }
+    }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

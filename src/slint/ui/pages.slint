@@ -328,12 +328,12 @@ component MapToolbar inherits VerticalLayout {
         Text { text: root.map.rx-text; font-size: Theme.font-small; color: root.map.rx-known ? Theme.fg-soft : Theme.dim; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }
         Text { text: root.map.count-text; font-size: Theme.font-small; color: Theme.muted; vertical-alignment: center; }
-        Checkbox { width: 118px; label: @tr("On screen only"); checked: root.map.on-screen-only; tooltip: @tr("Lists only the targets inside the map you are looking at."); toggled(v) => { root.on-screen(root.index, v); } }
+        Checkbox { label: @tr("On screen only"); checked: root.map.on-screen-only; tooltip: @tr("Lists only the targets inside the map you are looking at."); toggled(v) => { root.on-screen(root.index, v); } }
     }
     HorizontalLayout { spacing: 10px; alignment: start;
-        Checkbox { width: 86px; label: @tr("Coverage"); checked: root.map.coverage-on; tooltip: @tr("Furthest any target has been plotted, per 5 degrees of bearing, from the receiver position, this session only."); toggled(v) => { root.coverage(root.index, v); } }
-        Checkbox { width: 66px; label: @tr("Trails"); checked: root.map.trails-on; tooltip: @tr("Draw the lines plugins publish: flight trails, predicted ground tracks and footprints."); toggled(v) => { root.trails(root.index, v); } }
-        Checkbox { width: 124px; label: @tr("Altitude colours"); checked: root.map.alt-colours; enabled: root.map.trails-on; tooltip: root.map.trails-on ? @tr("Colour each part of a trail by the altitude observed there.") : @tr("Turn Trails on to colour them by altitude."); toggled(v) => { root.alt-colours(root.index, v); } }
+        Checkbox { label: @tr("Coverage"); checked: root.map.coverage-on; tooltip: @tr("Furthest any target has been plotted, per 5 degrees of bearing, from the receiver position, this session only."); toggled(v) => { root.coverage(root.index, v); } }
+        Checkbox { label: @tr("Trails"); checked: root.map.trails-on; tooltip: @tr("Draw the lines plugins publish: flight trails, predicted ground tracks and footprints."); toggled(v) => { root.trails(root.index, v); } }
+        Checkbox { label: @tr("Altitude colours"); checked: root.map.alt-colours; enabled: root.map.trails-on; tooltip: root.map.trails-on ? @tr("Colour each part of a trail by the altitude observed there.") : @tr("Turn Trails on to colour them by altitude."); toggled(v) => { root.alt-colours(root.index, v); } }
         Key { label: @tr("Reset coverage"); small: true; min-w: 0px; enabled: !root.map.coverage-empty; clicked => { root.reset-coverage(root.index); } }
         Text { text: root.map.coverage-status; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }

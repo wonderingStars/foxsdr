@@ -50,6 +50,9 @@ export component Checkbox inherits Rectangle {
     property <length> box-y: root.multi-line ? 1px : (root.height - root.box-d) / 2;
 
     height: max(root.box-d, words.preferred-height);
+    // the natural width, so a layout can size the checkbox to its label in any language (the map toolbar used to carry
+    // English-measured widths); a narrower width elides the label
+    preferred-width: root.box-d + root.gap + words.preferred-width;
 
     forward-focus: fs;
     accessible-role: checkbox;

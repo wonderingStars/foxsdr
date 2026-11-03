@@ -1064,5 +1064,12 @@ int main() {
         CHECKV(differing(f0, h, kM2x, kM1y, kM2x + kMw, kM1y + kMh) == 0, "...and MP2: %d", differing(f0, h, kM2x, kM1y, kM2x + kMw, kM1y + kMh));
     }
 
+    // ---- FM4: a page in a layout cell keeps the cell's width whatever its chip words measure (the French overflow, 6.38.3) ----
+    {
+        std::printf("  FM4: French-length chips inside a 700 px cell - the cell stays 700 and the bar drops to two rows\n");
+        const double w = ui->get_fm4_w();
+        CHECKV(w == 700.0, "the cell is %.0f wide (the page widened past its cell)", w);
+        CHECK(ui->get_fm4_two_rows());
+    }
     return testSummary("test_slint_fitted");
 }

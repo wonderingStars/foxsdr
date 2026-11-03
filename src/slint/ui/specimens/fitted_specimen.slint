@@ -14,6 +14,8 @@
 //    10,  760,  580,  600 - MP1 ModulePage of a module being fed: every block, taller than its 600 px so it scrolls
 //   610,  760,  580,  600 - MP2 ModulePage of a module the host refused: the reason under its cap, RE-ENABLE, the notes
 //    10, 1390,  580,  240 - MP3 ModulePage with nothing but three reach rows (an inward, an outward, an inward one) under their cap
+//    10, 1670,  700,   80 - FM4 FittedModules INSIDE A 700 PX LAYOUT CELL with French-length chip words: the cell must stay 700 wide
+//                           (a measuring row that leaked its minimum width widened the docked page past the window, 6.38.3)   (fm4-w)
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { Caption } from "../keys.slint";
 import { ChipTone, LampState } from "../chips.slint";
@@ -24,7 +26,7 @@ export { Theme, Skin, Workbench, ChipTone, LampState, StateChipModel, FittedRowM
 
 export component FittedSpecimen inherits Window {
     width: 1200px;
-    height: 1660px;
+    height: 1760px;
     background: Theme.bg;
 
     // ---- what the test observes ----
@@ -57,6 +59,8 @@ export component FittedSpecimen inherits Window {
     out property <length> fm2-bar-height: fm2.bar-height;
     out property <length> fm2-lines-height: fm2.lines-height;
     out property <bool> fm2-two-rows: fm2.two-row-bar;
+    out property <length> fm4-w: fm4.width;
+    out property <bool> fm4-two-rows: fm4.two-row-bar;
     out property <length> fm2-content: fm2.content-height;
     out property <length> fm3-bar-height: fm3.bar-height;
     out property <length> fm3-lines-height: fm3.lines-height;
@@ -257,6 +261,25 @@ export component FittedSpecimen inherits Window {
             { key: "Radio control", detail: "Asks the host to tune the receiver.", outward: true },
             { key: "Track source", detail: "Publishes the positions it decodes.", outward: false },
         ];
+    }
+
+    // ---- FM4: inside a layout cell, with French-length chip words ----
+    HorizontalLayout { x: 10px; y: 1670px; width: 700px; height: 80px;
+        fm4 := FittedModules {
+            rows: [];
+            chips: [
+                { label: "ALIMENTÉ", count: 0, tone: ChipTone.good, lamp: LampState.green, on: true },
+                { label: "INACTIF", count: 40, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+                { label: "PAS DE DÉCODAGE", count: 0, tone: ChipTone.warn, lamp: LampState.amber, on: true },
+                { label: "NE PREND AUCUN SIGNAL", count: 3, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+                { label: "ARRÊTÉ", count: 0, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+                { label: "REFUSÉ", count: 0, tone: ChipTone.err, lamp: LampState.red, on: true },
+            ];
+            scan-text: "RÉANALYSER";
+            reset-text: "RÉINITIALISER LES TAILLES DES FENÊTRES";
+            verdict: "Le récepteur est arrêté, donc RIEN n'alimente aucun module, quel que soit son réglage.";
+            directory: "lu depuis C:\\Users\\steve\\OneDrive\\Documents\\FoxSDR\\.claude\\worktrees\\slint-port-phase1-de6400\\build\\src\\slint\\Release\\plugins";
+        }
     }
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }
