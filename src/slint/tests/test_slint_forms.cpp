@@ -573,6 +573,29 @@ int main() {
     }
 
     // =========================================================================================================
+    // 11b. A disabled form: its fields wear the disabled look and take no typing, no tick and no key; the fold line is dead too
+    // =========================================================================================================
+    {
+        ui->set_f2_enabled(false);
+        const Frame d = render(ui, kW, kH);
+        reset();
+        const int lx = kLx + kPad, rx = kLx + kPad + kHalf + kColGap;
+        CHECKV(d.near(lx + 4, in1 + 12, keyDisBg) && d.near(rx + 4, in1 + 12, keyDisBg) && d.near(lx + 4, pathIn + 12, keyDisBg), "disabled inputs: %s / %s / %s", hex(d.at(lx + 4, in1 + 12)).c_str(), hex(d.at(rx + 4, in1 + 12)).c_str(), hex(d.at(lx + 4, pathIn + 12)).c_str());
+        CHECK(d.near(rx + 3, in2 + (kIn - 14) / 2 + 3, keyDisBg));                                           // the BOOL box
+        CHECK(d.countNear(kLx + kPad + 14 + 3, kF2y + 3, kLx + 300, kF2y + kFoldH - 1, keyDisFg, 30) >= 20);   // the title
+        clk(lx + 100, in1 + 12);
+        tap(u8"q");                                                                                         // (no Enter here: the keyboard focus is still on F1's fold line, where Enter unfolds it)
+        clk(rx + 7, in2 + 12);
+        clk(kLx + kPad + kFull - 30, pathIn + 12);
+        clk(kLx + kPad + kFull - 30, pwIn + 12);
+        CHECKV(ui->get_commits() == 0 && ui->get_toggles() == 0 && ui->get_browses() == 0, "a disabled form fired %d commits, %d toggles, %d browses", ui->get_commits(), ui->get_toggles(), ui->get_browses());
+        clk(kLx + 150, kF2y + 14);
+        CHECK(ui->get_f2_open());                                                                           // the fold line does not fold
+        ui->set_f2_enabled(true);
+        park();
+    }
+
+    // =========================================================================================================
     // 12. F3 (the rail): the host's answer. `pending` keeps what was typed; a refusal snaps the box back to the stored value and shows its
     //     sentence; an edit the user is in the middle of is not trampled by a refresh; a quiet refresh is adopted
     // =========================================================================================================
@@ -793,14 +816,16 @@ int main() {
     {
         reset();
         const auto ringed = [&](const Frame& fr, const Span& c) { return fr.near(c.l - 2, s1Mid, focus, 14) && fr.near(c.r + 1, s1Mid, focus, 14); };
-        int tabs = 0;
+        int tabs = 0, blind = 0;
         Frame fr = render(ui, kW, kH);
         while (tabs < 150 && !ringed(fr, spanAt(chips1, 0))) {
             tap(slint::platform::key_codes::Tab);
             fr = render(ui, kW, kH);
+            if (fr.countNear(0, 0, kW, kH, focus, 3) == 0) { ++blind; }                                    // a tab stop that draws no ring is a dead one
             ++tabs;
         }
         CHECKV(tabs < 150 && ringed(fr, spanAt(chips1, 0)), "Tab never reached the first chip (%d presses): %s", tabs, hex(fr.at(spanAt(chips1, 0).l - 2, s1Mid)).c_str());
+        CHECKV(blind == 0, "%d of the %d tab stops before the first chip showed no focus ring", blind, tabs);
         CHECK(fr.near(spanAt(chips1, 0).l - 1, s1Mid, bg, 14) && fr.near(spanAt(chips1, 0).mid(), kS1y - 3, focus, 14) && fr.near(spanAt(chips1, 0).mid(), kS1y + kChipH + 2, focus, 14));     // 1 px clear, 2 px ring
         CHECK(!ringed(fr, spanAt(chips1, 1)));
         tap(u8" ");
@@ -812,6 +837,38 @@ int main() {
         CHECKV(ui->get_chip_toggles() == 2 && ui->get_last_chip() == 1, "Enter on the second chip: %d toggles, index %d", ui->get_chip_toggles(), ui->get_last_chip());
         tap(u8"a");                                                                                       // other keys do nothing
         CHECK(ui->get_chip_toggles() == 2);
+        park();
+    }
+
+    // =========================================================================================================
+    // 15c. Tooltips of the grant keys, the card's boxes and the chips: each carries the host's sentence, 6 px under its own height
+    // =========================================================================================================
+    {
+        mv(kGx + 60, kG1y + 12);                                                                           // GRANT RECEIVER CONTROL has a sentence of its own
+        settle(milliseconds(750));
+        const Frame a = render(ui, kW, kH);
+        CHECKV(a.near(kGx + 12, kG1y + 24 + 6, knobRing, 3), "grant key tooltip border %s", hex(a.at(kGx + 12, kG1y + 24 + 6)).c_str());
+        park();
+        mv(kGx + 60, kG1y + 24 + 6 + 12);                                                                  // REVOKE RADIO SETTINGS has none
+        settle(milliseconds(750));
+        CHECK(!render(ui, kW, kH).near(kGx + 12, kG1y + 24 + 6 + 24 + 6, knobRing, 3));
+        park();
+        const int b0 = cardBoxes.size() > 0 ? cardBoxes[0] : -1000;
+        mv(kRx + 9 + 40, b0 + 7);                                                                          // the card's rows carry the card's sentence
+        settle(milliseconds(750));
+        const Frame c = render(ui, kW, kH);
+        CHECKV(c.near(kRx + 9 + 12, b0 + 14 + 6, knobRing, 3), "card checkbox tooltip border %s", hex(c.at(kRx + 9 + 12, b0 + 14 + 6)).c_str());
+        park();
+        const int s2Mid1 = kS2y + kChipH / 2;
+        mv(spanAt(runsOnRow(f0, s2Mid1, kSx, kSx + 400, bg), 1).mid(), s2Mid1);                            // a chip of S2 carries the set's sentence
+        settle(milliseconds(750));
+        const Frame d = render(ui, kW, kH);
+        const Span s2c = spanAt(runsOnRow(f0, s2Mid1, kSx, kSx + 400, bg), 1);
+        CHECKV(d.near(s2c.l + 12, kS2y + kChipH + 6, knobRing, 3), "chip tooltip border %s", hex(d.at(s2c.l + 12, kS2y + kChipH + 6)).c_str());
+        park();
+        mv(spanAt(chips1, 1).mid(), s1Mid);                                                                // S1 has no sentence
+        settle(milliseconds(750));
+        CHECK(!render(ui, kW, kH).near(spanAt(chips1, 1).l + 12, kS1y + kChipH + 6, knobRing, 3));
         park();
     }
 

@@ -224,7 +224,22 @@ std::shared_ptr<slint::Model<SettingField>> KitPublisher::fieldsModel(const std:
         sig += s.key + "=" + shown + (f.pending ? "?" : "") + std::string(f.error) + ";";
         fields.push_back(std::move(f));
     }
-    return model(std::move(fields));
+    // THE SAME MODEL OBJECT EACH TIME, its rows set in place where they changed (the forms family: a replaced model recreates every
+    // field and loses the text being typed; a row set in place keeps the box and only moves what differs).
+    auto& cached = fieldModels_[file];
+    if (!cached || cached->row_count() != fields.size()) {
+        cached = std::make_shared<slint::VectorModel<SettingField>>(std::move(fields));
+        return cached;
+    }
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+        const SettingField& now = fields[i];
+        const SettingField was = *cached->row_data(i);
+        if (was.id != now.id || was.value != now.value || was.error != now.error || was.pending != now.pending || was.checked != now.checked ||
+            was.label != now.label || was.kind != now.kind || was.placeholder != now.placeholder || was.max_length != now.max_length) {
+            cached->set_row_data(i, now);
+        }
+    }
+    return cached;
 }
 
 slint::Image KitPublisher::pictureImage(const std::string& plugin) {

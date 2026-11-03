@@ -560,7 +560,7 @@ export component StateChips inherits Rectangle {
         height: 0px;
         measure := HorizontalLayout {
             spacing: 6px;
-            for c in root.chips : StateChip { label: c.label; count: c.count; tone: c.tone; lamp: c.lamp; on: c.on; }
+            for c in root.chips : StateChip { label: c.label; count: c.count; tone: c.tone; lamp: c.lamp; on: c.on; enabled: false; }     // only measured: no tab stop, no clicks
         }
     }
     VerticalLayout {

@@ -242,10 +242,13 @@ int main() {
         CHECKV(report.n > 50 && report.y0 >= top + 8 + 15 + 3 && report.x0 <= kF1x + 14, "report ink n=%d from row %d (the verdict ends at %d)", report.n, report.y0, top + 8 + 15);
         CHECK(f0.countNear(kF1x + 12, top + 8 + 17, kF1x + 400, top + 50, goodFg, 40) >= 40);
         CHECK(f0.countNear(kF1x + 12, top + 8 + 17, kF1x + 400, top + 50, errFg, 20) == 0);
+        CHECKV(report.w() < 220, "the report is a short sentence: %d px", report.w());
         // an error is said instead of the report, in chip-err-fg
         ui->set_fm1_error("Not removed: the file is in use by another program.");
         const Frame withError = shot();
         CHECKV(withError.countNear(kF1x + 12, top + 8 + 17, kF1x + 600, top + 50, errFg, 40) >= 60 && withError.countNear(kF1x + 12, top + 8 + 17, kF1x + 600, top + 50, goodFg, 12) == 0, "the error line: %d red, %d green", withError.countNear(kF1x + 12, top + 8 + 17, kF1x + 600, top + 50, errFg, 40), withError.countNear(kF1x + 12, top + 8 + 17, kF1x + 600, top + 50, goodFg, 12));
+        const Ink errInk = inkBox(withError, kF1x, top + 8 + 17, kF1x + kF1w - 14, top + 50, panelAlt);
+        CHECKV(errInk.w() > 250 && errInk.w() > report.w() + 60, "the words are the error's, not the report's: %d px of ink (the report is %d)", errInk.w(), report.w());
         CHECK_NEAR(ui->get_fm1_lines_height(), 50.0, 1.01);                                               // one line replaces one line
         ui->set_fm1_error("");
         CHECK(shot().countNear(kF1x + 12, top + 8 + 17, kF1x + 400, top + 50, goodFg, 40) >= 40);        // and the report is back
@@ -437,7 +440,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 8. FM2: a 700 px page puts the chips on a second line of the bar; an error line in chip-err-fg; rows without groups
+    // 7. FM2: a 700 px page puts the chips on a second line of the bar; an error line in chip-err-fg; rows without groups
     // =========================================================================================================
     {
         CHECK(ui->get_fm2_two_rows());
@@ -480,7 +483,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 9. FM3: nothing fitted - the verdict, the empty text in muted, no rows, no rules, no foot
+    // 8. FM3: nothing fitted - the verdict, the empty text in muted, no rows, no rules, no foot
     // =========================================================================================================
     {
         CHECK_NEAR(ui->get_fm3_bar_height(), 94.0, 0.01);                                                 // 8 + 24 + 8 + 46 + 8: the chips take two lines
@@ -502,7 +505,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 10. FM1's interaction: row-clicked on the dot or name only, row-double-clicked anywhere on the row, the keys, the chips, the search box
+    // 9. FM1's interaction: row-clicked on the dot or name only, row-double-clicked anywhere on the row, the keys, the chips, the search box
     // =========================================================================================================
     {
         reset();
@@ -575,7 +578,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 11. FM1: chips, keys and the search box
+    // 10. FM1: chips, keys and the search box
     // =========================================================================================================
     {
         reset();
@@ -604,6 +607,17 @@ int main() {
         ui->set_search_fm1("");                                                                           // the host clears it
         const Frame cleared = shot();
         CHECKV(cleared.countNear(sx + 24, sy + 2, sx + 212, sy + 22, disabledInk, 40) >= 12, "cleared: the placeholder is back");
+        // the top bar's two keys: RESET WINDOW SIZES names what it moves (the ImGui sentence), SCAN AGAIN has no sentence
+        park();
+        mv(spanAt(keys1, 1).mid(), fm1Mid);
+        settle(milliseconds(750));
+        const Frame rt = shot();
+        CHECKV(rt.near(spanAt(keys1, 1).l + 12, kF1y + 8 + 24 + 6, knobRing, 3), "RESET WINDOW SIZES tooltip border %s", hex(rt.at(spanAt(keys1, 1).l + 12, kF1y + 8 + 24 + 6)).c_str());
+        park();
+        mv(spanAt(keys1, 0).mid(), fm1Mid);
+        settle(milliseconds(750));
+        CHECK(!shot().near(spanAt(keys1, 0).l + 12, kF1y + 8 + 24 + 6, knobRing, 3));
+        park();
         // clicking a row takes nothing from the box: the key presses leave the focus where it was
         clk(spanAt(keys1, 0).mid(), fm1Mid);
         tap(u8"x");
@@ -627,7 +641,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 12. FM1 and FM2: hover tints a row; a cut note shows in full as a tooltip; the second page's callbacks carry its own source
+    // 11. FM1 and FM2: hover tints a row; a cut note shows in full as a tooltip; the second page's callbacks carry its own source
     // =========================================================================================================
     {
         mv(kF1x + 650, rowTop(1) + 13);
@@ -659,7 +673,65 @@ int main() {
     }
 
     // =========================================================================================================
-    // 13. A disabled page is dead: the keys, the chips, the search box and the rows do nothing, in the kit's disabled look
+    // 11b. FM1 by keyboard: Tab reaches a row (a 2 px ring round it), Enter or Space asks for its page, and a row that takes the focus is
+    //      scrolled into view - so a keyboard user walking down the list never loses the row or its keys below the fold
+    // =========================================================================================================
+    {
+        wheel(600, 250, 3000.0f);
+        CHECK_NEAR(ui->get_fm1_scrolled(), 0.0, 0.01);
+        reset();
+        const auto rowRinged = [&](const Frame& f, int i) { return f.near(kF1x + 3, rowTop(i) + 12, focus, 14) && f.near(kF1x + 2, rowTop(i) + 12, focus, 14); };
+        int tabs = 0;
+        Frame fr = shot();
+        while (tabs < 60 && !rowRinged(fr, 0)) {
+            tap(slint::platform::key_codes::Tab);
+            fr = shot();
+            ++tabs;
+        }
+        CHECKV(tabs < 60 && rowRinged(fr, 0), "Tab never reached the first row (%d presses)", tabs);
+        CHECK(fr.near(kF1x + 1, rowTop(0) + 12, panelAlt) && fr.near(kF1x + 4, rowTop(0) + 12, panelAlt));       // a 2 px ring with 1 px clear on each side... inside the row
+        CHECK(fr.near(kF1x + 600, rowTop(0) + 2, focus, 14) && fr.near(kF1x + 600, rowTop(0) + 3, focus, 14));      // the ring's top edge runs under the rule
+        tap(slint::platform::key_codes::Return);
+        CHECKV(ui->get_row_clicks() == 1 && ui->get_last_row() == 0 && sval(ui->get_last_source()) == "FM1" && ui->get_row_doubles() == 0, "Enter on the first row: %d clicks, row %d", ui->get_row_clicks(), ui->get_last_row());
+        // the row's own keys come next (STOP, REMOVE), then the next row
+        for (int k = 0; k < 3; ++k) { tap(slint::platform::key_codes::Tab); }
+        fr = shot();
+        CHECK(rowRinged(fr, 1) && !rowRinged(fr, 0));
+        tap(u8" ");
+        CHECKV(ui->get_row_clicks() == 2 && ui->get_last_row() == 1, "Space on the second row: %d clicks, row %d", ui->get_row_clicks(), ui->get_last_row());
+        tap(u8"x");                                                                                       // other keys do nothing
+        CHECK(ui->get_row_clicks() == 2);
+        // walk on down the list: the body follows the focus, and the ringed row is always wholly inside it
+        int steps = 0;
+        bool inside = true;
+        while (steps < 80 && ui->get_fm1_scrolled() < 100.0) {
+            tap(slint::platform::key_codes::Tab);
+            fr = shot();
+            ++steps;
+            for (int y = 0; y < kH; ++y) {                                                                // any focus ring in the body's column must lie inside the body
+                if (fr.near(kF1x + 2, y, focus, 3) && (y < bodyTop1 || y >= bodyTop1 + kBodyH1)) { inside = false; }
+            }
+        }
+        CHECKV(steps < 80 && ui->get_fm1_scrolled() >= 100.0, "the body did not follow the focus down the list: scrolled %.1f after %d Tab presses", ui->get_fm1_scrolled(), steps);
+        CHECKV(inside, "a row ring was drawn outside the body");
+        int ringTop = -1, ringBottom = -1;
+        for (int y = bodyTop1; y < bodyTop1 + kBodyH1; ++y) {
+            if (fr.near(kF1x + 2, y, focus, 3)) { if (ringTop < 0) { ringTop = y; } ringBottom = y; }
+        }
+        CHECKV(ringTop >= bodyTop1 && ringBottom < bodyTop1 + kBodyH1 && ringBottom - ringTop >= 8, "the ringed row's straight edge spans %d..%d inside the body %d..%d", ringTop, ringBottom, bodyTop1, bodyTop1 + kBodyH1);
+        // the Flickable keeps what holds the focus in view, so the list cannot be scrolled away from the ringed row until the focus leaves it:
+        // a click in the search box takes the focus (a click on a row or a key does not), and the wheel is free again
+        wheel(600, 250, 3000.0f);
+        CHECKV(ui->get_fm1_scrolled() >= 100.0, "the list was scrolled up from under the focused row: %.1f", ui->get_fm1_scrolled());
+        clk(kF1x + 12 + 120, kF1y + 8 + 12);
+        wheel(600, 250, 3000.0f);
+        CHECKV(std::abs(ui->get_fm1_scrolled()) < 0.01, "back to the top after the walk: %.1f", ui->get_fm1_scrolled());
+        park();
+        CHECKV(std::abs(ui->get_fm1_scrolled()) < 0.01, "and still there after the pointer left: %.1f", ui->get_fm1_scrolled());
+    }
+
+    // =========================================================================================================
+    // 12. A disabled page is dead: the keys, the chips, the search box and the rows do nothing, in the kit's disabled look
     // =========================================================================================================
     {
         ui->set_fm1_enabled(false);
@@ -689,7 +761,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 14. MP1, the module page: back key, lamp and STOP at the top, the name and the maker line, the grants, the plate keys
+    // 13. MP1, the module page: back key, lamp and STOP at the top, the name and the maker line, the grants, the plate keys
     // =========================================================================================================
     const int m1Pad = 16;
     {
@@ -747,7 +819,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 15. MP1 interaction: back, STOP, the grant keys (the new state), the command keys (their index); then scrolled: the tick and the foot
+    // 14. MP1 interaction: back, STOP, the grant keys (the new state), the command keys (their index); then scrolled: the tick and the foot
     // =========================================================================================================
     {
         reset();
@@ -822,6 +894,12 @@ int main() {
         // the facts: FILE and PLUGIN ABI with their caps at the left and the values 150 px in; the notice line in accent-soft above them
         CHECK(e.countNear(kM1x + m1Pad, kM1y + kMh - 24 - 47 - 8 - 60, kM1x + m1Pad + 140, kM1y + kMh - 24 - 47 - 8, muted, 40) >= 15);
         CHECK(e.countNear(kM1x + m1Pad, tick + 20, kM1x + kMw - m1Pad, tick + 80, accentSoft, 40) >= 40);
+        // the tick explains itself: the ImGui sentence under its 14 px box (the page is scrolled: the tip follows the box)
+        mv(kM1x + m1Pad + 60, tick + 7);
+        settle(milliseconds(750));
+        const Frame kt = shot();
+        CHECKV(kt.near(kM1x + m1Pad + 12, tick + 14 + 6, knobRing, 3), "Keep running tooltip border %s", hex(kt.at(kM1x + m1Pad + 12, tick + 14 + 6)).c_str());
+        park();
         // the tick toggles and says its new state; the page has scrolled, the click lands where the box is drawn
         reset();
         clk(kM1x + m1Pad + 7, tick + 7);
@@ -837,7 +915,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 16. The reach list (MP3 shows it alone): a gold dot with a halo for what reaches outward, a hollow ring for what only publishes
+    // 15. The reach list (MP3 shows it alone): a gold dot with a halo for what reaches outward, a hollow ring for what only publishes
     // =========================================================================================================
     {
         CHECK_NEAR(ui->get_mp3_scrolled(), 0.0, 0.01);
@@ -879,7 +957,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 17. MP2, a refused module: no STOP, the reason under its red cap, RE-ENABLE with the fault as its tip, the notes, FILE and PLUGIN ABI
+    // 16. MP2, a refused module: no STOP, the reason under its red cap, RE-ENABLE with the fault as its tip, the notes, FILE and PLUGIN ABI
     // =========================================================================================================
     {
         CHECK_NEAR(ui->get_mp2_scrolled(), 0.0, 0.01);
@@ -962,7 +1040,7 @@ int main() {
     }
 
     // =========================================================================================================
-    // 18. The skin: a second filling reaches both pages with no component change
+    // 17. The skin: a second filling reaches both pages with no component change
     // =========================================================================================================
     {
         Skin probe = ui->global<Workbench>().get_value();

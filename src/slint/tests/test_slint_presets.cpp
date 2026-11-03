@@ -443,6 +443,29 @@ int main() {
     }
 
     // =========================================================================================================
+    // 11b. PlateKeys holds at most sixteen: a seventeenth label is not drawn, and has no key to press
+    // =========================================================================================================
+    {
+        reset();
+        std::vector<slint::SharedString> names;
+        for (int i = 0; i < 18; ++i) { names.emplace_back("KEY " + std::to_string(i)); }
+        ui->set_labels_e(std::make_shared<slint::VectorModel<slint::SharedString>>(names));
+        const Frame many = render(ui, kW, kH);
+        CHECKV(std::abs(ui->get_e_height() - (4 * kKeyH + 3 * kGap)) < 0.01, "18 labels make a grid %.1f high (four rows of 24, 6 apart: %d)", ui->get_e_height(), 4 * kKeyH + 3 * kGap);
+        const int cell = 120, pitch = cell + kGap, lastRow = kEy + 3 * (kKeyH + kGap);
+        CHECK(many.near(kBarX + 3 * pitch, lastRow + 12, plateLine) && many.near(kBarX + 3 * pitch + cell - 1, lastRow + 12, plateLine));       // the sixteenth key is the last of the fourth row
+        CHECKV(many.countInk(kBarX, kEy + 4 * (kKeyH + kGap) + 5, kBarX + 498, kEy + 4 * (kKeyH + kGap) + 24, bg) == 0, "a fifth row was drawn");     // (under the F and G keys, which end 4 rows down)
+        clk(kBarX + 3 * pitch + 60, lastRow + 12);
+        CHECKV(ui->get_plate_count() == 1 && ui->get_last_plate() == 15, "the sixteenth key: index %d", ui->get_last_plate());
+        clk(kBarX + 60, kEy + 4 * (kKeyH + kGap) + 12);                                                    // where a seventeenth would be
+        CHECK(ui->get_plate_count() == 1);
+        ui->set_labels_e(std::make_shared<slint::VectorModel<slint::SharedString>>(std::vector<slint::SharedString>{"RESET", "CLEAR LOG", "SEND BEACON", "SAVE", "LONG RUNNING COMMAND"}));
+        render(ui, kW, kH);
+        CHECK_NEAR(ui->get_e_height(), 54.0, 0.01);
+        park();
+    }
+
+    // =========================================================================================================
     // 12. The keyboard: Tab reaches the first key of the sheet and Space presses it
     // =========================================================================================================
     {

@@ -6,8 +6,9 @@
 // the pane's size reported when it changes. Text is in the embedded Inter (third_party/fonts): asserted as ink in a region, never as glyph shapes.
 //
 // ROTATION IS NOT HELD BY PIXELS HERE: the software renderer draws no rotation of any item (measured in the work on this file: an icon at 90 and at 45
-// degrees came out unturned). The heading is held by what the icon is bound to (MapPane.icon-turn, read below) and by the arithmetic of the dashed rings
-// and the placement; a desktop renderer is needed to see an aircraft turn.
+// degrees came out unturned). The heading is held by what the icon is bound to (MapPane.icon-turn, read below); a desktop renderer is needed to see an
+// aircraft turn. Also here: the legend, the scale and the targets follow their models (rows added, moved and removed), each kind has a glyph of its own,
+// and a pane that is switched off acts on nothing.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "render_harness.hpp"
 #include "test_check.hpp"
@@ -203,7 +204,6 @@ int main() {
             if (own < 4) { std::printf("  target %d: %d pixels of its own colour\n", i, own); }
             CHECK(own >= 4);
         }
-        // nothing of it past its 18 px box except the rings it asked for (the plain ones: none)
     }
     // the plain station and the faded unknown have no ring: the annulus outside their 18 px box is bare picture
     CHECK(ringInk(f, kT[3].x, kT[3].y, 11.0, 13.5) == 0 && ringInk(f, kT[5].x, kT[5].y, 11.0, 13.5) == 0);

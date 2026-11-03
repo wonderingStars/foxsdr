@@ -23,7 +23,17 @@
 //   * THE DASHES ARE 6 PX ON, 4 PX OFF ALONG THE PATH (the contract), where ImGui skips every second segment.
 //   * THE RINGS ARE GREAT-CIRCLE POLYLINES PROJECTED, so in equirectangular they are ellipses, wider than tall by 1 / cos(latitude)
 //     (a degree of longitude is shorter on the ground than a degree of latitude away from the equator, and the pixels per degree are
-//     the same both ways); ImGui draws a circle of the latitude radius. metresPerPixel() is the east-west scale at the centre.
+//     the same both ways); ImGui draws a circle of the latitude radius. metresPerPixel() is the east-west scale at the centre. Their
+//     step is the smallest of 1, 2, 2.5, 5 x 10^n km that leaves fewer than seven in the picture's half diagonal (so three to six show).
+//   * THE COVERAGE IS ONE OUTLINE: each bucket's arc, a step along the shared bearing to the next bucket's, the home itself where a bucket
+//     is empty (ImGui joins the sectors' middles). Filled apart, 72 wedges leave a hair of sea along every bearing they share.
+//   * WITH A TILE SOURCE AND NOT ONE TILE DRAWN (none arrived, none exists) THE COASTLINE IS THE PICTURE, as in ImGui: a map that has not
+//     loaded, or whose server cannot be reached, is not a blank. (The contract's either-or is read as: tiles, when there are any.)
+//   * AT MOST 64 TILES AN AXIS (ImGui's `> 64` test keeps 65), 256 READY tiles (kMaxTiles; fewer when a tile is big: 96 MiB of RGB).
+//   * THE MISSING CLOCK COUNTS compose() CALLS, clean ones too: a host that polls every tick (as it should) gets the retry ImGui gets
+//     (600 frames), and a clean view whose clock runs out is recomposed once to ask again.
+//   * WHICH BUFFER IS ASKED does not matter: false means "the picture you are showing is still right" and the buffer is not touched, so a
+//     host that alternates two buffers keeps working; a change repaints whichever one it is asked into, whole.
 //
 // Everything is plain loops with bounds checks: a tile buffer shorter than tileSize * tileSize * 3 is MISSING, a coordinate that is not
 // a number is skipped, a size past 16384 or 16 Mpixel is refused. The picture is opaque (alpha 255 everywhere).

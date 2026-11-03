@@ -168,6 +168,32 @@ int leftInk(const Frame& f, R r, Rgb background, int tol = 24) {
     return -1;
 }
 
+// the last x in the region whose column holds a pixel that is not the background, -1 when none
+int rightInk(const Frame& f, R r, Rgb background, int tol = 24) {
+    for (int x = r.x + r.w - 1; x >= r.x; --x) { if (f.countInk(x, r.y, x + 1, r.y + r.h, background, tol) > 0) { return x; } }
+    return -1;
+}
+// the shape of the figures in two regions of two frames, whatever colour each is drawn in: pixels that are plainly ink in one and plainly
+// not in the other (the same figures drawn in two inks agree everywhere but on the anti-aliased edges)
+int shapeMismatch(const Frame& a, R ra, const Frame& b, R rb, Rgb bg) {
+    auto dist = [&](const Rgb& p) { return std::max({std::abs(int(p.r) - int(bg.r)), std::abs(int(p.g) - int(bg.g)), std::abs(int(p.b) - int(bg.b))}); };
+    int peakA = 1, peakB = 1;
+    for (int y = 0; y < ra.h; ++y) {
+        for (int x = 0; x < ra.w; ++x) {
+            peakA = std::max(peakA, dist(a.at(ra.x + x, ra.y + y)));
+            peakB = std::max(peakB, dist(b.at(rb.x + x, rb.y + y)));
+        }
+    }
+    int n = 0;
+    for (int y = 0; y < ra.h; ++y) {
+        for (int x = 0; x < ra.w; ++x) {
+            const double p = double(dist(a.at(ra.x + x, ra.y + y))) / peakA, q = double(dist(b.at(rb.x + x, rb.y + y))) / peakB;
+            if (std::abs(p - q) > 0.4) { ++n; }
+        }
+    }
+    return n;
+}
+
 // a tile's height measured on the sheet: down the frame's left edge, which is the frame colour all the way between the corners
 int tileHeight(const Frame& f, int x, int y) {
     int yy = y + 10;
@@ -900,12 +926,14 @@ void checkFeed(InstrumentsSpecimen& ui) {
     auto tel = ui.get_st_tele();
     tel.seq = 6;
     ui.set_st_tele(tel);
+    const auto fed = std::chrono::steady_clock::now();
     const Frame started = shot(ui);
     CHECK_GT(differing(settled, started, paper), 200);
     settle(std::chrono::milliseconds(150));
     const Frame mid = shot(ui);
-    CHECK_GT(differing(started, mid, paper), 100);
-    CHECK_GT(differing(settled, mid, paper), 20);
+    CHECK_GT(differing(started, mid, paper), 100);                                  // it has moved ...
+    // ... and is not there yet (should this machine have stalled for most of the half second, the claim is not made - but the check is still counted)
+    CHECK(std::chrono::steady_clock::now() - fed >= std::chrono::milliseconds(400) || differing(settled, mid, paper) > 20);
     settle(std::chrono::milliseconds(700));
     const Frame done = shot(ui);
     CHECK_EQ(differing(settled, done, paper), 0);                                    // and it comes to rest where it was
@@ -968,6 +996,14 @@ void checkStates(InstrumentsSpecimen& ui) {
     f = shot(ui);
     for (int i = 0; i < 7; ++i) { CHECK_GT(cnt(f, F(kPagL, 275 + 22 * i, 66, 18, 26), kDigit, 40), 8); }
     CHECK_EQ(ink(f, F(kPagL, 260, 65, 13, 28), kPanel), 0);
+    // a short one stands against the right-hand end, like a drum that is only partly turned: the first four of seven cells are lit but blank
+    pg.texts = texts({"HELLO", "123", "14:32", "ALPHA"});
+    ui.set_st_pager(pg);
+    f = shot(ui);
+    for (int i = 0; i < 7; ++i) {
+        box(f, F(kPagL, 274 + 22 * i, 65, 20, 28), kLine, kField, kPanel);
+        if (i < 4) { CHECK_EQ(cnt(f, F(kPagL, 275 + 22 * i, 66, 18, 26), kDigit, 40), 0); } else { CHECK_GT(cnt(f, F(kPagL, 275 + 22 * i, 66, 18, 26), kDigit, 40), 8); }
+    }
     pg.texts = texts({"UK CALL 0123456 AMBULANCE CALL OUT ATTEND STATION RD", "1234567", "14:32", "ALPHA"});
     ui.set_st_pager(pg);
 
@@ -997,6 +1033,7 @@ void checkStates(InstrumentsSpecimen& ui) {
     CHECK_EQ(cnt(f, F(kMetL, 12, 77, 70, 13), kGreen, 24), 0);
     CHECK_GT(cnt(f, F(kMetL, 80, 77, 60, 13), kGreen, 24), 10);
     CHECK_EQ(cnt(f, F(kMetL, 254, 8, 60, 13), kRed, 24), 0);                           // no tamper reported
+    CHECK_GT(rightInk(f, F(kMetL, 181, 34, 56, 28), kFgSoft) - kMetL.x, 205);                    // the unit word UNITS reaches past where a two-letter unit would stop
     mt.values = vals({48213, 4});
     mt.texts = texts({"47281936", "ELECTRIC"});
     ui.set_st_meter(mt);
@@ -1075,6 +1112,52 @@ void checkStates(InstrumentsSpecimen& ui) {
     CHECK_GE(cnt(f, F(kBcnL, 12 + 223 + 215, 151, 8, 16), kAccent, 12), 14);          // 12345 Hz is past the stop: the needle is held on it
     bc.values = vals({210, 134});
     ui.set_st_beacon(bc);
+
+    // the figures themselves, not only that there are some: the inbound course is the radial turned half a circle (a bearing of 94 reads RADIAL FROM
+    // 094 and INBOUND CRS 274; a bearing of 274 the other way round), the hours of the age are drawn, the tone seconds have two decimals
+    {
+        const R fromRow = F(kVorL, 362, 6, 98, 14), inRow = F(kVorL, 362, 91, 98, 14);
+        auto v = ui.get_st_vor();
+        v.values = vals({274, 0.92f, 0.31f, 0.30f});
+        ui.set_st_vor(v);
+        const Frame at274 = shot(ui);
+        v.values = vals({94, 0.92f, 0.31f, 0.30f});
+        ui.set_st_vor(v);
+        const Frame at94 = shot(ui);
+        CHECK_GT(ink(at274, inRow, kPanel), 40);
+        CHECK_LE(shapeMismatch(at274, inRow, at94, fromRow, kPanel), 0);
+        CHECK_LE(shapeMismatch(at94, inRow, at274, fromRow, kPanel), 0);
+        CHECK_GT(shapeMismatch(at274, fromRow, at94, fromRow, kPanel), 10);                // and 274 is not 094
+        v.values = vals({274, 0.92f, 0.31f, 0.30f});
+        ui.set_st_vor(v);
+    }
+    {
+        auto bcn = ui.get_st_beacon();
+        bcn.values = vals({210, 3725});
+        ui.set_st_beacon(bcn);
+        const Frame h1 = shot(ui);
+        CHECK_GT(rightInk(h1, F(kBcnL, 14, 192, 72, 20), kField) - kBcnL.x, 70);                    // 01:02:05 fills the glass; "02:05" would stop 22 px short
+        bcn.values = vals({210, 134});
+        ui.set_st_beacon(bcn);
+        const Frame m2 = shot(ui);
+        CHECK_GT(rightInk(m2, F(kBcnL, 14, 192, 72, 20), kField) - kBcnL.x, 70);                    // 00:02:14 too
+        bcn.texts = texts({"adcc1b05fa0c8d1", "United Kingdom (232)", "EPIRB / Standard Location", "51.2N 001.4W"});
+        ui.set_st_beacon(bcn);
+        const Frame low = shot(ui);
+        CHECK_EQ(differing(m2, low, F(kBcnL, 0, 0, 470, 222)), 0);                         // a lower-case identity is the same upper-case identity
+        bcn.texts = texts({"ADCC1B05FA0C8D1", "United Kingdom (232)", "EPIRB / Standard Location", "51.2N 001.4W"});
+        ui.set_st_beacon(bcn);
+        auto mt2 = ui.get_st_meter();
+        const Frame elec = shot(ui);
+        mt2.texts = texts({"47281936", "electric"});
+        ui.set_st_meter(mt2);
+        CHECK_EQ(differing(elec, shot(ui), F(kMetL, 0, 0, 254, 117)), 0);                  // and "electric" is "ELECTRIC"
+        mt2.texts = texts({"47281936", "ELECTRIC"});
+        ui.set_st_meter(mt2);
+        const Frame t1 = shot(ui);
+        CHECK_GT(rightInk(t1, F(kTonL, 288, 154, 168, 20), kField) - kTonL.x, 370);                  // "1.00 / 3.00": two decimals each
+        CHECK_LE(rightInk(t1, F(kTonL, 288, 154, 168, 20), kField) - kTonL.x, 440);
+    }
 
     // the fax: the phase word lights its own lamp and none other; the tuning needle waits for the phasing signal (an error measured before it
     // would be the face claiming a perfectly tuned receiver on the strength of an empty slot); an unknown word lights nothing

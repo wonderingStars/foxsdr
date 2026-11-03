@@ -63,7 +63,7 @@ export component LogView inherits Rectangle {
     callback clear-clicked();
     callback follow-toggled(bool);
 
-    property <length> bar-h: 31px;
+    property <length> bar-h: 10px + Theme.key-xs-h + Theme.hairline;   // 5 px above and below the 20 px key, then the 1 px rule
     property <length> pad-v: 6px;
     property <length> pad-h: 10px;
     property <length> glyph-w: glyph.preferred-width;    // one character of the mono face: the space between a name and its text
@@ -206,7 +206,7 @@ export component LogView inherits Rectangle {
         x: clear-key.x + clear-key.width + 8px;
         y: 5px;
         width: max(0px, parent.width - self.x - root.pad-h);
-        height: 20px;
+        height: Theme.key-xs-h;
         text: root.count-text;
         color: Theme.dim;
         font-family: Theme.font-mono;
@@ -247,7 +247,7 @@ export component PicturePane inherits Rectangle {
     // what the pointer shows (a test cannot read the cursor itself): the hand over a picture that takes clicks
     out property <bool> hand: area.has-hover;
 
-    property <length> status-h: 28px;
+    property <length> status-h: Theme.key-xs-h + 8px;       // the xs key with 4 px above and below
     property <length> pad: 10px;
     property <length> area-w: max(0px, root.width - 2 * root.pad);
     property <length> area-h: max(0px, root.height - root.status-h - root.pad);
@@ -359,8 +359,8 @@ component DetailKeys inherits Rectangle {
 
     property <int> count: (root.has-target ? 2 : 0) + (root.show-close ? 1 : 0);
 
-    // a column: 24 px keys 4 px apart; a row: 24 px high with 2 px above it
-    height: root.count == 0 ? 0px : root.across ? 26px : root.count * 24px + (root.count - 1) * 4px;
+    // a column: small keys 4 px apart; a row: one small key high with 2 px above it
+    height: root.count == 0 ? 0px : root.across ? Theme.key-sm-h + 2px : root.count * Theme.key-sm-h + (root.count - 1) * 4px;
 
     if !root.across : VerticalLayout {
         x: 0px;
@@ -398,7 +398,7 @@ component DetailKeys inherits Rectangle {
         x: 0px;
         y: 2px;
         width: parent.width;
-        height: 24px;
+        height: Theme.key-sm-h;
         alignment: start;
         spacing: 6px;
         if root.has-target : Key {
@@ -486,7 +486,7 @@ export component TargetDetails inherits Rectangle {
 
         // the title row: the dot, the title, the chip at the right (24 px, as the sheet's .rw)
         HorizontalLayout {
-            height: 24px;
+            height: Theme.field-h;
             spacing: 6px;
             VerticalLayout {
                 alignment: center;

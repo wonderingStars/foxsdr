@@ -421,7 +421,7 @@ int main() {
         aH = panelHeight(f0, x0, y0, y0 + 300);
         std::printf("target details A: %d high\n", aH);
         // 1 + 8 + 24 + 4, then the lines (22 + 15 + 15 + 20 + 15 * 5 + 8 gaps of 2 = 163), then 8 + 1
-        CHECK(aH >= 205 && aH <= 213);
+        CHECK(aH == 209);                                                                // the sheet's 13 px x 1.3 and 11 px x 1.35 lines, rounded to 17 and 15
         // the frame: Theme.panel with a 1 px Theme.line border, 8 px corners, 340 wide
         CHECK(f0.rowNear(y0, x0 + 12, x0 + kTw - 12, line1, 0) && f0.near(x0 + 40, y0 + 1, panel, 0) && f0.near(x0 + 40, y0 - 1, bg, 0));
         CHECK(f0.colNear(x0, y0 + 12, y0 + aH - 12, line1, 0) && f0.colNear(x0 + kTw - 1, y0 + 12, y0 + aH - 12, line1, 0));
@@ -455,6 +455,8 @@ int main() {
         CHECK(inkIs(f0, lx, altY + 17, lx + lw, altY + 17 + 15, dim));                    // "speed unknown"
         // the rules: exactly two hairlines across the lines column (after the heading line, after "oper"), none in the keys column
         CHECK(rulesIn(f0, lx + 2, lx + lw, hy, y0 + aH - 8, line1) == 2);
+        // where they are: the heading's text row is 17 high and its rule 3 px under it; "oper" starts 58 px down, its rule 18 px into it
+        CHECK(f0.rowNear(hy + 20, lx + 2, lx + lw, line1, 2) && f0.rowNear(hy + 76, lx + 2, lx + lw, line1, 2));
         // the keys: a 120 px column at the right, two small keys of 24 px with 4 px between, top-aligned with the first line
         const int kx = x0 + kTw - 11 - kKeysW;
         CHECK(f0.near(kx, hy + 12, keyLine, 0) && f0.near(kx - 1, hy + 12, panel, 0) && f0.near(kx + kKeysW - 1, hy + 12, keyLine, 0) && f0.near(kx + kKeysW, hy + 12, panel, 0));
@@ -472,7 +474,7 @@ int main() {
         const int x0 = kTx, y0 = 230;
         bH = panelHeight(f0, x0, y0, y0 + 160);
         std::printf("target details B: %d high\n", bH);
-        CHECK(bH >= 122 && bH <= 130);                                                   // the keys' 24 + 4 + 24 + 4 + 24 = 80 are taller than its 3 lines
+        CHECK(bH == 126);                                                   // the keys' 24 + 4 + 24 + 4 + 24 = 80 are taller than its 3 lines
         CHECK(f0.near(x0 + 15, y0 + 21, lampAmber, 8));
         CHECK(f0.countNear(x0 + kTw - 110, y0 + 10, x0 + kTw - 11, y0 + 32, chipWarnBg, 4) > 400);       // "A1B2C3D4E5": the amber chip
         const int hy = y0 + 1 + 8 + 24 + 4;
@@ -493,7 +495,7 @@ int main() {
         const int x0 = kTx, y0 = 366;
         cH = panelHeight(f0, x0, y0, y0 + 120);
         std::printf("target details C: %d high\n", cH);
-        CHECK(cH >= 76 && cH <= 84);
+        CHECK(cH == 80);
         CHECK(f0.near(x0 + 15, y0 + 21, lampOff, 4));                                    // lit only while the target is still reported
         CHECK(f0.countNear(x0 + kTw - 110, y0 + 10, x0 + kTw - 11, y0 + 32, chipBg, 4) > 300);   // the neutral chip
         const int hy = y0 + 1 + 8 + 24 + 4;
@@ -511,7 +513,7 @@ int main() {
         const int x0 = kTx, y0 = 456;
         dH = panelHeight(f0, x0, y0, y0 + 100);
         std::printf("target details D: %d high\n", dH);
-        CHECK(dH >= 70 && dH <= 82);
+        CHECK(dH >= 70 && dH <= 76);                                                     // two wrapped lines of the hint: the text's own height
         CHECK(f0.near(x0 + 15, y0 + 21, lampOff, 4));
         const int hy = y0 + 1 + 8 + 24 + 4;
         CHECK(f0.countInk(x0 + 11, hy, x0 + kTw - 11, hy + 34, panel) > 300 && inkIs(f0, x0 + 11, hy, x0 + kTw - 11, hy + 34, dim));
@@ -546,7 +548,7 @@ int main() {
         fH = panelHeight(f0, x0, y0, y0 + 200);
         std::printf("target details F: %d high\n", fH);
         // 1 + 8 + 24 + 4, the lines (17 + 3 * 15 + 3 gaps of 2 = 68), 4, the key row (26: 2 above its 24), 8 + 1
-        CHECK(fH >= 140 && fH <= 148);
+        CHECK(fH == 144);
         CHECK(f0.rowNear(y0, x0 + 12, x0 + w - 12, line1, 0) && f0.colNear(x0 + w - 1, y0 + 12, y0 + fH - 12, line1, 0));
         const int hy = y0 + 1 + 8 + 24 + 4;
         // the lines take the whole width: "oper    Federal Express Corporation" reaches well past the 150 px a 120 px column would leave

@@ -49,6 +49,7 @@ export component PresetsSpecimen inherits Window {
         { label: "145.5000", lit: false, mine: true, tooltip: "Tune to your preset for APRS / AX.25 Packet Decoder.\nRight-click to forget it." },
     ];
     in-out property <string> note-d: "Saved 145.5000 MHz as a preset for APRS / AX.25 Packet Decoder";
+    in-out property <[string]> labels-e: ["RESET", "CLEAR LOG", "SEND BEACON", "SAVE", "LONG RUNNING COMMAND"];
 
     function pressed-by(src: string, i: int) {
         root.pressed-count += 1;
@@ -138,7 +139,7 @@ export component PresetsSpecimen inherits Window {
     plates-e := PlateKeys {
         x: 10px; y: 420px; width: 498px;
         per-row: 4;
-        labels: ["RESET", "CLEAR LOG", "SEND BEACON", "SAVE", "LONG RUNNING COMMAND"];
+        labels: root.labels-e;
         pressed(i) => { root.plated-by("E", i); }
     }
     plates-f := PlateKeys {

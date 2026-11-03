@@ -10,8 +10,11 @@
 //
 // A FACE IS THE TILE'S BODY ONLY: the header (title and chip), the preset row and the memory table are the page's. A face fills the
 // width it is given (472 on the sheet; it also lays out at 320 and at 900: below 420 px the faces that have two columns stack them)
-// and reports its natural height through `preferred-height` (about 120-220 px). Each face carries the artboard's own padding
-// (12 px at the sides, 8 px above and below).
+// and reports its natural height through `preferred-height`. Each face carries the artboard's own padding (12 px at the sides, 8 px above and
+// below), and the face clips to its own rectangle (the artboard's tile is overflow: hidden, and a lamp's bloom must not leave it). Natural
+// heights at 470 px wide: GENERIC 159 with three texts and three figures (10 + 17 + 8, 41 + 8 per row of three, + 8 + 16 + 10; 69 with no
+// reading), PAGER 174, TELEPRINTER 138, TONE_ALERT 206, NAV_BEARING 173, FAX 203, BEACON 222, METER 117, WEATHER 181. Below 420 px the faces
+// that have two columns put the second under the first: GENERIC +19, PAGER 318, TELEPRINTER 256, NAV_BEARING 223, FAX 385, METER 193.
 //
 //   InstrumentFace        kind (CASCADE_INSTRUMENT_* 0..8, anything else is the generic face), title, state, obs-course (in-out: the
 //                         VOR's one control), enabled, tooltip; callback obs-changed(int). Extras the ABI's memory rows feed:
@@ -606,7 +609,7 @@ export component ObsKnob inherits Rectangle {
     TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
 }
 
-// PaperStrip: the teleprinter's paper, fg-soft with bg ink: a blank leader, then the previous message in a fainter ink, a dotted rule, and the
+// PaperStrip: the teleprinter's paper, fg-soft with bg ink: a blank leader, then the previous message in a fainter ink, a hairline rule, and the
 // newest (its heading, then its text) in full ink. When `seq` changes the sheet starts 26 px short of its place and feeds out over 0.5 s
 // (instrument_teleprinter_math.hpp kFeedSeconds / kFeedDistancePx): the offset is animated, and set without animation first. The engraved
 // `legend` (PRINTER IDLE, NO MESSAGE PRINTED) stands in a dimmed ink at the foot of the paper while nothing is printed.
@@ -1033,7 +1036,7 @@ component TeleprinterFace inherits Rectangle {
     property <length> rx: root.stacked ? 12px : 294px;
     property <length> ry: root.stacked ? 8px + 122px + 8px : 8px;
     property <length> rw: root.stacked ? root.width - 24px : root.width - 12px - 294px;
-    property <length> col-w: (root.rw - 6px) / 2;
+    property <length> col-w: Math.min((root.rw - 6px) / 2, 100px);
     // REG / FLT / LBL / MODE / BLK tokens, whole (a token never breaks: a no-break space inside it), two spaces apart
     property <string> heading: root.have ? (root.state.texts[0] != "" ? "REG\u{a0}" + root.state.texts[0] + "  " : "")
         + (root.state.texts[1] != "" ? "FLT\u{a0}" + root.state.texts[1] + "  " : "")
@@ -1323,7 +1326,7 @@ component FaxFace inherits Rectangle {
     property <length> rx: root.stacked ? 12px : 224px;
     property <length> ry: root.stacked ? 8px + 187px + 12px : 8px;
     property <length> rw: root.stacked ? root.width - 24px : root.width - 12px - 224px;
-    property <length> col-w: (root.lw - 6px) / 2;
+    property <length> col-w: Math.min((root.lw - 6px) / 2, 100px);
     property <[LampSpec]> lamp-specs: [
         { caption: @tr("IDLE"), state: root.phase == 0 ? LampState.green : LampState.off },
         { caption: @tr("START"), state: root.phase == 1 ? LampState.green : LampState.off },

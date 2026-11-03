@@ -168,6 +168,7 @@ export component MapPane inherits Rectangle {
             dbl.running = false;
             root.last-click-target = -1;
             root.press-double = true;
+            root.target-double-clicked(target);
         } else {
             root.last-click-target = target;
             root.last-click-x = x;

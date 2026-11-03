@@ -264,6 +264,29 @@ component FittedRowLine inherits Rectangle {
             overflow: elide;
             accessible-role: none;
         }
+        // the keyboard: Tab reaches the row, Enter or Space asks for its page; a click never takes the focus (a key must not steal it).
+        // The Flickable of the body keeps whatever holds the focus in view, so a walk down the list with Tab scrolls the body by itself.
+        if fs.has-focus : Rectangle {
+            x: 2px;
+            y: 2px;
+            width: parent.width - 4px;
+            height: parent.height - 3px;
+            border-width: 2px;
+            border-color: Theme.focus;
+            border-radius: Theme.radius;
+        }
+        fs := FocusScope {
+            enabled: root.enabled;
+            focus-on-click: false;
+            focus-on-tab-navigation: true;
+            key-pressed(event) => {
+                if (event.text == Key.Return || event.text == Key.Space) {
+                    root.clicked();
+                    return accept;
+                }
+                return reject;
+            }
+        }
         area := TouchArea {
             x: 0px;
             y: 0px;

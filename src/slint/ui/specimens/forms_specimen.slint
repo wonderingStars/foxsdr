@@ -1,34 +1,35 @@
-// The forms specimen sheet (1160 x 800): the plugin kit's rail and window forms - PluginSettingsForm (closed, open wide, open rail),
+// The forms specimen sheet (1160 x 840): the plugin kit's rail and window forms - PluginSettingsForm (closed, open wide, open rail),
 // GrantKeys, ReceiverControlCard, StateChips and RunKeys - each at an absolute, documented position, so tests/test_slint_forms.cpp
 // can probe the pixels against the PluginKit sheet ("Torn-off plugin window": the settings fold and its two-to-a-row form;
 // "Sections-panel form": the fold line, STOP / START, the mute checkbox, the Receiver control card; "Module page (tab) excerpt": the
 // grant keys; "State chips and row examples": the state chips) and the contract in COMPONENTS.md ("The plugin kit").
 //
 // The torn-off window's body is Theme.panel and the rail's is Theme.panel-alt; each variant has its ground drawn behind it. Nothing
-// overlaps; nothing is in a top-level layout.
+// overlaps; nothing is in a top-level layout. (Heights marked ~ are what the embedded typefaces settle on; the test measures them.)
 //
-//   x,    y,    w,   h - what                                                           (the root property the test reads)
-//    10,   24,  470,  24 - F1 PluginSettingsForm, CLOSED, on Theme.panel: the fold line alone (6 + 16 + 2)  (f1-open)
-//    10,   60,  470, ~378 - F2 PluginSettingsForm, OPEN, wide: two to a row. Rows: [Callsign filter text | Squelch offset 3.5 number],
-//                          [Squelch offset 3,x number with its error | Log to file bool], [Log file path, full row],
-//                          [API password, full row], [Channel text + Station text, with a two-line error under the second]
-//                                                                                            (f2-height, f2-open, commits, toggles, browses)
-//    10,  400,  280,   ? - F3 PluginSettingsForm, OPEN, rail: 280 wide so one to a row: Callsign filter (text, `pending` driven by
-//                          the test), Squelch offset (number), Log to file (bool), Log file (path)    (f3-height; the rail model is
-//                                                                                            fields-rail, a VectorModel the test edits)
-//   500,   24,  480,   ? - G1 GrantKeys on Theme.panel-alt: GRANT RECEIVER CONTROL (plate), REVOKE RADIO SETTINGS (lit) + its note,
-//                          GRANT TRANSMIT (plate) + its note + the transmit state line         (g1-height, g1-*-on, grant events)
-//   500,  330,  480,   ? - G2 GrantKeys: the receiver control key only, lit (REVOKE)         (g2-height)
-//   510,  372,  296,   ? - R1 ReceiverControlCard on Theme.panel-alt (ground 500, 362, 316, ?): the refusal and two stale grants
-//                                                                                            (r1-height, card events)
-//   840,  372,  296,   0 - R2 ReceiverControlCard with nothing to say: draws nothing, 0 px  (r2-height)
-//   500,  600,  640,  20 - S1 StateChips, one row: FED 3, IDLE 2, NOT DECODING 1, TAKES NO SIGNAL 0 (off), STOPPED 1, REFUSED 1
-//                                                                                            (s1-height, s1-natural, chip events)
-//   500,  640,  400,  46 - S2 StateChips, 400 wide: the same six in two rows of three
-//   500,  710,  280,  50 - K1 RunKeys: STOP (danger), "Mute audio while running" checked      (run events)
-//   820,  710,  280,  50 - K2 RunKeys: START (the decoder is stopped), mute unchecked
-//   500,  770,  280,  30 - K3 RunKeys: START (the decoder is idle), no mute checkbox
-//   820,  770,  280,  50 - K4 RunKeys: STOP, disabled (the kit's disabled look), mute checked
+//   x,    y,    w,    h - what                                                          (the root property the test reads)
+//    10,   24,  470,   24 - F1 PluginSettingsForm, CLOSED, on Theme.panel: the fold line alone (6 + 16 + 2)    (f1-open, f1-height, f1-enabled)
+//    10,   60,  470, ~377 - F2 PluginSettingsForm, OPEN, wide: two to a row. Rows: [Callsign filter text | Squelch offset 3.5 number],
+//                           [Squelch offset 3,x number with its error | Log to file bool], [Log file path, full row],
+//                           [API password, full row], [Channel text + Station text, with a two-line error under the second]
+//                                                                                             (f2-height, f2-open, f2-enabled; commits, toggles, browses)
+//    10,  470,  280,  268 - F3 PluginSettingsForm, OPEN, rail: 280 wide so one to a row: Callsign filter (text, `pending` driven by
+//                           the test), Squelch offset (number), Log to file (bool), Log file (path); on Theme.panel-alt (ground 10, 470,
+//                           296, 290)                              (f3-height; the rail model is fields-rail, a VectorModel the test edits)
+//   500,   24,  480,  ~210 - G1 GrantKeys on Theme.panel-alt (ground 500, 24, 480, 290): GRANT RECEIVER CONTROL (plate), REVOKE RADIO
+//                           SETTINGS (lit) + its note, GRANT TRANSMIT (plate) + its note + the transmit state line
+//                                                                                             (g1-height, g1-*-on, g1-tx-state, g1-tx-hot, grant events)
+//   500,  330,  480,   24 - G2 GrantKeys: the receiver control key only, lit (REVOKE), on Theme.panel-alt   (g2-height, g2-enabled, g2-tune-shown)
+//   510,  372,  296, ~156 - R1 ReceiverControlCard on Theme.panel-alt (ground 500, 362, 316, 226): the refusal and two stale grants
+//                                                                                             (r1-height, r1-refusal, stale-r1, r1-enabled, card events)
+//   840,  372,  296,    0 - R2 ReceiverControlCard with nothing to say: draws nothing, 0 px (a Theme.panel-alt marker 830, 362, 316, 60 is behind it)
+//   500,  600,  640,   20 - S1 StateChips, one row: FED 3, IDLE 2, NOT DECODING 1, TAKES NO SIGNAL 0 (off), STOPPED 1, REFUSED 1
+//                                                                                             (s1-height, s1-natural, chips-s1, chip events)
+//   500,  640,  400,   46 - S2 StateChips, 400 wide: the same six in two rows of three         (s2-height, s2-enabled)
+//   500,  710,  280,   50 - K1 RunKeys: STOP (danger), "Mute audio while running" checked      (k1-*, run and mute events)
+//   820,  710,  280,   50 - K2 RunKeys: START (the decoder is stopped), mute unchecked
+//   500,  770,  280,   30 - K3 RunKeys: START (the decoder is idle), no mute checkbox
+//   820,  770,  280,   50 - K4 RunKeys: STOP, disabled (the kit's disabled look), mute checked
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { Caption } from "../keys.slint";
 import { ChipTone, LampState } from "../chips.slint";
@@ -120,6 +121,7 @@ export component FormsSpecimen inherits Window {
         { label: "REFUSED", count: 1, tone: ChipTone.err, lamp: LampState.red, on: true },
     ];
     in-out property <bool> f1-enabled: true;
+    in-out property <bool> f2-enabled: true;
     in-out property <bool> g2-enabled: true;
     in-out property <bool> r1-enabled: true;
     in-out property <bool> s2-enabled: true;
@@ -172,6 +174,7 @@ export component FormsSpecimen inherits Window {
         x: 10px; y: 60px; width: 470px;
         fields: root.fields-wide;
         open: true;
+        enabled: root.f2-enabled;
         committed(id, t) => { root.committed-by("F2", id, t); }
         toggled(id, v) => { root.toggled-by("F2", id, v); }
         browse-clicked(id) => { root.browses += 1; root.last-id = id; root.last-form = "F2"; }
@@ -194,6 +197,7 @@ export component FormsSpecimen inherits Window {
         x: 500px; y: 24px; width: 480px;
         tune-shown: true;
         tune-on: root.g1-tune-on;
+        tune-tooltip: "Lets the module move the receiver's centre frequency";
         settings-shown: true;
         settings-on: root.g1-settings-on;
         transmit-shown: true;
@@ -221,6 +225,7 @@ export component FormsSpecimen inherits Window {
         x: 510px; y: 372px; width: 296px;
         refusal: root.r1-refusal;
         stale: root.stale-r1;
+        tooltip: "A permission this module still holds";
         enabled: root.r1-enabled;
         grant-toggled(i, v) => { root.card-toggles += 1; root.last-card = i; root.last-card-value = v; }
     }
@@ -241,6 +246,7 @@ export component FormsSpecimen inherits Window {
         x: 500px; y: 640px; width: 400px;
         chips: root.chips-s1;
         enabled: root.s2-enabled;
+        tooltip: "Show or hide the modules in this state";
         toggled(i) => { root.chip-toggles += 1; root.last-chip = i; root.last-chip-source = "S2"; }
     }
 

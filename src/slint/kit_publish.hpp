@@ -117,6 +117,7 @@ private:
     std::shared_ptr<slint::VectorModel<PageTab>> pagesModel_;
     std::string pagesSig_;
     std::map<std::string, PictureBuffer> pictures_;
+    std::map<std::string, std::shared_ptr<slint::VectorModel<SettingField>>> fieldModels_;   // one per form, updated IN PLACE: a replaced model recreates the fields and loses what is being typed
     std::map<std::string, std::unique_ptr<MapSurface>> surfaces_;
     std::map<std::string, bool> entrySettingsOpen_;   // the rail entries' settings folds, by file
     std::map<std::string, bool> decodeOpen_{{"plugins", false}, {"details", false}};

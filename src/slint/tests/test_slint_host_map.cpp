@@ -851,6 +851,31 @@ void sectionTiles() {
         CHECK(p.compose(c));
         CHECK(src.total > before);
     }
+    // ---- ... and fewer when a tile is big: 96 MiB of RGB, so 32 of 1024 px (3 MiB each), however many the views touched ----
+    {
+        Source src;
+        src.answer = [](std::uint32_t, std::uint32_t, std::uint32_t, Bytes& rgb) {
+            fillTile(rgb, 1024, 60, 70, 80);
+            return 1;
+        };
+        TileCompositor c;
+        Pic p(1024, 768);
+        c.setMercator(true);
+        c.setLayers(false, false);
+        c.setTileSource(src.make(), 1024, 0, 12);
+        std::size_t most = 0;
+        for (int row = 0; row < 8; ++row) {
+            const double y = (row + 0.5) / 8.0;                              // the middle of a row of the zoom 3 world
+            const double lat = std::atan(std::sinh(kPi * (1.0 - 2.0 * y))) * 180.0 / kPi;
+            for (int col = 0; col < 8; ++col) {
+                c.setView(lat, -157.5 + 45.0 * col, 45.0);                   // 1024 px for 45 degrees: scale 1 on the 1024 px tiles of zoom 3
+                CHECK(p.compose(c));
+                most = std::max(most, c.residentTiles());
+            }
+        }
+        CHECK(c.tileZoom() == 3);
+        CHECK(src.total > 32 && most == 32 && c.residentTiles() == 32);
+    }
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------
@@ -1049,7 +1074,7 @@ struct WedgePair {
         c.setCoverage({});
         without.compose(c);
         c.setCoverage(km);
-        with.compose(c);
+        if (!with.compose(c)) { with.px = without.px; }                      // nothing changed (km is no wedge at all): the picture on show is the one it has
     }
     // the pixel of a place `dist` km from the home on `bearing`
     void pixel(double bearing, double dist, int& x, int& y) {
