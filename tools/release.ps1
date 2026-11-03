@@ -10,7 +10,9 @@
 #
 #   preflight     the tree is clean, HEAD is tagged or taggable, CMakeLists.txt, README.md
 #                 and docs\release-notes-<v>.md agree on the version, the notes carry
-#                 five TBD hash lines or five real ones, every tool is present and the
+#                 five TBD hash lines or five real ones (ONE of either for a Windows-only
+#                 release: the notes title line ends in an em dash and "Windows"; then the
+#                 installer is the only release file), every tool is present and the
 #                 two hosts answer, and a changed telemetry Worker has been deployed.
 #   build         configure and build Release twice, hash cascade.exe, run --version,
 #                 archive the symbols for exactly that binary. foxsdr-engine.exe is built
@@ -36,7 +38,9 @@
 #                 window)" Start-menu entry. -ClassicInstaller expects today's classic payload
 #                 and asserts the Slint files are absent.
 #   ci            find the GitHub Actions run for HEAD, wait for it, download its
-#                 artifacts, check every file, write the five hashes into the notes.
+#                 artifacts, check every file, write the five hashes into the notes. A
+#                 Windows-only release has no Linux artifacts to download or check: the one
+#                 hash (the installer's) goes into the notes, the Linux parts say SKIPPED.
 #   symbols       mirror the Windows and Linux symbols to the NAS, append the index
 #                 rows, put the symbol maps on the Pi, verify every hash remotely. Windows maps go to the Pi as
 #                 <module>-<build id>.json.gz (cascade-<id>, foxsdr-slint-<id>; the id is the record's own per module).
@@ -58,7 +62,7 @@
 # 2 something only the owner can do is next (the Store credentials, or -SubmitStore).
 #
 # NO Get-Content / Set-Content ON ANY SOURCE FILE HERE. The one file this script edits
-# in the tree (the five hash lines of the release notes) is read and written through
+# in the tree (the five hash lines of the release notes, one for a Windows-only release) is read and written through
 # [System.IO.File] with an explicit encoding and its line endings checked afterwards.
 #
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -89,6 +93,9 @@ param(
     # application, no Slint files (and it asserts they are absent). Off, the default: /DSlintIsApp=1 and the install test expects the
     # Slint application (foxsdr-slint.exe + slint_cpp.dll, cascade.exe beside them as the "classic window").
     [switch] $ClassicInstaller,
+    # The GitHub release is a PRE-RELEASE and not the latest: gh release create --prerelease, and the publish edit says
+    # --latest=false. For a beta held back from the stable channel (0.99.105, the Slint window); a stable release omits it.
+    [switch] $PreRelease,
 
     [string] $ReleaseRoot = 'C:\Users\steve\foxsdr-build',
     [string] $BuildDir = '',
@@ -155,13 +162,16 @@ function Get-ReleaseContext {
     $relDir = Join-Path $ReleaseRoot ('release-' + $version)
     $build = $BuildDir
     if ($build -eq '') { $build = Join-Path $repoRoot 'build' }
-    $files = @(
-        ('foxsdr-setup-' + $version + '.exe'),
-        ('FoxSDR-' + $version + '-x86_64.AppImage'),
-        ('foxsdr-' + $version + '-linux-x64.tar.gz'),
-        ('FoxSDR-' + $version + '-aarch64.AppImage'),
-        ('foxsdr-' + $version + '-linux-arm64.tar.gz')
-    )
+    # Read ONCE, here: the notes title line says whether this release is Windows-only (the installer is its one release
+    # file and the notes carry one hash line) or carries the five release files. Every check below follows $RC.Files.
+    $notesPath = Join-Path $repoRoot ('docs\release-notes-' + $version + '.md')
+    $notesTitle = ''
+    $windowsOnly = $false
+    if (Test-Path -LiteralPath $notesPath) {
+        $notesTitle = Get-NotesTitle $notesPath
+        $windowsOnly = Test-WindowsOnlyTitle $notesTitle
+    }
+    $files = @(Get-ReleaseFileNames $version $windowsOnly)
     return @{
         Repo = $repoRoot
         Git = $git
@@ -181,7 +191,9 @@ function Get-ReleaseContext {
         StatePath = (Join-Path $relDir 'state.json')
         BuildDir = $build
         NotesRel = ('docs/release-notes-' + $version + '.md')
-        NotesPath = (Join-Path $repoRoot ('docs\release-notes-' + $version + '.md'))
+        NotesPath = $notesPath
+        NotesTitle = $notesTitle
+        WindowsOnly = $windowsOnly
         Files = $files
         InstallerName = $files[0]
         MsixName = ('FoxSDR-' + $version + '-x64.msix')
@@ -248,8 +260,60 @@ function Assert-StepDone([string]$Needed, [string]$ForStep) {
 }
 
 # ---------------------------------------------------------------------------
-# The release notes: five "SHA-256 of `name`:" blocks
+# The release notes: one "SHA-256 of `name`:" block per release file (five; one for a Windows-only release)
 # ---------------------------------------------------------------------------
+
+# The first line of the notes: "# FoxSDR <version> <em dash> <suffix>", or just "# FoxSDR <version>".
+function Get-NotesTitle([string]$Path) {
+    $text = [System.IO.File]::ReadAllText($Path)
+    $nl = $text.IndexOf("`n")
+    if ($nl -ge 0) { $text = $text.Substring(0, $nl) }
+    return $text.TrimEnd("`r")
+}
+
+# A release is Windows-only when the title line says so: an em dash (U+2014), a space and the word Windows, then
+# nothing, a space and more ("<em dash> Windows (Slint beta)"), or any other character that does not continue the word.
+# The installer is then the only release file and the notes carry one hash line. (The em dash is written as \u2014
+# so this source stays ASCII.)
+function Test-WindowsOnlyTitle([string]$Title) {
+    return [bool]([regex]::IsMatch($Title, '^#\s.*\u2014 Windows(?![\p{L}\p{N}_])'))
+}
+
+function Test-WindowsOnlyNotes([string]$Path) {
+    return (Test-WindowsOnlyTitle (Get-NotesTitle $Path))
+}
+
+# The release files, installer first: the installer alone for a Windows-only release, otherwise the installer, both
+# AppImages and both tarballs.
+function Get-ReleaseFileNames([string]$Version, [bool]$WindowsOnly) {
+    $installer = 'foxsdr-setup-' + $Version + '.exe'
+    if ($WindowsOnly) { return @($installer) }
+    return @(
+        $installer,
+        ('FoxSDR-' + $Version + '-x86_64.AppImage'),
+        ('foxsdr-' + $Version + '-linux-x64.tar.gz'),
+        ('FoxSDR-' + $Version + '-aarch64.AppImage'),
+        ('foxsdr-' + $Version + '-linux-arm64.tar.gz')
+    )
+}
+
+# The release context's WindowsOnly flag, tolerant of a context that predates it (the symbols test builds one by hand).
+function Test-WindowsOnlyRelease($RC) {
+    return ($RC.ContainsKey('WindowsOnly') -and [bool]$RC['WindowsOnly'])
+}
+
+# "one", "five" ... for a count of release files or hash lines in a message.
+function ConvertTo-CountWord([int]$N) {
+    $words = @('no', 'one', 'two', 'three', 'four', 'five')
+    if ($N -ge 0 -and $N -lt $words.Count) { return $words[$N] }
+    return $N.ToString()
+}
+
+# "one hash line", "five hash lines": the count word and the noun, plural unless it is one.
+function Get-CountNoun([int]$N, [string]$Singular, [string]$Plural) {
+    if ($N -eq 1) { return ((ConvertTo-CountWord $N) + ' ' + $Singular) }
+    return ((ConvertTo-CountWord $N) + ' ' + $Plural)
+}
 
 function Get-NotesEntries([string]$Path) {
     $text = [System.IO.File]::ReadAllText($Path)
@@ -268,10 +332,16 @@ function Set-NotesHashes([string]$Path, [hashtable]$Hashes) {
     $text = [System.Text.Encoding]::UTF8.GetString($bytes)
     $pattern = '(\*\*SHA-256 of `([^`]+)`:\*\*\r?\n`)(TBD|[0-9a-f]{64})(`)'
     $ms = [regex]::Matches($text, $pattern)
-    if ($ms.Count -ne 5) { Stop-Release ('expected five hash blocks in the notes, found ' + $ms.Count) }
+    # one block per release file: five, or the one of a Windows-only release ($RC.Files follows the notes title)
+    $want = @($script:RC.Files).Count
+    if ($ms.Count -ne $want) { Stop-Release ('expected ' + (Get-CountNoun $want 'hash block' 'hash blocks') + ' in the notes, found ' + $ms.Count) }
     for ($i = $ms.Count - 1; $i -ge 0; $i--) {
         $name = $ms[$i].Groups[2].Value
-        if (-not $Hashes.ContainsKey($name)) { Stop-Release ('the notes name ' + $name + ', which is not one of the five release files') }
+        if (-not $Hashes.ContainsKey($name)) {
+            $which = 'one of the ' + (ConvertTo-CountWord $want) + ' release files'
+            if ($want -eq 1) { $which = 'the one release file' }
+            Stop-Release ('the notes name ' + $name + ', which is not ' + $which)
+        }
         $g = $ms[$i].Groups[3]
         $text = $text.Substring(0, $g.Index) + $Hashes[$name] + $text.Substring($g.Index + $g.Length)
     }
@@ -329,6 +399,37 @@ function Get-SdkBin {
     return $d.FullName
 }
 
+# The notes name exactly the release files of this release, each once, and hold either all TBD or all real hashes.
+# $RC.Files follows the notes title (Get-ReleaseContext), so a title that says Windows-only with five blocks, or a
+# plain title with one block, fails the names check, and the detail says which of the two it is.
+function Assert-NotesHashLines($RC) {
+    $dash = [string][char]0x2014
+    $want = @($RC.Files).Count
+    $files = Get-CountNoun $want 'release file' 'release files'
+    $lines = Get-CountNoun $want 'hash line' 'hash lines'
+    if ($RC.WindowsOnly) {
+        Write-Result 'INFO' ('Windows-only release: the notes carry ' + $lines) ('title "' + $RC.NotesTitle + '"')
+    } else {
+        Write-Result 'INFO' ('Five-file release: the notes carry ' + $lines) ('title "' + $RC.NotesTitle + '"')
+    }
+    $entries = @(Get-NotesEntries $RC.NotesPath)
+    $gotNames = @($entries | ForEach-Object { $_.Name } | Sort-Object)
+    $wantNames = @($RC.Files | Sort-Object)
+    $why = 'expected exactly: ' + ($RC.Files -join ', ')
+    if ($entries.Count -ne $want) {
+        if ($RC.WindowsOnly) {
+            $why = 'The notes title ends in "' + $dash + ' Windows", so this is a Windows-only release and the notes must carry exactly one hash block, for ' + $RC.InstallerName + '; this file has ' + $entries.Count + '. If the release also carries the Linux files, take "' + $dash + ' Windows" off the title line.'
+        } else {
+            $why = 'The notes title does not end in "' + $dash + ' Windows", so this is a five-file release and the notes must carry five hash blocks, one per release file; this file has ' + $entries.Count + '. If the release is Windows-only, end the title line with "' + $dash + ' Windows".'
+        }
+    }
+    Assert-Check (($gotNames -join '|') -eq ($wantNames -join '|')) ('notes name the ' + $files) ($entries.Count.ToString() + ' blocks') $why
+    $tbd = @($entries | Where-Object { $_.Value -eq 'TBD' }).Count
+    $real = @($entries | Where-Object { $_.Value -match '^[0-9a-f]{64}$' }).Count
+    $hashWhy = 'The notes must carry ' + (ConvertTo-CountWord $want) + ' TBD ' + $(if ($want -eq 1) { 'line' } else { 'lines' }) + ' (before the ci step) or ' + (ConvertTo-CountWord $want) + ' real ' + $(if ($want -eq 1) { 'hash' } else { 'hashes' }) + ' (after it), never a mixture.'
+    Assert-Check ($tbd -eq $want -or $real -eq $want) 'notes hash lines' ($tbd.ToString() + ' x TBD, ' + $real.ToString() + ' x sha256') $hashWhy
+}
+
 function Step-Preflight {
     $RC = $script:RC
     $v = $RC.Version
@@ -340,7 +441,7 @@ function Step-Preflight {
     $notesRel = $RC.NotesRel
     $state = Get-State
     if ($lines.Count -eq 1 -and $lines[0] -match ('^ M ' + [regex]::Escape($notesRel) + '$') -and $state.ContainsKey('notesFilledSha256') -and (Get-Sha256 $RC.NotesPath) -eq $state['notesFilledSha256']) {
-        Write-Result 'PASS' 'tree clean' 'apart from the five hash lines the ci step wrote into the release notes'
+        Write-Result 'PASS' 'tree clean' ('apart from the ' + (Get-CountNoun $RC.Files.Count 'hash line' 'hash lines') + ' the ci step wrote into the release notes')
     } elseif ($lines.Count -eq 0) {
         Write-Result 'PASS' 'tree clean' 'git status --porcelain is empty'
     } elseif ($AllowDirty) {
@@ -365,20 +466,15 @@ function Step-Preflight {
 
     # --- the version, three places ------------------------------------------
     $readmeText = [System.IO.File]::ReadAllText((Join-Path $RC.Repo 'README.md'))
-    $rm = [regex]::Match($readmeText, 'The current release is \*\*(\d+\.\d+\.\d+)\*\*')
+    # "The current release is **x.y.z**", or "The current Windows release is **x.y.z**" for a Windows-only release
+    $rm = [regex]::Match($readmeText, 'The current (?:Windows )?release is \*\*(\d+\.\d+\.\d+)\*\*')
     $readmeVer = ''
     if ($rm.Success) { $readmeVer = $rm.Groups[1].Value }
-    Assert-Check ($readmeVer -eq $v) 'version: CMakeLists.txt = README.md' ('CMakeLists ' + $v + ', README "' + $readmeVer + '"') 'README.md line "The current release is **x.y.z**" must carry the CMake project version.'
+    Assert-Check ($readmeVer -eq $v) 'version: CMakeLists.txt = README.md' ('CMakeLists ' + $v + ', README "' + $readmeVer + '"') 'README.md line "The current release is **x.y.z**" (or "The current Windows release is **x.y.z**") must carry the CMake project version.'
     Assert-Check (Test-Path -LiteralPath $RC.NotesPath) 'version: release notes file' $RC.NotesRel ('docs\release-notes-' + $v + '.md does not exist')
 
-    # --- the notes' five hash lines -----------------------------------------
-    $entries = @(Get-NotesEntries $RC.NotesPath)
-    $gotNames = @($entries | ForEach-Object { $_.Name } | Sort-Object)
-    $wantNames = @($RC.Files | Sort-Object)
-    Assert-Check (($gotNames -join '|') -eq ($wantNames -join '|')) 'notes name the five release files' ($entries.Count.ToString() + ' blocks') ('expected exactly: ' + ($RC.Files -join ', '))
-    $tbd = @($entries | Where-Object { $_.Value -eq 'TBD' }).Count
-    $real = @($entries | Where-Object { $_.Value -match '^[0-9a-f]{64}$' }).Count
-    Assert-Check ($tbd -eq 5 -or $real -eq 5) 'notes hash lines' ($tbd.ToString() + ' x TBD, ' + $real.ToString() + ' x sha256') 'The notes must carry five TBD lines (before the ci step) or five real hashes (after it), never a mixture.'
+    # --- the notes' hash lines: five, or one for a Windows-only release --------
+    Assert-NotesHashLines $RC
 
     # --- the tools ------------------------------------------------------------
     $cm = Find-Tool 'cmake' @('C:\Program Files\CMake\bin\cmake.exe')
@@ -1214,17 +1310,29 @@ function Step-Ci {
     $v = $RC.Version
     $cfg = $script:Cfg
     if (-not $script:Ctx.DryRun -and -not $Force -and (Test-StepDone 'ci')) {
-        Write-Result 'SKIP' 'ci' 'five release files in dist and the hashes in the notes are already done for this commit'
+        Write-Result 'SKIP' 'ci' ((Get-CountNoun $RC.Files.Count 'release file' 'release files') + ' in dist and the ' + $(if ($RC.Files.Count -eq 1) { 'hash' } else { 'hashes' }) + ' in the notes are already done for this commit')
         return 'skipped'
     }
     $artifacts = @('foxsdr-linux-x64', 'foxsdr-linux-x64-appimage', 'foxsdr-linux-x64-symbols', 'foxsdr-linux-arm64', 'foxsdr-linux-arm64-appimage', 'foxsdr-linux-arm64-symbols')
+    $windowsOnly = Test-WindowsOnlyRelease $RC
+    if ($windowsOnly) {
+        # A Windows-only release has no Linux files: nothing is downloaded or read back, and sha256.txt and the notes carry
+        # the installer alone. (The CI run is still found and its required jobs still judged, below.)
+        $artifacts = @()
+        Write-Result 'INFO' 'Linux artifacts' 'skipped: a Windows-only release carries the installer alone, so no Linux artifact is downloaded or checked'
+    }
     if ($script:Ctx.DryRun) {
         Write-Result 'DRY' 'find the run for HEAD' (Format-CommandLine 'gh' @('run', 'list', '--commit', $RC.Head, '-R', $cfg['repo'], '--json', 'databaseId,status,conclusion,workflowName,headSha,event,url,createdAt,attempt'))
         Write-Result 'DRY' 'wait for jobs' ('poll every 60 s: gh run view <id> -R ' + $cfg['repo'] + ' --json jobs,status,conclusion,url ; required: ' + ($RequiredCiJobs -join ', ') + ' ; give up after ' + $CiTimeoutMinutes + ' min')
         foreach ($a in $artifacts) { Write-Result 'DRY' ('download ' + $a) (Format-CommandLine 'gh' @('run', 'download', '<run-id>', '-R', $cfg['repo'], '-n', $a, '-D', (Join-Path $RC.Ci $a))) }
-        Write-Plan 'check' ('every tarball and AppImage exists (' + (($RC.Files | Select-Object -Skip 1) -join ', ') + ') with a gzip or ELF header; each tarball lists cascade, foxsdr-engine, a band plan and the firmware notice')
-        Write-Plan 'copy' ('the four Linux files beside ' + $RC.InstallerName + ' in ' + $RC.Dist + ', then write dist\sha256.txt')
-        Write-Plan 'edit' ('replace the five TBD lines in ' + $RC.NotesRel + ' with the five sha256 values, print git diff of that file')
+        if ($windowsOnly) {
+            Write-Plan 'write' ('dist\sha256.txt with the hash of ' + $RC.InstallerName + ' alone')
+            Write-Plan 'edit' ('replace the one TBD line in ' + $RC.NotesRel + ' with the one sha256 value, print git diff of that file')
+        } else {
+            Write-Plan 'check' ('every tarball and AppImage exists (' + (($RC.Files | Select-Object -Skip 1) -join ', ') + ') with a gzip or ELF header; each tarball lists cascade, foxsdr-engine, a band plan and the firmware notice')
+            Write-Plan 'copy' ('the four Linux files beside ' + $RC.InstallerName + ' in ' + $RC.Dist + ', then write dist\sha256.txt')
+            Write-Plan 'edit' ('replace the five TBD lines in ' + $RC.NotesRel + ' with the five sha256 values, print git diff of that file')
+        }
         return 'done'
     }
     Assert-StepDone 'installer' 'ci'
@@ -1288,6 +1396,7 @@ function Step-Ci {
         ('foxsdr-' + $v + '-linux-arm64.tar.gz') = 'foxsdr-linux-arm64'
         ('FoxSDR-' + $v + '-aarch64.AppImage') = 'foxsdr-linux-arm64-appimage'
     }
+    if ($windowsOnly) { $where = @{} }
     $hashes = @{}
     $setup = Join-Path $RC.Dist $RC.InstallerName
     $hashes[$RC.InstallerName] = Get-Sha256 $setup
@@ -1317,13 +1426,13 @@ function Step-Ci {
     # The one edit this script makes to the tree.
     $entries = @(Get-NotesEntries $RC.NotesPath)
     $realNow = @($entries | Where-Object { $_.Value -match '^[0-9a-f]{64}$' })
-    if ($realNow.Count -eq 5) {
+    if ($realNow.Count -eq $RC.Files.Count) {
         foreach ($e in $entries) { Assert-Check ($e.Value -eq $hashes[$e.Name]) ('notes hash ' + $e.Name) $e.Value ('the notes already carry a DIFFERENT hash than the file in dist (' + $hashes[$e.Name] + ')') }
         Write-Result 'SKIP' 'notes hashes' 'already filled, and equal to the files'
     } else {
         Set-NotesHashes $RC.NotesPath $hashes
         $d = Invoke-Git @('diff', '--no-color', '--unified=0', '--', $RC.NotesRel)
-        Write-Result 'PASS' ('notes written: ' + $RC.NotesRel) 'five hashes (the only edit this script makes to the tree)'
+        Write-Result 'PASS' ('notes written: ' + $RC.NotesRel) ((Get-CountNoun $RC.Files.Count 'hash' 'hashes') + ' (the only edit this script makes to the tree)')
         foreach ($l in ($d.StdOut -split "`r?`n")) { if ($l -match '^[+-]' -and $l -notmatch '^(\+\+\+|---)') { Write-Detail $l } }
     }
     $s = Get-State
@@ -1425,7 +1534,13 @@ function Step-Symbols {
     } else {
         Stop-Release 'verify\symbols.json is missing: run the build step'
     }
-    foreach ($art in @('foxsdr-linux-x64-symbols', 'foxsdr-linux-arm64-symbols')) {
+    $linuxSymbolArtifacts = @('foxsdr-linux-x64-symbols', 'foxsdr-linux-arm64-symbols')
+    if (Test-WindowsOnlyRelease $RC) {
+        # No Linux build is part of a Windows-only release (the ci step downloaded none): there is nothing of Linux to mirror.
+        $linuxSymbolArtifacts = @()
+        Write-Result 'INFO' 'Linux symbols' 'skipped: a Windows-only release carries no Linux build, so no Linux symbols are mirrored'
+    }
+    foreach ($art in $linuxSymbolArtifacts) {
         $dir = Join-Path $RC.Ci $art
         if (-not (Test-Path -LiteralPath $dir)) {
             if ($script:Ctx.DryRun) { Write-Plan ('Linux symbols ' + $art) 'downloaded by the ci step: for each of cascade and foxsdr-engine, <module>.debug\<id>\{<module>.debug,symmap.json.gz} and <module>\<id>\<module>, and one index row apiece; only cascade''s map goes to the Pi'; continue }
@@ -1504,6 +1619,15 @@ function Get-ReleaseAssets {
     return ($r.StdOut | ConvertFrom-Json)
 }
 
+# -PreRelease: the GitHub release is created --prerelease and published --latest=false (a beta held back from the stable
+# channel); without it, as before: a plain release published as the latest. The three helpers keep the dry-run lines and
+# the real calls on the same words.
+# (read through Test-PreRelease: the self-tests load the step functions without the parameter block, so the switch may not exist)
+function Test-PreRelease { if (Test-Path variable:script:PreRelease) { return [bool]$script:PreRelease } else { return $false } }
+function Get-PreReleaseCreateArgs { if (Test-PreRelease) { return @('--prerelease') } else { return @() } }
+function Get-PreReleasePublishArgs { if (Test-PreRelease) { return @('--latest=false') } else { return @('--latest') } }
+function Get-PublishWord { if (Test-PreRelease) { return 'published as a pre-release, not latest' } else { return 'published as latest' } }
+
 function Step-Github {
     $RC = $script:RC
     $v = $RC.Version
@@ -1517,10 +1641,10 @@ function Step-Github {
         Write-Plan 'check' ('HEAD is contained in origin/master (the CI run and the tag are for a pushed commit)')
         Write-Result 'DRY' 'tag (if absent)' (Format-CommandLine 'git' (@('-C', $RC.Repo) + $ident + @('tag', '-a', $tag, '-m', ('FoxSDR ' + $v), $RC.Head)))
         Write-Result 'DRY' 'push the tag' (Format-CommandLine 'git' @('-C', $RC.Repo, 'push', 'origin', ('refs/tags/' + $tag)))
-        Write-Plan 'write' ($notesOut + ' (the notes with the five real hashes, LF line endings)')
-        Write-Result 'DRY' 'draft release' (Format-CommandLine 'gh' (@('release', 'create', $tag, '--verify-tag', '--draft', '--title', ('FoxSDR ' + $v), '--notes-file', $notesOut, '-R', $repo) + $paths))
+        Write-Plan 'write' ($notesOut + ' (the notes with the ' + (Get-CountNoun $RC.Files.Count 'real hash' 'real hashes') + ', LF line endings)')
+        Write-Result 'DRY' 'draft release' (Format-CommandLine 'gh' (@('release', 'create', $tag, '--verify-tag', '--draft') + (Get-PreReleaseCreateArgs) + @('--title', ('FoxSDR ' + $v), '--notes-file', $notesOut, '-R', $repo) + $paths))
         Write-Result 'DRY' 'compare digests' ((Format-CommandLine 'gh' @('release', 'view', $tag, '-R', $repo, '--json', 'assets,isDraft,url,name')) + '  (each asset: name, size, digest "sha256:<hex>" against dist)')
-        Write-Result 'DRY' 'publish' (Format-CommandLine 'gh' @('release', 'edit', $tag, '-R', $repo, '--draft=false', '--latest'))
+        Write-Result 'DRY' (Get-PublishWord) (Format-CommandLine 'gh' (@('release', 'edit', $tag, '-R', $repo, '--draft=false') + (Get-PreReleasePublishArgs)))
         return 'done'
     }
     if (-not $Force -and (Test-StepDone 'github')) {
@@ -1535,6 +1659,7 @@ function Step-Github {
     $entries = @(Get-NotesEntries $RC.NotesPath)
     $hashes = @{}
     foreach ($n in $RC.Files) { $hashes[$n] = Get-Sha256 (Join-Path $RC.Dist $n) }
+    Assert-Check ($entries.Count -eq $RC.Files.Count) 'notes carry one hash line per release file' ($entries.Count.ToString() + ' block(s) for ' + $RC.Files.Count + ' release file(s)') 'the notes title and the number of hash blocks disagree; run the preflight step'
     foreach ($e in $entries) { Assert-Check ($e.Value -eq $hashes[$e.Name]) ('notes hash ' + $e.Name) $e.Value ('differs from the file in dist (' + $hashes[$e.Name] + '); run the ci step') }
     $md = ([System.IO.File]::ReadAllText($RC.NotesPath)) -replace "`r`n", "`n"
     [System.IO.File]::WriteAllText($notesOut, $md, (Get-Utf8NoBom))
@@ -1559,7 +1684,7 @@ function Step-Github {
     # --- the release ----------------------------------------------------------------------
     $existing = Get-ReleaseAssets
     if ($null -eq $existing) {
-        $c = Invoke-Exe -File $script:Gh -Arguments (@('release', 'create', $tag, '--verify-tag', '--draft', '--title', ('FoxSDR ' + $v), '--notes-file', $notesOut, '-R', $repo) + $paths) -TimeoutSec 3600 -Label 'gh release create'
+        $c = Invoke-Exe -File $script:Gh -Arguments (@('release', 'create', $tag, '--verify-tag', '--draft') + (Get-PreReleaseCreateArgs) + @('--title', ('FoxSDR ' + $v), '--notes-file', $notesOut, '-R', $repo) + $paths) -TimeoutSec 3600 -Label 'gh release create'
         Assert-Check ($c.ExitCode -eq 0) 'draft release created' ($c.StdOut.Trim()) $c.Output.Trim()
         $existing = Get-ReleaseAssets
         Assert-Check ($null -ne $existing) 'draft release readable' $tag 'gh release view found nothing after create'
@@ -1579,8 +1704,8 @@ function Step-Github {
         Assert-Check ($hex -eq $hashes[$n] -and [int64]$a.size -eq $size) ('GitHub asset ' + $n) ('digest ' + $hex + ', ' + $a.size + ' bytes') ('local sha256 ' + $hashes[$n] + ', ' + $size + ' bytes')
     }
     if ($existing.isDraft) {
-        $p = Invoke-Exe -File $script:Gh -Arguments @('release', 'edit', $tag, '-R', $repo, '--draft=false', '--latest')
-        Assert-Check ($p.ExitCode -eq 0) 'release published as latest' ($p.StdOut.Trim()) $p.Output.Trim()
+        $p = Invoke-Exe -File $script:Gh -Arguments (@('release', 'edit', $tag, '-R', $repo, '--draft=false') + (Get-PreReleasePublishArgs))
+        Assert-Check ($p.ExitCode -eq 0) ('release ' + (Get-PublishWord)) ($p.StdOut.Trim()) $p.Output.Trim()
         $after = Get-ReleaseAssets
         Assert-Check (-not $after.isDraft) 'release is no longer a draft' $after.url ''
     } else {
