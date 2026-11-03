@@ -109,7 +109,28 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/system_core_stubs.cpp")
         endif()
+        if(unit STREQUAL "tools")
+            # The TOOLS bank's logic (docs 6.40) quotes the core's pure units: the SIGNAL family's commands and grants, the airport table (airband_data, with its compiled-in
+            # 8 MB table), the frequency-list rules (freq_import: cleanImportPath) with the list manager and file reader they stand on, the markers' text rules, and
+            # the module census that says why the radar scope would be empty.
+            list(APPEND _extra
+                "${CMAKE_CURRENT_SOURCE_DIR}/../signal_logic.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/airband_data.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/freq_import.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/freq_markers.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/freq_manager.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/file_read.cpp"
+                "${FOXSDR_REPO_ROOT}/src/gui/module_census.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools_core_stubs.cpp")
+        endif()
         foxsdr_slint_logic_test(${name} ${_extra})
+        if(unit STREQUAL "tools")
+            target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
+            if(MSVC)
+                target_compile_options(${name} PRIVATE /utf-8)
+                target_compile_definitions(${name} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+            endif()
+        endif()
         if(unit STREQUAL "system")
             target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
             if(MSVC)

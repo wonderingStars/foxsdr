@@ -67,6 +67,7 @@
 #include "signal_publish.hpp"
 #include "signatures.hpp"
 #include "system_publish.hpp"
+#include "tools_publish.hpp"
 
 #include "main.h"  // generated from ui/main.slint by slint_target_sources
 
@@ -334,9 +335,9 @@ int main(int argc, char** argv) {
     bool followBandPlan = true;
     int bankIndex = 0;
     if (const char* bankEnv = std::getenv("FOXSDR_SLINT_BANK")) { bankIndex = std::clamp(std::atoi(bankEnv), 0, 4); }   // a bounded run's self-capture: the bank to show
-    // SIGNAL's Source, Radio and Sinks rows open (Audio filters and Recorder closed), as the ImGui window; SYSTEM's Display and Key bindings (the LOGICAL rows of
+    // SIGNAL's Source, Radio and Sinks rows open (Audio filters and Recorder closed), as the ImGui window; TOOLS' Bookmarks, Scanner and Airband (rows 2, 3, 4); SYSTEM's Display and Key bindings (the LOGICAL rows of
     // the contract: 0 Display ... 5 Key bindings ... 9 About - the rail's positions differ only while the Beta tester row is hidden)
-    std::map<int, std::set<int>> openSections{{0, {1, 2, 4}}, {4, {0, 5}}};
+    std::map<int, std::set<int>> openSections{{0, {1, 2, 4}}, {2, {2, 3, 4}}, {4, {0, 5}}};
     // A bounded run's self-capture: FOXSDR_SLINT_SECTIONS=<bank>:<i,j,k>[;<bank>:<i,j,k>] sets the open rows of a bank (next to FOXSDR_SLINT_BANK).
     if (const char* sectionsEnv = std::getenv("FOXSDR_SLINT_SECTIONS")) {
         std::string spec = sectionsEnv;
@@ -389,6 +390,22 @@ int main(int argc, char** argv) {
     }
     int captureTicks = 0;
 
+    // THE TOOLS BANK'S BODIES (tools_publish.hpp): the Radar fold's position offers, Bookmarks, Scanner, Airband and the Markers sheet, published from tools_logic's reads
+    // (once a tick, after the system bank's, whose GPS row the Radar fold shows) and wired to the effects tools_logic names. The Bookmarks Import key with an empty box
+    // opens the SIGNAL bank's import dialog. A bounded run writes no clipboard and opens no folder. FOXSDR_SLINT_MARKERS=1 opens the Markers sheet for a capture.
+    foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
+    toolsHooks.openImportDialog = [&] { ui->global<SignalEvents>().invoke_recorder_import(); };
+    foxsdr::slinttools::ToolsPublisher toolsBank(*ui, kit, api, session, bounded.bounded(), toolsHooks);
+    toolsBank.wire();
+    if (std::getenv("FOXSDR_SLINT_MARKERS") != nullptr) { toolsBank.openMarkers(); }
+    // A bounded run's self-capture of the gestures that touch nothing but the window (never set in a release): at tick 60 the Bookmarks search is typed, the Radar fold's
+    // position boxes are filled (the Set RX here key is NOT pressed) and the Airband code, frequency and name boxes are typed - the whole path of a gesture: callback,
+    // Effect, local state, forced re-read, model, repeater.
+    const bool toolsProbe = std::getenv("FOXSDR_SLINT_TOOLS_PROBE") != nullptr;
+    int toolsProbeTicks = 0;
+    // a section that starts open asks for what it shows: the Radar fold's GPS row needs the Serial ports scan
+    if (openSections[2].count(1) > 0) { systemBank.sectionOpened(4); }
+
     // ---- commands: every key becomes one submit() ----
     const auto submit = [&](FoxCommand c) {
         c.structSize = sizeof(c);
@@ -431,7 +448,7 @@ int main(int argc, char** argv) {
         for (std::uint32_t i = 0; i < 4096; ++i) {
             FoxListItem it{}; it.structSize = sizeof(it);
             const int32_t n = api->read_list(session, list, i, &it);
-            if (n <= 0) { break; }
+            if (n <= static_cast<int32_t>(i)) { break; }   // read_list answers HOW MANY there are and fills `it` only for index < that count
             each(it);
         }
     };
@@ -473,6 +490,11 @@ int main(int argc, char** argv) {
             // reads them with the models; the fallbacks below stand until its first read.
             if (bank == 0) {
                 const auto face = signalBank.face(i);
+                if (face.valid) { chip = face.chip; tone = face.tone; }
+            }
+            // The TOOLS bank's chips are the host's too (tools_logic: the scope tap word, OFF, the bookmark count, SCAN / IDLE, LISTEN / IDLE).
+            if (bank == 2) {
+                const auto face = toolsBank.face(i);
                 if (face.valid) { chip = face.chip; tone = face.tone; }
             }
             rows.push_back({ss(name), ss(chip), tone, openSections[bank].count(i) > 0, LampState::Off, false});
@@ -622,11 +644,6 @@ int main(int argc, char** argv) {
         s.digit_face = face == Face::Nixie ? DigitFace::Nixie : face == Face::Drum ? DigitFace::Drum : DigitFace::Plain;
         ui->global<Theme>().set_skin(s);
     };
-    const auto copyMarkers = [&] {
-        std::string text;
-        for (const auto& m : lists.markers) { text += "M" + std::to_string(m.id) + "\t" + fmt("%.6f", m.hz / 1e6) + "\t" + m.note + "\n"; }
-        std::fprintf(stderr, "foxsdr-slint: markers copied (%zu); the clipboard is reached in phase 2\n%s", lists.markers.size(), text.c_str());
-    };
     ui->on_menu_activated([&](int id) {
         switch (id) {
             case 101: case 102: case 104: std::fprintf(stderr, "foxsdr-slint: counter scale %d: the interface-size setting of phase 2\n", id); break;
@@ -646,8 +663,8 @@ int main(int argc, char** argv) {
             case 305: rangeManual = false; ui->set_range_manual(false); setDisplayRange(-110, 0); traceMode = 0; ui->set_trace_mode(0); resetTrace(traceState); break;
             case 401: { FoxCommand c = op(FOXAPP_OP_MARKER_DROP); c.num[0] = menuHz; c.num[1] = 2.0 * currentView().spanHz / 980.0; submit(c); break; }
             case 402: if (menuMarkerNear >= 0) { FoxCommand c = op(FOXAPP_OP_MARKER_REMOVE); c.ival[0] = static_cast<int64_t>(lists.markers[static_cast<std::size_t>(menuMarkerNear)].id); submit(c); } break;
-            case 403: std::fprintf(stderr, "foxsdr-slint: the Markers window is a companion screen (phase 3)\n"); break;
-            case 404: copyMarkers(); break;
+            case 403: toolsBank.openMarkers(); break;
+            case 404: ui->global<ToolsEvents>().invoke_markers_copy(); break;
             case 406: submit(op(FOXAPP_OP_MARKER_CLEAR)); break;
             case 601: ui->set_about_open(true); break;
             case 602: bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(5); break;
@@ -702,8 +719,14 @@ int main(int argc, char** argv) {
         int row = i;
         if (bankIndex == 4 && i >= 8 && !systemBank.testerShown()) { row = i + 1; }
         if (bankIndex == 4 && row == 9) { ui->set_about_open(true); return; }   // About opens its sheet and never folds
+        // TOOLS' Demod scope row is a switch that opens a window, not a fold: its click is the scope-clicked gesture (deferred: logged) and nothing opens under it.
+        if (bankIndex == 2 && row == 0) { ui->global<ToolsEvents>().invoke_scope_clicked(); return; }
         auto& open = openSections[bankIndex];
-        if (open.count(row)) { open.erase(row); } else { open.insert(row); if (bankIndex == 4) { systemBank.sectionOpened(row); } }
+        if (open.count(row)) { open.erase(row); } else {
+            open.insert(row);
+            if (bankIndex == 4) { systemBank.sectionOpened(row); }
+            if (bankIndex == 2 && row == 1) { systemBank.sectionOpened(4); }   // the Radar fold's GPS row reads the Serial ports scan
+        }
     });
     ui->on_passband_changed([&](float v) {
         const double lo = 3000.0, hi = std::max(lo, 0.9 * state.channelRateHz);
@@ -720,7 +743,7 @@ int main(int argc, char** argv) {
     // (the page tabs, the "+ Window" tab, the torn windows and every page body are the plugin kit's: kit_publish.cpp wires them)
     ui->on_trace_mode_selected([&](int i) { traceMode = i; ui->set_trace_mode(i); resetTrace(traceState); });
     ui->on_range_manual_selected([&](bool manual) { rangeManual = manual; ui->set_range_manual(manual); if (!manual) { setDisplayRange(-110, 0); } });
-    ui->on_markers_clicked([&] { menuHz = state.tunedHz; openMenu(MenuKind::Marker, 700.f, 180.f); });
+    ui->on_markers_clicked([&] { toolsBank.openMarkers(); });   // the toolbar's Markers key opens the Markers sheet (the marker menu is the waterfall's right-click)
     ui->on_band_plan_toggled([&] { bandPlanOn = !bandPlanOn; ui->set_band_plan_on(bandPlanOn); });
     ui->on_zoom([&](int dir) { if (dir == 0) { view = {0, 0}; } else { zoomView(dir > 0 ? kZoomPerNotch : 1.0 / kZoomPerNotch, 0.5); } });
     const auto hover = [&](float x, float y) {
@@ -1092,6 +1115,7 @@ int main(int argc, char** argv) {
         FoxCommandResult r[8]; for (auto& x2 : r) { x2.structSize = sizeof(x2); }
         const int32_t got = api->poll_results(session, r, 8);
         for (int32_t i = 0; i < got; ++i) {
+            toolsBank.onAnswer(r[i]);   // the answers the airband section waits for (an airport's rows, a preset's chunks, Listen, Export, Remove)
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
 
@@ -1101,6 +1125,16 @@ int main(int argc, char** argv) {
         publisher.publish(state);
         signalBank.publish(state);
         systemBank.publish(state);
+        toolsBank.publish(state, systemBank.models().serial.gps);
+        if (toolsProbe && ++toolsProbeTicks == 60) {
+            auto&& te = ui->global<ToolsEvents>();
+            te.invoke_bookmark_search(ss("kord"));
+            te.invoke_position_lat(ss("51.50"));
+            te.invoke_position_lon(ss("-0.12"));
+            te.invoke_airband_code(ss("kord"));
+            te.invoke_airband_freq(ss("118.1"));
+            te.invoke_airband_name(ss("Probe tower"));
+        }
         // the bounded run's self-capture of the language path: at tick 60 the Language dropdown picks the code (save, setLanguage, bundled translation, re-publish)
         if (!languageChangeCapture.empty() && ++captureTicks == 60) { systemBank.languageChangeForCapture(languageChangeCapture); }
     };
@@ -1157,6 +1191,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", kitLine.c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", signalBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", systemBank.summaryLine().c_str());
+        std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", toolsBank.summaryLine().c_str());
         for (const auto& r : kit.lists().rows) {
             std::fprintf(stderr, "foxsdr-slint: plugin %-40s caps=0x%04x %s%s%s file=%s\n", r.name.c_str(), r.caps, r.loaded ? "loaded" : "REFUSED",
                          r.stopped ? " stopped" : "", r.asleep ? " asleep" : "", r.file.c_str());

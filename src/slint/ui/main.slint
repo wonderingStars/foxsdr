@@ -30,6 +30,8 @@ import { SignalEvents, SelectItem, GainStage, OptionRow, SourceModel, RadioExtra
 import { SystemEvents, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
          UsageModel, TesterModel, ReportPageModel, DisplayBody, LanguageBody, UpdatesBody, SerialPortsBody, KeyBindingsBody, DiagnosticsBody,
          UsageBody, TesterBody, ReportSheet } from "system_bank.slint";
+import { ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow,
+         MarkersModel, RadarBody, BookmarksBody, ScannerBody, AirbandBody, MarkersSheet } from "tools_bank.slint";
 import { Checkbox } from "fields.slint";
 import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
@@ -46,7 +48,8 @@ export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, Men
          SignalEvents, SelectItem, GainStage, OptionRow, SourceModel, RadioExtrasModel, AudioFiltersModel, SinksModel, TransmitModel, RecorderModel,
          RadioSetupModel, UnboundRow, SetupKey, ImportDialogModel,
          SystemEvents, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
-         UsageModel, TesterModel, ReportPageModel }
+         UsageModel, TesterModel, ReportPageModel,
+         ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow, MarkersModel }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -171,6 +174,12 @@ export component MainWindow inherits Window {
     in property <UsageModel> usage-model;
     in property <TesterModel> tester-model;
     in property <ReportPageModel> report-page;
+    // THE TOOLS BANK (phase 3, docs 6.41): the bodies under the rows of bank 2, filled by the host (tools_publish.cpp)
+    in property <RadarModel> radar-model;
+    in property <BookmarksModel> bookmarks-model;
+    in property <ScannerModel> scanner-model;
+    in property <AirbandModel> airband-model;
+    in property <MarkersModel> markers-model;
     in property <[DecodeRow]> decode-rows: [];
     in property <[PluginEntry]> plugin-entries: [];
     in property <string> decode-note;
@@ -552,7 +561,12 @@ export component MainWindow inherits Window {
                             if root.bank-index != 1 : VerticalLayout { spacing: 0px;
                                 for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; clicked => { root.section-clicked(i); }
                                     // the Radio section's open body (the sheet's); the other bodies are the banks of phase 3
-                                    VerticalLayout { spacing: ((root.bank-index == 0 && i != 0 && i != 5) || (root.bank-index == 4 && i != 9)) ? 10px : 0px;
+                                    VerticalLayout { spacing: ((root.bank-index == 0 && i != 0 && i != 5) || (root.bank-index == 4 && i != 9) || (root.bank-index == 2 && i != 0)) ? 10px : 0px;
+                                        // the TOOLS bank's bodies (tools_bank.slint), by row: 1 Radar, 2 Bookmarks, 3 Scanner, 4 Airband (0 Demod scope: the row only)
+                                        if root.bank-index == 2 && i == 1 : RadarBody { model: root.radar-model; }
+                                        if root.bank-index == 2 && i == 2 : BookmarksBody { model: root.bookmarks-model; }
+                                        if root.bank-index == 2 && i == 3 : ScannerBody { model: root.scanner-model; }
+                                        if root.bank-index == 2 && i == 4 : AirbandBody { model: root.airband-model; }
                                         // the SYSTEM bank's bodies (system_bank.slint), by row: 0 Display, 1 Language & country, 2 Frequency correction (the SIGNAL
                                         // family's body), 3 Updates, 4 Serial ports, 5 Key bindings, 6 Diagnostics, 7 Usage reporting, 8 Beta tester; 9 About opens the sheet
                                         if root.bank-index == 4 && i == 0 : DisplayBody { model: root.display-model; }
@@ -572,11 +586,11 @@ export component MainWindow inherits Window {
                                         if root.bank-index == 0 && i == 5 && root.transmit-model.fault != "" : Text { text: root.transmit-model.fault; font-size: Theme.font-small; color: Theme.chip-err-fg; wrap: word-wrap; }
                                         if root.bank-index == 0 && i == 6 : RecorderBody { model: root.recorder-model; }
                                         if root.bank-index == 0 && i == 7 : FrequencyCorrectionBody { model: root.source-model; }
-                                        if i == 2 : Text { text: @tr("Mode keys are on the receiver strip above (Ctrl+F … Ctrl+R)."); font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
-                                        if i == 2 : BodyRow { label: @tr("Passband"); Text { text: root.passband-text; font-family: Theme.font-mono; color: Theme.fg; vertical-alignment: center; } }
-                                        if i == 2 : Slider { value: root.passband-norm; accessible-label: @tr("Passband"); changed(v) => { root.passband-changed(v); } }
-                                        if i == 2 : BodyRow { label: @tr("Tune step"); SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.absolute-position.x, self.absolute-position.y + self.height); } } }
-                                        if i == 2 : Checkbox { label: @tr("Follow the band plan's mode when retuning"); checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
+                                        if root.bank-index == 0 && i == 2 : Text { text: @tr("Mode keys are on the receiver strip above (Ctrl+F … Ctrl+R)."); font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
+                                        if root.bank-index == 0 && i == 2 : BodyRow { label: @tr("Passband"); Text { text: root.passband-text; font-family: Theme.font-mono; color: Theme.fg; vertical-alignment: center; } }
+                                        if root.bank-index == 0 && i == 2 : Slider { value: root.passband-norm; accessible-label: @tr("Passband"); changed(v) => { root.passband-changed(v); } }
+                                        if root.bank-index == 0 && i == 2 : BodyRow { label: @tr("Tune step"); SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.absolute-position.x, self.absolute-position.y + self.height); } } }
+                                        if root.bank-index == 0 && i == 2 : Checkbox { label: @tr("Follow the band plan's mode when retuning"); checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
                                     }
                                 }
                             }
@@ -740,6 +754,7 @@ export component MainWindow inherits Window {
     if root.radio-setup.shown : RadioSetupSheet { model: root.radio-setup; }
     if root.import-dialog.shown : ImportDialog { model: root.import-dialog; }
     if root.report-page.shown : ReportSheet { model: root.report-page; }
+    if root.markers-model.shown : MarkersSheet { model: root.markers-model; }
     if root.bias-question-open : Sheet { title: @tr("Turn on the bias tee?"); dismissed => { root.bias-question-open = false; }
         Text { text: root.bias-question-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
         Text { text: root.bias-tooltip; wrap: word-wrap; color: Theme.chip-warn-fg; font-size: Theme.font-small; }

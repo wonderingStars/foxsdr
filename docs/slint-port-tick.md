@@ -2263,18 +2263,358 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 | 1522 | Status line | readout | PRESENT | Note sent-line in sent-tone |
 | 1523 | Log-dropped note | readout | PRESENT | no note of its own: the sentence rides in sent-line after 'Thank you - your report was sent.' (green, not amber) |
 
-# Counts (the whole file: phase 1, phase 2 and the SIGNAL and SYSTEM banks of phase 3)
+# Phase 3: the TOOLS bank and the map rows (docs 6.41) - `inventory/tools-bank-map.txt` walked row by row
+
+Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls itself "about 235 controls and elements" and holds 251 control records, plus one row this part adds, see below: 252 rows) against the TOOLS bank and the map pages of the Slint window: the bodies of `src/slint/ui/tools_bank.slint` (`PositionOffersView`, `DemodScopeRow`, `RadarBody`, `BookmarksBody`, `ScannerBody`, `AirbandBody`), their effects (`src/slint/tools_logic.hpp`, the callbacks-to-effects table in its header) and the places `src/slint/ui/main.slint` puts them (bank 2, rows 1-4: Radar, Bookmarks, Scanner, Airband; row 0, Demod scope, is a row with no body). The map rows (the Map page, the track list, the canvas, the Satellites map window, the Map rows and Target details) are not in this bank's bodies: they are the plugin kit's pages (`pages.slint` `MapToolbar` and `PageBody` kind 5, `map.slint` `MapPane`, `kit_publish.cpp`), ticked in phase 2 (docs 6.38), and are RELOCATED here with the phase-2 row they correspond to. The status words are phase 1's: **PRESENT** = the family draws it and its callback has an effect in `tools_logic` (an op, a local change the publisher keeps, or both; the note names the component and the effect), **RELOCATED** = it lives elsewhere in the Slint window (the Section row `main.cpp` draws, the kit's map page, the SIGNAL family's import dialog, the SYSTEM family's GPS row, the spectrum's own bookmark marks, another form of the same control), **DEFERRED** = not drawn, drawn without an effect, or drawn but not placed, with the reason. A control whose status could not be established from the files is DEFERRED with "not found in" and the file. The DEMOD SCOPE window (22 rows), the RADAR SCOPE full-window mode (28 rows) and its LCD data panel (15 rows) are bespoke scope modes, next allowance: nothing of them is drawn. The host's publisher (`tools_publish`, named in `main.slint`) was not in the tree when this part was ticked, so PRESENT here means drawn and given an effect in `tools_logic`, not seen working in the window, and the five TOOLS Section rows are still the ones `main.cpp` (`sectionsFor`) draws: a static '--' chip on Demod scope, Radar and Airband, the live count on Bookmarks, SCANNING / OFF on Scanner, and no lamp on any (the chip words and lamps of `readTools` wait for the publisher). The Slint `Slider` calls its `changed` on every drag step, so the Airband squelch sends an op per step where the ImGui control sends on release (the publisher is not there to hold them back). One row is added to the inventory's: the Airband row's level tooltip is ticked apart from the row's click (the inventory's single Row line 1318), so that the click is not marked missing and the tooltip is not marked built. The family also draws what the inventory does not list: the Markers window as `MarkersSheet` (phase-1 rows 239-252, which still read DEFERRED as a companion window and are not edited here); it is not ticked here.
+
+## TOOLS bank — TOOLS (left-rail bank key and its group caption)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1524 | Bank key | key (latched toggle, one of five) | PRESENT | RailKey TOOLS with the F3 hint (main.slint; bank-selected(2)); phase-1 row 63 |
+| 1525 | Group caption | readout | PRESENT | the sections panel's head caption names the bank 'TOOLS' (bank-titles); phase-1 row 66 |
+
+## TOOLS bank — Demod scope (rail row)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1526 | Scope switch row | key (switch row, opens window) | DEFERRED | the Section row 'Demod scope' is drawn first in bank 2 (main.cpp sectionsFor) but a press only folds a body-less row: DemodScopeRow (-> ToolsEvents.scope-clicked -> applyScopeClicked, a [local] Deferred 'demod-scope' the publisher would log) is not placed in main.slint, so the key opens no window and logs nothing; the window it opens is deferred (bespoke scope mode, next allowance) |
+| 1527 | Input chip | readout | DEFERRED | tools_logic readScopeChip / scopeChipWord make the word (AUDIO / SPEC / I/Q / VECTOR / MPX) but main.cpp sectionsFor still draws a static '--' chip; no tools publisher is in the tree |
+| 1528 | Lamp | lamp/indicator | DEFERRED | the lamp (lit while the window is open and the tap advances) is readScopeChip's lit flag; the Section row draws no dot (show-dot false in sectionsFor) and the window it describes is deferred |
+| 1529 | Tooltip | tooltip | DEFERRED | the row's sentence is not found in tools_bank.slint or main.slint: main.slint passes no tooltip to the Section row |
+
+## TOOLS bank — DEMOD SCOPE (window)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1530 | Window | window | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1531 | Input key AUDIO | key (latched, one of row) | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint; the chip names the signal (ReadOptions::scope_signal) but no key sets it |
+| 1532 | Input key SPEC | key (latched) | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1533 | Input key I/Q | key (latched) | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1534 | Input key VECTOR | key (latched) | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1535 | Input key MPX | key (latched) | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1536 | TIME label | readout | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1537 | Time base - | button | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1538 | Time base + | button | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1539 | Time base readout | readout | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1540 | GAIN label | readout | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1541 | Gain - | button | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1542 | Gain + | button | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1543 | Gain readout | readout | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1544 | AUTO | checkbox | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1545 | DISPLAY label | readout | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1546 | Display key NORM | key (latched) | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1547 | Display key AVG | key (latched) | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1548 | Display key PERSIST | key (latched) | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1549 | Scope face | overlay/marker | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1550 | Face caption / legend | readout | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1551 | Band labels on spectrum | overlay/marker | DEFERRED | bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+
+## TOOLS bank — Radar (rail section)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1552 | Section plate | key (collapsible) | RELOCATED | the Section row 'Radar' of bank 2 (main.cpp sectionsFor: chip '--', no dot; it starts folded, openSections[2], and a press folds it); the fixed chip word OFF with a dark lamp is tools_logic's (readTools chips[kRowRadar]), no tools publisher is in the tree |
+| 1553 | No-position warning | readout | PRESENT | RadarBody amber Note (RadarModel.warning); readRadar sets it while FOXAPI_RX_POSITION_SET is clear |
+| 1554 | Position offers | (see "Receiver position offers") | PRESENT | PositionOffersView inside RadarBody: the two offer keys, the hint, the typed entry and the GPS row while no position is set; with one set it leads with the known-position line (green) |
+| 1555 | Receiver position fold | list (tree node) | RELOCATED | another form of the same control: no tree node, the PositionOffersView block is always open and, once a position is set, starts with the known-position line ('51.50000N 0.12000W', green) where the fold header was; there is no fold to open on a GPS fix |
+| 1556 | Radar scope / Leave radar scope | button (full-width) | DEFERRED | RadarBody full-width Key (lit while scope-on; label Radar scope / Leave radar scope) -> radar-scope-clicked -> applyRadarScopeClicked: [local] Deferred 'radar-scope', which the publisher would log (no tools publisher is in the tree); the full-window mode it toggles is bespoke scope mode, next allowance |
+| 1557 | Radar scope tooltip | tooltip | PRESENT | the radar scope key's tooltip (the ImGui sentence through tr()) |
+| 1558 | No-tracker note | readout | PRESENT | RadarBody Note scope-note: readRadar sets 'The scope will be empty. <why>' while the track-source census (ReadOptions::track_census) has no live source, naming no decoder / stopped / refused |
+
+## TOOLS bank — Receiver position controls (shared: Radar fold, radar-scope empty state, map pages)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1559 | Traffic-centre offer | button (full-width) | PRESENT | OfferKey (a sentence that wraps) -> position-heard -> applyPositionHeard: FOXAPI_OP_SET_POSITION with the mean of the aircraft heard (ReadOptions::traffic_*), only with three or more heard and a pair the position rule accepts, then the coverage restarts; the label says '(n heard, need 3)' or '(none heard yet)' and the key is disabled until ready; tooltip drawn |
+| 1560 | Map-centre offer | button (full-width) | PRESENT | OfferKey -> position-map -> applyPositionMap: SET_POSITION from a map page's centre (ReadOptions::map_*), nothing for an unacceptable centre; the key is not drawn while no map page offers one; tooltip drawn. The publisher must fill map_* from the kit's map page (no tools publisher is in the tree) |
+| 1561 | Offers hint | readout | PRESENT | Note hint under the offers |
+| 1562 | Latitude field | number field | PRESENT | LineInput (mono, right-aligned) with the tooltip: Enter or focus loss commits -> position-lat -> applyPositionLat, a [local] PositionLat draft; the text shown is ReadOptions::lat_text, five decimals (coordinateText) |
+| 1563 | Longitude field | number field | PRESENT | LineInput beside it with the tooltip -> position-lon -> applyPositionLon, a [local] PositionLon draft |
+| 1564 | Set RX here | button (small) | PRESENT | Key (set-label, 'Set RX here') flushes both fields then -> position-set -> applyPositionSet: SET_POSITION only when receiverPositionAcceptable (0,0 and out-of-range send nothing) then the coverage restarts; disabled with set-tooltip (the Gulf of Guinea sentence while untouched, the range sentence otherwise) and the red Note under it |
+| 1565 | GPS hint | readout | PRESENT | Note gps-hint ('or read it from a GPS receiver on a serial port:'), drawn with the GPS row |
+| 1566 | GPS port field | text field | RELOCATED | the SYSTEM family's GPS row (row 1442) drawn here by PositionOffersView from the same GpsRow model: the port is a DropKey over the scanned ports (SelectItem list), so the typed COM3 box is not drawn and the dropdown is not disabled while a read listens |
+| 1567 | GPS port arrow | button (arrow) + popup list | RELOCATED | the same DropKey is the arrow and the list (SYSTEM row 1442; the scan is the Refresh key, row 1439); the 'no serial ports found' entry is not found in tools_bank.slint |
+| 1568 | GPS baud | dropdown/combo | RELOCATED | the baud DropKey (84 px) of the SYSTEM family's GPS row (row 1442) -> SystemEvents.gps-baud (applyGpsBaud: save gpsBaud) |
+| 1569 | Read position from GPS | button | RELOCATED | the read key of the SYSTEM family's GPS row (row 1442): Key (key-label, key-enabled) -> SystemEvents.gps-toggle (applyGpsToggle: FOXAPI_OP_GPS start with the port and baud); disabled with no port named |
+| 1570 | Stop (GPS) | button | RELOCATED | the same Key lit as Stop while listening (SYSTEM row 1442) -> gps-toggle stops the read |
+| 1571 | GPS status line | readout | RELOCATED | Note gps status in its tone, the SYSTEM family's GpsRow.status (row 1442), plus the satellites line under it |
+| 1572 | GPS refusal line | readout | RELOCATED | the amber Note GpsRow.refusal (SYSTEM row 1442) |
+| 1573 | Serial-ports footnote | readout | PRESENT | Note footnote 'All serial-port settings are also under SYSTEM > Serial ports.' at the foot of the block |
+
+## TOOLS bank — Radar scope (full-window mode)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1574 | EXIT SCOPE | button | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1575 | Escape key | key (keyboard) | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint; the Esc chord dispatches (phase-1 row 144) but there is no scope mode for it to leave |
+| 1576 | RANGE caption | readout | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1577 | Range - | button | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1578 | Range readout | readout | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1579 | Range + | button | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1580 | Wheel hint | readout | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1581 | Empty state | readout | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint; the offers block it would hold is PositionOffersView, drawn in the Radar fold (rows 1559 to 1565) |
+| 1582 | SIG gauge | overlay/marker (gauge) | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1583 | ALT gauge | overlay/marker (gauge) | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1584 | Maker plate | overlay/marker | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1585 | Range drums | readout | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1586 | Track drums | readout | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1587 | GAIN knob | dial/knob | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint; the strip's Gain lane stays the gain control (phase-1 row 41) |
+| 1588 | Knob scale ticks | readout | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1589 | Knob stage note | readout | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1590 | POWER button | button (round, lit ring) | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint; the STOP / START dome stays the power control (phase-1 row 16) |
+| 1591 | Power state text | lamp/indicator | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1592 | Tube (canvas) wheel | drag/gesture | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1593 | Tube drag | drag/gesture | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1594 | Tube double-click | drag/gesture | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1595 | Tube click on aircraft | drag/gesture | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1596 | Tube click on empty | drag/gesture | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1597 | Range rings + labels | overlay/marker | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1598 | Bearing ticks | overlay/marker | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1599 | MODE ADS-B / position | overlay/marker | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1600 | Aircraft icons and trails | overlay/marker | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1601 | Antenna mark | overlay/marker | DEFERRED | bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+
+## TOOLS bank — Radar data panel (LCD) - three tabs
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1602 | Tab HOME | button (tab) | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1603 | Tab FLIGHT | button (tab) | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1604 | Tab SYS | button (tab) | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1605 | CONTACTS PLOTTED | readout | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1606 | Contact rows | list | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint; the contacts are the kit map page's list (row 369) |
+| 1607 | Empty-state text | readout | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1608 | Option row PHOSPHOR | toggle | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1609 | Option row SWEEP | toggle | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1610 | Option row TRAILS | toggle (cycles 3) | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1611 | Option row FILTER | toggle (cycles 3) | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1612 | Facts | readout | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1613 | Help paragraph | readout | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1614 | Detail lines | table | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint; the same facts are the Target details body (rows 315 and 374) |
+| 1615 | Nothing-selected text | readout | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1616 | Unavailable note | readout | DEFERRED | bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+
+## TOOLS bank — Bookmarks (rail section)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1617 | Section plate | key (collapsible) | RELOCATED | the Section row 'Bookmarks' of bank 2: main.cpp sectionsFor draws the live count as its chip and no lamp; tools_logic's chip and lamp (lit when the count is above 0) are not published (no tools publisher is in the tree) |
+| 1618 | Name field | text field | PRESENT | LineInput 'name' (placeholder) -> bookmark-name on commit -> applyBookmarkName, a [local] BookmarkName draft |
+| 1619 | Add current | button | PRESENT | Key (add-label, 'Add current') flushes the name and group boxes -> bookmark-add -> applyBookmarkAdd: FOXAPI_OP_BOOKMARK_ADD with the name, or FOXAPP_OP_BOOKMARK_GROUP (action 0, group + 0x1F + name) when the group box holds a name; a blank name is named by its frequency in the engine (addBookmarkHere) |
+| 1620 | Group field | text field | PRESENT | LineInput 'group (optional)' with the tooltip -> bookmark-group on commit -> [local] BookmarkGroup |
+| 1621 | Group pick arrow | dropdown/combo (no preview) | PRESENT | a 28 px DropKey of the groups the list holds, drawn only when there are any -> bookmark-group(<group name>): the pick types the name into the group box |
+| 1622 | Import path | text field | PRESENT | LineInput with the placeholder -> bookmark-import-path on commit -> [local] BookmarkImportPath |
+| 1623 | Import | button | PRESENT | Key (import-label) with the tooltip, disabled while an import runs (import-busy) -> bookmark-import -> applyBookmarkImport: an empty path opens the import dialog ([local] OpenImportDialog, the SIGNAL family's, rows 1380-1386); a path with a root = FOXAPP_OP_BOOKMARK_IMPORT_FILE; any other path = [local] ImportLookup for the publisher's worker |
+| 1624 | Import note | readout | PRESENT | Note import-note (fact.status.bookmarkNote: the result of an import, rename or removal) |
+| 1625 | Disk wait line | readout | PRESENT | Note disk-wait ('Waiting for the disk to open the file: n s'), drawn from one second of a read |
+| 1626 | Search box | text field | PRESENT | LineInput 'search names, groups or MHz' -> bookmark-search on every edit -> [local] BookmarkSearch, so the list filters as it is typed |
+| 1627 | Group filter | dropdown/combo | PRESENT | DropKey (104 px) 'Every group' plus each group, drawn only when the list holds a group -> bookmark-filter(i) -> applyBookmarkFilter: [local] BookmarkFilter by the group's name |
+| 1628 | Favourites only | checkbox | PRESENT | Tick -> bookmark-favourites -> [local] BookmarkFavourites |
+| 1629 | On the spectrum | checkbox | PRESENT | Tick with the tooltip -> bookmark-on-spectrum -> [local] BookmarkOnSpectrum; main.cpp draws the bookmark ticks unconditionally (phase-1 rows 259-260), so the flag is kept for the publisher and nothing reads it yet |
+| 1630 | Stack close names | checkbox | PRESENT | Tick with the tooltip, disabled while On the spectrum is off (stack-enabled) -> bookmark-stack -> [local] BookmarkStack; the spectrum draws names on one row (phase-1 row 260), so the flag changes nothing yet |
+| 1631 | Count line | readout | PRESENT | Note count-line ('n shown of m') |
+| 1632 | Export for SDR# | button (small) | PRESENT | xs Key in a KeyFlow (wraps under the next keys in a narrow column), label empty (key not drawn) for an empty view, disabled while an export is written -> bookmark-export -> applyBookmarkExport: FOXAPP_OP_BOOKMARK_EXPORT with the ids of the rows shown |
+| 1633 | Remove this group | button (small) | PRESENT | xs Key, drawn only with a group chosen -> bookmark-remove-group -> applyBookmarkRemoveGroup: FOXAPI_OP_BOOKMARK_REMOVE_GROUP and the filter back to every group; no confirmation, as in the ImGui window |
+| 1634 | Rename this group | button (small) | PRESENT | xs Key (lit while open) that toggles BookmarksBody's own `renaming` flag with no call to the host: applyBookmarkRenameOpen (the ImGui key seeds the field with the group's name) has no callback, so the rename field shows whatever BookmarksModel.rename-draft holds, not the group's name |
+| 1635 | Rename field | text field | PRESENT | LineInput 'new group name', drawn while renaming -> bookmark-rename-draft on commit; Enter -> bookmark-rename (applyBookmarkRename) and the field closes |
+| 1636 | Rename | button | PRESENT | Key 'Rename' beside the field: flushes it -> bookmark-rename -> applyBookmarkRename: FOXAPP_OP_BOOKMARK_GROUP action 2 (from + 0x1F + to; merges when the name exists), nothing for an empty or unchanged name; the filter follows the group |
+| 1637 | Row scan checkbox | checkbox | PRESENT | Tick (14 px) with the tooltip on each row -> bookmark-tick(id, on) -> FOXAPP_OP_BOOKMARK_TICK |
+| 1638 | Row favourite star | button | PRESENT | StarKey ('*' amber while a favourite, '.' dim) -> bookmark-favourite(id, on) -> FOXAPI_OP_BOOKMARK_FAVOURITE |
+| 1639 | Row | list (selectable) | PRESENT | BookmarkRowView's selectable 'name  145.6000 MHz  [group]' (mono, elided; hover highlight) -> bookmark-tune(id) -> FOXAPI_OP_BOOKMARK_TUNE; the rows scroll at 12 (ScrollRows). The inventory lists no hover tooltip for the row and the ImGui row shows none, so there is nothing to defer |
+| 1640 | Row context menu | context menu | PRESENT | a right-click on the row (pointer-event, right button up) opens a PopupWindow beside it: the row's name (BookmarkRow.name) and 'Move to group' -> bookmark-menu(id) -> [local] BookmarkMenu. The menu's closed state is not reported (a PopupWindow is modal and Slint 1.18 has no closed callback), so BookmarksModel.menu-row is never drawn from and returns to -1 only through a pick (applyBookmarkMove) |
+| 1641 | Menu: No group | menu item | PRESENT | DropRow 'No group' (ticked while the row has none) -> bookmark-move(id, '') -> FOXAPP_OP_BOOKMARK_GROUP action 1; nothing when the row is already ungrouped; the menu closes |
+| 1642 | Menu: group list | list | PRESENT | DropRows of the groups (plain up to eight, a scrolling Flickable beyond) -> bookmark-move(id, group) |
+| 1643 | Menu: new group | text field | PRESENT | LineInput 'new group name' at the foot of the menu: Enter with text -> bookmark-move(id, text) |
+| 1644 | Row delete | button | PRESENT | xs icon Key 'Delete this bookmark' -> bookmark-delete(id) -> FOXAPI_OP_BOOKMARK_REMOVE, at once |
+| 1645 | Error line | readout | PRESENT | red Note error (fact.status.bookmarkError) |
+| 1646 | Spectrum markers | overlay/marker | RELOCATED | the spectrum's own bookmark ticks and names (SpectrumView, main.cpp bookmarks marks): phase-1 rows 259 and 260; the strip's two settings are On the spectrum and Stack close names above |
+| 1647 | Drop-a-file import | drag/gesture | DEFERRED | not found in tools_bank.slint, main.slint or main.cpp: no file-drop event is wired into the Slint window (the same gap as row 1383); the path box and the import dialog are the ways in |
+
+## TOOLS bank — Import a frequency list (dialog)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1648 | Dialog | dialog | RELOCATED | the SIGNAL family's ImportDialog (row 1380), shared with this bank: opened by an empty Import path |
+| 1649 | Reason line | readout | RELOCATED | the SIGNAL family's ImportDialog reason line (row 1381) |
+| 1650 | Preset line | readout | DEFERRED | ImportDialogModel has no preset field, so the Airband Import with an empty box opens the plain dialog and its rows would join no preset (row 1382); not found in tools_bank.slint |
+| 1651 | Drop zone | overlay/marker | DEFERRED | the drop zone is words only in the SIGNAL family's dialog and no file-drop event is wired (row 1383) |
+| 1652 | or / Browse... | button | DEFERRED | the SIGNAL family's dialog has a path field in place of the system file chooser (row 1384) |
+| 1653 | Waiting line | readout | DEFERRED | the SIGNAL family's dialog has no reading line (row 1385) |
+| 1654 | Cancel | button | RELOCATED | the SIGNAL family's Cancel key (row 1386) |
+| 1655 | Escape | key (keyboard) | DEFERRED | Esc does not close the dialog: the escape handler of main.cpp clears the editor, About and the bias sheet only (row 1380) |
+
+## TOOLS bank — Scanner (rail section)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1656 | Section plate | key (collapsible) | RELOCATED | the Section row 'Scanner' of bank 2: main.cpp sectionsFor draws SCANNING (green) or OFF from FOXAPI_RX_SCANNER_ACTIVE and no lamp; the SCAN / IDLE words and the lit lamp are tools_logic's (readScanner chip) and not published (no tools publisher is in the tree) |
+| 1657 | Ticked frequencies | checkbox | PRESENT | Tick (label 'Ticked frequencies (n)') with the tooltip -> scanner-ticked -> applyScannerTicked: FOXAPP_OP_SCANNER_LIST (1 list mode, 0 range mode) |
+| 1658 | Start MHz | number field | PRESENT | LabelledField (caption above, mono, right-aligned), greyed in ticked mode -> scanner-start on commit -> applyScannerField: [local] ScannerDraft and FOXAPP_OP_SCANNER_RANGE for its bit (reconfigure bit while a scan runs); text that is no number sends nothing; four decimals |
+| 1659 | Stop MHz | number field | PRESENT | LabelledField, greyed in ticked mode -> scanner-stop -> applyScannerField (range bit 2) |
+| 1660 | Step kHz | number field | PRESENT | LabelledField, greyed in ticked mode -> scanner-step -> applyScannerField (range bit 4) |
+| 1661 | Dwell ms | number field | PRESENT | LabelledField -> scanner-dwell on commit -> applyScannerField: FOXAPI_OP_SCANNER_CONFIG with the four timings |
+| 1662 | Hold ms | number field | PRESENT | LabelledField -> scanner-hold -> FOXAPI_OP_SCANNER_CONFIG |
+| 1663 | Resume ms | number field | PRESENT | LabelledField -> scanner-resume -> FOXAPI_OP_SCANNER_CONFIG |
+| 1664 | Listen ms | number field | PRESENT | LabelledField with the tooltip -> scanner-listen -> FOXAPI_OP_SCANNER_CONFIG |
+| 1665 | Start scan | button (full-width) | PRESENT | full-width Key (start-label) that flushes the seven fields first, disabled in ticked mode with nothing ticked (start-disabled) -> scanner-run -> applyScannerRun: FOXAPP_OP_SCANNER_LIST action 2 in list mode (the engine stands the Airband monitor down), else FOXAPI_OP_SCANNER_RUN with the stored range |
+| 1666 | Stop scan | button (half) | PRESENT | half-width Key, lit, drawn only while scanning -> scanner-halt -> FOXAPI_OP_SCANNER_RUN 0 |
+| 1667 | Skip | button | PRESENT | half-width Key beside Stop scan, drawn only while scanning -> scanner-skip -> FOXAPI_OP_SCANNER_SKIP |
+| 1668 | Status line | readout | PRESENT | Note status ('Scanning / 145.5000 MHz') in its tone: Idle neutral, Scanning and Paused good, Holding amber (scannerStatusLine) |
+| 1669 | User retune | drag/gesture | PRESENT | not a Slint control: the engine stops the scan when the readback leaves the last commanded frequency (engine.cpp user-tune check against scannerExpectedAbsHz_), so any tune from this window stops it |
+
+## TOOLS bank — Airband (rail section)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1670 | Section plate | key (collapsible) | RELOCATED | the Section row 'Airband' of bank 2: main.cpp sectionsFor draws a static '--' chip and no lamp; the LISTEN / IDLE words and the lit lamp are tools_logic's (readAirband chip) and not published (no tools publisher is in the tree) |
+| 1671 | Airport code | text field | PRESENT | LineInput with the placeholder -> airband-code on commit -> [local] AirbandCode (upper-cased by applyAirbandCode); Enter -> airband-lookup |
+| 1672 | Look up | button | PRESENT | Key (lookup-label) with the tooltip, disabled while the code box is empty -> airband-lookup -> applyAirbandLookup: one airport = FOXAPP_OP_BOOKMARK_ADD_ROWS (its rows, ask AirportRows); none = the 'No airport with the code' note; several = the choices and the 'pick one' note |
+| 1673 | Nearest airports | button (small) | PRESENT | Key in a KeyFlow, disabled until the receiver has a position (nearest-disabled) -> airband-nearest -> applyAirbandNearest: the six nearest airports; the two tooltip sentences are not found in tools_bank.slint (a KeyFlow key carries no tooltip) |
+| 1674 | Hide | button (small) | PRESENT | Key beside it, drawn while the nearest list is shown -> airband-hide -> clear_nearest |
+| 1675 | Nearest list | list | PRESENT | AirportLine rows ('EGLL  London Heathrow  23 km') -> airband-airport(i) -> applyAirbandAirport: adds that airport's rows and closes the list |
+| 1676 | Lookup choices | list | PRESENT | AirportLine rows ('ORD  Chicago O'Hare  (United States)') -> airband-ambiguous(i) -> applyAirbandAirport (choice 1000 + i) |
+| 1677 | Preset label | readout (tooltip) | PRESENT | RowLabel 'Preset'; the preset help sentence is the tooltip of the name field beside it (preset-help), not of the label |
+| 1678 | Preset name | text field | PRESENT | LineInput 'Preset' with the tooltip and the 28 px arrow listing the presets that hold a playable row -> airband-preset-name on commit / airband-preset(i) -> [local] AirbandPresetName |
+| 1679 | Frequency (MHz) | text field | PRESENT | mono LineInput 'Frequency (MHz)' -> airband-freq on commit -> [local] AirbandFreq |
+| 1680 | Mode | dropdown/combo | PRESENT | DropKey AM / NFM (76 px) -> airband-mode(i) -> [local] AirbandMode |
+| 1681 | Name | text field | PRESENT | LineInput 'name' -> airband-name on commit -> [local] AirbandName |
+| 1682 | Add | button | PRESENT | Key with the tooltip, disabled with no frequency -> airband-add -> applyAirbandAdd: FOXAPP_OP_BOOKMARK_ADD_ROWS with one ticked AM or NFM row in the preset (ask TypedRow); a frequency parseMhz refuses gives the 'could not read frequency' note |
+| 1683 | Note | readout | PRESENT | Note note (AirbandModel.note: outcomes and refusals) |
+| 1684 | Import path | text field | PRESENT | LineInput 'SDR# frequencies.xml or .csv - its path' -> airband-import-path on commit -> [local] AirbandImportPath |
+| 1685 | Import | button | PRESENT | Key, disabled while a read is out (import-busy) -> airband-import -> applyAirbandImport: a path = [local] PresetImportLookup (the publisher's worker sends the rows as ADD_ROWS chunks); an empty box = [local] OpenImportDialog for the preset, but the dialog has no preset field (row 971), so the rows would join no preset |
+| 1686 | Export CSV | button | PRESENT | Key in a KeyFlow, disabled with no rows or while an export is written -> airband-export -> applyAirbandExport: FOXAPP_OP_BOOKMARK_EXPORT action 1 with the preset (ask ExportPreset) |
+| 1687 | Remove preset | button | PRESENT | Key beside it, disabled with no rows -> airband-remove-preset -> applyAirbandRemovePreset: FOXAPI_OP_BOOKMARK_REMOVE_GROUP with the preset (ask RemoveGroup); whether the engine stops LISTEN on it is not read here |
+| 1688 | Preset note | readout | PRESENT | Note preset-note |
+| 1689 | Open the folder | button (small) | PRESENT | Key in a KeyFlow, drawn after an export that wrote its file (folder-label) -> airband-folder -> [local] OpenFolder with fact.recorder.dir |
+| 1690 | Group filter | dropdown/combo | PRESENT | DropKey (popup 250 px) 'Every ticked AM or NFM frequency' plus each playable group -> airband-group(i) -> applyAirbandGroup: [local] AirbandGroup, the preset field takes the group's name, and FOXAPP_OP_AIRBAND action 1 when the group changes while the monitor listens |
+| 1691 | Count | readout | PRESENT | Note count-line ('n ticked of m') |
+| 1692 | Tick all / Untick all | button (small) x2 | PRESENT | two keys in a KeyFlow, drawn only with a group on show and rows listed -> airband-tick-all / airband-untick-all -> applyAirbandTickAll: [local] TickRun of the rows that differ |
+| 1693 | Busiest first | checkbox | PRESENT | Tick with the tooltip -> airband-busiest -> [local] AirbandBusiest (the read side sorts the rows by heard time) |
+| 1694 | Status block | readout | PRESENT | Note hearing ('block on the air' and 'Hearing: x' joined by a newline; the pending sentence while waiting for the patch) |
+| 1695 | Row tick | checkbox | PRESENT | Tick (14 px) with the tooltip on each channel row -> airband-tick(id, on) -> FOXAPP_OP_BOOKMARK_TICK |
+| 1696 | Row lamp | lamp/indicator | PRESENT | LampDot green on AirbandRow.heard, off otherwise |
+| 1697 | Row | list (selectable) | PRESENT | AirbandRowView's selectable '118.1000  name' (dim while listening and off the air) with the amber heard time -> airband-tune(id) -> FOXAPP_OP_AIRBAND action 6: the monitor stops and the receiver tunes there alone. The level tooltip is the next row |
+| 1698 | Row level tooltip | tooltip | DEFERRED | the tooltip half of the inventory's one Row line 1318, ticked apart so the click is not marked missing: AirbandRowView draws no tooltip and AirbandRow has no tooltip field (readAirband makes the 'Level -42 dB (squelch -55 dB)' text as a host extra, AirbandRow.tooltip); the family did not build it |
+| 1699 | Squelch | slider | PRESENT | SliderRow (squelch-text readout, tooltip) -> airband-squelch(norm) -> applyAirbandSquelch: FOXAPP_OP_AIRBAND action 4 with -110 + norm * 110 dB. The ImGui control sends on release; the Slint Slider calls changed on every drag step and has no release callback, so a drag sends one op per step unless the publisher (no tools publisher is in the tree) holds them back (unverified) |
+| 1700 | Above the noise | button (small) | PRESENT | Key, disabled unless listening -> airband-above-noise -> FOXAPP_OP_AIRBAND action 3 (the engine's rule); no tooltip is drawn |
+| 1701 | Hold | number field | PRESENT | LineInput (64 px, mono, right-aligned) 'hold 2.0 s' with the tooltip and a 's' unit label -> airband-hold on commit -> applyAirbandHold: FOXAPP_OP_AIRBAND action 5 with seconds clamped 0..60 (the first number in the text) |
+| 1702 | LISTEN | button (full-width) | PRESENT | full-width Key LISTEN with the tooltip -> airband-listen -> applyAirbandListen: FOXAPP_OP_AIRBAND action 1 with the group on show (ask Listen); the hold box is flushed first |
+| 1703 | STOP | button | PRESENT | the same key becomes the danger Key STOP while listening or waiting -> airband-listen -> FOXAPP_OP_AIRBAND action 0 |
+| 1704 | Next block | button | PRESENT | Key beside STOP, drawn only when next-label is set (more than one block) -> airband-next -> FOXAPP_OP_AIRBAND action 2 |
+
+## TOOLS bank — Map page (window per track-source plugin)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1705 | Window | window | RELOCATED | kit map page (6.38): a docked tab or a torn window titled '<plugin> map' (mapTitle), opened by the DECODE bank's map row (row 318); title, close and tear-off are rows 323-329 |
+| 1706 | Fit | button (small) | RELOCATED | kit map page (6.38) row 357: the Fit key of MapToolbar (page-map-fit: centres and zooms on every visible target) |
+| 1707 | Receiver position entry | number field x2 + button | RELOCATED | kit map page (6.38) row 358: Set RX here arms the next click on the map (FOXAPI_OP_SET_POSITION) in place of two typed boxes, and an RX readout shows the position; the typed latitude / longitude entry is the Radar fold's (rows 1562 and 1563), not repeated on the page |
+| 1708 | Count line | readout | RELOCATED | kit map page (6.38) row 359: the count text ('n targets', 'n of m targets, k heard without a position') |
+| 1709 | On screen only | checkbox | RELOCATED | kit map page (6.38) row 360: the On screen only checkbox |
+| 1710 | Coverage | checkbox | RELOCATED | kit map page (6.38) row 361: the Coverage checkbox |
+| 1711 | Trails | checkbox | RELOCATED | kit map page (6.38) row 362: the Trails checkbox |
+| 1712 | Altitude colours | checkbox | RELOCATED | kit map page (6.38) row 363: the Altitude colours checkbox, disabled without Trails |
+| 1713 | Trail style | dropdown/combo | DEFERRED | kit map page row 364 stays deferred: the compositor draws one line style; not found in pages.slint |
+| 1714 | Trail width | slider | DEFERRED | kit map page row 365 stays deferred: no trail width slider on the page; the same setting is the SYSTEM Display body's Trail width (row 1398) |
+| 1715 | Reset coverage | button (small) | RELOCATED | kit map page (6.38) row 366: the Reset coverage key |
+| 1716 | Coverage readout | readout | RELOCATED | kit map page (6.38) row 367: the coverage status sentence |
+| 1717 | GPS row | (shared GPS block) | RELOCATED | the kit map page draws no GPS row (6.38 row 368); the row lives in the SYSTEM bank's Serial ports (row 1442) and in the Radar fold (rows 1566 to 1572) |
+| 1718 | Attribution credit | readout | RELOCATED | kit map page (6.38): MapPane's attribution line (the basemap's text, or 'Coastline: Natural Earth (public domain)' on the coastline map); row 1133 is the basemap plugin's own row |
+| 1719 | Stop following? | dialog | DEFERRED | kit map page row 372 stays deferred: pages.slint has no Stop following? dialog and page-map-panned silently refuses a drag while following; Stop following is the key |
+| 1720 | Stop following (dialog) | button | DEFERRED | no dialog, so no key (row 372); the toolbar's Stop following key is row 371 |
+| 1721 | Keep following | button | DEFERRED | no dialog, so no Keep following key (row 372); the drag is refused instead |
+
+## TOOLS bank — Track list (left of the map page)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1722 | Empty text | readout | RELOCATED | kit map page (6.38) row 369: the list's empty text 'No targets. Decoded aircraft, ships and stations appear here.'; the 'No targets on screen.' variant is not found in pages.slint |
+| 1723 | Count | readout | RELOCATED | kit map page (6.38) row 359: the count text sits in the toolbar, not over the list |
+| 1724 | Following note | readout | RELOCATED | kit map page (6.38) row 371: 'following <id>' and the Stop following key sit in the toolbar, not in the list pane |
+| 1725 | Sort | dropdown/combo | RELOCATED | kit map page (6.38) row 369: a Sort key whose label is the sort key's name; each press steps to the next of the eight keys (a stepper in place of the dropdown), tooltip 'Order the list. Distance and bearing are measured from the RX position.' |
+| 1726 | Sort direction | button (arrow) | RELOCATED | kit map page (6.38) row 369: an Up / Down key with the two 'click to reverse' tooltips |
+| 1727 | Table | table | RELOCATED | kit map page (6.38) row 369: a Table with the columns Callsign, ID and Note; the Details / Info column is not drawn (row 370) |
+| 1728 | Row (callsign cell) | list (selectable, spans row) | RELOCATED | kit map page (6.38) row 369: a click selects and centres the map on it (zoom unchanged), a double-click follows; list rows are not dimmed by staleness (only the map target's alpha follows it), and an estimated position carries the 'estimated' note in the Note column |
+| 1729 | Details | button (small) | RELOCATED | kit map page (6.38) row 370: there is no Details key; a click on a row selects it for the Target details drawer |
+| 1730 | Heard-without-position rows | list | RELOCATED | kit map page (6.38): muted, non-pressable rows with the target's id and its unplaced note, always listed (On screen only does not hide them) and with no Details key |
+| 1731 | Distance footnote | readout | DEFERRED | not found in pages.slint or kit_publish.cpp: no footnote under the list; the RX readout says 'no receiver position: Set RX here, then click the map' instead |
+| 1732 | Hover block | tooltip | RELOCATED | kit map page (6.38) row 369: the hover tip over a map target shows callsign, altitude (ft) and speed (kt) only, not the full detail block |
+
+## TOOLS bank — Map canvas (all map pages)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1733 | Canvas pan | drag/gesture | RELOCATED | kit map page (6.38): MapPane panned -> page-map-panned moves the centre; while following the drag is refused without the dialog (rows 1719 to 1721) |
+| 1734 | Canvas wheel | drag/gesture | RELOCATED | kit map page (6.38): MapPane zoomed -> page-map-zoomed, span x 0.85 per notch about the pointer |
+| 1735 | Click target | drag/gesture | RELOCATED | kit map page (6.38): MapPane target-clicked selects the target (ringed), a click on empty map clears the selection; the hit area is 20 px square |
+| 1736 | Hover target | tooltip | RELOCATED | kit map page (6.38) row 369: MapPane hovered -> the host's hover-text tooltip (callsign, altitude, speed) |
+| 1737 | Zoom in key | button (on map, +) | RELOCATED | kit map page (6.38): the + key bottom right (page-map-zoom-key, half the span), disabled at the limit; no tooltip (the zoom keys carry none, map.slint) and no wheel hint |
+| 1738 | Zoom out key | button (on map, -) | RELOCATED | kit map page (6.38): the - key bottom right (twice the span), disabled at the limit; no tooltip |
+| 1739 | Pick-receiver cursor | drag/gesture | RELOCATED | kit map page (6.38) row 358: while Set RX here is armed the cursor is a crosshair and the next click sends FOXAPI_OP_SET_POSITION (page-map-clicked); the key is on every map page, not only the satellite window |
+| 1740 | Scale bar | overlay/marker | RELOCATED | kit map page (6.38): MapPane's scale bar with the text 'n km' (or 'n m'); the 'at the equator' / 'at N/S' wording is not found in kit_publish.cpp |
+| 1741 | Altitude legend | overlay/marker | RELOCATED | kit map page (6.38): MapPane's legend of the altitude bands, drawn while Altitude colours is on; the 'ALTITUDE - kft' heading, the 'no altitude' row and the orbital-altitude legend are not found in kit_publish.cpp |
+| 1742 | Markers, labels, trails, coverage ring, receiver mark | overlay/marker | RELOCATED | kit map page (6.38): MapPane's target icons by kind turned to heading, halo labels, the selected / followed / estimated / emergency rings, and the compositor's trails, coverage ring and home rings |
+
+## TOOLS bank — Satellites map window (SATELLITES MAP)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1743 | Plate title | readout | RELOCATED | kit map page (6.38): a satellite plugin opens the generic map page titled '<plugin> map' (rows 1005 and 1006); the SATELLITES MAP plate and its deck of wells are deferred (row 357) |
+| 1744 | FIT | key | RELOCATED | kit map page (6.38) row 357: the Fit key; it is never dead and has no 'nothing is plotted' tooltip |
+| 1745 | WHOLE WORLD | key | DEFERRED | kit map page row 357: the satellites page's own deck, WHOLE WORLD included, is deferred; the - key backs out a step at a time |
+| 1746 | STOP FOLLOWING | key | RELOCATED | kit map page (6.38) row 371: the Stop following key, drawn while following |
+| 1747 | Strip text | readout | RELOCATED | kit map page (6.38) row 371: the 'following <id>' text in the toolbar; the idle sentence 'The map moves on its own only while a target is followed.' is not found in pages.slint |
+| 1748 | Latitude cell | text field (click to edit) | RELOCATED | the typed latitude is the Radar fold's field (row 1562); the kit map page shows an RX readout, not a click-to-edit cell (6.38 row 358) |
+| 1749 | Longitude cell | text field (click to edit) | RELOCATED | the typed longitude is the Radar fold's field (row 1563); the kit map page shows an RX readout, not a click-to-edit cell (6.38 row 358) |
+| 1750 | Caption labels | readout | DEFERRED | not found in pages.slint: the RECEIVER POSITION / LATITUDE / LONGITUDE captions belong to the satellites deck, which is deferred (row 357) |
+| 1751 | SET FROM MAP CLICK | key (latched while armed) | RELOCATED | kit map page (6.38) row 358: the Set RX here key, lit and reading 'Click the map...' while armed (not a two-line SET FROM / MAP CLICK plate) |
+| 1752 | Position note | readout | DEFERRED | not found in pages.slint or kit_publish.cpp: the 'Position set. This window measures...' sentence is not drawn; the RX readout is the only position text |
+| 1753 | COVERAGE rocker | toggle | RELOCATED | kit map page (6.38) row 361: the Coverage checkbox (not a rocker with a sub-line; it is not disabled with no receiver position) |
+| 1754 | GROUND TRACKS rocker | toggle | RELOCATED | kit map page (6.38) row 362: the Trails checkbox draws the lines plugins publish, ground tracks included |
+| 1755 | ALTITUDE COLOURS rocker | toggle | RELOCATED | kit map page (6.38) row 363: the Altitude colours checkbox |
+| 1756 | TRAIL STYLE segments | radio (3 segments) | DEFERRED | kit map page row 364 stays deferred: no LINE / RIBBON / OFF choice (the satellites deck is deferred) |
+| 1757 | COVERAGE RESET | button | RELOCATED | kit map page (6.38) row 366: the Reset coverage key |
+| 1758 | Coverage note | readout | RELOCATED | kit map page (6.38) row 367: the coverage status sentence ('n of m bearings, best k km') |
+| 1759 | TARGETS header | readout | RELOCATED | kit map page (6.38) row 359: the target count in the toolbar; there is no TARGETS caption |
+| 1760 | SORT segments | radio (4 segments) | RELOCATED | kit map page (6.38) row 369: one Sort key that steps through the eight sort keys (the register's CALLSIGN / NORAD / ALT / AGE segments are not drawn) |
+| 1761 | ASC / DESC | button | RELOCATED | kit map page (6.38) row 369: the Up / Down key |
+| 1762 | Register rows | list | RELOCATED | kit map page (6.38) row 369: the Table (Callsign, ID, Note); a click selects and centres, a double-click follows (the satellites window centres without following); the ALT and AGE columns are not drawn |
+| 1763 | Empty text | readout | RELOCATED | kit map page (6.38) row 369: the generic empty text; the satellites sentence 'Decoded and propagated tracks appear here' is not found |
+| 1764 | Selected-target card | readout | RELOCATED | the Target details body (rows 315 and 374) in the drawer or as a page, fed by the selected target; the card's cells and the hatched 'cannot be computed' values are not found in pages.slint or output.slint |
+| 1765 | Notes | readout | DEFERRED | not found in pages.slint or output.slint: no NEXT PASSES, hatched-value or inclination / period notes; the satellites deck is deferred (row 357) |
+| 1766 | Map key | overlay/marker | DEFERRED | not found in map.slint, pages.slint or kit_publish.cpp: the EQUIRECTANGULAR / NATURAL EARTH / RINGED MARK / DASHED LINE key is not drawn; the nearest thing is the attribution line and the altitude legend |
+| 1767 | Map | (shares the Map canvas gestures above) | RELOCATED | kit map page (6.38): MapPane, with the gestures of rows 1733 to 1739 |
+
+## TOOLS bank — Map rows and Target details (reached from here; live in the DECODE bank)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1768 | Map row | key (switch row) | RELOCATED | the DECODE bank's map row (6.38 row 318): a Section per map page, '<plugin> map', chip 'n TGT', lamp lit while open, with the satellites tooltip for satellite plugins |
+| 1769 | No-maps row | readout row | RELOCATED | the DECODE bank's blocked 'Target maps NONE' row and its note (6.38 row 319) |
+| 1770 | Target details section | key (collapsible) | RELOCATED | the DECODE bank's Target details drawer (6.38 rows 312-315): a Section with the id chip and a state dot |
+| 1771 | Go to on map | button (small) | RELOCATED | the Target details Go to on map key (6.38 rows 316 and 375) |
+| 1772 | Follow / Stop following | button (small) | RELOCATED | the Target details Follow / Stop following key (6.38 rows 317 and 376) |
+| 1773 | TARGET DETAILS window | window | RELOCATED | the Target details window as a docked page or a torn window (6.38 row 373) |
+| 1774 | Close | button | RELOCATED | the Target details Close key on the page form (6.38 row 377) |
+| 1775 | Display settings (not here) | (none) | RELOCATED | the SYSTEM bank's Display body: Aircraft icons (row 1397) and Trail width (row 1398) |
+
+Subtotal: PRESENT 88, RELOCATED 75, DEFERRED 89, total 252 (rows 1524 to 1775).
+
+# Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM and TOOLS banks of phase 3)
 
 | Status | Rows |
 |---|---|
-| PRESENT | 1294 |
-| RELOCATED | 88 |
-| DEFERRED | 141 |
+| PRESENT | 1382 |
+| RELOCATED | 163 |
+| DEFERRED | 230 |
 | TODO (unclassified) | 0 |
-| Total | 1523 |
+| Total | 1775 |
 
 Phase 2 alone: PRESENT 888, RELOCATED 34, DEFERRED 13, total 935.
 
 Phase 3, the SIGNAL bank alone: PRESENT 122, RELOCATED 17, DEFERRED 37, total 176.
 
 Phase 3, the SYSTEM bank alone: PRESENT 95, RELOCATED 17, DEFERRED 25, total 137.
+
+Phase 3, the TOOLS bank and the map rows alone: PRESENT 88, RELOCATED 75, DEFERRED 89, total 252.

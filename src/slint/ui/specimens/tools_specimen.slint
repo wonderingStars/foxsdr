@@ -1,0 +1,404 @@
+// The TOOLS bank specimen sheet (1240 x 2600): every body of ui/tools_bank.slint inside the REAL Section it is shown under (296 wide: the body is 254 px, the
+// Section's own padding 30 / 12), on the sample models below, so tests/test_slint_tools.cpp can probe the pixels against the Banks artboard
+// (artboards/Workbench-Banks.dc.html: the TOOLS column A3, and SCREENS.md A3 / A3b for what the artboard cuts) and press the controls with real pointer and key
+// events. Four columns of stacked Sections (each Section's y is the one above's y + height + 10, so the stack holds whatever height the typefaces settle on);
+// the Markers sheets sit under them, each over a stage of its own.
+//
+//   column x      Section (296 wide, small = 30 px row)                           model           what it shows
+//   A  10   a1    Demod scope / AUDIO         the switch row, closed: nothing under it                                                 -
+//          a2    Radar / OFF                 the closed row                                                                           -
+//          a3    Radar / OFF (open)          the warning, the two offer keys (one disabled), the hint, latitude / longitude, Set RX here, the refusal, the GPS row, the footnote, the scope key and its note     m-radar
+//          a4    Radar / SET (open)          the known-position line, latitude / longitude, Set (disabled), the scope key lit ("Leave radar scope"); default-forwarding   m-radar-known
+//   B  316  b1    Bookmarks / 7              name + Add current, group + the arrow, import + note + wait line, search + filter, the ticks, the count, the three keys wrapped, the rename row,   m-bm
+//                                           seven rows (a star, a dot), the red error line (the row menu opens from a right-click: tools-specimen-menu.png)
+//          b3    Bookmarks / 14             the longest translations: 14 rows - the list stops at 12 and scrolls - and every label long                          m-bm-long
+//          b2    Bookmarks / 2              default-forwarding to ToolsEvents: no groups (no arrows, no filter, no group keys), two rows, Stack close names greyed    m-bm-plain
+//   C  622  c1    Scanner / IDLE             the ticked tick, seven fields, Start scan full width, the status line                     m-sc
+//          c2    Scanner / SCAN             Stop scan (lit) + Skip half width, "Scanning | 145.2125 MHz"                              m-sc-run
+//          c3    Scanner / IDLE             ticked mode: the first three fields greyed, Start scan disabled, an amber status; default-forwarding   m-sc-ticked
+//          c4    Airband / IDLE             the lookup row, nearest + ambiguous lists, the preset rows, the import row and keys, the group, Tick all / Untick all, Busiest first, three rows, squelch, hold, LISTEN   m-ab
+//   D  928  d1    Airband / LISTEN           the green "Hearing:" status, two rows - one heard (lamp, amber time) -, squelch, STOP + Next block                          m-ab-run
+//          d2    Airband / IDLE             default-forwarding to ToolsEvents: LISTEN full width, no rows                                                         m-ab-plain
+//   sheets: markers-stage (10, sheets-y, 660 x 380) holds the Markers sheet with three rows; markers-empty (690, sheets-y, 560 x 380) the empty one (default-forwarding)
+//   probes: p1..p9 (254-wide layout cells, below the window's last row) hold bare bodies and report the cell's width (rule 11); the long ones carry the longest
+//           translations the catalogue can bring
+//
+// What the test reads: `Rec` counts and names every callback of the bodies with an override, the sections' y and heights are out properties, and the plain
+// (default-forwarding) bodies are watched through the ToolsEvents global.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { Section } from "../sections.slint";
+import { TipLayer } from "../tooltip.slint";
+import { SelectItem } from "../signal_bank.slint";
+import { GpsRow } from "../system_bank.slint";
+import { PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow, MarkersModel, ToolsEvents, PositionOffersView, DemodScopeRow, RadarBody, BookmarksBody, ScannerBody, AirbandBody, MarkersSheet } from "../tools_bank.slint";
+export { Theme, Skin, Workbench, ChipTone, LampState, SelectItem, GpsRow, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow, MarkersModel, ToolsEvents }
+
+// What the bodies with an override report: the callback's name and its arguments, joined with a space.
+export global Rec {
+    in-out property <int> events;
+    in-out property <string> last;
+    in-out property <string> last-args;
+    callback fired(string, string);
+    public function rec(name: string, args: string) {
+        Rec.events += 1;
+        Rec.last = name;
+        Rec.last-args = args;
+        Rec.fired(name, args);
+    }
+}
+
+component SpecRadar inherits RadarBody {
+    radar-scope-clicked() => { Rec.rec("radar-scope-clicked", ""); }
+    position-heard() => { Rec.rec("position-heard", ""); }
+    position-map() => { Rec.rec("position-map", ""); }
+    position-lat(a) => { Rec.rec("position-lat", a); }
+    position-lon(a) => { Rec.rec("position-lon", a); }
+    position-set() => { Rec.rec("position-set", ""); }
+    gps-port(a) => { Rec.rec("gps-port", "" + a); }
+    gps-baud(a) => { Rec.rec("gps-baud", "" + a); }
+    gps-toggle() => { Rec.rec("gps-toggle", ""); }
+}
+
+component SpecBookmarks inherits BookmarksBody {
+    bookmark-name(a) => { Rec.rec("bookmark-name", a); }
+    bookmark-add() => { Rec.rec("bookmark-add", ""); }
+    bookmark-group(a) => { Rec.rec("bookmark-group", a); }
+    bookmark-import-path(a) => { Rec.rec("bookmark-import-path", a); }
+    bookmark-import() => { Rec.rec("bookmark-import", ""); }
+    bookmark-search(a) => { Rec.rec("bookmark-search", a); }
+    bookmark-filter(a) => { Rec.rec("bookmark-filter", "" + a); }
+    bookmark-favourites(a) => { Rec.rec("bookmark-favourites", a ? "1" : "0"); }
+    bookmark-on-spectrum(a) => { Rec.rec("bookmark-on-spectrum", a ? "1" : "0"); }
+    bookmark-stack(a) => { Rec.rec("bookmark-stack", a ? "1" : "0"); }
+    bookmark-export() => { Rec.rec("bookmark-export", ""); }
+    bookmark-remove-group() => { Rec.rec("bookmark-remove-group", ""); }
+    bookmark-rename-draft(a) => { Rec.rec("bookmark-rename-draft", a); }
+    bookmark-rename() => { Rec.rec("bookmark-rename", ""); }
+    bookmark-tick(a, b) => { Rec.rec("bookmark-tick", a + " " + (b ? "1" : "0")); }
+    bookmark-favourite(a, b) => { Rec.rec("bookmark-favourite", a + " " + (b ? "1" : "0")); }
+    bookmark-tune(a) => { Rec.rec("bookmark-tune", "" + a); }
+    bookmark-delete(a) => { Rec.rec("bookmark-delete", "" + a); }
+    bookmark-menu(a) => { Rec.rec("bookmark-menu", "" + a); }
+    bookmark-move(a, b) => { Rec.rec("bookmark-move", a + " [" + b + "]"); }
+}
+
+component SpecScanner inherits ScannerBody {
+    scanner-ticked(a) => { Rec.rec("scanner-ticked", a ? "1" : "0"); }
+    scanner-start(a) => { Rec.rec("scanner-start", a); }
+    scanner-stop(a) => { Rec.rec("scanner-stop", a); }
+    scanner-step(a) => { Rec.rec("scanner-step", a); }
+    scanner-dwell(a) => { Rec.rec("scanner-dwell", a); }
+    scanner-hold(a) => { Rec.rec("scanner-hold", a); }
+    scanner-resume(a) => { Rec.rec("scanner-resume", a); }
+    scanner-listen(a) => { Rec.rec("scanner-listen", a); }
+    scanner-run() => { Rec.rec("scanner-run", ""); }
+    scanner-halt() => { Rec.rec("scanner-halt", ""); }
+    scanner-skip() => { Rec.rec("scanner-skip", ""); }
+}
+
+component SpecAirband inherits AirbandBody {
+    airband-code(a) => { Rec.rec("airband-code", a); }
+    airband-lookup() => { Rec.rec("airband-lookup", ""); }
+    airband-nearest() => { Rec.rec("airband-nearest", ""); }
+    airband-hide() => { Rec.rec("airband-hide", ""); }
+    airband-airport(a) => { Rec.rec("airband-airport", "" + a); }
+    airband-ambiguous(a) => { Rec.rec("airband-ambiguous", "" + a); }
+    airband-preset(a) => { Rec.rec("airband-preset", "" + a); }
+    airband-preset-name(a) => { Rec.rec("airband-preset-name", a); }
+    airband-freq(a) => { Rec.rec("airband-freq", a); }
+    airband-mode(a) => { Rec.rec("airband-mode", "" + a); }
+    airband-name(a) => { Rec.rec("airband-name", a); }
+    airband-add() => { Rec.rec("airband-add", ""); }
+    airband-import-path(a) => { Rec.rec("airband-import-path", a); }
+    airband-import() => { Rec.rec("airband-import", ""); }
+    airband-export() => { Rec.rec("airband-export", ""); }
+    airband-remove-preset() => { Rec.rec("airband-remove-preset", ""); }
+    airband-folder() => { Rec.rec("airband-folder", ""); }
+    airband-group(a) => { Rec.rec("airband-group", "" + a); }
+    airband-tick-all() => { Rec.rec("airband-tick-all", ""); }
+    airband-untick-all() => { Rec.rec("airband-untick-all", ""); }
+    airband-busiest(a) => { Rec.rec("airband-busiest", a ? "1" : "0"); }
+    airband-tick(a, b) => { Rec.rec("airband-tick", a + " " + (b ? "1" : "0")); }
+    airband-tune(a) => { Rec.rec("airband-tune", "" + a); }
+    airband-squelch(a) => { Rec.rec("airband-squelch", "" + a); }
+    airband-above-noise() => { Rec.rec("airband-above-noise", ""); }
+    airband-hold(a) => { Rec.rec("airband-hold", a); }
+    airband-listen() => { Rec.rec("airband-listen", ""); }
+    airband-next() => { Rec.rec("airband-next", ""); }
+}
+
+component SpecMarkers inherits MarkersSheet {
+    markers-note(a, b) => { Rec.rec("markers-note", a + " " + b); }
+    markers-remove(a) => { Rec.rec("markers-remove", "" + a); }
+    markers-clear() => { Rec.rec("markers-clear", ""); }
+    markers-tune(a) => { Rec.rec("markers-tune", "" + a); }
+    markers-bookmark(a) => { Rec.rec("markers-bookmark", "" + a); }
+    markers-copy() => { Rec.rec("markers-copy", ""); }
+    markers-closed() => { Rec.rec("markers-closed", ""); }
+}
+
+export component ToolsSpecimen inherits Window {
+    width: 1240px;
+    height: 2080px;
+    background: Theme.bg;
+
+    // ---- the geometry the test reads ----
+    out property <length> a1-y: a1.y;
+    out property <length> a2-y: a2.y;
+    out property <length> a3-y: a3.y;
+    out property <length> a3-body-h: a3.body-height;
+    out property <length> a4-y: a4.y;
+    out property <length> a4-body-h: a4.body-height;
+    out property <length> b1-y: b1.y;
+    out property <length> b1-body-h: b1.body-height;
+    out property <length> b2-y: b2.y;
+    out property <length> b2-body-h: b2.body-height;
+    out property <length> b3-y: b3.y;
+    out property <length> b3-body-h: b3.body-height;
+    out property <length> c1-y: c1.y;
+    out property <length> c1-body-h: c1.body-height;
+    out property <length> c2-y: c2.y;
+    out property <length> c2-body-h: c2.body-height;
+    out property <length> c3-y: c3.y;
+    out property <length> c3-body-h: c3.body-height;
+    out property <length> c4-y: c4.y;
+    out property <length> c4-body-h: c4.body-height;
+    out property <length> d1-y: d1.y;
+    out property <length> d1-body-h: d1.body-height;
+    out property <length> d2-y: d2.y;
+    out property <length> d2-body-h: d2.body-height;
+    out property <length> sheets-y: max(max(a4.y + a4.height, b3.y + b3.height), max(c4.y + c4.height, d2.y + d2.height)) + 24px;
+    out property <length> probe-y: root.height + 10px;
+    out property <length> p1-w: p1.width;
+    out property <length> p2-w: p2.width;
+    out property <length> p3-w: p3.width;
+    out property <length> p4-w: p4.width;
+    out property <length> p5-w: p5.width;
+    out property <length> p6-w: p6.width;
+    out property <length> p7-w: p7.width;
+    out property <length> p8-w: p8.width;
+    out property <length> p8-h: p8v.height;
+    out property <length> p8-ph: p8v.preferred-height;
+
+    // ---- the sample models (the test may change them) ----
+    in-out property <RadarModel> m-radar: {
+        warning: "The scope needs the receiver's position first.",
+        offers: {
+            known: false, known-text: "",
+            heard-label: "Use the middle of the 14 aircraft heard  (51.51N 0.13W)", heard-enabled: true,
+            map-label: "Use the ADS-B map's centre  (51.47N 0.45W)", map-enabled: true,
+            hint: "or type it, or click SET FROM MAP CLICK on a map page:",
+            lat-text: "51.50720", lon-text: "-0.12760",
+            error: "Latitude must be -90..90 and longitude -180..180",
+            set-disabled: false,
+            gps-shown: true, gps-hint: "or read it from a GPS receiver on a serial port:",
+            gps: {
+                ports: [{ label: "COM3", id: "COM3", enabled: true, note: "" }, { label: "COM7", id: "COM7", enabled: true, note: "" }], port-index: 0,
+                bauds: [{ label: "4800", id: "", enabled: true, note: "" }, { label: "9600", id: "", enabled: true, note: "" }], baud-index: 1,
+                listening: false, key-label: "Read position from GPS", status: "Waiting for a fix... 6 s", status-tone: ChipTone.warn, satellites: "", key-enabled: true,
+                refusal: "The GPS fix was refused by the position rule (off the globe, or 0,0).",
+            },
+            footnote: "All serial-port settings are also under SYSTEM > Serial ports.",
+        },
+        scope-label: "", scope-on: false,
+        scope-note: "The scope will be empty. An ADS-B decoder is what fills this face; the plugin store is where one is fitted from.",
+    };
+    in-out property <RadarModel> m-radar-known: {
+        warning: "",
+        offers: {
+            known: true, known-text: "Receiver position set: 51.50720, -0.12760",
+            hint: "", lat-text: "51.50720", lon-text: "-0.12760", error: "",
+            set-disabled: true, set-tooltip: "Latitude must be -90..90 and longitude -180..180",
+            gps-shown: false, footnote: "",
+        },
+        scope-label: "", scope-on: true, scope-note: "",
+    };
+    in-out property <BookmarksModel> m-bm: {
+        name-draft: "", group-draft: "",
+        groups: [
+            { label: "Repeaters", id: "", enabled: true, note: "" }, { label: "Space", id: "", enabled: true, note: "" }, { label: "EGLL", id: "", enabled: true, note: "" },
+            { label: "PMR", id: "", enabled: true, note: "" }, { label: "Weather", id: "", enabled: true, note: "" }, { label: "EGVN", id: "", enabled: true, note: "" },
+        ],
+        import-path: "", import-note: "Imported 12 frequencies", disk-wait: "Waiting for the disk to open the file: 2 s",
+        search: "",
+        filter-groups: [
+            { label: "Every group", id: "", enabled: true, note: "" }, { label: "Repeaters", id: "", enabled: true, note: "" }, { label: "Space", id: "", enabled: true, note: "" },
+            { label: "EGLL", id: "", enabled: true, note: "" }, { label: "PMR", id: "", enabled: true, note: "" },
+        ],
+        filter-index: 0, favourites-only: false, on-spectrum: true, stack-names: true, stack-enabled: true,
+        count-line: "7 shown of 7",
+        export-label: "Export for SDR#", remove-group-label: "Remove this group", rename-group-label: "Rename this group", rename-draft: "Repeaters",
+        rows: [
+            { id: 11, ticked: true, favourite: true, text: "GB3XX  145.6000 MHz  [Repeaters]", group: "Repeaters", name: "GB3XX" },
+            { id: 12, ticked: false, favourite: false, text: "ISS APRS  145.8250 MHz  [Space]", group: "Space", name: "ISS APRS" },
+            { id: 13, ticked: true, favourite: false, text: "Heathrow Tower  118.7000 MHz  [EGLL]", group: "EGLL", name: "Heathrow Tower" },
+            { id: 14, ticked: false, favourite: false, text: "Marine 16  156.8000 MHz", group: "", name: "Marine 16" },
+            { id: 15, ticked: false, favourite: false, text: "PMR 1  446.0062 MHz  [PMR]", group: "PMR", name: "PMR 1" },
+            { id: 16, ticked: true, favourite: true, text: "Met Office  162.4000 MHz  [Weather]", group: "Weather", name: "Met Office" },
+            { id: 17, ticked: false, favourite: false, text: "RAF Brize  127.1500 MHz  [EGVN]", group: "EGVN", name: "RAF Brize" },
+        ],
+        menu-row: -1, error: "bookmark file could not be saved",
+    };
+    in-out property <BookmarksModel> m-bm-plain: {
+        name-draft: "", group-draft: "", import-path: "", import-note: "", disk-wait: "", search: "", filter-index: 0,
+        favourites-only: false, on-spectrum: false, stack-names: false, stack-enabled: false, count-line: "2 shown of 2",
+        import-busy: true,
+        rows: [
+            { id: 21, ticked: false, favourite: false, text: "Chiltern Radio  145.5000 MHz", group: "", name: "Chiltern Radio" },
+            { id: 22, ticked: true, favourite: true, text: "Beacon  144.4100 MHz", group: "", name: "Beacon" },
+        ],
+        menu-row: -1, error: "",
+    };
+    in-out property <ScannerModel> m-sc: {
+        ticked-mode: false, ticked-label: "Ticked frequencies (3)",
+        start-mhz: "144.0000", stop-mhz: "146.0000", step-khz: "12.5", dwell-ms: "80", hold-ms: "1500", resume-ms: "800", listen-ms: "5000",
+        range-enabled: true, scanning: false, status: "Idle | 145.2125 MHz", status-tone: ChipTone.neutral,
+    };
+    in-out property <ScannerModel> m-sc-run: {
+        ticked-mode: false, ticked-label: "Ticked frequencies (3)",
+        start-mhz: "144.0000", stop-mhz: "146.0000", step-khz: "12.5", dwell-ms: "80", hold-ms: "1500", resume-ms: "800", listen-ms: "5000",
+        range-enabled: true, scanning: true, status: "Scanning | 145.2125 MHz", status-tone: ChipTone.good,
+    };
+    in-out property <ScannerModel> m-sc-ticked: {
+        ticked-mode: true, ticked-label: "Ticked frequencies (0)",
+        start-mhz: "144.0000", stop-mhz: "146.0000", step-khz: "12.5", dwell-ms: "80", hold-ms: "1500", resume-ms: "800", listen-ms: "0",
+        range-enabled: true, scanning: false, start-disabled: true, status: "Paused (signal) | 145.7750 MHz", status-tone: ChipTone.warn,
+    };
+    in-out property <AirbandModel> m-ab: {
+        code-draft: "",
+        airports: [
+            { code: "EGLL", name: "London Heathrow", distance: "23 km", note: "" },
+            { code: "EGLC", name: "London City", distance: "31 km", note: "" },
+        ],
+        ambiguous: [{ code: "ORD", name: "Chicago O'Hare", distance: "", note: "(United States)" }],
+        hide-label: "Hide",
+        preset-name: "Heathrow",
+        presets: [{ label: "Heathrow", id: "", enabled: true, note: "" }, { label: "Stansted", id: "", enabled: true, note: "" }], preset-index: 0,
+        freq-draft: "",
+        modes: [{ label: "AM", id: "", enabled: true, note: "" }, { label: "NFM", id: "", enabled: true, note: "" }], mode-index: 0,
+        name-draft: "", note: "Added 118.7000 MHz to Heathrow.", import-path: "", preset-note: "Wrote foxsdr-Heathrow-20261103.csv", folder-label: "Open the folder",
+        groups: [
+            { label: "Every ticked AM or NFM frequency", id: "", enabled: true, note: "" }, { label: "Heathrow", id: "", enabled: true, note: "" },
+        ],
+        group-index: 1, count-line: "6 ticked of 9", tick-all-label: "Tick all", untick-all-label: "Untick all", busiest-first: false,
+        hearing: "",
+        rows: [
+            { id: 31, ticked: true, heard: false, text: "118.7000  Tower", heard-time: "4m 12s", on-air: false },
+            { id: 32, ticked: true, heard: false, text: "121.9000  Ground", heard-time: "", on-air: false },
+            { id: 33, ticked: false, heard: false, text: "119.7250  Approach", heard-time: "1h 03m", on-air: false },
+        ],
+        squelch-norm: 0.436, squelch-text: "-62 dB", hold-text: "4.0", listening: false,
+    };
+    in-out property <AirbandModel> m-ab-run: {
+        code-draft: "", airports: [], ambiguous: [],
+        preset-name: "", freq-draft: "", name-draft: "", import-path: "",
+        modes: [{ label: "AM", id: "", enabled: true, note: "" }, { label: "NFM", id: "", enabled: true, note: "" }], mode-index: 1,
+        groups: [{ label: "Every ticked AM or NFM frequency", id: "", enabled: true, note: "" }], group-index: 0,
+        count-line: "2 ticked of 9", tick-all-label: "Tick all", untick-all-label: "Untick all", busiest-first: true,
+        hearing: "Hearing: 118.700",
+        rows: [
+            { id: 41, ticked: true, heard: true, text: "118.7000  Tower", heard-time: "4m 12s", on-air: true },
+            { id: 42, ticked: true, heard: false, text: "121.9000  Ground", heard-time: "", on-air: true },
+        ],
+        squelch-norm: 0.6, squelch-text: "-44 dB", hold-text: "4.0", listening: true, listen-label: "STOP", next-label: "Next block",
+    };
+    in-out property <AirbandModel> m-ab-plain: {
+        code-draft: "", airports: [], ambiguous: [], preset-name: "", freq-draft: "", name-draft: "", import-path: "",
+        modes: [{ label: "AM", id: "", enabled: true, note: "" }, { label: "NFM", id: "", enabled: true, note: "" }], mode-index: 0,
+        groups: [], group-index: -1, count-line: "", busiest-first: false, hearing: "", rows: [],
+        squelch-norm: 0.5, squelch-text: "-55 dB", hold-text: "4.0", listening: false,
+    };
+    in-out property <MarkersModel> m-markers: {
+        shown: true, error: "",
+        rows: [
+            { number: 1, hz-text: "145.2125 MHz", note: "repeater input", dropped: "14:32:05" },
+            { number: 2, hz-text: "118.7000 MHz", note: "", dropped: "14:35:41" },
+            { number: 3, hz-text: "156.8000 MHz", note: "Marine 16", dropped: "14:41:10" },
+        ],
+    };
+    in-out property <MarkersModel> m-markers-empty: { shown: true, error: "markers could not be saved", rows: [] };
+    // the rule-11 probes: the longest labels a translation can bring
+    in-out property <BookmarksModel> m-bm-long: {
+        name-draft: "", group-draft: "", add-label: "Aktuelle Frequenz als Lesezeichen hinzufuegen",
+        groups: [{ label: "Wiederholer und Relaisfunkstellen", id: "", enabled: true, note: "" }],
+        import-path: "", import-label: "Importieren aus Datei", import-note: "12 Frequenzen importiert, 3 schon vorhandene uebersprungen", disk-wait: "Warten auf das Laufwerk beim Oeffnen der Datei: 2 s",
+        search: "", filter-groups: [{ label: "Jede Gruppe", id: "", enabled: true, note: "" }], filter-index: 0,
+        favourites-only: false, on-spectrum: true, stack-names: true, stack-enabled: true, count-line: "5 von 7 angezeigt",
+        export-label: "Fuer SDR# exportieren", remove-group-label: "Diese Gruppe entfernen", rename-group-label: "Diese Gruppe umbenennen", rename-draft: "",
+        rows: [
+            { id: 51, ticked: true, favourite: true, text: "Ein sehr langer Name eines Lesezeichens  145.6000 MHz  [Wiederholer und Relaisfunkstellen]", group: "Wiederholer und Relaisfunkstellen", name: "Lang" },
+            { id: 52, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" }, { id: 53, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" },
+            { id: 54, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" }, { id: 55, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" },
+            { id: 56, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" }, { id: 57, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" },
+            { id: 58, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" }, { id: 59, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" },
+            { id: 60, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" }, { id: 61, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" },
+            { id: 62, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" }, { id: 63, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" },
+            { id: 64, ticked: false, favourite: false, text: "GB3XX  145.6000 MHz", group: "", name: "GB3XX" },
+        ],
+        menu-row: -1, error: "",
+    };
+    in-out property <AirbandModel> m-ab-long: {
+        code-draft: "", lookup-label: "Flughafen suchen", nearest-label: "Naechstgelegene Flughaefen", hide-label: "Verbergen",
+        airports: [{ code: "EDDF", name: "Frankfurt am Main Flughafen Terminal", distance: "23 km", note: "" }], ambiguous: [],
+        preset-name: "", freq-draft: "", name-draft: "", add-label: "Hinzufuegen", note: "", import-path: "", import-label: "Importieren",
+        export-label: "Als CSV exportieren", remove-preset-label: "Voreinstellung entfernen", preset-note: "", folder-label: "Den Ordner oeffnen",
+        modes: [{ label: "AM", id: "", enabled: true, note: "" }], mode-index: 0,
+        groups: [{ label: "Jede angehakte AM- oder NFM-Frequenz", id: "", enabled: true, note: "" }], group-index: 0,
+        count-line: "6 von 9 angehakt", tick-all-label: "Alle anhaken", untick-all-label: "Alle abwaehlen", busiest-first: false, hearing: "",
+        rows: [{ id: 71, ticked: true, heard: true, text: "118.7000  Frankfurt Turm Anflugkontrolle Sektor Nord", heard-time: "1h 04m 12s", on-air: true }],
+        squelch-norm: 0.4, squelch-text: "-110 dB", above-noise-label: "Ueber dem Rauschen", hold-text: "60.0", listening: true, listen-label: "STOPP", next-label: "Naechster Block",
+    };
+
+    // ============================ column A (x 10) ============================
+    a1 := Section { x: 10px; y: 10px; width: 296px; small: true; name: "Demod scope"; chip: "AUDIO"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        DemodScopeRow { } }
+    a2 := Section { x: 10px; y: a1.y + a1.height + 0px; width: 296px; small: true; name: "Radar"; chip: "OFF"; show-dot: true; }
+    a3 := Section { x: 10px; y: a2.y + a2.height + 10px; width: 296px; small: true; open: true; name: "Radar"; chip: "OFF"; show-dot: true;
+        SpecRadar { model: root.m-radar; } }
+    a4 := Section { x: 10px; y: a3.y + a3.height + 10px; width: 296px; small: true; open: true; name: "Radar"; chip: "SET"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        RadarBody { model: root.m-radar-known; } }
+
+    // ============================ column B (x 316) ============================
+    b1 := Section { x: 316px; y: 10px; width: 296px; small: true; open: true; name: "Bookmarks"; chip: "7"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecBookmarks { model: root.m-bm; } }
+    b2 := Section { x: 316px; y: b1.y + b1.height + 10px; width: 296px; small: true; open: true; name: "Bookmarks"; chip: "2"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        BookmarksBody { model: root.m-bm-plain; } }
+    b3 := Section { x: 316px; y: b2.y + b2.height + 10px; width: 296px; small: true; open: true; name: "Bookmarks"; chip: "14"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        BookmarksBody { model: root.m-bm-long; } }
+
+    // ============================ column C (x 622) ============================
+    c1 := Section { x: 622px; y: 10px; width: 296px; small: true; open: true; name: "Scanner"; chip: "IDLE"; show-dot: true;
+        SpecScanner { model: root.m-sc; } }
+    c2 := Section { x: 622px; y: c1.y + c1.height + 10px; width: 296px; small: true; open: true; name: "Scanner"; chip: "SCAN"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecScanner { model: root.m-sc-run; } }
+    c3 := Section { x: 622px; y: c2.y + c2.height + 10px; width: 296px; small: true; open: true; name: "Scanner"; chip: "IDLE"; show-dot: true;
+        ScannerBody { model: root.m-sc-ticked; } }
+    c4 := Section { x: 622px; y: c3.y + c3.height + 10px; width: 296px; small: true; open: true; name: "Airband"; chip: "IDLE"; show-dot: true;
+        SpecAirband { model: root.m-ab; } }
+
+    // ============================ column D (x 928) ============================
+    d1 := Section { x: 928px; y: 10px; width: 296px; small: true; open: true; name: "Airband"; chip: "LISTEN"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecAirband { model: root.m-ab-run; } }
+    d2 := Section { x: 928px; y: d1.y + d1.height + 10px; width: 296px; small: true; open: true; name: "Airband"; chip: "IDLE"; show-dot: true;
+        AirbandBody { model: root.m-ab-plain; } }
+
+    // ============================ the Markers sheets ============================
+    markers-stage := Rectangle { x: 10px; y: root.sheets-y; width: 660px; height: 380px; background: Theme.bg; clip: true;
+        SpecMarkers { x: 0px; y: 0px; width: parent.width; height: parent.height; model: root.m-markers; } }
+    markers-empty := Rectangle { x: 690px; y: root.sheets-y; width: 560px; height: 380px; background: Theme.bg; clip: true;
+        MarkersSheet { x: 0px; y: 0px; width: parent.width; height: parent.height; model: root.m-markers-empty; } }
+
+    // ============================ rule 11: bare bodies in a 254-wide cell ============================
+    // (the cell's width, if a body asks for more than 254 px, would be wider)
+    HorizontalLayout { x: 10px; y: root.probe-y; width: 254px; height: 20px; p1 := Rectangle { RadarBody { model: root.m-radar; } } }
+    HorizontalLayout { x: 280px; y: root.probe-y; width: 254px; height: 20px; p2 := Rectangle { BookmarksBody { model: root.m-bm; } } }
+    HorizontalLayout { x: 550px; y: root.probe-y; width: 254px; height: 20px; p3 := Rectangle { ScannerBody { model: root.m-sc; } } }
+    HorizontalLayout { x: 820px; y: root.probe-y; width: 254px; height: 20px; p4 := Rectangle { AirbandBody { model: root.m-ab; } } }
+    HorizontalLayout { x: 10px; y: root.probe-y + 40px; width: 254px; height: 20px; p5 := Rectangle { BookmarksBody { model: root.m-bm-long; } } }
+    HorizontalLayout { x: 280px; y: root.probe-y + 40px; width: 254px; height: 20px; p6 := Rectangle { AirbandBody { model: root.m-ab-long; } } }
+    HorizontalLayout { x: 550px; y: root.probe-y + 40px; width: 254px; height: 20px; p7 := Rectangle { AirbandBody { model: root.m-ab-run; } } }
+    HorizontalLayout { x: 820px; y: root.probe-y + 40px; width: 254px; height: 20px; p8 := Rectangle { p8v := PositionOffersView { offers: root.m-radar.offers; } } }
+
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

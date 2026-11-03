@@ -1,0 +1,2115 @@
+// FoxSDR Slint front end - THE TOOLS BANK'S BODIES (phase 3, bank 3 of 4): the open bodies under the TOOLS rows - Radar (the receiver-position offers and the
+// scope key), Bookmarks (the list, its filters, the import and the row menu), Scanner, Airband - and the Markers window as a sheet. The Demod scope row is a switch
+// that opens a window and has no body; its scope face and the RADAR SCOPE full-window mode are deferred (the patch canvas and scope mode are bespoke, the next
+// allowance), so their rail keys only forward a click. The design: specs/SCREENS.md A3 and A3b, artboards/Workbench-Banks.dc.html (the TOOLS column); the parity
+// list is inventory/tools-bank-map.txt (lines 8-1366); the wording is the ImGui window's (aw = app_window.cpp drawRadarSection / drawReceiverPositionOffers /
+// drawBookmarksSection / drawScannerSection, app_window_airband.cpp, app_window_markers.cpp drawMarkerWindow), so the catalogue entries apply for free.
+//
+// THE PATTERN IS THE SIGNAL AND SYSTEM BANKS' (signal_bank.slint, system_bank.slint): this file declares the structs the host fills, one global of every gesture
+// (ToolsEvents) and the bodies; each body is a VerticalLayout the Section's fold shows (the bank column's width less the Section's padding: 254 px), and every
+// callback of a body forwards to the global unless the instance overrides it (the specimen does, to count them). The host owns every value: a tick shows the
+// model's value and a click asks (`toggled(v)`, `picked(i)`, `committed(t)`); the model changes when the host has done it or refused it.
+//
+// THE PIECES ARE COPIED, NOT SHARED, a third time (Line, Mid, Note, RowLabel, Readout, Tick, LineInput, DropRow, DropKey, SliderRow, the sheet frame): hoisting them
+// would edit two families other sessions are working in. The additions this bank needs are `KeyFlow` (a row of small keys that wraps under itself when the column
+// is too narrow: the artboard's `.row.fw`), `OfferKey` (a full-width key whose sentence wraps instead of being cut), `ScrollRows` (a list of at most 12 rows that
+// scrolls: "a scrolling list, max 12 visible rows") and `LabelledField` (the Scanner's number field with its caption above).
+//
+// THE ROW MENU IS A PopupWindow beside the row (a right-click on a bookmark: its name, "Move to group", "No group", the groups - up to eight rows, then they
+// scroll - and a "new group name" field). A PopupWindow is modal: it eats the click that dismisses it, and Slint 1.18 has no `closed` callback, so the host is told
+// only that a menu opened (`bookmark-menu(id)`) and what was picked (`bookmark-move(id, group)`); `BookmarksModel.menu-row` is therefore not drawn from.
+//
+// Rows are 24 px (Theme.field-h) with 6 px between them, the artboard's .rw and .sbd gap. Nothing here asks for more than the column: texts wrap or elide,
+// rows give their width away (rule 11; tests/test_slint_tools.cpp measures it).
+import { Theme } from "theme.slint";
+import { ChipTone, LampDot, LampState } from "chips.slint";
+import { Key } from "keys.slint";
+import { Checkbox } from "fields.slint";
+import { Slider } from "sliders.slint";
+import { SelectKey } from "sections.slint";
+import { TipTimer } from "tooltip.slint";
+import { ScrollThumb } from "table.slint";
+import { SelectItem } from "signal_bank.slint";
+import { GpsRow, SystemEvents } from "system_bank.slint";
+
+// ---- the Radar fold: the receiver-position offers (A3b; the kit's map pages reuse the same block) ----
+export struct PositionOffers {
+    known: bool, known-text: string, heard-label: string, heard-enabled: bool, map-label: string, map-enabled: bool,
+    hint: string, lat-text: string, lon-text: string, error: string,
+    set-label: string,                                 // ADDED: "Set RX here" ("" = the body's own word)
+    set-disabled: bool, set-tooltip: string,           // ADDED: the typed pair is out of range or 0,0 (aw receiverPositionAcceptable) and the sentence that says why
+    gps-shown: bool, gps-hint: string, gps: GpsRow,    // ADDED: the GPS row under "or read it from a GPS receiver on a serial port:" (the SYSTEM bank's GpsRowView)
+    footnote: string,                                  // ADDED: "All serial-port settings are also under SYSTEM > Serial ports."
+}
+export struct RadarModel { warning: string, offers: PositionOffers, scope-label: string, scope-on: bool, scope-note: string }
+
+// ---- Bookmarks ----
+export struct BookmarkRow {
+    id: int, ticked: bool, favourite: bool, text: string, group: string, hz-text: string, mode: string,
+    name: string,                                      // ADDED: the row's own name (the context menu's header); "" falls back to `text`
+}
+export struct BookmarksModel {
+    name-draft: string, add-label: string, group-draft: string, groups: [SelectItem], import-path: string, import-label: string,
+    import-note: string, disk-wait: string, search: string, filter-groups: [SelectItem], filter-index: int, favourites-only: bool,
+    on-spectrum: bool, stack-names: bool, stack-enabled: bool, count-line: string, export-label: string, remove-group-label: string,
+    rename-group-label: string, rename-draft: string, rows: [BookmarkRow], menu-row: int, error: string,
+    import-busy: bool, export-busy: bool,              // ADDED: Import / Export for SDR# are disabled while one runs (aw 29274, 29360)
+}
+
+// ---- Scanner ----
+export struct ScannerModel {
+    ticked-mode: bool, ticked-label: string, start-mhz: string, stop-mhz: string, step-khz: string, dwell-ms: string, hold-ms: string,
+    resume-ms: string, listen-ms: string, range-enabled: bool, scanning: bool, start-label: string, stop-label: string, skip-label: string,
+    status: string, status-tone: ChipTone,
+    start-disabled: bool,                              // ADDED: Start scan is disabled in ticked mode with nothing ticked (aw 30577)
+}
+
+// ---- Airband ----
+export struct AirbandRow { id: int, ticked: bool, heard: bool, text: string, heard-time: string, on-air: bool }
+export struct AirportRow { code: string, name: string, distance: string, note: string }
+export struct AirbandModel {
+    code-draft: string, lookup-label: string, nearest-label: string, hide-label: string, airports: [AirportRow], ambiguous: [AirportRow],
+    preset-name: string, presets: [SelectItem], preset-index: int, freq-draft: string, modes: [SelectItem], mode-index: int, name-draft: string,
+    add-label: string, note: string, import-path: string, import-label: string, export-label: string, remove-preset-label: string, preset-note: string,
+    folder-label: string, groups: [SelectItem], group-index: int, count-line: string, tick-all-label: string, untick-all-label: string,
+    busiest-first: bool, hearing: string, rows: [AirbandRow], squelch-norm: float, squelch-text: string, above-noise-label: string,
+    hold-text: string, listen-label: string, listening: bool, next-label: string,
+    nearest-disabled: bool,                            // ADDED: "Nearest airports" is disabled until the receiver has a position (awa 851)
+    import-busy: bool, export-busy: bool,              // ADDED: Import / Export CSV are disabled while one runs
+}
+
+// ---- the Markers window ----
+export struct MarkerRow { number: int, hz-text: string, note: string, dropped: string }
+export struct MarkersModel {
+    shown: bool, rows: [MarkerRow], error: string, clear-label: string, empty-line: string,
+    clear-yes-label: string,                           // ADDED: "Yes, remove all 3" (the second press of Clear all markers)
+    copy-label: string,                                // ADDED: "Copy markers to clipboard" ("" = the body's own word)
+}
+
+// EVERY GESTURE OF THE BODIES, as one global the host wires (ui->global<ToolsEvents>().on_...). Index arguments are positions in the model's lists, `id` arguments
+// are the row's `id` (a bookmark id), a marker's `number` is its own number.
+export global ToolsEvents {
+    callback scope-clicked();                      // the Demod scope row (deferred: the host logs "deferred")
+    callback radar-scope-clicked();                // the Radar scope key (deferred likewise)
+    callback position-heard();
+    callback position-map();
+    callback position-lat(string);
+    callback position-lon(string);
+    callback position-set();
+    callback bookmark-name(string);
+    callback bookmark-add();
+    callback bookmark-group(string);               // the group draft (typed, or picked from the arrow: the group's name)
+    callback bookmark-import-path(string);
+    callback bookmark-import();
+    callback bookmark-search(string);              // each edit: the list filters while the user types
+    callback bookmark-filter(int);
+    callback bookmark-favourites(bool);
+    callback bookmark-on-spectrum(bool);
+    callback bookmark-stack(bool);
+    callback bookmark-export();
+    callback bookmark-remove-group();
+    callback bookmark-rename-draft(string);
+    callback bookmark-rename();
+    callback bookmark-tick(int, bool);
+    callback bookmark-favourite(int, bool);
+    callback bookmark-tune(int);
+    callback bookmark-delete(int);
+    callback bookmark-menu(int);                   // a right-click opened this row's menu
+    callback bookmark-move(int, string);           // row id; the group name ("" = no group)
+    callback scanner-ticked(bool);
+    callback scanner-start(string);
+    callback scanner-stop(string);
+    callback scanner-step(string);
+    callback scanner-dwell(string);
+    callback scanner-hold(string);
+    callback scanner-resume(string);
+    callback scanner-listen(string);
+    callback scanner-run();
+    callback scanner-halt();
+    callback scanner-skip();
+    callback airband-code(string);
+    callback airband-lookup();
+    callback airband-nearest();
+    callback airband-hide();
+    callback airband-airport(int);                 // a row of `airports` (the nearest list)
+    callback airband-ambiguous(int);               // ADDED: a row of `ambiguous` (the choices of an ambiguous code)
+    callback airband-preset(int);
+    callback airband-preset-name(string);
+    callback airband-freq(string);
+    callback airband-mode(int);
+    callback airband-name(string);
+    callback airband-add();
+    callback airband-import-path(string);
+    callback airband-import();
+    callback airband-export();
+    callback airband-remove-preset();
+    callback airband-folder();
+    callback airband-group(int);
+    callback airband-tick-all();
+    callback airband-untick-all();
+    callback airband-busiest(bool);
+    callback airband-tick(int, bool);
+    callback airband-tune(int);                    // ADDED: a click on a row: stop the monitor and tune that frequency alone (aw awa 1188)
+    callback airband-squelch(float);               // 0..1 of the slider's track
+    callback airband-above-noise();
+    callback airband-hold(string);
+    callback airband-listen();
+    callback airband-next();
+    callback markers-open();
+    callback markers-note(int, string);            // number, the note as typed: every edit (the ImGui window saves a keystroke at a time)
+    callback markers-remove(int);
+    callback markers-clear();
+    callback markers-tune(int);
+    callback markers-bookmark(int);                // ADDED: "Bookmark" (add it to the Bookmarks in the current mode)
+    callback markers-copy();                       // ADDED: "Copy markers to clipboard"
+    callback markers-closed();
+}
+
+// ================================================ the pieces the bodies are made of ================================================
+
+// The label of an item of a list, "" when the index is off the list (the closed text of a dropdown).
+global Pick {
+    pure public function label(items: [SelectItem], i: int) -> string {
+        return i >= 0 && i < items.length ? items[i].label : "";
+    }
+}
+
+// A row of a body: 24 px (.rw min-height), the children side by side 8 px apart.
+component Line inherits Rectangle {
+    in property <length> gap: 8px;
+    height: Theme.field-h;
+    HorizontalLayout {
+        spacing: root.gap;
+        @children
+    }
+}
+
+// Keeps a fixed-height child (a 20 px key, a 14 px box) in the middle of a Line.
+component Mid inherits VerticalLayout {
+    alignment: center;
+}
+
+// A sentence of a body: 11 px, wrapped, dim unless a tone says otherwise (the sheet's .n, .n.am, .n.rd, .n.gn). The words are a Text of the Note's own width inside a
+// Rectangle whose height is the Text's: a wrapped Text that is itself a layout child is measured before its width is known and loses its last line when its
+// layout is nested (the position offers' footnote did).
+component Note inherits Rectangle {
+    in property <string> text;
+    in property <ChipTone> tone: ChipTone.neutral;
+    in property <color> ink: root.tone == ChipTone.err ? Theme.chip-err-fg
+                            : root.tone == ChipTone.warn ? Theme.chip-warn-fg
+                            : root.tone == ChipTone.good ? Theme.chip-good-fg
+                            : Theme.dim;
+    in property <length> wrap-w;                        // the width the words wrap at: the body's own (root.width of the body), NOT this Note's width the layout sets
+    min-width: 0px;
+    height: words.preferred-height;
+    words := Text {
+        x: 0px;
+        y: 0px;
+        width: root.wrap-w > 0px ? root.wrap-w : root.width;
+        text: root.text;
+        wrap: word-wrap;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        color: root.ink;
+    }
+}
+
+// The .lb label of a row: 11 px / 500, fg-soft, elided before it can widen the row.
+component RowLabel inherits Text {
+    min-width: 0px;
+    overflow: elide;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-small;
+    font-weight: Theme.weight-medium;
+    color: Theme.fg-soft;
+    vertical-alignment: center;
+}
+
+// A figure of a row: the mono 11 px readout.
+component Readout inherits Text {
+    min-width: 0px;
+    overflow: elide;
+    font-family: Theme.font-mono;
+    font-size: Theme.font-small;
+    color: Theme.fg;
+    vertical-alignment: center;
+}
+
+// The .ck checkbox, driven by the host's value: the Checkbox keeps its own `checked` after a press, so the model's value is pushed back into it every
+// time the user presses and every time the model changes (a refusal leaves the box where it was).
+component Tick inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback toggled(bool);
+
+    in property <length> row-h: Theme.field-h;          // the row it sits in: the box is centred in it (a longer label makes the row taller)
+    height: max(root.row-h, box.height);
+    min-width: 0px;
+    preferred-width: box.preferred-width;
+    changed on => { box.checked = root.on; }
+    box := Checkbox {
+        x: 0px;
+        y: (root.height - self.height) / 2;
+        width: root.width;
+        label: root.label;
+        checked: root.on;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        toggled(v) => {
+            root.toggled(v);
+            box.checked = root.on;
+        }
+    }
+}
+
+// The one-line input of a body (.in, 24 px): shows `value` (the host's text), commits on Enter and on the focus leaving after an edit. `edited` reports each
+// keystroke (the Bookmarks search and a marker's note, which the ImGui window acts on as they are typed), `accepted` is Enter alone (look up, rename), and
+// `flush()` commits what was typed and not yet committed - a key that acts on a field calls it first, so the host has the text before the action asks.
+component LineInput inherits Rectangle {
+    in property <string> value;
+    in property <string> placeholder;
+    in property <bool> mono;
+    in property <bool> right;
+    in property <bool> enabled: true;
+    in property <bool> error;
+    in property <string> tooltip;
+    in property <string> name;                          // the accessible label
+    callback committed(string);
+    callback edited(string);
+    callback accepted(string);
+    out property <bool> has-focus: input.has-focus;
+    out property <string> text: input.text;
+
+    property <length> pad: 8px + Theme.hairline;
+    property <bool> dirty;                              // edited since the last commit
+
+    public function flush() {
+        if (root.dirty) {
+            root.dirty = false;
+            root.committed(input.text);
+        }
+    }
+
+    height: Theme.field-h;
+    min-width: 0px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.enabled ? (root.error ? Theme.lamp-red : Theme.line-strong) : Theme.line-strong.with-alpha(0.5);
+    background: root.enabled ? Theme.field : Theme.key-disabled-bg;
+
+    init => { input.text = root.value; }
+    changed value => {
+        input.text = root.value;
+        root.dirty = false;
+    }
+
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
+        clicked => { if (root.enabled) { input.focus(); } }
+        if input.text == "" && root.placeholder != "" : Text {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            text: root.placeholder;
+            color: Theme.disabled;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        input := TextInput {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            enabled: root.enabled;
+            read-only: !root.enabled;
+            single-line: true;
+            color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.name;
+            edited => {
+                root.dirty = true;
+                root.edited(self.text);
+            }
+            accepted => {
+                root.dirty = false;
+                root.committed(self.text);
+                root.accepted(self.text);
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.dirty) {
+                    root.dirty = false;
+                    root.committed(self.text);
+                }
+            }
+        }
+    }
+    if input.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// One row of a dropdown's list: the tick of the chosen one, the label, the dim note at the right; a greyed row cannot be picked.
+component DropRow inherits Rectangle {
+    in property <SelectItem> item;
+    in property <bool> chosen;
+    callback activated();
+    height: Theme.menu-item-h;
+    border-radius: Theme.radius-menu-item;
+    background: root.item.enabled && row-area.has-hover ? Theme.menu-hot : transparent;
+    accessible-role: list-item;
+    accessible-label: root.item.label;
+    accessible-enabled: root.item.enabled;
+    if root.chosen : Image {
+        x: 5px;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        source: @image-url("icons/check.svg");
+        image-fit: contain;
+        colorize: Theme.accent;
+    }
+    Text {
+        x: 26px;
+        y: 0px;
+        width: max(0px, parent.width - 26px - 8px - (root.item.note != "" ? note-text.preferred-width + 8px : 0px));
+        height: parent.height;
+        text: root.item.label;
+        color: root.item.enabled ? Theme.fg : Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    note-text := Text {
+        x: parent.width - 8px - self.width;
+        y: 0px;
+        width: self.preferred-width;
+        height: parent.height;
+        visible: root.item.note != "";
+        text: root.item.note;
+        color: Theme.dim;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+    }
+    row-area := TouchArea {
+        mouse-cursor: root.item.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.item.enabled) { root.activated(); } }
+    }
+}
+
+// A dropdown: the SelectKey's look and a list of `items` it opens itself under the key.
+component DropKey inherits Rectangle {
+    in property <string> value;                         // the closed text
+    in property <[SelectItem]> items;
+    in property <int> selected: -1;
+    in property <string> label;                         // the accessible name
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> popup-min-w: 150px;
+    callback picked(int);
+
+    property <length> popup-w: max(root.width, root.popup-min-w);
+    property <length> popup-h: min(root.items.length * Theme.menu-item-h + 2 * (4px + Theme.hairline), 330px);
+
+    height: Theme.key-sm-h;
+    min-width: 0px;
+    preferred-width: 110px;
+
+    SelectKey {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        value: root.value;
+        label: root.label;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        clicked => { if (root.items.length > 0) { popup.show(); } }
+    }
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: root.popup-w;
+        height: root.popup-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 28px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            // a short list is plain rows (a Flickable holds a press back for a moment: the click of a quick pick would be late), a long one scrolls
+            if root.items.length * Theme.menu-item-h <= root.popup-h : Rectangle {
+                x: 4px + Theme.hairline;
+                y: 4px + Theme.hairline;
+                width: root.popup-w - 2 * (4px + Theme.hairline);
+                height: root.popup-h - 2 * (4px + Theme.hairline);
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: parent.width;
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        popup.close();
+                    }
+                }
+            }
+            if root.items.length * Theme.menu-item-h > root.popup-h : Flickable {
+                x: 4px + Theme.hairline;
+                y: 4px + Theme.hairline;
+                width: root.popup-w - 2 * (4px + Theme.hairline);
+                height: root.popup-h - 2 * (4px + Theme.hairline);
+                content-width: self.width;
+                content-height: root.items.length * Theme.menu-item-h;
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: root.popup-w - 2 * (4px + Theme.hairline);
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        popup.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A gain-style row: the name, the slider (8 px of air each side for the knob's overhang), the readout. 24 px.
+component SliderRow inherits Rectangle {
+    in property <string> label;
+    in property <string> readout;
+    in property <float> value;                          // 0..1
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback changed(float);
+    height: Theme.field-h;
+    HorizontalLayout {
+        spacing: 0px;
+        RowLabel { width: 56px; text: root.label; color: root.enabled ? Theme.fg-soft : Theme.disabled; }
+        VerticalLayout {
+            alignment: center;
+            padding-left: 8px;
+            padding-right: 8px;
+            Slider {
+                value: root.value;
+                enabled: root.enabled;
+                tooltip: root.tooltip;
+                accessible-label: root.label;
+                changed(v) => { root.changed(v); }
+            }
+        }
+        Readout { width: 62px; text: root.readout; horizontal-alignment: right; color: root.enabled ? Theme.fg : Theme.disabled; }
+    }
+}
+
+// The Scanner's number field: its caption above (the ImGui window's labelAboveIfNeeded, the artboard's `.c.g2` with a `.n` label), the mono right-aligned input.
+component LabelledField inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback committed(string);
+    out property <string> text: field.text;
+    public function flush() { field.flush(); }
+    spacing: 2px;
+    alignment: start;
+    Text {
+        min-width: 0px;
+        text: root.label;
+        overflow: elide;
+        color: root.enabled ? Theme.dim : Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+    }
+    field := LineInput {
+        mono: true;
+        right: true;
+        enabled: root.enabled;
+        value: root.value;
+        name: root.label;
+        tooltip: root.tooltip;
+        committed(t) => { root.committed(t); }
+    }
+}
+
+// A key that holds a whole sentence: the full-width offers of the Radar fold ("Use the middle of the 14 aircraft heard  (51.5072, -0.1276)"). The sentence wraps and
+// the key grows to hold it, where the ImGui window draws the text smaller to fit (text_fit.hpp): a wrapped sentence keeps its figures at the size of every other key.
+component OfferKey inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked();
+
+    in property <length> wrap-w;
+    min-width: 0px;
+    height: max(Theme.key-sm-h, words.preferred-height + 10px);
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    background: !root.enabled ? Theme.key-disabled-bg : area.has-hover ? Theme.menu-hot : Theme.key-bg;
+    border-color: root.enabled ? Theme.key-line : Theme.key-line.with-alpha(0.5);
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    words := Text {
+        x: 10px + Theme.hairline;
+        y: 5px;
+        width: max(0px, (root.wrap-w > 0px ? root.wrap-w : root.width) - 2 * (10px + Theme.hairline));
+        text: root.label;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        color: root.enabled ? Theme.key-fg : Theme.key-disabled-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        font-weight: Theme.weight-medium;
+        accessible-role: none;
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// One key of a KeyFlow: its words, whether it is lit, whether it answers. A key with no words is not drawn.
+struct FlowKey { label: string, on: bool, enabled: bool }
+
+// Up to four small keys in a row that wraps under itself when the next one would pass the right edge (the artboard's `.row.g4.fw`: "Export for SDR#", "Remove this
+// group" and "Rename this group" do not fit one line of a 254 px column). Each key keeps its own width (its words), so a longer translation moves a key down a
+// line instead of cutting it. Absolute placement, no layout: a flow asks nothing of its parents (rule 11) and its height is its rows.
+component KeyFlow inherits Rectangle {
+    in property <FlowKey> k1;
+    in property <FlowKey> k2;
+    in property <FlowKey> k3;
+    in property <FlowKey> k4;
+    in property <bool> xs;                              // 20 px keys; false: 24 px
+    in property <length> gap: 6px;
+    callback clicked(int);
+
+    property <length> kh: root.xs ? Theme.key-xs-h : Theme.key-sm-h;
+    property <bool> s1: root.k1.label != "";
+    property <bool> s2: root.k2.label != "";
+    property <bool> s3: root.k3.label != "";
+    property <bool> s4: root.k4.label != "";
+    property <length> w1: min(b1.preferred-width, root.width);
+    property <length> w2: min(b2.preferred-width, root.width);
+    property <length> w3: min(b3.preferred-width, root.width);
+    property <length> w4: min(b4.preferred-width, root.width);
+    // the cursor after each slot: the right edge of the last key placed (-gap before any, so the first lands at 0) and its row
+    property <length> cx0: -root.gap;
+    property <bool> wrap1: root.cx0 >= 0px && root.cx0 + root.gap + root.w1 > root.width;
+    property <length> x1: root.wrap1 ? 0px : root.cx0 + root.gap;
+    property <int> r1: root.wrap1 ? 1 : 0;
+    property <length> cx1: root.s1 ? root.x1 + root.w1 : root.cx0;
+    property <int> cr1: root.s1 ? root.r1 : 0;
+    property <bool> wrap2: root.cx1 >= 0px && root.cx1 + root.gap + root.w2 > root.width;
+    property <length> x2: root.wrap2 ? 0px : root.cx1 + root.gap;
+    property <int> r2: root.cr1 + (root.wrap2 ? 1 : 0);
+    property <length> cx2: root.s2 ? root.x2 + root.w2 : root.cx1;
+    property <int> cr2: root.s2 ? root.r2 : root.cr1;
+    property <bool> wrap3: root.cx2 >= 0px && root.cx2 + root.gap + root.w3 > root.width;
+    property <length> x3: root.wrap3 ? 0px : root.cx2 + root.gap;
+    property <int> r3: root.cr2 + (root.wrap3 ? 1 : 0);
+    property <length> cx3: root.s3 ? root.x3 + root.w3 : root.cx2;
+    property <int> cr3: root.s3 ? root.r3 : root.cr2;
+    property <bool> wrap4: root.cx3 >= 0px && root.cx3 + root.gap + root.w4 > root.width;
+    property <length> x4: root.wrap4 ? 0px : root.cx3 + root.gap;
+    property <int> r4: root.cr3 + (root.wrap4 ? 1 : 0);
+    property <int> cr4: root.s4 ? root.r4 : root.cr3;
+    property <bool> shown: root.s1 || root.s2 || root.s3 || root.s4;
+
+    height: root.shown ? (root.cr4 + 1) * root.kh + root.cr4 * root.gap : 0px;
+    min-width: 0px;
+
+    b1 := Key { visible: root.s1; x: root.x1; y: root.r1 * (root.kh + root.gap); width: root.w1; height: root.kh; small: !root.xs; xs: root.xs; min-w: 0px;
+            min-width: 0px;
+        label: root.k1.label; on: root.k1.on; enabled: root.k1.enabled; clicked => { root.clicked(1); } }
+    b2 := Key { visible: root.s2; x: root.x2; y: root.r2 * (root.kh + root.gap); width: root.w2; height: root.kh; small: !root.xs; xs: root.xs; min-w: 0px;
+            min-width: 0px;
+        label: root.k2.label; on: root.k2.on; enabled: root.k2.enabled; clicked => { root.clicked(2); } }
+    b3 := Key { visible: root.s3; x: root.x3; y: root.r3 * (root.kh + root.gap); width: root.w3; height: root.kh; small: !root.xs; xs: root.xs; min-w: 0px;
+            min-width: 0px;
+        label: root.k3.label; on: root.k3.on; enabled: root.k3.enabled; clicked => { root.clicked(3); } }
+    b4 := Key { visible: root.s4; x: root.x4; y: root.r4 * (root.kh + root.gap); width: root.w4; height: root.kh; small: !root.xs; xs: root.xs; min-w: 0px;
+            min-width: 0px;
+        label: root.k4.label; on: root.k4.on; enabled: root.k4.enabled; clicked => { root.clicked(4); } }
+}
+
+// A list of rows that is as tall as its rows up to `max-rows`, then scrolls (the ImGui child window's "max 12 visible rows"): a wheel or the thumb moves it. The
+// rows (the @children, a `for`) are laid out one under the other, `gap` apart; the thumb sits at the right edge and the rows give it 12 px.
+component ScrollRows inherits Rectangle {
+    in property <int> count;
+    in property <length> row-h: Theme.field-h;
+    in property <length> gap: 6px;
+    in property <int> max-rows: 12;
+
+    property <length> content-h: root.count > 0 ? root.count * root.row-h + (root.count - 1) * root.gap : 0px;
+    property <length> cap-h: root.max-rows * root.row-h + (root.max-rows - 1) * root.gap;
+    property <bool> scrolls: root.content-h > root.cap-h;
+
+    height: min(root.content-h, root.cap-h);
+    min-width: 0px;
+
+    fl := Flickable {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        content-width: self.width;
+        content-height: root.content-h;
+        VerticalLayout {
+            x: 0px;
+            y: 0px;
+            width: fl.width - (root.scrolls ? 12px : 0px);
+            height: root.content-h;
+            spacing: root.gap;
+            alignment: start;
+            @children
+        }
+    }
+    if root.scrolls : ScrollThumb {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        content-height: root.content-h;
+        visible-height: root.height;
+        content-y: fl.content-y;
+        scrolled(y) => { fl.content-y = y; }
+    }
+}
+
+// ================================================ the position offers ================================================
+
+// The receiver-position block (A3b): the known-position line or the two offer keys, the hint, the typed latitude / longitude with its Set key, the refusal, and
+// the GPS row with its footnote. Shared by the Radar fold (and by the kit's map pages later).
+export component PositionOffersView inherits VerticalLayout {
+    in property <PositionOffers> offers;
+
+    callback position-heard();
+    position-heard() => { ToolsEvents.position-heard(); }
+    callback position-map();
+    position-map() => { ToolsEvents.position-map(); }
+    callback position-lat(string);
+    position-lat(a) => { ToolsEvents.position-lat(a); }
+    callback position-lon(string);
+    position-lon(a) => { ToolsEvents.position-lon(a); }
+    callback position-set();
+    position-set() => { ToolsEvents.position-set(); }
+    callback gps-port(int);
+    gps-port(a) => { SystemEvents.gps-port(a); }
+    callback gps-baud(int);
+    gps-baud(a) => { SystemEvents.gps-baud(a); }
+    callback gps-toggle();
+    gps-toggle() => { SystemEvents.gps-toggle(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    if root.offers.known && root.offers.known-text != "" : Note { wrap-w: root.width; text: root.offers.known-text; tone: ChipTone.good; }
+    if !root.offers.known && root.offers.heard-label != "" : OfferKey {
+        wrap-w: root.width;
+        label: root.offers.heard-label;
+        enabled: root.offers.heard-enabled;
+        tooltip: @tr("The mean position of the aircraft with a reported position.\nReception is roughly a disc about the antenna, so its middle is\nnear the receiver - a starting point, not a survey.");
+        clicked => { root.position-heard(); }
+    }
+    if !root.offers.known && root.offers.map-label != "" : OfferKey {
+        wrap-w: root.width;
+        label: root.offers.map-label;
+        enabled: root.offers.map-enabled;
+        tooltip: @tr("Where that map is looking right now. If you have been panning\nit around your own area, that is close to where you are.");
+        clicked => { root.position-map(); }
+    }
+    if root.offers.hint != "" : Note { wrap-w: root.width; text: root.offers.hint; }
+    Line {
+        gap: 6px;
+        lat := LineInput {
+            horizontal-stretch: 1;
+            mono: true;
+            right: true;
+            value: root.offers.lat-text;
+            name: @tr("Latitude");
+            tooltip: @tr("Receiver latitude, degrees north (-90..90)");
+            committed(t) => { root.position-lat(t); }
+        }
+        lon := LineInput {
+            horizontal-stretch: 1;
+            mono: true;
+            right: true;
+            value: root.offers.lon-text;
+            name: @tr("Longitude");
+            tooltip: @tr("Receiver longitude, degrees east (-180..180)");
+            committed(t) => { root.position-lon(t); }
+        }
+    }
+    Line {
+        Mid { Key {
+            label: root.offers.set-label != "" ? root.offers.set-label : @tr("Set RX here");
+            max-width: 140px;
+            small: true;
+            min-w: 0px;
+            min-width: 0px;
+            enabled: !root.offers.set-disabled;
+            tooltip: root.offers.set-tooltip;
+            clicked => {
+                lat.flush();
+                lon.flush();
+                root.position-set();
+            }
+        } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if root.offers.error != "" : Note { wrap-w: root.width; text: root.offers.error; tone: ChipTone.err; }
+    // the GPS row, drawn here rather than through the SYSTEM bank's GpsRowView: that one is a layout of its own and, nested under this one, is measured a line short
+    // when its refusal wraps (the footnote under it was drawn over by the key below the block)
+    if root.offers.gps-shown && root.offers.gps-hint != "" : Note { wrap-w: root.width; text: root.offers.gps-hint; }
+    if root.offers.gps-shown : Line {
+        DropKey {
+            horizontal-stretch: 1;
+            value: Pick.label(root.offers.gps.ports, root.offers.gps.port-index);
+            items: root.offers.gps.ports;
+            selected: root.offers.gps.port-index;
+            label: @tr("GPS serial port");
+            popup-min-w: 120px;
+            picked(i) => { root.gps-port(i); }
+        }
+        DropKey {
+            width: 84px;
+            value: Pick.label(root.offers.gps.bauds, root.offers.gps.baud-index);
+            items: root.offers.gps.bauds;
+            selected: root.offers.gps.baud-index;
+            label: @tr("Baud rate");
+            popup-min-w: 100px;
+            picked(i) => { root.gps-baud(i); }
+        }
+    }
+    if root.offers.gps-shown : Rectangle {
+        height: Theme.key-sm-h;
+        clip: true;
+        Key {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            small: true;
+            on: root.offers.gps.listening;
+            enabled: root.offers.gps.key-enabled;
+            label: root.offers.gps.key-label;
+            clicked => { root.gps-toggle(); }
+        }
+    }
+    if root.offers.gps-shown && root.offers.gps.status != "" : Note { wrap-w: root.width; text: root.offers.gps.status; tone: root.offers.gps.status-tone; }
+    if root.offers.gps-shown && root.offers.gps.satellites != "" : Note { wrap-w: root.width; text: root.offers.gps.satellites; }
+    if root.offers.gps-shown && root.offers.gps.refusal != "" : Note { wrap-w: root.width; text: root.offers.gps.refusal; tone: ChipTone.warn; }
+    if root.offers.footnote != "" : Note { wrap-w: root.width; text: root.offers.footnote; }
+}
+
+// ================================================ Demod scope ================================================
+
+// The Demod scope row is a switch that opens a window: the Section's own click is the gesture, its chip (AUDIO / SPEC / I/Q / VECTOR / MPX) and lamp are the
+// Section's, and there is nothing under the row. This is the host's one place to turn that click into ToolsEvents.scope-clicked (the scope window itself is deferred).
+export component DemodScopeRow inherits Rectangle {
+    callback pressed();
+    pressed() => { ToolsEvents.scope-clicked(); }
+    width: 0px;
+    height: 0px;
+}
+
+// ================================================ Radar ================================================
+
+export component RadarBody inherits VerticalLayout {
+    in property <RadarModel> model;
+
+    callback radar-scope-clicked();
+    radar-scope-clicked() => { ToolsEvents.radar-scope-clicked(); }
+    callback position-heard();
+    position-heard() => { ToolsEvents.position-heard(); }
+    callback position-map();
+    position-map() => { ToolsEvents.position-map(); }
+    callback position-lat(string);
+    position-lat(a) => { ToolsEvents.position-lat(a); }
+    callback position-lon(string);
+    position-lon(a) => { ToolsEvents.position-lon(a); }
+    callback position-set();
+    position-set() => { ToolsEvents.position-set(); }
+    callback gps-port(int);
+    gps-port(a) => { SystemEvents.gps-port(a); }
+    callback gps-baud(int);
+    gps-baud(a) => { SystemEvents.gps-baud(a); }
+    callback gps-toggle();
+    gps-toggle() => { SystemEvents.gps-toggle(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    if root.model.warning != "" : Note { wrap-w: root.width; text: root.model.warning; tone: ChipTone.warn; }
+    PositionOffersView {
+        offers: root.model.offers;
+        position-heard() => { root.position-heard(); }
+        position-map() => { root.position-map(); }
+        position-lat(t) => { root.position-lat(t); }
+        position-lon(t) => { root.position-lon(t); }
+        position-set() => { root.position-set(); }
+        gps-port(i) => { root.gps-port(i); }
+        gps-baud(i) => { root.gps-baud(i); }
+        gps-toggle() => { root.gps-toggle(); }
+    }
+    Rectangle {
+        height: Theme.key-sm-h;
+        clip: true;
+        Key {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            small: true;
+            on: root.model.scope-on;
+            label: root.model.scope-label != "" ? root.model.scope-label : root.model.scope-on ? @tr("Leave radar scope") : @tr("Radar scope");
+            tooltip: @tr("A plan-position indicator for aircraft: range rings and bearing\nticks around the receiver, with a detail panel for the one you\nselect. Takes the whole window; there is a way back on its own bar.");
+            clicked => { root.radar-scope-clicked(); }
+        }
+    }
+    if root.model.scope-note != "" : Note { wrap-w: root.width; text: root.model.scope-note; }
+}
+
+// ================================================ Bookmarks ================================================
+
+// The amber star (a favourite) or the dim dot, a key of its own.
+component StarKey inherits Rectangle {
+    in property <bool> on;
+    in property <string> tooltip;
+    callback toggled();
+    width: 16px;
+    height: Theme.field-h;
+    accessible-role: button;
+    accessible-label: @tr("Favourite");
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-action-default => { root.toggled(); }
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.on ? "*" : ".";   // not-translated: the ImGui window's own glyphs (aw 29460)
+        color: root.on ? Theme.chip-warn-fg : area.has-hover ? Theme.fg-soft : Theme.dim;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        font-weight: Theme.weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    area := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.toggled(); }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// One bookmark: the scan tick, the star, the selectable "name  145.6000 MHz  [group]" (a click tunes, a right-click opens the menu beside the row), the delete key.
+component BookmarkRowView inherits Rectangle {
+    in property <BookmarkRow> entry;
+    in property <[SelectItem]> groups;
+    callback ticked(bool);
+    callback favourited(bool);
+    callback tuned();
+    callback deleted();
+    callback menu-opened();
+    callback moved(string);
+
+    // the menu's metrics: 26 px rows (Theme.menu-item-h), the groups up to eight rows then they scroll
+    property <length> pad: 4px + Theme.hairline;
+    property <length> menu-w: 200px;
+    property <length> list-h: min(root.groups.length, 8) * Theme.menu-item-h;
+    property <length> y-cap: root.pad + Theme.menu-item-h;                       // under the row's name
+    property <length> y-none: root.y-cap + 22px;                                 // under the "Move to group" heading
+    property <length> y-list: root.y-none + Theme.menu-item-h;
+    property <length> y-rule: root.y-list + root.list-h + 4px;
+    property <length> y-field: root.y-rule + Theme.hairline + 5px;
+    property <length> menu-h: root.y-field + Theme.field-h + root.pad + 2px;
+
+    height: Theme.field-h;
+    min-width: 0px;
+
+    HorizontalLayout {
+        spacing: 6px;
+        Tick {
+            width: 14px;
+            on: root.entry.ticked;
+            tooltip: @tr("Ticked: scanned by the Scanner's \"Ticked frequencies\"\nand, for AM or NFM, played by the Airband monitor.");
+            toggled(v) => { root.ticked(v); }
+        }
+        StarKey { on: root.entry.favourite; toggled() => { root.favourited(!root.entry.favourite); } }
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            border-radius: Theme.radius-menu-item;
+            background: pick.has-hover ? Theme.menu-hot : transparent;
+            accessible-role: list-item;
+            accessible-label: root.entry.text;
+            accessible-action-default => { root.tuned(); }
+            Text {
+                x: 4px;
+                y: 0px;
+                width: max(0px, parent.width - 8px);
+                height: parent.height;
+                text: root.entry.text;
+                color: Theme.fg;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+            pick := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.tuned(); }
+                pointer-event(e) => {
+                    if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                        root.menu-opened();
+                        popup.show();
+                    }
+                }
+            }
+        }
+        Mid { Key {
+            xs: true;
+            icon-only: true;
+            icon: @image-url("icons/close.svg");
+            icon-size: 10px;
+            tooltip: @tr("Delete this bookmark");
+            accessible-label: @tr("Delete this bookmark");
+            clicked => { root.deleted(); }
+        } }
+    }
+
+    // the row's context menu, beside the row (a PopupWindow: modal, no `closed` callback)
+    popup := PopupWindow {
+        x: root.width + 12px;
+        y: -root.pad;
+        width: root.menu-w;
+        height: root.menu-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 28px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            // the header: the row's name
+            Text {
+                x: 12px;
+                y: root.pad;
+                width: root.menu-w - 24px;
+                height: Theme.menu-item-h;
+                text: root.entry.name != "" ? root.entry.name : root.entry.text;
+                color: Theme.fg;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-body;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            // "Move to group", the menu's .mh cap
+            Text {
+                x: 12px;
+                y: root.y-cap;
+                width: root.menu-w - 24px;
+                height: 22px;
+                text: @tr("Move to group").to-uppercase();
+                color: Theme.muted;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-cap;
+                font-weight: Theme.weight-semibold;
+                letter-spacing: Theme.cap-spacing;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            DropRow {
+                x: root.pad;
+                y: root.y-none;
+                width: root.menu-w - 2 * root.pad;
+                item: { label: @tr("No group"), id: "", enabled: true, note: "" };
+                chosen: root.entry.group == "";
+                activated => {
+                    root.moved("");
+                    popup.close();
+                }
+            }
+            if root.groups.length <= 8 : Rectangle {
+                x: root.pad;
+                y: root.y-list;
+                width: root.menu-w - 2 * root.pad;
+                height: root.list-h;
+                for g[i] in root.groups : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: parent.width;
+                    item: g;
+                    chosen: g.label == root.entry.group;
+                    activated => {
+                        root.moved(g.label);
+                        popup.close();
+                    }
+                }
+            }
+            if root.groups.length > 8 : Flickable {
+                x: root.pad;
+                y: root.y-list;
+                width: root.menu-w - 2 * root.pad;
+                height: root.list-h;
+                content-width: self.width;
+                content-height: root.groups.length * Theme.menu-item-h;
+                for g[i] in root.groups : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: root.menu-w - 2 * root.pad;
+                    item: g;
+                    chosen: g.label == root.entry.group;
+                    activated => {
+                        root.moved(g.label);
+                        popup.close();
+                    }
+                }
+            }
+            Rectangle { x: root.pad; y: root.y-rule; width: root.menu-w - 2 * root.pad; height: Theme.hairline; background: Theme.line-strong; }
+            LineInput {
+                x: 8px;
+                y: root.y-field;
+                width: root.menu-w - 16px;
+                placeholder: @tr("new group name");
+                name: @tr("new group name");
+                accepted(t) => {
+                    if (t != "") {
+                        root.moved(t);
+                        popup.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component BookmarksBody inherits VerticalLayout {
+    in property <BookmarksModel> model;
+
+    callback bookmark-name(string);
+    bookmark-name(a) => { ToolsEvents.bookmark-name(a); }
+    callback bookmark-add();
+    bookmark-add() => { ToolsEvents.bookmark-add(); }
+    callback bookmark-group(string);
+    bookmark-group(a) => { ToolsEvents.bookmark-group(a); }
+    callback bookmark-import-path(string);
+    bookmark-import-path(a) => { ToolsEvents.bookmark-import-path(a); }
+    callback bookmark-import();
+    bookmark-import() => { ToolsEvents.bookmark-import(); }
+    callback bookmark-search(string);
+    bookmark-search(a) => { ToolsEvents.bookmark-search(a); }
+    callback bookmark-filter(int);
+    bookmark-filter(a) => { ToolsEvents.bookmark-filter(a); }
+    callback bookmark-favourites(bool);
+    bookmark-favourites(a) => { ToolsEvents.bookmark-favourites(a); }
+    callback bookmark-on-spectrum(bool);
+    bookmark-on-spectrum(a) => { ToolsEvents.bookmark-on-spectrum(a); }
+    callback bookmark-stack(bool);
+    bookmark-stack(a) => { ToolsEvents.bookmark-stack(a); }
+    callback bookmark-export();
+    bookmark-export() => { ToolsEvents.bookmark-export(); }
+    callback bookmark-remove-group();
+    bookmark-remove-group() => { ToolsEvents.bookmark-remove-group(); }
+    callback bookmark-rename-draft(string);
+    bookmark-rename-draft(a) => { ToolsEvents.bookmark-rename-draft(a); }
+    callback bookmark-rename();
+    bookmark-rename() => { ToolsEvents.bookmark-rename(); }
+    callback bookmark-tick(int, bool);
+    bookmark-tick(a, b) => { ToolsEvents.bookmark-tick(a, b); }
+    callback bookmark-favourite(int, bool);
+    bookmark-favourite(a, b) => { ToolsEvents.bookmark-favourite(a, b); }
+    callback bookmark-tune(int);
+    bookmark-tune(a) => { ToolsEvents.bookmark-tune(a); }
+    callback bookmark-delete(int);
+    bookmark-delete(a) => { ToolsEvents.bookmark-delete(a); }
+    callback bookmark-menu(int);
+    bookmark-menu(a) => { ToolsEvents.bookmark-menu(a); }
+    callback bookmark-move(int, string);
+    bookmark-move(a, b) => { ToolsEvents.bookmark-move(a, b); }
+
+    in-out property <bool> renaming;                    // the rename field is open (a press on "Rename this group"); the body's own state, no host round trip
+
+    spacing: 6px;
+    alignment: start;
+
+    // ---- the name and Add current; the group the next one joins (with the arrow that lists the groups the list has) ----
+    Line {
+        nm := LineInput {
+            horizontal-stretch: 1;
+            value: root.model.name-draft;
+            placeholder: @tr("name");
+            name: @tr("Bookmark name");
+            committed(t) => { root.bookmark-name(t); }
+        }
+        Mid { Key {
+            label: root.model.add-label != "" ? root.model.add-label : @tr("Add current");
+            max-width: 140px;
+            small: true;
+            min-w: 0px;
+            min-width: 0px;
+            clicked => {
+                nm.flush();
+                grp.flush();
+                root.bookmark-add();
+            }
+        } }
+    }
+    Line {
+        gap: 4px;
+        grp := LineInput {
+            horizontal-stretch: 1;
+            value: root.model.group-draft;
+            placeholder: @tr("group (optional)");
+            name: @tr("Group");
+            tooltip: @tr("New bookmarks join this group - type a new name, or pick one the\nlist already has from the arrow. Empty means no group. Right-click\na row below to move it to another group.");
+            committed(t) => { root.bookmark-group(t); }
+        }
+        if root.model.groups.length > 0 : DropKey {
+            width: 28px;
+            value: "";
+            items: root.model.groups;
+            selected: -1;
+            label: @tr("Pick a group");
+            popup-min-w: 160px;
+            picked(i) => { root.bookmark-group(root.model.groups[i].label); }
+        }
+    }
+
+    // ---- the import: a path (or an empty box: the dialog), its result, the wait for the disk ----
+    Line {
+        imp := LineInput {
+            horizontal-stretch: 1;
+            value: root.model.import-path;
+            placeholder: @tr("SDR# frequencies.xml or .csv - or drop it on the window");
+            name: @tr("Import path");
+            committed(t) => { root.bookmark-import-path(t); }
+        }
+        Mid { Key {
+            label: root.model.import-label != "" ? root.model.import-label : @tr("Import");
+            max-width: 140px;
+            small: true;
+            min-w: 0px;
+            min-width: 0px;
+            enabled: !root.model.import-busy;
+            tooltip: @tr("Adds every entry of an SDR# frequencies.xml, or of a CSV with a\nfrequency column (and name, group, mode, bandwidth if it has them).\nImporting the same file again adds nothing twice.");
+            clicked => {
+                imp.flush();
+                root.bookmark-import();
+            }
+        } }
+    }
+    if root.model.import-note != "" : Note { wrap-w: root.width; text: root.model.import-note; }
+    if root.model.disk-wait != "" : Note { wrap-w: root.width; text: root.model.disk-wait; }
+
+    // ---- the search and the group filter, the three ticks, the count ----
+    Line {
+        LineInput {
+            horizontal-stretch: 1;
+            value: root.model.search;
+            placeholder: @tr("search names, groups or MHz");
+            name: @tr("Search bookmarks");
+            edited(t) => { root.bookmark-search(t); }
+        }
+        if root.model.filter-groups.length > 0 : DropKey {
+            width: 104px;
+            value: Pick.label(root.model.filter-groups, root.model.filter-index);
+            items: root.model.filter-groups;
+            selected: root.model.filter-index;
+            label: @tr("Group filter");
+            popup-min-w: 160px;
+            picked(i) => { root.bookmark-filter(i); }
+        }
+    }
+    Line {
+        Tick { horizontal-stretch: 1; label: @tr("Favourites only"); on: root.model.favourites-only; toggled(v) => { root.bookmark-favourites(v); } }
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("On the spectrum");
+            on: root.model.on-spectrum;
+            tooltip: @tr("Marks every bookmark inside the spectrum's span, named where\nthere is room. Only the ones on screen are looked at, so a list\nof tens of thousands costs nothing.");
+            toggled(v) => { root.bookmark-on-spectrum(v); }
+        }
+    }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("Stack close names");
+            on: root.model.stack-names;
+            enabled: root.model.stack-enabled;
+            tooltip: @tr("Names that would overlap are placed on up to three rows\ninstead of being hidden. Untick for one row.");
+            toggled(v) => { root.bookmark-stack(v); }
+        }
+    }
+    if root.model.count-line != "" : Note { wrap-w: root.width; text: root.model.count-line; }
+
+    // ---- Export for SDR#, Remove this group, Rename this group (and the rename field) ----
+    if root.model.export-label != "" || root.model.remove-group-label != "" || root.model.rename-group-label != "" : KeyFlow {
+        xs: true;
+        gap: 4px;
+        k1: { label: root.model.export-label, on: false, enabled: !root.model.export-busy };
+        k2: { label: root.model.remove-group-label, on: false, enabled: true };
+        k3: { label: root.model.rename-group-label, on: root.renaming, enabled: true };
+        clicked(i) => {
+            if (i == 1) { root.bookmark-export(); }
+            else if (i == 2) { root.bookmark-remove-group(); }
+            else { root.renaming = !root.renaming; }
+        }
+    }
+    if root.renaming && root.model.rename-group-label != "" : Line {
+        rn := LineInput {
+            horizontal-stretch: 1;
+            value: root.model.rename-draft;
+            placeholder: @tr("new group name");
+            name: @tr("new group name");
+            committed(t) => { root.bookmark-rename-draft(t); }
+            accepted(t) => {
+                root.bookmark-rename();
+                root.renaming = false;
+            }
+        }
+        Mid { Key {
+            label: @tr("Rename");
+            max-width: 140px;
+            small: true;
+            min-w: 0px;
+            min-width: 0px;
+            clicked => {
+                rn.flush();
+                root.bookmark-rename();
+                root.renaming = false;
+            }
+        } }
+    }
+
+    // ---- the rows (a scrolling list, 12 rows high at most) and what the last save said ----
+    if root.model.rows.length > 0 : ScrollRows {
+        count: root.model.rows.length;
+        for r in root.model.rows : BookmarkRowView {
+            entry: r;
+            groups: root.model.groups;
+            ticked(v) => { root.bookmark-tick(r.id, v); }
+            favourited(v) => { root.bookmark-favourite(r.id, v); }
+            tuned() => { root.bookmark-tune(r.id); }
+            deleted() => { root.bookmark-delete(r.id); }
+            menu-opened() => { root.bookmark-menu(r.id); }
+            moved(g) => { root.bookmark-move(r.id, g); }
+        }
+    }
+    if root.model.error != "" : Note { wrap-w: root.width; text: root.model.error; tone: ChipTone.err; }
+}
+
+// ================================================ Scanner ================================================
+
+export component ScannerBody inherits VerticalLayout {
+    in property <ScannerModel> model;
+
+    callback scanner-ticked(bool);
+    scanner-ticked(a) => { ToolsEvents.scanner-ticked(a); }
+    callback scanner-start(string);
+    scanner-start(a) => { ToolsEvents.scanner-start(a); }
+    callback scanner-stop(string);
+    scanner-stop(a) => { ToolsEvents.scanner-stop(a); }
+    callback scanner-step(string);
+    scanner-step(a) => { ToolsEvents.scanner-step(a); }
+    callback scanner-dwell(string);
+    scanner-dwell(a) => { ToolsEvents.scanner-dwell(a); }
+    callback scanner-hold(string);
+    scanner-hold(a) => { ToolsEvents.scanner-hold(a); }
+    callback scanner-resume(string);
+    scanner-resume(a) => { ToolsEvents.scanner-resume(a); }
+    callback scanner-listen(string);
+    scanner-listen(a) => { ToolsEvents.scanner-listen(a); }
+    callback scanner-run();
+    scanner-run() => { ToolsEvents.scanner-run(); }
+    callback scanner-halt();
+    scanner-halt() => { ToolsEvents.scanner-halt(); }
+    callback scanner-skip();
+    scanner-skip() => { ToolsEvents.scanner-skip(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // the range fields are greyed in ticked mode (the ticked rows replace the range)
+    property <bool> range-on: root.model.range-enabled && !root.model.ticked-mode;
+
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: root.model.ticked-label != "" ? root.model.ticked-label : @tr("Ticked frequencies");
+            on: root.model.ticked-mode;
+            tooltip: @tr("Scans the rows ticked in the Bookmarks list, in frequency order,\ntuning each one's mode and bandwidth with it.");
+            toggled(v) => { root.scanner-ticked(v); }
+        }
+    }
+    Line {
+        height: 40px;
+        gap: 6px;
+        f-start := LabelledField { horizontal-stretch: 1; label: @tr("Start MHz"); value: root.model.start-mhz; enabled: root.range-on; committed(t) => { root.scanner-start(t); } }
+        f-stop := LabelledField { horizontal-stretch: 1; label: @tr("Stop MHz"); value: root.model.stop-mhz; enabled: root.range-on; committed(t) => { root.scanner-stop(t); } }
+        f-step := LabelledField { horizontal-stretch: 1; label: @tr("Step kHz"); value: root.model.step-khz; enabled: root.range-on; committed(t) => { root.scanner-step(t); } }
+    }
+    Line {
+        height: 40px;
+        gap: 6px;
+        f-dwell := LabelledField { horizontal-stretch: 1; label: @tr("Dwell ms"); value: root.model.dwell-ms; committed(t) => { root.scanner-dwell(t); } }
+        f-hold := LabelledField { horizontal-stretch: 1; label: @tr("Hold ms"); value: root.model.hold-ms; committed(t) => { root.scanner-hold(t); } }
+        f-resume := LabelledField { horizontal-stretch: 1; label: @tr("Resume ms"); value: root.model.resume-ms; committed(t) => { root.scanner-resume(t); } }
+        f-listen := LabelledField {
+            horizontal-stretch: 1;
+            label: @tr("Listen ms");
+            value: root.model.listen-ms;
+            tooltip: @tr("Longest stay on one signal before the scan moves on.\n0 = stay until it goes quiet.");
+            committed(t) => { root.scanner-listen(t); }
+        }
+    }
+    // Start scan fills the row; while scanning Stop scan and Skip share it (aw 30577-30600)
+    Rectangle {
+        height: Theme.key-sm-h;
+        clip: true;
+        if !root.model.scanning : Key {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            small: true;
+            label: root.model.start-label != "" ? root.model.start-label : @tr("Start scan");
+            enabled: !root.model.start-disabled;
+            clicked => {
+                f-start.flush();
+                f-stop.flush();
+                f-step.flush();
+                f-dwell.flush();
+                f-hold.flush();
+                f-resume.flush();
+                f-listen.flush();
+                root.scanner-run();
+            }
+        }
+        if root.model.scanning : Key {
+            x: 0px;
+            y: 0px;
+            width: (parent.width - 6px) / 2;
+            small: true;
+            on: true;
+            label: root.model.stop-label != "" ? root.model.stop-label : @tr("Stop scan");
+            clicked => { root.scanner-halt(); }
+        }
+        if root.model.scanning : Key {
+            x: (parent.width + 6px) / 2;
+            y: 0px;
+            width: (parent.width - 6px) / 2;
+            small: true;
+            label: root.model.skip-label != "" ? root.model.skip-label : @tr("Skip");
+            clicked => { root.scanner-skip(); }
+        }
+    }
+    if root.model.status != "" : Note { wrap-w: root.width; text: root.model.status; tone: root.model.status-tone; }
+}
+
+// ================================================ Airband ================================================
+
+// One channel of the monitor: the tick, the lamp (lit while the channel is heard), the selectable "118.7000  Tower", the amber time it has been heard.
+component AirbandRowView inherits Rectangle {
+    in property <AirbandRow> entry;
+    in property <bool> listening;
+    callback ticked(bool);
+    callback tuned();
+
+    height: Theme.field-h;
+    min-width: 0px;
+    HorizontalLayout {
+        spacing: 6px;
+        Tick {
+            width: 14px;
+            on: root.entry.ticked;
+            tooltip: @tr("Ticked: scanned by the Scanner's \"Ticked frequencies\"\nand, for AM or NFM, played by the Airband monitor.");
+            toggled(v) => { root.ticked(v); }
+        }
+        VerticalLayout {
+            width: Theme.lamp-dot-sm;
+            alignment: center;
+            LampDot { state: root.entry.heard ? LampState.green : LampState.off; accessible-role: none; }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            border-radius: Theme.radius-menu-item;
+            background: pick.has-hover ? Theme.menu-hot : transparent;
+            accessible-role: list-item;
+            accessible-label: root.entry.text;
+            accessible-action-default => { root.tuned(); }
+            Text {
+                x: 4px;
+                y: 0px;
+                width: max(0px, parent.width - 8px);
+                height: parent.height;
+                text: root.entry.text;
+                color: root.listening && !root.entry.on-air ? Theme.dim : Theme.fg;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+            pick := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.tuned(); }
+            }
+        }
+        Text {
+            horizontal-stretch: 0;
+            min-width: 0px;
+            text: root.entry.heard-time;
+            color: Theme.chip-warn-fg;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-small;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// One airport of a list ("EGLL  London Heathrow  23 km", "ORD  Chicago O'Hare  (United States)"): a selectable line.
+component AirportLine inherits Rectangle {
+    in property <AirportRow> airport;
+    callback picked();
+    height: Theme.field-h;
+    min-width: 0px;
+    border-radius: Theme.radius-menu-item;
+    background: area.has-hover ? Theme.menu-hot : transparent;
+    accessible-role: list-item;
+    accessible-label: root.airport.code + "  " + root.airport.name;
+    accessible-action-default => { root.picked(); }
+    Text {
+        x: 4px;
+        y: 0px;
+        width: max(0px, parent.width - 8px);
+        height: parent.height;
+        text: root.airport.code + "  " + root.airport.name + (root.airport.distance != "" ? "  " + root.airport.distance : "") + (root.airport.note != "" ? "  " + root.airport.note : "");
+        color: Theme.fg;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    area := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+export component AirbandBody inherits VerticalLayout {
+    in property <AirbandModel> model;
+
+    callback airband-code(string);
+    airband-code(a) => { ToolsEvents.airband-code(a); }
+    callback airband-lookup();
+    airband-lookup() => { ToolsEvents.airband-lookup(); }
+    callback airband-nearest();
+    airband-nearest() => { ToolsEvents.airband-nearest(); }
+    callback airband-hide();
+    airband-hide() => { ToolsEvents.airband-hide(); }
+    callback airband-airport(int);
+    airband-airport(a) => { ToolsEvents.airband-airport(a); }
+    callback airband-ambiguous(int);
+    airband-ambiguous(a) => { ToolsEvents.airband-ambiguous(a); }
+    callback airband-preset(int);
+    airband-preset(a) => { ToolsEvents.airband-preset(a); }
+    callback airband-preset-name(string);
+    airband-preset-name(a) => { ToolsEvents.airband-preset-name(a); }
+    callback airband-freq(string);
+    airband-freq(a) => { ToolsEvents.airband-freq(a); }
+    callback airband-mode(int);
+    airband-mode(a) => { ToolsEvents.airband-mode(a); }
+    callback airband-name(string);
+    airband-name(a) => { ToolsEvents.airband-name(a); }
+    callback airband-add();
+    airband-add() => { ToolsEvents.airband-add(); }
+    callback airband-import-path(string);
+    airband-import-path(a) => { ToolsEvents.airband-import-path(a); }
+    callback airband-import();
+    airband-import() => { ToolsEvents.airband-import(); }
+    callback airband-export();
+    airband-export() => { ToolsEvents.airband-export(); }
+    callback airband-remove-preset();
+    airband-remove-preset() => { ToolsEvents.airband-remove-preset(); }
+    callback airband-folder();
+    airband-folder() => { ToolsEvents.airband-folder(); }
+    callback airband-group(int);
+    airband-group(a) => { ToolsEvents.airband-group(a); }
+    callback airband-tick-all();
+    airband-tick-all() => { ToolsEvents.airband-tick-all(); }
+    callback airband-untick-all();
+    airband-untick-all() => { ToolsEvents.airband-untick-all(); }
+    callback airband-busiest(bool);
+    airband-busiest(a) => { ToolsEvents.airband-busiest(a); }
+    callback airband-tick(int, bool);
+    airband-tick(a, b) => { ToolsEvents.airband-tick(a, b); }
+    callback airband-tune(int);
+    airband-tune(a) => { ToolsEvents.airband-tune(a); }
+    callback airband-squelch(float);
+    airband-squelch(a) => { ToolsEvents.airband-squelch(a); }
+    callback airband-above-noise();
+    airband-above-noise() => { ToolsEvents.airband-above-noise(); }
+    callback airband-hold(string);
+    airband-hold(a) => { ToolsEvents.airband-hold(a); }
+    callback airband-listen();
+    airband-listen() => { ToolsEvents.airband-listen(); }
+    callback airband-next();
+    airband-next() => { ToolsEvents.airband-next(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    property <string> preset-help: @tr("A preset is a named list of frequencies - a group of the frequency list.\nAdd puts a frequency in it. Import reads a .csv or an SDR# frequencies.xml\ninto it, the AM and NFM rows ticked. Export CSV writes it to the recordings folder.\nRemove preset takes its rows out of the list.");
+
+    // ---- the airport: its code and Look up, the nearest ones, the ambiguous choices ----
+    Line {
+        code := LineInput {
+            horizontal-stretch: 1;
+            value: root.model.code-draft;
+            placeholder: @tr("airport code - KORD, ORD, EGLL, LHR");
+            name: @tr("Airport code");
+            committed(t) => { root.airband-code(t); }
+            accepted(t) => { root.airband-lookup(); }
+        }
+        Mid { Key {
+            label: root.model.lookup-label != "" ? root.model.lookup-label : @tr("Look up");
+            max-width: 140px;
+            small: true;
+            min-w: 0px;
+            min-width: 0px;
+            enabled: code.text != "";
+            tooltip: @tr("The ICAO code, the three-letter code on a luggage tag, or in the US\nthe FAA's own id. Adds the airport's frequencies to the frequency\nlist as a group. US lists come from the FAA, the rest of the world's\nfrom OurAirports; both are built into FoxSDR, so this needs no\ninternet connection.");
+            clicked => {
+                code.flush();
+                root.airband-lookup();
+            }
+        } }
+    }
+    KeyFlow {
+        k1: { label: root.model.nearest-label != "" ? root.model.nearest-label : @tr("Nearest airports"), on: false, enabled: !root.model.nearest-disabled };
+        k2: { label: root.model.hide-label, on: false, enabled: true };
+        clicked(i) => {
+            if (i == 1) { root.airband-nearest(); }
+            else { root.airband-hide(); }
+        }
+    }
+    for a[i] in root.model.airports : AirportLine { airport: a; picked() => { root.airband-airport(i); } }
+    for a[i] in root.model.ambiguous : AirportLine { airport: a; picked() => { root.airband-ambiguous(i); } }
+
+    // ---- the preset: its name (and the arrow that lists the presets there are), a frequency of your own with its mode, its name and Add ----
+    Line {
+        gap: 6px;
+        RowLabel { text: @tr("Preset"); horizontal-stretch: 0; }
+        pname := LineInput {
+            horizontal-stretch: 1;
+            value: root.model.preset-name;
+            placeholder: @tr("Preset");
+            name: @tr("Preset");
+            tooltip: root.preset-help;
+            committed(t) => { root.airband-preset-name(t); }
+        }
+        if root.model.presets.length > 0 : DropKey {
+            width: 28px;
+            value: "";
+            items: root.model.presets;
+            selected: root.model.preset-index;
+            label: @tr("Pick a preset");
+            popup-min-w: 160px;
+            picked(i) => { root.airband-preset(i); }
+        }
+    }
+    Line {
+        freq := LineInput {
+            horizontal-stretch: 1;
+            mono: true;
+            value: root.model.freq-draft;
+            placeholder: @tr("Frequency (MHz)");
+            name: @tr("Frequency (MHz)");
+            committed(t) => { root.airband-freq(t); }
+        }
+        DropKey {
+            width: 76px;
+            value: Pick.label(root.model.modes, root.model.mode-index);
+            items: root.model.modes;
+            selected: root.model.mode-index;
+            label: @tr("Mode");
+            popup-min-w: 80px;
+            picked(i) => { root.airband-mode(i); }
+        }
+    }
+    Line {
+        pname2 := LineInput {
+            horizontal-stretch: 1;
+            value: root.model.name-draft;
+            placeholder: @tr("name");
+            name: @tr("name");
+            committed(t) => { root.airband-name(t); }
+        }
+        Mid { Key {
+            label: root.model.add-label != "" ? root.model.add-label : @tr("Add");
+            max-width: 140px;
+            small: true;
+            min-w: 0px;
+            min-width: 0px;
+            enabled: freq.text != "";
+            tooltip: @tr("Adds the frequency to the preset named above, ticked. With no name\nit is named by its frequency.\nAM is for aircraft; NFM is narrow FM - marine, business and\npublic-service radio.");
+            clicked => {
+                pname.flush();
+                freq.flush();
+                pname2.flush();
+                root.airband-add();
+            }
+        } }
+    }
+    if root.model.note != "" : Note { wrap-w: root.width; text: root.model.note; }
+
+    // ---- the import, the export, the removal; their note and the way to the folder ----
+    Line {
+        imp := LineInput {
+            horizontal-stretch: 1;
+            value: root.model.import-path;
+            placeholder: @tr("SDR# frequencies.xml or .csv - its path");
+            name: @tr("Import path");
+            committed(t) => { root.airband-import-path(t); }
+        }
+        Mid { Key {
+            label: root.model.import-label != "" ? root.model.import-label : @tr("Import");
+            max-width: 140px;
+            small: true;
+            min-w: 0px;
+            min-width: 0px;
+            enabled: !root.model.import-busy;
+            clicked => {
+                imp.flush();
+                root.airband-import();
+            }
+        } }
+    }
+    KeyFlow {
+        k1: { label: root.model.export-label != "" ? root.model.export-label : @tr("Export CSV"), on: false, enabled: root.model.rows.length > 0 && !root.model.export-busy };
+        k2: { label: root.model.remove-preset-label != "" ? root.model.remove-preset-label : @tr("Remove preset"), on: false, enabled: root.model.rows.length > 0 };
+        clicked(i) => {
+            if (i == 1) { root.airband-export(); }
+            else { root.airband-remove-preset(); }
+        }
+    }
+    if root.model.preset-note != "" : Note { wrap-w: root.width; text: root.model.preset-note; }
+    if root.model.folder-label != "" : KeyFlow {
+        k1: { label: root.model.folder-label, on: false, enabled: true };
+        clicked(i) => { root.airband-folder(); }
+    }
+
+    // ---- which channels the monitor plays: the group, how many are ticked, Tick all / Untick all, Busiest first ----
+    Line {
+        DropKey {
+            horizontal-stretch: 1;
+            value: Pick.label(root.model.groups, root.model.group-index);
+            items: root.model.groups;
+            selected: root.model.group-index;
+            label: @tr("Group");
+            popup-min-w: 250px;
+            picked(i) => { root.airband-group(i); }
+        }
+    }
+    if root.model.count-line != "" : Note { wrap-w: root.width; text: root.model.count-line; }
+    if root.model.tick-all-label != "" || root.model.untick-all-label != "" : KeyFlow {
+        k1: { label: root.model.tick-all-label, on: false, enabled: true };
+        k2: { label: root.model.untick-all-label, on: false, enabled: true };
+        clicked(i) => {
+            if (i == 1) { root.airband-tick-all(); }
+            else { root.airband-untick-all(); }
+        }
+    }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("Busiest first");
+            on: root.model.busiest-first;
+            tooltip: @tr("Sorts by how long each frequency has been heard talking while\nFoxSDR listened - measured here, at your aerial, and kept.");
+            toggled(v) => { root.airband-busiest(v); }
+        }
+    }
+
+    // ---- what is being heard, above the list; the list (12 rows at most) ----
+    if root.model.hearing != "" : Note { wrap-w: root.width; text: root.model.hearing; ink: Theme.fg-soft; }
+    if root.model.rows.length > 0 : ScrollRows {
+        count: root.model.rows.length;
+        for r in root.model.rows : AirbandRowView {
+            entry: r;
+            listening: root.model.listening;
+            ticked(v) => { root.airband-tick(r.id, v); }
+            tuned() => { root.airband-tune(r.id); }
+        }
+    }
+
+    // ---- squelch, Above the noise, hold, LISTEN / STOP + Next block ----
+    SliderRow {
+        label: @tr("Squelch");
+        readout: root.model.squelch-text;
+        value: root.model.squelch-norm;
+        tooltip: @tr("A channel is heard while its level is above this. Hover a row\nwhile listening to see its level; \"Above the noise\" sets it\nfor you from the quiet channels.");
+        changed(v) => { root.airband-squelch(v); }
+    }
+    Line {
+        Mid { Key {
+            label: root.model.above-noise-label != "" ? root.model.above-noise-label : @tr("Above the noise");
+            max-width: 140px;
+            small: true;
+            min-w: 0px;
+            min-width: 0px;
+            enabled: root.model.listening;
+            clicked => { root.airband-above-noise(); }
+        } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    Line {
+        gap: 6px;
+        RowLabel { text: @tr("Hold"); horizontal-stretch: 1; }
+        hold := LineInput {
+            width: 64px;
+            mono: true;
+            right: true;
+            value: root.model.hold-text;
+            name: @tr("Hold");
+            tooltip: @tr("How long a block stays after its last word before the scan moves\non. Only used when the ticked frequencies need more than one block.");
+            committed(t) => { root.airband-hold(t); }
+        }
+        RowLabel { text: "s"; color: Theme.dim; horizontal-stretch: 0; }   // not-translated: a unit
+    }
+    Rectangle {
+        height: Theme.key-sm-h;
+        clip: true;
+        if !root.model.listening : Key {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            small: true;
+            label: root.model.listen-label != "" ? root.model.listen-label : @tr("LISTEN");
+            tooltip: @tr("Plays every ticked AM or NFM frequency the radio's band can hold at\nonce, mixed; when they do not all fit, scans between blocks of\nthem and stops wherever someone is talking. Uses the receiver's\nradio, so it switches to the RECEIVER view.");
+            clicked => {
+                hold.flush();
+                root.airband-listen();
+            }
+        }
+        if root.model.listening : Key {
+            x: 0px;
+            y: 0px;
+            width: root.model.next-label != "" ? (parent.width - 6px) / 2 : parent.width;
+            small: true;
+            danger: true;
+            label: root.model.listen-label != "" ? root.model.listen-label : @tr("STOP");
+            clicked => { root.airband-listen(); }
+        }
+        if root.model.listening && root.model.next-label != "" : Key {
+            x: (parent.width + 6px) / 2;
+            y: 0px;
+            width: (parent.width - 6px) / 2;
+            small: true;
+            label: root.model.next-label;
+            clicked => { root.airband-next(); }
+        }
+    }
+}
+
+// ================================================ the Markers window ================================================
+
+// A centred sheet on a dimmed backdrop (the IA's dialog form, as main.slint's Sheet): fills the element it is placed in; a click on the backdrop dismisses.
+component SheetFrame inherits Rectangle {
+    in property <string> title;
+    in property <length> sheet-w: 460px;
+    in property <length> sheet-h: 0px;                  // 0: as high as the content wants
+    callback dismissed();
+
+    background: Theme.backdrop;
+    TouchArea { clicked => { root.dismissed(); } }
+    panel := Rectangle {
+        width: min(root.sheet-w, root.width - 24px);
+        height: root.sheet-h > 0px ? min(root.sheet-h, root.height - 24px) : min(content.preferred-height + Theme.win-title-h + 3 * Theme.hairline, root.height - 24px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.panel;
+        border-width: Theme.hairline;
+        border-color: Theme.knob-ring;
+        border-radius: Theme.radius-panel;
+        drop-shadow-blur: Theme.shadows ? 28px : 0px;
+        drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+        drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+        clip: true;
+        TouchArea { }   // swallows the click so the backdrop does not dismiss
+        // the title strip (.wt): menu ground, a rule under it, the title as a cap, a close key at the right
+        Rectangle {
+            x: Theme.hairline;
+            y: Theme.hairline;
+            width: parent.width - 2 * Theme.hairline;
+            height: Theme.win-title-h;
+            background: Theme.menu;
+            Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line-strong; }
+            Text {
+                x: 12px;
+                y: 0px;
+                width: max(0px, parent.width - 12px - 40px);
+                height: parent.height;
+                text: root.title.to-uppercase();
+                color: Theme.fg;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-small;
+                font-weight: Theme.weight-semibold;
+                letter-spacing: 0.8px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Key {
+                x: parent.width - 4px - 26px;
+                y: (parent.height - 22px) / 2;
+                width: 26px;
+                height: 22px;
+                icon-only: true;
+                flat: true;
+                icon: @image-url("icons/close.svg");
+                icon-size: 12px;
+                tooltip: @tr("Close");
+                accessible-label: @tr("Close");
+                clicked => { root.dismissed(); }
+            }
+        }
+        content := VerticalLayout {
+            x: Theme.hairline;
+            y: Theme.win-title-h + Theme.hairline;
+            width: parent.width - 2 * Theme.hairline;
+            height: parent.height - Theme.win-title-h - 2 * Theme.hairline;
+            padding: 12px;
+            spacing: 10px;
+            @children
+        }
+    }
+}
+
+// The columns of the marker table (drawMarkerWindow: #, Frequency, Noted, Note, then the keys): fixed figures, the note takes the rest.
+global MarkerCols {
+    out property <length> num-w: 44px;
+    out property <length> freq-w: 124px;
+    out property <length> dropped-w: 76px;
+    out property <length> keys-w: 148px;
+}
+
+// A heading of the marker table: the .tbl cap (10 px / 600, upper-case, muted).
+component MarkerHead inherits Text {
+    min-width: 0px;
+    overflow: elide;
+    color: Theme.muted;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-cap;
+    font-weight: Theme.weight-semibold;
+    letter-spacing: Theme.cap-spacing;
+    vertical-alignment: center;
+}
+
+component MarkerRowView inherits Rectangle {
+    in property <MarkerRow> entry;
+    callback note-edited(string);
+    callback tuned();
+    callback bookmarked();
+    callback removed();
+    height: 28px;
+    min-width: 0px;
+    Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; background: Theme.line-faint; }
+    HorizontalLayout {
+        spacing: 8px;
+        padding-left: 8px;
+        padding-right: 8px;
+        Readout { width: MarkerCols.num-w - 8px; text: "M" + root.entry.number; color: Theme.accent-soft; }   // not-translated: the marker's own tag, M1, M2...
+        Readout { width: MarkerCols.freq-w - 8px; text: root.entry.hz-text; }
+        Readout { width: MarkerCols.dropped-w - 8px; text: root.entry.dropped; color: Theme.dim; }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            LineInput {
+                value: root.entry.note;
+                placeholder: @tr("add a note");
+                name: @tr("Note");
+                edited(t) => { root.note-edited(t); }
+            }
+        }
+        VerticalLayout {
+            width: MarkerCols.keys-w - 8px;
+            alignment: center;
+            HorizontalLayout {
+                spacing: 4px;
+                Key { xs: true; label: @tr("Tune"); tooltip: @tr("Tune the receiver here"); clicked => { root.tuned(); } }
+                Key { xs: true; label: @tr("Bookmark"); tooltip: @tr("Add it to the Bookmarks, in the current mode"); clicked => { root.bookmarked(); } }
+                Key { xs: true; icon-only: true; icon: @image-url("icons/close.svg"); icon-size: 10px; tooltip: @tr("Remove this marker"); accessible-label: @tr("Remove this marker"); clicked => { root.removed(); } }
+            }
+        }
+    }
+}
+
+// The Markers window (drawMarkerWindow) as a sheet over the element it is placed in: the error, the table (#, Frequency, Noted, an editable Note, Tune / Bookmark /
+// remove) or the empty sentence, then "Copy markers to clipboard" and "Clear all markers" (a second press asks "Yes, remove all N", as the ImGui popup does).
+export component MarkersSheet inherits Rectangle {
+    in property <MarkersModel> model;
+
+    callback markers-note(int, string);
+    markers-note(a, b) => { ToolsEvents.markers-note(a, b); }
+    callback markers-remove(int);
+    markers-remove(a) => { ToolsEvents.markers-remove(a); }
+    callback markers-clear();
+    markers-clear() => { ToolsEvents.markers-clear(); }
+    callback markers-tune(int);
+    markers-tune(a) => { ToolsEvents.markers-tune(a); }
+    callback markers-bookmark(int);
+    markers-bookmark(a) => { ToolsEvents.markers-bookmark(a); }
+    callback markers-copy();
+    markers-copy() => { ToolsEvents.markers-copy(); }
+    callback markers-closed();
+    markers-closed() => { ToolsEvents.markers-closed(); }
+
+    property <bool> armed;                              // Clear all markers has been pressed once
+    property <length> sheet-inner-w: min(620px, root.width - 24px) - 2 * Theme.hairline - 24px;   // the sheet's content width (SheetFrame: 12 px of padding each side)
+    changed model => { root.armed = false; }
+
+    if root.model.shown : SheetFrame {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        title: @tr("Markers");
+        sheet-w: 620px;
+        sheet-h: 340px;
+        dismissed => { root.markers-closed(); }
+        if root.model.error != "" : Note { wrap-w: root.sheet-inner-w; text: root.model.error; tone: ChipTone.err; }
+        if root.model.rows.length == 0 : Rectangle {
+            vertical-stretch: 1;
+            Note {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                wrap-w: root.sheet-inner-w;
+                text: root.model.empty-line != "" ? root.model.empty-line : @tr("No markers yet. Right-click the waterfall and choose Drop marker here.");
+            }
+        }
+        if root.model.rows.length > 0 : VerticalLayout {
+            vertical-stretch: 1;
+            spacing: 0px;
+            Rectangle {
+                height: 22px;
+                background: Theme.strip;
+                Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; background: Theme.line-strong; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    MarkerHead { width: MarkerCols.num-w - 8px; text: "#"; }
+                    MarkerHead { width: MarkerCols.freq-w - 8px; text: @tr("Frequency").to-uppercase(); }
+                    MarkerHead { width: MarkerCols.dropped-w - 8px; text: @tr("Noted").to-uppercase(); }
+                    MarkerHead { horizontal-stretch: 1; text: @tr("Note").to-uppercase(); }
+                    Rectangle { width: MarkerCols.keys-w - 8px; }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                body := Flickable {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    content-width: self.width;
+                    content-height: root.model.rows.length * 28px;
+                    VerticalLayout {
+                        x: 0px;
+                        y: 0px;
+                        width: body.width - (root.model.rows.length * 28px > body.height ? 12px : 0px);
+                        height: root.model.rows.length * 28px;
+                        alignment: start;
+                        for r in root.model.rows : MarkerRowView {
+                            entry: r;
+                            note-edited(t) => { root.markers-note(r.number, t); }
+                            tuned() => { root.markers-tune(r.number); }
+                            bookmarked() => { root.markers-bookmark(r.number); }
+                            removed() => { root.markers-remove(r.number); }
+                        }
+                    }
+                }
+                if root.model.rows.length * 28px > body.height + 0.5px : ScrollThumb {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    content-height: root.model.rows.length * 28px;
+                    visible-height: parent.height;
+                    content-y: body.content-y;
+                    scrolled(y) => { body.content-y = y; }
+                }
+            }
+        }
+        Rectangle {
+            height: Theme.key-sm-h;
+            clip: true;
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                Key {
+                    small: true;
+                    min-w: 0px;
+            min-width: 0px;
+                    label: root.model.copy-label != "" ? root.model.copy-label : @tr("Copy markers to clipboard");
+                    enabled: root.model.rows.length > 0;
+                    clicked => { root.markers-copy(); }
+                }
+                Key {
+                    small: true;
+                    min-w: 0px;
+            min-width: 0px;
+                    danger: root.armed;
+                    label: root.armed ? (root.model.clear-yes-label != "" ? root.model.clear-yes-label : @tr("Yes, remove all {}", root.model.rows.length))
+                                      : (root.model.clear-label != "" ? root.model.clear-label : @tr("Clear all markers"));
+                    enabled: root.model.rows.length > 0;
+                    clicked => {
+                        if (root.armed) {
+                            root.armed = false;
+                            root.markers-clear();
+                        } else {
+                            root.armed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
