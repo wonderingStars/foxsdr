@@ -487,18 +487,43 @@ jobs:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
           key: vcpkg-windows-2022-${{ env.VCPKG_COMMIT }}-soapysdr-x64-windows
 
+      # The Slint C++ SDK (prebuilt, MSVC x64): foxsdr-slint.exe is the application the
+      # installer ships (installer\cascade.iss, SlintIsApp), so the job needs the same SDK
+      # the release machine has at C:\Users\steve\slint-cpp-1.18.1 (tools\release.ps1
+      # -SlintSdk). The installer is unsigned: its SHA-256 is pinned here and checked
+      # before it runs, as the release machine's copy was checked when it was downloaded.
+      - name: The Slint C++ SDK
+        shell: pwsh
+        env:
+          SLINT_SDK_URL: https://github.com/slint-ui/slint/releases/download/v1.18.1/Slint-cpp-1.18.1-win64-MSVC-AMD64.exe
+          SLINT_SDK_SHA256: eea71789a54982bc1c164d9e1d2c7f00fead1415e9ac396ccb48676f2f66a7a9
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'slint-sdk-setup.exe'
+          Invoke-WebRequest -Uri $env:SLINT_SDK_URL -OutFile $setup
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:SLINT_SDK_SHA256) { throw "Slint SDK installer sha256 $hash, expected $env:SLINT_SDK_SHA256" }
+          $sdk = 'C:\slint-cpp-1.18.1'
+          # NSIS silent install; /D= must be the last switch and unquoted.
+          $p = Start-Process -FilePath $setup -ArgumentList "/S", "/D=$sdk" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Slint SDK installer exit $($p.ExitCode)" }
+          if (-not (Test-Path "$sdk\lib\cmake\Slint\SlintConfig.cmake")) { throw "no SlintConfig.cmake under $sdk" }
+          "SLINT_SDK=$sdk" >> $env:GITHUB_ENV
+          Get-ChildItem $sdk | Format-Table Name
+
       - name: Configure
         shell: pwsh
         run: |
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_BUILD_TYPE=Release
+            -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_BUILD_TYPE=Release `
+            -DCASCADE_BUILD_SLINT=ON "-DCMAKE_PREFIX_PATH=$($env:SLINT_SDK.Replace('\', '/'))"
           if ($LASTEXITCODE -ne 0) { throw 'configure failed' }
 
       # Twice, as on the release machine: the second pass must change nothing, and
-      # printing both hashes shows whether it did. Only the `cascade` target, because
-      # the installer and the package need nothing else; the POST_BUILD step on it is
-      # what archives the symbols (CMakeLists.txt).
+      # printing both hashes shows whether it did. The `cascade` target (the classic
+      # window; the POST_BUILD step on it is what archives the symbols, CMakeLists.txt)
+      # and `foxsdr-slint` (the window the installer ships), because the installer and
+      # the package need nothing else.
       - name: Build, twice
         shell: pwsh
         run: |
@@ -506,24 +531,28 @@ jobs:
             # `-m` alone: PowerShell hands a native command `-m:4` as `-m:` and `4`,
             # and MSBuild answers MSB1031 "Specify the maximum number of CPUs" (the
             # first run, 37615786440). Without a count MSBuild uses every core.
-            cmake --build build --config Release --target cascade -- -m
+            cmake --build build --config Release --target cascade foxsdr-slint -- -m
             if ($LASTEXITCODE -ne 0) { throw "build pass $pass failed" }
-            "pass ${pass}: $((Get-FileHash build\Release\cascade.exe -Algorithm SHA256).Hash)"
+            "pass ${pass}: cascade.exe $((Get-FileHash build\Release\cascade.exe -Algorithm SHA256).Hash)"
+            "pass ${pass}: foxsdr-slint.exe $((Get-FileHash build\src\slint\Release\foxsdr-slint.exe -Algorithm SHA256).Hash)"
           }
+          if (-not (Test-Path build\src\slint\Release\slint_cpp.dll)) { throw 'slint_cpp.dll is not beside foxsdr-slint.exe; the installer stages it from there' }
 
       # The binary has to say the version it was built as. Read through redirected
       # files, which works whether cascade.exe is a console or a Windows-subsystem
       # program (from PowerShell `& cascade.exe --version` captures nothing for the
       # second kind).
-      - name: Check the binary names its own version
+      - name: Check the binaries name their own version
         shell: pwsh
         run: |
-          $exe = (Resolve-Path build\Release\cascade.exe).Path
-          $out = Join-Path $env:RUNNER_TEMP 'version.out'
-          $p = Start-Process -FilePath $exe -ArgumentList '--version' -RedirectStandardOutput $out -RedirectStandardError "$out.err" -Wait -PassThru -NoNewWindow
-          $line = (Get-Content $out | Where-Object { $_.Trim() -ne '' } | Select-Object -First 1)
-          "exit $($p.ExitCode): $line"
-          if ($p.ExitCode -ne 0 -or $line.Trim() -ne "FoxSDR $env:CASCADE_VERSION") { throw "expected 'FoxSDR $env:CASCADE_VERSION'" }
+          foreach ($rel in 'build\Release\cascade.exe', 'build\src\slint\Release\foxsdr-slint.exe') {
+            $exe = (Resolve-Path $rel).Path
+            $out = Join-Path $env:RUNNER_TEMP 'version.out'
+            $p = Start-Process -FilePath $exe -ArgumentList '--version' -RedirectStandardOutput $out -RedirectStandardError "$out.err" -Wait -PassThru -NoNewWindow
+            $line = (Get-Content $out | Where-Object { $_.Trim() -ne '' } | Select-Object -First 1)
+            "$rel exit $($p.ExitCode): $line"
+            if ($p.ExitCode -ne 0 -or $line.Trim() -ne "FoxSDR $env:CASCADE_VERSION") { throw "$rel: expected 'FoxSDR $env:CASCADE_VERSION'" }
+          }
 
       - name: Find Inno Setup and the VC redistributable
         shell: pwsh

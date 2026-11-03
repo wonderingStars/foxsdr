@@ -181,7 +181,11 @@ int main() {
     // reports, then failed on exactly four lines (":1950", ":1956", ":1960", ":1961") in every full run and passed alone. The blocks that need a settings file
     // bring their own (toggleon, the unclean-exit block); the rest run hermetic, as they do wherever the variable is not set. test_shutdown_budget gives its
     // children a file of their own for the same reason.
+#if defined(_WIN32)
     ::SetEnvironmentVariableA("CASCADE_CONFIG_TEST", nullptr);
+#else
+    ::unsetenv("CASCADE_CONFIG_TEST");
+#endif
 
     // Every block from here through "No report directory means no file, and
     // no crash" below asserts that a stall produces an actual hang REPORT.
