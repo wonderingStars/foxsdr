@@ -1,0 +1,1443 @@
+// FoxSDR Slint front end - THE SIGNAL BANK'S BODIES (phase 3, bank 1 of 4): the open bodies under the SIGNAL PATH rows - Source (and its
+// eight variants, SCREENS A6), Frequency correction, the Radio row's WFM extras, Audio filters, Sinks, Transmit (its fault line), Recorder - and the
+// two companion sheets, the Radio-setup page and the recorder's import dialog. The design: specs/SCREENS.md A1 and A6, artboards/Workbench-Banks.dc.html
+// (the SIGNAL column and the Source-variants strip); the parity list is inventory/signal-bank.txt; the wording is the ImGui window's (aw = app_window.cpp
+// drawSourceSection, drawSinksSection, drawRecorderSection, drawStereoRdsControls, the audio filters; app_window_ppm / _soundcard / _airspy / _converter /
+// _radio_setup / _import_dialog), so the catalogue entries apply for free.
+//
+// THE PATTERN IS THE PLUGIN KIT'S (pages.slint): this file declares the structs the host fills, one global of every gesture (SignalEvents) and the
+// bodies; each body is a VerticalLayout the Section's fold shows (the bank column's width less the Section's padding: 254 px), and every callback of a
+// body forwards to the global unless the instance overrides it (the specimen does, to count them). The host (signal_logic / signal_publish) publishes
+// the models and wires the global to ops.
+//
+// WHO OWNS A VALUE. The host does. A tick, a dropdown and a text field show what the model says; a click asks (`toggled(v)`, `picked(i)`, `committed(t)`)
+// and the model changes when the host has done it or refused it, so a refused Auto gain springs back to where it was. The Checkbox writes its own
+// `checked` when pressed, which would end a `checked: model.x` binding for good; `Tick` therefore pushes the model's value back into the Checkbox after
+// every press and every model change. A text field keeps what was typed until the model's text next changes (the ImGui window's rule: "while the user
+// types, what they type stays"), and commits on Enter and on the focus leaving after an edit, never per keystroke.
+//
+// DROPDOWNS ARE SELF-CONTAINED. `DropKey` is the SelectKey's look with a popup list the component opens itself from `items` (a SelectItem is a row: its
+// label, an id the host keys it by, `enabled` - a greyed row cannot be picked - and `note`, a dim suffix such as "(busy)"); a click on an enabled row closes
+// the list and calls `picked(index)`. The host never owns the popup.
+//
+// Rows are 24 px (Theme.field-h) with 6 px between them, the artboard's .rw and .sbd gap. Nothing here asks for more than the column: texts wrap or
+// elide, rows give their width away (rule 11; tests/test_slint_signal.cpp measures it).
+import { Theme } from "theme.slint";
+import { Chip, ChipTone } from "chips.slint";
+import { Caption, Key } from "keys.slint";
+import { Checkbox } from "fields.slint";
+import { Slider } from "sliders.slint";
+import { SelectKey } from "sections.slint";
+import { CardTone } from "cards.slint";
+import { TipTimer } from "tooltip.slint";
+
+export struct SelectItem { label: string, id: string, enabled: bool, note: string }
+export struct GainStage { name: string, text: string, norm: float, enabled: bool, unit: string }
+export struct OptionRow { name: string, label: string, on: bool, enabled: bool, tooltip: string }
+
+export struct SourceModel {
+    device-label: string, devices: [SelectItem], device-index: int, refresh-enabled: bool, look-for-usrps: bool,
+    setup-key-label: string,
+    rate-text: string, rates: [SelectItem], actual-rate: string,
+    antenna-text: string, antennas: [SelectItem], single-port: bool,
+    auto-gain: bool, auto-gain-shown: bool, agc-note: string,
+    stages: [GainStage],
+    bias-shown: bool, bias-on: bool, bias-enabled: bool,
+    ppm-on: bool, ppm-radio-line: string, ppm-text: string, ppm-note: string, ppm-refusal: string,
+    error-line: string, mismatch-note: string, advisory: string, advisory-tone: ChipTone, stopped-line: string,
+    stopped-advice: string,                            // ADDED: the dim "Reconnect it and pick the source again..." line under the red one
+    variant: int,                                      // 0 none, 1 I/Q file, 2 Pluto, 3 rtl_tcp, 4 sound card, 5 Airspy, 6 radio extras, 7 converter
+    iq-path: string, iq-note: string,
+    pluto-address: string, pluto-help: string,
+    rtltcp-address: string, rtltcp-help: string,
+    card-busy: string, card-none: string, cards: [SelectItem], card-index: int, card-format-index: int, card-channel-index: int,
+    card-swap-iq: bool, card-centre-mhz: string, card-rates: [SelectItem], card-rate-index: int, card-receives: string, card-warning: string,
+    airspy-decimations: [SelectItem], airspy-decimation-index: int, airspy-hardware-rate: string, airspy-gain-mode: int,
+    airspy-gain-norm: float, airspy-lna-agc: bool, airspy-mixer-agc: bool, airspy-lna: float, airspy-mixer: float, airspy-vga: float,
+    options: [OptionRow],
+    converter-shown: bool, converter-mode: int, converter-alias: string, converter-lo: string, converter-inverts: bool,
+    converter-error: string, converter-on-air: string,
+}
+
+export struct RadioExtrasModel { wfm: bool, stereo: bool, stereo-word: string, stereo-tone: ChipTone, rds-shown: bool, rds-ps: string, rds-rt: string, rds-pi: string }
+
+export struct AudioFiltersModel {
+    chain-note: string, nr-on: bool, nr-strength: float, nr-text: string, notch-on: bool, notch-freq: float, notch-freq-text: string,
+    notch-q: float, notch-q-text: string, auto-notch-on: bool, auto-notch-status: string, auto-notch-locked: bool,
+}
+
+export struct SinksModel {
+    device-text: string, devices: [SelectItem], device-index: int, none-line: string, health-note: string,
+    buffer-text: string, buffers: [SelectItem], buffer-index: int, lead-notice: string, muted-by: string, muted-note: string,
+}
+
+export struct TransmitModel { chip: string, tone: ChipTone, available: bool, armed: bool, keyed: bool, fault: string }
+
+export struct RecorderModel {
+    folder: string, iq-label: string, iq-enabled: bool, iq-progress: string, iq-running: bool,
+    audio-label: string, audio-enabled: bool, audio-progress: string, audio-running: bool,
+    muted-warning: string, hint: string, error-line: string, notice: string, import-label: string,
+}
+
+export struct UnboundRow { name: string, family: string, vid: string, pid: string, advice: string }
+export struct SetupKey { id: string, label: string, enabled: bool, tooltip: string }
+export struct RadioSetupModel {
+    shown: bool, title: string, lines: [string], unbound: [UnboundRow], keys: [SetupKey], busy: string,
+    dont-show: bool,                                   // ADDED: the "Don't show this again" tick (saved by the host)
+}
+
+export struct ImportDialogModel { shown: bool, path: string, error: string, kinds: [SelectItem], kind-index: int }
+
+// EVERY GESTURE OF THE BODIES, as one global the host wires (ui->global<SignalEvents>().on_...). Index arguments are positions in the model's lists.
+export global SignalEvents {
+    callback source-device-selected(int);
+    callback source-refresh();
+    callback source-usrps(bool);
+    callback source-setup();
+    callback source-rate-selected(int);
+    callback source-antenna-selected(int);
+    callback source-auto-gain(bool);
+    callback source-gain-changed(int, float);      // stage index, 0..1
+    callback source-bias(bool);                    // true asks the bias question (the sheet decides), false switches off
+    callback ppm-toggled(bool);
+    callback ppm-committed(string);
+    callback iq-path-committed(string);
+    callback iq-open();
+    callback pluto-address-committed(string);
+    callback pluto-open();
+    callback rtltcp-address-committed(string);
+    callback rtltcp-open();
+    callback card-selected(int);
+    callback card-format(int);
+    callback card-channel(int);
+    callback card-swap(bool);
+    callback card-centre-committed(string);
+    callback card-rate-selected(int);
+    callback card-open();
+    callback airspy-decimation(int);
+    callback airspy-gain-mode(int);
+    callback airspy-gain(float);
+    callback airspy-lna-agc(bool);
+    callback airspy-mixer-agc(bool);
+    callback airspy-lna(float);
+    callback airspy-mixer(float);
+    callback airspy-vga(float);
+    callback option-toggled(int, bool);
+    callback converter-mode(int);
+    callback converter-lo-committed(string);
+    callback converter-quick(int);
+    callback converter-inverts(bool);
+    callback radio-stereo(bool);
+    callback filter-nr(bool);
+    callback filter-nr-strength(float);
+    callback filter-notch(bool);
+    callback filter-notch-freq(float);
+    callback filter-notch-q(float);
+    callback filter-auto-notch(bool);
+    callback sink-device-selected(int);
+    callback sink-buffer-selected(int);
+    callback transmit-clicked();
+    callback recorder-iq();
+    callback recorder-audio();
+    callback recorder-import();
+    callback setup-key(string);
+    callback setup-closed();
+    callback setup-dont-show(bool);                // ADDED: the setup page's tick
+    callback import-path-committed(string);
+    callback import-kind(int);
+    callback import-open();
+    callback import-closed();
+}
+
+// ================================================ the pieces the bodies are made of ================================================
+
+// A row of a body: 24 px (.rw min-height), the children side by side 8 px apart.
+component Line inherits Rectangle {
+    in property <length> gap: 8px;
+    height: Theme.field-h;
+    HorizontalLayout {
+        spacing: root.gap;
+        @children
+    }
+}
+
+// Keeps a fixed-height child (a 20 px key, a 14 px box) in the middle of a Line.
+component Mid inherits VerticalLayout {
+    alignment: center;
+}
+
+// A sentence of a body: 11 px, wrapped, dim unless a tone says otherwise (the sheet's .n, .n.am, .n.rd, .n.gn).
+component Note inherits Text {
+    in property <ChipTone> tone: ChipTone.neutral;
+    min-width: 0px;
+    wrap: word-wrap;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-small;
+    color: root.tone == ChipTone.err ? Theme.chip-err-fg
+         : root.tone == ChipTone.warn ? Theme.chip-warn-fg
+         : root.tone == ChipTone.good ? Theme.chip-good-fg
+         : Theme.dim;
+}
+
+// The .lb label of a row: 11 px / 500, fg-soft, elided before it can widen the row.
+component RowLabel inherits Text {
+    min-width: 0px;
+    overflow: elide;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-small;
+    font-weight: Theme.weight-medium;
+    color: Theme.fg-soft;
+    vertical-alignment: center;
+}
+
+// A figure of a row: the mono 11 px readout.
+component Readout inherits Text {
+    min-width: 0px;
+    overflow: elide;
+    font-family: Theme.font-mono;
+    font-size: Theme.font-small;
+    color: Theme.fg;
+    vertical-alignment: center;
+}
+
+// The .ck checkbox, driven by the host's value: the Checkbox keeps its own `checked` after a press, so the model's value is pushed back into it every
+// time the user presses and every time the model changes (a refusal leaves the box where it was).
+component Tick inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback toggled(bool);
+
+    in property <length> row-h: Theme.field-h;          // the row it sits in: the box is centred in it (a longer label makes the row taller)
+    height: max(root.row-h, box.height);
+    min-width: 0px;
+    preferred-width: box.preferred-width;
+    changed on => { box.checked = root.on; }
+    box := Checkbox {
+        x: 0px;
+        y: (root.height - self.height) / 2;
+        width: root.width;
+        label: root.label;
+        checked: root.on;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        toggled(v) => {
+            root.toggled(v);
+            box.checked = root.on;
+        }
+    }
+}
+
+// A radio button of the Airspy gain mode: 14 px ring, the accent dot when chosen.
+component RadioChoice inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback chosen();
+
+    height: Theme.field-h;                              // the row it sits in: the ring is centred in it
+    min-width: 0px;
+    preferred-width: 14px + 8px + words.preferred-width;
+    accessible-role: radio-button;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.chosen(); } }
+
+    Rectangle {
+        x: 0px;
+        y: (root.height - 14px) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        border-width: Theme.hairline;
+        background: !root.enabled ? Theme.key-disabled-bg : root.on ? Theme.accent : Theme.field;
+        border-color: !root.enabled ? Theme.line-strong.with-alpha(0.5) : root.on ? Theme.accent : Theme.line-strong;
+        if root.on : Rectangle {
+            x: 4px;
+            y: 4px;
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: root.enabled ? Theme.accent-ink : Theme.key-disabled-fg;
+        }
+    }
+    words := Text {
+        x: 22px;
+        y: 0px;
+        width: max(0px, root.width - 22px);
+        height: root.height;
+        text: root.label;
+        color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.chosen(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// The one-line input of a body (.in, 24 px): shows `value` (the host's text), commits on Enter and on the focus leaving after an edit.
+component LineInput inherits Rectangle {
+    in property <string> value;
+    in property <string> placeholder;
+    in property <bool> mono;
+    in property <bool> right;
+    in property <bool> enabled: true;
+    in property <bool> error;
+    in property <string> tooltip;
+    in property <string> name;                          // the accessible label
+    callback committed(string);
+    out property <bool> has-focus: input.has-focus;
+    out property <string> text: input.text;
+
+    property <length> pad: 8px + Theme.hairline;
+    property <bool> dirty;                              // edited since the last commit
+
+    height: Theme.field-h;
+    min-width: 0px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.enabled ? (root.error ? Theme.lamp-red : Theme.line-strong) : Theme.line-strong.with-alpha(0.5);
+    background: root.enabled ? Theme.field : Theme.key-disabled-bg;
+
+    init => { input.text = root.value; }
+    changed value => {
+        input.text = root.value;
+        root.dirty = false;
+    }
+
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
+        clicked => { if (root.enabled) { input.focus(); } }
+        if input.text == "" && root.placeholder != "" : Text {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            text: root.placeholder;
+            color: Theme.disabled;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        input := TextInput {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            enabled: root.enabled;
+            read-only: !root.enabled;
+            single-line: true;
+            color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.name;
+            edited => { root.dirty = true; }
+            accepted => {
+                root.dirty = false;
+                root.committed(self.text);
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.dirty) {
+                    root.dirty = false;
+                    root.committed(self.text);
+                }
+            }
+        }
+    }
+    if input.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// One row of a dropdown's list: the tick of the chosen one, the label, the dim note at the right; a greyed row cannot be picked.
+component DropRow inherits Rectangle {
+    in property <SelectItem> item;
+    in property <bool> chosen;
+    callback activated();
+    height: Theme.menu-item-h;
+    border-radius: Theme.radius-menu-item;
+    background: root.item.enabled && row-area.has-hover ? Theme.menu-hot : transparent;
+    accessible-role: list-item;
+    accessible-label: root.item.label;
+    accessible-enabled: root.item.enabled;
+    if root.chosen : Image {
+        x: 5px;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        source: @image-url("icons/check.svg");
+        image-fit: contain;
+        colorize: Theme.accent;
+    }
+    Text {
+        x: 26px;
+        y: 0px;
+        width: max(0px, parent.width - 26px - 8px - (root.item.note != "" ? note-text.preferred-width + 8px : 0px));
+        height: parent.height;
+        text: root.item.label;
+        color: root.item.enabled ? Theme.fg : Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    note-text := Text {
+        x: parent.width - 8px - self.width;
+        y: 0px;
+        width: self.preferred-width;
+        height: parent.height;
+        visible: root.item.note != "";
+        text: root.item.note;
+        color: Theme.dim;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+    }
+    row-area := TouchArea {
+        mouse-cursor: root.item.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.item.enabled) { root.activated(); } }
+    }
+}
+
+// A dropdown: the SelectKey's look and a list of `items` it opens itself under the key.
+component DropKey inherits Rectangle {
+    in property <string> value;                         // the closed text
+    in property <[SelectItem]> items;
+    in property <int> selected: -1;
+    in property <string> label;                         // the accessible name
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> popup-min-w: 150px;
+    callback picked(int);
+
+    property <length> popup-w: max(root.width, root.popup-min-w);
+    property <length> popup-h: min(root.items.length * Theme.menu-item-h + 2 * (4px + Theme.hairline), 330px);
+
+    height: Theme.key-sm-h;
+    min-width: 0px;
+    preferred-width: 110px;
+
+    SelectKey {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        value: root.value;
+        label: root.label;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        clicked => { if (root.items.length > 0) { popup.show(); } }
+    }
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: root.popup-w;
+        height: root.popup-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 28px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            // a short list is plain rows (a Flickable holds a press back for a moment: the click of a quick pick would be late), a long one scrolls
+            if root.items.length * Theme.menu-item-h <= root.popup-h : Rectangle {
+                x: 4px + Theme.hairline;
+                y: 4px + Theme.hairline;
+                width: root.popup-w - 2 * (4px + Theme.hairline);
+                height: root.popup-h - 2 * (4px + Theme.hairline);
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: parent.width;
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        popup.close();
+                    }
+                }
+            }
+            if root.items.length * Theme.menu-item-h > root.popup-h : Flickable {
+                x: 4px + Theme.hairline;
+                y: 4px + Theme.hairline;
+                width: root.popup-w - 2 * (4px + Theme.hairline);
+                height: root.popup-h - 2 * (4px + Theme.hairline);
+                content-width: self.width;
+                content-height: root.items.length * Theme.menu-item-h;
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: root.popup-w - 2 * (4px + Theme.hairline);
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        popup.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One of the two step arrows of a number field (the sheet's digit nudge arrows, as text).
+component NudgeKey inherits Rectangle {
+    in property <string> glyph;
+    in property <string> name;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: 20px;
+    height: 12px;
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+    Text {
+        text: root.glyph;
+        color: !root.enabled ? Theme.key-disabled-fg : area.has-hover ? Theme.fg : Theme.nudge;
+        font-size: Theme.font-micro;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+}
+
+// A gain-style row: the stage's name, the slider (8 px of air each side for the knob's overhang), the readout. 24 px.
+component SliderRow inherits Rectangle {
+    in property <string> label;
+    in property <string> readout;
+    in property <float> value;                          // 0..1
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback changed(float);
+    height: Theme.field-h;
+    HorizontalLayout {
+        spacing: 0px;
+        RowLabel { width: 56px; text: root.label; color: root.enabled ? Theme.fg-soft : Theme.disabled; }
+        VerticalLayout {
+            alignment: center;
+            padding-left: 8px;
+            padding-right: 8px;
+            Slider {
+                value: root.value;
+                enabled: root.enabled;
+                tooltip: root.tooltip;
+                accessible-label: root.label;
+                changed(v) => { root.changed(v); }
+            }
+        }
+        Readout { width: 62px; text: root.readout; horizontal-alignment: right; color: root.enabled ? Theme.fg : Theme.disabled; }
+    }
+}
+
+// A variant card (SCREENS A6, the Source-variants strip): .card (card ground, line-strong border, 8 px corners, padding 6 8), its tag a 10 px / 600 cap
+// in accent-soft (red on the error card), 4 px between its lines.
+component VariantCard inherits Rectangle {
+    in property <string> tag;
+    in property <CardTone> tone: CardTone.neutral;
+
+    height: inner.preferred-height;
+    min-width: 0px;
+    border-radius: Theme.radius-panel;
+    border-width: Theme.hairline;
+    background: root.tone == CardTone.warn ? Theme.card-warn : root.tone == CardTone.err ? Theme.card-err : Theme.card;
+    border-color: root.tone == CardTone.warn ? Theme.card-warn-line : root.tone == CardTone.err ? Theme.card-err-line : Theme.line-strong;
+    inner := VerticalLayout {
+        padding-left: 8px + Theme.hairline;
+        padding-right: 8px + Theme.hairline;
+        padding-top: 6px + Theme.hairline;
+        padding-bottom: 6px + Theme.hairline;
+        spacing: 4px;
+        Text {
+            min-width: 0px;
+            overflow: elide;
+            text: root.tag.to-uppercase();
+            color: root.tone == CardTone.err ? Theme.chip-err-fg : Theme.accent-soft;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-cap;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: 1px;
+        }
+        @children
+    }
+}
+
+// ================================================ Frequency correction ================================================
+
+export component FrequencyCorrectionBody inherits VerticalLayout {
+    in property <SourceModel> model;
+
+    callback ppm-toggled(bool);
+    ppm-toggled(a) => { SignalEvents.ppm-toggled(a); }
+    callback ppm-committed(string);
+    ppm-committed(a) => { SignalEvents.ppm-committed(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // the step arrows: the figure typed (or the model's) plus or minus 0.1 ppm, to one decimal
+    function nudged(typed: string, step: float) -> string {
+        return "" + Math.round((typed.to-float() + step) * 10) / 10;
+    }
+
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("PPM frequency correction");
+            on: root.model.ppm-on;
+            tooltip: @tr("Corrects the error of this radio's crystal, in parts per million. Positive when stations show up below their real frequency. Tune to a signal whose frequency you know exactly and change the value until it sits where it should. The switch is for every radio; the value is remembered for each radio.");
+            toggled(v) => { root.ppm-toggled(v); }
+        }
+    }
+    if root.model.ppm-on && root.model.ppm-radio-line != "" : Note { text: root.model.ppm-radio-line; }
+    if root.model.ppm-on && root.model.ppm-text != "" : Line {
+        field := LineInput {
+            horizontal-stretch: 1;
+            mono: true;
+            right: true;
+            value: root.model.ppm-text;
+            name: @tr("PPM frequency correction");
+            committed(t) => { root.ppm-committed(t); }
+        }
+        RowLabel { text: "ppm"; color: Theme.dim; }   // not-translated: a unit
+        VerticalLayout {
+            alignment: center;
+            width: 20px;
+            NudgeKey { glyph: "▲"; name: @tr("Raise the correction"); clicked => { root.ppm-committed(root.nudged(field.text, 0.1)); } }
+            NudgeKey { glyph: "▼"; name: @tr("Lower the correction"); clicked => { root.ppm-committed(root.nudged(field.text, -0.1)); } }
+        }
+    }
+    if root.model.ppm-on && root.model.ppm-note != "" : Note { text: root.model.ppm-note; }
+    if root.model.ppm-on && root.model.ppm-refusal != "" : Note { text: root.model.ppm-refusal; tone: ChipTone.warn; }
+}
+
+// ================================================ Source ================================================
+
+export component SourceBody inherits VerticalLayout {
+    in property <SourceModel> model;
+    in property <bool> ppm-block: true;                 // the Frequency correction block at the foot (the ImGui Source section carries it too)
+
+    callback source-device-selected(int);
+    source-device-selected(a) => { SignalEvents.source-device-selected(a); }
+    callback source-refresh();
+    source-refresh() => { SignalEvents.source-refresh(); }
+    callback source-usrps(bool);
+    source-usrps(a) => { SignalEvents.source-usrps(a); }
+    callback source-setup();
+    source-setup() => { SignalEvents.source-setup(); }
+    callback source-rate-selected(int);
+    source-rate-selected(a) => { SignalEvents.source-rate-selected(a); }
+    callback source-antenna-selected(int);
+    source-antenna-selected(a) => { SignalEvents.source-antenna-selected(a); }
+    callback source-auto-gain(bool);
+    source-auto-gain(a) => { SignalEvents.source-auto-gain(a); }
+    callback source-gain-changed(int, float);
+    source-gain-changed(a, b) => { SignalEvents.source-gain-changed(a, b); }
+    callback source-bias(bool);
+    source-bias(a) => { SignalEvents.source-bias(a); }
+    callback ppm-toggled(bool);
+    ppm-toggled(a) => { SignalEvents.ppm-toggled(a); }
+    callback ppm-committed(string);
+    ppm-committed(a) => { SignalEvents.ppm-committed(a); }
+    callback iq-path-committed(string);
+    iq-path-committed(a) => { SignalEvents.iq-path-committed(a); }
+    callback iq-open();
+    iq-open() => { SignalEvents.iq-open(); }
+    callback pluto-address-committed(string);
+    pluto-address-committed(a) => { SignalEvents.pluto-address-committed(a); }
+    callback pluto-open();
+    pluto-open() => { SignalEvents.pluto-open(); }
+    callback rtltcp-address-committed(string);
+    rtltcp-address-committed(a) => { SignalEvents.rtltcp-address-committed(a); }
+    callback rtltcp-open();
+    rtltcp-open() => { SignalEvents.rtltcp-open(); }
+    callback card-selected(int);
+    card-selected(a) => { SignalEvents.card-selected(a); }
+    callback card-format(int);
+    card-format(a) => { SignalEvents.card-format(a); }
+    callback card-channel(int);
+    card-channel(a) => { SignalEvents.card-channel(a); }
+    callback card-swap(bool);
+    card-swap(a) => { SignalEvents.card-swap(a); }
+    callback card-centre-committed(string);
+    card-centre-committed(a) => { SignalEvents.card-centre-committed(a); }
+    callback card-rate-selected(int);
+    card-rate-selected(a) => { SignalEvents.card-rate-selected(a); }
+    callback card-open();
+    card-open() => { SignalEvents.card-open(); }
+    callback airspy-decimation(int);
+    airspy-decimation(a) => { SignalEvents.airspy-decimation(a); }
+    callback airspy-gain-mode(int);
+    airspy-gain-mode(a) => { SignalEvents.airspy-gain-mode(a); }
+    callback airspy-gain(float);
+    airspy-gain(a) => { SignalEvents.airspy-gain(a); }
+    callback airspy-lna-agc(bool);
+    airspy-lna-agc(a) => { SignalEvents.airspy-lna-agc(a); }
+    callback airspy-mixer-agc(bool);
+    airspy-mixer-agc(a) => { SignalEvents.airspy-mixer-agc(a); }
+    callback airspy-lna(float);
+    airspy-lna(a) => { SignalEvents.airspy-lna(a); }
+    callback airspy-mixer(float);
+    airspy-mixer(a) => { SignalEvents.airspy-mixer(a); }
+    callback airspy-vga(float);
+    airspy-vga(a) => { SignalEvents.airspy-vga(a); }
+    callback option-toggled(int, bool);
+    option-toggled(a, b) => { SignalEvents.option-toggled(a, b); }
+    callback converter-mode(int);
+    converter-mode(a) => { SignalEvents.converter-mode(a); }
+    callback converter-lo-committed(string);
+    converter-lo-committed(a) => { SignalEvents.converter-lo-committed(a); }
+    callback converter-quick(int);
+    converter-quick(a) => { SignalEvents.converter-quick(a); }
+    callback converter-inverts(bool);
+    converter-inverts(a) => { SignalEvents.converter-inverts(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    // a radio the host holds open (variants 0, 5, 6, 7) has the Rate / Antenna / gain rows; a file, a Pluto, an rtl_tcp and a sound card do not
+    property <bool> radio: root.model.variant == 0 || root.model.variant >= 5;
+    property <bool> show-converter: root.model.converter-shown || root.model.variant == 7;
+    property <[SelectItem]> formats: [
+        { label: @tr("Real (mono)"), id: "", enabled: true, note: "" },
+        { label: @tr("I/Q (stereo)"), id: "", enabled: true, note: "" },
+    ];
+    property <[SelectItem]> channels: [
+        { label: @tr("Left"), id: "", enabled: true, note: "" },
+        { label: @tr("Right"), id: "", enabled: true, note: "" },
+    ];
+    property <[SelectItem]> airspy-modes: [
+        { label: @tr("Sensitive"), id: "", enabled: true, note: "" },
+        { label: @tr("Linear"), id: "", enabled: true, note: "" },
+        { label: @tr("Free"), id: "", enabled: true, note: "" },
+    ];
+    // a sound card of real (mono) samples takes a down-converter only (app_window_converter.cpp 171)
+    property <[SelectItem]> converter-modes: [
+        { label: @tr("Off"), id: "", enabled: true, note: "" },
+        { label: @tr("Up-converter"), id: "", enabled: !(root.model.variant == 4 && root.model.card-format-index == 0), note: "" },
+        { label: @tr("Down-converter"), id: "", enabled: true, note: "" },
+    ];
+
+    // ---- the faults and advisories first, as the ImGui section draws them ----
+    if root.model.stopped-line != "" : VariantCard {
+        tag: @tr("Device stopped");
+        tone: CardTone.err;
+        Note { text: root.model.stopped-line; tone: ChipTone.err; }
+        if root.model.stopped-advice != "" : Note { text: root.model.stopped-advice; }
+    }
+    if root.model.advisory != "" : VariantCard {
+        tag: @tr("Advisories");
+        tone: root.model.advisory-tone == ChipTone.warn ? CardTone.warn : root.model.advisory-tone == ChipTone.err ? CardTone.err : CardTone.neutral;
+        Note { text: root.model.advisory; tone: root.model.advisory-tone; }
+    }
+
+    // ---- the source, Refresh, the network USRPs, RADIO SETUP ----
+    Line {
+        DropKey {
+            horizontal-stretch: 1;
+            value: root.model.device-label;
+            items: root.model.devices;
+            selected: root.model.device-index;
+            label: @tr("Source");
+            popup-min-w: 250px;
+            picked(i) => { root.source-device-selected(i); }
+        }
+        Mid { Key {
+            label: @tr("Refresh");
+            small: true;
+            min-w: 0px;
+            enabled: root.model.refresh-enabled;
+            clicked => { root.source-refresh(); }
+        } }
+    }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("Look for network USRPs");
+            on: root.model.look-for-usrps;
+            tooltip: @tr("Ask UHD for USRPs on the network (N200, X310, N310 and the like) as well as on USB. A USB USRP is always looked for when one is plugged in.");
+            toggled(v) => { root.source-usrps(v); }
+        }
+        Mid { Key {
+            label: root.model.setup-key-label != "" ? root.model.setup-key-label : @tr("RADIO SETUP");
+            xs: true;
+            clicked => { root.source-setup(); }
+        } }
+    }
+
+    // ---- variant 1: an I/Q file ----
+    if root.model.variant == 1 : VariantCard {
+        tag: @tr("I/Q file");
+        Line {
+            LineInput { horizontal-stretch: 1; value: root.model.iq-path; name: @tr("I/Q file path"); committed(t) => { root.iq-path-committed(t); } }
+            Mid { Key { label: @tr("Open"); xs: true; clicked => { root.iq-open(); } } }
+        }
+        if root.model.iq-note != "" : Note { text: root.model.iq-note; }
+    }
+    // ---- variant 2: an ADALM-Pluto ----
+    if root.model.variant == 2 : VariantCard {
+        tag: "ADALM-Pluto";   // not-translated: a product name
+        Line {
+            LineInput { horizontal-stretch: 1; value: root.model.pluto-address; name: @tr("Pluto address"); committed(t) => { root.pluto-address-committed(t); } }
+            Mid { Key { label: @tr("Open"); xs: true; clicked => { root.pluto-open(); } } }
+        }
+        if root.model.pluto-help != "" : Note { text: root.model.pluto-help; }
+    }
+    // ---- variant 3: rtl_tcp ----
+    if root.model.variant == 3 : VariantCard {
+        tag: "rtl_tcp";   // not-translated: a program name
+        Line {
+            LineInput { horizontal-stretch: 1; value: root.model.rtltcp-address; name: @tr("rtl_tcp host and port"); committed(t) => { root.rtltcp-address-committed(t); } }
+            Mid { Key { label: @tr("Open"); xs: true; clicked => { root.rtltcp-open(); } } }
+        }
+        if root.model.rtltcp-help != "" : Note { text: root.model.rtltcp-help; }
+    }
+    // ---- variant 4: a sound card ----
+    if root.model.variant == 4 : VariantCard {
+        tag: @tr("Sound card");
+        if root.model.card-busy != "" : Note { text: root.model.card-busy; tone: ChipTone.warn; }
+        if root.model.card-none != "" : Note { text: root.model.card-none; tone: ChipTone.warn; }
+        Line {
+            DropKey {
+                horizontal-stretch: 1;
+                value: root.model.card-index >= 0 && root.model.card-index < root.model.cards.length ? root.model.cards[root.model.card-index].label : "";
+                items: root.model.cards;
+                selected: root.model.card-index;
+                label: @tr("Device");
+                popup-min-w: 250px;
+                picked(i) => { root.card-selected(i); }
+            }
+            DropKey {
+                width: 104px;
+                value: root.formats[root.model.card-format-index >= 0 && root.model.card-format-index < 2 ? root.model.card-format-index : 0].label;
+                items: root.formats;
+                selected: root.model.card-format-index;
+                label: @tr("Format");
+                picked(i) => { root.card-format(i); }
+            }
+        }
+        // real samples: which channel; I/Q: swap and the centre frequency
+        if root.model.card-format-index == 0 : Line {
+            RowLabel { text: @tr("Channel"); horizontal-stretch: 1; }
+            DropKey {
+                width: 84px;
+                value: root.channels[root.model.card-channel-index == 1 ? 1 : 0].label;
+                items: root.channels;
+                selected: root.model.card-channel-index;
+                label: @tr("Channel");
+                picked(i) => { root.card-channel(i); }
+            }
+        }
+        if root.model.card-format-index == 1 : Line {
+            Tick { horizontal-stretch: 1; label: @tr("Swap I/Q"); on: root.model.card-swap-iq; toggled(v) => { root.card-swap(v); } }
+        }
+        if root.model.card-format-index == 1 : Line {
+            RowLabel { text: @tr("Centre (MHz)"); horizontal-stretch: 1; }
+            LineInput { width: 82px; mono: true; right: true; value: root.model.card-centre-mhz; name: @tr("Centre (MHz)"); committed(t) => { root.card-centre-committed(t); } }
+        }
+        Line {
+            RowLabel { text: @tr("Sample rate"); horizontal-stretch: 1; }
+            DropKey {
+                width: 108px;
+                value: root.model.card-rate-index >= 0 && root.model.card-rate-index < root.model.card-rates.length ? root.model.card-rates[root.model.card-rate-index].label : "";
+                items: root.model.card-rates;
+                selected: root.model.card-rate-index;
+                label: @tr("Sample rate");
+                picked(i) => { root.card-rate-selected(i); }
+            }
+            Mid { Key { label: @tr("Open"); xs: true; clicked => { root.card-open(); } } }
+        }
+        if root.model.card-receives != "" : Note { text: root.model.card-receives; }
+        if root.model.card-warning != "" : Note { text: root.model.card-warning; tone: ChipTone.warn; }
+    }
+
+    // ---- the open radio: Rate, Antenna ----
+    if root.radio && (root.model.rates.length > 0 || root.model.rate-text != "") : Line {
+        gap: 4px;                                       // Rate, its dropdown, "Actual" and the figure share one row: 4 px keeps the figure whole
+        RowLabel { text: @tr("Rate"); }
+        DropKey {
+            width: 108px;
+            value: root.model.rate-text;
+            items: root.model.rates;
+            selected: -1;
+            label: @tr("Rate");
+            picked(i) => { root.source-rate-selected(i); }
+        }
+        RowLabel { text: @tr("Actual"); color: Theme.dim; horizontal-stretch: 0; }
+        Readout { text: root.model.actual-rate; horizontal-alignment: right; horizontal-stretch: 1; }
+    }
+    if root.radio && root.model.antenna-text != "" : Line {
+        RowLabel { text: @tr("Antenna"); }
+        if !root.model.single-port : DropKey {
+            width: 132px;
+            value: root.model.antenna-text;
+            items: root.model.antennas;
+            selected: -1;
+            label: @tr("Antenna");
+            picked(i) => { root.source-antenna-selected(i); }
+        }
+        if !root.model.single-port : Rectangle { horizontal-stretch: 1; }
+        if root.model.single-port : Readout { text: root.model.antenna-text; horizontal-stretch: 1; }
+    }
+    // Auto gain and Bias tee share a row (the sheet's .rw); the Airspy has its own gain panel instead of Auto gain and the stage sliders
+    if root.radio && ((root.model.auto-gain-shown && root.model.variant != 5) || root.model.bias-shown) : Line {
+        if root.model.auto-gain-shown && root.model.variant != 5 : Tick {
+            horizontal-stretch: 1;
+            label: @tr("Auto gain");
+            on: root.model.auto-gain;
+            toggled(v) => { root.source-auto-gain(v); }
+        }
+        if root.model.bias-shown : Tick {
+            horizontal-stretch: 1;
+            label: @tr("Bias tee");
+            on: root.model.bias-on;
+            enabled: root.model.bias-enabled;
+            tooltip: @tr("Sends about 4.5 V up the antenna cable to power an amplifier at the mast. Leave it off unless you have one: equipment that is not expecting power on the connector can be damaged by it.");
+            toggled(v) => { root.source-bias(v); }
+        }
+    }
+    if root.radio && root.model.variant != 5 && root.model.agc-note != "" : Note { text: root.model.agc-note; }
+    if root.radio && root.model.variant != 5 && root.model.stages.length > 0 : VerticalLayout {
+        spacing: 6px;
+        for g[i] in root.model.stages : SliderRow {
+            label: g.name;
+            readout: g.text;
+            value: g.norm;
+            enabled: g.enabled && !root.model.auto-gain;
+            changed(v) => { root.source-gain-changed(i, v); }
+        }
+    }
+
+    // ---- variant 5: the Airspy panel ----
+    if root.model.variant == 5 : VariantCard {
+        tag: @tr("Airspy");
+        Line {
+            RowLabel { text: @tr("Decimation"); horizontal-stretch: 1; }
+            DropKey {
+                width: 72px;
+                popup-min-w: 80px;
+                value: root.model.airspy-decimation-index >= 0 && root.model.airspy-decimation-index < root.model.airspy-decimations.length ? root.model.airspy-decimations[root.model.airspy-decimation-index].label : "";
+                items: root.model.airspy-decimations;
+                selected: root.model.airspy-decimation-index;
+                label: @tr("Decimation");
+                tooltip: @tr("Divides the sample rate by a power of two before anything else sees it: a narrower span, less work for the computer, and less noise in each sample - about 3 dB for every halving. The same as decimation in Airspy's own software.");
+                picked(i) => { root.airspy-decimation(i); }
+            }
+        }
+        if root.model.airspy-hardware-rate != "" : Note { text: root.model.airspy-hardware-rate; }
+        Caption { label: @tr("Gain mode"); }
+        Line {
+            RadioChoice {
+                label: @tr("Sensitive");
+                on: root.model.airspy-gain-mode == 0;
+                tooltip: @tr("One gain slider over Airspy's sensitivity table: the most gain early in the chain, for weak signals.");
+                chosen => { root.airspy-gain-mode(0); }
+            }
+            RadioChoice {
+                label: @tr("Linear");
+                on: root.model.airspy-gain-mode == 1;
+                tooltip: @tr("One gain slider over Airspy's linearity table: gain held back early in the chain, for when strong signals are nearby.");
+                chosen => { root.airspy-gain-mode(1); }
+            }
+            RadioChoice {
+                label: @tr("Free");
+                on: root.model.airspy-gain-mode == 2;
+                tooltip: @tr("Set the LNA, mixer and VGA yourself, with the LNA's and the mixer's own automatic gain control each switched on or off.");
+                chosen => { root.airspy-gain-mode(2); }
+            }
+        }
+        if root.model.airspy-gain-mode != 2 : SliderRow {
+            label: @tr("Gain");
+            readout: "";
+            value: root.model.airspy-gain-norm;
+            changed(v) => { root.airspy-gain(v); }
+        }
+        if root.model.airspy-gain-mode == 2 : Line {
+            Tick { horizontal-stretch: 1; label: @tr("LNA AGC"); on: root.model.airspy-lna-agc; toggled(v) => { root.airspy-lna-agc(v); } }
+            Tick { horizontal-stretch: 1; label: @tr("Mixer AGC"); on: root.model.airspy-mixer-agc; toggled(v) => { root.airspy-mixer-agc(v); } }
+        }
+        if root.model.airspy-gain-mode == 2 : SliderRow {
+            label: "LNA";   // not-translated: the Airspy's stage name
+            readout: "";
+            value: root.model.airspy-lna;
+            enabled: !root.model.airspy-lna-agc;
+            changed(v) => { root.airspy-lna(v); }
+        }
+        if root.model.airspy-gain-mode == 2 : SliderRow {
+            label: "MIXER";   // not-translated: the Airspy's stage name
+            readout: "";
+            value: root.model.airspy-mixer;
+            enabled: !root.model.airspy-mixer-agc;
+            changed(v) => { root.airspy-mixer(v); }
+        }
+        if root.model.airspy-gain-mode == 2 : SliderRow {
+            label: "VGA";   // not-translated: the Airspy's stage name
+            readout: "";
+            value: root.model.airspy-vga;
+            changed(v) => { root.airspy-vga(v); }
+        }
+    }
+
+    // ---- variant 6: the radio's own options (FM notch, DAB notch, HDR mode, ADC dither, ADC randomiser) ----
+    if root.model.variant == 6 && root.model.options.length > 0 : VariantCard {
+        tag: @tr("Radio extras");
+        for o[i] in root.model.options : Tick {
+            label: o.label;
+            on: o.on;
+            enabled: o.enabled;
+            tooltip: o.tooltip;
+            toggled(v) => { root.option-toggled(i, v); }
+        }
+    }
+
+    // ---- the converter (variant 7, and whenever the host says it is offered) ----
+    if root.show-converter : VariantCard {
+        tag: @tr("Converter");
+        Line {
+            DropKey {
+                width: 124px;
+                value: root.converter-modes[root.model.converter-mode >= 0 && root.model.converter-mode < 3 ? root.model.converter-mode : 0].label;
+                items: root.converter-modes;
+                selected: root.model.converter-mode;
+                label: @tr("Converter mode");
+                tooltip: @tr("An up- or down-converter between the antenna and this radio. FoxSDR then shows and tunes the frequency on the air, and drives the radio at the converted one.");
+                picked(i) => { root.converter-mode(i); }
+            }
+        }
+        if root.model.converter-alias != "" : Note { text: root.model.converter-alias; tone: ChipTone.warn; }
+        if root.model.converter-mode != 0 : Line {
+            RowLabel { text: @tr("Local oscillator"); horizontal-stretch: 1; }
+            LineInput { width: 92px; mono: true; right: true; error: root.model.converter-error != ""; value: root.model.converter-lo; name: @tr("Local oscillator");
+                tooltip: @tr("Type it in Hz, kHz or MHz - 125 MHz, 125000 kHz and 125000000 all mean the same; a bare number is MHz. Enter applies it.");
+                committed(t) => { root.converter-lo-committed(t); } }
+        }
+        if root.model.converter-mode != 0 : Line {
+            Mid { Key { label: "125 MHz"; xs: true; on: root.model.converter-lo == "125 MHz"; clicked => { root.converter-quick(0); } } }   // not-translated: a frequency (the order is the engine's kQuickLoHz: 125, 100, 2 MHz)
+            Mid { Key { label: "100 MHz"; xs: true; on: root.model.converter-lo == "100 MHz"; clicked => { root.converter-quick(1); } } }   // not-translated: a frequency
+            Mid { Key { label: "2 MHz"; xs: true; on: root.model.converter-lo == "2 MHz"; clicked => { root.converter-quick(2); } } }   // not-translated: a frequency
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.model.converter-mode != 0 : Tick {
+            label: @tr("Inverts the spectrum (LO above the signal)");
+            on: root.model.converter-inverts;
+            tooltip: @tr("Tick this when the converter's oscillator sits ABOVE the signal (a high-side LO): FoxSDR then tunes the oscillator minus the frequency and turns the band back the right way round.");
+            toggled(v) => { root.converter-inverts(v); }
+        }
+        if root.model.converter-error != "" : Note { text: root.model.converter-error; tone: ChipTone.warn; }
+        if root.model.converter-on-air != "" : Note { text: root.model.converter-on-air; }
+    }
+
+    // ---- the Frequency correction block (the ImGui Source section draws it here too) ----
+    if root.radio && root.ppm-block : VerticalLayout {
+        spacing: 6px;
+        Caption { label: @tr("Frequency correction"); }
+        FrequencyCorrectionBody {
+            model: root.model;
+            ppm-toggled(v) => { root.ppm-toggled(v); }
+            ppm-committed(t) => { root.ppm-committed(t); }
+        }
+    }
+
+    // ---- what the last attempt said ----
+    if root.model.mismatch-note != "" : Note { text: root.model.mismatch-note; tone: ChipTone.warn; }
+    if root.model.error-line != "" : Note { text: root.model.error-line; tone: ChipTone.err; }
+}
+
+// ================================================ Radio extras (WFM) ================================================
+
+export component RadioExtras inherits VerticalLayout {
+    in property <RadioExtrasModel> model;
+
+    callback radio-stereo(bool);
+    radio-stereo(a) => { SignalEvents.radio-stereo(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    if root.model.wfm : Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("Stereo");
+            on: root.model.stereo;
+            tooltip: @tr("Decode the 38 kHz difference channel when a 19 kHz pilot tone is present. Unticked, the sound is forced to mono.");
+            toggled(v) => { root.radio-stereo(v); }
+        }
+        Mid { Chip { label: root.model.stereo-word.to-uppercase(); tone: root.model.stereo-tone; } }
+    }
+    if root.model.wfm && root.model.rds-shown : VerticalLayout {
+        spacing: 4px;
+        Caption { label: "RDS"; }   // not-translated: the broadcast data system's name
+        Line {
+            Readout { text: "PI " + root.model.rds-pi; horizontal-stretch: 0; }   // not-translated: RDS field names
+            Readout { text: "PS " + root.model.rds-ps; horizontal-stretch: 1; }   // not-translated: RDS field names
+        }
+        if root.model.rds-rt != "" : Note { text: root.model.rds-rt; color: Theme.fg-soft; }
+    }
+}
+
+// ================================================ Audio filters ================================================
+
+export component AudioFiltersBody inherits VerticalLayout {
+    in property <AudioFiltersModel> model;
+
+    callback filter-nr(bool);
+    filter-nr(a) => { SignalEvents.filter-nr(a); }
+    callback filter-nr-strength(float);
+    filter-nr-strength(a) => { SignalEvents.filter-nr-strength(a); }
+    callback filter-notch(bool);
+    filter-notch(a) => { SignalEvents.filter-notch(a); }
+    callback filter-notch-freq(float);
+    filter-notch-freq(a) => { SignalEvents.filter-notch-freq(a); }
+    callback filter-notch-q(float);
+    filter-notch-q(a) => { SignalEvents.filter-notch-q(a); }
+    callback filter-auto-notch(bool);
+    filter-auto-notch(a) => { SignalEvents.filter-auto-notch(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    if root.model.chain-note != "" : Note { text: root.model.chain-note; }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Noise reduction"); on: root.model.nr-on; toggled(v) => { root.filter-nr(v); } } }
+    SliderRow { label: @tr("Strength"); readout: root.model.nr-text; value: root.model.nr-strength; enabled: root.model.nr-on; changed(v) => { root.filter-nr-strength(v); } }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Notch"); on: root.model.notch-on; toggled(v) => { root.filter-notch(v); } } }
+    SliderRow { label: @tr("Freq"); readout: root.model.notch-freq-text; value: root.model.notch-freq; enabled: root.model.notch-on; changed(v) => { root.filter-notch-freq(v); } }
+    SliderRow { label: "Q"; readout: root.model.notch-q-text; value: root.model.notch-q; enabled: root.model.notch-on; changed(v) => { root.filter-notch-q(v); } }   // not-translated: the notch's quality factor
+    Line {
+        Tick { horizontal-stretch: 1; label: @tr("Auto notch"); on: root.model.auto-notch-on; toggled(v) => { root.filter-auto-notch(v); } }
+        if root.model.auto-notch-on && root.model.auto-notch-status != "" : Note {
+            wrap: no-wrap;
+            overflow: elide;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            text: root.model.auto-notch-status;
+            tone: root.model.auto-notch-locked ? ChipTone.good : ChipTone.neutral;
+        }
+    }
+}
+
+// ================================================ Sinks ================================================
+
+export component SinksBody inherits VerticalLayout {
+    in property <SinksModel> model;
+
+    callback sink-device-selected(int);
+    sink-device-selected(a) => { SignalEvents.sink-device-selected(a); }
+    callback sink-buffer-selected(int);
+    sink-buffer-selected(a) => { SignalEvents.sink-buffer-selected(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    if root.model.none-line != "" : Note { text: root.model.none-line; }
+    if root.model.none-line == "" : Line {
+        DropKey {
+            horizontal-stretch: 1;
+            value: root.model.device-text;
+            items: root.model.devices;
+            selected: root.model.device-index;
+            label: @tr("Sound device");
+            popup-min-w: 250px;
+            picked(i) => { root.sink-device-selected(i); }
+        }
+    }
+    if root.model.health-note != "" : Note { text: root.model.health-note; tone: ChipTone.warn; }
+    Line {
+        RowLabel { text: @tr("Audio buffer"); horizontal-stretch: 1; }
+        DropKey {
+            width: 160px;
+            value: root.model.buffer-text;
+            items: root.model.buffers;
+            selected: root.model.buffer-index;
+            label: @tr("Audio buffer");
+            tooltip: @tr("How much sound is held back before it plays. A larger buffer rides out a slow computer, at the cost of a longer delay between the radio and the speakers. AUTOMATIC starts at 120 ms and deepens itself, to at most 960 ms, when this computer falls behind. After a quarter of an hour of quiet minutes it eases back one step at a time.");
+            picked(i) => { root.sink-buffer-selected(i); }
+        }
+    }
+    if root.model.lead-notice != "" : Note { text: root.model.lead-notice; tone: ChipTone.warn; }
+    if root.model.muted-by != "" : Note { text: root.model.muted-by; tone: ChipTone.warn; }
+    if root.model.muted-by != "" && root.model.muted-note != "" : Note { text: root.model.muted-note; }
+}
+
+// ================================================ Transmit ================================================
+
+// The Transmit row is a switch that opens the TRANSMIT page (its chip words live in the Section row); the only thing it has to say in the column is a fault.
+export component TransmitRowState inherits VerticalLayout {
+    in property <TransmitModel> model;
+    spacing: 0px;
+    alignment: start;
+    if root.model.fault != "" : Note { text: root.model.fault; tone: ChipTone.err; }
+}
+
+// ================================================ Recorder ================================================
+
+export component RecorderBody inherits VerticalLayout {
+    in property <RecorderModel> model;
+
+    callback recorder-iq();
+    recorder-iq() => { SignalEvents.recorder-iq(); }
+    callback recorder-audio();
+    recorder-audio() => { SignalEvents.recorder-audio(); }
+    callback recorder-import();
+    recorder-import() => { SignalEvents.recorder-import(); }
+
+    spacing: 6px;
+    alignment: start;
+
+    if root.model.folder != "" : Text {
+        min-width: 0px;
+        text: root.model.folder;
+        wrap: char-wrap;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        color: Theme.dim;
+    }
+    Line {
+        Key {
+            horizontal-stretch: 1;
+            wide: true;
+            small: true;
+            danger: root.model.iq-running;
+            label: root.model.iq-label;
+            enabled: root.model.iq-enabled;
+            clicked => { root.recorder-iq(); }
+        }
+        Key {
+            horizontal-stretch: 1;
+            wide: true;
+            small: true;
+            danger: root.model.audio-running;
+            label: root.model.audio-label;
+            enabled: root.model.audio-enabled;
+            clicked => { root.recorder-audio(); }
+        }
+    }
+    if root.model.iq-running && root.model.iq-progress != "" : Readout { text: root.model.iq-progress; color: Theme.dim; height: 14px; }
+    if root.model.audio-running && root.model.audio-progress != "" : Readout { text: root.model.audio-progress; color: Theme.dim; height: 14px; }
+    if root.model.muted-warning != "" : Note { text: root.model.muted-warning; tone: ChipTone.warn; }
+    if root.model.hint != "" : Note { text: root.model.hint; }
+    if root.model.error-line != "" : Note { text: root.model.error-line; tone: ChipTone.err; }
+    if root.model.notice != "" : Note { text: root.model.notice; }
+    if root.model.import-label != "" : Line {
+        Mid { Key { label: root.model.import-label; small: true; ghost: true; min-w: 0px; clicked => { root.recorder-import(); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+}
+
+// ================================================ the two companion sheets ================================================
+
+// A centred sheet on a dimmed backdrop (the IA's dialog form, as main.slint's Sheet): fills the element it is placed in; a click on the backdrop dismisses.
+component SheetFrame inherits Rectangle {
+    in property <string> title;
+    in property <length> sheet-w: 460px;
+    in property <length> sheet-h: 0px;                  // 0: as high as the content wants
+    callback dismissed();
+
+    background: Theme.backdrop;
+    TouchArea { clicked => { root.dismissed(); } }
+    panel := Rectangle {
+        width: min(root.sheet-w, root.width - 24px);
+        height: root.sheet-h > 0px ? min(root.sheet-h, root.height - 24px) : min(content.preferred-height + Theme.win-title-h + 3 * Theme.hairline, root.height - 24px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.panel;
+        border-width: Theme.hairline;
+        border-color: Theme.knob-ring;
+        border-radius: Theme.radius-panel;
+        drop-shadow-blur: Theme.shadows ? 28px : 0px;
+        drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+        drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+        clip: true;
+        TouchArea { }   // swallows the click so the backdrop does not dismiss
+        // the title strip (.wt): menu ground, a rule under it, the title as a cap, a close key at the right
+        Rectangle {
+            x: Theme.hairline;
+            y: Theme.hairline;
+            width: parent.width - 2 * Theme.hairline;
+            height: Theme.win-title-h;
+            background: Theme.menu;
+            Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line-strong; }
+            Text {
+                x: 12px;
+                y: 0px;
+                width: max(0px, parent.width - 12px - 40px);
+                height: parent.height;
+                text: root.title.to-uppercase();
+                color: Theme.fg;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-small;
+                font-weight: Theme.weight-semibold;
+                letter-spacing: 0.8px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Key {
+                x: parent.width - 4px - 26px;
+                y: (parent.height - 22px) / 2;
+                width: 26px;
+                height: 22px;
+                icon-only: true;
+                flat: true;
+                icon: @image-url("icons/close.svg");
+                icon-size: 12px;
+                tooltip: @tr("Close");
+                accessible-label: @tr("Close");
+                clicked => { root.dismissed(); }
+            }
+        }
+        content := VerticalLayout {
+            x: Theme.hairline;
+            y: Theme.win-title-h + Theme.hairline;
+            width: parent.width - 2 * Theme.hairline;
+            height: parent.height - Theme.win-title-h - 2 * Theme.hairline;
+            padding: 12px;
+            spacing: 10px;
+            @children
+        }
+    }
+}
+
+// The Radio-setup page (app_window_radio_setup.cpp): the checking line, the headline, one block per radio the machine cannot use yet, the keys the
+// host offers (CHECK AGAIN, INSTALL DRIVER, the vendor links), and the "Don't show this again" tick. Place it over the whole window.
+export component RadioSetupSheet inherits Rectangle {
+    in property <RadioSetupModel> model;
+
+    callback setup-key(string);
+    setup-key(a) => { SignalEvents.setup-key(a); }
+    callback setup-closed();
+    setup-closed() => { SignalEvents.setup-closed(); }
+    callback setup-dont-show(bool);
+    setup-dont-show(a) => { SignalEvents.setup-dont-show(a); }
+
+    if root.model.shown : SheetFrame {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        title: root.model.title != "" ? root.model.title : @tr("RADIO SETUP");
+        sheet-w: 580px;
+        sheet-h: 520px;
+        dismissed => { root.setup-closed(); }
+        if root.model.busy != "" : Note { text: root.model.busy; tone: ChipTone.warn; }
+        Flickable {
+            vertical-stretch: 1;
+            content-width: self.width;
+            content-height: findings.preferred-height;
+            findings := VerticalLayout {
+                width: parent.width;
+                spacing: 10px;
+                alignment: start;
+                for line[i] in root.model.lines : Text {
+                    min-width: 0px;
+                    text: line;
+                    wrap: word-wrap;
+                    font-family: Theme.font-ui;
+                    font-size: i == 0 ? Theme.font-body : Theme.font-small;
+                    color: i == 0 ? Theme.fg : Theme.fg-soft;
+                }
+                for u in root.model.unbound : VerticalLayout {
+                    spacing: 3px;
+                    Rectangle { height: Theme.hairline; background: Theme.line; }
+                    Text { min-width: 0px; text: u.name; wrap: word-wrap; font-family: Theme.font-ui; font-size: Theme.font-body; font-weight: Theme.weight-semibold; color: Theme.chip-warn-fg; }
+                    Text { min-width: 0px; text: u.family + "  " + u.vid + ":" + u.pid; overflow: elide; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.dim; }   // not-translated: a radio family and its USB ids
+                    Text { min-width: 0px; text: u.advice; wrap: word-wrap; font-family: Theme.font-ui; font-size: Theme.font-small; color: Theme.fg-soft; }
+                }
+            }
+        }
+        Rectangle { height: Theme.hairline; background: Theme.line; }
+        Rectangle {
+            height: Theme.key-sm-h;
+            clip: true;
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                for k in root.model.keys : Key { label: k.label; small: true; min-w: 0px; enabled: k.enabled; tooltip: k.tooltip; clicked => { root.setup-key(k.id); } }
+            }
+        }
+        Tick { label: @tr("Don't show this again"); on: root.model.dont-show; toggled(v) => { root.setup-dont-show(v); } }
+    }
+}
+
+// The recorder's frequency-list import dialog (app_window_import_dialog.cpp): why it opened, the drop zone in words, the path, Browse, Cancel.
+export component ImportDialog inherits Rectangle {
+    in property <ImportDialogModel> model;
+
+    callback import-path-committed(string);
+    import-path-committed(a) => { SignalEvents.import-path-committed(a); }
+    callback import-kind(int);
+    import-kind(a) => { SignalEvents.import-kind(a); }
+    callback import-open();
+    import-open() => { SignalEvents.import-open(); }
+    callback import-closed();
+    import-closed() => { SignalEvents.import-closed(); }
+
+    if root.model.shown : SheetFrame {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        title: @tr("Import a frequency list");
+        sheet-w: 460px;
+        dismissed => { root.import-closed(); }
+        if root.model.error != "" : Note { text: root.model.error; }
+        if root.model.kinds.length > 0 : Line {
+            RowLabel { text: @tr("Import as"); horizontal-stretch: 1; }
+            DropKey {
+                width: 200px;
+                value: root.model.kind-index >= 0 && root.model.kind-index < root.model.kinds.length ? root.model.kinds[root.model.kind-index].label : "";
+                items: root.model.kinds;
+                selected: root.model.kind-index;
+                label: @tr("Import as");
+                picked(i) => { root.import-kind(i); }
+            }
+        }
+        // the drop zone: a target in words (Slint draws no dashed border, so a solid hairline)
+        Rectangle {
+            height: 96px;
+            border-radius: Theme.radius-panel;
+            border-width: Theme.hairline;
+            border-color: Theme.muted;
+            VerticalLayout {
+                alignment: center;
+                spacing: 4px;
+                padding: 10px;
+                Text { min-width: 0px; text: @tr("Drop an SDR# frequencies.xml or a CSV here"); wrap: word-wrap; horizontal-alignment: center; font-family: Theme.font-ui; font-size: Theme.font-small; color: Theme.fg; }
+                Text { min-width: 0px; text: @tr("Anywhere on the FoxSDR window works too."); wrap: word-wrap; horizontal-alignment: center; font-family: Theme.font-ui; font-size: Theme.font-small; color: Theme.muted; }
+            }
+        }
+        Line {
+            LineInput { horizontal-stretch: 1; value: root.model.path; placeholder: @tr("Path to a .xml or .csv file"); name: @tr("Import path"); committed(t) => { root.import-path-committed(t); } }
+            Mid { Key { label: @tr("Browse..."); small: true; min-w: 0px; clicked => { root.import-open(); } } }
+        }
+        HorizontalLayout {
+            alignment: end;
+            Key { label: @tr("Cancel"); small: true; min-w: 0px; clicked => { root.import-closed(); } }
+        }
+    }
+}

@@ -28,7 +28,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/SlintDll.cmake")
 # /ENTRY:mainCRTStartup; the terminal comes back for --version, the tool modes and the bounded runs through the same bootProcess
 # and its AttachConsole (core/console_owner.hpp), so a harness that reads pipes (ctest, Git Bash, release.ps1) sees every line.
 # The icon resource is the one file cascade.exe embeds, so Explorer, the shortcuts and Add/Remove Programs show the fox.
-set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp
+set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp signal_logic.cpp signal_publish.cpp
     "${CMAKE_SOURCE_DIR}/src/gui/track_info_cache.cpp")
 if(WIN32)
     enable_language(RC)

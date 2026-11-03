@@ -64,6 +64,7 @@
 #include "host_logic.hpp"
 #include "kit_publish.hpp"
 #include "plugin_kit.hpp"
+#include "signal_publish.hpp"
 #include "signatures.hpp"
 
 #include "main.h"  // generated from ui/main.slint by slint_target_sources
@@ -287,6 +288,12 @@ int main(int argc, char** argv) {
     // screenshot of the window at the last tick (the screenshot key's own path). Never set in a release; the GUI test gate's idiom.
     if (const char* openSpec = std::getenv("FOXSDR_SLINT_OPEN")) { publisher.openFromEnv(openSpec); }
     const bool shotAtEnd = std::getenv("FOXSDR_SLINT_SHOT") != nullptr;
+    // THE SIGNAL BANK'S BODIES (signal_publish.hpp): the Source, Radio, Audio filters, Sinks, Transmit, Recorder and Frequency correction models, the Radio-setup
+    // page and the import dialog, published from signal_logic's reads once a tick (after the kit's) and wired to the engine's ops.
+    foxsdr::slintsignal::SignalPublisher signalBank(*ui, kit, api, session);
+    signalBank.wire();
+    if (std::getenv("FOXSDR_SLINT_SETUP") != nullptr) { signalBank.raiseSetupForCapture(); }     // a bounded run's capture of the Radio-setup page
+    if (std::getenv("FOXSDR_SLINT_IMPORT") != nullptr) { signalBank.raiseImportForCapture(); }   // ...and of the recorder's import dialog
 
     const auto applyUpdateCard = [&] {
         if (!duties.takeCardChange()) { return; }
@@ -326,7 +333,32 @@ int main(int argc, char** argv) {
     bool followBandPlan = true;
     int bankIndex = 0;
     if (const char* bankEnv = std::getenv("FOXSDR_SLINT_BANK")) { bankIndex = std::clamp(std::atoi(bankEnv), 0, 4); }   // a bounded run's self-capture: the bank to show
-    std::map<int, std::set<int>> openSections{{0, {2}}};   // SIGNAL's Radio row open, as the sheet
+    std::map<int, std::set<int>> openSections{{0, {1, 2, 4}}};   // SIGNAL's Source, Radio and Sinks rows open (Audio filters and Recorder closed), as the ImGui window
+    // A bounded run's self-capture: FOXSDR_SLINT_SECTIONS=<bank>:<i,j,k>[;<bank>:<i,j,k>] sets the open rows of a bank (next to FOXSDR_SLINT_BANK).
+    if (const char* sectionsEnv = std::getenv("FOXSDR_SLINT_SECTIONS")) {
+        std::string spec = sectionsEnv;
+        std::size_t at = 0;
+        while (at < spec.size()) {
+            std::size_t end = spec.find(';', at);
+            if (end == std::string::npos) { end = spec.size(); }
+            const std::string part = spec.substr(at, end - at);
+            const std::size_t colon = part.find(':');
+            if (colon != std::string::npos) {
+                const int bank = std::clamp(std::atoi(part.substr(0, colon).c_str()), 0, 4);
+                std::set<int> rows;
+                std::size_t p = colon + 1;
+                while (p <= part.size()) {
+                    std::size_t comma = part.find(',', p);
+                    if (comma == std::string::npos) { comma = part.size(); }
+                    const std::string num = part.substr(p, comma - p);
+                    if (!num.empty()) { rows.insert(std::atoi(num.c_str())); }
+                    p = comma + 1;
+                }
+                openSections[bank] = rows;
+            }
+            at = end + 1;
+        }
+    }
     MenuKind menuKind = MenuKind::None;
     double menuHz = 0; int menuMarkerNear = -1;
     OutputRate outputRate;
@@ -415,6 +447,12 @@ int main(int argc, char** argv) {
     const auto sectionsFor = [&](int bank) {
         std::vector<SectionRow> rows;
         const auto add = [&](int i, const char* name, std::string chip, ChipTone tone) {
+            // The SIGNAL bank's chips are the host's own (signal_logic: the Source chip, the filters count, the sink state, the recorder, the ppm): the signal publisher
+            // reads them with the models; the fallbacks below stand until its first read.
+            if (bank == 0) {
+                const auto face = signalBank.face(i);
+                if (face.valid) { chip = face.chip; tone = face.tone; }
+            }
             rows.push_back({ss(name), ss(chip), tone, openSections[bank].count(i) > 0, LampState::Off, false});
         };
         const bool running = (state.flags & FOXAPI_RX_RUNNING) != 0;
@@ -427,7 +465,7 @@ int main(int argc, char** argv) {
                 add(4, "Sinks", (state.flags & FOXAPI_RX_SINK_OPEN) ? "OPEN" : "CLOSED", (state.flags & FOXAPI_RX_SINK_OPEN) ? ChipTone::Good : ChipTone::Neutral);
                 add(5, "Transmit", (state.flags & FOXAPI_RX_TX_AVAILABLE) ? ((state.flags & FOXAPI_RX_TX_KEYED) ? "ON AIR" : "READY") : "NO TX", (state.flags & FOXAPI_RX_TX_KEYED) ? ChipTone::Err : (state.flags & FOXAPI_RX_TX_AVAILABLE) ? ChipTone::Good : ChipTone::Neutral);
                 add(6, "Recorder", lists.recording ? "REC" : "OFF", lists.recording ? ChipTone::Err : ChipTone::Neutral);
-                add(7, "Frequency correction", "--", ChipTone::Neutral);   // the table does not publish the ppm (phase 2)
+                add(7, "Frequency correction", "--", ChipTone::Neutral);   // the chip is the signal publisher's (the ppm model's: OFF, ON or PPM +1.5)
                 break;
             case 1:
                 add(0, "Plugin store", "--", ChipTone::Neutral);
@@ -622,8 +660,7 @@ int main(int argc, char** argv) {
         c.num[0] = lists.gainMin + (lists.gainMax - lists.gainMin) * v; submit(c);
     });
     ui->on_gain_auto_clicked([&] { FoxCommand c = op(FOXAPI_OP_SET_DEVICE_AGC); c.ival[0] = (state.flags & FOXAPI_RX_DEVICE_AGC) ? 0 : 1; submit(c); });
-    ui->on_bias_tee_clicked([&] { FoxCommand c = op(FOXAPI_OP_SET_BIAS_TEE); c.ival[0] = 0; submit(c); });          // on -> off at once
-    ui->on_bias_tee_confirmed([&] { FoxCommand c = op(FOXAPI_OP_SET_BIAS_TEE); c.ival[0] = 1; submit(c); });        // the question's "Turn it on"
+    // (the bias tee's two callbacks - on -> off at once, and the question's "Turn it on" with the radio the question named - are the signal publisher's: signal_publish.cpp wire())
     ui->on_stop_muting_plugin([&] { for (const auto& name : lists.muteCauses) { FoxCommand c = op(FOXAPI_OP_DECODER_STOP); std::snprintf(c.text, sizeof(c.text), "%s", name.c_str()); submit(c); } });
 
     // ---- rail + panel ----
@@ -1022,6 +1059,7 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         publisher.publish(state);
+        signalBank.publish(state);
     };
 
     // THE TICK = THE FRAME: the screen's reads, then the housekeeping (the sentinel's beat, the senders, the sweep, the update check), then the
@@ -1074,6 +1112,7 @@ int main(int argc, char** argv) {
     if (bounded.bounded()) {
         // What the kit holds at the end of a bounded run: the evidence that the port answered on this thread.
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", kitLine.c_str());
+        std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", signalBank.summaryLine().c_str());
         for (const auto& r : kit.lists().rows) {
             std::fprintf(stderr, "foxsdr-slint: plugin %-40s caps=0x%04x %s%s%s file=%s\n", r.name.c_str(), r.caps, r.loaded ? "loaded" : "REFUSED",
                          r.stopped ? " stopped" : "", r.asleep ? " asleep" : "", r.file.c_str());

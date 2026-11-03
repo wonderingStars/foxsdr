@@ -126,7 +126,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 67 | Bank curtain | readout (animation) | DEFERRED | the enamel fade is the ImGui window's; the panel width animates on fold instead (cosmetic) |
 | 68 | View key RECEIVER | key (latched, 2-way) | RELOCATED | the RECEIVER tab of the tab row (Workbench IA 4) |
 | 69 | View key PATCH | key (latched, 2-way) | RELOCATED | the PATCH tab (the canvas is the phase-3 stub) |
-| 70 | Sections area | list | PRESENT | the bank's rows with state chips in a Flickable; the Radio body is drawn (passband, tune step, band-plan checkbox), the other bodies are the banks of phase 3 |
+| 70 | Sections area | list | PRESENT | the bank's rows with state chips in a Flickable; the Radio body is drawn (passband, tune step, band-plan checkbox), the SIGNAL bank's bodies are drawn (phase 3); TOOLS, EXTEND and SYSTEM remain |
 | 71 | Rail footer | readout | PRESENT | two-line footer: source · band (FOXAPI_LIST_BAND_PLAN), rate · channel · underruns; the converter line replaces line 2 in warning colour |
 | 72 | Radio section mode keys | (not here) | RELOCATED | the eight mode keys are the strip's segmented control (Workbench IA 2) from 1760 px of window width; below that they fold into one picker key that opens the same eight as a menu (the sheet's strip does not fit 1440 by its own numbers); the Radio body says so; Ctrl+F .. Ctrl+R stay |
 
@@ -1767,14 +1767,296 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | 1209 | Planets block | panel rows | PRESENT | a Table row of the plugin's panel page |
 | 1210 | Feeds block | panel rows | PRESENT | a Table row of the plugin's panel page |
 
-# Counts (the whole file: phase 1 and phase 2)
+# Phase 3: the SIGNAL bank (docs 6.39) - `inventory/signal-bank.txt` walked row by row
+
+Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself "about 156 controls" and holds 176 rows) against the SIGNAL bank of the Slint window: the bodies of `src/slint/ui/signal_bank.slint` (`SourceBody` with its eight variants, `FrequencyCorrectionBody`, `RadioExtras`, `AudioFiltersBody`, `SinksBody`, `TransmitRowState`, `RecorderBody`, `RadioSetupSheet`, `ImportDialog`), their commands (`src/slint/signal_logic.hpp`) and the places `src/slint/ui/main.slint` puts them (bank 0, rows 0-7: Patch, Source, Radio, Audio filters, Sinks, Transmit, Recorder, Frequency correction). The status words are phase 1's: **PRESENT** = the family draws it and its callback has a command builder or a local effect (the note names the component), **RELOCATED** = it lives elsewhere in the Slint window (the receiver strip, the tab row, the Section row itself, a sheet of `main.slint`), **DEFERRED** = not drawn, or drawn wrongly, with the reason. A control whose status could not be established from the files is DEFERRED with "not found in signal_bank.slint". The import dialog also draws an 'Import as' dropdown that the inventory does not list. The host's publisher (`signal_publish`) was not in the tree when this part was ticked: PRESENT here means drawn and given a command in `signal_logic`, not seen working in the window.
+
+## SIGNAL bank — Patch (rail row, SIGNAL PATH bank)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1211 | Patch switch row | key (latched toggle) | RELOCATED | the PATCH tab of the tab row flips the view (row 69); the rail row itself is the Section row 'Patch' of bank 0, a fold with no body |
+| 1212 | Patch chip | readout | PRESENT | the Section row's chip: PATCH RUNNING (amber) or RECEIVER VIEW, from FOXAPI_RX_PATCH_RUNNING; the table carries no node count, so there is no 'n nodes' word |
+| 1213 | Patch lamp | lamp/indicator | RELOCATED | the lit PATCH tab (on while the patch view shows); the Section row draws no dot |
+| 1214 | Patch tooltip | tooltip | RELOCATED | the PATCH tab's tooltip carries the same sentence |
+
+## SIGNAL bank — Source (rail section): header
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1215 | Source header | key (fold) | RELOCATED | the Section row 'Source' of bank 0 folds the body; its chip is the source name (RTL-SDR / OPEN / GENERATOR) and its dot is off in sectionsFor today (SourceModel.chip and the lamp fields are host extras the row does not read yet) |
+
+## SIGNAL bank — Source (rail section): faults, advice and hints
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1216 | Device stopped | readout | PRESENT | SourceBody: a 'Device stopped' card in the error tone with the whole fault sentence (stopped-line) |
+| 1217 | Reconnect advice | readout | PRESENT | the second line of the same card (stopped-advice); signal_logic leaves it out when the fault already says to restart FoxSDR |
+| 1218 | Busy line | readout | PRESENT | the first paragraph of the Advisories card, amber ('Opening X...' / 'Scanning for devices...'); Refresh is greyed with it |
+| 1219 | Driver crashed scan | readout | PRESENT | a paragraph of the Advisories card, amber |
+| 1220 | Network USRP hint | readout | PRESENT | a paragraph of the Advisories card, dim; only with UHD left out and the box unticked |
+| 1221 | UHD images hint | readout | PRESENT | a paragraph of the Advisories card, amber |
+| 1222 | Scan-deferred explanation | readout + tooltip | PRESENT | a paragraph of the Advisories card (both sentences); the tooltip twin is not drawn, the sentence is on screen as text |
+| 1223 | Zadig / WinUSB warning (one per unbound USB radio) | readout | PRESENT | one paragraph per unbound radio in the Advisories card (zadigAdvice: RTL-SDR, RX888 two-step, AOR, generic); the Radio-setup page repeats them as blocks |
+| 1224 | SDRplay advice | readout | PRESENT | an amber advice paragraph and a dim 'SDRplay API: detail' paragraph in the Advisories card; hidden when an RSP row exists |
+
+## SIGNAL bank — Source (rail section): the source list and its keys
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1225 | Source dropdown | dropdown/combo | PRESENT | SourceBody DropKey -> FOXAPI_OP_SELECT_SOURCE by the fact id; closed text '(saved, not open)' or 'the patch has ...'; the lazy native read on opening (FOXAPP_OP_SCAN_DEVICES_ON_OPEN, opScanOnOpen) has no callback in the contract, so opening the list does not send it |
+| 1226 | Source row (device) | list | PRESENT | a DropRow per SelectItem; hardware rows grey while a patch runs; the explaining tooltip (SelectItem tooltip, a host extra) is not drawn, DropRow has none |
+| 1227 | Refresh | button | PRESENT | small Key -> FOXAPI_OP_SCAN_DEVICES; greyed while a scan or open is busy |
+| 1228 | Look for network USRPs | checkbox | PRESENT | Tick with the tooltip -> FOXAPP_OP_SET_NETWORK_USRP_SCAN |
+| 1229 | RADIO SETUP | button (small) | PRESENT | xs Key -> source-setup (local: shows the Radio-setup sheet and starts the probe) |
+| 1230 | Where FoxSDR looked | tree node (fold) | RELOCATED | its lines (vendor installs, search paths, modules) are on the Radio-setup page as plain lines under the heading, not a fold under the Source row |
+| 1231 | No radio hardware block | readout | PRESENT | one amber paragraph of the Advisories card: the headline, the SoapySDR-modules sentence, the PothosSDR / radioconda or modules-loaded sentence, the Zadig paragraph |
+| 1232 | Saved-source warning | readout | PRESENT | a paragraph of the Advisories card (file / sound card / radio wording), with the combo reading '<name> (saved, not open)' |
+| 1233 | Tune-mismatch note | readout | PRESENT | amber Note at the foot of SourceBody |
+| 1234 | Source error line | readout | PRESENT | red Note at the foot of SourceBody |
+
+## SIGNAL bank — Source (rail section): I/Q file, Pluto and rtl_tcp
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1235 | I/Q file path | text field | PRESENT | variant 1 card: LineInput, commits on Enter and on focus lost, the draft is the host's (local); no file chooser, as in the ImGui build |
+| 1236 | I/Q file Open | button | PRESENT | Open key -> SELECT_SOURCE 'file:' + path (nothing for an empty path); the 'waiting for the disk' line (iq-note) shows after 1 s; the key and the field are not greyed while an open is pending |
+| 1237 | Pluto address | text field | PRESENT | variant 2 card: LineInput -> FOXAPP_OP_SET_PLUTO_URI; not greyed while an open is pending |
+| 1238 | Pluto Open | button | PRESENT | Open key -> SELECT_SOURCE 'open-pluto:uri=' + the typed address |
+| 1239 | Pluto help | readout | PRESENT | the card's dim Note (pluto-help) |
+| 1240 | rtl_tcp address | text field | PRESENT | variant 3 card: LineInput -> FOXAPP_OP_SET_RTLTCP_ADDR; not greyed while an open is pending |
+| 1241 | rtl_tcp Open | button | PRESENT | Open key -> SELECT_SOURCE 'open-rtltcp:rtltcp=' + the typed address |
+| 1242 | rtl_tcp help | readout | PRESENT | the card's dim Note (rtltcp-help) |
+
+## SIGNAL bank — Source (rail section): sound card
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1243 | Busy line | readout | PRESENT | variant 4 card: amber Note (card-busy) |
+| 1244 | No inputs | readout | PRESENT | amber Note (card-none) |
+| 1245 | Device | dropdown/combo | PRESENT | DropKey of the cards -> FOXAPP_OP_SOUND_CARD_PICK; nothing for the card already chosen |
+| 1246 | Format | dropdown/combo | PRESENT | DropKey 'Real (mono)' / 'I/Q (stereo)' -> FOXAPP_OP_SOUND_CARD_FORM, field FORMAT |
+| 1247 | Channel | dropdown/combo | PRESENT | DropKey Left / Right -> SOUND_CARD_FORM, field CHANNEL; drawn only with Real (mono) |
+| 1248 | Swap I/Q | checkbox | PRESENT | Tick -> SOUND_CARD_FORM, field SWAP_IQ; drawn only with I/Q (stereo) |
+| 1249 | Centre (MHz) | number field | PRESENT | LineInput (mono, right) -> two commands, SOUND_CARD_FORM (centre) then FOXAPP_OP_SOUNDCARD_IQ_CENTRE; drawn only with I/Q (stereo) |
+| 1250 | Sample rate | dropdown/combo | PRESENT | DropKey of the card's rates (exclusive rows lettered '(exclusive)'; their row tooltip is not drawn) -> SOUND_CARD_FORM, field RATE |
+| 1251 | Open | button | PRESENT | Open key -> SELECT_SOURCE 'soundcard:open'; sends nothing while no card is chosen, but the key itself is not greyed |
+| 1252 | Receives line | readout | PRESENT | dim Note (card-receives) |
+| 1253 | Missing-card note | readout | PRESENT | amber Note (card-warning) |
+
+## SIGNAL bank — Source (rail section): the open radio
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1254 | Rate | dropdown/combo | PRESENT | DropKey (108 px) -> FOXAPI_OP_SET_SAMPLE_RATE; shows the row nearest the radio's rate |
+| 1255 | Actual rate | readout | PRESENT | 'actual x MS/s' readout on the Rate row |
+| 1256 | Antenna | dropdown/combo | PRESENT | DropKey -> FOXAPI_OP_SET_ANTENNA; drawn only with more than one port |
+| 1257 | Antenna (single) | readout | PRESENT | readout 'Antenna: X' in place of the dropdown |
+| 1258 | Auto gain | checkbox | PRESENT | Tick -> FOXAPI_OP_SET_DEVICE_AGC; the model's value is pushed back, so a refusal springs back; not drawn for an Airspy |
+| 1259 | Auto gain unsupported | readout | PRESENT | dim Note (agc-note) |
+| 1260 | Gain stage sliders | slider | PRESENT | a SliderRow per stage (the driver's name, readout in dB or steps) -> FOXAPI_OP_SET_GAIN; greyed with Auto gain; not drawn for an Airspy |
+| 1261 | Bias tee | checkbox | PRESENT | Tick with the 4.5 V tooltip; off is sent at once, on asks the bias question first (a deliberate change: the ImGui box did not ask) |
+| 1262 | FM notch | checkbox | PRESENT | the 'Radio extras' card (variant 6): an OptionRow Tick with its tooltip -> FOXAPI_OP_SET_DEVICE_OPTION; drawn only on a radio whose model has it |
+| 1263 | DAB notch | checkbox | PRESENT | the 'Radio extras' card (variant 6): an OptionRow Tick with its tooltip -> FOXAPI_OP_SET_DEVICE_OPTION; drawn only on a radio whose model has it |
+| 1264 | HDR mode | checkbox | PRESENT | the 'Radio extras' card (variant 6): an OptionRow Tick with its tooltip -> FOXAPI_OP_SET_DEVICE_OPTION; drawn only on a radio whose model has it |
+| 1265 | ADC dither | checkbox | PRESENT | the 'Radio extras' card (variant 6): an OptionRow Tick with its tooltip -> FOXAPI_OP_SET_DEVICE_OPTION; drawn only on a radio whose model has it |
+| 1266 | ADC randomiser | checkbox | PRESENT | the 'Radio extras' card (variant 6): an OptionRow Tick with its tooltip -> FOXAPI_OP_SET_DEVICE_OPTION; drawn only on a radio whose model has it |
+
+## SIGNAL bank — Source (rail section): Airspy panel
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1267 | Decimation | dropdown/combo | PRESENT | variant 5 card: DropKey (None, 2, 4 ...) with the tooltip -> FOXAPP_OP_AIRSPY_DECIMATION |
+| 1268 | Decimation readout | readout | PRESENT | dim Note ('radio at x MS/s, decimated by n'); only above 1 |
+| 1269 | Gain mode label | readout | PRESENT | Caption 'Gain mode' above the three radios |
+| 1270 | Sensitive | radio | PRESENT | RadioChoice with its tooltip -> FOXAPP_OP_AIRSPY_GAIN_MODE |
+| 1271 | Linear | radio | PRESENT | RadioChoice with its tooltip -> FOXAPP_OP_AIRSPY_GAIN_MODE |
+| 1272 | Free | radio | PRESENT | RadioChoice with its tooltip -> FOXAPP_OP_AIRSPY_GAIN_MODE |
+| 1273 | Gain (Sensitive/Linear) | slider | PRESENT | SliderRow (no figure) -> FOXAPI_OP_SET_GAIN on the first stage, whole steps |
+| 1274 | LNA AGC | checkbox | PRESENT | Tick -> FOXAPP_OP_AIRSPY_AGC; drawn in Free mode only |
+| 1275 | Mixer AGC | checkbox | PRESENT | Tick -> FOXAPP_OP_AIRSPY_AGC; drawn in Free mode only |
+| 1276 | LNA / MIXER / VGA sliders | slider | PRESENT | three SliderRows (LNA, MIXER, VGA) -> FOXAPI_OP_SET_GAIN by stage name; LNA and MIXER grey with their AGC; Free mode only |
+
+## SIGNAL bank — Source (rail section): converter
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1277 | Converter heading | readout | PRESENT | the Converter card's tag |
+| 1278 | Converter mode | dropdown/combo | PRESENT | DropKey Off / Up-converter / Down-converter with the tooltip -> FOXAPP_OP_SET_CONVERTER; Up is greyed for a real (mono) sound card |
+| 1279 | Alias / unusable notes | readout | PRESENT | amber Note (converter-alias) |
+| 1280 | Local oscillator | text field | PRESENT | LineInput (mono, right) with the tooltip, red border on a parse error; Enter -> SET_CONVERTER with the parsed LO; drawn only with a mode other than Off |
+| 1281 | LO quick-picks (3) | button (small) | DEFERRED | drawn but out of step with its command: the keys read 100 / 125 / 10 MHz and send index 0 / 1 / 2, which signal_logic maps to 125 / 100 / 2 MHz (kConverterQuickLoHz, the ImGui window's kQuickLoHz), so '100 MHz' sets 125 MHz and '10 MHz' sets 2 MHz; relabel the keys 125 / 100 / 2 MHz in signal_bank.slint before this row counts |
+| 1282 | Inverts the spectrum | checkbox | PRESENT | Tick with the tooltip -> FOXAPP_OP_SET_CONVERTER (inverted); drawn only with a mode other than Off |
+| 1283 | LO parse error | readout | PRESENT | the LO field's red border and an amber Note (converter-error) |
+| 1284 | On-air line | readout | PRESENT | dim Note (converter-on-air) |
+
+## SIGNAL bank — Source (rail section): frequency correction
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1285 | Frequency correction heading | readout | RELOCATED | the Section row 7 'Frequency correction' of the SIGNAL bank (the Slint SYSTEM bank has no such section); SourceBody keeps a Caption for it only when its ppm-block is on, and main.slint turns that off |
+| 1286 | PPM frequency correction | checkbox | PRESENT | FrequencyCorrectionBody Tick with the tooltip -> FOXAPP_OP_SET_PPM (the switch keeps the stored value); not greyed while an open is pending |
+| 1287 | Not-applicable note | readout | PRESENT | dim Note (ppm-note) when the source has no crystal |
+| 1288 | Whose value | readout | PRESENT | Note 'For <model>, serial <s>' (ppm-radio-line) |
+| 1289 | ppm value | number field (with step arrows) | PRESENT | mono LineInput with a 'ppm' unit and two step arrows (+-0.1, committed as text); Enter or focus lost -> SET_PPM with the sanitised value, nothing when unchanged |
+| 1290 | How applied | readout | PRESENT | dim Note (ppm-note: the method) |
+| 1291 | Refusal | readout | PRESENT | amber Note (ppm-refusal) |
+
+## SIGNAL bank — Source (rail section): SDRplay service restart
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1292 | RESTART SDRPLAY SERVICE | button | DEFERRED | not found in signal_bank.slint: signal_logic builds the key (sdrplay_key_shown / _label / _enabled) but the Slint SourceModel has no field for it and SourceBody draws no such key; the elevated restart is a local helper |
+| 1293 | Restart progress | readout | DEFERRED | not found in signal_bank.slint: the progress sentence (sdrplay_line) has no field in the Slint SourceModel |
+| 1294 | Restart outcome | readout | DEFERRED | not found in signal_bank.slint: the outcome sentence (sdrplay_line) has no field in the Slint SourceModel |
+
+## SIGNAL bank — Turn on the bias tee? (modal dialog)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1295 | Dialog | dialog | PRESENT | main.slint Sheet 'Turn on the bias tee?' (rows 107-109), opened by the strip's BIAS TEE key or the Source Bias tee tick; it does not close itself when the radio changes (only Esc, Cancel and the backdrop close it) |
+| 1296 | Radio name | readout | PRESENT | the first words of the sheet's question line (the device name, set from the state) |
+| 1297 | Warning | readout | PRESENT | the 4.5 V warning in the warning colour |
+| 1298 | Memory line | readout | PRESENT | one sentence ('FoxSDR will switch it on again whenever this radio is opened'); the variant for a radio with no serial (not remembered) is not told apart |
+| 1299 | Turn it on | button | PRESENT | Key -> FOXAPI_OP_SET_BIAS_TEE 1 (row 108) |
+| 1300 | Cancel | button | PRESENT | the lit default key closes the sheet (row 109) |
+| 1301 | Deck BIAS TEE key | key (latched toggle) | RELOCATED | the strip's BIAS TEE hazard key with its amber lamp (rows 21-22); enabled only when the radio has one |
+
+## SIGNAL bank — Radio setup page (first-run / driver / find my radio page)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1302 | Page | dialog (page) | PRESENT | RadioSetupSheet: a 580 x 520 sheet over the window, titled RADIO SETUP, with a close key; fixed in place (no drag, roll-up, maximise or resize grip); shown by the model's flag (RADIO SETUP, and the host at launch unless the tick is set) |
+| 1303 | Checking line | readout | PRESENT | amber Note (busy) above the lines |
+| 1304 | Intro line | readout | PRESENT | the first line of the sheet, larger ('FoxSDR found no radio it can use ...' / 'This is what this computer shows ...') |
+| 1305 | Finding list | list | PRESENT | per finding the title, explanation and install lines, plus one block per unbound radio (name, family and USB ids, advice); plain text, the usable (green) and not-checked (grey) tones are not told apart |
+| 1306 | INSTALL DRIVER | button | PRESENT | one Key per finding with an install target, greyed while an install runs, with the tooltip -> setup-key('install-driver:<target>'), the host's local effect (core/winusb_install, the Windows prompt); signal_publish was not in the tree when this was ticked, so the launch itself is unverified |
+| 1307 | Install-by-hand text | readout | PRESENT | the finding's install line in the list |
+| 1308 | Vendor link | button (small) | PRESENT | small Key per finding, text = the URL without https://, tooltip = the URL -> setup-key('link:<url>') (local: the browser) |
+| 1309 | Install status | readout | PRESENT | the install status line is appended to the list as a plain line (the amber tone is not applied) |
+| 1310 | CHECK AGAIN | button | PRESENT | Key -> FOXAPI_OP_SCAN_DEVICES and the host restarts the USB probe; greyed while checking |
+| 1311 | Don't show this again | checkbox | PRESENT | Tick -> setup-dont-show (saved by the host) |
+
+## SIGNAL bank — Radio (rail section)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1312 | Radio header | key (fold) | RELOCATED | the Section row 'Radio' of bank 0 folds the body; its chip is the mode name |
+| 1313 | Mode keys (8) | key (latched toggle) | RELOCATED | the strip's segmented control, folding to one picker key below 1760 px (row 72); Ctrl+F .. Ctrl+R |
+| 1314 | VFO | slider | RELOCATED | no offset slider in the Radio body; the tuned band on the spectrum (click or drag -> FOXAPP_OP_VFO_TO_ABSOLUTE) and the counter set the VFO (a judgement: the +-500 kHz slider itself is not drawn) |
+| 1315 | Bandwidth | dropdown/combo | RELOCATED | the Radio body's Passband slider in place of the width list (3 kHz to 0.9 of the channel rate -> FOXAPI_OP_SET_BANDWIDTH); dragging the band's edge on the spectrum sets it too |
+| 1316 | Squelch | slider | RELOCATED | the strip's SQUELCH lane, -120..0 dB, with its AUTO key (row 44) |
+| 1317 | De-emph | dropdown/combo | DEFERRED | not found in signal_bank.slint (nor in the Radio body of main.slint): no FM de-emphasis choice is drawn |
+| 1318 | Signal strength | meter | DEFERRED | not found in signal_bank.slint (nor in the Radio body of main.slint): the strip's level bar is the audio level, not the signal power |
+| 1319 | Stereo | checkbox | PRESENT | RadioExtras Tick with the tooltip -> FOXAPI_OP_SET_STEREO; WFM only, under the Radio body |
+| 1320 | Stereo state | lamp/indicator | PRESENT | a Chip beside the tick (stereo green, forced mono amber, mono or no pilot dim) |
+| 1321 | RDS block | readout | PRESENT | Caption RDS, PI and PS readouts and the radio text; WFM only, once RDS data is valid |
+
+## SIGNAL bank — Audio filters (rail section)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1322 | Audio filters header | key (fold) | RELOCATED | the Section row 'Audio filters' of bank 0 folds the body; chip ON / OFF |
+| 1323 | Chain note | readout | PRESENT | dim Note (chain-note) |
+| 1324 | Noise reduction | checkbox | PRESENT | Tick -> FOXAPI_OP_SET_NR |
+| 1325 | Strength | slider | PRESENT | SliderRow 0.00..1.00 -> FOXAPP_OP_SET_NR_STRENGTH; greyed unless Noise reduction is on |
+| 1326 | Notch | checkbox | PRESENT | Tick -> FOXAPI_OP_SET_NOTCH |
+| 1327 | Freq | slider | PRESENT | SliderRow, logarithmic 10 Hz to 20 kHz -> FOXAPP_OP_SET_NOTCH_FREQUENCY; greyed unless Notch is on |
+| 1328 | Q | slider | PRESENT | SliderRow 1..200 -> FOXAPP_OP_SET_NOTCH_Q; greyed unless Notch is on |
+| 1329 | Auto notch | checkbox | PRESENT | Tick -> FOXAPI_OP_SET_AUTO_NOTCH |
+| 1330 | Auto notch status | readout | PRESENT | Note beside the tick, green when locked (on 1000 Hz), dim while searching; only while Auto notch is ticked |
+
+## SIGNAL bank — Sinks (rail section: audio output)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1331 | Sinks header | key (fold) | RELOCATED | the Section row 'Sinks' of bank 0 folds the body; chip OPEN / CLOSED |
+| 1332 | Device | dropdown/combo | PRESENT | DropKey -> FOXAPI_OP_AUDIO_DEVICE; replaced by the dim 'none' line when there is no device |
+| 1333 | Audio health note | readout | PRESENT | amber Note (health-note) |
+| 1334 | Audio buffer | dropdown/combo | PRESENT | DropKey AUTOMATIC / 120 / 240 / 480 / 960 ms with the tooltip -> FOXAPP_OP_SET_AUDIO_BUFFER |
+| 1335 | Lead notice | readout | PRESENT | amber Note (lead-notice) |
+| 1336 | Muted by | readout | PRESENT | amber Note 'Muted by <plugin>' with the dim note under it |
+| 1337 | Sound is muted (popup) | dialog | RELOCATED | main.slint's Sheet 'Sound is muted' (the plugin kit's, Stop and resume / Keep it running -> KitEvents); phase 1 rows 104-106 predate it |
+
+## SIGNAL bank — Transmit (rail row)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1338 | Transmit switch row | key (latched toggle) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present; the row is a Section that only folds, and transmit-clicked (opTransmitPage -> FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN) has a builder but main.slint does not call it |
+| 1339 | Transmit chip + lamp | lamp/indicator | PRESENT | the Section row's chip (NO TX / READY / ON AIR, red when keyed) and the red fault line under it (TransmitModel.fault = the transmitter error); the logic's FAULT word is not in sectionsFor today |
+
+## SIGNAL bank — TRANSMIT page
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1340 | RADIO label + address | text field | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1341 | Open | button | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1342 | Close | button | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1343 | Radio name / state | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1344 | Frequency | number field | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1345 | SPLIT | button (latched, red when on) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1346 | Follow note | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1347 | Mode keys | key (latched toggle, one lit) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1348 | TX POWER | slider | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1349 | INPUT | label | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1350 | MIC | key (latched toggle) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1351 | TONE | key (latched toggle) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1352 | Tone frequency | number field | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1353 | AUDIO | meter | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1354 | PTT | button (hold) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1355 | LATCH | button (latched, red when on) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1356 | State word | lamp/indicator | RELOCATED | the Transmit Section row's chip and lamp (row 129) |
+| 1357 | Listen while transmitting | checkbox | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1358 | Auto-unkey / error | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present; the red transmitter error is the row's fault line, the amber auto-unkey reason is not drawn |
+| 1359 | ARM FOR PLUGINS | label + tooltip | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1360 | 5 MIN / 15 MIN / 60 MIN | key (latched toggle) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1361 | OFF (arming) | button | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1362 | Armed status | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1363 | DATA (flat) | checkbox | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1364 | Licence notice | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+
+## SIGNAL bank — Recorder (rail section)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1365 | Recorder header | key (fold) | RELOCATED | the Section row 'Recorder' of bank 0 folds the body; chip REC (red) / OFF |
+| 1366 | Record folder | readout | PRESENT | mono dim path (fact.recorder.dir) at the top of RecorderBody |
+| 1367 | Record IQ | button (full width) | PRESENT | Key, danger look while recording -> FOXAPI_OP_RECORD_IQ 1; side by side with Record audio |
+| 1368 | Starting IQ | button | PRESENT | the same key reads 'Starting IQ - click to cancel' (a press withdraws: RECORD_IQ 0), then 'Cancelling IQ start...' greyed; the 'disk is slow' line shows after 1 s |
+| 1369 | Saving (IQ) | button (disabled) | DEFERRED | not found in signal_bank.slint: RecorderModel has no finalising state, so the key reads 'Record IQ' while the last take is still being written |
+| 1370 | Stop IQ | button | PRESENT | the same key reads 'Stop IQ' -> FOXAPI_OP_RECORD_IQ 0 |
+| 1371 | IQ progress | readout | PRESENT | mono dim readout ('IQ 3.2 s / n samples / x MB') while recording |
+| 1372 | Record audio | button (full width) | PRESENT | Key -> FOXAPI_OP_RECORD_AUDIO 1 |
+| 1373 | Starting audio | button | PRESENT | the same key reads 'Starting audio - click to cancel', then 'Cancelling audio start...' greyed |
+| 1374 | Saving (audio) | button (disabled) | DEFERRED | not found in signal_bank.slint: RecorderModel has no finalising state, so the key reads 'Record audio' while the last take is still being written |
+| 1375 | Stop audio | button | PRESENT | the same key reads 'Stop audio' -> FOXAPI_OP_RECORD_AUDIO 0 |
+| 1376 | Audio progress | readout | PRESENT | mono dim readout while recording |
+| 1377 | Muted warning | readout | PRESENT | amber Note 'Muted by <plugin> - this take is silent' |
+| 1378 | Press Play hint | readout | PRESENT | dim Note '(press Play to feed the recorders)' |
+| 1379 | Recorder error / notice | readout | PRESENT | red Note (record error, 'disk refused the file') and a dim Note (the 4 GB limit, 'the file was closed and is complete') |
+
+## SIGNAL bank — Frequency-list import dialog
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1380 | Dialog | dialog | PRESENT | ImportDialog: a 460 px sheet with a close key; the backdrop and Cancel close it; Esc does not (the escape handler of main.cpp closes the editor, About and the bias sheet only) |
+| 1381 | Reason line | readout | PRESENT | Note at the top (import-reason, error) |
+| 1382 | Preset note | readout | DEFERRED | not found in signal_bank.slint: ImportDialogModel has no preset field (the airband preset import belongs to the TOOLS bank) |
+| 1383 | Drop zone | drag/gesture | DEFERRED | drawn as words only; no file-drop event is wired into the Slint window (not found in signal_bank.slint, main.slint or main.cpp), so a dropped file imports nothing; the path field is the way in |
+| 1384 | or / Browse... | button | DEFERRED | the OS file chooser: a path field takes its place (Enter imports: FOXAPP_OP_BOOKMARK_IMPORT_FILE for a frequency list, SELECT_SOURCE 'file:' for an I/Q recording); the Browse key is drawn and calls import-open, the host's local pickFile |
+| 1385 | Reading line | readout | DEFERRED | not found in signal_bank.slint: reading_line is a host extra with no field in the Slint ImportDialogModel |
+| 1386 | Cancel | button | PRESENT | Key -> import-closed (local) |
+
+# Counts (the whole file: phase 1, phase 2 and the SIGNAL bank of phase 3)
 
 | Status | Rows |
 |---|---|
-| PRESENT | 1077 |
-| RELOCATED | 54 |
-| DEFERRED | 79 |
+| PRESENT | 1199 |
+| RELOCATED | 71 |
+| DEFERRED | 116 |
 | TODO (unclassified) | 0 |
-| Total | 1210 |
+| Total | 1386 |
 
 Phase 2 alone: PRESENT 888, RELOCATED 34, DEFERRED 13, total 935.
+
+Phase 3, the SIGNAL bank alone: PRESENT 122, RELOCATED 17, DEFERRED 37, total 176.

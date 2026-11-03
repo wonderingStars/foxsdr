@@ -24,6 +24,9 @@ import { KitEvents, DecodeRow, PluginEntry, DecoderBar, PageTab, MapModel, Fitte
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow } from "pages.slint";
 import { MenuItemKind, MenuEntry, Menu } from "menus.slint";
+import { SignalEvents, SelectItem, GainStage, OptionRow, SourceModel, RadioExtrasModel, AudioFiltersModel, SinksModel, TransmitModel, RecorderModel,
+         RadioSetupModel, UnboundRow, SetupKey, ImportDialogModel, SourceBody, FrequencyCorrectionBody, RadioExtras, AudioFiltersBody, SinksBody,
+         RecorderBody, RadioSetupSheet, ImportDialog } from "signal_bank.slint";
 import { Checkbox } from "fields.slint";
 import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
@@ -36,7 +39,9 @@ export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, Men
          AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, AgeTick, PaletteResult, PatchNode, PatchWire,
          KitEvents, DecodeRow, PluginEntry, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
-         InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow }
+         InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow,
+         SignalEvents, SelectItem, GainStage, OptionRow, SourceModel, RadioExtrasModel, AudioFiltersModel, SinksModel, TransmitModel, RecorderModel,
+         RadioSetupModel, UnboundRow, SetupKey, ImportDialogModel }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -142,6 +147,15 @@ export component MainWindow inherits Window {
     in-out property <int> view-index: 0;             // RECEIVER PATCH SCOPE
     // the plugin kit (pages.slint): the docked and torn-off pages, the DECODE bank's rows and drawers, the "Sound is muted" question
     in property <[PageTab]> pages: [];
+    // THE SIGNAL BANK (phase 3, docs 6.39): the bodies under the rows of bank 0, filled by the host (signal_publish.cpp)
+    in property <SourceModel> source-model;
+    in property <RadioExtrasModel> radio-extras;
+    in property <AudioFiltersModel> filters-model;
+    in property <SinksModel> sinks-model;
+    in property <TransmitModel> transmit-model;
+    in property <RecorderModel> recorder-model;
+    in property <RadioSetupModel> radio-setup;
+    in property <ImportDialogModel> import-dialog;
     in property <[DecodeRow]> decode-rows: [];
     in property <[PluginEntry]> plugin-entries: [];
     in property <string> decode-note;
@@ -523,7 +537,15 @@ export component MainWindow inherits Window {
                             if root.bank-index != 1 : VerticalLayout { spacing: 0px;
                                 for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; clicked => { root.section-clicked(i); }
                                     // the Radio section's open body (the sheet's); the other bodies are the banks of phase 3
-                                    VerticalLayout { spacing: i == 2 ? 10px : 0px;
+                                    VerticalLayout { spacing: (root.bank-index == 0 && i != 0 && i != 5) ? 10px : 0px;
+                                        // the SIGNAL bank's bodies (signal_bank.slint), by row: 1 Source, 3 Audio filters, 4 Sinks, 6 Recorder, 7 Frequency correction
+                                        if root.bank-index == 0 && i == 1 : SourceBody { model: root.source-model; ppm-block: false; }   // the ppm block is row 7
+                                        if root.bank-index == 0 && i == 2 : RadioExtras { model: root.radio-extras; }
+                                        if root.bank-index == 0 && i == 3 : AudioFiltersBody { model: root.filters-model; }
+                                        if root.bank-index == 0 && i == 4 : SinksBody { model: root.sinks-model; }
+                                        if root.bank-index == 0 && i == 5 && root.transmit-model.fault != "" : Text { text: root.transmit-model.fault; font-size: Theme.font-small; color: Theme.chip-err-fg; wrap: word-wrap; }
+                                        if root.bank-index == 0 && i == 6 : RecorderBody { model: root.recorder-model; }
+                                        if root.bank-index == 0 && i == 7 : FrequencyCorrectionBody { model: root.source-model; }
                                         if i == 2 : Text { text: @tr("Mode keys are on the receiver strip above (Ctrl+F … Ctrl+R)."); font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
                                         if i == 2 : BodyRow { label: @tr("Passband"); Text { text: root.passband-text; font-family: Theme.font-mono; color: Theme.fg; vertical-alignment: center; } }
                                         if i == 2 : Slider { value: root.passband-norm; accessible-label: @tr("Passband"); changed(v) => { root.passband-changed(v); } }
@@ -688,6 +710,9 @@ export component MainWindow inherits Window {
             Key { label: @tr("Keep it running"); on: true; clicked => { root.mute-question-open = false; KitEvents.mute-keep-clicked(); } }
         }
     }
+    // the SIGNAL bank's companion sheets: the Radio-setup page and the recorder's import dialog (shown by their models)
+    if root.radio-setup.shown : RadioSetupSheet { model: root.radio-setup; }
+    if root.import-dialog.shown : ImportDialog { model: root.import-dialog; }
     if root.bias-question-open : Sheet { title: @tr("Turn on the bias tee?"); dismissed => { root.bias-question-open = false; }
         Text { text: root.bias-question-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
         Text { text: root.bias-tooltip; wrap: word-wrap; color: Theme.chip-warn-fg; font-size: Theme.font-small; }

@@ -1,0 +1,434 @@
+// The SIGNAL bank specimen sheet (1240 x 2400): every body of ui/signal_bank.slint inside the REAL Section it is shown under (296 wide: the body is
+// 254 px, the Section's own padding 30 / 12), on the sample models below, so tests/test_slint_signal.cpp can probe the pixels against the Banks
+// artboard (artboards/Workbench-Banks.dc.html: the SIGNAL column A1 and the Source-variants strip A6) and press the controls with real pointer events.
+// Four columns of stacked Sections (each Section's y is the one above's y + height + 10, so the stack holds whatever height the typefaces settle on);
+// the two companion sheets sit under them, each over a 620-wide stage of its own.
+//
+//   column x      Section (296 wide, small = 30 px row)                               model            what it shows
+//   A  10   s1    Source / RTL-SDR     variant 0, y 10   rate, antenna, auto gain + bias tee, one TUNER stage, the ppm block, then a mismatch
+//                                       note (amber) and the source error (red)                         m-rtl
+//   A       fc1   Frequency correction  FrequencyCorrectionBody, default-forwarding to SignalEvents      m-rtl
+//   B  316  b1    Source / SOUND CARD   variant 4, I/Q pair: Device + Format, Swap I/Q, Centre (MHz), Sample rate + Open, Receives     m-card-iq
+//          b2     Source / SOUND CARD   variant 4, real audio: the busy line, "No inputs found", Channel, the converter (Off), the missing-card note   m-card-real
+//          b3     Source / AIRSPY       variant 5, Sensitive: Rate (single port), Bias tee, the Airspy card with its Gain slider      m-airspy
+//          b4     Source / AIRSPY       variant 5, Free: LNA AGC / Mixer AGC, LNA / MIXER / VGA sliders                               m-airspy-free
+//   C  622  c1    Source / RTL-SDR      variant 7: the converter card with an Up converter, LO 125 MHz, quick keys, Inverts, parse error, on-air line   m-conv
+//          c2     Audio filters / 3 ON  NR on 0.45, notch on 1000 Hz Q 30, auto notch locked on 1.2 kHz                              m-filters
+//          c3     Audio filters / OFF   everything off: the sliders greyed, the auto notch has no status                              m-filters-off
+//          c4     Sinks / OPEN          device, audio-health note, buffer, lead notice, "Muted by", the untouched-volume note        m-sinks
+//          c5     Sinks / NO DEV        the "No audio output devices" line instead of the dropdown                                   m-sinks-none
+//   D  928  d1    Recorder / OFF        idle: the folder, Record IQ and Record audio side by side                                    m-rec-idle
+//          d2     Recorder / REC        IQ running (Stop IQ + progress), the muted warning, hint, error, notice, an import key      m-rec-run
+//          d3     Radio / WFM           RadioExtras: Stereo ticked + the STEREO chip, the RDS block                                   m-extras
+//          d4     Radio / WFM           RadioExtras: Stereo unticked, MONO (amber), no RDS                                            m-extras-mono
+//          d5     Transmit / FAULT      TransmitRowState with a fault line (red)                                                      m-tx
+//          d6     Source / I/Q FILE     variant 1: path + Open, the slow-disk line                                                    m-iq
+//          d7     Source / PLUTO        variant 2                                                                                     m-pluto
+//          d8     Source / RTL_TCP      variant 3                                                                                     m-tcp
+//          d9     Source / RTL-SDR      variant 6: the radio extras (FM notch, DAB notch, HDR mode, ADC dither, ADC randomiser)       m-options
+//          d10    Source                the Device-stopped card (red) and the Advisories card (amber), nothing else                   m-stopped
+//   sheets: setup-stage (10, setup-y, 620 x 420) holds RadioSetupSheet, import-stage (640, setup-y, 560 x 360) holds ImportDialog
+//   probes: p1..p5 (254-wide layout cells, below the window at y 2500 / 2540) hold bare bodies and report the cell's width (rule 11)
+//
+// What the test reads: `Rec` counts and names every callback of the bodies with an override (SpecSource and the others), the sections' y and heights
+// are out properties, and the plain (default-forwarding) bodies are watched through the SignalEvents global.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { Section } from "../sections.slint";
+import { TipLayer } from "../tooltip.slint";
+import { SelectItem, GainStage, OptionRow, SourceModel, RadioExtrasModel, AudioFiltersModel, SinksModel, TransmitModel, RecorderModel, UnboundRow, SetupKey, RadioSetupModel, ImportDialogModel, SignalEvents, SourceBody, FrequencyCorrectionBody, RadioExtras, AudioFiltersBody, SinksBody, TransmitRowState, RecorderBody, RadioSetupSheet, ImportDialog } from "../signal_bank.slint";
+export { Theme, Skin, Workbench, ChipTone, LampState, SelectItem, GainStage, OptionRow, SourceModel, RadioExtrasModel, AudioFiltersModel, SinksModel, TransmitModel, RecorderModel, UnboundRow, SetupKey, RadioSetupModel, ImportDialogModel, SignalEvents }
+
+// What the bodies with an override report: the callback's name and its arguments, joined with a space.
+export global Rec {
+    in-out property <int> events;
+    in-out property <string> last;
+    in-out property <string> last-args;
+    callback fired(string, string);
+    public function rec(name: string, args: string) {
+        Rec.events += 1;
+        Rec.last = name;
+        Rec.last-args = args;
+        Rec.fired(name, args);
+    }
+}
+
+component SpecSource inherits SourceBody {
+    source-device-selected(a) => { Rec.rec("source-device-selected", "" + a); }
+    source-refresh() => { Rec.rec("source-refresh", ""); }
+    source-usrps(a) => { Rec.rec("source-usrps", a ? "1" : "0"); }
+    source-setup() => { Rec.rec("source-setup", ""); }
+    source-rate-selected(a) => { Rec.rec("source-rate-selected", "" + a); }
+    source-antenna-selected(a) => { Rec.rec("source-antenna-selected", "" + a); }
+    source-auto-gain(a) => { Rec.rec("source-auto-gain", a ? "1" : "0"); }
+    source-gain-changed(a, b) => { Rec.rec("source-gain-changed", "" + a + " " + b); }
+    source-bias(a) => { Rec.rec("source-bias", a ? "1" : "0"); }
+    ppm-toggled(a) => { Rec.rec("ppm-toggled", a ? "1" : "0"); }
+    ppm-committed(a) => { Rec.rec("ppm-committed", a); }
+    iq-path-committed(a) => { Rec.rec("iq-path-committed", a); }
+    iq-open() => { Rec.rec("iq-open", ""); }
+    pluto-address-committed(a) => { Rec.rec("pluto-address-committed", a); }
+    pluto-open() => { Rec.rec("pluto-open", ""); }
+    rtltcp-address-committed(a) => { Rec.rec("rtltcp-address-committed", a); }
+    rtltcp-open() => { Rec.rec("rtltcp-open", ""); }
+    card-selected(a) => { Rec.rec("card-selected", "" + a); }
+    card-format(a) => { Rec.rec("card-format", "" + a); }
+    card-channel(a) => { Rec.rec("card-channel", "" + a); }
+    card-swap(a) => { Rec.rec("card-swap", a ? "1" : "0"); }
+    card-centre-committed(a) => { Rec.rec("card-centre-committed", a); }
+    card-rate-selected(a) => { Rec.rec("card-rate-selected", "" + a); }
+    card-open() => { Rec.rec("card-open", ""); }
+    airspy-decimation(a) => { Rec.rec("airspy-decimation", "" + a); }
+    airspy-gain-mode(a) => { Rec.rec("airspy-gain-mode", "" + a); }
+    airspy-gain(a) => { Rec.rec("airspy-gain", "" + a); }
+    airspy-lna-agc(a) => { Rec.rec("airspy-lna-agc", a ? "1" : "0"); }
+    airspy-mixer-agc(a) => { Rec.rec("airspy-mixer-agc", a ? "1" : "0"); }
+    airspy-lna(a) => { Rec.rec("airspy-lna", "" + a); }
+    airspy-mixer(a) => { Rec.rec("airspy-mixer", "" + a); }
+    airspy-vga(a) => { Rec.rec("airspy-vga", "" + a); }
+    option-toggled(a, b) => { Rec.rec("option-toggled", "" + a + " " + (b ? "1" : "0")); }
+    converter-mode(a) => { Rec.rec("converter-mode", "" + a); }
+    converter-lo-committed(a) => { Rec.rec("converter-lo-committed", a); }
+    converter-quick(a) => { Rec.rec("converter-quick", "" + a); }
+    converter-inverts(a) => { Rec.rec("converter-inverts", a ? "1" : "0"); }
+}
+
+component SpecFilters inherits AudioFiltersBody {
+    filter-nr(a) => { Rec.rec("filter-nr", a ? "1" : "0"); }
+    filter-nr-strength(a) => { Rec.rec("filter-nr-strength", "" + a); }
+    filter-notch(a) => { Rec.rec("filter-notch", a ? "1" : "0"); }
+    filter-notch-freq(a) => { Rec.rec("filter-notch-freq", "" + a); }
+    filter-notch-q(a) => { Rec.rec("filter-notch-q", "" + a); }
+    filter-auto-notch(a) => { Rec.rec("filter-auto-notch", a ? "1" : "0"); }
+}
+
+component SpecRecorder inherits RecorderBody {
+    recorder-iq() => { Rec.rec("recorder-iq", ""); }
+    recorder-audio() => { Rec.rec("recorder-audio", ""); }
+    recorder-import() => { Rec.rec("recorder-import", ""); }
+}
+
+component SpecSetup inherits RadioSetupSheet {
+    setup-key(a) => { Rec.rec("setup-key", a); }
+    setup-closed() => { Rec.rec("setup-closed", ""); }
+    setup-dont-show(a) => { Rec.rec("setup-dont-show", a ? "1" : "0"); }
+}
+
+component SpecImport inherits ImportDialog {
+    import-path-committed(a) => { Rec.rec("import-path-committed", a); }
+    import-kind(a) => { Rec.rec("import-kind", "" + a); }
+    import-open() => { Rec.rec("import-open", ""); }
+    import-closed() => { Rec.rec("import-closed", ""); }
+}
+
+export component SignalSpecimen inherits Window {
+    width: 1240px;
+    height: 2400px;
+    background: Theme.bg;
+
+    // ---- the geometry the test reads ----
+    out property <length> s1-y: s1.y;
+    out property <length> s1-h: s1.height;
+    out property <length> s1-body-h: s1.body-height;
+    out property <length> fc1-y: fc1.y;
+    out property <length> fc1-body-h: fc1.body-height;
+    out property <length> b1-y: b1.y;
+    out property <length> b1-body-h: b1.body-height;
+    out property <length> b2-y: b2.y;
+    out property <length> b2-body-h: b2.body-height;
+    out property <length> b3-y: b3.y;
+    out property <length> b3-body-h: b3.body-height;
+    out property <length> b4-y: b4.y;
+    out property <length> b4-body-h: b4.body-height;
+    out property <length> c1-y: c1.y;
+    out property <length> c1-body-h: c1.body-height;
+    out property <length> c2-y: c2.y;
+    out property <length> c2-body-h: c2.body-height;
+    out property <length> c3-y: c3.y;
+    out property <length> c3-body-h: c3.body-height;
+    out property <length> c4-y: c4.y;
+    out property <length> c4-body-h: c4.body-height;
+    out property <length> c5-y: c5.y;
+    out property <length> c5-body-h: c5.body-height;
+    out property <length> d1-y: d1.y;
+    out property <length> d1-body-h: d1.body-height;
+    out property <length> d2-y: d2.y;
+    out property <length> d2-body-h: d2.body-height;
+    out property <length> d3-y: d3.y;
+    out property <length> d3-body-h: d3.body-height;
+    out property <length> d4-y: d4.y;
+    out property <length> d4-body-h: d4.body-height;
+    out property <length> d5-y: d5.y;
+    out property <length> d5-body-h: d5.body-height;
+    out property <length> d6-y: d6.y;
+    out property <length> d6-body-h: d6.body-height;
+    out property <length> d7-y: d7.y;
+    out property <length> d8-y: d8.y;
+    out property <length> d9-y: d9.y;
+    out property <length> d9-body-h: d9.body-height;
+    out property <length> d10-y: d10.y;
+    out property <length> d10-body-h: d10.body-height;
+    out property <length> setup-y: max(max(fc1.y + fc1.height, b4.y + b4.height), max(c5.y + c5.height, d10.y + d10.height)) + 24px;
+    out property <length> p1-w: p1.width;
+    out property <length> p2-w: p2.width;
+    out property <length> p3-w: p3.width;
+    out property <length> p4-w: p4.width;
+    out property <length> p5-w: p5.width;
+
+    // ---- the sample models (the test may change them) ----
+    in-out property <SourceModel> m-rtl: {
+        device-label: "RTL-SDR Blog V4",
+        devices: [
+            { label: "Signal generator", id: "gen", enabled: true, note: "" },
+            { label: "I/Q file", id: "iq", enabled: true, note: "" },
+            { label: "Sound card", id: "card", enabled: true, note: "" },
+            { label: "RTL-SDR Blog V4", id: "rtl", enabled: true, note: "" },
+            { label: "Airspy R2", id: "airspy", enabled: false, note: "(in use by the patch)" },
+        ],
+        device-index: 3, refresh-enabled: true, look-for-usrps: false, setup-key-label: "RADIO SETUP",
+        rate-text: "2.400 MS/s",
+        rates: [
+            { label: "1.024 MS/s", id: "", enabled: true, note: "" },
+            { label: "2.048 MS/s", id: "", enabled: true, note: "" },
+            { label: "2.400 MS/s", id: "", enabled: true, note: "" },
+            { label: "3.200 MS/s", id: "", enabled: true, note: "" },
+        ],
+        actual-rate: "2.400 MS/s",
+        antenna-text: "ANTENNA RX",
+        antennas: [
+            { label: "ANTENNA RX", id: "", enabled: true, note: "" },
+            { label: "ANTENNA AUX", id: "", enabled: true, note: "" },
+        ],
+        single-port: false,
+        auto-gain: false, auto-gain-shown: true, agc-note: "",
+        stages: [{ name: "TUNER", text: "32.8 dB", norm: 0.66, enabled: true, unit: "dB" }],
+        bias-shown: true, bias-on: false, bias-enabled: true,
+        ppm-on: true, ppm-radio-line: "For RTL-SDR Blog V4, serial 00000001", ppm-text: "+0.0",
+        ppm-note: "Corrected in the radio itself.", ppm-refusal: "The driver refused 12.0 ppm",
+        error-line: "could not open the radio", mismatch-note: "Radio cannot tune below 24 MHz",
+        variant: 0,
+    };
+    in-out property <SourceModel> m-card-iq: {
+        device-label: "Sound card", look-for-usrps: false, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        devices: [
+            { label: "Signal generator", id: "gen", enabled: true, note: "" },
+            { label: "I/Q file", id: "iq", enabled: true, note: "" },
+            { label: "Sound card", id: "card", enabled: true, note: "" },
+        ],
+        device-index: 2, variant: 4,
+        cards: [
+            { label: "Line in (Realtek)", id: "a", enabled: true, note: "" },
+            { label: "Microphone (USB audio)", id: "b", enabled: true, note: "(busy)" },
+        ],
+        card-index: 0, card-format-index: 1, card-channel-index: 0, card-swap-iq: false, card-centre-mhz: "7.100",
+        card-rates: [
+            { label: "48000 Hz", id: "", enabled: true, note: "" },
+            { label: "96000 Hz", id: "", enabled: true, note: "" },
+            { label: "192000 Hz", id: "", enabled: true, note: "(exclusive)" },
+        ],
+        card-rate-index: 0, card-receives: "Receives 7.076 MHz to 7.124 MHz.",
+    };
+    in-out property <SourceModel> m-card-real: {
+        device-label: "Sound card", look-for-usrps: true, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        devices: [{ label: "Sound card", id: "card", enabled: true, note: "" }],
+        device-index: 0, variant: 4,
+        card-busy: "Scanning for devices...", card-none: "No sound card inputs found.",
+        cards: [], card-index: -1, card-format-index: 0, card-channel-index: 1,
+        card-rates: [{ label: "48000 Hz", id: "", enabled: true, note: "" }], card-rate-index: 0,
+        card-receives: "Receives 0 Hz to 24 kHz.", card-warning: "The saved card is not there: it is kept, and opens when it is back.",
+        converter-shown: true, converter-mode: 0,
+    };
+    in-out property <SourceModel> m-airspy: {
+        device-label: "Airspy R2", look-for-usrps: false, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        devices: [{ label: "Airspy R2", id: "airspy", enabled: true, note: "" }], device-index: 0,
+        rate-text: "10.000 MS/s", rates: [{ label: "10.000 MS/s", id: "", enabled: true, note: "" }, { label: "2.500 MS/s", id: "", enabled: true, note: "" }],
+        actual-rate: "10.000 MS/s", antenna-text: "RX", single-port: true,
+        auto-gain-shown: false, bias-shown: true, bias-on: true, bias-enabled: true,
+        ppm-on: false,
+        variant: 5,
+        airspy-decimations: [
+            { label: "None", id: "", enabled: true, note: "" },
+            { label: "2", id: "", enabled: true, note: "" },
+            { label: "4", id: "", enabled: true, note: "" },
+            { label: "8", id: "", enabled: true, note: "" },
+        ],
+        airspy-decimation-index: 1, airspy-hardware-rate: "radio at 10 MS/s, decimated by 2", airspy-gain-mode: 0, airspy-gain-norm: 0.4,
+    };
+    in-out property <SourceModel> m-airspy-free: {
+        device-label: "Airspy R2", look-for-usrps: false, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        devices: [{ label: "Airspy R2", id: "airspy", enabled: true, note: "" }], device-index: 0,
+        auto-gain-shown: false, bias-shown: false, ppm-on: false,
+        variant: 5,
+        airspy-decimations: [{ label: "None", id: "", enabled: true, note: "" }, { label: "2", id: "", enabled: true, note: "" }],
+        airspy-decimation-index: 0, airspy-gain-mode: 2, airspy-gain-norm: 0.5,
+        airspy-lna-agc: true, airspy-mixer-agc: false, airspy-lna: 0.3, airspy-mixer: 0.6, airspy-vga: 0.5,
+    };
+    in-out property <SourceModel> m-conv: {
+        device-label: "RTL-SDR Blog V4", look-for-usrps: false, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        devices: [{ label: "RTL-SDR Blog V4", id: "rtl", enabled: true, note: "" }], device-index: 0,
+        rate-text: "2.400 MS/s", rates: [{ label: "2.400 MS/s", id: "", enabled: true, note: "" }], actual-rate: "2.400 MS/s",
+        auto-gain-shown: true, auto-gain: true, agc-note: "", stages: [{ name: "TUNER", text: "20.7 dB", norm: 0.4, enabled: true, unit: "dB" }],
+        bias-shown: false, ppm-on: false,
+        variant: 7,
+        converter-shown: true, converter-mode: 1, converter-alias: "The up-converter's image falls inside the radio's band.", converter-lo: "125 MHz",
+        converter-inverts: true, converter-error: "could not read frequency \"12x MHz\"",
+        converter-on-air: "Listening on 145.000 MHz on the air - 20.000 MHz at the radio.",
+    };
+    in-out property <AudioFiltersModel> m-filters: {
+        chain-note: "chain: notch -> auto-notch -> noise reduction", nr-on: true, nr-strength: 0.45, nr-text: "0.45",
+        notch-on: true, notch-freq: 0.5, notch-freq-text: "1000 Hz", notch-q: 0.15, notch-q-text: "30",
+        auto-notch-on: true, auto-notch-status: "Locked on 1.2 kHz", auto-notch-locked: true,
+    };
+    in-out property <AudioFiltersModel> m-filters-off: {
+        chain-note: "chain: notch -> auto-notch -> noise reduction", nr-on: false, nr-strength: 0.45, nr-text: "0.45",
+        notch-on: false, notch-freq: 0.5, notch-freq-text: "1000 Hz", notch-q: 0.15, notch-q-text: "30",
+        auto-notch-on: true, auto-notch-status: "Searching", auto-notch-locked: false,
+    };
+    in-out property <SinksModel> m-sinks: {
+        device-text: "Speakers (Realtek)",
+        devices: [
+            { label: "Speakers (Realtek)", id: "a", enabled: true, note: "" },
+            { label: "Headphones (USB audio)", id: "b", enabled: true, note: "" },
+            { label: "HDMI output", id: "c", enabled: false, note: "(busy)" },
+        ],
+        device-index: 0, health-note: "Output stalled once and was recovered",
+        buffer-text: "AUTOMATIC  480 ms",
+        buffers: [
+            { label: "AUTOMATIC", id: "", enabled: true, note: "" },
+            { label: "120 ms", id: "", enabled: true, note: "" },
+            { label: "240 ms", id: "", enabled: true, note: "" },
+            { label: "480 ms", id: "", enabled: true, note: "" },
+            { label: "960 ms", id: "", enabled: true, note: "" },
+        ],
+        buffer-index: 0, lead-notice: "Buffer deepened to 480 ms", muted-by: "Muted by APRS decoder", muted-note: "sound returns when the plugin stops",
+    };
+    in-out property <SinksModel> m-sinks-none: { none-line: "No audio output devices", buffer-text: "AUTOMATIC", buffers: [{ label: "AUTOMATIC", id: "", enabled: true, note: "" }], buffer-index: 0 };
+    in-out property <RecorderModel> m-rec-idle: {
+        folder: "C:\\Users\\fox\\FoxSDR\\Recordings", iq-label: "Record IQ", iq-enabled: true, audio-label: "Record audio", audio-enabled: true,
+    };
+    in-out property <RecorderModel> m-rec-run: {
+        folder: "C:\\Users\\fox\\FoxSDR\\Recordings", iq-label: "Stop IQ", iq-enabled: true, iq-running: true, iq-progress: "IQ 12.4 s | 29760000 samples | 12.4 MB",
+        audio-label: "Record audio", audio-enabled: true,
+        muted-warning: "Muted by APRS decoder - this take is silent", hint: "(press Play to feed the recorders)",
+        error-line: "Disk refused the file", notice: "Take ended: source changed", import-label: "Import a frequency list",
+    };
+    in-out property <RadioExtrasModel> m-extras: {
+        wfm: true, stereo: true, stereo-word: "Stereo", stereo-tone: ChipTone.good, rds-shown: true, rds-pi: "2C1F", rds-ps: "BBC R2", rds-rt: "Now playing: the morning show",
+    };
+    in-out property <RadioExtrasModel> m-extras-mono: { wfm: true, stereo: false, stereo-word: "Mono", stereo-tone: ChipTone.warn, rds-shown: false };
+    in-out property <TransmitModel> m-tx: { chip: "FAULT", tone: ChipTone.err, available: true, armed: false, keyed: false, fault: "The transmitter stopped answering." };
+    in-out property <SourceModel> m-iq: {
+        device-label: "I/Q file", devices: [{ label: "I/Q file", id: "iq", enabled: true, note: "" }], device-index: 0, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        variant: 1, iq-path: "C:\\iq\\pass-0412.cu8", iq-note: "Waiting for the disk to open the file: 2 s",
+    };
+    in-out property <SourceModel> m-pluto: {
+        device-label: "ADALM-Pluto", devices: [{ label: "ADALM-Pluto", id: "pluto", enabled: true, note: "" }], device-index: 0, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        variant: 2, pluto-address: "ip:192.168.2.1", pluto-help: "A Pluto on its USB cable answers at ip:192.168.2.1. ip:pluto.local works if the name resolves.",
+    };
+    in-out property <SourceModel> m-tcp: {
+        device-label: "rtl_tcp", devices: [{ label: "rtl_tcp", id: "tcp", enabled: true, note: "" }], device-index: 0, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        variant: 3, rtltcp-address: "192.168.1.20:1234", rtltcp-help: "The address of a running rtl_tcp server, as host or host:port.",
+    };
+    in-out property <SourceModel> m-options: {
+        device-label: "SDRplay RSPdx", devices: [{ label: "SDRplay RSPdx", id: "rsp", enabled: true, note: "" }], device-index: 0, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        variant: 6, ppm-on: false,
+        options: [
+            { name: "fm-notch", label: "FM notch", on: true, enabled: true, tooltip: "The RSP's own broadcast-FM notch filter." },
+            { name: "dab-notch", label: "DAB notch", on: false, enabled: true, tooltip: "The RSP's own DAB band III notch filter." },
+            { name: "hdr", label: "HDR mode", on: false, enabled: true, tooltip: "An RSPdx's high-dynamic-range path below 2 MHz." },
+            { name: "dither", label: "ADC dither", on: false, enabled: false, tooltip: "" },
+            { name: "rand", label: "ADC randomiser", on: true, enabled: true, tooltip: "" },
+        ],
+    };
+    in-out property <SourceModel> m-stopped: {
+        device-label: "RTL-SDR Blog V4", devices: [{ label: "RTL-SDR Blog V4", id: "rtl", enabled: true, note: "" }], device-index: 0, refresh-enabled: true, setup-key-label: "RADIO SETUP",
+        variant: 0, ppm-on: false,
+        stopped-line: "Device stopped: the radio stopped answering - it was unplugged or reset", stopped-advice: "Reconnect it and pick the source again, or switch to the signal generator.",
+        advisory: "Zadig / WinUSB: install the WinUSB driver for this radio", advisory-tone: ChipTone.warn,
+    };
+    in-out property <RadioSetupModel> m-setup: {
+        shown: true, title: "RADIO SETUP", busy: "Checking this computer...",
+        lines: ["FoxSDR found no radio it can use. This is what this computer shows, and what to do about it:", "Nothing is plugged in that FoxSDR could open."],
+        unbound: [
+            { name: "RTL-SDR Blog V4 is plugged in but is not bound to WinUSB", family: "RTL-SDR", vid: "0BDA", pid: "2838",
+              advice: "Nothing can open it until Windows has the WinUSB driver bound to it. One Windows permission prompt, no Zadig." },
+            { name: "Airspy R2 needs the Airspy driver", family: "Airspy", vid: "1D50", pid: "60A1", advice: "Install the vendor's driver, then press CHECK AGAIN." },
+        ],
+        keys: [
+            { id: "install-driver", label: "INSTALL DRIVER", enabled: true, tooltip: "Install the WinUSB driver for this radio" },
+            { id: "check-again", label: "CHECK AGAIN", enabled: true, tooltip: "" },
+            { id: "link", label: "zadig.akeo.ie", enabled: true, tooltip: "https://zadig.akeo.ie" },
+        ],
+        dont-show: false,
+    };
+    in-out property <ImportDialogModel> m-import: {
+        shown: true, path: "", error: "No frequencies were found in that file.",
+        kinds: [{ label: "Bookmarks", id: "bm", enabled: true, note: "" }, { label: "Airband preset", id: "ab", enabled: true, note: "" }], kind-index: 0,
+    };
+
+    // ============================ column A (x 10) ============================
+    s1 := Section { x: 10px; y: 10px; width: 296px; small: true; open: true; name: "Source"; chip: "RTL-SDR"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecSource { model: root.m-rtl; } }
+    fc1 := Section { x: 10px; y: s1.y + s1.height + 10px; width: 296px; small: true; open: true; name: "Frequency correction"; chip: "0.0 PPM";
+        FrequencyCorrectionBody { model: root.m-rtl; } }
+
+    // ============================ column B (x 316) ============================
+    b1 := Section { x: 316px; y: 10px; width: 296px; small: true; open: true; name: "Source"; chip: "SOUND CARD";
+        SpecSource { model: root.m-card-iq; ppm-block: false; } }
+    b2 := Section { x: 316px; y: b1.y + b1.height + 10px; width: 296px; small: true; open: true; name: "Source"; chip: "SOUND CARD";
+        SpecSource { model: root.m-card-real; ppm-block: false; } }
+    b3 := Section { x: 316px; y: b2.y + b2.height + 10px; width: 296px; small: true; open: true; name: "Source"; chip: "AIRSPY R2";
+        SpecSource { model: root.m-airspy; } }
+    b4 := Section { x: 316px; y: b3.y + b3.height + 10px; width: 296px; small: true; open: true; name: "Source"; chip: "AIRSPY R2";
+        SpecSource { model: root.m-airspy-free; } }
+
+    // ============================ column C (x 622) ============================
+    c1 := Section { x: 622px; y: 10px; width: 296px; small: true; open: true; name: "Source"; chip: "RTL-SDR";
+        SpecSource { model: root.m-conv; } }
+    c2 := Section { x: 622px; y: c1.y + c1.height + 10px; width: 296px; small: true; open: true; name: "Audio filters"; chip: "3 ON"; tone: ChipTone.good;
+        SpecFilters { model: root.m-filters; } }
+    c3 := Section { x: 622px; y: c2.y + c2.height + 10px; width: 296px; small: true; open: true; name: "Audio filters"; chip: "OFF";
+        SpecFilters { model: root.m-filters-off; } }
+    c4 := Section { x: 622px; y: c3.y + c3.height + 10px; width: 296px; small: true; open: true; name: "Sinks"; chip: "OPEN"; tone: ChipTone.good;
+        SinksBody { model: root.m-sinks; } }
+    c5 := Section { x: 622px; y: c4.y + c4.height + 10px; width: 296px; small: true; open: true; name: "Sinks"; chip: "NO DEV"; tone: ChipTone.warn;
+        SinksBody { model: root.m-sinks-none; } }
+
+    // ============================ column D (x 928) ============================
+    d1 := Section { x: 928px; y: 10px; width: 296px; small: true; open: true; name: "Recorder"; chip: "OFF";
+        SpecRecorder { model: root.m-rec-idle; } }
+    d2 := Section { x: 928px; y: d1.y + d1.height + 10px; width: 296px; small: true; open: true; name: "Recorder"; chip: "REC"; tone: ChipTone.err;
+        SpecRecorder { model: root.m-rec-run; } }
+    d3 := Section { x: 928px; y: d2.y + d2.height + 10px; width: 296px; small: true; open: true; name: "Radio"; chip: "WFM";
+        RadioExtras { model: root.m-extras; } }
+    d4 := Section { x: 928px; y: d3.y + d3.height + 10px; width: 296px; small: true; open: true; name: "Radio"; chip: "WFM";
+        RadioExtras { model: root.m-extras-mono; } }
+    d5 := Section { x: 928px; y: d4.y + d4.height + 10px; width: 296px; small: true; open: true; name: "Transmit"; chip: "FAULT"; tone: ChipTone.err;
+        TransmitRowState { model: root.m-tx; } }
+    d6 := Section { x: 928px; y: d5.y + d5.height + 10px; width: 296px; small: true; open: true; name: "Source"; chip: "I/Q FILE";
+        SpecSource { model: root.m-iq; ppm-block: false; } }
+    d7 := Section { x: 928px; y: d6.y + d6.height + 10px; width: 296px; small: true; open: true; name: "Source"; chip: "PLUTO";
+        SpecSource { model: root.m-pluto; ppm-block: false; } }
+    d8 := Section { x: 928px; y: d7.y + d7.height + 10px; width: 296px; small: true; open: true; name: "Source"; chip: "RTL_TCP";
+        SpecSource { model: root.m-tcp; ppm-block: false; } }
+    d9 := Section { x: 928px; y: d8.y + d8.height + 10px; width: 296px; small: true; open: true; name: "Source"; chip: "RSPDX";
+        SpecSource { model: root.m-options; } }
+    d10 := Section { x: 928px; y: d9.y + d9.height + 10px; width: 296px; small: true; open: true; name: "Source"; chip: "STOPPED"; tone: ChipTone.err;
+        SpecSource { model: root.m-stopped; } }
+
+    // ============================ the companion sheets ============================
+    setup-stage := Rectangle { x: 10px; y: root.setup-y; width: 620px; height: 420px; background: Theme.bg; clip: true;
+        SpecSetup { x: 0px; y: 0px; width: parent.width; height: parent.height; model: root.m-setup; } }
+    import-stage := Rectangle { x: 640px; y: root.setup-y; width: 560px; height: 340px; background: Theme.bg; clip: true;
+        SpecImport { x: 0px; y: 0px; width: parent.width; height: parent.height; model: root.m-import; } }
+
+    // ============================ rule 11: bare bodies in a 254-wide cell ============================
+    // (the cell's width, if a body asks for more than 254 px, would be wider)
+    HorizontalLayout { x: 10px; y: 2500px; width: 254px; height: 20px; p1 := Rectangle { SourceBody { model: root.m-rtl; } } }
+    HorizontalLayout { x: 280px; y: 2500px; width: 254px; height: 20px; p2 := Rectangle { SourceBody { model: root.m-card-iq; } } }
+    HorizontalLayout { x: 550px; y: 2500px; width: 254px; height: 20px; p3 := Rectangle { SourceBody { model: root.m-conv; } } }
+    HorizontalLayout { x: 820px; y: 2500px; width: 254px; height: 20px; p4 := Rectangle { AudioFiltersBody { model: root.m-filters; } } }
+    HorizontalLayout { x: 10px; y: 2540px; width: 254px; height: 20px; p5 := Rectangle { RecorderBody { model: root.m-rec-run; } } }
+
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}
