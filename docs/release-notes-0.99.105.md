@@ -6,8 +6,14 @@ through the plugin kit: decoder output, pictures, panels, instruments, maps,
 settings forms and presets. The 33 languages are bundled into the window.
 
 The previous window stays installed as "FoxSDR (classic window)" in the Start
-menu. Use it for the plugin store, bookmarks, scanner, airband and recorder
-pages until those are ported.
+menu, and this beta still needs it for more than the pages. In the new window
+the rail's SIGNAL, TOOLS, EXTEND and SYSTEM banks show their sections and
+state, but only the Radio section opens; choosing or setting up a radio, the
+bias tee, audio filters, sinks, transmit, the recorder, bookmarks, scanner,
+airband, web access, CAT, the plugin store and every settings section are done
+in the classic window for now. The new window starts on the radio your settings
+already name. A first-time install sets its radio up in the classic window
+first. The next beta brings those banks into the new window.
 
 This is a beta and is held back from the stable channel. Copies set to "Stable
 releases" stay on 0.99.104. Copies set to "Every release (beta)" get 0.99.105.
@@ -20,7 +26,10 @@ Known issues:
 - The window is about 7 MB larger than the classic one, because of the
   catalogues it carries.
 - Words the engine sends stay English.
-- There is no Linux build of this beta. Linux stays at 0.99.103.
+- There is no Linux build of this beta. Linux stays at 0.99.103. The branch's
+  first Linux test run on CI failed 9 of 732 tests (instance lock, plugin status
+  lines, window placement on the runner's display); they are unfixed and Linux
+  is not released from it until they are.
 - It is not in the Microsoft Store.
 
 Verification:
@@ -40,4 +49,4 @@ Verification:
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.105.exe`:**
-`TBD`
+`7dae7c7c53948e41cdf89792cb2633f8e2dd30913063493f9545d2624b0bf22d`
