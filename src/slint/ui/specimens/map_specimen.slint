@@ -1,0 +1,146 @@
+// The map pane's specimen: one MapPane filling a 520 x 360 window, a synthetic base picture the test paints (a pixel buffer it sets as `base`),
+// six targets - one of every kind, and each variant once - a legend, the scale bar, the attribution and the zoom keys, with everything the
+// pane reports surfaced on the root so tests/test_slint_map.cpp can read what the gestures did.
+//
+//   x, y, w, h          what
+//   0, 0, 520, 360      MapPane (base = the test's picture)
+//   78, 72              [0] aircraft, heading 90, SELECTED (an accent ring), label "BAW123"
+//   208, 72             [1] vessel, heading 180, FOLLOWED (two accent rings), label "SEA STAR"
+//   325, 72             [2] aircraft, heading 0, EMERGENCY (a red halo that blinks at 2 Hz), label "SQK7700"
+//   78, 180             [3] station, no heading, plain, label "RX"
+//   208, 180            [4] satellite, no heading, ESTIMATED (a dashed ring in its colour: mint), label "ISS"
+//   325, 180            [5] unknown, no heading, faded to 50 %, no label
+//   right 10, top 10    the legend (three rows)
+//   left 12, 24 up      the scale bar of `scale-frac` of the width, "10 km" above it
+//   bottom centre       the attribution
+//   right 9, bottom 9   the zoom keys, 26 x 26: - at the bottom, + above it
+// The test can swap `targets`, `legend` and `base`, switch the keys, arm the pick, disable the pane and size the pane (view-w, view-h:
+// a Window's own width does not follow the platform's, so the pane is sized by properties, as the waterfall's specimen does).
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { MapPane, MapTarget, LegendRow } from "../map.slint";
+export { Theme, Skin, Workbench }
+export { MapTarget, LegendRow }
+
+export component MapSpecimen inherits Window {
+    width: 520px;
+    height: 360px;
+    background: Theme.bg;
+
+    // what the test sets
+    in-out property <image> base;
+    in-out property <[MapTarget]> targets: [
+        { id: "A1", x: 0.15, y: 0.20, heading: 90, kind: 1, label: "BAW123", alpha: 1.0, selected: true, followed: false, estimated: false, emergency: false, color: Theme.trace-live },
+        { id: "V2", x: 0.40, y: 0.20, heading: 180, kind: 2, label: "SEA STAR", alpha: 1.0, selected: false, followed: true, estimated: false, emergency: false, color: Theme.lamp-green },
+        { id: "A3", x: 0.625, y: 0.20, heading: 0, kind: 1, label: "SQK7700", alpha: 1.0, selected: false, followed: false, estimated: false, emergency: true, color: Theme.chip-err-fg },
+        { id: "S4", x: 0.15, y: 0.50, heading: -1, kind: 3, label: "RX", alpha: 1.0, selected: false, followed: false, estimated: false, emergency: false, color: Theme.fg },
+        { id: "T5", x: 0.40, y: 0.50, heading: -1, kind: 4, label: "ISS", alpha: 1.0, selected: false, followed: false, estimated: true, emergency: false, color: Theme.chip-good-fg },
+        { id: "U6", x: 0.625, y: 0.50, heading: -1, kind: 0, label: "", alpha: 0.5, selected: false, followed: false, estimated: false, emergency: false, color: Theme.muted },
+    ];
+    in-out property <[LegendRow]> legend: [
+        { label: "0-5 kft", color: Theme.lamp-amber },
+        { label: "5-20 kft", color: Theme.lamp-green },
+        { label: "above 20 kft", color: Theme.trace-live },
+    ];
+    in-out property <string> scale-text: "10 km";
+    in-out property <float> scale-frac: 0.2;
+    in-out property <string> attribution: "Map data - test";
+    in-out property <bool> zoom-in-enabled: true;
+    in-out property <bool> zoom-out-enabled: true;
+    in-out property <bool> pick-armed: false;
+    in-out property <bool> pane-enabled: true;
+    in-out property <string> hover-text;
+    in-out property <length> view-w: 520px;           // the pane's own size (the window's is fixed): the test narrows it to see `resized`
+    in-out property <length> view-h: 360px;
+
+    // what the pane reported
+    in-out property <int> clicks;
+    in-out property <float> click-x: -1;
+    in-out property <float> click-y: -1;
+    in-out property <int> target-clicks;
+    in-out property <int> last-target: -1;
+    in-out property <int> target-dclicks;
+    in-out property <int> last-dtarget: -1;
+    in-out property <int> hovers;
+    in-out property <int> hover-idx: -1;
+    in-out property <int> pans;
+    in-out property <float> pan-dx;
+    in-out property <float> pan-dy;
+    in-out property <float> pan-sum-x;
+    in-out property <float> pan-sum-y;
+    in-out property <int> zooms;
+    in-out property <int> zoom-notches;
+    in-out property <float> zoom-fx: -1;
+    in-out property <float> zoom-fy: -1;
+    in-out property <int> zoom-keys;
+    in-out property <int> last-zoom-key;
+    in-out property <int> resizes;
+    in-out property <length> resized-w;
+    in-out property <length> resized-h;
+    out property <bool> crosshair: pane.cursor == MouseCursor.crosshair;
+    out property <bool> grabbing: pane.cursor == MouseCursor.grabbing;
+    out property <bool> tip-shown: pane.tip-shown;
+    out property <int> pane-hover: pane.hover-index;
+    out property <length> pane-w: pane.pane-w;
+    out property <length> pane-h: pane.pane-h;
+    out property <angle> turn-of-90: pane.icon-turn(90);
+    out property <angle> turn-of-none: pane.icon-turn(-1);
+
+    pane := MapPane {
+        x: 0px;
+        y: 0px;
+        width: root.view-w;
+        height: root.view-h;
+        base: root.base;
+        targets: root.targets;
+        legend: root.legend;
+        scale-text: root.scale-text;
+        scale-frac: root.scale-frac;
+        attribution: root.attribution;
+        zoom-in-enabled: root.zoom-in-enabled;
+        zoom-out-enabled: root.zoom-out-enabled;
+        pick-armed: root.pick-armed;
+        hover-text: root.hover-text;
+        enabled: root.pane-enabled;
+
+        clicked(fx, fy) => {
+            root.clicks += 1;
+            root.click-x = fx;
+            root.click-y = fy;
+        }
+        target-clicked(i) => {
+            root.target-clicks += 1;
+            root.last-target = i;
+        }
+        target-double-clicked(i) => {
+            root.target-dclicks += 1;
+            root.last-dtarget = i;
+        }
+        hovered(i) => {
+            root.hovers += 1;
+            root.hover-idx = i;
+            root.hover-text = i >= 0 ? "Target " + i : "";
+        }
+        panned(dx, dy) => {
+            root.pans += 1;
+            root.pan-dx = dx;
+            root.pan-dy = dy;
+            root.pan-sum-x += dx;
+            root.pan-sum-y += dy;
+        }
+        zoomed(n, fx, fy) => {
+            root.zooms += 1;
+            root.zoom-notches += n;
+            root.zoom-fx = fx;
+            root.zoom-fy = fy;
+        }
+        zoom-key(d) => {
+            root.zoom-keys += 1;
+            root.last-zoom-key = d;
+        }
+        resized(w, h) => {
+            root.resizes += 1;
+            root.resized-w = w;
+            root.resized-h = h;
+        }
+    }
+}

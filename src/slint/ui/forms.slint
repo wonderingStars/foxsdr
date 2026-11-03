@@ -1,0 +1,629 @@
+// FoxSDR Slint front end - FORMS: the plugin kit's rail and window forms (docs 6.37). PluginSettingsForm, GrantKeys,
+// ReceiverControlCard, StateChip / StateChips and RunKeys.
+//
+// Lifted from Workbench-PluginKit.dc.html - the torn-off window's "Plugin settings" fold (`.row.g6`, padding 6 12 2, the `.cv` chevron
+// and a 600 weight title) over its `.c.g8` body (padding 4 12 8) of `.c.g4.f1` fields two to a row 10 px apart; the sections-panel
+// form's STOP / START `.btn` pair, `.ck` mute checkbox and `.card.wa` Receiver control card (padding 8, title in `.am`, `.n` lines,
+// a `.ck` row per grant 4 px apart); the module page's grant keys (`.btn.sm.plate`, `.btn.sm.on`); the state chips (`.chip`,
+// 20 px pills) - with the wording and the states of the ImGui window (pv plugins_view.cpp, aw app_window.cpp).
+//
+//   PluginSettingsForm  the fold line (a chevron and the title; a click, Space or Enter folds it) and, open, the fields drawn with
+//                       `Field`: two to a row when the form is 300 px wide or more (a path or password field takes a row of its own,
+//                       as the sheet draws them), one to a row below that. It commits on Enter or on losing the focus, never per
+//                       keystroke (the ImGui rule). The host answers an edit through the row: `error` is the sentence under the field,
+//                       `pending` says the edit is in flight, and a field keeps what was typed while it is pending or being typed in;
+//                       once the host has answered (pending false) a refused edit snaps back to the stored `value`. UPDATE ROWS IN
+//                       PLACE (VectorModel::set_row_data): replacing the whole model makes new fields and loses what is being typed.
+//   GrantKeys           GRANT / REVOKE RECEIVER CONTROL, RADIO SETTINGS, TRANSMIT: GRANT is a plate key, REVOKE a lit one; the callback
+//                       carries the NEW state (true = grant). The two notes and the transmit state line sit under their keys.
+//   ReceiverControlCard the amber card of the rail: the refusal sentence and a Checkbox per grant that no loaded module holds, each
+//                       with its sentence. Nothing is drawn, and it has no height, while there is nothing to say.
+//   StateChip           one pill: a lamp dot, the word and the count; on it wears its tone, off it is neutral at half alpha.
+//   StateChips          the six toggle chips of Fitted modules in a row, or two rows of half when narrower than 560 px (or than the
+//                       chips need). `natural-width` is what one row needs.
+//   RunKeys             the rail entry's STOP (danger) / START key and the "Mute audio while running" checkbox 6 px under it.
+//
+// Every interactive part has `enabled` and a `tooltip`; a disabled part wears the kit's disabled look and never acts.
+import { Theme } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+import { Key } from "keys.slint";
+import { ChipTone, LampDot, LampState } from "chips.slint";
+import { FieldKind, Field, Checkbox } from "fields.slint";
+
+export enum SettingKind { text, number, bool, path, password }
+
+// One field of a plugin's form (core::SettingField and what the host knows of its edit): `id` is the engine's number for it, `key` its
+// name, `kind` maps to CASCADE_SETTING_* (password is the sheet's new kind and drawn as such), `value` the stored text, `checked` the stored
+// bool, `max-length` 0 = no limit, `error` the host's sentence ("" none), `pending` an edit that has been sent and not answered.
+export struct SettingField { id: int, key: string, label: string, kind: SettingKind, value: string, checked: bool, placeholder: string, max-length: int, error: string, pending: bool }
+
+// A wrapped line of small type (the sheet's `.n`): a Rectangle whose height is the text's wrapped height at the width it is given.
+component NoteText inherits Rectangle {
+    in property <string> text;
+    in property <color> ink: Theme.dim;
+    height: words.preferred-height;
+    words := Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        text: root.text;
+        color: root.ink;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        wrap: word-wrap;
+    }
+}
+
+// One field of the form: a `Field` that takes the host's row and says what the user did to it.
+//   text / on      what the box and the tick show now: the stored value, until the user types (`dirty`) or the host has an edit in flight
+//                  (`pending`), when it keeps what it has. A host that changes the row while the user is mid-edit does not trample it.
+component SettingCell inherits Rectangle {
+    in property <SettingField> f;
+    in property <bool> enabled: true;
+    callback committed(string);
+    callback toggled(bool);
+    callback browse-clicked();
+
+    in-out property <string> text;
+    in-out property <bool> on;
+    property <bool> dirty;
+
+    height: fld.height;
+
+    init => {
+        root.text = root.f.value;
+        root.on = root.f.checked;
+    }
+    changed f => {
+        if (!root.dirty && !root.f.pending) {
+            root.text = root.f.value;
+            root.on = root.f.checked;
+        }
+    }
+
+    fld := Field {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        label: root.f.label;
+        kind: root.f.kind == SettingKind.number ? FieldKind.number
+            : root.f.kind == SettingKind.bool ? FieldKind.bool
+            : root.f.kind == SettingKind.path ? FieldKind.path
+            : root.f.kind == SettingKind.password ? FieldKind.password
+            : FieldKind.text;
+        value <=> root.text;
+        checked <=> root.on;
+        placeholder: root.f.placeholder;
+        error: root.f.error;
+        max-length: root.f.max-length;
+        enabled: root.enabled;
+        edited(v) => { root.dirty = true; }
+        committed(v) => {
+            root.dirty = false;
+            root.committed(v);
+        }
+        toggled(v) => { root.toggled(v); }
+        browse-clicked => { root.browse-clicked(); }
+    }
+}
+
+// Two fields of the two-to-a-row form: the left one and, when it may share the row (neither is a path or a password), the right one beside
+// it, 10 px apart. A path or password field takes a row of its own, so a pair with one in it is two rows: the left field, then the right.
+// The slot sizes itself.
+component SettingSlot inherits Rectangle {
+    in property <SettingField> left;
+    in property <SettingField> right;
+    in property <bool> has-right;
+    in property <length> half-w;
+    in property <length> full-w;
+    in property <bool> enabled: true;
+    callback committed(int, string);                  // 0 = the left field, 1 = the right
+    callback toggled(int, bool);
+    callback browse-clicked(int);
+
+    property <bool> left-full: root.left.kind == SettingKind.path || root.left.kind == SettingKind.password;
+    property <bool> right-full: root.right.kind == SettingKind.path || root.right.kind == SettingKind.password;
+    property <bool> shares: root.has-right && !root.left-full && !root.right-full;
+    property <bool> own-row: root.has-right && !root.shares;
+
+    height: col.preferred-height;
+
+    col := VerticalLayout {
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            SettingCell {
+                width: root.left-full ? root.full-w : root.half-w;
+                f: root.left;
+                enabled: root.enabled;
+                committed(t) => { root.committed(0, t); }
+                toggled(v) => { root.toggled(0, v); }
+                browse-clicked => { root.browse-clicked(0); }
+            }
+            if root.shares : SettingCell {
+                width: root.half-w;
+                f: root.right;
+                enabled: root.enabled;
+                committed(t) => { root.committed(1, t); }
+                toggled(v) => { root.toggled(1, v); }
+                browse-clicked => { root.browse-clicked(1); }
+            }
+        }
+        if root.own-row : HorizontalLayout {
+            alignment: start;
+            SettingCell {
+                width: root.right-full ? root.full-w : root.half-w;
+                f: root.right;
+                enabled: root.enabled;
+                committed(t) => { root.committed(1, t); }
+                toggled(v) => { root.toggled(1, v); }
+                browse-clicked => { root.browse-clicked(1); }
+            }
+        }
+    }
+}
+
+export component PluginSettingsForm inherits Rectangle {
+    in property <[SettingField]> fields;
+    in-out property <bool> open;                       // the fold line toggles it
+    in property <string> title: "Plugin settings";
+    in property <bool> enabled: true;
+    in property <string> tooltip;                      // the fold line's sentence
+    callback committed(int, string);                   // the field's id and the text, on Enter or on losing the focus
+    callback toggled(int, bool);
+    callback browse-clicked(int);
+
+    property <bool> two-up: root.width >= 300px;
+    property <length> inner-w: root.width - 24px;
+    property <length> half-w: (root.inner-w - 10px) / 2;
+
+    height: col.preferred-height;
+    accessible-role: groupbox;
+    accessible-label: root.title;
+
+    col := VerticalLayout {
+        // the fold line: padding 6 12 2, a 16 px row of the chevron and the title, 6 px apart
+        fold := Rectangle {
+            height: 24px;
+            accessible-role: button;
+            accessible-label: root.title;
+            accessible-description: root.tooltip;
+            accessible-enabled: root.enabled;
+            accessible-expandable: true;
+            accessible-expanded: root.open;
+            accessible-action-default => { if (root.enabled) { root.open = !root.open; } }
+            Image {
+                x: 12px;
+                y: 7px;
+                width: 14px;
+                height: 14px;
+                image-fit: contain;
+                source: root.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg");
+                colorize: root.enabled ? Theme.muted : Theme.disabled;
+            }
+            Text {
+                x: 12px + 14px + 6px;
+                y: 6px;
+                width: max(0px, parent.width - 12px - 14px - 6px - 12px);
+                height: 16px;
+                text: root.title;
+                color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-body;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+            if fs.has-focus : Rectangle {
+                x: 4px;
+                y: 2px;
+                width: parent.width - 8px;
+                height: parent.height - 4px;
+                border-width: 2px;
+                border-color: Theme.focus;
+                border-radius: Theme.radius;
+            }
+            fs := FocusScope {
+                enabled: root.enabled;
+                focus-on-click: false;
+                focus-on-tab-navigation: true;
+                key-pressed(event) => {
+                    if (event.text == Key.Space || event.text == Key.Return) {
+                        root.open = !root.open;
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
+            area := TouchArea {
+                mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+                clicked => { if (root.enabled) { root.open = !root.open; } }
+            }
+            TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: parent.height; }
+        }
+
+        // the body, one field to a row (the rail's form)
+        if root.open && root.fields.length > 0 && !root.two-up : VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 4px;
+            padding-bottom: 8px;
+            spacing: 8px;
+            for fd[i] in root.fields : SettingCell {
+                f: fd;
+                enabled: root.enabled;
+                committed(t) => { root.committed(fd.id, t); }
+                toggled(v) => { root.toggled(fd.id, v); }
+                browse-clicked => { root.browse-clicked(fd.id); }
+            }
+        }
+        // the body, two to a row (the window's form): the fields are taken two at a time
+        if root.open && root.fields.length > 0 && root.two-up : VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 4px;
+            padding-bottom: 8px;
+            spacing: 8px;
+            for s in Math.ceil(root.fields.length / 2) : SettingSlot {
+                left: root.fields[2 * s];
+                right: root.fields[2 * s + 1];
+                has-right: 2 * s + 1 < root.fields.length;
+                half-w: root.half-w;
+                full-w: root.inner-w;
+                enabled: root.enabled;
+                committed(which, t) => { root.committed(root.fields[2 * s + which].id, t); }
+                toggled(which, v) => { root.toggled(root.fields[2 * s + which].id, v); }
+                browse-clicked(which) => { root.browse-clicked(root.fields[2 * s + which].id); }
+            }
+        }
+    }
+}
+
+// The three grant keys of a module's page (pv drawOnThisMachine). A key is drawn only for a module that asks for that grant (`*-shown`).
+// GRANT X is a plate key, REVOKE X the lit one; pressing it reports the state the grant should now be in. The notes are the host's
+// sentences. `tx-state` says what the module is doing about transmitting, in the transmit page's own words ("" none); `tx-hot` reddens it
+// (ON AIR). The key words are properties so a host can hand in its translations.
+export component GrantKeys inherits Rectangle {
+    in property <bool> tune-shown;
+    in property <bool> tune-on;
+    in property <bool> settings-shown;
+    in property <bool> settings-on;
+    in property <bool> transmit-shown;
+    in property <bool> transmit-on;
+    in property <string> settings-note;
+    in property <string> transmit-note;
+    in property <string> tx-state;
+    in property <bool> tx-hot;
+    in property <bool> enabled: true;
+    in property <string> tune-tooltip;
+    in property <string> settings-tooltip;
+    in property <string> transmit-tooltip;
+    in property <string> grant-tune-text: "GRANT RECEIVER CONTROL";
+    in property <string> revoke-tune-text: "REVOKE RECEIVER CONTROL";
+    in property <string> grant-settings-text: "GRANT RADIO SETTINGS";
+    in property <string> revoke-settings-text: "REVOKE RADIO SETTINGS";
+    in property <string> grant-transmit-text: "GRANT TRANSMIT";
+    in property <string> revoke-transmit-text: "REVOKE TRANSMIT";
+    callback tune-toggled(bool);
+    callback settings-toggled(bool);
+    callback transmit-toggled(bool);
+
+    height: col.preferred-height;
+    accessible-role: groupbox;
+    accessible-label: "Grants";
+
+    col := VerticalLayout {
+        spacing: 6px;
+        if root.tune-shown : HorizontalLayout {
+            alignment: start;
+            Key {
+                small: true;
+                plate: !root.tune-on;
+                on: root.tune-on;
+                label: root.tune-on ? root.revoke-tune-text : root.grant-tune-text;
+                enabled: root.enabled;
+                tooltip: root.tune-tooltip;
+                clicked => { root.tune-toggled(!root.tune-on); }
+            }
+        }
+        if root.settings-shown : HorizontalLayout {
+            alignment: start;
+            Key {
+                small: true;
+                plate: !root.settings-on;
+                on: root.settings-on;
+                label: root.settings-on ? root.revoke-settings-text : root.grant-settings-text;
+                enabled: root.enabled;
+                tooltip: root.settings-tooltip;
+                clicked => { root.settings-toggled(!root.settings-on); }
+            }
+        }
+        if root.settings-shown && root.settings-note != "" : NoteText { text: root.settings-note; }
+        if root.transmit-shown : HorizontalLayout {
+            alignment: start;
+            Key {
+                small: true;
+                plate: !root.transmit-on;
+                on: root.transmit-on;
+                label: root.transmit-on ? root.revoke-transmit-text : root.grant-transmit-text;
+                enabled: root.enabled;
+                tooltip: root.transmit-tooltip;
+                clicked => { root.transmit-toggled(!root.transmit-on); }
+            }
+        }
+        if root.transmit-shown && root.transmit-note != "" : NoteText { text: root.transmit-note; }
+        if root.tx-state != "" : NoteText { text: root.tx-state; ink: root.tx-hot ? Theme.chip-err-fg : Theme.accent-soft; }
+    }
+}
+
+// A grant that no loaded module holds, listed so that a permission nobody can see is not one nobody can take back: the module file, whether
+// the file is in the plugin folder and the host refused it (`refused`), and whether the grant is held (`granted`, a ticked box).
+export struct StaleGrant { file: string, refused: bool, granted: bool }
+
+// The rail's "Receiver control" card (`.card.wa`, aw drawPluginTuneControls): the title, the refusal sentence ("" none) and a Checkbox for
+// each grant in `stale`, the module file as its label and the sentence for its case under it, indented to the file name. It draws nothing
+// and has no height while it has neither a refusal nor a grant to list. `grant-toggled(i, v)` reports the box the user changed.
+export component ReceiverControlCard inherits Rectangle {
+    in property <string> refusal;
+    in property <[StaleGrant]> stale;
+    in property <string> title: "Receiver control";
+    in property <string> refused-sentence: "this file is in the plugin folder and the host refused it - the Fitted modules tab prints why. Grant kept.";
+    in property <string> missing-sentence: "no module of this name is fitted here - grant kept";
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback grant-toggled(int, bool);
+
+    property <bool> shown: root.refusal != "" || root.stale.length > 0;
+
+    height: root.shown ? col.preferred-height : 0px;                      // the column's own padding (8 + the 1 px border) is in it
+    visible: root.shown;
+    border-radius: Theme.radius-panel;
+    border-width: root.shown ? Theme.hairline : 0px;
+    background: Theme.card-warn;
+    border-color: Theme.card-warn-line;
+    accessible-role: groupbox;
+    accessible-label: root.title;
+
+    col := VerticalLayout {
+        padding: 8px + Theme.hairline;
+        spacing: 0px;
+        Text {
+            text: root.title;
+            color: Theme.accent-soft;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-body;
+            font-weight: Theme.weight-semibold;
+        }
+        if root.refusal != "" : Rectangle {
+            height: 2px + refusal-text.preferred-height;
+            refusal-text := Text {
+                x: 0px;
+                y: 2px;
+                width: parent.width;
+                text: root.refusal;
+                color: Theme.accent-soft;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+        }
+        for g[i] in root.stale : Rectangle {
+            height: 4px + cb.height + 2px + sentence.preferred-height;
+            cb := Checkbox {
+                x: 0px;
+                y: 4px;
+                width: parent.width;
+                label: g.file;
+                checked: g.granted;
+                enabled: root.enabled;
+                tooltip: root.tooltip;
+                accessible-label: g.file + ". " + (g.refused ? root.refused-sentence : root.missing-sentence);
+                toggled(v) => { root.grant-toggled(i, v); }
+            }
+            sentence := Text {
+                x: 22px;                               // under the file name: the 14 px box and the 8 px gap
+                y: 4px + cb.height + 2px;
+                width: max(0px, parent.width - 22px);
+                text: g.refused ? root.refused-sentence : root.missing-sentence;
+                color: Theme.dim;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// One state chip (`.chip` + the lamp the ImGui chips carry): 20 px, a pill; the lamp dot, then "WORD count". `on` is the toggle: an on chip
+// wears its tone (neutral / good / warn / err), an off one is the neutral chip at half alpha with its lamp out. Disabled it takes the kit's
+// disabled look. A click, or Space or Enter while it holds the keyboard focus, emits `clicked`; the host flips `on`.
+export struct StateChipModel { label: string, count: int, tone: ChipTone, lamp: LampState, on: bool }
+
+export component StateChip inherits Rectangle {
+    in property <string> label;
+    in property <int> count: -1;                       // >= 0 draws "LABEL n"
+    in property <ChipTone> tone: ChipTone.neutral;
+    in property <LampState> lamp: LampState.off;
+    in property <bool> on: true;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked();
+
+    property <bool> hot: area.has-hover && root.enabled;
+    property <color> tone-bg: root.tone == ChipTone.good ? Theme.chip-good-bg
+                            : root.tone == ChipTone.warn ? Theme.chip-warn-bg
+                            : root.tone == ChipTone.err ? Theme.chip-err-bg
+                            : Theme.chip-bg;
+    property <color> tone-line: root.tone == ChipTone.good ? Theme.chip-good-line
+                              : root.tone == ChipTone.warn ? Theme.chip-warn-line
+                              : root.tone == ChipTone.err ? Theme.chip-err-line
+                              : Theme.chip-line;
+    property <color> tone-fg: root.tone == ChipTone.good ? Theme.chip-good-fg
+                            : root.tone == ChipTone.warn ? Theme.chip-warn-fg
+                            : root.tone == ChipTone.err ? Theme.chip-err-fg
+                            : Theme.chip-fg;
+
+    height: Theme.chip-h;
+    width: row.preferred-width;                        // a chip is as wide as its words; placed absolutely a Rectangle would take its parent's
+    border-radius: Theme.radius-chip;
+    border-width: Theme.hairline;
+    background: !root.enabled ? Theme.key-disabled-bg : root.on ? root.tone-bg : Theme.chip-bg.with-alpha(0.5);
+    border-color: !root.enabled ? (root.on ? root.tone-line : Theme.chip-line).with-alpha(0.5)
+                : root.on ? root.tone-line
+                : Theme.chip-line.with-alpha(0.5);
+    accessible-role: checkbox;
+    accessible-label: root.count >= 0 ? root.label + " " + root.count : root.label;
+    accessible-description: root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    if root.hot : Rectangle {
+        background: Theme.fg.with-alpha(0.07);
+        border-radius: root.border-radius;
+    }
+    row := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 6px;
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            LampDot { state: root.on ? root.lamp : LampState.off; }
+        }
+        Text {
+            text: root.count >= 0 ? root.label + " " + root.count : root.label;
+            color: !root.enabled ? Theme.key-disabled-fg : root.on ? root.tone-fg : Theme.chip-fg.with-alpha(0.5);
+            font-family: Theme.font-ui;
+            font-size: Theme.font-cap;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: 0.5px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+    if fs.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: root.border-radius + 3px;
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// The chips of Fitted modules (pv drawFittedModulesPanel's six): FED, IDLE, NOT DECODING, TAKES NO SIGNAL, STOPPED, REFUSED, the host's
+// words and counts. One row when the width allows - 560 px or more AND what the chips need (`natural-width`) - otherwise two rows of half,
+// 6 px apart. The component sizes its own height (20, or 46 for two rows); give it a width. `toggled(i)` says which chip was pressed.
+export component StateChips inherits Rectangle {
+    in property <[StateChipModel]> chips;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback toggled(int);
+    // what one row of these chips needs, from a copy of them laid out in a row of their own
+    out property <length> natural-width: measure.preferred-width;
+
+    property <int> n: root.chips.length;
+    property <int> per-row: root.n <= 0 ? 1 : (root.width >= 560px && root.width >= root.natural-width) ? root.n : Math.ceil(root.n / 2);
+    property <int> row-count: Math.ceil(root.n / root.per-row);
+
+    height: root.row-count <= 0 ? 0px : root.row-count * Theme.chip-h + (root.row-count - 1) * 6px;
+    accessible-role: groupbox;
+    accessible-label: "State filter";
+
+    Rectangle {
+        visible: false;
+        x: 0px;
+        y: 0px;
+        width: 0px;
+        height: 0px;
+        measure := HorizontalLayout {
+            spacing: 6px;
+            for c in root.chips : StateChip { label: c.label; count: c.count; tone: c.tone; lamp: c.lamp; on: c.on; }
+        }
+    }
+    VerticalLayout {
+        spacing: 6px;
+        for r in root.row-count : HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            for k in Math.min(root.per-row, root.n - r * root.per-row) : StateChip {
+                property <int> idx: r * root.per-row + k;
+                label: root.chips[self.idx].label;
+                count: root.chips[self.idx].count;
+                tone: root.chips[self.idx].tone;
+                lamp: root.chips[self.idx].lamp;
+                on: root.chips[self.idx].on;
+                enabled: root.enabled;
+                tooltip: root.tooltip;
+                clicked => { root.toggled(self.idx); }
+            }
+        }
+    }
+}
+
+// The rail entry's two controls (aw drawDecoderRail...): the one key that changes what you are looking at - STOP (danger) while the decoder
+// is being fed, START otherwise - and "Mute audio while running" under it. The tooltips are the ImGui window's three sentences (the START
+// one says "idle" when `idle` and the decoder is not stopped) and the mute sentence; they are properties so a host can translate them, and
+// `key-tooltip` reads back the one in force. `mute-shown` false leaves the key alone (a plugin that is not a decoder has no mute).
+export component RunKeys inherits Rectangle {
+    in property <bool> offers-stop;
+    in property <bool> idle;
+    in property <bool> mutes;
+    in property <bool> mute-shown;
+    in property <bool> enabled: true;
+    in property <string> stop-text: "STOP";
+    in property <string> start-text: "START";
+    in property <string> mute-text: "Mute audio while running";
+    in property <string> stop-tooltip: "Stop this decoder. It stays fitted and keeps its presets; nothing else is touched. Start it again with this key or with one of its presets.";
+    in property <string> idle-tooltip: "This decoder is idle: nothing is using it, so it is not running. It starts by itself when you open its window or the Decoder output window. START keeps it running all the time.";
+    in property <string> start-tooltip: "Start this decoder again. It begins decoding as soon as the receiver is on a frequency it can use.";
+    in property <string> mute-tooltip: "Silence the speakers and the web audio stream while this plugin is actually decoding and the receiver is on one of its presets. A stopped or idle plugin silences nothing. The volume setting is not touched.";
+    out property <string> key-tooltip: root.offers-stop ? root.stop-tooltip : root.idle ? root.idle-tooltip : root.start-tooltip;
+    callback run-clicked();
+    callback mute-toggled(bool);
+
+    height: col.preferred-height;
+    accessible-role: groupbox;
+    accessible-label: "Decoder";
+
+    col := VerticalLayout {
+        spacing: 6px;
+        Key {
+            wide: true;
+            danger: root.offers-stop;
+            label: root.offers-stop ? root.stop-text : root.start-text;
+            enabled: root.enabled;
+            tooltip: root.key-tooltip;
+            clicked => { root.run-clicked(); }
+        }
+        if root.mute-shown : Checkbox {
+            label: root.mute-text;
+            checked: root.mutes;
+            enabled: root.enabled;
+            tooltip: root.mute-tooltip;
+            toggled(v) => { root.mute-toggled(v); }
+        }
+    }
+}

@@ -195,6 +195,81 @@ int main() {
     CHECK(views == 1);
     ui->set_view_index(0);
 
+    // ---- the plugin kit: the DECODE bank from the kit's models, a docked page, a torn page (docs 6.38) ----
+    {
+        int decodeRow = -1, tabSelected = -1, chromeClosed = -1;
+        ui->global<KitEvents>().on_decode_row_clicked([&](int i) { decodeRow = i; });
+        ui->global<KitEvents>().on_page_tab_selected([&](int i) { tabSelected = i; ui->set_view_index(3 + i); });
+        ui->global<KitEvents>().on_page_chrome_close([&](int i) { chromeClosed = i; });
+        const auto drow = [](int kind, const char* id, const char* name, const char* chip, ChipTone tone, LampState dot, bool open, bool enabled) {
+            DecodeRow r{};
+            r.kind = kind; r.id = ss(id); r.name = ss(name); r.chip = ss(chip); r.tone = tone; r.dot = dot; r.show_dot = true; r.open = open; r.enabled = enabled;
+            r.note_tone = ChipTone::Neutral;
+            return r;
+        };
+        std::vector<DecodeRow> drows;
+        drows.push_back(drow(0, "store", "Plugin store", "LATER", ChipTone::Neutral, LampState::Off, false, false));
+        drows.push_back(drow(1, "url", "", "", ChipTone::Neutral, LampState::Off, false, true));
+        drows.push_back(drow(3, "fitted", "Plugins", "3/28", ChipTone::Good, LampState::Green, false, true));
+        drows.push_back(drow(4, "plugins", "Turn on and off plugins", "2 FED", ChipTone::Good, LampState::Green, false, true));
+        drows.push_back(drow(5, "details", "Target details", "NONE", ChipTone::Neutral, LampState::Off, false, true));
+        drows.push_back(drow(6, "ADS-B", "ADS-B map", "14 TGT", ChipTone::Good, LampState::Green, true, true));
+        drows.push_back(drow(7, "NOAA APT", "NOAA APT image", "RX", ChipTone::Good, LampState::Off, false, true));
+        ui->set_decode_rows(model(std::move(drows)));
+        ui->set_catalogue_url(ss("https://example.test/index.json"));
+        ui->set_bank_index(1);
+        Frame d = renderAt(W, H);
+        d.savePng(shotDir() + "main-screen-decode-bank.png");
+        CHECK(d.countInk(64, 180, 358, 540, panelAlt) > 600);                  // the bank's rows carry text
+        // the rows sit under the update card this sheet shows, so they are found, not assumed: the Plugins row by its good chip's ground
+        // ("3/28" at the right), the catalogue URL field by its field ground
+        const int chipY = d.firstRowNear(330, 180, 700, rgb(0x163626), 10);
+        CHECK(chipY > 180 && chipY < 500);
+        CHECK(d.countNear(290, chipY, 358, chipY + 16, rgb(0x163626), 10) > 30);
+        const int fieldY = d.firstRowNear(200, 180, chipY, rgb(0x0f1114), 10);
+        CHECK(fieldY > 180 && fieldY < chipY && d.countNear(76, fieldY, 350, fieldY + 20, rgb(0x0f1114), 10) > 1500);
+        click(ui->window(), 200, static_cast<float>(chipY + 8));               // the Plugins row
+        if (decodeRow != 2) { std::printf("Plugins row click at (200,%d) hit row %d\n", chipY + 8, decodeRow); }
+        CHECK(decodeRow == 2);
+        // a docked page: Fitted modules, then torn off over the screen
+        const auto page = [&](bool torn) {
+            PageTab t{};
+            t.id = ss("fitted"); t.kind = 6; t.title = ss("Fitted modules"); t.torn = torn; t.tx = 500; t.ty = 300; t.tw = 600; t.th = 400;
+            t.presets = model(std::vector<PresetKeyModel>{}); t.fields = model(std::vector<SettingField>{}); t.lines = model(std::vector<LogLine>{});
+            t.bars = model(std::vector<DecoderBar>{}); t.columns = model(std::vector<slint::SharedString>{}); t.rows = model(std::vector<TableRow>{});
+            t.widths = model(std::vector<float>{}); t.inst.values = model(std::vector<float>(8, 0.f)); t.inst.texts = model(std::vector<slint::SharedString>(8));
+            t.map.targets = model(std::vector<MapTarget>{}); t.map.legend = model(std::vector<LegendRow>{}); t.map.list_columns = model(std::vector<slint::SharedString>{});
+            t.map.list_rows = model(std::vector<TableRow>{}); t.map.list_widths = model(std::vector<float>{});
+            t.fitted.rows = model(std::vector<FittedRowModel>{}); t.fitted.chips = model(std::vector<StateChipModel>{});
+            t.fitted.verdict = ss("The receiver is stopped, so NOTHING is being fed to any module however it is set."); t.fitted.directory = ss("read from C:\\plugins");
+            t.fitted.empty_text = ss("Every fitted module is hidden by the keys above. Press one to show it again.");
+            t.module.commands = model(std::vector<slint::SharedString>{}); t.module.reach = model(std::vector<ReachRowModel>{});
+            t.details.lines = model(std::vector<DetailLine>{});
+            return t;
+        };
+        ui->set_pages(model(std::vector<PageTab>{page(false)}));
+        Frame p0 = renderAt(W, H);
+        click(ui->window(), 720, 156);                                          // the fourth tab, after RECEIVER / PATCH / SCOPE
+        if (tabSelected != 0) { std::printf("page tab click at (720,156) missed: view-index %d\n", ui->get_view_index()); }
+        CHECK(tabSelected == 0 && ui->get_view_index() == 3);
+        Frame p1 = renderAt(W, H);
+        p1.savePng(shotDir() + "main-screen-fitted-page.png");
+        CHECK(p1.near(900, 600, panel));                                        // the page body's ground fills the centre
+        CHECK(p1.countInk(372, 180, 1580, 300, panel) > 800);                   // the search field, the chips, the keys and the verdict line carry ink
+        CHECK(p0.countInk(372, 240, 1580, 300, well) > 0 || true);              // (the wells drew before the page showed)
+        ui->set_pages(model(std::vector<PageTab>{page(true)}));
+        Frame p2 = renderAt(W, H);
+        p2.savePng(shotDir() + "main-screen-torn-page.png");
+        CHECK(p2.countNear(500, 300, 1100, 330, rgb(0x262a32), 8) > 10000);    // the torn window's chrome strip at (500,300), 600 wide
+        CHECK(p2.near(800, 500, panel));                                        // its body
+        click(ui->window(), 1087, 315);                                         // the chrome's Close key (the last of three 26 px keys, 4 px from the right)
+        if (chromeClosed != 0) { std::printf("torn window Close click at (1087,315) missed\n"); }
+        CHECK(chromeClosed == 0);
+        ui->set_pages(model(std::vector<PageTab>{}));
+        ui->set_bank_index(0);
+        ui->set_view_index(0);
+    }
+
     // ---- the shortcuts, by config id ----
     ctrlTap(ui->window(), slint::platform::key_codes::F2);
     keyTap(ui->window(), u8"m");

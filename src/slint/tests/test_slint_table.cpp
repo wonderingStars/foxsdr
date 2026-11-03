@@ -1,17 +1,22 @@
 // The Table family (ui/table.slint): the frozen heading row, the row pitch, the band / selected / tone colours, the scrolling body,
 // clicks, right-clicks, the empty state and the themed scroll bar - rendered headlessly from ui/specimens/table_specimen.slint and
-// probed against the plugin kit's `.tbl` CSS (Workbench-PluginKit.dc.html).
+// probed against the plugin kit's `.tbl` CSS (Workbench-PluginKit.dc.html). The plugin kit's upgrades are tested here too: the row
+// kinds (heading, separator) and pressable rows (Table C), the draggable column edges (Table A) and the virtual body (2000 rows).
 //
 // The sheet: Table A at (10, 10) 420 x 160, heading 22 high (rows y 10..31, its border on y 31), body rows 24 high from y 32 whose last
 // pixel row is the hairline; columns Time 78 | Source 70 | Message (the rest, 216) | Level 56. Table B (empty) at (10, 180) 300 x 80.
+// Table C (panel rows) at (10, 270) 420 x 151: heading, then a heading row, two pressable rows, a 9 px separator, a heading row, a row.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "render_harness.hpp"
 #include "test_check.hpp"
 
 #include "table_specimen.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <initializer_list>
+#include <string>
 #include <vector>
 
 using namespace foxsdr::slinttest;
@@ -59,7 +64,7 @@ int lastInkY(const Frame& f, int x0, int y0, int x1, int y1, Rgb bg) {
     return -1;
 }
 
-constexpr int kW = 440, kH = 280;
+constexpr int kW = 440, kH = 440;
 constexpr int kTx = 10, kTy = 10, kTw = 420;            // Table A
 constexpr int kHeadH = 22, kRowH = 24;
 constexpr int kBodyTop = kTy + kHeadH;                    // 32
@@ -69,10 +74,22 @@ constexpr int kColTime = kTx, kColSource = kTx + 78, kColMessage = kTx + 78 + 70
 
 int rowTop(int row, int scrolled = 0) { return kBodyTop + kRowH * row - scrolled; }
 
-TableRow makeRow(std::initializer_list<const char*> cells, RowTone tone = RowTone::Normal, bool band = false) {
+// Table C, the plugin's own panel: heading 22 high at y 270..291, then rows of 24 / 24 / 24 / 9 (separator) / 24 / 24 from y 292.
+constexpr int kCx = 10, kCy = 270, kCw = 420, kCh = 151;
+constexpr int kCBodyTop = kCy + 22;                       // 292
+constexpr int kCRowTops[6] = {0, 24, 48, 72, 81, 105};   // offsets of rows 0..5 from the body top; row 3 is the 9 px separator
+constexpr int kSepH = 9;
+int cRowTop(int row) { return kCBodyTop + kCRowTops[row]; }
+
+TableRow makeRow(std::initializer_list<const char*> cells, RowTone tone = RowTone::Normal, bool band = false, RowKind kind = RowKind::Cells,
+                 bool pressable = false) {
     std::vector<slint::SharedString> text;
     for (const char* c : cells) { text.emplace_back(c); }
-    return TableRow{std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(text)), tone, band};
+    return TableRow{std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(text)), tone, band, kind, pressable};
+}
+
+float widthOf(const std::shared_ptr<slint::Model<float>>& widths, int column) {
+    return column < static_cast<int>(widths->row_count()) ? widths->row_data(static_cast<std::size_t>(column)).value_or(-1.0f) : -1.0f;
 }
 
 }  // namespace
@@ -458,6 +475,418 @@ int main() {
         // the text starts 12px in: padding 6px 12px of the sheet's `.n`
         const int textX = firstInkX(f0, kTbx + 1, kTby + kHeadH + 6, kTbx + 100, kTby + kHeadH + 22, panel);
         CHECK(textX >= kTbx + 12 && textX <= kTbx + 14);
+    }
+
+    // ===== row kinds: heading rows, separator rows (Table C, the plugin's own panel) ==========================================
+    {
+        // the table's own frame is Table A's: the strip heading, its rule, Item 120 | Value (the rest)
+        CHECK(f0.near(kCx + 2, kCy + 2, strip, 0) && f0.rowNear(kCy + kHeadH - 1, kCx, kCx + kCw, lineStrong, 0));
+        CHECK(f0.near(kCx - 1, cRowTop(1) + 5, bg, 0) && f0.near(kCx + kCw, cRowTop(1) + 5, bg, 0) && f0.near(kCx + 5, kCy + kCh, bg, 0));   // 420 x 151
+
+        // row 0, a HEADING row: its first cell as the dim cap across the columns. The words are longer than the 120 px of the first
+        // column, so ink beyond x 130 proves it spans, and the colour is Theme.dim whatever the row's tone
+        const int h0 = cRowTop(0);
+        CHECK(nearColour(brightest(f0, kCx + 8, h0 + 3, kCx + kCw - 12, h0 + 20), dim, 6));
+        CHECK(f0.countInk(kCx + 8, h0 + 3, kCx + kCw - 12, h0 + 20, panel) > 150);
+        CHECK(f0.countInk(kCx + 140, h0 + 3, kCx + kCw - 12, h0 + 20, panel) > 40);
+        CHECK(toneInk(f0, h0, fg) == 0 && toneInk(f0, h0, warnFg) == 0 && toneInk(f0, h0, accentSoft) == 0);
+        const int capX = firstInkX(f0, kCx + 1, h0 + 3, kCx + 60, h0 + 20, panel);
+        CHECK(capX >= kCx + 8 && capX <= kCx + 10);                                           // 8 px of padding, like a cell
+        CHECK(f0.near(kCx + 4, h0 + 10, panel, 0) && f0.near(kCx + 4, h0 + kRowH - 1, line, 0));   // 24 px, its hairline last
+        CHECK(centred(f0, h0, h0 + kRowH - 1, kCx + 8, kCx + 400, panel));
+
+        // rows 1 and 2: ordinary cells on the panel and on the band
+        const int p1 = cRowTop(1);
+        const int p2 = cRowTop(2);
+        CHECK(f0.near(kCx + 4, p1 + 10, panel, 0) && f0.near(kCx + 4, p2 + 10, card, 0));
+        CHECK(f0.near(kCx + 4, p1 + kRowH - 1, line, 0) && f0.near(kCx + 4, p2 + kRowH - 1, line, 0));
+        CHECK(f0.countInk(kCx + 8, p1 + 3, kCx + 60, p1 + 20, panel) > 15);                   // HD1 in the Item column
+        CHECK(f0.countInk(kCx + 128, p1 + 3, kCx + 300, p1 + 20, panel) > 20);                // Fox FM in the Value column
+        CHECK(toneInk(f0, p1, fg) >= 6);
+
+        // row 3, a SEPARATOR row: 9 px high, a Theme.line-strong rule across it (4 px down), no hairline of its own
+        const int s0 = cRowTop(3);
+        CHECK(s0 == p2 + kRowH && cRowTop(4) == s0 + kSepH);
+        CHECK(f0.rowNear(s0 + 4, kCx, kCx + kCw, lineStrong, 0));
+        CHECK(f0.countInk(kCx, s0, kCx + kCw, s0 + 4, panel) == 0);                           // blank above the rule
+        CHECK(f0.countInk(kCx, s0 + 5, kCx + kCw, s0 + kSepH, panel) == 0);                   // and below it: 4 + 1 + 4
+        CHECK(f0.near(kCx + 4, s0 + kSepH - 1, panel, 0) && f0.near(kCx + 4, s0 - 1, line, 0));   // row 2's hairline is the last thing above
+        CHECK(!f0.near(kCx + 4, s0 + 4, line, 0));                                            // the rule is line-strong, not the row hairline
+
+        // row 4, a second heading, 9 px after the separator's top; row 5 a plain row whose hairline is the table's last pixel row
+        const int h4 = cRowTop(4);
+        const int p5 = cRowTop(5);
+        CHECK(nearColour(brightest(f0, kCx + 8, h4 + 3, kCx + 120, h4 + 20), dim, 6));
+        CHECK(f0.countInk(kCx + 8, h4 + 3, kCx + 120, h4 + 20, panel) > 30);
+        CHECK(f0.near(kCx + 4, h4 + kRowH - 1, line, 0) && f0.near(kCx + 4, h4 + 10, panel, 0));
+        CHECK(p5 + kRowH == kCy + kCh && f0.near(kCx + 4, kCy + kCh - 1, line, 0));
+        CHECK(f0.countInk(kCx + 8, p5 + 3, kCx + 60, p5 + 20, panel) > 15 && toneInk(f0, p5, fg) >= 6);
+        // 129 px of rows in the 129 px body: nothing to scroll, so no thumb
+        CHECK(f0.countNear(kCx + kCw - 9, kCBodyTop, kCx + kCw - 3, kCy + kCh, knobRing, 2) == 0);
+    }
+
+    // ===== pressable rows: the hand cursor, the key tone, row-pressed as well as clicked ====================================
+    {
+        away();
+        CHECK(!ui->get_pointer_cursor() && ui->get_presses() == 0 && ui->get_c_clicks() == 0);
+        moveTo(win, 200.0f, cRowTop(1) + 12.0f);
+        const Frame hot1 = shot();
+        CHECK(ui->get_pointer_cursor());                                                // over a pressable row: the hand
+        CHECK(hot1.near(kCx + 4, cRowTop(1) + 10, selectedGround, 0));                  // and it lights like every row
+        CHECK(toneInk(hot1, cRowTop(1), accentSoft) >= 6 && toneInk(hot1, cRowTop(1), fg) == 0);
+        CHECK(hot1.near(kCx + 4, cRowTop(2) + 10, card, 0) && hot1.near(kCx + 4, cRowTop(5) + 10, panel, 0));   // the others do not
+        moveTo(win, 200.0f, cRowTop(2) + 12.0f);                                        // a band row, pressable
+        CHECK(shot().near(kCx + 4, cRowTop(2) + 10, selectedGround, 0) && ui->get_pointer_cursor());
+        moveTo(win, 200.0f, cRowTop(5) + 12.0f);                                        // a plain row: it lights, but no hand
+        CHECK(shot().near(kCx + 4, cRowTop(5) + 10, selectedGround, 0) && !ui->get_pointer_cursor());
+        moveTo(win, 200.0f, cRowTop(0) + 12.0f);                                        // a heading row is a label: nothing lights, no hand
+        CHECK(shot().near(kCx + 4, cRowTop(0) + 10, panel, 0) && !ui->get_pointer_cursor());
+        moveTo(win, 200.0f, cRowTop(3) + 4.0f);                                         // nor a separator
+        CHECK(shot().near(kCx + 4, cRowTop(3) + 2, panel, 0) && !ui->get_pointer_cursor());
+        away();
+        CHECK(!ui->get_pointer_cursor());
+
+        // a left click is clicked AND row-pressed, the row's own index in both
+        click(win, 200.0f, cRowTop(1) + 12.0f);
+        CHECK(ui->get_presses() == 1 && ui->get_last_press_row() == 1 && ui->get_c_clicks() == 1 && ui->get_c_last_row() == 1);
+        click(win, 60.0f, cRowTop(2) + 5.0f);
+        CHECK(ui->get_presses() == 2 && ui->get_last_press_row() == 2 && ui->get_c_clicks() == 2 && ui->get_c_last_row() == 2);
+        click(win, 200.0f, cRowTop(5) + 12.0f);                                         // a row that is not pressable: clicked, never pressed
+        CHECK(ui->get_c_clicks() == 3 && ui->get_c_last_row() == 5 && ui->get_presses() == 2);
+        click(win, 200.0f, cRowTop(1) + 12.0f, slint::PointerEventButton::Right);       // a right click is neither
+        CHECK(ui->get_c_clicks() == 3 && ui->get_presses() == 2);
+        click(win, 200.0f, cRowTop(0) + 12.0f);                                         // heading rows and separator rows are inert
+        click(win, 200.0f, cRowTop(3) + 4.0f);
+        click(win, 200.0f, cRowTop(4) + 12.0f);
+        CHECK(ui->get_c_clicks() == 3 && ui->get_presses() == 2);
+        click(win, 200.0f, kCy + 10.0f);                                                // the heading of the table is not a row
+        CHECK(ui->get_c_clicks() == 3 && ui->get_presses() == 2);
+        // the press is the RELEASE over the row: a press that slides off to the next row is not a click
+        press(win, 200.0f, cRowTop(1) + 12.0f);
+        moveTo(win, 200.0f, cRowTop(2) + 12.0f);
+        release(win, 200.0f, cRowTop(2) + 12.0f);
+        CHECK(ui->get_c_clicks() == 3 && ui->get_presses() == 2);
+        away();
+
+        // a disabled table never acts, shows no hand and lights nothing
+        ui->set_c_enabled(false);
+        click(win, 200.0f, cRowTop(1) + 12.0f);
+        CHECK(ui->get_c_clicks() == 3 && ui->get_presses() == 2);
+        moveTo(win, 200.0f, cRowTop(1) + 12.0f);
+        CHECK(shot().near(kCx + 4, cRowTop(1) + 10, panel, 0) && !ui->get_pointer_cursor());
+        ui->set_c_enabled(true);
+        away();
+        click(win, 200.0f, cRowTop(2) + 12.0f);                                         // and it is back
+        CHECK(ui->get_c_clicks() == 4 && ui->get_presses() == 3 && ui->get_last_press_row() == 2);
+        away();
+    }
+
+    // ===== the column edges drag: a 6 px zone at the right edge of each heading cell ==========================================
+    {
+        away();
+        const std::vector<float> defaults{78.0f, 70.0f, 0.0f, 56.0f};
+        const auto setWidths = [&](const std::vector<float>& w) { ui->set_widths(std::make_shared<slint::VectorModel<float>>(w)); };
+        const float yHead = kTy + 11.0f;                                                // inside the 22 px heading
+        const int edge0 = kTx + 78;                                                     // the right edge of the Time cell: x 88, its zone x 82..87
+        const auto inkStart = [&](const Frame& f, int col, int top, int bottom, Rgb ground) { return firstInkX(f, col + 6, top, col + 40, bottom, ground); };
+
+        // the cursor: ew-resize inside the zone, the plain pointer outside it
+        moveTo(win, edge0 - 3.0f, yHead);
+        CHECK(ui->get_resize_cursor());
+        moveTo(win, edge0 - 5.0f, yHead);
+        CHECK(ui->get_resize_cursor());                                                 // x 83: inside
+        moveTo(win, edge0 - 7.0f, yHead);
+        CHECK(!ui->get_resize_cursor());                                                // x 81: outside
+        moveTo(win, edge0 + 2.0f, yHead);
+        CHECK(!ui->get_resize_cursor());                                                // the Source cell's own left side is no zone
+        moveTo(win, edge0 - 3.0f, rowTop(1) + 12.0f);
+        CHECK(!ui->get_resize_cursor());                                                // the body has no zones
+        away();
+        const int clicksBeforeResizing = ui->get_clicks();
+        const int rightClicksBeforeResizing = ui->get_right_clicks();
+
+        // a press OUTSIDE the zone drags nothing
+        const int resizes0 = ui->get_resizes();
+        press(win, edge0 - 20.0f, yHead);
+        moveTo(win, edge0 + 10.0f, yHead);
+        moveTo(win, edge0 + 30.0f, yHead);
+        release(win, edge0 + 30.0f, yHead);
+        away();
+        CHECK(ui->get_resizes() == resizes0 && widthOf(ui->get_widths(), 0) == 78.0f);
+
+        // the drag: grabbed 3 px inside the edge, released 27 px past it, so 30 px wider
+        press(win, edge0 - 3.0f, yHead);
+        moveTo(win, edge0 + 7.0f, yHead);
+        moveTo(win, edge0 + 27.0f, yHead);
+        release(win, edge0 + 27.0f, yHead);
+        away();
+        CHECK(ui->get_resizes() > resizes0 && ui->get_last_resized_column() == 0);
+        CHECK_NEAR(ui->get_last_resized_width(), 108.0, 1.0);
+        CHECK_NEAR(widthOf(ui->get_widths(), 0), 108.0, 1.0);                           // written back: column-widths is in-out
+        CHECK(widthOf(ui->get_widths(), 1) == 70.0f && widthOf(ui->get_widths(), 3) == 56.0f);
+        const Frame w108 = shot();
+        const int source108 = kTx + 108;
+        CHECK(inkStart(w108, source108, kTy + 3, kTy + 19, strip) >= source108 + 8 && inkStart(w108, source108, kTy + 3, kTy + 19, strip) <= source108 + 10);   // heading
+        CHECK(inkStart(w108, source108, rowTop(1) + 3, rowTop(1) + 20, panel) >= source108 + 8 && inkStart(w108, source108, rowTop(1) + 3, rowTop(1) + 20, panel) <= source108 + 10);   // body
+        CHECK(w108.countInk(kTx + 100, kTy + 3, kTx + 110, kTy + 19, strip) == 0);      // nothing of the old Source cell is left
+        CHECK(w108.near(kTx + 4, rowTop(1) + kRowH - 1, line, 0));                      // the rows still run the full width
+        CHECK(differing(f0, w108, kTx, kTy, kTx + 70, kTy + kHeadH) == 0);              // the Time cell itself did not change
+        CHECK(ui->get_clicks() == clicksBeforeResizing && ui->get_right_clicks() == rightClicksBeforeResizing);   // dragging an edge clicked no row
+
+        // the 24 px minimum: the new edge is at x 118; drag it far past the left edge of the table
+        const int edge0b = kTx + 108;
+        press(win, edge0b - 3.0f, yHead);
+        moveTo(win, edge0b - 40.0f, yHead);
+        moveTo(win, kTx + 2.0f, yHead);
+        release(win, kTx + 2.0f, yHead);
+        away();
+        CHECK_NEAR(widthOf(ui->get_widths(), 0), 24.0, 0.01);
+        CHECK_NEAR(ui->get_last_resized_width(), 24.0, 0.01);
+        const Frame w24 = shot();
+        CHECK(inkStart(w24, kTx + 24, kTy + 3, kTy + 19, strip) >= kTx + 24 + 8);      // Source now starts at x 34
+        CHECK(w24.countInk(kTx + 1, kTy + 1, kTx + 7, kTy + 20, strip) == 0);
+
+        // a column that shares the rest (width 0) is dragged from the width it HAS: Message is 216, 40 px narrower makes 176
+        setWidths(defaults);
+        const int edge2 = kTx + 78 + 70 + 216;                                          // x 374
+        const int resizes1 = ui->get_resizes();
+        press(win, edge2 - 3.0f, yHead);
+        moveTo(win, edge2 - 23.0f, yHead);
+        moveTo(win, edge2 - 43.0f, yHead);
+        release(win, edge2 - 43.0f, yHead);
+        away();
+        CHECK(ui->get_resizes() > resizes1 && ui->get_last_resized_column() == 2);
+        CHECK_NEAR(ui->get_last_resized_width(), 176.0, 1.0);
+        CHECK_NEAR(widthOf(ui->get_widths(), 2), 176.0, 1.0);
+        const Frame w176 = shot();
+        const int level176 = kTx + 78 + 70 + 176;                                       // Level, fixed at 56, follows the narrower Message
+        CHECK(inkStart(w176, level176, kTy + 3, kTy + 19, strip) >= level176 + 8 && inkStart(w176, level176, kTy + 3, kTy + 19, strip) <= level176 + 10);
+        CHECK(w176.countInk(level176 + 56 + 2, kTy + 1, kTx + kTw - 12, kTy + 20, strip) == 0);   // 40 px of nothing after the last column
+
+        // the last column's own edge (the right edge of Level) is a zone too
+        setWidths(std::vector<float>{78.0f, 70.0f, 100.0f, 56.0f});
+        const int edge3 = kTx + 78 + 70 + 100 + 56;                                     // x 314
+        press(win, edge3 - 3.0f, yHead);
+        moveTo(win, edge3 + 17.0f, yHead);
+        release(win, edge3 + 17.0f, yHead);
+        away();
+        CHECK(ui->get_last_resized_column() == 3);
+        CHECK_NEAR(widthOf(ui->get_widths(), 3), 76.0, 1.0);
+
+        // a disabled table neither shows the cursor nor resizes
+        setWidths(defaults);
+        ui->set_table_enabled(false);
+        moveTo(win, edge0 - 3.0f, yHead);
+        CHECK(!ui->get_resize_cursor());
+        const int resizes2 = ui->get_resizes();
+        press(win, edge0 - 3.0f, yHead);
+        moveTo(win, edge0 + 27.0f, yHead);
+        release(win, edge0 + 27.0f, yHead);
+        away();
+        CHECK(ui->get_resizes() == resizes2 && widthOf(ui->get_widths(), 0) == 78.0f);
+        ui->set_table_enabled(true);
+
+        // a model shorter than the columns (only Time given): the callback still reports, nothing is written, nothing breaks
+        setWidths(std::vector<float>{100.0f});
+        const double edge1 = kTx + 100.0 + 320.0 / 3;                                  // the right edge of Source: Time's 100, then a shared 106.67
+        const int resizes3 = ui->get_resizes();
+        press(win, static_cast<float>(edge1 - 3.0), yHead);
+        moveTo(win, static_cast<float>(edge1 + 7.0), yHead);
+        release(win, static_cast<float>(edge1 + 7.0), yHead);
+        away();
+        CHECK(ui->get_resizes() > resizes3 && ui->get_last_resized_column() == 1);
+        CHECK(ui->get_widths()->row_count() == 1);
+
+        setWidths(defaults);
+        away();
+        CHECK(differing(f0, shot(), kTx, kTy, kTx + kTw - 12, kBodyBottom) == 0);       // and back to the sheet, pixel for pixel
+    }
+
+    // ===== the body is virtual: 2000 rows cost what the visible ones do =====================================================
+    {
+        const auto original = ui->get_rows();
+        const auto makeBig = [](int n) {
+            std::vector<TableRow> big;
+            big.reserve(static_cast<std::size_t>(n));
+            for (int i = 0; i < n; ++i) {
+                const std::string id = "R" + std::to_string(i);
+                big.push_back(makeRow({id.c_str(), "SRC", "a message of some length", "INFO"},
+                                      i == 0 ? RowTone::Warn : i == n - 1 ? RowTone::Good : RowTone::Normal, i % 2 == 1));
+            }
+            return std::make_shared<slint::VectorModel<TableRow>>(std::move(big));
+        };
+        const auto timed = [&](const std::shared_ptr<slint::VectorModel<TableRow>>& model, Frame& out) {
+            const auto t0 = std::chrono::steady_clock::now();
+            ui->set_rows(model);
+            out = shot();
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        };
+        ui->set_selected(-1);
+        away();
+
+        Frame v0;
+        const double ms = timed(makeBig(2000), v0);
+        std::printf("table: 2000 rows set and first frame rendered in %.1f ms\n", ms);
+        CHECK(ms < 250.0);                                                              // "well under a second": the visible rows only
+        CHECK(toneInk(v0, rowTop(0), warnFg) >= 12);                                    // the first rows are what shows
+        CHECK(v0.near(kTx + 4, rowTop(0) + 10, panel, 0) && v0.near(kTx + 4, rowTop(1) + 10, card, 0));
+        int bigHairlines = 0;
+        for (int y = kBodyTop; y < kBodyBottom; ++y) { if (v0.near(kTx + 4, y, line, 0)) { ++bigHairlines; } }
+        CHECK(bigHairlines == 5);                                                       // the same five rows as the nine-row sheet
+        CHECK(v0.countNear(kTx + 8, kBodyTop, kTx + kTw - 12, kBodyBottom, goodFg, 12) == 0);   // the last row is nowhere near
+        const int bigThumb = v0.countNear(thumbX, kBodyTop, thumbX + 1, kBodyBottom, knobRing, 2);
+        CHECK(bigThumb >= 18 && bigThumb <= 22);                                        // 138 * 138 / 48000 is under a pixel: the 20 px minimum
+        const int bigThumbTop = v0.firstRowNear(thumbX, kBodyTop, kBodyBottom, knobRing, 2);
+        CHECK(bigThumbTop >= kBodyTop && bigThumbTop <= kBodyTop + 2);
+        CHECK(differing(f0, v0, kTx, kTy, kTx + kTw, kTy + kHeadH) == 0);               // the heading is the same heading
+
+        Frame v20k;
+        const double ms20k = timed(makeBig(20000), v20k);
+        std::printf("table: 20000 rows set and first frame rendered in %.1f ms\n", ms20k);
+        CHECK(ms20k < 250.0);                                                           // ten times the rows, the same cost
+        CHECK(ms20k < 4.0 * std::max(ms, 15.0));                                        // ...not ten times the time: nothing here scales with the model
+        CHECK(differing(v0, v20k, kTx, kBodyTop, kTx + kTw - 12, kBodyBottom) == 0);    // the same first rows
+        const double msBack = timed(makeBig(2000), v0);
+        CHECK(msBack < 250.0);
+
+        // Frames that have stopped moving: the thumb sets the position directly and the body may glide the last pixels
+        const auto calm = [&] {
+            const auto start = std::chrono::steady_clock::now();
+            Frame prev = shot();
+            int still = 0;
+            while (std::chrono::steady_clock::now() - start < std::chrono::seconds(4)) {
+                settle(std::chrono::milliseconds(40));
+                Frame cur = shot();
+                still = differing(prev, cur, 0, 0, kW, kH) == 0 ? still + 1 : 0;
+                prev = std::move(cur);
+                if (still >= 3) { break; }
+            }
+        };
+
+        // THE WHEEL on the virtual body: three rows down (72 px), the top row is row 3 - a band row - and a click lands on it by its
+        // index in the MODEL, not by the instance that happens to be on screen
+        wheel(-72.0f);
+        away();
+        const Frame v3 = shot();
+        CHECK(v3.near(kTx + 4, kBodyTop + 10, card, 0) && v3.near(kTx + 4, kBodyTop + kRowH + 10, panel, 0));
+        CHECK(v3.near(kTx + 4, kBodyTop + kRowH - 1, line, 0));
+        CHECK(toneInk(v3, rowTop(0), warnFg) == 0);                                     // row 0 (the warn one) has scrolled away
+        CHECK(differing(v0, v3, kTx, kTy, kTx + kTw, kTy + kHeadH) == 0);               // the heading did not move a pixel
+        const int clicks3 = ui->get_clicks();
+        click(win, 200.0f, kBodyTop + 12.0f);
+        CHECK(ui->get_clicks() == clicks3 + 1 && ui->get_last_row() == 3);
+        click(win, 150.0f, kBodyTop + 2 * kRowH + 9.0f, slint::PointerEventButton::Right);
+        CHECK(ui->get_last_right_row() == 5);
+        away();
+        wheel(-24.0f);                                                                  // one more row: row 4, a plain one
+        away();
+        CHECK(shot().near(kTx + 4, kBodyTop + 10, panel, 0));
+        click(win, 200.0f, kBodyTop + 12.0f);
+        CHECK(ui->get_last_row() == 4);
+        away();
+        wheel(96.0f);                                                                   // four rows back up: the top, pixel for pixel
+        away();
+        CHECK(differing(v0, shot(), kTx, kTy, kTx + kTw, kBodyBottom) == 0);
+
+        // THE THUMB: halfway down its travel (59 of 118 px) is halfway down the list, about row 1000, and the rows under the pointer
+        // are consecutive rows of the model
+        const float thumbXf = static_cast<float>(thumbX);
+        press(win, thumbXf, kBodyTop + 8.0f);
+        moveTo(win, thumbXf, kBodyTop + 38.0f);
+        moveTo(win, thumbXf, kBodyTop + 67.0f);
+        release(win, thumbXf, kBodyTop + 67.0f);
+        away();
+        calm();
+        click(win, 200.0f, kBodyTop + 12.0f);
+        const int mid0 = ui->get_last_row();
+        click(win, 200.0f, kBodyTop + kRowH + 12.0f);
+        const int mid1 = ui->get_last_row();
+        click(win, 200.0f, kBodyTop + 2 * kRowH + 12.0f);
+        const int mid2 = ui->get_last_row();
+        std::printf("table: the thumb at half travel put row %d at the top of 2000\n", mid0);
+        CHECK(mid0 >= 980 && mid0 <= 1020);
+        CHECK(mid1 == mid0 + 1 && mid2 == mid0 + 2);
+        away();
+
+        // ...and to the end of its travel: the last row, whole, its hairline the table's last pixel row, the thumb at the foot
+        wheel(100000.0f);
+        away();
+        const int clicksBeforeThumb = ui->get_clicks();
+        press(win, thumbXf, kBodyTop + 8.0f);
+        moveTo(win, thumbXf, kBodyTop + 48.0f);
+        moveTo(win, thumbXf, kBodyTop + 88.0f);
+        moveTo(win, thumbXf, kBodyTop + 138.0f);
+        release(win, thumbXf, kBodyTop + 138.0f);
+        away();
+        calm();
+        const Frame vEnd = shot();
+        CHECK(vEnd.near(kTx + 4, kBodyBottom - 1, line, 0));
+        CHECK(toneInk(vEnd, kBodyBottom - kRowH, goodFg) >= 12);                        // row 1999, the good one
+        CHECK(toneInk(vEnd, rowTop(0), warnFg) == 0);
+        CHECK(vEnd.near(thumbX, kBodyBottom - 2, knobRing, 4));                         // the thumb is at the foot
+        CHECK(differing(v0, vEnd, kTx, kTy, kTx + kTw, kTy + kHeadH) == 0);             // the heading never moved
+        CHECK(ui->get_clicks() == clicksBeforeThumb);                                   // dragging the thumb clicked no row
+        // the wheel at the end: further down does nothing, three rows up shows the row above the last, and back is the same frame
+        wheel(-480.0f);
+        away();
+        CHECK(differing(vEnd, shot(), kTx, kTy, kTx + kTw, kBodyBottom) == 0);
+        wheel(72.0f);
+        away();
+        const Frame vUp = shot();
+        CHECK(toneInk(vUp, kBodyBottom - kRowH, goodFg) == 0);                          // row 1999 is three rows below the fold now
+        CHECK(differing(vEnd, vUp, kTx, kBodyTop, kTx + kTw - 12, kBodyBottom) > 500);
+        wheel(-72.0f);
+        away();
+        CHECK(differing(vEnd, shot(), kTx, kTy, kTx + kTw, kBodyBottom) == 0);
+
+        // the sheet's own rows again, as they were
+        ui->set_rows(original);
+        ui->set_selected(5);
+        wheel(100000.0f);
+        away();
+        CHECK(differing(f0, shot(), kTx, kTy, kTx + kTw, kBodyBottom) == 0);
+    }
+
+    // ===== rows of two heights - 24 px rows and 9 px separators - scroll without a jump =======================================
+    {
+        const auto original = ui->get_rows();
+        std::vector<TableRow> mixed;
+        for (int i = 0; i < 60; ++i) {
+            if (i % 5 == 4) {
+                mixed.push_back(makeRow({}, RowTone::Normal, false, RowKind::Separator));
+            } else {
+                const std::string id = "r" + std::to_string(i);
+                mixed.push_back(makeRow({id.c_str(), "a", "b", "c"}));
+            }
+        }
+        ui->set_rows(std::make_shared<slint::VectorModel<TableRow>>(std::move(mixed)));
+        ui->set_selected(-1);
+        away();
+        const auto ruleRows = [&](const Frame& f) {
+            std::vector<int> ys;
+            for (int y = kBodyTop; y < kBodyBottom; ++y) { if (f.rowNear(y, kTx, kTx + kTw - 12, lineStrong, 0)) { ys.push_back(y); } }
+            return ys;
+        };
+        // a separator every fifth row, so every 105 px (four rows of 24 and one of 9): the rule is 4 px into its row, at y 132 + 105 k
+        const auto expected = [&](int scrolled) {
+            std::vector<int> ys;
+            for (int k = 0; k < 12; ++k) {
+                const int y = 132 + 105 * k - scrolled;
+                if (y >= kBodyTop && y < kBodyBottom) { ys.push_back(y); }
+            }
+            return ys;
+        };
+        CHECK(ruleRows(shot()) == expected(0));
+        for (int step = 1; step <= 8; ++step) {
+            wheel(-72.0f);
+            away();
+            CHECK(ruleRows(shot()) == expected(72 * step));                              // every rule 72 px further up, none jumped
+        }
+        ui->set_rows(original);
+        ui->set_selected(5);
+        wheel(100000.0f);
+        away();
+        CHECK(differing(f0, shot(), kTx, kTy, kTx + kTw, kBodyBottom) == 0);
     }
 
     // ===== the tooltip: a rested pointer shows it below the table ===================================================

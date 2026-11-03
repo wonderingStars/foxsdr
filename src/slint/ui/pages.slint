@@ -1,0 +1,640 @@
+// FoxSDR Slint front end - THE PLUGIN KIT'S PAGES (docs/engine-stage4.md 6.37): the DECODE bank's rows and drawers, and the body of
+// every docked (or torn-off) page - the Decoder output, a plugin's picture, panel and instrument, a map page, Fitted modules, a module's
+// page, Target details - composed from the kit's families (presets, forms, output, table, fitted, instruments, map). The host
+// (kit_publish.cpp) fills one PageTab per page with everything its body draws, nested models included, and sets that row again when
+// the page's content changed; the main screen shows the current page's body in the centre and a torn page's in a TornWindow.
+//
+// Page kinds (PageTab.kind): 1 Decoder output, 2 picture, 3 panel, 4 instrument, 5 map, 6 Fitted modules, 7 a module's page,
+// 8 Target details. DECODE bank row kinds (DecodeRow.kind): 0 Plugin store (a chip; the store is a later beta), 1 the catalogue URL
+// field, 2 a retired plugin's row (Update / Remove), 3 Plugins (opens Fitted modules), 4 the "Turn on and off plugins" drawer,
+// 5 the "Target details" drawer, 6 a map page row, 7 a picture row, 8 a panel row, 9 an instrument row, 10 a note line.
+import { Theme } from "theme.slint";
+import { Chip, LampDot, ChipTone, LampState } from "chips.slint";
+import { Caption, Key } from "keys.slint";
+import { Lamp } from "lamps.slint";
+import { Section } from "sections.slint";
+import { RowKind, RowTone, TableRow, Table } from "table.slint";
+import { FieldKind, Field, Checkbox } from "fields.slint";
+import { Card, CardTone } from "cards.slint";
+import { PresetKeyModel, PresetBar, PlateKeys } from "presets.slint";
+import { SettingKind, SettingField, PluginSettingsForm, GrantKeys, ReceiverControlCard, StaleGrant, StateChipModel, StateChips, RunKeys } from "forms.slint";
+import { LineTone, LogLine, LogView, PicturePane, DetailLine, TargetDetails } from "output.slint";
+import { FittedRowModel, FittedModules, ReachRowModel, ModulePage } from "fitted.slint";
+import { InstrumentState, InstrumentFace } from "instruments.slint";
+import { MapTarget, LegendRow, MapPane } from "map.slint";
+
+export { PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
+         InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow }
+
+// EVERY GESTURE OF THE KIT'S PAGES AND OF THE DECODE BANK, as one global the host wires (ui->global<KitEvents>().on_...): a page body
+// inside a tab and the same body inside a torn-off window reach the host without a chain of forwarded callbacks. A page's callbacks
+// carry the page's index first.
+export global KitEvents {
+    // the DECODE bank
+    callback decode-row-clicked(int);
+    callback decode-row-key(int);
+    callback decode-row-key2(int);
+    callback decode-url-committed(string);
+    callback decode-output-clicked();
+    callback decode-stop-all();
+    callback decode-entry-preset(int, int);
+    callback decode-entry-forgot(int, int);
+    callback decode-entry-save(int);
+    callback decode-entry-run(int);
+    callback decode-entry-mute(int, bool);
+    callback decode-entry-settings-toggled(int);
+    callback decode-entry-setting-committed(int, int, string);
+    callback decode-entry-setting-toggled(int, int, bool);
+    callback decode-entry-browse(int, int);
+    callback decode-grant-toggled(int, bool);
+    callback decode-details-go();
+    callback decode-details-follow();
+    callback decode-details-close();
+    // the tab row and the torn windows
+    callback page-tab-selected(int);
+    callback page-tab-closed(int);
+    callback page-tab-torn(int, length, length);
+    callback page-chrome-close(int);
+    callback page-chrome-rollup(int);
+    callback page-chrome-dock(int);
+    callback page-chrome-drag(int, length, length);
+    callback page-chrome-resize(int, length, length);
+    // the page bodies
+    callback page-preset-pressed(int, int);
+    callback page-preset-forgot(int, int);
+    callback page-save-clicked(int);
+    callback page-settings-toggled(int);
+    callback page-setting-committed(int, int, string);
+    callback page-setting-toggled(int, int, bool);
+    callback page-browse-clicked(int, int);
+    callback page-bar-preset-pressed(int, int, int);
+    callback page-bar-save-clicked(int, int);
+    callback page-log-clear(int);
+    callback page-log-follow(int, bool);
+    callback page-picture-pressed(int, int, int);
+    callback page-picture-save(int);
+    callback page-row-pressed(int, int);
+    callback page-row-clicked(int, int);
+    callback page-column-resized(int, int, length);
+    callback page-obs-changed(int, int);
+    callback page-map-target-clicked(int, int);
+    callback page-map-target-double-clicked(int, int);
+    callback page-map-hovered(int, int);
+    callback page-map-panned(int, float, float);
+    callback page-map-zoomed(int, int, float, float);
+    callback page-map-zoom-key(int, int);
+    callback page-map-clicked(int, float, float);
+    callback page-map-resized(int, length, length);
+    callback page-map-list-clicked(int, int);
+    callback page-map-list-double-clicked(int, int);
+    callback page-map-fit(int);
+    callback page-map-set-rx(int);
+    callback page-map-on-screen(int, bool);
+    callback page-map-coverage(int, bool);
+    callback page-map-trails(int, bool);
+    callback page-map-alt-colours(int, bool);
+    callback page-map-reset-coverage(int);
+    callback page-map-stop-following(int);
+    callback page-map-sort-clicked(int);
+    callback page-map-sort-dir(int);
+    callback page-fitted-row-clicked(int, int);
+    callback page-fitted-row-double-clicked(int, int);
+    callback page-fitted-run(int, int);
+    callback page-fitted-remove(int, int);
+    callback page-fitted-chip(int, int);
+    callback page-fitted-search(int, string);
+    callback page-fitted-scan(int);
+    callback page-fitted-reset-windows(int);
+    callback page-fitted-cleanup(int);
+    callback page-module-back(int);
+    callback page-module-run(int);
+    callback page-module-grant(int, int, bool);
+    callback page-module-command(int, int);
+    callback page-module-reenable(int);
+    callback page-module-keep(int, bool);
+    callback page-details-go(int);
+    callback page-details-follow(int);
+    callback page-details-close(int);
+    // the "Sound is muted" question
+    callback mute-stop-clicked();
+    callback mute-keep-clicked();
+}
+
+export struct DecodeRow {
+    kind: int,
+    id: string,            // what the host keys the row by (a module file, a display name, "store", "url", ...)
+    name: string,
+    chip: string,
+    tone: ChipTone,
+    dot: LampState,
+    show-dot: bool,
+    open: bool,            // a drawer's open state, or a window row's lamp
+    enabled: bool,
+    tooltip: string,
+    note: string,          // a note line's text; a retired row's message
+    note-tone: ChipTone,
+    key-label: string,     // a retired row's first key ("Update", "" none)
+    key2-label: string,    // its second key ("Remove" / "Confirm delete")
+}
+
+// One plugin's entry in the "Turn on and off plugins" drawer: heading, presets (column form), STOP/START, mute, the settings fold.
+export struct PluginEntry {
+    file: string,
+    name: string,
+    group: string,         // the store's category heading over the group ("" none)
+    show-group: bool,      // the first entry of its group draws the heading
+    presets: [PresetKeyModel],
+    save-label: string,
+    save-shown: bool,
+    note: string,          // the preset result note (green)
+    decoder: bool,         // STOP/START and the mute checkbox are drawn
+    offers-stop: bool,
+    idle: bool,
+    mutes: bool,
+    has-settings: bool,
+    fields: [SettingField],
+    settings-open: bool,
+}
+
+export struct DecoderBar { name: string, file: string, presets: [PresetKeyModel] }
+
+export struct MapModel {
+    base: image,
+    targets: [MapTarget],
+    legend: [LegendRow],
+    scale-text: string,
+    scale-frac: float,
+    attribution: string,
+    zoom-in: bool,
+    zoom-out: bool,
+    pick-armed: bool,
+    hover-text: string,
+    list-columns: [string],
+    list-rows: [TableRow],
+    list-widths: [length],
+    count-text: string,
+    following: string,     // "following BAW123", "" none
+    coverage-on: bool,
+    trails-on: bool,
+    alt-colours: bool,
+    on-screen-only: bool,
+    coverage-status: string,
+    coverage-empty: bool,
+    sort-label: string,
+    sort-ascending: bool,
+    rx-text: string,       // "RX 51.4812 -0.4521", or the hint when none is set
+    rx-known: bool,
+}
+
+export struct FittedModel {
+    rows: [FittedRowModel],
+    chips: [StateChipModel],
+    search: string,
+    verdict: string,
+    directory: string,
+    report: string,
+    error: string,
+    empty-text: string,
+    cleanup-label: string,
+}
+
+export struct ModuleModel {
+    file: string,
+    name: string,
+    maker-line: string,
+    state-word: string,
+    state-tone: ChipTone,
+    lamp: LampState,
+    offers-start: bool,
+    can-run: bool,
+    tune-shown: bool, tune-on: bool, settings-shown: bool, settings-on: bool, transmit-shown: bool, transmit-on: bool,
+    settings-note: string, transmit-note: string, tx-state: string, tx-hot: bool,
+    commands: [string],
+    reach-lead: string,
+    reach: [ReachRowModel],
+    reach-note: string,
+    sentence: string,
+    refused: bool,
+    fault: string,
+    keep-shown: bool,
+    keep-running: bool,
+    orphan: string,
+    integrity: string,
+    origin: string,
+    notice: string,
+    notice-err: bool,
+    file-path: string,
+    abi-text: string,
+    fitted-text: string,
+    catalogue-note: string,
+}
+
+export struct DetailsModel {
+    heading: string,
+    chip: string,
+    lamp: LampState,
+    lines: [DetailLine],
+    gone: bool,
+    empty-hint: string,
+    can-go: bool,
+    following: bool,
+}
+
+export struct PageTab {
+    id: string,
+    kind: int,
+    title: string,
+    chip: string,
+    chip-tone: ChipTone,
+    torn: bool,
+    tx: length, ty: length, tw: length, th: length,   // the torn window's place in the main window
+    rolled: bool,
+    // the preset bar and the settings fold (every plugin page)
+    presets: [PresetKeyModel],
+    has-presets: bool,
+    fields: [SettingField],
+    has-settings: bool,
+    settings-open: bool,
+    // 1 Decoder output
+    lines: [LogLine],
+    count-text: string,
+    follow: bool,
+    bars: [DecoderBar],
+    // 2 picture
+    picture: image,
+    have: bool,
+    status: string,
+    interactive: bool,
+    pic-w: int, pic-h: int,
+    save-enabled: bool,
+    save-note: string,
+    // 3 panel, and an instrument's memory
+    columns: [string],
+    rows: [TableRow],
+    widths: [length],
+    empty-text: string,
+    // 4 instrument
+    inst-kind: int,
+    inst-title: string,
+    inst: InstrumentState,
+    obs-course: int,
+    // 5 .. 8
+    map: MapModel,
+    fitted: FittedModel,
+    module: ModuleModel,
+    details: DetailsModel,
+}
+
+// The bar every plugin page starts with: the presets and the settings fold (the order of the ImGui window's four loops).
+component PagePrelude inherits VerticalLayout {
+    in property <PageTab> page;
+    in property <int> index;
+    callback preset-pressed(int, int);
+    callback preset-forgot(int, int);
+    callback save-clicked(int);
+    callback settings-toggled(int);
+    callback setting-committed(int, int, string);
+    callback setting-toggled(int, int, bool);
+    callback browse-clicked(int, int);
+    spacing: 0px;
+    if root.page.has-presets : PresetBar { presets: root.page.presets; save-label: "+ Save";
+        pressed(i) => { root.preset-pressed(root.index, i); } forgot(i) => { root.preset-forgot(root.index, i); } save-clicked => { root.save-clicked(root.index); } }
+    if root.page.has-settings : PluginSettingsForm { fields: root.page.fields;
+        committed(id, text) => { root.setting-committed(root.index, id, text); }
+        toggled(id, on) => { root.setting-toggled(root.index, id, on); }
+        browse-clicked(id) => { root.browse-clicked(root.index, id); } }
+}
+
+// A map page's toolbar: the rows of the ImGui window's top bar (Fit, the RX position, the count, On screen only, Coverage, Trails,
+// Altitude colours, Reset coverage, the coverage status, Stop following) as keys and checkboxes in two lines.
+component MapToolbar inherits VerticalLayout {
+    in property <MapModel> map;
+    in property <int> index;
+    callback fit(int);
+    callback set-rx(int);
+    callback on-screen(int, bool);
+    callback coverage(int, bool);
+    callback trails(int, bool);
+    callback alt-colours(int, bool);
+    callback reset-coverage(int);
+    callback stop-following(int);
+    callback sort-clicked(int);
+    callback sort-dir(int);
+    spacing: 4px;
+    padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px;
+    HorizontalLayout { spacing: 8px; alignment: start;
+        Key { label: "Fit"; small: true; min-w: 0px; tooltip: "Centre and zoom on every target"; clicked => { root.fit(root.index); } }
+        Key { label: root.map.pick-armed ? "Click the map..." : "Set RX here"; small: true; min-w: 0px; on: root.map.pick-armed; tooltip: "The next click on the map sets the receiver position"; clicked => { root.set-rx(root.index); } }
+        Text { text: root.map.rx-text; font-size: Theme.font-small; color: root.map.rx-known ? Theme.fg-soft : Theme.dim; vertical-alignment: center; overflow: elide; }
+        Rectangle { horizontal-stretch: 1; }
+        Text { text: root.map.count-text; font-size: Theme.font-small; color: Theme.muted; vertical-alignment: center; }
+        Checkbox { width: 118px; label: "On screen only"; checked: root.map.on-screen-only; tooltip: "Lists only the targets inside the map you are looking at."; toggled(v) => { root.on-screen(root.index, v); } }
+    }
+    HorizontalLayout { spacing: 10px; alignment: start;
+        Checkbox { width: 86px; label: "Coverage"; checked: root.map.coverage-on; tooltip: "Furthest any target has been plotted, per 5 degrees of bearing, from the receiver position, this session only."; toggled(v) => { root.coverage(root.index, v); } }
+        Checkbox { width: 66px; label: "Trails"; checked: root.map.trails-on; tooltip: "Draw the lines plugins publish: flight trails, predicted ground tracks and footprints."; toggled(v) => { root.trails(root.index, v); } }
+        Checkbox { width: 124px; label: "Altitude colours"; checked: root.map.alt-colours; enabled: root.map.trails-on; tooltip: root.map.trails-on ? "Colour each part of a trail by the altitude observed there." : "Turn Trails on to colour them by altitude."; toggled(v) => { root.alt-colours(root.index, v); } }
+        Key { label: "Reset coverage"; small: true; min-w: 0px; enabled: !root.map.coverage-empty; clicked => { root.reset-coverage(root.index); } }
+        Text { text: root.map.coverage-status; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
+        Rectangle { horizontal-stretch: 1; }
+        if root.map.following != "" : Text { text: root.map.following; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
+        if root.map.following != "" : Key { label: "Stop following"; small: true; min-w: 0px; clicked => { root.stop-following(root.index); } }
+    }
+}
+
+// The body of one page, by kind. Every callback carries the page's index first.
+export component PageBody inherits Rectangle {
+    in property <PageTab> page;
+    in property <int> index;
+    background: Theme.panel;
+    clip: true;
+
+    callback preset-pressed(int, int);
+    preset-pressed(a, b) => { KitEvents.page-preset-pressed(a, b); }
+    callback preset-forgot(int, int);
+    preset-forgot(a, b) => { KitEvents.page-preset-forgot(a, b); }
+    callback save-clicked(int);
+    save-clicked(a) => { KitEvents.page-save-clicked(a); }
+    callback settings-toggled(int);
+    settings-toggled(a) => { KitEvents.page-settings-toggled(a); }
+    callback setting-committed(int, int, string);
+    setting-committed(a, b, c) => { KitEvents.page-setting-committed(a, b, c); }
+    callback setting-toggled(int, int, bool);
+    setting-toggled(a, b, c) => { KitEvents.page-setting-toggled(a, b, c); }
+    callback browse-clicked(int, int);
+    browse-clicked(a, b) => { KitEvents.page-browse-clicked(a, b); }
+    callback bar-preset-pressed(int, int, int);      // page, bar, preset
+    bar-preset-pressed(a, b, c) => { KitEvents.page-bar-preset-pressed(a, b, c); }
+    callback bar-save-clicked(int, int);
+    bar-save-clicked(a, b) => { KitEvents.page-bar-save-clicked(a, b); }
+    callback log-clear(int);
+    log-clear(a) => { KitEvents.page-log-clear(a); }
+    callback log-follow(int, bool);
+    log-follow(a, b) => { KitEvents.page-log-follow(a, b); }
+    callback picture-pressed(int, int, int);
+    picture-pressed(a, b, c) => { KitEvents.page-picture-pressed(a, b, c); }
+    callback picture-save(int);
+    picture-save(a) => { KitEvents.page-picture-save(a); }
+    callback row-pressed(int, int);
+    row-pressed(a, b) => { KitEvents.page-row-pressed(a, b); }
+    callback row-clicked(int, int);
+    row-clicked(a, b) => { KitEvents.page-row-clicked(a, b); }
+    callback column-resized(int, int, length);
+    column-resized(a, b, c) => { KitEvents.page-column-resized(a, b, c); }
+    callback obs-changed(int, int);
+    obs-changed(a, b) => { KitEvents.page-obs-changed(a, b); }
+    callback map-target-clicked(int, int);
+    map-target-clicked(a, b) => { KitEvents.page-map-target-clicked(a, b); }
+    callback map-target-double-clicked(int, int);
+    map-target-double-clicked(a, b) => { KitEvents.page-map-target-double-clicked(a, b); }
+    callback map-hovered(int, int);
+    map-hovered(a, b) => { KitEvents.page-map-hovered(a, b); }
+    callback map-panned(int, float, float);
+    map-panned(a, b, c) => { KitEvents.page-map-panned(a, b, c); }
+    callback map-zoomed(int, int, float, float);
+    map-zoomed(a, b, c, d) => { KitEvents.page-map-zoomed(a, b, c, d); }
+    callback map-zoom-key(int, int);
+    map-zoom-key(a, b) => { KitEvents.page-map-zoom-key(a, b); }
+    callback map-clicked(int, float, float);
+    map-clicked(a, b, c) => { KitEvents.page-map-clicked(a, b, c); }
+    callback map-resized(int, length, length);
+    map-resized(a, b, c) => { KitEvents.page-map-resized(a, b, c); }
+    callback map-list-clicked(int, int);
+    map-list-clicked(a, b) => { KitEvents.page-map-list-clicked(a, b); }
+    callback map-list-double-clicked(int, int);
+    map-list-double-clicked(a, b) => { KitEvents.page-map-list-double-clicked(a, b); }
+    callback map-fit(int);
+    map-fit(a) => { KitEvents.page-map-fit(a); }
+    callback map-set-rx(int);
+    map-set-rx(a) => { KitEvents.page-map-set-rx(a); }
+    callback map-on-screen(int, bool);
+    map-on-screen(a, b) => { KitEvents.page-map-on-screen(a, b); }
+    callback map-coverage(int, bool);
+    map-coverage(a, b) => { KitEvents.page-map-coverage(a, b); }
+    callback map-trails(int, bool);
+    map-trails(a, b) => { KitEvents.page-map-trails(a, b); }
+    callback map-alt-colours(int, bool);
+    map-alt-colours(a, b) => { KitEvents.page-map-alt-colours(a, b); }
+    callback map-reset-coverage(int);
+    map-reset-coverage(a) => { KitEvents.page-map-reset-coverage(a); }
+    callback map-stop-following(int);
+    map-stop-following(a) => { KitEvents.page-map-stop-following(a); }
+    callback map-sort-clicked(int);
+    map-sort-clicked(a) => { KitEvents.page-map-sort-clicked(a); }
+    callback map-sort-dir(int);
+    map-sort-dir(a) => { KitEvents.page-map-sort-dir(a); }
+    callback fitted-row-clicked(int, int);
+    fitted-row-clicked(a, b) => { KitEvents.page-fitted-row-clicked(a, b); }
+    callback fitted-row-double-clicked(int, int);
+    fitted-row-double-clicked(a, b) => { KitEvents.page-fitted-row-double-clicked(a, b); }
+    callback fitted-run(int, int);
+    fitted-run(a, b) => { KitEvents.page-fitted-run(a, b); }
+    callback fitted-remove(int, int);
+    fitted-remove(a, b) => { KitEvents.page-fitted-remove(a, b); }
+    callback fitted-chip(int, int);
+    fitted-chip(a, b) => { KitEvents.page-fitted-chip(a, b); }
+    callback fitted-search(int, string);
+    fitted-search(a, b) => { KitEvents.page-fitted-search(a, b); }
+    callback fitted-scan(int);
+    fitted-scan(a) => { KitEvents.page-fitted-scan(a); }
+    callback fitted-reset-windows(int);
+    fitted-reset-windows(a) => { KitEvents.page-fitted-reset-windows(a); }
+    callback fitted-cleanup(int);
+    fitted-cleanup(a) => { KitEvents.page-fitted-cleanup(a); }
+    callback module-back(int);
+    module-back(a) => { KitEvents.page-module-back(a); }
+    callback module-run(int);
+    module-run(a) => { KitEvents.page-module-run(a); }
+    callback module-grant(int, int, bool);           // page, kind (1 tune 2 settings 3 transmit), on
+    module-grant(a, b, c) => { KitEvents.page-module-grant(a, b, c); }
+    callback module-command(int, int);
+    module-command(a, b) => { KitEvents.page-module-command(a, b); }
+    callback module-reenable(int);
+    module-reenable(a) => { KitEvents.page-module-reenable(a); }
+    callback module-keep(int, bool);
+    module-keep(a, b) => { KitEvents.page-module-keep(a, b); }
+    callback details-go(int);
+    details-go(a) => { KitEvents.page-details-go(a); }
+    callback details-follow(int);
+    details-follow(a) => { KitEvents.page-details-follow(a); }
+    callback details-close(int);
+    details-close(a) => { KitEvents.page-details-close(a); }
+
+    VerticalLayout { spacing: 0px;
+        if root.page.kind >= 1 && root.page.kind <= 5 : PagePrelude { page: root.page; index: root.index;
+            preset-pressed(p, i) => { root.preset-pressed(p, i); } preset-forgot(p, i) => { root.preset-forgot(p, i); } save-clicked(p) => { root.save-clicked(p); }
+            settings-toggled(p) => { root.settings-toggled(p); } setting-committed(p, id, t) => { root.setting-committed(p, id, t); }
+            setting-toggled(p, id, v) => { root.setting-toggled(p, id, v); } browse-clicked(p, id) => { root.browse-clicked(p, id); } }
+
+        // 1 Decoder output: the per-decoder preset bars, then the log
+        if root.page.kind == 1 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
+            for b[bi] in root.page.bars : HorizontalLayout { spacing: 6px; padding-left: 10px; padding-right: 10px; padding-top: 4px; padding-bottom: 4px;
+                Text { text: b.name; font-size: Theme.font-small; color: Theme.dim; vertical-alignment: center; }
+                PresetBar { presets: b.presets; save-label: "+ Save"; pressed(i) => { root.bar-preset-pressed(root.index, bi, i); } save-clicked => { root.bar-save-clicked(root.index, bi); } }
+            }
+            LogView { vertical-stretch: 1; lines: root.page.lines; follow: root.page.follow; count-text: root.page.count-text; empty-text: "Listening...";
+                clear-clicked => { root.log-clear(root.index); } follow-toggled(v) => { root.log-follow(root.index, v); } }
+        }
+        // 2 picture
+        if root.page.kind == 2 : PicturePane { vertical-stretch: 1; picture: root.page.picture; have: root.page.have; status: root.page.status; interactive: root.page.interactive;
+            pic-w: root.page.pic-w; pic-h: root.page.pic-h; save-enabled: root.page.save-enabled; save-note: root.page.save-note;
+            pressed(x, y) => { root.picture-pressed(root.index, x, y); } save-clicked => { root.picture-save(root.index); } }
+        // 3 panel
+        if root.page.kind == 3 : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+            row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } column-resized(c, w) => { root.column-resized(root.index, c, w); } }
+        // 4 instrument: the face, then its memory beneath when the plugin feeds rows
+        if root.page.kind == 4 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
+            InstrumentFace { kind: root.page.inst-kind; title: root.page.inst-title; state: root.page.inst; obs-course: root.page.obs-course;
+                obs-changed(v) => { root.obs-changed(root.index, v); } }
+            if root.page.columns.length > 0 : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+                row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } }
+        }
+        // 5 map: the toolbar, then the list at the left and the pane at the right
+        if root.page.kind == 5 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
+            MapToolbar { map: root.page.map; index: root.index;
+                fit(p) => { root.map-fit(p); } set-rx(p) => { root.map-set-rx(p); } on-screen(p, v) => { root.map-on-screen(p, v); } coverage(p, v) => { root.map-coverage(p, v); }
+                trails(p, v) => { root.map-trails(p, v); } alt-colours(p, v) => { root.map-alt-colours(p, v); } reset-coverage(p) => { root.map-reset-coverage(p); }
+                stop-following(p) => { root.map-stop-following(p); } sort-clicked(p) => { root.map-sort-clicked(p); } sort-dir(p) => { root.map-sort-dir(p); } }
+            HorizontalLayout { spacing: 0px; vertical-stretch: 1;
+                VerticalLayout { width: 260px; spacing: 4px;
+                    HorizontalLayout { spacing: 6px; padding-left: 8px; padding-right: 8px;
+                        Text { text: "Sort"; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
+                        Key { label: root.page.map.sort-label; small: true; min-w: 0px; tooltip: "Order the list. Distance and bearing are measured from the RX position."; clicked => { root.map-sort-clicked(root.index); } }
+                        Key { label: root.page.map.sort-ascending ? "Up" : "Down"; small: true; min-w: 0px; tooltip: root.page.map.sort-ascending ? "Smallest first - click to reverse" : "Largest first - click to reverse"; clicked => { root.map-sort-dir(root.index); } }
+                    }
+                    Table { vertical-stretch: 1; columns: root.page.map.list-columns; rows: root.page.map.list-rows; column-widths: root.page.map.list-widths; empty-text: "No targets. Decoded aircraft, ships and stations appear here.";
+                        clicked(r) => { root.map-list-clicked(root.index, r); } row-pressed(r) => { root.map-list-double-clicked(root.index, r); } }
+                }
+                MapPane { horizontal-stretch: 1; base: root.page.map.base; targets: root.page.map.targets; legend: root.page.map.legend; scale-text: root.page.map.scale-text;
+                    scale-frac: root.page.map.scale-frac; attribution: root.page.map.attribution; zoom-in-enabled: root.page.map.zoom-in; zoom-out-enabled: root.page.map.zoom-out;
+                    pick-armed: root.page.map.pick-armed; hover-text: root.page.map.hover-text;
+                    target-clicked(i) => { root.map-target-clicked(root.index, i); } target-double-clicked(i) => { root.map-target-double-clicked(root.index, i); }
+                    hovered(i) => { root.map-hovered(root.index, i); } panned(dx, dy) => { root.map-panned(root.index, dx, dy); } zoomed(n, fx, fy) => { root.map-zoomed(root.index, n, fx, fy); }
+                    zoom-key(d) => { root.map-zoom-key(root.index, d); } clicked(fx, fy) => { root.map-clicked(root.index, fx, fy); } resized(w, h) => { root.map-resized(root.index, w, h); } }
+            }
+        }
+        // 6 Fitted modules
+        if root.page.kind == 6 : FittedModules { vertical-stretch: 1; rows: root.page.fitted.rows; chips: root.page.fitted.chips; search: root.page.fitted.search; verdict: root.page.fitted.verdict;
+            directory: root.page.fitted.directory; report: root.page.fitted.report; error: root.page.fitted.error; empty-text: root.page.fitted.empty-text; cleanup-label: root.page.fitted.cleanup-label;
+            row-clicked(i) => { root.fitted-row-clicked(root.index, i); } row-double-clicked(i) => { root.fitted-row-double-clicked(root.index, i); } run-clicked(i) => { root.fitted-run(root.index, i); }
+            remove-clicked(i) => { root.fitted-remove(root.index, i); } chip-toggled(i) => { root.fitted-chip(root.index, i); } search-changed(t) => { root.fitted-search(root.index, t); }
+            scan-clicked => { root.fitted-scan(root.index); } reset-windows-clicked => { root.fitted-reset-windows(root.index); } cleanup-clicked => { root.fitted-cleanup(root.index); } }
+        // 7 a module's page
+        if root.page.kind == 7 : ModulePage { vertical-stretch: 1; name: root.page.module.name; maker-line: root.page.module.maker-line; state-word: root.page.module.state-word;
+            state-lamp: root.page.module.lamp; offers-start: root.page.module.offers-start; run-shown: root.page.module.can-run; tx-hot: root.page.module.tx-hot;
+            tune-shown: root.page.module.tune-shown; tune-on: root.page.module.tune-on; settings-shown: root.page.module.settings-shown; settings-on: root.page.module.settings-on;
+            transmit-shown: root.page.module.transmit-shown; transmit-on: root.page.module.transmit-on; settings-note: root.page.module.settings-note; transmit-note: root.page.module.transmit-note;
+            tx-state: root.page.module.tx-state; commands: root.page.module.commands; reach-lead: root.page.module.reach-lead; reach: root.page.module.reach; reach-note: root.page.module.reach-note;
+            sentence: root.page.module.sentence; refused: root.page.module.refused; fault: root.page.module.fault; keep-shown: root.page.module.keep-shown; keep-running: root.page.module.keep-running;
+            orphan: root.page.module.orphan; integrity: root.page.module.integrity; origin: root.page.module.origin; notice: root.page.module.notice; notice-err: root.page.module.notice-err;
+            file-path: root.page.module.file-path; abi-text: root.page.module.abi-text; fitted-text: root.page.module.fitted-text; catalogue-note: root.page.module.catalogue-note;
+            back-clicked => { root.module-back(root.index); } run-clicked => { root.module-run(root.index); } tune-toggled(v) => { root.module-grant(root.index, 1, v); }
+            settings-toggled(v) => { root.module-grant(root.index, 2, v); } transmit-toggled(v) => { root.module-grant(root.index, 3, v); } command-pressed(i) => { root.module-command(root.index, i); }
+            reenable-clicked => { root.module-reenable(root.index); } keep-toggled(v) => { root.module-keep(root.index, v); } }
+        // 8 Target details
+        if root.page.kind == 8 : VerticalLayout { padding: 10px; alignment: start;
+            TargetDetails { heading: root.page.details.heading; chip: root.page.details.chip; lamp: root.page.details.lamp; lines: root.page.details.lines; gone: root.page.details.gone;
+                empty-hint: root.page.details.empty-hint; can-go: root.page.details.can-go; following: root.page.details.following; show-close: true;
+                go-clicked => { root.details-go(root.index); } follow-clicked => { root.details-follow(root.index); } close-clicked => { root.details-close(root.index); } }
+        }
+    }
+}
+
+// THE DECODE BANK (app_window.cpp 9569): the rows and the two drawers in the sections panel, from the host's models.
+export component DecodeBank inherits VerticalLayout {
+    in property <[DecodeRow]> rows;
+    in property <[PluginEntry]> entries;
+    in property <string> decode-note;          // "Nothing is decoding: ..." (the census sentence), "" none
+    in property <string> output-key-label;     // "Show decoder output" / "Hide decoder output", "" hidden
+    in property <string> lines-text;           // "128 lines decoded"
+    in property <string> tail-note;
+    in property <string> cost-note;            // the 2+ decoders note, "" none
+    in property <string> stop-all-label;       // "STOP ALL 3 RUNNING", "" hidden
+    in property <string> empty-entries-text;   // "No fitted module publishes a preset or is fed a signal.", "" none
+    in property <string> refusal;              // the Receiver control card's refusal sentence
+    in property <[StaleGrant]> stale;
+    in property <DetailsModel> details;
+    in property <string> url;
+    callback row-clicked(int);
+    row-clicked(a) => { KitEvents.decode-row-clicked(a); }
+    callback row-key(int);                     // a retired row's Update
+    row-key(a) => { KitEvents.decode-row-key(a); }
+    callback row-key2(int);                    // a retired row's Remove / Confirm delete
+    row-key2(a) => { KitEvents.decode-row-key2(a); }
+    callback url-committed(string);
+    url-committed(a) => { KitEvents.decode-url-committed(a); }
+    callback output-clicked();
+    output-clicked() => { KitEvents.decode-output-clicked(); }
+    callback stop-all();
+    stop-all() => { KitEvents.decode-stop-all(); }
+    callback entry-preset(int, int);
+    entry-preset(a, b) => { KitEvents.decode-entry-preset(a, b); }
+    callback entry-forgot(int, int);
+    entry-forgot(a, b) => { KitEvents.decode-entry-forgot(a, b); }
+    callback entry-save(int);
+    entry-save(a) => { KitEvents.decode-entry-save(a); }
+    callback entry-run(int);
+    entry-run(a) => { KitEvents.decode-entry-run(a); }
+    callback entry-mute(int, bool);
+    entry-mute(a, b) => { KitEvents.decode-entry-mute(a, b); }
+    callback entry-settings-toggled(int);
+    entry-settings-toggled(a) => { KitEvents.decode-entry-settings-toggled(a); }
+    callback entry-setting-committed(int, int, string);
+    entry-setting-committed(a, b, c) => { KitEvents.decode-entry-setting-committed(a, b, c); }
+    callback entry-setting-toggled(int, int, bool);
+    entry-setting-toggled(a, b, c) => { KitEvents.decode-entry-setting-toggled(a, b, c); }
+    callback entry-browse(int, int);
+    entry-browse(a, b) => { KitEvents.decode-entry-browse(a, b); }
+    callback grant-toggled(int, bool);
+    grant-toggled(a, b) => { KitEvents.decode-grant-toggled(a, b); }
+    callback details-go();
+    details-go() => { KitEvents.decode-details-go(); }
+    callback details-follow();
+    details-follow() => { KitEvents.decode-details-follow(); }
+    callback details-close();
+    details-close() => { KitEvents.decode-details-close(); }
+    spacing: 0px;
+    alignment: start;
+
+    for r[i] in root.rows : VerticalLayout { spacing: 0px;
+        if r.kind == 1 : VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 6px; padding-bottom: 6px;
+            Field { label: "Catalogue"; kind: FieldKind.text; value: root.url; placeholder: "catalogue index.json URL"; tooltip: "Where the catalogue is read from: an https URL or a local index.json path. It replaces the FoxSDR catalogue.";
+                committed(t) => { root.url-committed(t); } }
+        }
+        if r.kind == 2 : VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 4px; padding-bottom: 6px;
+            Card { title: "Disabled"; critical: true; lines: [r.note]; primary-label: r.key-label; secondary-label: r.key2-label; note: r.key-label == "" ? "Open the plugin store with the key above to fetch the update." : "";
+                primary-clicked => { root.row-key(i); } secondary-clicked => { root.row-key2(i); } }
+        }
+        if r.kind == 10 : Rectangle { height: note.preferred-height + 8px;
+            note := Text { x: 12px; y: 4px; width: max(0px, parent.width - 24px); text: r.note; font-size: Theme.font-small; color: r.note-tone == ChipTone.err ? Theme.chip-err-fg : r.note-tone == ChipTone.warn ? Theme.chip-warn-fg : Theme.muted; wrap: word-wrap; }
+        }
+        if r.kind != 1 && r.kind != 2 && r.kind != 10 : Section { name: r.name; chip: r.chip; tone: r.tone; open: r.open; first: i == 0; small: r.kind >= 6; show-dot: r.show-dot; dot: r.dot; enabled: r.enabled; tooltip: r.tooltip;
+            clicked => { root.row-clicked(i); }
+            // the "Turn on and off plugins" drawer
+            if r.kind == 4 : VerticalLayout { spacing: 8px;
+                if root.decode-note != "" : Text { text: root.decode-note; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
+                if root.output-key-label != "" : Key { label: root.output-key-label; small: true; wide: true; clicked => { root.output-clicked(); } }
+                if root.lines-text != "" : Text { text: root.lines-text; font-size: Theme.font-hint; color: Theme.dim; }
+                if root.tail-note != "" : Text { text: root.tail-note; font-size: Theme.font-hint; color: Theme.dim; wrap: word-wrap; }
+                if root.cost-note != "" : Text { text: root.cost-note; font-size: Theme.font-small; color: Theme.chip-warn-fg; wrap: word-wrap; }
+                if root.stop-all-label != "" : Key { label: root.stop-all-label; wide: true; danger: true; tooltip: "Stop every decoder that is being fed right now. Nothing is removed and nothing you already stopped is started; press a decoder's preset to start it again."; clicked => { root.stop-all(); } }
+                for e[ei] in root.entries : VerticalLayout { spacing: 6px;
+                    if e.show-group : Caption { label: e.group; color: Theme.accent-soft; }
+                    Text { text: e.name; font-size: 13px; font-weight: Theme.weight-semibold; color: Theme.fg; wrap: word-wrap; }
+                    PresetBar { presets: e.presets; column: true; save-label: e.save-label; note: e.note;
+                        pressed(i) => { root.entry-preset(ei, i); } forgot(i) => { root.entry-forgot(ei, i); } save-clicked => { root.entry-save(ei); } }
+                    if e.decoder : RunKeys { offers-stop: e.offers-stop; idle: e.idle; mutes: e.mutes; mute-shown: true;
+                        run-clicked => { root.entry-run(ei); } mute-toggled(v) => { root.entry-mute(ei, v); } }
+                    if e.has-settings : PluginSettingsForm { fields: e.fields;
+                        committed(id, t) => { root.entry-setting-committed(ei, id, t); } toggled(id, v) => { root.entry-setting-toggled(ei, id, v); } browse-clicked(id) => { root.entry-browse(ei, id); } }
+                }
+                if root.empty-entries-text != "" : Text { text: root.empty-entries-text; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
+                ReceiverControlCard { refusal: root.refusal; stale: root.stale; grant-toggled(i, v) => { root.grant-toggled(i, v); } }
+            }
+            // the "Target details" drawer
+            if r.kind == 5 : TargetDetails { heading: root.details.heading; chip: root.details.chip; lamp: root.details.lamp; lines: root.details.lines; gone: root.details.gone;
+                empty-hint: root.details.empty-hint; can-go: root.details.can-go; following: root.details.following; show-close: false;
+                go-clicked => { root.details-go(); } follow-clicked => { root.details-follow(); } close-clicked => { root.details-close(); } }
+        }
+    }
+}

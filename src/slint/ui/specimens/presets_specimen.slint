@@ -1,0 +1,155 @@
+// The presets specimen sheet (520 x 640): the PresetBar in its row form (one row, wrapped, disabled) and its column form (the
+// rail entry's), and the PlateKeys grid, each at an absolute, documented position, so tests/test_slint_presets.cpp can probe the
+// pixels against the PluginKit sheet's "Torn-off plugin window" preset bar, "Sections-panel form" preset column and "Module page"
+// plate keys. Nothing overlaps; nothing is in a top-level layout.
+//
+// The torn-off window's body is Theme.panel and the rail form sits on Theme.panel-alt, so each variant has its ground drawn
+// behind it (the keys' ghost and plate looks are transparent, so the ground is part of what is tested).
+//
+//   x,   y,   w,   h - what                                                          (the root property the test reads)
+//    10,  24, 500,  37 - PresetBar A on Theme.panel: row form, columns 4, ONE row of four keys: "145.800 APRS",
+//                        "144.390 NA" (lit), "145.5000" (mine) and the ghost "+ Save"; 6 + 24 + 6 + the 1 px rule = 37
+//                                                                                   (clicks of the pressed / forgot / save counters)
+//    10,  84, 500,  67 - PresetBar B on Theme.panel: row form, columns 4, SEVEN keys, so two rows (4 + 3): 6 + 24 + 6 + 24 + 6 + 1
+//    10, 174, 500,  37 - PresetBar C on Theme.panel: the same keys as A, disabled
+//    10, 234, 316, 167 - Theme.panel-alt ground of the rail form (10 px padding round it)
+//    20, 244, 296, 147 - PresetBar D: column form, 296 wide: two wide keys, a mine row with its 24 px x key, the green note (two
+//                        lines at 296: 11 px type), the wide plate "+ Save 145.5000 MHz as a preset"   (d-height: the bar's own height)
+//    10, 420, 498,  54 - PlateKeys E: per-row 4, five labels (so 4 + 1), cells 120 wide, 6 px apart, keys 24 high
+//    10, 490, 240,  54 - PlateKeys F: the default per-row 2, three labels (2 + 1): the empty cell keeps the grid
+//   270, 490, 240,  30 - PlateKeys G: per-row 2, two labels, disabled
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { Caption } from "../keys.slint";
+import { PresetKeyModel, PresetBar, PlateKeys } from "../presets.slint";
+export { Theme, Skin, Workbench, PresetKeyModel }
+
+export component PresetsSpecimen inherits Window {
+    width: 520px;
+    height: 640px;
+    background: Theme.bg;
+
+    // what the test observes
+    in-out property <int> pressed-count;
+    in-out property <int> last-pressed: -1;
+    in-out property <int> forgot-count;
+    in-out property <int> last-forgot: -1;
+    in-out property <int> save-count;
+    in-out property <int> plate-count;
+    in-out property <int> last-plate: -1;
+    in-out property <string> last-source;
+    out property <length> a-height: bar-a.height;
+    out property <length> b-height: bar-b.height;
+    out property <length> d-height: bar-d.height;
+    out property <length> e-height: plates-e.height;
+    out property <length> f-height: plates-f.height;
+    // what the test sets
+    in-out property <[PresetKeyModel]> keys-a: [
+        { label: "145.800 APRS", lit: false, mine: false, tooltip: "Tune to this preset of APRS / AX.25 Packet Decoder." },
+        { label: "144.390 NA", lit: true, mine: false, tooltip: "Already tuned to this preset of APRS / AX.25 Packet Decoder." },
+        { label: "145.5000", lit: false, mine: true, tooltip: "Tune to your preset for APRS / AX.25 Packet Decoder.\nRight-click to forget it." },
+    ];
+    in-out property <string> note-d: "Saved 145.5000 MHz as a preset for APRS / AX.25 Packet Decoder";
+
+    function pressed-by(src: string, i: int) {
+        root.pressed-count += 1;
+        root.last-pressed = i;
+        root.last-source = src;
+    }
+    function forgot-by(src: string, i: int) {
+        root.forgot-count += 1;
+        root.last-forgot = i;
+        root.last-source = src;
+    }
+    function saved-by(src: string) {
+        root.save-count += 1;
+        root.last-source = src;
+    }
+    function plated-by(src: string, i: int) {
+        root.plate-count += 1;
+        root.last-plate = i;
+        root.last-source = src;
+    }
+
+    Caption { x: 10px; y: 6px; label: "preset bar: one row, then wrapped at four keys a row, then disabled"; color: Theme.dim; }
+    Caption { x: 10px; y: 216px; label: "rail form (column)"; color: Theme.dim; }
+    Caption { x: 10px; y: 402px; label: "plate keys: four to a row, two to a row, disabled"; color: Theme.dim; }
+
+    // ---- A: one row ----
+    Rectangle { x: 10px; y: 24px; width: 500px; height: 37px; background: Theme.panel; }
+    bar-a := PresetBar {
+        x: 10px; y: 24px; width: 500px;
+        columns: 4;
+        presets: root.keys-a;
+        tooltip: "Save the frequency you are tuned to now (145.5000 MHz) as a preset for APRS / AX.25 Packet Decoder.";
+        pressed(i) => { root.pressed-by("A", i); }
+        forgot(i) => { root.forgot-by("A", i); }
+        save-clicked => { root.saved-by("A"); }
+    }
+
+    // ---- B: wrapped ----
+    Rectangle { x: 10px; y: 84px; width: 500px; height: 67px; background: Theme.panel; }
+    bar-b := PresetBar {
+        x: 10px; y: 84px; width: 500px;
+        columns: 4;
+        presets: [
+            { label: "145.800 APRS", lit: false, mine: false, tooltip: "" },
+            { label: "144.800 APRS EU", lit: false, mine: false, tooltip: "" },
+            { label: "144.390 NA", lit: true, mine: false, tooltip: "" },
+            { label: "145.825 ISS", lit: false, mine: false, tooltip: "" },
+            { label: "433.920 EU", lit: false, mine: false, tooltip: "" },
+            { label: "145.5000", lit: false, mine: true, tooltip: "" },
+        ];
+        pressed(i) => { root.pressed-by("B", i); }
+        forgot(i) => { root.forgot-by("B", i); }
+        save-clicked => { root.saved-by("B"); }
+    }
+
+    // ---- C: disabled ----
+    Rectangle { x: 10px; y: 174px; width: 500px; height: 37px; background: Theme.panel; }
+    bar-c := PresetBar {
+        x: 10px; y: 174px; width: 500px;
+        columns: 4;
+        enabled: false;
+        presets: root.keys-a;
+        pressed(i) => { root.pressed-by("C", i); }
+        forgot(i) => { root.forgot-by("C", i); }
+        save-clicked => { root.saved-by("C"); }
+    }
+
+    // ---- D: the rail form ----
+    Rectangle { x: 10px; y: 234px; width: 316px; height: 167px; background: Theme.panel-alt; }
+    bar-d := PresetBar {
+        x: 20px; y: 244px; width: 296px;
+        column: true;
+        save-label: "+ Save 145.5000 MHz as a preset";
+        note: root.note-d;
+        presets: [
+            { label: "APRS Europe 144.800", lit: false, mine: false, tooltip: "Tune to this preset of APRS / AX.25 Packet Decoder." },
+            { label: "APRS North America 144.390", lit: false, mine: false, tooltip: "" },
+            { label: "145.5000 MHz", lit: false, mine: true, tooltip: "Tune to your preset for APRS / AX.25 Packet Decoder.\nRight-click to forget it." },
+        ];
+        tooltip: "Keep the frequency, mode and bandwidth you are tuned to now as a preset for APRS / AX.25 Packet Decoder.";
+        pressed(i) => { root.pressed-by("D", i); }
+        forgot(i) => { root.forgot-by("D", i); }
+        save-clicked => { root.saved-by("D"); }
+    }
+
+    // ---- plate keys ----
+    plates-e := PlateKeys {
+        x: 10px; y: 420px; width: 498px;
+        per-row: 4;
+        labels: ["RESET", "CLEAR LOG", "SEND BEACON", "SAVE", "LONG RUNNING COMMAND"];
+        pressed(i) => { root.plated-by("E", i); }
+    }
+    plates-f := PlateKeys {
+        x: 10px; y: 490px; width: 240px;
+        labels: ["RESET", "CLEAR LOG", "SEND BEACON"];
+        pressed(i) => { root.plated-by("F", i); }
+    }
+    plates-g := PlateKeys {
+        x: 270px; y: 490px; width: 240px;
+        enabled: false;
+        labels: ["RESET", "CLEAR LOG"];
+        pressed(i) => { root.plated-by("G", i); }
+    }
+}

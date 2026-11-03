@@ -1,0 +1,809 @@
+// FoxSDR Slint front end - FITTED: the Fitted modules page and one module's page (docs 6.37).
+//
+// Lifted from Workbench-PluginKit.dc.html - "State chips and row examples" (the `.sec.s` dense rows under `.dn`: an 8 px state dot, the name,
+// the state `.chip`, the `.btn.xs` STOP / START key; a 44 px row with its `.n.rd` note under the name) and "Module page (tab) excerpt" (the
+// `< FITTED` back key, the lamp and STOP at the right, the 13 px / 600 name with its `.n` maker line, the grant keys, the plate keys, the
+// `.n` verdict) - with the ImGui window's states and words (pv plugins_view.cpp: drawFittedModulesPanel, drawOnThisMachine).
+//
+//   FittedModules  the page body of the Fitted modules tab. A top bar on the strip ground (the search box, the six `StateChips`, SCAN AGAIN
+//                  and RESET WINDOW SIZES keys; the chips drop to a second line when the bar is too narrow for one), then the verdict line
+//                  (`verdict` and `directory`) with the last install or remove report or error under it, then the rows in a body that
+//                  scrolls (wheel, drag the thumb): a cap heading over each group, a dense row per module (the state dot, the name, the
+//                  version, a state chip, STOP / START and REMOVE / CONFIRM keys, a note under the name), the empty text and the foot
+//                  "CLEAN UP OLD VERSIONS (n)". A click on a row's dot or name asks for its page, a double click anywhere on the row for its
+//                  own window; REMOVE arms (the host sets `armed`) and the same key, now CONFIRM, removes.
+//   ModulePage     one module's page: back key, the state lamp and the STOP / START key, the name and maker line, the grant keys, the
+//                  module's command keys, what it reaches, the verdict (and why a refused module is not running), RE-ENABLE, the KEEP
+//                  RUNNING tick, the notes, the FILE / PLUGIN ABI / fitted lines and the place of the catalogue body. The whole page scrolls.
+import { Theme } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+import { Caption, Key } from "keys.slint";
+import { Chip, ChipTone, LampDot, LampState } from "chips.slint";
+import { Lamp } from "lamps.slint";
+import { Checkbox } from "fields.slint";
+import { StateChipModel, StateChips, GrantKeys } from "forms.slint";
+import { PlateKeys } from "presets.slint";
+
+// One module of the list. `name` is the module's own name (its file name when the host refused it), `group` the store's heading for its
+// category ("" none), `state` the chip's word with its `tone` and `dot` lamp, `note` the line under the name in `note-tone`. `can-stop`
+// draws the STOP / START key (START when `offers-start`), `can-remove` the REMOVE key with `remove-label` (REMOVE or REMOVE FILE); `armed`
+// is the first press of REMOVE waiting for its confirmation (the key reads CONFIRM and is red).
+export struct FittedRowModel { file: string, name: string, version: string, group: string, state: string, tone: ChipTone, dot: LampState, note: string, note-tone: ChipTone, can-stop: bool, offers-start: bool, can-remove: bool, remove-label: string, armed: bool }
+
+// One line of "WHAT THIS MODULE REACHES": the capability's name, the sentence under it, and whether it reaches outward (a gold dot) or
+// only publishes to the host (a hollow one).
+export struct ReachRowModel { key: string, detail: string, outward: bool }
+
+// A scrolling body: the children sit in a Flickable (the wheel scrolls it) and a 6 px thumb (the sheet's scroll thumb, knob-ring, radius 3)
+// is laid over the right edge while the content is taller than the body. The caller gives `content-height`.
+component Scroller inherits Rectangle {
+    in property <length> content-height;
+    out property <length> scrolled: -fl.content-y;
+    clip: true;
+    fl := Flickable {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        content-width: root.width;
+        content-height: max(root.content-height, root.height);
+        interactive: false;
+        @children
+    }
+    if root.content-height > root.height : thumb := Rectangle {
+        property <length> travel: root.height - self.height;
+        property <length> overflow: root.content-height - root.height;
+        x: root.width - 9px;
+        y: (overflow > 0px ? -fl.content-y / overflow : 0) * travel;
+        width: 6px;
+        height: max(20px, root.height * root.height / root.content-height);
+        border-radius: 3px;
+        background: (grab.pressed || grab.has-hover) ? Theme.dim : Theme.knob-ring;
+        grab := TouchArea {
+            property <length> grab-y;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) { self.grab-y = self.mouse-y; }
+            }
+            moved => {
+                if (self.pressed && thumb.travel > 0px) {
+                    fl.content-y = max(-thumb.overflow, min(0px, fl.content-y - (self.mouse-y - self.grab-y) * (thumb.overflow / thumb.travel)));
+                }
+            }
+        }
+    }
+}
+
+// The search box of the top bar: a 24 px input with the search icon, a placeholder, the field's ground and strong border. `edited` fires on
+// every change the user makes.
+component SearchBox inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> enabled: true;
+    callback edited(string);
+
+    height: Theme.field-h;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.enabled ? Theme.line-strong : Theme.line-strong.with-alpha(0.5);
+    background: root.enabled ? Theme.field : Theme.key-disabled-bg;
+    accessible-role: text-input;
+    accessible-label: root.placeholder;
+
+    Image {
+        x: 8px;
+        y: (root.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        image-fit: contain;
+        source: @image-url("icons/search.svg");
+        colorize: Theme.dim;
+        accessible-role: none;
+    }
+    if root.text == "" : Text {
+        x: 28px;
+        y: 0px;
+        width: max(0px, root.width - 28px - 8px);
+        height: root.height;
+        text: root.placeholder;
+        color: Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
+        clicked => { if (root.enabled) { input.focus(); } }
+        input := TextInput {
+            x: 28px;
+            y: 0px;
+            width: max(0px, root.width - 28px - 8px);
+            height: root.height;
+            text <=> root.text;
+            enabled: root.enabled;
+            read-only: !root.enabled;
+            single-line: true;
+            color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.placeholder;
+            edited => { root.edited(self.text); }
+        }
+    }
+    if input.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+}
+
+// A wrapped line of small type: a Rectangle whose height is the text's wrapped height at the width it is given.
+component Lines inherits Rectangle {
+    in property <string> text;
+    in property <color> ink: Theme.dim;
+    in property <length> size: Theme.font-small;
+    in property <int> weight: Theme.weight-regular;
+    height: words.preferred-height;
+    words := Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        text: root.text;
+        color: root.ink;
+        font-family: Theme.font-ui;
+        font-size: root.size;
+        font-weight: root.weight;
+        wrap: word-wrap;
+    }
+}
+
+// One module of the Fitted modules list: `.sec.s`, 25 px (44 with a note), a 1 px rule on top, with the group's cap heading above it when
+// `heading` is not empty. The row sizes itself.
+component FittedRowLine inherits Rectangle {
+    in property <FittedRowModel> m;
+    in property <string> heading;
+    in property <bool> enabled: true;
+    in property <string> stop-text: "STOP";
+    in property <string> start-text: "START";
+    in property <string> confirm-text: "CONFIRM";
+    in property <string> remove-tooltip;
+    callback clicked();
+    callback double-clicked();
+    callback run-clicked();
+    callback remove-clicked();
+
+    property <bool> has-note: root.m.note != "";
+    property <length> head-h: root.heading != "" ? 28px : 0px;
+    property <length> row-h: root.has-note ? 44px : 25px;
+    property <length> name-y: root.has-note ? 7px : 5px;
+    property <length> avail: max(0px, cluster.x - 8px - 23px);                 // from the name's left edge to 8 px before the keys
+    property <bool> note-cut: note-t.preferred-width > note-t.width;
+    property <length> name-end: name-t.x + name-t.width;
+    property <color> note-ink: root.m.note-tone == ChipTone.good ? Theme.chip-good-fg
+                             : root.m.note-tone == ChipTone.warn ? Theme.accent-soft
+                             : root.m.note-tone == ChipTone.err ? Theme.chip-err-fg
+                             : Theme.dim;
+
+    height: root.head-h + root.row-h;
+
+    if root.heading != "" : Caption {
+        x: 10px;
+        y: 8px;
+        width: max(0px, root.width - 20px);
+        height: 16px;
+        label: root.heading;
+    }
+    row := Rectangle {
+        x: 0px;
+        y: root.head-h;
+        width: root.width;
+        height: root.row-h;
+        background: (area.has-hover && root.enabled) ? Theme.panel : transparent;
+        accessible-role: button;
+        accessible-label: root.m.name != "" ? root.m.name + ", " + root.m.state : root.m.file;
+        accessible-enabled: root.enabled;
+        accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: Theme.hairline;
+            background: Theme.line;
+        }
+        LampDot {
+            x: 8px;
+            y: root.name-y + 4px;
+            state: root.m.dot;
+        }
+        name-t := Text {
+            x: 23px;
+            y: root.name-y;
+            height: 16px;
+            width: max(0px, min(self.preferred-width, root.avail));
+            text: root.m.name != "" ? root.m.name : root.m.file;
+            color: root.enabled ? Theme.fg : Theme.disabled;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-body;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        ver-t := Text {
+            x: name-t.x + name-t.width + 8px;
+            y: root.name-y;
+            height: 16px;
+            width: max(0px, min(self.preferred-width, root.avail - name-t.width - 8px));
+            text: root.m.version;
+            color: Theme.muted;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        note-t := Text {
+            x: 23px;
+            y: 23px;
+            height: 15px;
+            width: root.has-note ? root.avail : 0px;
+            text: root.m.note;
+            color: root.note-ink;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        area := TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            mouse-cursor: (root.enabled && self.mouse-x < root.name-end + 4px) ? MouseCursor.pointer : MouseCursor.default;
+            clicked => {
+                if (root.enabled && self.mouse-x < root.name-end + 4px) { root.clicked(); }
+            }
+            double-clicked => { if (root.enabled) { root.double-clicked(); } }
+        }
+        TipTimer { x: 0px; y: 0px; hovered: area.has-hover && root.note-cut; text: root.m.note; anchor-h: parent.height; }
+        // the state chip, then the keys, hugging each other 6 px apart and the right padding of 10
+        cluster := HorizontalLayout {
+            x: parent.width - 10px - self.preferred-width;
+            y: Math.floor((parent.height + Theme.hairline - Theme.chip-h) / 2px) * 1px;
+            width: self.preferred-width;
+            height: Theme.chip-h;
+            spacing: 6px;
+            Chip { label: root.m.state; tone: root.m.tone; }
+            if root.m.can-stop : Key {
+                xs: true;
+                label: root.m.offers-start ? root.start-text : root.stop-text;
+                enabled: root.enabled;
+                clicked => { root.run-clicked(); }
+            }
+            if root.m.can-remove : Key {
+                xs: true;
+                danger: root.m.armed;
+                label: root.m.armed ? root.confirm-text : root.m.remove-label;
+                enabled: root.enabled;
+                tooltip: root.remove-tooltip;
+                clicked => { root.remove-clicked(); }
+            }
+        }
+    }
+}
+
+export component FittedModules inherits Rectangle {
+    in property <[FittedRowModel]> rows;
+    in property <[StateChipModel]> chips;
+    in-out property <string> search;
+    in property <string> verdict;                     // "The receiver is running, so a module with a matched decoder is being fed."
+    in property <string> directory;                   // "read from C:\\...\\plugins" (after a middle dot on the verdict line); "" none
+    in property <string> report;                      // what the last install or remove did (green)
+    in property <string> error;                       // what it failed to do (red); wins over the report
+    in property <string> empty-text;                  // drawn at the top of the body when there are no rows
+    in property <string> cleanup-label;               // "CLEAN UP OLD VERSIONS (3)"; "" draws no foot
+    in property <string> cleanup-note;                // the old copies, beside the key
+    in property <string> cleanup-report;              // what the last clean-up did (green), under the key
+    in property <bool> enabled: true;
+    in property <string> search-placeholder: "Search fitted modules";
+    in property <string> scan-text: "SCAN AGAIN";
+    in property <string> reset-text: "RESET WINDOW SIZES";
+    in property <string> stop-text: "STOP";
+    in property <string> start-text: "START";
+    in property <string> confirm-text: "CONFIRM";
+    in property <string> scan-tooltip;
+    in property <string> reset-tooltip: "Puts every decoder, panel, instrument and map window back to its default size and position.";
+    in property <string> remove-tooltip: "Removing deletes the file and nothing else. The stop, the receiver-control, radio-settings and transmit grants and the mute setting are all remembered against this module's FILE NAME, and any map page's position and the module's own settings against the name the module calls itself, so fitting this same file again finds every one of them as it was. A build that arrives under a different file name is a different key, and starts from the defaults, apart from its own settings.";
+    callback row-clicked(int);
+    callback row-double-clicked(int);
+    callback run-clicked(int);
+    callback remove-clicked(int);
+    callback chip-toggled(int);
+    callback search-changed(string);
+    callback scan-clicked();
+    callback reset-windows-clicked();
+    callback cleanup-clicked();
+
+    // what the page's parts measure, for a host or a test to aim by
+    out property <length> bar-height: root.bar-h;
+    out property <length> lines-height: lines.height;
+    out property <bool> two-row-bar: root.two-rows;
+    out property <length> scrolled: body.scrolled;
+    out property <length> content-height: col.preferred-height;
+
+    property <string> status: root.error != "" ? root.error : root.report;
+    property <length> keys-w: reset-key.preferred-width + 10px + scan-key.preferred-width;
+    property <length> search-w: max(100px, min(220px, root.width - 12px - 18px - root.keys-w - 12px));     // gives way to the keys on a narrow page
+    property <bool> two-rows: root.width < 12px + 220px + 18px + chips-view.natural-width + 18px + root.keys-w + 12px;
+    property <length> bar-h: 8px + Theme.field-h + 8px + (root.two-rows ? chips-view.height + 8px : 0px);
+
+    accessible-role: groupbox;
+    accessible-label: "Fitted modules";
+
+    // ---- the top bar: the strip ground, a rule under it ----
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.bar-h;
+        background: Theme.strip;
+        Rectangle {
+            x: 0px;
+            y: parent.height - Theme.hairline;
+            width: parent.width;
+            height: Theme.hairline;
+            background: Theme.line;
+        }
+    }
+    search-box := SearchBox {
+        x: 12px;
+        y: 8px;
+        width: root.search-w;
+        text <=> root.search;
+        placeholder: root.search-placeholder;
+        enabled: root.enabled;
+        edited(t) => { root.search-changed(t); }
+    }
+    chips-view := StateChips {
+        x: root.two-rows ? 12px : 12px + 220px + 18px;
+        y: root.two-rows ? 8px + Theme.field-h + 8px : 8px + (Theme.field-h - Theme.chip-h) / 2;
+        width: root.two-rows ? root.width - 24px : self.natural-width;
+        chips: root.chips;
+        enabled: root.enabled;
+        toggled(i) => { root.chip-toggled(i); }
+    }
+    reset-key := Key {
+        x: root.width - 12px - self.width;
+        y: 8px;
+        width: self.preferred-width;
+        small: true;
+        label: root.reset-text;
+        enabled: root.enabled;
+        tooltip: root.reset-tooltip;
+        clicked => { root.reset-windows-clicked(); }
+    }
+    scan-key := Key {
+        x: reset-key.x - 10px - self.width;
+        y: 8px;
+        width: self.preferred-width;
+        small: true;
+        label: root.scan-text;
+        enabled: root.enabled;
+        tooltip: root.scan-tooltip;
+        clicked => { root.scan-clicked(); }
+    }
+
+    // ---- the verdict line, and what the last install or remove said ----
+    lines := Rectangle {
+        x: 0px;
+        y: root.bar-h;
+        width: root.width;
+        height: 8px + verdict-t.preferred-height + (root.status != "" ? 4px + status-t.preferred-height : 0px) + 8px;
+        verdict-t := Text {
+            x: 12px;
+            y: 8px;
+            width: max(0px, root.width - 24px);
+            text: root.directory != "" ? root.verdict + "  \u{b7}  " + root.directory : root.verdict;
+            color: Theme.muted;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        status-t := Text {
+            x: 12px;
+            y: 8px + verdict-t.preferred-height + 4px;
+            width: max(0px, root.width - 24px);
+            text: root.status;
+            color: root.error != "" ? Theme.chip-err-fg : Theme.chip-good-fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+    }
+
+    // ---- the body: the groups and their rows, the empty text, the foot ----
+    body := Scroller {
+        x: 0px;
+        y: lines.y + lines.height;
+        width: root.width;
+        height: max(0px, root.height - self.y);
+        content-height: col.preferred-height;
+        col := VerticalLayout {
+            width: parent.width;
+            alignment: start;
+            for m[i] in root.rows : FittedRowLine {
+                m: m;
+                heading: (m.group != "" && (i == 0 || root.rows[i - 1].group != m.group)) ? m.group : "";
+                enabled: root.enabled;
+                stop-text: root.stop-text;
+                start-text: root.start-text;
+                confirm-text: root.confirm-text;
+                remove-tooltip: root.remove-tooltip;
+                clicked => { root.row-clicked(i); }
+                double-clicked => { root.row-double-clicked(i); }
+                run-clicked => { root.run-clicked(i); }
+                remove-clicked => { root.remove-clicked(i); }
+            }
+            if root.rows.length == 0 && root.empty-text != "" : Rectangle {
+                height: empty-t.preferred-height + 12px + 12px;
+                empty-t := Text {
+                    x: 12px;
+                    y: 12px;
+                    width: max(0px, parent.width - 24px);
+                    text: root.empty-text;
+                    color: Theme.muted;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-body;
+                    wrap: word-wrap;
+                }
+            }
+            if root.cleanup-label != "" || root.cleanup-report != "" : Rectangle {
+                height: foot.preferred-height + 12px + 12px;
+                foot := VerticalLayout {
+                    x: 12px;
+                    y: 12px;
+                    width: max(0px, parent.width - 24px);
+                    spacing: 8px;
+                    if root.cleanup-label != "" : HorizontalLayout {
+                        spacing: 16px;
+                        alignment: start;
+                        Key {
+                            small: true;
+                            label: root.cleanup-label;
+                            enabled: root.enabled;
+                            clicked => { root.cleanup-clicked(); }
+                        }
+                        if root.cleanup-note != "" : Text {
+                            text: root.cleanup-note;
+                            color: Theme.muted;
+                            font-family: Theme.font-ui;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    if root.cleanup-report != "" : Lines { text: root.cleanup-report; ink: Theme.chip-good-fg; size: Theme.font-body; }
+                }
+            }
+        }
+    }
+}
+
+// "o Audio decoder" and the sentence under it (pv drawReachRow): a gold dot with a halo when the capability reaches outward, a hollow
+// ring when the module only publishes to the host. The row sizes itself.
+component ReachRow inherits Rectangle {
+    in property <ReachRowModel> r;
+    height: 16px + 2px + detail-t.preferred-height;
+    if root.r.outward : Rectangle {
+        x: 1px;
+        y: 3px;
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        background: Theme.accent-soft.with-alpha(0.28);
+        Rectangle {
+            x: 2px;
+            y: 2px;
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: Theme.accent-soft;
+        }
+    }
+    if !root.r.outward : Rectangle {
+        x: 2px;
+        y: 4px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        border-width: 1.5px;
+        border-color: Theme.faint;
+    }
+    Text {
+        x: 20px;
+        y: 0px;
+        width: max(0px, parent.width - 20px);
+        height: 16px;
+        text: root.r.key;
+        color: root.r.outward ? Theme.fg : Theme.fg-soft;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    detail-t := Text {
+        x: 20px;
+        y: 18px;
+        width: max(0px, parent.width - 20px);
+        text: root.r.detail;
+        color: Theme.muted;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        wrap: word-wrap;
+    }
+}
+
+// FILE / PLUGIN ABI: a cap at the left in a 150 px column, the value wrapped beside it.
+component FactRow inherits Rectangle {
+    in property <string> key;
+    in property <string> value;
+    in property <color> ink: Theme.muted;
+    height: max(14px, value-t.preferred-height);
+    Caption {
+        x: 0px;
+        y: 0px;
+        width: 140px;
+        height: 14px;
+        label: root.key;
+    }
+    value-t := Text {
+        x: 150px;
+        y: 0px;
+        width: max(0px, parent.width - 150px);
+        text: root.value;
+        color: root.ink;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        wrap: word-wrap;
+    }
+}
+
+export component ModulePage inherits Rectangle {
+    // ---- the header: the name, the maker line, the state, the run key ----
+    in property <string> name;
+    in property <string> maker-line;                  // "FOX & SCHIRMYVER · version 1.0.2"
+    in property <string> state-word;                  // FED, IDLE, NOT DECODING, TAKES NO SIGNAL, STOPPED, REFUSED
+    in property <LampState> state-lamp: LampState.off;
+    in property <bool> run-shown;                     // the STOP / START key: only for a module the host loaded
+    in property <bool> offers-start;                  // START (the module is stopped or idle) instead of STOP
+    // ---- the grants and the module's own keys ----
+    in property <bool> tune-shown;
+    in property <bool> tune-on;
+    in property <bool> settings-shown;
+    in property <bool> settings-on;
+    in property <bool> transmit-shown;
+    in property <bool> transmit-on;
+    in property <string> settings-note;
+    in property <string> transmit-note;
+    in property <string> tx-state;
+    in property <bool> tx-hot;
+    in property <[string]> commands;                  // at most 16
+    in property <int> commands-per-row: 2;
+    // ---- what it reaches ----
+    in property <string> reach-lead;
+    in property <[ReachRowModel]> reach;
+    in property <string> reach-note;
+    // ---- the verdict and what follows it ----
+    in property <string> sentence;
+    in property <bool> refused;                       // the sentence is the host's reason: "WHY IT IS NOT RUNNING" above it, in red
+    in property <string> fault;                       // non-empty: the containment switched the module off; RE-ENABLE, with this as its tip
+    in property <bool> keep-shown;
+    in property <bool> keep-running;
+    in property <string> orphan;
+    in property <string> integrity;
+    in property <string> origin;
+    in property <string> notice;
+    in property <bool> notice-err;
+    in property <string> file-path;
+    in property <string> abi-text;
+    in property <string> fitted-text;
+    in property <string> catalogue-note;              // the place of the catalogue body (the store is a later beta)
+    in property <bool> enabled: true;
+    // ---- the words and the sentences the page draws itself ----
+    in property <string> back-text: "< FITTED";
+    in property <string> stop-text: "STOP";
+    in property <string> start-text: "START";
+    in property <string> reach-title: "WHAT THIS MODULE REACHES";
+    in property <string> why-title: "WHY IT IS NOT RUNNING";
+    in property <string> reenable-text: "RE-ENABLE";
+    in property <string> keep-text: "Keep running";
+    in property <string> keep-tooltip: "Ticked, this module runs all the time, as every module used to. Unticked, it runs only while something is using it - its window or map, the radar scope, a patch, the Decoder output window - and goes quiet 30 seconds after.";
+    in property <string> file-text: "FILE";
+    in property <string> abi-key-text: "PLUGIN ABI";
+    callback back-clicked();
+    callback run-clicked();
+    callback tune-toggled(bool);
+    callback settings-toggled(bool);
+    callback transmit-toggled(bool);
+    callback command-pressed(int);
+    callback reenable-clicked();
+    callback keep-toggled(bool);
+
+    out property <length> scrolled: scroller.scrolled;
+    out property <length> content-height: col.preferred-height;
+
+    property <bool> has-grants: root.tune-shown || root.settings-shown || root.transmit-shown;
+    property <bool> has-reach: root.reach-lead != "" || root.reach.length > 0 || root.reach-note != "";
+
+    accessible-role: groupbox;
+    accessible-label: root.name;
+
+    scroller := Scroller {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        content-height: col.preferred-height;
+        col := VerticalLayout {
+            width: parent.width;
+            alignment: start;
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 12px;
+            padding-bottom: 24px;
+            spacing: 8px;
+
+            // the back key at the left; the state lamp and the run key at the right
+            HorizontalLayout {
+                spacing: 8px;
+                Key {
+                    small: true;
+                    label: root.back-text;
+                    enabled: root.enabled;
+                    clicked => { root.back-clicked(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                if root.state-word != "" : Lamp {
+                    caption: root.state-word;
+                    state: root.state-lamp;
+                }
+                if root.run-shown : Key {
+                    small: true;
+                    danger: !root.offers-start;
+                    label: root.offers-start ? root.start-text : root.stop-text;
+                    enabled: root.enabled;
+                    clicked => { root.run-clicked(); }
+                }
+            }
+            // the name and the maker line, on one line, the name first
+            Rectangle {
+                height: 18px;
+                name-t := Text {
+                    x: 0px;
+                    y: 0px;
+                    height: 18px;
+                    width: max(0px, min(self.preferred-width, parent.width));
+                    text: root.name;
+                    color: Theme.fg;
+                    font-family: Theme.font-ui;
+                    font-size: 13px;
+                    font-weight: Theme.weight-semibold;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    x: name-t.width + 8px;
+                    y: 1px;
+                    height: 18px;
+                    width: max(0px, min(self.preferred-width, parent.width - name-t.width - 8px));
+                    text: root.maker-line;
+                    color: Theme.dim;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            if root.has-grants : GrantKeys {
+                tune-shown: root.tune-shown;
+                tune-on: root.tune-on;
+                settings-shown: root.settings-shown;
+                settings-on: root.settings-on;
+                transmit-shown: root.transmit-shown;
+                transmit-on: root.transmit-on;
+                settings-note: root.settings-note;
+                transmit-note: root.transmit-note;
+                tx-state: root.tx-state;
+                tx-hot: root.tx-hot;
+                enabled: root.enabled;
+                tune-toggled(v) => { root.tune-toggled(v); }
+                settings-toggled(v) => { root.settings-toggled(v); }
+                transmit-toggled(v) => { root.transmit-toggled(v); }
+            }
+            if root.commands.length > 0 : PlateKeys {
+                labels: root.commands;
+                per-row: root.commands-per-row;
+                enabled: root.enabled;
+                pressed(i) => { root.command-pressed(i); }
+            }
+            // what the module reaches: the cap, the lead, a row each, the note
+            if root.has-reach : Rectangle {
+                height: 10px + 14px;
+                Caption {
+                    x: 0px;
+                    y: 10px;
+                    width: parent.width;
+                    height: 14px;
+                    label: root.reach-title;
+                }
+            }
+            if root.reach-lead != "" : Lines { text: root.reach-lead; ink: Theme.muted; }
+            for r in root.reach : ReachRow { r: r; }
+            if root.reach-note != "" : Lines { text: root.reach-note; ink: Theme.muted; }
+            // the verdict; for a module the host refused, the reason under its cap
+            if root.refused : Rectangle {
+                height: 14px + 2px;
+                Caption {
+                    x: 0px;
+                    y: 2px;
+                    width: parent.width;
+                    height: 14px;
+                    label: root.why-title;
+                    color: Theme.chip-err-fg;
+                }
+            }
+            if root.sentence != "" : Lines { text: root.sentence; ink: root.refused ? Theme.chip-err-fg : Theme.dim; }
+            if root.fault != "" : HorizontalLayout {
+                alignment: start;
+                Key {
+                    small: true;
+                    label: root.reenable-text;
+                    enabled: root.enabled;
+                    tooltip: root.fault;
+                    clicked => { root.reenable-clicked(); }
+                }
+            }
+            if root.keep-shown : Checkbox {
+                label: root.keep-text;
+                checked: root.keep-running;
+                enabled: root.enabled;
+                tooltip: root.keep-tooltip;
+                toggled(v) => { root.keep-toggled(v); }
+            }
+            if root.orphan != "" : Lines { text: root.orphan; ink: Theme.accent-soft; }
+            if root.integrity != "" : Lines { text: root.integrity; ink: Theme.chip-err-fg; }
+            if root.origin != "" : Lines { text: root.origin; ink: Theme.muted; }
+            if root.notice != "" : Lines { text: root.notice; ink: root.notice-err ? Theme.chip-err-fg : Theme.accent-soft; }
+            if root.file-path != "" : FactRow { key: root.file-text; value: root.file-path; }
+            if root.abi-text != "" : FactRow { key: root.abi-key-text; value: root.abi-text; ink: Theme.fg; }
+            if root.fitted-text != "" : Lines { text: root.fitted-text; ink: Theme.muted; }
+            if root.catalogue-note != "" : Rectangle {
+                height: cat-t.preferred-height + 20px;
+                border-radius: Theme.radius-panel;
+                border-width: Theme.hairline;
+                border-color: Theme.line;
+                background: Theme.well;
+                cat-t := Text {
+                    x: 10px;
+                    y: 10px;
+                    width: max(0px, parent.width - 20px);
+                    text: root.catalogue-note;
+                    color: Theme.dim;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

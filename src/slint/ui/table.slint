@@ -9,25 +9,43 @@
 //
 // Geometry in px: heading 22 (4 + 13 + 4 padding and text, then the 1px rule); body row Theme.table-row-h = 24 (4 + 15 + 4,
 // then the 1px rule, which is the LAST pixel row of the row). Column i is `column-widths[i]` wide, or, when that is 0 or
-// missing, an equal share of what the fixed columns leave. A row with ONE cell in a table of several columns is a GROUP row
-// (the sheet's "TODAY"): its text spans every column in the 10px letter-spaced face, coloured by its tone.
+// missing, an equal share of what the fixed columns leave.
 //
-// The body scrolls in a std-widgets ScrollView (wheel, drag). The widget style would draw its bar in its own palette, so that bar is
-// switched off and a 6px thumb in Theme.knob-ring (the sheet's scroll thumb) is laid over the right edge instead; it can be dragged.
-// It overlays the rows rather than taking a column of its own, so the heading and the body keep the same column edges.
+// ROW KINDS (TableRow.kind). `cells` is the ordinary row. A `cells` row with ONE cell in a table of several columns is a GROUP row
+// (the sheet's "TODAY"): its text spans every column in the 10px letter-spaced face, coloured by its tone. A `heading` row (a plugin
+// panel's heading, src/gui/app_window_plugin_settings.cpp CASCADE_ROW_HEADING) is the same face in Theme.dim whatever its tone, a
+// label that never lights and is never clicked. A `separator` row is 9px high: a 1px Theme.line-strong rule 4px down, blank above and
+// below, no hairline of its own, and as inert as a heading. `pressable` marks a data row the plugin registered a command for (the
+// whole row is a key, CASCADE_ROW_FLAG_KEY): the pointer over it is the hand (`pointer-cursor`), and a left click is `row-pressed`
+// as well as `clicked`. Every `cells` row, pressable or not, lights under the pointer.
+//
+// THE BODY IS VIRTUAL. It is a std-widgets ListView, so only the rows in view are instantiated: 2000 rows (or 20000) cost what the
+// visible ones cost. The widget style would draw its scroll bar in its own palette, so that bar is switched off and a 6px thumb in
+// Theme.knob-ring (the sheet's scroll thumb) is laid over the right edge instead; it can be dragged. It overlays the rows rather than
+// taking a column of its own, so the heading and the body keep the same column edges. A ListView lays out only what is in view and
+// ESTIMATES the length of the rest from the rows it has seen, so with the 9px separators among 24px rows the thumb is approximate;
+// and a jump of more than a screen (the thumb dragged fast) lands on a row boundary, which the thumb corrects one tick later.
+//
+// COLUMN WIDTHS. A 6px zone at the right edge of every heading cell (the ew-resize cursor, `resize-cursor`) drags that column: the
+// new width (never under 24px) is written into `column-widths[i]` - the property is in-out, so a two-way binding keeps the host's
+// model - and reported as `column-resized(i, width)` on every move. The model needs one entry per column (0 = share the rest) for the
+// write to land; with fewer, the callback still reports and the host must store the width. A column that was sharing the rest is
+// dragged from the width it HAS, and is fixed from then on.
 //
 // clicked(row) on a left click; right-clicked(row, x, y) when the right button is released, x / y measured in the table. The row
 // under the pointer, the `selected` row and a row in the key tone all draw as the key tone. A disabled table (`enabled: false`)
-// neither lights its rows nor reports. The table has no ground of its own: it draws on whatever panel it sits in.
-import { ScrollView } from "std-widgets.slint";
+// neither lights its rows, nor reports, nor resizes. The table has no ground of its own: it draws on whatever panel it sits in.
+import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { TipTimer } from "tooltip.slint";
 
 export enum RowTone { normal, warn, good, muted, key }
+export enum RowKind { cells, heading, separator }
 
-export struct TableRow { cells: [string], tone: RowTone, band: bool }
+export struct TableRow { cells: [string], tone: RowTone, band: bool, kind: RowKind, pressable: bool }
 
-// One row's cells. The heading and every body row use the same cell constraints, so the columns line up.
+// One row's cells. The heading and every body row use the same cell constraints, so the columns line up. In the heading row (`grips`)
+// the right 6px of each cell is a resize zone.
 component TableCells inherits HorizontalLayout {
     in property <[string]> columns;
     in property <[string]> texts;
@@ -35,8 +53,12 @@ component TableCells inherits HorizontalLayout {
     in property <[bool]> mono;
     in property <color> ink;
     in property <bool> heading;
+    in property <bool> grips;                       // the heading row: a resize zone at the right edge of each cell
+    in property <bool> live: true;                  // false: the zones do nothing (a disabled table)
+    out property <int> hot-grip: -1;                // the column whose zone the pointer is in, -1 none
+    callback resized(int, length);                  // column, the width the drag asks for
     spacing: 0px;
-    for name[c] in root.columns : Rectangle {
+    for name[c] in root.columns : cell := Rectangle {
         min-width: root.widths[c] > 0px ? root.widths[c] : 0px;
         preferred-width: root.widths[c] > 0px ? root.widths[c] : 0px;
         max-width: root.widths[c] > 0px ? root.widths[c] : 100000px;
@@ -56,26 +78,113 @@ component TableCells inherits HorizontalLayout {
             vertical-alignment: center;
             overflow: elide;
         }
+        if root.grips : grip := TouchArea {
+            // the pointer's x in the window, so the drag does not depend on the zone itself, which moves with the edge it drags
+            property <length> grab-x;
+            property <length> start-w;
+            x: parent.width - 6px;
+            y: 0px;
+            width: 6px;
+            height: parent.height;
+            enabled: root.live;
+            mouse-cursor: root.live ? MouseCursor.ew-resize : MouseCursor.default;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                    self.grab-x = self.absolute-position.x + self.mouse-x;
+                    self.start-w = cell.width;
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    root.resized(c, max(24px, self.start-w + (self.absolute-position.x + self.mouse-x) - self.grab-x));
+                }
+            }
+            changed has-hover => {
+                if (self.has-hover) { root.hot-grip = c; }
+                else if (root.hot-grip == c) { root.hot-grip = -1; }
+            }
+        }
+    }
+}
+
+// The scroll thumb: a 6px thumb in Theme.knob-ring (the sheet's scroll thumb) laid over the right edge of a scrolling area that is
+// `visible-height` high and holds `content-height` of rows, `content-y` (0 at the top, negative below it) being the area's own
+// scroll position. Drag it, or use the wheel. The drag does not write the area's position itself (a two-way binding into an element
+// that comes and goes leaves Slint a chain of dead links to walk): it reports the position it asks for, `scrolled(y)`, and the owner
+// sets it. A ListView puts a jump of more than a screen on a row boundary, so the position the drag asked for is reported again one
+// tick later, when it is a small move and exact.
+export component ScrollThumb inherits Rectangle {
+    in property <length> content-height;
+    in property <length> visible-height;
+    in property <length> content-y;
+    callback scrolled(length);
+    property <length> overflow: root.content-height - root.visible-height;
+    property <length> travel: root.visible-height - thumb.height;
+    property <length> asked-y;
+    property <bool> settling;
+
+    Timer {
+        interval: 1ms;
+        running: root.settling;
+        triggered => {
+            root.settling = false;
+            root.scrolled(root.asked-y);
+        }
+    }
+    thumb := Rectangle {
+        x: root.width - 9px;
+        y: (root.overflow > 0px ? max(0, min(1, -root.content-y / root.overflow)) : 0) * root.travel;
+        width: 6px;
+        height: max(20px, root.visible-height * root.visible-height / root.content-height);
+        border-radius: 3px;
+        background: (grab.pressed || grab.has-hover) ? Theme.dim : Theme.knob-ring;
+        grab := TouchArea {
+            property <length> grab-y;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) { self.grab-y = self.mouse-y; }
+            }
+            moved => {
+                if (self.pressed && root.travel > 0px) {
+                    root.asked-y = max(-root.overflow, min(0px, root.content-y - (self.mouse-y - self.grab-y) * (root.overflow / root.travel)));
+                    root.scrolled(root.asked-y);
+                    root.settling = true;
+                }
+            }
+        }
     }
 }
 
 export component Table inherits Rectangle {
     in property <[string]> columns;
     in property <[TableRow]> rows;
-    in property <[length]> column-widths;      // 0 (or missing) = share the rest
+    in-out property <[length]> column-widths;  // 0 (or missing) = share the rest; a column drag writes the new width here
     in property <[bool]> mono-columns;
     in-out property <int> selected: -1;        // -1 none; the selected row draws as the key tone
     in property <string> empty-text;           // drawn under the heading while there are no rows
     in property <bool> enabled: true;
     in property <string> tooltip;
+    in property <length> row-h: Theme.table-row-h;   // the pitch of an ordinary row
     callback clicked(int);
     callback right-clicked(int, length, length);   // row, pointer position in the table
+    callback row-pressed(int);                     // a left click on a `pressable` row (clicked fires too)
+    callback column-resized(int, length);          // a heading edge is being dragged: the column, its new width
+    // What the pointer shows (a test cannot read the cursor itself): the hand over a pressable row, ew-resize over a heading edge.
+    out property <bool> pointer-cursor: root.enabled && root.hot-pressable;
+    out property <bool> resize-cursor: root.enabled && head-cells.hot-grip >= 0;
 
     out property <length> head-h: 22px;
     property <int> hot-row: -1;
+    property <bool> hot-pressable;
+    property <length> scrolled: body.content-y;
 
     clip: true;
     accessible-role: table;
+
+    // a row under a stationary pointer was made or unmade by the scroll: what was hovered is not known until the pointer moves
+    changed scrolled => {
+        root.hot-row = -1;
+        root.hot-pressable = false;
+    }
 
     head := Rectangle {
         x: 0px;
@@ -83,7 +192,7 @@ export component Table inherits Rectangle {
         width: parent.width;
         height: root.head-h;
         background: Theme.strip;
-        TableCells {
+        head-cells := TableCells {
             x: 0px;
             y: 0px;
             width: parent.width;
@@ -94,6 +203,12 @@ export component Table inherits Rectangle {
             mono: root.mono-columns;
             ink: Theme.muted;
             heading: true;
+            grips: true;
+            live: root.enabled;
+            resized(c, w) => {
+                root.column-widths[c] = w;
+                root.column-resized(c, w);
+            }
         }
         Rectangle {
             x: 0px;
@@ -104,7 +219,7 @@ export component Table inherits Rectangle {
         }
     }
 
-    body := ScrollView {
+    body := ListView {
         x: 0px;
         y: root.head-h;
         width: parent.width;
@@ -113,22 +228,22 @@ export component Table inherits Rectangle {
         // bar below is drawn from Theme tokens.
         vertical-scrollbar-policy: ScrollBarPolicy.always-off;
         horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-        content-width: self.visible-width;
-        content-height: root.rows.length * Theme.table-row-h;
         for row[r] in root.rows : rowbox := Rectangle {
-            property <bool> group: row.cells.length == 1 && root.columns.length > 1;
-            property <bool> key: row.tone == RowTone.key || r == root.selected || (root.enabled && touch.has-hover);
-            property <color> ink: key ? Theme.accent-soft
+            property <bool> sep: row.kind == RowKind.separator;
+            property <bool> label: row.kind == RowKind.heading;
+            property <bool> group: row.kind == RowKind.cells && row.cells.length == 1 && root.columns.length > 1;
+            property <bool> live: row.kind == RowKind.cells;
+            property <bool> key: rowbox.live && (row.tone == RowTone.key || r == root.selected || (root.enabled && touch.has-hover));
+            property <color> ink: rowbox.label ? Theme.dim
+                : key ? Theme.accent-soft
                 : row.tone == RowTone.warn ? Theme.chip-warn-fg
                 : row.tone == RowTone.good ? Theme.chip-good-fg
                 : row.tone == RowTone.muted ? Theme.dim
                 : Theme.fg;
-            x: 0px;
-            y: r * Theme.table-row-h;
             width: body.visible-width;
-            height: Theme.table-row-h;
-            background: key ? Theme.table-selected : row.band ? Theme.card : transparent;
-            if rowbox.group : Text {
+            height: rowbox.sep ? 9px : root.row-h;
+            background: key ? Theme.table-selected : (!rowbox.sep && row.band) ? Theme.card : transparent;
+            if rowbox.group || rowbox.label : Text {
                 x: 8px;
                 y: 0px;
                 width: parent.width - 16px;
@@ -142,7 +257,7 @@ export component Table inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
             }
-            if !rowbox.group : TableCells {
+            if rowbox.live && !rowbox.group : TableCells {
                 x: 0px;
                 y: 0px;
                 width: parent.width;
@@ -154,51 +269,56 @@ export component Table inherits Rectangle {
                 ink: rowbox.ink;
                 heading: false;
             }
-            Rectangle {
+            if !rowbox.sep : Rectangle {
                 x: 0px;
                 y: parent.height - Theme.hairline;
                 width: parent.width;
                 height: Theme.hairline;
                 background: Theme.line;
             }
+            if rowbox.sep : Rectangle {
+                x: 0px;
+                y: 4px;
+                width: parent.width;
+                height: Theme.hairline;
+                background: Theme.line-strong;
+            }
             touch := TouchArea {
-                enabled: root.enabled;
-                clicked => { root.clicked(r); }
+                enabled: root.enabled && rowbox.live;
+                mouse-cursor: (row.pressable && root.enabled) ? MouseCursor.pointer : MouseCursor.default;
+                clicked => {
+                    root.clicked(r);
+                    if (row.pressable) { root.row-pressed(r); }
+                }
                 pointer-event(e) => {
                     if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
-                        root.right-clicked(r, body.x + body.content-x + self.mouse-x, body.y + body.content-y + rowbox.y + self.mouse-y);
+                        root.right-clicked(r, self.absolute-position.x - root.absolute-position.x + self.mouse-x,
+                            self.absolute-position.y - root.absolute-position.y + self.mouse-y);
                     }
                 }
                 changed has-hover => {
-                    if (self.has-hover) { root.hot-row = r; }
-                    else if (root.hot-row == r) { root.hot-row = -1; }
+                    if (self.has-hover) {
+                        root.hot-row = r;
+                        root.hot-pressable = row.pressable;
+                    } else if (root.hot-row == r) {
+                        root.hot-row = -1;
+                        root.hot-pressable = false;
+                    }
                 }
             }
         }
     }
 
-    // The scroll bar: a 6px thumb (the sheet's scroll thumb: Theme.knob-ring, radius 3) laid over the right edge of the body,
-    // present only while the rows are taller than the body. Drag it, or use the wheel.
-    if body.content-height > body.visible-height : thumb := Rectangle {
-        property <length> travel: body.visible-height - self.height;
-        property <length> overflow: body.content-height - body.visible-height;
-        x: parent.width - 9px;
-        y: root.head-h + (overflow > 0px ? -body.content-y / overflow : 0) * travel;
-        width: 6px;
-        height: max(20px, body.visible-height * body.visible-height / body.content-height);
-        border-radius: 3px;
-        background: (grab.pressed || grab.has-hover) ? Theme.dim : Theme.knob-ring;
-        grab := TouchArea {
-            property <length> grab-y;
-            pointer-event(e) => {
-                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) { self.grab-y = self.mouse-y; }
-            }
-            moved => {
-                if (self.pressed && thumb.travel > 0px) {
-                    body.content-y = max(-thumb.overflow, min(0px, body.content-y - (self.mouse-y - self.grab-y) * (thumb.overflow / thumb.travel)));
-                }
-            }
-        }
+    // The scroll bar, present only while the rows are taller than the body.
+    if body.content-height > body.visible-height + 0.5px : ScrollThumb {
+        x: 0px;
+        y: root.head-h;
+        width: parent.width;
+        height: parent.height - root.head-h;
+        content-height: body.content-height;
+        visible-height: body.visible-height;
+        content-y: body.content-y;
+        scrolled(y) => { body.content-y = y; }
     }
 
     if root.rows.length == 0 : Text {

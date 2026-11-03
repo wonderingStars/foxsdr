@@ -1,0 +1,169 @@
+// FoxSDR Slint front end - PRESETS: the plugin kit's preset bar and the module page's command keys (docs 6.37).
+//
+// Lifted from Workbench-PluginKit.dc.html: the torn-off window's preset bar (`.row.g6.fw`, padding 6 12, a 1 px rule under it,
+// `.btn.sm` keys, the lit one `.on`, "+ Save" `.ghost`), the sections-panel form's preset column (`.btn.sm.wide` keys, a `.row.g4` with
+// a 24 px `x` key for the operator's own, the green `.n.gn` note, the `.btn.sm.wide.plate` save key) and the module page's plate keys
+// (a grid of `.btn.sm.plate`). The wording and the states are the ImGui window's (aw drawPresetKeys, drawPluginPresets).
+//
+//   PresetKeyModel  one key: its label, `lit` (the receiver is on that preset), `mine` (the operator's own: a right-click forgets
+//                   it, and the column form draws a small x key beside it) and its own tooltip sentence.
+//   PresetBar       the bar. The ROW form (the default) puts the keys in rows of `columns`, hugging their labels, 6 px apart, with
+//                   the "+ Save" key last; Slint cannot measure a row of keys and wrap it, so the host says how many fit. The
+//                   COLUMN form (`column: true`) is the rail's: a wide key on every line, the x key beside a mine one, the green
+//                   `note` (the result of the last save, "" none), the save key last as a wide plate key. The bar sizes its own
+//                   height; give it a width. `tooltip` is the + Save key's sentence; every preset key carries its own.
+//   PlateKeys       the module's own command keys, `per-row` to a line in equal cells (the sheet's grid), at most 16.
+//
+// Callbacks: `pressed(int)` (the model index), `forgot(int)` (right-click on a mine key, or its x key), `save-clicked`.
+import { Theme } from "theme.slint";
+import { Key } from "keys.slint";
+
+export struct PresetKeyModel { label: string, lit: bool, mine: bool, tooltip: string }
+
+export component PresetBar inherits Rectangle {
+    in property <[PresetKeyModel]> presets;
+    in property <string> save-label: "+ Save";      // the column form says "+ Save 145.5000 MHz as a preset"
+    in property <bool> column;                      // the rail form
+    in property <string> note;                      // the green result note under the keys (column form only); "" draws none
+    in property <int> columns: 4;                   // keys to a row in the row form (the + Save key counts as one)
+    in property <bool> enabled: true;
+    in property <string> tooltip;                   // the + Save key's sentence
+    in property <string> forget-tooltip: "Forget this preset";
+    callback pressed(int);
+    callback forgot(int);
+    callback save-clicked();
+
+    property <int> per-row: Math.max(1, root.columns);
+    property <int> key-count: root.presets.length + 1;                     // the + Save key is the last one
+    property <int> row-count: Math.ceil(root.key-count / root.per-row);
+
+    height: body.preferred-height;
+    accessible-role: groupbox;
+    accessible-label: "Presets";
+
+    // ONE column of lines. The row form's lines are rows of keys; the column form's are single keys, a key with its x key, the note
+    // and the save key. Whichever form is not asked for iterates over nothing, so it takes no height.
+    body := VerticalLayout {
+        padding-left: root.column ? 0px : 12px;
+        padding-right: root.column ? 0px : 12px;
+        padding-top: root.column ? 0px : 6px;
+        padding-bottom: root.column ? 0px : 6px + Theme.hairline;           // the rule below is the bar's own last pixel row
+        spacing: 6px;
+
+        // ---- the row form: rows of `columns` keys, each hugging its label ----
+        for r in (root.column ? 0 : root.row-count) : HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            for k in Math.min(root.per-row, root.key-count - r * root.per-row) : Key {
+                property <int> idx: r * root.per-row + k;
+                property <bool> is-save: self.idx >= root.presets.length;
+                small: true;
+                label: self.is-save ? root.save-label : root.presets[self.idx].label;
+                on: !self.is-save && root.presets[self.idx].lit;
+                ghost: self.is-save;
+                enabled: root.enabled;
+                tooltip: self.is-save ? root.tooltip : root.presets[self.idx].tooltip;
+                clicked => {
+                    if (self.is-save) { root.save-clicked(); } else { root.pressed(self.idx); }
+                }
+                right-clicked(x, y) => {
+                    if (!self.is-save && root.presets[self.idx].mine) { root.forgot(self.idx); }
+                }
+            }
+        }
+
+        // ---- the column form: a wide key a line; a mine key shares its line with the 24 px x key ----
+        for i in (root.column ? root.presets.length : 0) : HorizontalLayout {
+            spacing: 4px;
+            Key {
+                small: true;
+                wide: true;
+                min-width: 0px;                                             // a long label is cut inside the column, never pushed past it
+                label: root.presets[i].label;
+                on: root.presets[i].lit;
+                enabled: root.enabled;
+                tooltip: root.presets[i].tooltip;
+                clicked => { root.pressed(i); }
+                right-clicked(x, y) => {
+                    if (root.presets[i].mine) { root.forgot(i); }
+                }
+            }
+            if root.presets[i].mine : Key {
+                small: true;
+                ghost: true;
+                icon-only: true;                                            // 24 x 24: the sheet's x key has no padding
+                icon: @image-url("icons/close.svg");
+                icon-size: 12px;
+                enabled: root.enabled;
+                tooltip: root.forget-tooltip;
+                accessible-label: root.forget-tooltip;
+                clicked => { root.forgot(i); }
+            }
+        }
+        if root.column && root.note != "" : Rectangle {
+            height: note-text.preferred-height;
+            note-text := Text {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                text: root.note;
+                color: Theme.chip-good-fg;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+        }
+        if root.column : Key {
+            small: true;
+            wide: true;
+            plate: true;
+            min-width: 0px;
+            label: root.save-label;
+            enabled: root.enabled;
+            tooltip: root.tooltip;
+            clicked => { root.save-clicked(); }
+        }
+    }
+
+    // the row form's rule: the bar's own last pixel row (border-bottom: 1px solid line)
+    if !root.column : Rectangle {
+        x: 0px;
+        y: root.height - Theme.hairline;
+        width: root.width;
+        height: Theme.hairline;
+        background: Theme.line;
+    }
+}
+
+// The module page's command keys: the plugin's own words, `per-row` to a line (4 on the sheet, 2 in the ImGui page) in cells of equal
+// width 6 px apart, plate keys 24 high. The grid keeps its cells: a last line with fewer keys leaves the rest empty. A label too long for
+// its cell is cut inside the key.
+export component PlateKeys inherits Rectangle {
+    in property <[string]> labels;
+    in property <[string]> tooltips;                // optional, one per label
+    in property <int> per-row: 2;
+    in property <bool> enabled: true;
+    in property <string> tooltip;                   // for every key that has no sentence of its own
+    callback pressed(int);
+
+    property <int> count: Math.min(root.labels.length, 16);
+    property <int> cols: Math.max(1, root.per-row);
+    property <int> rows: Math.ceil(root.count / root.cols);
+    property <length> cell-w: Math.max(0px, (root.width - (root.cols - 1) * 6px) / root.cols);
+
+    height: root.rows <= 0 ? 0px : root.rows * Theme.key-sm-h + (root.rows - 1) * 6px;
+    accessible-role: groupbox;
+    accessible-label: "Commands";
+
+    for i in root.count : Key {
+        x: Math.mod(i, root.cols) * (root.cell-w + 6px);
+        y: Math.floor(i / root.cols) * (Theme.key-sm-h + 6px);
+        width: root.cell-w;
+        small: true;
+        plate: true;
+        label: root.labels[i];
+        enabled: root.enabled;
+        tooltip: root.tooltips[i] != "" ? root.tooltips[i] : root.tooltip;
+        clicked => { root.pressed(i); }
+    }
+}

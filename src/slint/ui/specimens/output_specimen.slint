@@ -1,0 +1,309 @@
+// The Output family's specimen sheet (1280 x 640): the decoder log, the picture pane and the target details of the plugin kit.
+// Every variant sits at an absolute position; nothing overlaps. The log and the picture pane draw on the window panel, so each
+// has a Theme.panel ground behind it (the torn-off window's body); TargetDetails is framed and brings its own.
+//
+//   x     y    w    h   what
+//   10    10   520  150 the panel ground behind LogView A
+//   10    10   520  150 LogView A: the bar (31 high: Follow checkbox, Clear xs key, "128 lines" at the right, a Theme.line rule on y 40),
+//                       then the body on Theme.field from y 41: six mono lines of 17 px from y 47 -
+//                         0 normal   "aprs-decoder" INFO line          3 normal   "aprs-decoder" frame
+//                         1 warn     "aprs-decoder" WARN line          4 normal   "aprs-decoder" frame
+//                         2 err      "pocsag" ERROR line               5 muted    no plugin name
+//   10    170  520  70  the panel ground behind LogView B
+//   10    170  520  70  LogView B: no lines, "0 lines": the dim "Listening..." on the first body line
+//   10    250  520  150 the panel ground behind LogView C
+//   10    250  520  150 LogView C: the test fills it (500 lines, then more); its bar is on y 250..280, its body from y 281
+//   550   10   360  230 the panel ground behind PicturePane A
+//   550   10   360  230 PicturePane A: status row 28 high (status text, "Save as BMP" xs key, the save note), then the picture
+//                       200 x 100 fitted in the free area x 560..900, y 38..230 (scale 1.7: 340 x 170 at x 560, y 49); interactive
+//   550   250  360  120 the panel ground behind PicturePane B
+//   550   250  360  120 PicturePane B: the same picture, height-limited (scale 0.82: 164 x 82 at x 648, y 278); not interactive,
+//                       the save key disabled, a save note
+//   550   380  360  70  the panel ground behind PicturePane C
+//   550   380  360  70  PicturePane C: no picture yet - "Waiting for the first image..." in Theme.dim
+//   930   10   340  209  TargetDetails A: live, the lines of a decoded aircraft (a heading line, unknown lines dim, two rules),
+//                       Go to on map / Follow keys, green lamp and chip
+//   930   230  340  126  TargetDetails B: heading property, followed (Stop following), Go disabled (no position), Close, amber lamp
+//   930   366  340  80   TargetDetails C: gone - the id and "No longer being reported.", Close only, lamp off
+//   930   456  340  73   TargetDetails D: nothing chosen - the empty hint, chip NONE, lamp off, no keys
+//   10    420  340  124  the panel ground behind TargetDetails E
+//   10    420  340  114  TargetDetails E: the page form - unframed (no ground, no border of its own), `mono-lines`: the padded labels
+//                       ("reg     G-XWBA") line up in the mono face; one unknown line; Go to on map / Follow
+//   370   470  296  144  TargetDetails F: the drawer in the 296 px sections panel - narrower than `side-min-w`, so the lines take the
+//                       whole width and the three keys sit in a row under them (Go to on map, Follow, Close)
+//
+// State the test reads: clears-a / clears-b / clears-c (clear-clicked), follow-toggles / last-follow (follow-toggled), follow-a /
+// follow-b / follow-c (the Follow checkboxes, two-way), pressed-count / last-px / last-py (PicturePane A pressed), pressed-b
+// (PicturePane B pressed), saves-a / saves-b (save-clicked), hand-a / hand-b (the pointer is over a picture that takes clicks),
+// a-go / a-follow, b-go / b-follow / b-close, c-close, f-go / f-follow / f-close (TargetDetails keys).
+// State the test sets: logs-enabled, panes-enabled, details-enabled, lines-a / lines-b / lines-c, count-a / count-b / count-c,
+// c-h (LogView C's height), picture + pic-w + pic-h, have-a / have-c, interactive-a, a-lines (TargetDetails A's lines).
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { LampState } from "../chips.slint";
+import { LineTone, LogLine, LogView, PicturePane, DetailLine, TargetDetails } from "../output.slint";
+export { Theme, Skin, Workbench }
+export { LineTone, LogLine, DetailLine }
+
+export component OutputSpecimen inherits Window {
+    width: 1280px;
+    height: 640px;
+    background: Theme.bg;
+
+    // ---- the logs ----
+    in-out property <bool> logs-enabled: true;
+    in-out property <bool> follow-a: true;
+    in-out property <bool> follow-b: true;
+    in-out property <bool> follow-c: true;
+    in-out property <string> count-a: "128 lines";
+    in-out property <string> count-b: "0 lines";
+    in-out property <string> count-c: "500 lines";
+    in-out property <[LogLine]> lines-a: [
+        { plugin: "aprs-decoder", text: "INFO  listening on 145.800 MHz", tone: LineTone.normal },
+        { plugin: "aprs-decoder", text: "WARN  bad checksum, frame dropped", tone: LineTone.warn },
+        { plugin: "pocsag", text: "ERROR  lost sync, retrying", tone: LineTone.err },
+        { plugin: "aprs-decoder", text: "M0ABC>APRS,WIDE1-1:!5130.00N/00007.00W-", tone: LineTone.normal },
+        { plugin: "aprs-decoder", text: "2E0FOX>APRS:=5128.41N/00004.22W>mobile", tone: LineTone.normal },
+        { plugin: "", text: "Idle for 30 seconds", tone: LineTone.muted },
+    ];
+    in-out property <length> c-h: 150px;
+    in-out property <[LogLine]> lines-b: [];
+    in-out property <[LogLine]> lines-c: [];
+    in-out property <int> clears-a;
+    in-out property <int> clears-b;
+    in-out property <int> clears-c;
+    in-out property <int> follow-toggles;
+    in-out property <bool> last-follow;
+
+    // ---- the picture panes ----
+    in-out property <bool> panes-enabled: true;
+    in-out property <image> picture;
+    in-out property <int> pic-w: 200;
+    in-out property <int> pic-h: 100;
+    in-out property <bool> have-a: true;
+    in-out property <bool> have-c: false;
+    in-out property <bool> interactive-a: true;
+    in-out property <int> pressed-count;
+    in-out property <int> last-px: -1;
+    in-out property <int> last-py: -1;
+    in-out property <int> pressed-b;
+    in-out property <int> saves-a;
+    in-out property <int> saves-b;
+    out property <bool> hand-a: pane-a.hand;
+    out property <bool> hand-b: pane-b.hand;
+
+    // ---- the target details ----
+    in-out property <bool> details-enabled: true;
+    in-out property <[DetailLine]> a-lines: [
+        { text: "BAW123", known: true, heading: true, separator-after: true },
+        { text: "reg     G-XWBA", known: true, heading: false, separator-after: false },
+        { text: "type    737NG 8K5/W", known: true, heading: false, separator-after: false },
+        { text: "oper    British Airways", known: true, heading: false, separator-after: true },
+        { text: "id      A1B2C3", known: true, heading: false, separator-after: false },
+        { text: "from    adsb-decoder", known: true, heading: false, separator-after: false },
+        { text: "pos     51.48120, -0.45210", known: true, heading: false, separator-after: false },
+        { text: "alt     unknown", known: false, heading: false, separator-after: false },
+        { text: "speed   unknown", known: false, heading: false, separator-after: false },
+    ];
+    in-out property <int> a-go;
+    in-out property <int> a-follow;
+    in-out property <int> b-go;
+    in-out property <int> b-follow;
+    in-out property <int> b-close;
+    in-out property <int> c-close;
+    in-out property <int> f-go;
+    in-out property <int> f-follow;
+    in-out property <int> f-close;
+
+    Rectangle { x: 10px; y: 10px; width: 520px; height: 150px; background: Theme.panel; }
+    LogView {
+        x: 10px;
+        y: 10px;
+        width: 520px;
+        height: 150px;
+        lines: root.lines-a;
+        follow <=> root.follow-a;
+        count-text: root.count-a;
+        enabled: root.logs-enabled;
+        tooltip: "Decoded text, newest at the bottom";
+        clear-clicked => { root.clears-a += 1; }
+        follow-toggled(on) => { root.follow-toggles += 1; root.last-follow = on; }
+    }
+
+    Rectangle { x: 10px; y: 170px; width: 520px; height: 70px; background: Theme.panel; }
+    LogView {
+        x: 10px;
+        y: 170px;
+        width: 520px;
+        height: 70px;
+        lines: root.lines-b;
+        follow <=> root.follow-b;
+        count-text: root.count-b;
+        enabled: root.logs-enabled;
+        clear-clicked => { root.clears-b += 1; }
+        follow-toggled(on) => { root.follow-toggles += 1; root.last-follow = on; }
+    }
+
+    Rectangle { x: 10px; y: 250px; width: 520px; height: 150px; background: Theme.panel; }
+    LogView {
+        x: 10px;
+        y: 250px;
+        width: 520px;
+        height: root.c-h;
+        lines: root.lines-c;
+        follow <=> root.follow-c;
+        count-text: root.count-c;
+        enabled: root.logs-enabled;
+        clear-clicked => { root.clears-c += 1; }
+        follow-toggled(on) => { root.follow-toggles += 1; root.last-follow = on; }
+    }
+
+    Rectangle { x: 550px; y: 10px; width: 360px; height: 230px; background: Theme.panel; }
+    pane-a := PicturePane {
+        x: 550px;
+        y: 10px;
+        width: 360px;
+        height: 230px;
+        picture: root.picture;
+        have: root.have-a;
+        status: "200x100  receiving...  frame 12";
+        interactive: root.interactive-a;
+        pic-w: root.pic-w;
+        pic-h: root.pic-h;
+        save-enabled: true;
+        save-note: "Saved a1.bmp";
+        enabled: root.panes-enabled;
+        tooltip: "Click the picture to send the position to the plugin";
+        pressed(x, y) => { root.pressed-count += 1; root.last-px = x; root.last-py = y; }
+        save-clicked => { root.saves-a += 1; }
+    }
+
+    Rectangle { x: 550px; y: 250px; width: 360px; height: 120px; background: Theme.panel; }
+    pane-b := PicturePane {
+        x: 550px;
+        y: 250px;
+        width: 360px;
+        height: 120px;
+        picture: root.picture;
+        have: true;
+        status: "200x100  complete  frame 13";
+        interactive: false;
+        pic-w: root.pic-w;
+        pic-h: root.pic-h;
+        save-enabled: false;
+        save-note: "Saving...";
+        enabled: root.panes-enabled;
+        pressed(x, y) => { root.pressed-b += 1; }
+        save-clicked => { root.saves-b += 1; }
+    }
+
+    Rectangle { x: 550px; y: 380px; width: 360px; height: 70px; background: Theme.panel; }
+    PicturePane {
+        x: 550px;
+        y: 380px;
+        width: 360px;
+        height: 70px;
+        picture: root.picture;
+        have: root.have-c;
+        status: "200x100  receiving...  frame 1";
+        pic-w: root.pic-w;
+        pic-h: root.pic-h;
+        enabled: root.panes-enabled;
+    }
+
+    TargetDetails {
+        x: 930px;
+        y: 10px;
+        width: 340px;
+        chip: "A1B2C3";
+        lamp: LampState.green;
+        lines: root.a-lines;
+        can-go: true;
+        following: false;
+        enabled: root.details-enabled;
+        tooltip: "The chosen target, as it was last reported";
+        go-clicked => { root.a-go += 1; }
+        follow-clicked => { root.a-follow += 1; }
+    }
+
+    TargetDetails {
+        x: 930px;
+        y: 230px;
+        width: 340px;
+        heading: "BAW123";
+        chip: "A1B2C3D4E5";
+        lamp: LampState.amber;
+        lines: [
+            { text: "reg     G-XWBA", known: true, heading: false, separator-after: false },
+            { text: "type    737NG 8K5/W", known: true, heading: false, separator-after: false },
+            { text: "from    adsb-decoder", known: true, heading: false, separator-after: false },
+        ];
+        can-go: false;
+        following: true;
+        show-close: true;
+        enabled: root.details-enabled;
+        go-clicked => { root.b-go += 1; }
+        follow-clicked => { root.b-follow += 1; }
+        close-clicked => { root.b-close += 1; }
+    }
+
+    TargetDetails {
+        x: 930px;
+        y: 366px;
+        width: 340px;
+        heading: "A1B2C3";
+        chip: "A1B2C3";
+        lamp: LampState.off;
+        // the host may still be holding the last values: a gone target shows none of them
+        lines: [
+            { text: "reg     G-XWBA", known: true, heading: false, separator-after: false },
+            { text: "type    737NG 8K5/W", known: true, heading: false, separator-after: false },
+        ];
+        gone: true;
+        show-close: true;
+        close-clicked => { root.c-close += 1; }
+    }
+
+    TargetDetails {
+        x: 930px;
+        y: 456px;
+        width: 340px;
+        chip: "NONE";
+        lamp: LampState.off;
+        empty-hint: "No target chosen. Click a target in the map's list, press its Details button, or follow one - it will be shown here.";
+    }
+
+    Rectangle { x: 10px; y: 420px; width: 340px; height: 124px; background: Theme.panel; }
+    TargetDetails {
+        x: 10px;
+        y: 420px;
+        width: 340px;
+        heading: "BAW123";
+        chip: "A1B2C3";
+        lamp: LampState.green;
+        lines: [
+            { text: "reg     G-XWBA", known: true, heading: false, separator-after: false },
+            { text: "type    737NG 8K5/W", known: true, heading: false, separator-after: false },
+            { text: "pos     no position yet", known: false, heading: false, separator-after: false },
+        ];
+        framed: false;
+        mono-lines: true;
+    }
+
+    TargetDetails {
+        x: 370px;
+        y: 470px;
+        width: 296px;
+        heading: "BAW123";
+        chip: "A1B2C3";
+        lamp: LampState.green;
+        lines: [
+            { text: "reg     G-XWBA", known: true, heading: false, separator-after: false },
+            { text: "type    737NG 8K5/W", known: true, heading: false, separator-after: false },
+            { text: "oper    Federal Express Corporation", known: true, heading: false, separator-after: false },
+        ];
+        show-close: true;
+        go-clicked => { root.f-go += 1; }
+        follow-clicked => { root.f-follow += 1; }
+        close-clicked => { root.f-close += 1; }
+    }
+}

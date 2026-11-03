@@ -1,0 +1,260 @@
+// The fitted specimen sheet (1200 x 1660): the Fitted modules page (FittedModules) in three states and one module's page (ModulePage) in
+// two, each at an absolute, documented position, so tests/test_slint_fitted.cpp can probe the pixels against the PluginKit sheet ("State
+// chips and row examples": the dense rows, the state chips, the 44 px row with its note; "Module page (tab) excerpt") and the contract in
+// COMPONENTS.md ("The plugin kit"). Nothing overlaps; nothing is in a top-level layout. The pages draw on Theme.panel-alt (the sheet's
+// `.panel.dn` ground), so each has it behind it.
+//
+//   x,    y,    w,    h - what                                                            (the root property the test reads)
+//    10,   24, 1180,  380 - FM1 FittedModules, wide enough for ONE-row top bar: search, the six chips, the two keys; the verdict line
+//                           and a green report; twelve rows in three groups (DECODERS, MAPS AND TOOLS, AUDIO) that scroll under the
+//                           bar; the foot "CLEAN UP OLD VERSIONS (3)" with its three old copies         (fm1-*, row / chip / key events)
+//    10,  430,  700,  300 - FM2 FittedModules, 700 wide: the chips drop to a second line of the bar (68 px bar); an error line; four
+//                           rows, one of them with its REMOVE armed (CONFIRM) and one whose note is too long for its row, none grouped   (fm2-*)
+//   730,  430,  460,  230 - FM3 FittedModules with nothing fitted: the verdict, the empty text, no rows, no foot
+//    10,  760,  580,  600 - MP1 ModulePage of a module being fed: every block, taller than its 600 px so it scrolls
+//   610,  760,  580,  600 - MP2 ModulePage of a module the host refused: the reason under its cap, RE-ENABLE, the notes
+//    10, 1390,  580,  240 - MP3 ModulePage with nothing but three reach rows (an inward, an outward, an inward one) under their cap
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { Caption } from "../keys.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { StateChipModel } from "../forms.slint";
+import { FittedRowModel, FittedModules, ReachRowModel, ModulePage } from "../fitted.slint";
+export { Theme, Skin, Workbench, ChipTone, LampState, StateChipModel, FittedRowModel, ReachRowModel }
+
+export component FittedSpecimen inherits Window {
+    width: 1200px;
+    height: 1660px;
+    background: Theme.bg;
+
+    // ---- what the test observes ----
+    in-out property <int> row-clicks;
+    in-out property <int> last-row: -1;
+    in-out property <int> row-doubles;
+    in-out property <int> last-double: -1;
+    in-out property <int> runs;
+    in-out property <int> last-run: -1;
+    in-out property <int> removes;
+    in-out property <int> last-remove: -1;
+    in-out property <int> chip-toggles;
+    in-out property <int> last-chip: -1;
+    in-out property <int> search-edits;
+    in-out property <string> last-search;
+    in-out property <int> scans;
+    in-out property <int> resets;
+    in-out property <int> cleanups;
+    in-out property <string> last-source;
+    in-out property <int> page-events;
+    in-out property <string> last-page-event;
+    in-out property <bool> last-page-value;
+    in-out property <int> last-command: -1;
+    in-out property <string> search-fm1 <=> fm1.search;
+    out property <length> fm1-bar-height: fm1.bar-height;
+    out property <length> fm1-lines-height: fm1.lines-height;
+    out property <bool> fm1-two-rows: fm1.two-row-bar;
+    out property <length> fm1-scrolled: fm1.scrolled;
+    out property <length> fm1-content: fm1.content-height;
+    out property <length> fm2-bar-height: fm2.bar-height;
+    out property <length> fm2-lines-height: fm2.lines-height;
+    out property <bool> fm2-two-rows: fm2.two-row-bar;
+    out property <length> fm2-content: fm2.content-height;
+    out property <length> fm3-bar-height: fm3.bar-height;
+    out property <length> fm3-lines-height: fm3.lines-height;
+    out property <length> fm3-content: fm3.content-height;
+    out property <length> mp1-scrolled: mp1.scrolled;
+    out property <length> mp1-content: mp1.content-height;
+    out property <length> mp2-scrolled: mp2.scrolled;
+    out property <length> mp2-content: mp2.content-height;
+    out property <length> mp3-scrolled: mp3.scrolled;
+    out property <length> mp3-content: mp3.content-height;
+
+    // ---- what the test sets ----
+    in-out property <bool> fm1-enabled: true;
+    in-out property <string> fm1-error;
+    in-out property <string> fm1-cleanup-report;
+    in-out property <bool> mp1-enabled: true;
+    in-out property <[FittedRowModel]> rows-fm1: [
+        { file: "adsb-decoder-1.4.1.dll", name: "ADS-B Aircraft Decoder", version: "1.4.1", group: "Decoders", state: "FED", tone: ChipTone.good, dot: LampState.green, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: false, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "noaa-apt-2.0.3.dll", name: "NOAA Weather Pictures", version: "2.0.3", group: "Decoders", state: "IDLE", tone: ChipTone.neutral, dot: LampState.off, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: true, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "pocsag-1.1.0.dll", name: "POCSAG pager", version: "1.1.0", group: "Decoders", state: "STOPPED", tone: ChipTone.neutral, dot: LampState.off, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: true, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "ft8-0.9.2.dll", name: "FT8 decoder", version: "0.9.2", group: "Decoders", state: "REFUSED", tone: ChipTone.err, dot: LampState.red, note: "needs FoxSDR 0.99 or newer", note-tone: ChipTone.err, can-stop: false, offers-start: false, can-remove: true, remove-label: "REMOVE FILE", armed: false },
+        { file: "target-maps-1.0.0.dll", name: "Target maps", version: "1.0.0", group: "Maps and tools", state: "TAKES NO SIGNAL", tone: ChipTone.neutral, dot: LampState.off, note: "Reaches outward: the host (tune, settings), a base map and the track details", note-tone: ChipTone.warn, can-stop: true, offers-start: false, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "frame-log-1.2.0.dll", name: "Frame log", version: "1.2.0", group: "Maps and tools", state: "NOT DECODING", tone: ChipTone.warn, dot: LampState.amber, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: false, can-remove: true, remove-label: "REMOVE", armed: true },
+        { file: "sat-track-0.7.0.dll", name: "Satellite tracker", version: "0.7.0", group: "Maps and tools", state: "TAKES NO SIGNAL", tone: ChipTone.neutral, dot: LampState.off, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: false, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "an-extremely-long-module-name-for-the-elision-test-3.14.15.dll", name: "An extremely long module name that has to be cut short before it reaches the keys, so long that even the widest page has to elide it with an ellipsis and give up its version number", version: "3.14.15", group: "Maps and tools", state: "FED", tone: ChipTone.good, dot: LampState.green, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: false, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "rds-1.0.4.dll", name: "FM RDS station names", version: "1.0.4", group: "Audio", state: "FED", tone: ChipTone.good, dot: LampState.green, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: false, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "noise-blanker-2.2.0.dll", name: "Noise blanker", version: "2.2.0", group: "Audio", state: "FED", tone: ChipTone.good, dot: LampState.green, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: false, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "audio-eq-1.0.0.dll", name: "Audio equaliser", version: "1.0.0", group: "Audio", state: "IDLE", tone: ChipTone.neutral, dot: LampState.off, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: true, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "vocoder-0.3.1.dll", name: "Vocoder", version: "0.3.1", group: "Audio", state: "STOPPED", tone: ChipTone.neutral, dot: LampState.off, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: true, can-remove: true, remove-label: "REMOVE", armed: false },
+    ];
+    in-out property <[StateChipModel]> chips-fm: [
+        { label: "FED", count: 4, tone: ChipTone.good, lamp: LampState.green, on: true },
+        { label: "IDLE", count: 2, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+        { label: "NOT DECODING", count: 1, tone: ChipTone.warn, lamp: LampState.amber, on: true },
+        { label: "TAKES NO SIGNAL", count: 2, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+        { label: "STOPPED", count: 2, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+        { label: "REFUSED", count: 1, tone: ChipTone.err, lamp: LampState.red, on: true },
+    ];
+    in-out property <[FittedRowModel]> rows-fm2: [
+        { file: "adsb-decoder-1.4.1.dll", name: "ADS-B Aircraft Decoder", version: "1.4.1", group: "", state: "FED", tone: ChipTone.good, dot: LampState.green, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: false, can-remove: true, remove-label: "REMOVE", armed: false },
+        { file: "pocsag-1.1.0.dll", name: "POCSAG pager", version: "1.1.0", group: "", state: "STOPPED", tone: ChipTone.neutral, dot: LampState.off, note: "", note-tone: ChipTone.neutral, can-stop: true, offers-start: true, can-remove: true, remove-label: "REMOVE", armed: true },
+        { file: "old-thing.dll", name: "", version: "", group: "", state: "REFUSED", tone: ChipTone.err, dot: LampState.red, note: "built for plugin ABI 5; this build is ABI 4.", note-tone: ChipTone.err, can-stop: false, offers-start: false, can-remove: true, remove-label: "REMOVE FILE", armed: false },
+        { file: "future-1.0.0.dll", name: "Future decoder", version: "1.0.0", group: "", state: "REFUSED", tone: ChipTone.err, dot: LampState.red, note: "needs FoxSDR 0.99 or newer: the plugin ABI it was built for (5) is newer than the one this build speaks (4), and the host cannot guess what changed between them", note-tone: ChipTone.err, can-stop: false, offers-start: false, can-remove: true, remove-label: "REMOVE FILE", armed: false },
+    ];
+    in-out property <string> mp1-sentence: "Fitted and being fed. The receiver is running and this module has a decoder matched to the rate it is producing.";
+    in-out property <bool> mp1-tune-on: false;
+    in-out property <bool> mp1-keep: true;
+    in-out property <bool> mp1-offers-start: false;
+    in-out property <string> mp2-fault: "The plugin guard switched this module off after it faulted twice this session.";
+
+    function page-event(src: string, what: string, v: bool) {
+        root.page-events += 1;
+        root.last-source = src;
+        root.last-page-event = what;
+        root.last-page-value = v;
+    }
+
+    Caption { x: 10px; y: 6px; label: "fitted modules: one-row bar (wide), two-row bar (narrow), empty"; color: Theme.dim; }
+    Caption { x: 10px; y: 742px; label: "module page: a module being fed, a module the host refused"; color: Theme.dim; }
+    Caption { x: 10px; y: 1372px; label: "module page: the reach rows alone"; color: Theme.dim; }
+
+    // ---- FM1 ----
+    Rectangle { x: 10px; y: 24px; width: 1180px; height: 380px; background: Theme.panel-alt; }
+    fm1 := FittedModules {
+        x: 10px; y: 24px; width: 1180px; height: 380px;
+        enabled: root.fm1-enabled;
+        rows: root.rows-fm1;
+        chips: root.chips-fm;
+        verdict: "The receiver is stopped, so NOTHING is being fed to any module however it is set. That is why no module below reads FED.";
+        directory: "read from C:\\Users\\steve\\AppData\\Local\\FoxSDR\\plugins";
+        report: "Removed adsb-decoder-1.3.9.dll.";
+        error: root.fm1-error;
+        cleanup-report: root.fm1-cleanup-report;
+        cleanup-label: "CLEAN UP OLD VERSIONS (3)";
+        cleanup-note: "adsb-decoder 1.3.9 - adsb-decoder-1.3.9.dll (1.4.1 stays)\nnoaa-apt 1.9.0 - noaa-apt-1.9.0.dll (2.0.3 stays)\nframe-log 1.1.0 - frame-log-1.1.0.dll (1.2.0 stays)";
+        row-clicked(i) => { root.row-clicks += 1; root.last-row = i; root.last-source = "FM1"; }
+        row-double-clicked(i) => { root.row-doubles += 1; root.last-double = i; root.last-source = "FM1"; }
+        run-clicked(i) => { root.runs += 1; root.last-run = i; root.last-source = "FM1"; }
+        remove-clicked(i) => { root.removes += 1; root.last-remove = i; root.last-source = "FM1"; }
+        chip-toggled(i) => { root.chip-toggles += 1; root.last-chip = i; root.last-source = "FM1"; }
+        search-changed(t) => { root.search-edits += 1; root.last-search = t; root.last-source = "FM1"; }
+        scan-clicked => { root.scans += 1; root.last-source = "FM1"; }
+        reset-windows-clicked => { root.resets += 1; root.last-source = "FM1"; }
+        cleanup-clicked => { root.cleanups += 1; root.last-source = "FM1"; }
+    }
+
+    // ---- FM2 ----
+    Rectangle { x: 10px; y: 430px; width: 700px; height: 300px; background: Theme.panel-alt; }
+    fm2 := FittedModules {
+        x: 10px; y: 430px; width: 700px; height: 300px;
+        rows: root.rows-fm2;
+        chips: root.chips-fm;
+        verdict: "The receiver is running, so a module with a matched decoder is being fed.";
+        directory: "read from C:\\Users\\steve\\AppData\\Local\\FoxSDR\\plugins";
+        error: "Not removed: the file is in use by another program.";
+        row-clicked(i) => { root.row-clicks += 1; root.last-row = i; root.last-source = "FM2"; }
+        row-double-clicked(i) => { root.row-doubles += 1; root.last-double = i; root.last-source = "FM2"; }
+        run-clicked(i) => { root.runs += 1; root.last-run = i; root.last-source = "FM2"; }
+        remove-clicked(i) => { root.removes += 1; root.last-remove = i; root.last-source = "FM2"; }
+        chip-toggled(i) => { root.chip-toggles += 1; root.last-chip = i; root.last-source = "FM2"; }
+        scan-clicked => { root.scans += 1; root.last-source = "FM2"; }
+        reset-windows-clicked => { root.resets += 1; root.last-source = "FM2"; }
+    }
+
+    // ---- FM3 ----
+    Rectangle { x: 730px; y: 430px; width: 460px; height: 230px; background: Theme.panel-alt; }
+    fm3 := FittedModules {
+        x: 730px; y: 430px; width: 460px; height: 230px;
+        rows: [];
+        chips: [
+            { label: "FED", count: 0, tone: ChipTone.good, lamp: LampState.green, on: true },
+            { label: "IDLE", count: 0, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+            { label: "NOT DECODING", count: 0, tone: ChipTone.warn, lamp: LampState.amber, on: true },
+            { label: "TAKES NO SIGNAL", count: 0, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+            { label: "STOPPED", count: 0, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+            { label: "REFUSED", count: 0, tone: ChipTone.err, lamp: LampState.red, on: true },
+        ];
+        verdict: "The receiver is running, so a module with a matched decoder is being fed.";
+        directory: "No directory has been scanned yet.";
+        empty-text: "No module the host can load was found in the folder above, so nothing is fitted. A module the version policy has retired is renamed aside and stops being scanned - it is still a file in that folder, and the rail's Plugins section lists it under Disabled.";
+    }
+
+    // ---- MP1 ----
+    Rectangle { x: 10px; y: 760px; width: 580px; height: 600px; background: Theme.panel-alt; }
+    mp1 := ModulePage {
+        x: 10px; y: 760px; width: 580px; height: 600px;
+        name: "APRS / AX.25 Packet Decoder";
+        maker-line: "FOX & SCHIRMYVER \u{b7} version 1.0.2";
+        state-word: "FED";
+        state-lamp: LampState.green;
+        run-shown: true;
+        offers-start: root.mp1-offers-start;
+        enabled: root.mp1-enabled;
+        tune-shown: true;
+        tune-on: root.mp1-tune-on;
+        settings-shown: true;
+        settings-on: true;
+        transmit-shown: true;
+        transmit-on: false;
+        settings-note: "Radio settings lets this module change the mode, bandwidth, squelch, gains, sample rate, volume and mute, and start or stop the receiver. It is separate from receiver control, which only lets it tune.";
+        transmit-note: "Transmit lets this module hand FoxSDR audio to send. It is not enough alone: you must also ARM FOR PLUGINS on the TRANSMIT page, for 5, 15 or 60 minutes, and the arming is never remembered.";
+        tx-state: "Allowed to transmit, but you have not armed plugins on the TRANSMIT page, so it cannot.";
+        commands: ["RESET", "CLEAR LOG", "SEND BEACON", "SAVE", "EXPORT", "IMPORT"];
+        reach-lead: "Declared by the maker, not enforced. A fitted module is loaded into this application's own process and runs with every privilege the application has: there is no sandbox and no permission model. This list is what the module says it PROVIDES, not a limit on what it can take.";
+        reach: [
+            { key: "Audio decoder", detail: "Reads the audio of the receiver and decodes packets from it.", outward: false },
+            { key: "Radio control", detail: "Asks the host to tune the receiver, change its mode, squelch and gains, and start or stop it.", outward: true },
+            { key: "Track source", detail: "Publishes the positions it decodes to the host's maps.", outward: false },
+        ];
+        reach-note: "The tune grant above, the radio-settings grant and the transmit grant are the only permissions this console does enforce: without them every request to retune, to change the receiver's settings, or to transmit, is refused. Nothing else in the list is a gate.";
+        sentence: root.mp1-sentence;
+        keep-shown: true;
+        keep-running: root.mp1-keep;
+        origin: "From the plugin store: Fox & Schirmyver, installed 2026-10-12 from foxsdr.example/plugins.";
+        notice: "newest WARN: bad checksum, frame dropped";
+        file-path: "C:\\Users\\steve\\AppData\\Local\\FoxSDR\\plugins\\aprs-decoder-1.0.2.dll";
+        abi-text: "5, matches this build";
+        fitted-text: "Fitted on 12 October 2026 at 14:32.";
+        catalogue-note: "The catalogue entry for this module - its description, pictures and reviews - arrives with the plugin store.";
+        back-clicked => { root.page-event("MP1", "back", false); }
+        run-clicked => { root.page-event("MP1", "run", false); }
+        tune-toggled(v) => { root.mp1-tune-on = v; root.page-event("MP1", "tune", v); }
+        settings-toggled(v) => { root.page-event("MP1", "settings", v); }
+        transmit-toggled(v) => { root.page-event("MP1", "transmit", v); }
+        command-pressed(i) => { root.last-command = i; root.page-event("MP1", "command", false); }
+        reenable-clicked => { root.page-event("MP1", "reenable", false); }
+        keep-toggled(v) => { root.mp1-keep = v; root.page-event("MP1", "keep", v); }
+    }
+
+    // ---- MP2 ----
+    Rectangle { x: 610px; y: 760px; width: 580px; height: 600px; background: Theme.panel-alt; }
+    mp2 := ModulePage {
+        x: 610px; y: 760px; width: 580px; height: 600px;
+        name: "ft8-0.9.2.dll";
+        maker-line: "maker not stated \u{b7} version ?";
+        state-word: "REFUSED";
+        state-lamp: LampState.red;
+        reach-lead: "Not known here, and nothing is routed to it. This file is fitted and the host did not accept it, so no capability list reached this panel and none of the module is loaded. That is not the same as a module which declares nothing.";
+        sentence: "built for plugin ABI 5; this build is ABI 4.";
+        refused: true;
+        fault: root.mp2-fault;
+        orphan: "This file was not installed from the plugin store - it has no install record and the catalogue does not list it - and it is not running, so FoxSDR has left it where it is. REMOVE FILE deletes this one file and nothing else.";
+        integrity: "The file on disk is not the file that was fitted: its size and checksum changed.";
+        notice: "The host logged: plugin ABI mismatch (expected 4, plugin reports 5).";
+        notice-err: true;
+        file-path: "C:\\Users\\steve\\AppData\\Local\\FoxSDR\\plugins\\ft8-0.9.2.dll";
+        abi-text: "5, this build needs 4";
+        back-clicked => { root.page-event("MP2", "back", false); }
+        reenable-clicked => { root.page-event("MP2", "reenable", false); }
+    }
+    // ---- MP3 ----
+    Rectangle { x: 10px; y: 1390px; width: 580px; height: 240px; background: Theme.panel-alt; }
+    mp3 := ModulePage {
+        x: 10px; y: 1390px; width: 580px; height: 240px;
+        name: "Reach rows";
+        reach: [
+            { key: "Audio decoder", detail: "Reads the audio of the receiver.", outward: false },
+            { key: "Radio control", detail: "Asks the host to tune the receiver.", outward: true },
+            { key: "Track source", detail: "Publishes the positions it decodes.", outward: false },
+        ];
+    }
+}

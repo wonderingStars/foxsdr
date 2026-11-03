@@ -1,0 +1,1749 @@
+// FoxSDR Slint front end - THE INSTRUMENT FACES (the plugin kit, phase 2 step 3): the nine faces of CASCADE_CAP_INSTRUMENT and the
+// primitives they share. The design is the Workbench-Instruments artboard (tiles C1..C9); the contract with the plugin is
+// src/core/plugin_abi.h (CASCADE_INSTRUMENT_*: which slot of values[8] / text[8] each kind reads, the flags); the RULES come from the
+// app's own faces (src/gui/instrument_face.hpp and the instrument_*_math.hpp headers), ported here as Slint expressions:
+//   1. no pretend controls: a lamp lights for a reason, a counter counts something real, the only control is the VOR's OBS knob;
+//   2. "no reading" is blank, never zero: with `state.have` false every face shows the sheet's own empty words (NO READING YET, NO PAGE
+//      RECEIVED, PRINTER IDLE, NO PAGE, the NO SIGNAL flag, NO SENSOR HEARD YET), dashes or unlit ghost cells, and no numeral;
+//   3. nothing invented: a slot the plugin left empty is not drawn (the generic face draws only the filled ones), and a figure the
+//      ABI has no slot for (the VOR's signal strength, the fax's "bursts logged") is not on the face.
+//
+// A FACE IS THE TILE'S BODY ONLY: the header (title and chip), the preset row and the memory table are the page's. A face fills the
+// width it is given (472 on the sheet; it also lays out at 320 and at 900: below 420 px the faces that have two columns stack them)
+// and reports its natural height through `preferred-height` (about 120-220 px). Each face carries the artboard's own padding
+// (12 px at the sides, 8 px above and below).
+//
+//   InstrumentFace        kind (CASCADE_INSTRUMENT_* 0..8, anything else is the generic face), title, state, obs-course (in-out: the
+//                         VOR's one control), enabled, tooltip; callback obs-changed(int). Extras the ABI's memory rows feed:
+//                         paper-newest / paper-previous (the teleprinter's last two printed lines), log-count (the beacon's burst
+//                         log; -1 = unknown, not drawn), heard (the meter's "last heard" text).
+//   Glass                 the phosphor window: field ground, a line border, mono text
+//   DrumCells             a row of cells, each holding one character (a counter, a capcode, a beacon's identity), lit or unlit (ghost)
+//   PaleLcd               the pale LCD (fg-soft ground, bg ink): a nameplate and a register of pale cells with a unit, or one reading
+//   CentreZeroMeter       a bar with the zero in the middle, red zones at both stops, a needle (the fax's tuning, the beacon's carrier)
+//   ReadBar               the slider's look, read-only: a track, a fill and a knob at a value
+//   Compass               the VOR's card: the cardinal letters, the index, the needle at the radial, the course line
+//   BarberFlag            the red-and-dark striped NAV flag with its words
+//   ObsKnob               the omni bearing selector: wheel (1 degree a notch) and press-drag turn it; it never writes the host's number
+//   PaperStrip            the teleprinter's paper, which feeds out over 0.5 s when `seq` changes
+//
+// DEVIATIONS FROM THE ARTBOARD, each for a reason a person can check: Inter has no Bold here, so the generic title is semi-bold; the pale
+// LCD and paper take fg-soft for their ground and bg for their ink (the sheet's #d9dde3 and #15171b are not theme colours), and their dimmed
+// ink is bg at 70 %; the slot captions of the generic face are the plain slot names (T0, V0): the sheet's "Station", "State" are sample
+// words the ABI cannot know; the VOR's SIGNAL row and the fax's "bursts logged" are not drawn for want of a slot.
+import { Theme } from "theme.slint";
+import { LampState, Chip, ChipTone } from "chips.slint";
+import { Lamp } from "lamps.slint";
+import { Caption } from "keys.slint";
+import { TipTimer } from "tooltip.slint";
+
+// The ABI's CascadeInstrumentState flattened (values 8, texts 8, both always full length). `unread` is the NEW lamp, `now-ms` the host's
+// clock for blinking (ALERT blinks at 2 Hz: floor(now-ms / 250) mod 2 == 0), `chart` the plugin's own picture for the FAX face.
+export struct InstrumentState { have: bool, alert: bool, lock: bool, low-batt: bool, unread: bool, seq: int, values: [float], texts: [string], now-ms: int, chart: image, chart-complete: bool }
+
+struct LampSpec { caption: string, state: LampState }
+struct ReadRow { label: string, value: string, ink: color }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The arithmetic of the faces: pure functions, no state.
+global Fmt {
+    // a figure a plugin can have filled: not a NaN, not an infinity
+    pure public function finite(v: float) -> bool { return v > -1000000000000000000 && v < 1000000000000000000; }
+    // ALERT's blink: lit for the first 250 ms of every 500
+    pure public function blink(now-ms: int) -> bool { return Math.mod(Math.floor(now-ms / 250), 2) == 0; }
+    // bit n (0 = the lowest) of a mask a plugin carries in a double; a non-number or an absurd one has no bits
+    pure public function bit(mask: float, n: int) -> bool {
+        return mask >= 0 && mask < 1000000000 && Math.mod(Math.floor(mask / Math.pow(2, n)), 2) == 1;
+    }
+    pure public function pad2(v: int) -> string { return (v < 10 ? "0" : "") + v; }
+    pure public function pad3(v: int) -> string { return (v < 100 ? "0" : "") + (v < 10 ? "0" : "") + v; }
+    pure public function pad4(v: int) -> string { return (v < 1000 ? "0" : "") + (v < 100 ? "0" : "") + (v < 10 ? "0" : "") + v; }
+    // a register's figures zero-padded to n (7 or 8) cells
+    pure public function pad-n(v: float, n: int) -> string {
+        let r = Math.round(v);
+        return (n >= 8 && r < 10000000 ? "0" : "") + (n >= 7 && r < 1000000 ? "0" : "") + (r < 100000 ? "0" : "") + (r < 10000 ? "0" : "")
+             + (r < 1000 ? "0" : "") + (r < 100 ? "0" : "") + (r < 10 ? "0" : "") + r;
+    }
+    // a figure to six significant digits with no trailing zeros (%.6g without the exponent)
+    pure public function g6(v: float) -> string {
+        if (v == 0) { return "0"; }
+        let scale = Math.pow(10, 5 - Math.floor(Math.log(Math.abs(v), 10)));
+        return "" + Math.round(v * scale) / scale;
+    }
+    // seconds as hh:mm:ss, capped at 99:59:59
+    pure public function clock(sec: float) -> string {
+        let s = Math.floor(Math.min(Math.max(sec, 0), 359999));
+        return Fmt.pad2(Math.floor(s / 3600)) + ":" + Fmt.pad2(Math.floor(Math.mod(s, 3600) / 60)) + ":" + Fmt.pad2(Math.mod(s, 60));
+    }
+    // a signed offset in hertz: "+40 Hz", "-23 Hz", "0 Hz"
+    pure public function hz-signed(v: float) -> string {
+        if (v > 9999) { return ">+9999 Hz"; }
+        if (v < -9999) { return "<-9999 Hz"; }
+        let r = Math.round(v);
+        return r == 0 ? "0 Hz" : (r > 0 ? "+" : "-") + Math.abs(r) + " Hz";
+    }
+    // degrees into [0, 360) and into (-180, +180]
+    pure public function m360(d: float) -> float { return Math.mod(d, 360); }
+    pure public function w180(d: float) -> float { return Math.mod(d, 360) > 180 ? Math.mod(d, 360) - 360 : Math.mod(d, 360); }
+    // the course solution (instrument_nav_bearing_math.hpp solveCourse): TO when the selected course leads to the station (the radial is more
+    // than 90 degrees from it); the bar's deflection as a fraction of full scale (10 degrees, two a dot), + to the right, held on the stops
+    pure public function is-to(radial: float, course: float) -> bool { return Math.abs(Fmt.w180(radial - course)) > 90; }
+    pure public function bar(radial: float, course: float) -> float {
+        let d = Fmt.w180(radial - course);
+        let defl = Math.abs(d) <= 90 ? -d : Fmt.w180(radial - course - 180);
+        return Math.max(-1.0, Math.min(1.0, defl / 10));
+    }
+    // how many text slots are filled, and how many value slots (an untouched slot arrives as a zero)
+    pure public function n-texts(s: InstrumentState) -> int {
+        return (s.texts[0] != "" ? 1 : 0) + (s.texts[1] != "" ? 1 : 0) + (s.texts[2] != "" ? 1 : 0) + (s.texts[3] != "" ? 1 : 0)
+             + (s.texts[4] != "" ? 1 : 0) + (s.texts[5] != "" ? 1 : 0) + (s.texts[6] != "" ? 1 : 0) + (s.texts[7] != "" ? 1 : 0);
+    }
+    pure public function n-values(s: InstrumentState) -> int {
+        return (s.values[0] != 0 ? 1 : 0) + (s.values[1] != 0 ? 1 : 0) + (s.values[2] != 0 ? 1 : 0) + (s.values[3] != 0 ? 1 : 0)
+             + (s.values[4] != 0 ? 1 : 0) + (s.values[5] != 0 ? 1 : 0) + (s.values[6] != 0 ? 1 : 0) + (s.values[7] != 0 ? 1 : 0);
+    }
+    // the filled slots before slot i: the place of slot i among the filled ones
+    pure public function rank-text(s: InstrumentState, i: int) -> int {
+        return (i > 0 && s.texts[0] != "" ? 1 : 0) + (i > 1 && s.texts[1] != "" ? 1 : 0) + (i > 2 && s.texts[2] != "" ? 1 : 0)
+             + (i > 3 && s.texts[3] != "" ? 1 : 0) + (i > 4 && s.texts[4] != "" ? 1 : 0) + (i > 5 && s.texts[5] != "" ? 1 : 0)
+             + (i > 6 && s.texts[6] != "" ? 1 : 0);
+    }
+    pure public function rank-value(s: InstrumentState, i: int) -> int {
+        return (i > 0 && s.values[0] != 0 ? 1 : 0) + (i > 1 && s.values[1] != 0 ? 1 : 0) + (i > 2 && s.values[2] != 0 ? 1 : 0)
+             + (i > 3 && s.values[3] != 0 ? 1 : 0) + (i > 4 && s.values[4] != 0 ? 1 : 0) + (i > 5 && s.values[5] != 0 ? 1 : 0)
+             + (i > 6 && s.values[6] != 0 ? 1 : 0);
+    }
+}
+
+// The faces' natural heights (the artboard's body without its table), at the width they are given. The face components lay themselves
+// out from the same numbers; the test measures the frame the specimen draws from these.
+global Heights {
+    pure public function generic(have: bool, n: int, w: length) -> length {
+        let head = w < 420px ? 36px : 17px;
+        let rows = Math.ceil(n / 3);
+        return have ? 10px + head + 8px + rows * 41px + Math.max(rows - 1, 0) * 8px + 8px + 16px + 10px : 10px + head + 8px + 24px + 10px;
+    }
+    pure public function pager(w: length) -> length { return w < 420px ? 318px : 174px; }
+    pure public function teleprinter(w: length) -> length { return w < 420px ? 256px : 138px; }
+    pure public function tone-alert(w: length) -> length { return 206px; }
+    pure public function nav-bearing(w: length) -> length { return w < 420px ? 223px : 173px; }
+    pure public function fax(w: length) -> length { return w < 420px ? 385px : 203px; }
+    pure public function beacon(w: length) -> length { return 222px; }
+    pure public function meter(w: length) -> length { return w < 420px ? 193px : 117px; }
+    pure public function weather(w: length) -> length { return 181px; }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Glass: the phosphor window of every live word and figure (.glass: field ground, a line border, radius, 12 px mono, padding 3 / 8).
+export component Glass inherits Rectangle {
+    in property <string> text;
+    in property <color> ink: Theme.digit;
+    in property <bool> right;                       // figures sit on the right
+    // as wide as its words: the caller may bind `width: self.hug-w`
+    out property <length> hug-w: label.preferred-width + 2 * (8px + Theme.hairline);
+    height: 24px;
+    background: Theme.field;
+    border-width: Theme.hairline;
+    border-color: Theme.line;
+    border-radius: Theme.radius;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    label := Text {
+        x: 8px + Theme.hairline;
+        y: 0px;
+        width: max(0px, root.width - 2 * (8px + Theme.hairline));
+        height: root.height;
+        text: root.text;
+        color: root.ink;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// DrumCells: `cells` cells (20 x 28, a 2 px gap) each holding one character, the text laid RIGHT-aligned so its last character stands in
+// the last cell (a longer text keeps its low end, as a drum would). Lit: figures in the phosphor on the field. Unlit (`ghost`, the "no
+// reading" look): the dark ground, the ring ink, and `ghost-text` ("8" for a segment readout, "-" for a counter, "" for nothing): never a
+// figure. `pale` is the meter's LCD (fg-soft cells, bg ink). One Text, letter-spaced to the cell pitch (a mono glyph is 0.6 em wide).
+export component DrumCells inherits Rectangle {
+    in property <string> text;
+    in property <int> cells: 4;
+    in property <bool> ghost;
+    in property <string> ghost-text;
+    in property <bool> pale;
+    in property <length> cell-w: 20px;
+    in property <length> cell-h: 28px;
+    in property <length> gap: 2px;
+    in property <length> font-size: 16px;
+    property <length> pitch: root.cell-w + root.gap;
+    property <length> advance: root.font-size * 0.6;
+    property <string> shown: root.ghost ? root.ghost-text : root.text;
+    property <color> ink: root.pale ? (root.ghost ? Theme.bg.with-alpha(0.14) : Theme.bg) : (root.ghost ? Theme.knob-ring : Theme.digit);
+    width: root.cells * root.pitch - root.gap;
+    height: root.cell-h;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.ghost ? "" : root.text;
+    for i in root.cells : Rectangle {
+        x: i * root.pitch;
+        y: 0px;
+        width: root.cell-w;
+        height: root.cell-h;
+        background: root.pale ? Theme.fg-soft : (root.ghost ? Theme.bg : Theme.field);
+        border-width: Theme.hairline;
+        border-color: root.pale ? Theme.muted : Theme.line;
+        border-radius: 4px;
+    }
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        clip: true;
+        Text {
+            x: (root.cells - root.shown.character-count) * root.pitch + (root.cell-w - root.advance) / 2;
+            y: 0px;
+            height: root.cell-h;
+            text: root.shown;
+            color: root.ink;
+            font-family: Theme.font-mono;
+            font-size: root.font-size;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: root.pitch - root.advance;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// PaleLcd: the pale liquid crystal (fg-soft ground, bg ink, a muted border). With `cells` > 0 it is a register: a nameplate, `cells` pale cells
+// and a unit after them (63 high); with none it is one reading in a box (34 high), shrunk to the width it has. `dim` is the dimmed ink (a
+// channel nobody heard); `ghost` unlit cells.
+export component PaleLcd inherits Rectangle {
+    in property <string> text;
+    in property <bool> dim;
+    in property <int> cells;
+    in property <bool> ghost;
+    in property <string> nameplate;
+    in property <string> unit;
+    in property <bool> unit-dim;
+    in property <string> ghost-text: "8888888";
+    property <color> ink: root.dim ? Theme.bg.with-alpha(0.7) : Theme.bg;
+    property <length> reading-px: min(18px, max(9px, (root.width - 2 * (8px + Theme.hairline)) / max(1, root.text.character-count) / 0.6));
+    height: root.cells > 0 ? 63px : 34px;
+    background: Theme.fg-soft;
+    border-width: Theme.hairline;
+    border-color: Theme.muted;
+    border-radius: Theme.radius;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    if root.cells == 0 : Text {
+        x: 8px + Theme.hairline;
+        y: 0px;
+        width: max(0px, root.width - 2 * (8px + Theme.hairline));
+        height: root.height;
+        text: root.text;
+        color: root.ink;
+        font-family: Theme.font-mono;
+        font-size: root.reading-px;
+        font-weight: Theme.weight-semibold;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.cells > 0 : Text {
+        x: 10px + Theme.hairline;
+        y: 8px + Theme.hairline;
+        width: max(0px, root.width - 22px);
+        height: 13px;
+        text: root.nameplate;
+        color: Theme.bg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        letter-spacing: 1px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.cells > 0 : DrumCells {
+        x: 10px + Theme.hairline;
+        y: 8px + Theme.hairline + 13px + 4px;
+        cells: root.cells;
+        pale: true;
+        text: root.text;
+        ghost: root.ghost;
+        ghost-text: root.ghost-text;
+    }
+    if root.cells > 0 : Text {
+        x: 10px + Theme.hairline + root.cells * 22px - 2px + 6px;
+        y: 8px + Theme.hairline + 13px + 4px;
+        height: 28px;
+        text: root.unit;
+        color: root.unit-dim ? Theme.bg.with-alpha(0.35) : Theme.bg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+    }
+}
+
+// CentreZeroMeter: the zero in the middle, red zones at both stops (both ends are equally wrong), a centre index, and the needle at `value`
+// (clamped to the stops) in `full-scale` units. No needle without a reading. `height` 34 is the fax's tall meter (a needle short of the
+// ends, a short index); 16 is the beacon's.
+export component CentreZeroMeter inherits Rectangle {
+    in property <float> value;
+    in property <float> full-scale: 250;
+    in property <bool> has-reading;
+    property <length> bar-h: 10px;
+    property <length> bar-y: (root.height - root.bar-h) / 2;
+    property <length> needle-inset: root.height > 20px ? 2px : 0px;
+    property <length> tick-inset: root.height > 20px ? 6px : 0px;
+    property <length> zone-w: Math.round(root.width / 1px * 0.066) * 1px;
+    property <length> half: Math.floor(root.width / 2px) * 1px;
+    property <float> frac: Math.max(-1.0, Math.min(1.0, root.value / root.full-scale));
+    accessible-role: progress-indicator;
+    Rectangle {
+        x: 0px;
+        y: root.bar-y;
+        width: root.width;
+        height: root.bar-h;
+        background: Theme.field;
+        border-radius: 3px;
+    }
+    Rectangle { x: Theme.hairline; y: root.bar-y + Theme.hairline; width: root.zone-w; height: root.bar-h - 2 * Theme.hairline; background: Theme.danger-line; }
+    Rectangle { x: root.width - Theme.hairline - root.zone-w; y: root.bar-y + Theme.hairline; width: root.zone-w; height: root.bar-h - 2 * Theme.hairline; background: Theme.danger-line; }
+    Rectangle {
+        x: 0px;
+        y: root.bar-y;
+        width: root.width;
+        height: root.bar-h;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        border-radius: 3px;
+    }
+    Rectangle { x: root.half; y: root.tick-inset; width: Theme.hairline; height: root.height - 2 * root.tick-inset; background: Theme.dim; }
+    if root.has-reading : Rectangle {
+        x: root.half + root.frac * (root.half - 1px) - 1px;
+        y: root.needle-inset;
+        width: 2px;
+        height: root.height - 2 * root.needle-inset;
+        background: Theme.accent;
+    }
+}
+
+// ReadBar: the slider's look (a 6 px track, the fill, a 16 px knob), read-only; `value` in the bar's own unit between `min` and `max`. With no
+// reading it is the bare track: no fill, no index.
+export component ReadBar inherits Rectangle {
+    in property <float> value;
+    in property <float> min: 0;
+    in property <float> max: 1;
+    in property <bool> has-reading: true;
+    property <float> frac: Math.max(0.0, Math.min(1.0, (root.value - root.min) / (root.max - root.min)));
+    height: Theme.slider-track-h;
+    border-radius: self.height / 2;
+    background: Theme.slider-track;
+    accessible-role: progress-indicator;
+    accessible-value-minimum: root.min;
+    accessible-value-maximum: root.max;
+    if root.has-reading : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width * root.frac;
+        height: root.height;
+        border-radius: root.border-radius;
+        background: Theme.slider-fill;
+    }
+    if root.has-reading : Rectangle {
+        x: root.width * root.frac - Theme.slider-knob-d / 2;
+        y: (root.height - Theme.slider-knob-d) / 2;
+        width: Theme.slider-knob-d;
+        height: Theme.slider-knob-d;
+        border-radius: self.width / 2;
+        background: Theme.slider-knob;
+        border-width: 2px;
+        border-color: Theme.slider-knob-ring;
+    }
+}
+
+// Compass: the VOR's card in a 150 x 150 box: a field disc with a line-strong ring, the four graduations, the card's letters every thirty
+// degrees (N, 3, 6, E, 12, 15, S, 21, 24, W, 30, 33), the deviation dots, the amber index at the top, the amber needle through the middle
+// at `bearing` (the radial; only with a reading), and the course the OBS selected as a dashed line in the focus colour.
+export component Compass inherits Rectangle {
+    in property <float> bearing;
+    in property <bool> has-needle;
+    in property <float> course;
+    property <angle> b: root.bearing * 1deg;
+    property <angle> c: root.course * 1deg;
+    width: 150px;
+    height: 150px;
+    Rectangle {
+        x: 7px;
+        y: 7px;
+        width: 136px;
+        height: 136px;
+        border-radius: 68px;
+        background: Theme.field;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+    }
+    Path {
+        x: 0px; y: 0px; width: 150px; height: 150px;
+        viewbox-width: 150;
+        viewbox-height: 150;
+        commands: "M 75 7 L 75 16 M 75 134 L 75 143 M 7 75 L 16 75 M 134 75 L 143 75";
+        stroke: Theme.dim;
+        stroke-width: 1.5px;
+        fill: transparent;
+    }
+    for lbl[i] in ["N", "3", "6", "E", "12", "15", "S", "21", "24", "W", "30", "33"] : Text {
+        x: 75px + 50px * Math.sin(i * 30deg) - 12px;
+        y: 75px - 50px * Math.cos(i * 30deg) - 7px;
+        width: 24px;
+        height: 14px;
+        text: lbl;
+        color: Theme.fg-soft;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-cap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    for k in 4 : Rectangle {
+        x: (k == 0 ? 43px : k == 1 ? 58px : k == 2 ? 88px : 103px);
+        y: 73px;
+        width: 4px;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.dim;
+    }
+    // the course the OBS selected: ten dashes of 3 px on a 6 px pitch, from 13 px behind the middle to 47 px ahead
+    for k in 10 : dash := Path {
+        property <length> r0: -13px + k * 6px;
+        property <length> r1: dash.r0 + 3px;
+        x: 0px; y: 0px; width: 150px; height: 150px;
+        viewbox-width: 150;
+        viewbox-height: 150;
+        stroke: Theme.focus;
+        stroke-width: 1px;
+        fill: transparent;
+        MoveTo { x: (75px + dash.r0 * Math.sin(root.c)) / 1px; y: (75px - dash.r0 * Math.cos(root.c)) / 1px; }
+        LineTo { x: (75px + dash.r1 * Math.sin(root.c)) / 1px; y: (75px - dash.r1 * Math.cos(root.c)) / 1px; }
+    }
+    // the index at the top
+    Path {
+        x: 0px; y: 0px; width: 150px; height: 150px;
+        viewbox-width: 150;
+        viewbox-height: 150;
+        commands: "M 75 4 L 71 12 L 79 12 Z";
+        fill: Theme.accent;
+    }
+    // the bearing needle: through the middle, toward the radial and its reciprocal
+    Path {
+        visible: root.has-needle;
+        x: 0px; y: 0px; width: 150px; height: 150px;
+        viewbox-width: 150;
+        viewbox-height: 150;
+        stroke: Theme.accent;
+        stroke-width: 2px;
+        stroke-line-cap: round;
+        fill: transparent;
+        MoveTo { x: (75px - 45px * Math.sin(root.b)) / 1px; y: (75px + 45px * Math.cos(root.b)) / 1px; }
+        LineTo { x: (75px + 45px * Math.sin(root.b)) / 1px; y: (75px - 45px * Math.cos(root.b)) / 1px; }
+    }
+}
+
+// BarberFlag: the NAV flag that swings across when there is no signal: danger-bg and card-err bands at 135 degrees in a danger-line frame, the
+// words in danger-fg over them. 16 px high. Tiled like the hazard key's ground (a 17 px square holds four 6 px bands).
+export component BarberFlag inherits Rectangle {
+    in property <string> text;
+    property <length> tile: 17px;
+    property <int> cols: Math.ceil(root.width / root.tile);
+    height: 16px;
+    border-radius: 3px;
+    border-width: Theme.hairline;
+    border-color: Theme.danger-line;
+    background: Theme.danger-bg;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    Rectangle {
+        x: Theme.hairline;
+        y: Theme.hairline;
+        width: root.width - 2 * Theme.hairline;
+        height: root.height - 2 * Theme.hairline;
+        clip: true;
+        for k in root.cols : Rectangle {
+            x: k * root.tile;
+            y: -1px;
+            width: root.tile;
+            height: root.tile;
+            background: @linear-gradient(135deg,
+                Theme.danger-bg 0%, Theme.danger-bg 25%, Theme.card-err 25%, Theme.card-err 50%,
+                Theme.danger-bg 50%, Theme.danger-bg 75%, Theme.card-err 75%, Theme.card-err 100%);
+        }
+    }
+    Text {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        text: root.text;
+        color: Theme.danger-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        font-weight: Theme.weight-semibold;
+        letter-spacing: 1px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// ObsKnob: the omni bearing selector, the VOR's only control. 40 px, a focus-coloured ring, the course on it. It turns by the wheel (one degree a
+// notch; touchpad deltas accumulate), by a press-drag (the angle from the middle to the pointer is tracked, so it never jumps to where the hand
+// took it) and by Left / Right when focused (10 degrees with Shift). `course` is the host's number and the knob NEVER assigns it (an assignment
+// from in here would replace the host's binding): it keeps the user's position in `local` and shows it until `course` next changes, and tells the
+// host through changed(int), once per whole degree moved.
+export component ObsKnob inherits Rectangle {
+    in property <int> course;
+    in property <bool> enabled: true;
+    in property <string> tooltip: @tr("Scroll or drag to turn the course");
+    callback changed(int);
+    property <int> local;
+    property <bool> moved;
+    property <float> acc;
+    property <float> last-angle;
+    property <float> wheel-acc;
+    out property <int> shown: root.moved ? root.local : Math.mod(Math.round(Math.mod(root.course, 360)), 360);   // any number the host holds is a course in [0, 360)
+    width: 40px;
+    height: 40px;
+    border-radius: 20px;
+    border-width: 2px;
+    border-color: root.enabled ? Theme.focus : Theme.focus.with-alpha(0.5);
+    background: area.has-hover && root.enabled ? Theme.menu-hot : Theme.key-bg;
+    accessible-role: slider;
+    accessible-label: @tr("OBS course");
+    accessible-value: Fmt.pad3(root.shown);
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 359;
+    accessible-value-step: 1;
+    accessible-action-increment => { if (root.enabled) { root.set-to(root.shown + 1); } }
+    accessible-action-decrement => { if (root.enabled) { root.set-to(root.shown - 1); } }
+    changed course => { root.moved = false; }
+    function set-to(v: float) {
+        let m = Math.round(Math.mod(v, 360));
+        let c = m >= 360 ? 0 : m;
+        if (c != root.shown) {
+            root.local = c;
+            root.moved = true;
+            root.changed(c);
+        }
+    }
+    // the bearing of a point from the knob's middle, 0 = up, clockwise, in degrees
+    function angle-of(px: length, py: length) -> float {
+        return Math.atan2((px - 20px) / 1px, -(py - 20px) / 1px) / 1deg;
+    }
+    Text {
+        x: 0px;
+        y: 0px;
+        width: root.width - 4px;
+        height: root.height - 4px;
+        text: Fmt.pad3(root.shown);
+        color: root.enabled ? Theme.key-fg : Theme.key-disabled-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        font-weight: Theme.weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    // the keyboard focus ring: 2 px of fg-soft, 3 px clear of the knob's own ring, only while the knob holds the focus
+    if fs.has-focus : Rectangle {
+        x: -5px;
+        y: -5px;
+        width: root.width + 10px;
+        height: root.height + 10px;
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: Theme.fg-soft;
+    }
+    fs := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (e.text == Key.RightArrow) { root.set-to(root.shown + (e.modifiers.shift ? 10 : 1)); return accept; }
+            if (e.text == Key.LeftArrow) { root.set-to(root.shown - (e.modifiers.shift ? 10 : 1)); return accept; }
+            return reject;
+        }
+        area := TouchArea {
+            width: parent.width;
+            height: parent.height;
+            enabled: root.enabled;
+            mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+            pointer-event(e) => {
+                if (root.enabled && e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                    root.last-angle = root.angle-of(self.mouse-x, self.mouse-y);
+                    root.acc = root.shown;
+                }
+            }
+            moved => {
+                if (root.enabled && self.pressed) {
+                    let a = root.angle-of(self.mouse-x, self.mouse-y);
+                    root.acc += Fmt.w180(a - root.last-angle);
+                    root.last-angle = a;
+                    root.set-to(root.acc);
+                }
+            }
+            scroll-event(e) => {
+                if (!root.enabled || e.delta-y == 0px) { return reject; }
+                root.wheel-acc += e.delta-y / 60px;
+                let n = root.wheel-acc >= 0 ? Math.floor(root.wheel-acc) : Math.ceil(root.wheel-acc);
+                if (n != 0) {
+                    root.wheel-acc -= n;
+                    root.set-to(root.shown + n);
+                }
+                return accept;
+            }
+        }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// PaperStrip: the teleprinter's paper, fg-soft with bg ink: a blank leader, then the previous message in a fainter ink, a dotted rule, and the
+// newest (its heading, then its text) in full ink. When `seq` changes the sheet starts 26 px short of its place and feeds out over 0.5 s
+// (instrument_teleprinter_math.hpp kFeedSeconds / kFeedDistancePx): the offset is animated, and set without animation first. The engraved
+// `legend` (PRINTER IDLE, NO MESSAGE PRINTED) stands in a dimmed ink at the foot of the paper while nothing is printed.
+export component PaperStrip inherits Rectangle {
+    in property <string> heading;
+    in property <string> newest;
+    in property <string> previous;
+    in property <string> legend;
+    in property <int> seq;
+    property <length> feed: 0px;
+    property <bool> feeding: true;
+    property <length> line-h: 15px;
+    property <length> text-w: max(0px, root.width - 20px);
+    property <bool> printed: root.heading != "" || root.newest != "" || root.previous != "";
+    property <length> prev-h: root.previous == "" ? 0px : min(prev.preferred-height, 3 * root.line-h);
+    property <length> head-h: root.heading == "" ? 0px : min(head.preferred-height, 2 * root.line-h);
+    property <length> body-h: root.newest == "" ? 0px : min(body.preferred-height, 4 * root.line-h);
+    animate feed { duration: root.feeding ? 500ms : 0ms; easing: ease-in-out; }
+    changed seq => {
+        root.feeding = false;
+        root.feed = 26px;
+        root.feeding = true;
+        root.feed = 0px;
+    }
+    border-radius: 3px;
+    background: Theme.fg-soft;
+    clip: true;
+    accessible-role: text;
+    accessible-label: root.heading + " " + root.newest;
+    // the leader (one blank line), then the sheet
+    prev := Text {
+        x: 10px;
+        y: 22px + root.feed;
+        width: root.text-w;
+        height: root.prev-h;
+        text: root.previous;
+        color: Theme.bg.with-alpha(0.55);
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        wrap: word-wrap;
+        overflow: clip;
+    }
+    Rectangle {
+        visible: root.previous != "";
+        x: 10px;
+        y: 22px + root.feed + root.prev-h + 3px;
+        width: root.text-w;
+        height: Theme.hairline;
+        background: Theme.bg.with-alpha(0.25);
+    }
+    head := Text {
+        x: 10px;
+        y: 22px + root.feed + root.prev-h + (root.previous == "" ? 0px : 8px);
+        width: root.text-w;
+        height: root.head-h;
+        text: root.heading;
+        color: Theme.bg;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        font-weight: Theme.weight-semibold;
+        wrap: word-wrap;
+        overflow: clip;
+    }
+    body := Text {
+        x: 10px;
+        y: 22px + root.feed + root.prev-h + (root.previous == "" ? 0px : 8px) + root.head-h;
+        width: root.text-w;
+        height: root.body-h;
+        text: root.newest;
+        color: Theme.bg;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        font-weight: Theme.weight-semibold;
+        wrap: word-wrap;
+        overflow: clip;
+    }
+    Text {
+        visible: !root.printed;
+        x: 10px;
+        y: root.height - 24px;
+        width: root.text-w;
+        height: 14px;
+        text: root.legend;
+        color: Theme.bg.with-alpha(0.7);
+        font-family: Theme.font-mono;
+        font-size: Theme.font-cap;
+        vertical-alignment: center;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The radial lamp of the tone-alert face: 64 px, a rose-to-rust glass lit off-centre (a radial gradient: the sheet's "circle at 40% 35%") with
+// a soft bloom round it while it rings; dark with a ring while it does not.
+component BigLamp inherits Rectangle {
+    in property <bool> lit;
+    width: 64px;
+    height: 64px;
+    if root.lit : Rectangle {
+        x: -18px;
+        y: -18px;
+        width: 100px;
+        height: 100px;
+        background: @radial-gradient(circle,
+            Theme.lamp-red.with-alpha(0.53) 0%, Theme.lamp-red.with-alpha(0.53) 40%, Theme.lamp-red.with-alpha(0.27) 45.3%,
+            Theme.lamp-red.with-alpha(0.1) 56.6%, Theme.lamp-red.with-alpha(0.03) 65%, Theme.lamp-red.with-alpha(0) 70.7%);
+    }
+    // dark: a disc with a ring
+    if !root.lit : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 64px;
+        height: 64px;
+        border-radius: 32px;
+        background: Theme.lamp-off;
+        border-width: 2px;
+        border-color: Theme.lamp-ring;
+    }
+    // lit: fourteen nested discs from the rust rim to the rose highlight, each a little smaller and a little further up and to the left
+    // (the software renderer does not clip a gradient to a rounded shape, so the gradient is built from solid circles)
+    for k in 14 : Rectangle {
+        visible: root.lit;
+        property <float> t: k / 13;
+        property <length> r: 32px - k * 1.6px;
+        x: 32px - self.t * 6.4px - self.r;
+        y: 32px - self.t * 9.6px - self.r;
+        width: 2 * self.r;
+        height: 2 * self.r;
+        border-radius: self.r;
+        background: self.t < 0.55 ? Theme.danger-line.mix(Theme.lamp-red, self.t / 0.55) : Theme.lamp-red.mix(Theme.lamp-red-cap, (self.t - 0.55) / 0.45);
+    }
+}
+
+// The fax's paper slot: a well (field, a line border) with a strip of paper coming out of its top as long as the lines received (one full slot
+// at 1200 lines, instrument_fax_math.hpp kNominalChartLines), carrying the plugin's own picture when there is one, else blank paper. No lines,
+// no paper.
+component PaperSlot inherits Rectangle {
+    in property <float> lines;
+    in property <bool> have;
+    in property <image> chart;
+    property <float> frac: root.have ? Math.min(1.0, Math.max(0.0, root.lines / 1200)) : 0.0;
+    property <length> len: root.have && root.lines > 0 ? Math.round((5 + root.frac * (root.height - 4px - 5px) / 1px)) * 1px : 0px;
+    height: 70px;
+    background: Theme.field;
+    border-width: Theme.hairline;
+    border-color: Theme.line;
+    border-radius: 3px;
+    accessible-role: image;
+    if root.len > 0px : Rectangle {
+        x: 14px;
+        y: 2px;
+        width: root.width - 28px;
+        height: root.len;
+        background: Theme.fg-soft;
+        clip: true;
+        if root.chart.width > 0 : Image {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            source: root.chart;
+            image-fit: fill;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// C1 GENERIC: every FILLED slot on glass (texts T0-T7 first, then the figures V0-V7, three to a row), the four lamps, EVENT n.
+component GenericFace inherits Rectangle {
+    in property <InstrumentState> state;
+    in property <string> title;
+    property <bool> stacked: root.width < 420px;
+    property <bool> have: root.state.have;
+    property <bool> alert-on: root.have && root.state.alert && Fmt.blink(root.state.now-ms);
+    property <int> n-text: Fmt.n-texts(root.state);
+    property <int> n: root.n-text + Fmt.n-values(root.state);
+    property <int> rows: Math.ceil(root.n / 3);
+    property <length> head-h: root.stacked ? 36px : 17px;
+    property <length> grid-y: 10px + root.head-h + 8px;
+    property <length> grid-h: root.rows * 41px + Math.max(root.rows - 1, 0) * 8px;
+    property <length> cw: Math.floor((root.width / 1px - 40) / 3) * 1px;
+    property <[LampSpec]> lamp-specs: [
+        { caption: @tr("ALERT"), state: root.alert-on ? LampState.red : LampState.off },
+        { caption: @tr("NEW"), state: root.have && root.state.unread ? LampState.amber : LampState.off },
+        { caption: @tr("LOCK"), state: root.have && root.state.lock ? LampState.green : LampState.off },
+        { caption: @tr("BATT"), state: root.have && root.state.low-batt ? LampState.amber : LampState.off },
+    ];
+    Text {
+        x: 12px;
+        y: 10px;
+        width: root.stacked ? root.width - 24px : max(0px, root.width - 24px - lamps.preferred-width - 12px);
+        height: 17px;
+        text: root.title;
+        color: Theme.fg;
+        font-family: Theme.font-ui;
+        font-size: 13px;
+        font-weight: Theme.weight-semibold;
+        letter-spacing: 1.04px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    lamps := HorizontalLayout {
+        x: root.stacked ? 12px : root.width - 12px - self.preferred-width;
+        y: root.stacked ? 33px : 12px;
+        width: self.preferred-width;
+        height: 13px;
+        spacing: 12px;
+        alignment: start;
+        for l in root.lamp-specs : Lamp { caption: l.caption; state: l.state; }
+    }
+    for k in 16 : cell := Rectangle {
+        property <bool> is-text: k < 8;
+        property <int> slot: k < 8 ? k : k - 8;
+        property <bool> filled: root.have && (k < 8 ? root.state.texts[k] != "" : root.state.values[k - 8] != 0);
+        property <int> rank: k < 8 ? Fmt.rank-text(root.state, k) : root.n-text + Fmt.rank-value(root.state, k - 8);
+        visible: cell.filled;
+        x: 12px + Math.mod(cell.rank, 3) * (root.cw + 8px);
+        y: root.grid-y + Math.floor(cell.rank / 3) * 49px;
+        width: Math.mod(cell.rank, 3) == 2 ? root.width - 12px - cell.x : root.cw;
+        height: 41px;
+        Caption {
+            x: 0px;
+            y: 0px;
+            width: cell.width;
+            height: 13px;
+            label: (cell.is-text ? "T" : "V") + cell.slot;
+            overflow: elide;
+        }
+        Glass {
+            x: 0px;
+            y: 17px;
+            width: cell.width;
+            text: cell.is-text ? root.state.texts[cell.slot] : Fmt.g6(root.state.values[cell.slot]);
+            right: !cell.is-text;
+        }
+    }
+    if root.have : Text {
+        x: 12px;
+        y: root.grid-y + root.grid-h + 8px;
+        width: root.width - 24px;
+        height: 16px;
+        text: @tr("EVENT {}", root.state.seq);
+        color: Theme.accent-soft;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+    }
+    if !root.have : Glass {
+        x: 12px;
+        y: root.grid-y;
+        width: root.width - 24px;
+        text: @tr("NO READING YET");
+        ink: Theme.muted;
+    }
+}
+
+// C2 PAGER: the 4 x 20 LCD (the message wrapped at twenty columns, the "more" arrow when it runs past the fourth row), the time, the envelope and
+// the unread chip, the maker's plate; the lamps (ALERT NEW SYNC BATT), the capcode in drum cells (right-aligned, the low digits kept), the
+// unread count, TYPE and RECEIVED on glass, EVENT n. Slots: text0 message, text1 capcode, text2 time, text3 kind, values0 unread.
+component PagerFace inherits Rectangle {
+    in property <InstrumentState> state;
+    property <bool> stacked: root.width < 420px;
+    property <bool> have: root.state.have;
+    property <bool> alert-on: root.have && root.state.alert && Fmt.blink(root.state.now-ms);
+    property <length> lw: root.stacked ? root.width - 24px : 250px;
+    property <length> rx: root.stacked ? 12px : 274px;
+    property <length> ry: root.stacked ? 8px + 132px + 12px : 8px;
+    property <int> unread: root.have && root.state.values[0] >= 0 ? Math.min(99, Math.round(root.state.values[0])) : -1;
+    property <[LampSpec]> lamp-specs: [
+        { caption: @tr("ALERT"), state: root.alert-on ? LampState.red : LampState.off },
+        { caption: @tr("NEW"), state: root.have && root.state.unread ? LampState.amber : LampState.off },
+        { caption: @tr("SYNC"), state: root.have && root.state.lock ? LampState.green : LampState.off },
+        { caption: @tr("BATT"), state: root.have && root.state.low-batt ? LampState.amber : LampState.off },
+    ];
+    // the LCD
+    Rectangle {
+        x: 12px;
+        y: 8px;
+        width: root.lw;
+        height: 78px;
+        background: Theme.field;
+        border-width: Theme.hairline;
+        border-color: Theme.line;
+        border-radius: Theme.radius;
+        Rectangle {
+            x: 8px + Theme.hairline;
+            y: 4px;
+            width: 144px;
+            height: 64px;
+            clip: true;
+            msg := Text {
+                x: 0px;
+                y: 0px;
+                width: 144px;
+                text: root.have ? root.state.texts[0] : "";
+                color: Theme.digit;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-body;
+                wrap: word-wrap;
+            }
+        }
+        if msg.preferred-height > 64.5px : Text {
+            x: root.lw - 20px;
+            y: 78px - 20px;
+            width: 12px;
+            height: 14px;
+            text: "▼";
+            color: Theme.digit;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-cap;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    // the time, the envelope and the unread chip
+    Text {
+        x: 12px;
+        y: 92px;
+        width: 80px;
+        height: 21px;
+        text: root.have ? root.state.texts[2] : "";
+        color: Theme.digit;
+        font-family: Theme.font-mono;
+        font-size: 16px;
+        font-weight: Theme.weight-semibold;
+        vertical-alignment: center;
+    }
+    chip := Chip {
+        visible: root.unread > 0;
+        x: 12px + root.lw - self.width;
+        y: 92px + 0.5px;
+        label: @tr("{} unread", root.unread);
+        tone: ChipTone.warn;
+    }
+    Image {
+        x: (root.unread > 0 ? chip.x : 12px + root.lw) - 6px - 26px;
+        y: 92px + 1.5px;
+        width: 26px;
+        height: 18px;
+        source: @image-url("icons/instrument-envelope.svg");
+        colorize: root.have ? Theme.fg-soft : Theme.faint;
+    }
+    // the maker's plate
+    Rectangle {
+        x: 12px;
+        y: 119px;
+        width: root.lw;
+        height: 21px;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        border-radius: 4px;
+        Caption {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            label: @tr("FOXSDR / ALPHANUMERIC PAGER");
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+    // the right column: the four lamps two by two (the column is 184 wide and four lamps with their words are 211: the sheet's flex row wraps)
+    for l[i] in root.lamp-specs : Lamp {
+        x: root.rx + Math.mod(i, 2) * 92px;
+        y: root.ry + Math.floor(i / 2) * 19px;
+        height: 13px;
+        caption: l.caption;
+        state: l.state;
+    }
+    Caption { x: root.rx; y: root.ry + 38px; width: 100px; height: 13px; label: @tr("Capcode"); }
+    DrumCells {
+        x: root.rx;
+        y: root.ry + 57px;
+        cells: 7;
+        text: root.have ? root.state.texts[1] : "";
+        ghost: !root.have || root.state.texts[1] == "";
+    }
+    Caption { x: root.rx; y: root.ry + 91px; width: 60px; height: 13px; label: @tr("Unread"); }
+    DrumCells {
+        x: root.rx;
+        y: root.ry + 108px;
+        cells: 2;
+        text: root.unread >= 0 ? Fmt.pad2(root.unread) : "";
+        ghost: root.unread < 0;
+    }
+    Caption { x: root.rx + 54px; y: root.ry + 91px; width: 80px; height: 13px; label: @tr("Type"); }
+    kind := Glass {
+        x: root.rx + 54px;
+        y: root.ry + 108px;
+        width: max(54px, self.hug-w);
+        text: root.have ? root.state.texts[3] : "";
+    }
+    Caption { x: root.rx + 54px + kind.width + 12px; y: root.ry + 91px; width: 80px; height: 13px; label: @tr("Received"); }
+    Glass {
+        x: root.rx + 54px + kind.width + 12px;
+        y: root.ry + 108px;
+        width: max(54px, self.hug-w);
+        text: root.have ? root.state.texts[2] : "";
+    }
+    Text {
+        x: root.rx;
+        y: root.ry + 142px;
+        width: root.stacked ? root.width - 24px : 184px;
+        height: 16px;
+        text: root.have ? @tr("EVENT {}", root.state.seq) : @tr("NO PAGE RECEIVED");
+        color: root.have ? Theme.accent-soft : Theme.faint;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// C3 TELEPRINTER: the paper (the heading REG / FLT / LBL / MODE / BLK from the five text slots, the last two printed lines from the memory) that feeds
+// out when `seq` advances, the status lamps PAPER READY NEW ALERT, the message counter (dashes when there is no reading). Slots: text0 station,
+// text1 flight, text2 label, text3 mode, text4 block, values0 printed.
+component TeleprinterFace inherits Rectangle {
+    in property <InstrumentState> state;
+    in property <string> newest;
+    in property <string> previous;
+    property <bool> stacked: root.width < 420px;
+    property <bool> have: root.state.have;
+    property <bool> alert-on: root.have && root.state.alert && Fmt.blink(root.state.now-ms);
+    property <length> pw: root.stacked ? root.width - 24px : 270px;
+    property <length> rx: root.stacked ? 12px : 294px;
+    property <length> ry: root.stacked ? 8px + 122px + 8px : 8px;
+    property <length> rw: root.stacked ? root.width - 24px : root.width - 12px - 294px;
+    property <length> col-w: (root.rw - 6px) / 2;
+    // REG / FLT / LBL / MODE / BLK tokens, whole (a token never breaks: a no-break space inside it), two spaces apart
+    property <string> heading: root.have ? (root.state.texts[0] != "" ? "REG\u{a0}" + root.state.texts[0] + "  " : "")
+        + (root.state.texts[1] != "" ? "FLT\u{a0}" + root.state.texts[1] + "  " : "")
+        + (root.state.texts[2] != "" ? "LBL\u{a0}" + root.state.texts[2] + "  " : "")
+        + (root.state.texts[3] != "" ? "MODE\u{a0}" + root.state.texts[3] + "  " : "")
+        + (root.state.texts[4] != "" ? "BLK\u{a0}" + root.state.texts[4] : "") : "";
+    property <bool> have-print: root.have && (root.state.texts[0] != "" || root.state.texts[1] != "" || root.state.texts[2] != "" || root.newest != "");
+    property <int> printed: root.have && root.state.values[0] >= 0 ? Math.min(9999, Math.round(root.state.values[0])) : -1;
+    property <[LampSpec]> lamp-specs: [
+        { caption: @tr("PAPER"), state: root.have-print ? LampState.green : LampState.off },
+        { caption: @tr("READY"), state: root.have ? LampState.green : LampState.off },
+        { caption: @tr("NEW"), state: root.have && root.state.unread ? LampState.amber : LampState.off },
+        { caption: @tr("ALERT"), state: root.alert-on ? LampState.red : LampState.off },
+    ];
+    PaperStrip {
+        x: 12px;
+        y: 8px;
+        width: root.pw;
+        height: 122px;
+        seq: root.have ? root.state.seq : 0;
+        heading: root.heading;
+        newest: root.have ? root.newest : "";
+        previous: root.have ? root.previous : "";
+        legend: root.have ? @tr("NO MESSAGE PRINTED") : @tr("PRINTER IDLE");
+    }
+    Caption { x: root.rx; y: root.ry; width: root.rw; height: 13px; label: @tr("Status"); }
+    for l[i] in root.lamp-specs : Lamp {
+        x: root.rx + Math.mod(i, 2) * (root.col-w + 6px);
+        y: root.ry + 21px + Math.floor(i / 2) * 19px;
+        height: 13px;
+        caption: l.caption;
+        state: l.state;
+    }
+    Caption { x: root.rx; y: root.ry + 61px; width: root.rw; height: 13px; label: @tr("Messages"); }
+    DrumCells {
+        x: root.rx;
+        y: root.ry + 82px;
+        cells: 4;
+        text: root.printed >= 0 ? Fmt.pad4(root.printed) : "";
+        ghost: root.printed < 0;
+        ghost-text: "----";
+    }
+}
+
+// C4 TONE ALERT: the radial lamp (rings while ALERT is held, at 2 Hz), ALERT and NEW, tone A and B in Hz on two read bars (250 to 3000 Hz, the
+// scale the app's face engraves: a tone off either end is pinned to the stop and its figure says what it measured), the code, the table and
+// group, the result (MATCHED in the good colour, UNMATCHED amber, anything else as it arrived), the two durations, EVENT n.
+// Slots: values0-1 tone Hz, values2-3 seconds, text0 code, text1 table, text2 result.
+component ToneAlertFace inherits Rectangle {
+    in property <InstrumentState> state;
+    property <bool> have: root.state.have;
+    property <bool> alert-on: root.have && root.state.alert && Fmt.blink(root.state.now-ms);
+    property <length> rx: 108px;
+    property <length> rw: root.width - 12px - 108px;
+    property <length> gw: (root.rw - 6px) / 2;
+    property <float> hz-a: root.have ? root.state.values[0] : 0;
+    property <float> hz-b: root.have ? root.state.values[1] : 0;
+    property <bool> tone-a: root.hz-a > 0 && root.hz-a < 1000000;
+    property <bool> tone-b: root.hz-b > 0 && root.hz-b < 1000000;
+    property <string> code: root.have ? root.state.texts[0] : "";
+    property <string> result: root.have ? root.state.texts[2] : "";
+    property <string> result-up: root.result.to-uppercase();
+    property <color> result-ink: root.result-up == "MATCHED" ? Theme.chip-good-fg : root.result-up == "UNMATCHED" ? Theme.accent-soft : Theme.fg-soft;
+    property <bool> sec-a: root.have && root.state.values[2] > 0;
+    property <bool> sec-b: root.have && root.state.values[3] > 0;
+    BigLamp { x: 22px; y: 8px; lit: root.alert-on; }
+    HorizontalLayout {
+        x: 12px;
+        y: 78px;
+        width: 84px;
+        height: 13px;
+        alignment: center;
+        Lamp { caption: @tr("ALERT"); state: root.alert-on ? LampState.red : LampState.off; }
+    }
+    HorizontalLayout {
+        x: 12px;
+        y: 97px;
+        width: 84px;
+        height: 13px;
+        alignment: center;
+        Lamp { caption: @tr("NEW"); state: root.have && root.state.unread ? LampState.amber : LampState.off; }
+    }
+    // tone A, then tone B
+    Caption { x: root.rx; y: 8px; width: 90px; height: 24px; label: @tr("Tone A"); }
+    Text {
+        x: root.rx;
+        y: 8px;
+        width: root.rw;
+        height: 24px;
+        text: root.tone-a ? root.hz-a.to-fixed(1) + " Hz" : "--";
+        color: root.tone-a ? Theme.accent-soft : Theme.dim;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+    ReadBar { x: root.rx; y: 36px; width: root.rw; value: root.hz-a; min: 250; max: 3000; has-reading: root.tone-a; }
+    Caption { x: root.rx; y: 50px; width: 90px; height: 24px; label: @tr("Tone B"); }
+    Text {
+        x: root.rx;
+        y: 50px;
+        width: root.rw;
+        height: 24px;
+        text: root.tone-b ? root.hz-b.to-fixed(1) + " Hz" : "--";
+        color: root.tone-b ? Theme.accent-soft : Theme.dim;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+    ReadBar { x: root.rx; y: 78px; width: root.rw; value: root.hz-b; min: 250; max: 3000; has-reading: root.tone-b; }
+    // the glass
+    Caption { x: root.rx; y: 92px; width: root.gw; height: 13px; label: @tr("Code"); }
+    Glass {
+        x: root.rx;
+        y: 107px;
+        width: root.gw;
+        text: root.code != "" ? root.code : @tr("NO PAGE");
+        ink: root.code != "" ? Theme.digit : Theme.faint;
+    }
+    Caption { x: root.rx + root.gw + 6px; y: 92px; width: root.gw; height: 13px; label: @tr("Format"); }
+    Glass { x: root.rx + root.gw + 6px; y: 107px; width: root.gw; text: root.have ? root.state.texts[1] : ""; }
+    Caption { x: root.rx; y: 137px; width: root.gw; height: 13px; label: @tr("Result"); }
+    Glass { x: root.rx; y: 152px; width: root.gw; text: root.result; ink: root.result-ink; }
+    Caption { x: root.rx + root.gw + 6px; y: 137px; width: root.gw; height: 13px; label: @tr("A / B seconds"); }
+    Glass {
+        x: root.rx + root.gw + 6px;
+        y: 152px;
+        width: root.gw;
+        text: (root.sec-a ? root.state.values[2].to-fixed(2) : "--") + " / " + (root.sec-b ? root.state.values[3].to-fixed(2) : "--");
+        ink: root.sec-a || root.sec-b ? Theme.digit : Theme.dim;
+    }
+    if root.have : Text {
+        x: 12px;
+        y: 184px;
+        width: root.width - 24px;
+        height: 16px;
+        text: @tr("EVENT {}", root.state.seq);
+        color: Theme.accent-soft;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+    }
+}
+
+// C5 VOR: the course indicator: the card (the needle at the radial, the amber index, the OBS course as a dashed line) with the OBS knob in the middle
+// (the only control on any face), the bar (2 degrees a dot, 10 full scale: where the course puts the radial), TO / FROM, the NO SIGNAL flag when not
+// locked, LOCK / NEW, and the readouts (radial, ident, confidence, the two reference levels, the inbound course). With no lock there is no radial:
+// no needle, no bar, no TO / FROM, dashes. Slots: values0 radial, values1 confidence, values2 reference, values3 variable, text0 ident, flag LOCK.
+component NavBearingFace inherits Rectangle {
+    in property <InstrumentState> state;
+    in property <int> obs-course;
+    in property <bool> enabled: true;
+    callback obs-changed(int);
+    property <bool> stacked: root.width < 420px;
+    property <bool> have: root.state.have;
+    property <bool> locked: root.have && root.state.lock && root.state.values[0] > -1000000 && root.state.values[0] < 1000000;
+    property <float> radial: Fmt.m360(root.state.values[0]);
+    property <int> radial-i: Math.mod(Math.round(root.radial), 360);
+    property <int> shown: knob.shown;
+    property <float> dev: Fmt.bar(root.radial, root.shown);
+    property <bool> to: Fmt.is-to(root.radial, root.shown);
+    property <string> ident: root.have ? root.state.texts[0] : "";
+    property <length> gx: 168px;
+    property <length> rows-x: root.stacked ? 10px : 280px;
+    property <length> rows-y: root.stacked ? 169px : 6px;
+    property <[ReadRow]> rows: [
+        { label: @tr("RADIAL FROM"), value: root.locked ? Fmt.pad3(root.radial-i) : "---", ink: root.locked ? Theme.accent-soft : Theme.dim },
+        { label: @tr("IDENT"), value: root.ident != "" ? root.ident : @tr("NO IDENT"), ink: root.ident != "" ? Theme.accent-soft : Theme.dim },
+        { label: @tr("CONF"), value: root.have && root.state.values[1] > 0 ? Math.round(root.state.values[1] * 100) + " %" : "--", ink: root.have && root.state.values[1] > 0 ? Theme.fg : Theme.dim },
+        { label: @tr("REF"), value: root.have && root.state.values[2] > 0 ? root.state.values[2].to-fixed(2) : "--", ink: root.have && root.state.values[2] > 0 ? Theme.fg : Theme.dim },
+        { label: @tr("VAR"), value: root.have && root.state.values[3] > 0 ? root.state.values[3].to-fixed(2) : "--", ink: root.have && root.state.values[3] > 0 ? Theme.fg : Theme.dim },
+        { label: @tr("INBOUND CRS"), value: root.locked ? Fmt.pad3(Math.mod(root.radial-i + 180, 360)) : "---", ink: root.locked ? Theme.fg : Theme.dim },
+    ];
+    Compass { x: 10px; y: 6px; bearing: root.radial; has-needle: root.locked; course: root.shown; }
+    knob := ObsKnob {
+        x: 65px;
+        y: 61px;
+        course: root.obs-course;
+        enabled: root.enabled;
+        changed(c) => { root.obs-changed(c); }
+    }
+    Caption { x: root.gx; y: 6px; width: 104px; height: 13px; label: @tr("OBS course"); }
+    Text {
+        x: root.gx;
+        y: 25px;
+        width: 104px;
+        height: 16px;
+        text: Fmt.pad3(root.shown);
+        color: Theme.accent-soft;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+    }
+    // the deviation bar: 104 x 18, the centre index (2 px, focus colour) and the marker (3 x 12, amber) at 48 px per full scale
+    Rectangle {
+        x: root.gx;
+        y: 47px;
+        width: 104px;
+        height: 18px;
+        background: Theme.field;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        border-radius: 4px;
+    }
+    Rectangle { x: root.gx + 51px; y: 48px; width: 2px; height: 16px; background: Theme.focus; }
+    if root.locked : Rectangle {
+        x: root.gx + 52px + Math.round(root.dev * 48) * 1px - 1px;
+        y: 50px;
+        width: 3px;
+        height: 12px;
+        background: Theme.accent;
+    }
+    Text {
+        x: root.gx;
+        y: 71px;
+        width: 104px;
+        height: 30px;
+        text: @tr("dot = 2 deg · full scale 10");
+        color: Theme.dim;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        x: root.gx;
+        y: 107px;
+        width: 104px;
+        height: 13px;
+        spacing: 8px;
+        alignment: start;
+        Lamp { caption: @tr("TO"); state: root.locked && root.to ? LampState.green : LampState.off; }
+        Lamp { caption: @tr("FROM"); state: root.locked && !root.to ? LampState.green : LampState.off; }
+    }
+    if !root.locked : BarberFlag { x: root.gx; y: 126px; width: 104px; text: @tr("NO SIGNAL"); }
+    HorizontalLayout {
+        x: root.gx;
+        y: 148px;
+        width: 104px;
+        height: 13px;
+        spacing: 8px;
+        alignment: start;
+        Lamp { caption: @tr("LOCK"); state: root.have && root.state.lock ? LampState.green : LampState.off; }
+        Lamp { caption: @tr("NEW"); state: root.have && root.state.unread ? LampState.amber : LampState.off; }
+    }
+    // the readouts: label (dim mono) and value, 17 px a row
+    for r[i] in root.rows : Text {
+        x: root.rows-x + (root.stacked && i >= 3 ? (root.width - 20px) / 2 : 0px);
+        y: root.rows-y + Math.mod(i, 3) * 17px + (root.stacked ? 0px : Math.floor(i / 3) * 51px);
+        width: 80px;
+        height: 14px;
+        text: r.label;
+        color: Theme.dim;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    for r[i] in root.rows : Text {
+        x: root.rows-x + 82px + (root.stacked && i >= 3 ? (root.width - 20px) / 2 : 0px);
+        y: root.rows-y + Math.mod(i, 3) * 17px + (root.stacked ? 0px : Math.floor(i / 3) * 51px);
+        width: root.stacked ? (root.width - 20px) / 2 - 90px : max(0px, root.width - 10px - 280px - 82px);
+        height: 14px;
+        text: r.value;
+        color: r.ink;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// C6 FAX: the reception lamps (IDLE START PHASING PICTURE STOP: the one the plugin names lights, an unknown word lights none; NEW; LOCK), IOC and
+// LPM on glass, the line counter (dashes until a line has landed), the tuning meter (+-250 Hz about the 1900 Hz subcarrier, a needle only once the
+// phasing signal has been measured), the paper slot (the plugin's own picture on a strip as long as the lines received).
+// Slots: values0 IOC, values1 LPM, values2 lines, values3 offset Hz, text0 phase, flag LOCK.
+component FaxFace inherits Rectangle {
+    in property <InstrumentState> state;
+    property <bool> stacked: root.width < 420px;
+    property <bool> have: root.state.have;
+    property <string> phase-word: root.have ? root.state.texts[0] : "";
+    property <int> phase: root.phase-word == "IDLE" ? 0 : root.phase-word == "START" ? 1 : root.phase-word == "PHASING" ? 2 : root.phase-word == "PICTURE" ? 3 : root.phase-word == "STOP" ? 4 : -1;
+    property <bool> measured: root.phase >= 2;
+    property <float> lines: root.have ? root.state.values[2] : 0;
+    property <bool> have-lines: root.have && root.lines > 0;
+    property <length> lw: root.stacked ? root.width - 24px : 200px;
+    property <length> rx: root.stacked ? 12px : 224px;
+    property <length> ry: root.stacked ? 8px + 187px + 12px : 8px;
+    property <length> rw: root.stacked ? root.width - 24px : root.width - 12px - 224px;
+    property <length> col-w: (root.lw - 6px) / 2;
+    property <[LampSpec]> lamp-specs: [
+        { caption: @tr("IDLE"), state: root.phase == 0 ? LampState.green : LampState.off },
+        { caption: @tr("START"), state: root.phase == 1 ? LampState.green : LampState.off },
+        { caption: @tr("PHASING"), state: root.phase == 2 ? LampState.green : LampState.off },
+        { caption: @tr("PICTURE"), state: root.phase == 3 ? LampState.green : LampState.off },
+        { caption: @tr("STOP"), state: root.phase == 4 ? LampState.green : LampState.off },
+        { caption: @tr("NEW"), state: root.have && root.state.unread ? LampState.amber : LampState.off },
+        { caption: @tr("LOCK"), state: root.have && root.state.lock ? LampState.green : LampState.off },
+    ];
+    Caption { x: 12px; y: 8px; width: root.lw; height: 13px; label: @tr("Reception"); }
+    // the five phases in two columns, then NEW and LOCK together on a row of their own: they report on the window and the link, not on the machine
+    for l[i] in root.lamp-specs : Lamp {
+        x: 12px + (i < 5 ? Math.mod(i, 2) : i - 5) * (root.col-w + 6px);
+        y: 27px + (i < 5 ? Math.floor(i / 2) : 3) * 19px;
+        height: 13px;
+        caption: l.caption;
+        state: l.state;
+    }
+    Caption { x: 12px; y: 103px; width: 60px; height: 13px; label: @tr("IOC"); }
+    ioc := Glass {
+        x: 12px;
+        y: 118px;
+        width: max(48px, self.hug-w);
+        text: root.have && root.state.values[0] > 0 ? Fmt.g6(root.state.values[0]) : "--";
+        ink: root.have && root.state.values[0] > 0 ? Theme.digit : Theme.dim;
+    }
+    Caption { x: 12px + ioc.width + 12px; y: 103px; width: 60px; height: 13px; label: @tr("LPM"); }
+    Glass {
+        x: 12px + ioc.width + 12px;
+        y: 118px;
+        width: max(48px, self.hug-w);
+        text: root.have && root.state.values[1] > 0 ? Fmt.g6(root.state.values[1]) : "--";
+        ink: root.have && root.state.values[1] > 0 ? Theme.digit : Theme.dim;
+    }
+    Caption { x: 12px; y: 148px; width: 60px; height: 13px; label: @tr("Lines"); }
+    DrumCells {
+        x: 12px;
+        y: 167px;
+        cells: 4;
+        text: root.have-lines ? Fmt.pad4(Math.min(9999, Math.round(root.lines))) : "";
+        ghost: !root.have-lines;
+        ghost-text: "----";
+    }
+    Caption { x: root.rx; y: root.ry; width: root.rw; height: 13px; label: @tr("Tuning"); }
+    CentreZeroMeter {
+        x: root.rx;
+        y: root.ry + 19px;
+        width: root.rw;
+        height: 34px;
+        value: root.state.values[3];
+        full-scale: 250;
+        has-reading: root.have && root.measured && Fmt.finite(root.state.values[3]);
+    }
+    Text {
+        x: root.rx;
+        y: root.ry + 59px;
+        width: root.rw;
+        height: 16px;
+        text: root.have && root.measured && Fmt.finite(root.state.values[3]) ? Fmt.hz-signed(root.state.values[3]) : "--";
+        color: root.have && root.measured && Fmt.finite(root.state.values[3]) ? Theme.accent-soft : Theme.dim;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+    }
+    Caption { x: root.rx; y: root.ry + 81px; width: root.rw; height: 13px; label: @tr("Paper slot"); }
+    PaperSlot {
+        x: root.rx;
+        y: root.ry + 100px;
+        width: root.rw;
+        have: root.have;
+        lines: root.lines;
+        chart: root.state.chart;
+    }
+}
+
+// C7 BEACON: DISTRESS (blinks while ALERT is held) and NEW, the fifteen-character identity in cells (unlit "8"s when there is none), country,
+// protocol and position, the carrier error on a centre-zero meter (+-5000 Hz; an exactly-zero slot is an untouched one and draws no needle), the age
+// of the newest burst (hh:mm:ss) and the bursts logged (the memory's row count, -1 = unknown: not drawn).
+// Slots: text0 the identity, text1 country, text2 protocol, text3 position, values0 carrier error Hz, values1 age seconds.
+component BeaconFace inherits Rectangle {
+    in property <InstrumentState> state;
+    in property <int> log-count: -1;
+    property <bool> have: root.state.have;
+    property <bool> alert-on: root.have && root.state.alert && Fmt.blink(root.state.now-ms);
+    property <length> cw: Math.min(20px, Math.floor((root.width / 1px - 24 - 28) / 15) * 1px);
+    property <bool> have-err: root.have && root.state.values[0] != 0 && root.state.values[0] > -1000000 && root.state.values[0] < 1000000;
+    property <bool> have-id: root.have && root.state.texts[0] != "";
+    // hertz while it is a hertz-sized number, kilohertz from ten thousand, held at 999.9 kHz (instrument_beacon_math.hpp formatError)
+    property <string> err-text: !root.have-err ? ""
+        : Math.abs(root.state.values[0]) < 9999.5 ? (root.state.values[0] > 0 ? "+" : "-") + Math.round(Math.abs(root.state.values[0])) + " Hz"
+        : (root.state.values[0] > 0 ? "+" : "-") + (Math.round(Math.min(Math.abs(root.state.values[0]), 999900) / 100) / 10).to-fixed(1) + " kHz";
+    property <[string]> caps: [@tr("Country"), @tr("Protocol"), @tr("Position")];
+    HorizontalLayout {
+        x: 12px;
+        y: 8px;
+        width: 250px;
+        height: 13px;
+        spacing: 8px;
+        alignment: start;
+        Lamp { caption: @tr("DISTRESS"); state: root.alert-on ? LampState.red : LampState.off; }
+        Lamp { caption: @tr("NEW"); state: root.have && root.state.unread ? LampState.amber : LampState.off; }
+    }
+    Caption {
+        x: root.width - 12px - 200px;
+        y: 8px;
+        width: 200px;
+        height: 13px;
+        label: @tr("Beacon 15 hex ID");
+        horizontal-alignment: right;
+    }
+    DrumCells {
+        x: 12px;
+        y: 29px;
+        cells: 15;
+        cell-w: root.cw;
+        text: root.have-id ? root.state.texts[0].to-uppercase() : "";
+        ghost: !root.have-id;
+        ghost-text: "888888888888888";
+    }
+    for c[i] in root.caps : Caption { x: 12px; y: 65px + i * 18px; width: 70px; height: 14px; label: c; overflow: elide; }
+    for i in 3 : Text {
+        x: 94px;
+        y: 65px + i * 18px;
+        width: max(0px, root.width - 94px - 12px);
+        height: 14px;
+        text: root.have ? root.state.texts[i + 1] : "";
+        color: Theme.fg;
+        font-family: i == 2 ? Theme.font-mono : Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Caption { x: 12px; y: 123px; width: 200px; height: 24px; label: @tr("Carrier error"); }
+    Text {
+        x: root.width - 12px - 160px;
+        y: 123px;
+        width: 160px;
+        height: 24px;
+        text: root.err-text;
+        color: Theme.accent-soft;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-body;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+    CentreZeroMeter {
+        x: 12px;
+        y: 151px;
+        width: root.width - 24px;
+        height: 16px;
+        value: root.state.values[0];
+        full-scale: 5000;
+        has-reading: root.have-err;
+    }
+    // two bays side by side: each as wide as the wider of its cap and its glass (the sheet's flex columns)
+    age-cap := Caption { x: 12px; y: 175px; width: self.preferred-width; height: 13px; label: @tr("Since last burst"); }
+    age := Glass {
+        x: 12px;
+        y: 190px;
+        width: max(76px, self.hug-w);
+        text: root.have && root.state.values[1] > -1000000 && root.state.values[1] < 100000000 ? Fmt.clock(root.state.values[1]) : "";
+    }
+    if root.log-count >= 0 : Caption { x: 12px + max(age-cap.width, age.width) + 12px; y: 175px; width: self.preferred-width; height: 13px; label: @tr("Bursts logged"); }
+    if root.log-count >= 0 : Glass {
+        x: 12px + max(age-cap.width, age.width) + 12px;
+        y: 190px;
+        width: max(24px, self.hug-w);
+        text: "" + root.log-count;
+    }
+}
+
+// C8 METER: the pale LCD (the nameplate by commodity, the register in seven cells - eight when the reading needs them, never one figure cut - and
+// its unit: kWh for electricity, UNITS for the rest, whose scale is the installation's), the commodity lamps, ALERT NEW OVER, TAMPER with the two
+// counters unpacked from the bits, and the roster's meter number, commodity and last heard. Slots: text0 meter id, text1 commodity, values0 reading,
+// values1 tamper bits (bits 0-1 physical, 2-3 encoder).
+component MeterFace inherits Rectangle {
+    in property <InstrumentState> state;
+    in property <string> heard;
+    property <bool> stacked: root.width < 420px;
+    property <bool> have: root.state.have;
+    property <bool> alert-on: root.have && root.state.alert && Fmt.blink(root.state.now-ms);
+    property <length> lw: root.stacked ? root.width - 24px : 230px;
+    property <length> rx: root.stacked ? 12px : 254px;
+    property <length> ry: root.stacked ? 8px + 101px + 12px : 8px;
+    property <string> comm: root.have ? root.state.texts[1].to-uppercase() : "";
+    property <bool> electric: root.comm.starts-with("ELECTRIC");
+    property <bool> gas: root.comm.starts-with("GAS");
+    property <bool> water: root.comm.starts-with("WATER");
+    property <float> reading: root.state.values[0];
+    property <bool> reading-ok: root.have && root.reading >= 0 && root.reading <= 99999999;
+    property <bool> over: root.have && root.reading > 99999999;
+    property <int> digits: root.reading-ok && root.reading >= 10000000 ? 8 : 7;
+    property <bool> tamper-known: root.have && root.state.values[1] >= 0 && root.state.values[1] < 1000000;
+    property <int> physical: root.tamper-known ? Math.mod(Math.round(root.state.values[1]), 4) : 0;
+    property <int> encoder: root.tamper-known ? Math.mod(Math.floor(Math.round(root.state.values[1]) / 4), 4) : 0;
+    property <[LampSpec]> kinds: [
+        { caption: @tr("ELECTRIC"), state: root.electric ? LampState.green : LampState.off },
+        { caption: @tr("GAS"), state: root.gas ? LampState.green : LampState.off },
+        { caption: @tr("WATER"), state: root.water ? LampState.green : LampState.off },
+    ];
+    property <[LampSpec]> flags: [
+        { caption: @tr("ALERT"), state: root.alert-on ? LampState.red : LampState.off },
+        { caption: @tr("NEW"), state: root.have && root.state.unread ? LampState.amber : LampState.off },
+        { caption: @tr("OVER"), state: root.over ? LampState.amber : LampState.off },
+    ];
+    PaleLcd {
+        x: 12px;
+        y: 8px;
+        width: root.lw;
+        cells: root.digits;
+        nameplate: root.electric ? @tr("ELECTRICITY") : root.gas ? @tr("GAS") : root.water ? @tr("WATER") : @tr("UTILITY METER");
+        text: root.reading-ok ? Fmt.pad-n(root.reading, root.digits) : "";
+        ghost: !root.reading-ok;
+        ghost-text: "88888888";
+        unit: root.electric ? "kWh" : @tr("UNITS");
+        unit-dim: !root.reading-ok;
+    }
+    HorizontalLayout {
+        x: 12px;
+        y: 77px;
+        height: 13px;
+        width: root.lw;
+        spacing: 10px;
+        alignment: start;
+        for l in root.kinds : Lamp { caption: l.caption; state: l.state; }
+    }
+    HorizontalLayout {
+        x: 12px;
+        y: 96px;
+        height: 13px;
+        width: root.lw;
+        spacing: 10px;
+        alignment: start;
+        for l in root.flags : Lamp { caption: l.caption; state: l.state; }
+    }
+    tamper := Lamp { x: root.rx; y: root.ry; height: 13px; caption: @tr("TAMPER"); state: root.physical + root.encoder > 0 ? LampState.red : LampState.off; }
+    if root.tamper-known : HorizontalLayout {
+        x: root.rx + tamper.width + 8px;
+        y: root.ry;
+        height: 13px;
+        width: max(0px, root.width - 12px - self.x);
+        spacing: 4px;
+        alignment: start;
+        Text { text: @tr("PHYSICAL"); color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small; vertical-alignment: center; }
+        Text { text: "" + root.physical; color: Theme.fg; font-family: Theme.font-mono; font-size: Theme.font-small; font-weight: Theme.weight-semibold; vertical-alignment: center; }
+        Text { text: "· " + @tr("ENCODER"); color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small; vertical-alignment: center; }
+        Text { text: "" + root.encoder; color: Theme.fg; font-family: Theme.font-mono; font-size: Theme.font-small; font-weight: Theme.weight-semibold; vertical-alignment: center; }
+    }
+    Caption { x: root.rx; y: root.ry + 19px; width: 80px; height: 13px; label: @tr("Meter No."); }
+    Text {
+        x: root.rx + 86px;
+        y: root.ry + 19px;
+        width: max(0px, root.width - root.rx - 86px - 12px);
+        height: 13px;
+        text: root.have ? root.state.texts[0] : "";
+        color: Theme.fg;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Caption { x: root.rx; y: root.ry + 35px; width: 80px; height: 13px; label: @tr("Commodity"); }
+    Text {
+        x: root.rx + 86px;
+        y: root.ry + 35px;
+        width: max(0px, root.width - root.rx - 86px - 12px);
+        height: 13px;
+        text: root.have ? root.state.texts[1] : "";
+        color: Theme.fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Caption { x: root.rx; y: root.ry + 51px; width: 80px; height: 13px; label: @tr("Last heard"); }
+    Text {
+        x: root.rx + 86px;
+        y: root.ry + 51px;
+        width: max(0px, root.width - root.rx - 86px - 12px);
+        height: 13px;
+        text: root.have ? root.heard : "";
+        color: Theme.fg;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// C9 WEATHER: three compartments, one per channel: the temperature and the humidity on pale LCDs ("-- . - C" and "-- %" for a channel outside the
+// mask - never 0.0 C; HHH / LLL when a reading is off the field; humidity 0 means "not measured"), the sensor model (or "not heard", "out of range"),
+// and a BATT lamp for a channel that is heard (red when its bit of the low-battery mask is set); NEW at the foot, and "NO SENSOR HEARD YET" when
+// nothing is. Slots: values0-2 temperature C, values3-5 humidity %, values6 channel mask, values7 low-battery mask, text0-2 the sensor names.
+component WeatherFace inherits Rectangle {
+    in property <InstrumentState> state;
+    property <bool> have: root.state.have;
+    property <length> cw: Math.floor((root.width / 1px - 40) / 3) * 1px;
+    property <bool> any-heard: root.have && (Fmt.bit(root.state.values[6], 0) || Fmt.bit(root.state.values[6], 1) || Fmt.bit(root.state.values[6], 2));
+    for ch in 3 : chn := Rectangle {
+        property <bool> heard: root.have && Fmt.bit(root.state.values[6], ch);
+        property <float> temp: root.state.values[ch];
+        property <bool> valid: chn.heard && (chn.temp >= 0 || chn.temp < 0);       // a number (an infinity is one; a NaN is not)
+        property <bool> over: chn.valid && Math.abs(chn.temp) >= 199.95;
+        property <int> tenths: Math.round(chn.temp * 10);
+        property <float> hum: root.state.values[ch + 3];
+        property <bool> hum-ok: chn.heard && chn.hum >= 0.5 && chn.hum <= 100.5;
+        x: 12px + ch * (root.cw + 8px);
+        y: 8px;
+        width: ch == 2 ? root.width - 12px - chn.x : root.cw;
+        height: 143px;
+        background: Theme.panel;
+        border-width: Theme.hairline;
+        border-color: Theme.line;
+        border-radius: Theme.radius-panel;
+        Caption { x: 8px + Theme.hairline; y: 8px + Theme.hairline; width: chn.width - 18px; height: 13px; label: @tr("Channel {}", ch + 1); overflow: elide; }
+        PaleLcd {
+            x: 8px + Theme.hairline;
+            y: 26px;
+            width: chn.width - 18px;
+            dim: !chn.valid;
+            text: !chn.valid ? "-- . - C" : chn.over ? (chn.temp < 0 ? "LLL" : "HHH") : (chn.tenths == 0 ? "0.0" : (chn.tenths / 10).to-fixed(1)) + " C";
+        }
+        PaleLcd {
+            x: 8px + Theme.hairline;
+            y: 64px;
+            width: chn.width - 18px;
+            dim: !chn.hum-ok;
+            text: chn.hum-ok ? Math.round(chn.hum) + " %" : "-- %";
+        }
+        Text {
+            x: 8px + Theme.hairline;
+            y: 102px;
+            width: chn.width - 18px;
+            height: 15px;
+            text: !chn.heard ? @tr("not heard") : chn.over ? @tr("out of range") : root.state.texts[ch];
+            color: Theme.dim;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if chn.heard : Lamp {
+            x: 8px + Theme.hairline;
+            y: 121px;
+            height: 13px;
+            caption: @tr("BATT");
+            state: Fmt.bit(root.state.values[7], ch) ? LampState.red : LampState.off;
+        }
+    }
+    Text {
+        visible: !root.any-heard;
+        x: 12px;
+        y: 159px;
+        width: max(0px, root.width - 24px - 80px);
+        height: 16px;
+        text: @tr("NO SENSOR HEARD YET");
+        color: Theme.dim;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    HorizontalLayout {
+        x: root.width - 12px - 80px;
+        y: 159px;
+        width: 80px;
+        height: 16px;
+        alignment: end;
+        Lamp { caption: @tr("NEW"); state: root.have && root.state.unread ? LampState.amber : LampState.off; }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// InstrumentFace: one face per kind (CASCADE_INSTRUMENT_*; an unknown kind gets the generic face). The memory table is the page's. `enabled`
+// false dims the face to 45 % and the knob stops answering; `tooltip` is shown after the pointer rests on the face.
+export component InstrumentFace inherits Rectangle {
+    in property <int> kind;
+    in property <string> title;
+    in property <InstrumentState> state;
+    in-out property <int> obs-course;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    // what the ABI's memory rows feed to a face (the page owns the table; the face needs these few cells of it)
+    in property <string> paper-newest;
+    in property <string> paper-previous;
+    in property <int> log-count: -1;
+    in property <string> heard;
+    callback obs-changed(int);
+
+    property <bool> known: root.kind >= 1 && root.kind <= 8;
+    preferred-height: root.kind == 1 ? Heights.pager(root.width)
+        : root.kind == 2 ? Heights.teleprinter(root.width)
+        : root.kind == 3 ? Heights.tone-alert(root.width)
+        : root.kind == 4 ? Heights.nav-bearing(root.width)
+        : root.kind == 5 ? Heights.fax(root.width)
+        : root.kind == 6 ? Heights.beacon(root.width)
+        : root.kind == 7 ? Heights.meter(root.width)
+        : root.kind == 8 ? Heights.weather(root.width)
+        : Heights.generic(root.state.have, Fmt.n-texts(root.state) + Fmt.n-values(root.state), root.width);
+    opacity: root.enabled ? 1.0 : 0.45;
+    clip: true;                          // the artboard's tile is overflow: hidden: a lamp's bloom never leaves the face
+    accessible-role: groupbox;
+    accessible-label: root.title;
+
+    area := TouchArea { enabled: root.tooltip != ""; }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+
+    if !root.known : GenericFace { x: 0px; y: 0px; width: root.width; height: root.height; state: root.state; title: root.title; }
+    if root.kind == 1 : PagerFace { x: 0px; y: 0px; width: root.width; height: root.height; state: root.state; }
+    if root.kind == 2 : TeleprinterFace { x: 0px; y: 0px; width: root.width; height: root.height; state: root.state; newest: root.paper-newest; previous: root.paper-previous; }
+    if root.kind == 3 : ToneAlertFace { x: 0px; y: 0px; width: root.width; height: root.height; state: root.state; }
+    if root.kind == 4 : NavBearingFace {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        state: root.state;
+        obs-course: root.obs-course;
+        enabled: root.enabled;
+        obs-changed(c) => { root.obs-changed(c); }
+    }
+    if root.kind == 5 : FaxFace { x: 0px; y: 0px; width: root.width; height: root.height; state: root.state; }
+    if root.kind == 6 : BeaconFace { x: 0px; y: 0px; width: root.width; height: root.height; state: root.state; log-count: root.log-count; }
+    if root.kind == 7 : MeterFace { x: 0px; y: 0px; width: root.width; height: root.height; state: root.state; heard: root.heard; }
+    if root.kind == 8 : WeatherFace { x: 0px; y: 0px; width: root.width; height: root.height; state: root.state; }
+}

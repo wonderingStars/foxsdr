@@ -1,0 +1,531 @@
+// FoxSDR Slint front end - THE MAP PANE: the base picture the host composes (src/slint/map_compositor.*: the basemap tiles or the
+// coastline, the graticule, the range rings, the coverage wedges, the trails) with the TARGETS laid over it as Slint items, so they
+// hit-test, carry a tip and are read by a screen reader. Contract: COMPONENTS.md, "map.slint + map_compositor"; the rules are those of
+// src/gui/map_view.cpp (the wheel zooms about the pointer, a drag pans, a click on a target selects it, +/- zoom by a step).
+//
+//   x, y (the pane's own, w x h)               what
+//   0, 0, w, h                                 `base`, filled (the compositor paints it at the pane's size: see `resized`)
+//   target at (x * w, y * h), 20 x 20          the hit area; the 18 px icon of its kind centred on it, rotated to its heading
+//                                              (rings: selected r16, followed r16 + r20, estimated dashed r13, emergency blinking r25),
+//                                              the label 10 px beside it, clear of the rings (to the left when it would run off the pane)
+//   right 10, top 10                           the legend: a 10 px swatch and a cap a row
+//   left 12, bar 24 px above the bottom        the scale bar (scale-frac of the width) with its text above it
+//   bottom centre                              the attribution, dim
+//   right 9, bottom 9, 26 x 26 each            the zoom keys: - below, + above it, 4 px apart
+//
+// GESTURES (one state machine for the pane and for a target, so a drag that starts on a marker still pans):
+//   a press that travels past 4 px is a pan: `panned(dx, dy)` per move, the pointer's step since the last move as a fraction of the pane
+//   (1.0 = the width, the height; the waterfall's rule - moves inside the 4 px are not part of it); a press that stays put is a click -
+//   `clicked(fx, fy)` on the map, `target-clicked(i)` on a target; the second press of a double-click on a target is
+//   `target-double-clicked(i)` and is not a click; the wheel is `zoomed(notches, fx, fy)` once per event, notches = round(delta / 120)
+//   and at least one, a wheel turned UP positive (zoom in), at the pointer's fractions.
+//
+// THE TIP is drawn inline in the shared TooltipFace, 600 ms after the pointer came to rest on a target, NOT through TipTimer: a PopupWindow
+// tip is modal in Slint and swallows the first click after it appears (the waterfall and the spectrum do the same for the same reason). The
+// zoom keys carry no tip for the same reason; their accessible labels are `zoom-in-label` / `zoom-out-label`.
+//
+// ROTATION: the icon is turned by `transform-rotation` (the 1.18 spelling of `rotation-angle`, which it deprecates). The software renderer
+// the headless tests use draws NO rotation of any item (measured: a chevron at 90 and 45 degrees came out unturned), so the heading is
+// held by the wiring (`MapPane.icon-turn` is what it is bound to) and not by pixels there; the desktop renderers draw it.
+import { Theme } from "theme.slint";
+import { Key } from "keys.slint";
+import { TooltipFace } from "tooltip.slint";
+
+// x, y: fractions of the pane (0..1, a little outside is drawn, further is not); heading: degrees clockwise from north, -1 for none (a
+// number, never NaN); kind: CASCADE_TRACK_* (1 aircraft, 2 vessel, 3 station, 4 satellite, anything else unknown); alpha 0..1 (the
+// host's fade); color: the host's colour for it (an altitude band, a kind).
+export struct MapTarget {
+    id: string,
+    x: float,
+    y: float,
+    heading: float,
+    kind: int,
+    label: string,
+    alpha: float,
+    selected: bool,
+    followed: bool,
+    estimated: bool,
+    emergency: bool,
+    color: color,
+}
+
+export struct LegendRow {
+    label: string,
+    color: color,
+}
+
+// A caption on a map: the ink with a 1 px halo of the ground colour all round (four copies one pixel up, down, left and right), so it
+// reads on the sea, on land and on a pale tile alike.
+component HaloText inherits Rectangle {
+    in property <string> text;
+    in property <color> ink;
+    in property <length> text-size: Theme.font-cap;
+    in property <int> text-weight: Theme.weight-medium;
+    in property <length> text-spacing: 0px;
+    in property <length> max-w: 100000px;
+    width: min(ink-text.preferred-width, root.max-w);
+    height: ink-text.preferred-height;
+    for d in [{ dx: -1px, dy: 0px }, { dx: 1px, dy: 0px }, { dx: 0px, dy: -1px }, { dx: 0px, dy: 1px }] : Text {
+        x: d.dx;
+        y: d.dy;
+        text: root.text;
+        color: Theme.bg;
+        font-family: Theme.font-ui;
+        font-size: root.text-size;
+        font-weight: root.text-weight;
+        letter-spacing: root.text-spacing;
+        overflow: elide;
+        accessible-role: none;
+    }
+    ink-text := Text {
+        x: 0px;
+        y: 0px;
+        text: root.text;
+        color: root.ink;
+        font-family: Theme.font-ui;
+        font-size: root.text-size;
+        font-weight: root.text-weight;
+        letter-spacing: root.text-spacing;
+        overflow: elide;
+        accessible-role: none;
+    }
+}
+
+export component MapPane inherits Rectangle {
+    // ---- what the host sets ----
+    in property <image> base;
+    in property <[MapTarget]> targets;
+    in property <[LegendRow]> legend;
+    in property <string> scale-text;                 // "10 km"
+    in property <float> scale-frac;                  // the bar's length as a fraction of the pane's width; 0 draws no bar
+    in property <string> attribution;
+    in property <bool> zoom-in-enabled: true;
+    in property <bool> zoom-out-enabled: true;
+    in property <bool> pick-armed;                   // the next click is a position: the crosshair
+    in property <string> hover-text;                 // the host's words for the target `hovered` named: shown as the tip
+    in property <string> zoom-in-label: "Zoom in";
+    in property <string> zoom-out-label: "Zoom out";
+    in property <bool> enabled: true;
+
+    // ---- what it reports ----
+    callback target-clicked(index: int);
+    callback target-double-clicked(index: int);
+    callback hovered(index: int);                    // the target under the pointer, -1 none
+    callback panned(dx: float, dy: float);
+    callback zoomed(notches: int, fx: float, fy: float);
+    callback zoom-key(direction: int);               // +1 in, -1 out
+    callback clicked(fx: float, fy: float);
+    callback resized(w: length, h: length);          // when the pane's width or height changes (not at the first layout: read pane-w, pane-h)
+    out property <length> pane-w: root.width;
+    out property <length> pane-h: root.height;
+    out property <MouseCursor> cursor: root.pick-armed ? MouseCursor.crosshair : root.panning ? MouseCursor.grabbing : MouseCursor.default;
+    out property <bool> panning: root.pressing && root.moved-past;
+    out property <int> hover-index: -1;
+    out property <bool> tip-shown;
+    // the angle the icon of a target is bound to (degrees, 0 for none): what a screen reader or a test can read where pixels cannot
+    public pure function icon-turn(heading: float) -> angle { return heading >= 0 ? heading * 1deg : 0deg; }
+
+    background: Theme.well;
+    clip: true;
+    accessible-role: image;
+    accessible-label: "Map";
+
+    // ---- gesture state ----
+    private property <bool> pressing;
+    private property <bool> moved-past;
+    private property <bool> press-double;            // the second press of a double-click on a target: neither a click nor a pan until it travels
+    private property <int> press-target: -1;
+    private property <length> press-x;
+    private property <length> press-y;
+    private property <length> last-x;
+    private property <length> last-y;
+    private property <length> reported-w;
+    private property <length> reported-h;
+    private property <int> last-click-target: -1;
+    private property <length> last-click-x;
+    private property <length> last-click-y;
+
+    // One wheel event is round(delta-y / 120) notches, at least one; a wheel turned up (delta-y > 0) is positive.
+    pure function notches-of(dy: length) -> int {
+        if (round(dy / 120px) != 0) { return round(dy / 120px); }
+        return dy > 0px ? 1 : -1;
+    }
+    function press-begin(x: length, y: length, target: int) {
+        root.pressing = true;
+        root.moved-past = false;
+        root.press-double = false;
+        root.press-target = target;
+        root.press-x = x;
+        root.press-y = y;
+        root.last-x = x;
+        root.last-y = y;
+        root.tip-shown = false;
+        if (target < 0) {
+            root.last-click-target = -1;
+            dbl.running = false;
+        } else if (dbl.running && root.last-click-target == target && abs(x - root.last-click-x) <= 6px && abs(y - root.last-click-y) <= 6px) {
+            // The second press of a double-click: the first already selected the target.
+            dbl.running = false;
+            root.last-click-target = -1;
+            root.press-double = true;
+        } else {
+            root.last-click-target = target;
+            root.last-click-x = x;
+            root.last-click-y = y;
+            // (restart() only re-arms a timer that is running: a stopped one is started by running = true)
+            if (dbl.running) { dbl.restart(); } else { dbl.running = true; }
+        }
+    }
+    function press-move(x: length, y: length) {
+        if (!root.moved-past && (abs(x - root.press-x) > 4px || abs(y - root.press-y) > 4px)) { root.moved-past = true; }
+        if (root.moved-past && (x != root.last-x || y != root.last-y)) {
+            root.panned((x - root.last-x) / root.width, (y - root.last-y) / root.height);
+        }
+        root.last-x = x;
+        root.last-y = y;
+    }
+    function press-end(x: length, y: length) {
+        if (!root.pressing) { return; }
+        root.pressing = false;
+        let past = root.moved-past;
+        root.moved-past = false;
+        if (past || root.press-double) { return; }
+        if (root.press-target >= 0) {
+            root.target-clicked(root.press-target);
+        } else {
+            root.clicked(x / root.width, y / root.height);
+        }
+    }
+    function press-cancel() {
+        dbl.running = false;
+        root.pressing = false;
+        root.moved-past = false;
+    }
+    function set-hover(i: int) {
+        if (root.hover-index == i) { return; }
+        root.hover-index = i;
+        root.tip-shown = false;
+        if (rest.running) { rest.restart(); }
+        root.hovered(i);
+    }
+    function target-hover(i: int, on: bool) {
+        if (on) {
+            root.set-hover(i);
+        } else if (root.hover-index == i) {
+            root.set-hover(-1);
+        }
+    }
+
+    // the double-click window, and the wait before the tip
+    dbl := Timer {
+        interval: 500ms;
+        running: false;
+        triggered => { self.running = false; }
+    }
+    rest := Timer {
+        interval: 600ms;
+        running: root.hover-index >= 0 && root.hover-text != "" && !root.tip-shown && !root.pressing;
+        triggered => { root.tip-shown = true; }
+    }
+
+    // The size, once per change however many of the two moved (a layout sets both): the host composes at it.
+    function report-size() {
+        if (root.width == root.reported-w && root.height == root.reported-h) { return; }
+        root.reported-w = root.width;
+        root.reported-h = root.height;
+        root.resized(root.width, root.height);
+    }
+    // A pane that is switched off lets go of what it was holding: a press in progress, the target under the pointer (and with it the tip).
+    changed enabled => {
+        if (!root.enabled) {
+            root.press-cancel();
+            root.set-hover(-1);
+        }
+    }
+    changed width => { root.report-size(); }
+    changed height => { root.report-size(); }
+
+    // ================= the picture =================
+    Image {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        source: root.base;
+        image-fit: fill;
+    }
+
+    // ================= input on the map itself (under the targets, so a target is hit first) =================
+    area := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        enabled: root.enabled;
+        mouse-cursor: root.cursor;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.move) {
+                if (root.pressing) { root.press-move(self.mouse-x, self.mouse-y); }
+            } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                root.press-begin(self.mouse-x, self.mouse-y, -1);
+            } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                root.press-end(self.mouse-x, self.mouse-y);
+            } else if (e.kind == PointerEventKind.cancel) {
+                root.press-cancel();
+            }
+        }
+        scroll-event(e) => {
+            if (e.delta-y == 0px) { return EventResult.reject; }
+            root.zoomed(root.notches-of(e.delta-y), self.mouse-x / root.width, self.mouse-y / root.height);
+            return EventResult.accept;
+        }
+    }
+
+    // ================= the targets =================
+    for t[i] in root.targets : Rectangle {
+        x: t.x * root.width - 10px;
+        y: t.y * root.height - 10px;
+        width: 20px;
+        height: 20px;
+        visible: t.alpha > 0 && t.x >= -0.04 && t.x <= 1.04 && t.y >= -0.04 && t.y <= 1.04;
+        opacity: min(1.0, max(0.0, t.alpha));
+
+        // an emergency: a red halo that blinks at 2 Hz (its own clock: a pane with none runs no timer)
+        if t.emergency : halo := Rectangle {
+            property <bool> lit: true;
+            x: -15px;
+            y: -15px;
+            width: 50px;
+            height: 50px;
+            visible: self.lit;
+            border-radius: 25px;
+            border-width: 2px;
+            border-color: Theme.lamp-red;
+            background: Theme.lamp-red.with-alpha(0.22);
+            Timer {
+                interval: 500ms;
+                running: true;
+                triggered => { halo.lit = !halo.lit; }
+            }
+        }
+        // followed: two rings; selected: one
+        if t.followed : Rectangle {
+            x: -10px;
+            y: -10px;
+            width: 40px;
+            height: 40px;
+            border-radius: 20px;
+            border-width: 1.5px;
+            border-color: Theme.accent.with-alpha(0.65);
+        }
+        if t.followed || t.selected : Rectangle {
+            x: -6px;
+            y: -6px;
+            width: 32px;
+            height: 32px;
+            border-radius: 16px;
+            border-width: 2px;
+            border-color: Theme.accent;
+        }
+        // estimated: a dashed ring, twelve arcs of fifteen degrees with fifteen between
+        if t.estimated : Path {
+            x: -4px;
+            y: -4px;
+            width: 28px;
+            height: 28px;
+            viewbox-width: 28;
+            viewbox-height: 28;
+            stroke: t.color;
+            stroke-width: 1.6px;
+            commands: "M 14.00 1.00 A 13 13 0 0 1 17.36 1.44 M 20.50 2.74 A 13 13 0 0 1 23.19 4.81 M 25.26 7.50 A 13 13 0 0 1 26.56 10.64 M 27.00 14.00 A 13 13 0 0 1 26.56 17.36 M 25.26 20.50 A 13 13 0 0 1 23.19 23.19 M 20.50 25.26 A 13 13 0 0 1 17.36 26.56 M 14.00 27.00 A 13 13 0 0 1 10.64 26.56 M 7.50 25.26 A 13 13 0 0 1 4.81 23.19 M 2.74 20.50 A 13 13 0 0 1 1.44 17.36 M 1.00 14.00 A 13 13 0 0 1 1.44 10.64 M 2.74 7.50 A 13 13 0 0 1 4.81 4.81 M 7.50 2.74 A 13 13 0 0 1 10.64 1.44";
+        }
+        // the icon of its kind, turned to its heading
+        Image {
+            x: 1px;
+            y: 1px;
+            width: 18px;
+            height: 18px;
+            source: t.kind == 1 ? @image-url("icons/map-aircraft.svg")
+                  : t.kind == 2 ? @image-url("icons/map-vessel.svg")
+                  : t.kind == 3 ? @image-url("icons/map-station.svg")
+                  : t.kind == 4 ? @image-url("icons/map-satellite.svg")
+                  : @image-url("icons/map-unknown.svg");
+            image-fit: contain;
+            colorize: t.color;
+            transform-rotation: root.icon-turn(t.heading);
+            accessible-role: none;
+        }
+        // its label, beside it: clear of the rings it wears (14 px from the centre, 18 estimated, 20 selected, 24 followed, 29 emergency), on the
+        // other side when it would run off the pane
+        if t.label != "" : HaloText {
+            property <length> gap: t.emergency ? 29px : t.followed ? 24px : t.selected ? 20px : t.estimated ? 18px : 14px;
+            text: t.label;
+            ink: t.color;
+            x: parent.x + 10px + self.gap + self.width > root.width ? 10px - self.gap - self.width : 10px + self.gap;
+            y: (20px - self.height) / 2;
+            max-w: max(40px, root.width * 0.4);
+        }
+        // the hit area: 20 px square, on the target
+        TouchArea {
+            x: 0px;
+            y: 0px;
+            width: 20px;
+            height: 20px;
+            enabled: root.enabled && !root.pick-armed;       // while a position is being picked a target is not a target: the map takes the click
+            mouse-cursor: MouseCursor.pointer;
+            accessible-role: button;
+            accessible-label: t.label != "" ? t.label : t.id;
+            accessible-action-default => { if (root.enabled) { root.target-clicked(i); } }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.move) {
+                    if (root.pressing) { root.press-move(parent.x + self.mouse-x, parent.y + self.mouse-y); }
+                } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                    root.press-begin(parent.x + self.mouse-x, parent.y + self.mouse-y, i);
+                } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                    root.press-end(parent.x + self.mouse-x, parent.y + self.mouse-y);
+                } else if (e.kind == PointerEventKind.cancel) {
+                    root.press-cancel();
+                }
+            }
+            changed has-hover => { root.target-hover(i, self.has-hover); }
+        }
+    }
+
+    // ================= the legend, top right =================
+    if root.legend.length > 0 : Rectangle {
+        x: root.width - self.width - 10px;
+        y: 10px;
+        width: legend-rows.preferred-width;
+        height: legend-rows.preferred-height;
+        background: Theme.wf-key-bg;
+        border-width: Theme.hairline;
+        border-color: Theme.line;
+        border-radius: Theme.radius-panel;
+        accessible-role: list;
+        accessible-label: "Legend";
+        legend-rows := VerticalLayout {
+            padding-left: 9px + Theme.hairline;
+            padding-right: 9px + Theme.hairline;
+            padding-top: 7px + Theme.hairline;
+            padding-bottom: 7px + Theme.hairline;
+            spacing: 4px;
+            for row in root.legend : HorizontalLayout {
+                spacing: 6px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 2px;
+                        background: row.color;
+                    }
+                }
+                Text {
+                    text: row.label;
+                    color: Theme.muted;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-cap;
+                    font-weight: Theme.weight-semibold;
+                    letter-spacing: 0.4px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // ================= the scale bar, bottom left =================
+    if root.scale-frac > 0 || root.scale-text != "" : Rectangle {
+        x: 12px;
+        y: root.height - 44px;
+        width: max(scale-bar.width, 1px);
+        height: 32px;
+        accessible-role: text;
+        accessible-label: root.scale-text;
+        // the bar: a dark underlay so it shows on a pale tile, the 2 px rule, and a 7 px tick at each end
+        property <length> bar-w: max(0px, min(root.width - 24px, root.scale-frac * root.width));
+        scale-bar := Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.bar-w;
+            height: parent.height;
+            if root.scale-frac > 0 : Rectangle {
+                x: -1px;
+                y: 17px;
+                width: parent.width + 2px;
+                height: 8px;
+                background: Theme.bg.with-alpha(0.55);
+            }
+            if root.scale-frac > 0 : Rectangle {
+                x: 0px;
+                y: 20px;
+                width: parent.width;
+                height: 2px;
+                background: Theme.fg-soft;
+            }
+            if root.scale-frac > 0 : Rectangle {
+                x: 0px;
+                y: 17px;
+                width: 1px;
+                height: 8px;
+                background: Theme.fg-soft;
+            }
+            if root.scale-frac > 0 : Rectangle {
+                x: parent.width - 1px;
+                y: 17px;
+                width: 1px;
+                height: 8px;
+                background: Theme.fg-soft;
+            }
+        }
+        HaloText {
+            x: 0px;
+            y: 2px;
+            text: root.scale-text;
+            ink: Theme.fg-soft;
+        }
+    }
+
+    // ================= the attribution, bottom centre =================
+    if root.attribution != "" : HaloText {
+        text: root.attribution;
+        ink: Theme.dim;
+        max-w: max(40px, root.width - 260px);
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 6px;
+    }
+
+    // ================= the zoom keys, bottom right =================
+    Key {
+        x: root.width - 9px - 26px;
+        y: root.height - 9px - 26px - 4px - 26px;
+        width: 26px;
+        height: 26px;
+        icon-only: true;
+        icon: @image-url("icons/map-plus.svg");
+        icon-size: 16px;
+        enabled: root.zoom-in-enabled && root.enabled;
+        accessible-label: root.zoom-in-label;
+        clicked => { root.zoom-key(1); }
+    }
+    Key {
+        x: root.width - 9px - 26px;
+        y: root.height - 9px - 26px;
+        width: 26px;
+        height: 26px;
+        icon-only: true;
+        icon: @image-url("icons/map-minus.svg");
+        icon-size: 16px;
+        enabled: root.zoom-out-enabled && root.enabled;
+        accessible-label: root.zoom-out-label;
+        clicked => { root.zoom-key(-1); }
+    }
+
+    // ================= the rest tip (over everything) =================
+    if root.tip-shown && root.hover-index >= 0 && root.hover-index < root.targets.length && root.hover-text != "" : TooltipFace {
+        text: root.hover-text;
+        x: max(2px, min(root.targets[root.hover-index].x * root.width - 10px, root.width - self.width - 4px));
+        y: root.targets[root.hover-index].y * root.height + 20px + self.height > root.height - 4px
+            ? root.targets[root.hover-index].y * root.height - 20px - self.height
+            : root.targets[root.hover-index].y * root.height + 20px;
+    }
+}

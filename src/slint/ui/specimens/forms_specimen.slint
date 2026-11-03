@@ -1,0 +1,282 @@
+// The forms specimen sheet (1160 x 800): the plugin kit's rail and window forms - PluginSettingsForm (closed, open wide, open rail),
+// GrantKeys, ReceiverControlCard, StateChips and RunKeys - each at an absolute, documented position, so tests/test_slint_forms.cpp
+// can probe the pixels against the PluginKit sheet ("Torn-off plugin window": the settings fold and its two-to-a-row form;
+// "Sections-panel form": the fold line, STOP / START, the mute checkbox, the Receiver control card; "Module page (tab) excerpt": the
+// grant keys; "State chips and row examples": the state chips) and the contract in COMPONENTS.md ("The plugin kit").
+//
+// The torn-off window's body is Theme.panel and the rail's is Theme.panel-alt; each variant has its ground drawn behind it. Nothing
+// overlaps; nothing is in a top-level layout.
+//
+//   x,    y,    w,   h - what                                                           (the root property the test reads)
+//    10,   24,  470,  24 - F1 PluginSettingsForm, CLOSED, on Theme.panel: the fold line alone (6 + 16 + 2)  (f1-open)
+//    10,   60,  470, ~378 - F2 PluginSettingsForm, OPEN, wide: two to a row. Rows: [Callsign filter text | Squelch offset 3.5 number],
+//                          [Squelch offset 3,x number with its error | Log to file bool], [Log file path, full row],
+//                          [API password, full row], [Channel text + Station text, with a two-line error under the second]
+//                                                                                            (f2-height, f2-open, commits, toggles, browses)
+//    10,  400,  280,   ? - F3 PluginSettingsForm, OPEN, rail: 280 wide so one to a row: Callsign filter (text, `pending` driven by
+//                          the test), Squelch offset (number), Log to file (bool), Log file (path)    (f3-height; the rail model is
+//                                                                                            fields-rail, a VectorModel the test edits)
+//   500,   24,  480,   ? - G1 GrantKeys on Theme.panel-alt: GRANT RECEIVER CONTROL (plate), REVOKE RADIO SETTINGS (lit) + its note,
+//                          GRANT TRANSMIT (plate) + its note + the transmit state line         (g1-height, g1-*-on, grant events)
+//   500,  330,  480,   ? - G2 GrantKeys: the receiver control key only, lit (REVOKE)         (g2-height)
+//   510,  372,  296,   ? - R1 ReceiverControlCard on Theme.panel-alt (ground 500, 362, 316, ?): the refusal and two stale grants
+//                                                                                            (r1-height, card events)
+//   840,  372,  296,   0 - R2 ReceiverControlCard with nothing to say: draws nothing, 0 px  (r2-height)
+//   500,  600,  640,  20 - S1 StateChips, one row: FED 3, IDLE 2, NOT DECODING 1, TAKES NO SIGNAL 0 (off), STOPPED 1, REFUSED 1
+//                                                                                            (s1-height, s1-natural, chip events)
+//   500,  640,  400,  46 - S2 StateChips, 400 wide: the same six in two rows of three
+//   500,  710,  280,  50 - K1 RunKeys: STOP (danger), "Mute audio while running" checked      (run events)
+//   820,  710,  280,  50 - K2 RunKeys: START (the decoder is stopped), mute unchecked
+//   500,  770,  280,  30 - K3 RunKeys: START (the decoder is idle), no mute checkbox
+//   820,  770,  280,  50 - K4 RunKeys: STOP, disabled (the kit's disabled look), mute checked
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { Caption } from "../keys.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { SettingKind, SettingField, PluginSettingsForm, GrantKeys, StaleGrant, ReceiverControlCard, StateChipModel, StateChips, RunKeys } from "../forms.slint";
+export { Theme, Skin, Workbench, SettingKind, SettingField, StaleGrant, StateChipModel, ChipTone, LampState }
+
+export component FormsSpecimen inherits Window {
+    width: 1160px;
+    height: 840px;
+    background: Theme.bg;
+
+    // ---- what the test observes ----
+    in-out property <int> commits;
+    in-out property <int> last-id: -1;
+    in-out property <string> last-text;
+    in-out property <string> last-form;
+    in-out property <int> toggles;
+    in-out property <bool> last-checked;
+    in-out property <int> browses;
+    in-out property <int> grant-events;
+    in-out property <string> last-grant;
+    in-out property <bool> last-grant-value;
+    in-out property <int> card-toggles;
+    in-out property <int> last-card: -1;
+    in-out property <bool> last-card-value;
+    in-out property <int> chip-toggles;
+    in-out property <int> last-chip: -1;
+    in-out property <string> last-chip-source;
+    in-out property <int> run-count;
+    in-out property <string> last-run;
+    in-out property <int> mute-count;
+    in-out property <string> last-mute-source;
+    in-out property <bool> last-mute;
+    out property <bool> f1-open: f1.open;
+    out property <bool> f2-open: f2.open;
+    out property <bool> f3-open: f3.open;
+    out property <length> f1-height: f1.height;
+    out property <length> f2-height: f2.height;
+    out property <length> f3-height: f3.height;
+    out property <length> g1-height: g1.height;
+    out property <length> g2-height: g2.height;
+    out property <length> r1-height: r1.height;
+    out property <length> r2-height: r2.height;
+    out property <length> s1-height: s1.height;
+    out property <length> s1-natural: s1.natural-width;
+    out property <length> s2-height: s2.height;
+    out property <length> k1-height: k1.height;
+    out property <length> k3-height: k3.height;
+    out property <string> k1-key-tooltip: k1.key-tooltip;
+    out property <string> k2-key-tooltip: k2.key-tooltip;
+    out property <string> k3-key-tooltip: k3.key-tooltip;
+    out property <string> k1-mute-tooltip: k1.mute-tooltip;
+
+    // ---- what the test sets ----
+    in-out property <[SettingField]> fields-wide: [
+        { id: 1, key: "callsign", label: "Callsign filter", kind: SettingKind.text, value: "", checked: false, placeholder: "e.g. M0ABC", max-length: 0, error: "", pending: false },
+        { id: 2, key: "offset", label: "Squelch offset", kind: SettingKind.number, value: "3.5", checked: false, placeholder: "", max-length: 0, error: "", pending: false },
+        { id: 3, key: "offset2", label: "Squelch offset", kind: SettingKind.number, value: "3,x", checked: false, placeholder: "", max-length: 0, error: "Not saved: that is not a number.", pending: false },
+        { id: 4, key: "log", label: "Log to file", kind: SettingKind.bool, value: "", checked: true, placeholder: "", max-length: 0, error: "", pending: false },
+        { id: 5, key: "logfile", label: "Log file", kind: SettingKind.path, value: "C:\\logs\\aprs.txt", checked: false, placeholder: "", max-length: 0, error: "", pending: false },
+        { id: 6, key: "api", label: "API password", kind: SettingKind.password, value: "hunter2hunter2", checked: false, placeholder: "", max-length: 0, error: "", pending: false },
+        { id: 7, key: "channel", label: "Channel", kind: SettingKind.text, value: "7", checked: false, placeholder: "", max-length: 4, error: "", pending: false },
+        { id: 8, key: "station", label: "Station", kind: SettingKind.text, value: "G4XYZ", checked: false, placeholder: "", max-length: 0, error: "Not saved: it holds a character a setting cannot.", pending: false },
+    ];
+    in-out property <[SettingField]> fields-rail: [
+        { id: 11, key: "callsign", label: "Callsign filter", kind: SettingKind.text, value: "M0ABC", checked: false, placeholder: "e.g. M0ABC", max-length: 0, error: "", pending: false },
+        { id: 12, key: "offset", label: "Squelch offset", kind: SettingKind.number, value: "3.5", checked: false, placeholder: "", max-length: 0, error: "", pending: false },
+        { id: 13, key: "log", label: "Log to file", kind: SettingKind.bool, value: "", checked: true, placeholder: "", max-length: 0, error: "", pending: false },
+        { id: 14, key: "logfile", label: "Log file", kind: SettingKind.path, value: "C:\\logs\\aprs.txt", checked: false, placeholder: "", max-length: 0, error: "", pending: false },
+    ];
+    in-out property <bool> g1-tune-on: false;
+    in-out property <bool> g1-settings-on: true;
+    in-out property <bool> g1-transmit-on: false;
+    in-out property <string> g1-tx-state: "Allowed to transmit, but you have not armed plugins on the TRANSMIT page, so it cannot.";
+    in-out property <bool> g1-tx-hot: false;
+    in-out property <bool> g2-tune-on: true;
+    in-out property <bool> g2-tune-shown: true;
+    in-out property <string> r1-refusal: "\"APRS / AX.25 Packet Decoder\" asked to tune the receiver and was refused.";
+    in-out property <[StaleGrant]> stale-r1: [
+        { file: "aprs-decoder-1.0.1.dll", refused: true, granted: true },
+        { file: "old-module.dll", refused: false, granted: true },
+    ];
+    in-out property <[StateChipModel]> chips-s1: [
+        { label: "FED", count: 3, tone: ChipTone.good, lamp: LampState.green, on: true },
+        { label: "IDLE", count: 2, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+        { label: "NOT DECODING", count: 1, tone: ChipTone.warn, lamp: LampState.amber, on: true },
+        { label: "TAKES NO SIGNAL", count: 0, tone: ChipTone.neutral, lamp: LampState.off, on: false },
+        { label: "STOPPED", count: 1, tone: ChipTone.neutral, lamp: LampState.off, on: true },
+        { label: "REFUSED", count: 1, tone: ChipTone.err, lamp: LampState.red, on: true },
+    ];
+    in-out property <bool> f1-enabled: true;
+    in-out property <bool> g2-enabled: true;
+    in-out property <bool> r1-enabled: true;
+    in-out property <bool> s2-enabled: true;
+    in-out property <bool> k1-offers-stop: true;
+    in-out property <bool> k1-mutes: true;
+
+    function committed-by(src: string, id: int, text: string) {
+        root.commits += 1;
+        root.last-id = id;
+        root.last-text = text;
+        root.last-form = src;
+    }
+    function toggled-by(src: string, id: int, v: bool) {
+        root.toggles += 1;
+        root.last-id = id;
+        root.last-checked = v;
+        root.last-form = src;
+    }
+    function granted-by(what: string, v: bool) {
+        root.grant-events += 1;
+        root.last-grant = what;
+        root.last-grant-value = v;
+    }
+    function ran-by(src: string) {
+        root.run-count += 1;
+        root.last-run = src;
+    }
+    function muted-by(src: string, v: bool) {
+        root.mute-count += 1;
+        root.last-mute-source = src;
+        root.last-mute = v;
+    }
+
+    Caption { x: 10px; y: 6px; label: "settings form: closed, open wide (two to a row), open rail (one to a row)"; color: Theme.dim; }
+    Caption { x: 500px; y: 6px; label: "grant keys, receiver control card, state chips, run keys"; color: Theme.dim; }
+
+    // ---- F1: closed ----
+    Rectangle { x: 10px; y: 24px; width: 470px; height: 24px; background: Theme.panel; }
+    f1 := PluginSettingsForm {
+        x: 10px; y: 24px; width: 470px;
+        fields: root.fields-wide;
+        open: false;
+        enabled: root.f1-enabled;
+        tooltip: "Fold or unfold the plugin's own settings";
+    }
+
+    // ---- F2: open, wide ----
+    Rectangle { x: 10px; y: 60px; width: 470px; height: 390px; background: Theme.panel; }
+    f2 := PluginSettingsForm {
+        x: 10px; y: 60px; width: 470px;
+        fields: root.fields-wide;
+        open: true;
+        committed(id, t) => { root.committed-by("F2", id, t); }
+        toggled(id, v) => { root.toggled-by("F2", id, v); }
+        browse-clicked(id) => { root.browses += 1; root.last-id = id; root.last-form = "F2"; }
+    }
+
+    // ---- F3: open, the rail's width ----
+    Rectangle { x: 10px; y: 470px; width: 296px; height: 290px; background: Theme.panel-alt; }
+    f3 := PluginSettingsForm {
+        x: 10px; y: 470px; width: 280px;
+        fields: root.fields-rail;
+        open: true;
+        committed(id, t) => { root.committed-by("F3", id, t); }
+        toggled(id, v) => { root.toggled-by("F3", id, v); }
+        browse-clicked(id) => { root.browses += 1; root.last-id = id; root.last-form = "F3"; }
+    }
+
+    // ---- G1, G2: the grant keys ----
+    Rectangle { x: 500px; y: 24px; width: 480px; height: 290px; background: Theme.panel-alt; }
+    g1 := GrantKeys {
+        x: 500px; y: 24px; width: 480px;
+        tune-shown: true;
+        tune-on: root.g1-tune-on;
+        settings-shown: true;
+        settings-on: root.g1-settings-on;
+        transmit-shown: true;
+        transmit-on: root.g1-transmit-on;
+        settings-note: "Radio settings lets this module change the mode, bandwidth, squelch, gains, sample rate, volume and mute, and start or stop the receiver. It is separate from receiver control, which only lets it tune.";
+        transmit-note: "Transmit lets this module hand FoxSDR audio to send. It is not enough alone: you must also ARM FOR PLUGINS on the TRANSMIT page, for 5, 15 or 60 minutes, and the arming is never remembered. FoxSDR chooses the frequency, the power and the mode, and never keys for longer than a minute at a time.";
+        tx-state: root.g1-tx-state;
+        tx-hot: root.g1-tx-hot;
+        tune-toggled(v) => { root.g1-tune-on = v; root.granted-by("tune", v); }
+        settings-toggled(v) => { root.g1-settings-on = v; root.granted-by("settings", v); }
+        transmit-toggled(v) => { root.g1-transmit-on = v; root.granted-by("transmit", v); }
+    }
+    Rectangle { x: 500px; y: 330px; width: 480px; height: 24px; background: Theme.panel-alt; }
+    g2 := GrantKeys {
+        x: 500px; y: 330px; width: 480px;
+        tune-shown: root.g2-tune-shown;
+        tune-on: root.g2-tune-on;
+        enabled: root.g2-enabled;
+        tune-toggled(v) => { root.g2-tune-on = v; root.granted-by("tune2", v); }
+    }
+
+    // ---- R1, R2: the Receiver control card ----
+    Rectangle { x: 500px; y: 362px; width: 316px; height: 226px; background: Theme.panel-alt; }
+    r1 := ReceiverControlCard {
+        x: 510px; y: 372px; width: 296px;
+        refusal: root.r1-refusal;
+        stale: root.stale-r1;
+        enabled: root.r1-enabled;
+        grant-toggled(i, v) => { root.card-toggles += 1; root.last-card = i; root.last-card-value = v; }
+    }
+    Rectangle { x: 830px; y: 362px; width: 316px; height: 60px; background: Theme.panel-alt; }
+    r2 := ReceiverControlCard {
+        x: 840px; y: 372px; width: 296px;
+        refusal: "";
+        stale: [];
+    }
+
+    // ---- S1, S2: the state chips ----
+    s1 := StateChips {
+        x: 500px; y: 600px; width: 640px;
+        chips: root.chips-s1;
+        toggled(i) => { root.chip-toggles += 1; root.last-chip = i; root.last-chip-source = "S1"; }
+    }
+    s2 := StateChips {
+        x: 500px; y: 640px; width: 400px;
+        chips: root.chips-s1;
+        enabled: root.s2-enabled;
+        toggled(i) => { root.chip-toggles += 1; root.last-chip = i; root.last-chip-source = "S2"; }
+    }
+
+    // ---- K1..K4: the run keys ----
+    k1 := RunKeys {
+        x: 500px; y: 710px; width: 280px;
+        offers-stop: root.k1-offers-stop;
+        mutes: root.k1-mutes;
+        mute-shown: true;
+        run-clicked => { root.ran-by("K1"); }
+        mute-toggled(v) => { root.k1-mutes = v; root.muted-by("K1", v); }
+    }
+    k2 := RunKeys {
+        x: 820px; y: 710px; width: 280px;
+        offers-stop: false;
+        idle: false;
+        mutes: false;
+        mute-shown: true;
+        run-clicked => { root.ran-by("K2"); }
+        mute-toggled(v) => { root.muted-by("K2", v); }
+    }
+    k3 := RunKeys {
+        x: 500px; y: 770px; width: 280px;
+        offers-stop: false;
+        idle: true;
+        mute-shown: false;
+        run-clicked => { root.ran-by("K3"); }
+        mute-toggled(v) => { root.muted-by("K3", v); }
+    }
+    k4 := RunKeys {
+        x: 820px; y: 770px; width: 280px;
+        offers-stop: true;
+        mutes: true;
+        mute-shown: true;
+        enabled: false;
+        run-clicked => { root.ran-by("K4"); }
+        mute-toggled(v) => { root.muted-by("K4", v); }
+    }
+}

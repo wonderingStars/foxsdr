@@ -59,6 +59,7 @@
 #include "engine/window_service_options.hpp"
 #include "host_duties.hpp"
 #include "host_logic.hpp"
+#include "kit_publish.hpp"
 #include "plugin_kit.hpp"
 #include "signatures.hpp"
 
@@ -249,6 +250,15 @@ int main(int argc, char** argv) {
 
     // THE UPDATE CARD'S EIGHT PROPERTIES, from the duties' model and only when it changed (a replaced list model recreates every repeater
     // item behind it). The card's two keys (below) and the tick both call this: what the duties decided is on screen the same tick.
+    // THE PLUGIN KIT'S PAGES (kit_publish.hpp): the DECODE bank, the docked and torn-off pages and the "Sound is muted" question, built from
+    // the kit's state after each tick and wired to it once.
+    foxsdr::slintkit::KitPublisher publisher(*ui, kit);
+    publisher.wire();
+    // A bounded run's self-capture: the pages FOXSDR_SLINT_OPEN names are opened once the plugins are known, and FOXSDR_SLINT_SHOT=1 saves a
+    // screenshot of the window at the last tick (the screenshot key's own path). Never set in a release; the GUI test gate's idiom.
+    if (const char* openSpec = std::getenv("FOXSDR_SLINT_OPEN")) { publisher.openFromEnv(openSpec); }
+    const bool shotAtEnd = std::getenv("FOXSDR_SLINT_SHOT") != nullptr;
+
     const auto applyUpdateCard = [&] {
         if (!duties.takeCardChange()) { return; }
         const UpdateCardModel& c = duties.card();
@@ -286,6 +296,7 @@ int main(int argc, char** argv) {
     Face face = Face::Plain;
     bool followBandPlan = true;
     int bankIndex = 0;
+    if (const char* bankEnv = std::getenv("FOXSDR_SLINT_BANK")) { bankIndex = std::clamp(std::atoi(bankEnv), 0, 4); }   // a bounded run's self-capture: the bank to show
     std::map<int, std::set<int>> openSections{{0, {2}}};   // SIGNAL's Radio row open, as the sheet
     MenuKind menuKind = MenuKind::None;
     double menuHz = 0; int menuMarkerNear = -1;
@@ -605,9 +616,7 @@ int main(int argc, char** argv) {
 
     // ---- centre ----
     ui->on_view_selected([&](int i) { ui->set_view_index(i); });
-    ui->on_window_tab_selected([&](int) {});
-    ui->on_window_tab_closed([&](int) {});
-    ui->on_add_window_clicked([&] { std::fprintf(stderr, "foxsdr-slint: docked windows come with the plugin kit (phase 3)\n"); });
+    // (the page tabs, the "+ Window" tab, the torn windows and every page body are the plugin kit's: kit_publish.cpp wires them)
     ui->on_trace_mode_selected([&](int i) { traceMode = i; ui->set_trace_mode(i); resetTrace(traceState); });
     ui->on_range_manual_selected([&](bool manual) { rangeManual = manual; ui->set_range_manual(manual); if (!manual) { setDisplayRange(-110, 0); } });
     ui->on_markers_clicked([&] { menuHz = state.tunedHz; openMenu(MenuKind::Marker, 700.f, 180.f); });
@@ -983,7 +992,7 @@ int main(int argc, char** argv) {
         // THE PLUGIN KIT'S DUTIES (plugin_kit.hpp): the directive, the poll, the pictures, the lists when they moved, the front end's facts,
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
-        for (const auto& line : kit.takeEvents().notices) { std::fprintf(stderr, "foxsdr-slint: %s\n", line.c_str()); }
+        publisher.publish(state);
     };
 
     // THE TICK = THE FRAME: the screen's reads, then the housekeeping (the sentinel's beat, the senders, the sweep, the update check), then the
@@ -996,7 +1005,10 @@ int main(int argc, char** argv) {
         in.deviceOpening = (state.flags & FOXAPI_RX_DEVICE_OPENING) != 0;
         duties.poll(in);
         applyUpdateCard();
-        if (bounded.noteTick()) { slint::quit_event_loop(); }
+        if (bounded.noteTick()) {
+            if (shotAtEnd) { ui->invoke_shortcut(ss("screenshot")); }
+            slint::quit_event_loop();
+        }
     });
 
     // `--frames 0` produces no frame at all: the window is neither shown nor run.
@@ -1015,6 +1027,14 @@ int main(int argc, char** argv) {
     // release, the clean-exit marker; then the window's last two steps. The session is closed last: a session closed before the stop would
     // drop the half that finish() queued.
     duties.finish();
+    // What the kit holds at the end of a bounded run, taken BEFORE the release lets the instances go.
+    std::string kitLine;
+    if (bounded.bounded()) {
+        kitLine = "kit attached=" + std::to_string(kitAttached ? 1 : 0) + " plugins=" + std::to_string(kit.lists().rows.size()) + " tracks=" + std::to_string(kit.tracks().size()) +
+                  " panels=" + std::to_string(kit.panels().size()) + " instruments=" + std::to_string(kit.instruments().size()) + " pictures=" + std::to_string(kit.images().size()) +
+                  " lines=" + std::to_string(kit.decoderLines().size()) + " map pages=" + std::to_string(kit.mapPages().size()) + "; " + publisher.pagesLine() +
+                  "; decode rows=" + std::to_string(ui->get_decode_rows() ? ui->get_decode_rows()->row_count() : std::size_t{0});
+    }
     // The kit's own release of everything borrowed from the modules (the basemap and track-info tables, every instance) on this thread,
     // before the service's stop unmaps them (app_window.cpp 2339: release and disconnect precede stop()).
     kit.release();
@@ -1024,9 +1044,11 @@ int main(int argc, char** argv) {
 
     if (bounded.bounded()) {
         // What the kit holds at the end of a bounded run: the evidence that the port answered on this thread.
-        std::fprintf(stderr, "foxsdr-slint: bounded run: kit attached=%d plugins=%zu tracks=%zu panels=%zu instruments=%zu pictures=%zu lines=%zu map pages=%zu\n",
-                     kitAttached ? 1 : 0, kit.lists().rows.size(), kit.tracks().size(), kit.panels().size(), kit.instruments().size(),
-                     kit.images().size(), kit.decoderLines().size(), kit.mapPages().size());
+        std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", kitLine.c_str());
+        for (const auto& r : kit.lists().rows) {
+            std::fprintf(stderr, "foxsdr-slint: plugin %-40s caps=0x%04x %s%s%s file=%s\n", r.name.c_str(), r.caps, r.loaded ? "loaded" : "REFUSED",
+                         r.stopped ? " stopped" : "", r.asleep ? " asleep" : "", r.file.c_str());
+        }
         // What the window itself holds at the end of a bounded run: the evidence that the duties' results reached its properties.
         std::string about(ui->get_about_text());
         std::replace(about.begin(), about.end(), '\n', '|');

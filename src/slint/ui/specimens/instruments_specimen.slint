@@ -1,0 +1,269 @@
+// The instruments specimen sheets (tests/test_slint_instruments.cpp): the nine instrument faces of the plugin kit's
+// Workbench-Instruments artboard (C1..C9), each as a LIVE and an EMPTY tile (the "no reading" rule: blank, dashes, ghost
+// cells, the sheet's own words - never a zero), framed the way the artboard's .tile frames them (panel ground, a 1px line
+// border, radius 8). A face is the tile's BODY only (no header, no preset row, no memory table: those are the page's), so a
+// tile's height is the face's preferred height + 2. `sheet` picks which of three sheets the window shows:
+//
+//   sheet 0 (1440 x 1300): the 18 tiles at the artboard's 472 px (the face is 470 wide inside the 1px frame)
+//   sheet 1 (1000 x 1200): the nine live faces at 322 px wide (the faces that have two columns stack), then the VOR three ways
+//   sheet 2 ( 920 x 1840): the nine live faces at 902 px wide (the flexible columns grow, the fixed ones stay), and a kind-99 tile
+//
+// sheet 0 -    x,    y,   w,   h - what                                              (face origin = tile + 1, face width 470)
+//   LIVE
+//              8,   12, 472, 161 - C1 GENERIC live: T0-T2 / V0-V2 on glass, EVENT 12 (3 + 3 filled slots)
+//            488,   12, 472, 176 - C2 PAGER live: 3 LCD lines, 14:32, 2 unread, capcode 1234567, type ALPHA, NEW and SYNC lit
+//            968,   12, 472, 140 - C3 TELEPRINTER live: previous line, heading, newest line, PAPER READY NEW ALERT, 0042
+//              8,  200, 472, 208 - C4 TONE ALERT live: 853.2 / 1273.9 Hz, MATCHED, the radial lamp ringing
+//            488,  200, 472, 175 - C5 VOR live: radial 274 locked, ident LON, OBS 090 (host-owned: `obs` on the root), TO
+//            968,  200, 472, 205 - C6 FAX live: PICTURE, IOC 576, 120 LPM, 312 lines, offset +40 Hz, NEW and LOCK lit
+//              8,  420, 472, 224 - C7 BEACON live: ADCC1B05FA0C8D1, carrier error +210 Hz, burst age 00:02:14, 3 bursts
+//            488,  420, 472, 119 - C8 METER live: ELECTRIC 47281936, 0048213 kWh, TAMPER encoder 1, last heard 00:00:09
+//            968,  420, 472, 183 - C9 WEATHER live: channel 1 21.4 C 56 %, channel 2 not heard, channel 3 HHH, BATT lit
+//   EMPTY (have: false)
+//              8,  656, 472,  71 - C1 GENERIC: NO READING YET
+//            488,  656, 472, 176 - C2 PAGER: blank glass, ghost cells, a dim envelope, NO PAGE RECEIVED
+//            968,  656, 472, 140 - C3 TELEPRINTER: PRINTER IDLE on a blank leader, dashes in the counter
+//              8,  844, 472, 208 - C4 TONE ALERT: NO PAGE, --, bars without an index, a dark lamp
+//            488,  844, 472, 175 - C5 VOR: the NO SIGNAL flag, no needle, no bar marker, no TO / FROM (the OBS knob still shows 090)
+//            968,  844, 472, 205 - C6 FAX: dashes, no tuning needle, an empty paper slot
+//              8, 1064, 472, 224 - C7 BEACON: fifteen ghost cells, no needle, no bursts bay
+//            488, 1064, 472, 119 - C8 METER: seven ghost cells, UNITS, UTILITY METER
+//            968, 1064, 472, 183 - C9 WEATHER: -- . - C, -- %, not heard, NO SENSOR HEARD YET
+// sheet 1 - the same nine live faces at 322 wide (x 8 / 338 / 668, y 8 / 336 / 731), then (y 963): C5 VOR on its own (no host
+//           binding: the knob keeps the user's position), C5 VOR disabled (45 %, the wheel does nothing), C9 WEATHER with a tooltip.
+// sheet 2 - the nine live faces, one column at x 8, 902 wide (y 8 177 361 509 725 908 1121 1353 1480), then (y 1671) a tile of an
+//           UNKNOWN kind (99): the generic face, under its own title.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { InstrumentFace, InstrumentState } from "../instruments.slint";
+export { Theme, Skin, Workbench, InstrumentState }
+
+// The artboard's .tile around one face: panel ground, line border, radius 8; the face sits inside the 1px border.
+component Tile inherits Rectangle {
+    in property <int> kind;
+    in property <string> title;
+    in property <InstrumentState> state;
+    in property <int> obs: 90;
+    in property <string> newest;
+    in property <string> previous;
+    in property <int> log-count: -1;
+    in property <string> heard;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback obs-changed(int);
+
+    height: face.height + 2 * Theme.hairline;
+    background: Theme.panel;
+    border-width: Theme.hairline;
+    border-color: Theme.line;
+    border-radius: Theme.radius-panel;
+    face := InstrumentFace {
+        x: Theme.hairline;
+        y: Theme.hairline;
+        width: parent.width - 2 * Theme.hairline;
+        height: self.preferred-height;
+        kind: root.kind;
+        title: root.title;
+        state: root.state;
+        obs-course: root.obs;
+        paper-newest: root.newest;
+        paper-previous: root.previous;
+        log-count: root.log-count;
+        heard: root.heard;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        obs-changed(c) => { root.obs-changed(c); }
+    }
+}
+
+// sheet 0, the nine live tiles
+component MainLive inherits Rectangle {
+    in property <[InstrumentState]> states;
+    in property <int> obs;
+    in property <string> newest;
+    in property <string> previous;
+    in property <int> log-count;
+    in property <string> heard;
+    callback obs-changed(int);
+    Tile { x: 8px;   y: 12px;  width: 472px; kind: 0; title: "WEATHER BEACON TEST"; state: root.states[0]; }
+    Tile { x: 488px; y: 12px;  width: 472px; kind: 1; state: root.states[1]; }
+    Tile { x: 968px; y: 12px;  width: 472px; kind: 2; state: root.states[2]; newest: root.newest; previous: root.previous; }
+    Tile { x: 8px;   y: 200px; width: 472px; kind: 3; state: root.states[3]; }
+    Tile { x: 488px; y: 200px; width: 472px; kind: 4; state: root.states[4]; obs: root.obs; obs-changed(c) => { root.obs-changed(c); } }
+    Tile { x: 968px; y: 200px; width: 472px; kind: 5; state: root.states[5]; }
+    Tile { x: 8px;   y: 420px; width: 472px; kind: 6; state: root.states[6]; log-count: root.log-count; }
+    Tile { x: 488px; y: 420px; width: 472px; kind: 7; state: root.states[7]; heard: root.heard; }
+    Tile { x: 968px; y: 420px; width: 472px; kind: 8; state: root.states[8]; }
+}
+
+// sheet 0, the nine empty tiles
+component MainEmpty inherits Rectangle {
+    in property <InstrumentState> none;
+    Tile { x: 8px;   y: 656px;  width: 472px; kind: 0; title: "WEATHER BEACON TEST"; state: root.none; }
+    Tile { x: 488px; y: 656px;  width: 472px; kind: 1; state: root.none; }
+    Tile { x: 968px; y: 656px;  width: 472px; kind: 2; state: root.none; }
+    Tile { x: 8px;   y: 844px;  width: 472px; kind: 3; state: root.none; }
+    Tile { x: 488px; y: 844px;  width: 472px; kind: 4; state: root.none; }
+    Tile { x: 968px; y: 844px;  width: 472px; kind: 5; state: root.none; }
+    Tile { x: 8px;   y: 1064px; width: 472px; kind: 6; state: root.none; }
+    Tile { x: 488px; y: 1064px; width: 472px; kind: 7; state: root.none; }
+    Tile { x: 968px; y: 1064px; width: 472px; kind: 8; state: root.none; }
+}
+
+// sheets 1 and 2: the nine live faces at the width the sheet gives them, at the x / y the root supplies
+component NineLive inherits Rectangle {
+    in property <length> tile-w;
+    in property <[length]> xs;
+    in property <[length]> ys;
+    in property <[InstrumentState]> states;
+    in property <string> newest;
+    in property <string> previous;
+    in property <int> log-count;
+    in property <string> heard;
+    Tile { x: root.xs[0]; y: root.ys[0]; width: root.tile-w; kind: 0; title: "WEATHER BEACON TEST"; state: root.states[0]; }
+    Tile { x: root.xs[1]; y: root.ys[1]; width: root.tile-w; kind: 1; state: root.states[1]; }
+    Tile { x: root.xs[2]; y: root.ys[2]; width: root.tile-w; kind: 2; state: root.states[2]; newest: root.newest; previous: root.previous; }
+    Tile { x: root.xs[3]; y: root.ys[3]; width: root.tile-w; kind: 3; state: root.states[3]; }
+    Tile { x: root.xs[4]; y: root.ys[4]; width: root.tile-w; kind: 4; state: root.states[4]; }
+    Tile { x: root.xs[5]; y: root.ys[5]; width: root.tile-w; kind: 5; state: root.states[5]; }
+    Tile { x: root.xs[6]; y: root.ys[6]; width: root.tile-w; kind: 6; state: root.states[6]; log-count: root.log-count; }
+    Tile { x: root.xs[7]; y: root.ys[7]; width: root.tile-w; kind: 7; state: root.states[7]; heard: root.heard; }
+    Tile { x: root.xs[8]; y: root.ys[8]; width: root.tile-w; kind: 8; state: root.states[8]; }
+}
+
+// sheet 1's last row: the VOR with no host binding, the VOR disabled, the weather console with a tooltip
+component NarrowExtras inherits Rectangle {
+    in property <InstrumentState> vor;
+    in property <InstrumentState> weather;
+    callback free-changed(int);
+    callback dis-changed(int);
+    Tile { x: 8px;   y: 963px; width: 322px; kind: 4; state: root.vor; obs-changed(c) => { root.free-changed(c); } }
+    Tile { x: 338px; y: 963px; width: 322px; kind: 4; state: root.vor; enabled: false; obs-changed(c) => { root.dis-changed(c); } }
+    Tile { x: 668px; y: 963px; width: 322px; kind: 8; state: root.weather; tooltip: "A 433 MHz weather console"; }
+}
+
+// sheet 2's last tile: a kind this library does not know gets the generic face
+component WideExtra inherits Rectangle {
+    in property <InstrumentState> state;
+    Tile { x: 8px; y: 1671px; width: 902px; kind: 99; title: "A KIND FROM THE FUTURE"; state: root.state; }
+}
+
+export component InstrumentsSpecimen inherits Window {
+    width: 1440px;
+    height: 1300px;
+    background: Theme.bg;
+
+    in property <int> sheet: 0;
+
+    // what the test observes: the course the host owns, and every change the knobs ask for
+    in-out property <int> obs: 90;
+    in-out property <int> obs-events;
+    in-out property <int> obs-last: -1;
+    in-out property <int> free-events;
+    in-out property <int> free-last: -1;
+    in-out property <int> dis-events;
+
+    // the nine live states (the test replaces them to change a reading, a flag or the clock)
+    in-out property <InstrumentState> st-generic: {
+        have: true, alert: true, lock: true, unread: true, seq: 12,
+        values: [21.4, 1013.2, 0.0042, 0, 0, 0, 0, 0],
+        texts: ["Bravo", "Idle", "Lock held", "", "", "", "", ""],
+    };
+    in-out property <InstrumentState> st-pager: {
+        have: true, lock: true, unread: true, seq: 18,
+        values: [2, 0, 0, 0, 0, 0, 0, 0],
+        texts: ["UK CALL 0123456 AMBULANCE CALL OUT ATTEND STATION RD", "1234567", "14:32", "ALPHA", "", "", "", ""],
+    };
+    in-out property <InstrumentState> st-tele: {
+        have: true, alert: true, unread: true, seq: 5,
+        values: [42, 0, 0, 0, 0, 0, 0, 0],
+        texts: ["G-EZBX", "BAW123", "H1", "2", "7", "", "", ""],
+    };
+    in-out property <InstrumentState> st-tone: {
+        have: true, alert: true, unread: true, seq: 4,
+        values: [853.2, 1273.9, 1.0, 3.0, 0, 0, 0, 0],
+        texts: ["A-B 853/1274", "Group 3", "MATCHED", "", "", "", "", ""],
+    };
+    in-out property <InstrumentState> st-vor: {
+        have: true, lock: true, unread: true, seq: 9,
+        values: [274, 0.92, 0.31, 0.30, 0, 0, 0, 0],
+        texts: ["LON", "", "", "", "", "", "", ""],
+    };
+    in-out property <InstrumentState> st-fax: {
+        have: true, lock: true, unread: true, seq: 7,
+        values: [576, 120, 312, 40, 0, 0, 0, 0],
+        texts: ["PICTURE", "", "", "", "", "", "", ""],
+    };
+    in-out property <InstrumentState> st-beacon: {
+        have: true, alert: true, unread: true, seq: 3,
+        values: [210, 134, 0, 0, 0, 0, 0, 0],
+        texts: ["ADCC1B05FA0C8D1", "United Kingdom (232)", "EPIRB / Standard Location", "51.2N 001.4W", "", "", "", ""],
+    };
+    in-out property <InstrumentState> st-meter: {
+        have: true, alert: true, unread: true, seq: 2,
+        values: [48213, 4, 0, 0, 0, 0, 0, 0],
+        texts: ["47281936", "ELECTRIC", "", "", "", "", "", ""],
+    };
+    in-out property <InstrumentState> st-weather: {
+        have: true, unread: true, seq: 2,
+        values: [21.4, 0, 250, 56, 0, 0, 5, 4],
+        texts: ["Oregon THGR122N", "", "Acme ST-9", "", "", "", "", ""],
+    };
+    // a kind from the future (the generic face): the test fills all sixteen slots of this one
+    in-out property <InstrumentState> st-future: {
+        have: true, alert: true, lock: true, unread: true, seq: 12,
+        values: [21.4, 1013.2, 0.0042, 0, 0, 0, 0, 0],
+        texts: ["Bravo", "Idle", "Lock held", "", "", "", "", ""],
+    };
+    in-out property <string> paper-newest: "DEP EGLL 1432Z RWY 27L";
+    in-out property <string> paper-previous: "DEP EGKK 1428Z RWY 26L";
+    in-out property <int> log-count: 3;
+    in-out property <string> heard: "00:00:09";
+    // the empty state every "no reading" tile shows: have false, every slot untouched
+    in-out property <InstrumentState> st-none: {
+        have: false,
+        values: [0, 0, 0, 0, 0, 0, 0, 0],
+        texts: ["", "", "", "", "", "", "", ""],
+    };
+
+    property <[InstrumentState]> live: [root.st-generic, root.st-pager, root.st-tele, root.st-tone, root.st-vor, root.st-fax, root.st-beacon, root.st-meter, root.st-weather];
+
+    if root.sheet == 0 : Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        MainLive {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            states: root.live; obs: root.obs; newest: root.paper-newest; previous: root.paper-previous;
+            log-count: root.log-count; heard: root.heard;
+            obs-changed(c) => { root.obs = c; root.obs-events += 1; root.obs-last = c; }
+        }
+        MainEmpty { x: 0px; y: 0px; width: parent.width; height: parent.height; none: root.st-none; }
+    }
+    if root.sheet == 1 : Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        NineLive {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            tile-w: 322px;
+            xs: [8px, 338px, 668px, 8px, 338px, 668px, 8px, 338px, 668px];
+            ys: [8px, 8px, 8px, 336px, 336px, 336px, 731px, 731px, 731px];
+            states: root.live; newest: root.paper-newest; previous: root.paper-previous;
+            log-count: root.log-count; heard: root.heard;
+        }
+        NarrowExtras {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            vor: root.st-vor; weather: root.st-weather;
+            free-changed(c) => { root.free-events += 1; root.free-last = c; }
+            dis-changed(c) => { root.dis-events += 1; }
+        }
+    }
+    if root.sheet == 2 : Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        NineLive {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            tile-w: 902px;
+            xs: [8px, 8px, 8px, 8px, 8px, 8px, 8px, 8px, 8px];
+            ys: [8px, 177px, 361px, 509px, 725px, 908px, 1121px, 1353px, 1480px];
+            states: root.live; newest: root.paper-newest; previous: root.paper-previous;
+            log-count: root.log-count; heard: root.heard;
+        }
+        WideExtra { x: 0px; y: 0px; width: parent.width; height: parent.height; state: root.st-future; }
+    }
+}

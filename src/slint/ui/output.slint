@@ -1,0 +1,625 @@
+// FoxSDR Slint front end - THE OUTPUT FAMILY of the plugin kit: LogView, PicturePane, TargetDetails.
+//
+// Lifted from the PluginKit sheet (Workbench-PluginKit.dc.html: "Decoder output tab / window", "Target details drawer") and, for the
+// wording and the states, from the ImGui window they replace (src/gui/app_window.cpp: the picture window, Target details). Everything
+// Theme has a token for is read from Theme; the lengths it has no metric for (the 17 px log line, the 13 px heading, the 120 px key
+// column) are literals taken from the sheet.
+//
+//   LogView        .win's body for the Decoder output: a bar 31 px high - a Follow checkbox, a Clear key (xs), the line count in
+//                  mono dim at the right, a Theme.line rule on its last row - then the log on Theme.field. The log is a ListView:
+//                  only the lines in view are made, so 500 or 20000 lines cost the same. Each line is 11 px mono on a 17 px pitch
+//                  (the sheet's 14 px line and 3 px gap), 10 px in from the left, the plugin's name in Theme.dim before the text; the
+//                  text is Theme.fg, or Theme.chip-warn-fg (WARN) / Theme.chip-err-fg (ERROR) / Theme.dim (muted). 6 px of padding
+//                  above the first line and below the last. With no lines, `empty-text` ("Listening...") is the first line, dim.
+//                  FOLLOW: while `follow` is on, a line that arrives (the model grows) scrolls the view to the end, and so does turning
+//                  it on; scrolling up turns nothing off. `follow` is in-out: bind it two-way (`follow <=> page.follow`) or write it
+//                  back from `follow-toggled`, because the first click on the box replaces a one-way binding. A long line is cut at
+//                  the right edge with an ellipsis: a ListView cannot scroll sideways, so the sheet's horizontal strip is not built.
+//                  The preset row the sheet shows under the bar (the plugin's name and its preset keys) is the PresetBar's.
+//   PicturePane    the picture window's body: a status row (28 px: the status text, the Save as BMP key, the save note) over the
+//                  picture, fitted (image-fit contain, centred) in the free area under it. `have: false` is the dim "Waiting for the
+//                  first image..." instead. With `interactive`, the pointer over the picture is the hand and a click is `pressed(x, y)`
+//                  in the picture's OWN pixels, worked out from the fitted rectangle and `pic-w` x `pic-h` (the picture's own size
+//                  when those are 0): x = floor(distance from the left of the fitted rectangle / scale), never outside 0 .. pic-w - 1.
+//   TargetDetails  the drawer body: a title row (the state dot, "Target details", the id chip at the right, its tone that of the
+//                  lamp), then the lines on the left and a 120 px column of small keys on the right (Go to on map, Follow / Stop
+//                  following, Close). `heading` is the callsign (13 px semibold); `lines` are 11 px, Theme.fg when `known`, Theme.dim
+//                  when not, a line flagged `heading` is drawn like the callsign (the host may pass the heading either way, not both),
+//                  `separator-after` a Theme.line hairline under the line, `mono-lines` puts the lines in the mono face (the host's
+//                  labels are padded to a column: "reg     G-XWBA"). `gone` is the id (`heading`) and "No longer being reported.",
+//                  with no lines and no Go / Follow keys; `empty-hint` is the dim sentence when there is nothing to show. `can-go`
+//                  false (the target has no position) disables Go to on map and Follow, never Stop following - a followed target
+//                  must always be stoppable. `framed` is the sheet's panel (ground, border, 8 px corners); the page form draws on the
+//                  window's own ground. Narrower than `side-min-w` (330 px: the drawer in the 296 px sections panel) the keys do not
+//                  take a column from the lines, they sit in a row under them. A TargetDetails sizes its own height (its rows,
+//                  wrapped at its width), so give it a width.
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { TipTimer } from "tooltip.slint";
+import { ChipTone, LampState, Chip, LampDot } from "chips.slint";
+import { Key } from "keys.slint";
+import { Checkbox } from "fields.slint";
+import { ScrollThumb } from "table.slint";
+
+export enum LineTone { normal, warn, err, muted }
+
+export struct LogLine { plugin: string, text: string, tone: LineTone }
+
+export struct DetailLine { text: string, known: bool, heading: bool, separator-after: bool }
+
+export component LogView inherits Rectangle {
+    // ---- what it shows ----
+    in property <[LogLine]> lines;                       // newest last
+    in-out property <bool> follow: true;
+    in property <string> count-text;                     // "128 lines"
+    in property <string> empty-text: "Listening...";
+    // ---- the words it draws itself, so a host can hand in its translations ----
+    in property <string> follow-text: "Follow";
+    in property <string> clear-text: "Clear";
+    // ---- how it behaves ----
+    in property <bool> enabled: true;                    // the bar's two controls; the log itself always scrolls
+    in property <string> tooltip;                        // shown while the pointer rests over the log
+    in property <length> line-h: 17px;                   // the pitch of a line
+    callback clear-clicked();
+    callback follow-toggled(bool);
+
+    property <length> bar-h: 31px;
+    property <length> pad-v: 6px;
+    property <length> pad-h: 10px;
+    property <length> glyph-w: glyph.preferred-width;    // one character of the mono face: the space between a name and its text
+    property <int> count: root.lines.length;
+    property <length> total-h: view.content-height;
+    property <length> vis-h: view.visible-height;
+    property <bool> settling;
+
+    accessible-role: AccessibleRole.list;
+    accessible-label: root.count-text;
+
+    // FOLLOW. The end is where the whole log has been scrolled; it is asked for when a line arrives, when the lines change height
+    // (the layout has caught up with the model), when the view is resized and when Follow is turned on. A ListView puts a jump of
+    // more than a screen on a line boundary, so the end is asked for once more a tick later, when it is a small move and exact.
+    function to-end() {
+        view.content-y = min(0px, view.visible-height - view.content-height);
+        root.settling = true;
+    }
+    changed count => { if (root.follow) { root.to-end(); } }
+    changed total-h => { if (root.follow) { root.to-end(); } }
+    changed vis-h => { if (root.follow) { root.to-end(); } }
+    changed follow => { if (root.follow) { root.to-end(); } }
+    Timer {
+        interval: 1ms;
+        running: root.settling;
+        triggered => {
+            root.settling = false;
+            if (root.follow) { view.content-y = min(0px, view.visible-height - view.content-height); }
+        }
+    }
+
+    // two hidden words that only measure: the width of a mono character, and of the word Follow (the checkbox is as wide as its box
+    // and its word; its own text wraps, so it gets a few pixels of slack)
+    glyph := Text { text: "0"; font-family: Theme.font-mono; font-size: Theme.font-small; visible: false; }
+    follow-word := Text { text: root.follow-text; font-family: Theme.font-ui; font-size: Theme.font-small; visible: false; }
+
+    // the log's ground, under the bar's rule
+    Rectangle {
+        x: 0px;
+        y: root.bar-h;
+        width: parent.width;
+        height: max(0px, parent.height - root.bar-h);
+        background: Theme.field;
+    }
+
+    view := ListView {
+        x: 0px;
+        y: root.bar-h + root.pad-v;
+        width: parent.width;
+        height: max(0px, parent.height - root.bar-h - 2 * root.pad-v);
+        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+        horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+        for line in root.lines : Rectangle {
+            width: view.visible-width;
+            height: root.line-h;
+            name := Text {
+                x: root.pad-h;
+                y: 0px;
+                width: min(self.preferred-width, parent.width * 0.4);
+                height: parent.height;
+                text: line.plugin;
+                color: Theme.dim;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                x: root.pad-h + (line.plugin != "" ? name.width + root.glyph-w : 0px);
+                y: 0px;
+                width: max(0px, parent.width - self.x - root.pad-h);
+                height: parent.height;
+                text: line.text;
+                color: line.tone == LineTone.warn ? Theme.chip-warn-fg
+                     : line.tone == LineTone.err ? Theme.chip-err-fg
+                     : line.tone == LineTone.muted ? Theme.dim
+                     : Theme.fg;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    // the pointer resting on the log shows the tooltip; the wheel passes through to the list
+    body-hover := TouchArea {
+        x: 0px;
+        y: root.bar-h;
+        width: parent.width;
+        height: max(0px, parent.height - root.bar-h);
+        scroll-event(e) => { reject }
+    }
+
+    if root.lines.length == 0 : Text {
+        x: root.pad-h;
+        y: root.bar-h + root.pad-v;
+        width: max(0px, parent.width - 2 * root.pad-h);
+        height: root.line-h;
+        text: root.empty-text;
+        color: Theme.dim;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // the scroll thumb of the table, over the right edge of the list: present only while there is more log than the view holds
+    if view.content-height > view.visible-height + 0.5px : ScrollThumb {
+        x: 0px;
+        y: view.y;
+        width: parent.width;
+        height: view.height;
+        content-height: view.content-height;
+        visible-height: view.visible-height;
+        content-y: view.content-y;
+        scrolled(y) => { view.content-y = y; }
+    }
+
+    // ---- the bar: 5 px above and below its 20 px of content, then the rule ----
+    follow-box := Checkbox {
+        x: root.pad-h;
+        y: (root.bar-h - Theme.hairline - self.height) / 2;
+        width: 22px + follow-word.preferred-width + 4px;
+        label: root.follow-text;
+        checked <=> root.follow;
+        enabled: root.enabled;
+        toggled(on) => { root.follow-toggled(on); }
+    }
+    clear-key := Key {
+        x: follow-box.x + follow-box.width + 8px;
+        y: 5px;
+        width: self.preferred-width;
+        xs: true;
+        label: root.clear-text;
+        enabled: root.enabled;
+        clicked => { root.clear-clicked(); }
+    }
+    Text {
+        x: clear-key.x + clear-key.width + 8px;
+        y: 5px;
+        width: max(0px, parent.width - self.x - root.pad-h);
+        height: 20px;
+        text: root.count-text;
+        color: Theme.dim;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Rectangle {
+        x: 0px;
+        y: root.bar-h - Theme.hairline;
+        width: parent.width;
+        height: Theme.hairline;
+        background: Theme.line;
+    }
+
+    TipTimer { x: 0px; y: 0px; hovered: body-hover.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+export component PicturePane inherits Rectangle {
+    // ---- what it shows ----
+    in property <image> picture;
+    in property <bool> have;                             // false: "Waiting for the first image..."
+    in property <string> status;                         // "640x480  receiving...  frame 12"
+    in property <bool> interactive;                      // the plugin takes clicks on its picture
+    in property <int> pic-w;                             // the picture's own size, the unit of pressed(x, y); 0 = the image's
+    in property <int> pic-h;
+    in property <bool> save-enabled: true;               // false while a save is being written
+    in property <string> save-note;                      // the outcome of the last save, dim, after the key
+    // ---- the words it draws itself ----
+    in property <string> waiting-text: "Waiting for the first image...";
+    in property <string> save-text: "Save as BMP";
+    // ---- how it behaves ----
+    in property <bool> enabled: true;
+    in property <string> tooltip;                        // shown while the pointer rests on a picture that takes clicks
+    callback pressed(int, int);                          // a click on the picture, in its own pixels
+    callback save-clicked();
+    // what the pointer shows (a test cannot read the cursor itself): the hand over a picture that takes clicks
+    out property <bool> hand: area.has-hover;
+
+    property <length> status-h: 28px;
+    property <length> pad: 10px;
+    property <length> area-w: max(0px, root.width - 2 * root.pad);
+    property <length> area-h: max(0px, root.height - root.status-h - root.pad);
+    property <int> nat-w: root.pic-w > 0 ? root.pic-w : root.picture.width;
+    property <int> nat-h: root.pic-h > 0 ? root.pic-h : root.picture.height;
+    // the scale of the fit, as the length of one picture pixel
+    property <length> unit: (root.nat-w > 0 && root.nat-h > 0) ? min(root.area-w / root.nat-w, root.area-h / root.nat-h) : 0px;
+    property <length> fit-w: root.nat-w * root.unit;
+    property <length> fit-h: root.nat-h * root.unit;
+    property <length> fit-x: root.pad + (root.area-w - root.fit-w) / 2;
+    property <length> fit-y: root.status-h + (root.area-h - root.fit-h) / 2;
+
+    accessible-role: groupbox;
+    accessible-label: root.status;
+
+    if !root.have : Text {
+        x: root.pad;
+        y: 0px;
+        width: max(0px, parent.width - 2 * root.pad);
+        height: root.status-h;
+        text: root.waiting-text;
+        color: Theme.dim;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    if root.have : HorizontalLayout {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: root.status-h;
+        padding-left: root.pad;
+        padding-right: root.pad;
+        spacing: 8px;
+        Text {
+            text: root.status;
+            color: Theme.fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        VerticalLayout {
+            alignment: center;
+            Key {
+                xs: true;
+                label: root.save-text;
+                enabled: root.enabled && root.save-enabled;
+                clicked => { root.save-clicked(); }
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.save-note;
+            color: Theme.dim;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    if root.have : Image {
+        x: root.fit-x;
+        y: root.fit-y;
+        width: root.fit-w;
+        height: root.fit-h;
+        source: root.picture;
+        image-fit: contain;
+        accessible-role: image;
+        accessible-label: root.status;
+    }
+
+    // the picture owns the gesture: a press elsewhere, or a release outside it, is never a position
+    area := TouchArea {
+        x: root.fit-x;
+        y: root.fit-y;
+        width: root.fit-w;
+        height: root.fit-h;
+        enabled: root.have && root.enabled && root.interactive;
+        mouse-cursor: (root.have && root.enabled && root.interactive) ? MouseCursor.pointer : MouseCursor.default;
+        clicked => {
+            root.pressed(Math.min(Math.max(Math.floor(self.mouse-x / root.unit), 0), root.nat-w - 1),
+                         Math.min(Math.max(Math.floor(self.mouse-y / root.unit), 0), root.nat-h - 1));
+        }
+    }
+
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// The keys of a TargetDetails: Go to on map, Follow / Stop following, Close (small keys). A 120 px column when there is room, a row under
+// the lines when there is not (`across`). Go to on map and Follow are the target's, Close is the window form's.
+component DetailKeys inherits Rectangle {
+    in property <bool> across;
+    in property <bool> has-target;
+    in property <bool> show-close;
+    in property <bool> can-go;
+    in property <bool> following;
+    in property <bool> enabled;
+    in property <string> go-text;
+    in property <string> follow-text;
+    in property <string> stop-text;
+    in property <string> close-text;
+    callback go-clicked();
+    callback follow-clicked();
+    callback close-clicked();
+
+    property <int> count: (root.has-target ? 2 : 0) + (root.show-close ? 1 : 0);
+
+    // a column: 24 px keys 4 px apart; a row: 24 px high with 2 px above it
+    height: root.count == 0 ? 0px : root.across ? 26px : root.count * 24px + (root.count - 1) * 4px;
+
+    if !root.across : VerticalLayout {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        alignment: start;
+        spacing: 4px;
+        if root.has-target : Key {
+            small: true;
+            wide: true;
+            min-width: 0px;
+            label: root.go-text;
+            enabled: root.enabled && root.can-go;
+            clicked => { root.go-clicked(); }
+        }
+        if root.has-target : Key {
+            small: true;
+            wide: true;
+            min-width: 0px;
+            label: root.following ? root.stop-text : root.follow-text;
+            enabled: root.enabled && (root.following || root.can-go);
+            clicked => { root.follow-clicked(); }
+        }
+        if root.show-close : Key {
+            small: true;
+            wide: true;
+            min-width: 0px;
+            label: root.close-text;
+            enabled: root.enabled;
+            clicked => { root.close-clicked(); }
+        }
+    }
+    if root.across : HorizontalLayout {
+        x: 0px;
+        y: 2px;
+        width: parent.width;
+        height: 24px;
+        alignment: start;
+        spacing: 6px;
+        if root.has-target : Key {
+            small: true;
+            min-width: 0px;
+            label: root.go-text;
+            enabled: root.enabled && root.can-go;
+            clicked => { root.go-clicked(); }
+        }
+        if root.has-target : Key {
+            small: true;
+            min-width: 0px;
+            label: root.following ? root.stop-text : root.follow-text;
+            enabled: root.enabled && (root.following || root.can-go);
+            clicked => { root.follow-clicked(); }
+        }
+        if root.show-close : Key {
+            small: true;
+            min-width: 0px;
+            label: root.close-text;
+            enabled: root.enabled;
+            clicked => { root.close-clicked(); }
+        }
+    }
+}
+
+export component TargetDetails inherits Rectangle {
+    // ---- what it shows ----
+    in property <string> heading;                        // the callsign (or, once gone, the id)
+    in property <string> chip;                           // the id's first 10 characters, or NONE
+    in property <LampState> lamp: LampState.off;         // lit while the target is still reported
+    in property <[DetailLine]> lines;
+    in property <bool> gone;                             // the target is no longer reported
+    in property <string> empty-hint;                     // shown when there are no lines and the target is not gone
+    in property <bool> can-go: true;                     // false: the target has no position, Go to on map and Follow are disabled
+    in property <bool> following;                        // the key says Stop following
+    in property <bool> show-close: false;                // the window form: a Close key under the others
+    in property <bool> framed: true;                     // the sheet's panel; false: drawn on the window's own ground
+    in property <bool> mono-lines: false;                // the lines in the mono face (the padded labels of the host's lines line up)
+    in property <length> side-min-w: 330px;              // from this width the keys are a 120 px column at the right of the lines; narrower, a row under them
+    // ---- the words it draws itself ----
+    in property <string> title-text: "Target details";
+    in property <string> go-text: "Go to on map";
+    in property <string> follow-text: "Follow";
+    in property <string> stop-text: "Stop following";
+    in property <string> close-text: "Close";
+    in property <string> gone-text: "No longer being reported.";
+    // ---- how it behaves ----
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback go-clicked();
+    callback follow-clicked();
+    callback close-clicked();
+
+    property <[DetailLine]> shown: root.gone ? [] : root.lines;       // a gone target shows no lines whatever the host still holds
+    property <bool> has-target: !root.gone && (root.lines.length > 0 || root.heading != "");
+    property <bool> show-hint: !root.gone && root.lines.length == 0 && root.empty-hint != "";
+    property <bool> has-keys: root.has-target || root.show-close;
+    property <bool> across: root.width < root.side-min-w;
+    property <ChipTone> chip-tone: root.lamp == LampState.green ? ChipTone.good
+        : (root.lamp == LampState.amber || root.lamp == LampState.yellow) ? ChipTone.warn
+        : root.lamp == LampState.red ? ChipTone.err
+        : ChipTone.neutral;
+
+    height: stack.preferred-height;
+    preferred-height: stack.preferred-height;
+    background: root.framed ? Theme.panel : transparent;
+    border-width: root.framed ? Theme.hairline : 0px;
+    border-color: Theme.line;
+    border-radius: root.framed ? Theme.radius-panel : 0px;
+
+    accessible-role: groupbox;
+    accessible-label: root.title-text;
+    accessible-description: root.tooltip;
+
+    hover := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; }
+
+    // the sheet's padding is 8 px 10 px inside a 1 px border; the content is laid out the same framed or not, so the two forms line up
+    stack := VerticalLayout {
+        padding-left: 10px + Theme.hairline;
+        padding-right: 10px + Theme.hairline;
+        padding-top: 8px + Theme.hairline;
+        padding-bottom: 8px + Theme.hairline;
+        spacing: 4px;
+
+        // the title row: the dot, the title, the chip at the right (24 px, as the sheet's .rw)
+        HorizontalLayout {
+            height: 24px;
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                LampDot { state: root.lamp; }
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: root.title-text;
+                color: Theme.fg;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-body;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.chip != "" : VerticalLayout {
+                alignment: center;
+                Chip { label: root.chip; tone: root.chip-tone; }
+            }
+        }
+
+        // the lines on the left, the keys on the right, 12 px apart, both from the top
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: stretch;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: start;
+                spacing: 2px;
+                if root.heading != "" : Rectangle {
+                    height: 17px;
+                    Text {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: parent.height;
+                        text: root.heading;
+                        color: Theme.fg;
+                        font-family: Theme.font-ui;
+                        font-size: 13px;
+                        font-weight: Theme.weight-semibold;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                for line in root.shown : Rectangle {
+                    property <length> text-h: line.heading ? 17px : 15px;
+                    height: self.text-h + (line.separator-after ? 5px : 0px);
+                    Text {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: parent.text-h;
+                        text: line.text;
+                        color: line.known ? Theme.fg : Theme.dim;
+                        font-family: (root.mono-lines && !line.heading) ? Theme.font-mono : Theme.font-ui;
+                        font-size: line.heading ? 13px : Theme.font-small;
+                        font-weight: line.heading ? Theme.weight-semibold : Theme.weight-regular;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if line.separator-after : Rectangle {
+                        x: 0px;
+                        y: parent.text-h + 3px;
+                        width: parent.width;
+                        height: Theme.hairline;
+                        background: Theme.line;
+                    }
+                }
+                if root.gone : Rectangle {
+                    height: 15px;
+                    Text {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: parent.height;
+                        text: root.gone-text;
+                        color: Theme.dim;
+                        font-family: Theme.font-ui;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                if root.show-hint : Rectangle {
+                    height: hint.preferred-height;
+                    hint := Text {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        text: root.empty-hint;
+                        color: Theme.dim;
+                        font-family: Theme.font-ui;
+                        font-size: Theme.font-small;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            if root.has-keys && !root.across : DetailKeys {
+                width: 120px;
+                across: false;
+                has-target: root.has-target;
+                show-close: root.show-close;
+                can-go: root.can-go;
+                following: root.following;
+                enabled: root.enabled;
+                go-text: root.go-text;
+                follow-text: root.follow-text;
+                stop-text: root.stop-text;
+                close-text: root.close-text;
+                go-clicked => { root.go-clicked(); }
+                follow-clicked => { root.follow-clicked(); }
+                close-clicked => { root.close-clicked(); }
+            }
+        }
+
+        // narrow (a drawer in the sections panel): the keys go in a row under the lines
+        if root.has-keys && root.across : DetailKeys {
+            across: true;
+            has-target: root.has-target;
+            show-close: root.show-close;
+            can-go: root.can-go;
+            following: root.following;
+            enabled: root.enabled;
+            go-text: root.go-text;
+            follow-text: root.follow-text;
+            stop-text: root.stop-text;
+            close-text: root.close-text;
+            go-clicked => { root.go-clicked(); }
+            follow-clicked => { root.follow-clicked(); }
+            close-clicked => { root.close-clicked(); }
+        }
+    }
+
+    TipTimer { x: 0px; y: 0px; hovered: hover.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
