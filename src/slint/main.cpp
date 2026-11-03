@@ -1,5 +1,5 @@
-// foxsdr-slint - THE SLINT WINDOW (phase 1 of the port, docs/engine-stage4.md 6.36): the Workbench main screen as
-// a client of the C API table.
+// foxsdr-slint - THE SLINT WINDOW (docs/engine-stage4.md 6.36; phase 2, step 2 of the port): the Workbench main
+// screen as a client of the C API table, HOSTED AS THE APPLICATION.
 //
 // The host owns an EngineService exactly as src/main.cpp does, opens a LOCAL session with VIEW|TUNE|SETTINGS, and
 // on a 33 ms slint::Timer heartbeats, read_state()s into the window's properties (through host_logic.hpp, the
@@ -8,17 +8,23 @@
 // never written: the detach count printed at exit is the proof), and drains poll_results. Every key, gesture and
 // shortcut of ui/main.slint becomes one submit() here; the app-level opcodes (click-to-tune, edge drag, display
 // floor/ceiling, markers) come from core/app_commands.hpp, a constants-only header, through the same submit().
-// Nothing of the engine is reached except through the table.
+// Nothing of the receiver is reached except through the table.
 //
-// THE REAL SETTINGS FILE IS NEVER TOUCHED. This window ships as a labelled PREVIEW beside the ImGui window, and
-// launching it is the opt-in. Its settings live in a folder of their own, %APPDATA%\foxsdr\slint-preview\ (the
-// engine keeps every side file - markers.json, recordings' notes - beside its config path, so the folder holds
-// all of them): on the first run that folder is seeded with a READ-ONLY copy of the user's config.json and
-// markers.json, so the preview starts with their radio, bookmarks and markers, and from then on it reads and
-// writes only its own copies. --config <path> or FOXSDR_SLINT_CONFIG name another file (the scratch runs), and
-// a path that resolves to the user's own %APPDATA%\foxsdr\config.json is refused outright unless
-// FOXSDR_SLINT_REAL=1 (nothing here sets it). slint-run.bat additionally redirects APPDATA/LOCALAPPDATA/
-// USERPROFILE to a scratch profile, as the GUI test gate does.
+// THE BOOT IS THE IMGUI WINDOW'S, STEP FOR STEP (src/main.cpp): bootProcess(ProcessKind::Host, ...) - which owns the
+// single-instance claim, the crash handlers, the diagnostics folders, the stored Diagnostics switch, the sentinel, the
+// console handler, the helper and tool modes and the refusal of arguments it does not know - then the service built with
+// the window application's options, the settings file's lock (a real session only), the restore, the session on the
+// table, the start, the run, the stop. bootProcess decides the settings file now: in a real session the user's own
+// per-user file, %APPDATA%\foxsdr\config.json; in a bounded run (`--frames N`) none, unless CASCADE_CONFIG_TEST names one.
+// The preview's own settings folder, --config, FOXSDR_SLINT_CONFIG and the refusal to touch the real file are GONE, and
+// the window is no longer labelled a preview. A SCRATCH RUN is therefore a bounded run with CASCADE_CONFIG_TEST naming
+// the file, or an interactive run with APPDATA, LOCALAPPDATA and USERPROFILE redirected to a scratch profile (the GUI test
+// gate's way; slint-run.bat does both). A test never runs this program on the real profile.
+//
+// THE HOUSEKEEPING the ImGui window does around its frame loop - the update check and its card, the crash-report sweep,
+// the two senders, the sentinel's phases and heartbeat, the console's close request, the settings handed to the engine at
+// the end - is host_duties.hpp, tested without a window. The tick below calls its poll(); the order at the end is
+// finish(), the service's stop(), closed() (tests/test_slint_duties.cpp holds this file's order from its text).
 
 #include <algorithm>
 #include <array>
@@ -45,10 +51,13 @@
 
 #include "foxsdr_api.h"
 #include "core/app_commands.hpp"
+#include "core/diag_log.hpp"
 #include "core/version.hpp"
 #include "engine/engine_service.hpp"
 #include "engine/fox_engine_api.hpp"
+#include "engine/process_boot.hpp"
 #include "engine/window_service_options.hpp"
+#include "host_duties.hpp"
 #include "host_logic.hpp"
 
 #include "main.h"  // generated from ui/main.slint by slint_target_sources
@@ -60,43 +69,6 @@ namespace {
 std::string lower(std::string s) {
     for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
     return s;
-}
-
-// The settings file: never the product's. See the header comment. `seeded` reports what the first run copied.
-std::string configPathFor(int argc, char** argv, std::string& seeded) {
-    for (int i = 1; i + 1 < argc; ++i) { if (std::strcmp(argv[i], "--config") == 0) { return argv[i + 1]; } }
-    if (const char* p = std::getenv("FOXSDR_SLINT_CONFIG"); p != nullptr && *p != '\0') { return p; }
-    const char* appdata = std::getenv("APPDATA");
-    if (appdata == nullptr || *appdata == '\0') {
-        std::filesystem::path exe = std::filesystem::absolute(argc > 0 && argv[0] != nullptr ? argv[0] : ".");
-        return (exe.parent_path() / "slint-preview-config.json").string();
-    }
-    const std::filesystem::path real = std::filesystem::path(appdata) / "foxsdr";
-    const std::filesystem::path preview = real / "slint-preview";
-    std::error_code ec;
-    std::filesystem::create_directories(preview, ec);
-    const std::filesystem::path mine = preview / "config.json";
-    if (!std::filesystem::exists(mine, ec)) {
-        // the one-time seed: the user's own files are only ever READ here
-        for (const char* name : {"config.json", "markers.json"}) {
-            const std::filesystem::path from = real / name;
-            if (std::filesystem::exists(from, ec) && std::filesystem::is_regular_file(from, ec)) {
-                if (std::filesystem::copy_file(from, preview / name, std::filesystem::copy_options::skip_existing, ec) && !ec) {
-                    seeded += std::string(seeded.empty() ? "" : ", ") + name;
-                }
-            }
-        }
-    }
-    return mine.string();
-}
-
-bool isTheRealConfig(const std::string& path) {
-    const char* appdata = std::getenv("APPDATA");
-    if (appdata == nullptr) { return false; }
-    std::error_code ec;
-    const auto real = std::filesystem::weakly_canonical(std::filesystem::path(appdata) / "foxsdr" / "config.json", ec);
-    const auto mine = std::filesystem::weakly_canonical(std::filesystem::path(path), ec);
-    return lower(real.string()) == lower(mine.string());
 }
 
 std::string fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof(b), f, v); return b; }
@@ -184,21 +156,45 @@ struct PaletteAction { std::string kind, title, detail; std::function<void()> ru
 int main(int argc, char** argv) {
     using namespace cascade::engine;
 
-    std::string seeded;
-    const std::string configPath = configPathFor(argc, argv, seeded);
-    if (isTheRealConfig(configPath) && std::getenv("FOXSDR_SLINT_REAL") == nullptr) {
-        std::fprintf(stderr, "foxsdr-slint: refusing to run on the product's own settings file (%s)\n", configPath.c_str());
-        return 2;
-    }
-    std::fprintf(stderr, "foxsdr-slint: settings %s%s%s\n", configPath.c_str(), seeded.empty() ? "" : " (seeded from your FoxSDR settings: ", seeded.empty() ? "" : (seeded + ")").c_str());
+    // EVERYTHING before the window: the console, the helper modes, the crash handlers, the instance claim, the argument parse, the tool
+    // modes, the stderr capture, the console handler and the sentinel - in that order, in bootProcess (src/main.cpp). A helper, a tool
+    // mode, a refused argument or a link handed to the instance already running ends the process here.
+    const BootResult boot = bootProcess(ProcessKind::Host, argc, argv);
+    if (boot.exit) { return boot.exitCode; }
+    BoundedRun bounded(boot.frames);
+    // The settings file this run owns: boot's answer, whatever it is (see the header comment).
+    const std::string configPath = boot.configPath;
 
-    // THE ENGINE'S SERVICE, as src/main.cpp holds it: built first, destroyed last; the window is its client.
+    // THE ENGINE'S SERVICE, as src/main.cpp holds it: built first, destroyed last; the window is its client. The diagnostics directory is
+    // empty unless this run is ALLOWED to write - which is not the same as whether the user wants it: the stored switch decides that.
     WindowServiceRun run;
-    run.configPath = configPath;
-    run.frames = -1;
-    EngineService service(windowServiceOptions(run));
+    run.configPath = boot.configPath;
+    run.diagnosticsDir = boot.mayWrite ? cascade::core::diagCrashDir() : std::string();
+    run.frames = boot.frames;
+    run.safePlugins = boot.safePlugins;
+    if (boot.safePlugins) { std::fprintf(stderr, "foxsdr-slint: safe mode - no plugin will be loaded in this session\n"); }
+    ServiceOptions options = windowServiceOptions(run);
+    // A BOUNDED RUN'S PASS FREE-RUNS HERE. windowServiceOptions steps a bounded run's pass by the window's frames (the ImGui window runs each
+    // part of the pass itself, through the host's hooks); this window has none of that and only reads what the engine publishes, so its N ticks
+    // are N heartbeats of a pass that runs on its own thread - what FOXSDR_PASS=free asks of the ImGui window, and what a real session has.
+    if (boot.frames >= 0) { options.stepped = false; }
+    EngineService service(options);
+
+    // THE SETTINGS FILE'S LOCK (src/main.cpp), for a real session only: the headless engine shares this file by design and refuses to run
+    // beside the window on it, so the window application says it is here by taking the lock it looks for. BEST EFFORT, never a refusal (the
+    // service's options say so: a second window has always been allowed); a refusal's sentence is shown here and in About all the same, for
+    // the day a host asks for a strict lock. A bounded run takes none and stays as hermetic as it was.
+    std::string lockSentence;
+    const bool lockAsked = boot.frames < 0 && service.persistent();
+    bool lockAccepted = true;
+    if (lockAsked) {
+        lockAccepted = service.acquireConfig(lockSentence);
+        if (!lockAccepted) { std::fprintf(stderr, "foxsdr-slint: %s\n", lockSentence.c_str()); }
+    }
+
+    // THE RESTORE (the plugin scan, the settings file's load, the receiver's half applied...), then CASCADE_CONFIG_TEST's read-back line.
     const EngineService::Restored restored = service.restore();
-    (void)restored;
+    if (boot.announceConfig && service.persistent()) { EngineService::announce(restored); }
 
     const FoxEngineApi* api = engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
     FoxEngine* handle = service.engine().apiHandle();
@@ -216,14 +212,54 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // THE ENGINE STARTS HERE: the receiver (a real session), the usage heartbeat, the settings forced to disk once with the unclean-exit
+    // marker false, the first pass, the control thread and the keeper thread. A start that fails is stopped all the same (src/main.cpp): the
+    // receiver this process started is stopped, and the marker says the run ended cleanly.
     std::string why;
-    if (!service.start(why)) { std::fprintf(stderr, "foxsdr-slint: %s\n", why.c_str()); return 1; }
+    if (!service.start(why)) {
+        std::fprintf(stderr, "foxsdr-slint: %s\n", why.c_str());
+        service.stop();
+        api->close_session(session);
+        return 1;
+    }
+
+    // THE HOUSEKEEPING (host_duties.hpp): the interface's half read from the table, the update check, the crash sweep armed, the sentinel
+    // left at "creating the window". The close it asks for (the installer has started, the console asked) is the event loop's end.
+    LiveWorld world(api, session);
+    HostDuties duties(world, [] { slint::quit_event_loop(); });
+    {
+        DutyStart s;
+        s.configPath = configPath;
+        s.configLoaded = restored.loaded;
+        s.diagnosticsDir = run.diagnosticsDir;
+        s.version = cascade::versionString();
+        s.frames = boot.frames;
+        s.lastRunUnclean = restored.lastRunUnclean;
+        s.lock = lockReportFor(lockAsked, lockAccepted, lockSentence, lockAsked ? readLockHolder(configPath) : std::string(), currentProcessId());
+        duties.start(s);
+    }
 
     auto ui = MainWindow::create();
     ui->set_version(ss(cascade::versionString()));
-    ui->set_preview(true);
-    ui->set_about_text(ss("The Slint window over the FoxSDR engine, a preview beside the FoxSDR window. It works on its own copy of your settings: " + configPath +
-                          (seeded.empty() ? std::string() : " (seeded on first run from " + seeded + ")") + ". Your FoxSDR settings are never written by it."));
+    ui->set_preview(false);   // this window boots as the host now; the property stays for a labelled beta
+    ui->set_about_text(ss(aboutText(duties.about())));
+
+    // THE UPDATE CARD'S EIGHT PROPERTIES, from the duties' model and only when it changed (a replaced list model recreates every repeater
+    // item behind it). The card's two keys (below) and the tick both call this: what the duties decided is on screen the same tick.
+    const auto applyUpdateCard = [&] {
+        if (!duties.takeCardChange()) { return; }
+        const UpdateCardModel& c = duties.card();
+        std::vector<slint::SharedString> notes;
+        for (const auto& n : c.notes) { notes.push_back(ss(n)); }
+        ui->set_update_shown(c.shown);
+        ui->set_update_headline(ss(c.headline));
+        ui->set_update_critical(c.critical);
+        ui->set_update_notes(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(notes)));
+        ui->set_update_primary(ss(c.primary));
+        ui->set_update_progress(c.progress);
+        ui->set_update_note(ss(c.note));
+        ui->set_update_error(ss(c.error));
+    };
 
     // ---- host state ----
     FoxReceiverState state{}; state.structSize = sizeof(state);
@@ -561,8 +597,8 @@ int main(int argc, char** argv) {
     ui->on_tune_step_clicked([&](float x, float y) { openMenu(MenuKind::TuneStep, x, y); });
     ui->on_follow_band_plan_toggled([&](bool v) { followBandPlan = v; });
     ui->on_team_message_seen([&] {});
-    ui->on_update_primary_clicked([&] {});
-    ui->on_update_dismissed([&] { ui->set_update_shown(false); });
+    ui->on_update_primary_clicked([&] { duties.updatePrimaryClicked(); applyUpdateCard(); });
+    ui->on_update_dismissed([&] { duties.updateDismissed(); applyUpdateCard(); });
 
     // ---- centre ----
     ui->on_view_selected([&](int i) { ui->set_view_index(i); });
@@ -701,8 +737,7 @@ int main(int argc, char** argv) {
     });
 
     // ---- the tick: heartbeat, read_state, lists, read_spectrum, poll_results -> properties ----
-    slint::Timer tick;
-    tick.start(slint::TimerMode::Repeated, std::chrono::milliseconds(33), [&] {
+    const auto onTick = [&] {
         (void)api->heartbeat(session);
         if (api->read_state(session, &state) < 0) { return; }
         if (state.listSeq != lastListSeq) { lastListSeq = state.listSeq; refreshLists(); }
@@ -788,8 +823,7 @@ int main(int argc, char** argv) {
         ui->set_source_line(ss(sourceLine(state, band)));
         ui->set_rate_line(ss(rateLine(state)));
         ui->set_converter_line(ss(lists.converter ? "via " + lists.converterName + " \xC2\xB7 LO " + fmtMHz(lists.converterLoHz) : std::string()));
-        ui->set_update_shown(false);        // no updater state crosses the table in API 0.3 (phase 2 adds it)
-        ui->set_team_message_shown(false);
+        ui->set_team_message_shown(false);  // the team message cards are a later phase's (the update card is the duties': applyUpdateCard)
 
         // the status bar
         HostExtras x;
@@ -941,14 +975,49 @@ int main(int argc, char** argv) {
         for (int32_t i = 0; i < got; ++i) {
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
+    };
+
+    // THE TICK = THE FRAME: the screen's reads, then the housekeeping (the sentinel's beat, the senders, the sweep, the update check), then the
+    // update card if the duties changed it, then the bounded run's count. `--frames N` is N ticks and exit 0 (BoundedRun); a real session never
+    // ends itself.
+    slint::Timer tick;
+    tick.start(slint::TimerMode::Repeated, std::chrono::milliseconds(33), [&] {
+        onTick();
+        TickInput in;
+        in.deviceOpening = (state.flags & FOXAPI_RX_DEVICE_OPENING) != 0;
+        duties.poll(in);
+        applyUpdateCard();
+        if (bounded.noteTick()) { slint::quit_event_loop(); }
     });
 
-    ui->show();
-    slint::run_event_loop();
+    // `--frames 0` produces no frame at all: the window is neither shown nor run.
+    if (!bounded.skipsLoop()) {
+        ui->show();
+        duties.windowUp();
+        slint::run_event_loop();
+    }
 
     tick.stop();
     std::fprintf(stderr, "foxsdr-slint: %d frames painted, %d buffer detaches (0 = every frame reused its buffer)\n", wells.frames, wells.detaches);
-    api->close_session(session);
+
+    // THE END, in the order src/main.cpp and app_window.cpp hold: the window's part (the sentinel's first shutdown step, the sweep stopped and
+    // its memory kept, the senders cancelled, the last half of the settings handed to the engine) while the engine is still running; then the
+    // service's stop - one whole pass first, which applies what finish() handed over, the final-state save, the receiver's stop, the plugins'
+    // release, the clean-exit marker; then the window's last two steps. The session is closed last: a session closed before the stop would
+    // drop the half that finish() queued.
+    duties.finish();
     service.stop();
+    duties.closed();
+    api->close_session(session);
+
+    if (bounded.bounded()) {
+        // What the window itself holds at the end of a bounded run: the evidence that the duties' results reached its properties.
+        std::string about(ui->get_about_text());
+        std::replace(about.begin(), about.end(), '\n', '|');
+        std::fprintf(stderr, "foxsdr-slint: bounded run: update card shown=%d headline=\"%s\" primary=\"%s\" progress=%.2f; about: %s\n",
+                     ui->get_update_shown() ? 1 : 0, std::string(ui->get_update_headline()).c_str(), std::string(ui->get_update_primary()).c_str(),
+                     static_cast<double>(ui->get_update_progress()), about.c_str());
+        std::fprintf(stderr, "%s\n", bounded.exitLine(0).c_str());
+    }
     return 0;
 }

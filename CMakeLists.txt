@@ -1143,6 +1143,10 @@ endif()  # CASCADE_BUILD_INTERFACE: the window application's half ends here
 # about the ImGui window or the tests. docs/engine-stage4.md records the spike.
 option(CASCADE_BUILD_SLINT "Build foxsdr-slint, the Slint window over the C API table (needs the Slint SDK on CMAKE_PREFIX_PATH)" OFF)
 if(CASCADE_BUILD_SLINT)
+    # The Slint tests (ctest label `slint`) register under THIS tree too, whether or not the ImGui window is built: the root's own
+    # enable_testing() is below, inside CASCADE_BUILD_INTERFACE, and an add_test with no enable_testing above it is dropped without a word
+    # (the engine-only build ran no Slint test through ctest). Calling it twice is harmless.
+    enable_testing()
     add_subdirectory(src/slint)
 endif()
 
