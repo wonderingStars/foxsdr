@@ -45,6 +45,9 @@ Verification:
 - The catalogue test: 230,639 checks over 2,324 keys in 33 languages, none
   failed.
 - Every bank was captured live in the real window on a scratch profile.
+- No control of the four banks has yet been driven by a pointer in the live
+  window: each command is covered by the bank's tests and the bodies were
+  captured live, but no key in them has been clicked for real.
 - The tick list accounts for every control of every inventory: 1,451 present,
   198 relocated and 314 deferred with reasons, of 1,963.
 - The headless and GUI labels and the installer are run by the release gate
