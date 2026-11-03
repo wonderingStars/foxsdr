@@ -15,8 +15,11 @@
 #   build         configure and build Release twice, hash cascade.exe, run --version,
 #                 archive the symbols for exactly that binary. foxsdr-engine.exe is built
 #                 beside it and held to the same version line and its own symbols (it is not
-#                 a Windows release file: the installer and the MSIX stay cascade.exe's).
-#   installer     ISCC, then the installer's name, size and hash.
+#                 a Windows release file). foxsdr-slint.exe (the Slint window, the installer's
+#                 application) is built in the same two passes, hashed and held to the same
+#                 version line; the MSIX stays cascade.exe's.
+#   installer     ISCC (SlintIsApp=1: foxsdr-slint.exe + slint_cpp.dll are the application,
+#                 cascade.exe the "classic window"), then the installer's name, size and hash.
 #   msix          build-msix.ps1 with the Store identity, then the package's own
 #                 manifest (name, publisher, version) and the exe inside it.
 #   install-test  silent per-user install, the installed exe against the built one,
@@ -92,6 +95,9 @@ param(
     [string] $SiteDir = '',
     [string] $VcCrtDir = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC\14.44.35112\x64\Microsoft.VC143.CRT',
     [string] $VcpkgRoot = 'C:\vcpkg',
+    # The prebuilt Slint C++ SDK (CMAKE_PREFIX_PATH for CASCADE_BUILD_SLINT): foxsdr-slint.exe is the application
+    # the Windows installer ships (installer\cascade.iss, SlintIsApp).
+    [string] $SlintSdk = 'C:\Users\steve\slint-cpp-1.18.1',
     [string] $GitUserName = 'Steven Fox',
     [string] $GitUserEmail = 'wonderingStars@users.noreply.github.com'
 )
@@ -461,11 +467,13 @@ function Step-Build {
     }
     if ($script:Ctx.DryRun -and (Test-StepDone 'build')) { Write-Result 'INFO' 'build' 'already done for this commit (a real run would skip it)' }
     Assert-TreeCleanForBuild
+    Assert-Check (Test-Path -LiteralPath (Join-Path $SlintSdk 'lib\cmake\Slint')) 'tool: Slint SDK' $SlintSdk 'foxsdr-slint.exe is the application the installer ships; install the prebuilt Slint C++ SDK there or pass -SlintSdk'
 
     $toolchain = (Join-Path $VcpkgRoot 'scripts\buildsystems\vcpkg.cmake').Replace('\', '/')
     $cmake = Find-Tool 'cmake' @('C:\Program Files\CMake\bin\cmake.exe')
     $cfgArgs = @('-S', $RC.Repo, '-B', $RC.BuildDir, '-G', 'Visual Studio 17 2022', '-A', 'x64',
-        ('-DCMAKE_TOOLCHAIN_FILE=' + $toolchain), '-DVCPKG_TARGET_TRIPLET=x64-windows', '-DCMAKE_BUILD_TYPE=Release')
+        ('-DCMAKE_TOOLCHAIN_FILE=' + $toolchain), '-DVCPKG_TARGET_TRIPLET=x64-windows', '-DCMAKE_BUILD_TYPE=Release',
+        '-DCASCADE_BUILD_SLINT=ON', ('-DCMAKE_PREFIX_PATH=' + $SlintSdk.Replace('\', '/')))
     $r = Invoke-Planned -What 'configure' -File $cmake -Arguments $cfgArgs -TimeoutSec 900 -WorkDir $RC.Repo
     if ($null -ne $r) {
         Assert-Check ($r.ExitCode -eq 0) 'configure exit code' ([string]$r.ExitCode) ('see ' + $script:Ctx.LogPath)
@@ -483,16 +491,25 @@ function Step-Build {
     # asserted here because it is the SAME source and the same version stamp, and a build that cannot
     # produce it, or one that stamps it with another version, is a broken release whatever it ships.
     $engineExe = Join-Path $RC.BuildDir 'Release\foxsdr-engine.exe'
+    # foxsdr-slint.exe, the Slint window, IS the application the installer ships (installer\cascade.iss,
+    # SlintIsApp, on by default), with its runtime slint_cpp.dll beside it in build\src\slint\Release.
+    # cascade.exe still ships beside it as the "classic window". The MSIX / Store input stays cascade.exe's.
+    $slintExe = Join-Path $RC.BuildDir 'src\slint\Release\foxsdr-slint.exe'
+    $slintDll = Join-Path $RC.BuildDir 'src\slint\Release\slint_cpp.dll'
     $hashes = @()
+    $slintHashes = @()
     foreach ($pass in 1, 2) {
-        $b = Invoke-Planned -What ('build pass ' + $pass) -File $cmake -Arguments @('--build', $RC.BuildDir, '--config', 'Release', '--target', 'cascade', 'foxsdr-engine', '--', '-m:4') -TimeoutSec 3600 -WorkDir $RC.Repo
+        $b = Invoke-Planned -What ('build pass ' + $pass) -File $cmake -Arguments @('--build', $RC.BuildDir, '--config', 'Release', '--target', 'cascade', 'foxsdr-engine', 'foxsdr-slint', '--', '-m:4') -TimeoutSec 3600 -WorkDir $RC.Repo
         if ($null -eq $b) { continue }
         Assert-Check ($b.ExitCode -eq 0) ('build pass ' + $pass + ' exit code') ([string]$b.ExitCode + ' in ' + ('{0:N0}' -f $b.Seconds) + ' s') ('see ' + $script:Ctx.LogPath)
         Assert-Check (Test-Path -LiteralPath $exe) ('build pass ' + $pass + ': cascade.exe') $exe 'the build reported success but wrote no cascade.exe'
         Assert-Check (Test-Path -LiteralPath $engineExe) ('build pass ' + $pass + ': foxsdr-engine.exe') $engineExe 'the build reported success but wrote no foxsdr-engine.exe'
+        Assert-Check ((Test-Path -LiteralPath $slintExe) -and (Test-Path -LiteralPath $slintDll)) ('build pass ' + $pass + ': foxsdr-slint.exe and slint_cpp.dll') $slintExe 'the build reported success but wrote no foxsdr-slint.exe or slint_cpp.dll; configure with CASCADE_BUILD_SLINT=ON and the Slint SDK on CMAKE_PREFIX_PATH (-SlintSdk)'
         $hashes += (Get-Sha256 $exe)
+        $slintHashes += (Get-Sha256 $slintExe)
     }
     if ($script:Ctx.DryRun) {
+        Write-Plan 'check' 'foxsdr-slint.exe --version prints "FoxSDR <version>" (the installer ships it as the application, with slint_cpp.dll)'
         Write-Plan 'check' 'cascade.exe --version prints "FoxSDR <version>"'
         Write-Plan 'check' 'foxsdr-engine.exe --version prints "FoxSDR <version>" too (built and checked here, not shipped on Windows)'
         Write-Plan 'check' 'build\Release holds no runtime DLL but SoapySDR.dll'
@@ -513,6 +530,22 @@ function Step-Build {
     Assert-Check ($ver.ExitCode -eq 0 -and $line.Trim() -eq ('FoxSDR ' + $v)) 'cascade.exe --version' ('"' + $line.Trim() + '" exit ' + $ver.ExitCode) ('expected "FoxSDR ' + $v + '"; for a windows-subsystem build the output must still arrive on the redirected pipe')
     $sub = Get-PeSubsystem $exe
     Write-Result 'INFO' 'cascade.exe subsystem' $sub
+
+    # The Slint window, held to the same checks as cascade.exe: unchanged by the second pass, and the same
+    # version line (its bootProcess answers --version before any window opens).
+    if ($slintHashes[0] -eq $slintHashes[1]) {
+        Write-Result 'PASS' 'build pass 2 left foxsdr-slint.exe unchanged' $slintHashes[1]
+    } else {
+        Write-Result 'WARN' 'build pass 2 relinked foxsdr-slint.exe' ('pass 1 ' + $slintHashes[0] + ', pass 2 ' + $slintHashes[1] + '; the final one is what the installer packages')
+    }
+    $sver = Get-VersionOutput $slintExe
+    $sline = ($sver.StdOut -split "`r?`n" | Where-Object { $_.Trim() -ne '' } | Select-Object -First 1)
+    if ($null -eq $sline) { $sline = '' }
+    Assert-Check ($sver.ExitCode -eq 0 -and $sline.Trim() -eq ('FoxSDR ' + $v)) 'foxsdr-slint.exe --version' ('"' + $sline.Trim() + '" exit ' + $sver.ExitCode) ('expected "FoxSDR ' + $v + '", the line cascade.exe prints; the Slint window takes its version from the same stamp')
+    $slintSub = Get-PeSubsystem $slintExe
+    Write-Result 'INFO' 'foxsdr-slint.exe subsystem' $slintSub
+    $slintSha = $slintHashes[1]
+    Write-Result 'PASS' 'foxsdr-slint.exe' ('{0:N0} bytes, sha256 {1}; slint_cpp.dll sha256 {2}' -f (Get-Item -LiteralPath $slintExe).Length, $slintSha, (Get-Sha256 $slintDll))
 
     # The engine's own version line: read the same way, and it must be the same line. A console
     # program, so its output needs no redirected-handle care, but it goes through the same helper.
@@ -595,7 +628,7 @@ function Step-Build {
     $size = (Get-Item -LiteralPath $exe).Length
     Write-Result 'PASS' 'cascade.exe' ('{0:N0} bytes, sha256 {1}' -f $size, $exeSha)
     Write-Result 'PASS' 'softgl' (($softPins.Keys | ForEach-Object { $_ + ' ' + $softSha[$_] }) -join '; ')
-    Set-StepDone 'build' @{ 'msix-in\cascade.exe' = $exeSha; 'msix-in\SoapySDR.dll' = $dllSha; 'msix-in\softgl\opengl32.dll' = $softSha['opengl32.dll']; 'msix-in\softgl\libgallium_wgl.dll' = $softSha['libgallium_wgl.dll'] } @{ exeSha256 = $exeSha; dllSha256 = $dllSha; softglOpengl32Sha256 = $softSha['opengl32.dll']; softglGalliumSha256 = $softSha['libgallium_wgl.dll']; size = $size; buildId = $buildId; subsystem = $sub; versionLine = $line.Trim() }
+    Set-StepDone 'build' @{ 'msix-in\cascade.exe' = $exeSha; 'msix-in\SoapySDR.dll' = $dllSha; 'msix-in\softgl\opengl32.dll' = $softSha['opengl32.dll']; 'msix-in\softgl\libgallium_wgl.dll' = $softSha['libgallium_wgl.dll'] } @{ exeSha256 = $exeSha; dllSha256 = $dllSha; softglOpengl32Sha256 = $softSha['opengl32.dll']; softglGalliumSha256 = $softSha['libgallium_wgl.dll']; size = $size; buildId = $buildId; subsystem = $sub; versionLine = $line.Trim(); slintExeSha256 = $slintSha }
     return 'done'
 }
 
@@ -622,7 +655,10 @@ function Step-Installer {
     if (-not $script:Ctx.DryRun -and -not (Test-Path -LiteralPath $RC.Dist)) { New-Item -ItemType Directory -Path $RC.Dist -Force | Out-Null }
     # Started from here, not from Git Bash: ISCC's /D and /O switches are rewritten
     # into paths by MSYS. The switches are the ones `ISCC /?` prints.
-    $isccArgs = @(('/O' + $RC.Dist), ('/DBuildDir=' + (Join-Path $RC.BuildDir 'Release')), ('/DVcCrtDir=' + $VcCrtDir), (Join-Path $RC.Repo 'installer\cascade.iss'))
+    # SlintIsApp=1 is the .iss default, passed anyway so the release does not change if that default ever does:
+    # the Slint window (foxsdr-slint.exe + slint_cpp.dll from build\src\slint\Release) is the application and
+    # cascade.exe ships beside it as the "classic window".
+    $isccArgs = @(('/O' + $RC.Dist), ('/DBuildDir=' + (Join-Path $RC.BuildDir 'Release')), ('/DSlintIsApp=1'), ('/DSlintDir=' + (Join-Path $RC.BuildDir 'src\slint\Release')), ('/DVcCrtDir=' + $VcCrtDir), (Join-Path $RC.Repo 'installer\cascade.iss'))
     $r = Invoke-Planned -What 'iscc' -File $iscc -Arguments $isccArgs -TimeoutSec 900 -WorkDir $RC.Repo
     if ($null -eq $r) { Write-Plan 'check' ('the installer ' + $RC.InstallerName + ' exists, with its size and sha256'); return 'done' }
     Assert-Check ($r.ExitCode -eq 0 -and $r.Output -match 'Successful compile') 'ISCC exit code' ([string]$r.ExitCode) ('see ' + $script:Ctx.LogPath)

@@ -1,7 +1,9 @@
 ; FoxSDR (cascade) Windows installer (Inno Setup 6).
 ;
 ; Builds a self-contained setup.exe: cascade.exe + SoapySDR.dll (the hardware
-; ABI boundary — the ONLY runtime DLL the build produces, enforced below) plus
+; ABI boundary — the ONLY runtime DLL the build produces, enforced below; with the
+; default SlintIsApp=1 the Slint window foxsdr-slint.exe + its slint_cpp.dll are the
+; application and cascade.exe stays as the "classic window", see SlintIsApp below) plus
 ; app-local MSVC runtime DLLs (msvcp140/vcruntime140/vcruntime140_1, sourced
 ; from the VS Redist folder — mirrors mayhem-b200's app-local-CRT approach; the
 ; UCRT is inbox on Windows 10+). Hardware vendor modules (SoapyUHD etc.) are
@@ -46,7 +48,26 @@
   #include "generated-version.iss"
 #endif
 #define AppPublisher "Steven Fox"
-#define AppExe "cascade.exe"
+; SlintIsApp: WHICH WINDOW IS THE APPLICATION (docs/engine-stage4.md 6.36-6.38; the port session's decision of
+; 2026-11-03). DEFAULT ON: the Slint window foxsdr-slint.exe (built by CASCADE_BUILD_SLINT into
+; build\src\slint\Release, with its runtime slint_cpp.dll beside it) is what the Start-menu entry, the desktop
+; icon, the Add/Remove Programs icon, the foxsdr: protocol handler and the run-after-install entry start.
+; cascade.exe (the ImGui window) is STILL INSTALLED beside it, with one secondary Start-menu entry, "FoxSDR
+; (classic window)", because the store, bookmarks, scanner, airband and recorder pages are not ported yet.
+; Both exes are in {app}, so ONE {app}\plugins folder serves both (each looks for plugins\ beside itself).
+; To build the classic installer (cascade.exe the application, no Slint files, nothing else changed):
+;   ISCC.exe /DSlintIsApp=0 installer\cascade.iss
+#ifndef SlintIsApp
+  #define SlintIsApp "1"
+#endif
+; ISPP hands a /D value over as text, and the text "0" is TRUE in a bare #if, so the switch is compared as a string:
+; SlintOn is 1 unless SlintIsApp is exactly 0 (every other value, including /DSlintIsApp=1, leaves it on).
+#define SlintOn (("" + SlintIsApp) != "0")
+#if SlintOn
+  #define AppExe "foxsdr-slint.exe"
+#else
+  #define AppExe "cascade.exe"
+#endif
 ; Install-dir leaf avoids '+' (some tools mishandle it in paths); display name keeps it.
 #define InstallLeaf "FoxSDR"
 ; Overridable so a nightly can be packaged from its own build tree. That tree
@@ -55,6 +76,12 @@
 ; leave a release binary calling itself a nightly.
 #ifndef BuildDir
   #define BuildDir AddBackslash(SourcePath) + "..\build\Release"
+#endif
+#if SlintOn
+  ; Where the Slint build leaves its two files. Overridable like BuildDir.
+  #ifndef SlintDir
+    #define SlintDir AddBackslash(SourcePath) + "..\build\src\slint\Release"
+  #endif
 #endif
 #ifndef VcCrtDir
   #define VcCrtDir "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC\14.44.35112\x64\Microsoft.VC143.CRT"
@@ -79,8 +106,15 @@
 #define FindResult
 #sub CheckRuntimeDll
   #define DllName FindGetFileName(FindHandle)
-  #if LowerCase(DllName) != "soapysdr.dll"
-    #pragma error "Unexpected runtime DLL in build\Release: " + DllName + " — payload contract is cascade.exe + SoapySDR.dll only; update installer\cascade.iss deliberately"
+  #if SlintOn
+    ; With the Slint window as the application the contract admits ONE more runtime DLL, slint_cpp.dll.
+    #if LowerCase(DllName) != "soapysdr.dll" && LowerCase(DllName) != "slint_cpp.dll"
+      #pragma error "Unexpected runtime DLL in build\Release: " + DllName + " — payload contract is cascade.exe + SoapySDR.dll (+ slint_cpp.dll with SlintIsApp) only; update installer\cascade.iss deliberately"
+    #endif
+  #else
+    #if LowerCase(DllName) != "soapysdr.dll"
+      #pragma error "Unexpected runtime DLL in build\Release: " + DllName + " — payload contract is cascade.exe + SoapySDR.dll only; update installer\cascade.iss deliberately"
+    #endif
   #endif
   #expr DllCount = DllCount + 1
 #endsub
@@ -108,6 +142,15 @@
 #if FindHandle
   #expr FindClose(FindHandle)
 #endif
+; The Slint window (SlintIsApp): foxsdr-slint.exe and its runtime slint_cpp.dll, built by CASCADE_BUILD_SLINT into
+; build\src\slint\Release (NOT build\Release; only these two files are taken from there - that folder also holds the
+; test programs and a SoapySDR.dll copy for them). Their other imports are Windows itself, SoapySDR.dll and the VC
+; runtime, which this script already stages.
+#if SlintOn
+  #if !FileExists(SlintDir + "\foxsdr-slint.exe") || !FileExists(SlintDir + "\slint_cpp.dll")
+    #pragma error "foxsdr-slint.exe and slint_cpp.dll not found in " + SlintDir + " — configure with CASCADE_BUILD_SLINT=ON and the Slint SDK on CMAKE_PREFIX_PATH and build the foxsdr-slint target, or build the classic installer with /DSlintIsApp=0"
+  #endif
+#endif
 
 [Setup]
 AppId={{{#AppGuid}}
@@ -126,9 +169,9 @@ OutputBaseFilename=foxsdr-setup-{#AppVersion}
 ; wizard's title-bar icon. Same .ico the executable embeds via
 ; resources\icon\foxsdr.rc, so setup and app are visually one product.
 SetupIconFile=..\resources\icon\foxsdr.ico
-; Add/Remove Programs icon. Resolves to the installed cascade.exe, which now
-; carries the icon as its lowest-numbered RT_GROUP_ICON — no separate .ico is
-; installed, and nothing here needed to change for the icon to appear.
+; Add/Remove Programs icon. Resolves to the installed AppExe: cascade.exe and
+; foxsdr-slint.exe both embed resources\iconoxsdr.rc as their lowest-numbered
+; RT_GROUP_ICON - no separate .ico is installed.
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName} {#AppVersion}
 WizardStyle=modern
@@ -168,7 +211,7 @@ Name: "cleaninstall"; Description: "Delete existing FoxSDR settings, plugins, ca
 
 [Files]
 ; Core payload — the runtime binaries the build produces.
-Source: "{#BuildDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\cascade.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\SoapySDR.dll"; DestDir: "{app}"; Flags: ignoreversion
 ; The software OpenGL renderer, in a folder of its own: beside cascade.exe its
 ; opengl32.dll would replace the graphics driver for every start. FoxSDR loads it
@@ -197,25 +240,19 @@ Source: "POSTINSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
 ; Authored from public regulatory allocations; INFORMATIONAL, not a licensing
 ; reference. See src/core/band_plan.hpp for the provenance note.
 Source: "..\resources\bandplans\*.json"; DestDir: "{app}\resources\bandplans"; Flags: ignoreversion
-; THE SLINT PREVIEW (docs/engine-stage4.md 6.36), only when ISCC is run with /DWithSlintPreview: foxsdr-slint.exe
-; and its runtime slint_cpp.dll land in a folder of their own, {app}\preview, with their own Start-menu entry.
-; Launching it is the opt-in; it works on a copy of the user's settings (%APPDATA%\foxsdr\slint-preview\) and
-; never writes the real ones. The payload contract above is untouched: the two files are built into
-; build\src\slint\Release by CASCADE_BUILD_SLINT, not into build\Release, and this block is off by default.
-#ifdef WithSlintPreview
-  #define SlintDir AddBackslash(SourcePath) + "..\build\src\slint\Release"
-  #if !FileExists(SlintDir + "\foxsdr-slint.exe") || !FileExists(SlintDir + "\slint_cpp.dll")
-    #pragma error "foxsdr-slint.exe and slint_cpp.dll not found in build\src\slint\Release — configure with CASCADE_BUILD_SLINT=ON and the Slint SDK on CMAKE_PREFIX_PATH, build foxsdr-slint, or drop /DWithSlintPreview"
-  #endif
-Source: "{#SlintDir}\foxsdr-slint.exe"; DestDir: "{app}\preview"; Flags: ignoreversion
-Source: "{#SlintDir}\slint_cpp.dll"; DestDir: "{app}\preview"; Flags: ignoreversion
+; THE SLINT WINDOW AS THE APPLICATION (SlintIsApp, on by default; see the header): foxsdr-slint.exe and its runtime
+; slint_cpp.dll sit in {app} beside cascade.exe, SoapySDR.dll and the VC runtime. Both exes look for plugins\ beside
+; themselves, so {app}\plugins serves both (this script stages no plugins; user-installed ones land there).
+#if SlintOn
+Source: "{#SlintDir}\foxsdr-slint.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SlintDir}\slint_cpp.dll"; DestDir: "{app}"; Flags: ignoreversion
 #endif
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"
 Name: "{group}\Hardware setup notes"; Filename: "{app}\POSTINSTALL.txt"
-#ifdef WithSlintPreview
-Name: "{group}\{#AppName} Slint preview"; Filename: "{app}\preview\foxsdr-slint.exe"; WorkingDir: "{app}\preview"; Comment: "Start the Slint window preview of {#AppName} (works on a copy of your settings)"
+#if SlintOn
+Name: "{group}\{#AppName} (classic window)"; Filename: "{app}\cascade.exe"; WorkingDir: "{app}"; Comment: "Start the classic {#AppName} window (the store, bookmarks, scanner, airband and recorder pages)"
 #endif
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"; Tasks: desktopicon

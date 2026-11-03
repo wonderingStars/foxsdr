@@ -22,8 +22,23 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/SlintDll.cmake")
 # THE PLUGIN KIT (docs 6.37): kit_logic (the pure rules), plugin_kit (the port, the duties, the commands), map_compositor (the map's
 # picture), kit_publish (the page models). The track-info cache is the ImGui window's own GL-free class, compiled in here rather than
 # copied (src/gui/track_info_cache.cpp includes nothing of ImGui); the basemap client is the kit's, because BasemapCache calls GL.
-add_executable(foxsdr-slint main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp
+# THE WINDOWS SUBSYSTEM AND THE ICON, as cascade.exe has them (the root CMakeLists.txt, "THE WINDOWS SUBSYSTEM (0.99.69)"):
+# foxsdr-slint.exe is the application the installer ships (installer/cascade.iss, SlintIsApp), so a launch from the Start menu or
+# the desktop must not bring a console window with it - the image is WIN32 (/SUBSYSTEM:WINDOWS) and keeps `int main` through
+# /ENTRY:mainCRTStartup; the terminal comes back for --version, the tool modes and the bounded runs through the same bootProcess
+# and its AttachConsole (core/console_owner.hpp), so a harness that reads pipes (ctest, Git Bash, release.ps1) sees every line.
+# The icon resource is the one file cascade.exe embeds, so Explorer, the shortcuts and Add/Remove Programs show the fox.
+set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp
     "${CMAKE_SOURCE_DIR}/src/gui/track_info_cache.cpp")
+if(WIN32)
+    enable_language(RC)
+    add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")
+    if(MSVC)
+        target_link_options(foxsdr-slint PRIVATE /ENTRY:mainCRTStartup)
+    endif()
+else()
+    add_executable(foxsdr-slint ${foxsdr_slint_sources})
+endif()
 target_compile_features(foxsdr-slint PRIVATE cxx_std_20)
 # The engine (EngineService, the C API table) is the same library the ImGui window and foxsdr-engine use; the
 # window itself only ever talks to the table.
