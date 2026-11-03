@@ -11,6 +11,7 @@
 
 #include "sliders_specimen.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -165,8 +166,10 @@ int main() {
         const int k = static_cast<int>(std::lround(g1x + 0.62 * 232));
         CHECK(knobRun(f, k, 325, kKnob) >= 11 && knobRun(f, k, 325, kKnob) <= 13);   // the lane's knob at 0.62 (off the pixel grid, so +/- 1)
     }
-    // the AUTO key: 20px high, 48 wide, right-aligned in the lane; key-bg ground, key-line border when off
-    CHECK(f.near(212, 306, kKeyBg) && f.near(245, 306, kKeyBg));
+    // the AUTO key: 20px high, 48 wide, right-aligned in the lane; key-bg ground, key-line border when off. Its ground is probed
+    // 4px inside each border column (208 and 255, below), in the padding either side of the word: the centred 10px "AUTO" ends
+    // about 11px short of the right border, and a probe closer to it than that lands on the word's last letter, not the ground.
+    CHECK(f.near(212, 306, kKeyBg) && f.near(251, 306, kKeyBg));
     CHECK(f.near(208, 306, kKeyLine) && f.near(255, 306, kKeyLine) && f.near(207, 306, kStrip) && f.near(256, 306, kStrip));
     CHECK(f.near(232, 296, kKeyLine) && f.near(232, 315, kKeyLine) && f.near(232, 295, kStrip) && f.near(232, 316, kStrip));
     CHECK(f.countInk(212, 299, 252, 313, kKeyBg) > 12);                              // the word AUTO is drawn on it
@@ -188,7 +191,7 @@ int main() {
     // the disabled lane: slider in the disabled colours, AUTO disabled (key-disabled-bg, half-alpha border)
     CHECK(f.near(100, 406, kDisFill) && f.near(240, 406, kTrack));
     CHECK(knobRun(f, static_cast<int>(std::lround(g1x + 0.62 * 232)), 405, kDisKnob) >= 11);
-    CHECK(f.near(212, g4y + 10, kKeyDisBg) && f.near(245, g4y + 10, kKeyDisBg));
+    CHECK(f.near(212, g4y + 10, kKeyDisBg) && f.near(251, g4y + 10, kKeyDisBg));       // 4px inside each border, clear of the word
     CHECK(!f.near(208, g4y + 10, kKeyLine, kTight) && f.near(208, g4y + 10, over(kKeyLine, 0.5, kKeyDisBg), 6));   // half-alpha border
     CHECK(f.countInk(212, g4y + 3, 252, g4y + 17, kKeyDisBg) > 12);                  // AUTO still legible in key-disabled-fg
     CHECK(f.countNear(212, g4y + 3, 252, g4y + 17, rgb(0x8a93a0), 20) > 6);
@@ -207,6 +210,45 @@ int main() {
         CHECK(f.countInk(left - 56, 378, left - 6, 394, kStrip) > 15);                // the readout "-85 dB" moved left to make room
         CHECK(f.countInk(left - 5, 378, left, 394, kStrip) == 0);                     // with 6px of air before the key
         CHECK(f.countInk(274, 378, 340, 394, kStrip) > 20);                           // the caption is still there
+    }
+    // The narrowest lanes: the main screen gives three of 120 px at its minimum width and 106 px each in a 1440 px window
+    // (specimen: 120 and 106 at y 48, 130 at y 128, 120 at y 208). In the real faces the 12px mono readout is 7.2px a figure and
+    // the AUTO key 48px, so a 120px lane leaves its caption 24px: the caption gives way (it elides to its first letters) and
+    // where there is no room for even a letter and the ellipsis it is left out - and caption, readout and key stay on the one
+    // 20px row, the caption never touches the readout, the readout keeps 6px of air before the key, nothing leaves the lane.
+    {
+        struct Lane { int x, y, w; bool hasAuto; Rgb keyLine; int figures; };         // figures: the characters of the readout
+        const Lane lanes[] = {{524, 48, 120, true, kKeyLine, 5}, {660, 48, 106, true, kAccent, 6}, {524, 128, 130, true, kAccent, 6},
+                              {524, 208, 120, false, kKeyLine, 4}};
+        for (const Lane& l : lanes) {
+            const int right = l.x + l.w, keyL = l.hasAuto ? right - 48 : right;
+            const int rowTop = l.y + 2, rowBot = l.y + 18;                          // inside the 20px caption row (the key's rows are y .. y + 19)
+            // the readout's box: 12px mono is 0.6 em, 7.2px, a figure (a text is as wide as its pixels rounded up), set 6px left of
+            // the key (flush with the lane's end without one)
+            const int boxR = l.hasAuto ? keyL - 6 : right, boxL = boxR - static_cast<int>(std::ceil(7.2 * l.figures - 1e-6));
+            const int room = boxL - 6 - l.x;                                        // what the caption has: up to the readout's box less 6px
+            if (l.hasAuto) {
+                CHECK(f.near(keyL, l.y + 10, l.keyLine) && f.near(right - 1, l.y + 10, l.keyLine));    // the key, 48 wide, ends on the lane's edge
+                CHECK(f.near(right, l.y + 10, kStrip) && f.near(keyL - 1, l.y + 10, kStrip));
+                CHECK(f.countInk(keyL - 5, rowTop, keyL, rowBot, kStrip) == 0);       // 6px of air before the key (the last figure's own bearing aside)
+            }
+            CHECK(f.countInk(boxL, rowTop, boxR, rowBot, kStrip) > 40);                // the readout is where the key puts it ...
+            CHECK(f.countInk(boxR - 3, rowTop, boxR + 1, rowBot, kStrip) > 4);         // ... and reaches the end of its box
+            // the caption: when it has the room for a letter and the ellipsis (two cap-sized letters, 20px) some of it is drawn; when it
+            // has not, nothing is - no stray ellipsis - and either way it stops 6px short of the readout's box
+            if (room >= 20) {
+                CHECK(f.countInk(l.x, rowTop, boxL - 5, rowBot, kStrip) > 3);
+            } else {
+                CHECK(f.countInk(l.x, rowTop, boxL, rowBot, kStrip) == 0);
+            }
+            CHECK(f.countInk(boxL - 5, rowTop, boxL, rowBot, kStrip) == 0);
+            // one row: nothing of the caption or the readout above the row or in the 7px gap under it (the knob reaches 8px above the track)
+            const int capH = l.hasAuto ? 20 : 16;                                    // the caption row: as high as the key, else the readout's line
+            CHECK(f.countInk(l.x, l.y, keyL, rowTop, kStrip) == 0 && f.countInk(l.x, l.y + capH, keyL, l.y + capH + 2, kStrip) == 0);
+            // nothing beyond the lane: no ink in the 6px either side of its rows
+            CHECK(f.countInk(l.x - 6, rowTop, l.x, rowBot, kStrip) == 0 && f.countInk(right, rowTop, right + 6, rowBot, kStrip) == 0);
+            if (!l.hasAuto) { CHECK(f.countInk(l.x, rowTop, boxL - 6, rowBot, kStrip) > 40); }   // "VOLUME" is not elided: it fits whole
+        }
     }
     // the caption is upper-cased by the component: "Gain" (the disabled lane, x 24) and "GAIN" (the sixth lane, x 524) are the
     // same row of pixels, whatever typeface stands in for Inter

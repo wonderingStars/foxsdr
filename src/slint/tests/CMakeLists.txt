@@ -41,6 +41,7 @@ target_include_directories(slint_render_harness PUBLIC
 function(foxsdr_slint_ui_test name slint_file)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} PRIVATE slint_render_harness)
+    set_property(TARGET ${name} PROPERTY SLINT_EMBED_RESOURCES embed-files)   # fonts and icons inside the test binary, as in the product
     slint_target_sources(${name} "${slint_file}")
     foxsdr_slint_copy_dll(${name})
     add_test(NAME ${name} COMMAND ${name})

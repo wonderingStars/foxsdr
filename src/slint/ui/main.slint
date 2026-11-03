@@ -492,12 +492,12 @@ export component MainWindow inherits Window {
                             }
                             for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; clicked => { root.section-clicked(i); }
                                 // the Radio section's open body (the sheet's); the other bodies are the banks of phase 3
-                                if i == 2 : VerticalLayout { spacing: 10px;
-                                    Text { text: "Mode keys are on the receiver strip above (Ctrl+F … Ctrl+R)."; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
-                                    BodyRow { label: "Passband"; Text { text: root.passband-text; font-family: Theme.font-mono; color: Theme.fg; vertical-alignment: center; } }
-                                    Slider { value: root.passband-norm; accessible-label: "Passband"; changed(v) => { root.passband-changed(v); } }
-                                    BodyRow { label: "Tune step"; SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.absolute-position.x, self.absolute-position.y + self.height); } } }
-                                    Checkbox { label: "Follow the band plan's mode when retuning"; checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
+                                VerticalLayout { spacing: i == 2 ? 10px : 0px;
+                                    if i == 2 : Text { text: "Mode keys are on the receiver strip above (Ctrl+F … Ctrl+R)."; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }
+                                    if i == 2 : BodyRow { label: "Passband"; Text { text: root.passband-text; font-family: Theme.font-mono; color: Theme.fg; vertical-alignment: center; } }
+                                    if i == 2 : Slider { value: root.passband-norm; accessible-label: "Passband"; changed(v) => { root.passband-changed(v); } }
+                                    if i == 2 : BodyRow { label: "Tune step"; SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.absolute-position.x, self.absolute-position.y + self.height); } } }
+                                    if i == 2 : Checkbox { label: "Follow the band plan's mode when retuning"; checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
                                 }
                             }
                         }
@@ -603,7 +603,7 @@ export component MainWindow inherits Window {
             Rectangle { y: 0; height: Theme.hairline; width: parent.width; background: Theme.line; }
             HorizontalLayout { padding-left: 4px; spacing: 0px; alignment: start;
                 for c[i] in root.status : StatusChip {
-                    key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp; lines: c.lines;
+                    key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp; lines: c.lines; max-detail-w: 364px;
                     value-color: c.tone == ChipTone.good ? Theme.chip-good-fg : c.tone == ChipTone.warn ? Theme.accent-soft : c.tone == ChipTone.err ? Theme.chip-err-fg : Theme.fg;
                     tooltip: c.detail;
                     clicked => { root.status-clicked(i); }
@@ -639,6 +639,7 @@ export component MainWindow inherits Window {
         Text { text: root.about-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
         // The Slint Royalty-free licence 2.0 requires this widget in an About dialog reachable from the top-level menu
         // (the brand menu above) in every distributed build; it is never behind a switch.
+        Text { text: "Typefaces: Inter (The Inter Project Authors) and JetBrains Mono (JetBrains), both under the SIL Open Font License 1.1; the licence texts travel with the fonts in third_party/fonts. Built with Slint:"; wrap: word-wrap; color: Theme.dim; font-size: Theme.font-hint; }
         AboutSlint { }
         HorizontalLayout { alignment: end; Key { label: "Close"; clicked => { root.about-open = false; } } }
     }

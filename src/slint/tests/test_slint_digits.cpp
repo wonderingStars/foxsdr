@@ -2,8 +2,9 @@
 // ui/specimens/digits_specimen.slint and probed against the Workbench sheet's CSS (.digit, .nud, .mono.row) and the
 // counter inventory (wheel steps a digit, a click opens the typed editor, UP/DN auto-repeat, right-click menu).
 //
-// Text is in a fallback typeface on this machine, so glyph checks assert INK in a region and its COLOUR, never a
-// shape or a width; the plate, dots, rows and cells are drawn geometry and are asserted to the pixel.
+// Text is in the embedded JetBrains Mono and Inter (third_party/fonts, the same on every machine), so glyph checks assert INK
+// in a region and its COLOUR, never a shape or a width; the plate, dots, rows and cells are drawn geometry and are asserted to
+// the pixel. The dot cell is a fixed 13 px (0.6 em of the 22 px counter size, rounded), whatever the dot glyph's advance.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "render_harness.hpp"
 #include "test_check.hpp"
@@ -612,8 +613,13 @@ int main() {
                "dot %d: %d ink pixels, centre %.1f (cell %d..%d)", k, dot.n, dot.cx(), dx, dx + kDot);
         CHECK(dot.y0 > kA.y + 3 + kH / 2 - 8);                                  // a full stop sits low in the cell, not at its top
     }
-    for (int i = 0; i < 10; ++i) {                                              // and only there: no dot colour on any figure's column
-        CHECK(f0.countNear(kA.x + digitX(i), kA.y + 3, kA.x + digitX(i) + kW, kA.y + 3 + kH, knobRing, 8) == 0);
+    // and only there: no dot colour in any figure's numeral band. The band stops short of the nudge rows on purpose: the arrows'
+    // anti-aliased edges blend the nudge grey into the field, and a few of those blends (row 0 and the last row of a column,
+    // wherever the face puts its triangle's edge) land within the tolerance of the dot colour; the dots live in the numeral band.
+    for (int i = 0; i < 10; ++i) {
+        CHECKV(f0.countNear(kA.x + digitX(i), kA.y + 3 + kNudge, kA.x + digitX(i) + kW, kA.y + 3 + kH - kNudge, knobRing, 8) == 0,
+               "figure %d: %d dot-coloured pixels in its numeral band", i,
+               f0.countNear(kA.x + digitX(i), kA.y + 3 + kNudge, kA.x + digitX(i) + kW, kA.y + 3 + kH - kNudge, knobRing, 8));
     }
 
     // leading zero dim, next figure bright (leading-zeros 1): figure 0 brown, figure 1 amber

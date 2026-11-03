@@ -33,6 +33,22 @@ int differing(const Frame& a, const Frame& b, int x0, int y0, int x1, int y1) {
     return n;
 }
 
+// The brightest pixel of a rectangle (the largest channel sum). Light text on a dark ground is anti-aliased into blends of the text
+// colour and the ground, so a count of "pixels near the colour" depends on how heavy the face is (a 10px regular face has a handful
+// of fully covered pixels in a row of words); the pixel a stroke covers fully is the brightest one and reads the text's own colour.
+Rgb brightest(const Frame& f, int x0, int y0, int x1, int y1) {
+    Rgb best{};
+    int sum = -1;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            const Rgb p = f.at(x, y);
+            const int s = int(p.r) + int(p.g) + int(p.b);
+            if (s > sum) { sum = s; best = p; }
+        }
+    }
+    return best;
+}
+
 // The leftmost column that carries ink in the rectangle, and the lowest row that does; -1 when none.
 int firstInkX(const Frame& f, int x0, int y0, int x1, int y1, Rgb bg) {
     for (int x = x0; x < x1; ++x) { if (f.countInk(x, y0, x + 1, y1, bg) > 0) { return x; } }
@@ -178,7 +194,10 @@ int main() {
     }
 
     // --- the group row: ONE cell spans every column, 10px letter-spaced, in the row's tone -----------------
-    CHECK(f0.countNear(kTx + 8, rowTop(0) + 3, kTx + kTw - 12, rowTop(0) + 20, dim, 6) >= 20);
+    // (the words are the sheet's 10px regular: thin strokes, so the tone is read from the row's brightest pixel, which must be Theme.dim
+    // itself - nothing brighter, no other tone - and the ink is counted on its own)
+    CHECK(nearColour(brightest(f0, kTx + 8, rowTop(0) + 3, kTx + kTw - 12, rowTop(0) + 20), dim, 6));
+    CHECK(f0.countInk(kTx + 8, rowTop(0) + 3, kTx + kTw - 12, rowTop(0) + 20, panel) > 100);
     CHECK(f0.countInk(kColSource + 20, rowTop(0) + 3, kColMessage + 60, rowTop(0) + 20, panel) > 40);   // ink beyond the first column
     CHECK(toneInk(f0, rowTop(0), fg) == 0 && toneInk(f0, rowTop(0), warnFg) == 0);                       // ...and in no other tone's colour
     const int groupStart = firstInkX(f0, kTx + 1, rowTop(0) + 3, kTx + 60, rowTop(0) + 20, panel);

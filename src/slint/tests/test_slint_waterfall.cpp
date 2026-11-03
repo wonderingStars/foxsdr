@@ -2,7 +2,8 @@
 // rectangle, the age strip, the strength key and its ramp, the foot, the VFO line, the plugin mark and the marker lines
 // (dashed), the marker tabs and how they stack - then driven the way the operator drives it: hover, click, a press held
 // 0.45 s (not a click), a pan after 4 px, double-click, right-click, the wheel, the marker under the pointer, the tips.
-// Text is in a fallback typeface on this machine: it is asserted as INK in a region, never as glyph shapes or widths.
+// Text is in the embedded Inter and JetBrains Mono (third_party/fonts, the same on every machine): it is asserted as INK in a
+// region (or by the hue of its brightest pixel, thin faces having few fully covered ones), never as glyph shapes or widths.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "render_harness.hpp"
 #include "test_check.hpp"
@@ -189,8 +190,34 @@ int main() {
     // the coverage line: only when there is something to say, in the accent
     ui->set_key_coverage("TOP 128 LINES");
     Frame cover = render(ui, kW, kH);
+    cover.savePng(shotDir() + "waterfall-specimen-coverage.png");
     CHECK(int(std::lround(ui->get_key_h())) > plateH0 + 6);
-    CHECK(cover.countNear(kx, ky + plateH0 - 6, kx + kw, ky + int(std::lround(ui->get_key_h())), kAccentSoft, 40) > 10);
+    {
+        // The line is 9px regular mono: thin strokes, so few of its pixels are fully covered (a handful lie within 40 of the colour)
+        // and a count of pixels near accent-soft says more about the face than about the line. It is judged by what the design says
+        // of it: it is the plate's new last row, 5px under the foot line, and it is WARM (accent-soft) where every other line of
+        // the plate is cool (muted over the dark plate) - so there is warm ink in its rows, none in the foot line's, and the
+        // brightest pixel of the row, which a stroke covers fully, is the accent itself.
+        const int covTop = ky + plateH0 - 4, covBot = ky + int(std::lround(ui->get_key_h())) - 8;
+        const auto warmInk = [&](int y0, int y1) {
+            int n = 0;
+            for (int y = y0; y < y1; ++y) {
+                for (int x = kx; x < kx + kw; ++x) { const Rgb p = cover.at(x, y); if (p.r > p.b + 40) { ++n; } }
+            }
+            return n;
+        };
+        int bestSum = -1;
+        Rgb best{};
+        for (int y = covTop; y < covBot; ++y) {
+            for (int x = kx; x < kx + kw; ++x) {
+                const Rgb p = cover.at(x, y);
+                if (int(p.r) + int(p.g) + int(p.b) > bestSum) { bestSum = int(p.r) + int(p.g) + int(p.b); best = p; }
+            }
+        }
+        CHECK(warmInk(covTop, covBot) > 40);
+        CHECK(warmInk(ky + plateH0 - 22, ky + plateH0 - 8) == 0);                       // the foot line above it is not the accent
+        CHECK(nearColour(best, kAccentSoft, 20));
+    }
     ui->set_key_coverage("");
 
     // ---- the foot: x 44 .. width - 14, 28 px, a hairline on top ----

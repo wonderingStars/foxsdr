@@ -2,7 +2,8 @@
 // the Workbench CSS (Workbench.dc.html, Workbench-PluginKit.dc.html): heights, widths, border and ground colours of
 // every variant, the diagonal hazard ground, the dome, the rail key, the group. Then every callback is driven the way
 // the OS delivers input: a click, a disabled click, a right-click, the keyboard, a hover and its tooltip.
-// The typeface is a fallback on this machine, so text is asserted as ink in a region, never as glyph shapes.
+// The typeface is the embedded Inter (third_party/fonts, the same on every machine): text is asserted as ink in a region, never
+// as glyph shapes, and no probe of a ground sits at a fixed offset into a label (the label's own strokes may be there).
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "render_harness.hpp"
 #include "test_check.hpp"
@@ -648,8 +649,11 @@ int main() {
         CHECK(ui->get_mode() == 1 && last() == "sk-b");
         away();
         Frame g = shot();
-        CHECK(g.near(skB + 12, 482 + 16, kAccent, 4));                      // key two of the explicit group is lit
-        CHECK(g.near(16 + 3 + 8, 482 + 16, kPanelAlt, 3));                  // and key one let go
+        // key two of the explicit group is lit: probed in its left padding on the label's row and along a row above the label's
+        // ink, never at a fixed offset into the label (a 12 px "WFM" begins about 11 px in and its W has a stroke there)
+        CHECK(g.near(skB + 4, 482 + 16, kAccent, 4));
+        CHECK(g.rowNear(482 + 3 + 3, skB + 6, skB + 6 + 40, kAccent, 4));
+        CHECK(g.near(16 + 3 + 4, 482 + 16, kPanelAlt, 3));                  // and key one let go
         const Run litNow = rowRun(g, 444 + 16, 17, 470, kAccent);          // the model-built group follows the same state
         CHECK(litNow.first == litBefore.last + 3);
         CHECK(litNow.len() >= 52);

@@ -14,6 +14,16 @@
 // arrangement is the one layout, and the artboards' pixel measurements are what the render tests check.
 // They are constants on `Theme` so a later density setting has one place to change.
 
+// The two typefaces, vendored under third_party/fonts (SIL OFL 1.1, licence texts beside them) and embedded into the
+// build by the Slint compiler: importing a font file registers it under its family name, so "Inter" and
+// "JetBrains Mono" below resolve to these files on every machine, not to whatever the OS has installed.
+import "../../../third_party/fonts/Inter-Regular.ttf";
+import "../../../third_party/fonts/Inter-Medium.ttf";
+import "../../../third_party/fonts/Inter-SemiBold.ttf";
+import "../../../third_party/fonts/JetBrainsMono-Regular.ttf";
+import "../../../third_party/fonts/JetBrainsMono-Medium.ttf";
+import "../../../third_party/fonts/JetBrainsMono-SemiBold.ttf";
+
 export enum DigitFace { plain, drum, nixie }
 export enum MeterStyle { classic, analogue, led-ladder, peak }
 

@@ -136,7 +136,7 @@ int main() {
     CHECK(f.rowNear(139, 700, 760, line));              // strip bottom hairline: 36 + 104 - 1
     CHECK(f.near(30, 600, bg));                         // the icon rail ground
     CHECK(f.colNear(63, 450, 520, line));               // its right hairline at x 63 (64 px)
-    CHECK(f.near(200, 600, panelAlt));                  // the sections panel ground (below the open Radio body)
+    CHECK(f.near(200, 800, panelAlt));                  // the sections panel ground (below the rows, above the footer)
     CHECK(f.colNear(359, 450, 520, line));              // its right hairline at x 64 + 296 - 1
     CHECK(f.rowNear(171, 1300, 1360, line));            // tab row bottom hairline: 140 + 32 - 1
     CHECK(f.near(700, 300, well));                      // the spectrum well
@@ -146,7 +146,7 @@ int main() {
     CHECK(f.rowNear(splitterTop + 5, 700, 760, line));
     CHECK(f.near(700, splitterTop + 6 + 120, wellDeep));// the waterfall ground (no picture set: the ground shows)
     CHECK(f.rowNear(872, 700, 760, line));              // status bar top hairline: 900 - 28
-    CHECK(f.near(700, 886, strip));                     // status bar ground
+    CHECK(f.near(2, 886, strip));                       // status bar ground, in its left padding
     // the STOP dome at the strip's left: 92 x 64 of danger ground, centred in the strip
     CHECK(f.near(60, 90, rgb(0x3a1d1d)));
     CHECK(f.near(60, 36 + 20, rgb(0x8a3434), 40) || f.near(16, 90, rgb(0x8a3434), 40));

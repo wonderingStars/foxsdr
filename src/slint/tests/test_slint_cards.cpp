@@ -4,10 +4,11 @@
 // 6 px gaps, 26 px keys), Workbench-Menus.dc.html's foot cards, Workbench-PluginKit.dc.html's .card / .card.wa / .card.er and
 // the contract in COMPONENTS.md.
 //
-// Text is in a fallback typeface on this machine, so text checks assert INK in a region and its COLOUR, never a shape or a
-// width; the cards, keys, bars and borders are drawn geometry and are asserted to the pixel. Heights come from the
-// specimen's out properties and every key, bar and line is found by its colour on the rendered sheet, so the checks follow
-// whatever line height the font gives.
+// Text is in the embedded Inter (third_party/fonts, the same on every machine), so text checks assert INK in a region and its
+// COLOUR, never a glyph's pixels or a width, and the pitch between lines of text is measured on baselines (the first row of a
+// line's ink moves with the glyphs the line holds); the cards, keys, bars and borders are drawn geometry and are asserted to
+// the pixel. Heights come from the specimen's out properties and every key, bar and line is found by its colour on the
+// rendered sheet, so the checks follow whatever line height the font gives.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "render_harness.hpp"
 #include "test_check.hpp"
@@ -88,17 +89,37 @@ Run colRun(const Frame& f, int x, int y0, int y1, Rgb want, int tol, int minLen)
     }
     return {};
 }
-// The first row of each band of rows that hold ink (a pixel that is not `ground`) inside [x0, x1): the lines of a block of text.
-std::vector<int> inkBands(const Frame& f, int x0, int x1, int y0, int y1, Rgb ground, int tol = 24) {
-    std::vector<int> tops;
+// The first and last row of each band of rows that hold ink (a pixel that is not `ground`) inside [x0, x1): the lines of a
+// block of text.
+struct RowSpan { int top = -1, bot = -1; };
+std::vector<RowSpan> inkSpans(const Frame& f, int x0, int x1, int y0, int y1, Rgb ground, int tol = 24) {
+    std::vector<RowSpan> spans;
     bool in = false;
     for (int y = y0; y < y1; ++y) {
         bool any = false;
         for (int x = x0; x < x1 && !any; ++x) { any = !f.near(x, y, ground, tol); }
-        if (any && !in) { tops.push_back(y); }
+        if (any && !in) { spans.push_back({y, y}); }
+        if (any) { spans.back().bot = y; }
         in = any;
     }
-    return tops;
+    return spans;
+}
+// The baseline of the line of text that fills rows [s.top, s.bot]: the last row that still holds at least half the ink of the
+// line's densest row. Lower-case text keeps most of its ink between the x-height and the baseline, so what a particular line
+// happens to contain (an ascender, the dot of an i, a descender) cannot move it, as it moves the line's first or last row of
+// ink: the pitch between two lines is a layout fact only when it is measured on baselines.
+int baselineRow(const Frame& f, int x0, int x1, const RowSpan& s, Rgb ground, int tol = 24) {
+    std::vector<int> n;
+    int peak = 0;
+    for (int y = s.top; y <= s.bot; ++y) {
+        int c = 0;
+        for (int x = x0; x < x1; ++x) { if (!f.near(x, y, ground, tol)) { ++c; } }
+        n.push_back(c);
+        peak = std::max(peak, c);
+    }
+    int base = s.top;
+    for (int i = 0; i < static_cast<int>(n.size()); ++i) { if (2 * n[i] >= peak) { base = s.top + i; } }
+    return base;
 }
 // The last row in [y0, y1) with a pixel near `want` inside [x0, x1); -1 when none.
 int lastRowNear(const Frame& f, int x0, int x1, int y0, int y1, Rgb want, int tol) {
@@ -266,17 +287,23 @@ int main() {
         CHECKV(key.top > c.y + kPad + 40 && key.bot - key.top + 1 == kKeyH, "notes: primary key rows %d..%d", key.top, key.bot);
         // the bullets sit between the title and the keys: a dot at the left, the words 10 px in
         const int titleEnd = lastRowNear(f0, cx, cx + 150, c.y + kPad, key.top - 1, accentSoft, 50);
-        const std::vector<int> dots = inkBands(f0, cx, cx + 8, titleEnd + 3, key.top - 3, card);
-        const std::vector<int> words = inkBands(f0, cx + 10, cx + inner, titleEnd + 3, key.top - 3, card);
+        const std::vector<RowSpan> dots = inkSpans(f0, cx, cx + 8, titleEnd + 3, key.top - 3, card);
+        const std::vector<RowSpan> words = inkSpans(f0, cx + 10, cx + inner, titleEnd + 3, key.top - 3, card);
         CHECKV(dots.size() == 3 && words.size() == 3, "%zu bullet dots, %zu lines of words (three bullets, one line each)", dots.size(), words.size());
         if (dots.size() == 3) {
-            CHECKV(dots[1] - dots[0] == dots[2] - dots[1], "dot pitch %d then %d", dots[1] - dots[0], dots[2] - dots[1]);
-            CHECKV(dots[1] - dots[0] >= 14 && dots[1] - dots[0] <= 20, "line pitch %d: an 11 px line and 2 px between", dots[1] - dots[0]);
+            CHECKV(dots[1].top - dots[0].top == dots[2].top - dots[1].top, "dot pitch %d then %d", dots[1].top - dots[0].top, dots[2].top - dots[1].top);
+            CHECKV(dots[1].top - dots[0].top >= 14 && dots[1].top - dots[0].top <= 20, "line pitch %d: an 11 px line and 2 px between", dots[1].top - dots[0].top);
         }
         if (words.size() == 3) {
-            CHECKV(std::abs((words[1] - words[0]) - (words[2] - words[1])) <= 1, "text line pitch %d then %d", words[1] - words[0], words[2] - words[1]);
-            if (dots.size() == 3) { CHECKV(std::abs(words[0] - dots[0]) <= 3, "the first dot (row %d) rides the first line (row %d)", dots[0], words[0]); }
-            CHECKV(words[0] - titleEnd >= kGapPx - 1, "bullets start %d rows under the last row of the title", words[0] - titleEnd);
+            // the pitch between lines is measured on baselines: the first row of a line's ink depends on whether it holds an f, an l or an i
+            const auto base = [&](const RowSpan& s) { return baselineRow(f0, cx + 10, cx + inner, s, card); };
+            CHECKV(std::abs((base(words[1]) - base(words[0])) - (base(words[2]) - base(words[1]))) <= 1, "text baseline pitch %d then %d", base(words[1]) - base(words[0]), base(words[2]) - base(words[1]));
+            // the dot is a middle dot: it sits at mid x-height of its own line, so the line's rows must hold it (and the next line's must not)
+            if (dots.size() == 3) {
+                CHECKV(dots[0].top >= words[0].top && dots[0].bot <= words[0].bot && dots[0].bot < words[1].top,
+                       "the first dot (rows %d..%d) rides the first line (rows %d..%d)", dots[0].top, dots[0].bot, words[0].top, words[0].bot);
+            }
+            CHECKV(words[0].top - titleEnd >= kGapPx - 1, "bullets start %d rows under the last row of the title", words[0].top - titleEnd);
         }
         const Ink textInk = inkBox(f0, cx + 10, titleEnd + 3, cx + inner, key.top - 3, card);
         CHECKV(textInk.x0 >= cx + 10 && textInk.x0 <= cx + 12, "the words start %d px in", textInk.x0 - cx);
@@ -403,13 +430,17 @@ int main() {
         const Ink date = inkBox(f0, cx + inner - 70, c.y + kPad, cx + inner, c.y + kPad + 14, card);
         CHECKV(date.n > 15 && date.x1 >= cx + inner - 4, "date ink n=%d right edge %d", date.n, date.x1);
         // two bullets, the second wraps: two dots, three lines of words
-        const std::vector<int> dots = inkBands(f0, cx, cx + 8, titleEnd + 3, teamKeyTop - 3, card);
-        const std::vector<int> words = inkBands(f0, cx + 10, cx + inner, titleEnd + 3, teamKeyTop - 3, card);
+        const std::vector<RowSpan> dots = inkSpans(f0, cx, cx + 8, titleEnd + 3, teamKeyTop - 3, card);
+        const std::vector<RowSpan> words = inkSpans(f0, cx + 10, cx + inner, titleEnd + 3, teamKeyTop - 3, card);
         CHECKV(dots.size() == 2 && words.size() == 3, "%zu dots and %zu lines of words (two bullets, the second wraps)", dots.size(), words.size());
         if (dots.size() == 2 && words.size() == 3) {
-            CHECKV(std::abs((words[1] - words[0]) - (words[2] - words[1]) - 2) <= 1, "bullets are 2 px further apart than the lines of one bullet: %d, then %d", words[1] - words[0], words[2] - words[1]);
-            CHECKV(std::abs((dots[1] - dots[0]) - (words[1] - words[0])) <= 1, "second dot %d under the first, second line of words %d", dots[1] - dots[0], words[1] - words[0]);
-            CHECKV(words[1] - words[0] <= 20, "line pitch %d: 2 px between lines, not 6", words[1] - words[0]);   // wrapped and bulleted lines alike
+            // pitches are measured on baselines (the first row of a line's ink moves with the glyphs the line holds: the line that
+            // starts "using Request a feature" has an f and an i, so its ink begins a row higher than the lines above it)
+            const auto base = [&](const RowSpan& s) { return baselineRow(f0, cx + 10, cx + inner, s, card); };
+            const int bulletPitch = base(words[1]) - base(words[0]), linePitch = base(words[2]) - base(words[1]);
+            CHECKV(std::abs(bulletPitch - linePitch - 2) <= 1, "bullets are 2 px further apart than the lines of one bullet: baselines %d, then %d", bulletPitch, linePitch);
+            CHECKV(std::abs((dots[1].top - dots[0].top) - bulletPitch) <= 1, "second dot %d under the first, second bullet's baseline %d under the first's", dots[1].top - dots[0].top, bulletPitch);
+            CHECKV(bulletPitch <= 20 && linePitch <= 20, "line pitch %d / %d: 2 px between lines, not 6", bulletPitch, linePitch);   // wrapped and bulleted lines alike
         }
     }
 
@@ -449,7 +480,7 @@ int main() {
         CHECK(f0.colNear(cx, key.top + 6, key.top + 20, accent) && f0.colNear(cx + inner - 1, key.top + 6, key.top + 20, accent));   // all 254 px
         CHECK(f0.rowNear(key.top + 4, cx + 8, cx + inner - 8, accent));
         // a headline too long for one line wraps to three beside the subtitle, and the card grows to hold it
-        const std::vector<int> lines = inkBands(f0, cx, cx + inner - 90, c.y + kPad, key.top - 2, card);
+        const std::vector<RowSpan> lines = inkSpans(f0, cx, cx + inner - 90, c.y + kPad, key.top - 2, card);
         CHECKV(lines.size() >= 3, "the Store headline takes %zu lines", lines.size());
         const Ink note = inkBox(f0, cx, key.bot + 2, cx + inner, c.y + c.h - 1, card);
         CHECKV(note.n > 100 && note.y1 <= c.y + c.h - 1 - 10 && note.y1 - note.y0 >= 14, "store note ink n=%d rows %d..%d", note.n, note.y0, note.y1);

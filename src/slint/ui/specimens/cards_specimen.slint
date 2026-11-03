@@ -3,22 +3,24 @@
 // critical update on the err ground, a disabled primary, the long Store headline) and the sound-muted Banner in each tone,
 // at absolute, documented positions, so tests/test_slint_cards.cpp can probe the pixels. Window 640 x 764 on the Theme
 // ground. Cards are 276 wide (the 296 px panel less the sheet's 10 px margins) and size their own height; the heights they
-// settle on are the out properties (the h column is what the tested font gave), and the gaps below leave room for a font a
-// pixel or two taller. Inside a card the content starts 11 px in (1 border + 10 padding), so its inner width is 254.
+// settle on are the out properties (the h column is what the embedded Inter gives; the first measurement, in the
+// fallback face, was 1 to 7 px less), and the gaps below leave room for a font a pixel or two taller. Inside a card the
+// content starts 11 px in (1 border + 10 padding), so its inner width is 254.
 //
 //   x,   y,   w,   h  - what                                                   (the id a click leaves in last-clicked)
 //   ---- left column ---------------------------------------------------------------------------------------------------
-//    16,  16, 276,  77 - update card as the sheet: title, "you run 0.99.104", Download update (on, fills) + Not now   (upd)
-//    16, 112, 276, 155 - the same with 3 release notes, the size note and a tooltip on the primary               (notes)
-//    16, 296, 276, 160 - warn card "Receiver control": a line, two Checkbox children, a note                    (warn)
-//    16, 480, 276, 124 - team message: 2 bullets (the second wraps), a plain full-width "Seen" key                (team)
+//    16,  16, 276,  79 - update card as the sheet: title (two lines: 176 px of title and 79 of subtitle do not share 254), "you run 0.99.104",
+//                        Download update (on, fills) + Not now                                                       (upd)
+//    16, 112, 276, 162 - the same with 3 release notes, the size note and a tooltip on the primary               (notes)
+//    16, 296, 276, 166 - warn card "Receiver control": a line, two Checkbox children, a note                    (warn)
+//    16, 480, 276, 128 - team message: 2 bullets (the second wraps), a plain full-width "Seen" key                (team)
 //   ---- right column --------------------------------------------------------------------------------------------------
-//   348,  16, 276, 129 - download in progress: lines, "Downloading..." beside a bar at prog-progress, Not now, a note   (prog)
-//   348, 168, 276, 128 - critical update on the err tone: red title, a line, the keys, the error line              (err)
-//   348, 332, 276,  66 - disabled primary (an update check is pending) with a tooltip, no subtitle; the secondary's
+//   348,  16, 276, 134 - download in progress: lines, "Downloading..." beside a bar at prog-progress, Not now, a note   (prog)
+//   348, 168, 276, 132 - critical update on the err tone: red title, a line, the keys, the error line              (err)
+//   348, 332, 276,  67 - disabled primary (an update check is pending) with a tooltip, no subtitle; the secondary's
 //                        word is short ("No"), so its key shows the 72 px minimum                                    (dis)
-//   348, 422, 276, 118 - the long Store headline wrapping to three lines beside its subtitle, one on key            (store)
-//   348, 556, 276,  66 - a primary word too long to fit beside "Not now": the key keeps the row, the word is elided     (long)
+//   348, 422, 276, 122 - the long Store headline wrapping to three lines beside its subtitle, one on key            (store)
+//   348, 556, 276,  67 - a primary word too long to fit beside "Not now": the key keeps the row, the word is elided     (long)
 //   ---- banners (28 high) ----------------------------------------------------------------------------------------------
 //    16, 652, 608,  28 - warn: "Sound muted by APRS" + the small key "Stop plugin" and its tooltip               (ban-warn)
 //    16, 688, 400,  28 - warn, a sentence too long for the bar: elided, its tooltip is the whole sentence        (ban-long)

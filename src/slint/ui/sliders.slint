@@ -209,10 +209,14 @@ export component SliderGroup inherits Rectangle {
         color: Theme.fg;
         vertical-alignment: center;
     }
-    // the caption: the cap look (10px / 600 / 0.8px, upper-case, muted), elided before it can reach the readout
+    // the caption: the cap look (10px / 600 / 0.8px, upper-case, muted), elided before it can reach the readout. Where the room
+    // is under two cap-sized letters (a letter and the ellipsis is 19px) it is left out: an elided Text still draws its ellipsis
+    // (11px) when it has less room than that, and the dots would run into the readout (the 106px lanes of a 1440px window).
+    // The Slider below keeps the caption as its accessible label, and the host's tooltip names the lane.
     Text {
         x: 0px; y: 0px;
         width: Math.max(0px, readout-text.x - 6px);
+        visible: self.width >= 2 * Theme.font-cap;
         height: root.caption-h;
         text: root.caption.to-uppercase();
         font-family: Theme.font-ui;
