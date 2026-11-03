@@ -123,8 +123,24 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/gui/module_census.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools_core_stubs.cpp")
         endif()
+        if(unit STREQUAL "extend")
+            # The EXTEND bank's logic (phase 3, bank 4) quotes the core's pure units rather than copying them: the grants of the SIGNAL family's commands, the site-address validator and
+            # labels (plugin_repo_data), the store's reasons (plugin_store_reasons: trStoredReason), with the add-all rule (add_all_plan.hpp), the first-open rule (store_first_open.hpp)
+            # and the port range (server_ports.hpp) which are header-only. gui/plugin_store_view.cpp is NOT here: it draws with ImGui (extend_logic.hpp says what is mirrored).
+            list(APPEND _extra
+                "${CMAKE_CURRENT_SOURCE_DIR}/../signal_logic.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/plugin_store_reasons.cpp")
+        endif()
         foxsdr_slint_logic_test(${name} ${_extra})
         if(unit STREQUAL "tools")
+            target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
+            if(MSVC)
+                target_compile_options(${name} PRIVATE /utf-8)
+                target_compile_definitions(${name} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+            endif()
+        endif()
+        if(unit STREQUAL "extend")
             target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
             if(MSVC)
                 target_compile_options(${name} PRIVATE /utf-8)

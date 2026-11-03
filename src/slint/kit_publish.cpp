@@ -31,6 +31,24 @@ std::shared_ptr<slint::Model<slint::SharedString>> strings(const std::vector<std
 }
 std::string cell(const char* c) { return std::string(c, ::strnlen(c, CASCADE_PANEL_CELL_CHARS)); }
 
+// A store model with every list present and empty (what every page of another kind carries, and what the page of kind 9 shows before the EXTEND publisher's first
+// hand-over): a model that was never set is not trusted to be an empty list by every repeater behind it.
+::StoreModel blankStore() {
+    ::StoreModel s{};
+    s.sites = model(std::vector<::StoreSite>{});
+    s.categories = model(std::vector<::StoreCategory>{});
+    s.updates = model(std::vector<::UpdateRow>{});
+    s.footnotes = model(std::vector<slint::SharedString>{});
+    s.cleanup_lines = model(std::vector<slint::SharedString>{});
+    s.plugin.badges = model(std::vector<::StoreBadge>{});
+    s.plugin.screenshots = model(std::vector<slint::Image>{});
+    return s;
+}
+const ::StoreModel& blankStoreModel() {
+    static const ::StoreModel kBlank = blankStore();
+    return kBlank;
+}
+
 ChipTone toneOfState(FittedState s) {
     switch (s) {
         case FittedState::Fed: return ChipTone::Good;
@@ -84,7 +102,7 @@ std::vector<TableRow> tableRows(const std::vector<CascadePanelRow>& rows, std::s
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-KitPublisher::KitPublisher(MainWindow& ui, PluginKit& kit) : ui_(ui), kit_(kit), pagesModel_(std::make_shared<slint::VectorModel<PageTab>>()) {
+KitPublisher::KitPublisher(MainWindow& ui, PluginKit& kit) : ui_(ui), kit_(kit), pagesModel_(std::make_shared<slint::VectorModel<PageTab>>()), storeModel_(blankStore()) {
     ui_.set_pages(pagesModel_);
 }
 KitPublisher::~KitPublisher() = default;
@@ -786,6 +804,38 @@ DetailsModel KitPublisher::detailsModel(const FoxReceiverState& state, std::stri
 
 void KitPublisher::fillDetails(PageTab& t, const FoxReceiverState& state, std::string& sig) { t.details = detailsModel(state, sig); }
 
+// The Plugin store page (kind 9): the model the EXTEND publisher handed over, whole. Its signature is the hand-over's revision (the publisher sets a model only when it
+// differs from the one before).
+void KitPublisher::fillStore(PageTab& t, std::string& sig) {
+    t.store = storeModel_;
+    t.chip = ss(storeChip_.empty() ? std::string(cascade::i18n::tr("IDLE")) : storeChip_);
+    sig += "S" + std::to_string(storeRevision_);
+}
+
+KitPublisher::StoreView KitPublisher::storeView() const {
+    for (std::size_t i = 0; i < pages_.size(); ++i) {
+        if (pages_[i].id != "store") { continue; }
+        return pages_[i].torn || currentPage() == static_cast<int>(i) ? StoreView::Shown : StoreView::Docked;
+    }
+    return StoreView::Closed;
+}
+
+void KitPublisher::setStoreModel(const ::StoreModel& model) {
+    storeModel_ = model;
+    ++storeRevision_;
+}
+
+void KitPublisher::setStoreRail(const std::string& word, ::ChipTone tone, bool lit) {
+    storeChip_ = word;
+    storeChipTone_ = tone;
+    storeLit_ = lit;
+}
+
+void KitPublisher::openStorePage() {
+    openPage("store", 9, "", "", cascade::i18n::tr("PLUGIN STORE"));
+    showPage("store");
+}
+
 PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, std::string& sig) {
     PageTab t{};
     t.id = ss(p.id);
@@ -816,6 +866,7 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
     t.module.commands = model(std::vector<slint::SharedString>{});
     t.module.reach = model(std::vector<ReachRowModel>{});
     t.details.lines = model(std::vector<DetailLine>{});
+    t.store = blankStoreModel();
     sig = p.id + (p.torn ? "T" : "") + fmt("%.0f", p.tx) + fmt("%.0f", p.ty) + fmt("%.0f", p.tw) + fmt("%.0f", p.th) + (p.rolled ? "r" : "") + (p.follow ? "f" : "");
     const PluginRow* r = rowOf(p);
     bool chipIdle = false;   // the chip says IDLE or WAIT (decided from the state: the words themselves are translated)
@@ -828,9 +879,10 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
         case 6: fillFitted(t, state, sig); break;
         case 7: fillModule(p, t, state, sig); break;
         case 8: fillDetails(t, state, sig); break;
+        case 9: fillStore(t, sig); break;
         default: break;
     }
-    t.chip_tone = chipIdle || std::string(t.chip) == "IDLE" || std::string(t.chip) == "WAIT" || std::string(t.chip).empty() ? ChipTone::Neutral : ChipTone::Good;   // the engine's own chip words (teleprinter, beacon, meter, weather) stay English
+    t.chip_tone = p.kind == 9 ? storeChipTone_ : chipIdle || std::string(t.chip) == "IDLE" || std::string(t.chip) == "WAIT" || std::string(t.chip).empty() ? ChipTone::Neutral : ChipTone::Good;   // the engine's own chip words (teleprinter, beacon, meter, weather) stay English
     sig += std::string(t.chip);
     return t;
 }
@@ -874,7 +926,14 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
     };
     std::size_t fed = 0, decoders = 0, refused = 0;
     for (const PluginRow& r : k.rows) { if (!r.loaded) { ++refused; continue; } if (r.decoder) { ++decoders; if (r.fed && running) { ++fed; } } }
-    add(0, "store", cascade::i18n::tr("Plugin store"), cascade::i18n::tr("LATER"), ChipTone::Neutral, LampState::Off, true, false, false, cascade::i18n::tr("The plugin store comes with a later beta of this window."));
+    // THE PLUGIN STORE ROW (drawPluginStoreSection): a key that opens the page of kind 9, its chip the EXTEND publisher's (BUSY / IDLE / "N UPD" / OK), its lamp green
+    // while the page is up and amber while a transfer moves or updates wait. The tooltip is the ImGui row's own.
+    {
+        const bool open = findPage("store") != nullptr;
+        add(0, "store", cascade::i18n::tr("Plugin store"), storeChip_.empty() ? std::string(cascade::i18n::tr("IDLE")) : storeChip_, storeChipTone_,
+            open ? LampState::Green : storeLit_ ? LampState::Yellow : LampState::Off, true, open, true,
+            cascade::i18n::tr("Opens the plugin store: the catalogue, what each module reaches for,\nwhat it costs to fit, and the updates the catalogue offers.\nThe first time you open it in a session it reads the catalogue;\nnothing is fetched at startup."));
+    }
     add(1, "url", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "");
     if (!k.enforceError.empty()) { add(10, "enforce", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", k.enforceError, ChipTone::Err); }
     for (const BlockedRow& b : k.blocked) {
@@ -1048,6 +1107,7 @@ void KitPublisher::publish(const FoxReceiverState& state) {
             if (kind == "output") { openPage("output", 1, "", "", cascade::i18n::tr("Decoder output")); }
             else if (kind == "fitted") { openPage("fitted", 6, "", "", cascade::i18n::tr("Fitted modules")); }
             else if (kind == "details") { openPage("details", 8, "", "", cascade::i18n::tr("Target details")); }
+            else if (kind == "store") { openPage("store", 9, "", "", cascade::i18n::tr("PLUGIN STORE")); }
             else if (kind == "module") { const PluginRow* r = rowByFile(kit_.lists().rows, arg); if (r != nullptr) { openPage(id, 7, r->name, r->file, r->name); } }
             else {
                 const std::size_t bar = arg.find('|');
@@ -1084,6 +1144,7 @@ void KitPublisher::wire() {
         const std::string id(r.id);
         const PluginRow* row = nullptr;
         switch (r.kind) {
+            case 0: if (findPage("store") != nullptr) { closePage("store"); } else { openStorePage(); } break;
             case 3: if (findPage("fitted") != nullptr) { closePage("fitted"); } else { openPage("fitted", 6, "", "", cascade::i18n::tr("Fitted modules")); showPage("fitted"); } break;
             case 4: decodeOpen_["plugins"] = !decodeOpen_["plugins"]; break;
             case 5: decodeOpen_["details"] = !decodeOpen_["details"]; break;

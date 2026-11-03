@@ -1,0 +1,1681 @@
+// FoxSDR Slint front end - THE EXTEND BANK'S BODIES AND THE PLUGIN STORE PAGE (phase 3, bank 4 of 4): the open bodies under the two EXTEND rows - Web access and
+// CAT control (rigctld) - and the body of the Plugin store page (PageTab kind 9). The design: specs/SCREENS.md A4 (the EXTEND column) and D1 (the store),
+// artboards/Workbench-Banks.dc.html (the EXTEND column) and Workbench-Pages.dc.html (the PLUGIN STORE tab: the top bar, the SITES panel, the Browse grid, the foot, the
+// Updates pane, the clean-up confirm, the plugin page); the parity list is inventory/extend-system-store-patch.txt (lines 86-286 and 1380-1776); the wording is the
+// ImGui window's (aw = app_window.cpp drawWebSection / drawCatSection, plugin_store_view.cpp), so the catalogue entries apply for free.
+//
+// THE PATTERN IS THE SIGNAL, SYSTEM AND TOOLS BANKS': this file declares the structs the host fills, one global of every gesture (ExtendEvents) and the components;
+// the two bodies are VerticalLayouts the Section's fold shows (254 px in the 296 px column, rows of 24 px with 6 px between them), and every callback of a
+// component forwards to the global unless the instance overrides it (the specimen does, to count them). The host owns every value: a tick shows the model's
+// value and a click asks (`toggled(v)`, `picked(i)`, `committed(t)`); the model changes when the host has done it or refused it. A host label that is "" falls
+// back to the component's own @tr word, except where the label is a key that is hidden when empty (Clear password, CANCEL, GET EVERYTHING, CLEAN UP).
+//
+// THE PIECES ARE COPIED, NOT SHARED, a fourth time (Line, Mid, Note, RowLabel, Readout, Tick, LineInput, DropRow, DropKey, LabelledField, KeyFlow): hoisting them
+// would edit three families other sessions work in. The additions this file needs are `LineInput.hidden` (the two masked password fields), `SentenceTick` (a
+// tick whose sentence wraps and is itself the click target: the consent, the bulk notice and the maker's notice), `BadgeFlow` (a row of chips that wraps), the
+// card, the update row and the plugin page.
+//
+// THE STORE PAGE draws with absolute positions and explicit heights, no layout asking for a width: a page asks nothing of its parents (rule 11). The top bar is
+// the strip ground (search field and the BROWSE / UPDATES tab keys; the catalogue line; CHECK AGAIN, SITES and CANCEL), under it a scrolling body: the SITES panel,
+// the host's top lines, then ONE of the Browse grid with its foot, the Updates pane, or the plugin page that REPLACES them. Cards are 1, 2 or 3 to a row by the
+// page's width (a card is never narrower than about 200 px) and keep their column width on a partly filled last row. The clean-up confirm is a small panel in the
+// page's lower right corner (not a PopupWindow: a PopupWindow is modal over the whole window and swallows the click that dismisses it).
+import { Theme } from "theme.slint";
+import { Chip, ChipTone } from "chips.slint";
+import { Caption, Key, SegGroup, SegKey } from "keys.slint";
+import { Checkbox } from "fields.slint";
+import { SelectKey } from "sections.slint";
+import { TipTimer } from "tooltip.slint";
+import { SelectItem } from "signal_bank.slint";
+
+// ---- Web access and CAT control ----
+export struct WebModel {
+    serve: bool, reach: [SelectItem], reach-index: int, address: string, port: string, user: string, password-status: string,
+    password-draft: string, confirm-draft: string, set-label: string, clear-label: string, apply-label: string, apply-enabled: bool,
+    error: string, serving-note: string, network-warning: string, addresses: [string], http-note: string, sessions: string, listeners: string,
+}
+
+export struct CatModel { intro: string, accept: bool, port: string, reachable: bool, warning: string, status: string, status-tone: ChipTone }
+
+// ---- the Plugin store ----
+export struct StoreBadge { text: string, tone: ChipTone }
+
+export struct StoreCard {
+    id: string, glyph: string, name: string, summary: string, badges: [StoreBadge],
+    key-label: string, key-kind: int,                  // 0 GET, 1 UPDATE, 2 FITTING..., 3 INSTALLED, 4 none
+    key-enabled: bool, version-note: string, progress: string, progress-norm: float,
+    key-tooltip: string,                               // ADDED: why a greyed key is greyed (the ImGui hover reason)
+}
+
+export struct StoreCategory { heading: string, cards: [StoreCard] }
+
+export struct StoreSite {
+    address: string, remove-label: string,
+    status: string,                                    // ADDED: the site's status line (amber: "That address did not answer"); "" none
+}
+
+export struct UpdateRow { id: string, glyph: string, name: string, version-note: string, badge: string, whats-new: string, key-label: string, key-enabled: bool }
+
+export struct StorePluginPage {
+    shown: bool, back-label: string, glyph: string, name: string, version: string, badges: [StoreBadge], origin: string,
+    key-label: string, key-kind: int, key-enabled: bool, report: string, report-tone: ChipTone, screenshots: [image], what-it-does: string,
+    whats-new: string, details: string, details-open: bool, details-label: string,
+    picture-index: int,                                // ADDED: which of `screenshots` the strip shows (the arrows ask for index - 1 / + 1 through store-picture)
+    pictures-note: string,                             // ADDED: the caption under the strip, or "No pictures published yet" / "loading..." when there is none
+    notice: string, notice-ticked: bool,               // ADDED: the maker's legal notice (the amber BEFORE YOU FIT IT box, "" none) and its tick; GET stays greyed until it is ticked
+    reach-lead: string,                                // ADDED: the sentence under the facts (what the plugin reaches); "" none
+}
+
+export struct StoreModel {
+    search: string, search-placeholder: string, tab: int, browse-label: string, updates-label: string, catalogue-line: string,
+    catalogue-tone: ChipTone, check-label: string, sites-open: bool, sites: [StoreSite], no-sites-line: string, site-draft: string,
+    consent: bool, consent-sentence: string, add-site-label: string, top-error: string, top-warning: string, empty-line: string,
+    categories: [StoreCategory], get-all-label: string, get-all-enabled: bool, get-all-reason: string, foot-note: string, bulk-tick: bool,
+    bulk-sentence: string, updates-heading: string, update-all-label: string, update-all-enabled: bool, updates: [UpdateRow],
+    footnotes: [string], cleanup-label: string, cleanup-enabled: bool, cleanup-lines: [string], cleanup-open: bool, cleanup-title: string,
+    cleanup-text: string, cleanup-yes: string, cleanup-no: string, plugin: StorePluginPage,
+    cancel-label: string,                              // ADDED: CANCEL, drawn only while a transfer runs ("" = hidden); callback store-cancel
+    site-error: string,                                // ADDED: the refusal of the last ADD (amber), under the address field
+    add-reason: string,                                // ADDED: why ADD is greyed ("" = ADD answers); shown dim under the field
+}
+
+// EVERY GESTURE OF THE BODIES AND OF THE STORE PAGE, as one global the host wires (ui->global<ExtendEvents>().on_...). A store gesture that names a card or an
+// update row carries its `id`; a site is its index in `sites`.
+export global ExtendEvents {
+    callback web-serve(bool);
+    callback web-reach(int);
+    callback web-port(string);
+    callback web-user(string);
+    callback web-password(string);                     // the password draft, committed (Enter or the focus leaving); Set password commits it first
+    callback web-confirm(string);
+    callback web-set-password();
+    callback web-clear-password();
+    callback web-apply();
+    callback cat-accept(bool);
+    callback cat-port(string);
+    callback cat-reachable(bool);
+    callback store-search(string);                     // each edit: the list filters while the user types
+    callback store-tab(int);                           // 0 Browse, 1 Updates
+    callback store-check();
+    callback store-sites-toggle();
+    callback store-site-remove(int);
+    callback store-site-draft(string);                 // each edit of the address field
+    callback store-consent(bool);
+    callback store-site-add();
+    callback store-card-key(string);
+    callback store-card-open(string);
+    callback store-get-all();
+    callback store-bulk-tick(bool);
+    callback store-update-all();
+    callback store-update(string);
+    callback store-cleanup();
+    callback store-cleanup-confirm(bool);              // true: Remove N files, false: Keep them
+    callback store-plugin-back();
+    callback store-plugin-key();
+    callback store-plugin-details(bool);               // the wanted state of the facts grid
+    callback store-picture(int);                       // the screenshot index the strip should show
+    callback store-cancel();                           // ADDED: CANCEL, the running transfer
+    callback store-plugin-notice(bool);                // ADDED: the maker's notice tick on the plugin page
+}
+
+// ================================================ the pieces the components are made of ================================================
+
+// The label of an item of a list, "" when the index is off the list (the closed text of a dropdown).
+global Pick {
+    pure public function label(items: [SelectItem], i: int) -> string {
+        return i >= 0 && i < items.length ? items[i].label : "";
+    }
+}
+
+// The ink of a line in a tone: the sheet's .n, .n.am, .n.rd, .n.gn.
+global Ink {
+    pure public function of(t: ChipTone) -> color {
+        return t == ChipTone.err ? Theme.chip-err-fg : t == ChipTone.warn ? Theme.chip-warn-fg : t == ChipTone.good ? Theme.chip-good-fg : Theme.dim;
+    }
+}
+
+// A row of a body: 24 px (.rw min-height), the children side by side 8 px apart.
+component Line inherits Rectangle {
+    in property <length> gap: 8px;
+    height: Theme.field-h;
+    HorizontalLayout {
+        spacing: root.gap;
+        @children
+    }
+}
+
+// Keeps a fixed-height child (a 20 px key, a 14 px box) in the middle of a Line.
+component Mid inherits VerticalLayout {
+    alignment: center;
+}
+
+// A sentence: 11 px, wrapped, dim unless a tone or an `ink` says otherwise. The words are a Text of an explicit width inside a Rectangle whose height is the Text's:
+// a wrapped Text that is itself a layout child is measured before its width is known and loses its last line when its layout is nested. `wrap-w` is the width the
+// words wrap at (the body's own `root.width`, or the page's inner width), NOT the width a layout gives the Note. Empty words take no height.
+component Note inherits Rectangle {
+    in property <string> text;
+    in property <ChipTone> tone: ChipTone.neutral;
+    in property <color> ink: Ink.of(root.tone);
+    in property <length> wrap-w;
+    in property <length> size: Theme.font-small;
+    in property <int> weight: Theme.weight-regular;
+    in property <bool> mono;
+    min-width: 0px;
+    height: root.text == "" ? 0px : words.preferred-height;
+    words := Text {
+        x: 0px;
+        y: 0px;
+        width: root.wrap-w > 0px ? root.wrap-w : root.width;
+        text: root.text;
+        wrap: word-wrap;
+        font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+        font-size: root.size;
+        font-weight: root.weight;
+        color: root.ink;
+    }
+}
+
+// The .lb label of a row: 11 px / 500, fg-soft, elided before it can widen the row.
+component RowLabel inherits Text {
+    min-width: 0px;
+    overflow: elide;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-small;
+    font-weight: Theme.weight-medium;
+    color: Theme.fg-soft;
+    vertical-alignment: center;
+}
+
+// A figure of a row: the mono 11 px readout.
+component Readout inherits Text {
+    min-width: 0px;
+    overflow: elide;
+    font-family: Theme.font-mono;
+    font-size: Theme.font-small;
+    color: Theme.fg;
+    vertical-alignment: center;
+}
+
+// The .ck checkbox, driven by the host's value: the Checkbox keeps its own `checked` after a press, so the model's value is pushed back into it every time the user
+// presses and every time the model changes (a refusal leaves the box where it was).
+component Tick inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback toggled(bool);
+
+    in property <length> row-h: Theme.field-h;
+    height: max(root.row-h, box.height);
+    min-width: 0px;
+    preferred-width: box.preferred-width;
+    changed on => { box.checked = root.on; }
+    box := Checkbox {
+        x: 0px;
+        y: (root.height - self.height) / 2;
+        width: root.width;
+        label: root.label;
+        checked: root.on;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        toggled(v) => {
+            root.toggled(v);
+            box.checked = root.on;
+        }
+    }
+}
+
+// A tick whose sentence wraps and is itself a click target (the site consent: "I understand this site's plugins are not checked by FoxSDR"). The host owns `on`.
+component SentenceTick inherits Rectangle {
+    in property <string> sentence;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> wrap-w;
+    callback toggled(bool);
+
+    property <length> text-x: 14px + 8px;
+    min-width: 0px;
+    height: max(14px, words.preferred-height + 2px);
+    accessible-role: checkbox;
+    accessible-label: root.sentence;
+    accessible-description: root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-action-default => { root.press(); }
+
+    function press() {
+        if (root.enabled) {
+            root.toggled(!root.on);
+        }
+    }
+
+    Rectangle {
+        x: 0px;
+        y: 1px;
+        width: 14px;
+        height: 14px;
+        border-radius: 2px;
+        border-width: Theme.hairline;
+        background: !root.enabled ? Theme.key-disabled-bg : root.on ? Theme.accent : Theme.field;
+        border-color: !root.enabled ? Theme.line-strong.with-alpha(0.5) : root.on ? Theme.accent : Theme.line-strong;
+        if root.on : Image {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            source: @image-url("icons/check.svg");
+            image-fit: contain;
+            colorize: root.enabled ? Theme.accent-ink : Theme.key-disabled-fg;
+            accessible-role: none;
+        }
+    }
+    words := Text {
+        x: root.text-x;
+        y: 0px;
+        width: max(0px, (root.wrap-w > 0px ? root.wrap-w : root.width) - root.text-x);
+        text: root.sentence;
+        wrap: word-wrap;
+        color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        accessible-role: none;
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.press(); }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// The one-line input of a body (.in, 24 px): shows `value` (the host's text), commits on Enter and on the focus leaving after an edit. `edited` reports each
+// keystroke, and `flush()` commits what was typed and not yet committed - a key that acts on a field calls it first, so the host has the text before the action
+// asks. `hidden` masks it (the two password fields).
+component LineInput inherits Rectangle {
+    in property <string> value;
+    in property <string> placeholder;
+    in property <bool> mono;
+    in property <bool> right;
+    in property <bool> hidden;
+    in property <bool> enabled: true;
+    in property <bool> error;
+    in property <string> tooltip;
+    in property <string> name;                          // the accessible label
+    callback committed(string);
+    callback edited(string);
+    callback accepted(string);
+    out property <bool> has-focus: input.has-focus;
+    out property <string> text: input.text;
+
+    property <length> pad: 8px + Theme.hairline;
+    property <bool> dirty;                              // edited since the last commit
+
+    public function flush() {
+        if (root.dirty) {
+            root.dirty = false;
+            root.committed(input.text);
+        }
+    }
+
+    height: Theme.field-h;
+    min-width: 0px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.enabled ? (root.error ? Theme.lamp-red : Theme.line-strong) : Theme.line-strong.with-alpha(0.5);
+    background: root.enabled ? Theme.field : Theme.key-disabled-bg;
+
+    init => { input.text = root.value; }
+    changed value => {
+        input.text = root.value;
+        root.dirty = false;
+    }
+
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
+        clicked => { if (root.enabled) { input.focus(); } }
+        if input.text == "" && root.placeholder != "" : Text {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            text: root.placeholder;
+            color: Theme.disabled;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        input := TextInput {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            enabled: root.enabled;
+            read-only: !root.enabled;
+            single-line: true;
+            input-type: root.hidden ? InputType.password : InputType.text;
+            color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.name;
+            edited => {
+                root.dirty = true;
+                root.edited(self.text);
+            }
+            accepted => {
+                root.dirty = false;
+                root.committed(self.text);
+                root.accepted(self.text);
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.dirty) {
+                    root.dirty = false;
+                    root.committed(self.text);
+                }
+            }
+        }
+    }
+    if input.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// The search field of the store's top bar: LineInput's host-driven text behind a loupe, the placeholder after it. `edited` fires on every change the user makes.
+component SearchBox inherits Rectangle {
+    in property <string> value;
+    in property <string> placeholder;
+    callback edited(string);
+    out property <bool> has-focus: input.has-focus;
+
+    height: Theme.field-h;
+    min-width: 0px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: Theme.line-strong;
+    background: Theme.field;
+    accessible-role: text-input;
+    accessible-label: root.placeholder;
+
+    init => { input.text = root.value; }
+    changed value => { input.text = root.value; }
+
+    Image {
+        x: 8px;
+        y: (root.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        image-fit: contain;
+        source: @image-url("icons/search.svg");
+        colorize: Theme.dim;
+        accessible-role: none;
+    }
+    if input.text == "" : Text {
+        x: 28px;
+        y: 0px;
+        width: max(0px, root.width - 28px - 8px);
+        height: root.height;
+        text: root.placeholder;
+        color: Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    area := TouchArea {
+        mouse-cursor: MouseCursor.text;
+        clicked => { input.focus(); }
+        input := TextInput {
+            x: 28px;
+            y: 0px;
+            width: max(0px, root.width - 28px - 8px);
+            height: root.height;
+            single-line: true;
+            color: Theme.fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.placeholder;
+            edited => { root.edited(self.text); }
+        }
+    }
+    if input.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+}
+
+// One row of a dropdown's list: the tick of the chosen one, the label, the dim note at the right; a greyed row cannot be picked.
+component DropRow inherits Rectangle {
+    in property <SelectItem> item;
+    in property <bool> chosen;
+    callback activated();
+    height: Theme.menu-item-h;
+    border-radius: Theme.radius-menu-item;
+    background: root.item.enabled && row-area.has-hover ? Theme.menu-hot : transparent;
+    accessible-role: list-item;
+    accessible-label: root.item.label;
+    accessible-enabled: root.item.enabled;
+    if root.chosen : Image {
+        x: 5px;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        source: @image-url("icons/check.svg");
+        image-fit: contain;
+        colorize: Theme.accent;
+    }
+    Text {
+        x: 26px;
+        y: 0px;
+        width: max(0px, parent.width - 26px - 8px - (root.item.note != "" ? note-text.preferred-width + 8px : 0px));
+        height: parent.height;
+        text: root.item.label;
+        color: root.item.enabled ? Theme.fg : Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    note-text := Text {
+        x: parent.width - 8px - self.width;
+        y: 0px;
+        width: self.preferred-width;
+        height: parent.height;
+        visible: root.item.note != "";
+        text: root.item.note;
+        color: Theme.dim;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+    }
+    row-area := TouchArea {
+        mouse-cursor: root.item.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.item.enabled) { root.activated(); } }
+    }
+}
+
+// A dropdown: the SelectKey's look and a list of `items` it opens itself under the key.
+component DropKey inherits Rectangle {
+    in property <string> value;                         // the closed text
+    in property <[SelectItem]> items;
+    in property <int> selected: -1;
+    in property <string> label;                         // the accessible name
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> popup-min-w: 150px;
+    callback picked(int);
+
+    property <length> popup-w: max(root.width, root.popup-min-w);
+    property <length> popup-h: min(root.items.length * Theme.menu-item-h + 2 * (4px + Theme.hairline), 330px);
+
+    height: Theme.key-sm-h;
+    min-width: 0px;
+    preferred-width: 110px;
+
+    SelectKey {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        value: root.value;
+        label: root.label;
+        enabled: root.enabled;
+        tooltip: root.tooltip;
+        clicked => { if (root.items.length > 0) { popup.show(); } }
+    }
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: root.popup-w;
+        height: root.popup-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: Theme.shadows ? 28px : 0px;
+            drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+            drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            // a short list is plain rows (a Flickable holds a press back for a moment: the click of a quick pick would be late), a long one scrolls
+            if root.items.length * Theme.menu-item-h <= root.popup-h : Rectangle {
+                x: 4px + Theme.hairline;
+                y: 4px + Theme.hairline;
+                width: root.popup-w - 2 * (4px + Theme.hairline);
+                height: root.popup-h - 2 * (4px + Theme.hairline);
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: parent.width;
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        popup.close();
+                    }
+                }
+            }
+            if root.items.length * Theme.menu-item-h > root.popup-h : Flickable {
+                x: 4px + Theme.hairline;
+                y: 4px + Theme.hairline;
+                width: root.popup-w - 2 * (4px + Theme.hairline);
+                height: root.popup-h - 2 * (4px + Theme.hairline);
+                content-width: self.width;
+                content-height: root.items.length * Theme.menu-item-h;
+                for it[i] in root.items : DropRow {
+                    x: 0px;
+                    y: i * Theme.menu-item-h;
+                    width: root.popup-w - 2 * (4px + Theme.hairline);
+                    item: it;
+                    chosen: i == root.selected;
+                    activated => {
+                        root.picked(i);
+                        popup.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A number or text field with its caption above (the artboard's `.c.g2` with a `.n` label), the input mono and right-aligned when `mono`.
+component LabelledField inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> mono;
+    in property <bool> right;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback committed(string);
+    out property <string> text: field.text;
+    public function flush() { field.flush(); }
+    spacing: 2px;
+    alignment: start;
+    Text {
+        min-width: 0px;
+        text: root.label;
+        overflow: elide;
+        color: root.enabled ? Theme.dim : Theme.disabled;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+    }
+    field := LineInput {
+        mono: root.mono;
+        right: root.right;
+        enabled: root.enabled;
+        value: root.value;
+        name: root.label;
+        tooltip: root.tooltip;
+        committed(t) => { root.committed(t); }
+    }
+}
+
+// One key of a KeyFlow: its words, whether it is lit, whether it answers. A key with no words is not drawn.
+struct FlowKey { label: string, on: bool, enabled: bool }
+
+// Up to four small keys in a row that wraps under itself when the next one would pass the right edge (the artboard's `.row.g6`: "Set password", "Clear password" and
+// "Apply" do not fit one line of a 254 px column in every language). Each key keeps its own width (its words), so a longer translation moves a key down a line
+// instead of cutting it. Absolute placement, no layout: a flow asks nothing of its parents (rule 11) and its height is its rows.
+component KeyFlow inherits Rectangle {
+    in property <FlowKey> k1;
+    in property <FlowKey> k2;
+    in property <FlowKey> k3;
+    in property <FlowKey> k4;
+    in property <length> gap: 6px;
+    callback clicked(int);
+
+    property <length> kh: Theme.key-sm-h;
+    property <bool> s1: root.k1.label != "";
+    property <bool> s2: root.k2.label != "";
+    property <bool> s3: root.k3.label != "";
+    property <bool> s4: root.k4.label != "";
+    property <length> w1: min(b1.preferred-width, root.width);
+    property <length> w2: min(b2.preferred-width, root.width);
+    property <length> w3: min(b3.preferred-width, root.width);
+    property <length> w4: min(b4.preferred-width, root.width);
+    // the cursor after each slot: the right edge of the last key placed (-gap before any, so the first lands at 0) and its row
+    property <length> cx0: -root.gap;
+    property <bool> wrap1: root.cx0 >= 0px && root.cx0 + root.gap + root.w1 > root.width;
+    property <length> x1: root.wrap1 ? 0px : root.cx0 + root.gap;
+    property <int> r1: root.wrap1 ? 1 : 0;
+    property <length> cx1: root.s1 ? root.x1 + root.w1 : root.cx0;
+    property <int> cr1: root.s1 ? root.r1 : 0;
+    property <bool> wrap2: root.cx1 >= 0px && root.cx1 + root.gap + root.w2 > root.width;
+    property <length> x2: root.wrap2 ? 0px : root.cx1 + root.gap;
+    property <int> r2: root.cr1 + (root.wrap2 ? 1 : 0);
+    property <length> cx2: root.s2 ? root.x2 + root.w2 : root.cx1;
+    property <int> cr2: root.s2 ? root.r2 : root.cr1;
+    property <bool> wrap3: root.cx2 >= 0px && root.cx2 + root.gap + root.w3 > root.width;
+    property <length> x3: root.wrap3 ? 0px : root.cx2 + root.gap;
+    property <int> r3: root.cr2 + (root.wrap3 ? 1 : 0);
+    property <length> cx3: root.s3 ? root.x3 + root.w3 : root.cx2;
+    property <int> cr3: root.s3 ? root.r3 : root.cr2;
+    property <bool> wrap4: root.cx3 >= 0px && root.cx3 + root.gap + root.w4 > root.width;
+    property <length> x4: root.wrap4 ? 0px : root.cx3 + root.gap;
+    property <int> r4: root.cr3 + (root.wrap4 ? 1 : 0);
+    property <int> cr4: root.s4 ? root.r4 : root.cr3;
+    property <bool> shown: root.s1 || root.s2 || root.s3 || root.s4;
+
+    height: root.shown ? (root.cr4 + 1) * root.kh + root.cr4 * root.gap : 0px;
+    min-width: 0px;
+
+    b1 := Key { visible: root.s1; x: root.x1; y: root.r1 * (root.kh + root.gap); width: root.w1; height: root.kh; small: true; min-w: 0px;
+            min-width: 0px;
+        label: root.k1.label; on: root.k1.on; enabled: root.k1.enabled; clicked => { root.clicked(1); } }
+    b2 := Key { visible: root.s2; x: root.x2; y: root.r2 * (root.kh + root.gap); width: root.w2; height: root.kh; small: true; min-w: 0px;
+            min-width: 0px;
+        label: root.k2.label; on: root.k2.on; enabled: root.k2.enabled; clicked => { root.clicked(2); } }
+    b3 := Key { visible: root.s3; x: root.x3; y: root.r3 * (root.kh + root.gap); width: root.w3; height: root.kh; small: true; min-w: 0px;
+            min-width: 0px;
+        label: root.k3.label; on: root.k3.on; enabled: root.k3.enabled; clicked => { root.clicked(3); } }
+    b4 := Key { visible: root.s4; x: root.x4; y: root.r4 * (root.kh + root.gap); width: root.w4; height: root.kh; small: true; min-w: 0px;
+            min-width: 0px;
+        label: root.k4.label; on: root.k4.on; enabled: root.k4.enabled; clicked => { root.clicked(4); } }
+}
+
+// ================================================ Web access ================================================
+
+export component WebBody inherits VerticalLayout {
+    in property <WebModel> model;
+    in-out property <bool> revealed;                    // the password field shows its text instead of dots
+
+    callback web-serve(bool);
+    web-serve(a) => { ExtendEvents.web-serve(a); }
+    callback web-reach(int);
+    web-reach(a) => { ExtendEvents.web-reach(a); }
+    callback web-port(string);
+    web-port(a) => { ExtendEvents.web-port(a); }
+    callback web-user(string);
+    web-user(a) => { ExtendEvents.web-user(a); }
+    callback web-password(string);
+    web-password(a) => { ExtendEvents.web-password(a); }
+    callback web-confirm(string);
+    web-confirm(a) => { ExtendEvents.web-confirm(a); }
+    callback web-set-password();
+    web-set-password() => { ExtendEvents.web-set-password(); }
+    callback web-clear-password();
+    web-clear-password() => { ExtendEvents.web-clear-password(); }
+    callback web-apply();
+    web-apply() => { ExtendEvents.web-apply(); }
+
+    property <bool> has-password: root.model.clear-label != "";   // Clear password is drawn only when a password record exists (aw 31907)
+
+    spacing: 6px;
+    alignment: start;
+
+    Tick {
+        label: @tr("Serve a browser page");
+        on: root.model.serve;
+        toggled(v) => { root.web-serve(v); }
+    }
+    Line {
+        RowLabel { horizontal-stretch: 1; text: @tr("Reachable from"); }
+        DropKey {
+            width: 150px;
+            value: Pick.label(root.model.reach, root.model.reach-index);
+            items: root.model.reach;
+            selected: root.model.reach-index;
+            label: @tr("Reachable from");
+            popup-min-w: 190px;
+            picked(i) => { root.web-reach(i); }
+        }
+    }
+    if root.model.address != "" : Line {
+        RowLabel { horizontal-stretch: 1; text: @tr("address"); color: Theme.dim; }
+        Readout { text: root.model.address; horizontal-alignment: right; }
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        port := LabelledField {
+            width: 70px;
+            label: @tr("Port");
+            mono: true;
+            right: true;
+            value: root.model.port;
+            committed(t) => { root.web-port(t); }
+        }
+        user := LabelledField {
+            horizontal-stretch: 1;
+            label: @tr("User name");
+            value: root.model.user;
+            committed(t) => { root.web-user(t); }
+        }
+    }
+    if root.model.password-status != "" : Note { wrap-w: root.width; text: root.model.password-status; tone: root.has-password ? ChipTone.good : ChipTone.neutral; }
+    VerticalLayout {
+        spacing: 2px;
+        Text { min-width: 0px; text: @tr("Password"); overflow: elide; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small; }
+        Line {
+            gap: 4px;
+            pw := LineInput {
+                horizontal-stretch: 1;
+                mono: true;
+                hidden: !root.revealed;
+                value: root.model.password-draft;
+                name: @tr("Password");
+                committed(t) => { root.web-password(t); }
+            }
+            Mid { Key {
+                label: root.revealed ? @tr("Hide").to-uppercase() : @tr("SHOW");
+                xs: true;
+                min-w: 0px;
+                on: root.revealed;
+                tooltip: root.revealed ? @tr("Hide") : @tr("Show");
+                accessible-label: root.revealed ? @tr("Hide the password") : @tr("Show the password");
+                clicked => { root.revealed = !root.revealed; }
+            } }
+        }
+    }
+    VerticalLayout {
+        spacing: 2px;
+        Text { min-width: 0px; text: @tr("Confirm"); overflow: elide; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small; }
+        cf := LineInput {
+            mono: true;
+            hidden: !root.revealed;
+            value: root.model.confirm-draft;
+            name: @tr("Confirm");
+            committed(t) => { root.web-confirm(t); }
+        }
+    }
+    KeyFlow {
+        k1: { label: root.model.set-label != "" ? root.model.set-label : @tr("Set password"), on: false, enabled: true };
+        k2: { label: root.has-password ? root.model.clear-label : "", on: false, enabled: true };
+        k3: { label: root.model.apply-label != "" ? root.model.apply-label : (root.model.apply-enabled ? @tr("Apply") : @tr("Applied")), on: root.model.apply-enabled, enabled: root.model.apply-enabled };
+        clicked(i) => {
+            if (i == 1) {
+                pw.flush();
+                cf.flush();
+                root.web-set-password();
+            } else if (i == 2) {
+                root.web-clear-password();
+            } else if (i == 3) {
+                port.flush();
+                user.flush();
+                root.web-apply();
+            }
+        }
+    }
+    if root.model.error != "" : Note { wrap-w: root.width; text: root.model.error; tone: ChipTone.err; }
+    if root.model.serving-note != "" : Note { wrap-w: root.width; text: root.model.serving-note; tone: ChipTone.good; }
+    if root.model.network-warning != "" : Note { wrap-w: root.width; text: root.model.network-warning; tone: ChipTone.err; }
+    for a in root.model.addresses : Note { wrap-w: root.width; text: a; mono: true; }
+    if root.model.http-note != "" : Note { wrap-w: root.width; text: root.model.http-note; tone: ChipTone.warn; }
+    if root.model.sessions != "" : Note { wrap-w: root.width; text: root.model.sessions; }
+    if root.model.listeners != "" : Note { wrap-w: root.width; text: root.model.listeners; }
+}
+
+// ================================================ CAT control ================================================
+
+export component CatBody inherits VerticalLayout {
+    in property <CatModel> model;
+
+    callback cat-accept(bool);
+    cat-accept(a) => { ExtendEvents.cat-accept(a); }
+    callback cat-port(string);
+    cat-port(a) => { ExtendEvents.cat-port(a); }
+    callback cat-reachable(bool);
+    cat-reachable(a) => { ExtendEvents.cat-reachable(a); }
+
+    spacing: 6px;
+    alignment: start;
+
+    if root.model.intro != "" : Note { wrap-w: root.width; text: root.model.intro; }
+    Tick {
+        label: @tr("Accept CAT connections");
+        on: root.model.accept;
+        toggled(v) => { root.cat-accept(v); }
+    }
+    Line {
+        RowLabel { horizontal-stretch: 1; text: @tr("Port"); }
+        LineInput {
+            width: 80px;
+            mono: true;
+            right: true;
+            value: root.model.port;
+            name: @tr("Port");
+            committed(t) => { root.cat-port(t); }
+        }
+    }
+    Tick {
+        label: @tr("Reachable from other machines");
+        on: root.model.reachable;
+        toggled(v) => { root.cat-reachable(v); }
+    }
+    if root.model.warning != "" : Note { wrap-w: root.width; text: root.model.warning; tone: ChipTone.warn; }
+    if root.model.status != "" : Note { wrap-w: root.width; text: root.model.status; tone: root.model.status-tone; }
+}
+
+// ================================================ the Plugin store page ================================================
+
+// A scrolling body: the children sit in a Flickable (the wheel scrolls it) and a 6 px thumb (the sheet's scroll thumb, knob-ring, radius 3) is laid over the right
+// edge while the content is taller than the body. The caller gives `content-height`.
+component Scroller inherits Rectangle {
+    in property <length> content-height;
+    in property <bool> reset;                           // flips to bring the body back to the top (a page was opened)
+    out property <length> scrolled: -fl.content-y;
+    clip: true;
+    changed reset => { fl.content-y = 0px; }
+    fl := Flickable {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        content-width: root.width;
+        content-height: max(root.content-height, root.height);
+        interactive: false;
+        @children
+    }
+    if root.content-height > root.height : thumb := Rectangle {
+        property <length> travel: root.height - self.height;
+        property <length> overflow: root.content-height - root.height;
+        x: root.width - 9px;
+        y: (overflow > 0px ? -fl.content-y / overflow : 0) * travel;
+        width: 6px;
+        height: max(20px, root.height * root.height / root.content-height);
+        border-radius: 3px;
+        background: (grab.pressed || grab.has-hover) ? Theme.dim : Theme.knob-ring;
+        grab := TouchArea {
+            property <length> grab-y;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) { self.grab-y = self.mouse-y; }
+            }
+            moved => {
+                if (self.pressed && thumb.travel > 0px) {
+                    fl.content-y = max(-thumb.overflow, min(0px, fl.content-y - (self.mouse-y - self.grab-y) * (thumb.overflow / thumb.travel)));
+                }
+            }
+        }
+    }
+}
+
+// The glyph tile of a card, an update row and the plugin page: a rounded square with the host's glyph (a letter or a symbol) in it.
+component GlyphTile inherits Rectangle {
+    in property <string> glyph;
+    in property <length> side: 30px;
+    width: root.side;
+    height: root.side;
+    border-radius: 6px;
+    border-width: Theme.hairline;
+    border-color: Theme.line-strong;
+    background: Theme.key-bg;
+    Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        text: root.glyph;     // not-translated: the catalogue's glyph
+        color: Theme.accent-soft;
+        font-family: Theme.font-ui;
+        font-size: root.side * 0.5;
+        font-weight: Theme.weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: clip;
+    }
+}
+
+// The one key of a card, an update row or the plugin page by the host's key kind: 0 GET (plain), 1 UPDATE (lit), 2 FITTING... (greyed indicator), 3 INSTALLED
+// (greyed indicator), 4 none (not drawn).
+component StoreKey inherits Key {
+    in property <int> kind;
+    in property <bool> allowed: true;
+    visible: root.kind != 4;
+    small: true;
+    min-w: 0px;
+    on: root.kind == 1;
+    enabled: root.allowed && root.kind <= 1;
+}
+
+// A row of chips that wraps under itself (the card's and the plugin page's badges). Six slots; a seventh badge is not drawn (no catalogue plugin has more than three).
+// Absolute placement, no layout: a flow asks nothing of its parents (rule 11) and its height is its rows.
+component BadgeFlow inherits Rectangle {
+    in property <[StoreBadge]> badges;
+    in property <length> gap: 4px;
+
+    property <length> kh: Theme.chip-h;
+    property <bool> s1: root.badges.length > 0;
+    property <bool> s2: root.badges.length > 1;
+    property <bool> s3: root.badges.length > 2;
+    property <bool> s4: root.badges.length > 3;
+    property <bool> s5: root.badges.length > 4;
+    property <bool> s6: root.badges.length > 5;
+    property <length> w1: min(c1.width, root.width);
+    property <length> w2: min(c2.width, root.width);
+    property <length> w3: min(c3.width, root.width);
+    property <length> w4: min(c4.width, root.width);
+    property <length> w5: min(c5.width, root.width);
+    property <length> w6: min(c6.width, root.width);
+    property <length> cx0: -root.gap;
+    property <bool> wrap1: root.cx0 >= 0px && root.cx0 + root.gap + root.w1 > root.width;
+    property <length> x1: root.wrap1 ? 0px : root.cx0 + root.gap;
+    property <int> r1: root.wrap1 ? 1 : 0;
+    property <length> cx1: root.s1 ? root.x1 + root.w1 : root.cx0;
+    property <int> cr1: root.s1 ? root.r1 : 0;
+    property <bool> wrap2: root.cx1 >= 0px && root.cx1 + root.gap + root.w2 > root.width;
+    property <length> x2: root.wrap2 ? 0px : root.cx1 + root.gap;
+    property <int> r2: root.cr1 + (root.wrap2 ? 1 : 0);
+    property <length> cx2: root.s2 ? root.x2 + root.w2 : root.cx1;
+    property <int> cr2: root.s2 ? root.r2 : root.cr1;
+    property <bool> wrap3: root.cx2 >= 0px && root.cx2 + root.gap + root.w3 > root.width;
+    property <length> x3: root.wrap3 ? 0px : root.cx2 + root.gap;
+    property <int> r3: root.cr2 + (root.wrap3 ? 1 : 0);
+    property <length> cx3: root.s3 ? root.x3 + root.w3 : root.cx2;
+    property <int> cr3: root.s3 ? root.r3 : root.cr2;
+    property <bool> wrap4: root.cx3 >= 0px && root.cx3 + root.gap + root.w4 > root.width;
+    property <length> x4: root.wrap4 ? 0px : root.cx3 + root.gap;
+    property <int> r4: root.cr3 + (root.wrap4 ? 1 : 0);
+    property <length> cx4: root.s4 ? root.x4 + root.w4 : root.cx3;
+    property <int> cr4: root.s4 ? root.r4 : root.cr3;
+    property <bool> wrap5: root.cx4 >= 0px && root.cx4 + root.gap + root.w5 > root.width;
+    property <length> x5: root.wrap5 ? 0px : root.cx4 + root.gap;
+    property <int> r5: root.cr4 + (root.wrap5 ? 1 : 0);
+    property <length> cx5: root.s5 ? root.x5 + root.w5 : root.cx4;
+    property <int> cr5: root.s5 ? root.r5 : root.cr4;
+    property <bool> wrap6: root.cx5 >= 0px && root.cx5 + root.gap + root.w6 > root.width;
+    property <length> x6: root.wrap6 ? 0px : root.cx5 + root.gap;
+    property <int> r6: root.cr5 + (root.wrap6 ? 1 : 0);
+    property <int> cr6: root.s6 ? root.r6 : root.cr5;
+    property <bool> shown: root.s1;
+
+    height: root.shown ? (root.cr6 + 1) * root.kh + root.cr6 * root.gap : 0px;
+    min-width: 0px;
+
+    c1 := Chip { visible: root.s1; x: root.x1; y: root.r1 * (root.kh + root.gap); label: root.badges[0].text; tone: root.badges[0].tone; }
+    c2 := Chip { visible: root.s2; x: root.x2; y: root.r2 * (root.kh + root.gap); label: root.badges[1].text; tone: root.badges[1].tone; }
+    c3 := Chip { visible: root.s3; x: root.x3; y: root.r3 * (root.kh + root.gap); label: root.badges[2].text; tone: root.badges[2].tone; }
+    c4 := Chip { visible: root.s4; x: root.x4; y: root.r4 * (root.kh + root.gap); label: root.badges[3].text; tone: root.badges[3].tone; }
+    c5 := Chip { visible: root.s5; x: root.x5; y: root.r5 * (root.kh + root.gap); label: root.badges[4].text; tone: root.badges[4].tone; }
+    c6 := Chip { visible: root.s6; x: root.x6; y: root.r6 * (root.kh + root.gap); label: root.badges[5].text; tone: root.badges[5].tone; }
+}
+
+// One plugin card of the Browse grid (the sheet's `.card` with 8 px padding): the glyph, the name, the one-line summary, the badges and the one key (with the amber
+// version note, or the progress bar and line, beside it). The whole card is a click target that opens the plugin page; its key is pressed on its own. The card sizes
+// itself from `card-w`.
+component StoreCardView inherits Rectangle {
+    in property <StoreCard> card;
+    in property <length> card-w;
+    callback key-pressed();
+    callback opened();
+
+    property <length> tx: 8px + 30px + 8px;
+    property <length> tw: max(0px, root.card-w - root.tx - 8px);
+    property <bool> fitting: root.card.key-kind == 2;
+    property <length> tail-h: root.fitting && root.card.progress != "" ? 2px + progress.height : 0px;    // the progress line under the key row
+    // the card's own height from its words; a row of cards is as tall as its tallest, and the key row sits on each card's bottom edge
+    property <length> natural-row-y: summary.y + summary.height + (badges.height > 0px ? 4px + badges.height : 0px) + 6px;
+    property <length> row-y: max(root.natural-row-y, root.height - 8px - Theme.key-sm-h - root.tail-h);
+
+    min-height: root.natural-row-y + Theme.key-sm-h + root.tail-h + 8px;
+    preferred-height: root.natural-row-y + Theme.key-sm-h + root.tail-h + 8px;
+    min-width: 0px;
+    border-radius: Theme.radius-panel;
+    border-width: Theme.hairline;
+    border-color: Theme.line-strong;
+    background: open-area.has-hover ? Theme.menu : Theme.card;
+    accessible-role: button;
+    accessible-label: root.card.name;
+    accessible-description: root.card.summary;
+    accessible-action-default => { root.opened(); }
+
+    open-area := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.opened(); }
+    }
+    GlyphTile { x: 8px; y: 8px; glyph: root.card.glyph; }
+    name := Note { x: root.tx; y: 8px; width: root.tw; wrap-w: root.tw; text: root.card.name; ink: Theme.fg; size: Theme.font-body; weight: Theme.weight-semibold; }
+    summary := Note { x: root.tx; y: name.y + name.height + 2px; width: root.tw; wrap-w: root.tw; text: root.card.summary; }
+    badges := BadgeFlow { x: root.tx; y: summary.y + summary.height + 4px; width: root.tw; badges: root.card.badges; }
+    key := StoreKey {
+        x: root.card-w - 8px - self.width;
+        y: root.row-y;
+        width: self.preferred-width;
+        kind: root.card.key-kind;
+        allowed: root.card.key-enabled;
+        label: root.card.key-label;
+        tooltip: root.card.key-tooltip;
+        clicked => { root.key-pressed(); }
+    }
+    if root.card.key-kind == 1 && root.card.version-note != "" : Text {
+        x: root.tx;
+        y: root.row-y;
+        width: max(0px, key.x - root.tx - 6px);
+        height: Theme.key-sm-h;
+        text: root.card.version-note;
+        color: Theme.chip-warn-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.fitting : Rectangle {
+        x: root.tx;
+        y: root.row-y + (Theme.key-sm-h - Theme.slider-track-h) / 2;
+        width: max(0px, key.x - root.tx - 8px);
+        height: Theme.slider-track-h;
+        border-radius: Theme.slider-track-h / 2;
+        background: Theme.slider-track;
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width * max(0.0, min(1.0, root.card.progress-norm));
+            height: parent.height;
+            border-radius: parent.border-radius;
+            background: Theme.slider-fill;
+        }
+    }
+    progress := Note { x: root.tx; y: root.row-y + Theme.key-sm-h + 2px; width: root.tw; wrap-w: root.tw; visible: root.fitting; text: root.fitting ? root.card.progress : ""; size: Theme.font-hint; }
+}
+
+// The cards of one category: rows of `cols` cards, each `card-w` wide, `gap` apart; a partly filled last row keeps the column width. A row is as tall as its tallest card.
+component CardGrid inherits VerticalLayout {
+    in property <[StoreCard]> cards;
+    in property <int> cols: 1;
+    in property <length> card-w;
+    in property <length> gap: 6px;
+    callback key-pressed(string);
+    callback opened(string);
+
+    property <int> rows: Math.ceil(root.cards.length / root.cols);
+    spacing: root.gap;
+    alignment: start;
+    for r in root.rows : HorizontalLayout {
+        spacing: root.gap;
+        alignment: start;
+        // a slot past the last card is not drawn but keeps its place, so the last row's cards hold the column width
+        for c in root.cols : StoreCardView {
+            visible: r * root.cols + c < root.cards.length;
+            width: root.card-w;
+            card: root.cards[r * root.cols + c];
+            card-w: root.card-w;
+            key-pressed => { root.key-pressed(root.cards[r * root.cols + c].id); }
+            opened => { root.opened(root.cards[r * root.cols + c].id); }
+        }
+    }
+}
+
+// One row of the Updates pane: the glyph, the name with its amber version and NEW badge, the what's-new line under it, UPDATE at the right.
+component UpdateRowView inherits Rectangle {
+    in property <UpdateRow> entry;
+    in property <length> row-w;
+    callback key-pressed();
+    callback opened();
+
+    property <length> tx: 8px + 24px + 8px;
+    property <length> text-w: max(0px, key.x - root.tx - 8px);
+    property <length> name-room: max(0px, root.text-w - (version.visible ? version.width + 6px : 0px) - (badge.visible ? badge.width + 6px : 0px));
+    height: max(Theme.key-xs-h + 12px, 6px + 16px + (news.height > 0px ? 2px + news.height : 0px) + 6px);
+    min-width: 0px;
+    border-radius: Theme.radius-panel;
+    border-width: Theme.hairline;
+    border-color: Theme.line-strong;
+    background: Theme.card;
+
+    GlyphTile { x: 8px; y: 6px; side: 24px; glyph: root.entry.glyph; }
+    name-area := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: max(0px, key.x - 8px);
+        height: root.height;
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.opened(); }
+    }
+    name := Text {
+        x: root.tx;
+        y: 6px;
+        width: min(self.preferred-width, root.name-room);
+        height: 16px;
+        text: root.entry.name;
+        color: Theme.fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        font-weight: Theme.weight-semibold;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    version := Text {
+        x: name.x + name.width + 6px;
+        y: 6px;
+        width: self.preferred-width;
+        height: 16px;
+        visible: root.entry.version-note != "";
+        text: root.entry.version-note;
+        color: Theme.chip-warn-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+    }
+    badge := Chip {
+        x: (version.visible ? version.x + version.width : name.x + name.width) + 6px;
+        y: 6px - 2px;
+        visible: root.entry.badge != "";
+        label: root.entry.badge;
+        tone: ChipTone.warn;
+        small: true;
+    }
+    news := Note { x: root.tx; y: 6px + 16px + 2px; width: root.text-w; wrap-w: root.text-w; text: root.entry.whats-new; ink: Theme.fg-soft; }
+    key := Key {
+        x: root.row-w - 8px - self.width;
+        y: 6px;
+        width: self.preferred-width;
+        xs: true;
+        label: root.entry.key-label;
+        enabled: root.entry.key-enabled;
+        clicked => { root.key-pressed(); }
+    }
+}
+
+// THE STORE PAGE: the body of a PageTab of kind 9. See the file header for what it draws; the host fills `model` and the gestures reach ExtendEvents.
+export component StorePage inherits Rectangle {
+    in property <StoreModel> model;
+
+    callback store-search(string);
+    store-search(a) => { ExtendEvents.store-search(a); }
+    callback store-tab(int);
+    store-tab(a) => { ExtendEvents.store-tab(a); }
+    callback store-check();
+    store-check() => { ExtendEvents.store-check(); }
+    callback store-sites-toggle();
+    store-sites-toggle() => { ExtendEvents.store-sites-toggle(); }
+    callback store-site-remove(int);
+    store-site-remove(a) => { ExtendEvents.store-site-remove(a); }
+    callback store-site-draft(string);
+    store-site-draft(a) => { ExtendEvents.store-site-draft(a); }
+    callback store-consent(bool);
+    store-consent(a) => { ExtendEvents.store-consent(a); }
+    callback store-site-add();
+    store-site-add() => { ExtendEvents.store-site-add(); }
+    callback store-card-key(string);
+    store-card-key(a) => { ExtendEvents.store-card-key(a); }
+    callback store-card-open(string);
+    store-card-open(a) => { ExtendEvents.store-card-open(a); }
+    callback store-get-all();
+    store-get-all() => { ExtendEvents.store-get-all(); }
+    callback store-bulk-tick(bool);
+    store-bulk-tick(a) => { ExtendEvents.store-bulk-tick(a); }
+    callback store-update-all();
+    store-update-all() => { ExtendEvents.store-update-all(); }
+    callback store-update(string);
+    store-update(a) => { ExtendEvents.store-update(a); }
+    callback store-cleanup();
+    store-cleanup() => { ExtendEvents.store-cleanup(); }
+    callback store-cleanup-confirm(bool);
+    store-cleanup-confirm(a) => { ExtendEvents.store-cleanup-confirm(a); }
+    callback store-plugin-back();
+    store-plugin-back() => { ExtendEvents.store-plugin-back(); }
+    callback store-plugin-key();
+    store-plugin-key() => { ExtendEvents.store-plugin-key(); }
+    callback store-plugin-details(bool);
+    store-plugin-details(a) => { ExtendEvents.store-plugin-details(a); }
+    callback store-picture(int);
+    store-picture(a) => { ExtendEvents.store-picture(a); }
+    callback store-cancel();
+    store-cancel() => { ExtendEvents.store-cancel(); }
+    callback store-plugin-notice(bool);
+    store-plugin-notice(a) => { ExtendEvents.store-plugin-notice(a); }
+
+    // what the page measures, for a host or a test to aim by
+    out property <length> bar-height: root.bar-h;
+    out property <int> columns: root.cols;
+    out property <length> card-width: root.card-w;
+    out property <length> content-height: col.preferred-height + 2 * root.pad;
+    out property <length> scrolled: body.scrolled;
+
+    property <length> pad: 12px;
+    property <length> iw: max(0px, root.width - 2 * root.pad);
+    property <length> grid-gap: 6px;
+    property <int> cols: root.iw >= 612px ? 3 : root.iw >= 400px ? 2 : 1;
+    property <length> card-w: (root.iw - (root.cols - 1) * root.grid-gap) / root.cols;
+    property <length> seg-w: seg.width;
+    property <length> search-w: max(80px, min(220px, root.iw - root.seg-w - 12px));
+    property <length> bar-h: 8px + 32px + 8px + (catalogue.height > 0px ? catalogue.height + 6px : 0px) + Theme.key-sm-h + 8px;
+    property <string> browse-text: root.model.browse-label != "" ? root.model.browse-label : @tr("BROWSE");
+    property <string> updates-text: root.model.updates-label != "" ? root.model.updates-label : @tr("UPDATES ({})", root.model.updates.length);
+
+    background: Theme.panel;
+    clip: true;
+    accessible-role: groupbox;
+    accessible-label: @tr("Plugin store");
+
+    // ---- the top bar: the strip ground, a rule under it ----
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.bar-h;
+        background: Theme.strip;
+        Rectangle {
+            x: 0px;
+            y: parent.height - Theme.hairline;
+            width: parent.width;
+            height: Theme.hairline;
+            background: Theme.line;
+        }
+    }
+    search := SearchBox {
+        x: root.pad;
+        y: 8px + 4px;
+        width: root.search-w;
+        value: root.model.search;
+        placeholder: root.model.search-placeholder != "" ? root.model.search-placeholder : @tr("Search the catalogue");
+        edited(t) => { root.store-search(t); }
+    }
+    seg := SegGroup {
+        x: root.pad + root.search-w + 12px;
+        y: 8px;
+        SegKey { label: root.browse-text; on: root.model.tab == 0; min-w: 76px; clicked => { root.store-tab(0); } }
+        SegKey { label: root.updates-text; on: root.model.tab == 1; min-w: 96px; clicked => { root.store-tab(1); } }
+    }
+    catalogue := Note {
+        x: root.pad;
+        y: 8px + 32px + 8px;
+        width: root.iw;
+        wrap-w: root.iw;
+        text: root.model.catalogue-line;
+        tone: root.model.catalogue-tone;
+        ink: root.model.catalogue-tone == ChipTone.neutral ? Theme.muted : Ink.of(root.model.catalogue-tone);
+    }
+    check-key := Key {
+        x: root.pad;
+        y: catalogue.y + (catalogue.height > 0px ? catalogue.height + 6px : 0px);
+        width: self.preferred-width;
+        small: true;
+        label: root.model.check-label != "" ? root.model.check-label : @tr("CHECK AGAIN");
+        clicked => { root.store-check(); }
+    }
+    sites-key := Key {
+        x: check-key.x + check-key.width + 10px;
+        y: check-key.y;
+        width: self.preferred-width;
+        small: true;
+        on: root.model.sites-open;
+        label: @tr("SITES");
+        clicked => { root.store-sites-toggle(); }
+    }
+    if root.model.cancel-label != "" : Key {
+        x: sites-key.x + sites-key.width + 10px;
+        y: check-key.y;
+        width: self.preferred-width;
+        small: true;
+        danger: true;
+        label: root.model.cancel-label;
+        clicked => { root.store-cancel(); }
+    }
+
+    // ---- the body ----
+    body := Scroller {
+        x: 0px;
+        y: root.bar-h;
+        width: root.width;
+        height: max(0px, root.height - root.bar-h);
+        content-height: col.preferred-height + 2 * root.pad;
+        reset: root.model.plugin.shown;
+        col := VerticalLayout {
+            x: root.pad;
+            y: root.pad;
+            width: root.iw;
+            spacing: 8px;
+            alignment: start;
+
+            // the SITES panel
+            if root.model.sites-open && !root.model.plugin.shown : Rectangle {
+                height: sites-col.preferred-height + 16px;
+                border-radius: Theme.radius-panel;
+                border-width: Theme.hairline;
+                border-color: Theme.line-strong;
+                background: Theme.card;
+                sites-col := VerticalLayout {
+                    x: 8px;
+                    y: 8px;
+                    width: parent.width - 16px;
+                    spacing: 4px;
+                    alignment: start;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        height: Theme.field-h;
+                        Text { text: @tr("SITES"); color: Theme.chip-warn-fg; font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: Theme.cap-spacing; vertical-alignment: center; }
+                        if root.model.sites.length == 0 : Text { horizontal-stretch: 1; min-width: 0px; text: root.model.no-sites-line; overflow: elide; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small; vertical-alignment: center; }
+                    }
+                    for s[i] in root.model.sites : VerticalLayout {
+                        spacing: 2px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            height: Theme.field-h;
+                            Text { horizontal-stretch: 1; min-width: 0px; text: s.address; overflow: elide; color: Theme.fg; font-family: Theme.font-ui; font-size: Theme.font-small; vertical-alignment: center; }
+                            Mid { Key { xs: true; label: s.remove-label != "" ? s.remove-label : @tr("REMOVE"); tooltip: @tr("Forgets the site. Plugins you already fitted from it stay, and they get no more updates."); clicked => { root.store-site-remove(i); } } }
+                        }
+                        if s.status != "" : Note { wrap-w: root.iw - 16px; text: s.status; tone: ChipTone.warn; }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        height: Theme.field-h;
+                        Text { text: @tr("Site address"); min-width: 0px; overflow: elide; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small; vertical-alignment: center; }
+                        site-field := LineInput {
+                            horizontal-stretch: 1;
+                            value: root.model.site-draft;
+                            placeholder: @tr("https://");
+                            name: @tr("Site address");
+                            edited(t) => { root.store-site-draft(t); }
+                        }
+                        add-key := Key {
+                            small: true;
+                            min-w: 0px;
+                            label: root.model.add-site-label != "" ? root.model.add-site-label : @tr("ADD");
+                            enabled: root.model.add-reason == "";
+                            clicked => { root.store-site-add(); }
+                        }
+                    }
+                    if root.model.add-reason != "" : Note { wrap-w: root.iw - 16px; text: root.model.add-reason; }
+                    if root.model.site-error != "" : Note { wrap-w: root.iw - 16px; text: root.model.site-error; tone: ChipTone.warn; }
+                    SentenceTick {
+                        wrap-w: root.iw - 16px;
+                        sentence: root.model.consent-sentence != "" ? root.model.consent-sentence : @tr("I understand this site's plugins are not checked by FoxSDR");
+                        on: root.model.consent;
+                        toggled(v) => { root.store-consent(v); }
+                    }
+                }
+            }
+
+            // the host's lines at the top of both lists
+            if !root.model.plugin.shown && root.model.top-error != "" : Note { wrap-w: root.iw; text: root.model.top-error; tone: ChipTone.err; size: Theme.font-body; }
+            if !root.model.plugin.shown && root.model.top-warning != "" : Note { wrap-w: root.iw; text: root.model.top-warning; tone: ChipTone.warn; size: Theme.font-body; }
+            if !root.model.plugin.shown && root.model.empty-line != "" : Note { wrap-w: root.iw; text: root.model.empty-line; size: Theme.font-body; ink: Theme.muted; }
+
+            // BROWSE: the categories, then the foot
+            if root.model.tab == 0 && !root.model.plugin.shown : VerticalLayout {
+                spacing: 12px;
+                alignment: start;
+                for cat in root.model.categories : VerticalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    Caption { label: cat.heading; }
+                    CardGrid {
+                        cards: cat.cards;
+                        cols: root.cols;
+                        card-w: root.card-w;
+                        gap: root.grid-gap;
+                        key-pressed(id) => { root.store-card-key(id); }
+                        opened(id) => { root.store-card-open(id); }
+                    }
+                }
+                if root.model.get-all-label != "" : VerticalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Rectangle {
+                        height: max(Theme.key-sm-h, reason.height);
+                        get-all := Key {
+                            x: 0px;
+                            y: 0px;
+                            width: self.preferred-width;
+                            small: true;
+                            label: root.model.get-all-label;
+                            enabled: root.model.get-all-enabled;
+                            clicked => { root.store-get-all(); }
+                        }
+                        reason := Note { x: get-all.width + 8px; y: max(0px, (Theme.key-sm-h - self.height) / 2); width: max(0px, root.iw - get-all.width - 8px); wrap-w: max(0px, root.iw - get-all.width - 8px); text: root.model.get-all-reason; }
+                    }
+                    if root.model.bulk-sentence != "" : SentenceTick {
+                        wrap-w: root.iw;
+                        sentence: root.model.bulk-sentence;
+                        on: root.model.bulk-tick;
+                        toggled(v) => { root.store-bulk-tick(v); }
+                    }
+                    if root.model.foot-note != "" : Note { wrap-w: root.iw; text: root.model.foot-note; }
+                }
+            }
+
+            // UPDATES
+            if root.model.tab == 1 && !root.model.plugin.shown : VerticalLayout {
+                spacing: 8px;
+                alignment: start;
+                Rectangle {
+                    height: Theme.key-sm-h;
+                    Text {
+                        x: 0px;
+                        y: 0px;
+                        width: max(0px, update-all.x - 8px);
+                        height: parent.height;
+                        text: root.model.updates-heading;
+                        color: Theme.fg;
+                        font-family: Theme.font-ui;
+                        font-size: Theme.font-body;
+                        font-weight: Theme.weight-semibold;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    update-all := Key {
+                        x: root.iw - self.width;
+                        y: 0px;
+                        width: self.preferred-width;
+                        small: true;
+                        on: root.model.update-all-enabled;
+                        visible: root.model.updates.length > 0;
+                        label: root.model.update-all-label != "" ? root.model.update-all-label : @tr("UPDATE ALL");
+                        enabled: root.model.update-all-enabled;
+                        clicked => { root.store-update-all(); }
+                    }
+                }
+                for u in root.model.updates : UpdateRowView {
+                    entry: u;
+                    row-w: root.iw;
+                    key-pressed => { root.store-update(u.id); }
+                    opened => { root.store-card-open(u.id); }
+                }
+                for f in root.model.footnotes : Note { wrap-w: root.iw; text: f; }
+                if root.model.cleanup-label != "" : VerticalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    HorizontalLayout {
+                        alignment: start;
+                        Key {
+                            xs: true;
+                            label: root.model.cleanup-label;
+                            enabled: root.model.cleanup-enabled;
+                            clicked => { root.store-cleanup(); }
+                        }
+                    }
+                    for l in root.model.cleanup-lines : Note { wrap-w: root.iw; text: l; }
+                }
+            }
+
+            // THE PLUGIN PAGE: replaces the grid
+            if root.model.plugin.shown : VerticalLayout {
+                spacing: 8px;
+                alignment: start;
+                Rectangle {
+                    height: Theme.key-sm-h;
+                    Key {
+                        x: 0px;
+                        y: 0px;
+                        width: self.preferred-width;
+                        small: true;
+                        label: root.model.plugin.back-label != "" ? root.model.plugin.back-label : @tr("< BROWSE");
+                        clicked => { root.store-plugin-back(); }
+                    }
+                    StoreKey {
+                        x: root.iw - self.width;
+                        y: 0px;
+                        width: self.preferred-width;
+                        kind: root.model.plugin.key-kind;
+                        allowed: root.model.plugin.key-enabled;
+                        label: root.model.plugin.key-label;
+                        clicked => { root.store-plugin-key(); }
+                    }
+                }
+                Rectangle {
+                    height: max(30px, head-name.height + 2px + head-origin.height);
+                    GlyphTile { x: 0px; y: 0px; glyph: root.model.plugin.glyph; }
+                    head-name := Note { x: 38px; y: 0px; width: root.iw - 38px; wrap-w: root.iw - 38px; text: root.model.plugin.name; ink: Theme.fg; size: 13px; weight: Theme.weight-semibold; }
+                    head-origin := Note {
+                        x: 38px;
+                        y: head-name.height + 2px;
+                        width: root.iw - 38px;
+                        wrap-w: root.iw - 38px;
+                        text: root.model.plugin.version != "" && root.model.plugin.origin != "" ? root.model.plugin.version + "  \u{b7}  " + root.model.plugin.origin : root.model.plugin.version + root.model.plugin.origin;
+                    }
+                }
+                if root.model.plugin.badges.length > 0 : BadgeFlow { badges: root.model.plugin.badges; }
+                if root.model.plugin.report != "" : Note { wrap-w: root.iw; text: root.model.plugin.report; tone: root.model.plugin.report-tone; }
+
+                Caption { label: @tr("Screenshots"); }
+                Rectangle {
+                    height: 132px;
+                    clip: true;
+                    prev-key := Key {
+                        x: 0px;
+                        y: (parent.height - self.height) / 2;
+                        width: 22px;
+                        xs: true;
+                        min-w: 0px;
+                        label: "\u{2039}";
+                        enabled: root.model.plugin.picture-index > 0;
+                        accessible-label: @tr("Previous picture");
+                        clicked => { root.store-picture(root.model.plugin.picture-index - 1); }
+                    }
+                    strip := Rectangle {
+                        x: 26px;
+                        y: 0px;
+                        width: max(0px, root.iw - 52px);
+                        height: parent.height;
+                        border-radius: 4px;
+                        border-width: Theme.hairline;
+                        border-color: Theme.line-strong;
+                        background: Theme.well;
+                        clip: true;
+                        if root.model.plugin.screenshots.length > 0 : Image {
+                            x: 2px;
+                            y: 2px;
+                            width: parent.width - 4px;
+                            height: parent.height - 4px;
+                            source: root.model.plugin.screenshots[max(0, min(root.model.plugin.screenshots.length - 1, root.model.plugin.picture-index))];
+                            image-fit: contain;
+                            accessible-role: image;
+                            accessible-label: root.model.plugin.pictures-note;
+                        }
+                        if root.model.plugin.screenshots.length == 0 : Text {
+                            x: 8px;
+                            y: 0px;
+                            width: parent.width - 16px;
+                            height: parent.height;
+                            text: root.model.plugin.pictures-note;
+                            color: Theme.dim;
+                            font-family: Theme.font-ui;
+                            font-size: Theme.font-small;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+                    next-key := Key {
+                        x: parent.width - self.width;
+                        y: (parent.height - self.height) / 2;
+                        width: 22px;
+                        xs: true;
+                        min-w: 0px;
+                        label: "\u{203a}";
+                        enabled: root.model.plugin.picture-index < root.model.plugin.screenshots.length - 1;
+                        accessible-label: @tr("Next picture");
+                        clicked => { root.store-picture(root.model.plugin.picture-index + 1); }
+                    }
+                }
+                if root.model.plugin.screenshots.length > 0 : Note { wrap-w: root.iw; text: root.model.plugin.pictures-note; }
+
+                Caption { label: @tr("What it does"); }
+                if root.model.plugin.what-it-does != "" : Note { wrap-w: root.iw; text: root.model.plugin.what-it-does; ink: Theme.fg; }
+                Caption { label: @tr("What's new"); }
+                if root.model.plugin.whats-new != "" : Note { wrap-w: root.iw; text: root.model.plugin.whats-new; ink: Theme.fg; }
+                if root.model.plugin.notice != "" : Rectangle {
+                    height: notice-col.preferred-height + 16px;
+                    border-radius: Theme.radius-panel;
+                    border-width: Theme.hairline;
+                    border-color: Theme.card-warn-line;
+                    background: Theme.card-warn;
+                    notice-col := VerticalLayout {
+                        x: 8px;
+                        y: 8px;
+                        width: parent.width - 16px;
+                        spacing: 4px;
+                        alignment: start;
+                        Caption { label: @tr("Before you fit it"); color: Theme.chip-warn-fg; }
+                        Note { wrap-w: root.iw - 16px; text: root.model.plugin.notice; tone: ChipTone.warn; }
+                        SentenceTick {
+                            wrap-w: root.iw - 16px;
+                            sentence: @tr("I have read the maker's notice");
+                            on: root.model.plugin.notice-ticked;
+                            toggled(v) => { root.store-plugin-notice(v); }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: Theme.key-xs-h + 4px;
+                    Text { x: 0px; y: 0px; width: details-key.x - 8px; height: parent.height; text: @tr("DETAILS"); color: Theme.muted; font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: Theme.cap-spacing; vertical-alignment: center; }
+                    details-key := Key {
+                        x: root.iw - self.width;
+                        y: 2px;
+                        width: self.preferred-width;
+                        xs: true;
+                        label: root.model.plugin.details-label != "" ? root.model.plugin.details-label : (root.model.plugin.details-open ? @tr("HIDE DETAILS") : @tr("SHOW DETAILS"));
+                        clicked => { root.store-plugin-details(!root.model.plugin.details-open); }
+                    }
+                }
+                if root.model.plugin.details-open : Note { wrap-w: root.iw; text: root.model.plugin.details; mono: true; ink: Theme.fg-soft; }
+                if root.model.plugin.reach-lead != "" : Note { wrap-w: root.iw; text: root.model.plugin.reach-lead; }
+            }
+        }
+    }
+
+    // ---- the clean-up confirm: a small panel in the lower right corner, over the page but clear of the keys that matter ----
+    if root.model.cleanup-open : Rectangle {
+        width: min(290px, root.width - 16px);
+        height: modal-col.preferred-height + 20px;
+        x: root.width - self.width - 8px;
+        y: root.height - self.height - 8px;
+        background: Theme.menu;
+        border-width: Theme.hairline;
+        border-color: Theme.knob-ring;
+        border-radius: Theme.radius-panel;
+        drop-shadow-blur: Theme.shadows ? 28px : 0px;
+        drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+        drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+        accessible-role: groupbox;
+        accessible-label: root.model.cleanup-title != "" ? root.model.cleanup-title : @tr("Remove old plugin versions");
+        TouchArea { }
+        modal-col := VerticalLayout {
+            x: 10px;
+            y: 10px;
+            width: parent.width - 20px;
+            spacing: 6px;
+            alignment: start;
+            Note { wrap-w: parent.width; text: root.model.cleanup-title != "" ? root.model.cleanup-title : @tr("Remove old plugin versions"); ink: Theme.fg; size: Theme.font-body; weight: Theme.weight-semibold; }
+            Note { wrap-w: parent.width; text: root.model.cleanup-text != "" ? root.model.cleanup-text : @tr("Each of these is an older copy of a plugin whose newer version is installed and running. Only these files are deleted."); ink: Theme.fg-soft; }
+            for l in root.model.cleanup-lines : Note { wrap-w: parent.width; text: l; mono: true; }
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                Key { small: true; on: true; label: root.model.cleanup-yes; clicked => { root.store-cleanup-confirm(true); } }
+                Key { small: true; label: root.model.cleanup-no != "" ? root.model.cleanup-no : @tr("Keep them"); clicked => { root.store-cleanup-confirm(false); } }
+            }
+        }
+    }
+}

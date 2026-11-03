@@ -2601,15 +2601,286 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 
 Subtotal: PRESENT 88, RELOCATED 75, DEFERRED 89, total 252 (rows 1524 to 1775).
 
-# Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM and TOOLS banks of phase 3)
+# Phase 3: the EXTEND bank, the Plugin store, the Fitted modules window and the patch rows (docs 6.42) - `inventory/extend-system-store-patch.txt` lines 86-286 and 1380-2599 walked row by row
+
+Every control of `inventory/extend-system-store-patch.txt` (FoxSDR 0.99.104) outside the SYSTEM part (lines 287-1379, ticked above in rows 1387 to 1523): lines 86-286 (the EXTEND bank: Web access, CAT control), 1380-1776 (the Plugin store window), 1777-2001 (the Fitted modules window, its module page and the retired rows), 2002-2492 (the Patch row and canvas) and 2493-2599 (the Patch presets page); 188 rows. The inventory file blanks every label string it quotes, so the wording is not compared here (the family's wording is the ImGui window's own, `app_window.cpp` `drawWebSection` / `drawCatSection` and `plugin_store_view.cpp`). The EXTEND bank and the store are `src/slint/ui/extend_bank.slint` (`WebBody`, `CatBody`, `StorePage` with its top bar, SITES panel, Browse grid with `StoreCardView` and `CardGrid`, foot, Updates pane with `UpdateRowView`, clean-up panel and plugin page), their effects (`src/slint/extend_logic.hpp`, the callbacks-to-effects table in its header) and the places `src/slint/ui/main.slint` and `pages.slint` put them (bank 3, rows 0 and 1: Web access and CAT; the store is the body of a `PageTab` of kind 9, `PageTab.store`, `StorePage`). The status words are phase 1's: **PRESENT** = the family draws it and its callback has an effect in `extend_logic` (an op, a local change the publisher keeps as a draft, or both; the note names the component and the effect), **RELOCATED** = it lives elsewhere in the Slint window (the Section row `main.cpp` draws, the DECODE bank's catalogue field and Disabled cards, the kit's fitted page and module page of phase 2, the tab row), **DEFERRED** = not drawn, drawn without an effect, or drawn wrongly, with the reason. A control whose status could not be established from the files is DEFERRED with "not found in" and the file. The host's publisher was being written when this part was ticked: `extend_publish.hpp` had just appeared (no `.cpp`, and `extend_publish` is in no source list of `src/slint/CMakeLists.txt`), and `kit_publish.cpp` had begun to carry the page (`blankStore`, `fillStore`, `setStoreModel`, the DECODE bank's Plugin store row opening page kind 9; the phase-2 rows 278 to 280 are not edited here). PRESENT here therefore means drawn and given an effect in `extend_logic`, not seen working in the window; the two EXTEND Section rows are still the ones `main.cpp` (`sectionsFor`, case 3) draws, with a chip of 'PORT n' or 'OFF' and no lamp.
+
+The departures the family's header states, as they bear on the rows: UPDATE ALL sends FOXAPP_OP_STORE_ADD_ALL with ival[1] = 1 (updates only), as the ImGui key does, and not FOXAPI_OP_STORE_UPDATE_ALL (0x0805), whose engine handler starts the whole ADD ALL run; the family has no REMOVE for an installed plugin (the ImGui store window has none; REMOVE is the Fitted modules page's key); CANCEL (`store-cancel`) and the maker's notice tick (`store-plugin-notice`) are callbacks the family ADDED to the contract; the amber `StoreCard.key-tooltip`, `StoreSite.status`, `add-reason`, `site-error` and the plugin page's `picture-index`, `pictures-note`, `notice`, `reach-lead` are ADDED fields. The Fitted modules window (31 rows: top bar and list, module page, retired rows) is not built in `extend_bank.slint`: its rows are RELOCATED to the plugin kit's fitted page and module page (phase 2, docs 6.38, rows 378 to 406) and the DECODE bank's Disabled cards (rows 281 to 288), with the phase-2 row number named; where the phase-2 row is itself DEFERRED the row here is DEFERRED. The 'Updates footnotes' row (inventory line 1586) is the store's and is ticked here. The inventory's RECEIVER / PATCH view keys (line 1995) sit inside the Fitted modules line range but belong to the Patch view; they are ticked first in the Patch block. The DECODE bank's own Plugin store row (phase 2 rows 278 to 280), the 'Entry:' paragraphs and the 'Not covered / uncertain' notes (inventory lines 2593 to 2599) are not control rows and are not ticked here. Not wired anywhere in the family: Esc on a plugin page returns to the list (the 'Entry' paragraph and the '< BROWSE' row; no Esc handling in `extend_bank.slint` or `pages.slint`), the framed screenshot strip and its arrows, the hatched unknown values of the facts grid, and the store's narrow top bar and its too-narrow and too-small messages. The whole Patch view (rail entry, top band, information pane, canvas, node faces, inspector drawer) and the PATCH PRESETS page are bespoke: the patch canvas is bespoke - next allowance (`PatchCanvas` in `stubs.slint` is a stub plate with `nodes`, `wires`, `node-moved` and `wire-requested` and no face), and the presets page opens only from the patch view.
+
+## EXTEND bank — Web access (EXTEND rail row, F4 bank)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1776 | Section header chip | readout + lamp | RELOCATED | the Section row 'Web access' of bank 3 (main.cpp sectionsFor): its chip is 'PORT n' (green) or 'OFF' from the SERVERS list and its dot is off; the refused word (FAIL, with the rust lamp) is not drawn: main.cpp keeps webRefused and never reads it, and WebModel's host extras chip, chip-tone and lit are not read by the row yet |
+| 1777 | Serve a browser page | checkbox | PRESENT | WebBody Tick -> web-serve -> applyWebServe: [local] draft enabled and dirty; nothing is sent until Apply |
+| 1778 | Reachable from | dropdown/combo | PRESENT | WebBody DropKey over model.reach -> web-reach(i) -> applyWebReach: [local] draft bind (this machine only, every network interface, or the specific address, offered only while the config holds one), dirty |
+| 1779 | Address readout | readout | PRESENT | a Line 'address' with a Readout, drawn only while model.address is not empty (the specific address chosen) |
+| 1780 | Port | number field | PRESENT | LabelledField (mono, right) -> web-port on Enter or focus loss -> applyWebPort: [local] draft port text, dirty, clamped to 1024-65535 when sent; a plain text field with no step arrows |
+| 1781 | User name | text field | PRESENT | LabelledField -> web-user -> applyWebUser: [local] draft user, dirty |
+| 1782 | Password status | readout | PRESENT | Note password-status, green while a password record exists |
+| 1783 | Password | text field (masked) | PRESENT | LineInput with hidden -> web-password -> applyWebPassword: [local] draft only, never echoed or logged; ADDED: a SHOW / HIDE key reveals both password fields |
+| 1784 | Confirm | text field (masked) | PRESENT | LineInput with hidden -> web-confirm -> applyWebConfirm: [local] draft confirm |
+| 1785 | Set password | button | PRESENT | KeyFlow key 1; commits the two typed fields first -> web-set-password -> applyWebSetPassword: a mismatch is a [local] draft error with both boxes wiped, else FOXAPI_OP_SERVER_CONFIG with the password in its JSON text (an ask ServerConfig; scrubEffect wipes it after the send), boxes wiped |
+| 1786 | Clear password | button | PRESENT | KeyFlow key 2, drawn only while clear-label is not empty (a password record exists) -> web-clear-password -> applyWebClearPassword: SERVER_CONFIG with clearPassword |
+| 1787 | Apply | button | PRESENT | KeyFlow key 3: lit 'Apply' while apply-enabled, greyed 'Applied' otherwise; commits the port and user fields first -> web-apply -> applyWebApply: SERVER_CONFIG enabled, bindAddress, port, username |
+| 1788 | Error line | readout | PRESENT | Note error in the error tone: this window's complaint or the engine's refusal (applyServerAnswer); the model leaves the serving lines empty while it is set |
+| 1789 | Serving note | readout | PRESENT | Note serving-note (green): 'serving at http://127.0.0.1:n' or 'serving on port n to every machine on your network' |
+| 1790 | Network warning | readout | PRESENT | Note network-warning (error tone) and one mono Note per entry of addresses |
+| 1791 | Plain-HTTP note | readout | PRESENT | Note http-note (warn tone), same condition as the network warning |
+| 1792 | Session count | readout | PRESENT | Note sessions ('n browser session(s)'), set while the server runs and a login is required |
+| 1793 | Audio listeners | readout | PRESENT | Note listeners ('n listening to audio'), set while it runs and someone listens |
+| 1794 | Not serving | readout | PRESENT | the same serving-note line: readWeb sets 'not serving' when enabled, not running and no error; it is drawn in the serving note's green, with no tone of its own |
+
+## EXTEND bank — CAT control (rigctld)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1795 | Section header chip | readout + lamp | RELOCATED | the Section row of bank 3 row 1, named 'CAT' (the inventory's 'CAT control (rigctld)'): its chip is 'PORT n' or 'OFF' and its dot is off; the FAIL word, the 'n CLI' client count and the lit lamp are CatModel host extras (chip, chip-tone, lit) the row does not read |
+| 1796 | Intro text | readout | PRESENT | CatBody Note intro |
+| 1797 | Accept CAT connections | checkbox | PRESENT | CatBody Tick -> cat-accept -> applyCatAccept: SERVER_CONFIG cat enabled at once, [local] draft |
+| 1798 | Port | number field | PRESENT | LineInput (mono, right) -> cat-port on Enter or focus loss -> applyCatPort: SERVER_CONFIG cat port clamped to 1024-65535 (restarts the listener); text that is no number sends nothing |
+| 1799 | Reachable from other machines | checkbox | PRESENT | CatBody Tick -> cat-reachable -> applyCatReachable: SERVER_CONFIG cat bindAll |
+| 1800 | No-password warning | readout | PRESENT | Note warning (warn tone), set by the model only while Reachable is ticked |
+| 1801 | Status line | readout | PRESENT | Note status in status-tone (error tone for the refusal); the model holds exactly one of the refusal, 'Listening on ...' and 'Not listening.' |
+
+## Plugin store — window: rail rows, top bar, Browse and Updates lists
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1802 | Rail catalogue URL | text field | RELOCATED | the DECODE bank's catalogue URL Field (phase 2 row 281, FOXAPP_OP_SET_CATALOGUE_URL); the store page does not repeat it |
+| 1803 | Rail "Disabled" rows | list | RELOCATED | the DECODE bank's Disabled cards (phase 2 rows 283 to 288), ticked again in the retired-modules block below |
+| 1804 | Too-narrow message | readout | DEFERRED | the narrow top bar and its message: not found in extend_bank.slint; StorePage lays out at any width (cards 1, 2 or 3 to a row by the inner width, the search box never under 80 px) and the tab group and the three keys keep their places; no message is drawn |
+| 1805 | Too-small message | readout | DEFERRED | not found in extend_bank.slint: no message for a face under 40 px |
+| 1806 | Search | text field (with loupe) | PRESENT | SearchBox (loupe, placeholder 'Search the catalogue') -> store-search on each edit -> applyStoreSearch: [local] draft search, a plugin page closed |
+| 1807 | BROWSE tab | key (latched) | PRESENT | SegKey in the SegGroup, lit while tab is 0 -> store-tab(0) -> applyStoreTab: [local] tab, page closed |
+| 1808 | UPDATES (n) tab | key (latched) | PRESENT | SegKey 'UPDATES (n)' (n from the model's updates), lit while tab is 1 -> store-tab(1) -> applyStoreTab |
+| 1809 | Catalogue line | readout | PRESENT | Note under the bar in the model's tone (amber for 'could not refresh', muted otherwise); it wraps, so the full text needs no hover |
+| 1810 | CHECK NOW / CHECK AGAIN | button | PRESENT | Key check-key -> store-check -> applyStoreCheck: FOXAPI_OP_STORE_FETCH; the key is never greyed (StoreModel has no check-enabled field, check_enabled is a host extra) and the effect does nothing while a transfer or a picture is in flight or the catalogue URL is empty |
+| 1811 | SITES | button | PRESENT | Key sites-key, lit while the panel is open, always enabled -> store-sites-toggle -> applyStoreSitesToggle: [local] sites_open |
+| 1812 | CANCEL | button | PRESENT | ADDED: a danger Key drawn only while cancel-label is not empty -> store-cancel (ADDED, not in the contract) -> applyStoreCancel: FOXAPI_OP_STORE_CANCEL while busy |
+| 1813 | Install/source error | readout | PRESENT | Note top-error (error tone) and top-warning (warn tone) at the top of both lists, hidden while a plugin page is open |
+| 1814 | Empty-state text | readout | PRESENT | Note empty-line (muted); the red 'catalogue could not be read' variant (empty_tone) has no Slint field, so every variant is drawn muted |
+| 1815 | Site status lines | readout | RELOCATED | drawn per site inside the SITES panel (StoreSite.status, ADDED, amber), not at the top of both lists as the window does: with the panel closed no site fault shows, and the field holds one string where the model has two or three lines (site_lines) |
+| 1816 | Category heading | readout | PRESENT | a Caption per StoreCategory over its CardGrid; the host leaves empty categories out |
+| 1817 | Plugin card | card | PRESENT | StoreCardView in a CardGrid: glyph tile, name, summary, badges, one key; a press on the card -> store-card-open(id) -> applyStoreCardOpen: [local] page opened (tab 0, details closed, notice tick off) and FOXAPP_OP_STORE_PICTURES_WANT; 1, 2 or 3 columns by the inner width (400 and 612 px) |
+| 1818 | Card key GET | button | PRESENT | StoreKey kind 0 -> store-card-key(id) -> applyStoreCardKey: GET with a legal notice and no tick opens the page, otherwise FOXAPI_OP_STORE_INSTALL; a greyed key shows the reason as its tooltip (StoreCard.key-tooltip, ADDED) |
+| 1819 | Card key UPDATE | button | PRESENT | StoreKey kind 1 (lit) with the amber version-note beside it -> store-card-key -> applyStoreCardKey: FOXAPP_OP_STORE_UPDATE; greyed with key-tooltip |
+| 1820 | Card key FITTING... | indicator | PRESENT | StoreKey kind 2: a greyed indicator with the progress bar (progress-norm) beside it and the progress line under it; a press is dead (the CANCEL key of the top bar cancels); a transfer whose server sent no length shows an empty bar, not the sweeping line |
+| 1821 | Card key INSTALLED | indicator | PRESENT | StoreKey kind 3, greyed, no action |
+| 1822 | Badges | readout | PRESENT | BadgeFlow chips from StoreCard.badges (amber THIRD PARTY and EXPERIMENTAL, muted build badges, by tone), wrapping, six slots |
+| 1823 | GET EVERYTHING | button | PRESENT | Key get-all at the foot of Browse, drawn while get-all-label is not empty (so not with a search typed), the reason it is greyed as text beside it -> store-get-all -> applyStoreGetAll: FOXAPP_OP_STORE_ADD_ALL with ival[0] the bulk tick and ival[1] = 0 |
+| 1824 | GET EVERYTHING note | readout | PRESENT | Note foot-note (the run's progress, 'Cannot add all: ...' or the fetch-and-update count); the notice-count sentence, the sites-left-out sentence and the last run's summary (notice_note, left_out_note, add_all_summary) are host extras with no field in StoreModel and are not drawn on the grid |
+| 1825 | Legal-notice tick (bulk) | checkbox | PRESENT | SentenceTick, drawn while bulk-sentence is not empty -> store-bulk-tick -> applyStoreBulkTick: [local] bulk_tick (cleared by watchConsents) |
+| 1826 | UPDATES heading | readout | PRESENT | the Updates pane's heading Text (updates-heading) |
+| 1827 | UPDATE ALL | button | PRESENT | Key update-all, drawn while updates exist, lit and enabled by update-all-enabled -> store-update-all -> applyStoreUpdateAll: FOXAPP_OP_STORE_ADD_ALL with ival[0] = 0 and ival[1] = 1 (updates only), as the window; not FOXAPI_OP_STORE_UPDATE_ALL |
+| 1828 | Update row | card (row) | PRESENT | UpdateRowView: glyph tile, name, amber version-note, THIRD PARTY chip, what's-new line, key; a press on the glyph, name or line -> store-card-open(id) opens the plugin page |
+| 1829 | Row UPDATE key | button | PRESENT | Key in the row -> store-update(id) -> applyStoreUpdate: FOXAPP_OP_STORE_UPDATE (a FITTING... row is greyed); UpdateRow has no tooltip field, so a greyed key does not say why |
+| 1830 | Updates footnotes | readout | PRESENT | one Note per string of footnotes under the rows ('fetched when you press CHECK AGAIN', the sites-left-out note) |
+| 1831 | CLEAN UP OLD VERSIONS (n) | button | PRESENT | Key in the Updates pane's foot, drawn while cleanup-label is not empty, greyed by cleanup-enabled, with the first three old copies and 'and n more' as lines under it (not beside it) -> store-cleanup -> applyStoreCleanup: [local] cleanup_open; the Fitted modules copy of the key is its own row below |
+| 1832 | Cleanup confirm | dialog (modal) | PRESENT | a small panel in the page's lower right corner, not a modal popup (title, text, cleanup-lines); it lists what cleanup-lines holds (the first three and 'and n more'), and the full list (cleanup_all) is a host extra with no field |
+| 1833 | Remove N files | button | PRESENT | Key (lit, cleanup-yes) -> store-cleanup-confirm(true) -> applyStoreCleanupConfirm: FOXAPP_OP_STORE_CLEAN_OLD ival[0] = 0 and the panel closed; the report line afterwards (cleanup_report) has no Slint field |
+| 1834 | Keep them | button | PRESENT | Key -> store-cleanup-confirm(false): [local] panel closed, nothing sent |
+
+## Plugin store — SITES panel (under the top bar when SITES is on)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1835 | Site list | list | PRESENT | the panel's rows (address Text, elided) with 'No sites added.' beside the SITES caption when empty; drawn while sites-open and no plugin page is open; the eight-site limit is the host's list |
+| 1836 | REMOVE | button (per site) | PRESENT | Key xs per site with the 'plugins already fitted stay' tooltip -> store-site-remove(i) -> applyStoreSiteRemove: FOXAPP_OP_STORE_SITE (remove); not greyed while a transfer runs (no field), the effect does nothing then |
+| 1837 | Site address | text field | PRESENT | LineInput (placeholder 'https://') -> store-site-draft on each edit -> applyStoreSiteDraft: [local] site_draft, the refusal cleared |
+| 1838 | ADD | button | PRESENT | Key greyed while add-reason is not empty (ADDED: the reason is a dim Note under the field) -> store-site-add -> applyStoreSiteAdd: the address checked (a refusal is a [local] site error), else FOXAPP_OP_STORE_SITE and the field and tick cleared |
+| 1839 | Consent tick | checkbox (+ clickable sentence) | PRESENT | SentenceTick (the sentence is the click target) -> store-consent -> applyStoreConsent: [local] consent; each ADD clears it |
+| 1840 | Site error | readout | PRESENT | Note site-error (ADDED, warn tone), set by a refused ADD |
+
+## Plugin store — Plugin page (opened from a card or an update row)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1841 | < BROWSE | button | PRESENT | Key -> store-plugin-back -> applyStorePluginBack: [local] page closed, tab 0; Esc also returns in the window and is not wired (no Esc handling in extend_bank.slint or pages.slint: DEFERRED) |
+| 1842 | Header | readout | PRESENT | GlyphTile, the name, the meta line (maker, version, size, platforms, host) joined to the origin note with a middle dot, and the BadgeFlow badges |
+| 1843 | Page key | button | PRESENT | StoreKey at the top right -> store-plugin-key -> applyStorePluginKey: as the card's key with the page's own tick (GET greyed until the notice tick); no amber version-note and no progress line beside it (StorePluginPage has no field for either) |
+| 1844 | Install report/error | readout | PRESENT | Note report in report-tone (green, or the error tone) for this plugin only |
+| 1845 | SCREENSHOTS | readout + strip | DEFERRED | the framed strip with a caption per frame is not drawn: the page shows ONE picture at a time (Image, contain) in a 132 px frame with one caption line (pictures-note) under it; no horizontal strip, no wheel scroll, no per-frame placeholder with its loading or failure words (PictureFrame.state and word have no Slint field) |
+| 1846 | Strip arrows | button | DEFERRED | drawn (a Key either side, greyed at the ends) and given no effect: store-picture(i) -> applyStorePicture returns an empty Effect and the draft holds no picture index, so picture-index (a field the host must set) does not move unless the publisher keeps one; they are drawn always, not only on overflow |
+| 1847 | WHAT IT DOES | readout | PRESENT | Caption and Note what-it-does; the 'none' fallback wording is the host's |
+| 1848 | WHAT'S NEW | readout | PRESENT | Caption and Note whats-new |
+| 1849 | BEFORE YOU FIT IT | readout (amber box) | PRESENT | the amber box (caption and the maker's notice, verbatim), drawn while notice is not empty (the host leaves it empty once the plugin is fitted) |
+| 1850 | Notice tick | checkbox | PRESENT | SentenceTick in the box -> store-plugin-notice(bool) (ADDED, the contract has no callback for it) -> applyStoreNoticeTick: [local] notice_tick, which enables GET |
+| 1851 | DETAILS | readout | PRESENT | the DETAILS caption row |
+| 1852 | SHOW DETAILS / HIDE DETAILS | button | PRESENT | Key xs -> store-plugin-details(!open) -> applyStorePluginDetails: [local] details_open |
+| 1853 | Facts grid | table | DEFERRED | the facts are drawn as ONE mono Note of 'KEY: value' lines (details) while open, not as a table: the hatched unknown values with their reasons and the read-only selectable HOMEPAGE and SHA-256 fields are not drawn (PageFact.hatched and copyable have no Slint field) |
+| 1854 | Reach lead | readout | PRESENT | Note reach-lead under the details, drawn while it is not empty |
+
+## Fitted modules — window (rail key Plugins): top bar and list
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1855 | Too-narrow message | readout | DEFERRED | not found in fitted.slint: the kit's Fitted modules page is a docked tab or a torn window that scrolls, with no too-narrow message (its state chips drop to a second line instead) |
+| 1856 | Search | text field | RELOCATED | the kit's fitted page (phase 2 row 379): the Search fitted modules box |
+| 1857 | State chips (6) | toggle | RELOCATED | the kit's fitted page (phase 2 row 380): StateChips with counts and lamps, each toggles the filter |
+| 1858 | RESET WINDOW SIZES | button | RELOCATED | the kit's fitted page (phase 2 row 382): every page back to its default rectangle |
+| 1859 | SCAN AGAIN | button | RELOCATED | the kit's fitted page (phase 2 row 381): FOXAPI_OP_PLUGIN_RESCAN |
+| 1860 | Verdict line | readout | RELOCATED | the kit's fitted page (phase 2 row 383): the verdict with the folder |
+| 1861 | Install/remove result | readout | RELOCATED | the kit's fitted page (phase 2 row 384): the install report / error line |
+| 1862 | Empty list text | readout | RELOCATED | the kit's fitted page (phase 2 row 392): the empty-list sentences |
+| 1863 | Group heading | readout | RELOCATED | the kit's fitted page (phase 2 row 385): the category headings over the rows |
+| 1864 | Module row | card (row) | RELOCATED | the kit's fitted page (phase 2 rows 386 and 387): FittedRowLine with the state word and lamp; a click opens the module page, a double-click the module's own window |
+| 1865 | Row STOP / START | button | RELOCATED | the kit's fitted page (phase 2 row 388) |
+| 1866 | Row REMOVE | button | RELOCATED | the kit's fitted page (phase 2 row 389): the first step of the two-step delete |
+| 1867 | Row CONFIRM | button | RELOCATED | the kit's fitted page (phase 2 row 390): CONFIRM within 5 s |
+| 1868 | CLEAN UP OLD VERSIONS | button + modal | DEFERRED | phase 2 row 391 is DEFERRED and still true: FittedModules has the foot key (cleanup-label) but kit_publish.cpp feeds it an empty label and the page-fitted-cleanup handler is empty; the store's confirm panel (row 1832) is not reachable from the Fitted page |
+
+## Fitted modules — Module page (click a row)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1869 | < FITTED | button | RELOCATED | the kit's module page (phase 2 row 393): the back key of ModulePage |
+| 1870 | Header + START/STOP | button | RELOCATED | the kit's module page (phase 2 rows 394 and 395): the header with its STOP / START key |
+| 1871 | ON THIS MACHINE | readout | RELOCATED | the kit's module page (phase 2 row 396): the state lamp and word |
+| 1872 | WHAT THIS MODULE REACHES | list | RELOCATED | the kit's module page (phase 2 row 397): the capability rows with the lead and note sentences |
+| 1873 | GRANT / REVOKE RECEIVER CONTROL | button | RELOCATED | the kit's module page (phase 2 row 398): GrantKeys |
+| 1874 | GRANT / REVOKE RADIO SETTINGS | button | RELOCATED | the kit's module page (phase 2 row 399): GrantKeys |
+| 1875 | GRANT / REVOKE TRANSMIT | button | RELOCATED | the kit's module page (phase 2 row 400): GrantKeys with the transmit plate sentence |
+| 1876 | Module command keys | button | RELOCATED | the kit's module page (phase 2 row 401): PlateKeys, two per row |
+| 1877 | Keep running | checkbox | RELOCATED | the kit's module page (phase 2 row 403) |
+| 1878 | Notes | readout | RELOCATED | the kit's module page (phase 2 rows 402 and 404): the state sentence and the orphan, integrity, origin and notice lines |
+| 1879 | FILE / PLUGIN ABI / fitted date | readout | RELOCATED | the kit's module page (phase 2 row 405): FactRow lines |
+| 1880 | Shared page body | readout | DEFERRED | phase 2 row 406 is DEFERRED: the module page shows only a one-line catalogue note in place of SCREENSHOTS, WHAT IT DOES, WHAT'S NEW and DETAILS; the store's plugin page (rows 1845 to 1854) draws them for the store only |
+
+## Fitted modules — Retired modules ("Disabled" rows on the rail, under the store row)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1881 | Block message | readout | RELOCATED | the DECODE bank's Disabled card (phase 2 rows 283 and 284): the whole message, never cut |
+| 1882 | Update | button | RELOCATED | the DECODE bank's Disabled card (phase 2 row 285): the card's primary key when a catalogue id exists |
+| 1883 | Remove | button (small) | RELOCATED | the DECODE bank's Disabled card (phase 2 row 287): the first step of the two-step delete |
+| 1884 | Confirm delete / Cancel | button | RELOCATED | the DECODE bank's Disabled card (phase 2 row 288): the armed state expires after 5 s |
+| 1885 | Enforcement error | readout | RELOCATED | the DECODE bank's enforcement-error line (phase 2 row 282) |
+
+## Patch — rail entries (the main window's other face)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1886 | RECEIVER / PATCH view keys | key (latched pair) | RELOCATED | the RECEIVER and PATCH tabs of the tab row (phase 1 rows 68 and 69), with the pair's two tooltips; view-selected(1) shows the PatchCanvas stub plate, and main.cpp's on_view_selected only sets view-index (no saved last view, no stop of a running patch on leaving) |
+| 1887 | Patch row | button (toggle) | RELOCATED | main.cpp sectionsFor(0) row 0 draws the Section row 'Patch' with the chip PATCH RUNNING (amber) or RECEIVER VIEW (row 1212), as the SIGNAL part says; its click folds a body that is empty and does not switch the view (the tab does, row 1211), and the row has no lamp or tooltip of its own |
+
+## Patch — top band: transport, parts bin, decoder row, blueprints
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1888 | START/STOP dome | button | DEFERRED | the patch canvas is bespoke - next allowance; the patch band's dome, which opens the patch's own radios, is not drawn (the receiver strip's StopKey, row 16, is the main window's) |
+| 1889 | ALL OFF | button (red) | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1890 | PRESETS | button | DEFERRED | the patch canvas is bespoke - next allowance; the key that opens the Patch presets page is not drawn |
+| 1891 | Run readout | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1892 | Part keys (7) | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1893 | Decoders row | readout + buttons | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1894 | No-decoder note | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1895 | Blueprints | dropdown/combo (tall) | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1896 | Blueprint note | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+
+## Patch — information pane (top-right of the band)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1897 | Verdict | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1898 | Channel level | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1899 | Plan summary | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1900 | Selection / help | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1901 | Node problems | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+
+## Patch — canvas (patch_view.cpp)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1902 | Canvas | drag/gesture | DEFERRED | the patch canvas is bespoke - next allowance; PatchCanvas (stubs.slint) is a stub plate with the nodes and wires properties and the node-moved and wire-requested callbacks, with no grid, pan or zoom |
+| 1903 | Zoom out key | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1904 | Zoom in key | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1905 | Fit | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1906 | Node (plate) | node/wire (patch) | DEFERRED | the patch canvas is bespoke - next allowance; the stub's PatchNode struct is the contract only |
+| 1907 | Close key | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1908 | Resize grip | drag/gesture | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1909 | Ports | node/wire (patch) | DEFERRED | the patch canvas is bespoke - next allowance; the stub's wire-requested callback is the contract only |
+| 1910 | Wire | node/wire (patch) | DEFERRED | the patch canvas is bespoke - next allowance; the stub's PatchWire struct is the contract only |
+| 1911 | Refusal bubble | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1912 | Delete key | key (keyboard) | DEFERRED | the patch canvas is bespoke - next allowance; not wired |
+| 1913 | Node readouts | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+
+## Patch — node faces (drawn over the plate)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1914 | Radio ON/OFF | button (small) | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1915 | Radio device label | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1916 | Radio centre | number field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1917 | Centre note | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1918 | Radio status | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1919 | Channel frequency | number field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1920 | Demod mode | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1921 | Demod squelch | checkbox + slider + readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1922 | Speaker face | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1923 | Text-out face | list | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1924 | Spectrum face | readout + trace + waterfall | DEFERRED | the patch canvas is bespoke - next allowance; the main window's spectrum and waterfall are not placed on a node |
+| 1925 | Map face | readout + chart | DEFERRED | the patch canvas is bespoke - next allowance; the kit's MapPane is not placed on a node |
+| 1926 | Decoder face | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+
+## Patch — inspector drawer (right of the canvas; appears when a node is selected)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1927 | Fold key | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1928 | Kind caption + Name | readout + text field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1929 | Radio: Device | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1930 | Radio: Look for radios | button (small) | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1931 | Radio: Centre (MHz) | number field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1932 | Radio: Sample rate | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1933 | Radio: live readout | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1934 | Channel: Frequency (MHz) | number field | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1935 | Demod: Mode + Squelch | dropdown/combo + squelch controls | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1936 | Decoder: Plugin | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1937 | Decoder: info | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1938 | Decoder: Plugin settings | list (form) | DEFERRED | the patch canvas is bespoke - next allowance; the kit's PluginSettingsForm is not placed in the inspector |
+| 1939 | Map: input count | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1940 | Map: Fit to targets / Whole world | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1941 | Map: help | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1942 | Speaker: Sound goes to | dropdown/combo | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1943 | Speaker: readouts | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1944 | Text out: help | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1945 | Other kinds | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1946 | Size | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1947 | Smaller / Larger | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1948 | Default size | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1949 | Resize hint | readout | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+| 1950 | Remove this node | button | DEFERRED | the patch canvas is bespoke - next allowance; not drawn |
+
+## Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1951 | Preset list | list | DEFERRED | the presets page opens only from the patch view (the PRESETS key of the patch band), and the patch canvas is bespoke - next allowance; the page is not drawn |
+| 1952 | LOAD | button | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1953 | SAVE AS... | button | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1954 | RENAME | button | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1955 | DELETE | button | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1956 | Name field | text field | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1957 | SAVE / RENAME | button | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1958 | CANCEL | button | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1959 | Result note | readout | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1960 | Replace preset? | dialog (modal) | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1961 | REPLACE / CANCEL | button | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1962 | Delete preset? | dialog (modal) | DEFERRED | the presets page opens only from the patch view; not drawn |
+| 1963 | DELETE / CANCEL | button | DEFERRED | the presets page opens only from the patch view; not drawn |
+
+Subtotal: PRESENT 69, RELOCATED 35, DEFERRED 84, total 188 (rows 1776 to 1963).
+
+# Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM, TOOLS and EXTEND banks of phase 3)
 
 | Status | Rows |
 |---|---|
-| PRESENT | 1382 |
-| RELOCATED | 163 |
-| DEFERRED | 230 |
+| PRESENT | 1451 |
+| RELOCATED | 198 |
+| DEFERRED | 314 |
 | TODO (unclassified) | 0 |
-| Total | 1775 |
+| Total | 1963 |
 
 Phase 2 alone: PRESENT 888, RELOCATED 34, DEFERRED 13, total 935.
 
@@ -2618,3 +2889,5 @@ Phase 3, the SIGNAL bank alone: PRESENT 122, RELOCATED 17, DEFERRED 37, total 17
 Phase 3, the SYSTEM bank alone: PRESENT 95, RELOCATED 17, DEFERRED 25, total 137.
 
 Phase 3, the TOOLS bank and the map rows alone: PRESENT 88, RELOCATED 75, DEFERRED 89, total 252.
+
+Phase 3, the EXTEND bank, the Plugin store, the Fitted modules window and the patch rows alone: PRESENT 69, RELOCATED 35, DEFERRED 84, total 188.

@@ -1,0 +1,332 @@
+// The EXTEND bank specimen sheet (1240 x 3230): the two bodies of ui/extend_bank.slint inside the REAL Section they are shown under (296 wide: the body is 254 px,
+// the Section's own padding 30 / 12) and the Plugin store page in four states, on the sample models below, so tests/test_slint_extend.cpp can probe the pixels
+// against the Banks artboard (artboards/Workbench-Banks.dc.html: the EXTEND column A4) and the Pages artboard (Workbench-Pages.dc.html: the PLUGIN STORE tab) and
+// press the controls with real pointer and key events.
+//
+//   x     y      w x h        what it shows
+//   10    10     296 (a1)     Web access / ON: serve ticked, "Any computer on the network", the port and user fields, a password is set, the masked fields (one
+//                             shown), Set password / Clear password / Apply, the red error, the serving note, the red network warning with its address, the
+//                             plain-HTTP note, sessions and listeners                                                                         m-web-on
+//   316   below  296 (a2)     Web access / REFUSED: red lamp, no password, "Applied" greyed, the refusal in red                                          m-web-refused
+//   10    below  296 (a3)     Web access / OFF: default-forwarding to ExtendEvents; "A specific address" with its address readout                        m-web-off
+//   316   10     296 (b1)     CAT control / 1 CLIENT: intro, the accept tick, port, the reachable tick, the amber warning, the green status             m-cat-ok
+//   316   below  296 (b2)     CAT control / FAILED: default-forwarding; reachable off, the red failure line                                              m-cat-failed
+//   622   10     500 x 700 (st-narrow)   StorePage, default-forwarding to ExtendEvents: Browse in two columns, the catalogue line amber, the SITES panel
+//                             open (a site with its status, the address field, ADD greyed with its reason, the amber refusal, the consent tick), CANCEL      m-store-narrow
+//   622   730    500 x 300 (st-short)    StorePage with more cards than it can show: the body scrolls under the top bar                                               m-store-short
+//   10    1070   1000 x 700 (st-browse)    StorePage Browse in three columns: the error and warning lines, two categories, five cards in every key kind, the foot
+//   10    1790   1000 x 700 (st-updates)   StorePage Updates: heading, UPDATE ALL, two rows, the footnotes, CLEAN UP OLD VERSIONS (2) with its lines, and the
+//                             clean-up confirm in the lower right corner
+//   10    2510   1000 x 700 (st-plugin)    StorePage, the plugin page replacing the grid: < BROWSE, header, the page key, report, screenshots, the notice, details
+//   probes: p1..p4 (254-wide layout cells below the window's last row) hold the bare bodies with the longest words and report the cell's width (rule 11)
+//
+// What the test reads: `Rec` counts and names every callback of the components with an override, the sections' y and heights and the pages' measurements are
+// out properties, and the plain (default-forwarding) components are watched through the ExtendEvents global.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { Section } from "../sections.slint";
+import { TipLayer } from "../tooltip.slint";
+import { SelectItem } from "../signal_bank.slint";
+import { WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel, ExtendEvents, WebBody, CatBody, StorePage } from "../extend_bank.slint";
+export { Theme, Skin, Workbench, ChipTone, LampState, SelectItem, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel, ExtendEvents }
+
+// What the components with an override report: the callback's name and its arguments, joined with a space.
+export global Rec {
+    in-out property <int> events;
+    in-out property <string> last;
+    in-out property <string> last-args;
+    callback fired(string, string);
+    public function rec(name: string, args: string) {
+        Rec.events += 1;
+        Rec.last = name;
+        Rec.last-args = args;
+        Rec.fired(name, args);
+    }
+}
+
+component SpecWeb inherits WebBody {
+    web-serve(a) => { Rec.rec("web-serve", a ? "1" : "0"); }
+    web-reach(a) => { Rec.rec("web-reach", "" + a); }
+    web-port(a) => { Rec.rec("web-port", a); }
+    web-user(a) => { Rec.rec("web-user", a); }
+    web-password(a) => { Rec.rec("web-password", a); }
+    web-confirm(a) => { Rec.rec("web-confirm", a); }
+    web-set-password() => { Rec.rec("web-set-password", ""); }
+    web-clear-password() => { Rec.rec("web-clear-password", ""); }
+    web-apply() => { Rec.rec("web-apply", ""); }
+}
+
+component SpecCat inherits CatBody {
+    cat-accept(a) => { Rec.rec("cat-accept", a ? "1" : "0"); }
+    cat-port(a) => { Rec.rec("cat-port", a); }
+    cat-reachable(a) => { Rec.rec("cat-reachable", a ? "1" : "0"); }
+}
+
+component SpecStore inherits StorePage {
+    store-search(a) => { Rec.rec("store-search", a); }
+    store-tab(a) => { Rec.rec("store-tab", "" + a); }
+    store-check() => { Rec.rec("store-check", ""); }
+    store-sites-toggle() => { Rec.rec("store-sites-toggle", ""); }
+    store-site-remove(a) => { Rec.rec("store-site-remove", "" + a); }
+    store-site-draft(a) => { Rec.rec("store-site-draft", a); }
+    store-consent(a) => { Rec.rec("store-consent", a ? "1" : "0"); }
+    store-site-add() => { Rec.rec("store-site-add", ""); }
+    store-card-key(a) => { Rec.rec("store-card-key", a); }
+    store-card-open(a) => { Rec.rec("store-card-open", a); }
+    store-get-all() => { Rec.rec("store-get-all", ""); }
+    store-bulk-tick(a) => { Rec.rec("store-bulk-tick", a ? "1" : "0"); }
+    store-update-all() => { Rec.rec("store-update-all", ""); }
+    store-update(a) => { Rec.rec("store-update", a); }
+    store-cleanup() => { Rec.rec("store-cleanup", ""); }
+    store-cleanup-confirm(a) => { Rec.rec("store-cleanup-confirm", a ? "1" : "0"); }
+    store-plugin-back() => { Rec.rec("store-plugin-back", ""); }
+    store-plugin-key() => { Rec.rec("store-plugin-key", ""); }
+    store-plugin-details(a) => { Rec.rec("store-plugin-details", a ? "1" : "0"); }
+    store-picture(a) => { Rec.rec("store-picture", "" + a); }
+    store-cancel() => { Rec.rec("store-cancel", ""); }
+    store-plugin-notice(a) => { Rec.rec("store-plugin-notice", a ? "1" : "0"); }
+}
+
+export component ExtendSpecimen inherits Window {
+    width: 1240px;
+    height: 3230px;
+    background: Theme.bg;
+
+    // ---- the geometry the test reads ----
+    out property <length> a1-y: a1.y;
+    out property <length> a1-body-h: a1.body-height;
+    out property <length> a2-y: a2.y;
+    out property <length> a2-body-h: a2.body-height;
+    out property <length> a3-y: a3.y;
+    out property <length> a3-body-h: a3.body-height;
+    out property <length> b1-y: b1.y;
+    out property <length> b1-body-h: b1.body-height;
+    out property <length> b2-y: b2.y;
+    out property <length> b2-body-h: b2.body-height;
+    out property <length> narrow-bar-h: st-narrow.bar-height;
+    out property <int> narrow-cols: st-narrow.columns;
+    out property <length> narrow-card-w: st-narrow.card-width;
+    out property <length> narrow-content-h: st-narrow.content-height;
+    out property <length> browse-bar-h: st-browse.bar-height;
+    out property <int> browse-cols: st-browse.columns;
+    out property <length> browse-card-w: st-browse.card-width;
+    out property <length> browse-content-h: st-browse.content-height;
+    out property <length> browse-scrolled: st-browse.scrolled;
+    out property <length> updates-bar-h: st-updates.bar-height;
+    out property <length> updates-content-h: st-updates.content-height;
+    out property <length> plugin-bar-h: st-plugin.bar-height;
+    out property <length> plugin-content-h: st-plugin.content-height;
+    out property <length> short-bar-h: st-short.bar-height;
+    out property <length> short-content-h: st-short.content-height;
+    out property <length> short-scrolled: st-short.scrolled;
+    out property <length> probe-y: root.height + 10px;
+    out property <length> p1-w: p1.width;
+    out property <length> p2-w: p2.width;
+    out property <length> p3-w: p3.width;
+    out property <length> p4-w: p4.width;
+
+    // ---- the sample models (the test may change them) ----
+    in-out property <WebModel> m-web-on: {
+        serve: true,
+        reach: [
+            { label: "This computer only", id: "", enabled: true, note: "" },
+            { label: "Any computer on the network", id: "", enabled: true, note: "" },
+            { label: "A specific address", id: "", enabled: true, note: "" },
+        ],
+        reach-index: 1, address: "",
+        port: "8080", user: "fox", password-status: "A password is set",
+        password-draft: "secretpass", confirm-draft: "secretpasx",
+        set-label: "Set password", clear-label: "Clear password", apply-label: "Apply", apply-enabled: true,
+        error: "The password and its confirmation differ",
+        serving-note: "Serving on port 8080 to every machine on your network",
+        network-warning: "This page can be reached from other computers",
+        addresses: ["http://192.168.1.40:8080"],
+        http-note: "Plain HTTP: passwords cross the network unencrypted",
+        sessions: "2 browsers signed in", listeners: "1 listening to the audio",
+    };
+    in-out property <WebModel> m-web-refused: {
+        serve: true,
+        reach: [
+            { label: "This computer only", id: "", enabled: true, note: "" },
+            { label: "Any computer on the network", id: "", enabled: true, note: "" },
+        ],
+        reach-index: 0, address: "",
+        port: "8080", user: "fox", password-status: "No password set",
+        set-label: "Set password", clear-label: "", apply-label: "Applied", apply-enabled: false,
+        error: "The web page did not start: port 8080 is already in use",
+    };
+    in-out property <WebModel> m-web-off: {
+        serve: false,
+        reach: [
+            { label: "This computer only", id: "", enabled: true, note: "" },
+            { label: "Any computer on the network", id: "", enabled: true, note: "" },
+            { label: "A specific address", id: "", enabled: true, note: "" },
+        ],
+        reach-index: 2, address: "192.168.1.40",
+        port: "8080", user: "fox", password-status: "A password is set",
+        clear-label: "Clear password", apply-enabled: true,
+        serving-note: "Not serving",
+    };
+    in-out property <CatModel> m-cat-ok: {
+        intro: "Lets logging and digital-mode software drive this receiver over the protocol Hamlib's rigctld speaks. Point the client at this machine's address on the port below.",
+        accept: true, port: "4532", reachable: true,
+        warning: "This protocol has no password. Anything that can reach the port can retune the receiver.",
+        status: "Listening on 0.0.0.0:4532 - 1 client, 12 commands", status-tone: ChipTone.good,
+    };
+    in-out property <CatModel> m-cat-failed: {
+        intro: "Lets logging and digital-mode software drive this receiver.",
+        accept: true, port: "4532", reachable: false, warning: "",
+        status: "The CAT listener could not start: port 4532 is already in use", status-tone: ChipTone.err,
+    };
+    // the rule-11 probes' models: the longest words a translation can bring
+    in-out property <WebModel> m-web-long: {
+        serve: true,
+        reach: [
+            { label: "Nur dieser Computer (Standard)", id: "", enabled: true, note: "" },
+            { label: "Jeder Computer im Netzwerk", id: "", enabled: true, note: "" },
+            { label: "Eine bestimmte Adresse", id: "", enabled: true, note: "" },
+        ],
+        reach-index: 2, address: "fe80::1c2b:3d4e:5f60:7182%12",
+        port: "65535", user: "a-rather-long-user-name-for-the-web-page",
+        password-status: "Ein Passwort ist festgelegt und wird bei jeder Anmeldung abgefragt",
+        password-draft: "secretpass", confirm-draft: "secretpass",
+        set-label: "Passwort festlegen", clear-label: "Passwort entfernen", apply-label: "Anwenden", apply-enabled: true,
+        error: "Das Passwort und die Wiederholung stimmen nicht ueberein, bitte noch einmal eingeben",
+        serving-note: "Wird auf Port 8080 fuer jeden Computer in Ihrem Netzwerk bereitgestellt",
+        network-warning: "Diese Seite ist von anderen Computern aus erreichbar",
+        addresses: ["http://192.168.100.200:8080", "http://[fe80::1c2b:3d4e:5f60:7182%12]:8080"],
+        http-note: "Einfaches HTTP: Passwoerter werden unverschluesselt uebertragen, nutzen Sie es nur in einem Netzwerk, dem Sie vertrauen",
+        sessions: "12 Browser-Sitzungen angemeldet", listeners: "3 hoeren dem Ton zu",
+    };
+    in-out property <CatModel> m-cat-long: {
+        intro: "Laesst Logbuch- und Digitalmodus-Software dieses Empfaengergeraet ueber das Protokoll steuern, das Hamlibs rigctld spricht.",
+        accept: true, port: "65535", reachable: true,
+        warning: "Dieses Protokoll hat kein Passwort. Alles, was den Port erreichen kann, kann den Empfaenger umstellen.",
+        status: "Hoert auf 0.0.0.0:4532 - 4 Clients verbunden, 1234567 Befehle", status-tone: ChipTone.good,
+    };
+
+    // the store: the catalogue's plugins, in every key kind
+    property <[StoreBadge]> b-net-1090: [{ text: "NETWORK", tone: ChipTone.warn }, { text: "1090 MHz", tone: ChipTone.neutral }];
+    in-out property <StoreModel> m-store-browse: {
+        search: "", search-placeholder: "Search the catalogue", tab: 0, browse-label: "BROWSE", updates-label: "UPDATES (2)",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", catalogue-tone: ChipTone.neutral, check-label: "CHECK AGAIN",
+        sites-open: false,
+        top-error: "Could not fit ADS-B Aircraft Decoder: the file is in use",
+        top-warning: "Catalogue warning: radioclub.example did not answer, showing the last copy",
+        categories: [
+            { heading: "Aircraft", cards: [
+                { id: "adsb", glyph: "A", name: "ADS-B Aircraft Decoder", summary: "Decodes 1090 MHz aircraft position reports.", badges: root.b-net-1090,
+                  key-label: "UPDATE", key-kind: 1, key-enabled: true, version-note: "1.9.1 > 1.9.2" },
+                { id: "acars", glyph: "C", name: "ACARS Printer", summary: "Prints aircraft datalink messages.", badges: [{ text: "131 MHz", tone: ChipTone.neutral }],
+                  key-label: "INSTALLED", key-kind: 3, key-enabled: false },
+                { id: "tower", glyph: "T", name: "Tower Voice Logger", summary: "Logs airband calls to a file.", badges: [{ text: "WRITES FILES", tone: ChipTone.warn }],
+                  key-label: "FITTING...", key-kind: 2, key-enabled: false, progress: "Fitting 2 of 5", progress-norm: 0.6 },
+                { id: "vor", glyph: "V", name: "VOR Navigation", summary: "Shows VOR radial and course deviation.", badges: [{ text: "108-118 MHz", tone: ChipTone.neutral }],
+                  key-label: "GET", key-kind: 0, key-enabled: true },
+            ] },
+            { heading: "Marine", cards: [
+                { id: "ais", glyph: "S", name: "AIS Ship Tracker", summary: "Plots ships from their AIS position reports on the map.", badges: [{ text: "162 MHz", tone: ChipTone.neutral }, { text: "NETWORK", tone: ChipTone.warn }],
+                  key-label: "GET", key-kind: 0, key-enabled: false, key-tooltip: "Another transfer is running" },
+            ] },
+        ],
+        get-all-label: "GET EVERYTHING", get-all-enabled: false, get-all-reason: "Tick the notices box first",
+        foot-note: "Fitting 2 of 5 - 1 done, 1 in progress, 0 failed",
+        bulk-tick: false, bulk-sentence: "I have read the notices of the plugins in this run",
+        updates-heading: "2 updates available", update-all-label: "UPDATE ALL",
+    };
+    in-out property <StoreModel> m-store-updates: {
+        search: "", tab: 1, browse-label: "BROWSE", updates-label: "UPDATES (2)",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", check-label: "CHECK AGAIN",
+        updates-heading: "2 updates available", update-all-label: "UPDATE ALL", update-all-enabled: true,
+        updates: [
+            { id: "adsb", glyph: "A", name: "ADS-B Aircraft Decoder", version-note: "1.9.1 > 1.9.2", badge: "NEW", whats-new: "faster decode", key-label: "UPDATE", key-enabled: true },
+            { id: "ais", glyph: "S", name: "AIS Ship Tracker", version-note: "2.0.0 > 2.1.0", badge: "NEW", whats-new: "fixes ship names and a crash when the first report arrives with no position", key-label: "UPDATE", key-enabled: false },
+        ],
+        footnotes: ["Updates need no notice tick.", "Plugins from other sites are left out of UPDATE ALL."],
+        cleanup-label: "CLEAN UP OLD VERSIONS (2)", cleanup-enabled: true,
+        cleanup-lines: ["ADS-B Aircraft Decoder 1.8.0 - old copy (1.9.1 stays)", "and 1 more"],
+        cleanup-open: true, cleanup-title: "Remove old plugin versions",
+        cleanup-text: "Each of these is an older copy of a plugin whose newer version is installed and running. Only these files are deleted.",
+        cleanup-yes: "Remove 2 files", cleanup-no: "Keep them",
+    };
+    in-out property <StoreModel> m-store-plugin: {
+        search: "", tab: 0, browse-label: "BROWSE", updates-label: "UPDATES (2)",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", check-label: "CHECK AGAIN",
+        plugin: {
+            shown: true, back-label: "< BROWSE", glyph: "A", name: "ADS-B Aircraft Decoder", version: "1.9.2", badges: root.b-net-1090,
+            origin: "FOX & SCHIRMYVER - from the FoxSDR catalogue", key-label: "UPDATE", key-kind: 1, key-enabled: true,
+            report: "Fitted 1.9.1 - install report: ok", report-tone: ChipTone.good,
+            screenshots: [@image-url("../icons/search.svg"), @image-url("../icons/check.svg")], picture-index: 0, pictures-note: "Map with trails",
+            what-it-does: "Decodes aircraft position reports and plots them on the Map tab.", whats-new: "Faster decode; fixes ship names.",
+            notice: "The maker states: this plugin sends positions to adsb.example.", notice-ticked: true,
+            details-open: true, details-label: "HIDE DETAILS",
+            details: "HOMEPAGE  foxsdr.example/adsb\nSHA-256  9f2c0000e41a",
+            reach-lead: "Declared by the maker, not enforced: it reaches the network.",
+        },
+    };
+    in-out property <StoreModel> m-store-narrow: {
+        search: "", search-placeholder: "Search the catalogue", tab: 0, browse-label: "BROWSE", updates-label: "UPDATES (2)",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com  -  Catalogue is out of date", catalogue-tone: ChipTone.warn, check-label: "CHECK AGAIN",
+        cancel-label: "CANCEL",
+        sites-open: true,
+        sites: [{ address: "Radio Club Plugins (radioclub.example)", remove-label: "REMOVE", status: "That address did not answer - status: last read failed" }],
+        no-sites-line: "No other sites", site-draft: "https://", consent: false, add-site-label: "ADD",
+        add-reason: "ADD is greyed until the box is ticked and the address starts with https://",
+        site-error: "That address did not answer",
+        categories: [
+            { heading: "Aircraft", cards: [
+                { id: "adsb", glyph: "A", name: "ADS-B Aircraft Decoder", summary: "Decodes 1090 MHz aircraft position reports.", badges: root.b-net-1090,
+                  key-label: "UPDATE", key-kind: 1, key-enabled: true, version-note: "1.9.1 > 1.9.2" },
+                { id: "acars", glyph: "C", name: "ACARS Printer", summary: "Prints aircraft datalink messages.", badges: [{ text: "131 MHz", tone: ChipTone.neutral }],
+                  key-label: "INSTALLED", key-kind: 3 },
+                { id: "vor", glyph: "V", name: "VOR Navigation", summary: "Shows VOR radial and course deviation.", badges: [{ text: "108-118 MHz", tone: ChipTone.neutral }],
+                  key-label: "GET", key-kind: 0, key-enabled: true },
+            ] },
+        ],
+    };
+
+    // a short page with more cards than it can show: the body scrolls (the wheel moves it, the thumb follows)
+    in-out property <StoreModel> m-store-short: {
+        search: "", search-placeholder: "Search the catalogue", tab: 0, browse-label: "BROWSE", updates-label: "UPDATES (2)",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", check-label: "CHECK AGAIN",
+        categories: [
+            { heading: "Aircraft", cards: [
+                { id: "a1", glyph: "A", name: "ADS-B Aircraft Decoder", summary: "Decodes 1090 MHz aircraft position reports.", badges: root.b-net-1090, key-label: "GET", key-kind: 0, key-enabled: true },
+                { id: "a2", glyph: "C", name: "ACARS Printer", summary: "Prints aircraft datalink messages.", key-label: "GET", key-kind: 0, key-enabled: true },
+                { id: "a3", glyph: "V", name: "VOR Navigation", summary: "Shows VOR radial and course deviation.", key-label: "GET", key-kind: 0, key-enabled: true },
+                { id: "a4", glyph: "T", name: "Tower Voice Logger", summary: "Logs airband calls to a file.", key-label: "GET", key-kind: 0, key-enabled: true },
+            ] },
+            { heading: "Marine", cards: [
+                { id: "m1", glyph: "S", name: "AIS Ship Tracker", summary: "Plots ships from their AIS position reports.", key-label: "GET", key-kind: 0, key-enabled: true },
+                { id: "m2", glyph: "N", name: "NAVTEX Receiver", summary: "Prints maritime safety broadcasts.", key-label: "GET", key-kind: 0, key-enabled: true },
+                { id: "m3", glyph: "D", name: "DSC Watch", summary: "Watches digital selective calling on channel 70.", key-label: "GET", key-kind: 0, key-enabled: true },
+            ] },
+        ],
+    };
+
+    // ---- the sheet ----
+    a1 := Section { x: 10px; y: 10px; width: 296px; small: true; open: true; name: "Web access"; chip: "ON"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecWeb { model: root.m-web-on; } }
+    a2 := Section { x: 316px; y: b2.y + b2.height + 10px; width: 296px; small: true; open: true; name: "Web access"; chip: "REFUSED"; tone: ChipTone.err; show-dot: true; dot: LampState.red;
+        SpecWeb { model: root.m-web-refused; } }
+    a3 := Section { x: 10px; y: a1.y + a1.height + 10px; width: 296px; small: true; open: true; name: "Web access"; chip: "OFF"; show-dot: true;
+        WebBody { model: root.m-web-off; } }
+    b1 := Section { x: 316px; y: 10px; width: 296px; small: true; open: true; name: "CAT control (rigctld)"; chip: "1 CLIENT"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
+        SpecCat { model: root.m-cat-ok; } }
+    b2 := Section { x: 316px; y: b1.y + b1.height + 10px; width: 296px; small: true; open: true; name: "CAT control (rigctld)"; chip: "FAILED"; tone: ChipTone.err; show-dot: true; dot: LampState.red;
+        CatBody { model: root.m-cat-failed; } }
+
+    st-narrow := StorePage { x: 622px; y: 10px; width: 500px; height: 700px; model: root.m-store-narrow; }
+    st-short := SpecStore { x: 622px; y: 730px; width: 500px; height: 300px; model: root.m-store-short; }
+    st-browse := SpecStore { x: 10px; y: 1070px; width: 1000px; height: 700px; model: root.m-store-browse; }
+    st-updates := SpecStore { x: 10px; y: 1790px; width: 1000px; height: 700px; model: root.m-store-updates; }
+    st-plugin := SpecStore { x: 10px; y: 2510px; width: 1000px; height: 700px; model: root.m-store-plugin; }
+
+    // the rule-11 probes: a bare body in a 254 px cell asks for no more than 254 px
+    HorizontalLayout { x: 10px; y: root.probe-y; width: 254px; height: 20px; p1 := Rectangle { WebBody { model: root.m-web-long; } } }
+    HorizontalLayout { x: 280px; y: root.probe-y; width: 254px; height: 20px; p2 := Rectangle { CatBody { model: root.m-cat-long; } } }
+    HorizontalLayout { x: 550px; y: root.probe-y; width: 254px; height: 20px; p3 := Rectangle { WebBody { model: root.m-web-on; } } }
+    HorizontalLayout { x: 820px; y: root.probe-y; width: 254px; height: 20px; p4 := Rectangle { CatBody { model: root.m-cat-ok; } } }
+
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

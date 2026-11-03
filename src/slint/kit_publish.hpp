@@ -44,6 +44,17 @@ public:
     // the pages named are opened on the first publish that knows the plugins, the last one named is shown. Never set in a release.
     void openFromEnv(const std::string& spec);
 
+    // THE PLUGIN STORE PAGE (kind 9, id "store"; docs 6.42). The KIT OWNS THE PAGE - its PageTab, its place in the tab row, its tear-off, the DECODE bank's row that opens
+    // it - and the EXTEND publisher (extend_publish.*) owns what the page SHOWS: it computes the whole ::StoreModel from extend_logic's read and hands it over here
+    // (setStoreModel), reads whether the page is up (storeView) so it reads the store's lists only while someone can see them, and hands over the DECODE row's chip
+    // (setStoreRail: BUSY / IDLE / "N UPD" / OK, extend_logic.hpp readStoreChip). The kit never reads the store's facts and the EXTEND publisher never touches a Page.
+    enum class StoreView { Closed, Docked, Shown };   // not open; open as a tab that is not the one showing; showing (the current tab or torn off)
+    StoreView storeView() const;
+    void setStoreModel(const ::StoreModel& model);
+    void setStoreRail(const std::string& word, ::ChipTone tone, bool lit);
+    // Opens the store page and shows it (the DECODE row's key, a bounded run's FOXSDR_SLINT_OPEN=store).
+    void openStorePage();
+
 private:
     struct Page {
         std::string id;            // "output", "image:<name>", "panel:<name>", "instrument:<name>|<title>", "map:<name>", "fitted", "module:<file>", "details"
@@ -100,6 +111,7 @@ private:
     void fillFitted(PageTab& t, const FoxReceiverState& state, std::string& sig);
     void fillModule(const Page& p, PageTab& t, const FoxReceiverState& state, std::string& sig);
     void fillDetails(PageTab& t, const FoxReceiverState& state, std::string& sig);
+    void fillStore(PageTab& t, std::string& sig);
     DetailsModel detailsModel(const FoxReceiverState& state, std::string& sig);
     void publishDecodeBank(const FoxReceiverState& state);
     void publishPages(const FoxReceiverState& state);
@@ -130,6 +142,11 @@ private:
     std::vector<std::string> muteNames_, muteKeys_;   // the "Sound is muted" question's subject
     bool muteQuestionOpen_ = false;
     std::string catalogueUrl_;
+    ::StoreModel storeModel_{};                       // what the EXTEND publisher last handed over for the page of kind 9
+    std::uint64_t storeRevision_ = 0;                 // moves with each handed-over model: the page's signature
+    std::string storeChip_;                           // the DECODE row's chip ("" until the EXTEND publisher's first read: the row says IDLE, the word nothing has been asked)
+    ::ChipTone storeChipTone_ = ::ChipTone::Neutral;
+    bool storeLit_ = false;
     FoxReceiverState state_{};
     std::int64_t nowMs_ = 0;
     std::string envSpec_;

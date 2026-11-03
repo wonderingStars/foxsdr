@@ -32,6 +32,8 @@ import { SystemEvents, DisplayModel, LanguageModel, UpdatesModel, GpsRow, Serial
          UsageBody, TesterBody, ReportSheet } from "system_bank.slint";
 import { ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow,
          MarkersModel, RadarBody, BookmarksBody, ScannerBody, AirbandBody, MarkersSheet } from "tools_bank.slint";
+import { ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
+         WebBody, CatBody } from "extend_bank.slint";
 import { Checkbox } from "fields.slint";
 import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
@@ -49,7 +51,8 @@ export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, Men
          RadioSetupModel, UnboundRow, SetupKey, ImportDialogModel,
          SystemEvents, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
          UsageModel, TesterModel, ReportPageModel,
-         ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow, MarkersModel }
+         ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow, MarkersModel,
+         ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -180,6 +183,9 @@ export component MainWindow inherits Window {
     in property <ScannerModel> scanner-model;
     in property <AirbandModel> airband-model;
     in property <MarkersModel> markers-model;
+    // THE EXTEND BANK (phase 3, docs 6.42): the two bodies under the rows of bank 3; the store is a kit page (pages.slint kind 9)
+    in property <WebModel> web-model;
+    in property <CatModel> cat-model;
     in property <[DecodeRow]> decode-rows: [];
     in property <[PluginEntry]> plugin-entries: [];
     in property <string> decode-note;
@@ -561,7 +567,10 @@ export component MainWindow inherits Window {
                             if root.bank-index != 1 : VerticalLayout { spacing: 0px;
                                 for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; clicked => { root.section-clicked(i); }
                                     // the Radio section's open body (the sheet's); the other bodies are the banks of phase 3
-                                    VerticalLayout { spacing: ((root.bank-index == 0 && i != 0 && i != 5) || (root.bank-index == 4 && i != 9) || (root.bank-index == 2 && i != 0)) ? 10px : 0px;
+                                    VerticalLayout { spacing: ((root.bank-index == 0 && i != 0 && i != 5) || (root.bank-index == 4 && i != 9) || (root.bank-index == 2 && i != 0) || root.bank-index == 3) ? 10px : 0px;
+                                        // the EXTEND bank's bodies (extend_bank.slint): 0 Web access, 1 CAT
+                                        if root.bank-index == 3 && i == 0 : WebBody { model: root.web-model; }
+                                        if root.bank-index == 3 && i == 1 : CatBody { model: root.cat-model; }
                                         // the TOOLS bank's bodies (tools_bank.slint), by row: 1 Radar, 2 Bookmarks, 3 Scanner, 4 Airband (0 Demod scope: the row only)
                                         if root.bank-index == 2 && i == 1 : RadarBody { model: root.radar-model; }
                                         if root.bank-index == 2 && i == 2 : BookmarksBody { model: root.bookmarks-model; }

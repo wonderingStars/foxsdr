@@ -60,6 +60,7 @@
 #include "engine/fox_engine_api.hpp"
 #include "engine/process_boot.hpp"
 #include "engine/window_service_options.hpp"
+#include "extend_publish.hpp"
 #include "host_duties.hpp"
 #include "host_logic.hpp"
 #include "kit_publish.hpp"
@@ -288,7 +289,14 @@ int main(int argc, char** argv) {
     publisher.wire();
     // A bounded run's self-capture: the pages FOXSDR_SLINT_OPEN names are opened once the plugins are known, and FOXSDR_SLINT_SHOT=1 saves a
     // screenshot of the window at the last tick (the screenshot key's own path). Never set in a release; the GUI test gate's idiom.
-    if (const char* openSpec = std::getenv("FOXSDR_SLINT_OPEN")) { publisher.openFromEnv(openSpec); }
+    // FOXSDR_SLINT_STORE_PAGE=<catalogue id> (below) opens the store page on that plugin, so it names the page "store" for the kit as well.
+    const char* storePageEnv = std::getenv("FOXSDR_SLINT_STORE_PAGE");
+    {
+        std::string openSpec;
+        if (const char* e = std::getenv("FOXSDR_SLINT_OPEN")) { openSpec = e; }
+        if (storePageEnv != nullptr && storePageEnv[0] != '\0' && (',' + openSpec + ',').find(",store,") == std::string::npos) { openSpec += (openSpec.empty() ? "" : ",") + std::string("store"); }
+        if (!openSpec.empty()) { publisher.openFromEnv(openSpec); }
+    }
     const bool shotAtEnd = std::getenv("FOXSDR_SLINT_SHOT") != nullptr;
     // THE SIGNAL BANK'S BODIES (signal_publish.hpp): the Source, Radio, Audio filters, Sinks, Transmit, Recorder and Frequency correction models, the Radio-setup
     // page and the import dialog, published from signal_logic's reads once a tick (after the kit's) and wired to the engine's ops.
@@ -335,9 +343,9 @@ int main(int argc, char** argv) {
     bool followBandPlan = true;
     int bankIndex = 0;
     if (const char* bankEnv = std::getenv("FOXSDR_SLINT_BANK")) { bankIndex = std::clamp(std::atoi(bankEnv), 0, 4); }   // a bounded run's self-capture: the bank to show
-    // SIGNAL's Source, Radio and Sinks rows open (Audio filters and Recorder closed), as the ImGui window; TOOLS' Bookmarks, Scanner and Airband (rows 2, 3, 4); SYSTEM's Display and Key bindings (the LOGICAL rows of
+    // SIGNAL's Source, Radio and Sinks rows open (Audio filters and Recorder closed), as the ImGui window; TOOLS' Bookmarks, Scanner and Airband (rows 2, 3, 4); EXTEND's Web access and CAT (the contract: both open); SYSTEM's Display and Key bindings (the LOGICAL rows of
     // the contract: 0 Display ... 5 Key bindings ... 9 About - the rail's positions differ only while the Beta tester row is hidden)
-    std::map<int, std::set<int>> openSections{{0, {1, 2, 4}}, {2, {2, 3, 4}}, {4, {0, 5}}};
+    std::map<int, std::set<int>> openSections{{0, {1, 2, 4}}, {2, {2, 3, 4}}, {3, {0, 1}}, {4, {0, 5}}};
     // A bounded run's self-capture: FOXSDR_SLINT_SECTIONS=<bank>:<i,j,k>[;<bank>:<i,j,k>] sets the open rows of a bank (next to FOXSDR_SLINT_BANK).
     if (const char* sectionsEnv = std::getenv("FOXSDR_SLINT_SECTIONS")) {
         std::string spec = sectionsEnv;
@@ -405,6 +413,32 @@ int main(int argc, char** argv) {
     int toolsProbeTicks = 0;
     // a section that starts open asks for what it shows: the Radar fold's GPS row needs the Serial ports scan
     if (openSections[2].count(1) > 0) { systemBank.sectionOpened(4); }
+
+    // THE EXTEND BANK'S BODIES AND THE PLUGIN STORE PAGE (extend_publish.hpp): Web access and CAT control, and the store's model handed to the kit's page of kind 9 (the DECODE
+    // bank's "Plugin store" row opens it), published from extend_logic's reads once a tick - BEFORE the kit's publish, so the page is built from this tick's model - and wired
+    // to the effects extend_logic names. A bounded run sends nothing (the first-open catalogue read, the pictures, the keys' commands are kept and said once by op).
+    // FOXSDR_SLINT_STORE_PAGE=<catalogue id> opens the page on that plugin once the catalogue lists it (the page only: nothing is asked of the network).
+    foxsdr::slintextend::ExtendPublisher extendBank(*ui, kit, publisher, api, session, bounded.bounded());
+    extendBank.wire();
+    if (storePageEnv != nullptr && storePageEnv[0] != '\0') { extendBank.openStorePageForCapture(storePageEnv); }
+    if (const char* e = std::getenv("FOXSDR_SLINT_STORE_LOCAL"); e != nullptr && e[0] != '\0') { extendBank.useLocalCatalogueForCapture(e); }
+    // FOXSDR_SLINT_EXTEND_PROBE=<file>;<file>... also runs each file through the store's picture decode (the worker, its words and the strip's mapping)
+    if (const char* e = std::getenv("FOXSDR_SLINT_EXTEND_PROBE"); e != nullptr && std::strchr(e, '.') != nullptr) {
+        std::vector<std::string> files;
+        std::string rest = e;
+        while (!rest.empty()) {
+            const std::size_t semi = rest.find(';');
+            const std::string one = rest.substr(0, semi);
+            rest = semi == std::string::npos ? std::string() : rest.substr(semi + 1);
+            if (!one.empty()) { files.push_back(one); }
+        }
+        extendBank.probePictures(files);
+    }
+    // A bounded run's self-capture of the gestures that touch nothing but the window (never set in a release): at tick 60 the web port and user boxes are typed, the store's
+    // search is typed and its SITES fold opened with an address in the field - the callback, the Effect, the draft, the forced re-read, the model, the repeater. Nothing
+    // is sent (no key that sends is pressed, and a bounded run would not send it).
+    const bool extendProbe = std::getenv("FOXSDR_SLINT_EXTEND_PROBE") != nullptr;
+    int extendProbeTicks = 0;
 
     // ---- commands: every key becomes one submit() ----
     const auto submit = [&](FoxCommand c) {
@@ -495,6 +529,11 @@ int main(int argc, char** argv) {
             // The TOOLS bank's chips are the host's too (tools_logic: the scope tap word, OFF, the bookmark count, SCAN / IDLE, LISTEN / IDLE).
             if (bank == 2) {
                 const auto face = toolsBank.face(i);
+                if (face.valid) { chip = face.chip; tone = face.tone; }
+            }
+            // The EXTEND bank's too (extend_logic: Web access ON / FAIL / OFF, CAT FAIL / OFF / "N CLI" / ON - the ImGui rail rows' own words).
+            if (bank == 3) {
+                const auto face = extendBank.face(i);
                 if (face.valid) { chip = face.chip; tone = face.tone; }
             }
             rows.push_back({ss(name), ss(chip), tone, openSections[bank].count(i) > 0, LampState::Off, false});
@@ -1116,12 +1155,14 @@ int main(int argc, char** argv) {
         const int32_t got = api->poll_results(session, r, 8);
         for (int32_t i = 0; i < got; ++i) {
             toolsBank.onAnswer(r[i]);   // the answers the airband section waits for (an airport's rows, a preset's chunks, Listen, Export, Remove)
+            extendBank.onAnswer(r[i]);  // a SERVER_CONFIG's (Web access and CAT control): a refusal becomes the web box's red line
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
 
         // THE PLUGIN KIT'S DUTIES (plugin_kit.hpp): the directive, the poll, the pictures, the lists when they moved, the front end's facts,
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
+        extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
         publisher.publish(state);
         signalBank.publish(state);
         systemBank.publish(state);
@@ -1134,6 +1175,14 @@ int main(int argc, char** argv) {
             te.invoke_airband_code(ss("kord"));
             te.invoke_airband_freq(ss("118.1"));
             te.invoke_airband_name(ss("Probe tower"));
+        }
+        if (extendProbe && ++extendProbeTicks == 60) {
+            auto&& xe = ui->global<ExtendEvents>();
+            xe.invoke_web_port(ss("9090"));
+            xe.invoke_web_user(ss("probe"));
+            xe.invoke_store_search(ss("ads"));
+            xe.invoke_store_sites_toggle();
+            xe.invoke_store_site_draft(ss("https://example.invalid/index.json"));
         }
         // the bounded run's self-capture of the language path: at tick 60 the Language dropdown picks the code (save, setLanguage, bundled translation, re-publish)
         if (!languageChangeCapture.empty() && ++captureTicks == 60) { systemBank.languageChangeForCapture(languageChangeCapture); }
@@ -1192,6 +1241,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", signalBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", systemBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", toolsBank.summaryLine().c_str());
+        std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", extendBank.summaryLine().c_str());
         for (const auto& r : kit.lists().rows) {
             std::fprintf(stderr, "foxsdr-slint: plugin %-40s caps=0x%04x %s%s%s file=%s\n", r.name.c_str(), r.caps, r.loaded ? "loaded" : "REFUSED",
                          r.stopped ? " stopped" : "", r.asleep ? " asleep" : "", r.file.c_str());
