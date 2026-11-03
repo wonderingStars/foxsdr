@@ -17,7 +17,9 @@
 #                 beside it and held to the same version line and its own symbols (it is not
 #                 a Windows release file). foxsdr-slint.exe (the Slint window, the installer's
 #                 application) is built in the same two passes, hashed and held to the same
-#                 version line; the MSIX stays cascade.exe's.
+#                 version line; the MSIX stays cascade.exe's. Its symbols (foxsdr-slint.pdb, symmap, exe, index row,
+#                 its own build id) are archived and checked like cascade's and recorded in verify\symbols.json
+#                 under "modules" for the symbols step.
 #   installer     ISCC (SlintIsApp=1: foxsdr-slint.exe + slint_cpp.dll are the application,
 #                 cascade.exe the "classic window"; -ClassicInstaller builds SlintIsApp=0, cascade.exe
 #                 alone), then the installer's name, size and hash.
@@ -36,7 +38,8 @@
 #   ci            find the GitHub Actions run for HEAD, wait for it, download its
 #                 artifacts, check every file, write the five hashes into the notes.
 #   symbols       mirror the Windows and Linux symbols to the NAS, append the index
-#                 rows, put the symbol maps on the Pi, verify every hash remotely.
+#                 rows, put the symbol maps on the Pi, verify every hash remotely. Windows maps go to the Pi as
+#                 <module>-<build id>.json.gz (cascade-<id>, foxsdr-slint-<id>; the id is the record's own per module).
 #   github        tag, draft release, compare GitHub's digests, publish as latest.
 #   store         Microsoft Store submission through the Partner Center submission API.
 #   store-status  which version the public Store catalogue is serving, and whether the
@@ -467,6 +470,52 @@ function Get-VersionOutput([string]$Exe) {
     return $r
 }
 
+# Archives the symbols of ONE more Windows module (today: foxsdr-slint.exe, the Slint window the installer ships) and holds
+# the result to the checks cascade.exe's symbols get: at least the pdb, the exe, the map and index.txt came back; the pdb is
+# <Module>.pdb (the one the module was linked with, not another module's); the build id is the module's own (not equal to any
+# id in -DistinctFrom: module name -> id); every file exists and is not empty; the symbol map for exactly that build id is
+# there; the index has a row for it naming <Module>.exe. Returns the record Step-Build writes into verify\symbols.json
+# (BuildId, IndexRow, Files: relative path -> sha256), which Step-Symbols mirrors. Tested by tests\test_release_symbols.ps1
+# against a fake archive-symbols.ps1.
+function Invoke-ModuleSymbolArchive([string]$Module, [string]$Binary, [string]$ArchiveTool, [string]$SymRoot, [string]$Version, [string]$CommitHeader, [hashtable]$DistinctFrom = @{}) {
+    $pdbName = $Module + '.pdb'
+    $exeName = $Module + '.exe'
+    $archived = @(& $ArchiveTool -Binary $Binary -ArchiveRoot $SymRoot -Version $Version -CommitHeader $CommitHeader -EmitPaths)
+    Assert-Check ($archived.Count -ge 4) ($Module + ' symbols archived') ($archived.Count.ToString() + ' paths') ('tools\archive-symbols.ps1 returned fewer than the pdb, the exe, the map and index.txt for ' + $exeName + ': a crash report from the window the installer ships would be unreadable for ever')
+    $pdbRel = [string]$archived[0]
+    Assert-Check ($pdbRel -like ($pdbName + '\*')) ($Module + ' PDB archived as ' + $pdbName) $pdbRel ('the PDB the linker recorded in ' + $exeName + ' is not ' + $pdbName + ' (a target renamed, or the wrong binary was passed)')
+    $id = $pdbRel.Split('\')[1]
+    foreach ($other in $DistinctFrom.Keys) {
+        Assert-Check ($id -ne [string]$DistinctFrom[$other]) ($Module + ' build id is its own') $id ($exeName + ' has the same build id as ' + $other + ': one of the two was archived under the other''s key')
+    }
+    $files = @{}
+    foreach ($rel in $archived) {
+        if ([string]$rel -eq 'index.txt') { continue }
+        $full = Join-Path $SymRoot ([string]$rel)
+        Assert-Check ((Test-Path -LiteralPath $full) -and ((Get-Item -LiteralPath $full).Length -gt 0)) ($Module + ' symbol file ' + $rel) '' ($full + ' is missing or empty')
+        $files[[string]$rel] = (Get-Sha256 $full)
+    }
+    Assert-Check ($files.Keys -contains ($pdbName + '\' + $id + '\symmap.json.gz')) ('symbol map for the ' + $Module + ' build id') $id 'symmap.json.gz is what the crash dashboard groups faults by; archive-symbols.ps1 needs py -3.14 to make it'
+    $idxPath = Join-Path $SymRoot 'index.txt'
+    $row = ''
+    foreach ($l in [System.IO.File]::ReadAllLines($idxPath)) { if ($l.Contains("`t" + $id + "`t")) { $row = $l } }
+    Assert-Check ($row -ne '' -and $row.Split("`t")[1] -eq $exeName) ($Module + ' symbol index row') $id ($idxPath + ' has no row for it naming ' + $exeName)
+    return @{ BuildId = $id; IndexRow = $row; Files = $files }
+}
+
+# The record verify\symbols.json holds for the symbols step. cascade's own build id, index row and files keep the top-level keys
+# buildId / indexRow / files EXACTLY as before: tools\site-release.ps1 (Get-SymbolMaps) still reads those and names EVERY map in
+# `files` cascade-<buildId>.json.gz, so another module's files must NOT be added to `files` or its map would be sent over
+# cascade's. Every further module (-Modules: name -> the record Invoke-ModuleSymbolArchive returned) goes under `modules`, with
+# its own buildId, indexRow and files; `modules` also lists cascade (buildId, indexRow) so a reader has one table of ids.
+function New-WindowsSymbolsRecord([string]$BuildId, [string]$IndexRow, [hashtable]$Files, [hashtable]$Modules = @{}) {
+    $table = @{ 'cascade' = @{ buildId = $BuildId; indexRow = $IndexRow } }
+    foreach ($name in $Modules.Keys) {
+        $table[$name] = @{ buildId = $Modules[$name].BuildId; indexRow = $Modules[$name].IndexRow; files = $Modules[$name].Files }
+    }
+    return @{ buildId = $BuildId; indexRow = $IndexRow; files = $Files; modules = $table }
+}
+
 function Step-Build {
     $RC = $script:RC
     $v = $RC.Version
@@ -526,6 +575,7 @@ function Step-Build {
         Write-Plan 'check' 'build\Release holds no runtime DLL but SoapySDR.dll'
         Write-Plan 'check' 'build\Release\softgl holds exactly the two files third_party\softgl\PINNED.txt pins, with their sha256'
         Write-Plan 'archive symbols' ('tools\archive-symbols.ps1 -Binary ' + $exe + ' -EmitPaths')
+        Write-Plan 'archive symbols (Slint window)' ('tools\archive-symbols.ps1 -Binary ' + $slintExe + ' -EmitPaths : foxsdr-slint.pdb\<id>\{foxsdr-slint.pdb,symmap.json.gz} and foxsdr-slint.exe\<key>\foxsdr-slint.exe, its own build id and index row; recorded in verify\symbols.json beside cascade''s, mirrored to the NAS by the symbols step, its map put on the Pi as foxsdr-slint-<id>.json.gz')
         Write-Plan 'copy' ('cascade.exe, SoapySDR.dll and softgl\ to ' + $RC.MsixIn)
         return 'done'
     }
@@ -606,7 +656,6 @@ function Step-Build {
     $row = ''
     foreach ($l in [System.IO.File]::ReadAllLines($idxPath)) { if ($l.Contains("`t" + $buildId + "`t")) { $row = $l } }
     Assert-Check ($row -ne '') 'symbol index row for this build id' $buildId ($idxPath + ' has no row for it')
-    Write-JsonFile (Join-Path $RC.Verify 'symbols.json') @{ buildId = $buildId; indexRow = $row; files = $symFiles }
     Write-Result 'PASS' 'symbols for this build' ('build id ' + $buildId + ', ' + $symFiles.Count + ' files')
 
     # THE ENGINE'S SYMBOLS, asserted the same way: its own build id, its PDB, its map, its index row.
@@ -629,6 +678,15 @@ function Step-Build {
     Assert-Check ($eRow -ne '' -and $eRow.Split("`t")[1] -eq 'foxsdr-engine.exe') 'engine symbol index row' $eBuildId ($idxPath + ' has no row for it naming foxsdr-engine.exe')
     Write-Result 'PASS' 'symbols for the engine (kept locally, not mirrored)' ('build id ' + $eBuildId)
 
+    # THE SLINT WINDOW'S SYMBOLS. foxsdr-slint.exe is the application the installer ships, so unlike the engine its
+    # files ARE a Windows release file: a crash report from it names foxsdr-slint.exe and its own build id, and without
+    # its PDB and map in the NAS archive (and its map on the Pi) that report is unreadable for ever. Same checks as
+    # cascade's, in Invoke-ModuleSymbolArchive; its build id, index row and files go into symbols.json under
+    # `modules` (New-WindowsSymbolsRecord: the top-level buildId / indexRow / files stay cascade's, for older readers).
+    $slintRec = Invoke-ModuleSymbolArchive -Module 'foxsdr-slint' -Binary $slintExe -ArchiveTool (Join-Path $RC.Repo 'tools\archive-symbols.ps1') -SymRoot $symRoot -Version $v -CommitHeader (Join-Path $RC.BuildDir 'generated\cascade_git_commit.h') -DistinctFrom @{ 'cascade' = $buildId; 'foxsdr-engine' = $eBuildId }
+    Write-JsonFile (Join-Path $RC.Verify 'symbols.json') (New-WindowsSymbolsRecord -BuildId $buildId -IndexRow $row -Files $symFiles -Modules @{ 'foxsdr-slint' = $slintRec })
+    Write-Result 'PASS' 'symbols for the Slint window' ('build id ' + $slintRec.BuildId + ', ' + $slintRec.Files.Count + ' files, mirrored with the Windows symbols')
+
     Copy-Item -LiteralPath $exe -Destination (Join-Path $RC.MsixIn 'cascade.exe') -Force
     Copy-Item -LiteralPath (Join-Path $relDir 'SoapySDR.dll') -Destination (Join-Path $RC.MsixIn 'SoapySDR.dll') -Force
     $msixSoft = Join-Path $RC.MsixIn 'softgl'
@@ -640,7 +698,7 @@ function Step-Build {
     $size = (Get-Item -LiteralPath $exe).Length
     Write-Result 'PASS' 'cascade.exe' ('{0:N0} bytes, sha256 {1}' -f $size, $exeSha)
     Write-Result 'PASS' 'softgl' (($softPins.Keys | ForEach-Object { $_ + ' ' + $softSha[$_] }) -join '; ')
-    Set-StepDone 'build' @{ 'msix-in\cascade.exe' = $exeSha; 'msix-in\SoapySDR.dll' = $dllSha; 'msix-in\softgl\opengl32.dll' = $softSha['opengl32.dll']; 'msix-in\softgl\libgallium_wgl.dll' = $softSha['libgallium_wgl.dll'] } @{ exeSha256 = $exeSha; dllSha256 = $dllSha; softglOpengl32Sha256 = $softSha['opengl32.dll']; softglGalliumSha256 = $softSha['libgallium_wgl.dll']; size = $size; buildId = $buildId; subsystem = $sub; versionLine = $line.Trim(); slintExeSha256 = $slintSha; slintDllSha256 = $slintDllSha }
+    Set-StepDone 'build' @{ 'msix-in\cascade.exe' = $exeSha; 'msix-in\SoapySDR.dll' = $dllSha; 'msix-in\softgl\opengl32.dll' = $softSha['opengl32.dll']; 'msix-in\softgl\libgallium_wgl.dll' = $softSha['libgallium_wgl.dll'] } @{ exeSha256 = $exeSha; dllSha256 = $dllSha; softglOpengl32Sha256 = $softSha['opengl32.dll']; softglGalliumSha256 = $softSha['libgallium_wgl.dll']; size = $size; buildId = $buildId; subsystem = $sub; versionLine = $line.Trim(); slintExeSha256 = $slintSha; slintDllSha256 = $slintDllSha; slintBuildId = $slintRec.BuildId }
     return 'done'
 }
 
@@ -1336,13 +1394,34 @@ function Step-Symbols {
     if (Test-Path -LiteralPath (Join-Path $RC.Verify 'symbols.json')) { $symJson = Read-JsonFile (Join-Path $RC.Verify 'symbols.json') }
     if ($null -ne $symJson) {
         $symRoot = Join-Path $RC.Repo 'symbols'
-        foreach ($rel in @($symJson['files'].Keys)) {
-            $items += @{ Local = (Join-Path $symRoot $rel); Rel = $rel.Replace('\', '/') }
-            if ($rel -like '*symmap.json.gz') { $maps += @{ Local = (Join-Path $symRoot $rel); PiName = ('cascade-' + $symJson['buildId'] + '.json.gz') } }
+        # Whose is each file? The record's top-level buildId / indexRow / files are cascade's (the shape every earlier build step
+        # wrote); every further Windows module (foxsdr-slint) has its own entry under `modules` with its own build id, row and
+        # files. The Pi's map name comes from the MODULE and the id in the map's own path (<module>.pdb\<id>\symmap.json.gz),
+        # never from cascade's id: the site keys a map by the build id inside the file, so cascade-<id> for another module's
+        # map would put the wrong file under cascade's name.
+        $modFiles = @(@{ Module = 'cascade'; Files = $symJson['files']; BuildId = $symJson['buildId']; Row = $symJson['indexRow'] })
+        if ($symJson.ContainsKey('modules')) {
+            foreach ($mn in @($symJson['modules'].Keys | Sort-Object)) {
+                if ($mn -eq 'cascade') { continue }
+                $mrec = $symJson['modules'][$mn]
+                $modFiles += @{ Module = $mn; Files = $mrec['files']; BuildId = $mrec['buildId']; Row = $mrec['indexRow'] }
+            }
         }
-        $rows += @{ BuildId = $symJson['buildId']; Row = $symJson['indexRow'] }
+        foreach ($mf in $modFiles) {
+            $mfKeys = @()
+            if ($null -ne $mf.Files) { $mfKeys = @($mf.Files.Keys) }
+            foreach ($rel in $mfKeys) {
+                $items += @{ Local = (Join-Path $symRoot $rel); Rel = $rel.Replace('\', '/') }
+                if ($rel -like '*symmap.json.gz') {
+                    $parts = $rel.Split('\')
+                    Assert-Check ($parts.Count -ge 3 -and $parts[0] -eq ($mf.Module + '.pdb') -and $parts[1] -eq $mf.BuildId) ($mf.Module + ' map matches its record in symbols.json') ($rel) ('the symbol map in the ' + $mf.Module + ' entry of verify\symbols.json is not <' + $mf.Module + '.pdb>\<the entry''s build id>\symmap.json.gz: the map is for another module or another build than the record')
+                    $maps += @{ Local = (Join-Path $symRoot $rel); PiName = ($mf.Module + '-' + $mf.BuildId + '.json.gz') }
+                }
+            }
+            $rows += @{ BuildId = $mf.BuildId; Row = $mf.Row }
+        }
     } elseif ($script:Ctx.DryRun) {
-        Write-Plan 'Windows symbols' 'verify\symbols.json is written by the build step; its files (cascade.pdb, cascade.exe, symmap.json.gz) and index row go here'
+        Write-Plan 'Windows symbols' 'verify\symbols.json is written by the build step; its files (cascade.pdb, cascade.exe, symmap.json.gz, and the same three for foxsdr-slint) and index rows go here; the Pi gets cascade-<id>.json.gz and foxsdr-slint-<id>.json.gz (foxsdr-engine.exe is not a Windows release file: not archived into the record, no Pi map)'
     } else {
         Stop-Release 'verify\symbols.json is missing: run the build step'
     }
