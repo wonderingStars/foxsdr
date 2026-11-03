@@ -36,6 +36,10 @@ public:
     void wire();
     // Builds and publishes the models from the kit's state (after kit.tick()).
     void publish(const FoxReceiverState& state);
+    // THE DISPLAY SETTINGS THE MAPS APPLY (SYSTEM > Display: Aircraft icons, Trail width, the trail style), already bounded (slintmap::mapLookOf) from the interface
+    // half's aircraftIconPx, mapTrailWidthPx and mapTrailStyle: handed in every tick, applied to every map page's compositor and targets at the next publish.
+    void setMapLook(const slintmap::MapLook& look) { look_ = look; }
+    const slintmap::MapLook& mapLook() const { return look_; }
     // The count of open pages (for the bounded run's evidence).
     std::size_t pageCount() const { return pages_.size(); }
     std::size_t openMapPages() const;
@@ -124,6 +128,7 @@ private:
 
     MainWindow& ui_;
     PluginKit& kit_;
+    slintmap::MapLook look_;                          // what the maps are drawn with: the classic window's standard until the first setMapLook
     foxsdr::slinthost::Signatures sigs_;
     std::vector<Page> pages_;
     std::shared_ptr<slint::VectorModel<PageTab>> pagesModel_;

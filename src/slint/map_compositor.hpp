@@ -28,6 +28,40 @@ namespace foxsdr::slintmap {
 // is what makes the plugin fetch it), -1 MISSING (believed for kMissingRetryComposes composes, then asked again).
 using TileSource = std::function<int(std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t>& rgb)>;
 
+// THE DISPLAY SETTINGS THE MAP APPLIES (SYSTEM > Display: "Aircraft icons", "Trail width" and the trail-style list; the interface half's
+// aircraftIconPx, mapTrailWidthPx and mapTrailStyle, core/config_halves.hpp). The bounds are the classic window's (gui/aircraft_icons.hpp
+// clampAircraftIconPx, aircraftWingspanPx, clampTrailWidthPx - that header includes imgui.h, so the numbers are copied here and
+// tests/test_slint_host_map.cpp reads the source to hold them equal): an icon is 16..96 px across (48 by default); a trail is 1 px up to the
+// WINGSPAN of the icon in force (114/128 of it, rounded: 86 px at 96), so a hand-edited config cannot draw a 1000 px aeroplane or a trail that
+// is broader than the aircraft drawing it.
+inline constexpr int kAircraftIconMinPx = 16;
+inline constexpr int kAircraftIconMaxPx = 96;
+inline constexpr int kAircraftIconDefaultPx = 48;
+inline constexpr int kTrailWidthMinPx = 1;
+inline constexpr int kTrailWidthDefaultPx = 4;
+inline constexpr float kAircraftSpanFraction = 114.0f / 128.0f;
+inline constexpr int kRibbonExtraPx = 3;                  // a ribbon is the line's width + 3 px (gui/scope_view.cpp: "the ribbon a little wider than the line")
+
+int clampAircraftIconPx(int px);
+int aircraftWingspanPx(int iconPx);
+int clampTrailWidthPx(int widthPx, int iconPx);
+
+enum class TrailStyle : int { Line = 0, Ribbon = 1 };     // AppConfig::mapTrailStyle (anything but 1 is a line, as map_view.cpp has it)
+
+// What the three settings come to once bounded: what the map is handed each publish.
+struct MapLook {
+    int iconPx = kAircraftIconDefaultPx;
+    int trailWidthPx = kTrailWidthDefaultPx;
+    TrailStyle trailStyle = TrailStyle::Line;
+    bool operator==(const MapLook& o) const { return iconPx == o.iconPx && trailWidthPx == o.trailWidthPx && trailStyle == o.trailStyle; }
+    bool operator!=(const MapLook& o) const { return !(*this == o); }
+};
+// The saved values (any ints) as the bounded look: icon 16..96, trail 1..wingspan, style 1 = ribbon and anything else a line.
+MapLook mapLookOf(int savedIconPx, int savedTrailWidthPx, int savedTrailStyle);
+// The pixels across a target of CASCADE_TRACK_* `kind` is drawn at: the look's icon size for an aircraft (kind 1), 0 (the pane's own 18 px
+// glyph) for every other kind - the settings are the AIRCRAFT icons'.
+int targetIconPx(int kind, const MapLook& look);
+
 struct Trail {
     std::vector<std::pair<double, double>> points;   // lat, lon degrees
     std::uint32_t rgba = 0xffffffffu;                // 0xRRGGBBAA
@@ -57,6 +91,12 @@ public:
     // 72 buckets of 5 degrees of bearing, km each (0 = nothing in that wedge); empty = the overlay is off.
     void setCoverage(const std::vector<double>& kmPerBucket);
     void setTrails(const std::vector<Trail>& trails);
+    // The width and the style every trail is stroked with (a trail of 2 px, as a line, until this is called). The width is bounded as the
+    // classic window bounds it for `iconPx` (clampTrailWidthPx): 1 .. the wingspan of the icon; a ribbon is kRibbonExtraPx wider than the line.
+    void setTrailLook(int widthPx, int iconPx, TrailStyle style);
+    int trailWidthPx() const;            // the bounded width (a ribbon's extra not counted)
+    TrailStyle trailStyle() const;
+    double trailStrokePx() const;        // the width the trails are stroked at: trailWidthPx(), + kRibbonExtraPx for a ribbon
 
     // Paints into `rgba` (width * height * 4, tightly packed) and returns true; returns false and touches nothing when
     // nothing changed since the last compose into a buffer of this size. A buffer of another size than setSize's is

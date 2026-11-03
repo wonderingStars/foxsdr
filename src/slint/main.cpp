@@ -1163,6 +1163,9 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
+        // THE MAP'S LOOK, from the interface half each tick (SYSTEM > Display saves it there): the aircraft icon size, the trail width and the trail style, bounded
+        // as the classic window bounds them (map_compositor.hpp mapLookOf). The kit republishes the maps only when the look changed.
+        publisher.setMapLook(foxsdr::slintmap::mapLookOf(duties.interfaceHalf().aircraftIconPx, duties.interfaceHalf().mapTrailWidthPx, duties.interfaceHalf().mapTrailStyle));
         publisher.publish(state);
         signalBank.publish(state);
         systemBank.publish(state);

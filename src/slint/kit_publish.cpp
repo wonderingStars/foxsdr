@@ -445,6 +445,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
         s.comp.setSize(s.w, s.h);
         if (pg != nullptr) { s.comp.setView(pg->centreLat, pg->centreLon, pg->spanDeg); }
         s.comp.setLayers(!tiles, true);
+        s.comp.setTrailLook(look_.trailWidthPx, look_.iconPx, look_.trailStyle);   // the Display settings: trail width (to the wingspan) and style
         s.comp.setHome(home, state.rxLatDeg, state.rxLonDeg);
         if (s.coverageOn && home) {
             std::vector<double> km(static_cast<std::size_t>(cascade::gui::CoverageMap::kBuckets), 0.0);
@@ -504,6 +505,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
                 mt.followed = pg != nullptr && pg->followedId == tr.t.id;
                 mt.estimated = cascade::core::trackIsEstimated(tr.t);
                 mt.emergency = (tr.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u;
+                mt.size = static_cast<float>(slintmap::targetIconPx(static_cast<int>(tr.t.kind), look_));   // the Display setting's icon size: an aircraft's only
                 if (s.altColours && tr.t.kind == CASCADE_TRACK_AIRCRAFT && std::isfinite(tr.t.altM)) {
                     const auto& band = cascade::gui::altBandStyle(cascade::gui::altitudeBandIndex(tr.t.altM));
                     mt.color = slint::Color::from_argb_uint8(255, band.r, band.g, band.b);
@@ -598,6 +600,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     m.rx_text = ss(home ? "RX " + fmt("%.4f", state.rxLatDeg) + " " + fmt("%.4f", state.rxLonDeg) : std::string(cascade::i18n::tr("no receiver position: Set RX here, then click the map")));
     sig += std::string(m.count_text) + std::string(m.following) + std::string(m.coverage_status) + (s.pickArmed ? "P" : "") + s.hoverText + std::string(m.scale_text) + std::string(m.attribution);
     sig += std::to_string(s.coverageOn) + std::to_string(s.trailsOn) + std::to_string(s.altColours) + std::to_string(s.onScreenOnly) + std::to_string(s.sortKey) + std::to_string(s.sortAscending);
+    sig += "L" + std::to_string(look_.iconPx) + "." + std::to_string(look_.trailWidthPx) + "." + std::to_string(static_cast<int>(look_.trailStyle));   // the icon size is in the targets: a change of look is a change of page
     t.map = m;
 }
 

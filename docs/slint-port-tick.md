@@ -276,8 +276,8 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 157 | Tuner switches | checkbox "Tuner switches" | PRESENT | the counter menu's Show tuner switches |
 | 158 | Enlarge every reading | checkbox | DEFERRED | the counter scale is the interface-size setting of phase 2; the items are in the menu and log their request |
 | 159 | Min dB / Max dB | slider x2 | PRESENT | the Display block's Floor / Ceiling sliders in the trace and marker menus |
-| 160 | Aircraft icons | slider | DEFERRED | the SYSTEM > Display body is a phase-3 bank |
-| 161 | Trail width | slider () | DEFERRED | the SYSTEM > Display body is a phase-3 bank |
+| 160 | Aircraft icons | slider | PRESENT | the slider is the SYSTEM Display body's (row 1397, saved as aircraftIconPx); the value is applied in the map: main.cpp hands slintmap::mapLookOf(interface half: aircraftIconPx, mapTrailWidthPx, mapTrailStyle) to KitPublisher::setMapLook every tick; kit_publish.cpp fillMap passes it to TileCompositor::setTrailLook and sets MapTarget.size of every aircraft; map.slint MapPane draws the icon, its rings, hit area and label at that size: 16..96 px across, 48 by default (gui/aircraft_icons.hpp bounds, copied in map_compositor.hpp and read against the source by test_slint_host_map) |
+| 161 | Trail width | slider () | PRESENT | the slider is the SYSTEM Display body's (row 1398, saved as mapTrailWidthPx); the value is applied in the map: main.cpp hands slintmap::mapLookOf(interface half: aircraftIconPx, mapTrailWidthPx, mapTrailStyle) to KitPublisher::setMapLook every tick; kit_publish.cpp fillMap passes it to TileCompositor::setTrailLook and sets MapTarget.size of every aircraft; map.slint MapPane draws the icon, its rings, hit area and label at that size (TileCompositor strokes the trails at the width, half-width = width / 2): 1 px up to the wingspan of the icon in force, 86 px at 96 |
 | 162 | Meter style (x2) | right-click menu on each deck meter | DEFERRED | no deck meter on Workbench |
 | 163 | Band plan | checkbox + size/colour/region combos | PRESENT | the toolbar's Band plan key; size / colour / region are the Display body of phase 3 |
 
@@ -609,8 +609,8 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | 361 | Coverage | checkbox | PRESENT | the Coverage checkbox |
 | 362 | Trails | checkbox | PRESENT | the Trails checkbox |
 | 363 | Altitude colours | checkbox | PRESENT | the Altitude colours checkbox, disabled without Trails |
-| 364 | Trail style | dropdown/combo | DEFERRED | trail style: the compositor draws 2 px lines; the setting lives in the interface half (config) with the INTERFACE_CONFIG work |
-| 365 | Trail width | slider | DEFERRED | trail width: the compositor draws 2 px lines; the setting lives in the interface half (config) with the INTERFACE_CONFIG work |
+| 364 | Trail style | dropdown/combo | DEFERRED | the SAVED style (mapTrailStyle: 0 line, 1 ribbon, the classic map page writes it) is applied by the map - main.cpp -> KitPublisher::setMapLook -> fillMap -> TileCompositor::setTrailLook (docs 6.44) - but no trail-style dropdown is drawn in the Slint window (the kit map page has no menu for it, row 1713): applied, not settable |
+| 365 | Trail width | slider | PRESENT | the saved width (mapTrailWidthPx) is applied by TileCompositor::setTrailLook in map_compositor.cpp (main.cpp -> KitPublisher::setMapLook -> kit_publish.cpp fillMap), half-width = width / 2, bounded 1 .. the wingspan of the icon in force (clampTrailWidthPx); the slider itself is the SYSTEM Display body's (row 1398) |
 | 366 | Reset coverage | button (small) | PRESENT | the Reset coverage key |
 | 367 | Coverage status | readout | PRESENT | the coverage status sentence |
 | 368 | GPS position | text field, combo, buttons | DEFERRED | the GPS position row: the serial-port page is a System bank page (later) |
@@ -2515,8 +2515,8 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1710 | Coverage | checkbox | RELOCATED | kit map page (6.38) row 361: the Coverage checkbox |
 | 1711 | Trails | checkbox | RELOCATED | kit map page (6.38) row 362: the Trails checkbox |
 | 1712 | Altitude colours | checkbox | RELOCATED | kit map page (6.38) row 363: the Altitude colours checkbox, disabled without Trails |
-| 1713 | Trail style | dropdown/combo | DEFERRED | kit map page row 364 stays deferred: the compositor draws one line style; not found in pages.slint |
-| 1714 | Trail width | slider | DEFERRED | kit map page row 365 stays deferred: no trail width slider on the page; the same setting is the SYSTEM Display body's Trail width (row 1398) |
+| 1713 | Trail style | dropdown/combo | DEFERRED | the saved style is applied by the map (kit map page row 364), but no trail-style dropdown is drawn on the page or in the Display body; not found in pages.slint |
+| 1714 | Trail width | slider | DEFERRED | the saved width is applied by the map (kit map page row 365); no trail width slider is drawn on the page; the same setting is the SYSTEM Display body's Trail width (row 1398) |
 | 1715 | Reset coverage | button (small) | RELOCATED | kit map page (6.38) row 366: the Reset coverage key |
 | 1716 | Coverage readout | readout | RELOCATED | kit map page (6.38) row 367: the coverage status sentence |
 | 1717 | GPS row | (shared GPS block) | RELOCATED | the kit map page draws no GPS row (6.38 row 368); the row lives in the SYSTEM bank's Serial ports (row 1442) and in the Radar fold (rows 1566 to 1572) |
@@ -2876,13 +2876,13 @@ Subtotal: PRESENT 69, RELOCATED 35, DEFERRED 84, total 188 (rows 1776 to 1963).
 
 | Status | Rows |
 |---|---|
-| PRESENT | 1451 |
+| PRESENT | 1454 |
 | RELOCATED | 198 |
-| DEFERRED | 314 |
+| DEFERRED | 311 |
 | TODO (unclassified) | 0 |
 | Total | 1963 |
 
-Phase 2 alone: PRESENT 888, RELOCATED 34, DEFERRED 13, total 935.
+Phase 2 alone: PRESENT 890, RELOCATED 34, DEFERRED 11, total 935.
 
 Phase 3, the SIGNAL bank alone: PRESENT 122, RELOCATED 17, DEFERRED 37, total 176.
 

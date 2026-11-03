@@ -9,6 +9,7 @@
 // degrees came out unturned). The heading is held by what the icon is bound to (MapPane.icon-turn, read below); a desktop renderer is needed to see an
 // aircraft turn. Also here: the legend, the scale and the targets follow their models (rows added, moved and removed), each kind has a glyph of its own,
 // and a pane that is switched off acts on nothing.
+// The Display setting "Aircraft icons" (MapTarget.size): an aircraft drawn at 16..96 px, 48 the standard, its rings, hit area and label scaling with it.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "render_harness.hpp"
 #include "test_check.hpp"
@@ -183,6 +184,9 @@ int main() {
     // =============================== the sheet, at rest ===============================
     Frame f = render(ui, kW, kH);
     CHECK(f.width == kW && f.height == kH);
+    // a pane that is laid out at its size on creation reports it once (without it the host never learns the size of a map page opened before the first resize,
+    // composes nothing and projects every target through the default view: the Display settings could not show)
+    CHECK(ui->get_resizes() >= 1 && std::lround(ui->get_resized_w()) == kW && std::lround(ui->get_resized_h()) == kH);
     f.savePng(shotDir() + "map-specimen.png");
     zoomed(f, 40, 36, 330, 190, 3).savePng(shotDir() + "map-specimen-targets.png");   // the six targets, three times life size
 
@@ -804,6 +808,90 @@ int main() {
         Frame shrunk = render(ui, kW, kH);
         CHECK(inkAround(shrunk, Pt{0.80 * kW, 0.80 * kH}, 9) == 0);
         CHECK(ringNear(shrunk, kT[0].x, kT[0].y, 8.0, 24.0, kAccent, 40) == 0);     // the selected aircraft was the first row: gone
+        ui->set_targets(sixTargets());
+        render(ui, kW, kH);
+    }
+
+    // =============================== the Display setting "Aircraft icons": the size an aircraft is drawn at ===============================
+    {
+        // one aircraft at (200, 150), no label, no ring: clear of the picture's own column (x = 300) and row (y = 250). size: 0 is the pane's own 18 px glyph,
+        // 48 the Display default, 96 the largest; a saved 200 is held to 96 and a 3 to 16 (the pane bounds it as the host does).
+        const Pt at{200, 150};
+        const auto aircraft = [&](float size, bool selected = false, int kind = 1) {
+            MapTarget t{};
+            t.id = "ICON";
+            t.x = static_cast<float>(at.x / kW);
+            t.y = static_cast<float>(at.y / kH);
+            t.heading = -1.0f;
+            t.kind = kind;
+            t.alpha = 1.0f;
+            t.selected = selected;
+            t.color = slint::Color::from_rgb_uint8(0xff, 0xff, 0xff);
+            t.size = size;
+            ui->set_targets(std::make_shared<slint::VectorModel<MapTarget>>(std::vector<MapTarget>{t}));
+            return render(ui, kW, kH);
+        };
+        // The white glyph's box and pixel count (the ring, when there is one, is not white: it is the accent).
+        const auto glyph = [&](const Frame& fr) { return boxOf(fr, 100, 60, 300, 240, rgb(0xffffff), 60); };
+        const Box def = glyph(aircraft(0.0f));
+        const Box mid = glyph(aircraft(48.0f));
+        const Box big = glyph(aircraft(96.0f));
+        const Box tiny = glyph(aircraft(16.0f));
+        std::printf("  aircraft glyph: size 0 -> %d x %d px (%d lit), 16 -> %d x %d, 48 -> %d x %d (%d lit), 96 -> %d x %d (%d lit)\n", def.x1 - def.x0 + 1, def.y1 - def.y0 + 1, def.n,
+                    tiny.x1 - tiny.x0 + 1, tiny.y1 - tiny.y0 + 1, mid.x1 - mid.x0 + 1, mid.y1 - mid.y0 + 1, mid.n, big.x1 - big.x0 + 1, big.y1 - big.y0 + 1, big.n);
+        const auto wide = [](const Box& b) { return b.x1 - b.x0 + 1; };
+        const auto tall = [](const Box& b) { return b.y1 - b.y0 + 1; };
+        // the glyph draws across 20/24 of its square (map-aircraft.svg: the wings run from 2 to 22 of 24), centred on the target
+        CHECK(wide(mid) >= 38 && wide(mid) <= 42 && wide(big) >= 78 && wide(big) <= 82);
+        CHECK(wide(def) >= 14 && wide(def) <= 17 && wide(tiny) >= 12 && wide(tiny) <= 15);
+        // a 96 px icon is measurably larger than the 48 px default, which is larger than the pane's 18 px glyph: wider, taller, and four times the ink
+        CHECK(wide(big) > wide(mid) * 19 / 10 && tall(big) > tall(mid) * 19 / 10);
+        CHECK(big.n > mid.n * 3 && mid.n > def.n * 4);
+        CHECK(wide(mid) > wide(def) * 2 && wide(def) >= wide(tiny) && wide(tiny) < wide(mid) / 2);
+        CHECK(std::abs((big.x0 + big.x1) / 2 - 200) <= 1 && std::abs((big.y0 + big.y1) / 2 - 150) <= 2);   // centred on the target at any size
+        // the bounds: a saved 200 draws as 96, a saved 3 (or a negative) as 16
+        const Frame f200 = aircraft(200.0f);
+        const Frame f96 = aircraft(96.0f);
+        const Frame f3 = aircraft(3.0f);
+        const Frame f16 = aircraft(16.0f);
+        const Frame fneg = aircraft(-40.0f);
+        const Frame f0 = aircraft(0.0f);
+        CHECK(f200.px == f96.px);
+        CHECK(f3.px == f16.px);
+        CHECK(fneg.px == f0.px || fneg.px == f16.px);                              // a size below 1 is "none": the pane's own glyph, never a negative one
+        // the other kinds ignore it: a vessel with a size of 96 is the 18 px vessel
+        const Frame vessel = aircraft(96.0f, false, 2);
+        const Frame vessel0 = aircraft(0.0f, false, 2);
+        CHECK(glyph(vessel).n > def.n / 2 && wide(glyph(vessel0)) <= 17);
+        // the rings and the hit area scale with the icon: the selected ring stands 6 px off the icon's box, the box is the icon + 2 px
+        const Frame sel = aircraft(96.0f, true);
+        CHECK(ringNear(sel, at.x, at.y, 52.0, 56.0, kAccent, 40) >= 280);          // r = 49 + 6 = 55 (the 2 px ring), round
+        CHECK(ringNear(sel, at.x, at.y, 14.0, 17.5, kAccent, 40) == 0);           // and not at the 16 px of the 18 px icon
+        const int before = ui->get_target_clicks();
+        aircraft(96.0f);
+        click(win, static_cast<float>(at.x + 44.0), static_cast<float>(at.y - 40.0));   // inside the 98 px box, outside the 20 px one
+        CHECK(ui->get_target_clicks() == before + 1 && ui->get_last_target() == 0);
+        click(win, static_cast<float>(at.x + 52.0), static_cast<float>(at.y));
+        CHECK(ui->get_target_clicks() == before + 1);                              // outside it
+        aircraft(0.0f);
+        click(win, static_cast<float>(at.x + 44.0), static_cast<float>(at.y - 40.0));
+        CHECK(ui->get_target_clicks() == before + 1);                              // the 18 px icon's box is 20 px: unchanged
+        // the label keeps clear of the bigger icon
+        {
+            MapTarget t{};
+            t.id = "ICON";
+            t.x = static_cast<float>(at.x / kW);
+            t.y = static_cast<float>(at.y / kH);
+            t.heading = -1.0f;
+            t.kind = 1;
+            t.label = "LBL123";
+            t.alpha = 1.0f;
+            t.color = slint::Color::from_rgb_uint8(0xff, 0xff, 0xff);
+            t.size = 96.0f;
+            ui->set_targets(std::make_shared<slint::VectorModel<MapTarget>>(std::vector<MapTarget>{t}));
+            const Frame lab = render(ui, kW, kH);
+            CHECK(regionInk(lab, 200 + 41, 144, 200 + 51, 157) == 0 && regionInk(lab, 200 + 53, 140, 200 + 120, 160) > 20);   // the glyph ends 40 px out; the label starts 53 out (the 18 px icon's 9 + 5 gap, from the 48 px half)
+        }
         ui->set_targets(sixTargets());
         render(ui, kW, kH);
     }

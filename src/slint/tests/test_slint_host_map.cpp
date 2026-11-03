@@ -12,6 +12,9 @@
 //   F. compose() returns false when nothing changed and true after any setter, and leaves the buffer alone
 //   G. the coverage wedges, the trails (width, dash 6 on 4 off, closed, translucent, across the antimeridian)
 //   H. the figures: metresPerPixel, the clamps, a place that is not a place, and the time of a 1024 x 768 compose
+//   I. the display settings the map applies (SYSTEM > Display: Aircraft icons, Trail width, the trail-style list): the width a trail paints at, the two
+//      styles told apart, the classic window's bounds (icon 16..96, trail 1..wingspan, 0 paints as 1), the dash that scales with the width, the
+//      icon size handed to a target, and the copied constants read against gui/aircraft_icons.hpp
 // It also writes a few pictures (slint-shots/map-compositor-*.png, or $FOXSDR_SLINT_SHOTS) for a person to look at.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "map_compositor.hpp"
@@ -32,6 +35,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -1287,6 +1291,156 @@ void sectionTrails() {
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------
+// I. the display settings the map applies
+// ----------------------------------------------------------------------------------------------------------------------------
+std::string slurp(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+// <repo>/src/<rel>, from this file's own path (.../src/slint/tests/test_slint_host_map.cpp).
+std::string srcPath(const char* rel) {
+    std::string p = __FILE__;
+    for (int i = 0; i < 3; ++i) {
+        const std::size_t cut = p.find_last_of("/\\");
+        if (cut == std::string::npos) { break; }
+        p.resize(cut);
+    }
+    return p + "/" + rel;
+}
+bool has(const std::string& hay, const char* needle) { return hay.find(needle) != std::string::npos; }
+
+// How many pixels thick the painted trail is across column x between rows y0 and y1: the sum of each pixel's coverage of `ink` over the sea.
+double thicknessAt(const Pic& p, int x, int y0, int y1, const Rgb& ink) {
+    double sum = 0.0;
+    for (int y = y0; y < y1; ++y) { sum += static_cast<double>(p.at(x, y).r - kSea.r) / static_cast<double>(ink.r - kSea.r); }
+    return sum;
+}
+
+void sectionTrailLook() {
+    std::printf("I. the display settings the map applies\n");
+    const auto lonAt = [](double x) { return (x - 256.0) / 10.0; };
+    const auto latAt = [](double y) { return (192.0 - y) / 10.0; };
+    Trail line;                                                              // y = 100 from x = 50 to 150, as G has it
+    line.points = {{latAt(100.0), lonAt(50.0)}, {latAt(100.0), lonAt(150.0)}};
+    line.rgba = 0xf5a524ffu;
+    TileCompositor c;
+    Pic p(512, 384);
+    c.setView(0.0, 0.0, 51.2);
+    c.setLayers(false, false);
+    c.setTrails({line});
+    CHECK(p.compose(c));
+    // before anything is set, a trail is the 2 px line it always was
+    CHECK(c.trailWidthPx() == 2 && c.trailStyle() == TrailStyle::Line && c.trailStrokePx() == 2.0);
+    CHECK(std::fabs(thicknessAt(p, 100, 30, 170, kOrange) - 2.0) < 0.1);
+
+    // the width is what paints: 4 (the saved default), 9 (odd: the edges are half covered), 86 (the largest at a 96 px icon) - across a straight segment
+    for (int w : {1, 2, 4, 9, 30, 86}) {
+        c.setTrailLook(w, 96, TrailStyle::Line);
+        CHECK(c.compose(p.data(), p.w, p.h));
+        const double got = thicknessAt(p, 100, 30, 170, kOrange);
+        if (std::fabs(got - w) >= 0.15) { std::printf("  width %d painted %.2f px thick\n", w, got); }
+        CHECK(std::fabs(got - w) < 0.15);
+        CHECK(c.trailWidthPx() == w);
+    }
+    // 86 px is measurably wider than the 2 px default, and the painted pixels grow with it
+    c.setTrailLook(2, 48, TrailStyle::Line);
+    CHECK(c.compose(p.data(), p.w, p.h));
+    const int inkDefault = p.count(kOrange, 0, 0, 512, 384, 40);
+    c.setTrailLook(86, 96, TrailStyle::Line);
+    CHECK(c.compose(p.data(), p.w, p.h));
+    const int inkWide = p.count(kOrange, 0, 0, 512, 384, 40);
+    CHECK(inkWide > inkDefault * 20);
+    CHECK(near(p.at(100, 60), kOrange, 2) && near(p.at(100, 140), kOrange, 2) && near(p.at(100, 50), kSea, 0) && near(p.at(100, 150), kSea, 0));
+
+    // the bounds are the classic window's: a trail wider than the wingspan of the icon in force paints at the wingspan, 0 and below paint at 1
+    struct Bound { int saved, icon, painted; };
+    for (const Bound& b : {Bound{200, 96, 86}, Bound{86, 96, 86}, Bound{87, 96, 86}, Bound{40, 16, 14}, Bound{20, 48, 20}, Bound{50, 48, 43},
+                           Bound{0, 48, 1}, Bound{-7, 48, 1}, Bound{100, 200, 86}, Bound{100, 3, 14}}) {
+        c.setTrailLook(b.saved, b.icon, TrailStyle::Line);
+        c.compose(p.data(), p.w, p.h);                                       // (false when the bounded look is the one before: the picture stands)
+        const double got = thicknessAt(p, 100, 20, 180, kOrange);
+        if (c.trailWidthPx() != b.painted || std::fabs(got - b.painted) >= 0.15) { std::printf("  saved %d at icon %d: width %d, painted %.2f, wanted %d\n", b.saved, b.icon, c.trailWidthPx(), got, b.painted); }
+        CHECK(c.trailWidthPx() == b.painted);
+        CHECK(std::fabs(got - b.painted) < 0.15);
+    }
+
+    // the two styles are not one picture: a ribbon is the line's width + 3 px, the same path in the same colour
+    c.setTrailLook(8, 96, TrailStyle::Line);
+    Pic lineShot(512, 384), ribbonShot(512, 384);
+    CHECK(lineShot.compose(c));
+    c.setTrailLook(8, 96, TrailStyle::Ribbon);
+    CHECK(c.trailStyle() == TrailStyle::Ribbon && c.trailWidthPx() == 8 && c.trailStrokePx() == 11.0);
+    CHECK(ribbonShot.compose(c));
+    CHECK(std::fabs(thicknessAt(lineShot, 100, 30, 170, kOrange) - 8.0) < 0.15);
+    CHECK(std::fabs(thicknessAt(ribbonShot, 100, 30, 170, kOrange) - 11.0) < 0.15);
+    int differ = 0;
+    for (std::size_t i = 0; i < lineShot.px.size(); i += 4) { if (lineShot.px[i] != ribbonShot.px[i]) { ++differ; } }
+    CHECK(differ > 250);                                                     // 3 rows of 100 and the longer ends
+    savePng(lineShot, "map-compositor-trail-line-8px.png");
+    savePng(ribbonShot, "map-compositor-trail-ribbon-8px.png");
+    // ... and the picture is the line's again when the style goes back; setting the same look is no change (compose says so)
+    c.setTrailLook(8, 96, TrailStyle::Line);
+    CHECK(c.compose(p.data(), p.w, p.h));
+    CHECK(p.px == lineShot.px);
+    c.setTrailLook(8, 96, TrailStyle::Line);
+    CHECK(!c.compose(p.data(), p.w, p.h));
+    // a ribbon at the wingspan is 3 px over it (the scope's rule: the width bounded first, the ribbon added after)
+    c.setTrailLook(500, 96, TrailStyle::Ribbon);
+    CHECK(c.trailWidthPx() == 86 && c.trailStrokePx() == 89.0);
+    // a style that is not 1 is a line (map_view.cpp: trailStyle_ != 1)
+    CHECK(mapLookOf(48, 4, 0).trailStyle == TrailStyle::Line && mapLookOf(48, 4, 1).trailStyle == TrailStyle::Ribbon);
+    CHECK(mapLookOf(48, 4, 2).trailStyle == TrailStyle::Line && mapLookOf(48, 4, -1).trailStyle == TrailStyle::Line);
+
+    // a dash scales with the width, or a 6 px dash with caps of 10 px would be a solid bar: 20 px wide, the dash is 60 on and 40 off
+    Trail dashed = line;
+    dashed.dashed = true;
+    c.setTrails({dashed});
+    c.setTrailLook(20, 96, TrailStyle::Line);
+    CHECK(c.compose(p.data(), p.w, p.h));
+    CHECK(near(p.at(80, 100), kOrange, 3) && near(p.at(130, 100), kSea, 0) && near(p.at(130, 95), kSea, 0));
+    // while a 2 px dashed trail is the 6 on, 4 off it was (G holds the pixels)
+    c.setTrailLook(2, 96, TrailStyle::Line);
+    CHECK(c.compose(p.data(), p.w, p.h));
+    CHECK(near(p.at(52, 100), kOrange, 3) && near(p.at(57, 100), kSea, 0));
+    // a wide translucent trail is composited once: it is not darker at its joint
+    Trail vee;
+    vee.points = {{latAt(300.0), lonAt(50.0)}, {latAt(250.0), lonAt(80.0)}, {latAt(300.0), lonAt(110.0)}};
+    vee.rgba = 0xf5a52480u;
+    c.setTrails({vee});
+    c.setTrailLook(20, 96, TrailStyle::Ribbon);
+    CHECK(c.compose(p.data(), p.w, p.h));
+    const Rgb half = over(kOrange, 128.0 / 255.0, kSea);
+    int brightest = 0;
+    for (int y = 200; y < 340; ++y) { for (int x = 20; x < 140; ++x) { brightest = std::max(brightest, p.at(x, y).r); } }
+    CHECK(brightest <= half.r + 2 && brightest >= half.r - 2);
+
+    // what a target is drawn at: the icon size for an aircraft, nothing (the pane's own glyph) for any other kind
+    const MapLook look = mapLookOf(96, 86, 1);
+    CHECK(targetIconPx(1, look) == 96 && targetIconPx(2, look) == 0 && targetIconPx(3, look) == 0 && targetIconPx(4, look) == 0 && targetIconPx(0, look) == 0);
+    CHECK(targetIconPx(1, MapLook{}) == 48);
+    // the icon is bounded 16..96, and the trail by the BOUNDED icon: a saved 200 px icon is 96, a saved 5 is 16
+    CHECK(mapLookOf(200, 86, 0).iconPx == 96 && mapLookOf(5, 1, 0).iconPx == 16 && mapLookOf(48, 4, 0).iconPx == 48 && mapLookOf(-3, 4, 0).iconPx == 16);
+    CHECK(mapLookOf(200, 200, 0).trailWidthPx == 86 && mapLookOf(200, 90, 0).trailWidthPx == 86 && mapLookOf(5, 90, 0).trailWidthPx == 14);
+    CHECK(mapLookOf(48, 0, 0).trailWidthPx == 1 && mapLookOf(48, -4, 0).trailWidthPx == 1 && mapLookOf(48, 4, 0).trailWidthPx == 4);
+    const MapLook want96{96, 86, TrailStyle::Ribbon};
+    CHECK(mapLookOf(96, 86, 1) == want96 && mapLookOf(96, 86, 1) != MapLook{});
+    CHECK(clampAircraftIconPx(200) == 96 && clampAircraftIconPx(16) == 16 && clampAircraftIconPx(15) == 16 && aircraftWingspanPx(96) == 86 && aircraftWingspanPx(48) == 43 && aircraftWingspanPx(16) == 14);
+    CHECK(clampTrailWidthPx(86, 96) == 86 && clampTrailWidthPx(87, 96) == 86 && clampTrailWidthPx(0, 96) == 1);
+    // the copied constants are the classic window's (gui/aircraft_icons.hpp includes imgui.h, so they are copies and this reads the source)
+    const std::string ic = slurp(srcPath("gui/aircraft_icons.hpp"));
+    CHECK(has(ic, "kAircraftIconMinPx = 16;") && has(ic, "kAircraftIconMaxPx = 96;") && has(ic, "kAircraftIconDefaultPx = 48;"));
+    CHECK(has(ic, "kTrailWidthMinPx = 1;") && has(ic, "kTrailWidthDefaultPx = 4;") && has(ic, "kAircraftSpanFraction = 114.0f / 128.0f;"));
+    CHECK(has(ic, "static_cast<float>(clampAircraftIconPx(iconPx)) *") && has(ic, "kAircraftSpanFraction +") && has(ic, "0.5f);"));
+    CHECK(kAircraftIconMinPx == 16 && kAircraftIconMaxPx == 96 && kAircraftIconDefaultPx == 48 && kTrailWidthMinPx == 1 && kTrailWidthDefaultPx == 4);
+    const std::string mv = slurp(srcPath("gui/map_view.cpp"));
+    CHECK(has(mv, "if (trailStyle_ != 1) {"));                               // a line unless it is 1
+    const std::string sv = slurp(srcPath("gui/scope_view.cpp"));
+    CHECK(has(sv, "(optTrail_ == 2 ? w + 3.0f : w)"));                       // the ribbon's extra 3 px
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------
 // H. the figures, the clamps, and the time
 // ----------------------------------------------------------------------------------------------------------------------------
 void sectionFigures() {
@@ -1421,6 +1575,7 @@ int main() {
     sectionDirty();
     sectionWedges();
     sectionTrails();
+    sectionTrailLook();
     sectionFigures();
     return testSummary("test_slint_host_map");
 }

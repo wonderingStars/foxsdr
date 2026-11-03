@@ -83,7 +83,6 @@ constexpr long kMaxTilesPerAxis = 64;                     // ImGui's cap (it kee
 constexpr std::uint32_t kMaxZoomLevel = 24;               // x and y stay inside the 29 bits of the cache key
 constexpr double kTileBudgetBytes = 96.0 * 1024.0 * 1024.0;
 constexpr std::size_t kMaxMissing = 8192;                 // MISSING answers remembered (they hold no pixels, only a key and a frame)
-constexpr double kTrailHalfWidth = 1.0;                   // trails are 2 px wide
 constexpr double kDashOn = 6.0;
 constexpr double kDashOff = 4.0;
 
@@ -706,6 +705,8 @@ struct TileCompositor::Impl {
     double homeLat = 0.0, homeLon = 0.0;
     std::vector<double> coverage;
     std::vector<Trail> trails;
+    int trailPx = 2;                                   // the bounded width (a trail of 2 px, a line, until setTrailLook)
+    TrailStyle trailStyle = TrailStyle::Line;
 
     // ---- the state ----
     bool dirty = true;
@@ -1113,6 +1114,7 @@ struct TileCompositor::Impl {
 
     // ---- the trails ----
     void drawTrails(const Frame& f, const View& v) {
+        const double trailStrokePx = static_cast<double>(trailPx) + (trailStyle == TrailStyle::Ribbon ? kRibbonExtraPx : 0);
         Raster raster(f, scratch);
         std::vector<double> ux, uy, sx;
         for (const Trail& t : trails) {
@@ -1146,13 +1148,17 @@ struct TileCompositor::Impl {
             const double halfSpan = v.span * 0.5;
             const int kLo = static_cast<int>(std::clamp(std::ceil((-halfSpan - uMax) / 360.0), -4.0, 4.0));
             const int kHi = static_cast<int>(std::clamp(std::floor((halfSpan - uMin) / 360.0), -4.0, 4.0));
-            const Dash dash = t.dashed ? Dash{kDashOn, kDashOff} : Dash{};
+            // The width is the Display setting's (setTrailLook). A dash is a capsule, its caps as wide as the line is, so the pattern grows with the
+            // half-width past 1 px (a 6 px dash with 43 px caps would be a solid bar): 6 on, 4 off at the 2 px default, 60 on, 40 off at 20 px.
+            const double hw = trailStrokePx * 0.5;
+            const double dashScale = std::max(1.0, hw);
+            const Dash dash = t.dashed ? Dash{kDashOn * dashScale, kDashOff * dashScale} : Dash{};
             for (int k = kLo; k <= kHi; ++k) {
                 sx.resize(ux.size());
                 for (std::size_t i = 0; i < ux.size(); ++i) { sx[i] = v.xOfDelta(ux[i] + 360.0 * k); }
                 if (!boxTouchesPicture(sx.data(), uy.data(), sx.size(), f.w, f.h, 3.0)) { continue; }
                 raster.begin();
-                strokePath(raster, sx.data(), uy.data(), sx.size(), t.closed, kTrailHalfWidth, dash);
+                strokePath(raster, sx.data(), uy.data(), sx.size(), t.closed, hw, dash);
                 raster.end(colour, alpha);
             }
         }
@@ -1371,5 +1377,47 @@ double TileCompositor::centreLatDeg() const { return impl_->centreLat; }
 double TileCompositor::centreLonDeg() const { return impl_->centreLon; }
 double TileCompositor::spanDeg() const { return impl_->span; }
 bool TileCompositor::mercator() const { return impl_->mercator; }
+
+// ------------------------------------------------------------------------------------------------------------------------
+// the display settings the map applies
+// ------------------------------------------------------------------------------------------------------------------------
+int clampAircraftIconPx(int px) {
+    if (px < kAircraftIconMinPx) { return kAircraftIconMinPx; }
+    if (px > kAircraftIconMaxPx) { return kAircraftIconMaxPx; }
+    return px;
+}
+
+int aircraftWingspanPx(int iconPx) {
+    const int span = static_cast<int>(static_cast<float>(clampAircraftIconPx(iconPx)) * kAircraftSpanFraction + 0.5f);
+    return span < kTrailWidthMinPx ? kTrailWidthMinPx : span;
+}
+
+int clampTrailWidthPx(int widthPx, int iconPx) {
+    if (widthPx < kTrailWidthMinPx) { return kTrailWidthMinPx; }
+    const int span = aircraftWingspanPx(iconPx);
+    return widthPx > span ? span : widthPx;
+}
+
+MapLook mapLookOf(int savedIconPx, int savedTrailWidthPx, int savedTrailStyle) {
+    MapLook look;
+    look.iconPx = clampAircraftIconPx(savedIconPx);
+    look.trailWidthPx = clampTrailWidthPx(savedTrailWidthPx, look.iconPx);
+    look.trailStyle = savedTrailStyle == 1 ? TrailStyle::Ribbon : TrailStyle::Line;
+    return look;
+}
+
+int targetIconPx(int kind, const MapLook& look) { return kind == 1 ? look.iconPx : 0; }
+
+void TileCompositor::setTrailLook(int widthPx, int iconPx, TrailStyle style) {
+    const int bounded = clampTrailWidthPx(widthPx, iconPx);
+    if (style != TrailStyle::Ribbon) { style = TrailStyle::Line; }
+    if (bounded == impl_->trailPx && style == impl_->trailStyle) { return; }
+    impl_->trailPx = bounded;
+    impl_->trailStyle = style;
+    impl_->dirty = true;
+}
+int TileCompositor::trailWidthPx() const { return impl_->trailPx; }
+TrailStyle TileCompositor::trailStyle() const { return impl_->trailStyle; }
+double TileCompositor::trailStrokePx() const { return static_cast<double>(impl_->trailPx) + (impl_->trailStyle == TrailStyle::Ribbon ? kRibbonExtraPx : 0); }
 
 }  // namespace foxsdr::slintmap

@@ -33,7 +33,8 @@ import { TooltipFace } from "tooltip.slint";
 
 // x, y: fractions of the pane (0..1, a little outside is drawn, further is not); heading: degrees clockwise from north, -1 for none (a
 // number, never NaN); kind: CASCADE_TRACK_* (1 aircraft, 2 vessel, 3 station, 4 satellite, anything else unknown); alpha 0..1 (the
-// host's fade); color: the host's colour for it (an altitude band, a kind).
+// host's fade); color: the host's colour for it (an altitude band, a kind); size: the pixels across the icon is drawn at, 0 for the pane's own 18 px
+// (the host hands an aircraft the Display setting's "Aircraft icons" size, 16..96; the pane holds it to that range itself).
 export struct MapTarget {
     id: string,
     x: float,
@@ -47,6 +48,7 @@ export struct MapTarget {
     estimated: bool,
     emergency: bool,
     color: color,
+    size: float,
 }
 
 export struct LegendRow {
@@ -124,6 +126,8 @@ export component MapPane inherits Rectangle {
     out property <bool> tip-shown;
     // the angle the icon of a target is bound to (degrees, 0 for none): what a screen reader or a test can read where pixels cannot
     public pure function icon-turn(heading: float) -> angle { return heading >= 0 ? heading * 1deg : 0deg; }
+    // half the box of a target of this `size` (10 px for the pane's own 18 px glyph): where the tip stands off it
+    pure function half-cell(size: float) -> length { return size > 0 ? min(96px, max(16px, size * 1px)) / 2 + 1px : 10px; }
 
     background: Theme.well;
     clip: true;
@@ -243,6 +247,7 @@ export component MapPane inherits Rectangle {
             root.set-hover(-1);
         }
     }
+    init => { root.report-size(); }
     changed width => { root.report-size(); }
     changed height => { root.report-size(); }
 
@@ -284,10 +289,15 @@ export component MapPane inherits Rectangle {
 
     // ================= the targets =================
     for t[i] in root.targets : Rectangle {
-        x: t.x * root.width - 10px;
-        y: t.y * root.height - 10px;
-        width: 20px;
-        height: 20px;
+        // THE ICON'S SIZE (the Display setting "Aircraft icons", the host sets `size` for an aircraft): 0 or less is the pane's own 18 px glyph, anything else is
+        // held to 16..96 px (gui/aircraft_icons.hpp's bounds; the host has clamped it already). The box is the icon + 2 px (20 px for the 18 px glyph), the rings
+        // stand off it by the same 6, 10 and 14 px, and the label by the same 5 px past the icon's own half-width as they did at 18.
+        property <length> icon: t.size > 0 ? min(96px, max(16px, t.size * 1px)) : 18px;
+        property <length> cell: self.icon + 2px;
+        x: t.x * root.width - self.cell / 2;
+        y: t.y * root.height - self.cell / 2;
+        width: self.cell;
+        height: self.cell;
         visible: t.alpha > 0 && t.x >= -0.04 && t.x <= 1.04 && t.y >= -0.04 && t.y <= 1.04;
         opacity: min(1.0, max(0.0, t.alpha));
 
@@ -296,10 +306,10 @@ export component MapPane inherits Rectangle {
             property <bool> lit: true;
             x: -15px;
             y: -15px;
-            width: 50px;
-            height: 50px;
+            width: parent.cell + 30px;
+            height: parent.cell + 30px;
             visible: self.lit;
-            border-radius: 25px;
+            border-radius: (parent.cell + 30px) / 2;
             border-width: 2px;
             border-color: Theme.lamp-red;
             background: Theme.lamp-red.with-alpha(0.22);
@@ -313,18 +323,18 @@ export component MapPane inherits Rectangle {
         if t.followed : Rectangle {
             x: -10px;
             y: -10px;
-            width: 40px;
-            height: 40px;
-            border-radius: 20px;
+            width: parent.cell + 20px;
+            height: parent.cell + 20px;
+            border-radius: (parent.cell + 20px) / 2;
             border-width: 1.5px;
             border-color: Theme.accent.with-alpha(0.65);
         }
         if t.followed || t.selected : Rectangle {
             x: -6px;
             y: -6px;
-            width: 32px;
-            height: 32px;
-            border-radius: 16px;
+            width: parent.cell + 12px;
+            height: parent.cell + 12px;
+            border-radius: (parent.cell + 12px) / 2;
             border-width: 2px;
             border-color: Theme.accent;
         }
@@ -332,8 +342,8 @@ export component MapPane inherits Rectangle {
         if t.estimated : Path {
             x: -4px;
             y: -4px;
-            width: 28px;
-            height: 28px;
+            width: parent.cell + 8px;
+            height: parent.cell + 8px;
             viewbox-width: 28;
             viewbox-height: 28;
             stroke: t.color;
@@ -344,8 +354,8 @@ export component MapPane inherits Rectangle {
         Image {
             x: 1px;
             y: 1px;
-            width: 18px;
-            height: 18px;
+            width: parent.icon;
+            height: parent.icon;
             source: t.kind == 1 ? @image-url("icons/map-aircraft.svg")
                   : t.kind == 2 ? @image-url("icons/map-vessel.svg")
                   : t.kind == 3 ? @image-url("icons/map-station.svg")
@@ -359,19 +369,19 @@ export component MapPane inherits Rectangle {
         // its label, beside it: clear of the rings it wears (14 px from the centre, 18 estimated, 20 selected, 24 followed, 29 emergency), on the
         // other side when it would run off the pane
         if t.label != "" : HaloText {
-            property <length> gap: t.emergency ? 29px : t.followed ? 24px : t.selected ? 20px : t.estimated ? 18px : 14px;
+            property <length> gap: (parent.cell - 20px) / 2 + (t.emergency ? 29px : t.followed ? 24px : t.selected ? 20px : t.estimated ? 18px : 14px);
             text: t.label;
             ink: t.color;
-            x: parent.x + 10px + self.gap + self.width > root.width ? 10px - self.gap - self.width : 10px + self.gap;
-            y: (20px - self.height) / 2;
+            x: parent.x + parent.cell / 2 + self.gap + self.width > root.width ? parent.cell / 2 - self.gap - self.width : parent.cell / 2 + self.gap;
+            y: (parent.cell - self.height) / 2;
             max-w: max(40px, root.width * 0.4);
         }
-        // the hit area: 20 px square, on the target
+        // the hit area: the box (20 px square at the 18 px glyph), on the target
         TouchArea {
             x: 0px;
             y: 0px;
-            width: 20px;
-            height: 20px;
+            width: parent.cell;
+            height: parent.cell;
             enabled: root.enabled && !root.pick-armed;       // while a position is being picked a target is not a target: the map takes the click
             mouse-cursor: MouseCursor.pointer;
             accessible-role: button;
@@ -524,9 +534,10 @@ export component MapPane inherits Rectangle {
     // ================= the rest tip (over everything) =================
     if root.tip-shown && root.hover-index >= 0 && root.hover-index < root.targets.length && root.hover-text != "" : TooltipFace {
         text: root.hover-text;
-        x: max(2px, min(root.targets[root.hover-index].x * root.width - 10px, root.width - self.width - 4px));
-        y: root.targets[root.hover-index].y * root.height + 20px + self.height > root.height - 4px
-            ? root.targets[root.hover-index].y * root.height - 20px - self.height
-            : root.targets[root.hover-index].y * root.height + 20px;
+        property <length> half: root.half-cell(root.targets[root.hover-index].size);
+        x: max(2px, min(root.targets[root.hover-index].x * root.width - self.half, root.width - self.width - 4px));
+        y: root.targets[root.hover-index].y * root.height + self.half + 10px + self.height > root.height - 4px
+            ? root.targets[root.hover-index].y * root.height - self.half - 10px - self.height
+            : root.targets[root.hover-index].y * root.height + self.half + 10px;
     }
 }
