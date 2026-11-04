@@ -256,12 +256,23 @@ Show-Breakdown "Most-used demodulator" `
 
 # Stability, per install rather than per report: one person launching a
 # hundred times must not look like a hundred stable users.
-$crash = Invoke-Sql "SELECT sum(double2) AS crashes, count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window"
+#
+# `double2` is a LIFETIME counter - unclean exits since install, never reset - and
+# every launch writes a row. SUMMING it over a window multiplies each install's
+# lifetime total by its number of reports: on 2026-11-04 this printed 902 unclean
+# exits (1.82 per install) for a 14-day window in which the counters had moved by
+# 44 (0.09 per install). So it is read as the INCREASE per install, last report
+# minus first report inside the window, the way the exit-cause section below reads
+# its counters. That is a floor, not a count: an exit between an install's last
+# report before the window and its first inside it is carried by the first row and
+# not seen, and an install with one report in the window shows none.
+$crash = Invoke-Sql "SELECT sum(d) AS crashes, count() AS installs FROM (SELECT index1, max(double2) - min(double2) AS d FROM foxsdr_usage WHERE $window GROUP BY index1)"
 if ($crash -and $crash[0].installs -gt 0) {
     Write-Host ""
     Write-Host "Stability" -ForegroundColor Cyan
-    Write-Host ("  unclean exits reported          {0}" -f $crash[0].crashes)
+    Write-Host ("  unclean exits in window         {0}" -f $crash[0].crashes)
     Write-Host ("  per install                     {0:N2}" -f ($crash[0].crashes / $crash[0].installs))
+    Write-Host "  (the increase of each install's lifetime counter between its first and last report in the window: a floor)" -ForegroundColor DarkGray
 }
 
 # DISPLAY STALLS, per version - how often the window freezes because the display
@@ -300,7 +311,7 @@ if (-not $reporting) {
         Write-Host ("  {0,-34} {1,8} {2,12} {3,8}" -f $label, $r.installs, $with, $total)
     }
     Write-Host "  installs = distinct installs on that version that reported a count; stalls = the sum of the counts."
-    $seen = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY blob1"
+    $seen = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY version"
     $reportsCount = @{}
     foreach ($r in $reporting) { $reportsCount[[string]$r.version] = $true }
     $names = @()
@@ -407,7 +418,7 @@ if (-not $healthReporting) {
             Write-Host "  (the 1000 most common count strings were read; the rarest are not shown)"
         }
     }
-    $seenHealth = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY blob1"
+    $seenHealth = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY version"
     $healthReports = @{}
     foreach ($r in $healthReporting) { $healthReports[[string]$r.version] = $true }
     $healthNames = @()
@@ -419,6 +430,47 @@ if (-not $healthReporting) {
     if ($healthNames.Count -gt 0) {
         Write-Host ("  Not measured (these builds send no failure counts): {0}" -f ($healthNames -join ", "))
     }
+}
+
+# WHY A COMPUTER HAS NO WORKING RADIO (0.99.107). The first-run radio check judges
+# what is on the USB bus against what is installed, and the application counts the
+# answer as two fixed words: `setup.<kind>.<family>`, kind being usable, wrong-driver,
+# vendor-missing, not-visible, no-device or not-checked. It answers the question the
+# radio_fail counts cannot - a radio that was never opened never failed to open - and
+# it is per radio on the bus, so an install with two radios counts twice. Once a
+# session for each finding, so installs (count(DISTINCT index1), never uniq()) is the
+# figure; "sessions" is the records that carried it. Measured only by builds that send
+# `health` at 0.99.107 or later; older ones say nothing, which is unmeasured, not
+# "no problem". The check reads Windows only, so `not-checked` is every other platform
+# plus a bus that would not read.
+Write-Host ""
+Write-Host "Why there is no working radio (first-run radio check, 0.99.107+)" -ForegroundColor Cyan
+$setupRows = Invoke-Sql "SELECT blob13 AS health, count() AS sessions FROM foxsdr_usage WHERE $window AND blob12 = '1' AND position('setup.' IN blob13) > 0 GROUP BY blob13 ORDER BY sessions DESC LIMIT 1000"
+$setupTokens = @{}
+foreach ($row in @($setupRows)) {
+    foreach ($pair in ([string]$row.health).Split(',')) {
+        $eq = $pair.IndexOf('=')
+        if ($eq -lt 1) { continue }
+        $tok = $pair.Substring(0, $eq)
+        # Pasted into SQL below: only what the vocabulary is made of.
+        if ($tok -notmatch '^setup\.[a-z-]+\.[a-z]+$') { continue }
+        if (-not $setupTokens.ContainsKey($tok)) { $setupTokens[$tok] = [int64]0 }
+        $setupTokens[$tok] += [int64]$row.sessions
+    }
+}
+if ($setupTokens.Count -eq 0) {
+    Write-Host "  No build in this window has reported a finding yet."
+    Write-Host "  That is not 'no problem' - 0.99.107 is the first build that sends them."
+} else {
+    Write-Host ("  {0,-34} {1,8} {2,9}" -f "finding", "installs", "sessions")
+    foreach ($tok in @($setupTokens.Keys | Sort-Object)) {
+        $per = Invoke-Sql "SELECT count(DISTINCT index1) AS installs FROM foxsdr_usage WHERE $window AND blob12 = '1' AND (startsWith(blob13, '$tok=') OR position(',$tok=' IN blob13) > 0)"
+        $n = 0
+        if ($per) { $n = [int64](@($per)[0].installs) }
+        Write-Host ("  {0,-34} {1,8} {2,9}" -f ($tok -replace '^setup\.', ''), $n, $setupTokens[$tok])
+    }
+    Write-Host "  finding = <kind>.<family>. wrong-driver = on the bus with the wrong driver or none; vendor-missing = needs software that is not installed;"
+    Write-Host "  not-visible = set up right but not listed; no-device = no known radio on the bus; not-checked = could not be read here."
 }
 
 # WHICH BUILDS MEASURE slow frames and recoveries (0.99.65). Those two families were
@@ -441,7 +493,7 @@ function Test-MeasuresSlowFramesAndRecoveries([string]$v) {
 # Every version seen in the window, measuring or not: what the "Not measured" lines are
 # worked out from (every version seen, minus those that measure), never from how an
 # unwritten column reads back.
-$allSeen = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY blob1"
+$allSeen = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY version"
 function Show-NotMeasuredSlowFramesAndRecoveries([string]$what, $measuredRows) {
     $have = @{}
     foreach ($r in @($measuredRows)) { $have[[string]$r.version] = $true }
@@ -700,7 +752,7 @@ if (-not $exitRows) {
     }
     Write-Host "  installs = installs that reported the split; ends seen = their sessions minus one each (the sessions whose end is on record);"
     Write-Host "  died / killed / ended / unknown = the rise of each lifetime counter across the window, summed; died % = died / ends seen."
-    $exitSeen = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY blob1"
+    $exitSeen = Invoke-Sql "SELECT blob1 AS version FROM foxsdr_usage WHERE $window GROUP BY blob1 ORDER BY version"
     $exitNames = @()
     foreach ($v in @($exitSeen)) {
         if (-not $exitStat.ContainsKey([string]$v.version)) {

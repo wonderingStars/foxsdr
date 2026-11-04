@@ -359,6 +359,16 @@ inline Counts withoutStages(Counts c) {
     }
     return c;
 }
+// THE REAL BINARY'S LEDGER ALSO HOLDS THE FIRST-RUN RADIO CHECK'S FINDINGS (`setup.<kind>.<family>`, 0.99.107), which say what THIS machine has on its
+// USB bus (a run on a computer with a UHD radio counts setup.usable.usrp). The tests of the real application's failure counts set them aside as well;
+// the findings are held by the synthetic-machine tests (radioSetupJudged), which control the machine.
+inline Counts withoutStagesOrMachine(Counts c) {
+    c = withoutStages(std::move(c));
+    for (auto it = c.begin(); it != c.end();) {
+        it = it->first.rfind("setup.", 0) == 0 ? c.erase(it) : std::next(it);
+    }
+    return c;
+}
 
 // A count that is not what was wanted says what it WAS.
 #define EXPECT_COUNTS(ledger, ...)                                                       \
@@ -505,6 +515,22 @@ struct AppWindowTestAccess {
     static void seedWorking(AppWindow& a, unsigned seconds) { passseam::on(th::engine(a), [&] { th::engine(a).workingClock_.seedFlowingSecondsForTest(seconds); }); }
     static void forgetWorkingTick(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).workingLastSec_ = -1.0; }); }
 
+    // The first-run radio check, on a synthetic machine (the member FOXSDR_FAKE_RADIO_SETUP
+    // sets in a bounded run; set here directly, since this window is not one): frames until it
+    // has judged. `again` runs CHECK AGAIN on `machine` after the first judgement, and waits for
+    // that probe.
+    static bool radioSetupJudged(AppWindow& a, const std::string& machine, bool again = false) {
+        a.radioSetupFake_ = machine;
+        if (again) { a.radioSetupCheckAgain(); }
+        const auto t0 = std::chrono::steady_clock::now();
+        while (true) {
+            a.radioSetupFrame();
+            if (a.radioSetupDecided_ && !a.radioSetupProbe_.running()) { return true; }
+            if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(30)) { return false; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+
     // The update check (the window's).
     static bool check(AppWindow& a) {
         a.updateCheckEnabled_ = true;
@@ -645,7 +671,7 @@ void testTheWindowCountsTheStagesItReaches() {
     {
         auto g = fresh();
         health::resetReachedForTest();
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         for (int i = 0; i < 5; ++i) { Access::poll(app); }
         CHECK(only(g, "reached.") == "reached.window=1");
         // Once a session: more frames count nothing.
@@ -659,7 +685,7 @@ void testTheWindowCountsTheStagesItReaches() {
         auto g = fresh();
         health::resetReachedForTest();
         setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-        cascade::gui::AppWindow app;
+        th::TestWindow app;
         CHECK(Access::selectNative(app, kArgs));
         Access::start(app);
         Access::seedWorking(app, health::kWorkingSampleSeconds - 1);
@@ -810,6 +836,38 @@ void testASoundCardInputIsCountedLikeARadio() {
         th::TestWindow app;
         CHECK(Access::openCard(app, s));
         EXPECT_COUNTS(g, (Counts{{"radio_open.soundcard", 1}}));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WHAT THE FIRST-RUN RADIO CHECK FOUND (0.99.107): the real application, judging a synthetic
+// machine, counts the kind and the family of each finding and nothing else.
+// ---------------------------------------------------------------------------
+void testTheRadioSetupCheckCountsWhatItFound() {
+    struct Row { const char* machine; const char* token; };
+    const Row rows[] = {
+        {"rtl-dvbt", "setup.wrong-driver.rtlsdr"},   {"rtl-nodriver", "setup.wrong-driver.rtlsdr"},
+        {"rsp-noapi", "setup.vendor-missing.sdrplay"}, {"usrp-nouhd", "setup.vendor-missing.usrp"},
+        {"usrp-unlisted", "setup.not-visible.usrp"}, {"rtl-winusb-listed", "setup.usable.rtlsdr"},
+        {"none", "setup.no-device.none"},            {"unreadable", "setup.not-checked.none"},
+    };
+    for (const Row& r : rows) {
+        auto g = fresh();
+        th::TestWindow app;
+        CHECK(Access::radioSetupJudged(app, r.machine));
+        std::printf("health: machine %s counted %s\n", r.machine, only(g, "setup.").c_str());
+        EXPECT_COUNTS(g, (Counts{{r.token, 1}}));
+    }
+    // CHECK AGAIN on the same machine counts nothing new (once a session for each finding)...
+    {
+        auto g = fresh();
+        th::TestWindow app;
+        CHECK(Access::radioSetupJudged(app, "rtl-dvbt"));
+        CHECK(Access::radioSetupJudged(app, "rtl-dvbt", true));
+        EXPECT_COUNTS(g, (Counts{{"setup.wrong-driver.rtlsdr", 1}}));
+        // ...and one that finds the radio usable after a fix counts that as its own fact.
+        CHECK(Access::radioSetupJudged(app, "rtl-winusb-listed", true));
+        EXPECT_COUNTS(g, (Counts{{"setup.wrong-driver.rtlsdr", 1}, {"setup.usable.rtlsdr", 1}}));
     }
 }
 
@@ -1105,7 +1163,7 @@ void testTheRealApplicationCountsKeepsAndClears() {
         CHECK(countOf(onDisk, "reached.launched") == 1 && countOf(onDisk, "reached.window") == 1);
         CHECK(countOf(onDisk, "reached.streaming") == 0 && countOf(onDisk, "reached.working") == 0);
         const Counts withStages = onDisk;
-        onDisk = withoutStages(onDisk);
+        onDisk = withoutStagesOrMachine(onDisk);
         CHECK(bindOrAbsentCount(onDisk, 1));
         // The journalled record carries it too (as of that save; what is SENT is the ledger's at the next start).
         Counts journalled;
@@ -1158,7 +1216,7 @@ void testTheRealApplicationCountsKeepsAndClears() {
         runApp(config);
         Counts onDisk;
         CHECK(HealthLedger::parseFileText(readFile(HealthLedger::pathIn(u8(dir))), id, onDisk));
-        onDisk = withoutStages(onDisk);
+        onDisk = withoutStagesOrMachine(onDisk);
         CHECK(onDisk.size() == 2 && countOf(onDisk, "upd_dl") == 2);
         std::uint32_t radio = 0;
         for (const auto& kv : onDisk) {
@@ -1179,7 +1237,7 @@ void testTheRealApplicationCountsKeepsAndClears() {
         runApp(config);
         Counts onDisk;
         CHECK(HealthLedger::parseFileText(readFile(HealthLedger::pathIn(u8(dir))), id, onDisk));
-        CHECK(bindOrAbsentCount(withoutStages(onDisk), 1));   // no upd_dl in it
+        CHECK(bindOrAbsentCount(withoutStagesOrMachine(onDisk), 1));   // no upd_dl in it
     }
 }
 
@@ -1435,12 +1493,12 @@ void testASlowFrameOfTheRealWindowEndsInTheLedgerFile() {
         CHECK(countOf(onDisk, "slow.render.5s") >= 1);
         // The 5 s stall is a freeze of its own tier, the 1.2 s one is not in the stutter tier.
         CHECK(countOf(onDisk, "slow.saves.1s") >= 1);
-        for (const auto& kv : withoutStages(onDisk)) { CHECK(kv.first.rfind("slow.", 0) == 0); }   // and nothing else but the stages
+        for (const auto& kv : withoutStagesOrMachine(onDisk)) { CHECK(kv.first.rfind("slow.", 0) == 0); }   // and nothing else but the stages
         // The record the session journals carries them too (as of that save).
         Counts journalled;
         CHECK(health::decode(pendingHealth(config), journalled));
         CHECK(!journalled.empty());
-        for (const auto& kv : withoutStages(journalled)) { CHECK(kv.first.rfind("slow.", 0) == 0); }
+        for (const auto& kv : withoutStagesOrMachine(journalled)) { CHECK(kv.first.rfind("slow.", 0) == 0); }
     }
 
     // A PERSON'S OWN TIME is not counted: a modal loop (dragging the window) inside the message pump
@@ -1558,11 +1616,11 @@ void testAFailureSurvivesEndTask() {
         Counts onDisk;
         bool there = false;
         for (int i = 0; i < 200 && !there; ++i) {
-            there = HealthLedger::parseFileText(readFile(file), id, onDisk) && !withoutStages(onDisk).empty();
+            there = HealthLedger::parseFileText(readFile(file), id, onDisk) && !withoutStagesOrMachine(onDisk).empty();
             if (!there) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
         }
         CHECK(there);
-        CHECK(bindOrAbsentCount(withoutStages(onDisk), 1));
+        CHECK(bindOrAbsentCount(withoutStagesOrMachine(onDisk), 1));
         // End task.
         ::TerminateProcess(c.process, 1);
         ::WaitForSingleObject(c.process, 10000);
@@ -1574,12 +1632,12 @@ void testAFailureSurvivesEndTask() {
     // The dead process saved nothing more, and the failure is still on disk...
     Counts after;
     CHECK(HealthLedger::parseFileText(readFile(file), id, after));
-    CHECK(bindOrAbsentCount(withoutStages(after), 1));
+    CHECK(bindOrAbsentCount(withoutStagesOrMachine(after), 1));
     // ...so THE NEXT START finds it as an earlier session's, and its own failure is added.
     runApp(config);
     Counts next;
     CHECK(HealthLedger::parseFileText(readFile(file), id, next));
-    const Counts nextFailures = withoutStages(next);
+    const Counts nextFailures = withoutStagesOrMachine(next);
     CHECK(nextFailures.size() == 1 && nextFailures.begin()->second == 2);   // the dead session's, and this one's
     CHECK(countOf(next, "reached.launched") == 2);   // two sessions started, one of them ended from the taskbar
 }
@@ -1596,7 +1654,7 @@ void testTheTrailFollowsTheWindow() {
     trail::resetForTest();
     auto g = fresh();
     setNative({{"rtlsdr", "RTL-SDR A", kArgs}});
-    cascade::gui::AppWindow app;
+    th::TestWindow app;
     CHECK(Access::selectNative(app, kArgs));
     Access::start(app);
     Access::setMode(app, 5);   // CW: a mode the window does not start in
@@ -1628,6 +1686,7 @@ int main() {
     testThePatchPagesRadiosAreCounted();
     testASoundCardInputIsCountedLikeARadio();
     testAScanThatFindsNoRadioIsCountedOnceASession();
+    testTheRadioSetupCheckCountsWhatItFound();
     testSoundOkIsCountedWhenTheOutputHasPlayed();
     testAnUpdateCheckThatFailsIsCounted();
     testAnInstallerThatCannotBeStartedIsCounted();

@@ -43,7 +43,14 @@ program keeps running) and eighteen more words for the handled faults a survey o
 2026-10-28 found - `readerleak`, `closeleak`, `linkstranded`, `streamrestart`,
 `tunerretry`, `latecall`, `scanlimit`, `usbstuck`, `ratesdefault`, `gainrefused`,
 `ppmrefused`, `iqfilegone`, `cataloguebad`, `catstop`, `filekept`, `takeheader`,
-`sentinelgone`, `displaywatch`: deploy this Worker before 0.99.100 ships.
+`sentinelgone`, `displaywatch`: deploy this Worker before 0.99.100 ships. And for
+**0.99.107**, which adds the `setup.<kind>.<family>` event: what the first-run radio
+check found on the computer (usable, wrong driver, vendor software missing, not
+listed, no radio on the bus, not checked), the answer to why a computer that never
+opened a radio has none. Deploy this Worker before it ships, or the findings are
+dropped (the rest of the record is still taken); `worker.test.mjs` shows the 0.99.67
+Worker doing exactly that. `usage.ps1` prints them under "Why there is no working
+radio".
 
 The release that carries the per-thread watchdog (docs/engine-stage4.md 6.27) adds one more, `recovered.threadwedge` (a worker thread stopped answering and the watchdog reported it by name): the same rule - deploy this Worker before that release ships, or the count of how often a worker wedges in the field is dropped. (Nothing was deployed by the change that adds the word.)
 

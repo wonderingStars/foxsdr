@@ -133,8 +133,9 @@ void testEveryTokenIsLegalAndNothingElseIs() {
     // slow (18 countable scopes x 3 tiers) and 40 recovered (0.99.73: audiolead; the early-warning pair devlatch and softgl; 0.99.100: viewport and the eighteen words of the 2026-10-28
     // survey; then the engine-extraction branch's five: the plugin containment pluginfault, pluginquarantine, pluginwedge, pluginoveruse,
     // and the per-thread watchdog's threadwedge); and, FIRST in the written order, the 7
-    // stages a session reaches (field-early-warning: launched ... working).
-    CHECK(all.size() == 7 + 220 + 54 + 40);
+    // stages a session reaches (field-early-warning: launched ... working). 0.99.107 adds the setup finding,
+    // 6 kinds x 8 families = 48 more failure tokens.
+    CHECK(all.size() == 7 + 220 + 48 + 54 + 40);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
@@ -664,18 +665,69 @@ void testTheGlobalLedgerIsWhatTheHelpersCountInto() {
     health::notePluginInstallFailed(health::InstallClass::Hash);
     health::notePluginLoadRefused(health::LoadClass::Retired);
     health::noteRecordFailed();
+    health::noteSetupFinding("wrong-driver", "rtlsdr");
     CHECK(g->counts() == (Counts{{"scan_none", 1}, {"radio_open.rtlsdr", 1}, {"radio_data.rtlsdr", 1},
                                  {"radio_fail.rtlsdr.busy", 1}, {"radio_fail.other.absent", 1},
                                  {"sound_ok.wasapi", 1}, {"sound_fail.none.nodevice", 1},
                                  {"upd_check", 1}, {"upd_dl", 1}, {"upd_verify", 1}, {"upd_run", 1},
                                  {"plug_cat", 1}, {"plug_inst.hash", 1}, {"plug_load.retired", 1},
-                                 {"rec_fail", 1},
+                                 {"rec_fail", 1}, {"setup.wrong-driver.rtlsdr", 1},
                                  // an opened radio and the speakers playing are two of the stages a
                                  // session reaches (Milestone): the same two call sites count them
                                  {"reached.streaming", 1}, {"reached.audio", 1}}));
     CHECK(health::sumOf(g->counts(), "radio_fail") == 2);
     CHECK(health::sumOf(g->counts(), "radio_open") == 1);
     CHECK(health::sumOf(g->counts(), "radio") == 0);   // a prefix of a name is not an event
+    g->reset();
+}
+
+// ---------------------------------------------------------------------------
+// WHAT THE RADIO-SETUP CHECK FOUND (0.99.107): two fixed words, nothing else.
+// ---------------------------------------------------------------------------
+void testSetupFindingsAreTwoWordsAndNothingElse() {
+    // Every kind x family pair is a legal token, and builds exactly itself.
+    const char* const kinds[] = {"usable", "wrong-driver", "vendor-missing",
+                                 "not-visible", "no-device", "not-checked"};
+    const char* const families[] = {"rtlsdr", "airspy", "airspyhf", "hackrf",
+                                    "sdrplay", "usrp", "lime", "none"};
+    int n = 0;
+    for (std::size_t k = 0; k < 6; ++k) {
+        for (const char* f : families) {
+            const std::string t = health::tokenSetup(static_cast<health::SetupKind>(k), f);
+            CHECK(t == std::string("setup.") + kinds[k] + "." + f);
+            CHECK(health::validToken(t));
+            ++n;
+        }
+    }
+    CHECK(n == 48);
+    // A family this build does not know - or text somebody typed - is "none": the
+    // token can never carry what it was handed.
+    CHECK(health::tokenSetup(health::SetupKind::NoDevice, "") == "setup.no-device.none");
+    CHECK(health::tokenSetup(health::SetupKind::WrongDriver, "RTL2832UUSB (Realtek)") ==
+          "setup.wrong-driver.none");
+    CHECK(health::tokenSetup(health::SetupKind::NotVisible, "serial=00000001") ==
+          "setup.not-visible.none");
+    CHECK(health::tokenSetup(health::SetupKind::Usable, "RTLSDR") == "setup.usable.rtlsdr");
+    // Not tokens: a missing slot, a third word, a word of neither list, a count.
+    for (const char* bad : {"setup", "setup.usable", "setup.usable.rtlsdr.x", "setup.nope.rtlsdr",
+                            "setup.usable.rtl", "setup..rtlsdr", "setup.usable.rtlsdr=1",
+                            "setup.WRONG-DRIVER.rtlsdr"}) {
+        CHECK(!health::validToken(bad));
+    }
+    // The helper takes the radio-setup check's own words; a word that is not one counts nothing.
+    auto g = health::globalLedger();
+    g->reset();
+    const fs::path dir = scratch("setup");
+    g->arm(HealthLedger::pathIn(u8(dir)), cascade::core::newInstallId(), false);
+    health::noteSetupFinding("no-device", "");
+    health::noteSetupFinding("wrong-driver", "rtlsdr");
+    health::noteSetupFinding("wrong-driver", "rtlsdr");   // once a session for each finding
+    health::noteSetupFinding("vendor-missing", "sdrplay");
+    health::noteSetupFinding("unknown", "rtlsdr");
+    health::noteSetupFinding("RTL-SDR (RTL2832U)", "rtlsdr");
+    health::noteSetupFinding("", "");
+    CHECK(g->counts() == (Counts{{"setup.no-device.none", 1}, {"setup.wrong-driver.rtlsdr", 1},
+                                 {"setup.vendor-missing.sdrplay", 1}}));
     g->reset();
 }
 
@@ -1384,6 +1436,7 @@ std::vector<std::string> sortedCopy(std::vector<std::string> v) {
 struct Lists {
     std::vector<std::string> events, drivers, radioReasons, apis, soundReasons, installClasses, loadClasses;
     std::vector<std::string> slowScopes, slowTiers, recovered, stages;
+    std::vector<std::string> setupKinds, setupFamilies;
 };
 
 Lists codeLists() {
@@ -1399,6 +1452,7 @@ Lists codeLists() {
         if (e.name == "slow") { l.slowScopes = e.qualifiers[0]; l.slowTiers = e.qualifiers[1]; }
         if (e.name == "recovered") { l.recovered = e.qualifiers[0]; }
         if (e.name == "reached") { l.stages = e.qualifiers[0]; }
+        if (e.name == "setup") { l.setupKinds = e.qualifiers[0]; l.setupFamilies = e.qualifiers[1]; }
     }
     return l;
 }
@@ -1455,6 +1509,8 @@ void testPrivacyListsEveryWordOfTheVocabulary() {
     same("Slow-frame tiers", code.slowTiers);
     same("Recovered from", code.recovered);
     same("Stages reached", code.stages);
+    same("Setup kinds", code.setupKinds);
+    same("Setup families", code.setupFamilies);
     // `user-wait` is named in the page - as the one scope that is NOT counted - but is never a
     // word of the scopes table.
     CHECK(doc.find("`user-wait`") != std::string::npos);
@@ -1686,5 +1742,6 @@ int main() {
     testStagesReachedBeforeReportingWasSwitchedOnAreReplayed();
     testAStageIsNotCountedWithReportingOrDiagnosticsOff();
     testASessionIsWorkingAfterSixtySecondsOfSamplesWithOutput();
+    testSetupFindingsAreTwoWordsAndNothingElse();
     return testSummary("test_health_events");
 }

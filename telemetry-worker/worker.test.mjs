@@ -685,6 +685,31 @@ test('the update channel (uch) is stored in blob15 as stable or beta and as noth
   assert.deepEqual(beat.beats[0].blobs, ['0.99.96']);
 });
 
+test('0.99.107 CLIENT (setup findings) -> OLD WORKER (0.99.67): a 204, those tokens dropped and the rest read; the NEW Worker keeps them', async () => {
+  // THE SAME ORDER OF DEPLOYMENT, for what the first-run radio check found: telemetry-worker/worker.js
+  // must be deployed BEFORE a client that sends `setup.<kind>.<family>` ships, or the one count that says
+  // why a computer has no working radio is silently dropped (the record itself is still taken).
+  const was = (await import('./test-fixtures/worker-0.99.67.js')).default;
+  const sent = 'radio_open.rtlsdr=1,setup.wrong-driver.rtlsdr=1,setup.no-device.none=1,recovered.audio=1';
+  const old = await postTo(was, { ...newRecord(), v: '0.99.107', stalls: 0, health: sent });
+  assert.equal(old.status, 204);
+  assert.equal(old.usage[0].blobs[12], 'radio_open.rtlsdr=1,recovered.audio=1');
+  const now = await post({ ...newRecord(), v: '0.99.107', stalls: 0, health: sent });
+  // Written order: the failure families, then setup (kind in the list's order, then family), then slow and recovered last.
+  assert.equal(now.usage[0].blobs[12],
+    'radio_open.rtlsdr=1,setup.wrong-driver.rtlsdr=1,setup.no-device.none=1,recovered.audio=1');
+  // A finding is a fact about the machine, not a failure: it is in none of the headline sums.
+  assert.equal(now.usage[0].doubles[5], 0);   // double6 radio_fail
+  assert.equal(now.usage[0].doubles[6], 1);   // double7 radio_open
+  assert.equal(now.usage[0].doubles[11], 1);  // double12 recoveries
+  // It carries exactly two words of two fixed lists and nothing else.
+  const bad = await post({ ...newRecord(), v: '0.99.107', stalls: 0,
+    health: ['setup.wrong-driver=1', 'setup.wrong-driver.rtlsdr.x=1', 'setup.Wrong-Driver.rtlsdr=1',
+      'setup.wrong-driver.RTL2832UUSB=1', 'setup.wrong-driver.serial0001=1', 'setup.fine.rtlsdr=1',
+      'setup.usable.rtl=1', 'setup=1'].join(',') });
+  assert.equal(bad.usage[0].blobs[12], '');
+});
+
 test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Worker wrote, and zeros in the new columns', async () => {
   for (const body of [oldRecord(), { ...record064(), stalls: 2 }, { ...record064(), stalls: 2, health: HEALTH },
     { ...record064(), health: '' }]) {
@@ -929,8 +954,23 @@ function standIn(rows) {
     req.on('data', (c) => { sql += c; });
     req.on('end', () => {
       queries.push(sql);
+      // WHAT THE REAL ENGINE REFUSES (found 2026-11-04 against production): ordering by a
+      // column that the SELECT has already renamed. `SELECT blob1 AS version ... ORDER BY
+      // blob1` answers 422 "unable to find type of column", and the reader aborted at the
+      // first such query, so every section after it never printed. A stand-in that accepts
+      // it hid this from the suite; this one refuses it the same way.
+      const orderBy = sql.match(/ORDER BY\s+([a-z0-9_, ]+?)(?:\s+(?:ASC|DESC))?(?:\s+LIMIT\b.*)?$/i);
+      if (orderBy) {
+        for (const term of orderBy[1].split(',').map((t) => t.trim())) {
+          if (/^(blob|double)\d+$|^index1$/.test(term) && new RegExp('\\b' + term + '\\s+AS\\s+\\w+').test(sql)) {
+            res.statusCode = 422;
+            res.end(`Input was invalid: unable to find type of column: "${term}"`);
+            return;
+          }
+        }
+      }
       let data = [];
-      const perToken = sql.match(/startsWith\(blob13, '([a-z0-9_.]+)='\)/);
+      const perToken = sql.match(/startsWith\(blob13, '([a-z0-9_.-]+)='\)/);
       const perScope = sql.match(/startsWith\(blob13, 'slow\.([a-z-]+)\.'\)/);
       if (/AS exitsDied/.test(sql)) {
         data = rows.exitRows || [];
@@ -950,6 +990,10 @@ function standIn(rows) {
         data = rows.withRec || [];
       } else if (/blob13 AS recoveredHealth/.test(sql)) {
         data = rows.recStrings || [];
+      } else if (/max\(double2\)/.test(sql)) {
+        data = rows.stability || [];
+      } else if (/position\('setup\.' IN blob13\)/.test(sql)) {
+        data = rows.setupStrings || [];
       } else if (/blob13 AS health/.test(sql)) {
         data = rows.healthStrings || [];
       } else if (perToken) {
@@ -1100,6 +1144,83 @@ readerTest('the reader prints what fails per version: sessions and installs per 
     const perEvent = failQueries.filter((q) => /startsWith\(blob13/.test(q));
     assert.equal(perEvent.length, 2);
     for (const q of perEvent) { assert.match(q, /count\(DISTINCT index1\) AS installs/); }
+  } finally {
+    server.close();
+  }
+});
+
+readerTest('the reader prints why there is no working radio: installs and sessions per finding, only vocabulary reaches a query', async () => {
+  const { server, queries, port } = await standIn({
+    reporting: [], stalled: [], unmeasured: [],
+    setupStrings: [
+      { health: 'radio_open.rtlsdr=1,setup.usable.rtlsdr=1', sessions: '5' },
+      { health: 'setup.wrong-driver.rtlsdr=1', sessions: '7' },
+      { health: 'setup.wrong-driver.rtlsdr=1,setup.no-device.none=1', sessions: '2' },
+      // text that is not the vocabulary: never reaches a query
+      { health: "setup.wrong-driver.rtlsdr=1,setup.evil'--.rtlsdr=1,setup.x;DROP.none=1", sessions: '1' },
+    ],
+    healthInstalls: {
+      'setup.wrong-driver.rtlsdr': [{ installs: '9' }],
+      'setup.no-device.none': [{ installs: '2' }],
+      'setup.usable.rtlsdr': [{ installs: '5' }],
+    },
+  });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Why there is no working radio/);
+    // finding, installs (count(DISTINCT index1)), sessions (records that carried it)
+    assert.match(r.stdout, /wrong-driver\.rtlsdr\s+9\s+10\b/);
+    assert.match(r.stdout, /no-device\.none\s+2\s+2\b/);
+    assert.match(r.stdout, /usable\.rtlsdr\s+5\s+5\b/);
+    const setupQueries = queries.filter((q) => /setup\./.test(q));
+    assert.equal(setupQueries.length, 4, 'one for the strings, one install count per finding seen');
+    for (const q of queries) {
+      assert.doesNotMatch(q, /uniq\s*\(/i, 'approximate uniq() must never be used for installs');
+      assert.doesNotMatch(q, /evil|DROP/, 'text that is not the vocabulary never reaches a query');
+    }
+    for (const q of setupQueries) { assert.match(q, /blob12 = '1'/); }
+    for (const q of setupQueries.filter((x) => /startsWith/.test(x))) {
+      assert.match(q, /count\(DISTINCT index1\) AS installs/);
+    }
+  } finally {
+    server.close();
+  }
+});
+
+readerTest('when no build has reported a setup finding the reader says so and prints no zero rows', async () => {
+  const { server, port } = await standIn({ reporting: [], stalled: [], unmeasured: [], setupStrings: [] });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Why there is no working radio/);
+    assert.match(r.stdout, /No build in this window has reported a finding yet/);
+    assert.match(r.stdout, /not 'no problem'/);
+    assert.doesNotMatch(r.stdout, /wrong-driver\.\w+\s+\d/);
+  } finally {
+    server.close();
+  }
+});
+
+readerTest('stability is the INCREASE of the lifetime crash counter per install, never the sum of it', async () => {
+  // double2 is a lifetime counter that is never reset, and every launch writes a row. Summing it
+  // over a window multiplies each install's lifetime total by its number of reports: on
+  // 2026-11-04 the reader printed 902 unclean exits (1.82 per install) for a 14-day window in
+  // which the counters moved by 44 (0.09 per install).
+  const { server, queries, port } = await standIn({
+    reporting: [], stalled: [], unmeasured: [], stability: [{ crashes: '44', installs: '495' }],
+  });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Stability/);
+    assert.match(r.stdout, /unclean exits in window\s+44\b/);
+    assert.match(r.stdout, /per install\s+0\.09\b/);
+    const asked = queries.filter((q) => /double2/.test(q));
+    assert.equal(asked.length, 1, 'one question about the crash counter outside the exit-cause section');
+    assert.match(asked[0], /max\(double2\) - min\(double2\)/);
+    assert.match(asked[0], /GROUP BY index1/);
+    assert.doesNotMatch(asked[0], /sum\(double2\)/, 'a lifetime counter is never summed across reports');
   } finally {
     server.close();
   }

@@ -31,6 +31,7 @@
 #include <imgui.h>
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/i18n.hpp"
 #include "core/patch_devices.hpp"
 #include "core/radio_setup.hpp"
@@ -62,6 +63,21 @@ namespace cascade::gui {
 using cascade::i18n::tr;
 using cascade::i18n::trId;
 namespace rs = cascade::core::radiosetup;
+
+namespace {
+// WHAT THE CHECK FOUND, COUNTED ANONYMOUSLY (0.99.107, core/health_events.hpp):
+// one fixed word for the kind of finding and one for the radio family, per radio on
+// the bus - never a device name, a driver name, an id or a serial. This is the answer
+// to why a computer that opened no radio has none, which no radio_fail count can give
+// because nothing was ever opened. The ledger keeps one a session for each, so a
+// "Check again" that finds the same thing counts nothing and one that finds the
+// radio usable after a fix counts that.
+void noteSetupFindings(const rs::Findings& f) {
+    for (const rs::Finding& x : f.items) {
+        cascade::core::health::noteSetupFinding(rs::kindName(x.kind), x.family);
+    }
+}
+}  // namespace
 
 void AppWindow::radioSetupStartProbe() {
     if (!radioSetupFake_.empty()) {
@@ -308,9 +324,13 @@ void AppWindow::radioSetupFrame() {
         // One line a fact, each short enough for the log's line (see
         // summaryLines): what the bus and the lists held, what is installed,
         // one per finding, and whether the page is wanted.
-        for (const std::string& line : rs::summaryLines(inv, rs::assess(inv))) {
+        const rs::Findings now = rs::assess(inv);
+        for (const std::string& line : rs::summaryLines(inv, now)) {
             cascade::core::diagLogf("%s", line.c_str());
         }
+        // A re-check after the first judgement (before it, the decision below
+        // counts, once the application's own lists have settled).
+        if (radioSetupDecided_) { noteSetupFindings(now); }
     }
 
     if (radioSetupDecided_ || radioSetupProbe_.running() || radioSetupProbe_.finished() == 0) {
@@ -323,6 +343,7 @@ void AppWindow::radioSetupFrame() {
     radioSetupDecided_ = true;
 
     const rs::Findings f = rs::assess(radioSetupInventory());
+    noteSetupFindings(f);
     if (radioSetupDontShow_) {
         cascade::core::diagLogf("radio setup: page not raised - \"Don't show this again\" is ticked");
     } else if (radioSetupBounded_ && radioSetupFake_.empty()) {

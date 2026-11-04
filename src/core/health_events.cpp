@@ -165,6 +165,18 @@ const Words& loadWords() {
     static const Words w = {"abi", "retired", "load"};
     return w;
 }
+// The radio-setup check's finding kinds (core/radio_setup.hpp kindName()) and the
+// families it names (its kFamily* constants), "none" for a finding about no radio.
+const Words& setupKindWords() {
+    static const Words w = {"usable", "wrong-driver", "vendor-missing",
+                            "not-visible", "no-device", "not-checked"};
+    return w;
+}
+const Words& setupFamilyWords() {
+    static const Words w = {"rtlsdr", "airspy", "airspyhf", "hackrf",
+                            "sdrplay", "usrp", "lime", "none"};
+    return w;
+}
 
 }  // namespace
 
@@ -191,6 +203,9 @@ const std::vector<VocabularyEntry>& vocabulary() {
         {"plug_inst", {installWords()}, false},
         {"plug_load", {loadWords()}, true},
         {"rec_fail", {}, false},
+        // 0.99.107: before `slow` and `recovered`, which stay last so a full record
+        // loses them first. Once a session for each finding.
+        {"setup", {setupKindWords(), setupFamilyWords()}, true},
         // 0.99.65: LAST in the written order, so a record an older
         // Worker reads has every earlier token where it always was.
         {"slow", {scopeWordList(), tierWordList()}, false},
@@ -484,6 +499,11 @@ std::string tokenPluginLoad(LoadClass c) {
     return build("plug_load", loadWords()[static_cast<std::size_t>(c)]);
 }
 std::string tokenRecordFail() { return "rec_fail"; }
+std::string tokenSetup(SetupKind kind, std::string_view family) {
+    const std::string f = lowerCopy(family);
+    return build("setup", setupKindWords()[static_cast<std::size_t>(kind)],
+                 indexOf(setupFamilyWords(), f) >= 0 ? f : std::string("none"));
+}
 
 // ---------------------------------------------------------------------------
 // Counts and their encoding
@@ -1045,6 +1065,11 @@ void notePluginCatalogueFailed() { note(tokenPluginCatalogue()); }
 void notePluginInstallFailed(InstallClass c) { note(tokenPluginInstall(c)); }
 void notePluginLoadRefused(LoadClass c) { note(tokenPluginLoad(c)); }
 void noteRecordFailed() { note(tokenRecordFail()); }
+void noteSetupFinding(std::string_view kindWord, std::string_view family) {
+    const int k = indexOf(setupKindWords(), lowerCopy(kindWord));
+    if (k < 0) { return; }
+    note(tokenSetup(static_cast<SetupKind>(k), family));
+}
 
 // ---------------------------------------------------------------------------
 // Slow frames, and what the program recovered from (0.99.65)

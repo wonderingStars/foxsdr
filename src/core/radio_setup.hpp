@@ -32,8 +32,11 @@
 // asks the Service Control Manager for the SDRplay service's state (read-only,
 // source/sdrplay_service.hpp) and looks for two DLLs on disk. No radio is opened
 // and no transfer is sent, so the check is as safe with a radio streaming as
-// without one. NOTHING IS SENT ANYWHERE either: the inventory stays on this
-// machine and reaches only the page and the diagnostics log (PRIVACY.md).
+// without one. NOTHING OF THE INVENTORY IS SENT ANYWHERE either: it stays on this
+// machine and reaches only the page and the diagnostics log. What IS counted
+// anonymously (0.99.107, core/health_events.hpp, PRIVACY.md "Setup kinds") is each
+// finding's kind and family as two fixed words - no device name, driver name, id or
+// serial.
 //
 // THE DRIVER A FINDING NAMES IS THE ONE WINDOWS REPORTS, not a guess from the
 // id: an RTL-SDR on "RTL2832UUSB (Realtek)" is named so, and one with no driver

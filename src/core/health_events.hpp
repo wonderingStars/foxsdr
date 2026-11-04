@@ -26,6 +26,8 @@
 //     plug_inst.<class>           a plugin install failed (net, hash, write...)
 //     plug_load.<class>           a plugin was refused at load
 //     rec_fail                    a recording could not be started
+//     setup.<kind>.<family>       what the first-run radio check found on this
+//                                 computer (once per session per finding)
 //     slow.<scope>.<tier>         a frame of the window took 250 ms or more, in
 //                                 the part of the frame that took most of it
 //     recovered.<what>            the program met a fault and carried on
@@ -75,6 +77,12 @@ enum class RadioReason : std::uint8_t { Busy, Driver, Bind, Absent, Timeout, Ven
 enum class SoundReason : std::uint8_t { NoDevice, Busy, Format, Host, Other };
 enum class InstallClass : std::uint8_t { Net, Hash, Write, Other };
 enum class LoadClass : std::uint8_t { Abi, Retired, Load };
+// WHAT THE RADIO-SETUP CHECK FOUND, per radio found on the USB bus (core/radio_setup.hpp
+// Kind, same words): the answer to "why does this computer have no working radio",
+// which a radio_fail count cannot give because the radio was never opened.
+enum class SetupKind : std::uint8_t {
+    Usable, WrongDriver, VendorMissing, NotVisible, NoDevice, NotChecked
+};
 enum class AudioApi : std::uint8_t {
     Mme, DirectSound, Wasapi, Wdmks, Asio, Alsa, Jack, Oss, CoreAudio, None, Other
 };
@@ -235,6 +243,9 @@ std::string tokenPluginCatalogue();
 std::string tokenPluginInstall(InstallClass c);
 std::string tokenPluginLoad(LoadClass c);
 std::string tokenRecordFail();
+// `family` is a radio family as core/radio_setup.hpp spells it ("rtlsdr", "airspy",
+// "airspyhf", "hackrf", "sdrplay", "usrp", "lime"); "" and anything else is "none".
+std::string tokenSetup(SetupKind kind, std::string_view family);
 
 // SLOW FRAMES (0.99.65). The scope is a frame scope's own name as
 // core/frame_timing.hpp spells it (hyphens included: "plugin-panels",
@@ -462,6 +473,11 @@ void notePluginCatalogueFailed();
 void notePluginInstallFailed(InstallClass c);
 void notePluginLoadRefused(LoadClass c);
 void noteRecordFailed();
+// One finding of the radio-setup check. `kindWord` is core::radiosetup::kindName()
+// ("usable", "wrong-driver", "vendor-missing", "not-visible", "no-device",
+// "not-checked"); a word that is none of those counts nothing. `family` is reduced
+// as for tokenSetup. Counted once a session for each finding.
+void noteSetupFinding(std::string_view kindWord, std::string_view family);
 
 // One slow frame (core::FrameTimer::commit, GUI thread): `frameScope` is the
 // scope's index in core::kFrameScopeNames and `tier` 0..2. Nothing for

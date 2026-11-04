@@ -422,6 +422,7 @@ but the one sixty-second rule.
 | `plug_inst.<class>` | A plugin install failed. The public catalogue's plugins only: a failed install of a plugin from a plugin site is not counted. |
 | `plug_load.<class>` | A plugin was refused at load. Once a session for each kind. |
 | `rec_fail` | A recording could not be started: its file could not be opened. |
+| `setup.<kind>.<family>` | Since 0.99.107. What FoxSDR's first-run radio check found on this computer, one count for each radio it found on the USB bus (or one for none): whether the radio is usable, is on the wrong driver, is missing its vendor software, is set up but not listed by FoxSDR, or no radio was found at all. A check run again counts only a finding it has not already counted. Once a session for each finding. |
 | `slow.<scope>.<tier>` | Since 0.99.65. A frame of the window took 250 ms or more: one count for each such frame, under the part of the frame that took most of it and the tier it reached. Not once a session - how many is the question. |
 | `recovered.<what>` | Since 0.99.65. FoxSDR met a fault at the place the word names and carried on. |
 
@@ -506,6 +507,32 @@ not its text.
 | `load` | could not be loaded as a module, or its description was refused |
 
 A file in the plugins folder that is not a plugin at all is not counted.
+
+**Setup kinds.** The first word of a `setup` event: the one fact the check reached.
+
+| Word | Meaning |
+|---|---|
+| `usable` | the radio has the right driver and its vendor software, and FoxSDR can list it |
+| `wrong-driver` | the radio is on the bus with the wrong driver, or none (an RTL-SDR still using the television driver Windows gives it, for one) |
+| `vendor-missing` | the radio is on the bus but the vendor software it needs (the SDRplay service, UHD) is not installed |
+| `not-visible` | the radio and its software look right but FoxSDR's own scan did not list it |
+| `no-device` | no radio FoxSDR knows was found on the bus |
+| `not-checked` | the bus could not be read, or this computer is not one the check reads (it reads Windows only) |
+
+**Setup families.** The second word of a `setup` event: the kind of radio the finding is about. `none` is a finding about no particular radio (`no-device`, `not-checked`).
+
+| Word | Which |
+|---|---|
+| `rtlsdr` | RTL-SDR dongles |
+| `airspy` | Airspy R2, Mini, HydraSDR |
+| `airspyhf` | Airspy HF+ |
+| `hackrf` | HackRF |
+| `sdrplay` | SDRplay RSP (and the Mirics chips behind it) |
+| `usrp` | Ettus USRP |
+| `lime` | LimeSDR |
+| `none` | no particular radio |
+
+The check itself - the USB listing it reads, the driver names and the ids it sees - stays on this computer and reaches only the page and the diagnostics log. What is counted is the two words above and nothing else: no device name, no driver name, no serial, no id.
 
 **Slow-frame scopes.** The parts of a frame, FoxSDR's own names for them, spelt as
 the application spells them. A scope's time is its own: time in a part opened
