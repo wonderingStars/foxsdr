@@ -31,6 +31,7 @@
 // autopsy — the same convention as test_config.cpp.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "core/band_mode.hpp"
 #include "core/band_plan.hpp"
 
 #include <cstddef>
@@ -640,6 +641,40 @@ int main() {
             if (q.id == "world") { haveWorld = true; }
         }
         CHECK(haveWorld);
+
+        // The default plan carries 80 m and 40 m as the segments allocated to
+        // the amateur service in ALL THREE Regions (the intersection of the
+        // regional columns), so the band-follow mode convention has a row to
+        // act on for a user who has not chosen a region.
+        {
+            BandPlan world;
+            std::string we = "stale";
+            CHECK(world.loadSelection(shipped, "world", we));
+            CHECK(we.empty());
+            const cascade::core::BandEntry* b40 = world.at(7100000.0);
+            CHECK(b40 != nullptr);
+            if (b40 != nullptr) {
+                CHECK(b40->name == "40 m Amateur");
+                CHECK(b40->service == "amateur");
+                CHECK(b40->startHz == 7000000.0 && b40->endHz == 7200000.0);
+            }
+            const cascade::core::BandEntry* b80 = world.at(3600000.0);
+            CHECK(b80 != nullptr);
+            if (b80 != nullptr) {
+                CHECK(b80->name == "80 m Amateur");
+                CHECK(b80->service == "amateur");
+                CHECK(b80->startHz == 3500000.0 && b80->endHz == 3800000.0);
+            }
+            // 7200-7300 kHz (Region 2 only) and 3800-4000 kHz (Regions 2 and 3
+            // only) are not allocated to amateurs everywhere: no amateur row.
+            const cascade::core::BandEntry* r2 = world.at(7250000.0);
+            CHECK(r2 == nullptr || r2->service != "amateur");
+            const cascade::core::BandEntry* r3 = world.at(3900000.0);
+            CHECK(r3 == nullptr || r3->service != "amateur");
+            // The mode convention the rows exist for: LSB below 10 MHz.
+            CHECK(std::string(cascade::core::conventionalModeForBand("amateur", 7100000.0)) == "LSB");
+            CHECK(std::string(cascade::core::conventionalModeForBand("amateur", 3600000.0)) == "LSB");
+        }
     }
 
     const int rc = testSummary("test_band_plan");
