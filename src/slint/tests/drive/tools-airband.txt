@@ -72,7 +72,9 @@ state list.bookmarks.names contains Guard
 +1 dump
 +1 click "Above the noise"
 +10 state fact.airband.listening == 1
-# listening added a status line above the key, which pushed STOP below the window: scroll again at a control still in view
-+1 scroll "Hold" 300
+# listening added a status line above the key, which pushed STOP below the window: scroll again. NOT at "Hold": its centre can sit
+# a few px under the bank's 44 px footer (the Flickable ends at y 828), where the wheel never reaches the bank (docs 6.54); "Above
+# the noise" is well inside the body in every run
++1 scroll "Above the noise" 300
 +3 click "STOP"
 +30 state fact.airband.listening == 0
