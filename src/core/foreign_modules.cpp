@@ -964,6 +964,10 @@ void ForeignModuleWatch::start() {
         impl_->started = true;
 #if !defined(_WIN32)
         impl_->value = "(not applicable)";
+        // There is no scan to wait for here, so the answer is final the moment it is given: scanned() says so (it stayed false for the life of
+        // the process, and the one test that waits for the scan before it counts allocations - test_engine_publish_alloc - waited its 30 s out
+        // and failed on Linux CI, 2026-11-09).
+        impl_->scanned = true;
         return;
 #endif
     }
