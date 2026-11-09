@@ -328,9 +328,15 @@ void testBusyHoldsAnswersBack() {
     A::act(app);
     CHECK(acted == 0);                        // not acted on against the old state
     CHECK(A::pending(app) >= 1);              // ...and not lost
-    for (int i = 0; i < 200 && acted == 0; ++i) {   // the next look that reads (the answer is a pass old by now: the state shows it)
+    // The next look that reads: the state shows the answer once ONE MORE PASS has published, and that is the control thread's own time, not a
+    // count of looks. 200 looks take well under a millisecond, so on a loaded runner the loop ended before the thread had run again and
+    // `acted` stayed 0 (Linux CI, 2026-11-09: "FAIL test_look_order.cpp:335 acted >= 1", the flake the docs name). The wait is by the clock,
+    // as the wait for the answer above is, and gives the thread the time to publish between looks.
+    const auto t1 = Clock::now();
+    while (acted == 0 && msSince(t1) < 5000.0) {
         A::look(app);
         A::act(app);
+        if (acted == 0) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
     }
     CHECK(acted >= 1);
     CHECK(olderThanAnswer == 0);
