@@ -1,0 +1,27 @@
+// The TRANSMIT page specimen sheet (1240 x 700): the Transmit page (ui/transmit_page.slint's TransmitPage) in two states side by side, on the models the test sets, so
+// tests/test_slint_transmit.cpp can press the controls with real pointer and key events, read the callbacks back through TransmitEvents and probe the pixels.
+//
+//   x     y     w x h        what it shows
+//   10    10    580 x 660    (idle) TransmitPage with NO RADIO: the radio row (Open), the controls greyed, the lamp NO RADIO, the ARM FOR PLUGINS block live         m-idle
+//   620   10    580 x 660    (open) TransmitPage with a radio open: SPLIT on, TONE input, a latch, remote consent, an armed window, a note                            m-open
+//
+// What the test reads: every gesture through the TransmitEvents global; the controls are found by their accessible labels (the element tree), the way the scripted input
+// of the window finds them. The models are in-out, the test changes them.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { ChipTone } from "../chips.slint";
+import { TxChoice, TransmitPageModel, TransmitEvents, TransmitPage } from "../transmit_page.slint";
+export { Theme, Skin, Workbench, ChipTone, TxChoice, TransmitPageModel, TransmitEvents }
+
+export component TransmitSpecimen inherits Window {
+    width: 1240px;
+    height: 700px;
+    background: Theme.bg;
+
+    in-out property <TransmitPageModel> m-idle;
+    in-out property <TransmitPageModel> m-open;
+    out property <bool> idle-ptt-down: idle.ptt-down;
+    out property <bool> open-ptt-down: open.ptt-down;
+
+    idle := TransmitPage { x: 10px; y: 10px; width: 580px; height: 660px; model: root.m-idle; }
+    open := TransmitPage { x: 620px; y: 10px; width: 580px; height: 660px; model: root.m-open; }
+}

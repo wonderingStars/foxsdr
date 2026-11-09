@@ -6,7 +6,8 @@
 //
 // Page kinds (PageTab.kind): 1 Decoder output, 2 picture, 3 panel, 4 instrument, 5 map, 6 Fitted modules, 7 a module's page,
 // 8 Target details, 9 the Plugin store (extend_bank.slint's StorePage over PageTab.store; its gestures go to ExtendEvents), 10 the Patch presets page
-// (patch_page.slint's PatchPresetsPage over PageTab.patch-presets; its gestures go to PatchEvents). DECODE bank row kinds
+// (patch_page.slint's PatchPresetsPage over PageTab.patch-presets; its gestures go to PatchEvents), 11 the Transmit page (transmit_page.slint's TransmitPage over
+// PageTab.transmit; its gestures go to TransmitEvents; docs 6.58). DECODE bank row kinds
 // (DecodeRow.kind): 0 Plugin store (the row that opens page kind 9), 1 the catalogue URL
 // field, 2 a retired plugin's row (Update / Remove), 3 Plugins (opens Fitted modules), 4 the "Turn on and off plugins" drawer,
 // 5 the "Target details" drawer, 6 a map page row, 7 a picture row, 8 a panel row, 9 an instrument row, 10 a note line.
@@ -26,6 +27,7 @@ import { InstrumentState, InstrumentFace } from "instruments.slint";
 import { MapTarget, LegendRow, MapPane } from "map.slint";
 import { StoreModel, StorePage } from "extend_bank.slint";
 import { PatchPresetsModel, PatchPresetsPage } from "patch_page.slint";
+import { TransmitPageModel, TransmitPage } from "transmit_page.slint";
 
 export { PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow }
@@ -291,6 +293,8 @@ export struct PageTab {
     store: StoreModel,
     // 10 Patch presets (NOT `presets`, which is the plugin preset keys' field)
     patch-presets: PatchPresetsModel,
+    // 11 Transmit page
+    transmit: TransmitPageModel,
 }
 
 // The bar every plugin page starts with: the presets and the settings fold (the order of the ImGui window's four loops).
@@ -543,6 +547,8 @@ export component PageBody inherits Rectangle {
         if root.page.kind == 9 : StorePage { vertical-stretch: 1; model: root.page.store; }
         // 10 the Patch presets page (patch_page.slint): its gestures reach the host through PatchEvents
         if root.page.kind == 10 : PatchPresetsPage { vertical-stretch: 1; model: root.page.patch-presets; }
+        // 11 the Transmit page (transmit_page.slint): its gestures reach the host through TransmitEvents
+        if root.page.kind == 11 : TransmitPage { vertical-stretch: 1; model: root.page.transmit; }
         // 8 Target details
         if root.page.kind == 8 : VerticalLayout { padding: 10px; alignment: start;
             TargetDetails { heading: root.page.details.heading; chip: root.page.details.chip; lamp: root.page.details.lamp; lines: root.page.details.lines; gone: root.page.details.gone;

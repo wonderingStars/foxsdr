@@ -1,0 +1,19 @@
+1338	ASSERTED	transmit-page	click Transmit (the rail row); state transmit.page == shown, transmit.live == 1; click Transmit again; state transmit.page == closed
+1340	ASSERTED	transmit-page	type the address into RADIO; state fact.transmit.args == the typed text (FOXAPP_OP_SET_TRANSMIT_ARGS reached the engine)
+1341	ASSERTED	transmit-page	click Open with the typed address; state transmit.withheld.0a01 == 1 and txAvailable == 0: a bounded run withholds TX_OPEN (nothing connects to a board), the page then shows no radio
+1342	NOT_DRIVABLE	-	Close is drawn only with a radio open and there is no transmit hardware on this machine (the dummy load is reachable only from C++ tests against the table); the family test presses it (test_slint_transmit)
+1344	NOT_DRIVABLE	-	live only with a radio open and SPLIT on; the script asserts it is greyed with none (expect MHz enabled equals false); the family test types and steps it
+1345	NOT_DRIVABLE	-	live only with a radio open; the script asserts SPLIT is greyed with none; the family test presses it
+1347	NOT_DRIVABLE	-	live only with a radio open; the script asserts NFM is greyed with none; the family test presses every key
+1348	NOT_DRIVABLE	-	live only with a radio open; the family test and the host test (test_slint_host_transmit) drive it
+1350	NOT_DRIVABLE	-	live only with a radio open (and a press would open the system microphone): never pressed in a bounded run; the family test presses it
+1351	NOT_DRIVABLE	-	live only with a radio open; the family test presses it
+1352	NOT_DRIVABLE	-	drawn only with the TONE input chosen, which needs a radio open; the family test commits a tone
+1354	ASSERTED	transmit-page	press PTT with no radio open (it is greyed): state transmit.sent.0a03 == 0, transmit.ptt == 0, txKeyed == 0 - nothing is held or sent; THE HOLD ITSELF IS NOT EXERCISED (no transmitter on this machine): the family test holds, drags off and releases it, the host test drives every interlock
+1355	ASSERTED	transmit-page	press LATCH with no radio open (greyed): state transmit.sent.0a04 == 0, txKeyed == 0; a latch is never exercised for real (no transmitter)
+1357	NOT_DRIVABLE	-	live only with a radio open; the script asserts it is greyed with none; the family test ticks it
+1359	NOT_DRIVABLE	-	a caption with a tooltip, not a control
+1360	ASSERTED	transmit-page	click 5 MIN, 15 MIN, 60 MIN with no radio open; state fact.tx.plugin.refusal == 1 (the engine refused: no transmitter is open) and txAvailable == 0 - the arming window cannot open
+1361	ASSERTED	transmit-page	click OFF; state fact.tx.plugin.refusal == 0 (the refusal is cleared)
+1363	ASSERTED	transmit-page	click DATA (flat) twice; state fact.tx.plugin.dataFlat == 0 then 1; expect checked false then true
+138	NOT_DRIVABLE	-	the Space hold works only with a radio open and the PTT key focused; the family test sends the spacebar to the focused key and Tab away (test_slint_transmit), the host test matches chords (test_slint_host_transmit)

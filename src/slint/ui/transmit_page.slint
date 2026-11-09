@@ -1,0 +1,480 @@
+// FoxSDR Slint front end - THE TRANSMIT PAGE (docs/engine-stage4.md 6.58): the classic window's Transmit page (app_window.cpp drawTransmitPage, app_window_transmit.cpp) as
+// a page of the plugin kit (PageTab kind 11): the radio and its address, the frequency with SPLIT, the mode, the power, the input and its tone, the audio meter, the PTT and
+// LATCH keys with the lamp, "Allow remote transmit", "Listen while transmitting", the notes, the ARM FOR PLUGINS block with DATA (flat) and the licence sentence.
+//
+// THE PATTERN IS THE PATCH PAGE'S: this file declares the struct the host fills (TransmitPageModel), one global of every gesture (TransmitEvents) and the component
+// (TransmitPage), which declares a callback for every gesture and forwards it to the global unless an instance overrides it (the specimen does, to count them). The host
+// owns every value; a control shows the model's value and a click ASKS. The words of the ImGui window are used as they are, so the catalogue entries apply for free; the
+// sentences the host builds (the radio line, the armed line, the notes, the mode captions) come through the model, translated by the host.
+//
+// SAFETY, AND THE UI'S SMALL PART OF IT. Nothing in this file can key a radio: the PTT key reports the level of the pointer (`ptt-pointer(bool)`) and of the bound chord
+// (`ptt-chord(text, ctrl, shift, alt, down)`) and the host turns those into the engine's re-asserted hold; the LATCH key, the consent tick and the arming keys report a press. Every
+// one is greyed while no radio is open (the arming keys excepted: pressing one with no radio is how the page says why it cannot). The PTT key has NO accessible default
+// action: a screen reader or a script cannot "click" it into a transmission, which is a hold and not a click. A key that is let go of - or whose key or page loses the
+// focus - while a chord is down reports the chord up.
+//
+// THE PIECES ARE COPIED, NOT SHARED, a sixth time (LineInput; see patch_page.slint).
+import { Theme } from "theme.slint";
+import { ChipTone } from "chips.slint";
+import { Caption, Key, SegGroup, SegKey } from "keys.slint";
+import { Checkbox } from "fields.slint";
+import { Slider, LevelBar } from "sliders.slint";
+import { TipTimer } from "tooltip.slint";
+
+// One choice of a row of keys (a mode, an input): the label on the key and its tooltip.
+export struct TxChoice { label: string, tip: string }
+
+export struct TransmitPageModel {
+    // the radio
+    address: string, address-enabled: bool, have: bool, open-enabled: bool, close-enabled: bool, open-tip: string, radio-line: string, radio-err: bool,
+    // the frequency
+    frequency: string, frequency-enabled: bool, split: bool, split-enabled: bool, following-note: string,
+    // the mode
+    mode: int, modes-enabled: bool, modes: [TxChoice],
+    // the power
+    power: float, power-text: string, power-enabled: bool, power-note: string,
+    // the input
+    input: int, inputs-enabled: bool, inputs: [TxChoice], tone-shown: bool, tone-hz: string, tone-enabled: bool, meter: float,
+    // the key
+    lamp-word: string, lamp-tone: ChipTone, on-air: bool, latched: bool, key-enabled: bool, remote-armed: bool, monitor: bool, key-note: string, unkey-reason: string, error-line: string,
+    ptt-hint: string,
+    // ARM FOR PLUGINS
+    armed: bool, armed-minutes: int, armed-line: string, on-air-line: string, plugin-on-air: bool, not-armed-line: string, refusal-line: string, reason-line: string, data-flat: bool,
+    arm-labels: [string],
+    // the sentence
+    licence: string,
+}
+
+// Every gesture of the page (the host wires each once; see transmit_publish.cpp).
+export global TransmitEvents {
+    callback address-edited(string);
+    callback address-focus(bool);
+    callback open-clicked();
+    callback close-clicked();
+    callback frequency-committed(string);
+    callback frequency-stepped(int);
+    callback split-clicked();
+    callback mode-clicked(int);
+    callback power-changed(float);
+    callback input-clicked(int);
+    callback tone-committed(string);
+    callback ptt-pointer(bool);
+    callback ptt-chord(string, bool, bool, bool, bool);
+    callback latch-clicked();
+    callback remote-toggled(bool);
+    callback monitor-toggled(bool);
+    callback arm-clicked(int);
+    callback data-flat-toggled(bool);
+}
+
+// The one-line input (.in, 24 px): shows `value` (the host's text), commits on Enter and on the focus leaving after an edit. `edited` reports each keystroke.
+// `suffix` is a unit drawn after the figure (" MHz"), `font-size` lets a face scale the text with its zoom, `focus-input()` takes the keyboard.
+component LineInput inherits Rectangle {
+    in property <string> value;
+    in property <string> placeholder;
+    in property <bool> mono;
+    in property <bool> right;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <string> name;                          // the accessible label
+    in property <string> suffix;
+    in property <length> font-size: Theme.font-small;
+    callback committed(string);
+    callback edited(string);
+    callback accepted(string);
+    out property <bool> has-focus: input.has-focus;
+    out property <string> text: input.text;
+
+    property <length> pad: 8px + Theme.hairline;
+    property <length> suffix-w: root.suffix == "" ? 0px : sfx.preferred-width + 2px;
+    property <bool> dirty;                              // edited since the last commit
+
+    public function focus-input() { input.focus(); }
+
+    height: Theme.field-h;
+    min-width: 0px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.enabled ? Theme.line-strong : Theme.line-strong.with-alpha(0.5);
+    background: root.enabled ? Theme.field : Theme.key-disabled-bg;
+
+    init => { input.text = root.value; }
+    changed value => {
+        input.text = root.value;
+        root.dirty = false;
+    }
+
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
+        clicked => { if (root.enabled) { input.focus(); } }
+        if input.text == "" && root.placeholder != "" : Text {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad);
+            height: root.height;
+            text: root.placeholder;
+            color: Theme.disabled;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: root.font-size;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        input := TextInput {
+            x: root.pad;
+            y: 0px;
+            width: max(0px, root.width - 2 * root.pad - root.suffix-w);
+            height: root.height;
+            enabled: root.enabled;
+            read-only: !root.enabled;
+            single-line: true;
+            color: root.enabled ? Theme.fg : Theme.key-disabled-fg;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: root.font-size;
+            horizontal-alignment: root.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.accent-ink;
+            accessible-label: root.name;
+            edited => {
+                root.dirty = true;
+                root.edited(self.text);
+            }
+            accepted => {
+                root.dirty = false;
+                root.committed(self.text);
+                root.accepted(self.text);
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.dirty) {
+                    root.dirty = false;
+                    root.committed(self.text);
+                }
+            }
+        }
+        sfx := Text {
+            x: root.width - root.pad - self.width;
+            y: 0px;
+            width: self.preferred-width;
+            height: root.height;
+            visible: root.suffix != "";
+            text: root.suffix;
+            color: Theme.dim;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: root.font-size;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+    if input.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-width: 2px;
+        border-color: Theme.focus;
+        border-radius: Theme.radius + 3px;
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// A latched key that shows its state as a red ground (SPLIT on, LATCH on): the library's Key has no checked state and its `danger` look is always red. It is a button
+// whose accessible state is checkable, so a screen reader and the scripted input read "checked".
+component ToggleKey inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    in property <length> key-w: 80px;
+    in property <length> key-h: Theme.key-h;
+    callback clicked();
+    out property <bool> has-focus: fs.has-focus;
+    property <bool> hot: area.has-hover && root.enabled;
+
+    width: root.key-w;
+    height: root.key-h;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: !root.enabled ? Theme.key-line.with-alpha(0.5) : root.on ? Theme.danger-strong-line : Theme.key-line;
+    background: !root.enabled ? Theme.key-disabled-bg : root.on ? (root.hot ? Theme.danger-line : Theme.danger-bg) : root.hot ? Theme.menu-hot : Theme.key-bg;
+    forward-focus: fs;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        color: !root.enabled ? Theme.key-disabled-fg : root.on ? Theme.danger-fg : Theme.key-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body;
+        font-weight: Theme.weight-medium;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    if fs.has-focus : Rectangle {
+        x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px;
+        border-width: 2px; border-color: Theme.focus; border-radius: Theme.radius + 3px;
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    area := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// THE PTT KEY: a HOLD, not a click. `held(true)` while the pointer is down on it (a TouchArea keeps the press until the button comes up, wherever the pointer went);
+// while it has the keyboard focus the host is told every key event (`chord`) and compares it with the bound chord (the spacebar by default). It carries NO accessible default
+// action - a hold cannot be "clicked" by a screen reader or a script into a transmission. It lets go of everything when it is disabled or loses the focus.
+component HoldKey inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <bool> on-air;
+    in property <string> tooltip;
+    callback held(bool);
+    callback chord(string, bool, bool, bool, bool);   // key text, ctrl, shift, alt, down
+    out property <bool> down: area.pressed;
+    out property <bool> has-focus: fs.has-focus;
+    property <bool> hot: area.has-hover && root.enabled;
+
+    width: 160px;
+    height: 56px;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: !root.enabled ? Theme.key-line.with-alpha(0.5) : root.on-air ? Theme.danger-strong-line : Theme.key-line;
+    background: !root.enabled ? Theme.key-disabled-bg : root.on-air ? Theme.lamp-red : area.pressed ? Theme.accent : root.hot ? Theme.menu-hot : Theme.key-bg;
+    accessible-role: button;
+    accessible-label: "PTT";   // not-translated: the key's own caption, as the ImGui window draws it
+    accessible-description: root.tooltip;
+    accessible-enabled: root.enabled;
+    changed enabled => { if (!root.enabled) { root.chord("", false, false, false, false); } }
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: "PTT";   // not-translated: radio vocabulary, as the ImGui window draws it
+        color: !root.enabled ? Theme.key-disabled-fg : root.on-air ? Theme.accent-ink : area.pressed ? Theme.accent-ink : Theme.key-fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-body + 4px;
+        font-weight: Theme.weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    if fs.has-focus : Rectangle {
+        x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px;
+        border-width: 2px; border-color: Theme.focus; border-radius: Theme.radius + 3px;
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: true;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            root.chord(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt, true);
+            return reject;
+        }
+        key-released(event) => {
+            root.chord(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt, false);
+            return reject;
+        }
+        changed has-focus => { if (!self.has-focus) { root.chord("", false, false, false, false); } }
+    }
+    area := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        changed pressed => {
+            if (self.pressed) { fs.focus(); }   // the pointer on the key gives it the keyboard (the TouchArea above the FocusScope takes the click)
+            root.held(self.pressed);
+        }
+    }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+}
+
+// A line of the page's notes: 11 px, in a tone (0 faint, 1 amber, 2 red).
+component NoteLine inherits Rectangle {
+    in property <string> text;
+    in property <int> tone: 1;
+    min-width: 0px;
+    height: root.text == "" ? 0px : words.preferred-height;
+    words := Text {
+        x: 0px; y: 0px; width: root.width;
+        text: root.text;
+        wrap: TextWrap.word-wrap;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        color: root.tone == 2 ? Theme.chip-err-fg : root.tone == 1 ? Theme.chip-warn-fg : Theme.dim;
+    }
+}
+
+export component TransmitPage inherits Rectangle {
+    in property <TransmitPageModel> model;
+    callback address-edited(string);
+    address-edited(t) => { TransmitEvents.address-edited(t); }
+    callback address-focus(bool);
+    address-focus(f) => { TransmitEvents.address-focus(f); }
+    callback open-clicked();
+    open-clicked() => { TransmitEvents.open-clicked(); }
+    callback close-clicked();
+    close-clicked() => { TransmitEvents.close-clicked(); }
+    callback frequency-committed(string);
+    frequency-committed(t) => { TransmitEvents.frequency-committed(t); }
+    callback frequency-stepped(int);
+    frequency-stepped(d) => { TransmitEvents.frequency-stepped(d); }
+    callback split-clicked();
+    split-clicked() => { TransmitEvents.split-clicked(); }
+    callback mode-clicked(int);
+    mode-clicked(i) => { TransmitEvents.mode-clicked(i); }
+    callback power-changed(float);
+    power-changed(v) => { TransmitEvents.power-changed(v); }
+    callback input-clicked(int);
+    input-clicked(i) => { TransmitEvents.input-clicked(i); }
+    callback tone-committed(string);
+    tone-committed(t) => { TransmitEvents.tone-committed(t); }
+    callback ptt-pointer(bool);
+    ptt-pointer(d) => { TransmitEvents.ptt-pointer(d); }
+    callback ptt-chord(string, bool, bool, bool, bool);
+    ptt-chord(t, c, s, a, d) => { TransmitEvents.ptt-chord(t, c, s, a, d); }
+    callback latch-clicked();
+    latch-clicked() => { TransmitEvents.latch-clicked(); }
+    callback remote-toggled(bool);
+    remote-toggled(v) => { TransmitEvents.remote-toggled(v); }
+    callback monitor-toggled(bool);
+    monitor-toggled(v) => { TransmitEvents.monitor-toggled(v); }
+    callback arm-clicked(int);
+    arm-clicked(m) => { TransmitEvents.arm-clicked(m); }
+    callback data-flat-toggled(bool);
+    data-flat-toggled(v) => { TransmitEvents.data-flat-toggled(v); }
+    out property <bool> ptt-down: ptt.down;
+    property <bool> addr-focus: addr.has-focus;
+    changed addr-focus => { root.address-focus(root.addr-focus); }
+    out property <length> content-h: col.preferred-height + 2 * 14px;
+
+    background: Theme.panel;
+    clip: true;
+
+    Flickable {
+        content-height: col.preferred-height + 2 * 14px;
+        col := VerticalLayout {
+            x: 14px; y: 14px;
+            width: root.width - 28px;
+            spacing: 8px;
+            alignment: start;
+
+            // --- the radio ---------------------------------------------------------
+            HorizontalLayout { spacing: 8px; height: Theme.key-h; alignment: start;
+                Caption { label: @tr("RADIO"); width: 48px; }
+                addr := LineInput { value: root.model.address; enabled: root.model.address-enabled; name: @tr("RADIO"); mono: true; width: 260px; tooltip: root.model.open-tip;
+                    edited(t) => { root.address-edited(t); } committed(t) => { root.address-edited(t); } }
+                if !root.model.have : Key { label: @tr("Open"); enabled: root.model.open-enabled; tooltip: root.model.open-tip; clicked => { root.open-clicked(); } }
+                if root.model.have : Key { label: @tr("Close"); enabled: root.model.close-enabled; clicked => { root.close-clicked(); } }
+            }
+            if root.model.radio-line != "" : NoteLine { text: root.model.radio-line; tone: root.model.radio-err ? 2 : 0; }
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+
+            // --- the frequency -----------------------------------------------------
+            HorizontalLayout { spacing: 8px; height: Theme.key-h; alignment: start;
+                LineInput { value: root.model.frequency; enabled: root.model.frequency-enabled; name: "MHz"; mono: true; suffix: " MHz"; width: 170px; font-size: Theme.font-body;   // not-translated: the unit's own label, as the ImGui window draws it
+                    committed(t) => { root.frequency-committed(t); } }
+                Key { label: "-"; tooltip: "Frequency down 1 kHz"; xs: true; enabled: root.model.frequency-enabled; clicked => { root.frequency-stepped(-1); } }   // not-translated: the step keys' own marks
+                Key { label: "+"; tooltip: "Frequency up 1 kHz"; xs: true; enabled: root.model.frequency-enabled; clicked => { root.frequency-stepped(1); } }   // not-translated: the step keys' own marks
+                ToggleKey { label: @tr("SPLIT"); on: root.model.split; enabled: root.model.split-enabled; key-w: 80px;
+                    tooltip: @tr("Off: the transmitter follows the receiver's dial, so a reply\ngoes out where the call came in.\nOn: the two are unlinked - what a repeater, a pile-up and a\nsatellite each need, and the state in which you are not\nlistening where you are transmitting.");
+                    clicked => { root.split-clicked(); } }
+                if root.model.following-note != "" : Text { text: root.model.following-note; color: Theme.dim; font-size: Theme.font-small; vertical-alignment: center; }
+            }
+
+            // --- the mode ----------------------------------------------------------
+            HorizontalLayout { alignment: start;
+                SegGroup {
+                    for c[i] in root.model.modes : SegKey { label: c.label; tooltip: c.tip; on: root.model.mode == i; enabled: root.model.modes-enabled; min-w: 56px; clicked => { root.mode-clicked(i); } }
+                }
+            }
+
+            // --- the power ---------------------------------------------------------
+            HorizontalLayout { spacing: 8px; height: 22px; alignment: start;
+                Caption { label: @tr("TX POWER"); width: 80px; }
+                Rectangle { width: 240px; Slider { y: (parent.height - self.height) / 2; width: parent.width; value: root.model.power; enabled: root.model.power-enabled; changed(v) => { root.power-changed(v); } } }
+                Text { text: root.model.power-text; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.fg; vertical-alignment: center; }
+                if root.model.power-note != "" : Text { text: root.model.power-note; font-size: Theme.font-small; color: Theme.chip-err-fg; vertical-alignment: center; }
+            }
+
+            // --- the input ---------------------------------------------------------
+            HorizontalLayout { spacing: 8px; height: Theme.key-h; alignment: start;
+                Caption { label: @tr("INPUT"); width: 48px; }
+                SegGroup {
+                    for c[i] in root.model.inputs : SegKey { label: c.label; tooltip: c.tip; on: root.model.input == i; enabled: root.model.inputs-enabled; min-w: 62px; clicked => { root.input-clicked(i); } }
+                }
+                if root.model.tone-shown : LineInput { value: root.model.tone-hz; enabled: root.model.tone-enabled; name: "Hz"; mono: true; suffix: " Hz"; width: 110px; font-size: Theme.font-body;   // not-translated: the unit's own label, as the ImGui window draws it
+                    committed(t) => { root.tone-committed(t); } }
+            }
+
+            // --- the audio meter ---------------------------------------------------
+            HorizontalLayout { spacing: 8px; height: 14px; alignment: start;
+                Caption { label: @tr("AUDIO"); width: 48px; }
+                Rectangle { width: 240px; LevelBar { y: (parent.height - self.height) / 2; width: parent.width; value: root.model.meter; } }
+            }
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+
+            // --- the key -----------------------------------------------------------
+            HorizontalLayout { spacing: 12px; height: 56px; alignment: start;
+                ptt := HoldKey { enabled: root.model.key-enabled; on-air: root.model.on-air;
+                    tooltip: @tr("Hold to transmit. Let go and it stops.\nThe spacebar does the same while this page has focus, and can\nbe rebound in SYSTEM > Settings.");
+                    held(d) => { root.ptt-pointer(d); }
+                    chord(t, c, s, a, d) => { root.ptt-chord(t, c, s, a, d); } }
+                ToggleKey { label: @tr("LATCH"); on: root.model.latched; enabled: root.model.key-enabled; key-w: 100px; key-h: 56px;
+                    tooltip: @tr("Holds the key down with no hand on it. It releases itself\nafter a minute, and any fault releases it at once.");
+                    clicked => { root.latch-clicked(); } }
+                Text { text: root.model.lamp-word; color: root.model.lamp-tone == ChipTone.err ? Theme.chip-err-fg : root.model.lamp-tone == ChipTone.warn ? Theme.chip-warn-fg : Theme.faint;
+                    font-size: Theme.font-body; font-weight: Theme.weight-semibold; vertical-alignment: center; }
+            }
+            Checkbox { label: @tr("Allow remote transmit"); checked: root.model.remote-armed; enabled: root.model.key-enabled;
+                tooltip: @tr("Lets the web remote's PTT key this transmitter while you are here.\nIt never latches, holds the key two seconds per press, and stops\nthe moment you untick this, close this page or the window stops.");
+                toggled(v) => { root.remote-toggled(v); } }
+            Checkbox { label: @tr("Listen while transmitting"); checked: root.model.monitor; enabled: root.model.key-enabled;
+                tooltip: @tr("The Pluto is full duplex, so the receiver keeps running while\nyou transmit. This is whether you HEAR it - off by default,\nbecause a receiver on the frequency it is transmitting on is\na howl.");
+                toggled(v) => { root.monitor-toggled(v); } }
+
+            // --- what happened -----------------------------------------------------
+            if root.model.key-note != "" : NoteLine { text: root.model.key-note; tone: 1; }
+            if root.model.unkey-reason != "" : NoteLine { text: root.model.unkey-reason; tone: 1; }
+            if root.model.error-line != "" : NoteLine { text: root.model.error-line; tone: 2; }
+
+            // --- PLUGINS THAT TRANSMIT ---------------------------------------------
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+            HorizontalLayout { spacing: 8px; height: Theme.key-h; alignment: start;
+                Rectangle { width: armcap.preferred-width + 4px;
+                    armcap := Caption { x: 0px; y: 0px; width: parent.width; height: parent.height; label: @tr("ARM FOR PLUGINS"); }
+                    armtip := TouchArea { }
+                    TipTimer { x: 0px; y: 0px; hovered: armtip.has-hover; anchor-h: parent.height;
+                        text: @tr("Lets a plugin you have granted TRANSMIT key this radio, for\nthe time you choose. It chooses nothing else: the\nfrequency, the power and the mode are the ones on this page,\nand any fault, closing this page or the time running out\nstops it. Nothing here is remembered next time."); }
+                }
+                for m[i] in [5, 15, 60] : Key { label: root.model.arm-labels.length > i ? root.model.arm-labels[i] : ""; on: root.model.armed && root.model.armed-minutes == m; min-w: 70px;
+                    clicked => { root.arm-clicked(m); } }
+                Key { label: @tr("OFF"); min-w: 70px; clicked => { root.arm-clicked(0); } }
+            }
+            NoteLine { text: root.model.armed ? root.model.armed-line : root.model.not-armed-line; tone: root.model.armed ? (root.model.plugin-on-air ? 2 : 1) : 0; }
+            if root.model.on-air-line != "" : NoteLine { text: root.model.on-air-line; tone: 2; }
+            if root.model.refusal-line != "" : NoteLine { text: root.model.refusal-line; tone: 2; }
+            if root.model.reason-line != "" : NoteLine { text: root.model.reason-line; tone: 1; }
+            Checkbox { label: @tr("DATA (flat)"); checked: root.model.data-flat;
+                tooltip: @tr("A plugin's audio goes out as NFM with the pre-emphasis off, whatever\nmode is selected above: a data modem's tones must reach the far\nreceiver flat. Untick it to send the plugin's audio in the mode\nselected above instead. The microphone and the tone are never\naffected.");
+                toggled(v) => { root.data-flat-toggled(v); } }
+
+            // --- THE SENTENCE ------------------------------------------------------
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+            if root.model.licence != "" : NoteLine { text: root.model.licence; tone: 0; }
+        }
+    }
+}
