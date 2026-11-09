@@ -1,0 +1,21 @@
+// The scope modes' specimen (docs/engine-stage4.md 6.57): the DEMOD SCOPE window filling a 800 x 580 sheet, its model handed in from a property of the root
+// (tests/test_slint_scope_modes.cpp sets each field once - the compile is the check that the contract holds) and every ScopeEvents callback reachable from C++.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { DemodModel, MpxMarkItem, DemodScopeWindow, ScopeEvents } from "../scope_modes.slint";
+export { Theme, Skin, Workbench }
+export { DemodModel, MpxMarkItem, ScopeEvents }
+
+export component ScopeModesSpecimen inherits Window {
+    width: 800px;
+    height: 580px;
+    background: Theme.bg;
+
+    in-out property <DemodModel> demod;
+
+    // the window exists only while the model says it is shown (as main.slint places it), so its init reaches handlers the host registered after create()
+    if root.demod.shown : DemodScopeWindow {
+        x: 0px; y: 0px;
+        width: parent.width; height: parent.height;
+        model: root.demod;
+    }
+}

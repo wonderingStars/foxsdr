@@ -69,6 +69,7 @@
 #include "input_script.hpp"
 #include "kit_publish.hpp"
 #include "patch_publish.hpp"
+#include "scope_publish.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
 #include "signatures.hpp"
@@ -424,7 +425,13 @@ int main(int argc, char** argv) {
     // THE TOOLS BANK'S BODIES (tools_publish.hpp): the Radar fold's position offers, Bookmarks, Scanner, Airband and the Markers sheet, published from tools_logic's reads
     // (once a tick, after the system bank's, whose GPS row the Radar fold shows) and wired to the effects tools_logic names. The Bookmarks Import key with an empty box
     // opens the SIGNAL bank's import dialog. A bounded run writes no clipboard and opens no folder. FOXSDR_SLINT_MARKERS=1 opens the Markers sheet for a capture.
+    // THE SCOPE MODES (scope_publish.hpp, docs 6.57): the DEMOD SCOPE window and the radar scope, opened by the TOOLS rows' keys (the hooks below) and published once a tick.
+    // FOXSDR_SLINT_DEMOD_SCOPE=<signal 0-4> opens the demod window on that input for a bounded run's capture.
+    foxsdr::slintscope::ScopePublisher scopeBank(*ui, api, session, duties, bounded.bounded());
+    scopeBank.wire();
+    if (const char* e = std::getenv("FOXSDR_SLINT_DEMOD_SCOPE"); e != nullptr && bounded.bounded()) { scopeBank.openDemodForCapture(e[0] >= '0' && e[0] <= '4' ? e[0] - '0' : -1); }
     foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
+    toolsHooks.demodScopeClicked = [&] { scopeBank.toggleDemod(); };
     toolsHooks.openImportDialog = [&] { ui->global<SignalEvents>().invoke_recorder_import(); };
     // the two spectrum options are the interface half's (docs 6.52): read at start, saved on each tick of a box, read again every tick by the spectrum's marks
     toolsHooks.onSpectrum = duties.interfaceHalf().bookmarkMarkers;
@@ -1279,6 +1286,8 @@ int main(int argc, char** argv) {
         publisher.publish(state);
         signalBank.publish(state);
         systemBank.publish(state);
+        scopeBank.publish(state, static_cast<double>(nowMs()) / 1000.0);
+        toolsBank.setScopeFacts(scopeBank.demodSignal(), scopeBank.demodOpen(), scopeBank.demodLive(), false);
         toolsBank.publish(state, systemBank.models().serial.gps);
         if (!retuneProbe.empty()) {
             ++retuneProbeTicks;
@@ -1425,6 +1434,8 @@ int main(int argc, char** argv) {
             out = std::to_string(n);
             return std::string();
         }
+        // scope.<what>: the scope modes' own state (scope_publish.hpp readState: demodOpen, signal, live, audioCount, bins, segments, ..., radarOn, range ...)
+        if (name.rfind("scope.", 0) == 0) { return scopeBank.readState(name.substr(6), out); }
         if (name == "bank") { out = std::to_string(ui->get_bank_index()); return std::string(); }
         if (name == "view") { out = std::to_string(ui->get_view_index()); return std::string(); }
         if (name == "pages") { out = publisher.pagesLine(); return std::string(); }
@@ -1539,6 +1550,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", signalBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", systemBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", toolsBank.summaryLine().c_str());
+        std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", scopeBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", extendBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", patchBank.summaryLine().c_str());
         if (!retuneProbe.empty()) {

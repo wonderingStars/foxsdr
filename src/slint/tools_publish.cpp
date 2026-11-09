@@ -630,6 +630,8 @@ void ToolsPublisher::applyLocal(const Effect& e) {
     switch (e.local) {
         case Local::None: break;
         case Local::Deferred:
+            if (e.text == "demod-scope" && hooks_.demodScopeClicked) { hooks_.demodScopeClicked(); break; }
+            if (e.text == "radar-scope" && hooks_.radarScopeClicked) { hooks_.radarScopeClicked(); break; }
             std::fprintf(stderr, "foxsdr-slint: tools: deferred: the scope mode / the radar scope - next allowance (%s)\n", e.text.c_str());
             break;
         case Local::PositionLat: opts_.lat_text = e.text; break;

@@ -40,6 +40,7 @@ import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, Tr
 import { AgeTick, WaterfallView } from "waterfall.slint";
 import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
 import { ScopeTube } from "stubs.slint";
+import { ScopeEvents, DemodModel, MpxMarkItem, DemodScopeWindow } from "scope_modes.slint";
 import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents, PatchPage } from "patch_page.slint";
 import { AboutSlint } from "std-widgets.slint";
@@ -56,7 +57,8 @@ export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, Men
          ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow, MarkersModel,
          ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
          FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
-         InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents }
+         InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents,
+         ScopeEvents, DemodModel, MpxMarkItem }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -191,6 +193,7 @@ export component MainWindow inherits Window {
     in property <ScannerModel> scanner-model;
     in property <AirbandModel> airband-model;
     in property <MarkersModel> markers-model;
+    in property <DemodModel> demod-model;            // the DEMOD SCOPE window (scope_modes.slint): shown while the TOOLS row has it open
     // THE EXTEND BANK (phase 3, docs 6.42): the two bodies under the rows of bank 3; the store is a kit page (pages.slint kind 9)
     in property <WebModel> web-model;
     in property <CatModel> cat-model;
@@ -772,6 +775,12 @@ export component MainWindow inherits Window {
     if root.import-dialog.shown : ImportDialog { model: root.import-dialog; }
     if root.report-page.shown : ReportSheet { model: root.report-page; }
     if root.markers-model.shown : MarkersSheet { model: root.markers-model; }
+    // THE DEMOD SCOPE: a window of its own over the centre, opened where the classic opens it (the lower right, inside the main window)
+    if root.demod-model.shown : DemodScopeWindow {
+        x: 0px; y: Theme.title-h; width: root.width; height: max(0px, root.height - Theme.title-h - Theme.status-h);
+        win-x: max(0px, root.width - 780px - 36px); win-y: max(0px, root.height - Theme.title-h - Theme.status-h - 540px - 20px);
+        model: root.demod-model;
+    }
     if root.bias-question-open : Sheet { title: @tr("Turn on the bias tee?"); dismissed => { root.bias-question-open = false; }
         Text { text: root.bias-question-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
         Text { text: root.bias-tooltip; wrap: word-wrap; color: Theme.chip-warn-fg; font-size: Theme.font-small; }

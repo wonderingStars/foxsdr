@@ -1,0 +1,24 @@
+#! frames=260 bank=2 iqfile=scope.wav centre=100000000 mode=AM bandwidth=3000
+# scope-demod-open (docs 6.57): the TOOLS rail's "Demod scope" row opens the bench oscilloscope window (tick rows 1526-1530); the window's own Close key and a second press of the row shut it
+# again. The picture is read back from the host: the sweep's samples (10 ms/DIV x 10 at 48 kHz = 4800), the glass the picture was painted at, the segments the painter drew.
+30 state running == 1
+state scope.demodOpen == 0
+state scope.painted == 0
++1 click "Demod scope"
++12 state scope.demodOpen == 1
++20 state scope.live == 1
+state scope.audioCount == 4800
+state scope.signal == 0
+state scope.segments > 300
+state scope.glassW > 500
+state scope.glassH > 250
+state scope.centre == "10 ms/DIV"
+shot "scope-demod-open.png"
+# the window's own Close key (the second "Close": the first is the title bar's)
++1 click "Close"#2
++8 state scope.demodOpen == 0
+# the row opens it again and a second press shuts it
++1 click "Demod scope"
++8 state scope.demodOpen == 1
++1 click "Demod scope"
++8 state scope.demodOpen == 0
