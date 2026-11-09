@@ -36,6 +36,11 @@ shot "scope-radar-open.png"
 +4 state scope.range == 50
 +1 click "Range up"
 +4 state scope.range == 100
+# the wheel over the tube steps the range too: a wheel turned UP is one rung down (the classic's rule); the driver's positive scroll shows what is BELOW, which is a wheel turned down
++1 scroll "Radar tube" 120
++4 state scope.range == 200
++1 scroll "Radar tube" -120
++4 state scope.range == 100
 # the LCD's three screens
 +1 click "SYS"
 +4 state scope.lcd == 2

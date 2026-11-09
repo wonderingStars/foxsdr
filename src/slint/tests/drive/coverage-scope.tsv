@@ -1,0 +1,40 @@
+1526	ASSERTED	scope-demod-open.txt	click "Demod scope"; state scope.demodOpen 0 -> 1 -> 0 -> 1 -> 0
+1530	ASSERTED	scope-demod-open.txt	the window opens (state scope.demodOpen, scope.glassW > 500, scope.painted) and its own Close key ("Close"#2) shuts it
+1531	ASSERTED	scope-demod-inputs.txt	click "AUDIO"; state scope.signal == 0, scope.audioCount == 4800
+1532	ASSERTED	scope-demod-inputs.txt	click "SPEC"; state scope.signal == 1, scope.bins > 300, scope.audioCount == 0
+1533	ASSERTED	scope-demod-inputs.txt	click "I/Q"; state scope.signal == 2, scope.iqCount > 1000
+1534	ASSERTED	scope-demod-inputs.txt	click "VECTOR"; state scope.signal == 3, scope.iqCount > 1000
+1535	NOT_DRIVABLE	-	the multiplex key exists only in WFM, which needs a 200 kS/s channel: the fixtures are narrowband (the gather, the marks and the key's refusal are unit-tested in test_slint_host_scope; the key and the marks are rendered in test_slint_scope_modes)
+1537	ASSERTED	scope-demod-inputs.txt	click "Shorter time base"; state scope.timebase == 2, scope.audioCount == 2400
+1538	ASSERTED	scope-demod-inputs.txt	click "Longer time base"; state scope.timebase == 4, scope.centre == "20 ms/DIV", scope.audioCount == 9600
+1541	ASSERTED	scope-demod-inputs.txt	click "Less gain" after unticking AUTO; state scope.gain == "100 mV/DIV"
+1542	ASSERTED	scope-demod-inputs.txt	click "More gain"; state scope.gainIndex == 7, scope.gain == "500 mV/DIV"; disabled while AUTO is ticked and on a spectrum (expect enabled equals "false")
+1544	ASSERTED	scope-demod-inputs.txt	click "AUTO"#3; state scope.auto 1 -> 0 and the steppers become enabled
+1546	ASSERTED	scope-demod-inputs.txt	click "NORM"; state scope.display == 0
+1547	ASSERTED	scope-demod-inputs.txt	click "AVG"; state scope.display == 1
+1548	ASSERTED	scope-demod-inputs.txt	click "PERSIST"; state scope.display == 2, scope.segments > 800
+1549	ASSERTED	scope-demod-open.txt	state scope.segments > 300 and scope.painted counts the glass painted at scope.glassW x scope.glassH; shots scope-demod-open.png and scope-demod-persist.png
+1556	ASSERTED	scope-radar-open.txt	click "Radar scope"; state view == 2 and scope.radarOn == 1
+1574	ASSERTED	scope-radar-open.txt	click "EXIT SCOPE"; state view back to 0
+1575	ASSERTED	scope-radar-open.txt	key escape; state view back to 0 (the root FocusScope's shortcut, the keyboard handed to it when the tab opens)
+1577	ASSERTED	scope-radar-open.txt	click "Range down"; state scope.range 200 -> 100 -> 50
+1579	ASSERTED	scope-radar-open.txt	click "Range up"; state scope.range 50 -> 100
+1581	ASSERTED	scope-radar-open.txt	state scope.hasRx == 0 and scope.tubeW == 0 with no position (the empty state), then 1 and > 300 after Set RX here; shot scope-radar-empty.png
+1586	ASSERTED	scope-radar-targets.txt	state scope.drumTracks == "001" with one aircraft heard
+1587	NOT_DRIVABLE	-	the fixtures have no gain stage, so the knob is dead (state scope.knobDead == 1 is asserted); the detents, the clamps, the local hold and the NaN for a dead knob are unit-tested in test_slint_host_radar; the knob's wheel and drag are in test_slint_scope_modes
+1590	ASSERTED	scope-radar-open.txt	click "POWER"; state running 1 -> 0 -> 1
+1592	ASSERTED	scope-radar-open.txt	scroll "Radar tube" 120 / -120; state scope.range 100 -> 200 -> 100 (a wheel turned up is one rung down)
+1593	NOT_DRIVABLE	-	the input script has no drag verb; the drag, the 2 px threshold and the swallowed click are asserted in test_slint_scope_modes (real pointer events) and test_slint_host_radar
+1594	NOT_DRIVABLE	-	the input script has no double-click verb; asserted in test_slint_scope_modes and test_slint_host_radar
+1595	NOT_DRIVABLE	-	a click lands at a position the script cannot aim at an aircraft (press "<label>" clicks a control's centre); the hit test is unit-tested in test_slint_host_radar, and a HOME row's click (row 1606) selects the same aircraft
+1596	NOT_DRIVABLE	-	as row 1595: the click on empty glass is unit-tested in test_slint_host_radar
+1600	ASSERTED	scope-radar-targets.txt	state scope.targets >= 1 and scope.trailPoints >= 1 with the decoded aircraft; shot scope-radar-target.png
+1602	ASSERTED	scope-radar-open.txt	click "HOME"; state scope.lcd == 0
+1603	ASSERTED	scope-radar-open.txt	click "FLIGHT"; state scope.lcd == 1
+1604	ASSERTED	scope-radar-open.txt	click "SYS"; state scope.lcd == 2
+1606	ASSERTED	scope-radar-targets.txt	click "FOXSDR1" (the HOME row's name); state scope.selected == 4D2025 and scope.lcd == 1
+1608	ASSERTED	scope-radar-open.txt	click "PHOSPHOR"; state scope.phosphor 1 -> 0
+1609	ASSERTED	scope-radar-open.txt	click "SWEEP"; state scope.sweep 1 -> 0
+1610	ASSERTED	scope-radar-open.txt	click "TRAILS" twice; state scope.trail 2 then 0
+1611	ASSERTED	scope-radar-targets.txt	click "FILTER"; state scope.filter == 1 (scope.plotted == 0) then 2 (scope.plotted >= 1)
+1614	ASSERTED	scope-radar-targets.txt	state scope.flight contains "35000 FT" after selecting the aircraft; shot scope-radar-flight.png
