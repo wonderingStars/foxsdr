@@ -97,6 +97,19 @@ if(Python3_Interpreter_FOUND)
 endif()
 foxsdr_slint_copy_dll(foxsdr-slint)
 
+# THE ENGINE'S BAND PLANS BESIDE THIS EXECUTABLE TOO (2026-11-09). BandPlan::defaultDir() is executable-relative and foxsdr-slint
+# is built into its own directory, so the root's cascade_stage_resources (beside cascade and foxsdr-engine) never reached it: a
+# build-tree foxsdr-slint ran with NO band plan - the Display section's plan picker empty and nothing for "Follow the band plan's
+# mode" to follow (found by src/slint/tests/drive_retune_run.cpp). The installer puts every executable in one folder, so a release
+# was never short. One target, as the root's is (two copies into one place by a parallel build would race).
+add_custom_target(foxsdr_slint_stage_resources ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/resources/bandplans"
+            "$<TARGET_FILE_DIR:foxsdr-slint>/resources/bandplans"
+    COMMENT "Staging resources/bandplans beside foxsdr-slint"
+    VERBATIM)
+add_dependencies(foxsdr-slint foxsdr_slint_stage_resources)
+
 # The render and host-logic tests (ctest label `slint`); see tests/CMakeLists.txt.
 add_subdirectory(tests)
 
@@ -115,6 +128,23 @@ target_include_directories(test_slint_duties PRIVATE
 target_compile_definitions(test_slint_duties PRIVATE FOXSDR_SLINT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME test_slint_duties COMMAND test_slint_duties)
 set_tests_properties(test_slint_duties PROPERTIES LABELS "slint" TIMEOUT 120)
+
+# THE RETUNE DRIVE (2026-11-09, a tester's band switch; src/slint/tests/drive_retune_run.cpp): spawns foxsdr-slint bounded on a
+# scratch profile with FOXSDR_SLINT_RETUNE_PROBE and reads its summary line - a zoomed picture follows a typed retune into another
+# band at its width, and the mode follows the band plan, or stays when the Radio body's checkbox is off. A window is opened, so it
+# carries the GUI gate's label (`gui`, run on the hidden desktop), never `slint`. Named outside the test_slint_*.cpp glob above on
+# purpose: that glob builds render tests against the specimen sheets.
+add_executable(test_slint_retune_run tests/drive_retune_run.cpp)
+target_compile_features(test_slint_retune_run PRIVATE cxx_std_20)
+target_link_libraries(test_slint_retune_run PRIVATE cascade_engine)
+target_include_directories(test_slint_retune_run PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/tests"
+    "${CMAKE_SOURCE_DIR}/third_party/foxsdr_api")
+target_compile_definitions(test_slint_retune_run PRIVATE FOXSDR_SLINT_EXE="$<TARGET_FILE:foxsdr-slint>")
+add_dependencies(test_slint_retune_run foxsdr-slint)
+add_test(NAME test_slint_retune_run COMMAND test_slint_retune_run)
+set_tests_properties(test_slint_retune_run PROPERTIES LABELS "gui" TIMEOUT 300)
 
 # The translation generator's own tests (tools/test_slint_po.py): temp-dir fixtures, nothing of the build tree. -I keeps the
 # interpreter out of the current directory and the user's site-packages (the script is standard-library only).

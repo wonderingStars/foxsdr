@@ -61,8 +61,19 @@ public:
     // no-op.
     bool keepInView(double bandLowHz, double bandHighHz, double marginFrac);
 
+    // The picture [lowHz, highHz], held to the class invariant: clipped into the full span (an edge
+    // past it gives, the full span's edge does not), and a picture narrower than the zoom floor
+    // (rate/1000) is widened about its middle to the floor. This is how a retune that leaves the
+    // picture recentres it (core/view_follow.hpp decides where; this applies it). Returns whether
+    // the view was set: an inert scale, a non-finite edge, an empty or inverted picture and one
+    // wholly outside the full span are refused and leave the view as it was.
+    bool setView(double lowHz, double highHz);
+
     double viewLowHz() const { return viewLow_; }
     double viewHighHz() const { return viewHigh_; }
+    // The full span's edges (center -/+ rate/2); both zero on an inert scale.
+    double fullLowHz() const { return fullLow_; }
+    double fullHighHz() const { return fullHigh_; }
 
     // Fractional widget x -> absolute Hz, as a pure linear map: 0 -> viewLow,
     // 1 -> viewHigh. Deliberately unclamped so callers can extrapolate (e.g.

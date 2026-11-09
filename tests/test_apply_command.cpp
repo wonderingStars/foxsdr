@@ -452,6 +452,14 @@ struct AppWindowTestAccess {
     static float dbMin(AppWindow& a) { return rd(a, [&] { return th::engine(a).dbMin_; }); }
     static float dbMax(AppWindow& a) { return rd(a, [&] { return th::engine(a).dbMax_; }); }
     static std::string bandPlan(AppWindow& a) { return rd(a, [&] { return th::engine(a).bandPlanSelection_; }); }
+    static bool bandFollow(AppWindow& a) { return rd(a, [&] { return th::engine(a).bandModeFollow_; }); }
+    // The shipped band plans, read from the source tree (no test executable has them beside it), as tests/test_rail_reads.cpp loads them.
+    static void usePlans(AppWindow& a, const std::string& dir) {
+        wr(a, [&] {
+            th::engine(a).bandPlanDirForTest_ = dir;
+            th::engine(a).loadBandPlan();
+        });
+    }
 
     // The recorder.
     static void setRecordDir(AppWindow& a, const std::string& d) { wr(a, [&] { th::engine(a).recordDir_ = d; }); }
@@ -1219,6 +1227,69 @@ void displayOps(AppWindow& a) {
         CHECK(A::bandPlan(a) == "stage1-no-such-plan");
         CHECK(refused(A::apply(a, text(FOXAPI_OP_SET_BAND_PLAN, "stage1-no-such-plan")),
                       FOXAPI_NO_CHANGE));
+    }
+
+    // THE BAND PLAN'S MODE FOLLOWS A BAND SWITCH (a beta tester, 2026-11-09; Engine::followBandModeOnTune, the rule of
+    // core/band_mode.hpp applied by the engine to every "take me there" gesture). kModeNames' order: NFM 0, WFM 1, AM 2, DSB 3,
+    // USB 4, CW 5, LSB 6, RAW 7. The UK plan has 80 m (3.5-3.8, LSB), 40 m (7.0-7.2, LSB), the 41 m broadcast band (7.2-7.45,
+    // AM), 20 m (14.0-14.35, USB) and the 4 MHz marine channels (4.063-4.438, USB).
+    covering(FOXAPI_OP_SET_BAND_FOLLOW);
+    {
+        A::usePlans(a, std::string(CASCADE_SOURCE_DIR) + "/resources/bandplans");
+        CHECK(ok(A::apply(a, text(FOXAPI_OP_SET_BAND_PLAN, "uk"))));
+        CHECK(A::bandFollow(a));   // on by default, as the typed rule of 0.99.83 always was
+        // A typed frequency in another band (SET_FREQUENCY) takes its convention: 20 m from wherever the receiver was, in LSB -> USB.
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_LSB))));
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 14.2e6))));
+        CHECK(A::modeIndex(a) == 4);
+        // 40 m is LSB...
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 7.1e6))));
+        CHECK(A::modeIndex(a) == 6);
+        // ...and a mode set by hand there STICKS within the band (FT8 on 7.074 USB survives a retype to 7.040)...
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_USB))));
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 7.04e6))));
+        CHECK(A::modeIndex(a) == 4);
+        // ...until the next switch: 80 m's LSB.
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 3.62e6))));
+        CHECK(A::modeIndex(a) == 6);
+        // A frequency in no band of the plan leaves the mode (7.9 MHz is in the gap above 41 m), as does a switch into a band whose
+        // convention is the mode already in force.
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 7.9e6))));
+        CHECK(A::modeIndex(a) == 6);
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 7.19e6))));
+        CHECK(A::modeIndex(a) == 6);
+        // A STEP across a band edge is the hand's: USB set on 7.19 MHz, one 20 kHz step up lands in 41 m broadcast (AM) and stays USB.
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_USB))));
+        CHECK(ok(A::apply(a, numInt(FOXAPI_OP_STEP_TUNE, 20000.0, 1))));
+        CHECK(A::modeIndex(a) == 4);
+        // A CLICK on the spectrum into another band follows (the tester's path after panning the waterfall by hand): back into 40 m -> LSB.
+        CHECK(ok(A::apply(a, numInt(FOXAPP_OP_VFO_TO_ABSOLUTE, 7.1e6, 1))));
+        CHECK(A::modeIndex(a) == 6);
+        // A BOOKMARK'S OWN MODE WINS over the convention: AM set by hand on 40 m and bookmarked; from 20 m (USB) the bookmark plays in AM.
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_AM))));
+        const FoxCommandResult added = A::apply(a, text(FOXAPI_OP_BOOKMARK_ADD, "forty in AM"));
+        CHECK(ok(added));
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 14.2e6))));
+        CHECK(A::modeIndex(a) == 4);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_BOOKMARK_TUNE, static_cast<std::int64_t>(added.applied[0])))));
+        CHECK(A::modeIndex(a) == 2);
+        // RAW is a diagnostics hold: nothing moves it.
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_RAW))));
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 3.62e6))));
+        CHECK(A::modeIndex(a) == 7);
+        // OFF: nothing follows, and the switch is read back and saved (an Engine row of the settings file).
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_BAND_FOLLOW, 0))));
+        CHECK(!A::bandFollow(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_USB))));
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 7.1e6))));
+        CHECK(A::modeIndex(a) == 4);
+        CHECK(!A::snapshotNow(a).bandPlanFollowMode);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_BAND_FOLLOW, 1))));
+        CHECK(A::bandFollow(a));
+        CHECK(A::snapshotNow(a).bandPlanFollowMode);
+        // Left as the case above left it: the missing plan selected, the plans' folder the executable's (none).
+        CHECK(ok(A::apply(a, text(FOXAPI_OP_SET_BAND_PLAN, "stage1-no-such-plan"))));
+        A::usePlans(a, std::string());
     }
 }
 

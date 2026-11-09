@@ -70,6 +70,7 @@
 #include "core/package_identity.hpp"
 #include "core/diag_evidence.hpp"
 #include "core/health_events.hpp"
+#include "core/view_follow.hpp"
 #include "gui/band_plan_style.hpp"
 #include "gui/basemap_stand_in.hpp"
 #include "gui/plugin_markers.hpp"
@@ -6654,6 +6655,16 @@ void AppWindow::drawRadioSection() {
         char overlay[32];
         std::snprintf(overlay, sizeof(overlay), "%.1f dB", static_cast<double>(sDb));
         ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), overlay);
+
+        // FOLLOW THE BAND PLAN'S MODE WHEN RETUNING (a beta tester, 2026-11-09): the engine's switch (Engine::followBandModeOnTune),
+        // read back as fact.bandPlan.followMode and moved with SET_BAND_FOLLOW. The same checkbox the Slint window's Radio body has.
+        // A COPY is ticked; the command moves the engine's switch, and the fact follows on the next publish. A fact not yet
+        // published (the first frames) reads as on, which is the default.
+        std::string followFact;
+        bool follow = !readFactText("fact.bandPlan.followMode", followFact) || followFact != "0";
+        if (ImGui::Checkbox(trId("Follow the band plan's mode when retuning"), &follow)) {
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BAND_FOLLOW, follow ? 1 : 0));
+        }
     }
 }
 
@@ -8781,7 +8792,24 @@ void AppWindow::drawCenterPanels() {
     // measured against.
     const TuningListCache& tune = tuningLists();
     const double centreHz = uiState_.centreHz;
+    // The picture as the LAST frame drew it, before setSpan may reset or keep it against the new baseband: what the follow below
+    // measures the new tuned frequency against, and the width it keeps.
+    const double pictureLowBefore = scale_.viewLowHz();
+    const double pictureHighBefore = scale_.viewHighHz();
     scale_.setSpan(centreHz, tune.inputRateHz);
+    // THE PICTURE FOLLOWS A RETUNE THAT LEAVES IT (a beta tester, 2026-11-09: "switch to the 3.5 MHz band, the waterfall display
+    // remains on 7 MHz"): when the tuned frequency moved since the last frame and landed outside the zoomed picture, the picture is
+    // recentred on it at the same width, inside the baseband the source now delivers (core/view_follow.hpp has the rule, shared with
+    // the Slint window; tests/test_view_follow.cpp pins it). Not under the hand (a drag of the band, a pan of the waterfall), not while
+    // the Airband monitor listens, and not while a slid passband's own follow (below) is in force - that one pans only as far as it
+    // must and is the slide's.
+    const double tunedNow = centreHz + tunedVfoOffsetHz();
+    if (vfoDrag_ == VfoDrag::None && !wfPanning_ && !airbandFacts().listening && ImGui::GetTime() >= passbandFollowUntilS_) {
+        const cascade::core::ViewFollow follow = cascade::core::recentreOnRetune(pictureLowBefore, pictureHighBefore, scale_.fullLowHz(),
+                                                                                 scale_.fullHighHz(), viewFollowTunedHz_, tunedNow);
+        if (follow.moved) { scale_.setView(follow.lowHz, follow.highHz); }
+    }
+    viewFollowTunedHz_ = tunedNow;
     // WHILE A SLID PASSBAND IS BEING FOLLOWED (kPassbandFollowS), and only while the hand is not on the band or the waterfall, the view is panned no further than it must
     // to keep the passband in it - after setSpan, so that it is the span the source now delivers that it is kept inside. The follow is an event the slide armed, never a
     // standing rule: a view left alone is left alone (stub campaign B11, 0.99.82).
@@ -17319,11 +17347,10 @@ void AppWindow::commitTypedFrequency(const char* text) {
     // first.
     uiSubmit(cascade::core::cmd::make(FOXAPP_OP_SET_SOURCE_ERROR));
     // THE MODE FOLLOWS A TYPED BAND CHANGE (field report a09fe097, 0.99.78; stub campaign B11): typing a frequency in another band adopts that band's conventional mode -
-    // 3.620 MHz lands in LSB - while a typed frequency in the SAME band leaves the mode alone, so a digital setup (FT8 on 7.074 USB) survives nearby retypes. Both bands are
-    // read BEFORE the tune is sent, so `from` is the band the user is leaving.
-    const int followMode = modeForTypedFrequency(typed);
+    // 3.620 MHz lands in LSB - while a typed frequency in the SAME band leaves the mode alone, so a digital setup (FT8 on 7.074 USB) survives nearby retypes. Since
+    // 2026-11-09 the ENGINE applies that rule to SET_FREQUENCY itself (Engine::followBandModeOnTune, under the Radio section's "Follow the band plan's mode when
+    // retuning"), so every band switch - typed here, clicked, a bookmark, the web remote, the Slint window - follows one rule; this window sends the tune alone.
     uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, typed));
-    if (followMode != 0) { uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, followMode)); }
 }
 
 // THE STATUS COLUMN'S LIST READS, only when listSeq has moved (the members are

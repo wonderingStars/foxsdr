@@ -2589,6 +2589,13 @@ void testBandPlanName() {
     CHECK_EQ(chain, std::string("ITU Region 1 + United Kingdom"));
     CHECK_EQ(std::string(act.detail), std::string("uk"));
     CHECK(chain != std::string(act.name));
+    // "Follow the band plan's mode when retuning" (2026-11-09): the engine's switch as a fact, on by default, moved by
+    // SET_BAND_FOLLOW and published with the next lists block (it is in the fingerprint), so a window's checkbox follows it.
+    CHECK_EQ(fact(s, "fact.bandPlan.followMode"), std::string("1"));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_BAND_FOLLOW, 0.0, 0)).result.status, FOXAPI_OK);
+    CHECK_EQ(fact(s, "fact.bandPlan.followMode"), std::string("0"));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_BAND_FOLLOW, 0.0, 1)).result.status, FOXAPI_OK);
+    CHECK_EQ(fact(s, "fact.bandPlan.followMode"), std::string("1"));
     // The rows are in the model's order: start ascending, the widest first on a
     // shared start - the back-to-front order a ribbon is drawn in.
     const int32_t n = count(s, FOXAPI_LIST_BAND_PLAN);

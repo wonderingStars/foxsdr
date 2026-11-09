@@ -536,6 +536,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_NR            0x010Du /* ival[0]: 0/1; num[0]: strength 0..1 (ival[1]=1 to set it) */
 #define FOXAPI_OP_SET_NOTCH         0x010Eu /* ival[0]: 0/1; num[0]: Hz; num[1]: Q (ival[1]=1 to set them) */
 #define FOXAPI_OP_SET_AUTO_NOTCH    0x010Fu /* ival[0]: 0/1 */
+#define FOXAPI_OP_SET_BAND_FOLLOW   0x0110u /* ival[0]: 0/1 - a retune into another band of the band plan adopts that band's conventional mode (fact.bandPlan.followMode) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */
 #define FOXAPI_OP_SET_BAND_PLAN     0x0202u /* text: selection name */

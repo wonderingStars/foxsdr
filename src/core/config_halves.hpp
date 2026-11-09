@@ -92,6 +92,7 @@ struct ConfigFieldInfo {
     X(notchQ,                  Engine,    false) \
     X(autoNotch,               Engine,    false) \
     X(bandPlanOverlay,         Interface, false) \
+    X(bandPlanFollowMode,      Engine,    false) \
     X(patch,                   Interface, false) \
     X(patchPresets,            Interface, false) \
     X(patchPresetPrevious,     Interface, false) \

@@ -78,7 +78,7 @@ const std::set<std::string>& engineWritten() {
         "airspy", "audioBufferMs", "audioBufferAutoMs", "ppmCorrection", "ppm", "autoGainByRadio",
         "manualGainByRadio", "plutoUri", "rtlTcpAddr", "iqFilePath", "soundCard", "centerHz", "mode", "bandwidthHz",
         "squelchDb", "squelchAuto", "volume", "dbMin", "dbMax", "vfoOffsetHz", "sampleRateHz", "stereoEnabled", "deemphasisIndex",
-        "nrEnabled", "nrStrength", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanSelection",
+        "nrEnabled", "nrStrength", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
         "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed", "pluginTransmitAllowed",
@@ -140,6 +140,7 @@ AppConfig seeded() {
     c.notchFreqHz = 1500.0;
     c.deemphasisIndex = 1;
     c.stereoEnabled = false;
+    c.bandPlanFollowMode = false;   // (2026-11-09) away from its default of true
     // --- the window's half (AppWindow::currentConfig) -------------------------------------------------------------
     c.patch = patchText(3.0f);
     c.mainView = "receiver";

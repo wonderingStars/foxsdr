@@ -169,6 +169,27 @@ bool FreqScale::keepInView(double bandLowHz, double bandHighHz, double marginFra
     return true;
 }
 
+bool FreqScale::setView(double lowHz, double highHz) {
+    if (!(rate_ > 0.0) || !std::isfinite(lowHz) || !std::isfinite(highHz) || !(highHz > lowHz)) { return false; }
+    if (highHz <= fullLow_ || lowHz >= fullHigh_) { return false; }  // wholly outside the baseband
+    double lo = std::max(lowHz, fullLow_);
+    double hi = std::min(highHz, fullHigh_);
+    // The zoom floor (the class invariant): widened about the middle, then held inside the full
+    // span the same way zoomAt's clamp is - shifted, not shrunk, which the floor allows because
+    // the floor is a thousandth of the full span.
+    const double minSpan = rate_ / 1000.0;
+    if (hi - lo < minSpan) {
+        const double mid = 0.5 * (lo + hi);
+        lo = mid - 0.5 * minSpan;
+        hi = mid + 0.5 * minSpan;
+        if (lo < fullLow_) { lo = fullLow_; hi = lo + minSpan; }
+        if (hi > fullHigh_) { hi = fullHigh_; lo = hi - minSpan; }
+    }
+    viewLow_ = lo;
+    viewHigh_ = hi;
+    return true;
+}
+
 void FreqScale::visibleBinRange(int fftSize, double& firstBin, double& lastBin) const {
     if (fftSize <= 0) {
         firstBin = 0.0;

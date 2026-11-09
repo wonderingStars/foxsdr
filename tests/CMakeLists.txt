@@ -372,6 +372,12 @@ foreach(src ${CASCADE_TESTS})
         # with a drag, and what a double-click does.
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_band_follow_app")
+        # Runs the real cascade.exe (built first) on the signal generator with the input script (2026-11-09, a
+        # tester's band switch): a zoomed picture follows a typed retune out of it at its width, a typed or clicked
+        # retune into another band takes that band's mode, the same band and the setting's off leave the mode alone.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_window_platform_app")
         # Runs the real cascade.exe (built first) in bounded runs and reads the diagnostics log it
         # leaves for the `window:` lines (0.99.78): their order before the first frame, the value of
@@ -1542,6 +1548,7 @@ set(CASCADE_GUI_TESTS
     test_tx_audio_page_app
     test_tx_audio_plate_app
     test_typed_band_mode_app
+    test_band_follow_app
     test_ui_scale_app
     test_unplaced_list_app
     test_map_open_inside_app

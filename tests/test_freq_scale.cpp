@@ -564,5 +564,46 @@ int main() {
         }
     }
 
+    // --- setView and the full span's edges: the picture a retune recentres (core/view_follow.hpp, 2026-11-09) ----------------
+    {
+        FreqScale s;
+        s.setSpan(100e6, 10e6);  // full span [95 MHz, 105 MHz]
+        CHECK_NEAR(s.fullLowHz(), 95e6, 1e-3);
+        CHECK_NEAR(s.fullHighHz(), 105e6, 1e-3);
+        // A picture inside the full span is taken exactly.
+        CHECK(s.setView(100.2e6, 100.4e6));
+        CHECK_NEAR(s.viewLowHz(), 100.2e6, 1e-3);
+        CHECK_NEAR(s.viewHighHz(), 100.4e6, 1e-3);
+        // One past an edge of the full span is clipped to it (the width gives, the edge does not).
+        CHECK(s.setView(104.95e6, 105.2e6));
+        CHECK_NEAR(s.viewLowHz(), 104.95e6, 1e-3);
+        CHECK_NEAR(s.viewHighHz(), 105e6, 1e-3);
+        CHECK(s.setView(94e6, 95.3e6));
+        CHECK_NEAR(s.viewLowHz(), 95e6, 1e-3);
+        CHECK_NEAR(s.viewHighHz(), 95.3e6, 1e-3);
+        // Narrower than the zoom floor (rate/1000 = 10 kHz): widened about its middle to the floor.
+        CHECK(s.setView(100.001e6, 100.002e6));
+        CHECK_NEAR(s.viewHighHz() - s.viewLowHz(), 10e3, 1e-3);
+        CHECK_NEAR(0.5 * (s.viewLowHz() + s.viewHighHz()), 100.0015e6, 1e-3);
+        // The whole full span, and wider than it: the full span.
+        CHECK(s.setView(90e6, 110e6));
+        CHECK_NEAR(s.viewLowHz(), 95e6, 1e-3);
+        CHECK_NEAR(s.viewHighHz(), 105e6, 1e-3);
+        // Refused, the view untouched: an empty or inverted picture, a non-finite edge, one wholly outside the full span.
+        CHECK(s.setView(100.2e6, 100.4e6));
+        CHECK(!s.setView(100.4e6, 100.2e6));
+        CHECK(!s.setView(100.3e6, 100.3e6));
+        CHECK(!s.setView(std::nan(""), 100.4e6));
+        CHECK(!s.setView(100.2e6, std::nan("")));
+        CHECK(!s.setView(106e6, 107e6));
+        CHECK_NEAR(s.viewLowHz(), 100.2e6, 1e-3);
+        CHECK_NEAR(s.viewHighHz(), 100.4e6, 1e-3);
+        // An inert scale refuses everything and its edges are zero.
+        FreqScale inert;
+        CHECK(!inert.setView(1e6, 2e6));
+        CHECK_NEAR(inert.fullLowHz(), 0.0, 0.0);
+        CHECK_NEAR(inert.fullHighHz(), 0.0, 0.0);
+    }
+
     return testSummary("test_freq_scale");
 }

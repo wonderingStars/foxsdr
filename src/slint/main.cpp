@@ -37,6 +37,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -56,6 +57,7 @@
 #include "core/i18n.hpp"
 #include "core/version.hpp"
 #include "core/utf8_text.hpp"
+#include "core/view_follow.hpp"
 #include "engine/engine_service.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/process_boot.hpp"
@@ -341,7 +343,12 @@ int main(int argc, char** argv) {
     double tuneStepHz = 12500;                // Ctrl+Up/Down and the Tune step picker
     bool showNudges = true;
     Face face = Face::Plain;
-    bool followBandPlan = true;
+    bool followBandPlan = true;                // the engine's switch (fact.bandPlan.followMode), read when the lists move
+    // THE PICTURE FOLLOWS A RETUNE THAT LEAVES IT (core/view_follow.hpp, 2026-11-09): the tuned frequency as the last tick saw it (NaN before the
+    // first), and the tick of the last drag of the band, so the picture is never moved under the hand (ten ticks of truce after a drag's last move).
+    double lastTunedHz = std::numeric_limits<double>::quiet_NaN();
+    int tickNo = 0;
+    int lastBandDragTick = -1000;
     int bankIndex = 0;
     if (const char* bankEnv = std::getenv("FOXSDR_SLINT_BANK")) { bankIndex = std::clamp(std::atoi(bankEnv), 0, 4); }   // a bounded run's self-capture: the bank to show
     // SIGNAL's Source, Radio and Sinks rows open (Audio filters and Recorder closed), as the ImGui window; TOOLS' Bookmarks, Scanner and Airband (rows 2, 3, 4); EXTEND's Web access and CAT (the contract: both open); SYSTEM's Display and Key bindings (the LOGICAL rows of
@@ -411,6 +418,24 @@ int main(int argc, char** argv) {
     // position boxes are filled (the Set RX here key is NOT pressed) and the Airband code, frequency and name boxes are typed - the whole path of a gesture: callback,
     // Effect, local state, forced re-read, model, repeater.
     const bool toolsProbe = std::getenv("FOXSDR_SLINT_TOOLS_PROBE") != nullptr;
+    // A bounded run's self-capture of a RETUNE WHILE ZOOMED (never set in a release; src/slint/tests/drive_retune_run.cpp reads it):
+    // FOXSDR_SLINT_RETUNE_PROBE="<notches>;<MHz>[;off]" zooms the picture <notches> notches about its middle at tick 40, unticks the Radio
+    // body's "Follow the band plan's mode when retuning" at tick 50 when "off" is given (the checkbox's own callback), and types <MHz> into
+    // the counter at tick 60 (the counter's whole typed path). The bounded run's summary line then says where the picture, the tune and the
+    // mode ended - the tester's complaint of 2026-11-09 (the picture left on the old band, the mode not following) made measurable.
+    std::string retuneProbe;
+    if (const char* e = std::getenv("FOXSDR_SLINT_RETUNE_PROBE"); e != nullptr && e[0] != '\0') { retuneProbe = e; }
+    int retuneProbeTicks = 0;
+    const auto retuneProbeField = [&](std::size_t i) -> std::string {
+        std::size_t start = 0;
+        for (std::size_t k = 0; k < i; ++k) {
+            const std::size_t sep = retuneProbe.find(';', start);
+            if (sep == std::string::npos) { return std::string(); }
+            start = sep + 1;
+        }
+        const std::size_t end = retuneProbe.find(';', start);
+        return retuneProbe.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    };
     int toolsProbeTicks = 0;
     // a section that starts open asks for what it shows: the Radar fold's GPS row needs the Serial ports scan
     if (openSections[2].count(1) > 0) { systemBank.sectionOpened(4); }
@@ -783,7 +808,9 @@ int main(int argc, char** argv) {
         FoxCommand c = op(FOXAPI_OP_SET_BANDWIDTH); c.num[0] = lo + (hi - lo) * v; submit(c);
     });
     ui->on_tune_step_clicked([&](float x, float y) { openMenu(MenuKind::TuneStep, x, y); });
-    ui->on_follow_band_plan_toggled([&](bool v) { followBandPlan = v; });
+    // FOLLOW THE BAND PLAN'S MODE WHEN RETUNING: the engine's switch (Engine::followBandModeOnTune, the rule shared with the ImGui window and the web
+    // remote); the fact follows on the next publish, so the box is set here as well for the tick in between.
+    ui->on_follow_band_plan_toggled([&](bool v) { followBandPlan = v; FoxCommand c = op(FOXAPI_OP_SET_BAND_FOLLOW); c.ival[0] = v ? 1 : 0; submit(c); });
     ui->on_team_message_seen([&] {});
     ui->on_update_primary_clicked([&] { duties.updatePrimaryClicked(); applyUpdateCard(); });
     ui->on_update_dismissed([&] { duties.updateDismissed(); applyUpdateCard(); });
@@ -814,7 +841,16 @@ int main(int argc, char** argv) {
     ui->on_waterfall_double_clicked([&] { view = {0, 0}; });
     ui->on_spectrum_menu_requested([&](float x, float px, float py) { menuHz = hzAtFrac(x); openMenu(MenuKind::Trace, px + 360.f, py + 172.f); });
     ui->on_waterfall_menu_requested([&](float x, float px, float py) { menuHz = hzAtFrac(x); openMenu(MenuKind::Marker, px + 360.f, py + 172.f); });
-    ui->on_band_dragged([&](float dx) { setFrequency(state.tunedHz + dx * currentView().spanHz); });
+    // A DRAG OF THE BAND moves the VFO inside the baseband (SET_VFO_OFFSET, clamped by the engine as the ImGui window's drag is) and not the SOURCE: it sent
+    // SET_FREQUENCY before 2026-11-09, which retuned the radio on every pointer move and - once the engine applied the band plan's mode to SET_FREQUENCY -
+    // would have flipped the mode under the hand at a band edge; a drag stays the hand's (core/band_mode.hpp). The tick's picture follow keeps off for
+    // ten ticks after the last move.
+    ui->on_band_dragged([&](float dx) {
+        FoxCommand c = op(FOXAPI_OP_SET_VFO_OFFSET);
+        c.num[0] = state.tunedHz + dx * currentView().spanHz - state.centreHz;
+        submit(c);
+        lastBandDragTick = tickNo;
+    });
     ui->on_edge_dragged([&](float half) { FoxCommand c = op(FOXAPP_OP_SET_BANDWIDTH_DRAG); c.num[0] = 2.0 * half * currentView().spanHz; submit(c); });
     const auto wheel = [&](float x, int notches, bool shift) {
         if (shift) { stepTune(notches > 0 ? 1 : -1, modeStepHz(state.demodMode)); return; }
@@ -932,7 +968,27 @@ int main(int argc, char** argv) {
         (void)api->heartbeat(session);
         if (api->read_state(session, &state) < 0) { return; }
         const bool listMoved = state.listSeq != lastListSeq;
-        if (listMoved) { lastListSeq = state.listSeq; refreshLists(); }
+        if (listMoved) {
+            lastListSeq = state.listSeq;
+            refreshLists();
+            // The Radio body's "Follow the band plan's mode when retuning": the engine's switch, a fact in the lists' block ("1"/"0"; not yet published reads as on).
+            char followBuf[8] = {};
+            const int32_t n = api->get_setting(session, "fact.bandPlan.followMode", followBuf, sizeof(followBuf));
+            followBandPlan = n < 0 || std::string(followBuf, static_cast<std::size_t>(std::max<int32_t>(0, std::min<int32_t>(n, 7)))) != "0";
+            ui->set_follow_band_plan(followBandPlan);
+        }
+        ++tickNo;
+        // THE PICTURE FOLLOWS A RETUNE THAT LEAVES IT (a beta tester, 2026-11-09: the waterfall left on 7 MHz after a switch to 3.5 MHz): a zoomed picture
+        // (view.spanHz > 0) is a window in absolute Hz that no retune touched; when the tuned frequency moved since the last tick and landed outside it, the
+        // picture is recentred on it at the same width, inside the baseband the source now delivers (core/view_follow.hpp, the rule shared with the ImGui
+        // window). Not within ten ticks of a drag of the band: the hand has it.
+        if (view.spanHz > 0 && tickNo - lastBandDragTick > 10) {
+            const double full = fullSpan();
+            const cascade::core::ViewFollow f = cascade::core::recentreOnRetune(view.centreHz - view.spanHz / 2.0, view.centreHz + view.spanHz / 2.0,
+                                                                                state.centreHz - full / 2.0, state.centreHz + full / 2.0, lastTunedHz, state.tunedHz);
+            if (f.moved) { view = {0.5 * (f.lowHz + f.highHz), f.highHz - f.lowHz}; }
+        }
+        lastTunedHz = state.tunedHz;
         const bool running = (state.flags & FOXAPI_RX_RUNNING) != 0;
 
         // the strip
@@ -1184,6 +1240,15 @@ int main(int argc, char** argv) {
         signalBank.publish(state);
         systemBank.publish(state);
         toolsBank.publish(state, systemBank.models().serial.gps);
+        if (!retuneProbe.empty()) {
+            ++retuneProbeTicks;
+            if (retuneProbeTicks == 40) {
+                const int notches = std::atoi(retuneProbeField(0).c_str());
+                for (int n = 0; n < notches; ++n) { zoomView(kZoomPerNotch, 0.5); }
+            }
+            if (retuneProbeTicks == 50 && retuneProbeField(2) == "off") { ui->invoke_follow_band_plan_toggled(false); }
+            if (retuneProbeTicks == 60) { ui->invoke_typed(ss(retuneProbeField(1))); }
+        }
         if (toolsProbe && ++toolsProbeTicks == 60) {
             auto&& te = ui->global<ToolsEvents>();
             te.invoke_bookmark_search(ss("kord"));
@@ -1260,6 +1325,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", toolsBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", extendBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", patchBank.summaryLine().c_str());
+        if (!retuneProbe.empty()) {
+            // The picture as the last tick drew it, the tune and the mode the state carries, and the Radio body's checkbox.
+            const ViewWindow v = currentView();
+            std::fprintf(stderr, "foxsdr-slint: bounded run: retune probe picture=[%.0f, %.0f] Hz span=%.0f Hz tuned=%.0f Hz mode=%u follow=%d\n",
+                         v.centreHz - v.spanHz / 2.0, v.centreHz + v.spanHz / 2.0, v.spanHz, state.tunedHz, state.demodMode, followBandPlan ? 1 : 0);
+        }
         for (const auto& r : kit.lists().rows) {
             std::fprintf(stderr, "foxsdr-slint: plugin %-40s caps=0x%04x %s%s%s file=%s\n", r.name.c_str(), r.caps, r.loaded ? "loaded" : "REFUSED",
                          r.stopped ? " stopped" : "", r.asleep ? " asleep" : "", r.file.c_str());
