@@ -183,7 +183,12 @@ int main() {
     CHECK_EQ(std::string(st.rdsRadioText), std::string());
     CHECK((st.rdsFlags & FOXAPI_RDS_PI_VALID) == 0u);
     CHECK(st.rdsSeq > before.rdsSeq);
-    CHECK(passUntil(eng, [&] { return (s.state().flags & FOXAPI_RX_PILOT_LOCKED) == 0u; }, 10000));
+    // THE PILOT LOCK IS READ IN THE SAME SNAPSHOT AS THE NAME (the one above, taken the moment the names went), not polled for afterwards. The
+    // retune leaves the transmitter 100 kHz off the channel's centre, still inside its 220 kHz, so the pilot decoder may find a pilot again once
+    // enough samples have gone through it (inferred from the printed numbers, not observed); how many a pass carries is the runner's pace, not the code's, and a poll that begins one pass later saw the flag set again on a
+    // slow Linux runner and waited out its 10 s (CI run 42647585347, linux job, 2026-11-09: "FAIL test_engine_api_rds_real.cpp:186" with
+    // "retuned: ... PILOT_LOCKED 0" printed just before it). What the retune owes is that the decoders were reset together; one snapshot shows that.
+    CHECK((st.flags & FOXAPI_RX_PILOT_LOCKED) == 0u);
 
     return check::finish("test_engine_api_rds_real");
 }
