@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1963 | 391 | 82 | 1490 | 0 |
+| 1968 | 425 | 82 | 1461 | 0 |
 
-Of the 1128 rows that are controls (the 835 readout-like rows left out): 391 asserted, 82 driven without a read-back, 655 not drivable.
+Of the 1135 rows that are controls (the 833 readout-like rows left out): 425 asserted, 82 driven without a read-back, 628 not drivable.
 
-NOT DRIVABLE by reason: readout 835, other 201, needs a signal (no fixture) 120, deferred 95, relocated 85, withheld in a bounded run 70, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 62, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
 
 ## Per section
 
@@ -167,12 +167,12 @@ NOT DRIVABLE by reason: readout 835, other 201, needs a signal (no fixture) 120,
 | SYSTEM bank — Full-page screens: Request a feature (page) | 9 | 0 | 0 | 9 | 5 | 0 |
 | SYSTEM bank — Full-page screens: Report a bug or dislike (page) | 19 | 0 | 0 | 19 | 9 | 0 |
 | TOOLS bank — TOOLS (left-rail bank key and its group caption) | 2 | 0 | 0 | 2 | 1 | 0 |
-| TOOLS bank — Demod scope (rail row) | 4 | 0 | 0 | 4 | 3 | 0 |
-| TOOLS bank — DEMOD SCOPE (window) | 22 | 0 | 0 | 22 | 9 | 0 |
-| TOOLS bank — Radar (rail section) | 7 | 0 | 0 | 7 | 3 | 0 |
+| TOOLS bank — Demod scope (rail row) | 4 | 1 | 0 | 3 | 3 | 0 |
+| TOOLS bank — DEMOD SCOPE (window) | 24 | 14 | 0 | 10 | 9 | 0 |
+| TOOLS bank — Radar (rail section) | 7 | 1 | 0 | 6 | 3 | 0 |
 | TOOLS bank — Receiver position controls (shared: Radar fold, radar-scope empty state, map pages) | 15 | 3 | 0 | 12 | 5 | 0 |
-| TOOLS bank — Radar scope (full-window mode) | 28 | 0 | 0 | 28 | 17 | 0 |
-| TOOLS bank — Radar data panel (LCD) - three tabs | 15 | 0 | 0 | 15 | 8 | 0 |
+| TOOLS bank — Radar scope (full-window mode) | 31 | 9 | 0 | 22 | 17 | 0 |
+| TOOLS bank — Radar data panel (LCD) - three tabs | 15 | 9 | 0 | 6 | 6 | 0 |
 | TOOLS bank — Bookmarks (rail section) | 31 | 14 | 2 | 15 | 6 | 0 |
 | TOOLS bank — Import a frequency list (dialog) | 8 | 0 | 0 | 8 | 5 | 0 |
 | TOOLS bank — Scanner (rail section) | 14 | 10 | 1 | 3 | 1 | 0 |
@@ -2459,7 +2459,7 @@ NOT DRIVABLE by reason: readout 835, other 201, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1526 | Scope switch row | key (switch row, opens window) | NOT DRIVABLE | - | deferred: the Section row 'Demod scope' is drawn first in bank 2 (main.cpp sectionsFor) but a press only folds a body-less row: DemodScopeRow (-> ToolsEvents.scope-clicked -> applyScopeClicked, a [local] Deferred 'demod-scope' the publisher would log) is not placed in main.slint, so the key opens no window and logs nothing; the window it opens is deferred (bespoke scope mode, next allowance) |
+| 1526 | Scope switch row | key (switch row, opens window) | DRIVEN+ASSERTED | scope-demod-open.txt | click "Demod scope"; state scope.demodOpen 0 -> 1 -> 0 -> 1 -> 0 |
 | 1527 | Input chip | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1528 | Lamp | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
 | 1529 | Tooltip | tooltip | NOT DRIVABLE | - | a readout, not a control |
@@ -2468,28 +2468,30 @@ NOT DRIVABLE by reason: readout 835, other 201, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1530 | Window | window | NOT DRIVABLE | - | a readout, not a control |
-| 1531 | Input key AUDIO | key (latched, one of row) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint; the chip names the signal (ReadOptions::scope_signal) but no key sets it |
-| 1532 | Input key SPEC | key (latched) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
-| 1533 | Input key I/Q | key (latched) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
-| 1534 | Input key VECTOR | key (latched) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
-| 1535 | Input key MPX | key (latched) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1530 | Window | window | DRIVEN+ASSERTED | scope-demod-open.txt | the window opens (state scope.demodOpen, scope.glassW > 500, scope.painted) and its own Close key ("Close"#2) shuts it |
+| 1531 | Input key AUDIO | key (latched, one of row) | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "AUDIO"; state scope.signal == 0, scope.audioCount == 4800 |
+| 1532 | Input key SPEC | key (latched) | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "SPEC"; state scope.signal == 1, scope.bins > 300, scope.audioCount == 0 |
+| 1533 | Input key I/Q | key (latched) | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "I/Q"; state scope.signal == 2, scope.iqCount > 1000 |
+| 1534 | Input key VECTOR | key (latched) | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "VECTOR"; state scope.signal == 3, scope.iqCount > 1000 |
+| 1535 | Input key MPX | key (latched) | NOT DRIVABLE | - | the multiplex key exists only in WFM, which needs a 200 kS/s channel: the fixtures are narrowband (the gather, the marks and the key's refusal are unit-tested in test_slint_host_scope; the key and the marks are rendered in test_slint_scope_modes) |
 | 1536 | TIME label | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1537 | Time base - | button | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
-| 1538 | Time base + | button | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1537 | Time base - | button | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "Shorter time base"; state scope.timebase == 2, scope.audioCount == 2400 |
+| 1538 | Time base + | button | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "Longer time base"; state scope.timebase == 4, scope.centre == "20 ms/DIV", scope.audioCount == 9600 |
 | 1539 | Time base readout | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1540 | GAIN label | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1541 | Gain - | button | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
-| 1542 | Gain + | button | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1541 | Gain - | button | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "Less gain" after unticking AUTO; state scope.gain == "100 mV/DIV" |
+| 1542 | Gain + | button | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "More gain"; state scope.gainIndex == 7, scope.gain == "500 mV/DIV"; disabled while AUTO is ticked and on a spectrum (expect enabled equals "false") |
 | 1543 | Gain readout | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1544 | AUTO | checkbox | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
+| 1544 | AUTO | checkbox | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "AUTO"#3; state scope.auto 1 -> 0 and the steppers become enabled |
 | 1545 | DISPLAY label | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1546 | Display key NORM | key (latched) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
-| 1547 | Display key AVG | key (latched) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
-| 1548 | Display key PERSIST | key (latched) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the DEMOD SCOPE window is not built (tools_bank.slint header, COMPONENTS.md); not found in tools_bank.slint |
-| 1549 | Scope face | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 1546 | Display key NORM | key (latched) | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "NORM"; state scope.display == 0 |
+| 1547 | Display key AVG | key (latched) | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "AVG"; state scope.display == 1 |
+| 1548 | Display key PERSIST | key (latched) | DRIVEN+ASSERTED | scope-demod-inputs.txt | click "PERSIST"; state scope.display == 2, scope.segments > 800 |
+| 1549 | Scope face | overlay/marker | DRIVEN+ASSERTED | scope-demod-open.txt | state scope.segments > 300 and scope.painted counts the glass painted at scope.glassW x scope.glassH; shots scope-demod-open.png and scope-demod-persist.png |
 | 1550 | Face caption / legend | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1551 | Band labels on spectrum | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 1964 | Dead-tube sentences | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1965 | AUDIO FROM legend | readout | NOT DRIVABLE | - | a readout, not a control |
 
 ### TOOLS bank — Radar (rail section)
 
@@ -2499,7 +2501,7 @@ NOT DRIVABLE by reason: readout 835, other 201, needs a signal (no fixture) 120,
 | 1553 | No-position warning | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1554 | Position offers | (see "Receiver position offers") | NOT DRIVABLE | - | container of rows 1559-1564 (the offers and the typed entry), no state of its own |
 | 1555 | Receiver position fold | list (tree node) | NOT DRIVABLE | - | relocated: another form of the same control: no tree node, the PositionOffersView block is always open and, once a position is set, starts with the known-position line ('51.50000N 0.12000W', green) where the fold header was; there is no fold to open on a GPS fix |
-| 1556 | Radar scope / Leave radar scope | button (full-width) | NOT DRIVABLE | - | deferred: RadarBody full-width Key (lit while scope-on; label Radar scope / Leave radar scope) -> radar-scope-clicked -> applyRadarScopeClicked: [local] Deferred 'radar-scope', which the publisher would log (no tools publisher is in the tree); the full-window mode it toggles is bespoke scope mode, next allowance |
+| 1556 | Radar scope / Leave radar scope | button (full-width) | DRIVEN+ASSERTED | scope-radar-open.txt | click "Radar scope"; state view == 2 and scope.radarOn == 1 |
 | 1557 | Radar scope tooltip | tooltip | NOT DRIVABLE | - | a readout, not a control |
 | 1558 | No-tracker note | readout | NOT DRIVABLE | - | a readout, not a control |
 
@@ -2527,52 +2529,55 @@ NOT DRIVABLE by reason: readout 835, other 201, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1574 | EXIT SCOPE | button | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
-| 1575 | Escape key | key (keyboard) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint; the Esc chord dispatches (phase-1 row 144) but there is no scope mode for it to leave |
+| 1574 | EXIT SCOPE | button | DRIVEN+ASSERTED | scope-radar-open.txt | click "EXIT SCOPE"; state view back to 0 |
+| 1575 | Escape key | key (keyboard) | DRIVEN+ASSERTED | scope-radar-open.txt | key escape; state view back to 0 (the root FocusScope's shortcut, the keyboard handed to it when the tab opens) |
 | 1576 | RANGE caption | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1577 | Range - | button | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1577 | Range - | button | DRIVEN+ASSERTED | scope-radar-open.txt | click "Range down"; state scope.range 200 -> 100 -> 50 |
 | 1578 | Range readout | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1579 | Range + | button | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1579 | Range + | button | DRIVEN+ASSERTED | scope-radar-open.txt | click "Range up"; state scope.range 50 -> 100 |
 | 1580 | Wheel hint | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1581 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1581 | Empty state | readout | DRIVEN+ASSERTED | scope-radar-open.txt | state scope.hasRx == 0 and scope.tubeW == 0 with no position (the empty state), then 1 and > 300 after Set RX here; shot scope-radar-empty.png |
 | 1582 | SIG gauge | overlay/marker (gauge) | NOT DRIVABLE | - | a readout, not a control |
 | 1583 | ALT gauge | overlay/marker (gauge) | NOT DRIVABLE | - | a readout, not a control |
 | 1584 | Maker plate | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 1585 | Range drums | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1586 | Track drums | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1587 | GAIN knob | dial/knob | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint; the strip's Gain lane stays the gain control (phase-1 row 41) |
+| 1586 | Track drums | readout | DRIVEN+ASSERTED | scope-radar-targets.txt | state scope.drumTracks == "001" with one aircraft heard |
+| 1587 | GAIN knob | dial/knob | NOT DRIVABLE | - | the fixtures have no gain stage, so the knob is dead (state scope.knobDead == 1 is asserted); the detents, the clamps, the local hold and the NaN for a dead knob are unit-tested in test_slint_host_radar; the knob's wheel and drag are in test_slint_scope_modes |
 | 1588 | Knob scale ticks | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1589 | Knob stage note | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1590 | POWER button | button (round, lit ring) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint; the STOP / START dome stays the power control (phase-1 row 16) |
+| 1590 | POWER button | button (round, lit ring) | DRIVEN+ASSERTED | scope-radar-open.txt | click "POWER"; state running 1 -> 0 -> 1 |
 | 1591 | Power state text | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
-| 1592 | Tube (canvas) wheel | drag/gesture | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
-| 1593 | Tube drag | drag/gesture | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
-| 1594 | Tube double-click | drag/gesture | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
-| 1595 | Tube click on aircraft | drag/gesture | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
-| 1596 | Tube click on empty | drag/gesture | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the RADAR SCOPE full-window mode is not built (the SCOPE tab of the tab row is phase 1's stub, row 7); not found in tools_bank.slint |
+| 1592 | Tube (canvas) wheel | drag/gesture | DRIVEN+ASSERTED | scope-radar-open.txt | scroll "Radar tube" 120 / -120; state scope.range 100 -> 200 -> 100 (a wheel turned up is one rung down) |
+| 1593 | Tube drag | drag/gesture | NOT DRIVABLE | - | the input script has no drag verb; the drag, the 2 px threshold and the swallowed click are asserted in test_slint_scope_modes (real pointer events) and test_slint_host_radar |
+| 1594 | Tube double-click | drag/gesture | NOT DRIVABLE | - | the input script has no double-click verb; asserted in test_slint_scope_modes and test_slint_host_radar |
+| 1595 | Tube click on aircraft | drag/gesture | NOT DRIVABLE | - | a click lands at a position the script cannot aim at an aircraft (press "<label>" clicks a control's centre); the hit test is unit-tested in test_slint_host_radar, and a HOME row's click (row 1606) selects the same aircraft |
+| 1596 | Tube click on empty | drag/gesture | NOT DRIVABLE | - | as row 1595: the click on empty glass is unit-tested in test_slint_host_radar |
 | 1597 | Range rings + labels | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 1598 | Bearing ticks | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 1599 | MODE ADS-B / position | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 1600 | Aircraft icons and trails | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 1600 | Aircraft icons and trails | overlay/marker | DRIVEN+ASSERTED | scope-radar-targets.txt | state scope.targets >= 1 and scope.trailPoints >= 1 with the decoded aircraft; shot scope-radar-target.png |
 | 1601 | Antenna mark | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 1966 | Tube optics: ground, coastline, phosphor, sweep | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 1967 | Basemap tiles under the tube and the attribution line | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 1968 | Cabinet case: gradient, screws, layout rules | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 
 ### TOOLS bank — Radar data panel (LCD) - three tabs
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1602 | Tab HOME | button (tab) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
-| 1603 | Tab FLIGHT | button (tab) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
-| 1604 | Tab SYS | button (tab) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1602 | Tab HOME | button (tab) | DRIVEN+ASSERTED | scope-radar-open.txt | click "HOME"; state scope.lcd == 0 |
+| 1603 | Tab FLIGHT | button (tab) | DRIVEN+ASSERTED | scope-radar-open.txt | click "FLIGHT"; state scope.lcd == 1 |
+| 1604 | Tab SYS | button (tab) | DRIVEN+ASSERTED | scope-radar-open.txt | click "SYS"; state scope.lcd == 2 |
 | 1605 | CONTACTS PLOTTED | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1606 | Contact rows | list | NOT DRIVABLE | - | a readout, not a control |
+| 1606 | Contact rows | list | DRIVEN+ASSERTED | scope-radar-targets.txt | click "FOXSDR1" (the HOME row's name); state scope.selected == 4D2025 and scope.lcd == 1 |
 | 1607 | Empty-state text | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1608 | Option row PHOSPHOR | toggle | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
-| 1609 | Option row SWEEP | toggle | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
-| 1610 | Option row TRAILS | toggle (cycles 3) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
-| 1611 | Option row FILTER | toggle (cycles 3) | NOT DRIVABLE | - | deferred: bespoke scope modes - next allowance: the radar scope's data panel (LCD) belongs to the deferred scope mode; not found in tools_bank.slint |
+| 1608 | Option row PHOSPHOR | toggle | DRIVEN+ASSERTED | scope-radar-open.txt | click "PHOSPHOR"; state scope.phosphor 1 -> 0 |
+| 1609 | Option row SWEEP | toggle | DRIVEN+ASSERTED | scope-radar-open.txt | click "SWEEP"; state scope.sweep 1 -> 0 |
+| 1610 | Option row TRAILS | toggle (cycles 3) | DRIVEN+ASSERTED | scope-radar-open.txt | click "TRAILS" twice; state scope.trail 2 then 0 |
+| 1611 | Option row FILTER | toggle (cycles 3) | DRIVEN+ASSERTED | scope-radar-targets.txt | click "FILTER"; state scope.filter == 1 (scope.plotted == 0) then 2 (scope.plotted >= 1) |
 | 1612 | Facts | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1613 | Help paragraph | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1614 | Detail lines | table | NOT DRIVABLE | - | a readout, not a control |
+| 1614 | Detail lines | table | DRIVEN+ASSERTED | scope-radar-targets.txt | state scope.flight contains "35000 FT" after selecting the aircraft; shot scope-radar-flight.png |
 | 1615 | Nothing-selected text | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1616 | Unavailable note | readout | NOT DRIVABLE | - | a readout, not a control |
 

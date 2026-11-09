@@ -504,13 +504,14 @@ bool windowBelongsTo(const std::string& key, const std::string& plugin) {
 }
 
 std::string pluginUseText(const std::vector<PluginRow>& rows, const OpenWindows& open) {
-    constexpr std::uint32_t kWindow = 1u, kMapPage = 2u, kDecoderOutput = 8u;   // FOXAPP_PLUGIN_USE_*
+    constexpr std::uint32_t kWindow = 1u, kMapPage = 2u, kRadarScope = 4u, kDecoderOutput = 8u;   // FOXAPP_PLUGIN_USE_*
     std::string text;
     for (const PluginRow& r : rows) {
         if (!r.loaded || r.file.empty()) { continue; }
         std::uint32_t bits = 0u;
         for (const std::string& k : open.windows) { if (windowBelongsTo(k, r.name)) { bits |= kWindow; break; } }
         if ((r.caps & CASCADE_CAP_TRACK_SOURCE) != 0u && open.mapPages.count(r.name) > 0) { bits |= kMapPage; }
+        if ((r.caps & CASCADE_CAP_TRACK_SOURCE) != 0u && open.radarScope) { bits |= kRadarScope; }   // while the scope shows, every track source is in use (app_window_plugin_use.cpp 68)
         if (open.decoderOutput && (r.caps & (CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER)) != 0u) { bits |= kDecoderOutput; }
         if (bits == 0u) { continue; }
         text += r.file;

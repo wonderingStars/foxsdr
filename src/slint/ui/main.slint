@@ -39,7 +39,7 @@ import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
 import { AgeTick, WaterfallView } from "waterfall.slint";
 import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
-import { ScopeTube } from "stubs.slint";
+import { ScopeEvents, DemodModel, MpxMarkItem, DemodScopeWindow, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel, RadarScopeView } from "scope_modes.slint";
 import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents, PatchPage } from "patch_page.slint";
 import { TxChoice, TransmitPageModel, TransmitEvents } from "transmit_page.slint";   // the Transmit page (kit page kind 11; docs 6.58): its model and gestures reach C++ through main.h
@@ -57,7 +57,8 @@ export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, Men
          ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow, MarkersModel,
          ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
          FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
-         InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents }
+         InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents,
+         ScopeEvents, DemodModel, MpxMarkItem, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel }
 export { TxChoice, TransmitPageModel, TransmitEvents }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
@@ -162,6 +163,8 @@ export component MainWindow inherits Window {
     in property <string> converter-line;             // "" = none (the rail footer's warning line)
     // centre
     in-out property <int> view-index: 0;             // RECEIVER PATCH SCOPE
+    // the radar scope takes the keyboard back from whatever field held it, so Esc (the shortcut table's) leaves it (docs 6.57; aw.cpp 13589 leaves it only when nothing is being edited)
+    changed view-index => { if (self.view-index == 2) { keys.focus(); } }
     // THE PATCH PAGE (phase 3, docs 6.44): the band, the canvas and the inspector of view 1, filled by the host (patch_publish.cpp)
     in property <PatchModel> patch-model;
     in property <CanvasModel> canvas-model;
@@ -193,6 +196,8 @@ export component MainWindow inherits Window {
     in property <ScannerModel> scanner-model;
     in property <AirbandModel> airband-model;
     in property <MarkersModel> markers-model;
+    in property <RadarScopeModel> radar-scope-model;   // the radar scope (scope_modes.slint) in the SCOPE tab
+    in property <DemodModel> demod-model;            // the DEMOD SCOPE window (scope_modes.slint): shown while the TOOLS row has it open
     // THE EXTEND BANK (phase 3, docs 6.42): the two bodies under the rows of bank 3; the store is a kit page (pages.slint kind 9)
     in property <WebModel> web-model;
     in property <CatModel> cat-model;
@@ -682,7 +687,7 @@ export component MainWindow inherits Window {
                         }
                     }
                     if root.view-index == 1 : PatchPage { model: root.patch-model; canvas: root.canvas-model; inspector: root.inspector-model; }
-                    if root.view-index == 2 : ScopeTube { caption: @tr("Scope"); }
+                    if root.view-index == 2 : RadarScopeView { model: root.radar-scope-model; offers: root.radar-model.offers; }
                     // a docked page of the plugin kit (its body reaches the host through the KitEvents global)
                     if root.view-index >= 3 && root.view-index - 3 < root.pages.length && !root.pages[root.view-index - 3].torn : PageBody { page: root.pages[root.view-index - 3]; index: root.view-index - 3; }
                 }
@@ -745,6 +750,12 @@ export component MainWindow inherits Window {
     if root.import-dialog.shown : ImportDialog { model: root.import-dialog; }
     if root.report-page.shown : ReportSheet { model: root.report-page; }
     if root.markers-model.shown : MarkersSheet { model: root.markers-model; }
+    // THE DEMOD SCOPE: a window of its own over the centre, opened where the classic opens it (the lower right, inside the main window)
+    if root.demod-model.shown : DemodScopeWindow {
+        x: 0px; y: Theme.title-h; width: root.width; height: max(0px, root.height - Theme.title-h - Theme.status-h);
+        win-x: max(0px, root.width - 780px - 36px); win-y: max(0px, root.height - Theme.title-h - Theme.status-h - 540px - 20px);
+        model: root.demod-model;
+    }
     if root.bias-question-open : Sheet { title: @tr("Turn on the bias tee?"); dismissed => { root.bias-question-open = false; }
         Text { text: root.bias-question-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
         Text { text: root.bias-tooltip; wrap: word-wrap; color: Theme.chip-warn-fg; font-size: Theme.font-small; }

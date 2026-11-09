@@ -1,0 +1,617 @@
+// FoxSDR Slint front end - THE SCOPE MODES (phase 3, docs/engine-stage4.md 6.57): the DEMOD SCOPE window (the bench oscilloscope the TOOLS rail's "Demod scope" row opens) and the
+// RADAR SCOPE (the ADS-B plan-position indicator the Radar section's key puts in the SCOPE tab). The design is the ImGui window's (aw = app_window.cpp drawDemodScopePage 18531,
+// drawScopeMode 13564, gui/scope_view.cpp), so the catalogue entries apply for free.
+//
+// THE PICTURE IS THE HOST'S, THE WORDS ARE OURS. The glass is a painted image (scope_compositor.cpp rasterises the graticule, the beam, the spectrum, the vector figure and the ground
+// into an RGBA buffer, as the spectrum trace and the map are); everything a user reads or presses is a Slint item laid over or beside it: the keys, the readouts along the foot of the
+// glass, the dead tube's sentence, the multiplex's names, the radar's targets. A Path with thousands of segments would re-tessellate on every update, a painted image does not.
+//
+// THE PATTERN IS THE BANKS': this file declares the structs the host fills, one global of every gesture (ScopeEvents) and the components. The host owns every value: a key shows
+// the model's value and a click asks. The windows' own place (x, y, size) is the one thing kept here - a window is moved by the pointer and nothing but the pointer cares.
+import { Theme } from "theme.slint";
+import { Key } from "keys.slint";
+import { Checkbox } from "fields.slint";
+import { TornWindow } from "tabs.slint";
+import { PositionOffers, PositionOffersView } from "tools_bank.slint";
+
+// ---- the demod scope ----
+export struct MpxMarkItem {
+    x0: float, x1: float,                  // 0..1 of the glass; a tone has x0 == x1
+    room: float,                           // the label's room as a fraction of the glass
+    label: string, tone: bool, optional: bool,
+}
+export struct DemodModel {
+    shown: bool, live: bool,
+    signal: int,                           // 0 AUDIO, 1 SPEC, 2 I/Q, 3 VECTOR, 4 MPX (the one the tube shows: a saved MPX outside WFM reads as SPEC)
+    mpx-available: bool, spectral: bool, baseband: bool,
+    timebase-text: string, gain-text: string, auto-gain: bool, display: int,
+    caption: string, display-word: string, centre: string, gain-read: string, audio-from: string, dead: string,
+    picture: image,
+    marks: [MpxMarkItem],
+}
+
+export global ScopeEvents {
+    callback demod-signal(int);            // the input key pressed
+    callback demod-timebase(int);          // -1 / +1
+    callback demod-gain(int);              // -1 / +1
+    callback demod-auto(bool);
+    callback demod-display(int);
+    callback demod-resized(int, int);      // the glass's size in pixels (the picture is painted at it)
+    callback demod-closed();
+    // ---- the radar scope ----
+    callback radar-exit();
+    callback radar-range(int);             // -1 / +1: the bar's keys (the ladder rung down / up)
+    callback radar-wheel(int);             // +1 wheel up (range DOWN one rung), -1 wheel down, over the tube
+    callback radar-drag(float, float);     // the pointer's travel since the last report, tube pixels, once the press has moved over 2 px
+    callback radar-released(float, float, bool);   // the press ends at (x, y) in tube pixels; true when it was a drag
+    callback radar-double-clicked();
+    callback radar-resized(int, int);      // the tube's size in pixels (the ground is painted at it)
+    callback radar-lcd-tab(int);           // 0 HOME, 1 FLIGHT, 2 SYS
+    callback radar-contact(string);        // a HOME row: select that aircraft and show its flight
+    callback radar-option(int);            // a SYS row: cycle PHOSPHOR / SWEEP / TRAILS / FILTER
+    callback radar-knob(int);              // gain detents: +-1
+    callback radar-power();
+}
+
+// One latched key of the instrument (a row of keys you can see the state of without opening anything).
+component LatchKey inherits Key {
+    small: true;
+    min-w: 0px;
+}
+
+// The readout row, the words on the glass: what is looked at, how fast the sweep is, what a division is worth. Figures amber, words ivory.
+component GlassText inherits Text {
+    font-size: Theme.font-tiny;
+    font-family: Theme.font-mono;
+    overflow: elide;
+}
+
+// The tube: the bay, the bezel, the glass with its painted picture and the words laid on it. `picture` is painted at the glass's size; sized() tells the host what that is.
+export component DemodTube inherits Rectangle {
+    in property <DemodModel> model;
+    callback sized(int, int);
+
+    background: Theme.well-deep;
+    border-radius: 3px;
+    property <length> bezel: 6px;
+    property <length> glass-pad: 5px;
+    property <length> gw: glass.width;
+    property <length> gh: glass.height;
+    property <bool> ready: root.gw >= 120px && root.gh >= 100px;
+
+    Rectangle {   // the bezel
+        x: root.bezel; y: root.bezel;
+        width: root.width - 2 * root.bezel; height: root.height - 2 * root.bezel;
+        background: Theme.panel-alt;
+        border-radius: 3px;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+    }
+    glass := Rectangle {
+        x: root.bezel + root.glass-pad; y: root.bezel + root.glass-pad;
+        width: max(0px, root.width - 2 * (root.bezel + root.glass-pad)); height: max(0px, root.height - 2 * (root.bezel + root.glass-pad));
+        background: Theme.well-deep;
+        clip: true;
+        accessible-role: image;
+        accessible-label: root.model.caption;
+
+        Image { x: 0px; y: 0px; width: parent.width; height: parent.height; source: root.model.picture; image-fit: fill; visible: root.ready; }
+
+        // THE MULTIPLEX'S NAMES (the rules are in the picture): a band's name centred under its bracket if it fits the band, a tone's beside its rule if it fits the room it owns
+        for m[i] in root.model.marks : GlassText {
+            property <length> tw: self.preferred-width;
+            property <bool> fits: m.tone ? self.tw + 6px <= m.room * parent.width : self.tw + 4px <= (m.x1 - m.x0) * parent.width;
+            text: m.label;
+            visible: self.fits && root.ready;
+            color: m.optional ? Theme.muted : Theme.fg-soft;
+            y: m.tone ? 25px : 13px;
+            x: m.tone ? ((m.x0 * parent.width + 3px + self.tw > parent.width - 2px) ? m.x0 * parent.width - 3px - self.tw : m.x0 * parent.width + 3px)
+                      : (m.x0 + m.x1) * 0.5 * parent.width - self.tw / 2;
+            overflow: clip;
+        }
+
+        // THE LETTERS OF THE TWO TRACES: each one division above its own trace, inside the glass
+        if root.model.baseband && root.model.signal == 2 && root.model.live : GlassText {
+            text: "I";
+            x: 5px; y: parent.height / 8 - Theme.font-tiny - 1px;
+            color: Theme.trace-live;
+        }
+        if root.model.baseband && root.model.signal == 2 && root.model.live : GlassText {
+            text: "Q";
+            x: 5px; y: parent.height * 5 / 8 - Theme.font-tiny - 1px;
+            color: Theme.dim;
+        }
+
+        // THE LEGEND of a plugin that owns the speakers, top left
+        if root.model.audio-from != "" : GlassText {
+            text: root.model.audio-from;
+            x: 7px; y: 5px;
+            color: Theme.digit;
+        }
+
+        // THE DEAD TUBE'S ONE SENTENCE, centred: not a flat line at zero, which would claim a measurement nobody made
+        if root.model.dead != "" : Text {
+            text: root.model.dead;
+            x: (parent.width - self.preferred-width) / 2; y: (parent.height - self.preferred-height) / 2;
+            font-size: Theme.font-small;
+            color: Theme.dim;
+            horizontal-alignment: center;
+        }
+
+        // THE READOUT ROW along the foot, inside the glass
+        centre := GlassText {
+            text: root.model.centre;
+            color: Theme.digit;
+            x: (parent.width - self.preferred-width) / 2; y: parent.height - Theme.font-tiny - 8px;
+            overflow: clip;
+        }
+        cap := GlassText {
+            text: root.model.caption;
+            color: Theme.fg;
+            x: 7px; y: centre.y;
+            width: min(self.preferred-width, max(0px, centre.x - 10px - 7px));
+        }
+        GlassText {
+            text: root.model.display-word;
+            color: Theme.digit;
+            x: cap.x + cap.width + 10px; y: centre.y;
+            visible: self.text != "" && self.x + self.preferred-width < centre.x - 10px;
+        }
+        GlassText {
+            text: root.model.gain-read;
+            color: Theme.digit;
+            x: parent.width - 7px - self.preferred-width; y: centre.y;
+            overflow: clip;
+        }
+        init => { root.sized(Math.round(self.width / 1px), Math.round(self.height / 1px)); }
+        changed width => { root.sized(Math.round(self.width / 1px), Math.round(self.height / 1px)); }
+        changed height => { root.sized(Math.round(self.width / 1px), Math.round(self.height / 1px)); }
+    }
+}
+
+// The window: the input keys, the time base and the attenuator, the display mode, the tube. 780 x 540 at first (ten by eight divisions: square divisions make the vector display's
+// circles circular), movable and resizable; its Close key tells the host through demod-closed.
+export component DemodScopeWindow inherits Rectangle {
+    in property <DemodModel> model;
+    in-out property <length> win-x: 0px;
+    in-out property <length> win-y: 0px;
+    in-out property <length> win-w: 780px;
+    in-out property <length> win-h: 540px;
+    property <bool> rolled;
+
+    callback demod-signal(int);
+    demod-signal(i) => { ScopeEvents.demod-signal(i); }
+    callback demod-timebase(int);
+    demod-timebase(d) => { ScopeEvents.demod-timebase(d); }
+    callback demod-gain(int);
+    demod-gain(d) => { ScopeEvents.demod-gain(d); }
+    callback demod-auto(bool);
+    demod-auto(v) => { ScopeEvents.demod-auto(v); }
+    callback demod-display(int);
+    demod-display(i) => { ScopeEvents.demod-display(i); }
+    callback demod-resized(int, int);
+    demod-resized(w, h) => { ScopeEvents.demod-resized(w, h); }
+    callback demod-closed();
+    demod-closed() => { ScopeEvents.demod-closed(); }
+
+    // the window keeps inside the area it is given (the main window's centre)
+    TornWindow {
+        x: root.win-x; y: root.win-y;
+        width: min(root.win-w, root.width); height: min(root.win-h, root.height);
+        title: @tr("DEMOD SCOPE");
+        rolled-up: root.rolled;
+        roll-up-clicked => { root.rolled = !root.rolled; }
+        maximise-clicked => { root.win-x = 0px; root.win-y = 0px; root.win-w = root.width; root.win-h = root.height; }
+        close-clicked => { root.demod-closed(); }
+        drag(dx, dy) => { root.win-x = max(0px, min(root.width - 60px, root.win-x + dx)); root.win-y = max(0px, min(root.height - 30px, root.win-y + dy)); }
+        resize(dx, dy) => { root.win-w = max(420px, root.win-w + dx); root.win-h = max(320px, root.win-h + dy); }
+
+        VerticalLayout {
+            padding: 10px; spacing: 6px;
+            // --- the input selector: the fifth key is ABSENT outside WFM, not disabled (there is no multiplex on an AM station) ---
+            HorizontalLayout {
+                spacing: 4px; alignment: start;
+                LatchKey { label: @tr("AUDIO"); on: root.model.signal == 0; tooltip: @tr("DEMODULATED AUDIO"); clicked => { root.demod-signal(0); } }
+                LatchKey { label: @tr("SPEC"); on: root.model.signal == 1; tooltip: @tr("AUDIO SPECTRUM"); clicked => { root.demod-signal(1); } }
+                LatchKey { label: "I/Q"; on: root.model.signal == 2; tooltip: @tr("BASEBAND I/Q"); clicked => { root.demod-signal(2); } }
+                LatchKey { label: @tr("VECTOR"); on: root.model.signal == 3; tooltip: @tr("VECTOR I-Q"); clicked => { root.demod-signal(3); } }
+                if root.model.mpx-available : LatchKey { label: "MPX"; on: root.model.signal == 4; tooltip: @tr("FM MULTIPLEX"); clicked => { root.demod-signal(4); } }   // not-translated: the multiplex's name
+            }
+            // --- the time base and the attenuator: disabled, not hidden, on a spectrum ---
+            HorizontalLayout {
+                spacing: 6px; alignment: start;
+                VerticalLayout { alignment: center; Text { text: @tr("TIME"); font-size: Theme.font-small; color: Theme.muted; } }
+                LatchKey { label: "-"; enabled: !root.model.spectral; accessible-label: @tr("Shorter time base"); clicked => { root.demod-timebase(-1); } }
+                LatchKey { label: "+"; enabled: !root.model.spectral; accessible-label: @tr("Longer time base"); clicked => { root.demod-timebase(1); } }
+                VerticalLayout { alignment: center; Text { text: root.model.timebase-text; font-size: Theme.font-small; font-family: Theme.font-mono; color: root.model.spectral ? Theme.disabled : Theme.digit; min-width: 84px; } }
+                Rectangle { width: 14px; }
+                VerticalLayout { alignment: center; Text { text: @tr("GAIN"); font-size: Theme.font-small; color: Theme.muted; } }
+                LatchKey { label: "-"; enabled: !root.model.spectral && !root.model.auto-gain; accessible-label: @tr("Less gain"); clicked => { root.demod-gain(-1); } }
+                LatchKey { label: "+"; enabled: !root.model.spectral && !root.model.auto-gain; accessible-label: @tr("More gain"); clicked => { root.demod-gain(1); } }
+                VerticalLayout { alignment: center; Text { text: root.model.gain-text; font-size: Theme.font-small; font-family: Theme.font-mono; color: root.model.spectral ? Theme.disabled : Theme.digit; min-width: 84px; } }
+                VerticalLayout { alignment: center; Checkbox {
+                    label: @tr("AUTO"); checked: root.model.auto-gain; enabled: !root.model.spectral;
+                    tooltip: @tr("Ranges the attenuator to fit the signal, one detent at a\ntime. Turn it off to set the volts per division by hand.");
+                    toggled(v) => { root.demod-auto(v); } } }
+            }
+            // --- the display mode ---
+            HorizontalLayout {
+                spacing: 4px; alignment: start;
+                VerticalLayout { alignment: center; Text { text: @tr("DISPLAY"); font-size: Theme.font-small; color: Theme.muted; } }
+                Rectangle { width: 2px; }
+                LatchKey { label: @tr("NORM"); on: root.model.display == 0; tooltip: @tr("The live trace, nothing kept between frames."); clicked => { root.demod-display(0); } }
+                LatchKey { label: @tr("AVG"); on: root.model.display == 1; tooltip: @tr("Average successive traces. A spectrum settles into its steady shape;\na waveform sheds its noise if it repeats (a tone), and fades towards\nthe centre if it does not (speech) - that is what averaging does."); clicked => { root.demod-display(1); } }
+                LatchKey { label: @tr("PERSIST"); on: root.model.display == 2; tooltip: @tr("Keep a fading memory of the trace behind the live one, like a\nlong-persistence tube: peaks and excursions stay visible for a moment."); clicked => { root.demod-display(2); } }
+            }
+            // --- the tube takes what is left ---
+            DemodTube { model: root.model; vertical-stretch: 1; sized(w, h) => { root.demod-resized(w, h); } }
+        }
+    }
+}
+
+
+// ======================================================================================================================================================================
+// THE RADAR SCOPE: a plan-position indicator for aircraft, in the SCOPE tab. The bar (EXIT SCOPE, RANGE), the cabinet - the SIG and ALT gauges either side of the tube, the LCD panel
+// with its three screens beside them, the deck under them (maker plate, the two odometer drums, the GAIN knob, the POWER key) - and, while the receiver has no position, the offers
+// that set one. Every number and word is the host's (radar_logic.hpp's frame); the ground is a painted picture, the aircraft, labels and sweep are items over it.
+// ======================================================================================================================================================================
+export struct RadarTargetItem {
+    id: string, x: float, y: float, heading: float, color: color, mark-r: float,
+    label: string, emergency: bool, selected: bool, alt-known: bool,
+}
+export struct RadarLabelItem { x: float, y: float, text: string, strong: bool }
+export struct RadarLineItem { label: string, value: string, dim: bool, alert: bool }
+export struct RadarContactItem { id: string, name: string, alt: string, detail: string, color: color, alert: bool }
+export struct RadarOptionItem { name: string, value: string }
+export struct RadarScopeModel {
+    shown: bool, has-rx: bool, warning: string, intro: string,
+    range-text: string, can-down: bool, can-up: bool,
+    plotted-text: string, mode-text: string, rx-text: string, range-corner: string,
+    ground: image, fan: image, sweep-deg: float, sweep-on: bool,
+    tube-w: float, tube-h: float, centre-x: float, centre-y: float, radius: float,
+    panned: bool, rx-x: float, rx-y: float,
+    targets: [RadarTargetItem], ring-labels: [RadarLabelItem], bearing-labels: [RadarLabelItem], show-bearing-digits: bool,
+    sig-lit: int, sig-text: string, alt-lit: int, alt-text: string,
+    drum-caption: string, drum-range: string, drum-tracks: string,
+    knob-dead: bool, knob-frac: float, knob-ticks: [int], knob-lit: int, knob-readout: string, knob-note: string,
+    power-on: bool, power-text: string,
+    lcd-shown: bool, lcd-screen: int, home-count: string, home-sub: string, contacts: [RadarContactItem], home-empty-title: string, home-empty-body: string,
+    flight: [RadarLineItem], flight-title: string, flight-body: string, flight-foot: string,
+    options: [RadarOptionItem], sys-range: string, sys-antenna: string, sys-help: string,
+}
+
+// A vertical row of 18 segments lit from the bottom (the SIG and ALT gauges).
+component Gauge inherits Rectangle {
+    in property <int> lit;
+    in property <string> caption;
+    in property <string> reading;
+    in property <color> tone: Theme.trace-live;
+    width: 62px;
+    background: Theme.well-deep;
+    border-radius: 3px;
+    border-width: Theme.hairline;
+    border-color: Theme.line-strong;
+    accessible-role: none;
+    VerticalLayout {
+        padding: 6px; spacing: 2px;
+        Text { text: root.caption; font-size: Theme.font-tiny; color: Theme.fg-soft; horizontal-alignment: center; }
+        VerticalLayout {
+            vertical-stretch: 1; spacing: 2px;
+            for i in 18 : Rectangle { vertical-stretch: 1; background: (17 - i) < root.lit ? root.tone : Theme.well; border-radius: 1px; }
+        }
+        Text { text: root.reading; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; horizontal-alignment: center; overflow: elide; }
+    }
+}
+
+// An odometer: a caption and a row of digit cells.
+component Drum inherits Rectangle {
+    in property <string> caption;
+    in property <string> digits;
+    background: Theme.well-deep;
+    border-radius: 3px;
+    border-width: Theme.hairline;
+    border-color: Theme.line-strong;
+    min-width: 96px;
+    accessible-role: none;
+    VerticalLayout {
+        padding: 5px; spacing: 3px;
+        Text { text: root.caption; font-size: Theme.font-tiny; color: Theme.fg-soft; horizontal-alignment: center; overflow: elide; }
+        Text { text: root.digits; font-size: Theme.font-body; font-family: Theme.font-mono; color: Theme.digit; horizontal-alignment: center; }
+    }
+}
+
+// The tube: the painted ground, the sweep, the labels, the aircraft; one touch area for the gestures.
+export component RadarTube inherits Rectangle {
+    in property <RadarScopeModel> model;
+    property <bool> pressing;
+    property <bool> moved;
+    property <length> start-x;
+    property <length> start-y;
+    property <length> last-x;
+    property <length> last-y;
+    callback sized(int, int);
+
+    background: Theme.well-deep;
+    border-radius: 3px;
+    clip: true;
+    accessible-role: image;
+    accessible-label: @tr("Radar tube");
+
+    Image { x: 0px; y: 0px; width: parent.width; height: parent.height; source: root.model.ground; image-fit: fill; }
+    // THE SWEEP: one fan picture turned about the view centre (4.2 s a turn, the host's angle)
+    if root.model.sweep-on && root.model.radius > 0 : Image {
+        x: root.model.centre-x * 1px - root.model.radius * 1px; y: root.model.centre-y * 1px - root.model.radius * 1px;
+        width: root.model.radius * 2px; height: root.model.radius * 2px;
+        source: root.model.fan;
+        transform-rotation: root.model.sweep-deg * 1deg;
+    }
+    for l in root.model.ring-labels : Text {
+        text: l.text; font-size: Theme.font-tiny; font-family: Theme.font-mono;
+        color: l.strong ? Theme.fg-soft : Theme.muted;
+        x: l.x * 1px - self.preferred-width / 2; y: l.y * 1px - self.preferred-height / 2;
+    }
+    for l in root.model.bearing-labels : Text {
+        text: l.text; font-size: Theme.font-tiny; font-family: Theme.font-mono;
+        color: l.strong ? Theme.fg-soft : Theme.muted;
+        x: l.x * 1px - self.preferred-width / 2; y: l.y * 1px - self.preferred-height / 2;
+    }
+    // THE ANTENNA while the view is panned: a green cross and the letters RX
+    if root.model.panned : Rectangle {
+        x: root.model.rx-x * 1px - 6px; y: root.model.rx-y * 1px - 6px; width: 12px; height: 12px;
+        Rectangle { x: 0px; y: 5px; width: 12px; height: 2px; background: Theme.lamp-green; }
+        Rectangle { x: 5px; y: 0px; width: 2px; height: 12px; background: Theme.lamp-green; }
+        Text { x: 14px; y: -2px; text: "RX"; font-size: Theme.font-tiny; color: Theme.lamp-green; }   // not-translated: the antenna's engraved mark
+    }
+    // THE VIEW CENTRE: the pink dot of the classic's home mark
+    Rectangle { x: root.model.centre-x * 1px - 3px; y: root.model.centre-y * 1px - 3px; width: 6px; height: 6px; border-radius: 3px; background: Theme.accent-soft; }
+    // THE AIRCRAFT
+    for t[i] in root.model.targets : Rectangle {
+        property <length> icon: max(14px, t.mark-r * 2px - 4px);
+        x: t.x * 1px - self.icon / 2 - 2px; y: t.y * 1px - self.icon / 2 - 2px; width: self.icon + 4px; height: self.icon + 4px;
+        if t.selected : Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; border-radius: self.width / 2; border-width: 2px; border-color: Theme.fg; }
+        if t.emergency : Rectangle { x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px; border-radius: self.width / 2; border-width: 2px; border-color: Theme.chip-err-fg; }
+        Image { x: 2px; y: 2px; width: parent.icon; height: parent.icon; source: @image-url("icons/map-aircraft.svg"); image-fit: contain; colorize: t.color; transform-rotation: t.heading * 1deg; accessible-role: none; }
+        Text { x: parent.width + 1px; y: (parent.height - self.preferred-height) / 2; text: t.label; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: t.color; accessible-role: none; }
+    }
+    // THE CORNERS
+    Text { x: 8px; y: 6px; text: root.model.plotted-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
+    if root.model.range-corner != "" : Text { x: parent.width - self.preferred-width - 8px; y: 6px; text: root.model.range-corner; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
+    Text { x: 8px; y: parent.height - self.preferred-height - 6px; text: root.model.mode-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.fg-soft; }
+    Text { x: parent.width - self.preferred-width - 8px; y: parent.height - self.preferred-height - 6px; text: root.model.rx-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.fg-soft; }
+
+    // THE GESTURES: one touch area over the glass (the classic's one InvisibleButton): a drag over 2 px pans, a click selects or recentres, a double-click resets, the wheel steps the range
+    TouchArea {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                root.pressing = true; root.moved = false;
+                root.start-x = self.mouse-x; root.start-y = self.mouse-y; root.last-x = self.mouse-x; root.last-y = self.mouse-y;
+            } else if (e.kind == PointerEventKind.move && root.pressing) {
+                if (root.moved || abs(self.mouse-x - root.start-x) + abs(self.mouse-y - root.start-y) > 2px) {
+                    root.moved = true;
+                    ScopeEvents.radar-drag((self.mouse-x - root.last-x) / 1px, (self.mouse-y - root.last-y) / 1px);
+                    root.last-x = self.mouse-x; root.last-y = self.mouse-y;
+                }
+            } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up && root.pressing) {
+                root.pressing = false;
+                ScopeEvents.radar-released(self.mouse-x / 1px, self.mouse-y / 1px, root.moved);
+            } else if (e.kind == PointerEventKind.cancel) {
+                root.pressing = false;
+            }
+        }
+        double-clicked => { ScopeEvents.radar-double-clicked(); }
+        scroll-event(e) => {
+            if (e.delta-y == 0px) { return EventResult.reject; }
+            ScopeEvents.radar-wheel(e.delta-y > 0px ? 1 : -1);
+            return EventResult.accept;
+        }
+    }
+    init => { root.sized(Math.round(self.width / 1px), Math.round(self.height / 1px)); }
+    changed width => { root.sized(Math.round(self.width / 1px), Math.round(self.height / 1px)); }
+    changed height => { root.sized(Math.round(self.width / 1px), Math.round(self.height / 1px)); }
+}
+
+// The GAIN knob: a drag steps detents (12 px of travel each), the wheel too; the pointer turns over -135..+135 degrees; the nearest tick is lit.
+component GainKnob inherits Rectangle {
+    in property <RadarScopeModel> model;
+    property <length> grab-y;
+    property <int> given;
+    width: 96px;
+    background: transparent;
+    accessible-role: slider;
+    accessible-label: @tr("GAIN");
+    accessible-value: root.model.knob-readout;
+    accessible-enabled: !root.model.knob-dead;
+    VerticalLayout {
+        spacing: 2px;
+        Text { text: @tr("GAIN"); font-size: Theme.font-tiny; color: Theme.fg-soft; horizontal-alignment: center; }
+        Rectangle {
+            vertical-stretch: 1; min-height: 56px;
+            knob := Rectangle {
+                width: min(parent.width, parent.height); height: self.width;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                border-radius: self.width / 2;
+                background: root.model.knob-dead ? Theme.key-disabled-bg : Theme.key-bg;
+                border-width: 2px;
+                border-color: root.model.knob-dead ? Theme.line : Theme.knob-ring;
+                Rectangle {   // the pointer
+                    x: parent.width / 2 - 1px; y: 3px; width: 2px; height: parent.height / 2 - 3px;
+                    background: root.model.knob-dead ? Theme.disabled : Theme.accent;
+                    transform-rotation: (root.model.knob-frac * 270 - 135) * 1deg;
+                    transform-origin: { x: 1px, y: parent.height / 2 - 3px };
+                }
+            }
+            TouchArea {
+                enabled: !root.model.knob-dead;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) { root.grab-y = self.mouse-y; root.given = 0; }
+                }
+                moved => {
+                    if (self.pressed) {
+                        // dragging UP turns the knob up
+                        let steps = Math.round((root.grab-y - self.mouse-y) / 12px);
+                        if (steps != root.given) { ScopeEvents.radar-knob(steps - root.given); root.given = steps; }
+                    }
+                }
+                scroll-event(e) => {
+                    if (e.delta-y == 0px) { return EventResult.reject; }
+                    ScopeEvents.radar-knob(e.delta-y > 0px ? 1 : -1);
+                    return EventResult.accept;
+                }
+            }
+        }
+        Text { text: root.model.knob-readout; font-size: Theme.font-small; font-family: Theme.font-mono; color: root.model.knob-dead ? Theme.disabled : Theme.digit; horizontal-alignment: center; }
+        Text { text: root.model.knob-note; font-size: Theme.font-tiny; color: Theme.muted; horizontal-alignment: center; overflow: elide; }
+    }
+}
+
+// The LCD panel: three screens on three tabs.
+component RadarLcd inherits Rectangle {
+    in property <RadarScopeModel> model;
+    background: Theme.well-deep;
+    border-radius: 3px;
+    border-width: Theme.hairline;
+    border-color: Theme.line-strong;
+    VerticalLayout {
+        padding: 8px; spacing: 6px;
+        HorizontalLayout {
+            spacing: 6px; alignment: start;
+            Key { label: @tr("HOME"); small: true; min-w: 0px; on: root.model.lcd-screen == 0; clicked => { ScopeEvents.radar-lcd-tab(0); } }
+            Key { label: @tr("FLIGHT"); small: true; min-w: 0px; on: root.model.lcd-screen == 1; clicked => { ScopeEvents.radar-lcd-tab(1); } }
+            Key { label: @tr("SYS"); small: true; min-w: 0px; on: root.model.lcd-screen == 2; clicked => { ScopeEvents.radar-lcd-tab(2); } }
+        }
+        // ---- HOME: what the face holds as a whole ----
+        if root.model.lcd-screen == 0 : VerticalLayout {
+            spacing: 4px;
+            VerticalLayout {
+                vertical-stretch: 0; spacing: 4px; alignment: start;
+                Text { text: @tr("CONTACTS PLOTTED"); font-size: Theme.font-tiny; color: Theme.fg-soft; }
+                Text { text: root.model.home-count; font-size: 22px; font-family: Theme.font-mono; color: Theme.digit; }
+                Text { text: root.model.home-sub; font-size: Theme.font-tiny; color: Theme.muted; overflow: elide; }
+                Rectangle { height: Theme.hairline; background: Theme.line; }
+                if root.model.home-empty-title == "" : Text { text: @tr("ALL CONTACTS"); font-size: Theme.font-tiny; color: Theme.fg-soft; }
+                if root.model.home-empty-title != "" : Text { text: root.model.home-empty-title; font-size: Theme.font-small; color: Theme.digit; }
+                if root.model.home-empty-title != "" : Text { text: root.model.home-empty-body; font-size: Theme.font-tiny; color: Theme.muted; wrap: word-wrap; }
+            }
+            Flickable {
+                vertical-stretch: 1;
+                content-height: rows.preferred-height;
+                rows := VerticalLayout {
+                    spacing: 2px; alignment: start;
+                    for c in root.model.contacts : Rectangle {
+                        height: 34px;
+                        accessible-role: button;
+                        accessible-label: c.name;
+                        accessible-action-default => { ScopeEvents.radar-contact(c.id); }
+                        Rectangle { background: ca.has-hover ? Theme.menu-hot : transparent; border-radius: 2px; }
+                        VerticalLayout {
+                            padding-left: 4px; padding-right: 4px; spacing: 1px; alignment: center;
+                            HorizontalLayout { Text { text: c.name; font-size: Theme.font-small; font-family: Theme.font-mono; color: c.alert ? Theme.chip-err-fg : Theme.fg; overflow: elide; } Text { text: c.alt; font-size: Theme.font-small; font-family: Theme.font-mono; color: c.color.alpha == 0 ? Theme.dim : c.color; horizontal-alignment: right; } }
+                            Text { text: c.detail; font-size: Theme.font-tiny; color: Theme.muted; overflow: elide; }
+                        }
+                        ca := TouchArea { clicked => { ScopeEvents.radar-contact(c.id); } }
+                    }
+                }
+            }
+        }
+        // ---- FLIGHT: the selected aircraft ----
+        if root.model.lcd-screen == 1 : VerticalLayout {
+            spacing: 3px;
+            if root.model.flight-title != "" : Text { text: root.model.flight-title; font-size: Theme.font-small; color: Theme.digit; }
+            if root.model.flight-title != "" : Text { text: root.model.flight-body; font-size: Theme.font-tiny; color: Theme.muted; wrap: word-wrap; }
+            for l in root.model.flight : HorizontalLayout {
+                spacing: 8px;
+                Text { text: l.label; font-size: Theme.font-tiny; color: Theme.muted; width: 74px; }
+                Text { text: l.value; font-size: Theme.font-small; font-family: Theme.font-mono; color: l.alert ? Theme.chip-err-fg : l.dim ? Theme.dim : Theme.digit; overflow: elide; horizontal-stretch: 1; }
+            }
+            Rectangle { vertical-stretch: 1; }
+            if root.model.flight-foot != "" : Text { text: root.model.flight-foot; font-size: Theme.font-tiny; color: Theme.muted; wrap: word-wrap; }
+        }
+        // ---- SYS: what the instrument is set to ----
+        if root.model.lcd-screen == 2 : VerticalLayout {
+            spacing: 4px;
+            Text { text: @tr("SYSTEM OPTIONS"); font-size: Theme.font-tiny; color: Theme.fg-soft; }
+            for o[i] in root.model.options : Rectangle {
+                height: 24px;
+                accessible-role: button;
+                accessible-label: o.name;
+                accessible-description: o.value;
+                accessible-action-default => { ScopeEvents.radar-option(i); }
+                Rectangle { background: oa.has-hover ? Theme.menu-hot : transparent; border-radius: 2px; }
+                HorizontalLayout {
+                    padding-left: 4px; padding-right: 4px;
+                    Text { text: o.name; font-size: Theme.font-small; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: o.value; font-size: Theme.font-small; font-family: Theme.font-mono; color: Theme.digit; vertical-alignment: center; }
+                }
+                oa := TouchArea { clicked => { ScopeEvents.radar-option(i); } }
+            }
+            HorizontalLayout { Text { text: @tr("RANGE"); font-size: Theme.font-tiny; color: Theme.muted; horizontal-stretch: 1; } Text { text: root.model.sys-range; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; } }
+            HorizontalLayout { Text { text: @tr("ANTENNA"); font-size: Theme.font-tiny; color: Theme.muted; horizontal-stretch: 1; } Text { text: root.model.sys-antenna; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; } }
+            Rectangle { vertical-stretch: 1; }
+            Text { text: root.model.sys-help; font-size: Theme.font-tiny; color: Theme.muted; wrap: word-wrap; }
+        }
+    }
+}
+
+// The whole mode: the bar, then either the position offers (no receiver position) or the cabinet.
+export component RadarScopeView inherits Rectangle {
+    in property <RadarScopeModel> model;
+    in property <PositionOffers> offers;     // the receiver-position offers (the TOOLS bank's RadarModel.offers, the one block the Radar fold, the map pages and this empty state share)
+    background: Theme.bg;
+    // THE TUBE'S SIDE: what is left of the height after the bar and the deck, and of the width after the gauges and the panel
+    property <length> panel-w: root.model.lcd-shown && root.width >= 900px ? 300px : 0px;
+    property <length> side: max(0px, min(root.height - 36px - 110px - 24px, root.width - 2 * 62px - root.panel-w - 5 * 8px));
+
+    VerticalLayout {
+        padding: 8px; spacing: 8px;
+        // ---- the bar, drawn first and unconditionally ----
+        HorizontalLayout {
+            spacing: 8px; alignment: start; height: 28px;
+            Key { label: @tr("EXIT SCOPE"); small: true; clicked => { ScopeEvents.radar-exit(); } }
+            VerticalLayout { alignment: center; Text { text: "|"; font-size: Theme.font-small; color: Theme.dim; } }
+            VerticalLayout { alignment: center; Text { text: @tr("RANGE"); font-size: Theme.font-small; color: Theme.muted; } }
+            Key { label: "-"; small: true; min-w: 28px; enabled: root.model.can-down; accessible-label: @tr("Range down"); clicked => { ScopeEvents.radar-range(-1); } }
+            VerticalLayout { alignment: center; Text { text: root.model.range-text; font-size: Theme.font-small; font-family: Theme.font-mono; color: Theme.digit; min-width: 70px; horizontal-alignment: center; } }
+            Key { label: "+"; small: true; min-w: 28px; enabled: root.model.can-up; accessible-label: @tr("Range up"); clicked => { ScopeEvents.radar-range(1); } }
+            VerticalLayout { alignment: center; Text { text: @tr("the mouse wheel over the scope steps it too"); font-size: Theme.font-tiny; color: Theme.dim; } }
+        }
+        Rectangle { height: Theme.hairline; background: Theme.line; }
+
+        // ---- no position: the empty state, the offers ----
+        if !root.model.has-rx : VerticalLayout {
+            spacing: 8px; alignment: start;
+            Text { text: root.model.warning; font-size: Theme.font-body; color: Theme.chip-warn-fg; wrap: word-wrap; max-width: 520px; }
+            Text { text: root.model.intro; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; max-width: 520px; }
+            PositionOffersView { offers: root.offers; max-width: 520px; }
+        }
+
+        // ---- the cabinet ----
+        if root.model.has-rx : VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px; alignment: center; vertical-stretch: 1;
+                Gauge { height: root.side; caption: @tr("SIG"); lit: root.model.sig-lit; reading: root.model.sig-text; }
+                RadarTube { width: root.side; height: root.side; model: root.model; sized(w, h) => { ScopeEvents.radar-resized(w, h); } }
+                Gauge { height: root.side; caption: @tr("ALT"); lit: root.model.alt-lit; reading: root.model.alt-text; tone: Theme.lamp-amber; }
+                if root.panel-w > 0px : RadarLcd { width: root.panel-w; height: root.side; model: root.model; }
+            }
+            // ---- the deck: maker plate, the two odometers, the knob, the power key ----
+            HorizontalLayout {
+                spacing: 14px; alignment: center; height: 104px;
+                VerticalLayout {
+                    alignment: center; spacing: 2px;
+                    HorizontalLayout { spacing: 6px; alignment: center; Image { width: 28px; height: 28px; source: @image-url("icons/fox.svg"); image-fit: contain; colorize: Theme.accent; accessible-role: none; } Text { text: "FOX"; font-size: 24px; font-weight: 700; color: Theme.fg; vertical-alignment: center; } }   // not-translated: the maker's engraved name
+                    Text { text: "& SCHIRMYVER INDUSTRIES"; font-size: Theme.font-tiny; color: Theme.dim; horizontal-alignment: center; }   // not-translated: the maker's engraved name
+                }
+                Drum { caption: root.model.drum-caption; digits: root.model.drum-range; }
+                Drum { caption: @tr("TRACKS"); digits: root.model.drum-tracks; }
+                GainKnob { model: root.model; }
+                VerticalLayout {
+                    alignment: center; spacing: 3px;
+                    Text { text: @tr("POWER"); font-size: Theme.font-tiny; color: Theme.fg-soft; horizontal-alignment: center; }
+                    Key { label: root.model.power-on ? @tr("ON LINE") : @tr("STANDBY"); on: root.model.power-on; accessible-label: @tr("POWER"); clicked => { ScopeEvents.radar-power(); } }
+                }
+            }
+        }
+    }
+}

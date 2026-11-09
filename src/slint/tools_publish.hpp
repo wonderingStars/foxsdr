@@ -44,6 +44,10 @@ public:
         bool onSpectrum = true;
         bool stackNames = true;
         std::function<void(bool onSpectrum, bool stackNames)> saveBookmarkOptions;
+        // THE TWO SCOPE KEYS (docs 6.57): the Demod scope row's press and the Radar section's "Radar scope" key. Both are the scope publisher's (scope_publish.hpp); without them the
+        // effects are logged as deferred, as before.
+        std::function<void()> demodScopeClicked;
+        std::function<void()> radarScopeClicked;
     };
     ToolsPublisher(MainWindow& ui, foxsdr::slintkit::PluginKit& kit, const FoxEngineApi* api, FoxSession* session, bool bounded, Hooks hooks);
     ~ToolsPublisher();
@@ -56,6 +60,15 @@ public:
     void publish(const FoxReceiverState& state, const foxsdr::slintsystem::GpsRow& gps);
     // An answer main.cpp polled: the ones this object waits for (an airband ask, a chunk of a preset import) are settled, the rest are not its business.
     void onAnswer(const FoxCommandResult& r);
+
+    // What the scope publisher knows that the Demod scope chip and the Radar key show: the input selected, the window open, the tap advancing, the radar scope up.
+    void setScopeFacts(int signal, bool open, bool live, bool radarOn) {
+        if (opts_.scope_signal != signal || opts_.scope_open != open || opts_.scope_live != live || opts_.radar_scope_on != radarOn) { forceRead_ = true; }
+        opts_.scope_signal = signal;
+        opts_.scope_open = open;
+        opts_.scope_live = live;
+        opts_.radar_scope_on = radarOn;
+    }
 
     // The chip a TOOLS row of bank 2 shows (rows 0 Demod scope, 1 Radar, 2 Bookmarks, 3 Scanner, 4 Airband); `valid` is false before the first publish.
     struct RowFace {

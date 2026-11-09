@@ -1,0 +1,62 @@
+#! frames=520 bank=2 iqfile=scope.wav centre=100000000 mode=AM bandwidth=3000 FOXSDR_SLINT_DEMOD_SCOPE=0
+# scope-demod-inputs (docs 6.57): every key of the bench oscilloscope reaches the host and the picture follows (tick rows 1531-1548). The scope.wav fixture (make_scope.py) is an AM carrier on
+# the VFO with a 100 Hz tone: the AUDIO tap carries the tone, the I/Q tap the channel baseband.
+30 state running == 1
++10 state scope.live == 1
+state scope.audioCount == 4800
+state scope.iqCount == 0
+# the input selector: SPEC puts a spectrum on the glass (no sweep), I/Q and VECTOR take the channel's samples (10 ms/DIV x 10 at the channel's 48 kHz)
++1 click "SPEC"
++8 state scope.signal == 1
+state scope.bins > 300
+state scope.audioCount == 0
+state scope.gain == "10 dB/DIV"
+# on a spectrum the time base and the attenuator are greyed, whatever AUTO says
+expect "Longer time base" enabled equals "false"
+expect "More gain" enabled equals "false"
++1 click "I/Q"
++8 state scope.signal == 2
+state scope.iqCount > 1000
+state scope.bins == 0
++1 click "VECTOR"
++8 state scope.signal == 3
+state scope.iqCount > 1000
+# the multiplex's key is absent outside WFM (this receiver is on AM)
++1 click "AUDIO"
++8 state scope.signal == 0
+# the time base: + steps 10 -> 20 ms/DIV, the sweep doubles
+state scope.timebase == 3
++1 click "Longer time base"
++8 state scope.timebase == 4
+state scope.centre == "20 ms/DIV"
+state scope.audioCount == 9600
++1 click "Shorter time base"
++1 click "Shorter time base"
++8 state scope.timebase == 2
+state scope.audioCount == 2400
++1 click "Longer time base"
++8 state scope.timebase == 3
+# the attenuator: the steppers are dead while AUTO is ticked; unticking AUTO frees them and a detent moves the figure
+state scope.auto == 1
+expect "More gain" enabled equals "false"
+# (the third "AUTO": the strip's gain and squelch carry the first two)
++1 click "AUTO"#3
++8 state scope.auto == 0
+expect "More gain" enabled equals "true"
+# AUTO had settled the attenuator on 200 mV/DIV (index 6) for the 0.4 V-peak tone: one detent up is 500 mV/DIV
+state scope.gainIndex == 6
++1 click "More gain"
++8 state scope.gainIndex == 7
+state scope.gain == "500 mV/DIV"
++1 click "Less gain"
++1 click "Less gain"
++8 state scope.gain == "100 mV/DIV"
+# the display mode: AVG and PERSIST are latched, NORM puts it back
++1 click "AVG"
++8 state scope.display == 1
++1 click "PERSIST"
++30 state scope.display == 2
+state scope.segments > 800
+shot "scope-demod-persist.png"
++1 click "NORM"
++8 state scope.display == 0

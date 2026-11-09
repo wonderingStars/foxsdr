@@ -78,7 +78,8 @@ function(foxsdr_slint_logic_test name)
         "${CMAKE_CURRENT_SOURCE_DIR}/.."
         "${FOXSDR_REPO_ROOT}/src"
         "${FOXSDR_REPO_ROOT}/tests"
-        "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api")
+        "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api"
+        "${FOXSDR_REPO_ROOT}/third_party/imgui")   # header only: gui/scope_view.hpp includes imgui.h through gui/aircraft_icons.hpp (docs 6.57); nothing of ImGui is linked
     add_test(NAME ${name} COMMAND ${name} ${FOXSDR_LOGIC_TEST_ARGS_${name}})
     set_tests_properties(${name} PROPERTIES LABELS "slint")
 endfunction()
@@ -154,6 +155,10 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${CMAKE_CURRENT_SOURCE_DIR}/../signal_logic.cpp"
                 "${FOXSDR_REPO_ROOT}/src/gui/transmit_page.cpp"
                 "${FOXSDR_REPO_ROOT}/src/dsp/modulator.cpp")
+        endif()
+        if(unit STREQUAL "radar")
+            # The radar scope's painter draws with the demod scope's Canvas (scope_compositor.cpp), which paints the demod tube with scope_logic.cpp's state object.
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../scope_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../scope_compositor.cpp")
         endif()
         if(unit STREQUAL "patch")
             # The PATCH page's logic (phase 3, the patch allowance) quotes the core's pure units rather than copying them: the grants of the SIGNAL family's commands, the airport table
