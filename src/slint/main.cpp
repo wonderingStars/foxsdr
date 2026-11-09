@@ -70,6 +70,7 @@
 #include "key_dispatch.hpp"
 #include "kit_publish.hpp"
 #include "patch_publish.hpp"
+#include "transmit_publish.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
 #include "signatures.hpp"
@@ -497,6 +498,9 @@ int main(int argc, char** argv) {
     // FOXSDR_SLINT_OPEN=patch-presets (the kit's openFromEnv) opens the presets page; FOXSDR_SLINT_PATCH_PROBE=1 runs the scripted pointer pass of a bounded run (patch_publish.cpp).
     foxsdr::slintpatch::PatchPublisher patchBank(*ui, kit, publisher, duties, api, session, bounded.bounded());
     patchBank.wire();
+    // THE TRANSMIT PAGE (transmit_publish.hpp): page kind 11 of the kit, opened by the Transmit row's switch; its key is the engine's hold, re-asserted by this object's tick.
+    foxsdr::slinttransmit::TransmitPublisher transmitBank(*ui, publisher, duties, api, session, bounded.bounded());
+    transmitBank.wire();
     if (const char* e = std::getenv("FOXSDR_SLINT_VIEW"); e != nullptr && lower(e) == "patch") { ui->set_view_index(1); }
     patchBank.setViewShown(ui->get_view_index() == 1);   // the engine starts out believing "showing": the first tick offers the truth
     if (std::getenv("FOXSDR_SLINT_PATCH_PROBE") != nullptr) { patchBank.enableProbe(); }
@@ -817,6 +821,7 @@ int main(int argc, char** argv) {
         int row = i;
         if (bankIndex == 4 && i >= 8 && !systemBank.testerShown()) { row = i + 1; }
         if (bankIndex == 4 && row == 9) { ui->set_about_open(true); return; }   // About opens its sheet and never folds
+        if (bankIndex == 0 && row == 5) { transmitBank.togglePage(); return; }   // the SIGNAL bank's Transmit row is a switch: it opens (or closes) the Transmit page, it does not fold
         // TOOLS' Demod scope row is a switch that opens a window, not a fold: its click is the scope-clicked gesture (deferred: logged) and nothing opens under it.
         if (bankIndex == 2 && row == 0) { ui->global<ToolsEvents>().invoke_scope_clicked(); return; }
         auto& open = openSections[bankIndex];
@@ -1098,6 +1103,7 @@ int main(int argc, char** argv) {
         ui->set_bank_index(bankIndex);
         {
             std::vector<SectionRow> rows = sectionsFor(bankIndex);
+            if (bankIndex == 0 && rows.size() > 5) { rows[5].open = transmitBank.pageOpen(); }   // the Transmit row is lit while its page is open
             std::string sig = std::to_string(bankIndex) + ":";
             for (const auto& r : rows) { sig += std::string(r.name) + "|" + std::string(r.chip) + "|" + std::to_string(static_cast<int>(r.tone)) + "|" + (r.open ? "1" : "0") + ";"; }
             if (sigs.changed("sections", sig)) { ui->set_sections(std::make_shared<slint::VectorModel<SectionRow>>(std::move(rows))); }
@@ -1273,6 +1279,7 @@ int main(int argc, char** argv) {
             toolsBank.onAnswer(r[i]);   // the answers the airband section waits for (an airport's rows, a preset's chunks, Listen, Export, Remove)
             extendBank.onAnswer(r[i]);  // a SERVER_CONFIG's (Web access and CAT control): a refusal becomes the web box's red line
             patchBank.onAnswer(r[i]);   // the draft's SET_GRAPH (its commit is settled by this answer) and the radio scan's
+            transmitBank.onAnswer(r[i]);   // a refused LATCH or consent (the Transmit page's key note)
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
 
@@ -1280,8 +1287,9 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
-        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); }   // an answer the kit's own poll took first: the draft waits for it
+        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); }   // an answer the kit's own poll took first: the draft waits for it
         patchBank.publish(state);    // before the kit's pages too: the Patch presets page of kind 10 is built from the model this hands over
+        transmitBank.publish(state); // ... and the Transmit page of kind 11 (and the key's batch for this tick)
         // THE MAP'S LOOK, from the interface half each tick (SYSTEM > Display saves it there): the aircraft icon size, the trail width and the trail style, bounded
         // as the classic window bounds them (map_compositor.hpp mapLookOf). The kit republishes the maps only when the look changed.
         publisher.setMapLook(foxsdr::slintmap::mapLookOf(duties.interfaceHalf().aircraftIconPx, duties.interfaceHalf().mapTrailWidthPx, duties.interfaceHalf().mapTrailStyle));
@@ -1370,6 +1378,7 @@ int main(int argc, char** argv) {
             return "list.<list>.count|names|details|values, not " + name;
         }
         if (name.rfind("fact.", 0) == 0) { return world.fact(name.c_str(), out) ? std::string() : "no fact " + name; }
+        if (name.rfind("transmit.", 0) == 0) { return transmitBank.readState(name, out); }   // the Transmit page's page / key / sent / withheld read-back (transmit_publish.hpp)
         // cfg.<field>: the interface half of the settings AS THE HOST HOLDS IT (host_duties interfaceHalf, kept by every bank's saveInterfaceHalf) - the
         // read-back for a control whose value never reaches the engine (the theme, the trail style, the diagnostics switch...). Scalars and strings;
         // a bool reads "true" / "false". An Engine-owned field reads the value the host loaded at start, not the engine's: ask the engine's state for those.
@@ -1550,6 +1559,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", toolsBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", extendBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", patchBank.summaryLine().c_str());
+        std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", transmitBank.summaryLine().c_str());
         if (!retuneProbe.empty()) {
             // The picture as the last tick drew it, the tune and the mode the state carries, and the Radio body's checkbox.
             const ViewWindow v = currentView();

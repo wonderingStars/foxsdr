@@ -1,0 +1,65 @@
+#! frames=420 bank=0
+# transmit-page (docs 6.58): the Transmit page of the Slint window against an engine with NO TRANSMITTER (there is no transmit hardware on this machine, and a bounded run withholds TX_OPEN and
+# every keying op - transmit_logic.hpp boundedMaySend). Tick rows 1338, 1340, 1341, 1354, 1355, 1360, 1361, 1363. NOTHING HERE KEYS A RADIO: the script opens the page from the rail row, types an
+# address, presses Open (withheld), presses the greyed PTT and LATCH (nothing is sent), presses the arming keys (the engine refuses them - no transmitter is open - and the page shows the
+# refusal) and the DATA (flat) tick. The controls that need a radio are asserted greyed.
+10 state txAvailable == 0
+state transmit.page == closed
++1 click "Transmit"
++10 state transmit.page == shown
+state transmit.live == 1
++1 dump
++1 shot "transmit-page.png"
+# no radio: the controls that can put RF out are greyed, the ones that explain themselves are not
++1 expect "PTT" enabled equals "false"
++1 expect "LATCH" enabled equals "false"
++1 expect "Allow remote transmit" enabled equals "false"
++1 expect "Listen while transmitting" enabled equals "false"
++1 expect "SPLIT" enabled equals "false"
++1 expect "NFM" enabled equals "false"
++1 expect "MHz" enabled equals "false"
++1 expect "Open" enabled equals "true"
++1 expect "5 MIN" enabled equals "true"
++1 expect "OFF" enabled equals "true"
+# the greyed keys, pressed, send nothing
++1 press "PTT"
++3 press "LATCH"
++5 state transmit.sent.0a03 == 0
+state transmit.sent.0a04 == 0
+state transmit.ptt == 0
+state txKeyed == 0
+# the address: typed text reaches the engine (config.json keeps it)
++1 type "RADIO" "uri=ip:10.9.9.9"
++10 state fact.transmit.args == "uri=ip:10.9.9.9"
+# Open: withheld in a bounded run, so nothing connects to a board and the page still shows no radio
++1 click "Open"
++10 state transmit.withheld.0a01 == 1
+state txAvailable == 0
+state transmit.sent.0a01 == 0
+# the arming keys: the engine refuses with no radio, the refusal is a fact (the page prints it under the keys)
++1 click "5 MIN"
++15 state fact.tx.plugin.refusal == 1
+state fact.tx.plugin.armed == 0
+state txAvailable == 0
++1 click "15 MIN"
++1 click "60 MIN"
++15 state fact.tx.plugin.refusal == 1
++1 click "OFF"
++15 state fact.tx.plugin.refusal == 0
+# DATA (flat): the engine's setting, session only
++1 expect "DATA (flat)" checked equals "true"
++1 click "DATA (flat)"
++15 state fact.tx.plugin.dataFlat == 0
++1 expect "DATA (flat)" checked equals "false"
++1 click "DATA (flat)"
++15 state fact.tx.plugin.dataFlat == 1
+# never a keying op, in the whole run
++1 state transmit.sent.0a03 == 0
+state transmit.sent.0a04 == 0
+state transmit.sent.0a0c == 0
+state txKeyed == 0
+# the row again closes the page
++1 click "Transmit"
++10 state transmit.page == closed
+state transmit.live == 0
++1 dump

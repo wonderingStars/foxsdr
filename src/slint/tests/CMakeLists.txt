@@ -42,7 +42,13 @@ function(foxsdr_slint_ui_test name slint_file)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} PRIVATE slint_render_harness)
     set_property(TARGET ${name} PROPERTY SLINT_EMBED_RESOURCES embed-files)   # fonts and icons inside the test binary, as in the product
+    # The TRANSMIT page's test finds its controls by their accessible labels through the element tree (as the window's scripted input does), which is empty unless the
+    # compiler emitted the element debug info (src/slint/CMakeLists.txt says why the variable is handed over).
+    if(name STREQUAL "test_slint_transmit")
+        set(SLINT_COMPILER_ENV_VARS SLINT_EMIT_DEBUG_INFO=1)
+    endif()
     slint_target_sources(${name} "${slint_file}")
+    unset(SLINT_COMPILER_ENV_VARS)
     foxsdr_slint_copy_dll(${name})
     add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES LABELS "slint")
@@ -140,6 +146,14 @@ foreach(src ${_foxsdr_slint_test_sources})
         if(unit STREQUAL "input")
             # The scripted input's parser and driver (docs 6.47): ../input_script.cpp, no Slint - the fake target in the test stands for the window.
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../input_script.cpp")
+        endif()
+        if(unit STREQUAL "transmit")
+            # The TRANSMIT page's logic (docs 6.58) quotes the classic's ImGui-free key rules rather than copying them: gui/transmit_page (the key's frame rules are inline in the header,
+            # formatTxPower and txMeterFraction are the .cpp) and the mode table (dsp/modulator: the names and captions), with the SIGNAL family's commands and grants.
+            list(APPEND _extra
+                "${CMAKE_CURRENT_SOURCE_DIR}/../signal_logic.cpp"
+                "${FOXSDR_REPO_ROOT}/src/gui/transmit_page.cpp"
+                "${FOXSDR_REPO_ROOT}/src/dsp/modulator.cpp")
         endif()
         if(unit STREQUAL "patch")
             # The PATCH page's logic (phase 3, the patch allowance) quotes the core's pure units rather than copying them: the grants of the SIGNAL family's commands, the airport table

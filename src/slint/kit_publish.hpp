@@ -69,6 +69,17 @@ public:
     void openPatchPresetsPage();
     void closePatchPresetsPage();
 
+    // THE TRANSMIT PAGE (kind 11, id "transmit"; docs 6.58), the same seam. The KIT owns the page - its PageTab, its tab, its tear-off; the TRANSMIT publisher (transmit_publish.*)
+    // computes the whole ::TransmitPageModel and hands it over (setTransmitModel), and reads whether the page is up. THE PAGE IS LIVE (its controls are on screen, so the key may be
+    // held) only while it is Shown and not rolled up (transmitLive): a page that is closed, a tab that is not the one showing, or a torn page rolled up holds nothing. The ImGui
+    // window keeps this page a floating 560 x 640 window (app_window.cpp drawTransmitPage), so it OPENS TORN OFF at that size and leaves the view showing as it was.
+    enum class TransmitView { Closed, Docked, Shown };
+    TransmitView transmitView() const;
+    bool transmitLive() const;
+    void setTransmitModel(const ::TransmitPageModel& model, const std::string& chip, ::ChipTone tone);
+    void openTransmitPage();
+    void closeTransmitPage();
+
 private:
     struct Page {
         std::string id;            // "output", "image:<name>", "panel:<name>", "instrument:<name>|<title>", "map:<name>", "fitted", "module:<file>", "details"
@@ -127,6 +138,7 @@ private:
     void fillDetails(PageTab& t, const FoxReceiverState& state, std::string& sig);
     void fillStore(PageTab& t, std::string& sig);
     void fillPatchPresets(PageTab& t, std::string& sig);
+    void fillTransmit(PageTab& t, std::string& sig);
     DetailsModel detailsModel(const FoxReceiverState& state, std::string& sig);
     void publishDecodeBank(const FoxReceiverState& state);
     void publishPages(const FoxReceiverState& state);
@@ -161,6 +173,10 @@ private:
     ::StoreModel storeModel_{};                       // what the EXTEND publisher last handed over for the page of kind 9
     ::PatchPresetsModel patchPresetsModel_{};         // what the PATCH publisher last handed over for the page of kind 10
     std::uint64_t patchPresetsRevision_ = 0;
+    ::TransmitPageModel transmitModel_{};             // what the TRANSMIT publisher last handed over for the page of kind 11
+    std::uint64_t transmitRevision_ = 0;
+    std::string transmitChip_;
+    ::ChipTone transmitChipTone_ = ::ChipTone::Neutral;
     std::uint64_t storeRevision_ = 0;                 // moves with each handed-over model: the page's signature
     std::string storeChip_;                           // the DECODE row's chip ("" until the EXTEND publisher's first read: the row says IDLE, the word nothing has been asked)
     ::ChipTone storeChipTone_ = ::ChipTone::Neutral;

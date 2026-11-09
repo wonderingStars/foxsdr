@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1963 | 383 | 82 | 1498 | 0 |
+| 1963 | 391 | 82 | 1490 | 0 |
 
-Of the 1128 rows that are controls (the 835 readout-like rows left out): 383 asserted, 82 driven without a read-back, 663 not drivable.
+Of the 1128 rows that are controls (the 835 readout-like rows left out): 391 asserted, 82 driven without a read-back, 655 not drivable.
 
-NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120, deferred 114, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 835, other 201, needs a signal (no fixture) 120, deferred 95, relocated 85, withheld in a bounded run 70, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
 
 ## Per section
 
@@ -147,8 +147,8 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | SIGNAL bank — Radio (rail section) | 10 | 2 | 0 | 8 | 3 | 0 |
 | SIGNAL bank — Audio filters (rail section) | 9 | 5 | 1 | 3 | 2 | 0 |
 | SIGNAL bank — Sinks (rail section: audio output) | 7 | 1 | 0 | 6 | 4 | 0 |
-| SIGNAL bank — Transmit (rail row) | 2 | 0 | 0 | 2 | 1 | 0 |
-| SIGNAL bank — TRANSMIT page | 25 | 0 | 0 | 25 | 8 | 0 |
+| SIGNAL bank — Transmit (rail row) | 2 | 1 | 0 | 1 | 1 | 0 |
+| SIGNAL bank — TRANSMIT page | 25 | 7 | 0 | 18 | 8 | 0 |
 | SIGNAL bank — Recorder (rail section) | 15 | 4 | 0 | 11 | 6 | 0 |
 | SIGNAL bank — Frequency-list import dialog | 7 | 1 | 1 | 5 | 3 | 0 |
 | SYSTEM bank — Display | 17 | 13 | 0 | 4 | 3 | 0 |
@@ -441,7 +441,7 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | 135 | Ctrl++ / Ctrl+- | Zoom the spectrum in / out about the centre (zoomIn, zoomOut) | NOT DRIVABLE | - | the key verb has no ctrl+plus or ctrl+minus; the span keys do the same zoom (rows 203-205) |
 | 136 | Ctrl+Delete | Zoom back to the full span (zoomReset) | NOT DRIVABLE | - | the key verb has no ctrl+delete; the Full span key does the same (row 205) |
 | 137 | Shift+R | Record the audio - starts/stops the audio recording (record) | NOT DRIVABLE | - | the key verb has no shift modifier or plain letter keys (Shift+R) |
-| 138 | Space | Transmit (hold) (transmitPtt) | NOT DRIVABLE | - | deferred: the TRANSMIT page is a companion screen (phase 3) |
+| 138 | Space | Transmit (hold) (transmitPtt) | NOT DRIVABLE | - | the Space hold works only with a radio open and the PTT key focused; the family test sends the spacebar to the focused key and Tab away (test_slint_transmit), the host test matches chords (test_slint_host_transmit) |
 | 139 | Ctrl+W | Save a screenshot (screenshot) | NOT DRIVABLE | - | writes a screenshot file only, nothing to read back (the shot verb covers the capture itself) |
 | 140 | F11 | Maximise / restore the window (fullscreen) | NOT DRIVABLE | - | would maximise the bounded run's window: told not to drive it |
 | 141 | F1 / F2 / F3 / F4 / F5 | Rail banks SIGNAL PATH / DECODE / TOOLS / EXTEND / SYSTEM (bankSignal, bankDecode, bankView [sic, id kept for TOOLS], bankExtend, bankSystem) | DRIVEN+ASSERTED | main-shortcuts.txt | key f1..f5; state bank == 0..4 |
@@ -2171,37 +2171,37 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1338 | Transmit switch row | key (latched toggle) | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present; the row is a Section that only folds, and transmit-clicked (opTransmitPage -> FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN) has a builder but main.slint does not call it |
+| 1338 | Transmit switch row | key (latched toggle) | DRIVEN+ASSERTED | transmit-page | click Transmit (the rail row); state transmit.page == shown, transmit.live == 1; click Transmit again; state transmit.page == closed |
 | 1339 | Transmit chip + lamp | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
 
 ### SIGNAL bank — TRANSMIT page
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1340 | RADIO label + address | text field | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1341 | Open | button | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1342 | Close | button | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1340 | RADIO label + address | text field | DRIVEN+ASSERTED | transmit-page | type the address into RADIO; state fact.transmit.args == the typed text (FOXAPP_OP_SET_TRANSMIT_ARGS reached the engine) |
+| 1341 | Open | button | DRIVEN+ASSERTED | transmit-page | click Open with the typed address; state transmit.withheld.0a01 == 1 and txAvailable == 0: a bounded run withholds TX_OPEN (nothing connects to a board), the page then shows no radio |
+| 1342 | Close | button | NOT DRIVABLE | - | Close is drawn only with a radio open and there is no transmit hardware on this machine (the dummy load is reachable only from C++ tests against the table); the family test presses it (test_slint_transmit) |
 | 1343 | Radio name / state | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1344 | Frequency | number field | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1345 | SPLIT | button (latched, red when on) | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1344 | Frequency | number field | NOT DRIVABLE | - | live only with a radio open and SPLIT on; the script asserts it is greyed with none (expect MHz enabled equals false); the family test types and steps it |
+| 1345 | SPLIT | button (latched, red when on) | NOT DRIVABLE | - | live only with a radio open; the script asserts SPLIT is greyed with none; the family test presses it |
 | 1346 | Follow note | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1347 | Mode keys | key (latched toggle, one lit) | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1348 | TX POWER | slider | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1347 | Mode keys | key (latched toggle, one lit) | NOT DRIVABLE | - | live only with a radio open; the script asserts NFM is greyed with none; the family test presses every key |
+| 1348 | TX POWER | slider | NOT DRIVABLE | - | live only with a radio open; the family test and the host test (test_slint_host_transmit) drive it |
 | 1349 | INPUT | label | NOT DRIVABLE | - | a readout, not a control |
-| 1350 | MIC | key (latched toggle) | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1351 | TONE | key (latched toggle) | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1352 | Tone frequency | number field | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1350 | MIC | key (latched toggle) | NOT DRIVABLE | - | live only with a radio open (and a press would open the system microphone): never pressed in a bounded run; the family test presses it |
+| 1351 | TONE | key (latched toggle) | NOT DRIVABLE | - | live only with a radio open; the family test presses it |
+| 1352 | Tone frequency | number field | NOT DRIVABLE | - | drawn only with the TONE input chosen, which needs a radio open; the family test commits a tone |
 | 1353 | AUDIO | meter | NOT DRIVABLE | - | a readout, not a control |
-| 1354 | PTT | button (hold) | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1355 | LATCH | button (latched, red when on) | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1354 | PTT | button (hold) | DRIVEN+ASSERTED | transmit-page | press PTT with no radio open (it is greyed): state transmit.sent.0a03 == 0, transmit.ptt == 0, txKeyed == 0 - nothing is held or sent; THE HOLD ITSELF IS NOT EXERCISED (no transmitter on this machine): the family test holds, drags off and releases it, the host test drives every interlock |
+| 1355 | LATCH | button (latched, red when on) | DRIVEN+ASSERTED | transmit-page | press LATCH with no radio open (greyed): state transmit.sent.0a04 == 0, txKeyed == 0; a latch is never exercised for real (no transmitter) |
 | 1356 | State word | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
-| 1357 | Listen while transmitting | checkbox | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1357 | Listen while transmitting | checkbox | NOT DRIVABLE | - | live only with a radio open; the script asserts it is greyed with none; the family test ticks it |
 | 1358 | Auto-unkey / error | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1359 | ARM FOR PLUGINS | label + tooltip | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1360 | 5 MIN / 15 MIN / 60 MIN | key (latched toggle) | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1361 | OFF (arming) | button | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1359 | ARM FOR PLUGINS | label + tooltip | NOT DRIVABLE | - | a caption with a tooltip, not a control |
+| 1360 | 5 MIN / 15 MIN / 60 MIN | key (latched toggle) | DRIVEN+ASSERTED | transmit-page | click 5 MIN, 15 MIN, 60 MIN with no radio open; state fact.tx.plugin.refusal == 1 (the engine refused: no transmitter is open) and txAvailable == 0 - the arming window cannot open |
+| 1361 | OFF (arming) | button | DRIVEN+ASSERTED | transmit-page | click OFF; state fact.tx.plugin.refusal == 0 (the refusal is cleared) |
 | 1362 | Armed status | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1363 | DATA (flat) | checkbox | NOT DRIVABLE | - | deferred: the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1363 | DATA (flat) | checkbox | DRIVEN+ASSERTED | transmit-page | click DATA (flat) twice; state fact.tx.plugin.dataFlat == 0 then 1; expect checked false then true |
 | 1364 | Licence notice | readout | NOT DRIVABLE | - | a readout, not a control |
 
 ### SIGNAL bank — Recorder (rail section)

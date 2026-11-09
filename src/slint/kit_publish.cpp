@@ -60,6 +60,19 @@ const ::PatchPresetsModel& blankPatchPresetsModel() {
     return kBlank;
 }
 
+// The same for the Transmit page (kind 11): the three arrays present and empty.
+::TransmitPageModel blankTransmit() {
+    ::TransmitPageModel t{};
+    t.modes = model(std::vector<::TxChoice>{});
+    t.inputs = model(std::vector<::TxChoice>{});
+    t.arm_labels = model(std::vector<slint::SharedString>{});
+    return t;
+}
+const ::TransmitPageModel& blankTransmitModel() {
+    static const ::TransmitPageModel kBlank = blankTransmit();
+    return kBlank;
+}
+
 ChipTone toneOfState(FittedState s) {
     switch (s) {
         case FittedState::Fed: return ChipTone::Good;
@@ -113,7 +126,7 @@ std::vector<TableRow> tableRows(const std::vector<CascadePanelRow>& rows, std::s
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-KitPublisher::KitPublisher(MainWindow& ui, PluginKit& kit) : ui_(ui), kit_(kit), pagesModel_(std::make_shared<slint::VectorModel<PageTab>>()), storeModel_(blankStore()), patchPresetsModel_(blankPatchPresets()) {
+KitPublisher::KitPublisher(MainWindow& ui, PluginKit& kit) : ui_(ui), kit_(kit), pagesModel_(std::make_shared<slint::VectorModel<PageTab>>()), storeModel_(blankStore()), patchPresetsModel_(blankPatchPresets()), transmitModel_(blankTransmit()) {
     ui_.set_pages(pagesModel_);
 }
 KitPublisher::~KitPublisher() = default;
@@ -856,6 +869,48 @@ void KitPublisher::openPatchPresetsPage() {
 
 void KitPublisher::closePatchPresetsPage() { closePage("patch-presets"); }
 
+// The Transmit page (kind 11): the model the TRANSMIT publisher handed over, whole; its signature is the hand-over's revision. The tab's chip is the lamp word.
+void KitPublisher::fillTransmit(PageTab& t, std::string& sig) {
+    t.transmit = transmitModel_;
+    t.chip = ss(transmitChip_);
+    sig += "X" + std::to_string(transmitRevision_);
+}
+
+KitPublisher::TransmitView KitPublisher::transmitView() const {
+    for (std::size_t i = 0; i < pages_.size(); ++i) {
+        if (pages_[i].id != "transmit") { continue; }
+        return pages_[i].torn || currentPage() == static_cast<int>(i) ? TransmitView::Shown : TransmitView::Docked;
+    }
+    return TransmitView::Closed;
+}
+
+// LIVE: the page's controls are drawn. A torn page is drawn unless it is rolled up; a docked one only while it is the tab showing.
+bool KitPublisher::transmitLive() const {
+    for (std::size_t i = 0; i < pages_.size(); ++i) {
+        if (pages_[i].id != "transmit") { continue; }
+        return pages_[i].torn ? !pages_[i].rolled : currentPage() == static_cast<int>(i);
+    }
+    return false;
+}
+
+void KitPublisher::setTransmitModel(const ::TransmitPageModel& model, const std::string& chip, ::ChipTone tone) {
+    transmitModel_ = model;
+    transmitChip_ = chip;
+    transmitChipTone_ = tone;
+    ++transmitRevision_;
+}
+
+// Opens the page TORN OFF at the window's own size (the ImGui window is a floating 560 x 640); an open page is left as it is.
+void KitPublisher::openTransmitPage() {
+    if (findPage("transmit") != nullptr) { return; }
+    Page& p = openPage("transmit", 11, "", "", cascade::i18n::tr("TRANSMIT"));
+    p.torn = true;
+    p.tw = 560.f;
+    p.th = 640.f;
+}
+
+void KitPublisher::closeTransmitPage() { closePage("transmit"); }
+
 KitPublisher::StoreView KitPublisher::storeView() const {
     for (std::size_t i = 0; i < pages_.size(); ++i) {
         if (pages_[i].id != "store") { continue; }
@@ -912,6 +967,7 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
     t.details.lines = model(std::vector<DetailLine>{});
     t.store = blankStoreModel();
     t.patch_presets = blankPatchPresetsModel();
+    t.transmit = blankTransmitModel();
     sig = p.id + (p.torn ? "T" : "") + fmt("%.0f", p.tx) + fmt("%.0f", p.ty) + fmt("%.0f", p.tw) + fmt("%.0f", p.th) + (p.rolled ? "r" : "") + (p.follow ? "f" : "");
     const PluginRow* r = rowOf(p);
     bool chipIdle = false;   // the chip says IDLE or WAIT (decided from the state: the words themselves are translated)
@@ -926,9 +982,10 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
         case 8: fillDetails(t, state, sig); break;
         case 9: fillStore(t, sig); break;
         case 10: fillPatchPresets(t, sig); break;
+        case 11: fillTransmit(t, sig); break;
         default: break;
     }
-    t.chip_tone = p.kind == 9 ? storeChipTone_ : chipIdle || std::string(t.chip) == "IDLE" || std::string(t.chip) == "WAIT" || std::string(t.chip).empty() ? ChipTone::Neutral : ChipTone::Good;   // the engine's own chip words (teleprinter, beacon, meter, weather) stay English
+    t.chip_tone = p.kind == 11 ? transmitChipTone_ : p.kind == 9 ? storeChipTone_ : chipIdle || std::string(t.chip) == "IDLE" || std::string(t.chip) == "WAIT" || std::string(t.chip).empty() ? ChipTone::Neutral : ChipTone::Good;   // the engine's own chip words (teleprinter, beacon, meter, weather) stay English
     sig += std::string(t.chip);
     return t;
 }
@@ -1155,6 +1212,7 @@ void KitPublisher::publish(const FoxReceiverState& state) {
             else if (kind == "details") { openPage("details", 8, "", "", cascade::i18n::tr("Target details")); }
             else if (kind == "store") { openPage("store", 9, "", "", cascade::i18n::tr("PLUGIN STORE")); }
             else if (kind == "patch-presets") { openPatchPresetsPage(); }
+            else if (kind == "transmit") { openTransmitPage(); }
             else if (kind == "module") { const PluginRow* r = rowByFile(kit_.lists().rows, arg); if (r != nullptr) { openPage(id, 7, r->name, r->file, r->name); } }
             else {
                 const std::size_t bar = arg.find('|');

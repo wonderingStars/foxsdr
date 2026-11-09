@@ -42,6 +42,7 @@ import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
 import { ScopeTube } from "stubs.slint";
 import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents, PatchPage } from "patch_page.slint";
+import { TxChoice, TransmitPageModel, TransmitEvents } from "transmit_page.slint";   // the Transmit page (kit page kind 11; docs 6.58): its model and gestures reach C++ through main.h
 import { AboutSlint } from "std-widgets.slint";
 
 export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
@@ -57,6 +58,7 @@ export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, Men
          ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
          FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents }
+export { TxChoice, TransmitPageModel, TransmitEvents }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }

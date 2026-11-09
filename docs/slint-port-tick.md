@@ -244,7 +244,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 135 | Ctrl++ / Ctrl+- | Zoom the spectrum in / out about the centre (zoomIn, zoomOut) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 136 | Ctrl+Delete | Zoom back to the full span (zoomReset) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 137 | Shift+R | Record the audio - starts/stops the audio recording (record) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
-| 138 | Space | Transmit (hold) (transmitPtt) | DEFERRED | the TRANSMIT page is a companion screen (phase 3) |
+| 138 | Space | Transmit (hold) (transmitPtt) | PRESENT | the PTT key's chord (row 1354): Space held while the PTT key has the keyboard focus (click it or Tab to it) - stricter than the ImGui window's 'while the page has focus'; the bound chord is read from the key table each press |
 | 139 | Ctrl+W | Save a screenshot (screenshot) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 140 | F11 | Maximise / restore the window (fullscreen) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 141 | F1 / F2 / F3 / F4 / F5 | Rail banks SIGNAL PATH / DECODE / TOOLS / EXTEND / SYSTEM (bankSignal, bankDecode, bankView [sic, id kept for TOOLS], bankExtend, bankSystem) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
@@ -1982,38 +1982,38 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1338 | Transmit switch row | key (latched toggle) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present; the row is a Section that only folds, and transmit-clicked (opTransmitPage -> FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN) has a builder but main.slint does not call it |
+| 1338 | Transmit switch row | key (latched toggle) | PRESENT | the Section row is a switch, not a fold: section-clicked on bank 0 row 5 calls TransmitPublisher::togglePage (transmit_publish.cpp), which opens or closes the kit's page kind 11; the row is lit while the page is open; it keys nothing (drive: transmit-page.txt) |
 | 1339 | Transmit chip + lamp | lamp/indicator | PRESENT | the Section row's chip (NO TX / READY / ON AIR, red when keyed) and the red fault line under it (TransmitModel.fault = the transmitter error); the logic's FAULT word is not in sectionsFor today |
 
 ## SIGNAL bank — TRANSMIT page
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1340 | RADIO label + address | text field | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1341 | Open | button | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1342 | Close | button | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1343 | Radio name / state | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1344 | Frequency | number field | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1345 | SPLIT | button (latched, red when on) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1346 | Follow note | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1347 | Mode keys | key (latched toggle, one lit) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1348 | TX POWER | slider | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1349 | INPUT | label | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1350 | MIC | key (latched toggle) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1351 | TONE | key (latched toggle) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1352 | Tone frequency | number field | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1353 | AUDIO | meter | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1354 | PTT | button (hold) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1355 | LATCH | button (latched, red when on) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1356 | State word | lamp/indicator | RELOCATED | the Transmit Section row's chip and lamp (row 129) |
-| 1357 | Listen while transmitting | checkbox | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1358 | Auto-unkey / error | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present; the red transmitter error is the row's fault line, the amber auto-unkey reason is not drawn |
-| 1359 | ARM FOR PLUGINS | label + tooltip | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1360 | 5 MIN / 15 MIN / 60 MIN | key (latched toggle) | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1361 | OFF (arming) | button | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1362 | Armed status | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1363 | DATA (flat) | checkbox | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
-| 1364 | Licence notice | readout | DEFERRED | the transmit page is bespoke: arming, PTT, latch, audio source - next allowance; the row's chip and fault line are present |
+| 1340 | RADIO label + address | text field | PRESENT | ui/transmit_page.slint TransmitPage (kit page kind 11, opened torn off at 560 x 640 like the ImGui window): the RADIO Caption and the address LineInput; each edit is FOXAPP_OP_SET_TRANSMIT_ARGS (TransmitPage::addressEdited); greyed while a radio is open; the engine's address seeds the draft whenever the box is not focused |
+| 1341 | Open | button | PRESENT | Key Open: FOXAPI_OP_TX_OPEN of the draft (TransmitPage::open); greyed for a blank box, tooltip 'Type the board's address first.'; a bounded run withholds it (boundedMaySend) |
+| 1342 | Close | button | PRESENT | Key Close (replaces Open while a radio is open): FOXAPI_OP_TX_CLOSE; greyed while the key is down |
+| 1343 | Radio name / state | readout | PRESENT | NoteLine radio-line: the open radio's name, else the engine's transmitter error (red, translated), else 'No transmitter is open.' (drive: transmit-page.txt reads it) |
+| 1344 | Frequency | number field | PRESENT | LineInput 'MHz' (suffix) with the - / + keys (1 kHz, the ImGui InputDouble's step; its Ctrl fast step is not carried): FOXAPI_OP_TX_SET_FREQUENCY, live only with a radio open and SPLIT on; shows where it would transmit (txFrequencyHz) |
+| 1345 | SPLIT | button (latched, red when on) | PRESENT | ToggleKey SPLIT (red ground when on, accessible checked): FOXAPI_OP_TX_SET_SPLIT with the receiver's dial and the flipped state; greyed with no radio |
+| 1346 | Follow note | readout | PRESENT | the 'following the receiver' text beside SPLIT while SPLIT is off |
+| 1347 | Mode keys | key (latched toggle, one lit) | PRESENT | SegGroup of the five mode SegKeys CW AM NFM USB LSB (radio-button, the lit one checked): FOXAPI_OP_TX_SET_MODE; the tooltip of each is its caption sentence; greyed with no radio |
+| 1348 | TX POWER | slider | PRESENT | Slider in the board's own span, right = louder (txPowerFraction / txPowerFromFraction, the classic's functions) with the 'QUIET' / '-20.0 dB' readout and '(the board published no range)': FOXAPI_OP_TX_SET_POWER |
+| 1349 | INPUT | label | PRESENT | Caption INPUT |
+| 1350 | MIC | key (latched toggle) | PRESENT | SegKey MIC: FOXAPI_OP_TX_SET_INPUT 0; greyed with no radio and while the microphone is opening (the page therefore cannot open a microphone with no radio, which the table would) |
+| 1351 | TONE | key (latched toggle) | PRESENT | SegKey TONE: FOXAPI_OP_TX_SET_INPUT 1 |
+| 1352 | Tone frequency | number field | PRESENT | LineInput 'Hz' (suffix), shown on the TONE input: FOXAPI_OP_TX_SET_TONE, committed on Enter or on leaving the box |
+| 1353 | AUDIO | meter | PRESENT | LevelBar AUDIO from txInputPeak, a fast rise and a slow fall (decay 0.90 a tick), on the classic's dB scale (txMeterFraction) |
+| 1354 | PTT | button (hold) | PRESENT | HoldKey PTT (160 x 56): a HOLD - the pointer's level (a TouchArea keeps the press wherever the pointer goes) and, while the key has the keyboard focus, the bound chord (Space by default; row 138), turned into TX_PTT 1 every tick it is held and TX_PTT 0 once on release (the classic's txKeyCommands); greyed with no radio; NO accessible default action. UNVERIFIED against a real transmitter: none on this machine (docs 6.58) |
+| 1355 | LATCH | button (latched, red when on) | PRESENT | ToggleKey LATCH (red ground when latched, accessible checked): a press is the classic's edge protocol (LATCH 0 then LATCH 1 on a key shown released, LATCH 0 on a key shown latched, in one batch); the state is the engine's |
+| 1356 | State word | lamp/indicator | PRESENT | the lamp word beside LATCH (NO RADIO / READY / ON AIR / FAULT, amber READY, red ON AIR and FAULT, the classic's txLampState) and the Transmit row's chip (row 1339) |
+| 1357 | Listen while transmitting | checkbox | PRESENT | Checkbox: FOXAPI_OP_TX_SET_MONITOR; greyed with no radio |
+| 1358 | Auto-unkey / error | readout | PRESENT | NoteLine key-note (amber: why a LATCH or the consent was refused, the engine's words), unkey-reason (amber: why the key last opened on its own) and error-line (red: the transmitter's error) |
+| 1359 | ARM FOR PLUGINS | label + tooltip | PRESENT | Caption ARM FOR PLUGINS with the classic's tooltip |
+| 1360 | 5 MIN / 15 MIN / 60 MIN | key (latched toggle) | PRESENT | Keys 5 MIN / 15 MIN / 60 MIN (the armed length lit): a press is FOXAPP_OP_TX_PLUGIN_ARM 5 / 15 / 60 through the classic's txPluginArmCommands (with the lease's beat); live with no radio, where the engine's refusal comes back as fact.tx.plugin.refusal (drive: transmit-page.txt reads it) |
+| 1361 | OFF (arming) | button | PRESENT | Key OFF: FOXAPP_OP_TX_PLUGIN_ARM 0; the page not being live sends OFF with reason 1 (the lease) |
+| 1362 | Armed status | readout | PRESENT | NoteLine: 'ARMED: <plugin> may key this transmitter, 4:32 left.' (amber, red with 'ON AIR for <time>.' while a plugin has the key), else 'Not armed: no plugin can key this transmitter.', the refusal sentence (red) and the last close reason (amber) |
+| 1363 | DATA (flat) | checkbox | PRESENT | Checkbox DATA (flat): FOXAPP_OP_TX_DATA_FLAT, live whatever the radio; drawn from fact.tx.plugin.dataFlat (drive: transmit-page.txt) |
+| 1364 | Licence notice | readout | PRESENT | NoteLine: the classic's licence sentence (gui::kTxLicenceNotice) |
 
 ## SIGNAL bank — Recorder (rail section)
 
@@ -2876,15 +2876,15 @@ Subtotal: PRESENT 142, RELOCATED 35, DEFERRED 11, total 188 (rows 1776 to 1963).
 
 | Status | Rows |
 |---|---|
-| PRESENT | 1527 |
-| RELOCATED | 198 |
-| DEFERRED | 238 |
+| PRESENT | 1555 |
+| RELOCATED | 197 |
+| DEFERRED | 211 |
 | TODO (unclassified) | 0 |
 | Total | 1963 |
 
 Phase 2 alone: PRESENT 890, RELOCATED 34, DEFERRED 11, total 935.
 
-Phase 3, the SIGNAL bank alone: PRESENT 122, RELOCATED 17, DEFERRED 37, total 176.
+Phase 3, the SIGNAL bank alone: PRESENT 148, RELOCATED 16, DEFERRED 12, total 176 (the Transmit page, docs 6.58, took 25 rows from DEFERRED and row 1356 from RELOCATED; row 138 - the Space hold - is phase 1's and went from DEFERRED too).
 
 Phase 3, the SYSTEM bank alone: PRESENT 95, RELOCATED 17, DEFERRED 25, total 137.
 
