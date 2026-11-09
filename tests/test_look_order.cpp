@@ -328,12 +328,15 @@ void testBusyHoldsAnswersBack() {
     A::act(app);
     CHECK(acted == 0);                        // not acted on against the old state
     CHECK(A::pending(app) >= 1);              // ...and not lost
-    // The next look that reads: the state shows the answer once ONE MORE PASS has published, and that is the control thread's own time, not a
-    // count of looks. 200 looks take well under a millisecond, so on a loaded runner the loop ended before the thread had run again and
-    // `acted` stayed 0 (Linux CI, 2026-11-09: "FAIL test_look_order.cpp:335 acted >= 1", the flake the docs name). The wait is by the clock,
-    // as the wait for the answer above is, and gives the thread the time to publish between looks.
+    // The next look that reads, as a FRAME makes it: a frame polls the answers, then looks, then acts. This loop looked and acted without polling, so it
+    // acted on a buffer that could never receive the answer it waited for: the wait above ends at the first answer of ANY kind, the engine can have
+    // answered something else first, and the SET_VFO_OFFSET answer was then still in the session, not in the buffer (on the Windows desk 4 runs in 10
+    // ended with `acted` 0 after 5 s and the buffer empty; Linux CI, 2026-11-09: "FAIL test_look_order.cpp:335 acted >= 1", the flake the docs name).
+    // The state also shows the answer only once one more pass has published, which is the control thread's own time and not a count of looks, so the
+    // loop waits by the clock, as the wait above does, and gives the thread the time between looks.
     const auto t1 = Clock::now();
     while (acted == 0 && msSince(t1) < 5000.0) {
+        A::poll(app);
         A::look(app);
         A::act(app);
         if (acted == 0) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
