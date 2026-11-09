@@ -203,6 +203,16 @@ bool claimPrimaryInstanceAt(const std::string& identity) {
     // so holding the fd for the process's life is what keeps the lock held;
     // a lock file the process never explicitly unlinks is harmless - the
     // NEXT process to check simply re-creates/re-locks it.
+    //
+    // THE FOLDER IS MADE FIRST. The lock sits in the settings folder, and the claim is the first thing a launch does there - before
+    // anything has written a file - so on a machine that has never run FoxSDR (no ~/.config/foxsdr) open() answered ENOENT, the claim
+    // read as "another instance holds it", and the first launch behaved as the second (Linux CI, 2026-11-09: test_process_boot_kind
+    // claimed a name in a fresh profile and was refused). The Windows mutex has no folder to need.
+    {
+        std::error_code ec;
+        const fs::path parent = fs::path(identity).parent_path();
+        if (!parent.empty()) { fs::create_directories(parent, ec); }
+    }
     const int fd = ::open(identity.c_str(), O_CREAT | O_RDWR, 0600);
     if (fd < 0) { return false; }
     if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
