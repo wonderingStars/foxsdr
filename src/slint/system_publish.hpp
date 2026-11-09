@@ -68,6 +68,11 @@ public:
     std::size_t commandsSent() const { return sent_; }
     std::size_t savesMade() const { return saves_; }
 
+    // The interface size as the Display dropdown sets it (0 = Auto, 1..6 the steps): saved, and seen by the window's look on the next tick (Ctrl+0 is index 0).
+    void setInterfaceSize(int index);
+    // The operating system's own scale (the window's look knows it apart from the one it dispatched): the Auto row's "% here" quotes this, not the window's.
+    void setOsScale(float scale) { osScale_ = scale; }
+
     // A bounded run's self-captures. Never set in a release.
     //   languageChangeForCapture: as if the Language dropdown had picked `code` (the whole path: save, setLanguage, select_bundled_translation, re-publish).
     //   raiseReportForCapture: opens the feature (0) or bug (1) page.
@@ -125,6 +130,7 @@ private:
     ReadOptions opts_;
     SystemModels last_;
     bool haveModels_ = false;
+    float osScale_ = 0.0f;   // 0 = not told yet: the window's own scale stands in
     FoxReceiverState state_{};
     std::size_t sent_ = 0;
     std::size_t saves_ = 0;

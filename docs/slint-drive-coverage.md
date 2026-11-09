@@ -448,16 +448,16 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | 142 | F7 | Settings and key bindings - goes to SYSTEM and opens the Key bindings row (openSettings) | DRIVEN+ASSERTED | main-shortcuts.txt | key f7; state bank == 4 (the Key bindings section it opens is not read back) |
 | 143 | F12 | Always saves a screenshot (hard-wired, not in the table) | NOT DRIVABLE | - | writes a screenshot file only, nothing to read back (the shot verb covers the capture itself) |
 | 144 | Esc | Cancels the counter editor, the key-capture, a dialog; leaves Scope mode when nothing is being edited and no popup is open | DRIVEN | main-editor-probe.txt | press a counter digit to open the editor, key escape; nothing read back (it clears editor flags that have no engine state) |
-| 145 | Ctrl+= / Ctrl+- / Ctrl+0 | Interface size: step up / step down through 100-250%, Ctrl+0 back to Auto. Not rebindable; ignored while text is being typed | NOT DRIVABLE | - | deferred: the interface size (window scale) is phase 2; the chords are bound and log their request |
+| 145 | Ctrl+= / Ctrl+- / Ctrl+0 | Interface size: step up / step down through 100-250%, Ctrl+0 back to Auto. Not rebindable; ignored while text is being typed | NOT DRIVABLE | - | deferred: Ctrl+0 (back to Auto) is answered and applied: key-dispatch names uiSizeAuto, main.cpp saves interfaceScale = auto through SystemPublisher::setInterfaceSize and the window's look moves the scale on the next tick (docs 6.61, drive system-look.txt: pin 150%, Ctrl+0, scale 1.00). Ctrl+= and Ctrl+- are NOT the interface size here: the key table binds them to the band zoom (Ctrl+Plus / Ctrl+Minus), so stepping the size through 100-250% by the keyboard stays deferred; the dropdown steps it |
 | 146 | Mouse wheel over a counter figure, a dial | Tunes that digit / turns the dial | NOT DRIVABLE | - | the scripted input has no wheel verb |
 
 ### Main window frame — Themes and sizes
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 147 | Today's bench () | The default brass-and-enamel bench; serif ("bench-serif") fonts, Nixie counter | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Today's bench"; state cfg.uiTheme == today (the look is saved, not applied: the row is DEFERRED, the setting is real) |
+| 147 | Today's bench () | The default brass-and-enamel bench; serif ("bench-serif") fonts, Nixie counter | DRIVEN+ASSERTED | system-look.txt | choose "Theme" "Today's bench"; state cfg.uiTheme == today; look.bg == "#15171b", look.face == nixie after Today's bench (system-look.txt) |
 | 148 | Bench Classic XL () | Today's palette, counter figures doubled, switches put away, every reading 1.4x | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Bench Classic XL"; state cfg.uiTheme == classic-xl (the look is saved, not applied: the row is DEFERRED, the setting is real) |
-| 149 | Night Watch () | Dark red-black palette with red sheen/highlights (preserves night vision); mono fonts, flat keys | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Night Watch"; state cfg.uiTheme == night (the look is saved, not applied: the row is DEFERRED, the setting is real) |
+| 149 | Night Watch () | Dark red-black palette with red sheen/highlights (preserves night vision); mono fonts, flat keys | DRIVEN+ASSERTED | system-look.txt | choose "Theme" "Night Watch"; state cfg.uiTheme == night; look.bg == "#070303", look.accent == "#ff6a4c", look.face == neon after Night Watch (system-look.txt) |
 | 150 | Glass Cockpit () | Dark blue-grey; sans UI font, condensed captions, chrome knobs, radius 8 | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Glass Cockpit"; state cfg.uiTheme == glass (the look is saved, not applied: the row is DEFERRED, the setting is real) |
 | 151 | Daylight Lab () | Light grey/white; sans fonts, chrome knobs, radius 6 | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Daylight Lab"; state cfg.uiTheme == daylight (the look is saved, not applied: the row is DEFERRED, the setting is real) |
 | 152 | Field Radio () | Olive/khaki; mono body with stencil captions | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Field Radio"; state cfg.uiTheme == field (the look is saved, not applied: the row is DEFERRED, the setting is real) |
@@ -466,8 +466,8 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 153 | Interface size | dropdown "Interface size" | DRIVEN+ASSERTED | system-scale.txt | choose "Interface size" "125%"; state cfg.interfaceScale == 125 |
-| 154 | Theme | dropdown "Theme" | DRIVEN+ASSERTED | system-display.txt | choose "Theme" x6; state cfg.uiTheme and the preset fields; expect "Theme" value |
+| 153 | Interface size | dropdown "Interface size" | DRIVEN+ASSERTED | system-look.txt | choose "Interface size" "125%"; state cfg.interfaceScale == 125; choose "Interface size" "200%": look.scale == 2.00 (system-look.txt) |
+| 154 | Theme | dropdown "Theme" | DRIVEN+ASSERTED | system-look.txt | choose "Theme" x6; state cfg.uiTheme and the preset fields; expect "Theme" value; look.bg / look.face per theme (system-look.txt) |
 | 155 | Frequency display | dropdown "Frequency display" | DRIVEN+ASSERTED | system-display.txt | choose "Frequency display" Neon / Plain / Nixie tubes; state cfg.tunerDisplayStyle |
 | 156 | Counter figures | dropdown "Counter figures" | DRIVEN+ASSERTED | system-display.txt | choose "Counter figures" Enlarged figures / Normal size; state cfg.counterScale |
 | 157 | Tuner switches | checkbox "Tuner switches" | DRIVEN+ASSERTED | system-display.txt | click "Tuner switches" x2; state cfg.counterSwitches; expect checked |
@@ -2241,9 +2241,9 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 1387 | Section chip | readout + lamp | NOT DRIVABLE | - | a readout, not a control |
-| 1388 | Interface size | dropdown/combo | DRIVEN+ASSERTED | system-scale.txt | choose "Interface size" "125%"; state cfg.interfaceScale == 125 |
+| 1388 | Interface size | dropdown/combo | DRIVEN+ASSERTED | system-look.txt | choose "Interface size" "125%"; state cfg.interfaceScale == 125; look.scale == 2.00, look.width == 800 at 200%, 1.00 back at Auto, Ctrl+0 (system-look.txt) |
 | 1389 | Interface size tooltip | tooltip | NOT DRIVABLE | - | a readout, not a control |
-| 1390 | Theme | dropdown/combo | DRIVEN+ASSERTED | system-display.txt | choose "Theme" x6; state cfg.uiTheme and the preset fields |
+| 1390 | Theme | dropdown/combo | DRIVEN+ASSERTED | system-look.txt | choose "Theme" x6; state cfg.uiTheme and the preset fields; look.bg / look.accent / look.face per theme (system-look.txt) |
 | 1391 | Min dB | slider | DRIVEN+ASSERTED | system-display-map.txt | slider "Min dB" 0.1; state dbMin < -125 |
 | 1392 | Max dB | slider | DRIVEN+ASSERTED | system-display-map.txt | slider "Max dB" 0.95; state dbMax > 5 |
 | 1393 | Frequency display | dropdown/combo | DRIVEN+ASSERTED | system-display.txt | choose "Frequency display" Neon / Plain / Nixie tubes; state cfg.tunerDisplayStyle |

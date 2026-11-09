@@ -206,6 +206,40 @@ export global Workbench {
     };
 }
 
+// Night Watch, the second filling (docs 6.61): the classic window's red-black look (gui/theme.cpp makeNight), ported end to end as the proof that a skin
+// carries the whole window with no component change. Every shade is red, so a night-adapted eye keeps its dark adaptation: no white, no green, no blue.
+// The mapping from the classic's 49 roles: Bg -> bg, Frame -> strip, Panel -> panel, PanelHead -> panel-alt, Deck -> card, Well -> well, DigitBg -> field,
+// MenuBg/MenuHi -> menu/menu-hot, Border -> line, CtrlBorder -> line-strong, MenuBorder -> knob-ring, Label/Text/Muted -> fg/fg-soft/muted, Accent -> accent,
+// Digit/DigitDim -> digit/digit-dim, Ctrl/CtrlText -> key-bg/key-fg, StopBg -> danger-bg, Trace/Grid -> trace-live/graticule, WfLow..WfTop -> wf-*, Mono
+// typeface, flat keys (small radius, no shadow), neon counter face. test_slint_theme holds the reading pairs to the classic test's 4.5:1.
+export global NightWatch {
+    out property <Skin> value: {
+        bg: #070303, strip: #140606, panel: #100505, panel-alt: #170808, card: #1c0a09, well: #040101, well-deep: #020000,
+        field: #0a0202, menu: #1c0a09, menu-hot: #3a1410, table-selected: #2a0f0a,
+        card-warn: #2a0f0a, card-warn-line: #6b2a1c, card-err: #3a0e0b, card-err-line: #8a2014, backdrop: #020000b0,
+        line: #3a1410, line-strong: #4a1a14, line-faint: #240d0a, knob-ring: #5a1a12,
+        fg: #ff8a72, fg-soft: #e87766, muted: #cf5d4d, dim: #b04c3e, faint: #8a3a2e, nudge: #a04436, disabled: #9a4538, focus: #ffd2c6,
+        accent: #ff6a4c, accent-ink: #1a0402, accent-soft: #ff8a70, accent-hover: #ff8a70, digit: #ff5a3c, digit-glow: #ff5a3c55, digit-dim: #3a100a,
+        lamp-off: #3a1410, lamp-ring: #5a1a12, lamp-green: #ff7a62, lamp-green-cap: #ffd2c6, lamp-amber: #ff6a4c, lamp-amber-cap: #ffc2b4,
+        lamp-red: #ffe1d8, lamp-red-cap: #fff0ea, lamp-yellow: #ff9a70, lamp-yellow-cap: #ffd2c6,
+        chip-bg: #1f0b09, chip-fg: #f08a76, chip-line: #4a1a14, chip-good-bg: #2a0c09, chip-good-fg: #ff7a62, chip-good-line: #5a1a12,
+        chip-warn-bg: #2e0f08, chip-warn-fg: #ff9a70, chip-warn-line: #6b2a1c, chip-err-bg: #3a0e0b, chip-err-fg: #ffe1d8, chip-err-line: #8a2014,
+        key-bg: #1f0b09, key-line: #4a1a14, key-fg: #f08a76, key-disabled-bg: #140606, key-disabled-fg: #9a4538,
+        danger-bg: #3a0806, danger-line: #8a2014, danger-strong-line: #b02a1a, danger-fg: #ffd2c6, danger-glyph: #ff8a70,
+        hazard-line: #6b2a1c, hazard-stripe: #2a0c09, plate-line: #ff6a4c, plate-fg: #ff8a70,
+        slider-track: #3a1410, slider-fill: #ff6a4c, slider-knob: #ff7a62, slider-knob-ring: #100505, slider-disabled-fill: #5a2a22, slider-disabled-knob: #8a4a3e,
+        level-bar: #ff5a3c,
+        meter-face: #140606, meter-ink: #e87766, meter-needle: #ff5a3c, meter-led-low: #a82a1c, meter-led-mid: #ff5a3c, meter-led-high: #ffe1d8, meter-peak: #ff9a70,
+        trace-live: #ff6a4c, trace-peak: #ffb09c, trace-average: #ffd2c6, vfo: #ff5a3c, vfo-fill: #ff5a3c22, bandplan: #3a1410, bandplan-fg: #e87766,
+        mark: #cf5d4d, mark-fill: #cf5d4d22, bookmark: #ff8a70, bookmark-tick: #ff5a3c, marker: #ffd2c6, cursor: #ff8a7266,
+        cursor-chip-bg: #040101dd, cursor-chip-line: #5a1a12, graticule: #2a0f0b, axis-fg: #b04c3e,
+        wf-floor: #140303, wf-mid: #4a0c07, wf-high: #c0281a, wf-hot: #ff9a70, wf-peak: #ffe1d8, wf-vfo: #ff8a70, wf-key-bg: #040101dd,
+        font-ui: "JetBrains Mono", font-mono: "JetBrains Mono",   // not-translated: typeface names, not words
+        radius: 2px, radius-panel: 2px, radius-seg: 2px, radius-seg-key: 2px, radius-chip: 3px, radius-dome: 10px, radius-menu-item: 2px,
+        digit-face: DigitFace.drum, lamp-glow: true, shadows: false, hairline: 1px,
+    };
+}
+
 export global Theme {
     // THE FILLING IN FORCE. Components never read this directly: they read the tokens below.
     in-out property <Skin> skin: Workbench.value;

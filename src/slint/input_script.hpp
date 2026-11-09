@@ -19,7 +19,7 @@
 //   press "<label>"                     a pointer click at the control's centre (the real gesture; a control outside the window is refused)
 //   type "<label>" "<text>"             a field: pointer-focused, its text selected, the text typed (no Enter: `key enter` commits)
 //   key <name>                          a key to the focused control: enter, escape, tab, backspace, delete, space, up, down, left,
-//                                       right, f1..f12, ctrl+<letter>, or ONE printable character typed as itself (a letter
+//                                       right, f1..f12, ctrl+<letter|digit>, or ONE printable character typed as itself (a letter
 //                                       into whatever has the focus - a popup's filter field, say - without a pointer)
 //   slider "<label>" <0..1>             a slider: a pointer press at that fraction of its track
 //   scroll "<label>" <pixels>           a wheel scroll at the control's centre: positive shows what is BELOW (the content moves up),

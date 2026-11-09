@@ -7,6 +7,7 @@
 // constants), so a change there that is not followed here fails this test: gui/key_bindings.cpp includes imgui.h and the Slint program links no ImGui.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "key_dispatch.hpp"
+#include "look_logic.hpp"
 #include "system_logic.hpp"
 #include "test_check.hpp"
 
@@ -919,6 +920,36 @@ void displayEffects() {
     CHECK(e.save && e.half.counterScale == 2 && !e.half.counterSwitches && e.half.readingsScale == 1.4f);
     CHECK(changedFields(plain, e.half) == (Names{"tunerDisplayStyle", "uiTheme", "counterScale", "counterSwitches", "readingsScale"}));
     CHECK(applyDisplayTheme(c, 2).empty() && applyDisplayTheme(c, 9).empty());   // the look already in force (pickTheme is guarded by != now)
+
+    // THE WINDOW'S LOOK FOLLOWS WHAT THESE EFFECTS SAVE (docs 6.61, look_logic.hpp): the saved theme names the skin and the saved tuner style the counter face; the
+    // saved interface size is the scale the window is moved to - so a pick saved here and not applied by the window would fail one of these.
+    {
+        namespace look = foxsdr::slintlook;
+        const look::SkinId skinOf[6] = {look::SkinId::Workbench, look::SkinId::Workbench, look::SkinId::NightWatch, look::SkinId::Workbench, look::SkinId::Workbench, look::SkinId::Workbench};
+        const look::CounterFace faceOf[6] = {look::CounterFace::Nixie, look::CounterFace::Nixie, look::CounterFace::Drum, look::CounterFace::Plain, look::CounterFace::Plain, look::CounterFace::Plain};
+        core::AppConfig from = plain;
+        from.uiTheme = "bogus";   // every index differs from what is in force, so every pick is saved
+        for (int i = 0; i < kThemeCount; ++i) {
+            const Effect te = applyDisplayTheme(from, i);
+            CHECK(te.save && (te.apply & kApplySkin) != 0);
+            CHECK(look::skinOfTheme(te.half.uiTheme) == skinOf[i]);
+            CHECK(look::faceOfStyle(te.half.tunerDisplayStyle) == faceOf[i]);
+        }
+        look::ScaleFollower follower;
+        CHECK(c.interfaceScale == "150" && follower.plan(c.interfaceScale, 1.0f).want == 1.5f);   // the config in force pins 150%, whatever the system reports
+        const float steps[6] = {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f};
+        for (int i = 1; i <= kScaleStepCount; ++i) {
+            core::AppConfig auto0 = c;
+            auto0.interfaceScale = "auto";
+            const Effect se = applyDisplayScale(auto0, i);
+            CHECK(se.save && (se.apply & kApplyScale) != 0);
+            const look::ScalePlan p = follower.plan(se.half.interfaceScale, 1.0f);
+            CHECK(std::fabs(p.want - steps[i - 1]) < 1e-5f);
+            CHECK(p.change == (i != 1));   // 100% on a 100% system is already in force
+        }
+        const Effect back = applyDisplayScale(c, 0);   // Auto again: the system's number
+        CHECK(std::fabs(follower.plan(back.half.interfaceScale, 1.0f).want - 1.0f) < 1e-5f);
+    }
 
     e = applyDisplayDbMin(c, st, -100.f);
     CHECK(e.save && e.half.dbMin == -100.f && e.half.dbMax == -10.f && e.half.waterfallRangeMode == "manual" && (e.apply & kApplyDbRange) != 0);

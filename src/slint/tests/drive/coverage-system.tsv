@@ -1,11 +1,11 @@
-147	ASSERTED	system-display.txt	choose "Theme" "Today's bench"; state cfg.uiTheme == today (the look is saved, not applied: the row is DEFERRED, the setting is real)
+147	ASSERTED	system-look.txt	choose "Theme" "Today's bench"; state cfg.uiTheme == today; look.bg == "#15171b", look.face == nixie after Today's bench (system-look.txt)
 148	ASSERTED	system-display.txt	choose "Theme" "Bench Classic XL"; state cfg.uiTheme == classic-xl (the look is saved, not applied: the row is DEFERRED, the setting is real)
-149	ASSERTED	system-display.txt	choose "Theme" "Night Watch"; state cfg.uiTheme == night (the look is saved, not applied: the row is DEFERRED, the setting is real)
+149	ASSERTED	system-look.txt	choose "Theme" "Night Watch"; state cfg.uiTheme == night; look.bg == "#070303", look.accent == "#ff6a4c", look.face == neon after Night Watch (system-look.txt)
 150	ASSERTED	system-display.txt	choose "Theme" "Glass Cockpit"; state cfg.uiTheme == glass (the look is saved, not applied: the row is DEFERRED, the setting is real)
 151	ASSERTED	system-display.txt	choose "Theme" "Daylight Lab"; state cfg.uiTheme == daylight (the look is saved, not applied: the row is DEFERRED, the setting is real)
 152	ASSERTED	system-display.txt	choose "Theme" "Field Radio"; state cfg.uiTheme == field (the look is saved, not applied: the row is DEFERRED, the setting is real)
-153	ASSERTED	system-scale.txt	choose "Interface size" "125%"; state cfg.interfaceScale == 125
-154	ASSERTED	system-display.txt	choose "Theme" x6; state cfg.uiTheme and the preset fields; expect "Theme" value
+153	ASSERTED	system-look.txt	choose "Interface size" "125%"; state cfg.interfaceScale == 125; choose "Interface size" "200%": look.scale == 2.00 (system-look.txt)
+154	ASSERTED	system-look.txt	choose "Theme" x6; state cfg.uiTheme and the preset fields; expect "Theme" value; look.bg / look.face per theme (system-look.txt)
 155	ASSERTED	system-display.txt	choose "Frequency display" Neon / Plain / Nixie tubes; state cfg.tunerDisplayStyle
 156	ASSERTED	system-display.txt	choose "Counter figures" Enlarged figures / Normal size; state cfg.counterScale
 157	ASSERTED	system-display.txt	click "Tuner switches" x2; state cfg.counterSwitches; expect checked
@@ -15,8 +15,8 @@
 161	ASSERTED	system-display-map.txt	slider "Trail width" 0.5; state cfg.mapTrailWidthPx > 8
 364	ASSERTED	system-display-map.txt	choose "Trail style" "Ribbon"; state cfg.mapTrailStyle == 1 (docs 6.52: the box the Slint window lacked)
 163	ASSERTED	system-display-map.txt	click "Band plan"#1 x2; state cfg.bandPlanOverlay true/false (size and colour: rows 1400, 1401)
-1388	ASSERTED	system-scale.txt	choose "Interface size" "125%"; state cfg.interfaceScale == 125
-1390	ASSERTED	system-display.txt	choose "Theme" x6; state cfg.uiTheme and the preset fields
+1388	ASSERTED	system-look.txt	choose "Interface size" "125%"; state cfg.interfaceScale == 125; look.scale == 2.00, look.width == 800 at 200%, 1.00 back at Auto, Ctrl+0 (system-look.txt)
+1390	ASSERTED	system-look.txt	choose "Theme" x6; state cfg.uiTheme and the preset fields; look.bg / look.accent / look.face per theme (system-look.txt)
 1391	ASSERTED	system-display-map.txt	slider "Min dB" 0.1; state dbMin < -125
 1392	ASSERTED	system-display-map.txt	slider "Max dB" 0.95; state dbMax > 5
 1393	ASSERTED	system-display.txt	choose "Frequency display" Neon / Plain / Nixie tubes; state cfg.tunerDisplayStyle

@@ -1,0 +1,58 @@
+#! frames=520 bank=4 sections=4:0
+# system-look: the interface size and the theme are APPLIED to the window (docs 6.61), not only saved. system-display.txt and system-scale.txt read the
+# saved settings (cfg.*); this reads what the window is DRAWN with (look.*: Window::scale_factor, the logical size the screen lays out in, the ground and
+# accent colours of the skin in force, the counter face), so a setting that is saved and not applied fails here. Night Watch is the one ported skin besides
+# Workbench; the other looks keep Workbench's colours and take their counter face.
+10 state running == 1
+state look.scale == 1.00
+state look.bg == "#15171b"
+state look.accent == "#f5a524"
+state look.face == nixie
+state cfg.interfaceScale == auto
+state look.width == 1600
+state look.height == 900
+
+# Interface size 200%: the window's scale doubles; the window is the hidden desktop's 1600 x 900 maximised, so the screen lays out in half as many logical pixels
+# (everything is twice as large in the same window - the classic window's interface size), and a window that is not maximised keeps its logical size and grows
++1 choose "Interface size" "200%"
++12 state cfg.interfaceScale == 200
+state look.scale == 2.00
+state look.width == 800
+state look.height == 450
++3 expect "Interface size" value contains "200%"
+
+# Night Watch: the red-black skin and the neon face, at the new scale
++2 choose "Theme" "Night Watch"
++12 state cfg.uiTheme == night
+state look.bg == "#070303"
+state look.accent == "#ff6a4c"
+state look.face == neon
+state look.scale == 2.00
+
+# Today's bench: Workbench and the Nixie tubes again
++2 choose "Theme" "Today's bench"
++12 state look.bg == "#15171b"
+state look.accent == "#f5a524"
+state look.face == nixie
+
+# a look that is not ported keeps Workbench's colours and takes its own counter face
++2 choose "Theme" "Glass Cockpit"
++12 state cfg.uiTheme == glass
+state look.bg == "#15171b"
+state look.face == plain
+
+# back to Night Watch, then the size to Auto by the dropdown: the system's number returns (the Auto row still says what the system reports)
++2 choose "Theme" "Night Watch"
++12 state look.bg == "#070303"
++2 choose "Interface size" "Auto (follows Windows, 100% here)"
++12 state cfg.interfaceScale == auto
+state look.scale == 1.00
+state look.width == 1600
+
+# Ctrl+0 does the same from the keyboard: pin 150%, then Ctrl+0
++2 choose "Interface size" "150%"
++12 state look.scale == 1.50
++2 key ctrl+0
++12 state cfg.interfaceScale == auto
+state look.scale == 1.00
+state look.bg == "#070303"

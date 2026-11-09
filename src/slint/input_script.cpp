@@ -77,7 +77,7 @@ bool knownKey(const std::string& k) {
         return digits && n >= 1 && n <= 12;
     }
     if (k.size() == 1 && std::isprint(static_cast<unsigned char>(k[0])) && k[0] != ' ') { return true; }   // one character, typed as itself
-    return k.size() == 6 && k.rfind("ctrl+", 0) == 0 && std::isalpha(static_cast<unsigned char>(k[5]));
+    return k.size() == 6 && k.rfind("ctrl+", 0) == 0 && std::isalnum(static_cast<unsigned char>(k[5]));   // ctrl+<letter> or ctrl+<digit> (Ctrl+0, docs 6.61)
 }
 
 }  // namespace
@@ -176,7 +176,7 @@ Script parseInputScript(const std::string& text) {
         } else if (verb == "key") {
             st.verb = Verb::Key;
             st.text = c.word();
-            if (!knownKey(st.text)) { bad("unknown key \"" + st.text + "\" (enter escape tab backspace delete space up down left right f1..f12 ctrl+<letter> or one character)"); continue; }
+            if (!knownKey(st.text)) { bad("unknown key \"" + st.text + "\" (enter escape tab backspace delete space up down left right f1..f12 ctrl+<letter|digit> or one character)"); continue; }
         } else if (verb == "slider") {
             st.verb = Verb::Slider;
             if (!c.quoted(st.label) || st.label.empty()) { bad("slider takes a quoted label"); continue; }

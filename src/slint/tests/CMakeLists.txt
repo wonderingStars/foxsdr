@@ -97,6 +97,8 @@ foreach(src ${_foxsdr_slint_test_sources})
         if(unit STREQUAL "system" OR unit STREQUAL "keydispatch")
             # The keyboard's dispatch (docs 6.56, ../key_dispatch.cpp) stands on the SYSTEM bank's key table, so both tests build the SYSTEM bank's logic with it.
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../key_dispatch.cpp")
+            # The window's look (docs 6.61, ../look_logic.cpp): the Display body's effects are read through the rules that apply them.
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../look_logic.cpp")
             if(unit STREQUAL "keydispatch")
                 list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../system_logic.cpp")
             endif()

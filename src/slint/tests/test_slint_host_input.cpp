@@ -254,6 +254,13 @@ int main() {
         CHECK(s.errors.size() == 1);
         CHECK(!s.errors.empty() && s.errors[0].find("line 3") != std::string::npos && s.errors[0].find("unknown key") != std::string::npos);
     }
+    // Ctrl with a letter or a digit is a chord (Ctrl+0 is the interface size's Auto, docs 6.61); Ctrl with a symbol or a second character is not
+    {
+        const Script s = parseInputScript("1 key ctrl+a\nkey ctrl+0\nkey ctrl+9\nkey ctrl+!\nkey ctrl+ab\n");
+        CHECK(s.errors.size() == 2);
+        CHECK(s.errors.size() == 2 && s.errors[0].find("line 4") != std::string::npos && s.errors[1].find("line 5") != std::string::npos);
+        CHECK(s.steps.size() == 3);
+    }
     // a word comparison is exact, and != works on words and numbers
     {
         const Script s = parseInputScript("1 state w == abc\nstate w != abd\nstate n != 4\nstate n == 3.0\nstate w == ABC\n");

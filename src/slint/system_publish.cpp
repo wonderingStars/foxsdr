@@ -316,13 +316,13 @@ void SystemPublisher::sendReport(const Effect& e) {
 
 void SystemPublisher::applyWindow(const Effect& e) {
     if ((e.apply & kApplyScale) != 0u) {
-        // The Slint window follows the operating system's own scale factor today (Window::scale_factor); the choice is saved for the ImGui window and for the
-        // step that lets this one take it. Nothing is applied here.
-        std::fprintf(stderr, "foxsdr-slint: system: interface size '%s' saved; this window follows the OS scale and takes it at the next start\n", e.value.c_str());
+        // Saved; the window's look (main.cpp applyLook, look_logic.hpp) reads the interface half on the next tick and moves the window's scale to it.
+        std::fprintf(stderr, "foxsdr-slint: system: interface size '%s' saved; the window takes it on the next tick\n", e.value.c_str());
     }
     if ((e.apply & kApplySkin) != 0u) {
-        // The six ImGui looks are one Workbench skin in this window: the key is saved (and the counter, readings and tuner style that come with it), nothing else.
-        std::fprintf(stderr, "foxsdr-slint: system: look '%s' saved; this window has the one Workbench skin\n", e.value.c_str());
+        // Saved with the counter, readings and tuner style that come with it; the window's look (main.cpp applyLook) reads them on the next tick: Night Watch has
+        // its own skin, the other four looks are drawn in Workbench until they are ported (look_logic.hpp skinOfTheme).
+        std::fprintf(stderr, "foxsdr-slint: system: look '%s' saved; the window takes it on the next tick\n", e.value.c_str());
     }
     if ((e.apply & kApplyDbRange) != 0u) {
         if (hooks_.rangeManual) { hooks_.rangeManual(); }   // the range itself is the SET_DISPLAY_RANGE command the effect carries
@@ -383,6 +383,8 @@ void SystemPublisher::applyLocal(const Effect& e) {
             break;
     }
 }
+
+void SystemPublisher::setInterfaceSize(int index) { execute(applyDisplayScale(duties_.interfaceHalf(), index), "interface-size"); }
 
 void SystemPublisher::execute(const Effect& e, const char* what) {
     forceRead_ = true;
@@ -627,7 +629,7 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
 // ---------------------------------------------------------------------------------------------------------------------------------
 ReadOptions SystemPublisher::buildOptions() {
     // the monitor's scale as a whole percent (the Auto row's "% here")
-    opts_.monitor_percent = std::clamp(static_cast<int>(std::lround(static_cast<double>(ui_.window().scale_factor()) * 100.0)), 50, 400);
+    opts_.monitor_percent = std::clamp(static_cast<int>(std::lround(static_cast<double>(osScale_ > 0.0f ? osScale_ : ui_.window().scale_factor()) * 100.0)), 50, 400);
     opts_.log_path = cc::DiagLog::instance().filePath();
     opts_.reports_path = duties_.about().diagnosticsDir.empty() ? std::string() : cc::diagCrashDir();
     opts_.gps_ports_waiting = serialAsked_ && state_.listSeq == serialAskedSeq_ && nowS() - serialAskedAt_ < 2.0;
