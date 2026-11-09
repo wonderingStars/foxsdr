@@ -156,7 +156,10 @@ int main() {
         CHECK(emt::contains(second.err, "is already using the settings file"));
         CHECK(emt::contains(second.err, cfg.string()));
         CHECK(emt::contains(second.err, "--config PATH"));
-        CHECK(!emt::contains(second.err, "running"));
+        // The engine's own "running" announcement ("foxsdr-engine <version>: running, ..."), not the bare word: on Linux the audio
+        // library prints "jack server is not running or cannot be started" while the process enumerates its sound devices, whatever
+        // else it does (Linux CI, 2026-11-09), and that sentence says nothing about the engine having started.
+        CHECK(!emt::contains(second.err, ": running, "));
         CHECK(!emt::contains(second.err, "stopped after"));
         CHECK(second.out.empty());
         CHECK(second.seconds < 30.0);  // refused at once: no engine was started to wait for
@@ -193,7 +196,7 @@ int main() {
         std::printf("  C: engine beside the window: exit %d\n%s", r.exitCode, r.err.c_str());
         CHECK(r.started && !r.timedOut && r.exitCode == 1);
         CHECK(emt::contains(r.err, "not started - the FoxSDR window application (process " + std::to_string(thisPid()) + ")"));
-        CHECK(!emt::contains(r.err, "running"));
+        CHECK(!emt::contains(r.err, ": running, "));  // (the engine's own announcement; see B above)
         // The refused engine did not touch the file: still the seed, no clean-exit rewrite, no launch counted.
         CHECK(emt::contains(emt::readFile(cfg), "\"telemetryLaunches\": 0"));
         window.release();
