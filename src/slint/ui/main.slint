@@ -39,8 +39,7 @@ import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
 import { AgeTick, WaterfallView } from "waterfall.slint";
 import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
-import { ScopeTube } from "stubs.slint";
-import { ScopeEvents, DemodModel, MpxMarkItem, DemodScopeWindow } from "scope_modes.slint";
+import { ScopeEvents, DemodModel, MpxMarkItem, DemodScopeWindow, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel, RadarScopeView } from "scope_modes.slint";
 import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents, PatchPage } from "patch_page.slint";
 import { AboutSlint } from "std-widgets.slint";
@@ -58,7 +57,7 @@ export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, Men
          ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
          FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents,
-         ScopeEvents, DemodModel, MpxMarkItem }
+         ScopeEvents, DemodModel, MpxMarkItem, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -162,6 +161,8 @@ export component MainWindow inherits Window {
     in property <string> converter-line;             // "" = none (the rail footer's warning line)
     // centre
     in-out property <int> view-index: 0;             // RECEIVER PATCH SCOPE
+    // the radar scope takes the keyboard back from whatever field held it, so Esc (the shortcut table's) leaves it (docs 6.57; aw.cpp 13589 leaves it only when nothing is being edited)
+    changed view-index => { if (self.view-index == 2) { keys.focus(); } }
     // THE PATCH PAGE (phase 3, docs 6.44): the band, the canvas and the inspector of view 1, filled by the host (patch_publish.cpp)
     in property <PatchModel> patch-model;
     in property <CanvasModel> canvas-model;
@@ -193,6 +194,7 @@ export component MainWindow inherits Window {
     in property <ScannerModel> scanner-model;
     in property <AirbandModel> airband-model;
     in property <MarkersModel> markers-model;
+    in property <RadarScopeModel> radar-scope-model;   // the radar scope (scope_modes.slint) in the SCOPE tab
     in property <DemodModel> demod-model;            // the DEMOD SCOPE window (scope_modes.slint): shown while the TOOLS row has it open
     // THE EXTEND BANK (phase 3, docs 6.42): the two bodies under the rows of bank 3; the store is a kit page (pages.slint kind 9)
     in property <WebModel> web-model;
@@ -712,7 +714,7 @@ export component MainWindow inherits Window {
                         }
                     }
                     if root.view-index == 1 : PatchPage { model: root.patch-model; canvas: root.canvas-model; inspector: root.inspector-model; }
-                    if root.view-index == 2 : ScopeTube { caption: @tr("Scope"); }
+                    if root.view-index == 2 : RadarScopeView { model: root.radar-scope-model; offers: root.radar-model.offers; }
                     // a docked page of the plugin kit (its body reaches the host through the KitEvents global)
                     if root.view-index >= 3 && root.view-index - 3 < root.pages.length && !root.pages[root.view-index - 3].torn : PageBody { page: root.pages[root.view-index - 3]; index: root.view-index - 3; }
                 }

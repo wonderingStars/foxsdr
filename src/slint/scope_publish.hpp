@@ -16,13 +16,15 @@
 
 #include "host_duties.hpp"
 #include "main.h"
+#include "plugin_kit.hpp"
+#include "radar_logic.hpp"
 #include "scope_logic.hpp"
 
 namespace foxsdr::slintscope {
 
 class ScopePublisher {
 public:
-    ScopePublisher(MainWindow& ui, const FoxEngineApi* api, FoxSession* session, foxsdr::slinthost::HostDuties& duties, bool bounded);
+    ScopePublisher(MainWindow& ui, foxsdr::slintkit::PluginKit& kit, const FoxEngineApi* api, FoxSession* session, foxsdr::slinthost::HostDuties& duties, bool bounded);
     ~ScopePublisher();
     ScopePublisher(const ScopePublisher&) = delete;
     ScopePublisher& operator=(const ScopePublisher&) = delete;
@@ -31,6 +33,11 @@ public:
     void wire();
     // The tick: gather, range, paint and set the models that changed. `nowS` is a steady clock in seconds.
     void publish(const FoxReceiverState& state, double nowS);
+
+    // THE RADAR SCOPE is the SCOPE tab (view-index 2): the Radar section's key puts the window there and remembers the view it came from; EXIT SCOPE, the key again and Esc go back.
+    void toggleRadar();
+    void leaveRadar();
+    bool radarOn() const;
 
     // The TOOLS row's press (and the bounded run's FOXSDR_SLINT_DEMOD_SCOPE): opens or closes the window.
     void toggleDemod();
@@ -48,6 +55,7 @@ public:
     std::string summaryLine() const;
 
 private:
+    void radarPublish(const FoxReceiverState& state, double nowS);
     struct Impl;
     std::unique_ptr<Impl> impl_;
     MainWindow& ui_;

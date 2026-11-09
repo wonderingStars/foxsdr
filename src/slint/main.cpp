@@ -427,11 +427,12 @@ int main(int argc, char** argv) {
     // opens the SIGNAL bank's import dialog. A bounded run writes no clipboard and opens no folder. FOXSDR_SLINT_MARKERS=1 opens the Markers sheet for a capture.
     // THE SCOPE MODES (scope_publish.hpp, docs 6.57): the DEMOD SCOPE window and the radar scope, opened by the TOOLS rows' keys (the hooks below) and published once a tick.
     // FOXSDR_SLINT_DEMOD_SCOPE=<signal 0-4> opens the demod window on that input for a bounded run's capture.
-    foxsdr::slintscope::ScopePublisher scopeBank(*ui, api, session, duties, bounded.bounded());
+    foxsdr::slintscope::ScopePublisher scopeBank(*ui, kit, api, session, duties, bounded.bounded());
     scopeBank.wire();
     if (const char* e = std::getenv("FOXSDR_SLINT_DEMOD_SCOPE"); e != nullptr && bounded.bounded()) { scopeBank.openDemodForCapture(e[0] >= '0' && e[0] <= '4' ? e[0] - '0' : -1); }
     foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
     toolsHooks.demodScopeClicked = [&] { scopeBank.toggleDemod(); };
+    toolsHooks.radarScopeClicked = [&] { scopeBank.toggleRadar(); };
     toolsHooks.openImportDialog = [&] { ui->global<SignalEvents>().invoke_recorder_import(); };
     // the two spectrum options are the interface half's (docs 6.52): read at start, saved on each tick of a box, read again every tick by the spectrum's marks
     toolsHooks.onSpectrum = duties.interfaceHalf().bookmarkMarkers;
@@ -977,6 +978,7 @@ int main(int argc, char** argv) {
         else if (id == "bankView") { bankIndex = 2; ui->set_bank_index(2); } else if (id == "bankExtend") { bankIndex = 3; ui->set_bank_index(3); }
         else if (id == "bankSystem") { bankIndex = 4; ui->set_bank_index(4); }
         else if (id == "openSettings") { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(5); }
+        else if (id == "escape" && scopeBank.radarOn() && !ui->get_editing() && !ui->get_about_open()) { scopeBank.leaveRadar(); }   // the radar scope's second way out (aw.cpp 13589): not while a field is being edited
         else if (id == "escape") { ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); }
         else if (id == "uiSizeUp" || id == "uiSizeAuto") { std::fprintf(stderr, "foxsdr-slint: the interface size is phase 2's (%s)\n", id.c_str()); }
         else { std::fprintf(stderr, "foxsdr-slint: shortcut %s is not bound here\n", id.c_str()); }
@@ -1287,7 +1289,7 @@ int main(int argc, char** argv) {
         signalBank.publish(state);
         systemBank.publish(state);
         scopeBank.publish(state, static_cast<double>(nowMs()) / 1000.0);
-        toolsBank.setScopeFacts(scopeBank.demodSignal(), scopeBank.demodOpen(), scopeBank.demodLive(), false);
+        toolsBank.setScopeFacts(scopeBank.demodSignal(), scopeBank.demodOpen(), scopeBank.demodLive(), scopeBank.radarOn());
         toolsBank.publish(state, systemBank.models().serial.gps);
         if (!retuneProbe.empty()) {
             ++retuneProbeTicks;

@@ -1,0 +1,77 @@
+#! frames=300 bank=2 sections=2:1 iqfile=scope.wav centre=100000000 mode=AM bandwidth=3000
+# scope-radar-open (docs 6.57): the Radar section's key puts the plan-position indicator in the SCOPE tab (tick rows 1556, 1574-1581). With no receiver position the tab asks for one instead of
+# drawing a tube; once the position is set the key opens the cabinet, EXIT SCOPE and Esc each go back to the view the scope was entered from, the key's second press too.
+30 state running == 1
+state view == 0
+state scope.radarOn == 0
++1 click "Radar scope"
++10 state view == 2
+state scope.radarOn == 1
+# no position: the empty state, the offers, and no tube
+state scope.hasRx == 0
+state scope.tubeW == 0
+shot "scope-radar-empty.png"
++1 click "EXIT SCOPE"
++8 state view == 0
+state scope.radarOn == 0
+# the position, typed into the Radar section's own boxes (the same position the map uses)
++1 type "Latitude" "51.4775"
++1 key enter
++1 type "Longitude" "-0.4614"
++1 key enter
++3 click "Set RX here"
++25 state positionSet == 1
++1 click "Radar scope"
++12 state view == 2
+state scope.hasRx == 1
+state scope.tubeW > 300
+state scope.groundPaints >= 1
+state scope.range == 200
+state scope.drumRange == "0200"
+shot "scope-radar-open.png"
+# the bar's keys step the ladder (200 -> 100 -> 50 -> 100) and never leave it
++1 click "Range down"
++4 state scope.range == 100
++1 click "Range down"
++4 state scope.range == 50
++1 click "Range up"
++4 state scope.range == 100
+# the LCD's three screens
++1 click "SYS"
++4 state scope.lcd == 2
++1 click "HOME"
++4 state scope.lcd == 0
++1 click "FLIGHT"
++4 state scope.lcd == 1
+# SYS options cycle: PHOSPHOR on -> off, SWEEP on -> off, TRAILS line -> ribbon -> off, FILTER all -> alerts -> named
++1 click "SYS"
++4 click "PHOSPHOR"
++4 state scope.phosphor == 0
++1 click "SWEEP"
++4 state scope.sweep == 0
++1 click "TRAILS"
++4 state scope.trail == 2
++1 click "TRAILS"
++4 state scope.trail == 0
++1 click "FILTER"
++4 state scope.filter == 1
++1 click "FILTER"
++4 state scope.filter == 2
+# the POWER key stops and starts the receiver (FOXAPI_OP_RUN); this generator-less fixture has no gain stage, so the GAIN knob is dead
+state scope.knobDead == 1
+state scope.powerText == "ON LINE"
++1 click "POWER"
++25 state running == 0
++1 click "POWER"
++25 state running == 1
+# Esc is the second way out, EXIT SCOPE the first
++1 key escape
++8 state view == 0
++1 click "Radar scope"
++8 state view == 2
++1 click "EXIT SCOPE"
++8 state view == 0
+# and the key's own second press (its label reads "Leave radar scope" while the scope shows: the scope replaces the section's centre, so go in by the tab)
++1 click "SCOPE"
++8 state view == 2
+state scope.notes >= 1

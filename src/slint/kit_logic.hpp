@@ -147,6 +147,7 @@ struct OpenWindows {
     std::set<std::string> windows;    // windowKey(...) of every shown picture / panel / instrument page
     std::set<std::string> mapPages;   // the display names of the open map pages
     bool decoderOutput = false;
+    bool radarScope = false;          // the radar scope shows (the SCOPE tab): every track source is in use (docs 6.57; FOXAPP_PLUGIN_USE_RADAR_SCOPE)
 };
 std::string windowKey(const char* kind, const std::string& plugin, const std::string& title = std::string());  // "image:<name>", "panel:<name>", "instrument:<name>|<title>"
 bool windowBelongsTo(const std::string& key, const std::string& plugin);

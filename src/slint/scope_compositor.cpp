@@ -223,7 +223,7 @@ std::size_t paintDemodFace(Rgba* px, int w, int h, DemodScope& scope, PaintScrat
     const bool persist = scopeDisplayFromIndex(state.display) == ScopeDisplay::Persist;
     const float fullRange = unitsPerDiv * static_cast<float>(kScopeDivY);
     ScopeMemory& mem = scope.memory();
-    const double dtS = scope.dtS(), nowS = scope.nowS();
+    const double dtS = scope.dtS();
 
     if (feed.live) {
         switch (signal) {

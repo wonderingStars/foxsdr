@@ -72,6 +72,230 @@ Vec scanRow(slint::Window& win, int y, int x0, int x1, Vec& log) {
     return order;
 }
 
+
+// ======================================================================================================================================================================
+// THE RADAR SCOPE: every callback of the view through a real pointer event, found by scanning, and the picture's pieces by ink.
+// ======================================================================================================================================================================
+struct RadarSeen {
+    std::vector<int> range, wheel, tab, knob, option;
+    std::vector<std::string> contact;
+    std::vector<std::pair<float, float>> drags, released;
+    std::vector<bool> releasedDragged;
+    std::vector<std::pair<int, int>> sized;
+    int exit = 0, power = 0, doubles = 0;
+};
+
+RadarScopeModel radarModel() {
+    RadarScopeModel m;
+    m.shown = true;
+    m.has_rx = true;
+    m.range_text = "200 NM";
+    m.can_down = true;
+    m.can_up = true;
+    m.plotted_text = "2 PLOTTED";
+    m.mode_text = "MODE ADS-B";
+    m.rx_text = "51.5N 000.1W";
+    m.range_corner = "200 NM";
+    m.sweep_on = false;
+    m.sig_lit = 9;
+    m.sig_text = "-50";
+    m.alt_lit = 5;
+    m.alt_text = "FL350";
+    m.drum_caption = "SET RANGE NM";
+    m.drum_range = "0200";
+    m.drum_tracks = "002";
+    m.knob_dead = false;
+    m.knob_frac = 0.5f;
+    m.knob_readout = "30 dB";
+    m.knob_note = "LNA";
+    m.power_on = true;
+    m.lcd_shown = true;
+    m.lcd_screen = 1;
+    m.flight_title = "NOTHING SELECTED";
+    m.flight_body = "Click an aircraft on the scope to see its details.";
+    return m;
+}
+
+void radarFamily() {
+    auto ui = RadarSpecimen::create();
+    slint::Window& win = ui->window();
+    RadarSeen r;
+    auto& ev = ui->global<ScopeEvents>();
+    ev.on_radar_exit([&] { ++r.exit; });
+    ev.on_radar_range([&](int d) { r.range.push_back(d); });
+    ev.on_radar_wheel([&](int d) { r.wheel.push_back(d); });
+    ev.on_radar_drag([&](float dx, float dy) { r.drags.push_back({dx, dy}); });
+    ev.on_radar_released([&](float x, float y, bool dragged) { r.released.push_back({x, y}); r.releasedDragged.push_back(dragged); });
+    ev.on_radar_double_clicked([&] { ++r.doubles; });
+    ev.on_radar_resized([&](int w, int h) { r.sized.push_back({w, h}); });
+    ev.on_radar_lcd_tab([&](int i) { r.tab.push_back(i); });
+    ev.on_radar_contact([&](slint::SharedString id) { r.contact.push_back(std::string(id)); });
+    ev.on_radar_option([&](int i) { r.option.push_back(i); });
+    ev.on_radar_knob([&](int d) { r.knob.push_back(d); });
+    ev.on_radar_power([&] { ++r.power; });
+
+    // ---- the cabinet draws, the tube reports its square ----
+    RadarScopeModel m = radarModel();
+    ui->set_radar(m);
+    Frame f = render(ui, 1240, 700);
+    CHECK(!r.sized.empty());
+    int side = 0;
+    if (!r.sized.empty()) {
+        side = r.sized.back().first;
+        std::printf("  the radar tube is %d x %d\n", r.sized.back().first, r.sized.back().second);
+        CHECK(r.sized.back().first == r.sized.back().second);
+        CHECK(side > 400 && side < 600);
+    }
+    f.savePng(shotDir() + "scope-modes-radar.png");
+
+    // ---- the tube's own frame: where it is, from where a click lands ----
+    click(win, 400.0f, 300.0f);
+    CHECK(r.released.size() == 1 && r.releasedDragged.size() == 1);
+    float ox = 0, oy = 0;
+    if (!r.released.empty()) {
+        CHECK(!r.releasedDragged[0]);   // a click that stayed put is not a drag
+        ox = 400.0f - r.released[0].first;
+        oy = 300.0f - r.released[0].second;
+        std::printf("  the tube starts at %.0f, %.0f\n", ox, oy);
+        CHECK(ox > 150 && ox < 260 && oy > 40 && oy < 70);
+    }
+    // a one-pixel wobble is still a click; a press moved over 2 px is a drag, reported as the travel since the last report, and its release says so
+    r.released.clear(); r.releasedDragged.clear(); r.drags.clear();
+    press(win, 400.0f, 300.0f);
+    moveTo(win, 401.0f, 300.0f);
+    release(win, 401.0f, 300.0f);
+    CHECK(r.drags.empty() && r.releasedDragged.size() == 1 && !r.releasedDragged[0]);
+    r.released.clear(); r.releasedDragged.clear();
+    press(win, 400.0f, 300.0f);
+    moveTo(win, 410.0f, 305.0f);
+    moveTo(win, 415.0f, 305.0f);
+    release(win, 415.0f, 305.0f);
+    CHECK(r.drags.size() == 2);
+    if (r.drags.size() == 2) {
+        CHECK_NEAR(r.drags[0].first, 10.0, 0.6);
+        CHECK_NEAR(r.drags[0].second, 5.0, 0.6);
+        CHECK_NEAR(r.drags[1].first, 5.0, 0.6);
+        CHECK_NEAR(r.drags[1].second, 0.0, 0.6);
+    }
+    CHECK(r.releasedDragged.size() == 1 && r.releasedDragged[0]);
+    // the wheel: up is +1, down is -1
+    scroll(win, 400.0f, 300.0f, 0.0f, 120.0f);
+    scroll(win, 400.0f, 300.0f, 0.0f, -120.0f);
+    CHECK((r.wheel == std::vector<int>{1, -1}));
+    // a double click
+    click(win, 420.0f, 320.0f);
+    click(win, 420.0f, 320.0f);
+    CHECK(r.doubles >= 1);
+
+    // ---- the bar: EXIT SCOPE, then the range keys (each disabled at its own end) ----
+    std::vector<int> order;
+    for (int x = 8; x < 420; x += 3) {
+        const int before = r.exit;
+        const std::size_t rb = r.range.size();
+        click(win, static_cast<float>(x), 22.0f);
+        if (r.exit != before && (order.empty() || order.back() != 0)) { order.push_back(0); }
+        for (std::size_t i = rb; i < r.range.size(); ++i) { if (order.empty() || order.back() != r.range[i]) { order.push_back(r.range[i]); } }
+    }
+    CHECK((order == std::vector<int>{0, -1, 1}));
+    m.can_down = false;
+    ui->set_radar(m);
+    render(ui, 1240, 700);
+    r.range.clear();
+    for (int x = 8; x < 420; x += 3) { click(win, static_cast<float>(x), 22.0f); }
+    {
+        std::vector<int> dedup;
+        for (const int v : r.range) { if (dedup.empty() || dedup.back() != v) { dedup.push_back(v); } }
+        CHECK((dedup == std::vector<int>{1}));   // "-" is dead at the bottom of the ladder
+    }
+    m.can_down = true;
+    ui->set_radar(m);
+    render(ui, 1240, 700);
+
+    // ---- the LCD: three tabs, a list of contacts, four options ----
+    r.tab.clear();
+    std::vector<int> tabs;
+    for (int x = 800; x < 1130; x += 3) {
+        const std::size_t b = r.tab.size();
+        click(win, static_cast<float>(x), 72.0f);
+        for (std::size_t i = b; i < r.tab.size(); ++i) { if (tabs.empty() || tabs.back() != r.tab[i]) { tabs.push_back(r.tab[i]); } }
+    }
+    CHECK((tabs == std::vector<int>{0, 1, 2}));
+    m.lcd_screen = 0;
+    m.home_count = "2";
+    m.home_sub = "of 2 tracked   200 NM";
+    std::vector<RadarContactItem> cs;
+    cs.push_back(RadarContactItem{"4D2025", "FOXSDR1", "FL350", "12 NM   045 deg", slint::Color::from_argb_uint8(255, 255, 136, 0), false});
+    cs.push_back(RadarContactItem{"4D2026", "G-FOXS", "FL100", "40 NM   270 deg", slint::Color::from_argb_uint8(255, 0, 200, 255), false});
+    m.contacts = std::make_shared<slint::VectorModel<RadarContactItem>>(cs);
+    ui->set_radar(m);
+    render(ui, 1240, 700).savePng(shotDir() + "scope-modes-radar-home.png");
+    r.contact.clear();
+    std::vector<std::string> ids;
+    for (int y = 130; y < 520; y += 4) {
+        const std::size_t b = r.contact.size();
+        click(win, 900.0f, static_cast<float>(y));
+        for (std::size_t i = b; i < r.contact.size(); ++i) { if (ids.empty() || ids.back() != r.contact[i]) { ids.push_back(r.contact[i]); } }
+    }
+    std::printf("  contacts clicked:");
+    for (const std::string& i : ids) { std::printf(" %s", i.c_str()); }
+    std::printf(" (raw %zu)\n", r.contact.size());
+    CHECK((ids == std::vector<std::string>{"4D2025", "4D2026"}));
+    m.lcd_screen = 2;
+    m.options = std::make_shared<slint::VectorModel<RadarOptionItem>>(std::vector<RadarOptionItem>{{"PHOSPHOR", "ON"}, {"SWEEP", "ON"}, {"TRAILS", "LINE"}, {"FILTER", "ALL"}});
+    ui->set_radar(m);
+    render(ui, 1240, 700);
+    r.option.clear();
+    std::vector<int> opts;
+    for (int y = 90; y < 400; y += 3) {
+        const std::size_t b = r.option.size();
+        click(win, 900.0f, static_cast<float>(y));
+        for (std::size_t i = b; i < r.option.size(); ++i) { if (opts.empty() || opts.back() != r.option[i]) { opts.push_back(r.option[i]); } }
+    }
+    CHECK((opts == std::vector<int>{0, 1, 2, 3}));
+
+    // ---- the deck: the knob turns on the wheel and answers nothing when dead; POWER is a key ----
+    r.knob.clear();
+    for (int y = 590; y < 695; y += 6) { for (int x = 300; x < 1000; x += 6) { scroll(win, static_cast<float>(x), static_cast<float>(y), 0.0f, 120.0f); } }
+    CHECK(!r.knob.empty());
+    for (const int d : r.knob) { CHECK(d == 1); }
+    m.knob_dead = true;
+    ui->set_radar(m);
+    render(ui, 1240, 700);
+    r.knob.clear();
+    for (int y = 590; y < 695; y += 6) { for (int x = 300; x < 1000; x += 6) { scroll(win, static_cast<float>(x), static_cast<float>(y), 0.0f, 120.0f); } }
+    CHECK(r.knob.empty());
+    r.power = 0;
+    for (int y = 590; y < 695; y += 6) { for (int x = 300; x < 1000; x += 6) { click(win, static_cast<float>(x), static_cast<float>(y)); } }
+    CHECK(r.power >= 1);
+
+    // ---- the aircraft: a marker in its colour at its place, its label beside it ----
+    m = radarModel();
+    std::vector<RadarTargetItem> ts;
+    ts.push_back(RadarTargetItem{"4D2025", 200.0f, 200.0f, 90.0f, slint::Color::from_argb_uint8(255, 255, 136, 0), 18.0f, "FOXSDR1", false, true, true});
+    ts.push_back(RadarTargetItem{"4D2026", 300.0f, 320.0f, 0.0f, slint::Color::from_argb_uint8(255, 0, 200, 255), 18.0f, "G-FOXS", true, false, true});
+    m.targets = std::make_shared<slint::VectorModel<RadarTargetItem>>(ts);
+    ui->set_radar(m);
+    Frame t = render(ui, 1240, 700);
+    t.savePng(shotDir() + "scope-modes-radar-targets.png");
+    const int ax = static_cast<int>(ox) + 200, ay = static_cast<int>(oy) + 200;
+    CHECK(t.countNear(ax - 14, ay - 14, ax + 14, ay + 14, rgb(0xff8800), 40) > 8);
+    const int bx = static_cast<int>(ox) + 300, by = static_cast<int>(oy) + 320;
+    CHECK(t.countNear(bx - 14, by - 14, bx + 14, by + 14, rgb(0x00c8ff), 40) > 8);
+    CHECK(t.countInk(ax + 16, ay - 8, ax + 90, ay + 8, t.at(ax + 60, ay - 20), 40) > 10);   // the label beside it
+
+    // ---- the empty state: no position, no tube, the sentence and the offers instead ----
+    m = radarModel();
+    m.has_rx = false;
+    m.warning = "The scope needs the receiver's position.";
+    m.intro = "Everything on a radar scope is a range and a bearing measured from the antenna.";
+    ui->set_radar(m);
+    Frame e = render(ui, 1240, 700);
+    e.savePng(shotDir() + "scope-modes-radar-empty.png");
+    const Rgb bg = e.at(1000, 400);
+    CHECK(e.countInk(8, 50, 540, 110, bg, 40) > 100);
+    CHECK(e.countInk(600, 150, 1200, 650, bg, 40) < 5);   // no cabinet
+}
+
 }  // namespace
 
 int main() {
@@ -222,5 +446,6 @@ int main() {
     CHECK(s.closed == 0);
     click(win, 762.0f, 16.0f);
     CHECK(s.closed == 1);
+    radarFamily();
     return testSummary("test_slint_scope_modes");
 }

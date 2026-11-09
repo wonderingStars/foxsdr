@@ -1,0 +1,54 @@
+#! frames=900 bank=1 sections=2:1 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1600x1600
+# scope-radar-targets (docs 6.57): an aircraft decoded from the synthetic ADS-B recording (make_adsb-decoder.py: ICAO 4D2025, FOXSDR1, 35000 ft near 51.5 N 0.1 W) appears on the radar scope (tick rows 1582-1586, 1592-1611):
+# plotted and counted, listed on HOME, selected from the list (FLIGHT shows its details), dropped when the range ladder is too small for it, and kept as a trail.
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.tracks >= 1
+# the receiver's position, then the scope (the aircraft is about 13 NM from Heathrow)
++1 key f3
++4 state bank == 2
++1 type "Latitude" "51.4775"
++1 key enter
++1 type "Longitude" "-0.4614"
++1 key enter
++3 click "Set RX here"
++25 state positionSet == 1
++1 click "Radar scope"
++12 state scope.radarOn == 1
+state scope.hasRx == 1
++20 state scope.targets >= 1
+state scope.plotted >= 1
+state scope.drumTracks == "001"
+shot "scope-radar-target.png"
+# HOME lists it, a click on its row selects it and shows FLIGHT
++1 click "HOME"
++6 state scope.contacts >= 1
++1 click "FOXSDR1"
++6 state scope.selected == 4D2025
+state scope.lcd == 1
+state scope.flight contains "35000 FT"
+shot "scope-radar-flight.png"
+# the ladder: 200 -> 100 -> 50 -> 25 NM still holds it (13 NM out), 10 NM does not; back up it returns
++1 click "Range down"
++1 click "Range down"
++1 click "Range down"
++8 state scope.range == 25
+state scope.plotted >= 1
++1 click "Range down"
++8 state scope.range == 10
+state scope.plotted == 0
+state scope.drumTracks == "001"
++1 click "Range up"
++8 state scope.range == 25
++10 state scope.plotted >= 1
+# the trail is kept from the moment it was first seen
+state scope.trailPoints >= 1
+# the SYS FILTER: NAMED ONLY keeps a callsigned aircraft, ALERT ONLY drops it (it reports no emergency)
++1 click "SYS"
++6 click "FILTER"
++6 state scope.filter == 1
++10 state scope.plotted == 0
++1 click "FILTER"
++6 state scope.filter == 2
++10 state scope.plotted >= 1

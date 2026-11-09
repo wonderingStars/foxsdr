@@ -227,6 +227,30 @@ int main() {
         CHECK(text == "aprs-decoder-1.0.2-abi3-win-x64.dll\t8\npocsag-decoder-1.0.5-abi3-win-x64.dll\t9\n");
         OpenWindows map; map.mapPages.insert("APRS / AX.25 Packet Decoder");   // not a track source: no bit
         CHECK(pluginUseText(k.rows, map).empty());
+        // THE RADAR SCOPE'S BIT (docs 6.57; FOXAPP_PLUGIN_USE_RADAR_SCOPE = 4): while the scope shows, EVERY track source is in use - an AUTO ADS-B plugin sleeps without it and the scope stays empty -
+        // and nothing that is not a track source is
+        {
+            KitLists r;
+            PluginRow tracks;
+            tracks.loaded = true;
+            tracks.file = "adsb-decoder-1.9.1-abi3-win-x64.dll";
+            tracks.name = "ADS-B";
+            tracks.caps = CASCADE_CAP_TRACK_SOURCE;
+            PluginRow audio;
+            audio.loaded = true;
+            audio.file = "cw-decoder-1.1.0-abi3-win-x64.dll";
+            audio.name = "CW";
+            audio.caps = CASCADE_CAP_DECODER;
+            r.rows.push_back(tracks);
+            r.rows.push_back(audio);
+            OpenWindows none;
+            CHECK(pluginUseText(r.rows, none).empty());
+            OpenWindows scope;
+            scope.radarScope = true;
+            CHECK(pluginUseText(r.rows, scope) == "adsb-decoder-1.9.1-abi3-win-x64.dll\t4\n");
+            scope.mapPages.insert("ADS-B");   // the bits add: a map page and the scope together
+            CHECK(pluginUseText(r.rows, scope) == "adsb-decoder-1.9.1-abi3-win-x64.dll\t6\n");
+        }
         CHECK(windowBelongsTo(windowKey("image", "NOAA Weather Pictures (APT)"), "NOAA Weather Pictures (APT)"));
         CHECK(!windowBelongsTo(windowKey("panel", "POCSAG"), "POCSAG pager"));
         CHECK(windowBelongsTo(windowKey("instrument", "POCSAG", "POCSAG pager"), "POCSAG"));
