@@ -116,10 +116,18 @@ constexpr double kCwToneHz = 700.0;
 // AGC headroom. Standard first-order blocker
 //     y[n] = x[n] - x[n-1] + R*y[n-1]
 // has an exact zero at DC and gain ~1 above its corner. R = exp(-2*pi*fc/T
-// ... /rate) places the -3 dB corner at fc = 30 Hz: comfortably below program
-// audio (AM broadcast rolls off below ~100 Hz) yet fast enough that the
-// blocker settles in ~5 ms of samples at 48 kHz instead of drooping bass.
-constexpr double kAmDcCutoffHz = 30.0;
+// ... /rate) places the -3 dB corner at fc.
+//
+// THE CORNER WAS 30 Hz (settles in ~5 ms) UNTIL 2026-11-09 (docs/engine-stage4.md
+// 6.50): a first-order high-pass LEADS by 45 degrees at its corner, and a VOR
+// reads its bearing as the phase of the 30 Hz AM variable against the 30 Hz FM
+// reference on the 9960 Hz subcarrier - so every radial decoded 45 degrees low
+// (the synthetic VOR fixture, radial 090, read 045; the plugin's own tests
+// bypass this demodulator and never saw it). At 2 Hz the lead at 30 Hz is
+// 3.8 degrees (within a VOR receiver's allowance) and the blocker settles in
+// ~80 ms (tests/test_demod.cpp warms it for half a second). Program audio is
+// unchanged: nothing of AM broadcast lives below 2 Hz either.
+constexpr double kAmDcCutoffHz = 2.0;
 
 // Sideband-select low-pass for the Weaver chain. Hamming window: its first
 // stopband lobe is ~-53 dB, 13 dB beyond the 40 dB opposite-sideband-rejection

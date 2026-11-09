@@ -1,0 +1,10 @@
+#! frames=800 bank=1 plugins=eas-decoder open=module:eas-decoder-1.0.0-abi3-win-x64.dll iqfile=eas-decoder.wav centre=162400000 mode=NFM bandwidth=16000 size=1600x1600
+# fixture-eas-decoder (docs 6.50): a SAME Required Weekly Test (ZCZC-WXR-RWT-048113-048121+0030-2311832-KXYZ/NWS-, three copies then NNNN), AFSK 520.83 Bd, FM on the carrier, played through NFM.
+120 state kit.plugins == 1
+state deviceName contains eas-decoder
++1 click "START"
++60 state decodersRunning >= 1
++450 state count.decoderLines >= 1
+state list.decoderLines.details contains "Required Weekly Test"
+state list.decoderLines.details contains "end of message (NNNN)"
+state list.decoderLines.details contains "ZCZC-WXR-RWT-048113-048121+0030-2311832-KXYZ/NWS-"

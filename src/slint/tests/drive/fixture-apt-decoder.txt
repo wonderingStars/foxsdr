@@ -1,0 +1,11 @@
+#! frames=600 bank=1 plugins=apt-decoder open=module:apt-decoder-1.0.0-abi3-win-x64.dll iqfile=apt-decoder.wav centre=137100000 mode=NFM bandwidth=40000 size=1600x1600
+# fixture-apt-decoder (docs 6.50): a NOAA APT pass of 24 lines (12 s at 2 lines/s): the 2400 Hz subcarrier amplitude modulated by the
+# 2080-word line (sync A train, ramp in video A, flat video B), narrow-FM modulated around 137.1 MHz and played through the receiver
+# in NFM, the carrier 4 kHz above the centre where the VFO sits (header bandwidth 40000 = the plugin preset width, so START finds the receiver already tuned and leaves it). The file leads with 6.5 s of silence so the sync train arrives after START.
+# Asserted: the sync-locked line and the kit holding a picture page.
+120 state kit.plugins == 1
+state deviceName contains apt-decoder
++1 click "START"
++60 state decodersRunning >= 1
++300 state list.decoderLines.details contains "sync locked"
+state kit.pictures >= 1

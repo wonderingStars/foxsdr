@@ -1,0 +1,13 @@
+#! frames=450 bank=1 plugins=example-decoder open=module:example-decoder-2.0.0-abi3-win-x64.dll iqfile=example-decoder.wav centre=7100000 mode=LSB bandwidth=3000 size=1600x1600
+# fixture-example-decoder (docs 6.50): a steady 1 kHz note (a carrier at +93.5 kHz: the VFO sits at +94.5 kHz, the edge of the 192 kS/s file, so LSB
+# hears 1 kHz) through the Example RMS Reporter, which says "example: <n> samples, rms <x>" once a second of the audio it is handed (8 kHz).
+120 state kit.plugins == 1
+state deviceName contains example-decoder
+state vfoOffsetHz == 94500
++1 click "START"
++60 state decodersRunning >= 1
++150 state count.decoderLines >= 1
+state list.decoderLines.details contains "rms"
+state list.decoderLines.details contains "8000 samples"
+state list.decoderLines.names contains "Example"
+state list.decoderLines.details contains "rms 0.34"

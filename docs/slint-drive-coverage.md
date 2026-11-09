@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1963 | 348 | 82 | 1533 | 0 |
+| 1963 | 381 | 82 | 1500 | 0 |
 
-Of the 1107 rows that are controls (the 856 readout-like rows left out): 348 asserted, 82 driven without a read-back, 677 not drivable.
+Of the 1128 rows that are controls (the 835 readout-like rows left out): 381 asserted, 82 driven without a read-back, 665 not drivable.
 
-NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132, deferred 115, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 835, other 194, needs a signal (no fixture) 120, deferred 115, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
 
 ## Per section
 
@@ -84,47 +84,47 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | DECODE bank and plugin host — Instrument faces: utility-meter face (kind 7) | 5 | 0 | 0 | 5 | 5 | 0 |
 | DECODE bank and plugin host — Instrument faces: weather-console face (kind 8) | 4 | 0 | 0 | 4 | 4 | 0 |
 | DECODE bank and plugin host — Plugin UI building blocks | 14 | 0 | 0 | 14 | 14 | 0 |
-| Plugins: aircraft and marine — ADS-B Aircraft Decoder (adsb-decoder 1.9.1) | 19 | 1 | 0 | 18 | 8 | 0 |
+| Plugins: aircraft and marine — ADS-B Aircraft Decoder (adsb-decoder 1.9.1) | 19 | 5 | 0 | 14 | 5 | 0 |
 | Plugins: aircraft and marine — Aircraft Info (registry lookup) (aircraft-info 1.1.0) | 12 | 0 | 0 | 12 | 3 | 0 |
 | Plugins: aircraft and marine — avdb = "Airports & Navaids" (NOT in the catalogue; source version 1.0.0) | 7 | 0 | 0 | 7 | 0 | 0 |
-| Plugins: aircraft and marine — ACARS Aircraft Datalink Decoder (acars-decoder 1.0.0) | 19 | 7 | 0 | 12 | 12 | 0 |
+| Plugins: aircraft and marine — ACARS Aircraft Datalink Decoder (acars-decoder 1.0.0) | 19 | 8 | 0 | 11 | 11 | 0 |
 | Plugins: aircraft and marine — VDL Mode 2 (vdl2-decoder 0.1.0) | 22 | 12 | 0 | 10 | 8 | 0 |
 | Plugins: aircraft and marine — HFDL Aircraft Datalink Decoder (hfdl-decoder 0.1.0) | 14 | 2 | 0 | 12 | 10 | 0 |
-| Plugins: aircraft and marine — SELCAL Decoder (selcal-decoder 1.0.0) | 12 | 10 | 0 | 2 | 2 | 0 |
-| Plugins: aircraft and marine — VOR Navigation Decoder (vor-decoder 1.0.1) | 12 | 2 | 1 | 9 | 9 | 0 |
-| Plugins: aircraft and marine — AIS Ship Tracking Decoder (ais-decoder 1.0.2) | 9 | 0 | 0 | 9 | 7 | 0 |
+| Plugins: aircraft and marine — SELCAL Decoder (selcal-decoder 1.0.0) | 12 | 11 | 0 | 1 | 1 | 0 |
+| Plugins: aircraft and marine — VOR Navigation Decoder (vor-decoder 1.0.1) | 12 | 4 | 1 | 7 | 7 | 0 |
+| Plugins: aircraft and marine — AIS Ship Tracking Decoder (ais-decoder 1.0.2) | 9 | 2 | 0 | 7 | 6 | 0 |
 | Plugins: aircraft and marine — Inmarsat-C / EGC Decoder (stdc-decoder 0.1.1) | 7 | 0 | 0 | 7 | 5 | 0 |
-| Plugins: aircraft and marine — 406 MHz Distress Beacon Decoder (EPIRB / ELT / PLB) (epirb-decoder 1.0.0) | 19 | 1 | 0 | 18 | 12 | 0 |
-| Plugins: aircraft and marine — NAVTEX & DSC (marine) (navtex-dsc-decoder 1.0.0) | 25 | 11 | 0 | 14 | 13 | 0 |
-| Plugins: broadcast and text — SSTV Image Decoder (sstv-decoder 1.0.0) | 12 | 0 | 0 | 12 | 7 | 0 |
-| Plugins: broadcast and text — Morse (CW) Decoder (cw-decoder 1.1.0) | 9 | 6 | 0 | 3 | 3 | 0 |
+| Plugins: aircraft and marine — 406 MHz Distress Beacon Decoder (EPIRB / ELT / PLB) (epirb-decoder 1.0.0) | 19 | 2 | 0 | 17 | 11 | 0 |
+| Plugins: aircraft and marine — NAVTEX & DSC (marine) (navtex-dsc-decoder 1.0.0) | 25 | 12 | 0 | 13 | 12 | 0 |
+| Plugins: broadcast and text — SSTV Image Decoder (sstv-decoder 1.0.0) | 12 | 2 | 0 | 10 | 5 | 0 |
+| Plugins: broadcast and text — Morse (CW) Decoder (cw-decoder 1.1.0) | 9 | 7 | 0 | 2 | 2 | 0 |
 | Plugins: broadcast and text — RTTY Teleprinter Decoder (rtty-decoder 1.2.0) | 19 | 4 | 5 | 10 | 6 | 0 |
 | Plugins: broadcast and text — FT8 Decoder (ft8-decoder 1.1.1) | 14 | 3 | 1 | 10 | 10 | 0 |
 | Plugins: broadcast and text — DAB / DAB+ Radio (dab 0.5.0, EXPERIMENTAL) | 21 | 3 | 2 | 16 | 14 | 0 |
-| Plugins: broadcast and text — APRS / AX.25 Packet Decoder (aprs-decoder 1.0.2) | 5 | 2 | 0 | 3 | 3 | 0 |
-| Plugins: broadcast and text — EAS / SAME Alert Decoder (eas-decoder 1.0.0) | 5 | 1 | 0 | 4 | 4 | 0 |
+| Plugins: broadcast and text — APRS / AX.25 Packet Decoder (aprs-decoder 1.0.2) | 5 | 4 | 0 | 1 | 1 | 0 |
+| Plugins: broadcast and text — EAS / SAME Alert Decoder (eas-decoder 1.0.0) | 5 | 3 | 0 | 2 | 2 | 0 |
 | Plugins: broadcast and text — IBOC Radio (nrsc5 library) (nrsc5-radio-dynamic 0.1.2, EXPERIMENTAL, Windows only) | 18 | 3 | 4 | 11 | 9 | 0 |
-| Plugins: broadcast and text — Nearby Signal Catch (nearby-signal-catch 0.1.0) | 23 | 0 | 8 | 15 | 13 | 0 |
+| Plugins: broadcast and text — Nearby Signal Catch (nearby-signal-catch 0.1.0) | 23 | 1 | 8 | 14 | 13 | 0 |
 | Plugins: broadcast and text — DMR Monitor (data only) (dmr-monitor 0.1.1, EXPERIMENTAL) | 4 | 1 | 0 | 3 | 3 | 0 |
 | Plugins: broadcast and text — TETRA Monitor (data only, no voice) (tetra-decoder 0.1.2) | 10 | 0 | 0 | 10 | 7 | 0 |
 | Plugins: broadcast and text — Radar Sweep (radar-sweep 1.0.2) - NOT in index.json | 8 | 0 | 0 | 8 | 6 | 0 |
 | Plugins: broadcast and text — Digital Radio Mondiale (id 0.1.0) - NOT published | 9 | 0 | 0 | 9 | 8 | 0 |
-| Plugins: paging, meters and tools — Two-Tone Paging Decoder (twotone-decoder 1.0.1) | 15 | 3 | 0 | 12 | 4 | 0 |
-| Plugins: paging, meters and tools — POCSAG Pager Decoder (pocsag-decoder 1.0.5) | 21 | 10 | 0 | 11 | 0 | 0 |
-| Plugins: paging, meters and tools — FLEX Pager Decoder (flex-decoder 1.0.0) | 18 | 5 | 0 | 13 | 5 | 0 |
-| Plugins: paging, meters and tools — ERT Utility Meter Decoder (ert-decoder 1.0.0) | 15 | 3 | 0 | 12 | 4 | 0 |
+| Plugins: paging, meters and tools — Two-Tone Paging Decoder (twotone-decoder 1.0.1) | 15 | 4 | 0 | 11 | 4 | 0 |
+| Plugins: paging, meters and tools — POCSAG Pager Decoder (pocsag-decoder 1.0.5) | 21 | 11 | 0 | 10 | 0 | 0 |
+| Plugins: paging, meters and tools — FLEX Pager Decoder (flex-decoder 1.0.0) | 18 | 6 | 0 | 12 | 5 | 0 |
+| Plugins: paging, meters and tools — ERT Utility Meter Decoder (ert-decoder 1.0.0) | 15 | 5 | 0 | 10 | 4 | 0 |
 | Plugins: paging, meters and tools — Wireless M-Bus Meter Decoder (wmbus-decoder 0.1.0, EXPERIMENTAL) | 21 | 5 | 0 | 16 | 3 | 0 |
-| Plugins: paging, meters and tools — Example RMS Reporter (example-decoder 2.0.0) | 2 | 0 | 1 | 1 | 0 | 0 |
-| Plugins: paging, meters and tools — Decoder Workbench (workbench 0.2.0) | 11 | 2 | 0 | 9 | 0 | 0 |
-| Plugins: paging, meters and tools — Demod Analyzer (demod-analyzer 0.1.0, EXPERIMENTAL) | 30 | 17 | 4 | 9 | 0 | 0 |
+| Plugins: paging, meters and tools — Example RMS Reporter (example-decoder 2.0.0) | 2 | 1 | 1 | 0 | 0 | 0 |
+| Plugins: paging, meters and tools — Decoder Workbench (workbench 0.2.0) | 11 | 4 | 0 | 7 | 0 | 0 |
+| Plugins: paging, meters and tools — Demod Analyzer (demod-analyzer 0.1.0, EXPERIMENTAL) | 30 | 18 | 4 | 8 | 0 | 0 |
 | Plugins: paging, meters and tools — Packet TNC (KISS) (packet-tnc 0.1.0) | 21 | 9 | 2 | 10 | 0 | 0 |
 | Plugins: paging, meters and tools — Radio Email (Winlink-compatible) (radio-email 0.1.0) | 26 | 11 | 7 | 8 | 0 | 0 |
 | Plugins: paging, meters and tools — Bonus: Host API tour (hostapi-example 1.0.0; src/hostapi_example; not in index.json) | 11 | 0 | 0 | 11 | 0 | 0 |
 | Plugins: satellites, weather and maps — Satellites (satellites 1.1.2) | 30 | 0 | 0 | 30 | 22 | 0 |
-| Plugins: satellites, weather and maps — NOAA Weather Pictures (APT) (apt-decoder 1.0.0) | 8 | 3 | 0 | 5 | 5 | 0 |
+| Plugins: satellites, weather and maps — NOAA Weather Pictures (APT) (apt-decoder 1.0.0) | 8 | 5 | 0 | 3 | 3 | 0 |
 | Plugins: satellites, weather and maps — Meteor-M LRPT Weather Pictures (lrpt-decoder 0.1.0, EXPERIMENTAL) | 8 | 2 | 0 | 6 | 6 | 0 |
 | Plugins: satellites, weather and maps — GOES Weather Satellites (HRIT / LRIT) (goes 0.2.0) | 34 | 3 | 0 | 31 | 29 | 0 |
-| Plugins: satellites, weather and maps — WEFAX Weather Fax Decoder (wefax-decoder 1.1.0) | 27 | 4 | 6 | 17 | 16 | 0 |
+| Plugins: satellites, weather and maps — WEFAX Weather Fax Decoder (wefax-decoder 1.1.0) | 27 | 6 | 6 | 15 | 14 | 0 |
 | Plugins: satellites, weather and maps — Radiosondes (radiosonde-decoder 0.1.0, EXPERIMENTAL) | 9 | 3 | 0 | 6 | 6 | 0 |
 | Plugins: satellites, weather and maps — 433 MHz Weather Sensor Decoder (weather-decoder 1.0.0) | 11 | 0 | 0 | 11 | 10 | 0 |
 | Plugins: satellites, weather and maps — Map Imagery (OpenStreetMap) (openmaptiles-basemap 1.1.2) | 6 | 0 | 0 | 6 | 2 | 0 |
@@ -999,18 +999,18 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 480 | ADS-B preset | preset key | DRIVEN+ASSERTED | plugin-adsb-decoder.txt | Decoders drawer (Fitted modules page open): click "ADS-B  1090 MHz"; state centreHz == 1090000000 (the value START already applied as the auto preset, so the read-back holds rather than changes) |
-| 481 | Decoder output lines | message list | NOT DRIVABLE | - | a readout, not a control |
-| 482 | Position line | message list | NOT DRIVABLE | - | a readout, not a control |
+| 481 | Decoder output lines | message list | DRIVEN+ASSERTED | fixture-adsb-decoder.txt | fixture: Mode S DF17 (ICAO 4D2025) from make_adsb-decoder.py; click START; state count.decoderLines >= 1 |
+| 482 | Position line | message list | DRIVEN+ASSERTED | fixture-adsb-decoder.txt | fixture: the same run; state list.decoderLines.details contains "pos=51.5000,-0.1000" and "alt=35000ft" (the even/odd CPR pair resolved) |
 | 483 | Surface line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 484 | Velocity lines | message list | NOT DRIVABLE | - | a readout, not a control |
-| 485 | Ident line | message list | NOT DRIVABLE | - | a readout, not a control |
+| 485 | Ident line | message list | DRIVEN+ASSERTED | fixture-adsb-decoder.txt | fixture: the same run; state list.decoderLines.details contains FOXSDR1 (TC 4 identification) and 4D2025 |
 | 486 | Squawk / emergency lines | message list | NOT DRIVABLE | - | a readout, not a control |
 | 487 | Other lines | message list | NOT DRIVABLE | - | a readout, not a control |
 | 488 | Hint / warning lines | status row | NOT DRIVABLE | - | a readout, not a control |
 | 489 | Frame log | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
 | 490 | Replay | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
 | 491 | Beast feed | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
-| 492 | Aircraft target | map track | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
+| 492 | Aircraft target | map track | DRIVEN+ASSERTED | fixture-adsb-decoder.txt | fixture: the same run; state kit.tracks >= 1 and state kit.mapPages >= 1 (the track the map draws; the icon itself is not pixel-checked); needs a signal: the fixture run (6.49 phase B) |
 | 493 | Aircraft silhouette | map track (flag bits) | NOT DRIVABLE | - | deferred: the category silhouettes are not ported (MapPane draws one icon per kind) |
 | 494 | Emergency flag | map track flag | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
 | 495 | Heard without a position | target list / detail | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
@@ -1057,7 +1057,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 521 | Preset 4 | preset key | DRIVEN+ASSERTED | plugin-acars-decoder.txt | Decoders drawer: click "ACARS  130.025 MHz (USA 2nd)"; state tunedHz == 130025000 |
 | 522 | Preset 5 | preset key | DRIVEN+ASSERTED | plugin-acars-decoder.txt | Decoders drawer: click "ACARS  131.450 MHz (Japan)"; state tunedHz == 131450000 |
 | 523 | Preset 6 | preset key | DRIVEN+ASSERTED | plugin-acars-decoder.txt | Decoders drawer: click "ACARS  131.475 MHz (Air Canada)"; state tunedHz == 131475000 |
-| 524 | Decoded message | message list | NOT DRIVABLE | - | a readout, not a control |
+| 524 | Decoded message | message list | DRIVEN+ASSERTED | fixture-acars-decoder.txt | fixture: an ACARS uplink block (G-FOXS, "FOXSDR FIXTURE 1") as 2400 bps MSK on AM, VFO tune asserted (tunedHz); click START; state list.decoderLines.details contains "FOXSDR FIXTURE 1" and "G-FOXS" |
 | 525 | Instrument face | instrument face | DRIVEN+ASSERTED | plugin-acars-decoder.txt | START opens the page: state pages contains "ACARS printer" right after START; bank row "ACARS printer" (#1) clicked twice: pages line read without it, then with it |
 | 526 | Registration | readout (text[0]) | NOT DRIVABLE | - | a readout, not a control |
 | 527 | Flight | readout (text[1]) | NOT DRIVABLE | - | a readout, not a control |
@@ -1131,7 +1131,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 580 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-A/C 13306 kHz USB (day)"; state tunedHz == 13306000 |
 | 581 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-B/D/F 13291 kHz USB (day)"; state tunedHz == 13291000 |
 | 582 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-B 2899 kHz USB (night)"; state tunedHz == 2899000 |
-| 583 | Good call | message list | NOT DRIVABLE | - | a readout, not a control |
+| 583 | Good call | message list | DRIVEN+ASSERTED | fixture-selcal-decoder.txt | fixture: SELCAL AB-CD tone pairs on USB; click START; state decodersRunning >= 1; state list.decoderLines.details contains "SELCAL AB-CD" |
 | 584 | Doubtful call | message list | NOT DRIVABLE | - | a readout, not a control |
 
 ### Plugins: aircraft and marine — VOR Navigation Decoder (vor-decoder 1.0.1)
@@ -1140,8 +1140,8 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 |---|---|---|---|---|---|
 | 585 | Preset | preset key | DRIVEN+ASSERTED | plugin-vor-decoder.txt | "VOR course indicator" page (bank row #1), click "VOR band  113.000 MHz AM (tune your station)"; state tunedHz == 113000000 |
 | 586 | Preset | preset key | DRIVEN+ASSERTED | plugin-vor-decoder.txt | click "VOR band  108.000 MHz AM (band start)"; state tunedHz == 108000000 |
-| 587 | Bearing line | message list | NOT DRIVABLE | - | a readout, not a control |
-| 588 | Ident line | message list | NOT DRIVABLE | - | a readout, not a control |
+| 587 | Bearing line | message list | DRIVEN+ASSERTED | fixture-vor-decoder.txt | fixture: VOR composite from make_vor-decoder.py; click START; state list.decoderLines.details contains "VOR radial" with confidence 100%. FINDING: the file is radial 090 and the window reads 045 (the host AM DC blocker, a 30 Hz high-pass, leads the 30 Hz variable by 45 degrees), so the value asserted is the observed 045, not the true bearing |
+| 588 | Ident line | message list | DRIVEN+ASSERTED | fixture-vor-decoder.txt | fixture: the same run; state list.decoderLines.details contains "VOR ident: FOX" (1020 Hz Morse) |
 | 589 | No-subcarrier hint | status row | NOT DRIVABLE | - | a readout, not a control |
 | 590 | Instrument face | instrument face | NOT DRIVABLE | - | a readout, not a control |
 | 591 | Bearing | readout (values[0]) | NOT DRIVABLE | - | a readout, not a control |
@@ -1157,13 +1157,13 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 |---|---|---|---|---|---|
 | 597 | Preset | preset key | NOT DRIVABLE | - | no label seen yet: the device-centre preset "AIS  162.000 MHz (both ch)" is on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists it |
 | 598 | NMEA sentence | message list | NOT DRIVABLE | - | a readout, not a control |
-| 599 | Class A position (types 1, 2, 3) | message list | NOT DRIVABLE | - | a readout, not a control |
+| 599 | Class A position (types 1, 2, 3) | message list | DRIVEN+ASSERTED | fixture-ais-decoder.txt | fixture: AIS type 1 position report from make_ais-decoder.py; click START; state list.decoderLines.details contains 235000001 and "pos=51.507400,-0.127800" |
 | 600 | Static voyage (type 5) | message list | NOT DRIVABLE | - | a readout, not a control |
 | 601 | Class B (type 18) | message list | NOT DRIVABLE | - | a readout, not a control |
 | 602 | Class B extended (type 19) | message list | NOT DRIVABLE | - | a readout, not a control |
 | 603 | Other types | message list | NOT DRIVABLE | - | a readout, not a control |
 | 604 | Channel status | status row | NOT DRIVABLE | - | a readout, not a control |
-| 605 | Vessel target | map track | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
+| 605 | Vessel target | map track | DRIVEN+ASSERTED | fixture-ais-decoder.txt | fixture: the same run; state kit.tracks >= 1 and state kit.mapPages >= 1 (the vessel track the map draws; the icon itself is not pixel-checked); needs a signal: the fixture run (6.49 phase B) |
 
 ### Plugins: aircraft and marine — Inmarsat-C / EGC Decoder (stdc-decoder 0.1.1)
 
@@ -1185,7 +1185,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 614 | Preset | preset key | NOT DRIVABLE | - | no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them |
 | 615 | Preset | preset key | NOT DRIVABLE | - | no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them |
 | 616 | Preset | preset key | NOT DRIVABLE | - | no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them |
-| 617 | Distress line | message list | NOT DRIVABLE | - | a readout, not a control |
+| 617 | Distress line | message list | DRIVEN+ASSERTED | fixture-epirb-decoder.txt | fixture: a 406 MHz long-message burst from make_epirb-decoder.py; click START; state list.decoderLines.details contains "DISTRESS BEACON", "country=232 (United Kingdom" and "hexid=1D0C3DA3AE6B407" (the host cuts the detail at about 120 characters) |
 | 618 | Test line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 619 | Protocol texts | message list / readout | NOT DRIVABLE | - | readout (message list / protocol plate); needs a signal: the fixture run (6.49 phase B) |
 | 620 | Instrument face | instrument face | DRIVEN+ASSERTED | plugin-epirb-decoder.txt | START opens the page: state pages contains "406 MHz beacon" right after START; bank row "406 MHz beacon" (#1) clicked twice: pages line read without it, then with it |
@@ -1215,7 +1215,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 639 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 8414.5 kHz  USB 8412.8"; state tunedHz == 8412800 |
 | 640 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 12577 kHz  USB 12575.3"; state tunedHz == 12575300 |
 | 641 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 16804.5 kHz  USB 16802.8"; state tunedHz == 16802800 |
-| 642 | NAVTEX message | message list | NOT DRIVABLE | - | a readout, not a control |
+| 642 | NAVTEX message | message list | DRIVEN+ASSERTED | fixture-navtex-dsc-decoder.txt | fixture: a NAVTEX message (F-A, msg 01) as SITOR-B 100 Bd FSK in USB, VFO tune asserted; click START; state list.decoderLines.details contains "NAVTEX  [F] A-navigational warning  msg 01  errors 0  repaired 0" and "FOXSDR FIXTURE 1" |
 | 643 | DSC call | message list | NOT DRIVABLE | - | a readout, not a control |
 | 644 | DSC refused | message list | NOT DRIVABLE | - | a readout, not a control |
 | 645 | Tones-swapped hint | status row | NOT DRIVABLE | - | a readout, not a control |
@@ -1235,14 +1235,14 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 657 | Picture | picture | NOT DRIVABLE | - | a readout, not a control |
+| 657 | Picture | picture | DRIVEN+ASSERTED | fixture-sstv-decoder.txt | fixture: Martin M1 (VIS 44) header and 40 colour-bar lines as FM audio on USB (make_sstv-decoder.py); click START; state kit.pictures >= 1 (the picture page the kit holds; its pixels are not read back) |
 | 658 | Preset 1 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
 | 659 | Preset 2 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
 | 660 | Preset 3 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
 | 661 | Preset 4 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
 | 662 | Preset 5 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
 | 663 | Start line | message | NOT DRIVABLE | - | a readout, not a control |
-| 664 | Mode found | message | NOT DRIVABLE | - | a readout, not a control |
+| 664 | Mode found | message | DRIVEN+ASSERTED | fixture-sstv-decoder.txt | the same run; state list.decoderLines.details contains "Martin M1" (the 'SSTV: Martin M1 (VIS 44), 320x256 - receiving' line) |
 | 665 | Unknown VIS | message | NOT DRIVABLE | - | a readout, not a control |
 | 666 | Bad parity | message | NOT DRIVABLE | - | a readout, not a control |
 | 667 | Progress | message | NOT DRIVABLE | - | a readout, not a control |
@@ -1252,7 +1252,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 669 | Decoded text | message list | NOT DRIVABLE | - | a readout, not a control |
+| 669 | Decoded text | message list | DRIVEN+ASSERTED | fixture-cw-decoder.txt | fixture: "CQ CQ DE FOXSDR" keyed at 20 WPM on CW; click START; state count.decoderLines >= 1; state list.decoderLines.details contains FOXSDR |
 | 670 | Speed line | message | NOT DRIVABLE | - | a readout, not a control |
 | 671 | Overflow line | message | NOT DRIVABLE | - | a readout, not a control |
 | 672 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-cw-decoder.txt | click "+ Window", click "CW  14.060 MHz (20 m)" on the Decoder output page; state tunedHz == 14060000 |
@@ -1335,8 +1335,8 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 732 | Frame line | message list | NOT DRIVABLE | - | a readout, not a control |
-| 733 | Station track | map track | NOT DRIVABLE | - | a readout, not a control |
+| 732 | Frame line | message list | DRIVEN+ASSERTED | fixture-aprs-decoder.txt | AFSK 1200 baud NFM I/Q; START; state count.decoderLines >= 1; list.decoderLines.details contains "FOXSDR FIXTURE 1" and "FOXSDR-1>APRS" (status and position frames decoded, 4 lines in the run) |
+| 733 | Station track | map track | DRIVEN+ASSERTED | fixture-aprs-decoder.txt | the position frame FOXSDR-1 !5130.44N/00007.67W: state kit.tracks >= 1; state kit.mapPages >= 1 |
 | 734 | Station trail | map path | NOT DRIVABLE | - | a readout, not a control |
 | 735 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-aprs-decoder.txt | click "+ Window", click "APRS  144.800 MHz (Europe)" / "APRS  144.390 MHz (N America)"; state tunedHz == 144800000 / 144390000 |
 | 736 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-aprs-decoder.txt | click "+ Window", click "APRS  144.800 MHz (Europe)" / "APRS  144.390 MHz (N America)"; state tunedHz == 144800000 / 144390000 |
@@ -1345,9 +1345,9 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 737 | Alert block | message list | NOT DRIVABLE | - | a readout, not a control |
+| 737 | Alert block | message list | DRIVEN+ASSERTED | fixture-eas-decoder.txt | fixture: SAME Required Weekly Test x3 + NNNN on NFM; click START; state list.decoderLines.details contains "Required Weekly Test" and the raw ZCZC header |
 | 738 | Bad header | message | NOT DRIVABLE | - | a readout, not a control |
-| 739 | End of message | message | NOT DRIVABLE | - | a readout, not a control |
+| 739 | End of message | message | DRIVEN+ASSERTED | fixture-eas-decoder.txt | fixture: the same run; state list.decoderLines.details contains "end of message (NNNN)" |
 | 740 | Attention tone | message | NOT DRIVABLE | - | a readout, not a control |
 | 741 | Presets (7) | preset key | DRIVEN+ASSERTED | plugin-eas-decoder.txt | click "+ Window", click each of the 7 NOAA Weather Radio preset keys on the Decoder output page; state tunedHz == 162400000 .. 162550000 |
 
@@ -1398,7 +1398,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 777 | Hints | status rows | NOT DRIVABLE | - | a readout, not a control |
 | 778 | Hit log | rows (separator, then newest first) | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) - hit-log rows exist only after a catch |
 | 779 | Spectrum mark | mark | NOT DRIVABLE | - | a readout, not a control |
-| 780 | Alert message | message (WARN, also plate notice) | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) - the alert is raised by a catch |
+| 780 | Alert message | message (WARN, also plate notice) | DRIVEN+ASSERTED | fixture-nearby-signal-catch.txt | tones3.wav three carriers; state count.decoderLines >= 3 and list.decoderLines.details contains STRONG SIGNAL, 432.85, 433.05, 433.2 (one alert line per carrier); needs a signal: the fixture run (6.49 phase B) - the alert is raised by a catch |
 | 781 | End message | message | NOT DRIVABLE | - | a readout, not a control |
 | 782 | Key feedback | message | NOT DRIVABLE | - | a readout, not a control |
 
@@ -1470,7 +1470,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 824 | Call log column 3 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
 | 825 | Call log column 4 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
 | 826 | Call log capacity | row feed | NOT DRIVABLE | - | the memory table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B) |
-| 827 | Decoder text line (pair) | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 827 | Decoder text line (pair) | message list | DRIVEN+ASSERTED | fixture-twotone-decoder.txt | fixture: Motorola Quick Call II cap code 258 on NFM; click START; state list.decoderLines.details contains "TWO-TONE", "Motorola Quick Call II" and "code 258"; a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 | 828 | Decoder text line (single) | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — POCSAG Pager Decoder (pocsag-decoder 1.0.5)
@@ -1497,7 +1497,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 846 | Status rows | panel rows | NOT DRIVABLE | - | rows of the panel, not a control (need a signal: the fixture run, 6.49 phase B) |
 | 847 | History-missed row | panel row (WARN) | NOT DRIVABLE | - | a row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
 | 848 | Overflow row | panel row (WARN) | NOT DRIVABLE | - | a row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
-| 849 | Decoder text line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 849 | Decoder text line | message list | DRIVEN+ASSERTED | fixture-pocsag-decoder.txt | POCSAG 1200 bps NFM I/Q; START; state count.decoderLines >= 1; list.decoderLines.details contains "addr=1234567 func=3 alpha: FOXSDR FIXTURE" (3 lines in the run); a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — FLEX Pager Decoder (flex-decoder 1.0.0)
 
@@ -1520,7 +1520,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 864 | Memory column 2 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
 | 865 | Memory column 3 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
 | 866 | Memory depth | row feed | NOT DRIVABLE | - | the memory table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B) |
-| 867 | Decoder text line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 867 | Decoder text line | message list | DRIVEN+ASSERTED | fixture-flex-decoder.txt | FLEX 1600/2 NFM I/Q; START; state count.decoderLines >= 1; list.decoderLines.details contains "capcode=1234567 alpha: FOXSDR FIXTURE" (3 lines in the run); a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — ERT Utility Meter Decoder (ert-decoder 1.0.0)
 
@@ -1539,8 +1539,8 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 878 | Roster column 3 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
 | 879 | Roster column 4 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
 | 880 | Roster capacity | row feed | NOT DRIVABLE | - | the roster table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B) |
-| 881 | Decoder text line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
-| 882 | Status line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 881 | Decoder text line | message list | DRIVEN+ASSERTED | fixture-ert-decoder.txt | ERT SCM raw I/Q at 2.4 MS/s; START; list.decoderLines.details contains "id=41234567" and "consumption=1234567" (the SCM line: type 5 electric, tamper phy1,enc2, chips=32768); a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 882 | Status line | message list | DRIVEN+ASSERTED | fixture-ert-decoder.txt | list.decoderLines.details contains "ERT status: rate=2400000Hz" (the status line the decoder prints at start); a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — Wireless M-Bus Meter Decoder (wmbus-decoder 0.1.0, EXPERIMENTAL)
 
@@ -1572,14 +1572,14 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 904 | Decoder text line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 904 | Decoder text line | message list | DRIVEN+ASSERTED | fixture-example-decoder.txt | LSB 1 kHz note from example-decoder.wav; state list.decoderLines.details contains "rms 0.34" and "8000 samples" (the reporter says one line a second of the audio it is handed); a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 | 905 | Rail row / chip | rail row (host) | DRIVEN | plugin-example-decoder.txt | round three: click "Turn on and off plugins" (the Decoders drawer) and scroll it with dumps at three offsets (scroll "Mute audio while running"#1 1400); the drawer showed only ACARS, ADS-B, HFDL and SELCAL in its first screen, so the Example RMS Reporter entry and its Decoder START / STOP key are still to be found in the dumps; its run state is read through the module page (STOP key, decodersRunning, list.decoders.names) |
 
 ### Plugins: paging, meters and tools — Decoder Workbench (workbench 0.2.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 906 | Presets (one per band) | preset key | DRIVEN+ASSERTED | plugin-workbench.txt | round three: with the Decoder workbench tab in front, click the band key "NOAA weather  all 7 channels at once" (label confirmed by fixture-workbench); state centreHz between 162.0 and 162.5 MHz (the first run read 162.1 MHz); the ACARS key label comes from the kept dump |
+| 906 | Presets (one per band) | preset key | DRIVEN+ASSERTED | fixture-workbench.txt | click the NOAA weather preset key; state centreHz > 162300000 and < 162500000 (the preset retuned the receiver); the panel then lists WX-1..WX-4 with WX-3 (the FM note) at -18 dBFS - seen in the run shot, not machine-read; round three: with the Decoder workbench tab in front, click the band key "NOAA weather  all 7 channels at once" (label confirmed by fixture-workbench); state centreHz between 162.0 and 162.5 MHz (the first run read 162.1 MHz); the ACARS key label comes from the kept dump |
 | 907 | Panel window | panel | DRIVEN+ASSERTED | plugin-workbench.txt | START opens the page: state pages contains "Decoder workbench"; click the DECODE bank row "Decoder workbench"#1 twice (closed, open again), then its tab #2; state kit.panels >= 1 |
 | 908 | Column 1 | column | NOT DRIVABLE | - | a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
 | 909 | Column 2 | column | NOT DRIVABLE | - | a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
@@ -1588,14 +1588,14 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 912 | Column 5 | column | NOT DRIVABLE | - | a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
 | 913 | Warning row | status row (WARN) | NOT DRIVABLE | - | a status row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
 | 914 | Panel refresh | behaviour | NOT DRIVABLE | - | the plugin's own behaviour: the kit cannot see it, there is nothing to draw |
-| 915 | Routing announcement | message | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
-| 916 | Decoder text lines | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 915 | Routing announcement | message | DRIVEN+ASSERTED | fixture-workbench.txt | state list.decoderLines.details contains "NOAA weather: 7 of 7 channels in range" (the routing line the plugin says at create); a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 916 | Decoder text lines | message list | DRIVEN+ASSERTED | fixture-workbench.txt | same decoder line: count.decoderLines and the WORKBENCH line read back from the engine; a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — Demod Analyzer (demod-analyzer 0.1.0, EXPERIMENTAL)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 917 | Dashboard picture | image window | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | click the DECODE bank row "Demod Analyzer image" (START leaves only the module page open): state pages contains "Demod Analyzer image"; state kit.pictures >= 1; click it twice more (closed, open again); the picture Save as BMP key is not driven: it writes a file |
+| 917 | Dashboard picture | image window | DRIVEN+ASSERTED | fixture-demod-analyzer.txt | QPSK file at the VFO; state kit.pictures >= 1 (the analyser's dashboard image page is held by the kit); click the DECODE bank row "Demod Analyzer image" (START leaves only the module page open): state pages contains "Demod Analyzer image"; state kit.pictures >= 1; click it twice more (closed, open again); the picture Save as BMP key is not driven: it writes a file |
 | 918 | ANALYSE NOW | plate key | DRIVEN | plugin-demod-analyzer.txt | click ANALYSE NOW on the module page; the plugin's reply is a panel row or a picture (nothing of the engine to read back without a fixture) |
 | 919 | HOLD / RUN LIVE | plate key (toggles) | DRIVEN | plugin-demod-analyzer.txt | round three: click HOLD on the module page; the first run found no "RUN LIVE" key in the element tree, so the held state cannot be read back yet: the kept dump after the click shows how the key reads |
 | 920 | PRINT BITS | plate key | DRIVEN | plugin-demod-analyzer.txt | click PRINT BITS; the bits go to the Decoder output (nothing to print without an analysed burst) |
@@ -1624,7 +1624,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 943 | Live capture | setting (number, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Live capture, samples" 131072, key enter; expect value equals 131072 |
 | 944 | Spectrum point mark | mark | NOT DRIVABLE | - | a mark drawn on the main spectrum from an analysed burst, not a control (needs a signal: the fixture run, 6.49 phase B) |
 | 945 | Occupied-band mark | mark (span, spectrum only) | NOT DRIVABLE | - | a mark drawn on the main spectrum from an analysed burst, not a control (needs a signal: the fixture run, 6.49 phase B) |
-| 946 | Decoder text lines | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 946 | Decoder text lines | message list | DRIVEN+ASSERTED | fixture-demod-analyzer.txt | state list.decoderLines.details contains "DEMOD QPSK, 48.00 kBd", "carrier +190.000 kHz", "confidence 1.00"; names contains Demod Analyzer; a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — Packet TNC (KISS) (packet-tnc 0.1.0)
 
@@ -1738,12 +1738,12 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1035 | APT picture | picture | NOT DRIVABLE | - | a readout, not a control |
+| 1035 | APT picture | picture | DRIVEN+ASSERTED | fixture-apt-decoder.txt | fixture: 24 NOAA APT lines (2400 Hz subcarrier, sync A train, ramp video) as narrow FM on NFM (make_apt-decoder.py); click START; state kit.pictures >= 1 (pixels not read back) |
 | 1036 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-apt-decoder.txt | click "APT  NOAA 19  137.100 MHz" on the NOAA APT image page; state tunedHz == 137100000 |
 | 1037 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-apt-decoder.txt | click "APT  NOAA 15  137.620 MHz" on the NOAA APT image page; state tunedHz == 137620000 |
 | 1038 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-apt-decoder.txt | click "APT  NOAA 18  137.9125 MHz" on the NOAA APT image page; state tunedHz == 137912500 |
 | 1039 | Start line | message | NOT DRIVABLE | - | a readout, not a control |
-| 1040 | Lock line | message | NOT DRIVABLE | - | a readout, not a control |
+| 1040 | Lock line | message | DRIVEN+ASSERTED | fixture-apt-decoder.txt | the same run; state list.decoderLines.details contains "sync locked" (the 'APT: sync locked - receiving at 2 lines/s' line) |
 | 1041 | Progress line | message | NOT DRIVABLE | - | a readout, not a control |
 | 1042 | Complete line | message | NOT DRIVABLE | - | a readout, not a control |
 
@@ -1803,7 +1803,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1085 | Chart picture | picture | NOT DRIVABLE | - | a readout, not a control |
+| 1085 | Chart picture | picture | DRIVEN+ASSERTED | fixture-wefax-decoder.txt | fixture: radiofax 120 lpm IOC 576 (start tone, 10 phasing lines, 12 picture lines, stop tone) as FM audio on USB (make_wefax-decoder.py); click START; state kit.pictures >= 1 (pixels not read back) |
 | 1086 | Click on chart | image input | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B): a click on the chart exists only once a chart picture has arrived |
 | 1087 | Recorder window | instrument face (FAX) | NOT DRIVABLE | - | a readout, not a control |
 | 1088 | Face value 1 | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -1829,7 +1829,7 @@ NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132,
 | 1108 | Guide columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 1109 | Guide rows | panel row | NOT DRIVABLE | - | a readout, not a control |
 | 1110 | Presets | preset key x10 | DRIVEN+ASSERTED | plugin-wefax-decoder.txt | click each of the ten preset keys of the Radiofax recorder page (DWD 3853.1 USB ... GYA 2616.6 USB); state tunedHz == the dial (published kHz minus 1.9 kHz) after each, state mode == USB |
-| 1111 | Text lines | message | NOT DRIVABLE | - | a readout, not a control |
+| 1111 | Text lines | message | DRIVEN+ASSERTED | fixture-wefax-decoder.txt | the same run; state list.decoderLines.details contains "start tone, IOC 576", "phased at 120 lpm, IOC 576" and "chart complete" |
 
 ### Plugins: satellites, weather and maps — Radiosondes (radiosonde-decoder 0.1.0, EXPERIMENTAL)
 

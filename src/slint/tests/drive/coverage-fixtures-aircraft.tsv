@@ -1,0 +1,11 @@
+481	ASSERTED	fixture-adsb-decoder.txt	fixture: Mode S DF17 (ICAO 4D2025) from make_adsb-decoder.py; click START; state count.decoderLines >= 1
+482	ASSERTED	fixture-adsb-decoder.txt	fixture: the same run; state list.decoderLines.details contains "pos=51.5000,-0.1000" and "alt=35000ft" (the even/odd CPR pair resolved)
+485	ASSERTED	fixture-adsb-decoder.txt	fixture: the same run; state list.decoderLines.details contains FOXSDR1 (TC 4 identification) and 4D2025
+492	ASSERTED	fixture-adsb-decoder.txt	fixture: the same run; state kit.tracks >= 1 and state kit.mapPages >= 1 (the track the map draws; the icon itself is not pixel-checked)
+524	ASSERTED	fixture-acars-decoder.txt	fixture: an ACARS uplink block (G-FOXS, "FOXSDR FIXTURE 1") as 2400 bps MSK on AM, VFO tune asserted (tunedHz); click START; state list.decoderLines.details contains "FOXSDR FIXTURE 1" and "G-FOXS"
+587	ASSERTED	fixture-vor-decoder.txt	fixture: VOR composite from make_vor-decoder.py; click START; state list.decoderLines.details contains "VOR radial" with confidence 100%. FINDING: the file is radial 090 and the window reads 045 (the host AM DC blocker, a 30 Hz high-pass, leads the 30 Hz variable by 45 degrees), so the value asserted is the observed 045, not the true bearing
+588	ASSERTED	fixture-vor-decoder.txt	fixture: the same run; state list.decoderLines.details contains "VOR ident: FOX" (1020 Hz Morse)
+599	ASSERTED	fixture-ais-decoder.txt	fixture: AIS type 1 position report from make_ais-decoder.py; click START; state list.decoderLines.details contains 235000001 and "pos=51.507400,-0.127800"
+605	ASSERTED	fixture-ais-decoder.txt	fixture: the same run; state kit.tracks >= 1 and state kit.mapPages >= 1 (the vessel track the map draws; the icon itself is not pixel-checked)
+617	ASSERTED	fixture-epirb-decoder.txt	fixture: a 406 MHz long-message burst from make_epirb-decoder.py; click START; state list.decoderLines.details contains "DISTRESS BEACON", "country=232 (United Kingdom" and "hexid=1D0C3DA3AE6B407" (the host cuts the detail at about 120 characters)
+642	ASSERTED	fixture-navtex-dsc-decoder.txt	fixture: a NAVTEX message (F-A, msg 01) as SITOR-B 100 Bd FSK in USB, VFO tune asserted; click START; state list.decoderLines.details contains "NAVTEX  [F] A-navigational warning  msg 01  errors 0  repaired 0" and "FOXSDR FIXTURE 1"

@@ -21,6 +21,7 @@
 namespace {
 
 constexpr double kTwoPi = 6.283185307179586476925286766559;
+constexpr double kPi = kTwoPi / 2.0;
 constexpr double kFs = 48000.0;   // channel rate for every test
 constexpr std::size_t kN = 4800;  // analysis window: 10 Hz bins, so 1 kHz,
                                   // 1.5 kHz, 700 Hz all land on integer bins
@@ -374,7 +375,7 @@ int main() {
         // regardless of carrier phase/frequency (a Re{x} detector would not).
         const double carrierAmp = 0.7;
         const double m = 0.8;
-        const std::size_t warm = 2400;  // >> DC blocker settle (~5 ms = 240)
+        const std::size_t warm = 24000;  // >> DC blocker settle (~80 ms = 3,800 samples at the 2 Hz corner: half a second)
         std::vector<std::complex<float>> x(warm + kN);
         for (std::size_t i = 0; i < x.size(); ++i) {
             const double t = static_cast<double>(i) / kFs;
@@ -396,6 +397,46 @@ int main() {
         const double dcOut = dftMag(y.data(), kN, 0);
         const double dcIn = carrierAmp * static_cast<double>(kN);
         CHECK(dcOut < 0.01 * dcIn);
+    }
+
+    // --- AM: a 30 Hz modulation keeps its PHASE (the VOR bearing, docs 6.50) ---
+    // A VOR reads the bearing as the phase of the 30 Hz AM variable against the
+    // 30 Hz FM reference on the 9960 Hz subcarrier. The DC blocker is a first-
+    // order high-pass: at its corner it LEADS by 45 degrees, so a corner of
+    // 30 Hz read every radial 45 degrees low (the synthetic VOR fixture, radial
+    // 090, decoded as 045). The corner is now far below 30 Hz; this holds the
+    // phase error at 30 Hz under 4 degrees (3.8 at the 2 Hz corner; a VOR receiver allows about 5).
+    {
+        Demodulator d(kFs);
+        d.setMode(DemodMode::AM);
+        const double carrierAmp = 0.7;
+        const double m = 0.3;
+        const double fm = 30.0;
+        const std::size_t warm = 48000;   // a second: past the blocker's settling at any sane corner
+        std::vector<std::complex<float>> x(warm + kN);
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            const double t = static_cast<double>(i) / kFs;
+            const double env = carrierAmp * (1.0 + m * std::cos(kTwoPi * fm * t));
+            const double ph = kTwoPi * 500.0 * t;
+            x[i] = {static_cast<float>(env * std::cos(ph)), static_cast<float>(env * std::sin(ph))};
+        }
+        auto y = demodTail(d, x, warm);
+        // the 30 Hz bin of the tail (kN samples at kFs: bin = fm * kN / kFs, an integer by construction)
+        const std::size_t bin = static_cast<std::size_t>(fm * static_cast<double>(kN) / kFs + 0.5);
+        CHECK(std::fabs(fm * static_cast<double>(kN) / kFs - static_cast<double>(bin)) < 1e-9);
+        std::complex<double> acc{0.0, 0.0};
+        for (std::size_t n = 0; n < kN; ++n) {
+            const double w = kTwoPi * static_cast<double>(bin) * static_cast<double>(n) / static_cast<double>(kN);
+            acc += std::complex<double>(static_cast<double>(y[n]) * std::cos(w), -static_cast<double>(y[n]) * std::sin(w));
+        }
+        // the modulation's own phase at the tail's first sample (cos: the DFT of cos(w0 n + p) at its bin has argument p)
+        const double expected = std::fmod(kTwoPi * fm * static_cast<double>(warm) / kFs, kTwoPi);
+        double err = std::arg(acc) - expected;
+        while (err > kPi) { err -= kTwoPi; }
+        while (err < -kPi) { err += kTwoPi; }
+        const double errDeg = err * 180.0 / kPi;
+        std::printf("  AM 30 Hz modulation: phase error %.2f degrees (the DC blocker's lead)\n", errDeg);
+        CHECK(std::fabs(errDeg) < 4.0);
     }
 
     // --- USB: +1.5 kHz passes to 1.5 kHz audio, -1.5 kHz suppressed ---------

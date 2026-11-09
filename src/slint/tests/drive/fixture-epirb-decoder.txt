@@ -1,0 +1,11 @@
+#! frames=500 bank=1 plugins=epirb-decoder open=module:epirb-decoder-1.0.0-abi3-win-x64.dll iqfile=epirb-decoder.wav centre=406025000 mode=RAW bandwidth=200000 size=1600x1600
+# fixture-epirb-decoder: a 406 MHz long-message burst (UK 232, EPIRB serial location, 53.55556 N 1.71444 W) on channel B, from make_epirb-decoder.py. I/Q decoder: the receiver's tune does not matter.
+120 state kit.plugins == 1
+state deviceName contains epirb-decoder
++1 click "START"
++60 state decodersRunning >= 1
++250 state count.decoderLines >= 1
+state list.decoderLines.details contains "DISTRESS BEACON"
+state list.decoderLines.details contains "country=232 (United Kingdom"
+# The decoderLines detail is cut at about 120 characters by the host, so only the head of the line is assertable: the position, protocol and channel are in the tail.
+state list.decoderLines.details contains "hexid=1D0C3DA3AE6B407"

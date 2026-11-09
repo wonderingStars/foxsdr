@@ -1,0 +1,8 @@
+#! frames=700 bank=1 plugins=selcal-decoder open=module:selcal-decoder-1.0.0-abi3-win-x64.dll iqfile=selcal-decoder.wav centre=5598000 mode=USB bandwidth=3000 size=1600x1600
+# fixture-selcal-decoder (docs 6.50): the SELCAL code AB-CD (two tone pairs, 1.0 s each, 0.2 s apart) on the upper sideband, played through the receiver.
+120 state kit.plugins == 1
+state deviceName contains selcal-decoder
++1 click "START"
++60 state decodersRunning >= 1
++400 state count.decoderLines >= 1
+state list.decoderLines.details contains "SELCAL AB-CD"

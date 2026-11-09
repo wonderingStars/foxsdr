@@ -1,0 +1,8 @@
+#! frames=600 bank=1 plugins=pocsag-decoder open=module:pocsag-decoder-1.0.5-abi3-win-x64.dll iqfile=pocsag-decoder.wav centre=153350000 mode=NFM bandwidth=12500 size=1600x1600
+# fixture-pocsag-decoder: a POCSAG page (1200 bps, address 1234567, "FOXSDR FIXTURE") as NFM I/Q through the real receiver.
+120 state kit.plugins == 1
+state deviceName contains pocsag-decoder
++1 click "START"
++60 state decodersRunning >= 1
++300 state count.decoderLines >= 1
+state list.decoderLines.details contains "addr=1234567 func=3 alpha: FOXSDR FIXTURE"

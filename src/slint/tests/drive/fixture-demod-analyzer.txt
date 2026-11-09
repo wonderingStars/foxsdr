@@ -1,0 +1,17 @@
+#! frames=450 bank=1 plugins=demod-analyzer open=module:demod-analyzer-0.1.0-abi3-win-x64.dll iqfile=demod-analyzer.wav centre=145000000 mode=RAW bandwidth=100000 size=1600x1600
+# fixture-demod-analyzer (docs 6.50): a QPSK carrier, 48 kBd, root-raised-cosine 0.35, centred on the receiver's VFO (+190 kHz in the 480 kS/s
+# file: the profile's VFO offset clamped to the span's edge less half the 100 kHz passband). The analyser looks only at the VFO's channel and says
+# its verdict as a Decoder output line: "DEMOD QPSK, 48.00 kBd, carrier +190.000 kHz, EVM 0.7 %, SNR 42.8 dB, confidence 1.00" (the figures of the run that made this script).
+120 state kit.plugins == 1
+state deviceName contains demod-analyzer
+state vfoOffsetHz == 190000
++1 click "START"
++60 state decodersRunning >= 1
++200 state count.decoderLines >= 1
+state list.decoderLines.details contains "DEMOD"
+state list.decoderLines.details contains "DEMOD QPSK, 48.00 kBd"
+state list.decoderLines.details contains "carrier +190.000 kHz"
+state list.decoderLines.details contains "confidence 1.00"
+state list.decoderLines.names contains "Demod Analyzer"
++1 state kit.panels >= 1
+state kit.pictures >= 1

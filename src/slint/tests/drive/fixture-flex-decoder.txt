@@ -1,0 +1,8 @@
+#! frames=800 bank=1 plugins=flex-decoder open=module:flex-decoder-1.0.0-abi3-win-x64.dll iqfile=flex-decoder.wav centre=931937500 mode=NFM bandwidth=12500 size=1600x1600
+# fixture-flex-decoder: one FLEX frame (1600 bps 2-FSK, capcode 1234567, alphanumeric "FOXSDR FIXTURE") as NFM I/Q through the real receiver.
+120 state kit.plugins == 1
+state deviceName contains flex-decoder
++1 click "START"
++60 state decodersRunning >= 1
++300 state count.decoderLines >= 1
+state list.decoderLines.details contains "capcode=1234567 alpha: FOXSDR FIXTURE"

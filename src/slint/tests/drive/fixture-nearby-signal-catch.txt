@@ -1,0 +1,13 @@
+#! frames=1200 bank=1 plugins=nearby-signal-catch open=module:nearby-signal-catch-0.1.0-abi3-win-x64.dll iqfile=tones3.wav centre=433000000 mode=RAW bandwidth=480000 size=1600x1600
+# fixture-nearby-signal-catch (docs 6.50): three carriers one after another (-150 kHz, +50 kHz, +200 kHz from 433 MHz, 1 s each, 3 s apart, 480 kS/s)
+# over a faint noise floor. Each is a hit (the plugin holds one hit at a time and ends it 2 s after the signal goes), so the line names
+# 432.85, 433.05 and 433.2 MHz. The file is 13 s long and loops: 900 ticks (30 s) hold every carrier at least twice whatever the phase at START.
+120 state kit.plugins == 1
+state deviceName contains tones3
++1 click "START"
++60 state decodersRunning >= 1
++1000 state count.decoderLines >= 3
+state list.decoderLines.details contains "STRONG SIGNAL"
+state list.decoderLines.details contains "432.85"
+state list.decoderLines.details contains "433.05"
+state list.decoderLines.details contains "433.2"

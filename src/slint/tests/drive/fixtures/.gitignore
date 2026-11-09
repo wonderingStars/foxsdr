@@ -1,0 +1,5 @@
+# the fixture WAVs are made by their make_<name>.py at test time (docs 6.50); only the generators are committed
+*.wav
+survey-engine-profile/survey.csv
+survey-engine-profile/survey-labels.txt
+__pycache__/

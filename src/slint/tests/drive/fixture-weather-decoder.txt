@@ -1,0 +1,14 @@
+#! frames=640 bank=1 plugins=weather-decoder open=module:weather-decoder-1.0.0-abi3-win-x64.dll iqfile=weather-decoder.wav centre=433920000 mode=RAW bandwidth=250000 size=1600x1600
+# fixture-weather-decoder (docs 6.50): 433.92 MHz Oregon Scientific OOK, 250 kS/s I/Q, mode RAW (an I/Q decoder, like ADS-B): a version 3.0 THGR810
+# message (id F824, channel 2, 21.7 C, 55 %RH) and the protocol description's worked example 1 as a version 2.1 transmission sent twice
+# (THGR122NX id 1D20, channel 3, -8.4 C, 28 %RH, battery low). Six seconds of noise lead the first burst so it arrives after START.
+# Asserted: both decoded lines (id, channel, rolling code, temperature, humidity, battery) and, by the end, exactly four lines: the engine loops the 9.7 s file,
+# so two passes of two messages, the second 2.1 repeat of each pass suppressed by the decoder's duplicate window (six bursts heard, four lines).
+120 state kit.plugins == 1
+state deviceName contains weather-decoder
++1 click "START"
++60 state decodersRunning >= 1
++250 state count.decoderLines >= 1
+state list.decoderLines.details contains "id=F824 ch=2 rc=6B temp=21.7C hum=55% batt=ok"
++120 state list.decoderLines.details contains "id=1D20 ch=3 rc=85 temp=-8.4C hum=28% batt=low"
+state count.decoderLines == 4

@@ -1,0 +1,19 @@
+#! frames=520 bank=1 plugins=survey-engine open=module:survey-engine-0.1.1-abi3-win-x64.dll iqfile=tones3.wav centre=145000000 mode=RAW bandwidth=480000 FOXSDR_SURVEY_DIR=C:\Users\steve\foxsdr-wt\engine-stage4\src\slint\tests\drive\fixtures\survey-engine-profile size=1600x1600
+# fixture-survey-engine (docs 6.50): the three carriers of tones3.wav (-150 kHz, +50 kHz, +200 kHz from 145 MHz) over a faint noise floor.
+# The plugin keeps its configuration, survey.csv and labels in FOXSDR_SURVEY_DIR (its own override of %LOCALAPPDATA%\foxsdr\surveyengine):
+# fixtures/survey-engine-profile holds a survey.cfg with dwell_seconds = 2 (the default 20 s of wall clock would take 600 of the script's ticks) and sweep = no (the receiver stays on 145 MHz; stepping the band needs the plugin's tune grant, which was
+# not given: unverified whether a bounded run could grant it). The path is absolute because the header's environment values are not resolved; edit it on another checkout.
+# A dwell closes every 2 s. The proof is the PANEL: its table lists the three carriers as 144.8500, 145.0500 and 145.2000 MHz (the cells are
+# drawn, not in the accessible tree, so the read-back is the picture: shot "survey-panel.png", seen in the run that made this script), and
+# survey.csv beside survey.cfg holds the same three rows. The plugin's "survey: ..." status lines did NOT reach the Decoder output in these
+# runs (count.decoderLines stayed 0 while the dwells ran): not asserted, reported as a finding.
+120 state kit.plugins == 1
+state deviceName contains tones3
++1 click "START"
++60 state decodersRunning >= 1
++2 state kit.panels >= 1
++300 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "Survey Engine"
++3 state pages contains "Survey Engine"
++2 shot "survey-panel.png"

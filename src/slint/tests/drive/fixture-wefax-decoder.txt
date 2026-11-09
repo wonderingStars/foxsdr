@@ -1,0 +1,14 @@
+#! frames=800 bank=1 plugins=wefax-decoder open=module:wefax-decoder-1.1.0-abi3-win-x64.dll iqfile=wefax-decoder.wav centre=3853100 mode=USB bandwidth=42000 size=1600x1600
+# fixture-wefax-decoder (docs 6.50): radiofax at 120 lpm, IOC 576: white lead-in, the 300 Hz start tone, 10 phasing lines, 12 picture lines of
+# 1810 pixels (eight grey bars), the 450 Hz stop tone. FM audio 1500 (black) - 2300 Hz (white) in USB, 3 kHz above the file's centre where the VFO
+# sits (header bandwidth 42000 leaves the VFO 3 kHz up and the receiver already tuned, so START applies no preset and moves nothing). The file
+# leads with 6.5 s of silence so the start tone arrives after START. Asserted: the start-tone line, the phased line (120 lpm, IOC 576), the
+# chart-complete line (stop tone), and the kit holding a picture page.
+120 state kit.plugins == 1
+state deviceName contains wefax-decoder
++1 click "START"
++60 state decodersRunning >= 1
++260 state list.decoderLines.details contains "start tone, IOC 576"
++150 state list.decoderLines.details contains "phased at 120 lpm, IOC 576"
+state kit.pictures >= 1
++150 state list.decoderLines.details contains "chart complete"

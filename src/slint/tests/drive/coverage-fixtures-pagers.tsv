@@ -1,0 +1,6 @@
+732	ASSERTED	fixture-aprs-decoder.txt	AFSK 1200 baud NFM I/Q; START; state count.decoderLines >= 1; list.decoderLines.details contains "FOXSDR FIXTURE 1" and "FOXSDR-1>APRS" (status and position frames decoded, 4 lines in the run)
+733	ASSERTED	fixture-aprs-decoder.txt	the position frame FOXSDR-1 !5130.44N/00007.67W: state kit.tracks >= 1; state kit.mapPages >= 1
+849	ASSERTED	fixture-pocsag-decoder.txt	POCSAG 1200 bps NFM I/Q; START; state count.decoderLines >= 1; list.decoderLines.details contains "addr=1234567 func=3 alpha: FOXSDR FIXTURE" (3 lines in the run)
+867	ASSERTED	fixture-flex-decoder.txt	FLEX 1600/2 NFM I/Q; START; state count.decoderLines >= 1; list.decoderLines.details contains "capcode=1234567 alpha: FOXSDR FIXTURE" (3 lines in the run)
+881	ASSERTED	fixture-ert-decoder.txt	ERT SCM raw I/Q at 2.4 MS/s; START; list.decoderLines.details contains "id=41234567" and "consumption=1234567" (the SCM line: type 5 electric, tamper phy1,enc2, chips=32768)
+882	ASSERTED	fixture-ert-decoder.txt	list.decoderLines.details contains "ERT status: rate=2400000Hz" (the status line the decoder prints at start)

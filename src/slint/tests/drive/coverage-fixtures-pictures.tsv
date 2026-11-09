@@ -1,0 +1,6 @@
+657	ASSERTED	fixture-sstv-decoder.txt	fixture: Martin M1 (VIS 44) header and 40 colour-bar lines as FM audio on USB (make_sstv-decoder.py); click START; state kit.pictures >= 1 (the picture page the kit holds; its pixels are not read back)
+664	ASSERTED	fixture-sstv-decoder.txt	the same run; state list.decoderLines.details contains "Martin M1" (the 'SSTV: Martin M1 (VIS 44), 320x256 - receiving' line)
+1035	ASSERTED	fixture-apt-decoder.txt	fixture: 24 NOAA APT lines (2400 Hz subcarrier, sync A train, ramp video) as narrow FM on NFM (make_apt-decoder.py); click START; state kit.pictures >= 1 (pixels not read back)
+1040	ASSERTED	fixture-apt-decoder.txt	the same run; state list.decoderLines.details contains "sync locked" (the 'APT: sync locked - receiving at 2 lines/s' line)
+1085	ASSERTED	fixture-wefax-decoder.txt	fixture: radiofax 120 lpm IOC 576 (start tone, 10 phasing lines, 12 picture lines, stop tone) as FM audio on USB (make_wefax-decoder.py); click START; state kit.pictures >= 1 (pixels not read back)
+1111	ASSERTED	fixture-wefax-decoder.txt	the same run; state list.decoderLines.details contains "start tone, IOC 576", "phased at 120 lpm, IOC 576" and "chart complete"

@@ -1,0 +1,10 @@
+#! frames=700 bank=1 plugins=twotone-decoder open=module:twotone-decoder-1.0.1-abi3-win-x64.dll iqfile=twotone-decoder.wav centre=154000000 mode=NFM bandwidth=12500 size=1600x1600
+# fixture-twotone-decoder (docs 6.50): a Motorola Quick Call II page, cap code 258 (reeds 125 + 128: 746.8 Hz for 1 s then 879.0 Hz for 3 s), FM on the carrier, played through NFM.
+120 state kit.plugins == 1
+state deviceName contains twotone-decoder
++1 click "START"
++60 state decodersRunning >= 1
++400 state count.decoderLines >= 1
+state list.decoderLines.details contains "TWO-TONE"
+state list.decoderLines.details contains "Motorola Quick Call II"
+state list.decoderLines.details contains "code 258"

@@ -1,0 +1,11 @@
+#! frames=600 bank=1 plugins=ais-decoder open=module:ais-decoder-1.0.2-abi3-win-x64.dll iqfile=ais-decoder.wav centre=162000000 mode=RAW bandwidth=192000 size=1600x1600
+# fixture-ais-decoder: an AIS type 1 position report (MMSI 235000001, 51.5074 N 0.1278 W) on AIS 1 from make_ais-decoder.py.
+120 state kit.plugins == 1
+state deviceName contains ais-decoder
++1 click "START"
++60 state decodersRunning >= 1
++300 state count.decoderLines >= 1
+state list.decoderLines.details contains 235000001
+state list.decoderLines.details contains "pos=51.507400,-0.127800"
+state kit.tracks >= 1
+state kit.mapPages >= 1

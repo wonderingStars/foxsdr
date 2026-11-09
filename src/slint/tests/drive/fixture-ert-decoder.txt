@@ -1,0 +1,10 @@
+#! frames=600 bank=1 plugins=ert-decoder open=module:ert-decoder-1.0.0-abi3-win-x64.dll iqfile=ert-decoder.wav centre=912600000 mode=RAW size=1600x1600
+# fixture-ert-decoder: one Itron ERT SCM packet (meter 41234567, electric, reading 1234567) as raw I/Q, OOK Manchester at 32768 chips/s.
+120 state kit.plugins == 1
+state deviceName contains ert-decoder
++1 click "START"
++60 state decodersRunning >= 1
++200 state count.decoderLines >= 1
+state list.decoderLines.details contains "id=41234567"
+state list.decoderLines.details contains "consumption=1234567"
+state list.decoderLines.details contains "ERT status: rate=2400000Hz"

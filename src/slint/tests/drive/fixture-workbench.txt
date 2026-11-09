@@ -1,0 +1,21 @@
+#! frames=450 bank=1 plugins=workbench open=module:workbench-0.2.0-abi3-win-x64.dll iqfile=workbench.wav centre=162475000 mode=RAW bandwidth=240000 size=1600x1600
+# fixture-workbench (docs 6.50): one NOAA weather channel (WX-3, 162.450 MHz, 62 kHz above the 162.388 MHz centre the NOAA preset lands on) carrying a 1 kHz FM note.
+120 state kit.plugins == 1
+state deviceName contains workbench
++1 click "START"
++60 state decodersRunning >= 1
++30 state kit.panels >= 1
++1 state list.decoderLines.details contains "WORKBENCH"
++1 state list.decoderLines.details contains "NOAA weather: 7 of 7 channels in range"
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "Decoder workbench"#2
++3 state pages contains "Decoder workbench"
+# Whatever the receiver was retuned to at START (the shot of a first run showed 130.7875 MHz, the ACARS preset), the NOAA weather preset key
+# puts it back on 162.475 MHz, and the panel then lists the seven channels: WX-1 with a level in dBFS, the rest "quiet" (the panel's cells are
+# drawn, not in the accessible tree, so the picture is the only read-back: shot "workbench-panel.png").
++1 click "NOAA weather  all 7 channels at once"
++20 state centreHz > 162300000
+state centreHz < 162500000
++15 shot "workbench-panel.png"
++1 state list.decoderLines.details contains "NOAA weather: 7 of 7 channels in range"

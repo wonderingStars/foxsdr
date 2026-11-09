@@ -1,0 +1,12 @@
+#! frames=620 bank=1 plugins=sstv-decoder open=module:sstv-decoder-1.0.0-abi3-win-x64.dll iqfile=sstv-decoder.wav centre=14230000 mode=USB bandwidth=42000 size=1600x1600
+# fixture-sstv-decoder (docs 6.50): Martin M1 (VIS 44), 40 lines of a colour-bar picture: FM tones 1500-2300 Hz with 1200 Hz sync, USB, the audio
+# 3 kHz above the file's centre where the VFO sits (header bandwidth 42000 leaves the VFO 3 kHz up and the receiver already tuned, so START
+# leaves it alone). The file leads with 7 s of silence so the header arrives after START.
+# Asserted: the decoder's announcement line "SSTV: Martin M1 (VIS 44), 320x256 - receiving" and the kit holding a picture page.
+120 state kit.plugins == 1
+state deviceName contains sstv-decoder
++1 click "START"
++60 state decodersRunning >= 1
++400 state count.decoderLines >= 1
+state list.decoderLines.details contains "Martin M1"
+state kit.pictures >= 1

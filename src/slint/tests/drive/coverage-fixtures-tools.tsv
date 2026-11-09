@@ -1,0 +1,7 @@
+904	ASSERTED	fixture-example-decoder.txt	LSB 1 kHz note from example-decoder.wav; state list.decoderLines.details contains "rms 0.34" and "8000 samples" (the reporter says one line a second of the audio it is handed)
+906	ASSERTED	fixture-workbench.txt	click the NOAA weather preset key; state centreHz > 162300000 and < 162500000 (the preset retuned the receiver); the panel then lists WX-1..WX-4 with WX-3 (the FM note) at -18 dBFS - seen in the run shot, not machine-read
+915	ASSERTED	fixture-workbench.txt	state list.decoderLines.details contains "NOAA weather: 7 of 7 channels in range" (the routing line the plugin says at create)
+916	ASSERTED	fixture-workbench.txt	same decoder line: count.decoderLines and the WORKBENCH line read back from the engine
+780	ASSERTED	fixture-nearby-signal-catch.txt	tones3.wav three carriers; state count.decoderLines >= 3 and list.decoderLines.details contains STRONG SIGNAL, 432.85, 433.05, 433.2 (one alert line per carrier)
+917	ASSERTED	fixture-demod-analyzer.txt	QPSK file at the VFO; state kit.pictures >= 1 (the analyser's dashboard image page is held by the kit)
+946	ASSERTED	fixture-demod-analyzer.txt	state list.decoderLines.details contains "DEMOD QPSK, 48.00 kBd", "carrier +190.000 kHz", "confidence 1.00"; names contains Demod Analyzer

@@ -1,0 +1,10 @@
+#! frames=900 bank=1 plugins=navtex-dsc-decoder open=module:navtex-dsc-decoder-1.0.0-abi3-win-x64.dll iqfile=navtex-dsc-decoder.wav centre=516300 mode=USB bandwidth=8000 size=1600x1600
+# fixture-navtex-dsc-decoder: a NAVTEX message (F-A, msg 01, "FOXSDR FIXTURE 1") as SITOR-B 100 Bd FSK in USB audio, from make_navtex-dsc-decoder.py. The file is one 11 s transmission that loops: START lands mid-file, so the first whole message is the second pass.
+120 state kit.plugins == 1
+state deviceName contains navtex-dsc-decoder
+state tunedHz == 536300
++1 click "START"
++60 state decodersRunning >= 1
++600 state count.decoderLines >= 1
+state list.decoderLines.details contains "FOXSDR FIXTURE 1"
+state list.decoderLines.details contains "NAVTEX  [F] A-navigational warning  msg 01  errors 0  repaired 0"

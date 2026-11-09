@@ -1,0 +1,8 @@
+#! frames=700 bank=1 plugins=rtty-decoder open=module:rtty-decoder-1.2.0-abi3-win-x64.dll iqfile=rtty-decoder.wav centre=14080000 mode=LSB bandwidth=3000 size=1600x1600
+# fixture-rtty-decoder (docs 6.50): "FOXSDR FIXTURE 1" in 45.45 Bd / 170 Hz Baudot RTTY, FSK on the lower sideband, played through the receiver.
+120 state kit.plugins == 1
+state deviceName contains rtty-decoder
++1 click "START"
++60 state decodersRunning >= 1
++400 state count.decoderLines >= 1
+state list.decoderLines.details contains "FOXSDR FIXTURE 1"

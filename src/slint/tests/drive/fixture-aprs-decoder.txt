@@ -1,0 +1,12 @@
+#! frames=800 bank=1 plugins=aprs-decoder open=module:aprs-decoder-1.0.2-abi3-win-x64.dll iqfile=aprs-decoder.wav centre=144800000 mode=NFM bandwidth=12500 size=1600x1600
+# fixture-aprs-decoder: two AX.25 UI frames from FOXSDR-1 (status + position, "FOXSDR FIXTURE 1") as AFSK 1200 baud NFM I/Q.
+120 state kit.plugins == 1
+state deviceName contains aprs-decoder
++1 click "START"
++60 state decodersRunning >= 1
++300 state count.decoderLines >= 1
+state list.decoderLines.details contains "FOXSDR FIXTURE 1"
+state list.decoderLines.details contains "FOXSDR-1>APRS"
+# the position report puts the station on the map: the track source raises a track and a map page
+state kit.tracks >= 1
+state kit.mapPages >= 1

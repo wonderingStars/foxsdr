@@ -1,0 +1,14 @@
+#! frames=800 bank=1 plugins=vor-decoder open=module:vor-decoder-1.0.1-abi3-win-x64.dll iqfile=vor-decoder.wav centre=113000000 mode=AM bandwidth=22000 size=1600x1600
+# fixture-vor-decoder: a VOR composite (radial 090, ident FOX) from make_vor-decoder.py, AM at 113.000 MHz, 22 kHz wide.
+120 state kit.plugins == 1
+state deviceName contains vor-decoder
+state tunedHz == 113013000
++1 click "START"
++60 state decodersRunning >= 1
++300 state count.decoderLines >= 1
+state list.decoderLines.details contains "VOR radial"
+# FINDING, FIXED (docs 6.50): the file carries radial 090 and the window first read 045 at confidence 100%: the host's AM demodulator
+# DC blocker (src/dsp/demod.cpp kAmDcCutoffHz) was a 30 Hz high-pass, a 45 degree phase LEAD on the 30 Hz variable (AM) signal, so every
+# bearing from a real radio read 45 degrees low. The corner is 2 Hz now (a 3.8 degree lead, tests/test_demod.cpp pins it under 4): the
+# radial reads 086..090.
+state list.decoderLines.details contains "VOR radial 08"

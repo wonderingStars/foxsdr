@@ -1,0 +1,13 @@
+#! frames=600 bank=1 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1600x1600
+# fixture-adsb-decoder: Mode S DF17 from make_adsb-decoder.py (ICAO 4D2025, callsign FOXSDR1, TC 11 pair at 35000 ft near 51.5 N 0.1 W) decoded by the plugin.
+120 state kit.plugins == 1
+state deviceName contains adsb-decoder
++1 click "START"
++60 state decodersRunning >= 1
++300 state count.decoderLines >= 1
+state list.decoderLines.details contains FOXSDR1
+state list.decoderLines.details contains 4D2025
+state list.decoderLines.details contains "pos=51.5000,-0.1000"
+state list.decoderLines.details contains "alt=35000ft"
+state kit.tracks >= 1
+state kit.mapPages >= 1

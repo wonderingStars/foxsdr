@@ -1,0 +1,8 @@
+#! frames=700 bank=1 plugins=cw-decoder open=module:cw-decoder-1.1.0-abi3-win-x64.dll iqfile=cw-decoder.wav centre=14060000 mode=CW bandwidth=500 size=1600x1600
+# fixture-cw-decoder (docs 6.50): "CQ CQ DE FOXSDR" at 20 WPM, a keyed carrier on the centre 14.060 MHz (the START preset applies CW, 500 Hz, 14.060 MHz).
+120 state kit.plugins == 1
+state deviceName contains cw-decoder
++1 click "START"
++60 state decodersRunning >= 1
++400 state count.decoderLines >= 1
+state list.decoderLines.details contains FOXSDR

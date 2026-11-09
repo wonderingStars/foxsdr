@@ -1,0 +1,5 @@
+583	ASSERTED	fixture-selcal-decoder.txt	fixture: SELCAL AB-CD tone pairs on USB; click START; state decodersRunning >= 1; state list.decoderLines.details contains "SELCAL AB-CD"
+669	ASSERTED	fixture-cw-decoder.txt	fixture: "CQ CQ DE FOXSDR" keyed at 20 WPM on CW; click START; state count.decoderLines >= 1; state list.decoderLines.details contains FOXSDR
+737	ASSERTED	fixture-eas-decoder.txt	fixture: SAME Required Weekly Test x3 + NNNN on NFM; click START; state list.decoderLines.details contains "Required Weekly Test" and the raw ZCZC header
+739	ASSERTED	fixture-eas-decoder.txt	fixture: the same run; state list.decoderLines.details contains "end of message (NNNN)"
+827	ASSERTED	fixture-twotone-decoder.txt	fixture: Motorola Quick Call II cap code 258 on NFM; click START; state list.decoderLines.details contains "TWO-TONE", "Motorola Quick Call II" and "code 258"
