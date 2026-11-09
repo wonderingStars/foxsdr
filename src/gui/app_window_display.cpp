@@ -13,7 +13,7 @@
 // THE PASSBAND'S SLIDE (a Linux user, 0.99.82): Shift + wheel over the spectrum or the waterfall moves the tuned frequency along the band by the mode's raster a notch.
 // gui/passband_slide.hpp has the arithmetic.
 //
-// THE TYPED FREQUENCY'S MODE (field report a09fe097, 0.99.83): typing a frequency in another band adopts that band's conventional mode.
+// THE TYPED FREQUENCY'S MODE (field report a09fe097, 0.99.83) moved into the engine on 2026-11-09 (Engine::followBandModeOnTune): every band switch follows the one rule.
 //
 // WHERE THE STATE LIVES. In master the window held all of it next to the pipeline and wrote its picture's floats. Here the ENGINE holds the dB window IN FORCE (dbMin_/dbMax_,
 // the state's dbMin/dbMax, what the spectrum and the waterfall are drawn through) and takes it by FOXAPI_OP_SET_DISPLAY_RANGE; WHICH WINDOW THAT IS - Automatic's, or the
@@ -34,7 +34,6 @@
 
 #include <imgui.h>
 
-#include "core/band_mode.hpp"
 #include "core/diag_log.hpp"
 #include "core/freq_converter.hpp"
 #include "core/i18n.hpp"
@@ -358,42 +357,4 @@ void AppWindow::slidePassband(double notches) {
     passbandFollowUntilS_ = nowS + kPassbandFollowS;
     cascade::gui::census::note("rx:slide");
 }
-
-// --- the typed frequency's mode ------------------------------------------------------------------------------------------------------------------
-
-int AppWindow::modeForTypedFrequency(double typedHz) {
-    // Both bands are read BEFORE the tune so `from` is the band the user is leaving, not the one just landed in. The whole rule, including the RAW hold and the
-    // no-convention services, is core/band_mode.hpp's; this only reads the plan the engine holds (the rail's BAND_PLAN rows) and names the mode.
-    const std::vector<BandRow>& bands = railLists().bands;
-    const BandRow* to = bandRowAt(bands, typedHz);
-    if (to == nullptr) { return 0; }
-    const BandRow* from = bandRowAt(bands, std::max(0.0, uiState_.tunedHz));
-    cascade::core::BandEntry toEntry;
-    toEntry.startHz = to->startHz;
-    toEntry.endHz = to->endHz;
-    toEntry.name = to->name;
-    toEntry.service = to->service;
-    cascade::core::BandEntry fromEntry;
-    const cascade::core::BandEntry* fromPtr = nullptr;
-    if (from == to) {
-        fromPtr = &toEntry;   // the rule compares the entries by identity: the same band is the same entry
-    } else if (from != nullptr) {
-        fromEntry.startHz = from->startHz;
-        fromEntry.endHz = from->endHz;
-        fromEntry.name = from->name;
-        fromEntry.service = from->service;
-        fromPtr = &fromEntry;
-    }
-    const char* follow = cascade::core::conventionalModeForBand(toEntry.service, typedHz);
-    if (!cascade::core::modeFollowsTypedBandChange(fromPtr, &toEntry, kModeNames[railModeIndex(uiState_.demodMode)], follow)) { return 0; }
-    for (int m = 0; m < 8; ++m) {
-        if (std::strcmp(kModeNames[m], follow) == 0) {
-            // The engine logs the mode and bandwidth the change moves to; this line says WHY it moved. The band's NAME only, never a frequency (core::scrubUploadLine).
-            cascade::core::diagLogf("mode follows the band plan: %s", toEntry.name.c_str());
-            return m + 1;
-        }
-    }
-    return 0;
-}
-
 }  // namespace cascade::gui

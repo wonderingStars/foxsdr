@@ -362,6 +362,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.text(bandPlanSelection_);
     f.text(bandPlan_.name());
     f.value(bandPlan_.entries().size());
+    f.value(bandModeFollow_);   // fact.bandPlan.followMode
     f.value(bandPlanChoices_.size());
     for (const cascade::core::UserPreset& u : userPresets_) {
         f.text(u.plugin);
@@ -1008,6 +1009,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // The name of the plan LOADED, as the Display section captions it (8.4): the
     // chain "ITU Region 1 + United Kingdom", which no single BAND_PLANS entry names.
     fact("bandPlan.name", bandPlan_.name());
+    // The Radio section's "Follow the band plan's mode when retuning" (SET_BAND_FOLLOW), "1" or "0".
+    fact("bandPlan.followMode", bandModeFollow_ ? "1" : "0");
     // PRESETS: a plugin's own (asked of its code only when the plugins
     // changed - kept from the last block otherwise), and the ones saved here.
     if (apiLists_ != nullptr && apiLists_->presets && apiLists_->presetsFingerprint == apiPluginPathsHash_) {

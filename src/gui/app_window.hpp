@@ -1555,9 +1555,11 @@ private:
     };
     SlideAsk slideAsk_;
     double passbandFollowUntilS_ = 0.0;
-    // THE TYPED FREQUENCY'S MODE (0.99.83): typing a frequency in another band adopts that band's conventional mode (core/band_mode.hpp has the rule).
-    // Returns the 1-based FOXAPI_DEMOD_* the mode should become, or 0 for "leave it".
-    int modeForTypedFrequency(double typedHz);
+    // THE PICTURE FOLLOWS A RETUNE THAT LEAVES IT (2026-11-09; core/view_follow.hpp): the tuned frequency as the last frame saw it, so
+    // a frame can tell a retune from a picture the hand parked elsewhere. NaN until the first frame (nothing to compare against).
+    double viewFollowTunedHz_ = std::numeric_limits<double>::quiet_NaN();
+    // (THE TYPED FREQUENCY'S MODE of 0.99.83 moved into the engine on 2026-11-09 - Engine::followBandModeOnTune - so that every band
+    // switch, in both windows and from the web remote, follows the one rule; commitTypedFrequency sends the tune alone.)
 
     // --- THE AIRBAND SECTION (stub campaign B7, 0.99.60 - 0.99.71; app_window_airband.cpp has the why) -----------------------------------
     // The monitor is the engine's (src/engine/engine_airband.cpp): the window sends FOXAPP_OP_AIRBAND, FOXAPP_OP_BOOKMARK_TICK, _ADD_ROWS and

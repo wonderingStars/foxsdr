@@ -159,6 +159,7 @@ AppConfig junkConfig() {
     c.notchQ = 1e9;
     c.autoNotch = true;
     c.bandPlanOverlay = false;
+    c.bandPlanFollowMode = false;
     // Both a closed three-way choice, away from their "small"/"classic"
     // defaults and NOT the value the round-trip fixture below picks either,
     // so a load path that forgot either field is caught here rather than by
@@ -380,6 +381,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.notchFreqHz == b.notchFreqHz);
     CHECK(a.notchQ == b.notchQ);
     CHECK(a.autoNotch == b.autoNotch);
+    CHECK(a.bandPlanFollowMode == b.bandPlanFollowMode);
     CHECK(a.bandPlanOverlay == b.bandPlanOverlay);
     CHECK(a.bandPlanSize == b.bandPlanSize);
     CHECK(a.bandPlanPalette == b.bandPlanPalette);
@@ -898,6 +900,7 @@ int main() {
         in.notchQ = 42.25;
         in.autoNotch = true;
         in.bandPlanOverlay = false;
+        in.bandPlanFollowMode = false;   // (2026-11-09) away from its default of true
         // A legal value for each, distinct from BOTH the default
         // ("small"/"classic") and junkConfig()'s ("large"/"vivid"), so the
         // roundtrip proves the FILE is what came back rather than either
@@ -2193,6 +2196,7 @@ int main() {
         CHECK(d.deemphasisIndex == 0);
         CHECK(d.stereoEnabled);
         CHECK(d.bandPlanOverlay);
+        CHECK(d.bandPlanFollowMode);   // the band plan's mode follows a band switch unless the user says otherwise
         CHECK(d.bandPlanSize == "small");
         CHECK(d.bandPlanPalette == "classic");
         // The frequency counter opens on the face it has always had.

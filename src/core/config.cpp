@@ -507,6 +507,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getDouble(j, "notchQ", out.notchQ);
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
+    getBool(j, "bandPlanFollowMode", out.bandPlanFollowMode);
     getString(j, "patch", out.patch);
     // The patch presets. ELEMENT-WISE TOLERANT, like userPresets, and louder
     // about it: an entry that is not an object with a string name and a
@@ -1338,6 +1339,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["notchQ"] = cfg.notchQ;
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
+    j["bandPlanFollowMode"] = cfg.bandPlanFollowMode;
     j["patch"] = cfg.patch;
     {
         json presets = json::array();

@@ -1953,6 +1953,12 @@ private:
     // pipeline's own construction defaults, so the three can never disagree
     // before the first user click.
     bool stereoEnabled_ = true;
+    // FOLLOW THE BAND PLAN'S MODE WHEN RETUNING (AppConfig::bandPlanFollowMode; FOXAPI_OP_SET_BAND_FOLLOW; fact.bandPlan.followMode).
+    // Applied by followBandModeOnTune on the gestures that mean "take me there" - SET_FREQUENCY (the counter, a marker's Tune, the
+    // palette, the web remote), a click on the spectrum (VFO_TO_ABSOLUTE) and a bookmark's tune (whose own mode then wins) - and
+    // never on a wheel step, a drag, the scanner or a plugin's preset, which stay in the hand (core/band_mode.hpp says why).
+    bool bandModeFollow_ = true;
+    void followBandModeOnTune(double toAbsHz);
     bool nrEnabled_ = false;
     float nrStrength_ = 0.5f;
     bool notchEnabled_ = false;

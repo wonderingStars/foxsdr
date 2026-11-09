@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine.hpp"
 
+#include "core/band_mode.hpp"
 #include "core/config_halves.hpp"
 #include "core/patch_draft.hpp"
 #include "core/serial_port.hpp"
@@ -5911,6 +5912,10 @@ void Engine::tuneToBookmark(const cascade::core::Bookmark& b) {
     // retunes), then mode and bandwidth. An unknown mode name - a newer
     // build's file, kept verbatim by FreqManager on purpose - leaves the
     // current mode untouched.
+    // The band plan's mode first (a bookmark is a "take me there"), then the
+    // bookmark's OWN mode over it: a bookmark saved in AM on a band whose
+    // convention is USB plays in AM, as it always did.
+    followBandModeOnTune(b.freqHz);
     tuneAbsoluteHz(b.freqHz);
     for (int m = 0; m < 8; ++m) {
         if (b.mode == kModeNames[m]) {
@@ -6432,6 +6437,33 @@ double Engine::currentAbsoluteHz() {
     return pipeline_.activeSource().centerFrequencyHz() + pipeline_.vfoOffsetHz();
 }
 
+// THE BAND PLAN'S MODE FOLLOWS A BAND SWITCH (a beta tester, an HF operator, 2026-11-09: "when switching bands the LSB/USB mode should
+// be set automatically: 7 MHz should show LSB, 14 MHz USB; the operator stays free to change the mode for that band afterward"). The
+// rule is core/band_mode.hpp's, which the ImGui window applied to its typed entry alone since 0.99.83 (field report a09fe097) and the
+// Slint window not at all: the mode moves only when the retune CROSSES into a different entry of the plan (from a gap counts), never
+// within one (an FT8 setup on 7.074 USB survives a retype to 7.040), never out of RAW, never without a convention. The band being
+// LEFT is read here, so this runs BEFORE the tune it accompanies. THE PER-BAND MODE MEMORY IS NOTHING NEW: within a band the mode is
+// whatever the hand last set - the rule's own "same entry, no change" - and the next switch applies the destination's convention
+// again; nothing is stored per band. Where the plan has no entry for the destination (the default WORLD plan carries no 40 m or
+// 80 m entry, since the three ITU regions disagree about their edges) nothing can follow: a regional plan has them.
+void Engine::followBandModeOnTune(double toAbsHz) {
+    if (!bandModeFollow_ || !std::isfinite(toAbsHz)) { return; }
+    const cascade::core::BandEntry* to = bandPlan_.at(toAbsHz);
+    if (to == nullptr) { return; }
+    const cascade::core::BandEntry* from = bandPlan_.at(std::max(0.0, currentAbsoluteHz()));
+    const char* want = cascade::core::conventionalModeForBand(to->service, toAbsHz);
+    if (!cascade::core::modeFollowsTypedBandChange(from, to, kModeNames[modeIndex_], want)) { return; }
+    for (int m = 0; m < 8; ++m) {
+        if (std::strcmp(kModeNames[m], want) == 0) {
+            // setModeIndex logs the mode and bandwidth the change moves to; this line says WHY it moved. The band's NAME only,
+            // never a frequency (core::scrubUploadLine).
+            cascade::core::diagLogf("mode follows the band plan: %s", to->name.c_str());
+            setModeIndex(m);
+            return;
+        }
+    }
+}
+
 void Engine::scannerFrame() {
     if (!scanner_.active()) { return; }
 
@@ -6900,7 +6932,11 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = pipeline_.activeSource().centerFrequencyHz();
             return res;
         case FOXAPI_OP_SET_FREQUENCY:
-            // The counter's rule: the VFO offset kept, the centre follows.
+            // The counter's rule: the VFO offset kept, the centre follows. A
+            // landing in another band of the plan takes that band's mode first
+            // (followBandModeOnTune reads the band being LEFT, so it goes
+            // before the tune).
+            followBandModeOnTune(c.num[0]);
             tuneAbsoluteHz(c.num[0]);
             res.applied[0] = currentAbsoluteHz();
             return res;
@@ -6926,7 +6962,11 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPP_OP_VFO_TO_ABSOLUTE:
             // Click-to-tune on the spectrum or the waterfall: the snap is to
             // the mode in force WHEN APPLIED, the offset against the centre
-            // in force when applied.
+            // in force when applied. A click into another band takes that
+            // band's mode (the tester's path after panning the waterfall by
+            // hand, 2026-11-09) - before the snap, so the raster is the new
+            // mode's.
+            followBandModeOnTune(c.num[0]);
             setVfoToAbsoluteHz(c.num[0], on);
             res.applied[0] = pipeline_.vfoOffsetHz();
             return res;
@@ -7024,6 +7064,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_SET_STEREO:
             stereoEnabled_ = on;
             pipeline_.setStereoEnabled(stereoEnabled_);
+            return res;
+        case FOXAPI_OP_SET_BAND_FOLLOW:
+            // The Radio section's "Follow the band plan's mode when retuning"
+            // (both windows). Read back as fact.bandPlan.followMode, which is
+            // in the lists' fingerprint, so the checkbox follows on the next
+            // publish.
+            bandModeFollow_ = on;
             return res;
         case FOXAPI_OP_SET_NR:
             nrEnabled_ = on;
@@ -8746,6 +8793,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     pipeline_.setNotchEnabled(notchEnabled_);
     autoNotch_ = cfg.autoNotch;
     pipeline_.setAutoNotchEnabled(autoNotch_);
+    bandModeFollow_ = cfg.bandPlanFollowMode;
     // applyConfig runs AFTER the startup loadBandPlan(), so a restored
     // selection that differs from the default has to re-load or the user's
     // chosen region silently reverts to "world" on every launch. Guarded on
@@ -9267,6 +9315,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.notchFreqHz = static_cast<double>(notchFreqHz_);
     cfg.notchQ = static_cast<double>(notchQ_);
     cfg.autoNotch = autoNotch_;
+    cfg.bandPlanFollowMode = bandModeFollow_;
     cfg.bandPlanSelection = bandPlanSelection_;
     cfg.transmitOpen = transmitOpen_;
     cfg.transmitMode = transmitModeIndex_;

@@ -421,6 +421,17 @@ struct AppConfig {
     double notchQ = 30.0;
     bool autoNotch = false;
     bool bandPlanOverlay = true;
+    // FOLLOW THE BAND PLAN'S MODE WHEN RETUNING (a beta tester, 2026-11-09; the
+    // typed-frequency rule of 0.99.83 widened to every band switch): a retune
+    // that lands in a DIFFERENT band of the plan - typed, clicked on the
+    // spectrum, a bookmark, the web remote - adopts that band's conventional
+    // demodulator (core/band_mode.hpp: LSB below 10 MHz, USB above, AM for
+    // broadcast...), while a mode changed by hand afterwards stays until the
+    // next switch and a retune within the same band never touches it. The
+    // ENGINE applies it (Engine::applyCommand), so every client follows the
+    // one rule; the Radio section of both windows carries the checkbox. On by
+    // default, as the typed rule always was.
+    bool bandPlanFollowMode = true;
     // Which band plan is active: the `id` of a plan in resources/bandplans,
     // loaded together with the chain of plans it refines.
     //
