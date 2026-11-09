@@ -1743,6 +1743,10 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
             // had the service go on delivering after raising it.
             noteFaultOn(link, "device failure", "the SDRplay service reported a device failure",
                         /*endsWithStream=*/true);
+            // THE EARLY-WARNING COUNT (health word `devlatch`): this is the service's thread, so
+            // the word is only RAISED - one relaxed atomic OR, no lock, no allocation - and the
+            // window's per-frame poll turns it into a count (core/health_events.hpp).
+            cascade::core::health::raiseRecovered(cascade::core::health::Recovered::DevLatch);
             link.pendingEventLogs.fetch_or(kEventLogFailure, std::memory_order_acq_rel);
             break;
 

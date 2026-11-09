@@ -386,6 +386,10 @@ void AppWindow::drawTrackList(MapPage& page,
             detailsTrackId_ = r.id;
             detailsOpen_ = true;
         }
+        if (cascade::gui::census::enabled()) {
+            cascade::gui::census::rect("tracklist:details:" + r.id, ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                       ImGui::GetItemRectMax().y);
+        }
 
         ImGui::PopStyleVar();
         ImGui::PopID();

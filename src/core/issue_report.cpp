@@ -112,6 +112,10 @@ constexpr const char* kSentences[health::kRecoveredCount] = {
     // DisplayWatch
     "FoxSDR could not subscribe to the screen's on and off state, so drawing continues while "
     "the screen is off",
+    // DevLatch (field-early-warning: master's pair after the survey's words)
+    "the SDRplay service reported a stream failure and FoxSDR marked the radio as failed until it is started again",
+    // SoftGl
+    "the window is drawn by FoxSDR's own software OpenGL renderer, because the graphics driver's could not be used (or because it was asked for)",
     // PluginFault (the engine-extraction branch's five: plugin containment 6.28, per-thread watchdog 6.27)
     "a plugin faulted inside a call FoxSDR made into it, and FoxSDR absorbed the fault and switched "
     "the plugin off for the rest of the session",

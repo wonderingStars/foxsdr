@@ -22,11 +22,15 @@
 #define CASCADE_GUI_TRACK_DETAIL_VIEW_HPP
 
 #include <cstdint>
+#include <functional>
+#include <string>
 #include <vector>
 
+#include "core/i18n.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_ui_data.hpp"
 #include "gui/track_info_cache.hpp"
+#include "gui/ui_census.hpp"
 #include "gui/track_metrics.hpp"
 #include "imgui.h"
 
@@ -124,6 +128,49 @@ inline void drawTrackDetailLines(const std::vector<TrackDetailLine>& lines) {
         }
         if (l.separatorAfter) { ImGui::Separator(); }
     }
+}
+
+// THE PHOTO, for a target whose details the user OPENED (0.99.98): the details
+// window and the rail's Target details section, never a hover. Asking is what
+// makes the plugin fetch, and hovering over a map is not a choice to look.
+// Draws nothing without a photo source, and nothing for a target with no
+// photo. The picture is clickable and `openLink` is handed the photo's own
+// page, unchanged; the credit is drawn beneath it, because the photographer
+// is credited wherever the photo is shown.
+inline void drawTrackPhoto(const cascade::core::HostTrack& ht, TrackInfoCache* info, float maxW,
+                           const std::function<void(const std::string&)>& openLink) {
+    if (info == nullptr || !info->active() || !info->photos().active()) { return; }
+    const TrackPhotoCache::Photo* photo = nullptr;
+    const TrackPhotoCache::State st = info->photos().request(ht.t.id, ht.t.kind, &photo);
+    if (st == TrackPhotoCache::State::Pending) {
+        ImGui::TextDisabled("%s", cascade::i18n::tr("Fetching photo..."));
+        census::note("trackphoto:pending:", ht.t.id);
+        return;
+    }
+    if (st != TrackPhotoCache::State::Ready || photo == nullptr) { return; }
+    // At most the panel's width and a short panel's worth of height: a
+    // thumbnail beside the details, not a poster over them.
+    const PhotoFit fit = fitPhoto(photo->width, photo->height, maxW, 280.0f);
+    if (fit.w <= 0.0f) { return; }
+    ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(photo->texture)),
+                 ImVec2(fit.w, fit.h));
+    // THE CENSUS (tests/test_track_photo_app): where the picture is and what
+    // the credit under it says.
+    if (census::enabled()) {
+        census::rect(std::string("trackphoto:") + ht.t.id, ImGui::GetItemRectMin().x,
+                     ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                     ImGui::GetItemRectMax().y);
+        census::note("trackphoto:credit:", photo->credit);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::SetTooltip("%s\n%s", cascade::i18n::tr("Open this photo's page in your browser"),
+                          photo->link.c_str());
+    }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && openLink) { openLink(photo->link); }
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + fit.w);
+    ImGui::TextUnformatted(photo->credit.c_str());
+    ImGui::PopTextWrapPos();
 }
 
 // The block for one target, gathered and drawn. The two-step version above is

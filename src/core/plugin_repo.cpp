@@ -332,6 +332,7 @@ const CapabilityName kCapabilityNames[] = {
     {"CASCADE_CAP_RECEIVER_LOCATOR", CASCADE_CAP_RECEIVER_LOCATOR},
     {"CASCADE_CAP_TX_AUDIO", CASCADE_CAP_TX_AUDIO},
     {"CASCADE_CAP_IMAGE_INPUT", CASCADE_CAP_IMAGE_INPUT},
+    {"CASCADE_CAP_TRACK_PHOTO", CASCADE_CAP_TRACK_PHOTO},
 };
 
 // Reads the shop-window fields of one catalogue entry into `e`. Never fails.

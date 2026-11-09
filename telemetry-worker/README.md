@@ -43,13 +43,34 @@ program keeps running) and eighteen more words for the handled faults a survey o
 2026-10-28 found - `readerleak`, `closeleak`, `linkstranded`, `streamrestart`,
 `tunerretry`, `latecall`, `scanlimit`, `usbstuck`, `ratesdefault`, `gainrefused`,
 `ppmrefused`, `iqfilegone`, `cataloguebad`, `catstop`, `filekept`, `takeheader`,
-`sentinelgone`, `displaywatch`: deploy this Worker before 0.99.100 ships.
+`sentinelgone`, `displaywatch`: deploy this Worker before 0.99.100 ships. And for
+**0.99.107**, which adds the `setup.<kind>.<family>` event: what the first-run radio
+check found on the computer (usable, wrong driver, vendor software missing, not
+listed, no radio on the bus, not checked), the answer to why a computer that never
+opened a radio has none. Deploy this Worker before it ships, or the findings are
+dropped (the rest of the record is still taken); `worker.test.mjs` shows the 0.99.67
+Worker doing exactly that. `usage.ps1` prints them under "Why there is no working
+radio".
 
 The release that carries the per-thread watchdog (docs/engine-stage4.md 6.27) adds one more, `recovered.threadwedge` (a worker thread stopped answering and the watchdog reported it by name): the same rule - deploy this Worker before that release ships, or the count of how often a worker wedges in the field is dropped. (Nothing was deployed by the change that adds the word.)
 
 The release that carries the plugin containment (docs/engine-stage4.md 6.28) adds four more, `recovered.pluginfault` (the host absorbed a fault inside a plugin's call), `recovered.pluginquarantine` (a plugin was switched off for the session), `recovered.pluginwedge` (a plugin call never returned, or an unload timed out inside one) and `recovered.pluginoveruse` (a plugin call overran its budget; once a session): the same rule - deploy this Worker before that release ships, or those counts are dropped. The words carry no plugin id; which plugin it was is in the crash reports' `blamed-plugin` fields, not here. (Nothing was deployed by the change that adds the words.)
 
 Merging master's 0.99.100 into the engine branch (docs/engine-merge-0.99.100.md) joined those five words (the four above and `recovered.threadwedge`) to master's thirty-three, so the Worker's family is thirty-eight words, in master's order and then the branch's; every one is also an issue report (core/issue_report.hpp). Deploy-before applies to the whole union: the branch's release ships after a Worker that has all thirty-eight (`worker.test.mjs`, the merged-vocabulary test).
+
+**The early-warning words are the same case again** (field-early-warning): `recovered.devlatch` (an SDRplay
+stream failure latched the source) and `recovered.softgl` (the window is drawn by the software OpenGL
+renderer) are new words of the `recovered` family, so **this Worker is deployed before the application that
+sends them ships**. The Worker as 0.99.95 shipped it, kept byte for byte in `test-fixtures/worker-0.99.95.js`,
+is the one `worker.test.mjs` shows dropping them. The site's `health_vocabulary.json` carries the same two words.
+
+**The stage words are the same case once more** (field-early-warning): `reached.<stage>` - `launched`,
+`window`, `enumerated`, `streaming`, `audio`, `webspectrum`, `working` - says how far a session got and
+whether it achieved a working radio, and is a new EVENT of the vocabulary (the first one in the written
+order), so **this Worker is deployed before the application that sends them ships**: the 0.99.95 Worker,
+kept in `test-fixtures/worker-0.99.95.js`, drops every one of them (the record is still taken, and a record
+of nothing else is "not reported" there). They add no column: they ride in `blob13` as `reached.launched=1,
+reached.window=1,...` and are counted by none of `double6`..`double12`.
 
 ## The columns of `foxsdr_usage`
 
@@ -68,6 +89,7 @@ corrupts every row written before.
 | `blob12` | `'1'` when this client sent failure counts (`health`), else `''` |
 | `blob13` | the counts, `token=count,token=count` from the fixed vocabulary, canonical order: failures, then `slow.<scope>.<tier>`, then `recovered.<what>`; `''` when nothing was counted - meaningful only where `blob12 = '1'` |
 | `blob14` | `'1'` when this client sent the unclean-exit split by cause (`exits_died`, `exits_killed`, `exits_ended`, `exits_unknown`), else `''` (0.99.69) |
+| `blob15` | the **update channel** setting, `stable` or `beta` (field-early-warning, from 0.99.96); `''` when the client did not send it or sent anything else. Not `blob8`: that is where the copy came from (store, installer...), this is which releases it asked to be offered (`AppConfig::updateChannel`, since 0.99.88). The site splits each version's crash, freeze and health rates by it. **Always ask with `blob15 != ''`; `''` is "not reported", never "stable".** Deploy the Worker before the application that sends `uch`: the old Worker answers 204 and drops it. |
 | `double1` | launches since install (lifetime) |
 | `double2` | unclean exits since install (lifetime) |
 | `double3` | length of the session the record describes, seconds |
@@ -85,8 +107,8 @@ corrupts every row written before.
 | `double15` | unclean exits that were the operating system closing the session - **ended** (lifetime) - only where `blob14 = '1'` |
 | `double16` | unclean exits with no evidence of how they ended - **unknown** (lifetime) - only where `blob14 = '1'` |
 
-Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob14`
-and `double1`..`double16` are used: 6 blobs and 4 doubles are free. Slow frames and
+Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob15`
+and `double1`..`double16` are used: 5 blobs and 4 doubles are free. Slow frames and
 recoveries took no blob (they ride in `blob13`) and three doubles; the unclean-exit split
 took one blob (its marker) and four doubles. (The 16 KB limit on a row's blobs is
 nowhere near: `blob13` is never more than 832 characters.)
@@ -244,6 +266,9 @@ it".
 | opened radios that never delivered | `sum(double7) - sum(double8)` where `blob12 = '1'` |
 | sessions that had sound | `sum(double9)` where `blob12 = '1'` (a session count: `sound_ok` is once a session) |
 | builds that do not measure it | every `blob1` seen, minus those with `blob12 = '1'` |
+| sessions that measured how far they got | `blob12 = '1' AND startsWith(blob13, 'reached.launched=')` - `reached` is first in the written order, and the count of `reached.launched` is how many sessions the record describes (a failed send makes a record carry more than one) |
+| sessions that reached a stage | the same, with the stage's token in `blob13` (`position('reached.working=' IN blob13) > 0`); the count in the string is how many of the record's sessions did |
+| builds that do not measure the stages | every `blob1` seen, minus those whose rows have `reached.launched=` - **not measured, never "got nowhere"** (an old build, or Diagnostics off, sends no stage word at all) |
 | slow frames by version | `sum(double10)` and `sum(double11)` where `blob12 = '1'`, grouped by `blob1`, **keeping only the versions that measure them (0.99.65 and later)**; per 1,000 records: `1000 * sum(double10) / count()` |
 | installs with any slow frame | `count(DISTINCT index1)` where `blob12 = '1' AND double10 > 0` (a 0.99.64 row never qualifies, so this needs no version rule) |
 | installs with slow frames in one scope | `blob12 = '1' AND (startsWith(blob13, 'slow.SCOPE.') OR position(',slow.SCOPE.' IN blob13) > 0)`, with `count(DISTINCT index1)` |
@@ -269,6 +294,16 @@ Compatibility, as `worker.test.mjs` measures it:
 | 0.99.65 | the 0.99.64 Worker (`test-fixtures/worker-health-counts.js`, the one deployed today) | 204 | the failure tokens as before, `slow` and `recovered` tokens dropped, `double6..9` right, no `double10..12`; a record with only the new families is *not reported* there - which is why the new Worker is deployed first |
 | 0.99.65, the longest record the client writes (832 characters) | the 0.99.64 Worker | 204 | every failure token read - a record is never longer than that Worker's own limit |
 | a bad id, GET, bad JSON, over 4096 bytes | new | 400, 405, 400, 413 | nothing (unchanged) |
+
+## The heartbeat dataset, and the uptime canary
+
+A heartbeat (`{"id": ..., "v": ..., "beat": 1}`) is written to its OWN dataset, `foxsdr_heartbeat`
+(`index1` the install id, `blob1` the version), never to `foxsdr_usage`. The website reads it for one
+thing: whether ANYTHING has arrived in the last hour (the ingestion-silence alert, `watchers.go`). The
+Uptime workflow (`.github/workflows/uptime.yml`) therefore sends one beat every fifteen minutes from the
+reserved install id `5afe5afe5afe5afe5afe5afe5afe5afe` with version `0.0.0-canary`, so the dataset is fed
+around the clock; the website leaves that id out of every usage statement (`notUsers`), and a reader of
+this dataset that counts installs must leave it out too.
 
 ## Reading the numbers
 

@@ -533,8 +533,13 @@ void checkTheOpenIsNotMadeOnTheGuiThread() {
     CHECK(functionBody(engine, "void Engine::pumpWorkers()").find("pollDiskJobs();") != std::string::npos);
     CHECK(functionBody(source, "void Engine::pollDiskJobs()").find("pollIqOpen();") != std::string::npos);
     // The button is the op and nothing more: no file call and no source of its own in the window.
-    CHECK(window.find("uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, std::string(\"file:\") + iqPath_));") != std::string::npos);
+    // (Since the I/Q row gained its Browse key and its empty-box rule the submit is made by AppWindow::openIqFile, in app_window_disk_work.cpp,
+    // which the Open key, the Browse key and a dropped recording all call; the row's key calls it.)
+    const std::string diskWork = withoutLineComments(readFileText(src / "gui" / "app_window_disk_work.cpp"));
+    CHECK(diskWork.find("uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, std::string(\"file:\") + path));") != std::string::npos);
+    CHECK(window.find("if (ImGui::Button(trId(\"Open\"))) { openIqFile(); }") != std::string::npos);
     CHECK(window.find("IqFileSource") == std::string::npos);
+    CHECK(diskWork.find("IqFileSource") == std::string::npos);
 }
 
 }  // namespace

@@ -138,6 +138,16 @@ set_target_properties(track_probe_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_track/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_track/$<CONFIG>")
 
+# A REAL PLUGIN MODULE THAT LOOKS TARGETS UP AND HAS THEIR PHOTOS (0.99.98), for
+# test_track_photo_app: CASCADE_CAP_TRACK_INFO with CASCADE_CAP_TRACK_PHOTO on its instance, a
+# picture made in memory, and every photo call written to PHOTO_PROBE_LOG. Its own directory.
+add_library(photo_probe_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/photo_probe_plugin.cpp")
+target_include_directories(photo_probe_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(photo_probe_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_photo/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_photo/$<CONFIG>")
+
 # A REAL PLUGIN MODULE WHOSE PANEL ROWS ARE KEYS (0.99.77), for test_row_keys_app: a programme
 # chooser that marks its rows CASCADE_ROW_FLAG_KEY only when get_state says the host draws them
 # (CASCADE_STATE_ROW_KEYS), registers its commands with add_command, and writes every press it is
@@ -493,6 +503,14 @@ foreach(src ${CASCADE_TESTS})
         # (the _stepped variant the pass seam adds - the test is the engine's since stub batch B9 - is handed the same fixture module)
         set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:programme_audio_fixture>")
         add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
+    elseif(name STREQUAL "test_track_photo_app")
+        # Runs the real cascade.exe (built first) with the track fixture (one aircraft with an ICAO
+        # address) and the photo fixture fitted, opens the aircraft's details from its map page's
+        # list, and reads from the UI census and the fixture's call log that the photo is drawn
+        # with its credit, opens its page when clicked, and is let go when the details close.
+        add_dependencies(${name} track_probe_fixture photo_probe_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>"
+                 "$<TARGET_FILE:photo_probe_fixture>")
     elseif(name STREQUAL "test_viewport_fallback_app")
         # Runs the real cascade.exe (built first) with the track fixture's map page, the plugin store
         # and the Fitted modules window open as separate windows, has the backend refuse the next
@@ -542,6 +560,13 @@ foreach(src ${CASCADE_TESTS})
         # import box (FOXSDR_BOOKMARK_IMPORT), presses Import and the window's keys with the input
         # script, and reads the window's parts from the UI census, whether it is still up from the
         # screenshot's window list, and the rows from the bookmarks file the run leaves (0.99.80).
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_iq_file_box_app")
+        # Runs the real cascade.exe (built first) with a recording as the saved I/Q file, presses the
+        # Source row's Browse and Open keys and pastes into its box with the input script (the file
+        # dialog answered by FOXSDR_FILE_PICK, the paste from the scripted clipboard), and reads the
+        # row's parts from the UI census, the log the run leaves and the config it saves (2026-10-29).
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
@@ -1012,6 +1037,10 @@ endif()
 if(TEST test_tester_host_only)
     set_tests_properties(test_tester_host_only PROPERTIES TIMEOUT 300)
 endif()
+# The kill-switch test starts the real application six times, 60 frames each.
+if(TEST test_withdrawn_app)
+    set_tests_properties(test_withdrawn_app PROPERTIES TIMEOUT 300)
+endif()
 # The deck-knobs test starts the real application dozens of times (as a child of
 # itself, so that a fake radio can sit behind the window; the noise-floor and Airband
 # runs hold a few seconds of real time each): 46 s on this desktop before the Airband
@@ -1096,6 +1125,11 @@ endif()
 if(TEST test_map_coverage_app)
     set_tests_properties(test_map_coverage_app PROPERTIES TIMEOUT 300)
 endif()
+# The track-photo test starts the real application three times (the list alone, the details
+# opened, and opened-clicked-closed), up to 160 frames each.
+if(TEST test_track_photo_app)
+    set_tests_properties(test_track_photo_app PROPERTIES TIMEOUT 600)
+endif()
 # The viewport-fallback test starts the real application three times (refused mid-run, one viewport
 # from the start, and the control that keeps separate windows), 110 frames each.
 if(TEST test_viewport_fallback_app)
@@ -1157,6 +1191,11 @@ endif()
 # the generous bound its siblings are.
 if(TEST test_import_dialog_app)
     set_tests_properties(test_import_dialog_app PROPERTIES TIMEOUT 600)
+endif()
+# Six starts of the real application, 50 to 60 frames each (the I/Q-file row's layout, Browse, an
+# emptied box's Open, its cancel, a paste and its control); the same bound as its siblings.
+if(TEST test_iq_file_box_app)
+    set_tests_properties(test_iq_file_box_app PROPERTIES TIMEOUT 600)
 endif()
 # The display-menu test starts the real application twenty-three times (the menu on the waterfall and the
 # spectrum, Manual with its sliders, the ten-decibel rule, Reset, a restart, a 0.99.75 config, a patch
@@ -1510,6 +1549,7 @@ set(CASCADE_GUI_TESTS
     test_gps_app
     test_health_app
     test_import_dialog_app
+    test_iq_file_box_app
     test_main_view
     test_map_coverage_app
     test_markers_window_app
@@ -1545,7 +1585,9 @@ set(CASCADE_GUI_TESTS
     test_tester_usage
     test_tester_usage_app
     test_theme_census
+    test_withdrawn_app
     test_tx_audio_page_app
+    test_track_photo_app
     test_tx_audio_plate_app
     test_typed_band_mode_app
     test_band_follow_app

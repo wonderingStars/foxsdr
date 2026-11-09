@@ -34,6 +34,7 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/event_trail.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -203,6 +204,12 @@ int faultChild(int kind, const std::string& dir, bool enabled) {
     setWindowSystem("wayland");
     refreshModuleTable();
 
+    // WHAT LED UP TO IT (field-early-warning, core/event_trail.hpp): three state transitions the
+    // application would have noted, which the fault handler must write down in the process block.
+    cascade::core::trail::noteSource(true, "rtlsdr");
+    cascade::core::trail::noteMode(1);
+    cascade::core::trail::note(cascade::core::trail::Event::RecStart);
+
     CrashHandlerConfig cfg;
     cfg.crashDir = dir;
     cfg.enabled = enabled;
@@ -284,6 +291,25 @@ void checkReportContent(const CaughtReport& r, const char* what) {
     CHECK(stackAt != std::string::npos && processAt > stackAt);
     CHECK(r.text.find("uptime-sec: ") != std::string::npos);
     CHECK(r.text.find("fault-thread-own: yes") != std::string::npos);
+    // THE TRAIL, written on the fault path with no allocation: the three transitions the child
+    // noted, oldest first, in the process block, each a whole entry of the closed tables, and
+    // the line survives the uploader's own check unchanged.
+    {
+        const std::size_t at = r.text.find("\ntrail: ", processAt);
+        CHECK(at != std::string::npos);
+        if (at != std::string::npos) {
+            const std::size_t eol = r.text.find('\n', at + 1);
+            std::string line = r.text.substr(at + 8, eol - at - 8);
+            while (!line.empty() && line.back() == '\r') { line.pop_back(); }
+            std::printf("crash trail: %s\n", line.c_str());
+            const std::size_t a1 = line.find(":src-open.rtlsdr;");
+            const std::size_t a2 = line.find(":mode.wfm;");
+            const std::size_t a3 = line.find(":rec-start");
+            CHECK(a1 != std::string::npos && a2 != std::string::npos && a3 != std::string::npos);
+            CHECK(a1 < a2 && a2 < a3);
+            CHECK(cascade::core::trail::sanitise(line) == line);
+        }
+    }
 
     // Application context: which plugin was loaded has already been the
     // answer to real faults in this product.

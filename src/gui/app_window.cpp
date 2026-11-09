@@ -85,6 +85,8 @@
 #include "dsp/window.hpp"
 #include "gui/bookmark_marker_geometry.hpp"
 #include "gui/freq_marker_layout.hpp"
+#include "gui/iq_file_box.hpp"
+#include "gui/paste_files.hpp"
 #include "gui/press_gesture.hpp"
 #include "gui/fonts.hpp"
 #include "gui/text_fit.hpp"
@@ -1000,6 +1002,13 @@ int AppWindow::run(int frames) {
         tellUserWindowFailed("the OpenGL driver is older than 3.0", frames, softwareTried);
         return 1;
     }
+    // THE EARLY-WARNING COUNT OF THE SOFTWARE RENDERER (health word `softgl`, once a session): the
+    // window this run draws is Mesa's llvmpipe, by the automatic fallback after the graphics driver
+    // was refused or by FOXSDR_GL=software. The ledger holds the count in memory until reporting is
+    // decided (core/health_events.hpp), so this early place is safe.
+    if (cascade::gui::softgl::loaded()) {
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::SoftGl);
+    }
     // THE INTERFACE SCALE'S "auto": the monitor this window is about to open
     // on, read BEFORE anything below is sized against it - GLFW already
     // knows a hidden window's target monitor content scale. FOXSDR_UI_SCALE
@@ -1259,6 +1268,10 @@ int AppWindow::run(int frames) {
     // platform but Windows) the window keeps the frame the desktop gave it
     // and drawCabinetRail draws no keys.
     cascade::gui::frame::install(window);
+    // A FILE COPIED IN EXPLORER PASTES AS ITS PATH (gui/paste_files.hpp, 2026-10-29): the backend's clipboard reader knows text alone, and a copied
+    // file is a list of files, so Ctrl+V over a copied recording pasted nothing. Wrapped once the backend has installed its reader, which the
+    // wrapper asks first.
+    cascade::gui::installFilePaste();
     glfwShowWindow(window);
     cascade::core::diagLogf("window: window shown; the Dear ImGui backends are up");
     glUp_ = true;   // from here closeWindow() has the GL context, ImGui and GLFW to take down (shell retirement R8)
@@ -1322,6 +1335,13 @@ int AppWindow::run(int frames) {
         // press, the commit, the import, the plugin seeing settings_seq move - can. Bounded runs only: an interactive session can never have its
         // file dialog replaced by a stray variable.
         if (const char* pickSeam = std::getenv("FOXSDR_FILE_PICK"); pickSeam != nullptr) { filePickSeam_ = std::string(pickSeam); }
+        // WHAT WOULD HAVE BEEN OPENED, WITHOUT OPENING IT (0.99.98, AppWindow::shellOpen):
+        // FOXSDR_SHELL_OPEN_LOG=<path> appends each target there instead of handing it
+        // to the shell, so a test can click a link (a target photo's page) without a
+        // browser starting on the desktop it runs on. Bounded runs only.
+        if (const char* openLog = std::getenv("FOXSDR_SHELL_OPEN_LOG"); openLog != nullptr && *openLog != '\0') {
+            shellOpenLog_ = std::string(openLog);
+        }
         // A DLL to map on frame 90, standing in for another program's injected hook (foreignModuleTestPath_ in the header). Bounded
         // runs only, like every hook here.
         if (const char* fm = std::getenv("CASCADE_FOREIGN_MODULE_TEST"); fm != nullptr && *fm != '\0') {
@@ -3300,6 +3320,14 @@ void AppWindow::submitPendingDrop() {
     if (pendingDropPath_.empty()) { return; }
     const std::string dropped = std::move(pendingDropPath_);
     pendingDropPath_.clear();
+    // A WAV IS A RECORDING TO PLAY, not a frequency list to import (2026-10-29, the same report that found the I/Q file's row could not be pasted
+    // into): it goes to the I/Q file's box and is opened as Open would open it - the combo moves to that row so the box, and the open's answer, are
+    // drawn where the file went. Before this a dropped recording was tried as a frequency list and the IMPORT window opened to say it was not one.
+    if (cascade::gui::isWavName(dropped)) {
+        cascade::core::diagLogf("source: a WAV file was dropped on the window; opening it as the I/Q file");
+        openIqFileAt(dropped);
+        return;
+    }
     importBookmarkFile(dropped, importDialogOpen_ ? importDialogInto_ : cascade::core::ImportInto{});
 }
 
@@ -3754,6 +3782,9 @@ void AppWindow::drawUi() {
         basemap_.endFrame();
     }
     basemapUsedThisFrame_ = false;
+    // Target photos are kept only while their details are drawn (0.99.98,
+    // gui/track_photo_cache.hpp): after every surface that shows one.
+    trackInfo_.photos().endFrame();
 
     // (The scanner's frame driver ran near the top, after the command drain:
     // see the call there for why it moved in stage 1.)
@@ -7567,6 +7598,11 @@ cascade::gui::ShellPauseHooks AppWindow::watchdogShellHooks() {
 }
 
 bool AppWindow::shellOpen(const std::string& target) {
+    if (shellOpenLog_.has_value()) {
+        std::ofstream log(*shellOpenLog_, std::ios::app | std::ios::binary);
+        log << target << "\n";
+        return static_cast<bool>(log);
+    }
     return cascade::gui::runShellOpenResponsive(watchdogShellHooks(), [&target]() -> bool {
 #if defined(_WIN32)
         SHELLEXECUTEINFOA sei{};
@@ -8077,19 +8113,32 @@ void AppWindow::drawSourceSection() {
     // and destroys a throwaway IqFileSource without ever touching the
     // pipeline, so there is nothing to roll back.
     if (c.row == 1) {
-        ImGui::SetNextItemWidth(-60.0f);
+        // THE BOX, A BROWSE KEY AND OPEN (the Browse key since 2026-10-29: a tester found a row he could neither choose a file in nor paste one into,
+        // see core/iq_file_box.hpp). Browse is drawn only where there is a file dialog to open - the system's on Windows, zenity or kdialog on Linux, the
+        // FOXSDR_FILE_PICK seam in a bounded run - never a key that does nothing; Open over an empty box opens the same dialog (openIqFile). The widths:
+        // the keys take what they need, the box the rest.
+        const float keyW = ImGui::CalcTextSize(trId("Open")).x + 2.0f * ImGui::GetStyle().FramePadding.x;
+        const float browseW = filePickOffered_ ? ImGui::CalcTextSize(tr("Browse...")).x + 2.0f * ImGui::GetStyle().FramePadding.x : 0.0f;
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetNextItemWidth(-(keyW + spacing + (filePickOffered_ ? browseW + spacing : 0.0f)));
         ImGui::InputText("##iq_path", iqPath_, sizeof(iqPath_));
+        cascade::gui::census::rect("source:iqpath", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                   ImGui::GetItemRectMax().y);
         ImGui::SameLine();
         // DISABLED WHILE THE HEADER IS BEING READ (0.99.64, stub campaign B19): the engine reads it on a worker (fact.source.iqOpening), and a second
         // press would only be ignored; a wait of a second or more says it is the disk's and not the window's.
         ImGui::BeginDisabled(iqOpenPending());
-        if (ImGui::Button(trId("Open"))) {
-            // SELECT_SOURCE "file:<path>" (openIqFile): the pipeline keeps
-            // what it has unless the file opens. A path past 255 bytes rides
-            // in the command's long text.
-            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, std::string("file:") + iqPath_));
+        if (filePickOffered_) {
+            if (ImGui::Button(trId("Browse...##iq_browse"))) { browseIqFile(); }
+            cascade::gui::census::rect("source:iqbrowse", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                       ImGui::GetItemRectMax().y);
+            ImGui::SameLine();
         }
+        if (ImGui::Button(trId("Open"))) { openIqFile(); }
+        cascade::gui::census::rect("source:iqopen", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                   ImGui::GetItemRectMax().y);
         ImGui::EndDisabled();
+        if (!iqBoxNote_.empty()) { ImGui::TextWrapped("%s", iqBoxNote_.c_str()); }
         if (iqOpenPending() && iqOpenElapsedS() >= 1.0) {
             ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"), iqOpenElapsedS());
         }
@@ -11415,10 +11464,11 @@ void AppWindow::applyInputScript(long frame) {
             case cascade::gui::ScriptStep::Verb::Key: {
                 // A down and an up in one frame is still two frames to ImGui:
                 // its input queue trickles them, so the key is seen pressed.
-                if (st.arg == "ctrl+a") {
+                if (st.arg == "ctrl+a" || st.arg == "ctrl+v") {
+                    const ImGuiKey letter = (st.arg == "ctrl+a") ? ImGuiKey_A : ImGuiKey_V;
                     io.AddKeyEvent(ImGuiMod_Ctrl, true);
-                    io.AddKeyEvent(ImGuiKey_A, true);
-                    io.AddKeyEvent(ImGuiKey_A, false);
+                    io.AddKeyEvent(letter, true);
+                    io.AddKeyEvent(letter, false);
                     io.AddKeyEvent(ImGuiMod_Ctrl, false);
                     break;
                 }
@@ -11436,6 +11486,15 @@ void AppWindow::applyInputScript(long frame) {
             }
             case cascade::gui::ScriptStep::Verb::Text:
                 io.AddInputCharactersUTF8(st.arg.c_str());
+                break;
+            case cascade::gui::ScriptStep::Verb::Paste:
+                // The text goes on the SCRIPTED clipboard (gui/paste_files.hpp), never the desk's, and Ctrl+V is tapped as ctrl+a is above: the
+                // paste then runs through Dear ImGui's own shortcut, filter and buffer checks against the field that holds the keys.
+                cascade::gui::setScriptedClipboard(st.arg);
+                io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                io.AddKeyEvent(ImGuiKey_V, true);
+                io.AddKeyEvent(ImGuiKey_V, false);
+                io.AddKeyEvent(ImGuiMod_Ctrl, false);
                 break;
             case cascade::gui::ScriptStep::Verb::Wheel:
                 io.AddMouseWheelEvent(0.0f, st.y);
@@ -13548,7 +13607,7 @@ void AppWindow::applyDirectiveAfter(const cascade::core::PluginDirectiveFacts& d
     const CascadeBasemapApi* basemap = d.basemap;
     if (basemap == nullptr && basemapStandIn_) { basemap = cascade::gui::standInBasemap(); }
     basemap_.attach(basemap, d.basemapPlugin);
-    trackInfo_.attach(d.trackInfo, d.trackInfoPlugin);
+    trackInfo_.attach(d.trackInfo, d.trackInfoPlugin, d.trackPhoto);
     // DEMONSTRATION instruments open their windows by themselves: the one deliberate exception to "nothing opens but by your hand"
     // (0.79.1), safe because a demonstration exists only when a developer set FOXSDR_DEMO_INSTRUMENT for this launch. The window that
     // rebuilt them shows them - the engine used to ask for it through a hook. (Not for a wake or a sleep of one plugin: nothing was
@@ -15878,6 +15937,8 @@ void AppWindow::drawTargetDetailsSection() {
     }
 
     drawTrackDetailOf(*found, &trackInfo_, receiverPositionKnown(), uiState_.rxLatDeg, uiState_.rxLonDeg);
+    // Its photo, where the plugin offers one (0.99.98).
+    cascade::gui::drawTrackPhoto(*found, &trackInfo_, ImGui::GetContentRegionAvail().x, [this](const std::string& link) { shellOpen(link); });
     ImGui::Separator();
     // The same two gestures the details window offers, so acting on what was
     // just read never requires finding the row it came from. Both land on the
@@ -15954,6 +16015,7 @@ void AppWindow::drawTargetDetailsWindow() {
             ImGui::TextDisabled("%s", tr("No longer being reported."));
         } else {
             drawTrackDetailOf(*found, &trackInfo_, receiverPositionKnown(), uiState_.rxLatDeg, uiState_.rxLonDeg);
+            cascade::gui::drawTrackPhoto(*found, &trackInfo_, ImGui::GetContentRegionAvail().x, [this](const std::string& link) { shellOpen(link); });
             ImGui::Separator();
             // The same two gestures the row offers, as named buttons: the
             // details window is reachable from a row, and a user who got here
@@ -15984,6 +16046,11 @@ void AppWindow::drawTargetDetailsWindow() {
         }
         ImGui::Separator();
         if (ImGui::Button(trId("Close"))) { detailsOpen_ = false; }
+        if (cascade::gui::census::enabled()) {
+            cascade::gui::census::rect("details:close", ImGui::GetItemRectMin().x,
+                                       ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                       ImGui::GetItemRectMax().y);
+        }
     }
     endPage();
     // Cleared only once the window is actually shut, so the id survives being

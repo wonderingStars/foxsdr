@@ -37,6 +37,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/event_trail.hpp"
 #include "core/frame_timing.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/phase_clock.hpp"
@@ -210,6 +211,11 @@ int main() {
         beatFor(w, 1600);
         CHECK(w.reportsWritten() == 0u);
 
+        // WHAT LED UP TO IT (field-early-warning, core/event_trail.hpp): two transitions the
+        // application would have noted before the stall below. The freeze report must carry them.
+        cascade::core::trail::resetForTest();
+        cascade::core::trail::noteSource(true, "hackrf");
+        cascade::core::trail::noteMode(4);
         // Now stall. 3x the threshold, plus the poll interval. The stall is INSIDE
         // A PART OF THE FRAME (0.99.64): this thread opens the scope `rail`, as
         // the window's thread does while it draws the rail, and stops there.
@@ -242,6 +248,24 @@ int main() {
         // inside a reload step is asserted after the recovery block.
         CHECK(text.find("\nreload-phase: none\n") != std::string::npos);
         CHECK(text.find("\nreload-phase: ") < text.find("--- context ---"));
+        // THE TRAIL, in the process block (before the stacks, like uptime-sec): the two
+        // transitions above, oldest first, whole entries of the closed tables.
+        {
+            const std::size_t proc = text.find("--- process ---");
+            const std::size_t at = text.find("\ntrail: ", proc);
+            CHECK(proc != std::string::npos && at != std::string::npos);
+            CHECK(at < text.find("--- thread"));
+            if (at != std::string::npos) {
+                const std::size_t eol = text.find('\n', at + 1);
+                std::string line = text.substr(at + 8, eol - at - 8);
+                while (!line.empty() && line.back() == '\r') { line.pop_back(); }
+                std::printf("freeze trail: %s\n", line.c_str());
+                const std::size_t a1 = line.find(":src-open.hackrf;");
+                const std::size_t a2 = line.find(":mode.usb");
+                CHECK(a1 != std::string::npos && a2 != std::string::npos && a1 < a2);
+                CHECK(cascade::core::trail::sanitise(line) == line);
+            }
+        }
 
         // THE INVENTORY, BOTH DIRECTIONS. Present-and-correct was already
         // asserted above; this asserts EXHAUSTIVE. PRIVACY.md lists what a
@@ -340,6 +364,12 @@ int main() {
             const std::string third = readFile(fs::path(w.lastReportPath()));
             CHECK(third.find("\nframe-scope: plugins-reload\n") != std::string::npos);
             CHECK(third.find("\nreload-phase: unload\n") != std::string::npos);
+            // AND THE STEP IS IN THE TRAIL TOO: the publishing clock notes each step it enters,
+            // so a reload that went on to freeze says which step began last.
+            const std::size_t at = third.find("\ntrail: ");
+            CHECK(at != std::string::npos);
+            CHECK(at != std::string::npos &&
+                  third.find(":rescan.unload", at) < third.find('\n', at + 1));
         }
 
         w.stop();

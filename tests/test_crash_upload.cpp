@@ -1044,6 +1044,125 @@ int main() {
         CHECK(c.reloadPhase.empty());
     }
 
+    // --- The breadcrumb trail rides in the context (field-early-warning) -----
+    //
+    // Both fault writers put a `trail:` line in the `--- process ---` block: the last thirty
+    // state transitions (core/event_trail.hpp), oldest first, `<secs>:<event>[.<word>]` joined by
+    // `;`. It goes up as ONE string, `context.trail`, and - like frame-scope and reload-phase -
+    // only entries that are members of the closed tables are ever forwarded, because the line is
+    // read back off a file on disk that a hand or a later build may have written.
+    {
+        auto withTrail = [](std::string text, const std::string& value) {
+            const std::string line = "trail: " + value + "\n";
+            const std::string proc = "--- process ---\n";
+            const std::size_t at = text.find(proc);
+            if (at != std::string::npos) {
+                text.insert(at + proc.size(), line);
+            } else {
+                const std::size_t mods = text.find("--- modules ---\n");
+                CHECK(mods != std::string::npos);
+                if (mods != std::string::npos) { text.insert(mods, proc + line); }
+            }
+            return text;
+        };
+        const std::string good = "412:src-open.rtlsdr;405:mode.wfm;3:rescan.unload;0:rec-start";
+        for (const std::string& base : {crashReportText(), hangReportText()}) {
+            ParsedReport r;
+            CHECK(parseReportText(withTrail(base, good), r));
+            CHECK(r.trail == good);
+            const nlohmann::json j = parseOrEmpty(uploadJson(r, std::string()));
+            CHECK(j["context"].value("trail", std::string("x")) == good);
+        }
+        // Entries that are not members of the tables are dropped one by one, the rest kept in
+        // order: a path, a serial number, a frequency, an address, a plugin's name, a bad time.
+        {
+            ParsedReport r;
+            CHECK(parseReportText(
+                withTrail(hangReportText(),
+                          "9:src-open.rtlsdr;C:\\Users\\someone\\rec.wav;8:mode.wfm;7:src-open.0000000123;"
+                          "6:rec-start.145500000;5:rescan.my-plugin;1000000:rec-stop;4:plug-fit;"
+                          "x:rec-stop;3:src-close.192.168.1.7;2:rec-stop"),
+                r));
+            CHECK(r.trail == "9:src-open.rtlsdr;8:mode.wfm;4:plug-fit;2:rec-stop");
+        }
+        // More than thirty entries: the newest thirty.
+        {
+            std::string many;
+            for (int i = 0; i < 45; ++i) {
+                many += (many.empty() ? "" : ";") + std::to_string(500 - i) + ":rec-start";
+            }
+            ParsedReport r;
+            CHECK(parseReportText(withTrail(crashReportText(), many), r));
+            std::size_t entries = r.trail.empty() ? 0 : 1;
+            for (char ch : r.trail) { entries += (ch == ';') ? 1 : 0; }
+            CHECK(entries == 30);
+            CHECK(r.trail.rfind("485:rec-start;", 0) == 0);          // entries 16..45 of 45
+            CHECK(r.trail.size() >= 13 && r.trail.substr(r.trail.size() - 13) == "456:rec-start");
+        }
+        // `none` (what the writers say for an empty ring), an empty value, and a report with no
+        // line at all (every report before this build) all answer empty - and the key is still in
+        // the payload, because the inventory is exact both ways.
+        for (const char* nothing : {"none", "", "garbage", "5 :rec-start"}) {
+            ParsedReport r;
+            CHECK(parseReportText(withTrail(hangReportText(), nothing), r));
+            CHECK(r.trail.empty());
+        }
+        ParsedReport plain;
+        CHECK(parseReportText(crashReportText(), plain));
+        CHECK(plain.trail.empty());
+        const nlohmann::json pj = parseOrEmpty(uploadJson(plain, std::string()));
+        CHECK(pj["context"].contains("trail"));
+        CHECK(pj["context"].value("trail", std::string("x")).empty());
+        // A line in the wrong section is not read: the header of a crash is not the process block.
+        {
+            std::string text = crashReportText();
+            text.insert(text.find("signature:"), "trail: 5:rec-start\n");
+            ParsedReport r;
+            CHECK(parseReportText(text, r));
+            CHECK(r.trail.empty());
+        }
+    }
+
+    // --- The update channel rides in the context (field-early-warning) ------
+    //
+    // The shared context block carries `update-channel:` (stable or beta, the Updates section's
+    // setting); it goes up as `context.updateChannel` so the receiving end can read each
+    // version's crash rate per channel. Only the two words are forwarded - the line is read back
+    // off a file on disk - and a report without it (every report before this build, a sentinel's)
+    // sends the key empty: the inventory is exact both ways.
+    {
+        auto withChannel = [](std::string text, const std::string& value) {
+            const std::string ctx = "--- context ---\n";
+            const std::size_t at = text.find(ctx);
+            CHECK(at != std::string::npos);
+            if (at != std::string::npos) { text.insert(at + ctx.size(), "update-channel: " + value + "\n"); }
+            return text;
+        };
+        for (const std::string& base : {crashReportText(), hangReportText()}) {
+            for (const char* ok : {"stable", "beta"}) {
+                ParsedReport r;
+                CHECK(parseReportText(withChannel(base, ok), r));
+                CHECK(r.updateChannel == ok);
+                const nlohmann::json j = parseOrEmpty(uploadJson(r, std::string()));
+                CHECK(j["context"].value("updateChannel", std::string("x")) == ok);
+            }
+            // (A trailing space is trimmed by the line parser for every key, so "beta " is "beta".)
+            for (const char* bad : {"(not recorded)", "", "Beta", "nightly", "beta x", "stable beta",
+                                    "C:/Users/someone/x", "beta; tuned to 145.500 MHz"}) {
+                ParsedReport r;
+                CHECK(parseReportText(withChannel(base, bad), r));
+                if (!r.updateChannel.empty()) { std::printf("FAIL channel \"%s\" was carried\n", bad); }
+                CHECK(r.updateChannel.empty());
+            }
+            ParsedReport plain;
+            CHECK(parseReportText(base, plain));
+            CHECK(plain.updateChannel.empty());
+            const nlohmann::json pj = parseOrEmpty(uploadJson(plain, std::string()));
+            CHECK(pj["context"].contains("updateChannel"));
+            CHECK(pj["context"].value("updateChannel", std::string("x")).empty());
+        }
+    }
+
     // --- Rubbish is refused rather than posted ------------------------------
     {
         ParsedReport r;

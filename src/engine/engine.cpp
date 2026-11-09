@@ -41,6 +41,7 @@
 #include "core/frame_timing.hpp"
 #include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
+#include "core/event_trail.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
 #include "core/issue_report.hpp"
@@ -526,6 +527,13 @@ void Engine::refreshDiagContext() {
     // seen at start and since. In the one builder, so a bundle and a fault report say the
     // same thing about it.
     ctx.foreignModules = foreignModules_.contextValue();
+    // The Updates setting (field-early-warning), so a report from a beta copy is read against the beta copies' own rate. One of two words; the
+    // context block says anything else is not recorded. The setting is the interface's half (core/config_halves.hpp): the engine holds the copy
+    // the interface last sent, under the half's own mutex.
+    {
+        std::lock_guard<std::mutex> halfLock(interfaceHalfMutex_);
+        ctx.updateChannel = interfaceCfg_.updateChannel;
+    }
     // The sound path: the same facts the Sinks panel's chip and the rail's
     // volume, mute and squelch controls show, none of them a frequency.
     {
@@ -3260,6 +3268,7 @@ void Engine::recordPluginUiStateLocked(const cascade::core::PluginDirective& d) 
         pluginUiState_->dormant = d.dormant;
         pluginUiState_->basemap = d.basemap;
         pluginUiState_->trackInfo = d.trackInfo;
+        pluginUiState_->trackPhoto = d.trackPhoto;
     }
 }
 
@@ -4011,6 +4020,8 @@ void Engine::removeInstalledPlugin(const std::string& fileName) {
     }
     std::string err;
     if (pluginRepo_.remove(pluginDir_, fileName, err)) {
+        // The breadcrumb trail (core/event_trail.hpp): a plugin was unfitted by the person.
+        cascade::core::trail::note(cascade::core::trail::Event::PlugUnfit);
         std::string removedBuf;
         cascade::core::formatUtf8(removedBuf, tr("Removed %s"), fileName.c_str());
         installReport_ = removedBuf;
@@ -4133,7 +4144,8 @@ void Engine::refreshPluginRunner() {
     const CascadeTrackInfoApi* wantTrackInfo = nullptr;
     std::string wantBasemapPlugin;
     std::string wantTrackInfoPlugin;
-    chooseBasemapAndTrackInfo(wantBasemap, wantTrackInfo, &wantBasemapPlugin, &wantTrackInfoPlugin);
+    const CascadeTrackPhotoApi* wantTrackPhoto = nullptr;
+    chooseBasemapAndTrackInfo(wantBasemap, wantTrackInfo, &wantBasemapPlugin, &wantTrackInfoPlugin, &wantTrackPhoto);
     // THE DIRECTIVE: what the plugin UI is to be built over, as values. The interface rebuilds its track sources, panels and
     // instruments, attaches the host table (the ABI's attach(), before any capability's create()) and the basemap and the
     // track-info client from it, on its own thread. Where that thread is not this one the wait is bounded and is NOT an error
@@ -4147,6 +4159,7 @@ void Engine::refreshPluginRunner() {
         d.services = std::move(svc);
         d.basemap = wantBasemap;
         d.trackInfo = wantTrackInfo;
+        d.trackPhoto = wantTrackPhoto;
         d.basemapPlugin = std::move(wantBasemapPlugin);
         d.trackInfoPlugin = std::move(wantTrackInfoPlugin);
         if (!deliverPluginDirective(std::move(d))) {
@@ -5600,6 +5613,9 @@ void Engine::finishTake(bool iq) {
     // False when there is no open file: never started, already stopped, or ended by the size limit (which closed its own file). Nothing to
     // finish, nothing to wait for.
     if (!rec.stopForFinish(req)) { return; }
+    // The breadcrumb trail (core/event_trail.hpp): a take ended - its file is handed to the finisher. Not noted when there was nothing to finish (never
+    // started, already stopped).
+    cascade::core::trail::note(cascade::core::trail::Event::RecStop);
     (iq ? iqFinish_ : audioFinish_) = cascade::core::RecordFinisher::submit(std::move(req));
 }
 
@@ -5703,6 +5719,8 @@ void Engine::finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, do
     }
     recordError_.clear();
     recordNotice_.clear();
+    // The breadcrumb trail (core/event_trail.hpp): a take began - its file opened and the recorder is armed. Neither kind is told apart: a take is a take.
+    cascade::core::trail::note(cascade::core::trail::Event::RecStart);
     if (iq) {
         iqRecordStartS_ = nowS;
         pipeline_.setIqRecorder(&iqRecorder_);
@@ -5801,6 +5819,8 @@ void Engine::stopReceiver(const char* who) {
     // seconds in, nothing recording, eight seconds before the death. An idle recorder has no tap to take out and no file to finish, so that
     // wait is not spent. The stop still waits once, inside pipeline_.stop(), for the block in progress to end - that wait is the join's.
     const bool running = pipeline_.running() || pipeline_.faulted();
+    // The breadcrumb trail (core/event_trail.hpp): the receiver is being stopped, which releases the open radio - by the driver's vocabulary word, never a name.
+    if (running) { cascade::core::trail::noteSource(false, cascade::core::health::driverWord(healthWatchKind_)); }
     const bool iq = running && (iqRecorder_.recording() || iqStart_.pending() || iqStartQueued_);
     const bool audio = running && (audioRecorder_.recording() || audioStart_.pending() || audioStartQueued_);
     // The two recording stops timed, for the log line below: the quantity the 0.99.65 report showed as 701 ms. tests/test_stop_ends_
@@ -6065,6 +6085,8 @@ void Engine::commitModeIndex(int index) {
     if (index < 0 || index >= 8) { return; }
     modeIndex_ = index;
     pipeline_.setDemodMode(kModeMap[index]);
+    // The breadcrumb trail (core/event_trail.hpp): a demodulator change, by its fixed name.
+    cascade::core::trail::noteMode(index);
     refreshDiagContext();
 }
 
@@ -8475,6 +8497,9 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
     // window's diagnostics, AppWindow::diagnosticsStartup.)
     telemetrySessionStart_ = host_->wallTimeS();
     telemetryModeAccrual_.reset(telemetrySessionStart_);
+    // THE FIRST STAGE of how far this session gets (core/health_events.hpp, Milestone): the settings are read and start-up is under way. Held in
+    // memory until the ledger below has been decided, like every event before it.
+    cascade::core::health::noteReached(cascade::core::health::Milestone::Launched);
     // DISPLAY STALLS. Armed only for a real identity, which an opted-out run
     // does not have - so off means nothing is counted and nothing is kept - and
     // it picks up what earlier sessions left (a session ended from the taskbar
@@ -8568,6 +8593,10 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
     r.os = cascade::core::osDescription();
     r.arch = cascade::core::archDescription();
     r.channel = cascade::core::installChannel();
+    {
+        std::lock_guard<std::mutex> halfLock(interfaceHalfMutex_);
+        r.updateChannel = interfaceCfg_.updateChannel;   // "stable" or "beta"; toJson sends anything else empty
+    }
     r.firstRun = telemetryFirstRun_;
     r.firstVersion = telemetryFirstVersion_;
     r.launches = telemetryLaunches_;
@@ -8628,6 +8657,30 @@ void Engine::healthPoll() {
     // loads a pass.
     cascade::core::health::drainRecovered();
     recoveryWatch_.poll(recoveryReadings());
+
+    // HOW FAR THIS SESSION GOT (field-early-warning, core/health_events.hpp Milestone): the engine's pass ran (`window`: the first pass an
+    // interface is served by; master noted it at the first frame drawn), a radio was listed, and - once a second, with one spectrum-frame copy a
+    // second at most - whether the open radio's samples are flowing, which is the 60 seconds a session must have before it counts as working.
+    // `streaming` and `audio` are counted where the radio opens and the speakers play (noteRadioOpen, noteSoundOk); `webspectrum` by the web
+    // server. Each check below is one relaxed atomic load until it has fired.
+    namespace health = cascade::core::health;
+    if (!health::reached(health::Milestone::Window)) { health::noteReached(health::Milestone::Window); }
+    if (!health::reached(health::Milestone::Enumerated) && (!soapyDevices_.empty() || !nativeDevices_.empty())) {
+        health::noteReached(health::Milestone::Enumerated);
+    }
+    if (!health::reached(health::Milestone::Working)) {
+        // The steady clock: this poll is also driven by the tests without a frame.
+        const double nowSec = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (workingLastSec_ < 0.0 || nowSec - workingLastSec_ >= 1.0) {
+            workingLastSec_ = nowSec;
+            // True iff a frame newer than the probe's cursor was published since last look.
+            const bool flowing = pipeline_.getLatestFrame(workingProbe_);
+            if (workingClock_.second(health::reached(health::Milestone::Streaming), flowing,
+                                     health::reached(health::Milestone::Audio) || health::reached(health::Milestone::WebSpectrum))) {
+                health::noteReached(health::Milestone::Working);
+            }
+        }
+    }
 }
 
 cascade::core::health::RecoveryReadings Engine::recoveryReadings() {

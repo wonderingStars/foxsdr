@@ -398,6 +398,88 @@ int main() {
         CHECK(text.find("AAAABBBBCCCCDDDDEEEEFFFF000011112") != std::string::npos);
     }
 
+    // --- WHAT LED UP TO IT (field-early-warning) ---------------------------
+    //
+    // A report's context carries `trail` (the last thirty state changes, oldest first) and, for a
+    // freeze inside a plugin reload, `reloadPhase`. The reader shows both - in the text, one entry
+    // a line, and in the JSON as an array - and, as the feed is read off a network and a disk, it
+    // shows ONLY entries that are members of the application's closed tables: a path, a serial
+    // number or a frequency pasted into a feed by a hand is not printed.
+    {
+        SymbolArchive archive(archiveRoot.string());
+        nlohmann::json r = makeReport("TRAIL", exeName, realBuildId, anchorOffset, "0.99.96",
+                                      "2026-10-26T09:00:00Z");
+        r["context"]["trail"] =
+            "412:src-open.rtlsdr;C:\\Users\\steve\\rec.wav;405:mode.wfm;4:src-close.192.168.1.7;"
+            "3:rescan.unload;0:rec-start";
+        r["context"]["reloadPhase"] = "unload";
+        std::string err;
+        const std::vector<ReaderReport> rs = parseReportFeed(feedOf({r}), err, nullptr);
+        CHECK(rs.size() == 1);
+        CHECK(at(rs, 0).reloadPhase == "unload");
+        const std::vector<ReportGroup> groups = groupReports(rs, archive);
+        CHECK(groups.size() == 1);
+        CHECK(at(groups, 0).trail.size() == 4);
+        CHECK(at(at(groups, 0).trail, 0) == "412:src-open.rtlsdr");
+        CHECK(at(at(groups, 0).trail, 3) == "0:rec-start");
+        CHECK(at(groups, 0).reloadPhase == "unload");
+
+        const std::string text = renderGroupsText(groups, 1, 0, archive);
+        CHECK(text.find("what led up to it") != std::string::npos);
+        CHECK(text.find("412 s before: src-open.rtlsdr") != std::string::npos);
+        CHECK(text.find("0 s before: rec-start") != std::string::npos);
+        CHECK(text.find("reload step: unload") != std::string::npos);
+        CHECK(text.find("rec.wav") == std::string::npos);
+        CHECK(text.find("192.168") == std::string::npos);
+
+        const nlohmann::json j = parseOrEmpty(renderGroupsJson(groups, 1, 0));
+        const nlohmann::json g0 = jat(j["groups"], 0);
+        CHECK(g0["trail"].is_array() && g0["trail"].size() == 4);
+        CHECK(jat(g0["trail"], 1) == "405:mode.wfm");
+        CHECK(g0.value("reloadPhase", std::string("x")) == "unload");
+
+        // A report with neither says so by showing neither: no heading, empty array.
+        nlohmann::json plain = makeReport("NOTRAIL", exeName, realBuildId, anchorOffset, "0.99.95",
+                                          "2026-10-26T09:00:00Z");
+        const std::vector<ReaderReport> prs = parseReportFeed(feedOf({plain}), err, nullptr);
+        const std::vector<ReportGroup> pg = groupReports(prs, archive);
+        CHECK(pg.size() == 1);
+        CHECK(renderGroupsText(pg, 1, 0, archive).find("what led up to it") == std::string::npos);
+        CHECK(parseOrEmpty(renderGroupsJson(pg, 1, 0))["groups"][0]["trail"].is_array());
+    }
+
+    // --- THE UPDATE CHANNEL OF EACH REPORT (field-early-warning) -----------
+    //
+    // `context.updateChannel` is `stable` or `beta`; a group lists the channels its reports came
+    // from, so "this fault is only in the beta copies" is readable at a glance. Anything else
+    // (a spelling, a path) is not shown, and a group with none says nothing.
+    {
+        SymbolArchive archive(archiveRoot.string());
+        nlohmann::json a = makeReport("CHAN", exeName, realBuildId, anchorOffset, "0.99.96",
+                                      "2026-10-26T09:00:00Z");
+        a["context"]["updateChannel"] = "beta";
+        nlohmann::json b = makeReport("CHAN", exeName, realBuildId, anchorOffset, "0.99.96",
+                                      "2026-10-26T10:00:00Z");
+        b["context"]["updateChannel"] = "nightly";
+        nlohmann::json c = makeReport("CHAN", exeName, realBuildId, anchorOffset, "0.99.96",
+                                      "2026-10-26T11:00:00Z");
+        c["context"]["updateChannel"] = "stable";
+        std::string err;
+        const std::vector<ReaderReport> rs = parseReportFeed(feedOf({a, b, c}), err, nullptr);
+        CHECK(rs.size() == 3);
+        CHECK(at(rs, 0).updateChannel == "beta");
+        const std::vector<ReportGroup> groups = groupReports(rs, archive);
+        CHECK(groups.size() == 1);
+        CHECK(at(groups, 0).channels.size() == 2);
+        CHECK(at(at(groups, 0).channels, 0) == "beta");
+        CHECK(at(at(groups, 0).channels, 1) == "stable");
+        const std::string text = renderGroupsText(groups, 3, 0, archive);
+        CHECK(text.find("update channels: beta, stable") != std::string::npos);
+        CHECK(text.find("nightly") == std::string::npos);
+        const nlohmann::json j = parseOrEmpty(renderGroupsJson(groups, 3, 0));
+        CHECK(jat(j["groups"], 0)["channels"].is_array() && jat(j["groups"], 0)["channels"].size() == 2);
+    }
+
     // --- An archive that is not there is said plainly, not crashed on ------
     {
         SymbolArchive missing((archiveRoot / "not-here").string());

@@ -878,6 +878,8 @@ The sites that are counted:
 | `takeheader` | `engine.cpp` `collectFinish`, a take not finalised (0.99.100) | the engine's pass |
 | `sentinelgone` | `sentinel_host_win.cpp` / `sentinel_host_posix.cpp`, the watcher not started or ended early (0.99.100) | the window's thread |
 | `displaywatch` | `win_frame.cpp`, the display-state notification not registered (0.99.100) | the window's thread |
+| `devlatch` | `SdrPlaySource`'s event callback, `DeviceFailure`: the stream-failure latch the next successful Init supersedes (field-early-warning; read from the service's thread, so only raised) |
+| `softgl` | `AppWindow::run`, right after the window's OpenGL driver is accepted and `softgl::loaded()` is true: this run is drawn by Mesa's llvmpipe (field-early-warning) | the window's thread |
 | `pluginfault` | `core/plugin_fault.cpp` `totals().faults`: a guarded call into a plugin faulted and was absorbed (see *A bad plugin does not take the program down*) | the engine's pass, from `fault::totals()` |
 | `pluginquarantine` | `fault::totals().quarantines`: a plugin was switched off for the session | the engine's pass |
 | `pluginwedge` | `fault::totals().wedges`: a guarded call never returned (the stage-2 finding of the call budget), or an unload timed out inside one | the engine's pass |
@@ -3532,6 +3534,23 @@ never saw it because the scan runs in a child.
   `radio_fail.<driver>.busy`. While no radio is open the deck's GAIN dial and its
   AUTO key say so in their tooltips (and name the saved radio's reason when there
   is one).
+- `source: the I/Q file did not open: <reason>` — the Source section's I/Q-file
+  Open refused (`Engine::pollIqOpen`, re-expressed from `AppWindow::pollIqOpen`, 2026-10-29). The reason is the source's own
+  sentence with the path replaced by `(the file)` (`gui::iqOpenReasonForLog`):
+  `cannot open file: (the file)`, `not a RIFF/WAVE file: (the file)`, `missing fmt
+  chunk`, and so on; the full sentence, path included, is the red line on screen.
+  Until this line existed a refused Open left no trace but that red line, and a
+  tester's report that "the Open does nothing" came with a log that had no I/Q line
+  at all. Beside it, three lines from the same change: `source: a recording was
+  chosen in the I/Q file dialog` and `source: the I/Q file dialog was closed without
+  a choice` (the row's Browse key, and Open pressed over an empty box, both open the
+  system's file dialog - `AppWindow::browseIqFile`), `source: Open pressed with no
+  I/Q file named and no file dialog to offer` (a Linux machine with neither zenity nor
+  kdialog: the red line says to type or paste a path), and `source: a WAV file was
+  dropped on the window; opening it as the I/Q file` (`consumePendingDrop`: a dropped
+  recording goes to the row's box, not to the frequency-list import). None names
+  the file; the success line is the rate line it always was (`source: opened an I/Q
+  file at <rate> S/s`).
 
 A hang report captures every thread because *a deadlock is only legible as a
 pair.* "The GUI thread is blocked" names no bug; "the GUI thread waits on the
@@ -5004,6 +5023,93 @@ exercised by any test:** a real log off or
 shutdown; a real Task Manager *End task* (the exit code was measured with `taskkill /F`, not
 with it); a shutdown that wedges for the full 27 s; the Store package; Linux.
 
+## Field-issue early warning: learning of a bug before a user writes (field-early-warning)
+
+Seven pieces, each shippable alone, that turn what the application already knows into
+something the owner is told about:
+
+1. **New-signature alerting** (the site, `foxsdr-site`): the site's owner-alert engine
+   (`alerts.go`) already emailed new fault groups, regressions, bursts, WORSE versions and
+   radios failing. It now also pushes to an ntfy topic (`FOXSDR_NTFY_TOPIC`, a long random
+   name that is the only secret; `FOXSDR_NTFY_URL` defaults to `https://ntfy.sh`), adds a
+   *spike* event - a known group reported by three or more distinct installs inside 24 hours
+   in a version newer than any it was seen in before - and a daily digest (admin page and
+   `/admin/early-warning.json`, emailed through the site's existing mailer). Nothing from a
+   report's body is in a push. The site's README has the owner's steps.
+2. **Health counters** on the usage record's `health` string: most of what the application
+   counts internally was already there (the Recovered ledger incl. `ringdrop` - the
+   dsp-dropped figure - `reopen`, `vendorcall`, `enumchild`, `dspexc`, the `slow.*` tiers
+   which are the freeze watchdog's near-misses, the radio-open failures). Added:
+   `recovered.devlatch` (an SDRplay stream failure latched the source) and
+   `recovered.softgl` (this run is drawn by the software OpenGL renderer). The Worker, the
+   site's `health_vocabulary.json` and PRIVACY.md carry the same words, held together by
+   `tests/test_health_events.cpp`.
+3. **Breadcrumb trail** in crash and freeze reports (above, *The breadcrumb trail*), which
+   folds in the 0.99.84 `reload-phase` work: each reload step is also a trail entry.
+4. **Beta canary**: the usage record carries the Updates setting as `uch` (`stable` or
+   `beta`; the Worker's `blob15`) and every report's context block carries
+   `update-channel:` (sent as `context.updateChannel`), so the site can split each
+   version's crash, freeze and health rates by channel (`/admin/channels`,
+   `/admin/channels.json`). `''` is "not reported", never "stable": versions before
+   0.99.96 and copies that did not say are listed apart. The channel is the setting AT THE
+   TIME THE RECORD IS SENT: the usage record describes the previous session and is sent at
+   the next start, so a person who switched channels in between is counted under the new one.
+
+5. **How far a session got** (wave 2): positive proof of function, for the failure that crashes
+   nowhere (a build in which no radio can be heard). The usage record's `health` string carries,
+   for the session it describes, which *stages* it reached - `reached.launched`, `.window`,
+   `.enumerated`, `.streaming`, `.audio`, `.webspectrum`, `.working` (`core/health_events.hpp`,
+   `health::Milestone`; PRIVACY.md, *Stages reached*). A session is **working** when a radio was
+   open, sixty seconds of its samples flowed (`health::WorkingClock`, told once a second by
+   `AppWindow::healthPoll` whether the pipeline published a newer spectrum frame) and the output
+   was reached - the speakers played (`sound_ok`) or a browser was served a spectrum frame
+   (`/api/spectrum`). The stages are counted at the places that already knew: a radio opening
+   (`noteRadioOpen` -> `streaming`), the speakers playing (`noteSoundOk` -> `audio`), the web route
+   (`webspectrum`); the window adds `window` (first frame), `enumerated` (a radio is listed) and
+   `working` in its existing health poll, and `launched` is counted when the settings are read.
+   A stage is counted once a session in the ordinary ledger, so a record's `reached.launched` is
+   how many sessions it describes. **A record with no `reached` word is "not measured"** (an older
+   build, or Diagnostics off), never "got nowhere". Reporting switched on mid-session replays the
+   stages already reached (`health::replayReached`). The site draws it per version and channel at
+   `/admin/working` and `/admin/working.json` (working rate, the funnel, by driver).
+
+6. **The kill switch** (wave 2): the update manifest can mark a release WITHDRAWN. `/api/update`
+   (site) gains `withdrawn` (the versions the owner, or the automatic rollback, pulled) and
+   `current_withdrawn` (the version asking is one of them); `core::parseUpdateManifest` reads both
+   one entry at a time (well-formed versions only, at most `kMaxWithdrawn`), recomputes
+   `UpdateInfo::offerWithdrawn` / `runningWithdrawn` itself, forces `newer = false` for a withdrawn
+   offer whatever the service said, and `downloadUpdate` refuses one outright. The window
+   (`AppWindow::drawUpdateBanner`) shows a gentle notice, in the warning colour, when the running
+   version is withdrawn: with a good build offered it recommends updating (the banner below it is
+   unchanged); with none it says so and points at foxsdr.com. Nothing new is sent to receive it;
+   the notice is plain English (a safety notice must not wait for 34 catalogues) and is not shown
+   to a Microsoft Store copy or with the update check off. Tests: `tests/test_updater.cpp` (the
+   parse) and `tests/test_withdrawn_app.cpp` (the real window, six runs against canned answers).
+
+7. **Watching the watchers** (wave 2): two checks the chain makes on itself, both in the site
+   (`watchers.go`, `/admin/watchers`). *Ingestion silence*: no heartbeat of any kind in the Worker's
+   `foxsdr_heartbeat` dataset for an hour pushes the owner; because a field of a few dozen installs
+   is quiet at night, the Uptime workflow (`.github/workflows/uptime.yml`) sends a **canary** beat
+   from the reserved install id every fifteen minutes, and the alert is armed only once the canary
+   has been seen. It lives on the site's own clock rather than in the outside workflow because
+   reading the dataset needs the analytics token, which a public repository's workflow cannot hold;
+   a dead site is what the workflow's `/healthz` check is for. *The weekly synthetic report*
+   (`.github/workflows/synthetic.yml`, `docs/synthetic-check.md`): a clearly marked fake crash report
+   goes through the real endpoint and the alert engine and arrives as a SYNTHETIC TEST message; the
+   site diverts it before its store, so it is in no rate, group or digest; nine days without one is
+   itself an alert. Nothing in the application changes for this.
+**Deployment order.** The Worker first (`telemetry-worker`: `npx wrangler deploy`), because it
+drops a word or a field it does not know and the old Worker answers 204, which tells the
+application to forget the count. Then the site (it reads the new columns behind a guard, so
+it also works before the Worker stores them), then the application release.
+
+**What is not in it, on purpose.** No new identifier, no free text, no frequency, path,
+serial number or device name anywhere; the trail and the channel are checked against closed
+tables on the way out of the machine as well as on the way in at the site. Absorbed driver
+faults need no counter: the crash handler already files them as reports (reason: `fault in
+a third-party SDR module, absorbed`), and the site's new-group and spike alerts see them
+like any other.
+
 ## Symbols — where the archive lives, and why that was a decision
 
 A captured stack is `module+offset`. Turning an offset back into a function and
@@ -5550,6 +5656,49 @@ two small ELF files built by `tests/elf_line_fixture.hpp` — one with DWARF lin
 tables, one with a symbol table only — whose answers are known in advance, and
 checks the tool-absent message with `PATH` really emptied. On Linux a missing
 `addr2line` fails that test; on Windows it is a stated skip.
+
+### The breadcrumb trail: what led up to a fault (field-early-warning)
+
+A report says where the process was and what the log ring held, and the ring is a few
+hundred lines of everything: a retune storm or a chatty plugin pushes the one line that
+mattered out of it. `core/event_trail.hpp` keeps a separate, small record that only STATE
+TRANSITIONS write to - a ring of the last thirty - and both fault writers put it in their
+report's `--- process ---` block as one line, `trail:`, which the uploader sends as
+`context.trail` and the report reader prints.
+
+**An entry** is `<secs>:<event>[.<word>]`: the whole seconds before the report was
+written, and a word from a closed list, optionally qualified from that event's own list.
+The entries are joined by `;`, oldest first: `412:src-open.rtlsdr;405:mode.wfm;3:rescan.unload`.
+
+| Event | Written by | Qualifier |
+|---|---|---|
+| `src-open` | `health::noteRadioOpen`, the one function every radio (receiver, patch page, sound card) is counted through | the driver word of the failure counts |
+| `src-close` | `AppWindow::stopReceiver`, when the receiver was running | the driver word of the radio that was open |
+| `mode` | `AppWindow::commitModeIndex`, every demodulator change | `nfm wfm am dsb usb cw lsb raw` |
+| `rescan` | `PhaseClock::begin` of a PUBLISHING clock, i.e. each step of a plugin reload as it is entered (folds in the `reload-phase` work of 0.99.84) | the step, hyphens for spaces: `panels-and-map` |
+| `rec-start` | `AppWindow::finishRecordStart`, once the file opened and the recorder is armed | - |
+| `rec-stop` | `AppWindow::finishTake`, when there was an open take to finish | - |
+| `plug-fit` | the install/update result landing on the GUI thread | - |
+| `plug-unfit` | `AppWindow::removeInstalledPlugin`, the file deleted | - |
+
+**Closed vocabulary, checked three times.** The writers take enums and small indexes, never
+text; the formatter builds the line from the tables; and the uploader passes it through the
+same tables again (`trail::sanitise`), keeping only valid entries and the newest thirty. A
+hand-edited report cannot make the field carry a path, a serial number or a frequency.
+`tests/test_event_trail.cpp` holds the tables to their sources (the driver words to the
+health vocabulary, the steps to `core/plugin_reload_phases.hpp`, the modes to
+`kModeNames`) and holds each writer to its one site.
+
+**Safe on the fault path.** `note()` is two relaxed atomics on a fixed array - no lock, no
+allocation, any thread. `format()` allocates nothing and takes no lock either, so
+`crash_handler.cpp`, `crash_handler_posix.cpp` and the freeze watchdog call it from where
+they are. Entries are one 64-bit word each, so a writer lapping the reader can replace an
+entry but never tear one (the test races four writers against a reader). The ring is lossy
+on purpose.
+
+**Deliberately not in it:** the sentinel's reports (the watcher is another process and
+cannot read this one's memory - it has the breadcrumb block instead, above), startup
+transitions before the first window (the ring starts empty), and any per-frame event.
 
 ### A freeze report now carries the module table
 

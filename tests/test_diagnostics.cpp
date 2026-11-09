@@ -1256,6 +1256,43 @@ int main() {
         CHECK(bundle.find("bookmark") == std::string::npos);
     }
 
+    // --- The update channel is one of two words, or says it is not recorded -----------
+    // (field-early-warning) `stable` or `beta`, as the Updates section's setting names them: a
+    // report from a beta copy is read against the beta copies' own crash rate. A process that
+    // never filled it in says `(not recorded)`, and so does any other value - a path, a
+    // sentence, a different spelling is never carried.
+    {
+        auto block = [](const std::string& v) {
+            DiagContext ctx;
+            ctx.updateChannel = v;
+            setDiagContext(ctx);
+            return diagContextBlock();
+        };
+        auto has = [](const std::string& b, const char* line) {
+            return b.find(std::string("\n") + line + "\n") != std::string::npos;
+        };
+        {
+            DiagContext fresh;
+            setDiagContext(fresh);
+            CHECK(has("\n" + diagContextBlock(), "update-channel: (not recorded)"));
+        }
+        CHECK(has("\n" + block("stable"), "update-channel: stable"));
+        CHECK(has("\n" + block("beta"), "update-channel: beta"));
+        for (const char* bad : {"Beta", "BETA", "nightly", "beta ", "", "C:\\Users\\steve\\x",
+                                "beta; tuned to 145.500 MHz", "stable\nvolume: 100"}) {
+            const std::string b = block(bad);
+            if (!has("\n" + b, "update-channel: (not recorded)")) {
+                std::printf("FAIL update channel \"%s\" was carried\n", bad);
+            }
+            CHECK(has("\n" + b, "update-channel: (not recorded)"));
+            CHECK(b.find("tuned") == std::string::npos);
+        }
+        // Ahead of the plugin list, which is the part a full buffer cuts.
+        const std::string b = block("beta");
+        CHECK(b.find("\nupdate-channel: ") < b.find("\nplugin: "));
+        setDiagContext(DiagContext{});
+    }
+
     // --- The other software's DLLs say every state they can be in (0.99.69) -------
     // A process that never looked says `(not recorded)`, the first moments of a run say
     // `(not scanned yet)`, Linux says `(not applicable)`, none foreign is `(none)`, and

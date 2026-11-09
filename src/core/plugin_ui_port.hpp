@@ -106,6 +106,7 @@ struct PluginDirectiveFacts {
     bool lifeOnly = false;
     const CascadeBasemapApi* basemap = nullptr;
     const CascadeTrackInfoApi* trackInfo = nullptr;
+    const CascadeTrackPhotoApi* trackPhoto = nullptr;  // the same plugin's photo table, or null
     // The module file each table came from (plugin containment P1): the interface's clients call the plugin through its guard.
     std::string basemapPlugin;
     std::string trackInfoPlugin;

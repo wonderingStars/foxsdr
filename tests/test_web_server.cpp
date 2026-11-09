@@ -641,6 +641,61 @@ void testSpectrumEndpoint() {
     server.stop();
 }
 
+void testAServedSpectrumFrameIsAStageOfTheSession() {
+    // THE USAGE RECORD (field-early-warning): a session that is used through the web interface
+    // reaches the output when a browser is served a spectrum picture - `reached.webspectrum`, once a
+    // session. A poll that has nothing new for the browser (a stale cursor) is not "served".
+    namespace health = cascade::core::health;
+    auto g = health::globalLedger();
+    g->reset();
+    health::resetReachedForTest();
+    g->arm("", cascade::core::newInstallId(), false);
+    WebServer server;
+    // (Since stage 5e the page's frame is read through the engine's session: the stand-in session reports one frame, then nothing newer.)
+    auto log = std::make_shared<SessionLog>();
+    log->spectrum = [](SpectrumSnapshot& inOut) {
+        if (inOut.seq >= 7) {
+            return false;
+        }
+        inOut.seq = 7;
+        inOut.centerHz = 100000000.0;
+        inOut.spanHz = 2000000.0;
+        inOut.dbBins.assign(8, kSpectrumDbMax);
+        return true;
+    };
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    // A frame is served: the stage is reached, counted once.
+    CHECK(!health::reached(health::Milestone::WebSpectrum));
+    auto fresh = cli.Get("/api/spectrum?since=0");
+    CHECK(static_cast<bool>(fresh));
+    CHECK(health::reached(health::Milestone::WebSpectrum));
+    CHECK(g->counts() == (health::Counts{{"reached.webspectrum", 1}}));
+    auto again = cli.Get("/api/spectrum?since=0");
+    CHECK(static_cast<bool>(again));
+    CHECK(g->counts() == (health::Counts{{"reached.webspectrum", 1}}));
+    // A poll with nothing new for the browser (its cursor is the newest frame) is answered and is
+    // NOT a served frame: after a fresh start, only the poll that carried a picture counts.
+    g->reset();
+    health::resetReachedForTest();
+    g->arm("", cascade::core::newInstallId(), false);
+    auto none = cli.Get("/api/spectrum?since=7");
+    CHECK(static_cast<bool>(none));
+    if (none) { CHECK(none->body.find("\"fresh\":false") != std::string::npos); }
+    CHECK(!health::reached(health::Milestone::WebSpectrum));
+    CHECK(g->counts().empty());
+    server.stop();
+    g->reset();
+    health::resetReachedForTest();
+}
+
 void testAHandlerThatThrowsIsCountedOnceASession() {
     // THE USAGE RECORD (0.99.65): the server survives a handler that throws, answering 500, and that is
     // a recovery - `recovered.webroute`, once a session, never the message (it can name a path). The
@@ -2947,6 +3002,7 @@ int main() {
     testSessionExpiresOnTheInjectedClock();
     testOffMachineBindWithoutPasswordNeverListens();
     testSpectrumEndpoint();
+    testAServedSpectrumFrameIsAStageOfTheSession();
     testAHandlerThatThrowsIsCountedOnceASession();
     testInvalidUtf8FromAPluginDoesNotKillTheApi();
     testStaleCursorFromAPreviousRunRecovers();

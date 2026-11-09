@@ -318,10 +318,21 @@ private:
         // The consumer side of the ring: read() and start()'s clear.
         std::mutex consumerMutex;
 
-        // The socket. NOT owned here: the source owns it, except on the
-        // abandoning path, which leaks it so a stranded reader still has a
-        // live object to be inside.
+        // The socket. NOT owned through this pointer: the source owns it
+        // (transport_), except on the abandoning path, which hands it to
+        // `stranded` below so that a stranded reader still has a live object to
+        // be inside.
         iiod::Transport* transport = nullptr;
+
+        // The socket of an ABANDONED reader, and only of one. The link is shared
+        // by the source and by the reader thread and dies when the last of them
+        // lets go of it, so the socket lives exactly as long as the thread that
+        // may still be inside it - and is destroyed (closed) on the thread's way
+        // out if it ever returns, instead of being leaked for the life of the
+        // process. Written once, by the source, when it gives the reader up; the
+        // reader never touches it, and the source keeps its own reference to the
+        // link, so the write cannot meet the link's destruction.
+        std::unique_ptr<iiod::Transport> stranded;
 
         cascade::dsp::SpscRing<std::complex<float>> ring;
 

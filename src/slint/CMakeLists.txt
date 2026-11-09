@@ -31,6 +31,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/SlintDll.cmake")
 set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp signal_logic.cpp signal_publish.cpp system_logic.cpp system_publish.cpp key_dispatch.cpp tools_logic.cpp tools_publish.cpp extend_logic.cpp extend_publish.cpp patch_logic.cpp patch_publish.cpp transmit_logic.cpp transmit_publish.cpp scope_logic.cpp scope_compositor.cpp scope_publish.cpp radar_logic.cpp radar_compositor.cpp input_script.cpp
     "${CMAKE_SOURCE_DIR}/src/gui/track_info_cache.cpp"
     "${CMAKE_SOURCE_DIR}/src/gui/transmit_page.cpp"
+    "${CMAKE_SOURCE_DIR}/src/gui/track_photo_cache.cpp"
     "${CMAKE_SOURCE_DIR}/src/gui/module_census.cpp")
 if(WIN32)
     enable_language(RC)
@@ -45,6 +46,16 @@ target_compile_features(foxsdr-slint PRIVATE cxx_std_20)
 # The engine (EngineService, the C API table) is the same library the ImGui window and foxsdr-engine use; the
 # window itself only ever talks to the table.
 target_link_libraries(foxsdr-slint PRIVATE Slint::Slint cascade_engine)
+# TrackInfoCache owns a TrackPhotoCache (the target photos, 0.99.98), whose default texture hooks are OpenGL calls: this window never asks the
+# plugin for a photo, so none runs, but the class links them.
+if(WIN32)
+    target_link_libraries(foxsdr-slint PRIVATE opengl32)
+else()
+    find_package(OpenGL QUIET)
+    if(OpenGL_FOUND)
+        target_link_libraries(foxsdr-slint PRIVATE OpenGL::GL)
+    endif()
+endif()
 target_include_directories(foxsdr-slint PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
     "${CMAKE_SOURCE_DIR}/third_party/foxsdr_api"

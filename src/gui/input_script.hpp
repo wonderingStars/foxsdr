@@ -30,8 +30,14 @@
 //   <frame> ctrlwheel <n>     the wheel with Ctrl held (a touchpad pinch)
 //   <frame> shiftwheel <n>    the wheel with Shift held (slides the passband, 0.99.82)
 //   <frame> key <name>        tap a key: enter, delete, backspace, escape,
-//                             tab, ctrl+a
+//                             tab, ctrl+a, ctrl+v (the REAL clipboard - for a
+//                             check by hand of what the desk's clipboard
+//                             pastes; a test uses "paste" below instead)
 //   <frame> text <chars...>   type the rest of the line
+//   <frame> paste <chars...>  put the rest of the line on the SCRIPTED clipboard
+//                             (gui/paste_files.hpp - never the desk's) and tap
+//                             Ctrl+V, so the paste runs through Dear ImGui's
+//                             own shortcut, filter and buffer checks (2026-10-29)
 //   <frame> sleep <ms>        hold the frame loop for 1..5000 ms of real time,
 //                             so a step after it is really that much later -
 //                             a long press is a duration, and a bounded run's
@@ -48,7 +54,7 @@
 namespace cascade::gui {
 
 struct ScriptStep {
-    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp, WheelH, CtrlWheel, ShiftWheel, Sleep };
+    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp, WheelH, CtrlWheel, ShiftWheel, Sleep, Paste };
     long frame = 0;
     Verb verb = Verb::World;
     float x = 0.0f;
@@ -62,7 +68,7 @@ struct ScriptParse {
 };
 
 inline const char* const kScriptKeys[] = {"enter", "delete", "backspace", "escape", "tab",
-                                          "ctrl+a"};
+                                          "ctrl+a", "ctrl+v"};
 
 inline bool knownScriptKey(const std::string& k) {
     for (const char* n : kScriptKeys) {
@@ -136,13 +142,14 @@ inline ScriptParse parseInputScript(const std::string& text) {
             // Milliseconds in x; bounded so a typo cannot hang a test run.
             st.verb = ScriptStep::Verb::Sleep;
             ok = static_cast<bool>(s >> st.x) && st.x >= 1.0f && st.x <= 5000.0f;
-        } else if (verb == "text") {
+        } else if (verb == "text" || verb == "paste") {
             // THE REST OF THE RAW LINE, not of the comment-stripped body: a
             // '#' is something to type here ("Channel #12"), and cutting the
             // payload at it typed "Channel " as a perfectly good step with
             // nothing counted in `bad`. The body is a prefix of the line, so
             // the stream's position in it is the same position in the line.
-            st.verb = ScriptStep::Verb::Text;
+            // "paste" takes its text the same way: a path can hold a '#'.
+            st.verb = (verb == "text") ? ScriptStep::Verb::Text : ScriptStep::Verb::Paste;
             const std::streamoff at = s.tellg();
             const std::size_t from =
                 (at < 0) ? body.size() : static_cast<std::size_t>(at);

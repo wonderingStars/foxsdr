@@ -38,6 +38,7 @@
 #include "core/diag_report.hpp"
 #include "core/plugin_fault.hpp"
 #include "core/plugin_marker.hpp"
+#include "core/event_trail.hpp"
 
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
@@ -495,6 +496,14 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
         const bool survived = child != nullptr || reasonStartsWith(reason, kAbsorbedFaultReasonPrefix) ||
                               reasonStartsWith(reason, kAbsorbedPluginFaultReasonPrefix);
         if (a.found && !survived) { marker::blame(a.runId); }
+    }
+    // WHAT LED UP TO IT (field-early-warning): see crash_handler.cpp, the same line.
+    {
+        static char trailBuf[cascade::core::trail::kMaxFormatted];
+        const std::size_t n = cascade::core::trail::format(trailBuf, sizeof(trailBuf));
+        e.str("trail: ");
+        e.str(n > 0 ? trailBuf : "none");
+        e.str("\n");
     }
     if (child != nullptr) {
         e.str("child-exit-code: 0x");

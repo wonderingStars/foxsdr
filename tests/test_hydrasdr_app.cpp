@@ -230,7 +230,8 @@ int main() {
         // THE THREE RECEIVE PORTS, offered by the generic antenna combo.
         CHECK(Access::antennas(app) == std::vector<std::string>({"ANT", "CABLE1", "CABLE2"}));
         // THE COUNT: one radio opened, counted under its own word.
-        CHECK(g->counts() == (Counts{{"radio_open.hydrasdr", 1}}));
+        // (and, beside it, the stage a session reaches by opening a radio: reached.streaming)
+        CHECK(g->counts() == (Counts{{"radio_open.hydrasdr", 1}, {"reached.streaming", 1}}));
 
         // The memory is the radio's own, under ITS key - not an Airspy's.
         CHECK(Access::mode(app, Mode::Linearity));
@@ -265,7 +266,7 @@ int main() {
         }
         CHECK(Access::sourceKind(app) == "hydrasdr");
         // THE RESTORE IS COUNTED LIKE ANY OTHER OPEN.
-        CHECK(g->counts() == (Counts{{"radio_open.hydrasdr", 1}}));
+        CHECK(g->counts() == (Counts{{"radio_open.hydrasdr", 1}, {"reached.streaming", 1}}));
         g->reset();
     }
 

@@ -48,6 +48,10 @@ struct FilePickRequest {
                                // the IMPORT window's Browse key); with `programs` too,
                                // programs come first, then lists, then all files
     std::string listsName;     // "Frequency lists (*.xml, *.csv)" - the filter's words
+    bool recordings = false;   // offer "I/Q recordings" (*.wav) first (the Source section's
+                               // I/Q-file Browse key, 2026-10-29); after programs and lists
+                               // when those are set too
+    std::string recordingsName;  // "I/Q recordings (*.wav)" - the filter's words
     std::string allFilesName;  // "All files (*.*)"
     void* owner = nullptr;     // the application window's native handle (an HWND
                                // on Windows) so the dialog is modal to it; may be
@@ -79,8 +83,9 @@ std::string pickStartPath(const std::string& typed, const std::string& folder,
 // The (name, pattern) pairs the dialog's file-type list is built from, in the
 // order shown: the first is what is selected when it opens. A request with
 // `programs` set lists {programsName, "*.exe"} first; one with `lists` set lists
-// {listsName, "*.xml;*.csv"} next (after the programs, if both are set); the
-// last is always {allFilesName, "*.*"}. An empty name falls back to its pattern
+// {listsName, "*.xml;*.csv"} next (after the programs, if both are set); one with
+// `recordings` set lists {recordingsName, "*.wav"} after those; the last is
+// always {allFilesName, "*.*"}. An empty name falls back to its pattern
 // so the list is never blank. (Windows turns these into the dialog's
 // double-NUL-terminated filter string; the pairs are kept apart so a test can
 // read them.)

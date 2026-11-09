@@ -989,14 +989,23 @@ int main() {
         CHECK(fake->lastBulkBufferCount() == 16);          // RFONE_TRANSFER_COUNT
         src.stop();
         CHECK(isControl("stop: OFF", at(fake->controls(), 2), false, 1, 0, 0));
+        // closeDevice() destroys the fake (the source owns it; `fake` only
+        // borrows it), so everything read off the fake itself is read BEFORE
+        // the close, and what the driver sends on the way out is read from the
+        // transcript, which is shared and outlives it. The last SET_PACKING
+        // the fake saw is packingState, and the transcript loop below proves
+        // the close sent no SET_PACKING to a different state, so the state the
+        // fake held before the close is the one it held after.
+        const std::shared_ptr<cascade::test::AirspyTranscript> tx = fake->transcript();
+        const int packingBeforeClose = fake->packingState.load();
         src.closeDevice();
         // Across a whole session, packing was only ever switched ON (state 1).
         bool onlyOn = true;
-        for (const AirspyControlRecord& r : fake->controls()) {
+        for (const AirspyControlRecord& r : tx->snapshot()) {
             if (r.request == 26 && r.index != 1) { onlyOn = false; }
         }
         CHECK(onlyOn);
-        CHECK(fake->packingState.load() == 1);
+        CHECK(packingBeforeClose == 1);
     }
 
     // =====================================================================

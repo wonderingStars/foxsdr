@@ -83,7 +83,25 @@ struct UpdateInfo {
     // Messages from the team, newest first. Present whether or not `newer`: that is the
     // point of them (0.99.79).
     std::vector<TeamMessage> messages;
+
+    // THE KILL SWITCH (field-early-warning). The service can WITHDRAW a release: it stops offering
+    // it, lists it here, and says when the version asking is one of them.
+    //   withdrawn         the versions the service has withdrawn (well-formed ones only, at most
+    //                     kMaxWithdrawn); a stale or mistaken answer therefore cannot talk this
+    //                     copy into a version the service has pulled - the list is checked HERE as
+    //                     well as at the service;
+    //   offerWithdrawn    the version offered is on that list. `newer` is then false whatever the
+    //                     service said: a withdrawn version is not offered, no banner, no download;
+    //   runningWithdrawn  the version RUNNING is on that list (or the service said so):
+    //                     the window shows a gentle notice recommending the person update.
+    std::vector<std::string> withdrawn;
+    bool offerWithdrawn = false;
+    bool runningWithdrawn = false;
 };
+
+// The most withdrawn versions an answer may list; a longer list is cut. The service lists the
+// newest first, and a list longer than this is not one the service wrote.
+inline constexpr std::size_t kMaxWithdrawn = 32;
 
 // Orders two version strings: -1 older, 0 same, +1 newer.
 //

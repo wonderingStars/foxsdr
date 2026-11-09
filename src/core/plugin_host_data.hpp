@@ -138,6 +138,10 @@ enum class PluginRejection {
     ImageInputStructSizeMismatch,
     MissingImageInputFunction,
     ImageInputNeedsDecoder,
+    MissingTrackPhotoApi,
+    TrackPhotoStructSizeMismatch,
+    MissingTrackPhotoFunction,
+    TrackPhotoNeedsTrackInfo,  // rides on the track-info handle; refused without it
     // --- plugin containment P1, load-time validation (docs/engine-stage4.md 6.28) ----------------------------------------------
     DuplicateCapabilityTable,    // two entries claim one declared capability: which table is the plugin's?
 };
@@ -211,6 +215,9 @@ struct LoadedPlugin {
     const CascadeSettingsUiApi* settingsUi = nullptr;
     const CascadeBasemapApi* basemap = nullptr;            // CASCADE_CAP_BASEMAP
     const CascadeTrackInfoApi* trackInfo = nullptr;        // CASCADE_CAP_TRACK_INFO
+    // CASCADE_CAP_TRACK_PHOTO (0.99.98). No create/destroy: called on the
+    // handle trackInfo's create() returned, so it is only ever used with it.
+    const CascadeTrackPhotoApi* trackPhoto = nullptr;
     // CASCADE_CAP_AUDIO_OUT. Carries no create/destroy of its own: it rides on
     // whichever decoder instance this plugin's other capabilities produced (see
     // CascadeAudioOutApi), so a record with this set and no decoder table is a

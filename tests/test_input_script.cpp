@@ -21,10 +21,17 @@ int main() {
             "110 screen 800 600\n"
             "120 key ctrl+a\n"
             "121 text 100.310 MHz\n"
-            "122 key enter\n");
+            "122 key enter\n"
+            "123 paste \"C:\\Users\\me\\rec #1.wav\" \n"
+            "124 key ctrl+v\n");
         CHECK(p.bad == 0);
-        CHECK(p.steps.size() == 7u);
-        if (p.steps.size() == 7u) {
+        CHECK(p.steps.size() == 9u);
+        if (p.steps.size() == 9u) {
+            CHECK(p.steps[8].verb == ScriptStep::Verb::Key && p.steps[8].arg == "ctrl+v");
+            // "paste" (2026-10-29) takes the rest of the raw line as "text" does:
+            // quotes, a '#' and a trailing space are all part of a pasted path.
+            CHECK(p.steps[7].verb == ScriptStep::Verb::Paste);
+            CHECK(p.steps[7].arg == "\"C:\\Users\\me\\rec #1.wav\" ");
             CHECK(p.steps[0].verb == ScriptStep::Verb::World);
             CHECK(p.steps[0].frame == 100);
             CHECK(p.steps[0].x == 250.5f);
@@ -48,11 +55,12 @@ int main() {
             "11 wiggle\n"           // unknown verb
             "12 key hyperspace\n"   // unknown key
             "13 text\n"             // nothing to type
+            "13 paste\n"            // nothing to paste
             "abc down\n"            // no frame
             "20 down\n"             // fine
             "15 up\n"               // goes backwards
             "-1 up\n");             // negative
-        CHECK(p.bad == 7);
+        CHECK(p.bad == 8);
         CHECK(p.steps.size() == 1u);
         CHECK(!p.steps.empty() && p.steps[0].frame == 20);
     }

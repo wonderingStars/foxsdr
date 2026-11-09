@@ -3775,6 +3775,13 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         // no frame - the same "nothing new" a stopped receiver gives.
         const bool fresh = session_ ? session_->readSpectrum(snap) : false;
         if (fresh) {
+            // A BROWSER WAS SERVED A SPECTRUM FRAME: the stage a session that is used only
+            // through the web reaches instead of "audio" (core/health_events.hpp, Milestone).
+            // Counted once a session by the ledger; the process remembers, so the common
+            // path past the first frame is one atomic load.
+            if (!cascade::core::health::reached(cascade::core::health::Milestone::WebSpectrum)) {
+                cascade::core::health::noteReached(cascade::core::health::Milestone::WebSpectrum);
+            }
             // Highest sequence this PROCESS has served, which is what makes
             // the test above mean "impossible" rather than merely "large".
             std::uint64_t seen = maxSeenSeq_.load(std::memory_order_relaxed);

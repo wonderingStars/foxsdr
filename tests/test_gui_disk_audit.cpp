@@ -652,6 +652,11 @@ const std::vector<Allowed>& allowed() {
          "watchdogShellHooks(): the user-paced pause every native modal wait goes through (gui/shell_open.hpp), uncapped, and the wait is "
          "subtracted from the frame as 'user-wait'. So a stall here cannot be mistaken for a hang. In a bounded run that set FOXSDR_FILE_PICK "
          "the dialog and the stat are skipped altogether."},
+        {"app_window.cpp", "AppWindow::shellOpen", "stream", Pause::NotNeeded, "",
+         "0.99.98: the shell-open log (FOXSDR_SHELL_OPEN_LOG): one line appended to a file the "
+         "verification harness names, in place of opening a link, only in a bounded run that set "
+         "the variable - so a test can click a target photo without a browser starting. Never "
+         "reached in a normal session, where shellOpen hands the target to the shell as before."},
         {"app_window.cpp", "AppWindow::traceScriptFrame", "stdio", Pause::NotNeeded, "",
          "The scripted-pointer trace (FOXSDR_SCRIPT_TRACE): one line appended a frame to a file the verification harness names, only in a bounded "
          "run that set the variable. Never reached in a normal session."},

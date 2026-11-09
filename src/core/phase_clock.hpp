@@ -60,6 +60,7 @@
 #include <vector>
 
 #include "core/diag_log.hpp"
+#include "core/event_trail.hpp"
 
 namespace cascade::core {
 
@@ -108,7 +109,12 @@ public:
         open_ = true;
         openName_ = name != nullptr ? name : "";
         openedAt_ = now_();
-        if (publish_) { g_publishedPhase.store(name, std::memory_order_relaxed); }
+        if (publish_) {
+            g_publishedPhase.store(name, std::memory_order_relaxed);
+            // The breadcrumb trail (core/event_trail.hpp) notes each reload step as it is
+            // entered, so a report filed in the middle of one names the steps that led to it.
+            trail::noteRescanStep(name);
+        }
     }
 
     // Closes the lap in progress, if any. Safe to call twice, and safe to call

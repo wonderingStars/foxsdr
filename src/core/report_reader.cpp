@@ -4,6 +4,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/report_reader.hpp"
 
+#include "core/event_trail.hpp"
+#include "core/plugin_reload_phases.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -128,6 +131,9 @@ std::vector<ReaderReport> parseReportFeed(const std::string& jsonText, std::stri
             r.mode = jstr(c, "mode");
             r.source = jstr(c, "source");
             r.sdrModel = jstr(c, "sdrModel");
+            r.reloadPhase = jstr(c, "reloadPhase");
+            r.updateChannel = jstr(c, "updateChannel");
+            r.trail = jstr(c, "trail");
             if (c.contains("sampleRate") && c["sampleRate"].is_number()) {
                 r.sampleRateHz = c["sampleRate"].get<double>();
             }
@@ -561,6 +567,7 @@ std::vector<ReportGroup> groupReports(const std::vector<ReaderReport>& reports,
         std::set<std::string> versions;
         std::set<std::string> oses;
         std::set<std::string> plugins;
+        std::set<std::string> channels;
         std::set<std::string> missing;
         const ReaderReport* rep = nullptr;
     };
@@ -583,6 +590,7 @@ std::vector<ReportGroup> groupReports(const std::vector<ReaderReport>& reports,
         ++a.g.count;
         if (!r.version.empty()) { a.versions.insert(r.version); }
         if (!r.os.empty()) { a.oses.insert(r.os); }
+        if (r.updateChannel == "stable" || r.updateChannel == "beta") { a.channels.insert(r.updateChannel); }
         for (const ReaderPlugin& p : r.plugins) {
             if (!p.name.empty()) { a.plugins.insert(p.name + " " + p.version); }
         }
@@ -607,6 +615,7 @@ std::vector<ReportGroup> groupReports(const std::vector<ReaderReport>& reports,
         a.g.versions = sortedUnique(a.versions);
         a.g.osVersions = sortedUnique(a.oses);
         a.g.plugins = sortedUnique(a.plugins);
+        a.g.channels = sortedUnique(a.channels);
         if (a.rep != nullptr) {
             const ReaderReport& r = *a.rep;
             a.g.module = r.module;
@@ -614,6 +623,20 @@ std::vector<ReportGroup> groupReports(const std::vector<ReaderReport>& reports,
             a.g.offset = r.offset;
             a.g.commit = r.commit;
             a.g.log = r.log;
+            // What led up to it: only the entries that are members of the application's
+            // closed tables (the feed is read off a network and a disk), one to an element.
+            {
+                const std::string clean = trail::sanitise(r.trail);
+                std::size_t from = 0;
+                while (!clean.empty() && from <= clean.size()) {
+                    std::size_t to = clean.find(';', from);
+                    if (to == std::string::npos) { to = clean.size(); }
+                    a.g.trail.push_back(clean.substr(from, to - from));
+                    from = to + 1;
+                }
+                a.g.reloadPhase = isPluginReloadPhaseName(r.reloadPhase.c_str()) ? r.reloadPhase
+                                                                                  : std::string();
+            }
             a.g.symbol = archive.resolve(r.module, r.buildId, r.offset);
             if (!a.g.symbol.resolved && !r.buildId.empty()) { a.missing.insert(r.buildId); }
             // The FAULTING thread's stack. For a crash that is the only one
@@ -736,6 +759,15 @@ std::string renderGroupsText(const std::vector<ReportGroup>& groups, int totalRe
         if (!g.missingBuildIds.empty()) {
             out += "    missing symbols for build id(s): " + joinList(g.missingBuildIds) + "\n";
         }
+        if (!g.channels.empty()) { out += "    update channels: " + joinList(g.channels) + "\n"; }
+        if (!g.reloadPhase.empty()) { out += "    reload step: " + g.reloadPhase + "\n"; }
+        if (!g.trail.empty()) {
+            out += "    what led up to it (oldest first):\n";
+            for (const std::string& t : g.trail) {
+                const std::size_t colon = t.find(':');
+                out += "      " + t.substr(0, colon) + " s before: " + t.substr(colon + 1) + "\n";
+            }
+        }
         if (!g.log.empty()) {
             out += "    log (last " + std::to_string(g.log.size()) + " lines):\n";
             for (const std::string& l : g.log) { out += "      " + l + "\n"; }
@@ -786,6 +818,9 @@ std::string renderGroupsJson(const std::vector<ReportGroup>& groups, int totalRe
         }
         e["frames"] = std::move(frames);
         e["log"] = g.log;
+        e["trail"] = g.trail;
+        e["channels"] = g.channels;
+        e["reloadPhase"] = g.reloadPhase;
         // installId is DELIBERATELY absent, here and in the text rendering. It
         // exists so the receiving end can rate-limit one machine; a reader that
         // emitted it would turn an anonymous counter into a way to follow one

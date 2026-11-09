@@ -18,6 +18,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/event_trail.hpp"
 #include "core/frame_timing.hpp"
 #include "core/i18n.hpp"
 #include "core/issue_report.hpp"
@@ -71,6 +72,8 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"takeheader", false},   // per take: each is a recording the person made
     {"sentinelgone", true},  // the watcher is gone for the session
     {"displaywatch", true},  // start-up, once by nature
+    {"devlatch", true},      // the service can raise it again on every start; "this session had it" is the fact
+    {"softgl", true},        // a state of the whole run, counted once
     {"pluginfault", false},       // each absorbed fault switches that plugin off, so the next is another plugin's or another session's
     {"pluginquarantine", false},  // likewise: one per plugin switched off
     {"pluginwedge", false},       // each is a call that never returned (or an unload that timed out inside one)
@@ -99,6 +102,20 @@ const std::vector<std::string>& tierWordList() {
             v.push_back(ns % 1'000'000'000LL == 0 ? std::to_string(ns / 1'000'000'000LL) + "s"
                                                   : std::to_string(ns / 1'000'000LL) + "ms");
         }
+        return v;
+    }();
+    return w;
+}
+
+// HOW FAR A SESSION GOT: the words and the written order (the enum's).
+constexpr const char* kMilestones[kMilestoneCount] = {
+    "launched", "window", "enumerated", "streaming", "audio", "webspectrum", "working",
+};
+
+const std::vector<std::string>& milestoneWordList() {
+    static const std::vector<std::string> w = [] {
+        std::vector<std::string> v;
+        for (const char* m : kMilestones) { v.push_back(m); }
         return v;
     }();
     return w;
@@ -148,6 +165,18 @@ const Words& loadWords() {
     static const Words w = {"abi", "retired", "load"};
     return w;
 }
+// The radio-setup check's finding kinds (core/radio_setup.hpp kindName()) and the
+// families it names (its kFamily* constants), "none" for a finding about no radio.
+const Words& setupKindWords() {
+    static const Words w = {"usable", "wrong-driver", "vendor-missing",
+                            "not-visible", "no-device", "not-checked"};
+    return w;
+}
+const Words& setupFamilyWords() {
+    static const Words w = {"rtlsdr", "airspy", "airspyhf", "hackrf",
+                            "sdrplay", "usrp", "lime", "none"};
+    return w;
+}
 
 }  // namespace
 
@@ -155,6 +184,11 @@ const std::vector<VocabularyEntry>& vocabulary() {
     // The written order of tokens in a record is this order, then the order of
     // each qualifier list.
     static const std::vector<VocabularyEntry> v = {
+        // field-early-warning: FIRST in the written order, so that in the rare record that
+        // cannot hold everything the stages a session reached are the last thing lost, and
+        // every token after them is where it always was relative to the others. Counted once
+        // a session each; `launched` is the session count of the record (see Milestone).
+        {"reached", {milestoneWordList()}, true},
         {"scan_none", {}, true},
         {"radio_open", {driverWords()}, false},
         {"radio_data", {driverWords()}, false},
@@ -169,6 +203,9 @@ const std::vector<VocabularyEntry>& vocabulary() {
         {"plug_inst", {installWords()}, false},
         {"plug_load", {loadWords()}, true},
         {"rec_fail", {}, false},
+        // 0.99.107: before `slow` and `recovered`, which stay last so a full record
+        // loses them first. Once a session for each finding.
+        {"setup", {setupKindWords(), setupFamilyWords()}, true},
         // 0.99.65: LAST in the written order, so a record an older
         // Worker reads has every earlier token where it always was.
         {"slow", {scopeWordList(), tierWordList()}, false},
@@ -436,6 +473,10 @@ std::string radioFailWhy(std::string_view driverKind, std::string_view error) {
     return radioReasonWord(classifyRadioOpen(driverKind, error));
 }
 
+std::string tokenReached(Milestone m) {
+    const std::size_t i = static_cast<std::size_t>(m);
+    return i < kMilestoneCount ? build("reached", kMilestones[i]) : std::string();
+}
 std::string tokenScanNone() { return "scan_none"; }
 std::string tokenRadioOpen(std::string_view k) { return build("radio_open", driverWord(k)); }
 std::string tokenRadioData(std::string_view k) { return build("radio_data", driverWord(k)); }
@@ -458,6 +499,11 @@ std::string tokenPluginLoad(LoadClass c) {
     return build("plug_load", loadWords()[static_cast<std::size_t>(c)]);
 }
 std::string tokenRecordFail() { return "rec_fail"; }
+std::string tokenSetup(SetupKind kind, std::string_view family) {
+    const std::string f = lowerCopy(family);
+    return build("setup", setupKindWords()[static_cast<std::size_t>(kind)],
+                 indexOf(setupFamilyWords(), f) >= 0 ? f : std::string("none"));
+}
 
 // ---------------------------------------------------------------------------
 // Counts and their encoding
@@ -994,13 +1040,21 @@ std::shared_ptr<HealthLedger> globalLedger() {
 
 void note(const std::string& token) { globalLedger()->note(token); }
 void noteScanNone() { note(tokenScanNone()); }
-void noteRadioOpen(std::string_view k) { note(tokenRadioOpen(k)); }
+void noteRadioOpen(std::string_view k) {
+    // THE BREADCRUMB TRAIL (core/event_trail.hpp) notes every radio that opened, whether or not
+    // usage reporting is on: it lives in memory and goes nowhere unless a fault report is filed
+    // with Diagnostics on. The driver word is the vocabulary's own - never a name or a serial.
+    trail::noteSource(true, driverWord(k));
+    note(tokenRadioOpen(k));
+    noteReached(Milestone::Streaming);
+}
 void noteRadioData(std::string_view k) { note(tokenRadioData(k)); }
 void noteRadioFail(std::string_view k, std::string_view error) {
     note(tokenRadioFail(k, classifyRadioOpen(k, error)));
 }
 void noteSoundOk(std::string_view hostApiName) {
     note(tokenSoundOk(audioApiFromName(hostApiName)));
+    noteReached(Milestone::Audio);
 }
 void noteSoundFail(AudioApi api, SoundReason why) { note(tokenSoundFail(api, why)); }
 void noteUpdateCheckFailed() { note(tokenUpdateCheck()); }
@@ -1011,6 +1065,11 @@ void notePluginCatalogueFailed() { note(tokenPluginCatalogue()); }
 void notePluginInstallFailed(InstallClass c) { note(tokenPluginInstall(c)); }
 void notePluginLoadRefused(LoadClass c) { note(tokenPluginLoad(c)); }
 void noteRecordFailed() { note(tokenRecordFail()); }
+void noteSetupFinding(std::string_view kindWord, std::string_view family) {
+    const int k = indexOf(setupKindWords(), lowerCopy(kindWord));
+    if (k < 0) { return; }
+    note(tokenSetup(static_cast<SetupKind>(k), family));
+}
 
 // ---------------------------------------------------------------------------
 // Slow frames, and what the program recovered from (0.99.65)
@@ -1019,6 +1078,49 @@ void noteRecordFailed() { note(tokenRecordFail()); }
 const std::vector<std::string>& slowScopeWords() { return scopeWordList(); }
 const std::vector<std::string>& slowTierWords() { return tierWordList(); }
 const std::vector<std::string>& recoveredWords() { return recoveredWordList(); }
+const std::vector<std::string>& milestoneWords() { return milestoneWordList(); }
+const char* milestoneWord(Milestone m) {
+    const std::size_t i = static_cast<std::size_t>(m);
+    return i < kMilestoneCount ? kMilestones[i] : "";
+}
+
+namespace {
+// Which milestones this PROCESS has reached: one bit each, read lock-free by the frame loop.
+std::atomic<std::uint32_t> g_reachedMask{0};
+}  // namespace
+
+void noteReached(Milestone m) {
+    const std::size_t i = static_cast<std::size_t>(m);
+    if (i >= kMilestoneCount) { return; }
+    g_reachedMask.fetch_or(1u << i, std::memory_order_relaxed);
+    // Counted once a session by the ledger itself (the vocabulary says so). A ledger that is
+    // off, not yet decided against, or not allowed ignores it as it ignores every event.
+    note(tokenReached(m));
+}
+
+bool reached(Milestone m) {
+    const std::size_t i = static_cast<std::size_t>(m);
+    return i < kMilestoneCount && (g_reachedMask.load(std::memory_order_relaxed) & (1u << i)) != 0;
+}
+
+void replayReached() {
+    const std::uint32_t bits = g_reachedMask.load(std::memory_order_relaxed);
+    for (std::size_t i = 0; i < kMilestoneCount; ++i) {
+        if ((bits & (1u << i)) != 0) { note(tokenReached(static_cast<Milestone>(i))); }
+    }
+}
+
+void resetReachedForTest() { g_reachedMask.store(0u, std::memory_order_relaxed); }
+
+bool WorkingClock::second(bool radioOpen, bool samplesFlowing, bool outputReached) {
+    if (working_) { return false; }
+    if (radioOpen && samplesFlowing && flowing_ < kWorkingSampleSeconds) { ++flowing_; }
+    if (flowing_ >= kWorkingSampleSeconds && outputReached) {
+        working_ = true;
+        return true;
+    }
+    return false;
+}
 
 std::string tokenSlowFrame(int frameScope, int tier) {
     if (frameScope < 0 || frameScope >= kFrameScopeCount ||

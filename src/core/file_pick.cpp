@@ -84,6 +84,7 @@ std::vector<std::pair<std::string, std::string>> openFileFilters(const FilePickR
     };
     if (r.programs) { out.push_back(named(r.programsName, "*.exe")); }
     if (r.lists) { out.push_back(named(r.listsName, "*.xml;*.csv")); }
+    if (r.recordings) { out.push_back(named(r.recordingsName, "*.wav")); }
     out.push_back(named(r.allFilesName, "*.*"));
     return out;
 }

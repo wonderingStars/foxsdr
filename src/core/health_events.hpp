@@ -12,6 +12,7 @@
 // WHAT IS COUNTED IS A FIXED VOCABULARY, never text. An event is a small
 // enumerated id, optionally qualified by words from another fixed list:
 //
+//     reached.<milestone>         a session reached a stage of getting to work (below)
 //     scan_none                   a device scan found no radio at all
 //     radio_open.<driver>         a radio was opened
 //     radio_data.<driver>         an opened radio's samples reached the display
@@ -25,6 +26,8 @@
 //     plug_inst.<class>           a plugin install failed (net, hash, write...)
 //     plug_load.<class>           a plugin was refused at load
 //     rec_fail                    a recording could not be started
+//     setup.<kind>.<family>       what the first-run radio check found on this
+//                                 computer (once per session per finding)
 //     slow.<scope>.<tier>         a frame of the window took 250 ms or more, in
 //                                 the part of the frame that took most of it
 //     recovered.<what>            the program met a fault and carried on
@@ -74,6 +77,12 @@ enum class RadioReason : std::uint8_t { Busy, Driver, Bind, Absent, Timeout, Ven
 enum class SoundReason : std::uint8_t { NoDevice, Busy, Format, Host, Other };
 enum class InstallClass : std::uint8_t { Net, Hash, Write, Other };
 enum class LoadClass : std::uint8_t { Abi, Retired, Load };
+// WHAT THE RADIO-SETUP CHECK FOUND, per radio found on the USB bus (core/radio_setup.hpp
+// Kind, same words): the answer to "why does this computer have no working radio",
+// which a radio_fail count cannot give because the radio was never opened.
+enum class SetupKind : std::uint8_t {
+    Usable, WrongDriver, VendorMissing, NotVisible, NoDevice, NotChecked
+};
 enum class AudioApi : std::uint8_t {
     Mme, DirectSound, Wasapi, Wdmks, Asio, Alsa, Jack, Oss, CoreAudio, None, Other
 };
@@ -121,6 +130,10 @@ enum class Recovered : std::uint8_t {
     TakeHeader,    // a recording's file could not be finalised and keeps its opening header
     SentinelGone,  // the watcher process did not start, or ended while the application ran
     DisplayWatch,  // the display on/off notification could not be registered
+    // THE EARLY-WARNING PAIR (master's field-early-warning branch, folded here from there): after master's thirty-three, before the engine branch's five, so
+    // master's words keep their places and the next merge from master stays a merge.
+    DevLatch,      // an SDRplay stream failure (the service's DeviceFailure) latched the source as faulted
+    SoftGl,        // the window is drawn by the software OpenGL renderer, not the graphics driver's
     // THE ENGINE-EXTRACTION BRANCH'S FIVE (docs/engine-stage4.md 6.27, 6.28), after master's thirty-three: the order is the vocabulary's
     // order in the Worker, PRIVACY.md and the tests, and master's words keep their places so the next merge from master stays a merge.
     PluginFault,       // a plugin's call faulted and the host absorbed it (core/plugin_fault.hpp, plugin containment P1)
@@ -129,7 +142,39 @@ enum class Recovered : std::uint8_t {
     PluginOveruse,     // a plugin call overran its budget
     ThreadWedge, // a worker thread missed its heartbeat budget and was reported by name (core/thread_beats.hpp)
 };
-inline constexpr std::size_t kRecoveredCount = 38;
+inline constexpr std::size_t kRecoveredCount = 40;
+
+// HOW FAR A SESSION GOT (field-early-warning): the stages between "the program started" and
+// "the radio is doing its job", one fixed word each. They are the working-session metric and
+// the startup funnel the website draws (a build in which no radio can be heard crashes
+// nowhere and used to show up in no number at all): launched -> window -> enumerated ->
+// streaming -> audio, with `webspectrum` for a session that served its spectrum to a browser
+// instead of (or beside) the speakers, and `working` when a radio was open, 60 seconds of its
+// samples flowed AND the output was reached (audio or the web spectrum). Counted once a
+// session each, in the ordinary ledger, so a record's `reached.launched` is how many sessions
+// it describes and every other word's count is how many of them got that far - which is why
+// `launched` is counted at all: a record from a build that never measured the stages has NO
+// `reached` token, and "not measured" must not read as "got nowhere".
+//   launched    the program read its settings and began (the record exists)
+//   window      the window drew its first frame
+//   enumerated  at least one radio was listed (a scan or the native list found one)
+//   streaming   a radio was opened (radio_open, any driver)
+//   audio       the speakers played (sound_ok)
+//   webspectrum a browser was served a spectrum frame
+//   working     streaming + 60 s of samples + (audio or webspectrum)
+// Stage names only: no device, no driver, no timing beyond the single 60 s rule.
+enum class Milestone : std::uint8_t {
+    Launched,
+    Window,
+    Enumerated,
+    Streaming,
+    Audio,
+    WebSpectrum,
+    Working,
+};
+inline constexpr std::size_t kMilestoneCount = 7;
+// Samples seconds a session must have flowing before it is "working".
+inline constexpr unsigned kWorkingSampleSeconds = 60;
 
 // One event of the vocabulary, as documentation and the Worker see it: its
 // name, the word lists of its qualifiers in order (empty for a bare event), and
@@ -198,6 +243,9 @@ std::string tokenPluginCatalogue();
 std::string tokenPluginInstall(InstallClass c);
 std::string tokenPluginLoad(LoadClass c);
 std::string tokenRecordFail();
+// `family` is a radio family as core/radio_setup.hpp spells it ("rtlsdr", "airspy",
+// "airspyhf", "hackrf", "sdrplay", "usrp", "lime"); "" and anything else is "none".
+std::string tokenSetup(SetupKind kind, std::string_view family);
 
 // SLOW FRAMES (0.99.65). The scope is a frame scope's own name as
 // core/frame_timing.hpp spells it (hyphens included: "plugin-panels",
@@ -221,6 +269,11 @@ std::string tokenRecovered(Recovered r);
 // a watchdog's retry, a once-a-minute reopen, a ring that overflows again and
 // again). The others are counted once per occurrence.
 bool recoveredOncePerSession(Recovered r);
+
+// THE MILESTONES. Words of Milestone, in written order.
+const std::vector<std::string>& milestoneWords();
+const char* milestoneWord(Milestone m);
+std::string tokenReached(Milestone m);
 
 // ---------------------------------------------------------------------------
 // Counts, and their one-string encoding
@@ -420,6 +473,11 @@ void notePluginCatalogueFailed();
 void notePluginInstallFailed(InstallClass c);
 void notePluginLoadRefused(LoadClass c);
 void noteRecordFailed();
+// One finding of the radio-setup check. `kindWord` is core::radiosetup::kindName()
+// ("usable", "wrong-driver", "vendor-missing", "not-visible", "no-device",
+// "not-checked"); a word that is none of those counts nothing. `family` is reduced
+// as for tokenSetup. Counted once a session for each finding.
+void noteSetupFinding(std::string_view kindWord, std::string_view family);
 
 // One slow frame (core::FrameTimer::commit, GUI thread): `frameScope` is the
 // scope's index in core::kFrameScopeNames and `tier` 0..2. Nothing for
@@ -437,6 +495,38 @@ void noteSlowFrame(int frameScope, int tier);
 void noteRecovered(Recovered r);
 void raiseRecovered(Recovered r);
 void drainRecovered();
+
+// A MILESTONE REACHED. Callable from any thread that may take the ledger's lock (the GUI thread,
+// a web worker): never from the DSP, source or audio threads. The process remembers which it has
+// reached (reachedMask), so a frame loop can ask `reached()` for the price of one atomic load
+// before it counts anything, and replayReached() puts them into a ledger armed AFTER they were
+// reached (the person switched usage reporting on mid-session, which arms a fresh ledger).
+void noteReached(Milestone m);
+bool reached(Milestone m);
+void replayReached();
+// Test seam: forget what the process has reached.
+void resetReachedForTest();
+
+// WHEN A SESSION COUNTS AS WORKING. Pure, so the rule is testable without a window: told
+// once a second (wall clock) whether a radio is open, whether its samples are flowing, and
+// whether the output has been reached, it says - exactly once - when the session has had
+// kWorkingSampleSeconds seconds of flowing samples with a radio open and the output reached.
+// The seconds are cumulative, not consecutive: a radio that is retuned or briefly stalls
+// does not start the minute over. Time with no radio open, or with the samples stopped, adds
+// nothing.
+class WorkingClock {
+public:
+    // True on the one call that makes the session working; false before and after.
+    bool second(bool radioOpen, bool samplesFlowing, bool outputReached);
+    unsigned flowingSeconds() const { return flowing_; }
+    bool working() const { return working_; }
+    // Test seam: a window test cannot wait a minute for real.
+    void seedFlowingSecondsForTest(unsigned seconds) { flowing_ = seconds; }
+
+private:
+    unsigned flowing_ = 0;
+    bool working_ = false;
+};
 
 // THE POLL FOR WHAT ONLY A COUNTER CAN SAY. Five recoveries happen inside a
 // thread this code must not count from (the pipeline's source and DSP threads,

@@ -29,6 +29,8 @@
 
 #include "core/diag_log.hpp"
 #include "core/hang_watchdog.hpp"
+#include "core/health_events.hpp"
+#include "core/telemetry.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "sdrplay_fake_api.hpp"
 #include "source/sdrplay_source.hpp"
@@ -1825,6 +1827,60 @@ void testDeviceRemovedFaultsTheSource() {
     CHECK(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
                                                                 t0)
               .count() < 15);
+}
+
+// THE EARLY-WARNING COUNT OF A DEVICE-FAILURE LATCH (field-early-warning). The service's
+// DeviceFailure is raised on ITS thread, so the source only raises the health word (one relaxed
+// atomic OR, no lock) and the window's per-frame poll drains it into the ledger. Other faults
+// (a removed radio, a lost master) are not this word. Nothing is counted while the ledger is not
+// armed (reporting off), which is what keeps the count opt-in.
+void testADeviceFailureLatchIsCountedForTheHealthRecord() {
+    namespace health = cascade::core::health;
+    auto ledger = health::globalLedger();
+    // The flag word is process-wide and the tests before this one fired DeviceFailure without
+    // draining it: take what they raised off while nothing is armed, so the counts below are this
+    // test's own.
+    ledger->reset();
+    health::drainRecovered();
+    ledger->reset();
+    ledger->arm("", cascade::core::newInstallId(), false);
+    auto countOf = [&](const char* token) -> std::uint32_t {
+        const auto c = ledger->counts();
+        const auto it = c.find(token);
+        return it == c.end() ? 0u : it->second;
+    };
+    {
+        // A removal is a fault, not a stream failure: no devlatch.
+        FakeSdrPlayApi fake;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK(src.start());
+        abi::EventParamsT p{};
+        fake.fireEvent(abi::DeviceRemoved, p);
+        CHECK(src.faulted());
+        health::drainRecovered();
+        CHECK(countOf("recovered.devlatch") == 0);
+    }
+    {
+        FakeSdrPlayApi fake;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK(src.start());
+        abi::EventParamsT p{};
+        fake.fireEvent(abi::DeviceFailure, p);
+        CHECK(src.faulted());
+        // Raised, not yet counted: the callback's thread never takes the ledger's lock.
+        CHECK(countOf("recovered.devlatch") == 0);
+        health::drainRecovered();
+        CHECK(countOf("recovered.devlatch") == 1);
+        // A second failure in the same run is the same fact: once a session.
+        fake.fireEvent(abi::DeviceFailure, p);
+        health::drainRecovered();
+        CHECK(countOf("recovered.devlatch") == 1);
+    }
+    ledger->reset();
 }
 
 void testDeviceFailureAndMasterLossAlsoFault() {
@@ -4270,6 +4326,7 @@ int main() {
     testAWindowWithServiceGapsIsWrittenAsAWarning();
     testDeviceRemovedFaultsTheSource();
     testDeviceFailureAndMasterLossAlsoFault();
+    testADeviceFailureLatchIsCountedForTheHealthRecord();
     testADeviceFailureIsClearedByTheNextStart();
     testADeviceFailureSurvivesAStartWhoseInitFails();
     testRemovalAndMasterLossSurviveARestart();

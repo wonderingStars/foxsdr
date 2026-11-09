@@ -191,7 +191,12 @@ are still moving. What is in the current build:
   details button per row. The button opens the full block for that target —
   registration, type, operator and country where a track-info plugin can supply
   them, then position, altitude, speed, course, age, and distance and bearing
-  from your receiver. A **Sort** control above the list orders it by any of
+  from your receiver. Where that plugin also offers photos (the Aircraft Info
+  plugin does from 1.2.0, from Planespotters.net), a photo of the aircraft
+  appears under the block, with the photographer's credit beneath it; click the
+  photo to open its page in your browser. A photo is asked for only when you
+  open a target's details — never for everything on the map — and is not kept
+  once the details are closed. A **Sort** control above the list orders it by any of
   those eight — callsign, id, altitude (ft), speed (kt), course (deg), distance
   (km), bearing (deg) or age (s) — ascending or descending, so "what is nearest
   me" is one menu pick away. Clicking a row takes the map to that target;

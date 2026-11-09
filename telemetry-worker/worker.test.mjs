@@ -354,7 +354,7 @@ test('NEW CLIENT -> OLD WORKER: a 204, the field discarded, and the row exactly 
 
 test('the column budget: Analytics Engine allows 20 blobs and 20 doubles, and this is how many are used', async () => {
   const p = (await post({ ...oldRecord(), stalls: 0, health: HEALTH })).usage[0];
-  assert.equal(p.blobs.length, 14);      // blob14 is the unclean-exits marker (0.99.69); slow frames and recoveries live in blob13
+  assert.equal(p.blobs.length, 15);      // blob14 is the unclean-exits marker (0.99.69); blob15 the update channel (field-early-warning); slow frames and recoveries live in blob13
   assert.equal(p.doubles.length, 16);    // double13..16 are the four unclean-exit counters (0.99.69)
   assert.ok(p.blobs.length <= 20 && p.doubles.length <= 20);
   // The 16 KB blob budget: the longest record this Worker can write is far under it.
@@ -571,16 +571,16 @@ test('the plugin containment CLIENT (recovered.pluginfault, .pluginquarantine, .
   assert.equal(bad.usage[0].blobs[12], '');
 });
 
-test('the MERGED vocabulary (0.99.100 merge): master\'s thirty-three recovered words AND the branch\'s five are every one kept, each alone, and nothing else is', async () => {
+test('the MERGED vocabulary (0.99.100 merge): master\'s thirty-five recovered words (the thirty-three of 0.99.100 and the early-warning pair) AND the branch\'s five are every one kept, each alone, and nothing else is', async () => {
   // Master's 0.99.100 (viewport and the eighteen words of the 2026-10-28 survey) and this branch's plugin containment and per-thread watchdog words
   // are ONE closed family in ONE list (worker.js HEALTH VOCABULARY, held to core/health_events.cpp and PRIVACY.md by tests/test_health_events.cpp). The
   // plugin test above covers four of them against the old Worker; this one proves the union, so a merge that drops either side's words is red here.
   const master = ['audio', 'reopen', 'srcthread', 'vendorcall', 'ringdrop', 'dspexc', 'cfgsave', 'enumchild', 'pluginapi', 'webroute', 'patchload',
     'sdrenum', 'sdrlost', 'audiolead', 'viewport', 'readerleak', 'closeleak', 'linkstranded', 'streamrestart', 'tunerretry', 'latecall', 'scanlimit',
     'usbstuck', 'ratesdefault', 'gainrefused', 'ppmrefused', 'iqfilegone', 'cataloguebad', 'catstop', 'filekept', 'takeheader', 'sentinelgone',
-    'displaywatch'];
+    'displaywatch', 'devlatch', 'softgl'];
   const branch = ['pluginfault', 'pluginquarantine', 'pluginwedge', 'pluginoveruse', 'threadwedge'];
-  assert.equal(master.length, 33);
+  assert.equal(master.length, 35);
   assert.equal(branch.length, 5);
   for (const word of [...master, ...branch]) {
     const p = await post({ ...newRecord(), v: '0.99.100', stalls: 0, health: `recovered.${word}=3` });
@@ -593,6 +593,121 @@ test('the MERGED vocabulary (0.99.100 merge): master\'s thirty-three recovered w
     const p = await post({ ...newRecord(), v: '0.99.100', stalls: 0, health: bad });
     assert.equal(p.usage[0].blobs[12], '', bad);
   }
+});
+
+test('early-warning words (recovered.devlatch, recovered.softgl) -> OLD WORKER (0.99.95): a 204, those tokens dropped and the rest read; the NEW Worker keeps them', async () => {
+  // THE SAME ORDER OF DEPLOYMENT as audiolead: deploy this Worker BEFORE the application that sends
+  // `recovered.devlatch` (an SDRplay stream failure latched) or `recovered.softgl` (the window is drawn
+  // by the software OpenGL renderer), or the count is dropped with the record taken. The Worker as
+  // 0.99.95 shipped it, kept byte for byte, is the fixture.
+  const was = (await import('./test-fixtures/worker-0.99.95.js')).default;
+  const sent = 'radio_open.sdrplay=1,recovered.audiolead=1,recovered.devlatch=1,recovered.softgl=1';
+  const old = await postTo(was, { ...newRecord(), v: '0.99.96', stalls: 0, health: sent });
+  assert.equal(old.status, 204);
+  assert.equal(old.usage[0].blobs[12], 'radio_open.sdrplay=1,recovered.audiolead=1');
+  const now = await post({ ...newRecord(), v: '0.99.96', stalls: 0, health: sent });
+  assert.equal(now.usage[0].blobs[12], sent);
+  // Both are words of the `recovered` family and count in double12 (the recoveries) ...
+  assert.equal(now.usage[0].doubles[11], 3);
+  // ... and are not a way to write anything else (letters only; no other spelling is a word).
+  const bad = await post({ ...newRecord(), v: '0.99.96', stalls: 0,
+    health: 'recovered.dev_latch=1,recovered.device_latch=1,recovered.gl_software=1,recovered.SoftGl=1,recovered.softgl.x=1,softgl=1' });
+  assert.equal(bad.usage[0].blobs[12], '');
+});
+
+test('milestone words (reached.*): the NEW Worker keeps them first in the canonical text and counts them nowhere else; the OLD Worker (0.99.95) drops them and reads the rest', async () => {
+  // THE SAME ORDER OF DEPLOYMENT as every word before: this Worker is deployed BEFORE the application
+  // that sends `reached.*` ships (the working-session metric and the startup funnel), or the stages are
+  // dropped with the record taken. The Worker as 0.99.95 shipped it, kept byte for byte, is the fixture.
+  const was = (await import('./test-fixtures/worker-0.99.95.js')).default;
+  const stages = 'reached.launched=1,reached.window=1,reached.enumerated=1,reached.streaming=1,reached.audio=1,reached.working=1';
+  const sent = `radio_open.rtlsdr=1,${stages},recovered.audiolead=1`;
+  const now = await post({ ...newRecord(), v: '0.99.96', stalls: 0, health: sent });
+  assert.equal(now.status, 204);
+  // Canonical order: `reached` is FIRST in the written order, whatever order the client sent.
+  assert.equal(now.usage[0].blobs[12], `${stages},radio_open.rtlsdr=1,recovered.audiolead=1`);
+  // The headline sums are the validated tokens' and the stages are in none of them: radio opens 1,
+  // recoveries 1, no failure, no slow frame.
+  assert.equal(now.usage[0].doubles[5], 0);   // radio_fail
+  assert.equal(now.usage[0].doubles[6], 1);   // radio_open
+  assert.equal(now.usage[0].doubles[8], 0);   // sound_ok (the stage `reached.audio` is not the sound_ok event)
+  assert.equal(now.usage[0].doubles[11], 1);  // recovered
+  const old = await postTo(was, { ...newRecord(), v: '0.99.96', stalls: 0, health: sent });
+  assert.equal(old.status, 204);
+  assert.equal(old.usage[0].blobs[12], 'radio_open.rtlsdr=1,recovered.audiolead=1');
+  // A record of nothing but stages is a usable record here and "not reported" there.
+  const only = `reached.launched=2,reached.window=2,reached.webspectrum=1`;
+  assert.equal((await post({ ...newRecord(), v: '0.99.96', stalls: 0, health: only })).usage[0].blobs[12], only);
+  const oldOnly = await postTo(was, { ...newRecord(), v: '0.99.96', stalls: 0, health: only });
+  assert.equal(oldOnly.usage[0].blobs[11], '');
+  assert.equal(oldOnly.usage[0].blobs[12], '');
+  // They are a word list and nothing more: no other spelling, depth, case or count is a stage.
+  const bad = await post({ ...newRecord(), v: '0.99.96', stalls: 0,
+    health: 'reached=1,reached.=1,reached.Launched=1,reached.web_spectrum=1,reached.web-spectrum=1,reached.launched.x=1,reached.working=0,reached.working=-1,reached.working=x,reached.unknown=1,launched=1,working=1' });
+  assert.equal(bad.usage[0].blobs[12], '');
+  // The count is clamped like every other (999), and the stages are bounded by the base-token cap.
+  const big = await post({ ...newRecord(), v: '0.99.96', stalls: 0, health: 'reached.launched=1000,reached.window=999' });
+  assert.equal(big.usage[0].blobs[12], 'reached.launched=999,reached.window=999');
+});
+
+test('the update channel (uch) is stored in blob15 as stable or beta and as nothing else; an OLD Worker drops it, the row otherwise unchanged', async () => {
+  // THE SAME ORDER OF DEPLOYMENT: this Worker is deployed BEFORE the application that sends `uch`
+  // ships, or the channel is dropped with the record taken (a 204 tells the client to forget it).
+  // The Worker as 0.99.95 shipped it, kept byte for byte, is the fixture.
+  const was = (await import('./test-fixtures/worker-0.99.95.js')).default;
+  for (const ch of ['stable', 'beta']) {
+    const sent = { ...newRecord(), v: '0.99.96', stalls: 0, health: 'radio_open.rtlsdr=1', uch: ch };
+    const now = await post(sent);
+    assert.equal(now.status, 204);
+    assert.equal(now.usage[0].blobs.length, 15);
+    assert.equal(now.usage[0].blobs[14], ch);
+    const old = await postTo(was, sent);
+    assert.equal(old.status, 204);
+    assert.equal(old.usage[0].blobs.length, 14, 'the old Worker has no blob15');
+    // Every other column is exactly what the old Worker wrote.
+    assert.deepEqual(now.usage[0].blobs.slice(0, 14), old.usage[0].blobs);
+    assert.deepEqual(now.usage[0].doubles, old.usage[0].doubles);
+    assert.deepEqual(now.usage[0].indexes, old.usage[0].indexes);
+  }
+  // Not reported: an older client, and a client that sent nothing usable. '' means "not reported".
+  const absent = await post({ ...newRecord(), v: '0.99.95', stalls: 0 });
+  assert.equal(absent.usage[0].blobs[14], '');
+  for (const bad of ['', 'Beta', 'STABLE', 'nightly', 'beta ', ' beta', 'stable,beta', 'beta\nstable', '0.99.96',
+    'C:\\Users\\steve\\x', '192.168.0.7', 'beta; tuned to 145.500 MHz', 'x'.repeat(3000), null, 1, true, ['beta'], { a: 'beta' }]) {
+    const r = await post({ ...newRecord(), v: '0.99.96', stalls: 0, uch: bad });
+    assert.equal(r.status, 204);
+    assert.equal(r.usage[0].blobs[14], '', JSON.stringify(bad)?.slice(0, 40));
+  }
+  // A heartbeat cannot carry it: a beat is the id, the version and the marker.
+  const beat = await post({ id: ID, v: '0.99.96', beat: 1, uch: 'beta' });
+  assert.equal(beat.usage.length, 0);
+  assert.equal(beat.beats.length, 1);
+  assert.deepEqual(beat.beats[0].blobs, ['0.99.96']);
+});
+
+test('0.99.107 CLIENT (setup findings) -> OLD WORKER (0.99.67): a 204, those tokens dropped and the rest read; the NEW Worker keeps them', async () => {
+  // THE SAME ORDER OF DEPLOYMENT, for what the first-run radio check found: telemetry-worker/worker.js
+  // must be deployed BEFORE a client that sends `setup.<kind>.<family>` ships, or the one count that says
+  // why a computer has no working radio is silently dropped (the record itself is still taken).
+  const was = (await import('./test-fixtures/worker-0.99.67.js')).default;
+  const sent = 'radio_open.rtlsdr=1,setup.wrong-driver.rtlsdr=1,setup.no-device.none=1,recovered.audio=1';
+  const old = await postTo(was, { ...newRecord(), v: '0.99.107', stalls: 0, health: sent });
+  assert.equal(old.status, 204);
+  assert.equal(old.usage[0].blobs[12], 'radio_open.rtlsdr=1,recovered.audio=1');
+  const now = await post({ ...newRecord(), v: '0.99.107', stalls: 0, health: sent });
+  // Written order: the failure families, then setup (kind in the list's order, then family), then slow and recovered last.
+  assert.equal(now.usage[0].blobs[12],
+    'radio_open.rtlsdr=1,setup.wrong-driver.rtlsdr=1,setup.no-device.none=1,recovered.audio=1');
+  // A finding is a fact about the machine, not a failure: it is in none of the headline sums.
+  assert.equal(now.usage[0].doubles[5], 0);   // double6 radio_fail
+  assert.equal(now.usage[0].doubles[6], 1);   // double7 radio_open
+  assert.equal(now.usage[0].doubles[11], 1);  // double12 recoveries
+  // It carries exactly two words of two fixed lists and nothing else.
+  const bad = await post({ ...newRecord(), v: '0.99.107', stalls: 0,
+    health: ['setup.wrong-driver=1', 'setup.wrong-driver.rtlsdr.x=1', 'setup.Wrong-Driver.rtlsdr=1',
+      'setup.wrong-driver.RTL2832UUSB=1', 'setup.wrong-driver.serial0001=1', 'setup.fine.rtlsdr=1',
+      'setup.usable.rtl=1', 'setup=1'].join(',') });
+  assert.equal(bad.usage[0].blobs[12], '');
 });
 
 test('0.99.64 CLIENT (failure counts only) -> NEW WORKER: the row the 0.99.64 Worker wrote, and zeros in the new columns', async () => {
@@ -655,8 +770,9 @@ test('an older client (no split) reads as NOT REPORTED: blob14 is empty and the 
   for (const body of [oldRecord(), { ...oldRecord(), stalls: 1, health: '' },
     { ...oldRecord(), v: '0.99.67', crashes: 3, stalls: 0, health: HEALTH }]) {
     const p = (await post(body)).usage[0];
-    assert.equal(p.blobs.length, 14);
+    assert.equal(p.blobs.length, 15);
     assert.equal(p.blobs[13], '');
+    assert.equal(p.blobs[14], '');   // and no update channel either: an old client sends none
     assert.deepEqual(p.doubles.slice(12), [0, 0, 0, 0]);
   }
 });
@@ -838,8 +954,23 @@ function standIn(rows) {
     req.on('data', (c) => { sql += c; });
     req.on('end', () => {
       queries.push(sql);
+      // WHAT THE REAL ENGINE REFUSES (found 2026-11-04 against production): ordering by a
+      // column that the SELECT has already renamed. `SELECT blob1 AS version ... ORDER BY
+      // blob1` answers 422 "unable to find type of column", and the reader aborted at the
+      // first such query, so every section after it never printed. A stand-in that accepts
+      // it hid this from the suite; this one refuses it the same way.
+      const orderBy = sql.match(/ORDER BY\s+([a-z0-9_, ]+?)(?:\s+(?:ASC|DESC))?(?:\s+LIMIT\b.*)?$/i);
+      if (orderBy) {
+        for (const term of orderBy[1].split(',').map((t) => t.trim())) {
+          if (/^(blob|double)\d+$|^index1$/.test(term) && new RegExp('\\b' + term + '\\s+AS\\s+\\w+').test(sql)) {
+            res.statusCode = 422;
+            res.end(`Input was invalid: unable to find type of column: "${term}"`);
+            return;
+          }
+        }
+      }
       let data = [];
-      const perToken = sql.match(/startsWith\(blob13, '([a-z0-9_.]+)='\)/);
+      const perToken = sql.match(/startsWith\(blob13, '([a-z0-9_.-]+)='\)/);
       const perScope = sql.match(/startsWith\(blob13, 'slow\.([a-z-]+)\.'\)/);
       if (/AS exitsDied/.test(sql)) {
         data = rows.exitRows || [];
@@ -859,6 +990,10 @@ function standIn(rows) {
         data = rows.withRec || [];
       } else if (/blob13 AS recoveredHealth/.test(sql)) {
         data = rows.recStrings || [];
+      } else if (/max\(double2\)/.test(sql)) {
+        data = rows.stability || [];
+      } else if (/position\('setup\.' IN blob13\)/.test(sql)) {
+        data = rows.setupStrings || [];
       } else if (/blob13 AS health/.test(sql)) {
         data = rows.healthStrings || [];
       } else if (perToken) {
@@ -1009,6 +1144,83 @@ readerTest('the reader prints what fails per version: sessions and installs per 
     const perEvent = failQueries.filter((q) => /startsWith\(blob13/.test(q));
     assert.equal(perEvent.length, 2);
     for (const q of perEvent) { assert.match(q, /count\(DISTINCT index1\) AS installs/); }
+  } finally {
+    server.close();
+  }
+});
+
+readerTest('the reader prints why there is no working radio: installs and sessions per finding, only vocabulary reaches a query', async () => {
+  const { server, queries, port } = await standIn({
+    reporting: [], stalled: [], unmeasured: [],
+    setupStrings: [
+      { health: 'radio_open.rtlsdr=1,setup.usable.rtlsdr=1', sessions: '5' },
+      { health: 'setup.wrong-driver.rtlsdr=1', sessions: '7' },
+      { health: 'setup.wrong-driver.rtlsdr=1,setup.no-device.none=1', sessions: '2' },
+      // text that is not the vocabulary: never reaches a query
+      { health: "setup.wrong-driver.rtlsdr=1,setup.evil'--.rtlsdr=1,setup.x;DROP.none=1", sessions: '1' },
+    ],
+    healthInstalls: {
+      'setup.wrong-driver.rtlsdr': [{ installs: '9' }],
+      'setup.no-device.none': [{ installs: '2' }],
+      'setup.usable.rtlsdr': [{ installs: '5' }],
+    },
+  });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Why there is no working radio/);
+    // finding, installs (count(DISTINCT index1)), sessions (records that carried it)
+    assert.match(r.stdout, /wrong-driver\.rtlsdr\s+9\s+10\b/);
+    assert.match(r.stdout, /no-device\.none\s+2\s+2\b/);
+    assert.match(r.stdout, /usable\.rtlsdr\s+5\s+5\b/);
+    const setupQueries = queries.filter((q) => /setup\./.test(q));
+    assert.equal(setupQueries.length, 4, 'one for the strings, one install count per finding seen');
+    for (const q of queries) {
+      assert.doesNotMatch(q, /uniq\s*\(/i, 'approximate uniq() must never be used for installs');
+      assert.doesNotMatch(q, /evil|DROP/, 'text that is not the vocabulary never reaches a query');
+    }
+    for (const q of setupQueries) { assert.match(q, /blob12 = '1'/); }
+    for (const q of setupQueries.filter((x) => /startsWith/.test(x))) {
+      assert.match(q, /count\(DISTINCT index1\) AS installs/);
+    }
+  } finally {
+    server.close();
+  }
+});
+
+readerTest('when no build has reported a setup finding the reader says so and prints no zero rows', async () => {
+  const { server, port } = await standIn({ reporting: [], stalled: [], unmeasured: [], setupStrings: [] });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Why there is no working radio/);
+    assert.match(r.stdout, /No build in this window has reported a finding yet/);
+    assert.match(r.stdout, /not 'no problem'/);
+    assert.doesNotMatch(r.stdout, /wrong-driver\.\w+\s+\d/);
+  } finally {
+    server.close();
+  }
+});
+
+readerTest('stability is the INCREASE of the lifetime crash counter per install, never the sum of it', async () => {
+  // double2 is a lifetime counter that is never reset, and every launch writes a row. Summing it
+  // over a window multiplies each install's lifetime total by its number of reports: on
+  // 2026-11-04 the reader printed 902 unclean exits (1.82 per install) for a 14-day window in
+  // which the counters moved by 44 (0.09 per install).
+  const { server, queries, port } = await standIn({
+    reporting: [], stalled: [], unmeasured: [], stability: [{ crashes: '44', installs: '495' }],
+  });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Stability/);
+    assert.match(r.stdout, /unclean exits in window\s+44\b/);
+    assert.match(r.stdout, /per install\s+0\.09\b/);
+    const asked = queries.filter((q) => /double2/.test(q));
+    assert.equal(asked.length, 1, 'one question about the crash counter outside the exit-cause section');
+    assert.match(asked[0], /max\(double2\) - min\(double2\)/);
+    assert.match(asked[0], /GROUP BY index1/);
+    assert.doesNotMatch(asked[0], /sum\(double2\)/, 'a lifetime counter is never summed across reports');
   } finally {
     server.close();
   }

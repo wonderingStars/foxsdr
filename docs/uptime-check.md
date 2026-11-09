@@ -16,7 +16,7 @@ No secrets, no checkout, no third-party actions. A healthy run takes a few secon
 
 ## What it checks
 
-Every 15 minutes (`schedule`) and on demand (`workflow_dispatch`):
+Every 15 minutes (`schedule`) and on demand (`workflow_dispatch`), four checks:
 
 1. `https://foxsdr.com/healthz` answers **200** with JSON `ok: true` and a
    non-empty `version`.
@@ -28,6 +28,20 @@ Every 15 minutes (`schedule`) and on demand (`workflow_dispatch`):
    sent. (Read from `worker.js` in the application repository; not exercised
    against the live endpoint from where this was written - the first manual run
    does that.)
+
+4. **The canary heartbeat** (field-early-warning): `https://telemetry.foxsdr.com/` answers
+   **204** to a heartbeat - `{"id":"5afe5afe5afe5afe5afe5afe5afe5afe","v":"0.0.0-canary","beat":1}` -
+   from the *reserved canary install id*. A heartbeat goes into the Worker's own
+   `foxsdr_heartbeat` dataset and nowhere else (never into `foxsdr_usage`), and the website
+   leaves that id out of every usage statement, so it is not a user. **Why it is here:** the
+   website's ingestion-silence alert ("no heartbeat reached the dataset for an hour") reads that
+   dataset, and a field of a few dozen installs is genuinely quiet at night. With a beat that is
+   always there - one every fifteen minutes, about 96 small rows a day - an hour with no beat of any
+   kind means the Worker, its dataset or the route is broken, not that everyone is asleep. This
+   workflow cannot read the dataset itself (that needs the analytics token, and this workflow holds
+   no secret), so the *website* does the reading and the alerting (`watchers.go`, its README,
+   *Watching the watchers*) and arms the alert only once it has seen the canary. Deploying the
+   website first is harmless; deploying this first just starts feeding the dataset.
 
 **It rides out a restart.** All three checks are repeated, 15 seconds apart, for
 about three minutes (a redeploy is silent for about one) and the run passes the

@@ -130,10 +130,12 @@ void testEveryTokenIsLegalAndNothingElseIs() {
     // + 1 catalogue + 4 + 3 plugin + 1 recording = 220 failure tokens (0.99.66: the
     // thirteenth driver word, hydrasdr, added one open, one data and eight fail
     // tokens; 0.99.70: the fourteenth, rtltcp, adds the same ten again); then 54
-    // slow (18 countable scopes x 3 tiers) and 38 recovered (0.99.73: audiolead; 0.99.100: viewport and the eighteen words of the 2026-10-28
+    // slow (18 countable scopes x 3 tiers) and 40 recovered (0.99.73: audiolead; the early-warning pair devlatch and softgl; 0.99.100: viewport and the eighteen words of the 2026-10-28
     // survey; then the engine-extraction branch's five: the plugin containment pluginfault, pluginquarantine, pluginwedge, pluginoveruse,
-    // and the per-thread watchdog's threadwedge).
-    CHECK(all.size() == 220 + 54 + 38);
+    // and the per-thread watchdog's threadwedge); and, FIRST in the written order, the 7
+    // stages a session reaches (field-early-warning: launched ... working). 0.99.107 adds the setup finding,
+    // 6 kinds x 8 families = 48 more failure tokens.
+    CHECK(all.size() == 7 + 220 + 48 + 54 + 40);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
@@ -663,15 +665,69 @@ void testTheGlobalLedgerIsWhatTheHelpersCountInto() {
     health::notePluginInstallFailed(health::InstallClass::Hash);
     health::notePluginLoadRefused(health::LoadClass::Retired);
     health::noteRecordFailed();
+    health::noteSetupFinding("wrong-driver", "rtlsdr");
     CHECK(g->counts() == (Counts{{"scan_none", 1}, {"radio_open.rtlsdr", 1}, {"radio_data.rtlsdr", 1},
                                  {"radio_fail.rtlsdr.busy", 1}, {"radio_fail.other.absent", 1},
                                  {"sound_ok.wasapi", 1}, {"sound_fail.none.nodevice", 1},
                                  {"upd_check", 1}, {"upd_dl", 1}, {"upd_verify", 1}, {"upd_run", 1},
                                  {"plug_cat", 1}, {"plug_inst.hash", 1}, {"plug_load.retired", 1},
-                                 {"rec_fail", 1}}));
+                                 {"rec_fail", 1}, {"setup.wrong-driver.rtlsdr", 1},
+                                 // an opened radio and the speakers playing are two of the stages a
+                                 // session reaches (Milestone): the same two call sites count them
+                                 {"reached.streaming", 1}, {"reached.audio", 1}}));
     CHECK(health::sumOf(g->counts(), "radio_fail") == 2);
     CHECK(health::sumOf(g->counts(), "radio_open") == 1);
     CHECK(health::sumOf(g->counts(), "radio") == 0);   // a prefix of a name is not an event
+    g->reset();
+}
+
+// ---------------------------------------------------------------------------
+// WHAT THE RADIO-SETUP CHECK FOUND (0.99.107): two fixed words, nothing else.
+// ---------------------------------------------------------------------------
+void testSetupFindingsAreTwoWordsAndNothingElse() {
+    // Every kind x family pair is a legal token, and builds exactly itself.
+    const char* const kinds[] = {"usable", "wrong-driver", "vendor-missing",
+                                 "not-visible", "no-device", "not-checked"};
+    const char* const families[] = {"rtlsdr", "airspy", "airspyhf", "hackrf",
+                                    "sdrplay", "usrp", "lime", "none"};
+    int n = 0;
+    for (std::size_t k = 0; k < 6; ++k) {
+        for (const char* f : families) {
+            const std::string t = health::tokenSetup(static_cast<health::SetupKind>(k), f);
+            CHECK(t == std::string("setup.") + kinds[k] + "." + f);
+            CHECK(health::validToken(t));
+            ++n;
+        }
+    }
+    CHECK(n == 48);
+    // A family this build does not know - or text somebody typed - is "none": the
+    // token can never carry what it was handed.
+    CHECK(health::tokenSetup(health::SetupKind::NoDevice, "") == "setup.no-device.none");
+    CHECK(health::tokenSetup(health::SetupKind::WrongDriver, "RTL2832UUSB (Realtek)") ==
+          "setup.wrong-driver.none");
+    CHECK(health::tokenSetup(health::SetupKind::NotVisible, "serial=00000001") ==
+          "setup.not-visible.none");
+    CHECK(health::tokenSetup(health::SetupKind::Usable, "RTLSDR") == "setup.usable.rtlsdr");
+    // Not tokens: a missing slot, a third word, a word of neither list, a count.
+    for (const char* bad : {"setup", "setup.usable", "setup.usable.rtlsdr.x", "setup.nope.rtlsdr",
+                            "setup.usable.rtl", "setup..rtlsdr", "setup.usable.rtlsdr=1",
+                            "setup.WRONG-DRIVER.rtlsdr"}) {
+        CHECK(!health::validToken(bad));
+    }
+    // The helper takes the radio-setup check's own words; a word that is not one counts nothing.
+    auto g = health::globalLedger();
+    g->reset();
+    const fs::path dir = scratch("setup");
+    g->arm(HealthLedger::pathIn(u8(dir)), cascade::core::newInstallId(), false);
+    health::noteSetupFinding("no-device", "");
+    health::noteSetupFinding("wrong-driver", "rtlsdr");
+    health::noteSetupFinding("wrong-driver", "rtlsdr");   // once a session for each finding
+    health::noteSetupFinding("vendor-missing", "sdrplay");
+    health::noteSetupFinding("unknown", "rtlsdr");
+    health::noteSetupFinding("RTL-SDR (RTL2832U)", "rtlsdr");
+    health::noteSetupFinding("", "");
+    CHECK(g->counts() == (Counts{{"setup.no-device.none", 1}, {"setup.wrong-driver.rtlsdr", 1},
+                                 {"setup.vendor-missing.sdrplay", 1}}));
     g->reset();
 }
 
@@ -897,7 +953,7 @@ void testRecoveredWordsAndCap() {
                                             "streamrestart", "tunerretry", "latecall", "scanlimit",
                                             "usbstuck", "ratesdefault", "gainrefused", "ppmrefused",
                                             "iqfilegone", "cataloguebad", "catstop", "filekept",
-                                            "takeheader", "sentinelgone", "displaywatch",
+                                            "takeheader", "sentinelgone", "displaywatch", "devlatch", "softgl",
                                             "pluginfault", "pluginquarantine", "pluginwedge", "pluginoveruse", "threadwedge"};
     CHECK(health::recoveredWords() == words);
     CHECK(health::kRecoveredCount == words.size());
@@ -919,7 +975,7 @@ void testRecoveredWordsAndCap() {
                                         "webroute", "sdrenum", "sdrlost", "audiolead", "viewport",
                                         "readerleak", "closeleak", "linkstranded", "streamrestart",
                                         "tunerretry", "latecall", "scanlimit", "usbstuck", "iqfilegone",
-                                        "cataloguebad", "filekept", "sentinelgone", "displaywatch", "pluginoveruse"};
+                                        "cataloguebad", "filekept", "sentinelgone", "displaywatch", "devlatch", "softgl", "pluginoveruse"};
     for (std::size_t i = 0; i < words.size(); ++i) {
         CHECK(health::recoveredOncePerSession(static_cast<health::Recovered>(i)) == (once.count(words[i]) == 1));
     }
@@ -1379,7 +1435,8 @@ std::vector<std::string> sortedCopy(std::vector<std::string> v) {
 // The vocabulary's own lists, by the heading PRIVACY.md and the Worker use for them.
 struct Lists {
     std::vector<std::string> events, drivers, radioReasons, apis, soundReasons, installClasses, loadClasses;
-    std::vector<std::string> slowScopes, slowTiers, recovered;
+    std::vector<std::string> slowScopes, slowTiers, recovered, stages;
+    std::vector<std::string> setupKinds, setupFamilies;
 };
 
 Lists codeLists() {
@@ -1394,6 +1451,8 @@ Lists codeLists() {
         if (e.name == "plug_load") { l.loadClasses = e.qualifiers[0]; }
         if (e.name == "slow") { l.slowScopes = e.qualifiers[0]; l.slowTiers = e.qualifiers[1]; }
         if (e.name == "recovered") { l.recovered = e.qualifiers[0]; }
+        if (e.name == "reached") { l.stages = e.qualifiers[0]; }
+        if (e.name == "setup") { l.setupKinds = e.qualifiers[0]; l.setupFamilies = e.qualifiers[1]; }
     }
     return l;
 }
@@ -1449,6 +1508,9 @@ void testPrivacyListsEveryWordOfTheVocabulary() {
     same("Slow-frame scopes", code.slowScopes);
     same("Slow-frame tiers", code.slowTiers);
     same("Recovered from", code.recovered);
+    same("Stages reached", code.stages);
+    same("Setup kinds", code.setupKinds);
+    same("Setup families", code.setupFamilies);
     // `user-wait` is named in the page - as the one scope that is NOT counted - but is never a
     // word of the scopes table.
     CHECK(doc.find("`user-wait`") != std::string::npos);
@@ -1501,6 +1563,150 @@ void testTheWorkerCarriesTheSameVocabulary() {
     CHECK(constant("MAX_HEALTH_COUNT") == static_cast<long>(health::kMaxCount));
 }
 
+
+// ---------------------------------------------------------------------------
+// How far a session got (Milestone): the stages, their written place, the rule
+// that makes a session "working", and what carries them into the ledger.
+// ---------------------------------------------------------------------------
+void testTheStagesAreWordsOfTheClosedVocabularyAndWrittenFirst() {
+    const std::vector<std::string> words = {"launched", "window", "enumerated", "streaming",
+                                            "audio", "webspectrum", "working"};
+    CHECK(health::milestoneWords() == words);
+    CHECK(health::kMilestoneCount == words.size());
+    for (std::size_t i = 0; i < words.size(); ++i) {
+        const health::Milestone m = static_cast<health::Milestone>(i);
+        CHECK(std::string(health::milestoneWord(m)) == words[i]);
+        CHECK(health::tokenReached(m) == "reached." + words[i]);
+        CHECK(health::validToken("reached." + words[i]));
+        // letters only: nothing a path, a number or a name could be dressed as
+        CHECK(std::all_of(words[i].begin(), words[i].end(), [](char c) { return c >= 'a' && c <= 'z'; }));
+    }
+    for (const char* bad : {"reached", "reached.", "reached.Launched", "reached.web_spectrum", "reached.web-spectrum",
+                            "reached.launched.x", "reached.unknown", "reached.window=1", "launched", "working"}) {
+        if (health::validToken(bad)) { std::printf("FAIL %s is a legal token\n", bad); }
+        CHECK(!health::validToken(bad));
+    }
+    // The vocabulary lists them FIRST, once a session.
+    const auto& v = health::vocabulary();
+    CHECK(!v.empty() && v.front().name == "reached" && v.front().oncePerSession);
+    // So in a record they come before every other token, whatever order they were counted in.
+    CHECK(health::encode({{"radio_open.rtlsdr", 1}, {"scan_none", 1}, {"reached.working", 1}, {"reached.launched", 1},
+                          {"recovered.audio", 2}}) ==
+          "reached.launched=1,reached.working=1,scan_none=1,radio_open.rtlsdr=1,recovered.audio=2");
+    health::Counts back;
+    CHECK(health::decode("reached.launched=1,reached.window=1,scan_none=1", back));
+    CHECK(back == (Counts{{"reached.launched", 1}, {"reached.window", 1}, {"scan_none", 1}}));
+    // Seven stages never push a record over the base-token cap on their own.
+    CHECK(health::kMilestoneCount < health::kMaxBaseTokens);
+}
+
+void testAStageIsCountedOnceASessionAndRemembered() {
+    auto g = health::globalLedger();
+    g->reset();
+    health::resetReachedForTest();
+    const fs::path dir = scratch("stages");
+    g->arm(HealthLedger::pathIn(u8(dir)), cascade::core::newInstallId(), false);
+    CHECK(!health::reached(health::Milestone::Window));
+    health::noteReached(health::Milestone::Launched);
+    health::noteReached(health::Milestone::Window);
+    health::noteReached(health::Milestone::Window);
+    health::noteReached(health::Milestone::Window);
+    CHECK(g->counts() == (Counts{{"reached.launched", 1}, {"reached.window", 1}}));
+    CHECK(health::reached(health::Milestone::Window) && health::reached(health::Milestone::Launched));
+    CHECK(!health::reached(health::Milestone::Working));
+    // The two call sites that already knew: a radio opened, the speakers played.
+    health::noteRadioOpen("rtlsdr");
+    health::noteSoundOk("Windows WASAPI");
+    CHECK(countOf(g->counts(), "reached.streaming") == 1 && countOf(g->counts(), "reached.audio") == 1);
+    CHECK(health::reached(health::Milestone::Streaming) && health::reached(health::Milestone::Audio));
+    // An out-of-range stage is nothing.
+    health::noteReached(static_cast<health::Milestone>(99));
+    CHECK(!health::reached(static_cast<health::Milestone>(99)));
+    // launched, window, streaming, audio, and the radio_open and sound_ok events beside them
+    CHECK(g->counts().size() == 6);
+    g->reset();
+    health::resetReachedForTest();
+}
+
+void testStagesReachedBeforeReportingWasSwitchedOnAreReplayed() {
+    auto g = health::globalLedger();
+    g->reset();
+    health::resetReachedForTest();
+    // Reporting is off for the first part of the session: decided, not armed. Nothing is kept...
+    g->disarm();
+    health::noteReached(health::Milestone::Launched);
+    health::noteReached(health::Milestone::Window);
+    CHECK(g->counts().empty());
+    // ...then the person switches it on: a fresh ledger, armed, and the stages the session had
+    // reached are said to it, so the record shows the funnel it really went through.
+    const fs::path dir = scratch("replay");
+    g->arm(HealthLedger::pathIn(u8(dir)), cascade::core::newInstallId(), false);
+    CHECK(g->counts().empty());
+    health::replayReached();
+    CHECK(g->counts() == (Counts{{"reached.launched", 1}, {"reached.window", 1}}));
+    // A second replay changes nothing (once a session).
+    health::replayReached();
+    CHECK(g->counts() == (Counts{{"reached.launched", 1}, {"reached.window", 1}}));
+    g->reset();
+    health::resetReachedForTest();
+}
+
+void testAStageIsNotCountedWithReportingOrDiagnosticsOff() {
+    auto g = health::globalLedger();
+    g->reset();
+    health::resetReachedForTest();
+    g->setAllowed(false);   // Diagnostics off
+    const fs::path dir = scratch("stages-off");
+    g->arm(HealthLedger::pathIn(u8(dir)), cascade::core::newInstallId(), false);
+    health::noteReached(health::Milestone::Launched);
+    health::noteRadioOpen("rtlsdr");
+    CHECK(g->counts().empty());
+    g->reset();
+    health::resetReachedForTest();
+}
+
+void testASessionIsWorkingAfterSixtySecondsOfSamplesWithOutput() {
+    // Sixty flowing seconds with a radio open is not enough without the output...
+    {
+        health::WorkingClock c;
+        for (unsigned i = 0; i < 300; ++i) { CHECK(!c.second(true, true, false)); }
+        CHECK(!c.working() && c.flowingSeconds() == health::kWorkingSampleSeconds);
+        // ...and the output arriving later is what completes it, on exactly one call.
+        CHECK(c.second(true, true, true));
+        CHECK(c.working());
+        CHECK(!c.second(true, true, true));
+    }
+    // The 60th second is the one: 59 are not enough.
+    {
+        health::WorkingClock c;
+        for (unsigned i = 0; i < 59; ++i) { CHECK(!c.second(true, true, true)); }
+        CHECK(!c.working() && c.flowingSeconds() == 59);
+        CHECK(c.second(true, true, true));
+    }
+    // Time with no radio open, or with the samples stopped, adds nothing - however long.
+    {
+        health::WorkingClock c;
+        for (unsigned i = 0; i < 1000; ++i) { CHECK(!c.second(false, true, true)); }
+        for (unsigned i = 0; i < 1000; ++i) { CHECK(!c.second(true, false, true)); }
+        CHECK(c.flowingSeconds() == 0 && !c.working());
+    }
+    // Cumulative, not consecutive: a stall does not start the minute over.
+    {
+        health::WorkingClock c;
+        for (unsigned i = 0; i < 30; ++i) { c.second(true, true, true); }
+        for (unsigned i = 0; i < 100; ++i) { CHECK(!c.second(true, false, true)); }
+        CHECK(c.flowingSeconds() == 30);
+        for (unsigned i = 0; i < 29; ++i) { CHECK(!c.second(true, true, true)); }
+        CHECK(c.second(true, true, true));
+    }
+    // Output without samples is the "no device" session this metric exists to catch: never working.
+    {
+        health::WorkingClock c;
+        for (unsigned i = 0; i < 100000; ++i) { CHECK(!c.second(true, false, true)); }
+        CHECK(!c.working());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1531,5 +1737,11 @@ int main() {
     testTheRecordCarriesOnlyVocabulary();
     testPrivacyListsEveryWordOfTheVocabulary();
     testTheWorkerCarriesTheSameVocabulary();
+    testTheStagesAreWordsOfTheClosedVocabularyAndWrittenFirst();
+    testAStageIsCountedOnceASessionAndRemembered();
+    testStagesReachedBeforeReportingWasSwitchedOnAreReplayed();
+    testAStageIsNotCountedWithReportingOrDiagnosticsOff();
+    testASessionIsWorkingAfterSixtySecondsOfSamplesWithOutput();
+    testSetupFindingsAreTwoWordsAndNothingElse();
     return testSummary("test_health_events");
 }
