@@ -1,0 +1,37 @@
+#! frames=500 bank=1 plugins=all open=module:lrpt-decoder-0.1.0-abi3-win-x64.dll size=1600x1600
+# plugin-lrpt-decoder: Meteor-M LRPT Weather Pictures (lrpt-decoder 0.1.0, EXPERIMENTAL, tick rows 1043-1050; an IMAGE DECODER), docs 6.49 round two.
+# Idle page: IDLE lamp, START, Keep running, < FITTED (no grant key). START is read back from the engine (decodersRunning) and from the
+# page's key turning into STOP. The picture page ("Meteor-M LRPT (EXPERIMENTAL) image" bank row) carries the preset keys (Preset 1-2, rows
+# 1044-1045); no signal is fed, so no picture arrives (the fixture run, 6.49 phase B).
+120 state kit.plugins == 43
+state list.plugins.names contains "Meteor-M LRPT (EXPERIMENTAL)"
++1 expect "START" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# START opens the plugin's windows: read them as open right away
+state pages contains "Meteor-M LRPT (EXPERIMENTAL) image"
+state decodersRunning >= 1
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
++1 click "Meteor-M LRPT (EXPERIMENTAL) image"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "Meteor-M LRPT (EXPERIMENTAL) image"#1
++10 state pages contains "Meteor-M LRPT (EXPERIMENTAL) image"
+# the one dump still needed: the labels of the image page's own controls (the preset keys come from the plugin source, not from a dump)
++1 dump
+# ---- the preset keys of the Meteor-M LRPT image page (device-centre presets: the receiver's centre moves) ----
++1 click "LRPT  Meteor-M  137.100 MHz"
++15 state centreHz == 137100000
++1 click "LRPT  Meteor-M  137.900 MHz"
++15 state centreHz == 137900000

@@ -1,0 +1,54 @@
+#! frames=540 bank=1 plugins=all open=module:pocsag-decoder-1.0.5-abi3-win-x64.dll size=1600x1800
+# plugin-pocsag-decoder: the POCSAG Pager Decoder (tick rows 829-849): its module page (START, Keep running, GRANT RECEIVER CONTROL,
+# < FITTED), the "POCSAG settings" panel page, the six preset keys and the three setting checkboxes.
+# No signal is fed: only STATE changes are asserted (the run word, the grant, the open pages, the tuned frequency, the settings echo).
+120 state kit.plugins == 43
+state list.plugins.names contains "POCSAG"
+state list.pluginSettings.names contains "Numeric messages"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START opens the plugin's own windows: the page is read back right after it
+state pages contains "POCSAG settings"
+# START turns "Keep running" on: it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++15 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the DECODE bank row "POCSAG settings"#1 toggles the page: click it twice (closed, then open again), then bring the tab (#2) to the front
++1 click "POCSAG settings"#1
++5 click "POCSAG settings"#1
++5 state pages contains "POCSAG settings"
++1 click "POCSAG settings"#2
++3 state pages contains "POCSAG settings"
++1 state kit.panels >= 1
++1 click "UK  153.350 MHz"
++25 state tunedHz == 153350000
++1 click "DAPNET  439.9875 MHz (ham)"
++25 state tunedHz == 439987500
++1 click "POCSAG  931.9375 MHz (US)"
++25 state tunedHz == 931937500
++1 click "POCSAG  931.9125 MHz (US)"
++25 state tunedHz == 931912500
++1 click "POCSAG  931.8875 MHz (US)"
++25 state tunedHz == 931887500
++1 click "POCSAG  931.4375 MHz (US)"
++25 state tunedHz == 931437500
+# the settings fold on the panel page (the fold's key is the 2nd "Plugin settings": the form's group is the 1st), then the three BOOL fields
++1 click "Plugin settings"#2
+# KEPT DUMP (round three): the expanded form, for the real checkbox state and labels
++3 dump
++1 click "Numeric messages"
++15 expect "Numeric messages" checked equals "true"
++1 click "Use function codes"
++15 expect "Use function codes" checked equals "true"
++1 click "Show frame details"
++15 expect "Show frame details" checked equals "true"

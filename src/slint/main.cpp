@@ -1319,6 +1319,21 @@ int main(int argc, char** argv) {
         if (name == "sinkName") { out = state.sinkName; return std::string(); }
         if (name == "faultMessage") { out = state.faultMessage; return std::string(); }
         if (name == "audioMutedBy") { out = state.audioMutedBy; return std::string(); }
+        // kit.<what>: what the plugin kit holds (the bounded summary's figures, docs 6.49): plugins, tracks, panels, instruments, pictures, lines, mapPages
+        if (name.rfind("kit.", 0) == 0) {
+            const std::string what = name.substr(4);
+            std::size_t n = 0;
+            if (what == "plugins") { n = kit.lists().rows.size(); }
+            else if (what == "tracks") { n = kit.tracks().size(); }
+            else if (what == "panels") { n = kit.panels().size(); }
+            else if (what == "instruments") { n = kit.instruments().size(); }
+            else if (what == "pictures") { n = kit.images().size(); }
+            else if (what == "lines") { n = kit.decoderLines().size(); }
+            else if (what == "mapPages") { n = kit.mapPages().size(); }
+            else { return "kit.plugins|tracks|panels|instruments|pictures|lines|mapPages, not " + name; }
+            out = std::to_string(n);
+            return std::string();
+        }
         if (name == "bank") { out = std::to_string(ui->get_bank_index()); return std::string(); }
         if (name == "view") { out = std::to_string(ui->get_view_index()); return std::string(); }
         if (name == "pages") { out = publisher.pagesLine(); return std::string(); }

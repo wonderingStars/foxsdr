@@ -1648,6 +1648,12 @@ std::string PluginHost::choosePluginDir(const std::string& exeDir, const std::st
 }
 
 std::string PluginHost::defaultPluginDir() {
+    // THE TEST SEAM (docs/engine-stage4.md 6.49), the plugin folder's CASCADE_CONFIG_TEST: a harness that spawns the real window on a
+    // scratch profile names the folder its plugins are fitted from, so a run with the 43 catalogue plugins and a run with none can sit
+    // side by side under one build tree (a writable exe folder wins below, and that folder is shared by every run of the tree).
+    if (const char* t = std::getenv("CASCADE_PLUGIN_DIR_TEST"); t != nullptr && *t != '\0') {
+        return t;
+    }
     const std::string exeDir = exePluginDir();
     const std::string userDir = userPluginDir();
     // THE PROBE IS SKIPPED, NOT IGNORED, when this process is packaged: the

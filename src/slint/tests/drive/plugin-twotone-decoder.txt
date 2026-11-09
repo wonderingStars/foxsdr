@@ -1,0 +1,36 @@
+#! frames=350 bank=1 plugins=all open=module:twotone-decoder-1.0.1-abi3-win-x64.dll size=1600x1800
+# plugin-twotone-decoder: the Two-Tone Paging Decoder (tick rows 814-828): its module page (START, Keep running, < FITTED), the Tone alert
+# instrument window, the two preset keys. The module page of this plugin shows no grant keys (it asks for none) and no command keys.
+# No signal is fed: the decoder decodes nothing, so only STATE changes are asserted (the run word, the open pages, the tuned frequency).
+# START itself retunes the receiver to the first preset (154.000 MHz), so the keys are clicked second-then-first: every read-back is a change.
+120 state kit.plugins == 43
+state list.plugins.names contains "Two-Tone Paging"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START opens the plugin's own windows: the page is read back right after it
+state pages contains "Tone alert"
+# START turns "Keep running" on (the plugin then runs "always"): it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the DECODE bank row "Tone alert"#1 toggles the page: click it twice (closed, then open again), then bring the tab (#2) to the front
++1 click "Tone alert"#1
++5 click "Tone alert"#1
++5 state pages contains "Tone alert"
++1 click "Tone alert"#2
++3 state pages contains "Tone alert"
+# KEPT DUMP (round three): the Tone alert page, to confirm the PresetBar sits on it
++3 dump
++1 state kit.instruments >= 1
++1 click "Two-tone  453.000 MHz NFM (UHF dispatch)"
++25 state tunedHz == 453000000
+state mode == NFM
++1 click "Two-tone  154.000 MHz NFM (tune your dispatch)"
++25 state tunedHz == 154000000
+state mode == NFM

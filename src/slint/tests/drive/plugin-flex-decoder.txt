@@ -1,0 +1,38 @@
+#! frames=440 bank=1 plugins=all open=module:flex-decoder-1.0.0-abi3-win-x64.dll size=1600x1800
+# plugin-flex-decoder: the FLEX Pager Decoder (tick rows 850-867): its module page (START, Keep running, < FITTED), the "FLEX pager"
+# instrument window (the PagerFace) and the four preset keys. The module page shows no grant keys (the plugin asks for none).
+# No signal is fed: only STATE changes are asserted (the run word, the open pages, the tuned frequency).
+# START itself retunes the receiver to the first preset (931.9375 MHz), so the keys are clicked 2, 3, 4, then 1: every read-back is a change.
+120 state kit.plugins == 43
+state list.plugins.names contains "FLEX"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START opens the plugin's own windows: the page is read back right after it
+state pages contains "FLEX pager"
+# START turns "Keep running" on: it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the DECODE bank row "FLEX pager"#1 toggles the page: click it twice (closed, then open again), then bring the tab (#2) to the front
++1 click "FLEX pager"#1
++5 click "FLEX pager"#1
++5 state pages contains "FLEX pager"
++1 click "FLEX pager"#2
++3 state pages contains "FLEX pager"
+# KEPT DUMP (round three): the FLEX pager page, to confirm the PresetBar sits on it
++3 dump
++1 state kit.instruments >= 1
++1 click "FLEX  931.9125 MHz (US)"
++25 state tunedHz == 931912500
++1 click "FLEX  931.8875 MHz (US)"
++25 state tunedHz == 931887500
++1 click "FLEX  931.4375 MHz (US)"
++25 state tunedHz == 931437500
++1 click "FLEX  931.9375 MHz (US)"
++25 state tunedHz == 931937500

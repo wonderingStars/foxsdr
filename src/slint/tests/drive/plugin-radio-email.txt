@@ -1,0 +1,81 @@
+#! frames=540 bank=1 plugins=all open=module:radio-email-0.1.0-abi3-win-x64.dll size=1600x1800
+# plugin-radio-email: the Radio Email, Winlink-compatible (tick rows 968-993): its module page (START, Keep running, GRANT RECEIVER CONTROL,
+# the nine plate keys, < FITTED), the "Radio Email" panel page and the 11 settings of its form.
+# NOT DRIVEN, on purpose: CONNECT (it dials the gateway: the network is withheld in a bounded run, and a login is the owner's) and the
+# "Winlink password (write-only)" box (a credential: no script types one). The gateway host is typed as 127.0.0.1 and the auto-check as 0
+# (a non-zero value would make the plugin dial out by itself). QUEUE MESSAGE and the mailbox keys act on the plugin's own local store.
+# No signal is fed: only STATE changes are asserted (the run word, the grant, the open pages, the settings echo).
+120 state kit.plugins == 43
+state list.plugins.names contains "Radio Email (Winlink-compatible)"
+state list.pluginSettings.names contains "Gateway host"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START leaves only the module page open (the panel opens from its DECODE bank row, as the second run showed)
+state pages contains "Radio Email (Winlink-compatible)"
+# START turns "Keep running" on: it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++15 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 state list.pluginCommands.names contains "CONNECT"
+# the panel: the DECODE bank row "Radio Email" opens it
++1 click "Radio Email"
++5 state pages contains "Radio Email (Winlink-compatible) Radio Email"
++1 state kit.panels >= 1
+# the settings fold on the panel page (its key is the 2nd "Plugin settings"), then the fields
++1 click "Plugin settings"#2
+# KEPT DUMP (round three): the expanded form, for the real field labels and kinds ("Callsign" matched a table row in the first run)
++3 dump
++1 type "Callsign" "N0CALL"
++1 key enter
++5 expect "Callsign" value equals "N0CALL"
++1 type "Locator" "IO91wm"
++1 key enter
++5 expect "Locator" value equals "IO91wm"
++1 type "To" "N0CALL"
++1 key enter
++5 expect "To" value equals "N0CALL"
++1 type "Cc" "N0CALL"
++1 key enter
++5 expect "Cc" value equals "N0CALL"
++1 type "Subject" "Drive probe"
++1 key enter
++5 expect "Subject" value equals "Drive probe"
++1 type "Message text" "Drive probe body"
++1 key enter
++5 expect "Message text" value equals "Drive probe body"
++1 type "Attachment" "drive-none.txt"
++1 key enter
++5 expect "Attachment" value equals "drive-none.txt"
++1 type "Gateway host" "127.0.0.1"
++1 key enter
++5 expect "Gateway host" value equals "127.0.0.1"
++1 type "Gateway port" "9772"
++1 key enter
++5 expect "Gateway port" value equals "9772"
++1 type "Auto-check, minutes (0 = off)" "0"
++1 key enter
++5 expect "Auto-check, minutes (0 = off)" value equals "0"
+# back to the module page (its tab) for the plate keys: the draft was typed above, so QUEUE MESSAGE has something to queue
++1 click "Radio Email (Winlink-compatible)"#1
++3 state pages contains "Radio Email (Winlink-compatible)"
++1 click "QUEUE MESSAGE"
++10 click "NEXT MESSAGE"
++5 click "PREVIOUS MESSAGE"
++5 click "MARK READ"
++5 click "NEXT PAGE"
++5 click "PREVIOUS PAGE"
++5 click "DELETE DRAFT"
++5 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the DECODE bank row "Radio Email" toggles the open panel: click it twice (closed, then open again)
++1 click "Radio Email"#1
++5 click "Radio Email"#1
++5 state pages contains "Radio Email"

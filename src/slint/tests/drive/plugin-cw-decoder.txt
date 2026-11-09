@@ -1,0 +1,33 @@
+#! frames=500 bank=1 plugins=all open=module:cw-decoder-1.1.0-abi3-win-x64.dll size=1600x1600
+# plugin-cw-decoder: Morse (CW) Decoder (tick rows 669-677): the module page, START / STOP, Keep running, "< FITTED", then the
+# Decoder output page where the six presets are keys of the PresetBar.
+# No signal: asserted by state, not by decoded text. The preset frequencies are the labels'.
+120 state kit.plugins == 43
+state list.plugins.names contains "Morse (CW)"
+state pages contains "Morse (CW)"
++1 expect "START" label equals "START"
++1 click "START"
++40 state decodersRunning >= 1
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 state pages contains "Decoder output"
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "+ Window"
++3 state pages contains "Decoder output"
++1 click "CW  14.060 MHz (20 m)"
++10 state tunedHz == 14060000
++1 click "CW  7.030 MHz (40 m)"
++10 state tunedHz == 7030000
++1 click "CW  3.560 MHz (80 m)"
++10 state tunedHz == 3560000
++1 click "CW  21.060 MHz (15 m)"
++10 state tunedHz == 21060000
++1 click "CW  28.060 MHz (10 m)"
++10 state tunedHz == 28060000
++1 click "SAQ Grimeton 17.2 kHz (VLF)"
++10 state tunedHz == 17200

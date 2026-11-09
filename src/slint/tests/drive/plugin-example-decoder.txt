@@ -1,0 +1,30 @@
+#! frames=300 bank=1 plugins=all open=module:example-decoder-2.0.0-abi3-win-x64.dll size=1600x1800
+# plugin-example-decoder: the Example RMS Reporter (tick rows 904-905): its module page (START, Keep running, < FITTED) and its row in the
+# DECODE bank's Decoders drawer. The plugin has no window, no preset and no setting, so the module page and the drawer entry are all it has.
+# No signal is fed: only STATE changes are asserted (the run word, the decoder list, the open pages).
+120 state kit.plugins == 43
+state list.plugins.names contains "Example RMS Reporter"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+state list.decoders.names contains "Example RMS Reporter"
+# START turns "Keep running" on: it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
+# KEPT DUMPS (round three): the Decoders drawer lists decoders with a preset bar, a Decoder START / STOP key and the mute tick; the first run saw
+# only ACARS, ADS-B, HFDL and SELCAL in the top screen, so it is dumped at three scroll offsets (the scroll hit "Mute audio while running"#1,
+# the first of three such ticks) to find the Example RMS Reporter entry and its START / STOP key (row 905)
++1 click "Turn on and off plugins"
++5 state pages contains "Fitted modules"
++1 scroll "Mute audio while running"#1 1400
++3 dump
++1 scroll "Mute audio while running"#1 1400
++3 dump
++1 scroll "Mute audio while running"#1 1400
++3 dump

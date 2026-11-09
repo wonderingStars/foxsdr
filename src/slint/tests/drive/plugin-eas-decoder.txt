@@ -1,0 +1,34 @@
+#! frames=500 bank=1 plugins=all open=module:eas-decoder-1.0.0-abi3-win-x64.dll size=1600x1600
+# plugin-eas-decoder: EAS / SAME Alert Decoder (tick rows 737-741): the module page, START / STOP, Keep running, "< FITTED", then the
+# seven NOAA Weather Radio presets on the Decoder output page. No signal: no alert block, tone or end-of-message line.
+120 state kit.plugins == 43
+state list.plugins.names contains "EAS / SAME"
+state pages contains "EAS / SAME"
++1 expect "START" label equals "START"
++1 click "START"
++40 state decodersRunning >= 1
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 state pages contains "Decoder output"
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "+ Window"
++3 state pages contains "Decoder output"
++1 click "NOAA Weather Radio  162.400 MHz"
++10 state tunedHz == 162400000
++1 click "NOAA Weather Radio  162.425 MHz"
++10 state tunedHz == 162425000
++1 click "NOAA Weather Radio  162.450 MHz"
++10 state tunedHz == 162450000
++1 click "NOAA Weather Radio  162.475 MHz"
++10 state tunedHz == 162475000
++1 click "NOAA Weather Radio  162.500 MHz"
++10 state tunedHz == 162500000
++1 click "NOAA Weather Radio  162.525 MHz"
++10 state tunedHz == 162525000
++1 click "NOAA Weather Radio  162.550 MHz"
++10 state tunedHz == 162550000

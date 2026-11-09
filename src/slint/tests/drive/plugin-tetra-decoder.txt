@@ -1,0 +1,25 @@
+#! frames=500 bank=1 plugins=all open=module:tetra-decoder-0.1.2-abi3-win-x64.dll size=1600x1600
+# plugin-tetra-decoder: TETRA Monitor, data only (tick rows 787-796): the module page, START / STOP, Keep running, "< FITTED", the panel
+# page "TETRA cell". No signal: no cell, no traffic. The three preset keys are in no dump yet (not on the Decoder output page): the dump on
+# the panel page is KEPT (still needed: the preset labels and where they live).
+# START itself opens the plugin's windows: the pages read-back right after START is the assertion for TETRA cell; its tab is then
+# SELECTED with click "<page>"#2 (#1 is the DECODE bank row, a toggle that would close it) - no row click is used.
+120 state kit.plugins == 43
+state list.plugins.names contains "TETRA Monitor"
+state pages contains "TETRA Monitor"
++1 expect "START" label equals "START"
++1 click "START"
++40 state decodersRunning >= 1
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 state pages contains "TETRA cell"
++1 state kit.panels >= 1
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "TETRA cell"#2
++3 state pages contains "TETRA cell"
++2 dump

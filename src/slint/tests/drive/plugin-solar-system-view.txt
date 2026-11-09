@@ -1,0 +1,60 @@
+#! frames=500 bank=1 plugins=all open=module:solar-system-view-0.1.0-abi3-win-x64.dll size=1600x1600
+# plugin-solar-system-view: Solar System View (solar-system-view 0.1.0, EXPERIMENTAL, tick rows 1189-1210; an IMAGE DECODER + PANEL, asks for
+# receiver control), docs 6.49 round two. Idle page: IDLE lamp, START, GRANT RECEIVER CONTROL, Keep running, < FITTED. START is read back from
+# the engine (decodersRunning) and from the page's key turning into STOP. The plugin's own plate keys (ROTATE LEFT, ROTATE RIGHT, TILT, ZOOM IN,
+# ZOOM OUT, NEXT PAGE, PREVIOUS PAGE, NEXT CHANNEL, rows 1194-1201) appear on the module page once it runs: the round-one dump gave their real
+# wording (the same as the inventory's). Windows: "Solar System View image" (picture, settings fold with locator and log orbits,
+# rows 1202-1203) and "Solar System View" (the panel). The settings fold is "Plugin settings" (groupbox #1, fold key #2).
+120 state kit.plugins == 43
+state list.plugins.names contains "Solar System View"
++1 expect "START" enabled equals "true"
++1 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# START opens the PANEL page only (round three): read it as open right away; the image page is opened below with one row click
+state pages contains "Solar System View"
+state decodersRunning >= 1
+# ---- the plate keys, then the module page's own keys ----
++1 state list.pluginSettings.details contains solar-system-view-0.1.0-abi3-win-x64.dll
++1 state kit.panels >= 1
++1 state kit.pictures >= 1
++1 click "ROTATE LEFT"
++5 click "ROTATE RIGHT"
++5 click "TILT"
++5 click "ZOOM IN"
++5 click "ZOOM OUT"
++5 click "NEXT PAGE"
++5 click "PREVIOUS PAGE"
++5 click "NEXT CHANNEL"
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++20 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++20 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
+# ---- the plugin's windows from the DECODE bank ----
++1 click "Solar System View image"#1
++10 state pages contains "Solar System View image"
++1 click "Plugin settings"#2
++3 state list.pluginSettings.names contains "Your locator (kept on this PC)"
++1 type "Your locator (kept on this PC)" "IO91wm"
++1 key enter
++5 expect "Your locator (kept on this PC)" value equals "IO91wm"
++1 click "Log-scale orbits (SYSTEM page)"
++5 expect "Log-scale orbits (SYSTEM page)" checked equals "true"
++1 click "Solar System View"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "Solar System View"#1
++10 state pages contains "Solar System View"
+state pages contains "Solar System View image"

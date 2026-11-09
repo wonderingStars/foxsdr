@@ -1,0 +1,23 @@
+#! frames=500 bank=1 plugins=all open=module:dmr-monitor-0.1.1-abi3-win-x64.dll size=1600x1600
+# plugin-dmr-monitor: DMR Monitor, data only (tick rows 783-786): the module page, START / STOP, Keep running, "< FITTED", then the
+# one preset on the Decoder output page. No signal: no hello line, no group or private call line.
+120 state kit.plugins == 43
+state list.plugins.names contains "DMR Monitor"
+state pages contains "DMR Monitor"
++1 expect "START" label equals "START"
++1 click "START"
++40 state decodersRunning >= 1
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 state pages contains "Decoder output"
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "+ Window"
++3 state pages contains "Decoder output"
++1 click "DMR  446.000 MHz NFM (tune your repeater)"
++10 state tunedHz == 446000000
++1 state mode == NFM

@@ -1,0 +1,69 @@
+#! frames=500 bank=1 plugins=all open=module:ft8-decoder-1.1.1-abi3-win-x64.dll size=1600x1600
+# plugin-ft8-decoder: FT8 Decoder (tick rows 697-710): the module page (START / STOP, GRANT, Keep running), the panel page
+# "FT8 - PSK Reporter" with its "Plugin settings" fold (Callsign, Locator, Report to PSK Reporter - labels from the DLL's strings), then
+# the thirteen presets on the Decoder output page. The dump after the fold opens is KEPT as a guard and for the initial state of the
+# Report box. No signal: state, not decodes.
+# START itself opens the plugin's windows: the pages read-back right after START is the assertion for FT8 - PSK Reporter; its tab is then
+# SELECTED with click "<page>"#2 (#1 is the DECODE bank row, a toggle that would close it) - no row click is used.
+120 state kit.plugins == 43
+state list.plugins.names contains "FT8"
+state pages contains "FT8"
++1 expect "START" label equals "START"
++1 click "START"
++40 state decodersRunning >= 1
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 state pages contains "FT8 - PSK Reporter"
+# (START opens the plugin's own page, not the Decoder output: that read-back was wrong and is gone)
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 state list.pluginSettings.names contains "Callsign"
++1 state kit.panels >= 1
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "FT8 - PSK Reporter"#2
++3 state pages contains "FT8 - PSK Reporter"
++1 click "Plugin settings"#2
++3 dump
++1 type "Callsign" "G0FOX"
++1 key enter
++5 expect "Callsign" value equals "G0FOX"
++1 type "Locator" "IO91wm"
++1 key enter
++5 expect "Locator" value equals "IO91wm"
++1 click "Report to PSK Reporter"
++5 click "Report to PSK Reporter"
++5 state running == 1
++1 click "+ Window"
++3 state pages contains "Decoder output"
++1 click "FT8  1.840 MHz USB (160 m)"
++10 state tunedHz == 1840000
++1 state mode == USB
++1 click "FT8  3.573 MHz USB (80 m)"
++10 state tunedHz == 3573000
++1 click "FT8  7.074 MHz USB (40 m)"
++10 state tunedHz == 7074000
++1 click "FT8  10.136 MHz USB (30 m)"
++10 state tunedHz == 10136000
++1 click "FT8  14.074 MHz USB (20 m)"
++10 state tunedHz == 14074000
++1 click "FT8  18.100 MHz USB (17 m)"
++10 state tunedHz == 18100000
++1 click "FT8  21.074 MHz USB (15 m)"
++10 state tunedHz == 21074000
++1 click "FT8  24.915 MHz USB (12 m)"
++10 state tunedHz == 24915000
++1 click "FT8  28.074 MHz USB (10 m)"
++10 state tunedHz == 28074000
++1 click "FT8  50.313 MHz USB (6 m)"
++10 state tunedHz == 50313000
++1 click "FT8  50.323 MHz USB (6 m, second)"
++10 state tunedHz == 50323000
++1 click "FT8  70.154 MHz USB (4 m, Region 1)"
++10 state tunedHz == 70154000
++1 click "FT8  144.174 MHz USB (2 m)"
++10 state tunedHz == 144174000

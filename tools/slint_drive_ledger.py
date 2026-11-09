@@ -101,7 +101,7 @@ def classify(rows, tsv):
             if t in READOUT_TYPES or t.startswith("readout") or t.startswith("lamp") or t.startswith("tooltip") or t.startswith("overlay") or t.startswith("instrumentface"):
                 cls, script, detail = "NOT_DRIVABLE", "-", "a readout, not a control"
             elif section.startswith(PLUGIN_SECTION_PREFIX):
-                cls, script, detail = "NOT_DRIVABLE", "-", "no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows"
+                cls, script, detail = "NOT_DRIVABLE", "-", "no script step for this row (the plugin is fitted in the 6.49 runs; a decode, a track or a picture needs 6.50's fixture, which this plugin has not)"
             elif status == "DEFERRED":
                 cls, script, detail = "NOT_DRIVABLE", "-", "deferred: " + note
             elif status == "RELOCATED":
@@ -126,6 +126,12 @@ def reason_class(detail):
         return "needs a file"
     if "bounded run" in d or "withheld" in d or "shell" in d or "clipboard" in d or "network" in d:
         return "withheld in a bounded run"
+    if "not installed" in d:
+        return "not installed"
+    if "no script step for this row" in d:
+        return "plugin row without a step"
+    if "needs a signal" in d:
+        return "needs a signal (no fixture)"
     if "no plugin" in d or "plugin fitted" in d:
         return "no plugin fitted"
     if "label" in d and ("dump" in d or "tree" in d):

@@ -1,0 +1,96 @@
+#! frames=560 bank=1 plugins=all open=module:wefax-decoder-1.1.0-abi3-win-x64.dll size=1600x1600
+# plugin-wefax-decoder: WEFAX Weather Fax Decoder (wefax-decoder 1.1.0, tick rows 1085-1111; an IMAGE DECODER + INSTRUMENT (FAX) + PANEL), docs 6.49 round two.
+# Idle page: IDLE lamp, START, GRANT RECEIVER CONTROL, Keep running, < FITTED. START is read back from the engine (decodersRunning) and from
+# the page's key turning into STOP. Windows from the DECODE bank: "WEFAX image" (picture + settings fold + preset keys), "UK & European WEFAX
+# Stations to Monitor" (the station guide panel) and "Radiofax recorder" (the FAX instrument: START NOW, STOP NOW, SLANT -10 / +10 ppm, SET LEFT
+# EDGE are pressable rows of its memory table and plate keys of the module page, the wording is the plugin's: the labels are those of the round-one dump). The
+# settings fold ("Plugin settings", the groupbox is #1, the fold key #2) holds slant, hand-start rate and hand-start IOC. No signal is fed (the
+# fixture run, 6.49 phase B).
+120 state kit.plugins == 43
+state list.plugins.names contains WEFAX
++1 expect "START" enabled equals "true"
++1 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# START opens the plugin's windows: read them as open right away
+state pages contains "WEFAX image"
+state pages contains "Radiofax recorder"
+state pages contains "UK & European WEFAX Stations to Monitor"
+state decodersRunning >= 1
++1 dump
+# ---- after the dump: the module page's own keys ----
++1 state list.pluginSettings.details contains wefax-decoder-1.1.0-abi3-win-x64.dll
++1 state kit.panels >= 1
++1 state kit.instruments >= 1
+# ---- the module page's plate keys (the plugin's wording, "Commands" box): plugin commands, nothing in the engine reads their effect back ----
++1 click "START NOW"
++3 click "STOP NOW"
++3 click "SLANT -10 PPM"
++3 click "SLANT +10 PPM"
++3 click "SET LEFT EDGE"
++3 state running == 1
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++20 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++20 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
+# ---- the Radiofax recorder page: the preset bar, the settings fold and the instrument face are on it (dump of round one) ----
++1 click "Radiofax recorder"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "Radiofax recorder"#1
++10 state pages contains "Radiofax recorder"
+# the ten station presets (HF, USB 2.7 kHz, VFO tune: the dial is the published frequency minus 1.9 kHz)
++1 click "DWD 3853.1 USB"
++6 state tunedHz == 3853100
+state mode == USB
++1 click "DWD 7878.1 USB"
++6 state tunedHz == 7878100
++1 click "DWD 13880.6 USB"
++6 state tunedHz == 13880600
++1 click "GYA 4608.1 USB"
++6 state tunedHz == 4608100
++1 click "GYA 8038.1 USB"
++6 state tunedHz == 8038100
++1 click "GYA 11084.6 USB"
++6 state tunedHz == 11084600
++1 click "NMF 4233.1 USB"
++6 state tunedHz == 4233100
++1 click "NMF 9108.1 USB"
++6 state tunedHz == 9108100
++1 click "NMF 12748.1 USB"
++6 state tunedHz == 12748100
++1 click "GYA 2616.6 USB"
++6 state tunedHz == 2616600
+# ---- the settings fold (the groupbox is #1, the fold key #2); the labels are the plugin's own spec ----
++1 click "Plugin settings"#2
++3 state list.pluginSettings.names contains "Slant (ppm)"
++1 type "Slant (ppm)" "12"
++1 key enter
++5 expect "Slant (ppm)" value equals "12"
++1 type "Hand start: lines per minute" "90"
++1 key enter
++5 expect "Hand start: lines per minute" value equals "90"
++1 type "Hand start: IOC" "288"
++1 key enter
++5 expect "Hand start: IOC" value equals "288"
+# ---- the other two pages from the DECODE bank ----
++1 click "WEFAX image"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "WEFAX image"#1
++10 state pages contains "WEFAX image"
++1 click "UK & European WEFAX Stations to Monitor"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "UK & European WEFAX Stations to Monitor"#1
++10 state pages contains "UK & European WEFAX Stations to Monitor"

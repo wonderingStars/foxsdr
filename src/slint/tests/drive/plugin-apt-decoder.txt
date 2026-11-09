@@ -1,0 +1,41 @@
+#! frames=500 bank=1 plugins=all open=module:apt-decoder-1.0.0-abi3-win-x64.dll size=1600x1600
+# plugin-apt-decoder: NOAA Weather Pictures (apt-decoder 1.0.0, tick rows 1035-1042; an IMAGE DECODER), docs 6.49 round two.
+# Idle page: IDLE lamp, START, Keep running, < FITTED (no grant key). START is read back from the engine (decodersRunning) and from the
+# page's key turning into STOP. The picture page ("NOAA APT image" bank row) carries the preset keys (Preset 1-3, rows 1036-1038) and the
+# picture; no signal is fed, so no picture arrives (the fixture run, 6.49 phase B).
+120 state kit.plugins == 43
+state list.plugins.names contains "NOAA APT"
++1 expect "START" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# START opens the plugin's windows: read them as open right away
+state pages contains "NOAA APT image"
+state decodersRunning >= 1
++1 dump
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
++1 click "NOAA APT image"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "NOAA APT image"#1
++10 state pages contains "NOAA APT image"
+# the one dump still needed: the labels of the image page's own controls (the preset keys come from the plugin source, not from a dump)
++1 dump
+# ---- the preset keys of the NOAA APT image page (the plugin's own labels; VFO tune, NFM, 40 kHz) ----
++1 click "APT  NOAA 19  137.100 MHz"
++10 state tunedHz == 137100000
+state mode == NFM
++1 click "APT  NOAA 15  137.620 MHz"
++10 state tunedHz == 137620000
++1 click "APT  NOAA 18  137.9125 MHz"
++10 state tunedHz == 137912500

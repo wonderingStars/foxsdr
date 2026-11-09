@@ -1,0 +1,58 @@
+#! frames=500 bank=1 plugins=all open=module:vdl2-decoder-0.1.0-abi3-win-x64.dll size=1600x2600
+# plugin-vdl2-decoder: VDL Mode 2 (tick rows 537-558), docs 6.49 round three.
+# Caps: I/Q decoder + track source + instrument + presets. START itself opens the map page and the printer page (round two): the
+# pages read-back after START asserts both. The bank rows "VDL2 printer" and "VDL Mode 2 (EXPERIMENTAL) map" (#1, the bank rows)
+# are toggles: each closed (pages line read back), then opened again. The 11 presets are DEVICE-CENTRE presets (read-back centreHz)
+# on the Decoders drawer (labels from the round-two STDC dump). The first (CSC 136.975) is the auto preset START applies, so it
+# is pressed LAST.
+120 state kit.plugins == 43
+state list.plugins.names contains "VDL Mode 2"
+state decodersRunning == 0
++1 click "START"
++40 state decodersRunning >= 1
+expect "STOP" label equals "STOP"
+state pages contains "VDL Mode 2 (EXPERIMENTAL) map"
+state pages contains "VDL2 printer"
+state kit.mapPages >= 1
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+state decodersRunning >= 1
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
++1 click "VDL2 printer"#1
++10 state pages == "pages: VDL Mode 2 (EXPERIMENTAL) map Fitted modules"
++1 click "VDL Mode 2 (EXPERIMENTAL) map"#1
++10 state pages == "pages: Fitted modules"
++1 click "VDL Mode 2 (EXPERIMENTAL) map"#1
++10 state pages contains "VDL Mode 2 (EXPERIMENTAL) map"
++1 click "VDL2 printer"#1
++10 state pages contains "VDL2 printer"
++20 state kit.instruments >= 1
++1 click "Fitted modules"#1
++3 click "Turn on and off plugins"
++5 state pages contains "Fitted modules"
++1 click "VDL2 136.725 MHz (Europe, ARINC)"
++10 state centreHz == 136725000
++1 click "VDL2 136.775 MHz (Europe, SITA)"
++10 state centreHz == 136775000
++1 click "VDL2 136.825 MHz (Europe, ARINC)"
++10 state centreHz == 136825000
++1 click "VDL2 136.875 MHz (Europe, SITA)"
++10 state centreHz == 136875000
++1 click "VDL2 136.675 MHz (Europe, ARINC)"
++10 state centreHz == 136675000
++1 click "VDL2 136.700 MHz (N America, ARINC)"
++10 state centreHz == 136700000
++1 click "VDL2 136.800 MHz (N America, SITA)"
++10 state centreHz == 136800000
++1 click "VDL2 136.650 MHz (N America, ARINC)"
++10 state centreHz == 136650000
++1 click "VDL2 136.100 MHz (N America, ARINC)"
++10 state centreHz == 136100000
++1 click "VDL2 all 12 channels 136.700-136.975"
++10 state centreHz == 136837500
++1 click "VDL2 CSC 136.975 MHz (worldwide)"
++10 state centreHz == 136975000

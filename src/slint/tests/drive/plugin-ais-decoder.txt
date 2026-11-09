@@ -1,0 +1,24 @@
+#! frames=500 bank=1 plugins=all open=module:ais-decoder-1.0.2-abi3-win-x64.dll size=1600x1600
+# plugin-ais-decoder: AIS Ship Tracking Decoder (tick rows 597-605), docs 6.49 round three.
+# Caps: I/Q decoder + track source + presets: no instrument. An I/Q decoder does not count in decodersRunning (it stayed 0 after
+# START), so START is read back from the key turning into STOP. START itself opens the map page (round two): the pages read-back
+# asserts it. The bank row "AIS map" (#1, the bank row) is a toggle: closed (pages line read back), then open again. The one preset
+# (device-centre, read-back centreHz) is on the Decoders drawer, below the part the round-two STDC dump reached: the dump of the
+# whole drawer in plugin-stdc-decoder.txt (8000 px window, round three) lists it; no preset step is guessed here.
+120 state kit.plugins == 43
+state list.plugins.names contains "AIS"
++1 click "START"
++40 expect "STOP" label equals "STOP"
+state pages contains "AIS map"
+state kit.mapPages >= 1
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
++1 click "AIS map"#1
++10 state pages == "pages: Fitted modules"
++1 click "AIS map"#1
++10 state pages contains "AIS map"

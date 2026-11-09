@@ -1,0 +1,27 @@
+#! frames=500 bank=1 plugins=all sections=1:2 open=module:weather-decoder-1.0.0-abi3-win-x64.dll size=1600x1600
+# plugin-weather-decoder: 433 MHz Weather Sensor Decoder (weather-decoder 1.0.0, tick rows 1121-1131; an IQ DECODER, descriptor name "Weather
+# sensors"), docs 6.49 round two. Idle page: IDLE lamp, START, Keep running, < FITTED (no grant key). START is read back from the engine
+# (decodersRunning) and from the page's key turning into STOP. The DECODE bank lists no window row for it (round one: the weather console
+# instrument page needs a signal), so its preset key (row 1130) is looked for in the Decoders drawer, opened here with sections=1:2: the final dump is
+# the one still needed to read its label there.
+120 state kit.plugins == 43
+state list.plugins.names contains "Weather sensors"
++1 expect "START" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
+# the Decoders drawer is open on the DECODE bank (sections=1:2): the dump shows whether it carries this plugin's preset key
++5 dump

@@ -1,0 +1,80 @@
+1027	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1028	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1029	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1030	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1031	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1032	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1033	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1034	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1036	ASSERTED	plugin-apt-decoder.txt	click "APT  NOAA 19  137.100 MHz" on the NOAA APT image page; state tunedHz == 137100000
+1037	ASSERTED	plugin-apt-decoder.txt	click "APT  NOAA 15  137.620 MHz" on the NOAA APT image page; state tunedHz == 137620000
+1038	ASSERTED	plugin-apt-decoder.txt	click "APT  NOAA 18  137.9125 MHz" on the NOAA APT image page; state tunedHz == 137912500
+1044	ASSERTED	plugin-lrpt-decoder.txt	click "LRPT  Meteor-M  137.100 MHz" on the Meteor-M LRPT image page; state centreHz == 137100000
+1045	ASSERTED	plugin-lrpt-decoder.txt	click "LRPT  Meteor-M  137.900 MHz" on the Meteor-M LRPT image page; state centreHz == 137900000
+1079	ASSERTED	plugin-goes.txt	click "GOES-East HRIT  1694.1 MHz" on the GOES HRIT / LRIT image page; state centreHz == 1694100000
+1080	ASSERTED	plugin-goes.txt	click "GOES-West HRIT  1694.1 MHz" on the GOES HRIT / LRIT image page; state centreHz == 1694100000 (pressed after LRIT, which moves it to 1691000000)
+1081	ASSERTED	plugin-goes.txt	click "GOES LRIT  1691.0 MHz" on the GOES HRIT / LRIT image page; state centreHz == 1691000000
+1083	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1084	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1086	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B): a click on the chart exists only once a chart picture has arrived
+1097	DRIVEN	plugin-wefax-decoder.txt	click "START NOW" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal
+1098	DRIVEN	plugin-wefax-decoder.txt	click "STOP NOW" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal
+1099	DRIVEN	plugin-wefax-decoder.txt	click "SLANT -10 PPM" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal
+1100	DRIVEN	plugin-wefax-decoder.txt	click "SLANT +10 PPM" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal
+1101	DRIVEN	plugin-wefax-decoder.txt	click "SET LEFT EDGE" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal
+1102	DRIVEN	plugin-wefax-decoder.txt	the five plate keys of the module page (START NOW, STOP NOW, SLANT -10 PPM, SLANT +10 PPM, SET LEFT EDGE) are clicked in sequence; plugin commands, no engine read-back without a signal
+1104	ASSERTED	plugin-wefax-decoder.txt	open the Radiofax recorder page, click "Plugin settings"#2; type "Slant (ppm)" 12, key enter; expect value equals "12"; state list.pluginSettings.names contains "Slant (ppm)"
+1105	ASSERTED	plugin-wefax-decoder.txt	open the Radiofax recorder page, click "Plugin settings"#2; type "Hand start: lines per minute" 90, key enter; expect value equals "90"
+1106	ASSERTED	plugin-wefax-decoder.txt	open the Radiofax recorder page, click "Plugin settings"#2; type "Hand start: IOC" 288, key enter; expect value equals "288"
+1110	ASSERTED	plugin-wefax-decoder.txt	click each of the ten preset keys of the Radiofax recorder page (DWD 3853.1 USB ... GYA 2616.6 USB); state tunedHz == the dial (published kHz minus 1.9 kHz) after each, state mode == USB
+1118	ASSERTED	plugin-radiosonde-decoder.txt	click "Radiosondes 400-402 MHz" on the Radiosondes (EXPERIMENTAL) map page; state centreHz == 401000000
+1119	ASSERTED	plugin-radiosonde-decoder.txt	click "Radiosondes 402-404 MHz" on the Radiosondes (EXPERIMENTAL) map page; state centreHz == 403000000
+1120	ASSERTED	plugin-radiosonde-decoder.txt	click "Radiosondes 404-406 MHz" on the Radiosondes (EXPERIMENTAL) map page; state centreHz == 405000000
+1130	NOT_DRIVABLE	-	no page of its own to carry the preset key: the weather console instrument page needs a signal and the DECODE bank lists no row for it; the Decoders drawer is dumped in plugin-weather-decoder.txt to find the key there
+1132	NOT_DRIVABLE	-	needs the network: the tiles come from the internet; the plugin has no window and no control of its own (its module page START / STOP is driven in plugin-openmaptiles-basemap.txt)
+1135	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1136	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1137	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1148	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1149	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1150	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1151	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1152	NOT_DRIVABLE	-	config file / env var, not a window control (the inventory lists it for completeness)
+1155	NOT_DRIVABLE	-	inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161)
+1156	NOT_DRIVABLE	-	inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161)
+1157	NOT_DRIVABLE	-	inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161)
+1158	NOT_DRIVABLE	-	inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161)
+1159	NOT_DRIVABLE	-	inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161)
+1160	DRIVEN	plugin-propagation-tools.txt	click "NEXT PAGE" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1161	DRIVEN	plugin-propagation-tools.txt	click "PREV PAGE" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1162	DRIVEN	plugin-propagation-tools.txt	click "REFRESH" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1163	DRIVEN	plugin-propagation-tools.txt	click "NEXT HOUR" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1164	DRIVEN	plugin-propagation-tools.txt	click "PREV HOUR" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1174	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Your locator" IO91wm, key enter; expect value equals "IO91wm"
+1175	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Target locator" JN58td, key enter; expect value equals "JN58td"
+1176	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; click "Heat map on the world"; expect checked equals "false" (default on)
+1177	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; click "Fetch solar data"; expect checked equals "false" (default on)
+1178	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Engine" empirical, key enter; expect value equals "empirical"
+1179	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "VOACAP program (optional)" voacapw.exe, key enter; expect value equals "voacapw.exe"
+1180	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Sunspot number (0 = from SFI)" 120, key enter; expect value equals "120"
+1181	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Transmit power, W" 50, key enter; expect value equals "50"
+1182	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Antenna" dipole_hd, key enter; expect value equals "dipole_hd"
+1183	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Isotropic gain, dBi" 3, key enter; expect value equals "3"
+1184	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Noise at 3 MHz, -dBW" 150, key enter; expect value equals "150"
+1185	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Required SNR, dB" 20, key enter; expect value equals "20"
+1186	ASSERTED	plugin-propagation-tools.txt	open the Propagation Tools image page, click "Plugin settings"#2; type "Map threshold, REL %" 60, key enter; expect value equals "60"
+1187	ASSERTED	plugin-propagation-tools.txt	click each of the five NCDXF beacon preset keys of the Propagation Tools image page (20 M 14.100 ... 10 M 28.200 MHz CW); state tunedHz == the beacon frequency after each, state mode == CW
+1190	NOT_DRIVABLE	-	inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREVIOUS PAGE (rows 1199-1200)
+1191	NOT_DRIVABLE	-	inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREVIOUS PAGE (rows 1199-1200)
+1192	NOT_DRIVABLE	-	inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREVIOUS PAGE (rows 1199-1200)
+1193	NOT_DRIVABLE	-	inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREVIOUS PAGE (rows 1199-1200)
+1194	DRIVEN	plugin-solar-system-view.txt	click "ROTATE LEFT" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1195	DRIVEN	plugin-solar-system-view.txt	click "ROTATE RIGHT" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1196	DRIVEN	plugin-solar-system-view.txt	click "TILT" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1197	DRIVEN	plugin-solar-system-view.txt	click "ZOOM IN" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1198	DRIVEN	plugin-solar-system-view.txt	click "ZOOM OUT" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1199	DRIVEN	plugin-solar-system-view.txt	click "NEXT PAGE" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1200	DRIVEN	plugin-solar-system-view.txt	click "PREVIOUS PAGE" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1201	DRIVEN	plugin-solar-system-view.txt	click "NEXT CHANNEL" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back
+1202	ASSERTED	plugin-solar-system-view.txt	open the Solar System View image page, click "Plugin settings"#2; type "Your locator (kept on this PC)" IO91wm, key enter; expect value equals "IO91wm"
+1203	ASSERTED	plugin-solar-system-view.txt	open the Solar System View image page, click "Plugin settings"#2; click "Log-scale orbits (SYSTEM page)"; expect checked equals "true" (default off)

@@ -1,0 +1,98 @@
+#! frames=540 bank=1 plugins=all open=module:demod-analyzer-0.1.0-abi3-win-x64.dll size=1600x1800
+# plugin-demod-analyzer: the Demod Analyzer (tick rows 917-946): its module page (START, Keep running, GRANT RECEIVER CONTROL, the four plate
+# keys ANALYSE NOW / HOLD (RUN LIVE) / PRINT BITS / EXPORT, < FITTED), the "Demod Analyzer image" picture page, the "Demod Analyzer" panel
+# page and the 16 settings of its form. EXPORT writes under the scratch profile's LOCALAPPDATA (the plugin's dataDir), or says "nothing to
+# export yet". The settings are typed with test values (a file name that does not exist, a symbol rate, a sync word): nothing leaves the process.
+# No signal is fed: only STATE changes are asserted (the run word, the grant, the open pages, the settings echo), not an analysis.
+120 state kit.plugins == 43
+state list.plugins.names contains "Demod Analyzer"
+state list.pluginSettings.names contains "Roll-off"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START leaves only the module page open (the picture page and the panel open from their DECODE bank rows, as the second run showed)
+state pages contains "Demod Analyzer"
+# START turns "Keep running" on: it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++15 expect "GRANT RECEIVER CONTROL" enabled equals "true"
+# the four plate keys; the first run showed HOLD does not turn into a "RUN LIVE" key in the element tree
++1 state list.pluginCommands.names contains "ANALYSE NOW"
++1 click "ANALYSE NOW"
++10 click "HOLD"
+# KEPT DUMP (round three): the module page right after HOLD, to see how the key shows the held state
++5 dump
++1 click "PRINT BITS"
++5 click "EXPORT"
++5 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the picture page: its DECODE bank row opens it, a second click closes it, a third opens it again
++1 click "Demod Analyzer image"
++5 state pages contains "Demod Analyzer image"
++1 state kit.pictures >= 1
++1 click "Demod Analyzer image"#1
++5 click "Demod Analyzer image"#1
++5 state pages contains "Demod Analyzer image"
+# the panel page: its row opens it (the pages line then ends "image Demod Analyzer"); the fold is on it
++1 click "Demod Analyzer"
++5 state pages contains "image Demod Analyzer"
++1 state kit.panels >= 1
+# the settings fold on the panel page (its key is the 2nd "Plugin settings": the form's group is the 1st), then the 16 fields: each typed,
+# committed with Enter and read back from the form (the engine's echo)
++1 click "Plugin settings"#2
+# KEPT DUMP (round three): the expanded form, for the real field kinds (a "Modulation" or "File format" field may be a choice, not a text box)
++3 dump
++1 type "I/Q file (empty = live radio)" "drive-none.cu8"
++1 key enter
++5 expect "I/Q file (empty = live radio)" value equals "drive-none.cu8"
++1 type "File format" "cu8"
++1 key enter
++5 expect "File format" value equals "cu8"
++1 type "File sample rate, Hz" "250000"
++1 key enter
++5 expect "File sample rate, Hz" value equals "250000"
++1 type "Skip first samples" "1000"
++1 key enter
++5 expect "Skip first samples" value equals "1000"
++1 type "Modulation" "qpsk"
++1 key enter
++5 expect "Modulation" value equals "qpsk"
++1 type "Symbol rate, Bd (0 = auto)" "9600"
++1 key enter
++5 expect "Symbol rate, Bd (0 = auto)" value equals "9600"
++1 type "Carrier offset, Hz" "1200"
++1 key enter
++5 expect "Carrier offset, Hz" value equals "1200"
++1 type "Extra rotation, degrees" "90"
++1 key enter
++5 expect "Extra rotation, degrees" value equals "90"
++1 type "Matched filter" "rc"
++1 key enter
++5 expect "Matched filter" value equals "rc"
++1 type "Roll-off" "0.35"
++1 key enter
++5 expect "Roll-off" value equals "0.35"
++1 type "Filter span, symbols" "12"
++1 key enter
++5 expect "Filter span, symbols" value equals "12"
++1 type "Sampling offset, symbols" "0.25"
++1 key enter
++5 expect "Sampling offset, symbols" value equals "0.25"
++1 type "Symbol range" "0-100"
++1 key enter
++5 expect "Symbol range" value equals "0-100"
++1 type "Sync word (resolves phase)" "0x1ACFFC1D"
++1 key enter
++5 expect "Sync word (resolves phase)" value equals "0x1ACFFC1D"
++1 click "Remove DC offset"
++15 expect "Remove DC offset" checked equals "false"
++1 type "Live capture, samples" "131072"
++1 key enter
++5 expect "Live capture, samples" value equals "131072"

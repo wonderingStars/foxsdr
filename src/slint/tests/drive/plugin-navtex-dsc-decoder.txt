@@ -1,0 +1,55 @@
+#! frames=500 bank=1 plugins=all open=module:navtex-dsc-decoder-1.0.0-abi3-win-x64.dll size=1600x1600
+# plugin-navtex-dsc-decoder: NAVTEX & DSC (marine) (tick rows 632-656), docs 6.49 round three.
+# Caps: audio decoder + track source + instrument + presets. START itself opens the map page and the printer page (round two): the
+# pages read-back after START asserts both. The bank rows "NAVTEX & DSC printer" and "NAVTEX & DSC map" (#1, the bank rows) are
+# toggles: each closed (pages line read back), then opened again; the printer is opened LAST so it is the open page, and the ten
+# presets (absolute, tunedHz; HF ones tune the USB dial 1.7 kHz below the carrier in the label, 518 kHz -> 516300 Hz) are looked for
+# on it, with the labels of the STDC run's Decoder output dump. One dump of that page is kept to confirm where the keys are (they
+# are not yet seen on the instrument page). The first preset (518 kHz) is the auto preset START applies, so it is pressed LAST.
+120 state kit.plugins == 43
+state list.plugins.names contains "NAVTEX"
+state decodersRunning == 0
++1 click "START"
++40 state decodersRunning >= 1
+expect "STOP" label equals "STOP"
+state pages contains "NAVTEX & DSC map"
+state pages contains "NAVTEX & DSC printer"
+state kit.mapPages >= 1
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+state decodersRunning >= 1
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
++1 click "NAVTEX & DSC printer"#1
++10 state pages == "pages: NAVTEX & DSC map Fitted modules"
++1 click "NAVTEX & DSC map"#1
++10 state pages == "pages: Fitted modules"
++1 click "NAVTEX & DSC map"#1
++10 state pages contains "NAVTEX & DSC map"
++1 click "NAVTEX & DSC printer"#1
++10 state pages contains "NAVTEX & DSC printer"
++20 state kit.instruments >= 1
++1 dump
++1 click "NAVTEX 490 kHz  USB 488.3"
++10 state tunedHz == 488300
++1 click "NAVTEX 4209.5 kHz  USB 4207.8"
++10 state tunedHz == 4207800
++1 click "DSC VHF ch70  156.525 MHz  NFM"
++10 state tunedHz == 156525000
++1 click "DSC HF 2187.5 kHz  USB 2185.8"
++10 state tunedHz == 2185800
++1 click "DSC HF 4207.5 kHz  USB 4205.8"
++10 state tunedHz == 4205800
++1 click "DSC HF 6312 kHz  USB 6310.3"
++10 state tunedHz == 6310300
++1 click "DSC HF 8414.5 kHz  USB 8412.8"
++10 state tunedHz == 8412800
++1 click "DSC HF 12577 kHz  USB 12575.3"
++10 state tunedHz == 12575300
++1 click "DSC HF 16804.5 kHz  USB 16802.8"
++10 state tunedHz == 16802800
++1 click "NAVTEX 518 kHz  USB 516.3"
++10 state tunedHz == 516300

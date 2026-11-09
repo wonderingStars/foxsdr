@@ -1,0 +1,38 @@
+#! frames=500 bank=1 plugins=all open=module:adsb-decoder-1.9.1-abi3-win-x64.dll size=1600x2600
+# plugin-adsb-decoder: ADS-B Aircraft Decoder (tick rows 480-498), docs 6.49 round three.
+# Caps: I/Q decoder + track source + host client (GRANT RECEIVER CONTROL key) + presets + locator.
+# START itself opens the map page (round two): the pages read-back right after START is the assertion for it. The bank row
+# "ADS-B map" (#1, the bank row) is a toggle: one click closes the open page, a second opens it again. The one preset key is
+# on the Decoders drawer (round two dump of the STDC run): "ADS-B  1090 MHz". START already applies that preset (auto preset), so
+# the press cannot prove a change of centre: the read-back holds the same value. No signal: no aircraft, no decode line.
+120 state kit.plugins == 43
+state list.plugins.names contains "ADS-B"
+state decodersRunning == 0
++1 click "START"
++40 state decodersRunning >= 1
+expect "STOP" label equals "STOP"
+state pages contains "ADS-B map"
+state kit.mapPages >= 1
+# the tune grant: a plate key, then a lit REVOKE key (the key's own label is the read-back)
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" label equals "REVOKE RECEIVER CONTROL"
++1 click "REVOKE RECEIVER CONTROL"
++15 expect "GRANT RECEIVER CONTROL" label equals "GRANT RECEIVER CONTROL"
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+state decodersRunning >= 1
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the bank row toggles the map page: closed (read back from the pages line), then open again
++1 click "ADS-B map"#1
++10 state pages == "pages: Fitted modules"
++1 click "ADS-B map"#1
++10 state pages contains "ADS-B map"
+# the preset key on the Decoders drawer (the Fitted modules page is the open page, so no other copy of the key exists)
++1 click "Fitted modules"#1
++3 click "Turn on and off plugins"
++5 click "ADS-B  1090 MHz"
++10 state centreHz == 1090000000

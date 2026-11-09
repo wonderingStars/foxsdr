@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1963 | 183 | 28 | 1752 | 0 |
+| 1963 | 348 | 82 | 1533 | 0 |
 
-Of the 1000 rows that are controls (the 963 readout-like rows left out): 183 asserted, 28 driven without a read-back, 789 not drivable.
+Of the 1107 rows that are controls (the 856 readout-like rows left out): 348 asserted, 82 driven without a read-back, 677 not drivable.
 
-NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 110, relocated 85, withheld in a bounded run 64, needs hardware 28, no label in the element tree 9, needs a file 6.
+NOT DRIVABLE by reason: readout 856, other 194, needs a signal (no fixture) 132, deferred 115, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
 
 ## Per section
 
@@ -84,53 +84,53 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | DECODE bank and plugin host — Instrument faces: utility-meter face (kind 7) | 5 | 0 | 0 | 5 | 5 | 0 |
 | DECODE bank and plugin host — Instrument faces: weather-console face (kind 8) | 4 | 0 | 0 | 4 | 4 | 0 |
 | DECODE bank and plugin host — Plugin UI building blocks | 14 | 0 | 0 | 14 | 14 | 0 |
-| Plugins: aircraft and marine — ADS-B Aircraft Decoder (adsb-decoder 1.9.1) | 19 | 0 | 0 | 19 | 15 | 0 |
-| Plugins: aircraft and marine — Aircraft Info (registry lookup) (aircraft-info 1.1.0) | 12 | 0 | 0 | 12 | 5 | 0 |
-| Plugins: aircraft and marine — avdb = "Airports & Navaids" (NOT in the catalogue; source version 1.0.0) | 7 | 0 | 0 | 7 | 7 | 0 |
-| Plugins: aircraft and marine — ACARS Aircraft Datalink Decoder (acars-decoder 1.0.0) | 19 | 0 | 0 | 19 | 13 | 0 |
-| Plugins: aircraft and marine — VDL Mode 2 (vdl2-decoder 0.1.0) | 22 | 0 | 0 | 22 | 11 | 0 |
-| Plugins: aircraft and marine — HFDL Aircraft Datalink Decoder (hfdl-decoder 0.1.0) | 14 | 0 | 0 | 14 | 12 | 0 |
-| Plugins: aircraft and marine — SELCAL Decoder (selcal-decoder 1.0.0) | 12 | 0 | 0 | 12 | 2 | 0 |
-| Plugins: aircraft and marine — VOR Navigation Decoder (vor-decoder 1.0.1) | 12 | 0 | 0 | 12 | 9 | 0 |
-| Plugins: aircraft and marine — AIS Ship Tracking Decoder (ais-decoder 1.0.2) | 9 | 0 | 0 | 9 | 8 | 0 |
+| Plugins: aircraft and marine — ADS-B Aircraft Decoder (adsb-decoder 1.9.1) | 19 | 1 | 0 | 18 | 8 | 0 |
+| Plugins: aircraft and marine — Aircraft Info (registry lookup) (aircraft-info 1.1.0) | 12 | 0 | 0 | 12 | 3 | 0 |
+| Plugins: aircraft and marine — avdb = "Airports & Navaids" (NOT in the catalogue; source version 1.0.0) | 7 | 0 | 0 | 7 | 0 | 0 |
+| Plugins: aircraft and marine — ACARS Aircraft Datalink Decoder (acars-decoder 1.0.0) | 19 | 7 | 0 | 12 | 12 | 0 |
+| Plugins: aircraft and marine — VDL Mode 2 (vdl2-decoder 0.1.0) | 22 | 12 | 0 | 10 | 8 | 0 |
+| Plugins: aircraft and marine — HFDL Aircraft Datalink Decoder (hfdl-decoder 0.1.0) | 14 | 2 | 0 | 12 | 10 | 0 |
+| Plugins: aircraft and marine — SELCAL Decoder (selcal-decoder 1.0.0) | 12 | 10 | 0 | 2 | 2 | 0 |
+| Plugins: aircraft and marine — VOR Navigation Decoder (vor-decoder 1.0.1) | 12 | 2 | 1 | 9 | 9 | 0 |
+| Plugins: aircraft and marine — AIS Ship Tracking Decoder (ais-decoder 1.0.2) | 9 | 0 | 0 | 9 | 7 | 0 |
 | Plugins: aircraft and marine — Inmarsat-C / EGC Decoder (stdc-decoder 0.1.1) | 7 | 0 | 0 | 7 | 5 | 0 |
-| Plugins: aircraft and marine — 406 MHz Distress Beacon Decoder (EPIRB / ELT / PLB) (epirb-decoder 1.0.0) | 19 | 0 | 0 | 19 | 13 | 0 |
-| Plugins: aircraft and marine — NAVTEX & DSC (marine) (navtex-dsc-decoder 1.0.0) | 25 | 0 | 0 | 25 | 15 | 0 |
+| Plugins: aircraft and marine — 406 MHz Distress Beacon Decoder (EPIRB / ELT / PLB) (epirb-decoder 1.0.0) | 19 | 1 | 0 | 18 | 12 | 0 |
+| Plugins: aircraft and marine — NAVTEX & DSC (marine) (navtex-dsc-decoder 1.0.0) | 25 | 11 | 0 | 14 | 13 | 0 |
 | Plugins: broadcast and text — SSTV Image Decoder (sstv-decoder 1.0.0) | 12 | 0 | 0 | 12 | 7 | 0 |
-| Plugins: broadcast and text — Morse (CW) Decoder (cw-decoder 1.1.0) | 9 | 0 | 0 | 9 | 3 | 0 |
-| Plugins: broadcast and text — RTTY Teleprinter Decoder (rtty-decoder 1.2.0) | 19 | 0 | 0 | 19 | 6 | 0 |
-| Plugins: broadcast and text — FT8 Decoder (ft8-decoder 1.1.1) | 14 | 0 | 0 | 14 | 10 | 0 |
-| Plugins: broadcast and text — DAB / DAB+ Radio (dab 0.5.0, EXPERIMENTAL) | 21 | 0 | 0 | 21 | 14 | 0 |
-| Plugins: broadcast and text — APRS / AX.25 Packet Decoder (aprs-decoder 1.0.2) | 5 | 0 | 0 | 5 | 3 | 0 |
-| Plugins: broadcast and text — EAS / SAME Alert Decoder (eas-decoder 1.0.0) | 5 | 0 | 0 | 5 | 4 | 0 |
-| Plugins: broadcast and text — IBOC Radio (nrsc5 library) (nrsc5-radio-dynamic 0.1.2, EXPERIMENTAL, Windows only) | 18 | 0 | 0 | 18 | 9 | 0 |
-| Plugins: broadcast and text — Nearby Signal Catch (nearby-signal-catch 0.1.0) | 23 | 0 | 0 | 23 | 13 | 0 |
-| Plugins: broadcast and text — DMR Monitor (data only) (dmr-monitor 0.1.1, EXPERIMENTAL) | 4 | 0 | 0 | 4 | 3 | 0 |
+| Plugins: broadcast and text — Morse (CW) Decoder (cw-decoder 1.1.0) | 9 | 6 | 0 | 3 | 3 | 0 |
+| Plugins: broadcast and text — RTTY Teleprinter Decoder (rtty-decoder 1.2.0) | 19 | 4 | 5 | 10 | 6 | 0 |
+| Plugins: broadcast and text — FT8 Decoder (ft8-decoder 1.1.1) | 14 | 3 | 1 | 10 | 10 | 0 |
+| Plugins: broadcast and text — DAB / DAB+ Radio (dab 0.5.0, EXPERIMENTAL) | 21 | 3 | 2 | 16 | 14 | 0 |
+| Plugins: broadcast and text — APRS / AX.25 Packet Decoder (aprs-decoder 1.0.2) | 5 | 2 | 0 | 3 | 3 | 0 |
+| Plugins: broadcast and text — EAS / SAME Alert Decoder (eas-decoder 1.0.0) | 5 | 1 | 0 | 4 | 4 | 0 |
+| Plugins: broadcast and text — IBOC Radio (nrsc5 library) (nrsc5-radio-dynamic 0.1.2, EXPERIMENTAL, Windows only) | 18 | 3 | 4 | 11 | 9 | 0 |
+| Plugins: broadcast and text — Nearby Signal Catch (nearby-signal-catch 0.1.0) | 23 | 0 | 8 | 15 | 13 | 0 |
+| Plugins: broadcast and text — DMR Monitor (data only) (dmr-monitor 0.1.1, EXPERIMENTAL) | 4 | 1 | 0 | 3 | 3 | 0 |
 | Plugins: broadcast and text — TETRA Monitor (data only, no voice) (tetra-decoder 0.1.2) | 10 | 0 | 0 | 10 | 7 | 0 |
 | Plugins: broadcast and text — Radar Sweep (radar-sweep 1.0.2) - NOT in index.json | 8 | 0 | 0 | 8 | 6 | 0 |
 | Plugins: broadcast and text — Digital Radio Mondiale (id 0.1.0) - NOT published | 9 | 0 | 0 | 9 | 8 | 0 |
-| Plugins: paging, meters and tools — Two-Tone Paging Decoder (twotone-decoder 1.0.1) | 15 | 0 | 0 | 15 | 13 | 0 |
-| Plugins: paging, meters and tools — POCSAG Pager Decoder (pocsag-decoder 1.0.5) | 21 | 0 | 0 | 21 | 10 | 0 |
-| Plugins: paging, meters and tools — FLEX Pager Decoder (flex-decoder 1.0.0) | 18 | 0 | 0 | 18 | 12 | 0 |
-| Plugins: paging, meters and tools — ERT Utility Meter Decoder (ert-decoder 1.0.0) | 15 | 0 | 0 | 15 | 13 | 0 |
-| Plugins: paging, meters and tools — Wireless M-Bus Meter Decoder (wmbus-decoder 0.1.0, EXPERIMENTAL) | 21 | 0 | 0 | 21 | 16 | 0 |
-| Plugins: paging, meters and tools — Example RMS Reporter (example-decoder 2.0.0) | 2 | 0 | 0 | 2 | 1 | 0 |
-| Plugins: paging, meters and tools — Decoder Workbench (workbench 0.2.0) | 11 | 0 | 0 | 11 | 9 | 0 |
-| Plugins: paging, meters and tools — Demod Analyzer (demod-analyzer 0.1.0, EXPERIMENTAL) | 30 | 0 | 0 | 30 | 8 | 0 |
-| Plugins: paging, meters and tools — Packet TNC (KISS) (packet-tnc 0.1.0) | 21 | 0 | 0 | 21 | 8 | 0 |
-| Plugins: paging, meters and tools — Radio Email (Winlink-compatible) (radio-email 0.1.0) | 26 | 0 | 0 | 26 | 5 | 0 |
-| Plugins: paging, meters and tools — Bonus: Host API tour (hostapi-example 1.0.0; src/hostapi_example; not in index.json) | 11 | 0 | 0 | 11 | 2 | 0 |
+| Plugins: paging, meters and tools — Two-Tone Paging Decoder (twotone-decoder 1.0.1) | 15 | 3 | 0 | 12 | 4 | 0 |
+| Plugins: paging, meters and tools — POCSAG Pager Decoder (pocsag-decoder 1.0.5) | 21 | 10 | 0 | 11 | 0 | 0 |
+| Plugins: paging, meters and tools — FLEX Pager Decoder (flex-decoder 1.0.0) | 18 | 5 | 0 | 13 | 5 | 0 |
+| Plugins: paging, meters and tools — ERT Utility Meter Decoder (ert-decoder 1.0.0) | 15 | 3 | 0 | 12 | 4 | 0 |
+| Plugins: paging, meters and tools — Wireless M-Bus Meter Decoder (wmbus-decoder 0.1.0, EXPERIMENTAL) | 21 | 5 | 0 | 16 | 3 | 0 |
+| Plugins: paging, meters and tools — Example RMS Reporter (example-decoder 2.0.0) | 2 | 0 | 1 | 1 | 0 | 0 |
+| Plugins: paging, meters and tools — Decoder Workbench (workbench 0.2.0) | 11 | 2 | 0 | 9 | 0 | 0 |
+| Plugins: paging, meters and tools — Demod Analyzer (demod-analyzer 0.1.0, EXPERIMENTAL) | 30 | 17 | 4 | 9 | 0 | 0 |
+| Plugins: paging, meters and tools — Packet TNC (KISS) (packet-tnc 0.1.0) | 21 | 9 | 2 | 10 | 0 | 0 |
+| Plugins: paging, meters and tools — Radio Email (Winlink-compatible) (radio-email 0.1.0) | 26 | 11 | 7 | 8 | 0 | 0 |
+| Plugins: paging, meters and tools — Bonus: Host API tour (hostapi-example 1.0.0; src/hostapi_example; not in index.json) | 11 | 0 | 0 | 11 | 0 | 0 |
 | Plugins: satellites, weather and maps — Satellites (satellites 1.1.2) | 30 | 0 | 0 | 30 | 22 | 0 |
-| Plugins: satellites, weather and maps — NOAA Weather Pictures (APT) (apt-decoder 1.0.0) | 8 | 0 | 0 | 8 | 5 | 0 |
-| Plugins: satellites, weather and maps — Meteor-M LRPT Weather Pictures (lrpt-decoder 0.1.0, EXPERIMENTAL) | 8 | 0 | 0 | 8 | 6 | 0 |
-| Plugins: satellites, weather and maps — GOES Weather Satellites (HRIT / LRIT) (goes 0.2.0) | 34 | 0 | 0 | 34 | 29 | 0 |
-| Plugins: satellites, weather and maps — WEFAX Weather Fax Decoder (wefax-decoder 1.1.0) | 27 | 0 | 0 | 27 | 16 | 0 |
-| Plugins: satellites, weather and maps — Radiosondes (radiosonde-decoder 0.1.0, EXPERIMENTAL) | 9 | 0 | 0 | 9 | 6 | 0 |
+| Plugins: satellites, weather and maps — NOAA Weather Pictures (APT) (apt-decoder 1.0.0) | 8 | 3 | 0 | 5 | 5 | 0 |
+| Plugins: satellites, weather and maps — Meteor-M LRPT Weather Pictures (lrpt-decoder 0.1.0, EXPERIMENTAL) | 8 | 2 | 0 | 6 | 6 | 0 |
+| Plugins: satellites, weather and maps — GOES Weather Satellites (HRIT / LRIT) (goes 0.2.0) | 34 | 3 | 0 | 31 | 29 | 0 |
+| Plugins: satellites, weather and maps — WEFAX Weather Fax Decoder (wefax-decoder 1.1.0) | 27 | 4 | 6 | 17 | 16 | 0 |
+| Plugins: satellites, weather and maps — Radiosondes (radiosonde-decoder 0.1.0, EXPERIMENTAL) | 9 | 3 | 0 | 6 | 6 | 0 |
 | Plugins: satellites, weather and maps — 433 MHz Weather Sensor Decoder (weather-decoder 1.0.0) | 11 | 0 | 0 | 11 | 10 | 0 |
 | Plugins: satellites, weather and maps — Map Imagery (OpenStreetMap) (openmaptiles-basemap 1.1.2) | 6 | 0 | 0 | 6 | 2 | 0 |
 | Plugins: satellites, weather and maps — Survey Engine (survey-engine 0.1.1) | 16 | 0 | 0 | 16 | 11 | 0 |
-| Plugins: satellites, weather and maps — Propagation Tools (propagation-tools 0.1.0, EXPERIMENTAL) | 35 | 0 | 0 | 35 | 11 | 0 |
-| Plugins: satellites, weather and maps — Solar System View (solar-system-view 0.1.0, EXPERIMENTAL) | 22 | 0 | 0 | 22 | 8 | 0 |
+| Plugins: satellites, weather and maps — Propagation Tools (propagation-tools 0.1.0, EXPERIMENTAL) | 35 | 14 | 5 | 16 | 11 | 0 |
+| Plugins: satellites, weather and maps — Solar System View (solar-system-view 0.1.0, EXPERIMENTAL) | 22 | 2 | 8 | 12 | 8 | 0 |
 | SIGNAL bank — Patch (rail row, SIGNAL PATH bank) | 4 | 0 | 0 | 4 | 3 | 0 |
 | SIGNAL bank — Source (rail section): header | 1 | 0 | 0 | 1 | 0 | 0 |
 | SIGNAL bank — Source (rail section): faults, advice and hints | 9 | 0 | 0 | 9 | 9 | 0 |
@@ -668,10 +668,10 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 |---|---|---|---|---|---|
 | 283 | Disabled heading | readout | NOT DRIVABLE | - | a readout, not a control |
 | 284 | Block message | readout | NOT DRIVABLE | - | a readout, not a control |
-| 285 | Update | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card) |
+| 285 | Update | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no retired plugin file, so no Disabled card) |
 | 286 | Fetch hint | readout | NOT DRIVABLE | - | a readout, not a control |
-| 287 | Remove | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card) |
-| 288 | Delete confirmation | readout + button x2 | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card) |
+| 287 | Remove | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no retired plugin file, so no Disabled card) |
+| 288 | Delete confirmation | readout + button x2 | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no retired plugin file, so no Disabled card) |
 
 ### DECODE bank and plugin host — Plugins (rail row)
 
@@ -688,23 +688,23 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 |---|---|---|---|---|---|
 | 293 | Section header | context-free drawer key | DRIVEN | decode-plugins-drawer.txt | click "Turn on and off plugins"; a drawer toggle with no engine state: only state pages unchanged is read back |
 | 294 | Decoder absence / status note | readout | NOT DRIVABLE | - | a readout, not a control |
-| 295 | Show/Hide decoder output | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 295 | Show/Hide decoder output | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 296 | Lines decoded | readout | NOT DRIVABLE | - | a readout, not a control |
 | 297 | Log tail note | readout | NOT DRIVABLE | - | a readout, not a control |
 | 298 | Running cost note | readout | NOT DRIVABLE | - | a readout, not a control |
-| 299 | Stop all | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 299 | Stop all | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 300 | Category heading | readout | NOT DRIVABLE | - | a readout, not a control |
 | 301 | Plugin entry heading | readout | NOT DRIVABLE | - | a readout, not a control |
-| 302 | Catalogue preset button | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 303 | User preset button | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 304 | Forget preset | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 305 | Save preset | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 306 | Start/Stop key | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 307 | Mute audio while running | checkbox | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 308 | Plugin settings fold | tree node | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 302 | Catalogue preset button | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 303 | User preset button | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 304 | Forget preset | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 305 | Save preset | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 306 | Start/Stop key | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 307 | Mute audio while running | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 308 | Plugin settings fold | tree node | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 309 | Empty-list note | readout | NOT DRIVABLE | - | a readout, not a control |
 | 310 | Preset result note | readout | NOT DRIVABLE | - | a readout, not a control |
-| 311 | Receiver control (stale grants) | checkbox list | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 311 | Receiver control (stale grants) | checkbox list | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 
 ### DECODE bank and plugin host — Target details (rail drawer)
 
@@ -714,23 +714,23 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 313 | Empty hint | readout | NOT DRIVABLE | - | a readout, not a control |
 | 314 | Gone note | readout | NOT DRIVABLE | - | a readout, not a control |
 | 315 | Detail lines | readout | NOT DRIVABLE | - | a readout, not a control |
-| 316 | Go to on map | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no target, so the key is not drawn) |
-| 317 | Follow / Stop following | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no target, so the key is not drawn) |
+| 316 | Go to on map | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no target, so the key is not drawn) |
+| 317 | Follow / Stop following | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no target, so the key is not drawn) |
 
 ### DECODE bank and plugin host — Map page rows (one per track-source plugin)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 318 | Map page switch row | key (latched toggle) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no track-source plugin, so no map page row) |
+| 318 | Map page switch row | key (latched toggle) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no track-source plugin, so no map page row) |
 | 319 | No-tracker row | switch row (blocked) | NOT DRIVABLE | - | the blocked "Target maps" row is disabled by design; decode-target-details.txt only expects it disabled (enabled == false) |
 
 ### DECODE bank and plugin host — Plugin window rows (one per picture, panel or instrument)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 320 | Image row | key (latched toggle) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 321 | Panel row | key (latched toggle) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 322 | Instrument row | key (latched toggle) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 320 | Image row | key (latched toggle) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 321 | Panel row | key (latched toggle) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 322 | Instrument row | key (latched toggle) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 
 ### DECODE bank and plugin host — Window title rail and frame (every page)
 
@@ -750,10 +750,10 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 331 | Window | window | NOT DRIVABLE | - | a readout, not a control |
-| 332 | Follow | checkbox | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 333 | Clear | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 332 | Follow | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 333 | Clear | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 334 | Line count | readout | NOT DRIVABLE | - | a readout, not a control |
-| 335 | Preset bars | key set | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 335 | Preset bars | key set | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 336 | Log | list | NOT DRIVABLE | - | a readout, not a control |
 
 ### DECODE bank and plugin host — Picture window ("<PLUGIN> IMAGE")
@@ -761,32 +761,32 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 337 | Window | window | NOT DRIVABLE | - | a readout, not a control |
-| 338 | Preset bar | key set | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 339 | Plugin settings fold | tree node | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 338 | Preset bar | key set | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 339 | Plugin settings fold | tree node | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 340 | Waiting note | readout | NOT DRIVABLE | - | a readout, not a control |
 | 341 | Image status | readout | NOT DRIVABLE | - | a readout, not a control |
-| 342 | Save as BMP | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 342 | Save as BMP | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 343 | Save note | readout | NOT DRIVABLE | - | a readout, not a control |
-| 344 | Picture | readout (clickable) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 344 | Picture | readout (clickable) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 
 ### DECODE bank and plugin host — Panel window (plugin's own table)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 345 | Window | window | NOT DRIVABLE | - | a readout, not a control |
-| 346 | Preset bar, Plugin settings fold | key set / tree node | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 347 | Rows table | table | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 346 | Preset bar, Plugin settings fold | key set / tree node | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 347 | Rows table | table | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 348 | Row cell colour | readout | NOT DRIVABLE | - | a readout, not a control |
-| 349 | Pressable row | key (row) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 349 | Pressable row | key (row) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 
 ### DECODE bank and plugin host — Instrument window
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 350 | Window | window | NOT DRIVABLE | - | a readout, not a control |
-| 351 | Preset bar, Plugin settings fold | key set / tree node | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 351 | Preset bar, Plugin settings fold | key set / tree node | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 352 | Face | readout | NOT DRIVABLE | - | a readout, not a control |
-| 353 | Memory table | table | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 353 | Memory table | table | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 354 | Fax chart panel | readout (clickable) | NOT DRIVABLE | - | a readout, not a control |
 | 355 | NEW hold | lamp | NOT DRIVABLE | - | a readout, not a control |
 
@@ -794,22 +794,22 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 356 | Preset bar / Plugin settings | key set / tree node | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 357 | Fit | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 356 | Preset bar / Plugin settings | key set / tree node | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 357 | Fit | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 358 | RX position entry | text field x2 + button | NOT DRIVABLE | - | relocated: Set RX here arms the next click on the map (FOXAPI_OP_SET_POSITION) in place of two lat/lon boxes; the RX readout shows the position |
 | 359 | Target count | readout | NOT DRIVABLE | - | a readout, not a control |
-| 360 | On screen only | checkbox | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 361 | Coverage | checkbox | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 362 | Trails | checkbox | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 363 | Altitude colours | checkbox | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 360 | On screen only | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 361 | Coverage | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 362 | Trails | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 363 | Altitude colours | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 364 | Trail style | dropdown/combo | NOT DRIVABLE | - | deferred: the SAVED style (mapTrailStyle: 0 line, 1 ribbon, the classic map page writes it) is applied by the map - main.cpp -> KitPublisher::setMapLook -> fillMap -> TileCompositor::setTrailLook (docs 6.44) - but no trail-style dropdown is drawn in the Slint window (the kit map page has no menu for it, row 1713): applied, not settable |
-| 365 | Trail width | slider | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 366 | Reset coverage | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 365 | Trail width | slider | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 366 | Reset coverage | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 367 | Coverage status | readout | NOT DRIVABLE | - | a readout, not a control |
 | 368 | GPS position | text field, combo, buttons | NOT DRIVABLE | - | deferred: the GPS position row: the serial-port page is a System bank page (later) |
-| 369 | Target list | table | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 369 | Target list | table | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 370 | Details button | button (small) | NOT DRIVABLE | - | relocated: a click on a list row selects the target for the Target details drawer; there is no Details key |
-| 371 | Stop following | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 371 | Stop following | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 372 | Stop following? dialog | dialog | NOT DRIVABLE | - | a readout, not a control |
 
 ### DECODE bank and plugin host — Target details (window)
@@ -818,9 +818,9 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 |---|---|---|---|---|---|
 | 373 | Window | window | NOT DRIVABLE | - | a readout, not a control |
 | 374 | Body | readout | NOT DRIVABLE | - | a readout, not a control |
-| 375 | Go to on map | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no target, so the key is not drawn) |
-| 376 | Follow / Stop following | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no target, so the key is not drawn) |
-| 377 | Close | button | NOT DRIVABLE | - | the Target details page is opened only by a target; with none the row opens a drawer, not a page: no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 375 | Go to on map | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no target, so the key is not drawn) |
+| 376 | Follow / Stop following | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no target, so the key is not drawn) |
+| 377 | Close | button | NOT DRIVABLE | - | the Target details page is opened only by a target; with none the row opens a drawer, not a page: not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 
 ### DECODE bank and plugin host — Fitted modules (window; rail key "Plugins"): top bar and list
 
@@ -834,11 +834,11 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 383 | Verdict line | readout | NOT DRIVABLE | - | a readout, not a control |
 | 384 | Install report / error | readout | NOT DRIVABLE | - | a readout, not a control |
 | 385 | Group heading | readout | NOT DRIVABLE | - | a readout, not a control |
-| 386 | Module row | list | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 386 | Module row | list | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 387 | State word + lamp | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
-| 388 | STOP / START | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 389 | REMOVE | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 390 | CONFIRM | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 388 | STOP / START | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 389 | REMOVE | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 390 | CONFIRM | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 391 | Cleanup foot | button + dialog | NOT DRIVABLE | - | deferred: CLEAN UP OLD VERSIONS (n) and its dialog: the store is a later beta (the foot is in FittedModules; the host feeds it no label) |
 | 392 | Empty-list text | readout | NOT DRIVABLE | - | a readout, not a control |
 
@@ -846,17 +846,17 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 393 | Back | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 393 | Back | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 394 | Header | readout | NOT DRIVABLE | - | a readout, not a control |
-| 395 | STOP / START | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 395 | STOP / START | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 396 | State lamp + word | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
 | 397 | WHAT THIS MODULE REACHES | readout | NOT DRIVABLE | - | a readout, not a control |
-| 398 | GRANT / REVOKE RECEIVER CONTROL | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 399 | GRANT / REVOKE RADIO SETTINGS | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 400 | GRANT / REVOKE TRANSMIT | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 401 | Plugin command keys | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 398 | GRANT / REVOKE RECEIVER CONTROL | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 399 | GRANT / REVOKE RADIO SETTINGS | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 400 | GRANT / REVOKE TRANSMIT | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 401 | Plugin command keys | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 402 | State sentence | readout | NOT DRIVABLE | - | a readout, not a control |
-| 403 | Keep running | checkbox | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 403 | Keep running | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 404 | Notes | readout | NOT DRIVABLE | - | a readout, not a control |
 | 405 | FILE / PLUGIN ABI / fitted date | readout | NOT DRIVABLE | - | a readout, not a control |
 | 406 | Catalogue body | readout/key | NOT DRIVABLE | - | a readout, not a control |
@@ -865,9 +865,9 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 407 | Preset key | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 408 | + Save | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 409 | Forget | context menu (right-click) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 407 | Preset key | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 408 | + Save | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 409 | Forget | context menu (right-click) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 410 | Separator | readout | NOT DRIVABLE | - | a readout, not a control |
 
 ### DECODE bank and plugin host — Sound muted dialog and banner (generic plugin mute behaviour)
@@ -924,7 +924,7 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 436 | OBS knob | dial/knob | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 436 | OBS knob | dial/knob | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 437 | Compass card | readout | NOT DRIVABLE | - | a readout, not a control |
 | 438 | Deviation bar + dots | meter | NOT DRIVABLE | - | a readout, not a control |
 | 439 | TO / FROM | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
@@ -998,7 +998,7 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 480 | ADS-B preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 480 | ADS-B preset | preset key | DRIVEN+ASSERTED | plugin-adsb-decoder.txt | Decoders drawer (Fitted modules page open): click "ADS-B  1090 MHz"; state centreHz == 1090000000 (the value START already applied as the auto preset, so the read-back holds rather than changes) |
 | 481 | Decoder output lines | message list | NOT DRIVABLE | - | a readout, not a control |
 | 482 | Position line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 483 | Surface line | message list | NOT DRIVABLE | - | a readout, not a control |
@@ -1007,58 +1007,58 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 486 | Squawk / emergency lines | message list | NOT DRIVABLE | - | a readout, not a control |
 | 487 | Other lines | message list | NOT DRIVABLE | - | a readout, not a control |
 | 488 | Hint / warning lines | status row | NOT DRIVABLE | - | a readout, not a control |
-| 489 | Frame log | env var (not UI) | NOT DRIVABLE | - | a readout, not a control |
-| 490 | Replay | env var (not UI) | NOT DRIVABLE | - | a readout, not a control |
-| 491 | Beast feed | env var (not UI) | NOT DRIVABLE | - | a readout, not a control |
-| 492 | Aircraft target | map track | NOT DRIVABLE | - | a readout, not a control |
-| 493 | Aircraft silhouette | map track (flag bits) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 494 | Emergency flag | map track flag | NOT DRIVABLE | - | a readout, not a control |
-| 495 | Heard without a position | target list / detail | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 496 | Estimated position | map track flag | NOT DRIVABLE | - | a readout, not a control |
-| 497 | Flight trail | map path | NOT DRIVABLE | - | a readout, not a control |
-| 498 | Target details | target-detail field | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 489 | Frame log | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
+| 490 | Replay | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
+| 491 | Beast feed | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
+| 492 | Aircraft target | map track | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
+| 493 | Aircraft silhouette | map track (flag bits) | NOT DRIVABLE | - | deferred: the category silhouettes are not ported (MapPane draws one icon per kind) |
+| 494 | Emergency flag | map track flag | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
+| 495 | Heard without a position | target list / detail | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
+| 496 | Estimated position | map track flag | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
+| 497 | Flight trail | map path | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
+| 498 | Target details | target-detail field | NOT DRIVABLE | - | readout of the Target details page; needs a signal: the fixture run (6.49 phase B) |
 
 ### Plugins: aircraft and marine — Aircraft Info (registry lookup) (aircraft-info 1.1.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 499 | Registration | target-detail field | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 500 | Type code | target-detail field | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 501 | Type name | target-detail field | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 502 | Manufacturer | target-detail field | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 503 | Operator | target-detail field | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 504 | Country | target-detail field | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 499 | Registration | target-detail field | NOT DRIVABLE | - | readout of the Target details page; needs a signal: the fixture run (6.49 phase B) |
+| 500 | Type code | target-detail field | NOT DRIVABLE | - | readout of the Target details page; needs a signal: the fixture run (6.49 phase B) |
+| 501 | Type name | target-detail field | NOT DRIVABLE | - | readout of the Target details page; needs a signal: the fixture run (6.49 phase B) |
+| 502 | Manufacturer | target-detail field | NOT DRIVABLE | - | readout of the Target details page; needs a signal: the fixture run (6.49 phase B) |
+| 503 | Operator | target-detail field | NOT DRIVABLE | - | readout of the Target details page; needs a signal: the fixture run (6.49 phase B) |
+| 504 | Country | target-detail field | NOT DRIVABLE | - | readout of the Target details page; needs a signal: the fixture run (6.49 phase B) |
 | 505 | Lookup scope | behaviour | NOT DRIVABLE | - | a readout, not a control |
 | 506 | foxsdr.com down | status row | NOT DRIVABLE | - | a readout, not a control |
 | 507 | adsbdb error | status row | NOT DRIVABLE | - | a readout, not a control |
-| 508 | Base URL override | env var (not UI) | NOT DRIVABLE | - | a readout, not a control |
-| 509 | Base URL override | env var (not UI) | NOT DRIVABLE | - | a readout, not a control |
-| 510 | Network reach | permission note | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 508 | Base URL override | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
+| 509 | Base URL override | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
+| 510 | Network reach | permission note | NOT DRIVABLE | - | a readout: the amber WHAT THIS MODULE REACHES paragraph of the module page (in the module dump), not a control |
 
 ### Plugins: aircraft and marine — avdb = "Airports & Navaids" (NOT in the catalogue; source version 1.0.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 511 | Airport target | map track | NOT DRIVABLE | - | a readout, not a control |
-| 512 | Navaid target | map track | NOT DRIVABLE | - | a readout, not a control |
-| 513 | Age | behaviour | NOT DRIVABLE | - | a readout, not a control |
-| 514 | Home position | env var (not UI) | NOT DRIVABLE | - | a readout, not a control |
-| 515 | Radius | env var (not UI) | NOT DRIVABLE | - | a readout, not a control |
-| 516 | Cache dir | env var (not UI) | NOT DRIVABLE | - | a readout, not a control |
-| 517 | No fetch | env var (not UI) | NOT DRIVABLE | - | a readout, not a control |
+| 511 | Airport target | map track | NOT DRIVABLE | - | avdb is not in the catalogue: not installed, so no plugin to fit |
+| 512 | Navaid target | map track | NOT DRIVABLE | - | avdb is not in the catalogue: not installed, so no plugin to fit |
+| 513 | Age | behaviour | NOT DRIVABLE | - | avdb is not in the catalogue: not installed, so no plugin to fit |
+| 514 | Home position | env var (not UI) | NOT DRIVABLE | - | avdb is not in the catalogue: not installed, so no plugin to fit |
+| 515 | Radius | env var (not UI) | NOT DRIVABLE | - | avdb is not in the catalogue: not installed, so no plugin to fit |
+| 516 | Cache dir | env var (not UI) | NOT DRIVABLE | - | avdb is not in the catalogue: not installed, so no plugin to fit |
+| 517 | No fetch | env var (not UI) | NOT DRIVABLE | - | avdb is not in the catalogue: not installed, so no plugin to fit |
 
 ### Plugins: aircraft and marine — ACARS Aircraft Datalink Decoder (acars-decoder 1.0.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 518 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 519 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 520 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 521 | Preset 4 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 522 | Preset 5 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 523 | Preset 6 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 518 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-acars-decoder.txt | Decoders drawer: click "ACARS  131.550 MHz (N America)"; state tunedHz == 131550000 |
+| 519 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-acars-decoder.txt | Decoders drawer: click "ACARS  131.725 MHz (Europe)"; state tunedHz == 131725000 |
+| 520 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-acars-decoder.txt | Decoders drawer: click "ACARS  131.525 MHz (Europe)"; state tunedHz == 131525000 |
+| 521 | Preset 4 | preset key | DRIVEN+ASSERTED | plugin-acars-decoder.txt | Decoders drawer: click "ACARS  130.025 MHz (USA 2nd)"; state tunedHz == 130025000 |
+| 522 | Preset 5 | preset key | DRIVEN+ASSERTED | plugin-acars-decoder.txt | Decoders drawer: click "ACARS  131.450 MHz (Japan)"; state tunedHz == 131450000 |
+| 523 | Preset 6 | preset key | DRIVEN+ASSERTED | plugin-acars-decoder.txt | Decoders drawer: click "ACARS  131.475 MHz (Air Canada)"; state tunedHz == 131475000 |
 | 524 | Decoded message | message list | NOT DRIVABLE | - | a readout, not a control |
-| 525 | Instrument face | instrument face | NOT DRIVABLE | - | a readout, not a control |
+| 525 | Instrument face | instrument face | DRIVEN+ASSERTED | plugin-acars-decoder.txt | START opens the page: state pages contains "ACARS printer" right after START; bank row "ACARS printer" (#1) clicked twice: pages line read without it, then with it |
 | 526 | Registration | readout (text[0]) | NOT DRIVABLE | - | a readout, not a control |
 | 527 | Flight | readout (text[1]) | NOT DRIVABLE | - | a readout, not a control |
 | 528 | Label | readout (text[2]) | NOT DRIVABLE | - | a readout, not a control |
@@ -1075,34 +1075,34 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 537 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 538 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 539 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 540 | Preset 4 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 541 | Preset 5 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 542 | Preset 6 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 543 | Preset 7 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 544 | Preset 8 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 545 | Preset 9 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 546 | Preset 10 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 547 | Preset 11 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 537 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 CSC 136.975 MHz (worldwide)"; state centreHz == 136975000 |
+| 538 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 136.725 MHz (Europe, ARINC)"; state centreHz == 136725000 |
+| 539 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 136.775 MHz (Europe, SITA)"; state centreHz == 136775000 |
+| 540 | Preset 4 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 136.825 MHz (Europe, ARINC)"; state centreHz == 136825000 |
+| 541 | Preset 5 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 136.875 MHz (Europe, SITA)"; state centreHz == 136875000 |
+| 542 | Preset 6 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 136.675 MHz (Europe, ARINC)"; state centreHz == 136675000 |
+| 543 | Preset 7 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 136.700 MHz (N America, ARINC)"; state centreHz == 136700000 |
+| 544 | Preset 8 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 136.800 MHz (N America, SITA)"; state centreHz == 136800000 |
+| 545 | Preset 9 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 136.650 MHz (N America, ARINC)"; state centreHz == 136650000 |
+| 546 | Preset 10 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 136.100 MHz (N America, ARINC)"; state centreHz == 136100000 |
+| 547 | Preset 11 | preset key | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | Decoders drawer: click "VDL2 all 12 channels 136.700-136.975"; state centreHz == 136837500 |
 | 548 | Banner | status row | NOT DRIVABLE | - | a readout, not a control |
 | 549 | Retune line | status row | NOT DRIVABLE | - | a readout, not a control |
 | 550 | Refusal line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 551 | Drop warning | status row | NOT DRIVABLE | - | a readout, not a control |
 | 552 | Frame lines | message list | NOT DRIVABLE | - | a readout, not a control |
-| 553 | Instrument face | instrument face | NOT DRIVABLE | - | a readout, not a control |
+| 553 | Instrument face | instrument face | DRIVEN+ASSERTED | plugin-vdl2-decoder.txt | START opens the page: state pages contains "VDL2 printer" right after START; bank row "VDL2 printer" (#1) clicked twice: pages line read without it, then with it |
 | 554 | Face readouts | readout | NOT DRIVABLE | - | a readout, not a control |
 | 555 | Memory columns | column | NOT DRIVABLE | - | a readout, not a control |
-| 556 | Ground-station target | map track | NOT DRIVABLE | - | a readout, not a control |
-| 557 | Aircraft target | map track | NOT DRIVABLE | - | a readout, not a control |
+| 556 | Ground-station target | map track | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
+| 557 | Aircraft target | map track | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
 | 558 | Not decoded | note | NOT DRIVABLE | - | a readout, not a control |
 
 ### Plugins: aircraft and marine — HFDL Aircraft Datalink Decoder (hfdl-decoder 0.1.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 559 | 12 presets | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 559 | 12 presets | preset key | DRIVEN+ASSERTED | plugin-hfdl-decoder.txt | Decoders drawer: click each of the 12 HFDL preset keys (Shannon 8942 last, it is the auto preset); state tunedHz == the kHz * 1000 of each |
 | 560 | Preamble-not-recognised line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 561 | Odd-tone line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 562 | Bad-format line | message list | NOT DRIVABLE | - | a readout, not a control |
@@ -1111,26 +1111,26 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 565 | Log-on lines | message list | NOT DRIVABLE | - | a readout, not a control |
 | 566 | Squitter line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 567 | Undecoded / refused lines | message list | NOT DRIVABLE | - | a readout, not a control |
-| 568 | Position paper line | message list / paper | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 569 | Instrument face | instrument face | NOT DRIVABLE | - | a readout, not a control |
+| 568 | Position paper line | message list / paper | NOT DRIVABLE | - | readout (message list / paper); needs a signal: the fixture run (6.49 phase B) |
+| 569 | Instrument face | instrument face | DRIVEN+ASSERTED | plugin-hfdl-decoder.txt | START opens the page: state pages contains "HFDL printer" right after START; bank row "HFDL printer" (#1) clicked twice: pages line read without it, then with it |
 | 570 | Face readouts | readout | NOT DRIVABLE | - | a readout, not a control |
 | 571 | Memory columns | column | NOT DRIVABLE | - | a readout, not a control |
-| 572 | Aircraft target | map track | NOT DRIVABLE | - | a readout, not a control |
+| 572 | Aircraft target | map track | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
 
 ### Plugins: aircraft and marine — SELCAL Decoder (selcal-decoder 1.0.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 573 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 574 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 575 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 576 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 577 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 578 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 579 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 580 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 581 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 582 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 573 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-A 5598 kHz USB"; state tunedHz == 5598000 |
+| 574 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-A 8906 kHz USB"; state tunedHz == 8906000 |
+| 575 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-B 5616 kHz USB"; state tunedHz == 5616000 |
+| 576 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-B 8864 kHz USB"; state tunedHz == 8864000 |
+| 577 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-C 5649 kHz USB"; state tunedHz == 5649000 |
+| 578 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-C 8879 kHz USB"; state tunedHz == 8879000 |
+| 579 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-D 8891 kHz USB"; state tunedHz == 8891000 |
+| 580 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-A/C 13306 kHz USB (day)"; state tunedHz == 13306000 |
+| 581 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-B/D/F 13291 kHz USB (day)"; state tunedHz == 13291000 |
+| 582 | Preset | preset key | DRIVEN+ASSERTED | plugin-selcal-decoder.txt | Decoder output page (tab), click "SELCAL NAT-B 2899 kHz USB (night)"; state tunedHz == 2899000 |
 | 583 | Good call | message list | NOT DRIVABLE | - | a readout, not a control |
 | 584 | Doubtful call | message list | NOT DRIVABLE | - | a readout, not a control |
 
@@ -1138,8 +1138,8 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 585 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 586 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 585 | Preset | preset key | DRIVEN+ASSERTED | plugin-vor-decoder.txt | "VOR course indicator" page (bank row #1), click "VOR band  113.000 MHz AM (tune your station)"; state tunedHz == 113000000 |
+| 586 | Preset | preset key | DRIVEN+ASSERTED | plugin-vor-decoder.txt | click "VOR band  108.000 MHz AM (band start)"; state tunedHz == 108000000 |
 | 587 | Bearing line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 588 | Ident line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 589 | No-subcarrier hint | status row | NOT DRIVABLE | - | a readout, not a control |
@@ -1149,13 +1149,13 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 593 | Reference level | readout (values[2]) | NOT DRIVABLE | - | a readout, not a control |
 | 594 | Variable level | readout (values[3]) | NOT DRIVABLE | - | a readout, not a control |
 | 595 | Ident | readout (text[0]) | NOT DRIVABLE | - | a readout, not a control |
-| 596 | OBS knob | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 596 | OBS knob | button | DRIVEN | plugin-vor-decoder.txt | slider "OBS course" 0.5 on the VOR instrument page; the value stayed "090" in the round-one dump (the knob does not map a track press to a course), so nothing can be read back |
 
 ### Plugins: aircraft and marine — AIS Ship Tracking Decoder (ais-decoder 1.0.2)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 597 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 597 | Preset | preset key | NOT DRIVABLE | - | no label seen yet: the device-centre preset "AIS  162.000 MHz (both ch)" is on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists it |
 | 598 | NMEA sentence | message list | NOT DRIVABLE | - | a readout, not a control |
 | 599 | Class A position (types 1, 2, 3) | message list | NOT DRIVABLE | - | a readout, not a control |
 | 600 | Static voyage (type 5) | message list | NOT DRIVABLE | - | a readout, not a control |
@@ -1163,14 +1163,14 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 602 | Class B extended (type 19) | message list | NOT DRIVABLE | - | a readout, not a control |
 | 603 | Other types | message list | NOT DRIVABLE | - | a readout, not a control |
 | 604 | Channel status | status row | NOT DRIVABLE | - | a readout, not a control |
-| 605 | Vessel target | map track | NOT DRIVABLE | - | a readout, not a control |
+| 605 | Vessel target | map track | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
 
 ### Plugins: aircraft and marine — Inmarsat-C / EGC Decoder (stdc-decoder 0.1.1)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 606 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 607 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 606 | Preset | preset key | NOT DRIVABLE | - | no label in the element tree on the Decoder output page (round-two dump: audio decoders only); the Decoders drawer lists presets of every plugin but was cut off after the APRS group at 2600 px: the 8000 px drawer dump kept in plugin-stdc-decoder.txt (round three) shows the Inmarsat-C keys |
+| 607 | Preset | preset key | NOT DRIVABLE | - | no label in the element tree on the Decoder output page (round-two dump); see row 606: the 8000 px drawer dump (round three) shows the Inmarsat-C keys |
 | 608 | Sync line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 609 | Frame error | message list | NOT DRIVABLE | - | a readout, not a control |
 | 610 | EGC header | message list | NOT DRIVABLE | - | a readout, not a control |
@@ -1181,14 +1181,14 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 613 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 614 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 615 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 616 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 613 | Preset | preset key | NOT DRIVABLE | - | no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them |
+| 614 | Preset | preset key | NOT DRIVABLE | - | no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them |
+| 615 | Preset | preset key | NOT DRIVABLE | - | no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them |
+| 616 | Preset | preset key | NOT DRIVABLE | - | no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them |
 | 617 | Distress line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 618 | Test line | message list | NOT DRIVABLE | - | a readout, not a control |
-| 619 | Protocol texts | message list / readout | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 620 | Instrument face | instrument face | NOT DRIVABLE | - | a readout, not a control |
+| 619 | Protocol texts | message list / readout | NOT DRIVABLE | - | readout (message list / protocol plate); needs a signal: the fixture run (6.49 phase B) |
+| 620 | Instrument face | instrument face | DRIVEN+ASSERTED | plugin-epirb-decoder.txt | START opens the page: state pages contains "406 MHz beacon" right after START; bank row "406 MHz beacon" (#1) clicked twice: pages line read without it, then with it |
 | 621 | Hex ID | readout (text[0]) | NOT DRIVABLE | - | a readout, not a control |
 | 622 | Country | readout (text[1]) | NOT DRIVABLE | - | a readout, not a control |
 | 623 | Protocol | readout (text[2]) | NOT DRIVABLE | - | a readout, not a control |
@@ -1199,27 +1199,27 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 628 | Burst log col 2 | column | NOT DRIVABLE | - | a readout, not a control |
 | 629 | Burst log col 3 | column | NOT DRIVABLE | - | a readout, not a control |
 | 630 | Burst log col 4 | column | NOT DRIVABLE | - | a readout, not a control |
-| 631 | Safety wording | description text | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 631 | Safety wording | description text | NOT DRIVABLE | - | deferred: the store's catalogue body is a later beta |
 
 ### Plugins: aircraft and marine — NAVTEX & DSC (marine) (navtex-dsc-decoder 1.0.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 632 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 633 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 634 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 635 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 636 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 637 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 638 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 639 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 640 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 641 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 632 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "NAVTEX 518 kHz  USB 516.3"; state tunedHz == 516300 |
+| 633 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "NAVTEX 490 kHz  USB 488.3"; state tunedHz == 488300 |
+| 634 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "NAVTEX 4209.5 kHz  USB 4207.8"; state tunedHz == 4207800 |
+| 635 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC VHF ch70  156.525 MHz  NFM"; state tunedHz == 156525000 |
+| 636 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 2187.5 kHz  USB 2185.8"; state tunedHz == 2185800 |
+| 637 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 4207.5 kHz  USB 4205.8"; state tunedHz == 4205800 |
+| 638 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 6312 kHz  USB 6310.3"; state tunedHz == 6310300 |
+| 639 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 8414.5 kHz  USB 8412.8"; state tunedHz == 8412800 |
+| 640 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 12577 kHz  USB 12575.3"; state tunedHz == 12575300 |
+| 641 | Preset | preset key | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 16804.5 kHz  USB 16802.8"; state tunedHz == 16802800 |
 | 642 | NAVTEX message | message list | NOT DRIVABLE | - | a readout, not a control |
 | 643 | DSC call | message list | NOT DRIVABLE | - | a readout, not a control |
 | 644 | DSC refused | message list | NOT DRIVABLE | - | a readout, not a control |
 | 645 | Tones-swapped hint | status row | NOT DRIVABLE | - | a readout, not a control |
-| 646 | Instrument face | instrument face | NOT DRIVABLE | - | a readout, not a control |
+| 646 | Instrument face | instrument face | DRIVEN+ASSERTED | plugin-navtex-dsc-decoder.txt | START opens the page: state pages contains "NAVTEX & DSC printer" right after START; bank row "NAVTEX & DSC printer" (#1) clicked twice: pages line read without it, then with it |
 | 647 | Station | readout (text[0]) | NOT DRIVABLE | - | a readout, not a control |
 | 648 | What | readout (text[1]) | NOT DRIVABLE | - | a readout, not a control |
 | 649 | Id | readout (text[2]) | NOT DRIVABLE | - | a readout, not a control |
@@ -1228,7 +1228,7 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 652 | Printed | readout (values[0]) | NOT DRIVABLE | - | a readout, not a control |
 | 653 | Paper col 1 | column | NOT DRIVABLE | - | a readout, not a control |
 | 654 | Paper col 2 | column | NOT DRIVABLE | - | a readout, not a control |
-| 655 | Vessel target | map track | NOT DRIVABLE | - | a readout, not a control |
+| 655 | Vessel target | map track | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
 | 656 | Not covered | note | NOT DRIVABLE | - | a readout, not a control |
 
 ### Plugins: broadcast and text — SSTV Image Decoder (sstv-decoder 1.0.0)
@@ -1236,11 +1236,11 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 657 | Picture | picture | NOT DRIVABLE | - | a readout, not a control |
-| 658 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 659 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 660 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 661 | Preset 4 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 662 | Preset 5 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 658 | Preset 1 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
+| 659 | Preset 2 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
+| 660 | Preset 3 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
+| 661 | Preset 4 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
+| 662 | Preset 5 | preset key | NOT DRIVABLE | - | the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three) |
 | 663 | Start line | message | NOT DRIVABLE | - | a readout, not a control |
 | 664 | Mode found | message | NOT DRIVABLE | - | a readout, not a control |
 | 665 | Unknown VIS | message | NOT DRIVABLE | - | a readout, not a control |
@@ -1255,44 +1255,44 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 669 | Decoded text | message list | NOT DRIVABLE | - | a readout, not a control |
 | 670 | Speed line | message | NOT DRIVABLE | - | a readout, not a control |
 | 671 | Overflow line | message | NOT DRIVABLE | - | a readout, not a control |
-| 672 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 673 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 674 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 675 | Preset 4 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 676 | Preset 5 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 677 | Preset 6 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 672 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-cw-decoder.txt | click "+ Window", click "CW  14.060 MHz (20 m)" on the Decoder output page; state tunedHz == 14060000 |
+| 673 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-cw-decoder.txt | click "+ Window", click "CW  7.030 MHz (40 m)" on the Decoder output page; state tunedHz == 7030000 |
+| 674 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-cw-decoder.txt | click "+ Window", click "CW  3.560 MHz (80 m)" on the Decoder output page; state tunedHz == 3560000 |
+| 675 | Preset 4 | preset key | DRIVEN+ASSERTED | plugin-cw-decoder.txt | click "+ Window", click "CW  21.060 MHz (15 m)" on the Decoder output page; state tunedHz == 21060000 |
+| 676 | Preset 5 | preset key | DRIVEN+ASSERTED | plugin-cw-decoder.txt | click "+ Window", click "CW  28.060 MHz (10 m)" on the Decoder output page; state tunedHz == 28060000 |
+| 677 | Preset 6 | preset key | DRIVEN+ASSERTED | plugin-cw-decoder.txt | click "+ Window", click "SAQ Grimeton 17.2 kHz (VLF)" on the Decoder output page; state tunedHz == 17200 |
 
 ### Plugins: broadcast and text — RTTY Teleprinter Decoder (rtty-decoder 1.2.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 678 | Baud | setting (number) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 679 | Shift | setting (number) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 680 | Reverse | setting (bool) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 681 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 682 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 683 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 684 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 678 | Baud | setting (number) | DRIVEN+ASSERTED | plugin-rtty-decoder.txt | state pages contains "RTTY settings" after START (the page START opens), click its tab "RTTY settings"#2, click "Plugin settings"#2; type "Baud (45.45, 50, 75, 100)" "75", key enter; expect value equals "75"; list.pluginSettings.names contains Baud |
+| 679 | Shift | setting (number) | DRIVEN+ASSERTED | plugin-rtty-decoder.txt | type "Shift Hz (170, 425, 450, 850)" "850", key enter; expect value equals "850" |
+| 680 | Reverse | setting (bool) | DRIVEN | plugin-rtty-decoder.txt | click "Reverse (swap mark/space)" twice on the "RTTY settings" page; no read-back yet: its initial state is read from the kept dump (round three adds expect checked) |
+| 681 | Plate key | plate key | DRIVEN | plugin-rtty-decoder.txt | click "RTTY BAUD" on the running module page after GRANT; the command goes to the plugin, whose answer is a panel / log line that needs a signal-free read-back nobody has named yet |
+| 682 | Plate key | plate key | DRIVEN | plugin-rtty-decoder.txt | click "RTTY SHIFT" on the running module page after GRANT; the command goes to the plugin, whose answer is a panel / log line that needs a signal-free read-back nobody has named yet |
+| 683 | Plate key | plate key | DRIVEN | plugin-rtty-decoder.txt | click "RTTY REVERSE" on the running module page after GRANT; the command goes to the plugin, whose answer is a panel / log line that needs a signal-free read-back nobody has named yet |
+| 684 | Plate key | plate key | DRIVEN | plugin-rtty-decoder.txt | click "RTTY STATION SETTINGS" on the running module page after GRANT; the command goes to the plugin, whose answer is a panel / log line that needs a signal-free read-back nobody has named yet |
 | 685 | Panel columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 686 | Intro row | panel row (heading) | NOT DRIVABLE | - | a readout, not a control |
-| 687 | Baud row | panel row (key) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 688 | Shift row | panel row (key) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 689 | Reverse row | panel row (key) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 687 | Baud row | panel row (key) | NOT DRIVABLE | - | pressable rows of the "RTTY settings" panel: not in any dump yet (the first run never opened the page); pending the kept dump (round three) |
+| 688 | Shift row | panel row (key) | NOT DRIVABLE | - | pressable rows of the "RTTY settings" panel: not in any dump yet (the first run never opened the page); pending the kept dump (round three) |
+| 689 | Reverse row | panel row (key) | NOT DRIVABLE | - | pressable rows of the "RTTY settings" panel: not in any dump yet (the first run never opened the page); pending the kept dump (round three) |
 | 690 | Station heading | panel row (heading) | NOT DRIVABLE | - | a readout, not a control |
-| 691 | Station settings row | panel row (key) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 691 | Station settings row | panel row (key) | NOT DRIVABLE | - | pressable rows of the "RTTY settings" panel: not in any dump yet (the first run never opened the page); pending the kept dump (round three) |
 | 692 | Tune-to row | panel row | NOT DRIVABLE | - | a readout, not a control |
 | 693 | Tone rows | panel rows | NOT DRIVABLE | - | a readout, not a control |
 | 694 | Polarity row | panel row | NOT DRIVABLE | - | a readout, not a control |
-| 695 | Presets 1-4 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 696 | Presets 5-7 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 695 | Presets 1-4 | preset key | DRIVEN+ASSERTED | plugin-rtty-decoder.txt | click the four RTTY amateur preset keys on the Decoder output page; state tunedHz inside +-10 kHz of the key frequency |
+| 696 | Presets 5-7 | preset key | DRIVEN+ASSERTED | plugin-rtty-decoder.txt | click the three DWD preset keys on the Decoder output page; state tunedHz inside +-10 kHz of the key frequency |
 
 ### Plugins: broadcast and text — FT8 Decoder (ft8-decoder 1.1.1)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 697 | Callsign | setting (text, 15) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 698 | Locator | setting (text, 6) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 699 | Report | setting (bool) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 697 | Callsign | setting (text, 15) | DRIVEN+ASSERTED | plugin-ft8-decoder.txt | state pages contains "FT8 - PSK Reporter" after START, click its tab #2, click "Plugin settings"#2; type "Callsign" "G0FOX", key enter; expect "Callsign" value equals "G0FOX" |
+| 698 | Locator | setting (text, 6) | DRIVEN+ASSERTED | plugin-ft8-decoder.txt | type "Locator" "IO91wm", key enter; expect "Locator" value equals "IO91wm" |
+| 699 | Report | setting (bool) | DRIVEN | plugin-ft8-decoder.txt | click "Report to PSK Reporter" twice; no read-back yet: its initial state is read from the kept dump (round three adds expect checked) |
 | 700 | Panel columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 701 | Reporting row | status row | NOT DRIVABLE | - | a readout, not a control |
 | 702 | Locator row | status row | NOT DRIVABLE | - | a readout, not a control |
@@ -1303,17 +1303,17 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 707 | Decode lines | message list | NOT DRIVABLE | - | a readout, not a control |
 | 708 | Start message | message | NOT DRIVABLE | - | a readout, not a control |
 | 709 | Diagnostic messages | message | NOT DRIVABLE | - | a readout, not a control |
-| 710 | Presets (13) | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 710 | Presets (13) | preset key | DRIVEN+ASSERTED | plugin-ft8-decoder.txt | click "+ Window", click each of the 13 FT8 preset keys on the Decoder output page; state tunedHz == the key frequency |
 
 ### Plugins: broadcast and text — DAB / DAB+ Radio (dab 0.5.0, EXPERIMENTAL)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 711 | Service number | setting (number) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 712 | Station name | setting (text) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 713 | Decoder path | setting (path) + BROWSE FILES | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 714 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 715 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 711 | Service number | setting (number) | DRIVEN+ASSERTED | plugin-dab.txt | state pages contains "DAB / DAB+ Radio image" after START, click its tab #2, click "Plugin settings"#2: type "Service number" "2", key enter; expect value equals "2"; list.pluginSettings.names contains |
+| 712 | Station name | setting (text) | DRIVEN+ASSERTED | plugin-dab.txt | type "Station name" "Probe FM", key enter; expect value equals "Probe FM" |
+| 713 | Decoder path | setting (path) + BROWSE FILES | DRIVEN+ASSERTED | plugin-dab.txt | type "DAB+ decoder (ffmpeg)" a path, key enter; expect value equals the path (BROWSE FILES is deferred: native handle) |
+| 714 | Plate key | plate key | DRIVEN | plugin-dab.txt | click "NEXT STATION" on the running module page after GRANT; the station choice needs an ensemble, no read-back without a signal |
+| 715 | Plate key | plate key | DRIVEN | plugin-dab.txt | click "PREVIOUS STATION" on the running module page after GRANT; the station choice needs an ensemble, no read-back without a signal |
 | 716 | Panel columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 717 | Receiver row | status row | NOT DRIVABLE | - | a readout, not a control |
 | 718 | Sync row | status row | NOT DRIVABLE | - | a readout, not a control |
@@ -1325,10 +1325,10 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 724 | Text row | status row | NOT DRIVABLE | - | a readout, not a control |
 | 725 | DL Plus rows | status rows | NOT DRIVABLE | - | a readout, not a control |
 | 726 | Slideshow row | status row | NOT DRIVABLE | - | a readout, not a control |
-| 727 | Service list | panel rows (cols) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 727 | Service list | panel rows (cols) | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) - the service list is an ensemble |
 | 728 | Footer rows | status rows | NOT DRIVABLE | - | a readout, not a control |
 | 729 | Slideshow picture | picture | NOT DRIVABLE | - | a readout, not a control |
-| 730 | Presets (16) | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 730 | Presets (16) | preset key | NOT DRIVABLE | - | the sixteen DAB preset keys are on no page dumped so far (not the module page, not the Decoder output page): pending the dumps on the image and ensemble pages (round three) |
 | 731 | Decoder messages | message | NOT DRIVABLE | - | a readout, not a control |
 
 ### Plugins: broadcast and text — APRS / AX.25 Packet Decoder (aprs-decoder 1.0.2)
@@ -1338,8 +1338,8 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 732 | Frame line | message list | NOT DRIVABLE | - | a readout, not a control |
 | 733 | Station track | map track | NOT DRIVABLE | - | a readout, not a control |
 | 734 | Station trail | map path | NOT DRIVABLE | - | a readout, not a control |
-| 735 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 736 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 735 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-aprs-decoder.txt | click "+ Window", click "APRS  144.800 MHz (Europe)" / "APRS  144.390 MHz (N America)"; state tunedHz == 144800000 / 144390000 |
+| 736 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-aprs-decoder.txt | click "+ Window", click "APRS  144.800 MHz (Europe)" / "APRS  144.390 MHz (N America)"; state tunedHz == 144800000 / 144390000 |
 
 ### Plugins: broadcast and text — EAS / SAME Alert Decoder (eas-decoder 1.0.0)
 
@@ -1349,21 +1349,21 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 738 | Bad header | message | NOT DRIVABLE | - | a readout, not a control |
 | 739 | End of message | message | NOT DRIVABLE | - | a readout, not a control |
 | 740 | Attention tone | message | NOT DRIVABLE | - | a readout, not a control |
-| 741 | Presets (7) | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 741 | Presets (7) | preset key | DRIVEN+ASSERTED | plugin-eas-decoder.txt | click "+ Window", click each of the 7 NOAA Weather Radio preset keys on the Decoder output page; state tunedHz == 162400000 .. 162550000 |
 
 ### Plugins: broadcast and text — IBOC Radio (nrsc5 library) (nrsc5-radio-dynamic 0.1.2, EXPERIMENTAL, Windows only)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 742 | Programme | setting (kind unclear, likely number; key ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 743 | Picture page | setting (text; key ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 744 | Auto gain | setting (bool; key ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 745 | Library path | setting (path; key ) + BROWSE FILES | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 746 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 747 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 748 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 749 | Dashboard programme rows | picture hit-target | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 750 | Programme legend | picture text | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 742 | Programme | setting (kind unclear, likely number; key ) | DRIVEN+ASSERTED | plugin-nrsc5-radio-dynamic.txt | on "IBOC Radio (nrsc5 library) image" after click "Plugin settings"#2: type "Programme 0-7 (HD1-HD8)" "2", key enter; expect value equals "2" |
+| 743 | Picture page | setting (text; key ) | DRIVEN+ASSERTED | plugin-nrsc5-radio-dynamic.txt | type "Picture page" "2", key enter; expect value equals "2" |
+| 744 | Auto gain | setting (bool; key ) | DRIVEN | plugin-nrsc5-radio-dynamic.txt | click "Auto gain" twice; no read-back yet: its initial state is read from the kept dump (round three adds expect checked) |
+| 745 | Library path | setting (path; key ) + BROWSE FILES | DRIVEN+ASSERTED | plugin-nrsc5-radio-dynamic.txt | type "nrsc5 library file" a path, key enter; expect value equals the path (BROWSE FILES is deferred: native handle) |
+| 746 | Plate key | plate key | DRIVEN | plugin-nrsc5-radio-dynamic.txt | click the plate keys "HD next", "HD previous", "Re-acquire" after GRANT; the plugin answers on its dashboard, which needs a station: no read-back |
+| 747 | Plate key | plate key | DRIVEN | plugin-nrsc5-radio-dynamic.txt | click the plate keys "HD1".."HD4" after GRANT; the programme choice needs a station: no read-back |
+| 748 | Plate key | plate key | DRIVEN | plugin-nrsc5-radio-dynamic.txt | click the plate keys "HD5".."HD8" after GRANT; the programme choice needs a station: no read-back |
+| 749 | Dashboard programme rows | picture hit-target | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) - a click on the plugin's own picture, which exists only with a decoded station |
+| 750 | Programme legend | picture text | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) - text inside the picture the plugin rasterises |
 | 751 | Panel columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 752 | Library rows | status rows | NOT DRIVABLE | - | a readout, not a control |
 | 753 | Signal rows | status rows | NOT DRIVABLE | - | a readout, not a control |
@@ -1378,14 +1378,14 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 760 | Mode key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 761 | Bands key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 762 | Level + | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 763 | Level - | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 764 | Margin + | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 765 | Margin - | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 766 | Ignore | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 767 | Clear ignores | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 760 | Mode key | plate key | DRIVEN | plugin-nearby-signal-catch.txt | click "Mode: Alert only" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back) |
+| 761 | Bands key | plate key | DRIVEN | plugin-nearby-signal-catch.txt | click "Bands: Handhelds" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back) |
+| 762 | Level + | plate key | DRIVEN | plugin-nearby-signal-catch.txt | click "Level +5 dB" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back) |
+| 763 | Level - | plate key | DRIVEN | plugin-nearby-signal-catch.txt | click "Level -5 dB" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back) |
+| 764 | Margin + | plate key | DRIVEN | plugin-nearby-signal-catch.txt | click "Margin +5 dB" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back) |
+| 765 | Margin - | plate key | DRIVEN | plugin-nearby-signal-catch.txt | click "Margin -5 dB" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back) |
+| 766 | Ignore | plate key | DRIVEN | plugin-nearby-signal-catch.txt | click "Ignore last hit" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back) |
+| 767 | Clear ignores | plate key | DRIVEN | plugin-nearby-signal-catch.txt | click "Clear ignores" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back) |
 | 768 | Panel columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 769 | Disclaimer row | status row | NOT DRIVABLE | - | a readout, not a control |
 | 770 | Mode row | status row | NOT DRIVABLE | - | a readout, not a control |
@@ -1396,9 +1396,9 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 775 | Sweep row | status row | NOT DRIVABLE | - | a readout, not a control |
 | 776 | Ignore summary | status row | NOT DRIVABLE | - | a readout, not a control |
 | 777 | Hints | status rows | NOT DRIVABLE | - | a readout, not a control |
-| 778 | Hit log | rows (separator, then newest first) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 778 | Hit log | rows (separator, then newest first) | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) - hit-log rows exist only after a catch |
 | 779 | Spectrum mark | mark | NOT DRIVABLE | - | a readout, not a control |
-| 780 | Alert message | message (WARN, also plate notice) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 780 | Alert message | message (WARN, also plate notice) | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) - the alert is raised by a catch |
 | 781 | End message | message | NOT DRIVABLE | - | a readout, not a control |
 | 782 | Key feedback | message | NOT DRIVABLE | - | a readout, not a control |
 
@@ -1409,29 +1409,29 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 783 | Hello line | message | NOT DRIVABLE | - | a readout, not a control |
 | 784 | Group call line | message | NOT DRIVABLE | - | a readout, not a control |
 | 785 | Private call line | message | NOT DRIVABLE | - | a readout, not a control |
-| 786 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 786 | Preset | preset key | DRIVEN+ASSERTED | plugin-dmr-monitor.txt | click "+ Window", click "DMR  446.000 MHz NFM (tune your repeater)"; state tunedHz == 446000000, state mode == NFM |
 
 ### Plugins: broadcast and text — TETRA Monitor (data only, no voice) (tetra-decoder 0.1.2)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 787 | Panel columns | column | NOT DRIVABLE | - | a readout, not a control |
-| 788 | Banner | status row (WARN, wrapped) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 788 | Banner | status row (WARN, wrapped) | NOT DRIVABLE | - | a readout row of the panel table, not a control |
 | 789 | CELL heading | heading | NOT DRIVABLE | - | a readout, not a control |
 | 790 | Status | status row | NOT DRIVABLE | - | a readout, not a control |
 | 791 | Cell fields | status rows | NOT DRIVABLE | - | a readout, not a control |
 | 792 | SYSTEM INFO | heading + rows | NOT DRIVABLE | - | a readout, not a control |
 | 793 | TRAFFIC | heading + rows | NOT DRIVABLE | - | a readout, not a control |
-| 794 | LEGAL | heading + wrapped text | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 794 | LEGAL | heading + wrapped text | NOT DRIVABLE | - | a readout row of the panel table, not a control |
 | 795 | Text lines | message list | NOT DRIVABLE | - | a readout, not a control |
-| 796 | Presets (3) | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 796 | Presets (3) | preset key | NOT DRIVABLE | - | the three TETRA preset keys are on no page dumped so far (not the module page, not the Decoder output page): pending the dump on "TETRA cell" (round three) |
 
 ### Plugins: broadcast and text — Radar Sweep (radar-sweep 1.0.2) - NOT in index.json
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 797 | Plate key | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 798 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 797 | Plate key | plate key | NOT DRIVABLE | - | not installed: the plugin is not in the catalogue, so no run fits it |
+| 798 | Preset | preset key | NOT DRIVABLE | - | not installed: the plugin is not in the catalogue, so no run fits it |
 | 799 | Radar table columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 800 | Summary rows | status rows | NOT DRIVABLE | - | a readout, not a control |
 | 801 | Receiver rows | status rows | NOT DRIVABLE | - | a readout, not a control |
@@ -1451,253 +1451,253 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 810 | Audio row | status row | NOT DRIVABLE | - | a readout, not a control |
 | 811 | Service list | rows | NOT DRIVABLE | - | a readout, not a control |
 | 812 | Footer | status rows | NOT DRIVABLE | - | a readout, not a control |
-| 813 | Presets (16) | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 813 | Presets (16) | preset key | NOT DRIVABLE | - | not installed: the plugin is not in the catalogue, so no run fits it |
 
 ### Plugins: paging, meters and tools — Two-Tone Paging Decoder (twotone-decoder 1.0.1)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 814 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 815 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 816 | Instrument window | instrument face (TONE_ALERT) | NOT DRIVABLE | - | a readout, not a control |
-| 817 | Tone A / B bars | readout | NOT DRIVABLE | - | a readout, not a control |
-| 818 | Code plate | readout | NOT DRIVABLE | - | a readout, not a control |
-| 819 | Format plate | readout | NOT DRIVABLE | - | a readout, not a control |
-| 820 | Verdict word | readout | NOT DRIVABLE | - | a readout, not a control |
-| 821 | Alert lamp | instrument flag (ALERT) | NOT DRIVABLE | - | a readout, not a control |
-| 822 | Call log column 1 | column | NOT DRIVABLE | - | a readout, not a control |
-| 823 | Call log column 2 | column | NOT DRIVABLE | - | a readout, not a control |
-| 824 | Call log column 3 | column | NOT DRIVABLE | - | a readout, not a control |
-| 825 | Call log column 4 | column | NOT DRIVABLE | - | a readout, not a control |
-| 826 | Call log capacity | row feed | NOT DRIVABLE | - | a readout, not a control |
-| 827 | Decoder text line (pair) | message list | NOT DRIVABLE | - | a readout, not a control |
-| 828 | Decoder text line (single) | message list | NOT DRIVABLE | - | a readout, not a control |
+| 814 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-twotone-decoder.txt | round three: with the Tone alert tab in front, click the key "Two-tone  154.000 MHz NFM (tune your dispatch)" (clicked after the 453 key: START itself tunes to 154.000); state tunedHz == 154000000 |
+| 815 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-twotone-decoder.txt | round three: click the key "Two-tone  453.000 MHz NFM (UHF dispatch)"; state tunedHz == 453000000 and mode == NFM |
+| 816 | Instrument window | instrument face (TONE_ALERT) | DRIVEN+ASSERTED | plugin-twotone-decoder.txt | START opens the page: state pages contains "Tone alert"; click the DECODE bank row "Tone alert"#1 twice (closed, open again), then its tab "Tone alert"#2; state pages contains "Tone alert"; state kit.instruments >= 1 |
+| 817 | Tone A / B bars | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 818 | Code plate | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 819 | Format plate | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 820 | Verdict word | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 821 | Alert lamp | instrument flag (ALERT) | NOT DRIVABLE | - | a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B) |
+| 822 | Call log column 1 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 823 | Call log column 2 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 824 | Call log column 3 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 825 | Call log column 4 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 826 | Call log capacity | row feed | NOT DRIVABLE | - | the memory table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 827 | Decoder text line (pair) | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 828 | Decoder text line (single) | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — POCSAG Pager Decoder (pocsag-decoder 1.0.5)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 829 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 830 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 831 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 832 | Preset 4 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 833 | Preset 5 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 834 | Preset 6 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 835 | Numeric messages | setting (bool, key ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 836 | Use function codes | setting (bool, key ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 837 | Show frame details | setting (bool, key ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 838 | Panel window | panel | NOT DRIVABLE | - | a readout, not a control |
-| 839 | Empty-history row | status row | NOT DRIVABLE | - | a readout, not a control |
-| 840 | Page rows | panel row (GOOD) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 841 | Frame details heading | panel heading | NOT DRIVABLE | - | a readout, not a control |
-| 842 | Frame rows | panel rows | NOT DRIVABLE | - | a readout, not a control |
-| 843 | Raw codewords heading + rows | panel heading/rows | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 844 | Truncation row | panel row (WARN) | NOT DRIVABLE | - | a readout, not a control |
-| 845 | Reception status heading | panel heading | NOT DRIVABLE | - | a readout, not a control |
-| 846 | Status rows | panel rows | NOT DRIVABLE | - | a readout, not a control |
-| 847 | History-missed row | panel row (WARN) | NOT DRIVABLE | - | a readout, not a control |
-| 848 | Overflow row | panel row (WARN) | NOT DRIVABLE | - | a readout, not a control |
-| 849 | Decoder text line | message list | NOT DRIVABLE | - | a readout, not a control |
+| 829 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | round three: with the POCSAG settings tab in front, click the key "UK  153.350 MHz"; state tunedHz == 153350000 |
+| 830 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | round three: with the POCSAG settings tab in front, click the key "DAPNET  439.9875 MHz (ham)"; state tunedHz == 439987500 |
+| 831 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | round three: with the POCSAG settings tab in front, click the key "POCSAG  931.9375 MHz (US)"; state tunedHz == 931937500 |
+| 832 | Preset 4 | preset key | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | round three: with the POCSAG settings tab in front, click the key "POCSAG  931.9125 MHz (US)"; state tunedHz == 931912500 |
+| 833 | Preset 5 | preset key | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | round three: with the POCSAG settings tab in front, click the key "POCSAG  931.8875 MHz (US)"; state tunedHz == 931887500 |
+| 834 | Preset 6 | preset key | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | round three: with the POCSAG settings tab in front, click the key "POCSAG  931.4375 MHz (US)"; state tunedHz == 931437500 |
+| 835 | Numeric messages | setting (bool, key ) | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | round three: click the fold key "Plugin settings"#2 on the POCSAG settings page, click "Numeric messages"; expect checked equals true (the form's echo of the engine's stored value) |
+| 836 | Use function codes | setting (bool, key ) | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | round three: click "Use function codes"; expect checked equals true (the form's echo of the engine's stored value) |
+| 837 | Show frame details | setting (bool, key ) | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | round three: click "Show frame details"; expect checked equals true (the form's echo of the engine's stored value) |
+| 838 | Panel window | panel | DRIVEN+ASSERTED | plugin-pocsag-decoder.txt | START opens the page: state pages contains "POCSAG settings"; click the DECODE bank row "POCSAG settings"#1 twice (closed, open again), then its tab #2; state kit.panels >= 1 |
+| 839 | Empty-history row | status row | NOT DRIVABLE | - | a status row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 840 | Page rows | panel row (GOOD) | NOT DRIVABLE | - | a row of the panel, not a control (a decoded page: needs a signal: the fixture run, 6.49 phase B) |
+| 841 | Frame details heading | panel heading | NOT DRIVABLE | - | a heading of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 842 | Frame rows | panel rows | NOT DRIVABLE | - | rows of the panel, not a control (need a signal: the fixture run, 6.49 phase B) |
+| 843 | Raw codewords heading + rows | panel heading/rows | NOT DRIVABLE | - | a heading and rows of the panel, not a control (need a signal: the fixture run, 6.49 phase B) |
+| 844 | Truncation row | panel row (WARN) | NOT DRIVABLE | - | a row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 845 | Reception status heading | panel heading | NOT DRIVABLE | - | a heading of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 846 | Status rows | panel rows | NOT DRIVABLE | - | rows of the panel, not a control (need a signal: the fixture run, 6.49 phase B) |
+| 847 | History-missed row | panel row (WARN) | NOT DRIVABLE | - | a row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 848 | Overflow row | panel row (WARN) | NOT DRIVABLE | - | a row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 849 | Decoder text line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — FLEX Pager Decoder (flex-decoder 1.0.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 850 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 851 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 852 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 853 | Preset 4 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 854 | Pager window | instrument face (PAGER) | NOT DRIVABLE | - | a readout, not a control |
-| 855 | Message display | readout | NOT DRIVABLE | - | a readout, not a control |
-| 856 | Capcode | readout | NOT DRIVABLE | - | a readout, not a control |
-| 857 | Time | readout | NOT DRIVABLE | - | a readout, not a control |
-| 858 | Kind | readout | NOT DRIVABLE | - | a readout, not a control |
-| 859 | Unread count | readout | NOT DRIVABLE | - | a readout, not a control |
-| 860 | Alert lamp | instrument flag (ALERT) | NOT DRIVABLE | - | a readout, not a control |
-| 861 | Sync lamp | instrument flag (LOCK) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 862 | Low battery lamp | instrument flag | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 863 | Memory column 1 | column | NOT DRIVABLE | - | a readout, not a control |
-| 864 | Memory column 2 | column | NOT DRIVABLE | - | a readout, not a control |
-| 865 | Memory column 3 | column | NOT DRIVABLE | - | a readout, not a control |
-| 866 | Memory depth | row feed | NOT DRIVABLE | - | a readout, not a control |
-| 867 | Decoder text line | message list | NOT DRIVABLE | - | a readout, not a control |
+| 850 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-flex-decoder.txt | round three: with the FLEX pager tab in front, click the key "FLEX  931.9375 MHz (US)" (the 931.9375 key last: START itself tunes to it); state tunedHz == 931937500 |
+| 851 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-flex-decoder.txt | round three: with the FLEX pager tab in front, click the key "FLEX  931.9125 MHz (US)" (the 931.9375 key last: START itself tunes to it); state tunedHz == 931912500 |
+| 852 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-flex-decoder.txt | round three: with the FLEX pager tab in front, click the key "FLEX  931.8875 MHz (US)" (the 931.9375 key last: START itself tunes to it); state tunedHz == 931887500 |
+| 853 | Preset 4 | preset key | DRIVEN+ASSERTED | plugin-flex-decoder.txt | round three: with the FLEX pager tab in front, click the key "FLEX  931.4375 MHz (US)" (the 931.9375 key last: START itself tunes to it); state tunedHz == 931437500 |
+| 854 | Pager window | instrument face (PAGER) | DRIVEN+ASSERTED | plugin-flex-decoder.txt | START opens the page: state pages contains "FLEX pager"; click the DECODE bank row "FLEX pager"#1 twice (closed, open again), then its tab #2; state kit.instruments >= 1 |
+| 855 | Message display | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 856 | Capcode | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 857 | Time | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 858 | Kind | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 859 | Unread count | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 860 | Alert lamp | instrument flag (ALERT) | NOT DRIVABLE | - | a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B) |
+| 861 | Sync lamp | instrument flag (LOCK) | NOT DRIVABLE | - | a lamp, not a control (lit by a lock: needs a signal: the fixture run, 6.49 phase B) |
+| 862 | Low battery lamp | instrument flag | NOT DRIVABLE | - | a lamp, not a control (the plugin never sets it) |
+| 863 | Memory column 1 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 864 | Memory column 2 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 865 | Memory column 3 | column | NOT DRIVABLE | - | a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 866 | Memory depth | row feed | NOT DRIVABLE | - | the memory table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 867 | Decoder text line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — ERT Utility Meter Decoder (ert-decoder 1.0.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 868 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 869 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 870 | Meter window | instrument face (METER) | NOT DRIVABLE | - | a readout, not a control |
-| 871 | Meter id | readout | NOT DRIVABLE | - | a readout, not a control |
-| 872 | Commodity lamps | readout | NOT DRIVABLE | - | a readout, not a control |
-| 873 | Reading | readout | NOT DRIVABLE | - | a readout, not a control |
-| 874 | Tamper counters | readout | NOT DRIVABLE | - | a readout, not a control |
-| 875 | Tamper alert | instrument flag (ALERT) | NOT DRIVABLE | - | a readout, not a control |
-| 876 | Roster column 1 | column | NOT DRIVABLE | - | a readout, not a control |
-| 877 | Roster column 2 | column | NOT DRIVABLE | - | a readout, not a control |
-| 878 | Roster column 3 | column | NOT DRIVABLE | - | a readout, not a control |
-| 879 | Roster column 4 | column | NOT DRIVABLE | - | a readout, not a control |
-| 880 | Roster capacity | row feed | NOT DRIVABLE | - | a readout, not a control |
-| 881 | Decoder text line | message list | NOT DRIVABLE | - | a readout, not a control |
-| 882 | Status line | message list | NOT DRIVABLE | - | a readout, not a control |
+| 868 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-ert-decoder.txt | round three: with the ERT meters tab in front, click the key "ERT meters  912.600 MHz" (clicked after the 915 key: START itself tunes to 912.600); state tunedHz == 912600000 |
+| 869 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-ert-decoder.txt | round three: click the key "ERT meters  915.000 MHz (band centre)"; state tunedHz == 915000000 |
+| 870 | Meter window | instrument face (METER) | DRIVEN+ASSERTED | plugin-ert-decoder.txt | START opens the page: state pages contains "ERT meters"; click the DECODE bank row "ERT meters"#1 twice (closed, open again), then its tab #2; state kit.instruments >= 1 |
+| 871 | Meter id | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 872 | Commodity lamps | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 873 | Reading | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 874 | Tamper counters | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 875 | Tamper alert | instrument flag (ALERT) | NOT DRIVABLE | - | a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B) |
+| 876 | Roster column 1 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 877 | Roster column 2 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 878 | Roster column 3 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 879 | Roster column 4 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 880 | Roster capacity | row feed | NOT DRIVABLE | - | the roster table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 881 | Decoder text line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 882 | Status line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — Wireless M-Bus Meter Decoder (wmbus-decoder 0.1.0, EXPERIMENTAL)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 883 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 884 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 885 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 886 | AES keys | setting (text, key , max 4000 chars) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 887 | Settings loaded log | message | NOT DRIVABLE | - | a readout, not a control |
-| 888 | Meter window | instrument face (METER) | NOT DRIVABLE | - | a readout, not a control |
-| 889 | Meter id | readout | NOT DRIVABLE | - | a readout, not a control |
-| 890 | Commodity | readout | NOT DRIVABLE | - | a readout, not a control |
-| 891 | Reading + unit | readout | NOT DRIVABLE | - | a readout, not a control |
-| 892 | Alarm lamp | instrument flag (ALERT) | NOT DRIVABLE | - | a readout, not a control |
-| 893 | Low-battery lamp | instrument flag (LOW_BATT) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 894 | Roster col 1 | column | NOT DRIVABLE | - | a readout, not a control |
-| 895 | Roster col 2 | column | NOT DRIVABLE | - | a readout, not a control |
-| 896 | Roster col 3 | column | NOT DRIVABLE | - | a readout, not a control |
-| 897 | Roster col 4 | column | NOT DRIVABLE | - | a readout, not a control |
-| 898 | Roster col 5 | column | NOT DRIVABLE | - | a readout, not a control |
-| 899 | Roster col 6 | column | NOT DRIVABLE | - | a readout, not a control |
-| 900 | Roster col 7 | column | NOT DRIVABLE | - | a readout, not a control |
-| 901 | Roster capacity | row feed | NOT DRIVABLE | - | a readout, not a control |
-| 902 | Decoder text line | message list | NOT DRIVABLE | - | a readout, not a control |
-| 903 | Status line | message list | NOT DRIVABLE | - | a readout, not a control |
+| 883 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-wmbus-decoder.txt | round three: with the Wireless M-Bus meters tab in front, click the key "wM-Bus T/C 868.95 MHz" (clicked last: START itself tunes to it); state tunedHz == 868950000 |
+| 884 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-wmbus-decoder.txt | round three: click the key "wM-Bus S 868.30 MHz"; state tunedHz == 868300000 |
+| 885 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-wmbus-decoder.txt | round three: click the key "wM-Bus S+T+C 868.625 MHz (both)"; state tunedHz == 868625000 |
+| 886 | AES keys | setting (text, key , max 4000 chars) | DRIVEN+ASSERTED | plugin-wmbus-decoder.txt | round three: click the fold key "Plugin settings"#2, type "AES keys" a sample id=key line, key enter; expect "AES keys" value equals the typed text (the form's echo of the engine's stored value); the field may sit on another page |
+| 887 | Settings loaded log | message | NOT DRIVABLE | - | a decoder output line, not a control (written when the keys are loaded: needs a running decode, the fixture run, 6.49 phase B) |
+| 888 | Meter window | instrument face (METER) | DRIVEN+ASSERTED | plugin-wmbus-decoder.txt | START opens the page: state pages contains "Wireless M-Bus meters"; click the DECODE bank row #1 twice (closed, open again), then its tab #2; state kit.instruments >= 1 |
+| 889 | Meter id | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 890 | Commodity | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 891 | Reading + unit | readout | NOT DRIVABLE | - | a readout, not a control (its values need a signal: the fixture run, 6.49 phase B) |
+| 892 | Alarm lamp | instrument flag (ALERT) | NOT DRIVABLE | - | a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B) |
+| 893 | Low-battery lamp | instrument flag (LOW_BATT) | NOT DRIVABLE | - | a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B) |
+| 894 | Roster col 1 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 895 | Roster col 2 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 896 | Roster col 3 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 897 | Roster col 4 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 898 | Roster col 5 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 899 | Roster col 6 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 900 | Roster col 7 | column | NOT DRIVABLE | - | a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 901 | Roster capacity | row feed | NOT DRIVABLE | - | the roster table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 902 | Decoder text line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 903 | Status line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — Example RMS Reporter (example-decoder 2.0.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 904 | Decoder text line | message list | NOT DRIVABLE | - | a readout, not a control |
-| 905 | Rail row / chip | rail row (host) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 904 | Decoder text line | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 905 | Rail row / chip | rail row (host) | DRIVEN | plugin-example-decoder.txt | round three: click "Turn on and off plugins" (the Decoders drawer) and scroll it with dumps at three offsets (scroll "Mute audio while running"#1 1400); the drawer showed only ACARS, ADS-B, HFDL and SELCAL in its first screen, so the Example RMS Reporter entry and its Decoder START / STOP key are still to be found in the dumps; its run state is read through the module page (STOP key, decodersRunning, list.decoders.names) |
 
 ### Plugins: paging, meters and tools — Decoder Workbench (workbench 0.2.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 906 | Presets (one per band) | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 907 | Panel window | panel | NOT DRIVABLE | - | a readout, not a control |
-| 908 | Column 1 | column | NOT DRIVABLE | - | a readout, not a control |
-| 909 | Column 2 | column | NOT DRIVABLE | - | a readout, not a control |
-| 910 | Column 3 | column | NOT DRIVABLE | - | a readout, not a control |
-| 911 | Column 4 | column | NOT DRIVABLE | - | a readout, not a control |
-| 912 | Column 5 | column | NOT DRIVABLE | - | a readout, not a control |
-| 913 | Warning row | status row (WARN) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 914 | Panel refresh | behaviour | NOT DRIVABLE | - | a readout, not a control |
-| 915 | Routing announcement | message | NOT DRIVABLE | - | a readout, not a control |
-| 916 | Decoder text lines | message list | NOT DRIVABLE | - | a readout, not a control |
+| 906 | Presets (one per band) | preset key | DRIVEN+ASSERTED | plugin-workbench.txt | round three: with the Decoder workbench tab in front, click the band key "NOAA weather  all 7 channels at once" (label confirmed by fixture-workbench); state centreHz between 162.0 and 162.5 MHz (the first run read 162.1 MHz); the ACARS key label comes from the kept dump |
+| 907 | Panel window | panel | DRIVEN+ASSERTED | plugin-workbench.txt | START opens the page: state pages contains "Decoder workbench"; click the DECODE bank row "Decoder workbench"#1 twice (closed, open again), then its tab #2; state kit.panels >= 1 |
+| 908 | Column 1 | column | NOT DRIVABLE | - | a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 909 | Column 2 | column | NOT DRIVABLE | - | a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 910 | Column 3 | column | NOT DRIVABLE | - | a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 911 | Column 4 | column | NOT DRIVABLE | - | a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 912 | Column 5 | column | NOT DRIVABLE | - | a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B) |
+| 913 | Warning row | status row (WARN) | NOT DRIVABLE | - | a status row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 914 | Panel refresh | behaviour | NOT DRIVABLE | - | the plugin's own behaviour: the kit cannot see it, there is nothing to draw |
+| 915 | Routing announcement | message | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 916 | Decoder text lines | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — Demod Analyzer (demod-analyzer 0.1.0, EXPERIMENTAL)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 917 | Dashboard picture | image window | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 918 | ANALYSE NOW | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 919 | HOLD / RUN LIVE | plate key (toggles) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 920 | PRINT BITS | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 921 | EXPORT | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 922 | Source | panel row | NOT DRIVABLE | - | a readout, not a control |
-| 923 | Status | panel row | NOT DRIVABLE | - | a readout, not a control |
-| 924 | Modulation | panel row | NOT DRIVABLE | - | a readout, not a control |
-| 925 | Confidence | panel row | NOT DRIVABLE | - | a readout, not a control |
-| 926 | Measurement rows | panel rows | NOT DRIVABLE | - | a readout, not a control |
-| 927 | Result row | panel row (WARN) | NOT DRIVABLE | - | a readout, not a control |
-| 928 | I/Q file | setting (text, key ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 929 | File format | setting (text, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 930 | File sample rate | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 931 | Skip first samples | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 932 | Modulation | setting (text, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 933 | Symbol rate | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 934 | Carrier offset | setting (text, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 935 | Extra rotation | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 936 | Matched filter | setting (text, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 937 | Roll-off | setting (text, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 938 | Filter span | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 939 | Sampling offset | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 940 | Symbol range | setting (text, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 941 | Sync word | setting (text, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 942 | Remove DC offset | setting (bool, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 943 | Live capture | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 944 | Spectrum point mark | mark | NOT DRIVABLE | - | a readout, not a control |
-| 945 | Occupied-band mark | mark (span, spectrum only) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 946 | Decoder text lines | message list | NOT DRIVABLE | - | a readout, not a control |
+| 917 | Dashboard picture | image window | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | click the DECODE bank row "Demod Analyzer image" (START leaves only the module page open): state pages contains "Demod Analyzer image"; state kit.pictures >= 1; click it twice more (closed, open again); the picture Save as BMP key is not driven: it writes a file |
+| 918 | ANALYSE NOW | plate key | DRIVEN | plugin-demod-analyzer.txt | click ANALYSE NOW on the module page; the plugin's reply is a panel row or a picture (nothing of the engine to read back without a fixture) |
+| 919 | HOLD / RUN LIVE | plate key (toggles) | DRIVEN | plugin-demod-analyzer.txt | round three: click HOLD on the module page; the first run found no "RUN LIVE" key in the element tree, so the held state cannot be read back yet: the kept dump after the click shows how the key reads |
+| 920 | PRINT BITS | plate key | DRIVEN | plugin-demod-analyzer.txt | click PRINT BITS; the bits go to the Decoder output (nothing to print without an analysed burst) |
+| 921 | EXPORT | plate key | DRIVEN | plugin-demod-analyzer.txt | click EXPORT; writes under the scratch profile's LOCALAPPDATA, or says "nothing to export yet" (nothing of the engine to read back) |
+| 922 | Source | panel row | NOT DRIVABLE | - | a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B) |
+| 923 | Status | panel row | NOT DRIVABLE | - | a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B) |
+| 924 | Modulation | panel row | NOT DRIVABLE | - | a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B) |
+| 925 | Confidence | panel row | NOT DRIVABLE | - | a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B) |
+| 926 | Measurement rows | panel rows | NOT DRIVABLE | - | rows of the panel, not a control (need an analysed burst: the fixture run, 6.49 phase B) |
+| 927 | Result row | panel row (WARN) | NOT DRIVABLE | - | a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B) |
+| 928 | I/Q file | setting (text, key ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: click the fold key "Plugin settings"#2 on the Demod Analyzer panel page (the form was folded in the first run), type "I/Q file (empty = live radio)" drive-none.cu8, key enter; expect value equals the typed text (the form's echo of the engine's stored value) |
+| 929 | File format | setting (text, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "File format" cu8, key enter; expect value equals cu8 |
+| 930 | File sample rate | setting (number, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "File sample rate, Hz" 250000, key enter; expect value equals 250000 |
+| 931 | Skip first samples | setting (number, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Skip first samples" 1000, key enter; expect value equals 1000 |
+| 932 | Modulation | setting (text, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Modulation" qpsk, key enter; expect value equals qpsk |
+| 933 | Symbol rate | setting (number, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Symbol rate, Bd (0 = auto)" 9600, key enter; expect value equals 9600 |
+| 934 | Carrier offset | setting (text, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Carrier offset, Hz" 1200, key enter; expect value equals 1200 |
+| 935 | Extra rotation | setting (number, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Extra rotation, degrees" 90, key enter; expect value equals 90 |
+| 936 | Matched filter | setting (text, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Matched filter" rc, key enter; expect value equals rc |
+| 937 | Roll-off | setting (text, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Roll-off" 0.35, key enter; expect value equals 0.35 |
+| 938 | Filter span | setting (number, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Filter span, symbols" 12, key enter; expect value equals 12 |
+| 939 | Sampling offset | setting (number, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Sampling offset, symbols" 0.25, key enter; expect value equals 0.25 |
+| 940 | Symbol range | setting (text, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Symbol range" 0-100, key enter; expect value equals 0-100 |
+| 941 | Sync word | setting (text, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Sync word (resolves phase)" 0x1ACFFC1D, key enter; expect value equals 0x1ACFFC1D |
+| 942 | Remove DC offset | setting (bool, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: click "Remove DC offset" (default on); expect checked equals false |
+| 943 | Live capture | setting (number, ) | DRIVEN+ASSERTED | plugin-demod-analyzer.txt | round three: type "Live capture, samples" 131072, key enter; expect value equals 131072 |
+| 944 | Spectrum point mark | mark | NOT DRIVABLE | - | a mark drawn on the main spectrum from an analysed burst, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 945 | Occupied-band mark | mark (span, spectrum only) | NOT DRIVABLE | - | a mark drawn on the main spectrum from an analysed burst, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 946 | Decoder text lines | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
 
 ### Plugins: paging, meters and tools — Packet TNC (KISS) (packet-tnc 0.1.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 947 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 948 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 949 | KISS TCP port | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 950 | Bind address | setting (text, , max 45) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 951 | Channel busy above (dB) | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 952 | TX amplitude (0.05-1) | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 953 | TX gives up after (s) | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 954 | My callsign (panel only) | setting (text, , max 9) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 955 | RESTART SERVER | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 956 | DROP TX QUEUE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 957 | GRANT TRANSMIT | host plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 958 | Transmit audio | transmit | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 959 | Panel window | panel | NOT DRIVABLE | - | a readout, not a control |
-| 960 | KISS server block | heading + rows | NOT DRIVABLE | - | a readout, not a control |
-| 961 | Receive block | heading + rows | NOT DRIVABLE | - | a readout, not a control |
-| 962 | Transmit block | heading + rows | NOT DRIVABLE | - | a readout, not a control |
-| 963 | Host transmit state block | heading + rows | NOT DRIVABLE | - | a readout, not a control |
-| 964 | KISS parameters block | heading + rows | NOT DRIVABLE | - | a readout, not a control |
-| 965 | Last frames block | heading + rows | NOT DRIVABLE | - | a readout, not a control |
-| 966 | Decoder text lines | message list | NOT DRIVABLE | - | a readout, not a control |
-| 967 | Network | TCP listener | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 947 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-packet-tnc.txt | round three: click the Preset 1 key "Packet  144.800 MHz (Europe)" on the Packet TNC (KISS) page; state tunedHz == 144800000 |
+| 948 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-packet-tnc.txt | round three: click the Preset 2 key "Packet  144.390 MHz (N America)"; state tunedHz == 144390000 |
+| 949 | KISS TCP port | setting (number, ) | DRIVEN+ASSERTED | plugin-packet-tnc.txt | round three: click the fold key "Plugin settings"#2 on the Packet TNC (KISS) panel page, type "KISS TCP port" 8011, key enter; expect value equals 8011 |
+| 950 | Bind address | setting (text, , max 45) | DRIVEN+ASSERTED | plugin-packet-tnc.txt | round three: type "Bind address" 127.0.0.1 (never a wider address), key enter; expect value equals 127.0.0.1 |
+| 951 | Channel busy above (dB) | setting (number, ) | DRIVEN+ASSERTED | plugin-packet-tnc.txt | round three: type "Channel busy above (dB)" -30, key enter; expect value equals -30 |
+| 952 | TX amplitude (0.05-1) | setting (number, ) | DRIVEN+ASSERTED | plugin-packet-tnc.txt | round three: type "TX amplitude (0.05-1)" 0.5, key enter; expect value equals 0.5 |
+| 953 | TX gives up after (s) | setting (number, ) | DRIVEN+ASSERTED | plugin-packet-tnc.txt | round three: type "TX gives up after (s)" 20, key enter; expect value equals 20 |
+| 954 | My callsign (panel only) | setting (text, , max 9) | DRIVEN+ASSERTED | plugin-packet-tnc.txt | round three: type "My callsign (panel only)" N0CALL, key enter; expect value equals N0CALL |
+| 955 | RESTART SERVER | plate key | DRIVEN | plugin-packet-tnc.txt | click RESTART SERVER on the module page (rebinds the KISS listener on 127.0.0.1); state list.pluginCommands.names contains it; no engine state to read back |
+| 956 | DROP TX QUEUE | plate key | DRIVEN | plugin-packet-tnc.txt | click DROP TX QUEUE on the module page; the queue is empty, no engine state to read back |
+| 957 | GRANT TRANSMIT | host plate key | NOT DRIVABLE | - | the GRANT TRANSMIT key is not offered until the plugin asks for the transmit grant: it was absent from the running module page in the first run (no radio, nothing transmitted) |
+| 958 | Transmit audio | transmit | NOT DRIVABLE | - | needs a transmitter and ARM FOR PLUGINS: no radio in the drive run; the audio path is the engine's |
+| 959 | Panel window | panel | DRIVEN+ASSERTED | plugin-packet-tnc.txt | START opens the page: state pages contains "Packet TNC (KISS)"; click the DECODE bank row "Packet TNC (KISS)"#1 twice (closed, open again), then its tab #2; state kit.panels >= 1 |
+| 960 | KISS server block | heading + rows | NOT DRIVABLE | - | a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B) |
+| 961 | Receive block | heading + rows | NOT DRIVABLE | - | a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B) |
+| 962 | Transmit block | heading + rows | NOT DRIVABLE | - | a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B) |
+| 963 | Host transmit state block | heading + rows | NOT DRIVABLE | - | a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B) |
+| 964 | KISS parameters block | heading + rows | NOT DRIVABLE | - | a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B) |
+| 965 | Last frames block | heading + rows | NOT DRIVABLE | - | a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B) |
+| 966 | Decoder text lines | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B) |
+| 967 | Network | TCP listener | NOT DRIVABLE | - | the plugin's own behaviour (a TCP listener on 127.0.0.1): the kit cannot see it, there is nothing to draw |
 
 ### Plugins: paging, meters and tools — Radio Email (Winlink-compatible) (radio-email 0.1.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 968 | Callsign | setting (text, , max 16) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 969 | Winlink password (write-only) | setting (text, , max 64) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 970 | Locator | setting (text, , max 6) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 971 | To | setting (text, , max 255) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 972 | Cc | setting (text, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 973 | Subject | setting (text, , max 128) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 974 | Message text | setting (text, , max 4095) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 975 | Attachment | setting (path, , max 520) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 976 | Gateway host | setting (text, , max 100) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 977 | Gateway port | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 978 | Auto-check, minutes (0 = off) | setting (number, ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 979 | CONNECT | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 980 | QUEUE MESSAGE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 981 | DELETE DRAFT | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 982 | NEXT MESSAGE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 983 | PREVIOUS MESSAGE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 984 | MARK READ | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 985 | NEXT PAGE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 986 | PREVIOUS PAGE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 987 | Panel window | panel | NOT DRIVABLE | - | a readout, not a control |
-| 988 | Status heading | panel heading | NOT DRIVABLE | - | a readout, not a control |
-| 989 | Status rows | status rows | NOT DRIVABLE | - | a readout, not a control |
-| 990 | Mailbox list rows | panel rows (5 cells) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 991 | Message view | heading + rows | NOT DRIVABLE | - | a readout, not a control |
-| 992 | Decoder output session log | message list | NOT DRIVABLE | - | a readout, not a control |
-| 993 | Network | outbound TCP | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 968 | Callsign | setting (text, , max 16) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: click the fold key "Plugin settings"#2 on the Radio Email panel page, type "Callsign" N0CALL, key enter; expect value equals N0CALL (the label matched a table row while the form was folded) |
+| 969 | Winlink password (write-only) | setting (text, , max 64) | NOT DRIVABLE | - | a credential box: no script types a password (the plugin stores it protected); the network login it feeds is withheld in a bounded run |
+| 970 | Locator | setting (text, , max 6) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: type "Locator" IO91wm, key enter; expect value equals IO91wm |
+| 971 | To | setting (text, , max 255) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: type "To" N0CALL, key enter; expect value equals N0CALL |
+| 972 | Cc | setting (text, ) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: type "Cc" N0CALL, key enter; expect value equals N0CALL |
+| 973 | Subject | setting (text, , max 128) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: type "Subject" "Drive probe", key enter; expect value equals the typed text |
+| 974 | Message text | setting (text, , max 4095) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: type "Message text" "Drive probe body", key enter; expect value equals the typed text |
+| 975 | Attachment | setting (path, , max 520) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: type "Attachment" drive-none.txt into the path box, key enter; expect value equals the typed text (the BROWSE FILES dialog is deferred: it needs the native handle) |
+| 976 | Gateway host | setting (text, , max 100) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: type "Gateway host" 127.0.0.1 (never a real gateway), key enter; expect value equals 127.0.0.1 |
+| 977 | Gateway port | setting (number, ) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: type "Gateway port" 9772, key enter; expect value equals 9772 |
+| 978 | Auto-check, minutes (0 = off) | setting (number, ) | DRIVEN+ASSERTED | plugin-radio-email.txt | round three: type "Auto-check, minutes (0 = off)" 0 (never non-zero: the plugin would dial out), key enter; expect value equals 0 |
+| 979 | CONNECT | plate key | NOT DRIVABLE | - | dials the Winlink gateway over the network: withheld in a bounded run, and a login is the owner's to make |
+| 980 | QUEUE MESSAGE | plate key | DRIVEN | plugin-radio-email.txt | click QUEUE MESSAGE on the module page after the draft fields are typed; acts on the plugin's local store, no engine state to read back |
+| 981 | DELETE DRAFT | plate key | DRIVEN | plugin-radio-email.txt | click DELETE DRAFT on the module page; no engine state to read back |
+| 982 | NEXT MESSAGE | plate key | DRIVEN | plugin-radio-email.txt | click NEXT MESSAGE on the module page; moves the plugin's own mailbox cursor, no engine state to read back |
+| 983 | PREVIOUS MESSAGE | plate key | DRIVEN | plugin-radio-email.txt | click PREVIOUS MESSAGE on the module page; moves the plugin's own mailbox cursor, no engine state to read back |
+| 984 | MARK READ | plate key | DRIVEN | plugin-radio-email.txt | click MARK READ on the module page; acts on the plugin's own mailbox, no engine state to read back |
+| 985 | NEXT PAGE | plate key | DRIVEN | plugin-radio-email.txt | click NEXT PAGE on the module page; pages the plugin's own message view, no engine state to read back |
+| 986 | PREVIOUS PAGE | plate key | DRIVEN | plugin-radio-email.txt | click PREVIOUS PAGE on the module page; pages the plugin's own message view, no engine state to read back |
+| 987 | Panel window | panel | DRIVEN+ASSERTED | plugin-radio-email.txt | click the DECODE bank row "Radio Email" (START leaves only the module page open): state pages contains "Radio Email (Winlink-compatible) Radio Email"; state kit.panels >= 1; after FITTED click the row twice (closed, open again) |
+| 988 | Status heading | panel heading | NOT DRIVABLE | - | a heading of the panel, not a control (needs the plugin's mailbox: the fixture run, 6.49 phase B) |
+| 989 | Status rows | status rows | NOT DRIVABLE | - | rows of the panel, not a control (needs the plugin's mailbox: the fixture run, 6.49 phase B) |
+| 990 | Mailbox list rows | panel rows (5 cells) | NOT DRIVABLE | - | rows of the panel, not a control (need a mailbox: the fixture run, 6.49 phase B) |
+| 991 | Message view | heading + rows | NOT DRIVABLE | - | a heading and rows of the panel, not a control (need a mailbox: the fixture run, 6.49 phase B) |
+| 992 | Decoder output session log | message list | NOT DRIVABLE | - | a decoder output line, not a control (needs a session: the network is withheld in a bounded run) |
+| 993 | Network | outbound TCP | NOT DRIVABLE | - | the plugin's own behaviour (an outbound TCP connection): needs the network, withheld in a bounded run; nothing to draw |
 
 ### Plugins: paging, meters and tools — Bonus: Host API tour (hostapi-example 1.0.0; src/hostapi_example; not in index.json)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 994 | Mark here | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 995 | Clear marks | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 996 | Up 25 kHz | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 997 | AM 10 kHz | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 998 | Gain step | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 999 | Mute / Unmute | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1000 | Stop / Start | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1001 | Next rate | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1002 | Receiver panel | panel | NOT DRIVABLE | - | a readout, not a control |
-| 1003 | Soft limiter | audio processor | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1004 | Level meter text | message list | NOT DRIVABLE | - | a readout, not a control |
+| 994 | Mark here | plate key | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 995 | Clear marks | plate key | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 996 | Up 25 kHz | plate key | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 997 | AM 10 kHz | plate key | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 998 | Gain step | plate key | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 999 | Mute / Unmute | plate key | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 1000 | Stop / Start | plate key | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 1001 | Next rate | plate key | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 1002 | Receiver panel | panel | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 1003 | Soft limiter | audio processor | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
+| 1004 | Level meter text | message list | NOT DRIVABLE | - | not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it |
 
 ### Plugins: satellites, weather and maps — Satellites (satellites 1.1.2)
 
@@ -1725,23 +1725,23 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 1024 | Look-angle row (geostationary) | panel row | NOT DRIVABLE | - | a readout, not a control |
 | 1025 | Doppler heading | panel row | NOT DRIVABLE | - | a readout, not a control |
 | 1026 | Doppler row | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1027 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1028 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1029 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1030 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1031 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1032 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1033 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1034 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1027 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1028 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1029 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1030 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1031 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1032 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1033 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1034 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
 
 ### Plugins: satellites, weather and maps — NOAA Weather Pictures (APT) (apt-decoder 1.0.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 1035 | APT picture | picture | NOT DRIVABLE | - | a readout, not a control |
-| 1036 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1037 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1038 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1036 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-apt-decoder.txt | click "APT  NOAA 19  137.100 MHz" on the NOAA APT image page; state tunedHz == 137100000 |
+| 1037 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-apt-decoder.txt | click "APT  NOAA 15  137.620 MHz" on the NOAA APT image page; state tunedHz == 137620000 |
+| 1038 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-apt-decoder.txt | click "APT  NOAA 18  137.9125 MHz" on the NOAA APT image page; state tunedHz == 137912500 |
 | 1039 | Start line | message | NOT DRIVABLE | - | a readout, not a control |
 | 1040 | Lock line | message | NOT DRIVABLE | - | a readout, not a control |
 | 1041 | Progress line | message | NOT DRIVABLE | - | a readout, not a control |
@@ -1752,8 +1752,8 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 1043 | LRPT picture | picture | NOT DRIVABLE | - | a readout, not a control |
-| 1044 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1045 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1044 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-lrpt-decoder.txt | click "LRPT  Meteor-M  137.100 MHz" on the Meteor-M LRPT image page; state centreHz == 137100000 |
+| 1045 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-lrpt-decoder.txt | click "LRPT  Meteor-M  137.900 MHz" on the Meteor-M LRPT image page; state centreHz == 137900000 |
 | 1046 | Banner lines | message | NOT DRIVABLE | - | a readout, not a control |
 | 1047 | Refused line | message | NOT DRIVABLE | - | a readout, not a control |
 | 1048 | Carrier / lock lines | message | NOT DRIVABLE | - | a readout, not a control |
@@ -1792,19 +1792,19 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 1076 | EMWIN row | status row | NOT DRIVABLE | - | a readout, not a control |
 | 1077 | Image row | status row | NOT DRIVABLE | - | a readout, not a control |
 | 1078 | Channel row | status row | NOT DRIVABLE | - | a readout, not a control |
-| 1079 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1080 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1081 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1079 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-goes.txt | click "GOES-East HRIT  1694.1 MHz" on the GOES HRIT / LRIT image page; state centreHz == 1694100000 |
+| 1080 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-goes.txt | click "GOES-West HRIT  1694.1 MHz" on the GOES HRIT / LRIT image page; state centreHz == 1694100000 (pressed after LRIT, which moves it to 1691000000) |
+| 1081 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-goes.txt | click "GOES LRIT  1691.0 MHz" on the GOES HRIT / LRIT image page; state centreHz == 1691000000 |
 | 1082 | Message lines | message | NOT DRIVABLE | - | a readout, not a control |
-| 1083 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1084 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1083 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1084 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
 
 ### Plugins: satellites, weather and maps — WEFAX Weather Fax Decoder (wefax-decoder 1.1.0)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 1085 | Chart picture | picture | NOT DRIVABLE | - | a readout, not a control |
-| 1086 | Click on chart | image input | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1086 | Click on chart | image input | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B): a click on the chart exists only once a chart picture has arrived |
 | 1087 | Recorder window | instrument face (FAX) | NOT DRIVABLE | - | a readout, not a control |
 | 1088 | Face value 1 | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1089 | Face value 2 | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -1815,20 +1815,20 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 1094 | Memory column 1 | column | NOT DRIVABLE | - | a readout, not a control |
 | 1095 | Memory column 2 | column | NOT DRIVABLE | - | a readout, not a control |
 | 1096 | Log events | message list | NOT DRIVABLE | - | a readout, not a control |
-| 1097 | START NOW | panel row (pressable key) + plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1098 | STOP NOW | panel row (pressable key) + plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1099 | SLANT -10 ppm | panel row (key) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1100 | SLANT +10 ppm | panel row (key) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1101 | SET LEFT EDGE | panel row (key) + plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1102 | Plate keys (same five, uppercase wording differs) | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1097 | START NOW | panel row (pressable key) + plate key | DRIVEN | plugin-wefax-decoder.txt | click "START NOW" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal |
+| 1098 | STOP NOW | panel row (pressable key) + plate key | DRIVEN | plugin-wefax-decoder.txt | click "STOP NOW" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal |
+| 1099 | SLANT -10 ppm | panel row (key) | DRIVEN | plugin-wefax-decoder.txt | click "SLANT -10 PPM" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal |
+| 1100 | SLANT +10 ppm | panel row (key) | DRIVEN | plugin-wefax-decoder.txt | click "SLANT +10 PPM" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal |
+| 1101 | SET LEFT EDGE | panel row (key) + plate key | DRIVEN | plugin-wefax-decoder.txt | click "SET LEFT EDGE" on the module page's "Commands" plate key (the plugin's wording), clicked while WEFAX runs; a plugin command whose effect is the plugin's own memory row or picture, which nothing in the engine reads back without a signal |
+| 1102 | Plate keys (same five, uppercase wording differs) | plate key | DRIVEN | plugin-wefax-decoder.txt | the five plate keys of the module page (START NOW, STOP NOW, SLANT -10 PPM, SLANT +10 PPM, SET LEFT EDGE) are clicked in sequence; plugin commands, no engine read-back without a signal |
 | 1103 | Slant/edge figures | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1104 | Setting: slant | settings field (NUMBER) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1105 | Setting: hand-start rate | settings field (NUMBER) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1106 | Setting: hand-start IOC | settings field (NUMBER) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1104 | Setting: slant | settings field (NUMBER) | DRIVEN+ASSERTED | plugin-wefax-decoder.txt | open the Radiofax recorder page, click "Plugin settings"#2; type "Slant (ppm)" 12, key enter; expect value equals "12"; state list.pluginSettings.names contains "Slant (ppm)" |
+| 1105 | Setting: hand-start rate | settings field (NUMBER) | DRIVEN+ASSERTED | plugin-wefax-decoder.txt | open the Radiofax recorder page, click "Plugin settings"#2; type "Hand start: lines per minute" 90, key enter; expect value equals "90" |
+| 1106 | Setting: hand-start IOC | settings field (NUMBER) | DRIVEN+ASSERTED | plugin-wefax-decoder.txt | open the Radiofax recorder page, click "Plugin settings"#2; type "Hand start: IOC" 288, key enter; expect value equals "288" |
 | 1107 | Station guide window | panel | NOT DRIVABLE | - | a readout, not a control |
 | 1108 | Guide columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 1109 | Guide rows | panel row | NOT DRIVABLE | - | a readout, not a control |
-| 1110 | Presets | preset key x10 | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1110 | Presets | preset key x10 | DRIVEN+ASSERTED | plugin-wefax-decoder.txt | click each of the ten preset keys of the Radiofax recorder page (DWD 3853.1 USB ... GYA 2616.6 USB); state tunedHz == the dial (published kHz minus 1.9 kHz) after each, state mode == USB |
 | 1111 | Text lines | message | NOT DRIVABLE | - | a readout, not a control |
 
 ### Plugins: satellites, weather and maps — Radiosondes (radiosonde-decoder 0.1.0, EXPERIMENTAL)
@@ -1841,9 +1841,9 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 1115 | No-fix line | message | NOT DRIVABLE | - | a readout, not a control |
 | 1116 | Carrier lines | message | NOT DRIVABLE | - | a readout, not a control |
 | 1117 | Rate warning | message | NOT DRIVABLE | - | a readout, not a control |
-| 1118 | Preset 1 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1119 | Preset 2 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1120 | Preset 3 | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1118 | Preset 1 | preset key | DRIVEN+ASSERTED | plugin-radiosonde-decoder.txt | click "Radiosondes 400-402 MHz" on the Radiosondes (EXPERIMENTAL) map page; state centreHz == 401000000 |
+| 1119 | Preset 2 | preset key | DRIVEN+ASSERTED | plugin-radiosonde-decoder.txt | click "Radiosondes 402-404 MHz" on the Radiosondes (EXPERIMENTAL) map page; state centreHz == 403000000 |
+| 1120 | Preset 3 | preset key | DRIVEN+ASSERTED | plugin-radiosonde-decoder.txt | click "Radiosondes 404-406 MHz" on the Radiosondes (EXPERIMENTAL) map page; state centreHz == 405000000 |
 
 ### Plugins: satellites, weather and maps — 433 MHz Weather Sensor Decoder (weather-decoder 1.0.0)
 
@@ -1858,19 +1858,19 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 1127 | Memory column 2 | column | NOT DRIVABLE | - | a readout, not a control |
 | 1128 | Memory column 3 | column | NOT DRIVABLE | - | a readout, not a control |
 | 1129 | Memory column 4 | column | NOT DRIVABLE | - | a readout, not a control |
-| 1130 | Preset | preset key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1130 | Preset | preset key | NOT DRIVABLE | - | no page of its own to carry the preset key: the weather console instrument page needs a signal and the DECODE bank lists no row for it; the Decoders drawer is dumped in plugin-weather-decoder.txt to find the key there |
 | 1131 | Warning lines | message | NOT DRIVABLE | - | a readout, not a control |
 
 ### Plugins: satellites, weather and maps — Map Imagery (OpenStreetMap) (openmaptiles-basemap 1.1.2)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1132 | Map tiles | map layer | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1132 | Map tiles | map layer | NOT DRIVABLE | - | needs the network: the tiles come from the internet; the plugin has no window and no control of its own (its module page START / STOP is driven in plugin-openmaptiles-basemap.txt) |
 | 1133 | Attribution | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1134 | Status lines | message | NOT DRIVABLE | - | a readout, not a control |
-| 1135 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1136 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1137 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1135 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1136 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1137 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
 
 ### Plugins: satellites, weather and maps — Survey Engine (survey-engine 0.1.1)
 
@@ -1886,11 +1886,11 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 1145 | Column 7 | column | NOT DRIVABLE | - | a readout, not a control |
 | 1146 | Summary row | status row | NOT DRIVABLE | - | a readout, not a control |
 | 1147 | Cannot-sweep row | status row | NOT DRIVABLE | - | a readout, not a control |
-| 1148 | Config key / | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1149 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1150 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1151 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1152 | Config key | config file key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1148 | Config key / | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1149 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1150 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1151 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
+| 1152 | Config key | config file key | NOT DRIVABLE | - | config file / env var, not a window control (the inventory lists it for completeness) |
 | 1153 | Text lines | message | NOT DRIVABLE | - | a readout, not a control |
 
 ### Plugins: satellites, weather and maps — Propagation Tools (propagation-tools 0.1.0, EXPERIMENTAL)
@@ -1898,16 +1898,16 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 1154 | Picture window | picture | NOT DRIVABLE | - | a readout, not a control |
-| 1155 | Page 1 WORLD MAP | picture page | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1156 | Page 2 BEACONS | picture page | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1157 | Page 3 METEORS | picture page | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1158 | Page 4 SOLAR | picture page | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1159 | Page 5 VOACAP | picture page | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1160 | NEXT PAGE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1161 | PREV PAGE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1162 | REFRESH | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1163 | NEXT HOUR | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1164 | PREV HOUR | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1155 | Page 1 WORLD MAP | picture page | NOT DRIVABLE | - | inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161) |
+| 1156 | Page 2 BEACONS | picture page | NOT DRIVABLE | - | inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161) |
+| 1157 | Page 3 METEORS | picture page | NOT DRIVABLE | - | inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161) |
+| 1158 | Page 4 SOLAR | picture page | NOT DRIVABLE | - | inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161) |
+| 1159 | Page 5 VOACAP | picture page | NOT DRIVABLE | - | inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREV PAGE (rows 1160-1161) |
+| 1160 | NEXT PAGE | plate key | DRIVEN | plugin-propagation-tools.txt | click "NEXT PAGE" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1161 | PREV PAGE | plate key | DRIVEN | plugin-propagation-tools.txt | click "PREV PAGE" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1162 | REFRESH | plate key | DRIVEN | plugin-propagation-tools.txt | click "REFRESH" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1163 | NEXT HOUR | plate key | DRIVEN | plugin-propagation-tools.txt | click "NEXT HOUR" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1164 | PREV HOUR | plate key | DRIVEN | plugin-propagation-tools.txt | click "PREV HOUR" on the module page once Propagation Tools runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
 | 1165 | Panel window | panel | NOT DRIVABLE | - | a readout, not a control |
 | 1166 | Columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 1167 | Status block | panel rows | NOT DRIVABLE | - | a readout, not a control |
@@ -1917,20 +1917,20 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 1171 | Path block | panel rows | NOT DRIVABLE | - | a readout, not a control |
 | 1172 | VOACAP engines block | panel rows | NOT DRIVABLE | - | a readout, not a control |
 | 1173 | Credits block | panel rows | NOT DRIVABLE | - | a readout, not a control |
-| 1174 | Setting: locator | settings field (TEXT, max 8) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1175 | Setting: target | settings field (TEXT, max 8) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1176 | Setting: heat map | settings field (BOOL, default on) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1177 | Setting: network | settings field (BOOL, default on) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1178 | Setting: engine | settings field (TEXT, max 12, default ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1179 | Setting: VOACAP path | settings field (PATH, max 512) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1180 | Setting: SSN | settings field (NUMBER, default 0, range 0-400) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1181 | Setting: power | settings field (NUMBER, default 100, range 0.1-100000) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1182 | Setting: antenna | settings field (TEXT, max 24, default ) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1183 | Setting: gain | settings field (NUMBER, default 0, range -10..30) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1184 | Setting: noise | settings field (NUMBER, default 145, range 100-180) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1185 | Setting: required SNR | settings field (NUMBER, default 24, range 0-80) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1186 | Setting: map threshold | settings field (NUMBER, default 50, range 1-100) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1187 | Beacon presets | preset key x5 | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1174 | Setting: locator | settings field (TEXT, max 8) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Your locator" IO91wm, key enter; expect value equals "IO91wm" |
+| 1175 | Setting: target | settings field (TEXT, max 8) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Target locator" JN58td, key enter; expect value equals "JN58td" |
+| 1176 | Setting: heat map | settings field (BOOL, default on) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; click "Heat map on the world"; expect checked equals "false" (default on) |
+| 1177 | Setting: network | settings field (BOOL, default on) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; click "Fetch solar data"; expect checked equals "false" (default on) |
+| 1178 | Setting: engine | settings field (TEXT, max 12, default ) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Engine" empirical, key enter; expect value equals "empirical" |
+| 1179 | Setting: VOACAP path | settings field (PATH, max 512) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "VOACAP program (optional)" voacapw.exe, key enter; expect value equals "voacapw.exe" |
+| 1180 | Setting: SSN | settings field (NUMBER, default 0, range 0-400) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Sunspot number (0 = from SFI)" 120, key enter; expect value equals "120" |
+| 1181 | Setting: power | settings field (NUMBER, default 100, range 0.1-100000) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Transmit power, W" 50, key enter; expect value equals "50" |
+| 1182 | Setting: antenna | settings field (TEXT, max 24, default ) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Antenna" dipole_hd, key enter; expect value equals "dipole_hd" |
+| 1183 | Setting: gain | settings field (NUMBER, default 0, range -10..30) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Isotropic gain, dBi" 3, key enter; expect value equals "3" |
+| 1184 | Setting: noise | settings field (NUMBER, default 145, range 100-180) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Noise at 3 MHz, -dBW" 150, key enter; expect value equals "150" |
+| 1185 | Setting: required SNR | settings field (NUMBER, default 24, range 0-80) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Required SNR, dB" 20, key enter; expect value equals "20" |
+| 1186 | Setting: map threshold | settings field (NUMBER, default 50, range 1-100) | DRIVEN+ASSERTED | plugin-propagation-tools.txt | open the Propagation Tools image page, click "Plugin settings"#2; type "Map threshold, REL %" 60, key enter; expect value equals "60" |
+| 1187 | Beacon presets | preset key x5 | DRIVEN+ASSERTED | plugin-propagation-tools.txt | click each of the five NCDXF beacon preset keys of the Propagation Tools image page (20 M 14.100 ... 10 M 28.200 MHz CW); state tunedHz == the beacon frequency after each, state mode == CW |
 | 1188 | Warning log | message | NOT DRIVABLE | - | a readout, not a control |
 
 ### Plugins: satellites, weather and maps — Solar System View (solar-system-view 0.1.0, EXPERIMENTAL)
@@ -1938,20 +1938,20 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 1189 | Picture window | picture | NOT DRIVABLE | - | a readout, not a control |
-| 1190 | SYSTEM page | picture page | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1191 | SUN page | picture page | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1192 | CORONA page | picture page | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1193 | AURORA page | picture page | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1194 | ROTATE LEFT | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1195 | ROTATE RIGHT | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1196 | TILT | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1197 | ZOOM IN | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1198 | ZOOM OUT | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1199 | NEXT PAGE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1200 | PREVIOUS PAGE | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1201 | NEXT CHANNEL | plate key | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1202 | Setting: locator | settings field (TEXT, max 6) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
-| 1203 | Setting: log orbits | settings field (BOOL, default off) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this plugin's rows |
+| 1190 | SYSTEM page | picture page | NOT DRIVABLE | - | inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREVIOUS PAGE (rows 1199-1200) |
+| 1191 | SUN page | picture page | NOT DRIVABLE | - | inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREVIOUS PAGE (rows 1199-1200) |
+| 1192 | CORONA page | picture page | NOT DRIVABLE | - | inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREVIOUS PAGE (rows 1199-1200) |
+| 1193 | AURORA page | picture page | NOT DRIVABLE | - | inside the picture the plugin rasterises: no label in the element tree; reached with NEXT PAGE / PREVIOUS PAGE (rows 1199-1200) |
+| 1194 | ROTATE LEFT | plate key | DRIVEN | plugin-solar-system-view.txt | click "ROTATE LEFT" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1195 | ROTATE RIGHT | plate key | DRIVEN | plugin-solar-system-view.txt | click "ROTATE RIGHT" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1196 | TILT | plate key | DRIVEN | plugin-solar-system-view.txt | click "TILT" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1197 | ZOOM IN | plate key | DRIVEN | plugin-solar-system-view.txt | click "ZOOM IN" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1198 | ZOOM OUT | plate key | DRIVEN | plugin-solar-system-view.txt | click "ZOOM OUT" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1199 | NEXT PAGE | plate key | DRIVEN | plugin-solar-system-view.txt | click "NEXT PAGE" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1200 | PREVIOUS PAGE | plate key | DRIVEN | plugin-solar-system-view.txt | click "PREVIOUS PAGE" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1201 | NEXT CHANNEL | plate key | DRIVEN | plugin-solar-system-view.txt | click "NEXT CHANNEL" on the module page once Solar System View runs; a plugin command whose effect is a repainted picture, which the engine does not read back |
+| 1202 | Setting: locator | settings field (TEXT, max 6) | DRIVEN+ASSERTED | plugin-solar-system-view.txt | open the Solar System View image page, click "Plugin settings"#2; type "Your locator (kept on this PC)" IO91wm, key enter; expect value equals "IO91wm" |
+| 1203 | Setting: log orbits | settings field (BOOL, default off) | DRIVEN+ASSERTED | plugin-solar-system-view.txt | open the Solar System View image page, click "Plugin settings"#2; click "Log-scale orbits (SYSTEM page)"; expect checked equals "true" (default off) |
 | 1204 | Panel window | panel | NOT DRIVABLE | - | a readout, not a control |
 | 1205 | Columns | column | NOT DRIVABLE | - | a readout, not a control |
 | 1206 | Solar wind block | panel rows | NOT DRIVABLE | - | a readout, not a control |
@@ -2897,25 +2897,25 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | 1861 | Install/remove result | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1862 | Empty list text | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1863 | Group heading | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1864 | Module row | card (row) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 1865 | Row STOP / START | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 1866 | Row REMOVE | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 1867 | Row CONFIRM | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 1864 | Module row | card (row) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 1865 | Row STOP / START | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 1866 | Row REMOVE | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 1867 | Row CONFIRM | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 1868 | CLEAN UP OLD VERSIONS | button + modal | NOT DRIVABLE | - | deferred: phase 2 row 391 is DEFERRED and still true: FittedModules has the foot key (cleanup-label) but kit_publish.cpp feeds it an empty label and the page-fitted-cleanup handler is empty; the store's confirm panel (row 1832) is not reachable from the Fitted page |
 
 ### Fitted modules — Module page (click a row)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1869 | < FITTED | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 1870 | Header + START/STOP | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 1869 | < FITTED | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 1870 | Header + START/STOP | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 1871 | ON THIS MACHINE | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1872 | WHAT THIS MODULE REACHES | list | NOT DRIVABLE | - | a readout, not a control |
-| 1873 | GRANT / REVOKE RECEIVER CONTROL | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 1874 | GRANT / REVOKE RADIO SETTINGS | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 1875 | GRANT / REVOKE TRANSMIT | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 1876 | Module command keys | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
-| 1877 | Keep running | checkbox | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row |
+| 1873 | GRANT / REVOKE RECEIVER CONTROL | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 1874 | GRANT / REVOKE RADIO SETTINGS | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 1875 | GRANT / REVOKE TRANSMIT | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 1876 | Module command keys | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
+| 1877 | Keep running | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 1878 | Notes | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1879 | FILE / PLUGIN ABI / fitted date | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1880 | Shared page body | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -2925,9 +2925,9 @@ NOT DRIVABLE by reason: readout 963, no plugin fitted 374, deferred 113, other 1
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 1881 | Block message | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1882 | Update | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card) |
-| 1883 | Remove | button (small) | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card) |
-| 1884 | Confirm delete / Cancel | button | NOT DRIVABLE | - | no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card) |
+| 1882 | Update | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no retired plugin file, so no Disabled card) |
+| 1883 | Remove | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no retired plugin file, so no Disabled card) |
+| 1884 | Confirm delete / Cancel | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) (no retired plugin file, so no Disabled card) |
 | 1885 | Enforcement error | readout | NOT DRIVABLE | - | a readout, not a control |
 
 ### Patch — rail entries (the main window's other face)

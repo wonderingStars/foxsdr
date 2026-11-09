@@ -1,0 +1,69 @@
+#! frames=500 bank=1 plugins=all open=module:rtty-decoder-1.2.0-abi3-win-x64.dll size=1600x1600
+# plugin-rtty-decoder: RTTY Teleprinter Decoder (tick rows 678-696): the module page (START / STOP, GRANT, Keep running, the four plate
+# keys), the panel page "RTTY settings" with its "Plugin settings" fold (Baud, Shift, Reverse), the Decoder output page with the seven
+# presets. The field labels come from the DLL's own strings (verified there, not from a dump); the dump after the fold opens is KEPT as a
+# guard and to read the initial state of the Reverse box. No signal: state, not decodes.
+# START itself opens the plugin's windows: the pages read-back right after START is the assertion for RTTY settings; its tab is then
+# SELECTED with click "<page>"#2 (#1 is the DECODE bank row, a toggle that would close it) - no row click is used.
+120 state kit.plugins == 43
+state list.plugins.names contains "RTTY"
+state pages contains "RTTY"
++1 expect "START" label equals "START"
++1 click "START"
++40 state decodersRunning >= 1
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 state pages contains "RTTY settings"
+# (START opens the plugin's own page, not the Decoder output: that read-back was wrong and is gone)
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 state list.pluginSettings.names contains "Baud"
++1 state list.pluginCommands.details contains "rtty-decoder"
++1 click "RTTY BAUD"
++3 click "RTTY SHIFT"
++3 click "RTTY REVERSE"
++3 click "RTTY STATION SETTINGS"
++5 state running == 1
++1 state kit.panels >= 1
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "RTTY settings"#2
++3 state pages contains "RTTY settings"
++1 click "Plugin settings"#2
++3 dump
++1 type "Baud (45.45, 50, 75, 100)" "75"
++1 key enter
++5 expect "Baud (45.45, 50, 75, 100)" value equals "75"
++1 type "Shift Hz (170, 425, 450, 850)" "850"
++1 key enter
++5 expect "Shift Hz (170, 425, 450, 850)" value equals "850"
++1 click "Reverse (swap mark/space)"
++5 click "Reverse (swap mark/space)"
++5 state running == 1
++1 click "+ Window"
++3 state pages contains "Decoder output"
++1 click "RTTY  14.080 MHz (20 m)"
++10 state tunedHz > 14070000
++1 state tunedHz < 14090000
++1 click "RTTY  7.040 MHz (40 m)"
++10 state tunedHz > 7030000
++1 state tunedHz < 7050000
++1 click "RTTY  21.080 MHz (15 m)"
++10 state tunedHz > 21070000
++1 state tunedHz < 21090000
++1 click "RTTY  3.590 MHz (80 m)"
++10 state tunedHz > 3580000
++1 state tunedHz < 3600000
++1 click "DWD DDK2 4583.0 kHz (50 Bd 450 Hz)"
++10 state tunedHz > 4570000
++1 state tunedHz < 4590000
++1 click "DWD DDH7 7646.0 kHz (50 Bd 450 Hz)"
++10 state tunedHz > 7635000
++1 state tunedHz < 7655000
++1 click "DWD DDK9 10100.8 kHz (50 Bd 450 Hz)"
++10 state tunedHz > 10090000
++1 state tunedHz < 10110000

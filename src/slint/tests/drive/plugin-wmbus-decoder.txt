@@ -1,0 +1,47 @@
+#! frames=460 bank=1 plugins=all open=module:wmbus-decoder-0.1.0-abi3-win-x64.dll size=1600x1800
+# plugin-wmbus-decoder: the Wireless M-Bus Meter Decoder (tick rows 883-903): its module page (START, Keep running, GRANT RECEIVER CONTROL,
+# < FITTED), the "Wireless M-Bus meters" instrument window (the MeterFace), the three preset keys and the AES keys setting.
+# No signal is fed: only STATE changes are asserted (the run word, the grant, the open pages, the tuned frequency, the settings echo).
+# An I/Q decoder: START is read back through the STOP key and decodersRunning, which passed in the first run.
+# START itself retunes the receiver to the first preset (868.950 MHz), so the keys are clicked 2, 3, then 1: every read-back is a change.
+120 state kit.plugins == 43
+state list.plugins.names contains "Wireless M-Bus meters"
+state list.pluginSettings.names contains "AES keys"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START opens the plugin's own windows: the page is read back right after it
+state pages contains "Wireless M-Bus meters"
+# START turns "Keep running" on: it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++15 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the DECODE bank row "Wireless M-Bus meters"#1 toggles the page: click it twice (closed, then open again), then bring the tab (#2) to the front
++1 click "Wireless M-Bus meters"#1
++5 click "Wireless M-Bus meters"#1
++5 state pages contains "Wireless M-Bus meters"
++1 click "Wireless M-Bus meters"#2
++3 state pages contains "Wireless M-Bus meters"
++1 state kit.instruments >= 1
++1 click "wM-Bus S 868.30 MHz"
++25 state tunedHz == 868300000
++1 click "wM-Bus S+T+C 868.625 MHz (both)"
++25 state tunedHz == 868625000
++1 click "wM-Bus T/C 868.95 MHz"
++25 state tunedHz == 868950000
+# the settings fold (the fold's key is the 2nd "Plugin settings"), then the one TEXT field
++1 click "Plugin settings"#2
+# KEPT DUMP (round three): the expanded form, to confirm the AES keys field sits on this page
++3 dump
++1 type "AES keys" "12345678=00112233445566778899AABBCCDDEEFF"
++1 key enter
++5 expect "AES keys" value equals "12345678=00112233445566778899AABBCCDDEEFF"

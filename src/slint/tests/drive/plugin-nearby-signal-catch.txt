@@ -1,0 +1,35 @@
+#! frames=500 bank=1 plugins=all open=module:nearby-signal-catch-0.1.0-abi3-win-x64.dll size=1600x1600
+# plugin-nearby-signal-catch: Nearby Signal Catch (tick rows 760-782): the module page (START / STOP, GRANT, Keep running, the eight
+# plate keys, each clicked once - labels from the first run's dump), "< FITTED", the panel page "Nearby Signal Catch" (no settings fold).
+# No signal: no hit, no ignore; the plate keys' effect is not readable without a hit (a key whose label carries its state may change
+# its caption: the dump after the clicks is KEPT to see which).
+120 state kit.plugins == 43
+state list.plugins.names contains "Nearby Signal Catch"
+state pages contains "Nearby Signal Catch"
++1 expect "START" label equals "START"
++1 click "START"
++40 state decodersRunning >= 1
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 state list.pluginCommands.details contains "nearby-signal-catch"
++1 click "Mode: Alert only"
++3 click "Bands: Handhelds"
++3 click "Level +5 dB"
++3 click "Level -5 dB"
++3 click "Margin +5 dB"
++3 click "Margin -5 dB"
++3 click "Ignore last hit"
++3 click "Clear ignores"
++5 state running == 1
++1 dump
++1 state kit.panels >= 1
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "Nearby Signal Catch"
++3 state pages contains "Nearby Signal Catch"

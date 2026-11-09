@@ -1,0 +1,22 @@
+#! frames=500 bank=1 plugins=all open=module:stdc-decoder-0.1.1-abi3-win-x64.dll size=1600x8000
+# plugin-stdc-decoder: Inmarsat-C / EGC Decoder (tick rows 606-612), docs 6.49 round three.
+# Caps: I/Q decoder + presets only: no instrument, panel, picture or map row. Round two: the Decoder output page lists the audio
+# decoders' presets only; the Decoders drawer lists every plugin's presets (device-centre ones too, e.g. "ADS-B  1090 MHz"), but
+# a 2600 px window cut it off after the APRS group. The window is now 8000 px tall (the limit is 8192): the one dump below
+# (kept) shows the whole drawer, including Inmarsat-C, AIS and 406 MHz presets. No preset step is guessed.
+120 state kit.plugins == 43
+state list.plugins.names contains "Inmarsat-C"
+state decodersRunning == 0
++1 click "START"
++40 state decodersRunning >= 1
+expect "STOP" label equals "STOP"
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+state decodersRunning >= 1
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
++1 click "Turn on and off plugins"
++5 dump

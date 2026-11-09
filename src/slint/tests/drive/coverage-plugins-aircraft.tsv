@@ -1,0 +1,88 @@
+480	ASSERTED	plugin-adsb-decoder.txt	Decoders drawer (Fitted modules page open): click "ADS-B  1090 MHz"; state centreHz == 1090000000 (the value START already applied as the auto preset, so the read-back holds rather than changes)
+489	NOT_DRIVABLE	-	env var / config file, not a window control
+490	NOT_DRIVABLE	-	env var / config file, not a window control
+491	NOT_DRIVABLE	-	env var / config file, not a window control
+492	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
+493	NOT_DRIVABLE	-	deferred: the category silhouettes are not ported (MapPane draws one icon per kind)
+494	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
+495	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
+496	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
+497	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
+498	NOT_DRIVABLE	-	readout of the Target details page; needs a signal: the fixture run (6.49 phase B)
+499	NOT_DRIVABLE	-	readout of the Target details page; needs a signal: the fixture run (6.49 phase B)
+500	NOT_DRIVABLE	-	readout of the Target details page; needs a signal: the fixture run (6.49 phase B)
+501	NOT_DRIVABLE	-	readout of the Target details page; needs a signal: the fixture run (6.49 phase B)
+502	NOT_DRIVABLE	-	readout of the Target details page; needs a signal: the fixture run (6.49 phase B)
+503	NOT_DRIVABLE	-	readout of the Target details page; needs a signal: the fixture run (6.49 phase B)
+504	NOT_DRIVABLE	-	readout of the Target details page; needs a signal: the fixture run (6.49 phase B)
+508	NOT_DRIVABLE	-	env var / config file, not a window control
+509	NOT_DRIVABLE	-	env var / config file, not a window control
+510	NOT_DRIVABLE	-	a readout: the amber WHAT THIS MODULE REACHES paragraph of the module page (in the module dump), not a control
+511	NOT_DRIVABLE	-	avdb is not in the catalogue: not installed, so no plugin to fit
+512	NOT_DRIVABLE	-	avdb is not in the catalogue: not installed, so no plugin to fit
+513	NOT_DRIVABLE	-	avdb is not in the catalogue: not installed, so no plugin to fit
+514	NOT_DRIVABLE	-	avdb is not in the catalogue: not installed, so no plugin to fit
+515	NOT_DRIVABLE	-	avdb is not in the catalogue: not installed, so no plugin to fit
+516	NOT_DRIVABLE	-	avdb is not in the catalogue: not installed, so no plugin to fit
+517	NOT_DRIVABLE	-	avdb is not in the catalogue: not installed, so no plugin to fit
+518	ASSERTED	plugin-acars-decoder.txt	Decoders drawer: click "ACARS  131.550 MHz (N America)"; state tunedHz == 131550000
+519	ASSERTED	plugin-acars-decoder.txt	Decoders drawer: click "ACARS  131.725 MHz (Europe)"; state tunedHz == 131725000
+520	ASSERTED	plugin-acars-decoder.txt	Decoders drawer: click "ACARS  131.525 MHz (Europe)"; state tunedHz == 131525000
+521	ASSERTED	plugin-acars-decoder.txt	Decoders drawer: click "ACARS  130.025 MHz (USA 2nd)"; state tunedHz == 130025000
+522	ASSERTED	plugin-acars-decoder.txt	Decoders drawer: click "ACARS  131.450 MHz (Japan)"; state tunedHz == 131450000
+523	ASSERTED	plugin-acars-decoder.txt	Decoders drawer: click "ACARS  131.475 MHz (Air Canada)"; state tunedHz == 131475000
+525	ASSERTED	plugin-acars-decoder.txt	START opens the page: state pages contains "ACARS printer" right after START; bank row "ACARS printer" (#1) clicked twice: pages line read without it, then with it
+537	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 CSC 136.975 MHz (worldwide)"; state centreHz == 136975000
+538	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 136.725 MHz (Europe, ARINC)"; state centreHz == 136725000
+539	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 136.775 MHz (Europe, SITA)"; state centreHz == 136775000
+540	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 136.825 MHz (Europe, ARINC)"; state centreHz == 136825000
+541	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 136.875 MHz (Europe, SITA)"; state centreHz == 136875000
+542	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 136.675 MHz (Europe, ARINC)"; state centreHz == 136675000
+543	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 136.700 MHz (N America, ARINC)"; state centreHz == 136700000
+544	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 136.800 MHz (N America, SITA)"; state centreHz == 136800000
+545	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 136.650 MHz (N America, ARINC)"; state centreHz == 136650000
+546	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 136.100 MHz (N America, ARINC)"; state centreHz == 136100000
+547	ASSERTED	plugin-vdl2-decoder.txt	Decoders drawer: click "VDL2 all 12 channels 136.700-136.975"; state centreHz == 136837500
+553	ASSERTED	plugin-vdl2-decoder.txt	START opens the page: state pages contains "VDL2 printer" right after START; bank row "VDL2 printer" (#1) clicked twice: pages line read without it, then with it
+556	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
+557	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
+559	ASSERTED	plugin-hfdl-decoder.txt	Decoders drawer: click each of the 12 HFDL preset keys (Shannon 8942 last, it is the auto preset); state tunedHz == the kHz * 1000 of each
+568	NOT_DRIVABLE	-	readout (message list / paper); needs a signal: the fixture run (6.49 phase B)
+569	ASSERTED	plugin-hfdl-decoder.txt	START opens the page: state pages contains "HFDL printer" right after START; bank row "HFDL printer" (#1) clicked twice: pages line read without it, then with it
+572	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
+573	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-A 5598 kHz USB"; state tunedHz == 5598000
+574	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-A 8906 kHz USB"; state tunedHz == 8906000
+575	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-B 5616 kHz USB"; state tunedHz == 5616000
+576	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-B 8864 kHz USB"; state tunedHz == 8864000
+577	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-C 5649 kHz USB"; state tunedHz == 5649000
+578	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-C 8879 kHz USB"; state tunedHz == 8879000
+579	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-D 8891 kHz USB"; state tunedHz == 8891000
+580	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-A/C 13306 kHz USB (day)"; state tunedHz == 13306000
+581	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-B/D/F 13291 kHz USB (day)"; state tunedHz == 13291000
+582	ASSERTED	plugin-selcal-decoder.txt	Decoder output page (tab), click "SELCAL NAT-B 2899 kHz USB (night)"; state tunedHz == 2899000
+585	ASSERTED	plugin-vor-decoder.txt	"VOR course indicator" page (bank row #1), click "VOR band  113.000 MHz AM (tune your station)"; state tunedHz == 113000000
+586	ASSERTED	plugin-vor-decoder.txt	click "VOR band  108.000 MHz AM (band start)"; state tunedHz == 108000000
+596	DRIVEN	plugin-vor-decoder.txt	slider "OBS course" 0.5 on the VOR instrument page; the value stayed "090" in the round-one dump (the knob does not map a track press to a course), so nothing can be read back
+597	NOT_DRIVABLE	-	no label seen yet: the device-centre preset "AIS  162.000 MHz (both ch)" is on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists it
+605	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
+606	NOT_DRIVABLE	-	no label in the element tree on the Decoder output page (round-two dump: audio decoders only); the Decoders drawer lists presets of every plugin but was cut off after the APRS group at 2600 px: the 8000 px drawer dump kept in plugin-stdc-decoder.txt (round three) shows the Inmarsat-C keys
+607	NOT_DRIVABLE	-	no label in the element tree on the Decoder output page (round-two dump); see row 606: the 8000 px drawer dump (round three) shows the Inmarsat-C keys
+613	NOT_DRIVABLE	-	no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them
+614	NOT_DRIVABLE	-	no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them
+615	NOT_DRIVABLE	-	no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them
+616	NOT_DRIVABLE	-	no label seen yet: the 406 MHz device-centre presets are on the Decoders drawer, below the part the round-two dump reached; the 8000 px drawer dump in plugin-stdc-decoder.txt (round three) lists them
+619	NOT_DRIVABLE	-	readout (message list / protocol plate); needs a signal: the fixture run (6.49 phase B)
+620	ASSERTED	plugin-epirb-decoder.txt	START opens the page: state pages contains "406 MHz beacon" right after START; bank row "406 MHz beacon" (#1) clicked twice: pages line read without it, then with it
+631	NOT_DRIVABLE	-	deferred: the store's catalogue body is a later beta
+632	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "NAVTEX 518 kHz  USB 516.3"; state tunedHz == 516300
+633	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "NAVTEX 490 kHz  USB 488.3"; state tunedHz == 488300
+634	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "NAVTEX 4209.5 kHz  USB 4207.8"; state tunedHz == 4207800
+635	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC VHF ch70  156.525 MHz  NFM"; state tunedHz == 156525000
+636	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 2187.5 kHz  USB 2185.8"; state tunedHz == 2185800
+637	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 4207.5 kHz  USB 4205.8"; state tunedHz == 4205800
+638	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 6312 kHz  USB 6310.3"; state tunedHz == 6310300
+639	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 8414.5 kHz  USB 8412.8"; state tunedHz == 8412800
+640	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 12577 kHz  USB 12575.3"; state tunedHz == 12575300
+641	ASSERTED	plugin-navtex-dsc-decoder.txt	on the "NAVTEX & DSC printer" page (reopened by its bank row, #1): click "DSC HF 16804.5 kHz  USB 16802.8"; state tunedHz == 16802800
+646	ASSERTED	plugin-navtex-dsc-decoder.txt	START opens the page: state pages contains "NAVTEX & DSC printer" right after START; bank row "NAVTEX & DSC printer" (#1) clicked twice: pages line read without it, then with it
+655	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)

@@ -1,0 +1,191 @@
+814	ASSERTED	plugin-twotone-decoder.txt	round three: with the Tone alert tab in front, click the key "Two-tone  154.000 MHz NFM (tune your dispatch)" (clicked after the 453 key: START itself tunes to 154.000); state tunedHz == 154000000
+815	ASSERTED	plugin-twotone-decoder.txt	round three: click the key "Two-tone  453.000 MHz NFM (UHF dispatch)"; state tunedHz == 453000000 and mode == NFM
+816	ASSERTED	plugin-twotone-decoder.txt	START opens the page: state pages contains "Tone alert"; click the DECODE bank row "Tone alert"#1 twice (closed, open again), then its tab "Tone alert"#2; state pages contains "Tone alert"; state kit.instruments >= 1
+817	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+818	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+819	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+820	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+821	NOT_DRIVABLE	-	a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B)
+822	NOT_DRIVABLE	-	a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+823	NOT_DRIVABLE	-	a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+824	NOT_DRIVABLE	-	a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+825	NOT_DRIVABLE	-	a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+826	NOT_DRIVABLE	-	the memory table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B)
+827	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+828	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+829	ASSERTED	plugin-pocsag-decoder.txt	round three: with the POCSAG settings tab in front, click the key "UK  153.350 MHz"; state tunedHz == 153350000
+830	ASSERTED	plugin-pocsag-decoder.txt	round three: with the POCSAG settings tab in front, click the key "DAPNET  439.9875 MHz (ham)"; state tunedHz == 439987500
+831	ASSERTED	plugin-pocsag-decoder.txt	round three: with the POCSAG settings tab in front, click the key "POCSAG  931.9375 MHz (US)"; state tunedHz == 931937500
+832	ASSERTED	plugin-pocsag-decoder.txt	round three: with the POCSAG settings tab in front, click the key "POCSAG  931.9125 MHz (US)"; state tunedHz == 931912500
+833	ASSERTED	plugin-pocsag-decoder.txt	round three: with the POCSAG settings tab in front, click the key "POCSAG  931.8875 MHz (US)"; state tunedHz == 931887500
+834	ASSERTED	plugin-pocsag-decoder.txt	round three: with the POCSAG settings tab in front, click the key "POCSAG  931.4375 MHz (US)"; state tunedHz == 931437500
+835	ASSERTED	plugin-pocsag-decoder.txt	round three: click the fold key "Plugin settings"#2 on the POCSAG settings page, click "Numeric messages"; expect checked equals true (the form's echo of the engine's stored value)
+836	ASSERTED	plugin-pocsag-decoder.txt	round three: click "Use function codes"; expect checked equals true (the form's echo of the engine's stored value)
+837	ASSERTED	plugin-pocsag-decoder.txt	round three: click "Show frame details"; expect checked equals true (the form's echo of the engine's stored value)
+838	ASSERTED	plugin-pocsag-decoder.txt	START opens the page: state pages contains "POCSAG settings"; click the DECODE bank row "POCSAG settings"#1 twice (closed, open again), then its tab #2; state kit.panels >= 1
+839	NOT_DRIVABLE	-	a status row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B)
+840	NOT_DRIVABLE	-	a row of the panel, not a control (a decoded page: needs a signal: the fixture run, 6.49 phase B)
+841	NOT_DRIVABLE	-	a heading of the panel, not a control (needs a signal: the fixture run, 6.49 phase B)
+842	NOT_DRIVABLE	-	rows of the panel, not a control (need a signal: the fixture run, 6.49 phase B)
+843	NOT_DRIVABLE	-	a heading and rows of the panel, not a control (need a signal: the fixture run, 6.49 phase B)
+844	NOT_DRIVABLE	-	a row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B)
+845	NOT_DRIVABLE	-	a heading of the panel, not a control (needs a signal: the fixture run, 6.49 phase B)
+846	NOT_DRIVABLE	-	rows of the panel, not a control (need a signal: the fixture run, 6.49 phase B)
+847	NOT_DRIVABLE	-	a row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B)
+848	NOT_DRIVABLE	-	a row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B)
+849	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+850	ASSERTED	plugin-flex-decoder.txt	round three: with the FLEX pager tab in front, click the key "FLEX  931.9375 MHz (US)" (the 931.9375 key last: START itself tunes to it); state tunedHz == 931937500
+851	ASSERTED	plugin-flex-decoder.txt	round three: with the FLEX pager tab in front, click the key "FLEX  931.9125 MHz (US)" (the 931.9375 key last: START itself tunes to it); state tunedHz == 931912500
+852	ASSERTED	plugin-flex-decoder.txt	round three: with the FLEX pager tab in front, click the key "FLEX  931.8875 MHz (US)" (the 931.9375 key last: START itself tunes to it); state tunedHz == 931887500
+853	ASSERTED	plugin-flex-decoder.txt	round three: with the FLEX pager tab in front, click the key "FLEX  931.4375 MHz (US)" (the 931.9375 key last: START itself tunes to it); state tunedHz == 931437500
+854	ASSERTED	plugin-flex-decoder.txt	START opens the page: state pages contains "FLEX pager"; click the DECODE bank row "FLEX pager"#1 twice (closed, open again), then its tab #2; state kit.instruments >= 1
+855	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+856	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+857	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+858	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+859	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+860	NOT_DRIVABLE	-	a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B)
+861	NOT_DRIVABLE	-	a lamp, not a control (lit by a lock: needs a signal: the fixture run, 6.49 phase B)
+862	NOT_DRIVABLE	-	a lamp, not a control (the plugin never sets it)
+863	NOT_DRIVABLE	-	a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+864	NOT_DRIVABLE	-	a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+865	NOT_DRIVABLE	-	a column of the memory table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+866	NOT_DRIVABLE	-	the memory table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B)
+867	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+868	ASSERTED	plugin-ert-decoder.txt	round three: with the ERT meters tab in front, click the key "ERT meters  912.600 MHz" (clicked after the 915 key: START itself tunes to 912.600); state tunedHz == 912600000
+869	ASSERTED	plugin-ert-decoder.txt	round three: click the key "ERT meters  915.000 MHz (band centre)"; state tunedHz == 915000000
+870	ASSERTED	plugin-ert-decoder.txt	START opens the page: state pages contains "ERT meters"; click the DECODE bank row "ERT meters"#1 twice (closed, open again), then its tab #2; state kit.instruments >= 1
+871	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+872	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+873	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+874	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+875	NOT_DRIVABLE	-	a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B)
+876	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+877	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+878	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+879	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+880	NOT_DRIVABLE	-	the roster table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B)
+881	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+882	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+883	ASSERTED	plugin-wmbus-decoder.txt	round three: with the Wireless M-Bus meters tab in front, click the key "wM-Bus T/C 868.95 MHz" (clicked last: START itself tunes to it); state tunedHz == 868950000
+884	ASSERTED	plugin-wmbus-decoder.txt	round three: click the key "wM-Bus S 868.30 MHz"; state tunedHz == 868300000
+885	ASSERTED	plugin-wmbus-decoder.txt	round three: click the key "wM-Bus S+T+C 868.625 MHz (both)"; state tunedHz == 868625000
+886	ASSERTED	plugin-wmbus-decoder.txt	round three: click the fold key "Plugin settings"#2, type "AES keys" a sample id=key line, key enter; expect "AES keys" value equals the typed text (the form's echo of the engine's stored value); the field may sit on another page
+887	NOT_DRIVABLE	-	a decoder output line, not a control (written when the keys are loaded: needs a running decode, the fixture run, 6.49 phase B)
+888	ASSERTED	plugin-wmbus-decoder.txt	START opens the page: state pages contains "Wireless M-Bus meters"; click the DECODE bank row #1 twice (closed, open again), then its tab #2; state kit.instruments >= 1
+889	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+890	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+891	NOT_DRIVABLE	-	a readout, not a control (its values need a signal: the fixture run, 6.49 phase B)
+892	NOT_DRIVABLE	-	a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B)
+893	NOT_DRIVABLE	-	a lamp, not a control (lit by a decode: needs a signal: the fixture run, 6.49 phase B)
+894	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+895	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+896	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+897	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+898	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+899	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+900	NOT_DRIVABLE	-	a column of the roster table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+901	NOT_DRIVABLE	-	the roster table's row feed, not a control (needs a signal: the fixture run, 6.49 phase B)
+902	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+903	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+904	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+905	DRIVEN	plugin-example-decoder.txt	round three: click "Turn on and off plugins" (the Decoders drawer) and scroll it with dumps at three offsets (scroll "Mute audio while running"#1 1400); the drawer showed only ACARS, ADS-B, HFDL and SELCAL in its first screen, so the Example RMS Reporter entry and its Decoder START / STOP key are still to be found in the dumps; its run state is read through the module page (STOP key, decodersRunning, list.decoders.names)
+906	ASSERTED	plugin-workbench.txt	round three: with the Decoder workbench tab in front, click the band key "NOAA weather  all 7 channels at once" (label confirmed by fixture-workbench); state centreHz between 162.0 and 162.5 MHz (the first run read 162.1 MHz); the ACARS key label comes from the kept dump
+907	ASSERTED	plugin-workbench.txt	START opens the page: state pages contains "Decoder workbench"; click the DECODE bank row "Decoder workbench"#1 twice (closed, open again), then its tab #2; state kit.panels >= 1
+908	NOT_DRIVABLE	-	a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+909	NOT_DRIVABLE	-	a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+910	NOT_DRIVABLE	-	a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+911	NOT_DRIVABLE	-	a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+912	NOT_DRIVABLE	-	a column of the panel table, not a control (its rows need a signal: the fixture run, 6.49 phase B)
+913	NOT_DRIVABLE	-	a status row of the panel, not a control (needs a signal: the fixture run, 6.49 phase B)
+914	NOT_DRIVABLE	-	the plugin's own behaviour: the kit cannot see it, there is nothing to draw
+915	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+916	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+917	ASSERTED	plugin-demod-analyzer.txt	click the DECODE bank row "Demod Analyzer image" (START leaves only the module page open): state pages contains "Demod Analyzer image"; state kit.pictures >= 1; click it twice more (closed, open again); the picture Save as BMP key is not driven: it writes a file
+918	DRIVEN	plugin-demod-analyzer.txt	click ANALYSE NOW on the module page; the plugin's reply is a panel row or a picture (nothing of the engine to read back without a fixture)
+919	DRIVEN	plugin-demod-analyzer.txt	round three: click HOLD on the module page; the first run found no "RUN LIVE" key in the element tree, so the held state cannot be read back yet: the kept dump after the click shows how the key reads
+920	DRIVEN	plugin-demod-analyzer.txt	click PRINT BITS; the bits go to the Decoder output (nothing to print without an analysed burst)
+921	DRIVEN	plugin-demod-analyzer.txt	click EXPORT; writes under the scratch profile's LOCALAPPDATA, or says "nothing to export yet" (nothing of the engine to read back)
+922	NOT_DRIVABLE	-	a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B)
+923	NOT_DRIVABLE	-	a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B)
+924	NOT_DRIVABLE	-	a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B)
+925	NOT_DRIVABLE	-	a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B)
+926	NOT_DRIVABLE	-	rows of the panel, not a control (need an analysed burst: the fixture run, 6.49 phase B)
+927	NOT_DRIVABLE	-	a row of the panel, not a control (needs an analysed burst: the fixture run, 6.49 phase B)
+928	ASSERTED	plugin-demod-analyzer.txt	round three: click the fold key "Plugin settings"#2 on the Demod Analyzer panel page (the form was folded in the first run), type "I/Q file (empty = live radio)" drive-none.cu8, key enter; expect value equals the typed text (the form's echo of the engine's stored value)
+929	ASSERTED	plugin-demod-analyzer.txt	round three: type "File format" cu8, key enter; expect value equals cu8
+930	ASSERTED	plugin-demod-analyzer.txt	round three: type "File sample rate, Hz" 250000, key enter; expect value equals 250000
+931	ASSERTED	plugin-demod-analyzer.txt	round three: type "Skip first samples" 1000, key enter; expect value equals 1000
+932	ASSERTED	plugin-demod-analyzer.txt	round three: type "Modulation" qpsk, key enter; expect value equals qpsk
+933	ASSERTED	plugin-demod-analyzer.txt	round three: type "Symbol rate, Bd (0 = auto)" 9600, key enter; expect value equals 9600
+934	ASSERTED	plugin-demod-analyzer.txt	round three: type "Carrier offset, Hz" 1200, key enter; expect value equals 1200
+935	ASSERTED	plugin-demod-analyzer.txt	round three: type "Extra rotation, degrees" 90, key enter; expect value equals 90
+936	ASSERTED	plugin-demod-analyzer.txt	round three: type "Matched filter" rc, key enter; expect value equals rc
+937	ASSERTED	plugin-demod-analyzer.txt	round three: type "Roll-off" 0.35, key enter; expect value equals 0.35
+938	ASSERTED	plugin-demod-analyzer.txt	round three: type "Filter span, symbols" 12, key enter; expect value equals 12
+939	ASSERTED	plugin-demod-analyzer.txt	round three: type "Sampling offset, symbols" 0.25, key enter; expect value equals 0.25
+940	ASSERTED	plugin-demod-analyzer.txt	round three: type "Symbol range" 0-100, key enter; expect value equals 0-100
+941	ASSERTED	plugin-demod-analyzer.txt	round three: type "Sync word (resolves phase)" 0x1ACFFC1D, key enter; expect value equals 0x1ACFFC1D
+942	ASSERTED	plugin-demod-analyzer.txt	round three: click "Remove DC offset" (default on); expect checked equals false
+943	ASSERTED	plugin-demod-analyzer.txt	round three: type "Live capture, samples" 131072, key enter; expect value equals 131072
+944	NOT_DRIVABLE	-	a mark drawn on the main spectrum from an analysed burst, not a control (needs a signal: the fixture run, 6.49 phase B)
+945	NOT_DRIVABLE	-	a mark drawn on the main spectrum from an analysed burst, not a control (needs a signal: the fixture run, 6.49 phase B)
+946	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+947	ASSERTED	plugin-packet-tnc.txt	round three: click the Preset 1 key "Packet  144.800 MHz (Europe)" on the Packet TNC (KISS) page; state tunedHz == 144800000
+948	ASSERTED	plugin-packet-tnc.txt	round three: click the Preset 2 key "Packet  144.390 MHz (N America)"; state tunedHz == 144390000
+949	ASSERTED	plugin-packet-tnc.txt	round three: click the fold key "Plugin settings"#2 on the Packet TNC (KISS) panel page, type "KISS TCP port" 8011, key enter; expect value equals 8011
+950	ASSERTED	plugin-packet-tnc.txt	round three: type "Bind address" 127.0.0.1 (never a wider address), key enter; expect value equals 127.0.0.1
+951	ASSERTED	plugin-packet-tnc.txt	round three: type "Channel busy above (dB)" -30, key enter; expect value equals -30
+952	ASSERTED	plugin-packet-tnc.txt	round three: type "TX amplitude (0.05-1)" 0.5, key enter; expect value equals 0.5
+953	ASSERTED	plugin-packet-tnc.txt	round three: type "TX gives up after (s)" 20, key enter; expect value equals 20
+954	ASSERTED	plugin-packet-tnc.txt	round three: type "My callsign (panel only)" N0CALL, key enter; expect value equals N0CALL
+955	DRIVEN	plugin-packet-tnc.txt	click RESTART SERVER on the module page (rebinds the KISS listener on 127.0.0.1); state list.pluginCommands.names contains it; no engine state to read back
+956	DRIVEN	plugin-packet-tnc.txt	click DROP TX QUEUE on the module page; the queue is empty, no engine state to read back
+957	NOT_DRIVABLE	-	the GRANT TRANSMIT key is not offered until the plugin asks for the transmit grant: it was absent from the running module page in the first run (no radio, nothing transmitted)
+958	NOT_DRIVABLE	-	needs a transmitter and ARM FOR PLUGINS: no radio in the drive run; the audio path is the engine's
+959	ASSERTED	plugin-packet-tnc.txt	START opens the page: state pages contains "Packet TNC (KISS)"; click the DECODE bank row "Packet TNC (KISS)"#1 twice (closed, open again), then its tab #2; state kit.panels >= 1
+960	NOT_DRIVABLE	-	a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B)
+961	NOT_DRIVABLE	-	a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B)
+962	NOT_DRIVABLE	-	a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B)
+963	NOT_DRIVABLE	-	a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B)
+964	NOT_DRIVABLE	-	a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B)
+965	NOT_DRIVABLE	-	a heading and rows of the panel, not a control (live values need a signal: the fixture run, 6.49 phase B)
+966	NOT_DRIVABLE	-	a decoder output line, not a control (needs a signal: the fixture run, 6.49 phase B)
+967	NOT_DRIVABLE	-	the plugin's own behaviour (a TCP listener on 127.0.0.1): the kit cannot see it, there is nothing to draw
+968	ASSERTED	plugin-radio-email.txt	round three: click the fold key "Plugin settings"#2 on the Radio Email panel page, type "Callsign" N0CALL, key enter; expect value equals N0CALL (the label matched a table row while the form was folded)
+969	NOT_DRIVABLE	-	a credential box: no script types a password (the plugin stores it protected); the network login it feeds is withheld in a bounded run
+970	ASSERTED	plugin-radio-email.txt	round three: type "Locator" IO91wm, key enter; expect value equals IO91wm
+971	ASSERTED	plugin-radio-email.txt	round three: type "To" N0CALL, key enter; expect value equals N0CALL
+972	ASSERTED	plugin-radio-email.txt	round three: type "Cc" N0CALL, key enter; expect value equals N0CALL
+973	ASSERTED	plugin-radio-email.txt	round three: type "Subject" "Drive probe", key enter; expect value equals the typed text
+974	ASSERTED	plugin-radio-email.txt	round three: type "Message text" "Drive probe body", key enter; expect value equals the typed text
+975	ASSERTED	plugin-radio-email.txt	round three: type "Attachment" drive-none.txt into the path box, key enter; expect value equals the typed text (the BROWSE FILES dialog is deferred: it needs the native handle)
+976	ASSERTED	plugin-radio-email.txt	round three: type "Gateway host" 127.0.0.1 (never a real gateway), key enter; expect value equals 127.0.0.1
+977	ASSERTED	plugin-radio-email.txt	round three: type "Gateway port" 9772, key enter; expect value equals 9772
+978	ASSERTED	plugin-radio-email.txt	round three: type "Auto-check, minutes (0 = off)" 0 (never non-zero: the plugin would dial out), key enter; expect value equals 0
+979	NOT_DRIVABLE	-	dials the Winlink gateway over the network: withheld in a bounded run, and a login is the owner's to make
+980	DRIVEN	plugin-radio-email.txt	click QUEUE MESSAGE on the module page after the draft fields are typed; acts on the plugin's local store, no engine state to read back
+981	DRIVEN	plugin-radio-email.txt	click DELETE DRAFT on the module page; no engine state to read back
+982	DRIVEN	plugin-radio-email.txt	click NEXT MESSAGE on the module page; moves the plugin's own mailbox cursor, no engine state to read back
+983	DRIVEN	plugin-radio-email.txt	click PREVIOUS MESSAGE on the module page; moves the plugin's own mailbox cursor, no engine state to read back
+984	DRIVEN	plugin-radio-email.txt	click MARK READ on the module page; acts on the plugin's own mailbox, no engine state to read back
+985	DRIVEN	plugin-radio-email.txt	click NEXT PAGE on the module page; pages the plugin's own message view, no engine state to read back
+986	DRIVEN	plugin-radio-email.txt	click PREVIOUS PAGE on the module page; pages the plugin's own message view, no engine state to read back
+987	ASSERTED	plugin-radio-email.txt	click the DECODE bank row "Radio Email" (START leaves only the module page open): state pages contains "Radio Email (Winlink-compatible) Radio Email"; state kit.panels >= 1; after FITTED click the row twice (closed, open again)
+988	NOT_DRIVABLE	-	a heading of the panel, not a control (needs the plugin's mailbox: the fixture run, 6.49 phase B)
+989	NOT_DRIVABLE	-	rows of the panel, not a control (needs the plugin's mailbox: the fixture run, 6.49 phase B)
+990	NOT_DRIVABLE	-	rows of the panel, not a control (need a mailbox: the fixture run, 6.49 phase B)
+991	NOT_DRIVABLE	-	a heading and rows of the panel, not a control (need a mailbox: the fixture run, 6.49 phase B)
+992	NOT_DRIVABLE	-	a decoder output line, not a control (needs a session: the network is withheld in a bounded run)
+993	NOT_DRIVABLE	-	the plugin's own behaviour (an outbound TCP connection): needs the network, withheld in a bounded run; nothing to draw
+994	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+995	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+996	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+997	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+998	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+999	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+1000	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+1001	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+1002	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+1003	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it
+1004	NOT_DRIVABLE	-	not installed: the Bonus Host API tour (hostapi-example) is not in the catalogue, so no plugin is fitted for it

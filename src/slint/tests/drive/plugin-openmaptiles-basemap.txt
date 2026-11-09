@@ -1,0 +1,22 @@
+#! frames=500 bank=1 plugins=all open=module:openmaptiles-basemap-1.1.2-abi3-win-x64.dll size=1600x1600
+# plugin-openmaptiles-basemap: Map Imagery (openmaptiles-basemap 1.1.2, descriptor name "OpenMapTiles basemap", tick rows 1132-1137; a BASEMAP,
+# no decoder, no window of its own), docs 6.49 round two. The plugin is RUNNING from the start (the idle dump shows STOP and TAKES NO SIGNAL),
+# so the page's key is cycled STOP -> START -> STOP and read back from the key itself (the page's key comes from the engine's plugin row).
+# No decoder row and no picture, panel or map page: nothing else on the page is operated but Keep running. The tiles themselves need the
+# network (NOT DRIVABLE).
+120 state kit.plugins == 43
+state list.plugins.names contains "OpenMapTiles basemap"
++1 expect "STOP" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "< FITTED"
++10 state pages == "pages: Fitted modules"

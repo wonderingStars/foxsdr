@@ -1,0 +1,21 @@
+#! frames=500 bank=1 plugins=all open=module:aircraft-info-1.1.0-abi3-win-x64.dll size=1600x1600
+# plugin-aircraft-info: Aircraft Info (registry lookup) (tick rows 499-510), docs 6.49 round three (unchanged: 16 of 16 ran in round two).
+# A TRACK_INFO module declares no decoder: it has NO decoder row, so state decodersRunning stays 0 whatever it does. The module page
+# shows it already running (key STOP, no START, no grant key, no preset keys), so the START / STOP key is driven the other way
+# round: STOP, read the key turn into START, START again. START turns "Keep running" on by itself (round one): first click OFF.
+120 state kit.plugins == 43
+state list.plugins.names contains "Aircraft Info"
+state decodersRunning == 0
+expect "STOP" label equals "STOP"
++1 click "STOP"
++20 expect "START" label equals "START"
++1 click "START"
++20 expect "STOP" label equals "STOP"
+state decodersRunning == 0
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "< FITTED"
++5 state pages contains "Fitted modules"

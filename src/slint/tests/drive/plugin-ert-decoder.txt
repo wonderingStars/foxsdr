@@ -1,0 +1,35 @@
+#! frames=380 bank=1 plugins=all open=module:ert-decoder-1.0.0-abi3-win-x64.dll size=1600x1800
+# plugin-ert-decoder: the ERT Utility Meter Decoder (tick rows 868-882): its module page (START, Keep running, < FITTED), the "ERT meters"
+# instrument window (the MeterFace) and the two preset keys. The module page shows no grant keys (the plugin asks for none).
+# No signal is fed: only STATE changes are asserted (the run word, the open pages, the tuned frequency).
+# An I/Q decoder: START is read back through the STOP key and decodersRunning, which passed in the first run.
+# START itself retunes the receiver to the first preset (912.600 MHz), so the keys are clicked 2 then 1: every read-back is a change.
+120 state kit.plugins == 43
+state list.plugins.names contains "ERT"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START opens the plugin's own windows: the page is read back right after it
+state pages contains "ERT meters"
+# START turns "Keep running" on: it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the DECODE bank row "ERT meters"#1 toggles the page: click it twice (closed, then open again), then bring the tab (#2) to the front
++1 click "ERT meters"#1
++5 click "ERT meters"#1
++5 state pages contains "ERT meters"
++1 click "ERT meters"#2
++3 state pages contains "ERT meters"
+# KEPT DUMP (round three): the ERT meters page, to confirm the PresetBar sits on it
++3 dump
++1 state kit.instruments >= 1
++1 click "ERT meters  915.000 MHz (band centre)"
++25 state tunedHz == 915000000
++1 click "ERT meters  912.600 MHz"
++25 state tunedHz == 912600000

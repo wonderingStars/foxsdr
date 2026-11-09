@@ -1,0 +1,103 @@
+#! frames=580 bank=1 plugins=all open=module:propagation-tools-0.1.0-abi3-win-x64.dll size=1600x1600
+# plugin-propagation-tools: Propagation Tools (propagation-tools 0.1.0, EXPERIMENTAL, tick rows 1154-1188; an IMAGE DECODER + PANEL, asks for
+# receiver control), docs 6.49 round two. Idle page: IDLE lamp, START, GRANT RECEIVER CONTROL, Keep running, < FITTED. START is read back from
+# the engine (decodersRunning) and from the page's key turning into STOP. The plugin's own plate keys (NEXT PAGE, PREV PAGE, REFRESH, NEXT HOUR,
+# PREV HOUR, rows 1160-1164) appear on the module page once it runs: the round-one dump gave their real wording, the same as the
+# inventory's. Windows: "Propagation Tools image" (picture, settings fold with the 13 fields rows 1174-1186, beacon preset keys row 1187) and
+# "Propagation Tools" (the panel). The settings fold is "Plugin settings" (groupbox #1, fold key #2).
+120 state kit.plugins == 43
+state list.plugins.names contains "Propagation Tools"
++1 expect "START" enabled equals "true"
++1 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# START opens the plugin's windows: read them as open right away
+state pages contains "Propagation Tools image"
+state decodersRunning >= 1
+# ---- the plate keys, then the module page's own keys ----
++1 state list.pluginSettings.details contains propagation-tools-0.1.0-abi3-win-x64.dll
++1 state kit.panels >= 1
++1 state kit.pictures >= 1
++1 click "NEXT PAGE"
++5 click "PREV PAGE"
++5 click "REFRESH"
++5 click "NEXT HOUR"
++5 click "PREV HOUR"
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++20 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++20 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
+# ---- the plugin's windows from the DECODE bank ----
++1 click "Propagation Tools image"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "Propagation Tools image"#1
++10 state pages contains "Propagation Tools image"
+# the five NCDXF beacon presets (VFO tune, CW 500 Hz)
++1 click "NCDXF beacons 20 M 14.100 MHz CW"
++6 state tunedHz == 14100000
+state mode == CW
++1 click "NCDXF beacons 17 M 18.110 MHz CW"
++6 state tunedHz == 18110000
++1 click "NCDXF beacons 15 M 21.150 MHz CW"
++6 state tunedHz == 21150000
++1 click "NCDXF beacons 12 M 24.930 MHz CW"
++6 state tunedHz == 24930000
++1 click "NCDXF beacons 10 M 28.200 MHz CW"
++6 state tunedHz == 28200000
+# the settings fold (the groupbox is #1, the fold key #2); the labels are the plugin's own spec, two to a row
++1 click "Plugin settings"#2
++3 state list.pluginSettings.names contains "Your locator"
++1 type "Your locator" "IO91wm"
++1 key enter
++5 expect "Your locator" value equals "IO91wm"
++1 type "Target locator" "JN58td"
++1 key enter
++5 expect "Target locator" value equals "JN58td"
++1 click "Heat map on the world"
++5 expect "Heat map on the world" checked equals "false"
++1 click "Fetch solar data"
++5 expect "Fetch solar data" checked equals "false"
++1 type "Engine" "empirical"
++1 key enter
++5 expect "Engine" value equals "empirical"
++1 type "VOACAP program (optional)" "voacapw.exe"
++1 key enter
++5 expect "VOACAP program (optional)" value equals "voacapw.exe"
++1 type "Sunspot number (0 = from SFI)" "120"
++1 key enter
++5 expect "Sunspot number (0 = from SFI)" value equals "120"
++1 type "Transmit power, W" "50"
++1 key enter
++5 expect "Transmit power, W" value equals "50"
++1 type "Antenna" "dipole_hd"
++1 key enter
++20 expect "Antenna" value equals "dipole_hd"   # the field commits through the engine; under load +5 read the old value once
++1 type "Isotropic gain, dBi" "3"
++1 key enter
++5 expect "Isotropic gain, dBi" value equals "3"
++1 type "Noise at 3 MHz, -dBW" "150"
++1 key enter
++5 expect "Noise at 3 MHz, -dBW" value equals "150"
++1 type "Required SNR, dB" "20"
++1 key enter
++5 expect "Required SNR, dB" value equals "20"
++1 type "Map threshold, REL %" "60"
++1 key enter
++5 expect "Map threshold, REL %" value equals "60"
++1 click "Propagation Tools"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "Propagation Tools"#1
++10 state pages contains "Propagation Tools image Propagation Tools"

@@ -1,0 +1,47 @@
+#! frames=500 bank=1 plugins=all open=module:dab-0.5.0-abi3-win-x64.dll size=1600x1600
+# plugin-dab: DAB / DAB+ Radio (tick rows 711-731): the module page (START / STOP, GRANT, Keep running, the two plate keys), the
+# picture page "DAB / DAB+ Radio image" with its "Plugin settings" fold (Service number, Station name, DAB+ decoder (ffmpeg) - labels from
+# the DLL's strings) and the ensemble panel "DAB ensemble". An I/Q decoder does not count in decodersRunning: the STOP key is the proof.
+# The two dumps are KEPT (still needed: the sixteen preset keys' labels and where they live).
+# START itself opens the plugin's windows: the pages read-back right after START is the assertion for the image and ensemble pages; its tab is then
+# SELECTED with click "<page>"#2 (#1 is the DECODE bank row, a toggle that would close it) - no row click is used.
+120 state kit.plugins == 43
+state list.plugins.names contains "DAB / DAB+ Radio"
+state pages contains "DAB / DAB+ Radio"
++1 expect "START" label equals "START"
++1 click "START"
++40 state list.decoders.names contains "DAB"
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 state pages contains "DAB / DAB+ Radio image"
++1 state pages contains "DAB ensemble"
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 state list.pluginSettings.names contains "Service number"
++1 state list.pluginCommands.details contains "dab-0.5.0"
++1 click "NEXT STATION"
++3 click "PREVIOUS STATION"
++5 state running == 1
++1 state kit.panels >= 1
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "DAB / DAB+ Radio image"#2
++3 state pages contains "DAB / DAB+ Radio image"
++1 click "Plugin settings"#2
++3 dump
++1 type "Service number" "2"
++1 key enter
++5 expect "Service number" value equals "2"
++1 type "Station name" "Probe FM"
++1 key enter
++5 expect "Station name" value equals "Probe FM"
++1 type "DAB+ decoder (ffmpeg)" "C:\\probe\\ffmpeg.exe"
++1 key enter
++5 expect "DAB+ decoder (ffmpeg)" value equals "C:\\probe\\ffmpeg.exe"
++1 click "DAB ensemble"#2
++3 state pages contains "DAB ensemble"
++2 dump

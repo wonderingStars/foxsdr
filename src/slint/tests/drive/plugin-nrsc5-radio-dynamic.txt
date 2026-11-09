@@ -1,0 +1,53 @@
+#! frames=500 bank=1 plugins=all open=module:nrsc5-radio-dynamic-0.1.2-abi3-win-x64.dll size=1600x1600
+# plugin-nrsc5-radio-dynamic: IBOC Radio, nrsc5 library (tick rows 742-759): the module page (START / STOP, GRANT, Keep running, the eleven
+# plate keys), the picture page "IBOC Radio (nrsc5 library) image" with its "Plugin settings" fold (Programme 0-7 (HD1-HD8), Picture page,
+# Auto gain, nrsc5 library file - labels from the DLL's strings). The dump after the fold opens is KEPT as a guard and for the initial
+# state of the Auto gain box. No signal and no nrsc5 library: state, not a station.
+120 state kit.plugins == 43
+state list.plugins.names contains "IBOC Radio (nrsc5 library)"
+state pages contains "IBOC Radio (nrsc5 library)"
++1 expect "START" label equals "START"
++1 click "START"
++40 state decodersRunning >= 1
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 state list.pluginSettings.names contains "Programme"
++1 state list.pluginCommands.details contains "nrsc5-radio-dynamic"
++1 click "HD next"
++3 click "HD previous"
++3 click "Re-acquire"
++3 click "HD1"
++3 click "HD2"
++3 click "HD3"
++3 click "HD4"
++3 click "HD5"
++3 click "HD6"
++3 click "HD7"
++3 click "HD8"
++5 state running == 1
++1 state kit.panels >= 1
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "IBOC Radio (nrsc5 library) image"
++3 state pages contains "IBOC Radio (nrsc5 library) image"
++1 click "Plugin settings"#2
++3 dump
++1 type "Programme 0-7 (HD1-HD8)" "2"
++1 key enter
++5 expect "Programme 0-7 (HD1-HD8)" value equals "2"
++1 type "Picture page" "2"
++1 key enter
++5 expect "Picture page" value equals "2"
++1 click "Auto gain"
++5 click "Auto gain"
++5 type "nrsc5 library file" "C:\\probe\\libnrsc5.dll"
++1 key enter
++5 expect "nrsc5 library file" value equals "C:\\probe\\libnrsc5.dll"
++1 click "IBOC Radio (nrsc5)"
++3 state pages contains "IBOC Radio (nrsc5)"

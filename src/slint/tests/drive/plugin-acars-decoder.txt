@@ -1,0 +1,43 @@
+#! frames=500 bank=1 plugins=all open=module:acars-decoder-1.0.0-abi3-win-x64.dll size=1600x2600
+# plugin-acars-decoder: ACARS Aircraft Datalink Decoder (tick rows 518-536), docs 6.49 round three.
+# Caps: audio decoder + instrument (the "ACARS printer" bank row, a TeleprinterFace) + presets. No track source (no map row).
+# START itself opens the printer page and the Decoder output page (round two): the pages read-back after START asserts them. The
+# bank row "ACARS printer" (#1) is a toggle: closed (pages line read back), then open again. Presets (AM 25 kHz, audio decoder:
+# the VFO goes there, tunedHz is the read-back) are pressed on the Decoders drawer, whose labels the round-two STDC dump listed.
+# The first preset (131.550) is the auto preset START applies, so it is pressed LAST.
+120 state kit.plugins == 43
+state list.plugins.names contains "ACARS"
+state decodersRunning == 0
++1 click "START"
++40 state decodersRunning >= 1
+expect "STOP" label equals "STOP"
+state pages contains "ACARS printer"
+state pages contains "Decoder output"
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+state decodersRunning >= 1
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
++1 click "ACARS printer"#1
++10 state pages == "pages: Decoder output Fitted modules"
++1 click "ACARS printer"#1
++10 state pages contains "ACARS printer"
++20 state kit.instruments >= 1
++1 click "Fitted modules"#1
++3 click "Turn on and off plugins"
++5 state pages contains "Fitted modules"
++1 click "ACARS  131.725 MHz (Europe)"
++10 state tunedHz == 131725000
++1 click "ACARS  131.525 MHz (Europe)"
++10 state tunedHz == 131525000
++1 click "ACARS  130.025 MHz (USA 2nd)"
++10 state tunedHz == 130025000
++1 click "ACARS  131.450 MHz (Japan)"
++10 state tunedHz == 131450000
++1 click "ACARS  131.475 MHz (Air Canada)"
++10 state tunedHz == 131475000
++1 click "ACARS  131.550 MHz (N America)"
++10 state tunedHz == 131550000

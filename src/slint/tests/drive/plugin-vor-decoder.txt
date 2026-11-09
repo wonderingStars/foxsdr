@@ -1,0 +1,28 @@
+#! frames=500 bank=1 plugins=all open=module:vor-decoder-1.0.1-abi3-win-x64.dll size=1600x1600
+# plugin-vor-decoder: VOR Navigation Decoder (tick rows 585-596), docs 6.49 round three (unchanged: 22 of 22 ran in round two).
+# Caps: audio decoder + instrument (the "VOR course indicator" bank row, a NavBearingFace) + 2 presets (AM 25 kHz, so tunedHz).
+# Round one: the preset steps ran on the instrument page. The first preset (113.000) is the auto preset START applies, so 108.000 is
+# pressed first and 113.000 after it. The face has one control, the slider "OBS course" (value "090" before and after a press at 0.5
+# in the round-one dump: the knob does not map a track press to a course), so it is DRIVEN with no read-back; no dump needed.
+120 state kit.plugins == 43
+state list.plugins.names contains "VOR"
+state decodersRunning == 0
++1 click "START"
++40 state decodersRunning >= 1
+expect "STOP" label equals "STOP"
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+state decodersRunning >= 1
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
++1 click "VOR course indicator"#1
++10 state pages contains "VOR course indicator"
++20 state kit.instruments >= 1
++1 click "VOR band  108.000 MHz AM (band start)"
++10 state tunedHz == 108000000
++1 click "VOR band  113.000 MHz AM (tune your station)"
++10 state tunedHz == 113000000
++1 slider "OBS course" 0.5

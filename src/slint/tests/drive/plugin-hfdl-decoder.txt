@@ -1,0 +1,60 @@
+#! frames=500 bank=1 plugins=all open=module:hfdl-decoder-0.1.0-abi3-win-x64.dll size=1600x2600
+# plugin-hfdl-decoder: HFDL Aircraft Datalink Decoder (tick rows 559-572), docs 6.49 round three.
+# Caps: audio decoder + track source + instrument + presets. START itself opens the map page and the printer page (round two): the
+# pages read-back after START asserts both. The bank rows "HFDL printer" and "HFDL (EXPERIMENTAL) map" (#1, the bank rows) are
+# toggles: each closed (pages line read back), then opened again. The 12 presets are USB 3 kHz audio presets (tunedHz = kHz * 1000)
+# on the Decoders drawer (labels from the round-two STDC dump). The first (Shannon 8942) is the auto preset START applies, so it
+# is pressed LAST.
+120 state kit.plugins == 43
+state list.plugins.names contains "HFDL"
+state decodersRunning == 0
++1 click "START"
++40 state decodersRunning >= 1
+expect "STOP" label equals "STOP"
+state pages contains "HFDL (EXPERIMENTAL) map"
+state pages contains "HFDL printer"
+state kit.mapPages >= 1
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+state decodersRunning >= 1
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
++1 click "HFDL printer"#1
++10 state pages == "pages: HFDL (EXPERIMENTAL) map Fitted modules"
++1 click "HFDL (EXPERIMENTAL) map"#1
++10 state pages == "pages: Fitted modules"
++1 click "HFDL (EXPERIMENTAL) map"#1
++10 state pages contains "HFDL (EXPERIMENTAL) map"
++1 click "HFDL printer"#1
++10 state pages contains "HFDL printer"
++20 state kit.instruments >= 1
++1 click "Fitted modules"#1
++3 click "Turn on and off plugins"
++5 state pages contains "Fitted modules"
++1 click "HFDL Shannon 5547 kHz"
++10 state tunedHz == 5547000
++1 click "HFDL Reykjavik 8977 kHz"
++10 state tunedHz == 8977000
++1 click "HFDL Riverhead 8912 kHz"
++10 state tunedHz == 8912000
++1 click "HFDL Canarias 8948 kHz"
++10 state tunedHz == 8948000
++1 click "HFDL Al Muharraq 8885 kHz"
++10 state tunedHz == 8885000
++1 click "HFDL Johannesburg 8834 kHz"
++10 state tunedHz == 8834000
++1 click "HFDL Hat Yai 8825 kHz"
++10 state tunedHz == 8825000
++1 click "HFDL Agana 8927 kHz"
++10 state tunedHz == 8927000
++1 click "HFDL Auckland 8921 kHz"
++10 state tunedHz == 8921000
++1 click "HFDL Molokai 8936 kHz"
++10 state tunedHz == 8936000
++1 click "HFDL San Francisco 8927 kHz"
++10 state tunedHz == 8927000
++1 click "HFDL Shannon 8942 kHz"
++10 state tunedHz == 8942000

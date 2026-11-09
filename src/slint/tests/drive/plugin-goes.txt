@@ -1,0 +1,46 @@
+#! frames=500 bank=1 plugins=all open=module:goes-0.2.0-abi3-win-x64.dll size=1600x1600
+# plugin-goes: GOES Weather Satellites (goes 0.2.0, tick rows 1051-1084; an IQ DECODER + IMAGE DECODER + PANEL), docs 6.49 round two.
+# Idle page: IDLE lamp, START, Keep running, < FITTED (no grant key). START is read back from the engine (decodersRunning) and from the
+# page's key turning into STOP. Windows from the DECODE bank: the picture page ("GOES HRIT / LRIT image", the preset keys
+# 1079-1081) and the panel page ("GOES HRIT / LRIT"). No signal is fed (the fixture run, 6.49 phase B).
+120 state kit.plugins == 43
+state list.plugins.names contains "GOES HRIT / LRIT"
++1 expect "START" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# START opens the plugin's windows: read them as open right away
+state pages contains "GOES HRIT / LRIT image"
+state decodersRunning >= 1
++1 dump
++1 state kit.panels >= 1
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
++1 click "GOES HRIT / LRIT image"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "GOES HRIT / LRIT image"#1
++10 state pages contains "GOES HRIT / LRIT image"
+# the one dump still needed: the labels of the image page's own controls (the preset keys come from the plugin source, not from a dump)
++1 dump
+# ---- the preset keys of the GOES image page (device-centre presets, 3 MS/s; East and West HRIT share 1694.1 MHz, so LRIT is pressed first) ----
++1 click "GOES LRIT  1691.0 MHz"
++15 state centreHz == 1691000000
++1 click "GOES-East HRIT  1694.1 MHz"
++15 state centreHz == 1694100000
++1 click "GOES-West HRIT  1694.1 MHz"
++15 state centreHz == 1694100000
+# ---- the panel page ----
++1 click "GOES HRIT / LRIT"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "GOES HRIT / LRIT"#1
++10 state pages contains "GOES HRIT / LRIT image GOES HRIT / LRIT"

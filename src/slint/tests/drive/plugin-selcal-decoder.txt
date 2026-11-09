@@ -1,0 +1,43 @@
+#! frames=500 bank=1 plugins=all open=module:selcal-decoder-1.0.0-abi3-win-x64.dll size=1600x2600
+# plugin-selcal-decoder: SELCAL Decoder (tick rows 573-584), docs 6.49 round three.
+# Caps: audio decoder + presets only: NO instrument, panel, picture or map row. Its ten preset keys (USB 2.7 kHz, tunedHz is the
+# read-back) are on the Decoder output page, whose tab is in the tab row (round-one dump). The labels are the ones that page listed
+# in the round-one dump of the STDC run. The first preset (NAT-A 5598) is the auto preset START applies, so it is pressed LAST.
+120 state kit.plugins == 43
+state list.plugins.names contains "SELCAL"
+state decodersRunning == 0
++1 click "START"
++40 state decodersRunning >= 1
+expect "STOP" label equals "STOP"
+# START itself opens the Decoder output page (round two): that read-back is the assertion for it
+state pages contains "Decoder output"
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+state decodersRunning >= 1
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
++1 click "Decoder output"
++10 state pages contains "Decoder output"
++1 click "SELCAL NAT-A 8906 kHz USB"
++10 state tunedHz == 8906000
++1 click "SELCAL NAT-B 5616 kHz USB"
++10 state tunedHz == 5616000
++1 click "SELCAL NAT-B 8864 kHz USB"
++10 state tunedHz == 8864000
++1 click "SELCAL NAT-C 5649 kHz USB"
++10 state tunedHz == 5649000
++1 click "SELCAL NAT-C 8879 kHz USB"
++10 state tunedHz == 8879000
++1 click "SELCAL NAT-D 8891 kHz USB"
++10 state tunedHz == 8891000
++1 click "SELCAL NAT-A/C 13306 kHz USB (day)"
++10 state tunedHz == 13306000
++1 click "SELCAL NAT-B/D/F 13291 kHz USB (day)"
++10 state tunedHz == 13291000
++1 click "SELCAL NAT-B 2899 kHz USB (night)"
++10 state tunedHz == 2899000
++1 click "SELCAL NAT-A 5598 kHz USB"
++10 state tunedHz == 5598000

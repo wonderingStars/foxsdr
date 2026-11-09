@@ -1,0 +1,27 @@
+#! frames=500 bank=1 plugins=all open=module:epirb-decoder-1.0.0-abi3-win-x64.dll size=1600x1600
+# plugin-epirb-decoder: 406 MHz Distress Beacon Decoder (tick rows 613-631), docs 6.49 round three.
+# Caps: I/Q decoder + instrument (the "406 MHz beacon" bank row, a BeaconFace) + 4 DEVICE-CENTRE presets (read-back centreHz).
+# START itself opens the instrument page (round two): the pages read-back asserts it. The bank row "406 MHz beacon" (#1, the bank
+# row) is a toggle: closed (pages line read back), then open again. The preset keys are on the Decoders drawer, below the part the
+# round-two STDC dump reached: the full-drawer dump in plugin-stdc-decoder.txt (round three) lists them; no preset step is guessed.
+# No track source: no map row. Row 631 (safety wording) is DEFERRED.
+120 state kit.plugins == 43
+state list.plugins.names contains "406 MHz"
+state decodersRunning == 0
++1 click "START"
++40 state decodersRunning >= 1
+expect "STOP" label equals "STOP"
+state pages contains "406 MHz beacon"
++5 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+state decodersRunning >= 1
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
++1 click "406 MHz beacon"#1
++10 state pages == "pages: Fitted modules"
++1 click "406 MHz beacon"#1
++10 state pages contains "406 MHz beacon"
++20 state kit.instruments >= 1

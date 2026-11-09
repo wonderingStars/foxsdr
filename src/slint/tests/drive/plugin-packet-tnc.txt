@@ -1,0 +1,64 @@
+#! frames=520 bank=1 plugins=all open=module:packet-tnc-0.1.0-abi3-win-x64.dll size=1600x1800
+# plugin-packet-tnc: the Packet TNC (KISS) (tick rows 947-967): its module page (START, Keep running, GRANT RECEIVER CONTROL, the plate keys
+# RESTART SERVER / DROP TX QUEUE, GRANT TRANSMIT once the plugin has asked, < FITTED), the "Packet TNC (KISS)" panel page, the two preset keys
+# and the six settings. The KISS server listens on 127.0.0.1 only (the bind address is typed back as 127.0.0.1, never 0.0.0.0); nothing is
+# transmitted (no transmitter in the run, ARM FOR PLUGINS stays closed). No signal is fed: only STATE changes are asserted.
+120 state kit.plugins == 43
+state list.plugins.names contains "Packet TNC (KISS)"
+state list.pluginSettings.names contains "KISS TCP port"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START opens the plugin's own windows: the panel is read back right after it
+state pages contains "Packet TNC (KISS)"
+# START turns "Keep running" on: it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++15 expect "GRANT RECEIVER CONTROL" enabled equals "true"
+# the plate keys (GRANT TRANSMIT is not offered until the plugin asks for the transmit grant: it did not in the first run)
++1 state list.pluginCommands.names contains "RESTART SERVER"
++1 click "RESTART SERVER"
++15 click "DROP TX QUEUE"
++3 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the DECODE bank row "Packet TNC (KISS)"#1 toggles the panel (click twice), the tab is #2
++1 click "Packet TNC (KISS)"#1
++5 click "Packet TNC (KISS)"#1
++5 state pages contains "Packet TNC (KISS)"
++1 click "Packet TNC (KISS)"#2
++3 state pages contains "Packet TNC (KISS)"
++1 state kit.panels >= 1
+# START retunes nothing here (100.3 MHz stays), so either key order is a change
++1 click "Packet  144.800 MHz (Europe)"
++25 state tunedHz == 144800000
++1 click "Packet  144.390 MHz (N America)"
++25 state tunedHz == 144390000
+# the settings fold on the panel page (its key is the 2nd "Plugin settings"), then the six fields: each typed, committed with Enter, read back
++1 click "Plugin settings"#2
+# KEPT DUMP (round three): the expanded form, to confirm the six field labels and kinds
++3 dump
++1 type "KISS TCP port" "8011"
++1 key enter
++5 expect "KISS TCP port" value equals "8011"
++1 type "Bind address" "127.0.0.1"
++1 key enter
++5 expect "Bind address" value equals "127.0.0.1"
++1 type "Channel busy above (dB)" "-30"
++1 key enter
++5 expect "Channel busy above (dB)" value equals "-30"
++1 type "TX amplitude (0.05-1)" "0.5"
++1 key enter
++5 expect "TX amplitude (0.05-1)" value equals "0.5"
++1 type "TX gives up after (s)" "20"
++1 key enter
++5 expect "TX gives up after (s)" value equals "20"
++1 type "My callsign (panel only)" "N0CALL"
++1 key enter
++5 expect "My callsign (panel only)" value equals "N0CALL"

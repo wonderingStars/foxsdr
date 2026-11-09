@@ -1,0 +1,38 @@
+#! frames=500 bank=1 plugins=all open=module:satellites-1.1.2-abi3-win-x64.dll size=1600x1600
+# plugin-satellites: the Satellites plugin (satellites 1.1.2, tick rows 1005-1034; a TRACK SOURCE + PANEL, no decoder row), docs 6.49 round two.
+# The module page opens at start (idle: TAKES NO SIGNAL, START, GRANT RECEIVER CONTROL, Keep running, < FITTED). The plugin declares no
+# decoder, so state decodersRunning is not read: START is read back from the page's own key turning into STOP (the page's key comes from the
+# engine's plugin row).  The panel page and the satellites map page are opened from
+# the DECODE bank rows ("Satellites" panel row, "Satellites map" row that exists once the tracker runs).
+120 state kit.plugins == 43
+state list.plugins.names contains Satellites
++1 expect "START" enabled equals "true"
++1 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# ---- after the dump: the module page's own keys ----
++1 state kit.panels >= 1
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++20 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++20 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages == "pages: Fitted modules"
+# ---- the plugin's windows from the DECODE bank ----
++1 click "Satellites"
++10 state pages contains "Fitted modules Satellites"
+state kit.panels >= 1
++1 click "Satellites map"
++10 state pages contains "Satellites map"
+state kit.mapPages >= 1

@@ -1,0 +1,27 @@
+#! frames=500 bank=1 plugins=all open=module:aprs-decoder-1.0.2-abi3-win-x64.dll size=1600x1600
+# plugin-aprs-decoder: APRS / AX.25 Packet Decoder (tick rows 732-736): the module page, START / STOP, Keep running, "< FITTED", the
+# two presets on the Decoder output page, and the map count the plugin raises once it runs (the track source). No signal: no station,
+# no track, no trail (those rows are the fixture run, 6.49 phase B).
+120 state kit.plugins == 43
+state list.plugins.names contains "APRS"
+state pages contains "APRS"
++1 expect "START" label equals "START"
++1 click "START"
++40 state decodersRunning >= 1
++1 expect "STOP" label equals "STOP"
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
+# (START opens the plugin's own page, not the Decoder output: that read-back was wrong and is gone)
++1 state pages contains "APRS map"
++1 state kit.mapPages >= 1
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "+ Window"
++3 state pages contains "Decoder output"
++1 click "APRS  144.800 MHz (Europe)"
++10 state tunedHz == 144800000
++1 click "APRS  144.390 MHz (N America)"
++10 state tunedHz == 144390000

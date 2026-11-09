@@ -87,6 +87,12 @@ std::string readFile(const fs::path& p) {
 // The "#!" header lines of a script: key=value tokens. Known keys name the run; an upper-case key is an environment variable.
 struct Header {
     int frames = 240;
+    std::string plugins;   // "all", or a comma list of plugin ids (file-name prefixes), to fit from the user's plugin folder
+    std::string iqfile;    // an I/Q WAV played as the receiver's source instead of the generator (docs 6.50: the fixture runs); a relative path is under tests/drive/fixtures
+    std::string centre;    // the source's centre frequency in Hz (the tune at start), with iqfile
+    std::string mode;      // the demodulation mode at start (NFM WFM AM DSB USB CW LSB RAW), with iqfile
+    std::string bandwidth; // the passband in Hz at start, with iqfile
+    std::string config;    // a JSON file used as the run's settings seed instead of the generator profile (docs 6.51: a real radio's profile); relative = under tests/drive/fixtures
     std::map<std::string, std::string> env;
 };
 
@@ -109,6 +115,12 @@ Header parseHeader(const std::string& script) {
             else if (key == "open") { h.env["FOXSDR_SLINT_OPEN"] = value; }
             else if (key == "store") { h.env["FOXSDR_SLINT_STORE_PAGE"] = value; }
             else if (key == "size") { h.env["FOXSDR_SLINT_SIZE"] = value; }   // <w>x<h>: a taller window for a tall section body
+            else if (key == "plugins") { h.plugins = value; }                 // all | <id>,<id>...: the plugins fitted for this run (docs 6.49)
+            else if (key == "iqfile") { h.iqfile = value; }                   // the I/Q WAV source (docs 6.50)
+            else if (key == "centre") { h.centre = value; }
+            else if (key == "mode") { h.mode = value; }
+            else if (key == "bandwidth") { h.bandwidth = value; }
+            else if (key == "config") { h.config = value; }                   // the settings seed file (docs 6.51)
             else if (key.rfind("FOXSDR_", 0) == 0 || key.rfind("CASCADE_", 0) == 0) { h.env[key] = value; }
         }
     }
@@ -163,6 +175,42 @@ int main(int argc, char** argv) {
     fs::remove_all(dir, ec);
     fs::create_directories(dir / "appdata", ec);
     fs::create_directories(dir / "local", ec);
+    // THE PLUGINS (docs 6.49): a run that says `plugins=` gets the DLLs copied from the user's own plugin folder (read-only; FOXSDR_DRIVE_PLUGINS_DIR
+    // names another) into the scratch profile's %LOCALAPPDATA%\foxsdr\plugins, with catalogue.json and installed.json beside them, BEFORE the
+    // variables are redirected - the host scans exactly that folder (core/plugin_host.cpp userPluginDir).
+    int pluginsCopied = 0;
+    if (!h.plugins.empty()) {
+        fs::path from;
+        if (const char* o = std::getenv("FOXSDR_DRIVE_PLUGINS_DIR"); o != nullptr && *o != '\0') { from = o; }
+        else if (const char* la = std::getenv("LOCALAPPDATA"); la != nullptr && *la != '\0') { from = fs::path(la) / "FoxSDR" / "plugins"; }
+        const fs::path to = dir / "local" / "foxsdr" / "plugins";
+        fs::create_directories(to, ec);
+        std::vector<std::string> wanted;
+        if (h.plugins != "all") {
+            std::istringstream ids(h.plugins);
+            std::string id;
+            while (std::getline(ids, id, ',')) { if (!id.empty()) { wanted.push_back(id); } }
+        }
+        for (const auto& e : fs::directory_iterator(from, ec)) {
+            const std::string name = e.path().filename().string();
+            const bool dll = name.size() > 4 && name.compare(name.size() - 4, 4, ".dll") == 0;
+            const bool meta = name == "catalogue.json" || name == "installed.json";
+            if (!dll && !meta) { continue; }
+            if (dll && !wanted.empty()) {
+                bool hit = false;
+                for (const auto& w : wanted) { if (name.rfind(w + "-", 0) == 0) { hit = true; } }
+                if (!hit) { continue; }
+            }
+            fs::copy_file(e.path(), to / name, fs::copy_options::overwrite_existing, ec);
+            if (!ec && dll) { ++pluginsCopied; }
+        }
+        std::printf("  plugins: %d DLL(s) copied from %s\n", pluginsCopied, from.string().c_str());
+        setEnv("CASCADE_PLUGIN_DIR_TEST", to.string());   // the host's folder for this run (core/plugin_host.cpp defaultPluginDir): a writable exe folder would win otherwise
+    } else {
+        // no plugins for this run, whatever the build tree's exe folder holds
+        fs::create_directories(dir / "local" / "foxsdr" / "plugins", ec);
+        setEnv("CASCADE_PLUGIN_DIR_TEST", (dir / "local" / "foxsdr" / "plugins").string());
+    }
     fs::create_directories(dir / "home", ec);
     fs::create_directories(dir / "diag", ec);
     setEnv("APPDATA", (dir / "appdata").string());
@@ -177,9 +225,53 @@ int main(int argc, char** argv) {
         setEnv(url, "http://127.0.0.1:9/");
     }
     const fs::path cfg = dir / "config.json";
-    {
+    if (!h.config.empty()) {
+        // THE SEED FILE (docs 6.51): a complete settings document of the author's - a real radio's profile, say - copied as the run's config.json.
+        // It is the author's to keep hermetic (telemetryEnabled false, updateCheckEnabled false); the run still redirects every folder and endpoint.
+        fs::path seed(h.config);
+        if (seed.is_relative()) {
+            const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
+            seed = (fx != nullptr && *fx != '\0') ? fs::path(fx) / seed : fs::path(FOXSDR_DRIVE_FIXTURES_DIR) / seed;
+        }
+        const std::string text = readFile(seed);
+        if (text.empty()) { std::printf("  the config seed %s is missing or empty\n", seed.string().c_str()); }
+        CHECK(!text.empty());
         std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
-        f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"sourceKind\": \"siggen\", \"mainView\": \"receiver\", \"bandPlanOverlay\": false }\n";
+        f << text;
+    } else {
+        std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
+        f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"mainView\": \"receiver\", \"bandPlanOverlay\": false";
+        if (h.iqfile.empty()) {
+            f << ", \"sourceKind\": \"siggen\"";
+        } else {
+            // THE FIXTURE RUN (docs 6.50): the file source plays the WAV in a loop; its centre is the tune, and the demodulator and passband are the
+            // plugin's. A relative path is under src/slint/tests/drive/fixtures (FOXSDR_DRIVE_FIXTURES_DIR names another folder).
+            fs::path wav(h.iqfile);
+            if (wav.is_relative()) {
+                const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
+                wav = (fx != nullptr && *fx != '\0') ? fs::path(fx) / wav : fs::path(FOXSDR_DRIVE_FIXTURES_DIR) / wav;
+            }
+            std::string p = wav.string();
+            std::string esc;
+            for (char c : p) { if (c == '\\') { esc += "\\\\"; } else if (c == '"') { esc += "\\\""; } else { esc += c; } }
+            f << ", \"sourceKind\": \"file\", \"iqFilePath\": \"" << esc << "\"";
+            if (!h.centre.empty()) { f << ", \"centerHz\": " << h.centre; }
+            if (!h.mode.empty()) { f << ", \"mode\": \"" << h.mode << "\""; }
+            if (!h.bandwidth.empty()) { f << ", \"bandwidthHz\": " << h.bandwidth; }
+            // The WAVs are not committed (tens of megabytes each): a missing fixture is made by its generator, make_<stem>.py beside it,
+            // with the standard-library Python the build found (deterministic, so every machine gets the same bytes).
+            if (!fs::exists(wav)) {
+                const fs::path gen = wav.parent_path() / ("make_" + wav.stem().string() + ".py");
+                if (fs::exists(gen)) {
+                    std::printf("  making the fixture %s with %s\n", p.c_str(), gen.filename().string().c_str());
+                    const Run g = run("\"" FOXSDR_DRIVE_PYTHON "\" -I \"" + gen.string() + "\" 2>&1");
+                    if (g.exitCode != 0) { std::printf("  the generator failed (%d):\n%s\n", g.exitCode, g.out.c_str()); }
+                }
+            }
+            if (!fs::exists(wav)) { std::printf("  the fixture %s does not exist\n", p.c_str()); }
+            CHECK(fs::exists(wav));
+        }
+        f << " }\n";
     }
     const fs::path scriptPath = dir / "input.txt";
     {

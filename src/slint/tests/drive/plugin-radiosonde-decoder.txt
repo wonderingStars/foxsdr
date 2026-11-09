@@ -1,0 +1,40 @@
+#! frames=500 bank=1 plugins=all open=module:radiosonde-decoder-0.1.0-abi3-win-x64.dll size=1600x1600
+# plugin-radiosonde-decoder: Radiosondes (radiosonde-decoder 0.1.0, EXPERIMENTAL, tick rows 1112-1120; an IQ DECODER + TRACK SOURCE), docs 6.49 round two.
+# Idle page: IDLE lamp, START, Keep running, < FITTED (no grant key). START is read back from the engine (decodersRunning) and from the page's
+# key turning into STOP. Windows: the plugin's map page ("Radiosondes (EXPERIMENTAL) map" row of the DECODE bank, which exists once the tracker
+# runs; the balloon markers and trails need a signal: the fixture run, 6.49 phase B) with the preset keys Preset 1-3 (rows 1118-1120). 
+120 state kit.plugins == 43
+state list.plugins.names contains "Radiosondes (EXPERIMENTAL)"
++1 expect "START" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# START opens the plugin's windows: read them as open right away
+state pages contains "Radiosondes (EXPERIMENTAL) map"
+state decodersRunning >= 1
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
++1 click "Radiosondes (EXPERIMENTAL) map"#1
+# START opened this page, so the first click closes it; the second opens it again and shows it
++5 click "Radiosondes (EXPERIMENTAL) map"#1
++10 state pages contains "Radiosondes (EXPERIMENTAL) map"
+state kit.mapPages >= 1
+# the one dump still needed: whether the map page carries the preset bar (the labels below come from the plugin source)
++1 dump
+# ---- the three band presets (device-centre, RAW, 2.4 MS/s: the receiver's centre moves) ----
++1 click "Radiosondes 400-402 MHz"
++15 state centreHz == 401000000
++1 click "Radiosondes 402-404 MHz"
++15 state centreHz == 403000000
++1 click "Radiosondes 404-406 MHz"
++15 state centreHz == 405000000

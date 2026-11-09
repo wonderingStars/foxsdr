@@ -1,0 +1,34 @@
+#! frames=360 bank=1 plugins=all open=module:workbench-0.2.0-abi3-win-x64.dll size=1600x1800
+# plugin-workbench: the Decoder Workbench (tick rows 906-916): its module page (START, Keep running, < FITTED), the "Decoder workbench" panel
+# window and its one-per-band preset keys. The module page shows no grant keys (the plugin asks for none).
+# No signal is fed: only STATE changes are asserted (the run word, the open pages, the centre frequency). An I/Q decoder: START is read back
+# through the STOP key and decodersRunning, which passed in the first run. START itself retunes to the ACARS band (130.7875 MHz) and mutes.
+# The NOAA key's label "NOAA weather  all 7 channels at once" is confirmed by the fixture run (fixture-workbench.txt); the ACARS key's is not.
+120 state kit.plugins == 43
+state list.plugins.names contains "WORKBENCH"
++2 expect "START" enabled equals "true"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
+# START opens the plugin's own windows: the page is read back right after it
+state pages contains "Decoder workbench"
+# START turns "Keep running" on: it reads true now, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "< FITTED"
++5 state pages contains "Fitted modules"
+# the DECODE bank row "Decoder workbench"#1 toggles the page: click it twice (closed, then open again), then bring the tab (#2) to the front
++1 click "Decoder workbench"#1
++5 click "Decoder workbench"#1
++5 state pages contains "Decoder workbench"
++1 click "Decoder workbench"#2
++3 state pages contains "Decoder workbench"
+# KEPT DUMP (round three): the panel page, for the real label of the ACARS band key
++3 dump
++1 state kit.panels >= 1
++1 click "NOAA weather  all 7 channels at once"
++25 state centreHz > 162000000
+state centreHz < 162500000

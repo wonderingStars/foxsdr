@@ -1,0 +1,64 @@
+658	NOT_DRIVABLE	-	the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three)
+659	NOT_DRIVABLE	-	the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three)
+660	NOT_DRIVABLE	-	the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three)
+661	NOT_DRIVABLE	-	the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three)
+662	NOT_DRIVABLE	-	the SSTV preset keys are on no page dumped so far (not the running module page, not the Decoder output page): pending the dump on "SSTV image" (round three)
+672	ASSERTED	plugin-cw-decoder.txt	click "+ Window", click "CW  14.060 MHz (20 m)" on the Decoder output page; state tunedHz == 14060000
+673	ASSERTED	plugin-cw-decoder.txt	click "+ Window", click "CW  7.030 MHz (40 m)" on the Decoder output page; state tunedHz == 7030000
+674	ASSERTED	plugin-cw-decoder.txt	click "+ Window", click "CW  3.560 MHz (80 m)" on the Decoder output page; state tunedHz == 3560000
+675	ASSERTED	plugin-cw-decoder.txt	click "+ Window", click "CW  21.060 MHz (15 m)" on the Decoder output page; state tunedHz == 21060000
+676	ASSERTED	plugin-cw-decoder.txt	click "+ Window", click "CW  28.060 MHz (10 m)" on the Decoder output page; state tunedHz == 28060000
+677	ASSERTED	plugin-cw-decoder.txt	click "+ Window", click "SAQ Grimeton 17.2 kHz (VLF)" on the Decoder output page; state tunedHz == 17200
+678	ASSERTED	plugin-rtty-decoder.txt	state pages contains "RTTY settings" after START (the page START opens), click its tab "RTTY settings"#2, click "Plugin settings"#2; type "Baud (45.45, 50, 75, 100)" "75", key enter; expect value equals "75"; list.pluginSettings.names contains Baud
+679	ASSERTED	plugin-rtty-decoder.txt	type "Shift Hz (170, 425, 450, 850)" "850", key enter; expect value equals "850"
+680	DRIVEN	plugin-rtty-decoder.txt	click "Reverse (swap mark/space)" twice on the "RTTY settings" page; no read-back yet: its initial state is read from the kept dump (round three adds expect checked)
+681	DRIVEN	plugin-rtty-decoder.txt	click "RTTY BAUD" on the running module page after GRANT; the command goes to the plugin, whose answer is a panel / log line that needs a signal-free read-back nobody has named yet
+682	DRIVEN	plugin-rtty-decoder.txt	click "RTTY SHIFT" on the running module page after GRANT; the command goes to the plugin, whose answer is a panel / log line that needs a signal-free read-back nobody has named yet
+683	DRIVEN	plugin-rtty-decoder.txt	click "RTTY REVERSE" on the running module page after GRANT; the command goes to the plugin, whose answer is a panel / log line that needs a signal-free read-back nobody has named yet
+684	DRIVEN	plugin-rtty-decoder.txt	click "RTTY STATION SETTINGS" on the running module page after GRANT; the command goes to the plugin, whose answer is a panel / log line that needs a signal-free read-back nobody has named yet
+687	NOT_DRIVABLE	-	pressable rows of the "RTTY settings" panel: not in any dump yet (the first run never opened the page); pending the kept dump (round three)
+688	NOT_DRIVABLE	-	pressable rows of the "RTTY settings" panel: not in any dump yet (the first run never opened the page); pending the kept dump (round three)
+689	NOT_DRIVABLE	-	pressable rows of the "RTTY settings" panel: not in any dump yet (the first run never opened the page); pending the kept dump (round three)
+691	NOT_DRIVABLE	-	pressable rows of the "RTTY settings" panel: not in any dump yet (the first run never opened the page); pending the kept dump (round three)
+695	ASSERTED	plugin-rtty-decoder.txt	click the four RTTY amateur preset keys on the Decoder output page; state tunedHz inside +-10 kHz of the key frequency
+696	ASSERTED	plugin-rtty-decoder.txt	click the three DWD preset keys on the Decoder output page; state tunedHz inside +-10 kHz of the key frequency
+697	ASSERTED	plugin-ft8-decoder.txt	state pages contains "FT8 - PSK Reporter" after START, click its tab #2, click "Plugin settings"#2; type "Callsign" "G0FOX", key enter; expect "Callsign" value equals "G0FOX"
+698	ASSERTED	plugin-ft8-decoder.txt	type "Locator" "IO91wm", key enter; expect "Locator" value equals "IO91wm"
+699	DRIVEN	plugin-ft8-decoder.txt	click "Report to PSK Reporter" twice; no read-back yet: its initial state is read from the kept dump (round three adds expect checked)
+710	ASSERTED	plugin-ft8-decoder.txt	click "+ Window", click each of the 13 FT8 preset keys on the Decoder output page; state tunedHz == the key frequency
+711	ASSERTED	plugin-dab.txt	state pages contains "DAB / DAB+ Radio image" after START, click its tab #2, click "Plugin settings"#2: type "Service number" "2", key enter; expect value equals "2"; list.pluginSettings.names contains
+712	ASSERTED	plugin-dab.txt	type "Station name" "Probe FM", key enter; expect value equals "Probe FM"
+713	ASSERTED	plugin-dab.txt	type "DAB+ decoder (ffmpeg)" a path, key enter; expect value equals the path (BROWSE FILES is deferred: native handle)
+714	DRIVEN	plugin-dab.txt	click "NEXT STATION" on the running module page after GRANT; the station choice needs an ensemble, no read-back without a signal
+715	DRIVEN	plugin-dab.txt	click "PREVIOUS STATION" on the running module page after GRANT; the station choice needs an ensemble, no read-back without a signal
+727	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B) - the service list is an ensemble
+730	NOT_DRIVABLE	-	the sixteen DAB preset keys are on no page dumped so far (not the module page, not the Decoder output page): pending the dumps on the image and ensemble pages (round three)
+735	ASSERTED	plugin-aprs-decoder.txt	click "+ Window", click "APRS  144.800 MHz (Europe)" / "APRS  144.390 MHz (N America)"; state tunedHz == 144800000 / 144390000
+736	ASSERTED	plugin-aprs-decoder.txt	click "+ Window", click "APRS  144.800 MHz (Europe)" / "APRS  144.390 MHz (N America)"; state tunedHz == 144800000 / 144390000
+741	ASSERTED	plugin-eas-decoder.txt	click "+ Window", click each of the 7 NOAA Weather Radio preset keys on the Decoder output page; state tunedHz == 162400000 .. 162550000
+742	ASSERTED	plugin-nrsc5-radio-dynamic.txt	on "IBOC Radio (nrsc5 library) image" after click "Plugin settings"#2: type "Programme 0-7 (HD1-HD8)" "2", key enter; expect value equals "2"
+743	ASSERTED	plugin-nrsc5-radio-dynamic.txt	type "Picture page" "2", key enter; expect value equals "2"
+744	DRIVEN	plugin-nrsc5-radio-dynamic.txt	click "Auto gain" twice; no read-back yet: its initial state is read from the kept dump (round three adds expect checked)
+745	ASSERTED	plugin-nrsc5-radio-dynamic.txt	type "nrsc5 library file" a path, key enter; expect value equals the path (BROWSE FILES is deferred: native handle)
+746	DRIVEN	plugin-nrsc5-radio-dynamic.txt	click the plate keys "HD next", "HD previous", "Re-acquire" after GRANT; the plugin answers on its dashboard, which needs a station: no read-back
+747	DRIVEN	plugin-nrsc5-radio-dynamic.txt	click the plate keys "HD1".."HD4" after GRANT; the programme choice needs a station: no read-back
+748	DRIVEN	plugin-nrsc5-radio-dynamic.txt	click the plate keys "HD5".."HD8" after GRANT; the programme choice needs a station: no read-back
+749	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B) - a click on the plugin's own picture, which exists only with a decoded station
+750	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B) - text inside the picture the plugin rasterises
+760	DRIVEN	plugin-nearby-signal-catch.txt	click "Mode: Alert only" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back)
+761	DRIVEN	plugin-nearby-signal-catch.txt	click "Bands: Handhelds" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back)
+762	DRIVEN	plugin-nearby-signal-catch.txt	click "Level +5 dB" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back)
+763	DRIVEN	plugin-nearby-signal-catch.txt	click "Level -5 dB" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back)
+764	DRIVEN	plugin-nearby-signal-catch.txt	click "Margin +5 dB" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back)
+765	DRIVEN	plugin-nearby-signal-catch.txt	click "Margin -5 dB" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back)
+766	DRIVEN	plugin-nearby-signal-catch.txt	click "Ignore last hit" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back)
+767	DRIVEN	plugin-nearby-signal-catch.txt	click "Clear ignores" on the running module page after GRANT; the effect shows on a caption or a hit: the kept dump reads the captions (round three adds the read-back)
+778	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B) - hit-log rows exist only after a catch
+780	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B) - the alert is raised by a catch
+786	ASSERTED	plugin-dmr-monitor.txt	click "+ Window", click "DMR  446.000 MHz NFM (tune your repeater)"; state tunedHz == 446000000, state mode == NFM
+796	NOT_DRIVABLE	-	the three TETRA preset keys are on no page dumped so far (not the module page, not the Decoder output page): pending the dump on "TETRA cell" (round three)
+788	NOT_DRIVABLE	-	a readout row of the panel table, not a control
+794	NOT_DRIVABLE	-	a readout row of the panel table, not a control
+797	NOT_DRIVABLE	-	not installed: the plugin is not in the catalogue, so no run fits it
+798	NOT_DRIVABLE	-	not installed: the plugin is not in the catalogue, so no run fits it
+813	NOT_DRIVABLE	-	not installed: the plugin is not in the catalogue, so no run fits it

@@ -1,0 +1,32 @@
+#! frames=500 bank=1 plugins=all open=module:survey-engine-0.1.1-abi3-win-x64.dll size=1600x1600
+# plugin-survey-engine: Survey Engine (survey-engine 0.1.1, tick rows 1138-1153; an IQ DECODER + PANEL, asks for receiver control), docs 6.49 round two.
+# Idle page: IDLE lamp, START, GRANT RECEIVER CONTROL, Keep running, < FITTED. START is read back from the engine (decodersRunning) and from the
+# page's key turning into STOP. The only window is the panel page ("Survey Engine" DECODE bank row): its columns and rows are readouts and the
+# config keys are environment variables, so there is no further control to drive.
+120 state kit.plugins == 43
+state list.plugins.names contains "Survey Engine"
++1 expect "START" enabled equals "true"
++1 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 expect "Keep running" checked equals "false"
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state decodersRunning >= 1
++1 state kit.panels >= 1
+# START turned "Keep running" on itself (the plugin now runs "always"): it reads true, a click turns it off, another on
++1 expect "Keep running" checked equals "true"
++1 click "Keep running"
++5 expect "Keep running" checked equals "false"
++1 click "Keep running"
++5 expect "Keep running" checked equals "true"
++1 click "GRANT RECEIVER CONTROL"
++20 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "REVOKE RECEIVER CONTROL"
++20 expect "GRANT RECEIVER CONTROL" enabled equals "true"
++1 click "STOP"
++30 expect "START" enabled equals "true"
++1 click "START"
++30 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages == "pages: Fitted modules"
++1 click "Survey Engine"
++10 state pages contains "Fitted modules Survey Engine"
