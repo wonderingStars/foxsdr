@@ -67,6 +67,7 @@
 #include "host_duties.hpp"
 #include "host_logic.hpp"
 #include "input_script.hpp"
+#include "key_dispatch.hpp"
 #include "kit_publish.hpp"
 #include "patch_publish.hpp"
 #include "plugin_kit.hpp"
@@ -923,7 +924,15 @@ int main(int argc, char** argv) {
     ui->on_palette_query_changed([&](slint::SharedString q) { rebuildPalette(std::string(q)); });
     ui->on_palette_activated([&](int id) { if (id >= 0 && id < static_cast<int>(paletteActions.size())) { paletteActions[static_cast<std::size_t>(id)].run(); } });
 
-    // ---- the shortcuts, by config id (the key table of the ImGui window; rebinding is the SYSTEM bank's, phase 3) ----
+    // ---- the shortcuts, by config id (the key table of the ImGui window, as the user has SAVED it: docs 6.56) ----
+    // The root FocusScope names a key press and asks here; the answer is the config id of the action that holds the chord in the saved table (the interface half the
+    // host keeps, so a rebinding the Key bindings body has just saved answers on the very next press), "" when nothing does.
+    ui->on_key_answer([&](slint::SharedString key, bool ctrl, bool shift, bool alt, bool glyphShifted) {
+        foxsdr::slintsystem::KeyPress press;
+        press.key = std::string(key);
+        press.ctrl = ctrl; press.shift = shift; press.alt = alt; press.glyphShifted = glyphShifted;
+        return ss(foxsdr::slintsystem::shortcutForPress(press, foxsdr::slintsystem::keyTableFromConfig(duties.interfaceHalf().keyBindings)));
+    });
     // A PNG of the window to `path` ("" = the refusal); the screenshot key stamps a name under the settings file's screenshots folder,
     // the scripted input's `shot` names its own file (relative to that folder, or absolute).
     const auto screenshotTo = [&](const std::string& pathIn) -> std::string {
@@ -955,10 +964,10 @@ int main(int argc, char** argv) {
         else if (id == "volumeDown") { setVolume(state.volume - 0.05); }
         else if (id == "squelchUp") { setSquelch(std::min(0.0, (squelchAuto(state.squelchDb) ? -120.0 : state.squelchDb) + 2.0)); }
         else if (id == "squelchDown") { setSquelch(std::max(-120.0, (squelchAuto(state.squelchDb) ? -120.0 : state.squelchDb) - 2.0)); }
-        else if (id == "modeNfm") { setMode(FOXAPI_DEMOD_NFM); } else if (id == "modeWfm") { setMode(FOXAPI_DEMOD_WFM); }
-        else if (id == "modeAm") { setMode(FOXAPI_DEMOD_AM); } else if (id == "modeDsb") { setMode(FOXAPI_DEMOD_DSB); }
-        else if (id == "modeUsb") { setMode(FOXAPI_DEMOD_USB); } else if (id == "modeCw") { setMode(FOXAPI_DEMOD_CW); }
-        else if (id == "modeLsb") { setMode(FOXAPI_DEMOD_LSB); } else if (id == "modeRaw") { setMode(FOXAPI_DEMOD_RAW); }
+        else if (id == "modeNFM") { setMode(FOXAPI_DEMOD_NFM); } else if (id == "modeWFM") { setMode(FOXAPI_DEMOD_WFM); }
+        else if (id == "modeAM") { setMode(FOXAPI_DEMOD_AM); } else if (id == "modeDSB") { setMode(FOXAPI_DEMOD_DSB); }
+        else if (id == "modeUSB") { setMode(FOXAPI_DEMOD_USB); } else if (id == "modeCW") { setMode(FOXAPI_DEMOD_CW); }
+        else if (id == "modeLSB") { setMode(FOXAPI_DEMOD_LSB); } else if (id == "modeRAW") { setMode(FOXAPI_DEMOD_RAW); }
         else if (id == "tuneStepUp") { stepTune(1, tuneStepHz); } else if (id == "tuneStepDown") { stepTune(-1, tuneStepHz); }
         else if (id == "tuneSpanUp") { stepTune(1, currentView().spanHz); } else if (id == "tuneSpanDown") { stepTune(-1, currentView().spanHz); }
         else if (id == "quickTune") { ui->invoke_edit_requested(); }
@@ -971,7 +980,7 @@ int main(int argc, char** argv) {
         else if (id == "bankSystem") { bankIndex = 4; ui->set_bank_index(4); }
         else if (id == "openSettings") { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(5); }
         else if (id == "escape") { ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); }
-        else if (id == "uiSizeUp" || id == "uiSizeAuto") { std::fprintf(stderr, "foxsdr-slint: the interface size is phase 2's (%s)\n", id.c_str()); }
+        else if (id == "uiSizeAuto") { std::fprintf(stderr, "foxsdr-slint: the interface size is phase 2's (%s)\n", id.c_str()); }
         else { std::fprintf(stderr, "foxsdr-slint: shortcut %s is not bound here\n", id.c_str()); }
     });
 

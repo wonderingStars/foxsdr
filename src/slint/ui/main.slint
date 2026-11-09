@@ -14,7 +14,7 @@
 import { Theme, Skin, Workbench, DigitFace, MeterStyle } from "theme.slint";
 import { Chip, LampDot, ChipTone, LampState } from "chips.slint";
 import { TipTimer, TipLayer } from "tooltip.slint";
-import { Caption, Key, SegGroup, SegKey, RailKey, StopKey } from "keys.slint";
+import { Caption, Key, KeyNames, KeyFocus, SegGroup, SegKey, RailKey, StopKey } from "keys.slint";
 import { Lamp, StatusChip, VLine } from "lamps.slint";
 import { FrequencyCounter } from "digits.slint";
 import { Slider, LevelBar, SliderGroup } from "sliders.slint";
@@ -327,49 +327,20 @@ export component MainWindow inherits Window {
     public function open-menu(x: length, y: length) { menu.at-x = x; menu.at-y = y; menu.show(); }
     public function open-palette() { palette.show(); }
 
-    // ===================== keyboard: the default bindings, dispatched by config id =====================
+    // ===================== keyboard: the SAVED bindings, answered by the host (docs 6.56) =====================
+    // The window knows no chord. A key press is named (KeyNames, the names the Key bindings capture stores) and put to the host, which looks it up in the
+    // key table the user has saved (src/slint/key_dispatch.hpp) and answers the config id of the action - "" when nothing holds the chord, and the press
+    // is then rejected, so a field or a parent may have it. "palette" (Ctrl+K) is the one answer that is this window's own.
+    callback key-answer(string, bool, bool, bool, bool) -> string;   // key name, Ctrl, Shift, Alt, the glyph was typed with Shift
+    property <int> focus-released: KeyFocus.released;
+    changed focus-released => { keys.focus(); }   // a control that held the keyboard for a moment (a listening key cap) gave it back
     keys := FocusScope {
         key-pressed(e) => {
-            if (e.text == Key.F2 && e.modifiers.control) { root.shortcut("startStop"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.F1 && !e.modifiers.control) { root.shortcut("bankSignal"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.F2 && !e.modifiers.control) { root.shortcut("bankDecode"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.F3) { root.shortcut("bankView"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.F4) { root.shortcut("bankExtend"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.F5) { root.shortcut("bankSystem"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.F7) { root.shortcut("openSettings"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.F11) { root.shortcut("fullscreen"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.F12) { root.shortcut("screenshot"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.Escape) { root.shortcut("escape"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.UpArrow && e.modifiers.control) { root.shortcut("tuneStepUp"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.DownArrow && e.modifiers.control) { root.shortcut("tuneStepDown"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.PageUp && e.modifiers.control && e.modifiers.shift) { root.shortcut("squelchUp"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.PageDown && e.modifiers.control && e.modifiers.shift) { root.shortcut("squelchDown"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.PageUp && e.modifiers.control) { root.shortcut("tuneSpanUp"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.PageDown && e.modifiers.control) { root.shortcut("tuneSpanDown"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == Key.Delete && e.modifiers.control) { root.shortcut("zoomReset"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.modifiers.control) {
-                if (e.text == "f" && e.modifiers.shift) { root.shortcut("modeWfm"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "F" && e.modifiers.shift) { root.shortcut("modeWfm"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "f") { root.shortcut("modeNfm"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "a") { root.shortcut("modeAm"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "d") { root.shortcut("modeDsb"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "u") { root.shortcut("modeUsb"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "c") { root.shortcut("modeCw"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "l") { root.shortcut("modeLsb"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "r") { root.shortcut("modeRaw"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "w") { root.shortcut("screenshot"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "k") { root.open-palette(); return accept; }
-                if (e.text == "+" || e.text == "=") { root.shortcut(e.text == "=" ? "uiSizeUp" : "zoomIn"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "-") { root.shortcut("zoomOut"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                if (e.text == "0") { root.shortcut("uiSizeAuto"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-                return reject;
-            }
-            if (e.text == "m" || e.text == "M") { root.shortcut("mute"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == "+" || e.text == "=") { root.shortcut("volumeUp"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == "-") { root.shortcut("volumeDown"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == "t" || e.text == "T") { root.shortcut("quickTune"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            if (e.text == "R" && e.modifiers.shift) { root.shortcut("record"); return accept; }   // not-translated: host shortcut id (the key table's config id)
-            return reject;
+            let id = root.key-answer(KeyNames.name(e.text), e.modifiers.control, e.modifiers.shift || e.text == Key.Backtab, e.modifiers.alt, KeyNames.glyph-shifted(e.text));
+            if (id == "") { return reject; }
+            if (id == "palette") { root.open-palette(); return accept; }   // not-translated: the host's answer for Ctrl+K
+            root.shortcut(id);
+            return accept;
         }
     }
 

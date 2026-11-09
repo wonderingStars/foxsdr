@@ -69,3 +69,5 @@
 1518	NOT_DRIVABLE	-	Report a bug page, Attachment preview: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
 1521	NOT_DRIVABLE	-	Report a bug page, SEND: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
 1441	NOT_DRIVABLE	-	the port list is a table of read-only rows (no port on the test machine, nothing to pick); the Refresh button is row 1439
+1448	ASSERTED	system-keys-dispatch.txt	capture F6 onto "Bank: SIGNAL PATH", Backspace on "Bank: DECODE", Ctrl+J onto "Mode: AM"; the window answers the new chord (state bank / mode) and not the old one, a cleared key answers nothing (docs 6.56)
+1445	ASSERTED	system-keys-dispatch.txt	"Reset to defaults" then the stock chords answer again (F1 -> bank 0, Ctrl+A -> AM) and the rebound ones do not (docs 6.56)

@@ -226,31 +226,31 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 120 | Ctrl+F2 | Start / stop the receiver (startStop) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 121 | M | Mute the sound (mute) - toggles user mute; lights the MUTE lamp | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 122 | + (the  key) / - | Volume up / down, 0.05 per press (volumeUp, volumeDown) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 123 | Ctrl+Shift+PageUp / PageDown | Squelch up / down, 2 dB per press, switches AUTO squelch off (squelchUp, squelchDown) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 124 | Ctrl+F | Mode: NFM (narrow FM) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 125 | Ctrl+Shift+F | Mode: WFM (broadcast FM) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 126 | Ctrl+A | Mode: AM | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 127 | Ctrl+D | Mode: DSB | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 128 | Ctrl+U | Mode: USB | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 129 | Ctrl+C | Mode: CW | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 130 | Ctrl+L | Mode: LSB | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 131 | Ctrl+R | Mode: RAW | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 132 | Ctrl+Up / Ctrl+Down | Tune up / down one step (the 10 kHz digit, cell 5) (tuneStepUp, tuneStepDown) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 133 | Ctrl+PageUp / Ctrl+PageDown | Tune up / down one screen width (visible span) (tuneSpanUp, tuneSpanDown) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 134 | T | Type a frequency - opens the counter's editor (quickTune) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 135 | Ctrl++ / Ctrl+- | Zoom the spectrum in / out about the centre (zoomIn, zoomOut) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 136 | Ctrl+Delete | Zoom back to the full span (zoomReset) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 137 | Shift+R | Record the audio - starts/stops the audio recording (record) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
+| 120 | Ctrl+F2 | Start / stop the receiver (startStop) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 121 | M | Mute the sound (mute) - toggles user mute; lights the MUTE lamp | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 122 | + (the  key) / - | Volume up / down, 0.05 per press (volumeUp, volumeDown) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 123 | Ctrl+Shift+PageUp / PageDown | Squelch up / down, 2 dB per press, switches AUTO squelch off (squelchUp, squelchDown) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 124 | Ctrl+F | Mode: NFM (narrow FM) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 125 | Ctrl+Shift+F | Mode: WFM (broadcast FM) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 126 | Ctrl+A | Mode: AM | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 127 | Ctrl+D | Mode: DSB | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 128 | Ctrl+U | Mode: USB | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 129 | Ctrl+C | Mode: CW | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 130 | Ctrl+L | Mode: LSB | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 131 | Ctrl+R | Mode: RAW | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 132 | Ctrl+Up / Ctrl+Down | Tune up / down one step (the 10 kHz digit, cell 5) (tuneStepUp, tuneStepDown) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 133 | Ctrl+PageUp / Ctrl+PageDown | Tune up / down one screen width (visible span) (tuneSpanUp, tuneSpanDown) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 134 | T | Type a frequency - opens the counter's editor (quickTune) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 135 | Ctrl++ / Ctrl+- | Zoom the spectrum in / out about the centre (zoomIn, zoomOut) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 136 | Ctrl+Delete | Zoom back to the full span (zoomReset) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 137 | Shift+R | Record the audio - starts/stops the audio recording (record) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 138 | Space | Transmit (hold) (transmitPtt) | DEFERRED | the TRANSMIT page is a companion screen (phase 3) |
-| 139 | Ctrl+W | Save a screenshot (screenshot) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 140 | F11 | Maximise / restore the window (fullscreen) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 141 | F1 / F2 / F3 / F4 / F5 | Rail banks SIGNAL PATH / DECODE / TOOLS / EXTEND / SYSTEM (bankSignal, bankDecode, bankView [sic, id kept for TOOLS], bankExtend, bankSystem) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 142 | F7 | Settings and key bindings - goes to SYSTEM and opens the Key bindings row (openSettings) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 143 | F12 | Always saves a screenshot (hard-wired, not in the table) | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
-| 144 | Esc | Cancels the counter editor, the key-capture, a dialog; leaves Scope mode when nothing is being edited and no popup is open | PRESENT | the root FocusScope dispatches the default binding by config id; the host acts |
+| 139 | Ctrl+W | Save a screenshot (screenshot) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 140 | F11 | Maximise / restore the window (fullscreen) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 141 | F1 / F2 / F3 / F4 / F5 | Rail banks SIGNAL PATH / DECODE / TOOLS / EXTEND / SYSTEM (bankSignal, bankDecode, bankView [sic, id kept for TOOLS], bankExtend, bankSystem) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 142 | F7 | Settings and key bindings - goes to SYSTEM and opens the Key bindings row (openSettings) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 143 | F12 | Always saves a screenshot (hard-wired, not in the table) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
+| 144 | Esc | Cancels the counter editor, the key-capture, a dialog; leaves Scope mode when nothing is being edited and no popup is open | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 145 | Ctrl+= / Ctrl+- / Ctrl+0 | Interface size: step up / step down through 100-250%, Ctrl+0 back to Auto. Not rebindable; ignored while text is being typed | DEFERRED | the interface size (window scale) is phase 2; the chords are bound and log their request |
 | 146 | Mouse wheel over a counter figure, a dial | Tunes that digit / turns the dial | PRESENT | wheel over a figure steps it; wheel over a slider moves it 5 % |
 
@@ -2147,7 +2147,7 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 | 1446 | Group heading | readout | PRESENT | Caption per group (the first beside Reset, later ones under a thin rule), a new heading each time the group changes as readKeyBindings builds them |
 | 1447 | Action name | readout | PRESENT | Text per KeyRow (action), 32 rows from the host's copy of the action table (system_logic kActions, held equal to gui/key_bindings.cpp by test_slint_host_system) |
 | 1448 | Key cap (one per action) | key (momentary, capture) | PRESENT | KeyCap, one 112 px pill for every row: press -> keys-capture(id) -> local capture (applyKeysCapture); 'Press a key...' while listening; the next chord -> keys-captured -> applyKeysCaptured: save keyBindings; Esc -> keys-cancel, Backspace -> keys-clear, a second press cancels. Two limits: a Ctrl+Alt chord cannot be captured (Slint on Windows delivers it without modifiers), and the root FocusScope of main.slint still dispatches the stock chords only, so a saved rebinding is not honoured until it reads the table |
-| 1449 | Clash note | readout | PRESENT | red Note 'also <action>' under the row (clash from clashOf); the ImGui rule 'first in list wins at dispatch' has nothing to act on yet, because dispatch ignores the table (previous row) |
+| 1449 | Clash note | readout | PRESENT | red Note 'also <action>' under the row (clash from clashOf); the ImGui rule 'first in list wins at dispatch' holds: the host answers the first action in table order (key_dispatch, docs 6.56) |
 | 1450 | Footer | readout | PRESENT | Note footer: the ImGui hint (F12 always saves a screenshot, Esc always cancels); the counts 'N actions, M clashes' ride in system_logic (action_count, clash_count) but the Slint KeyBindingsModel has no field for them |
 
 ## SYSTEM bank — Diagnostics

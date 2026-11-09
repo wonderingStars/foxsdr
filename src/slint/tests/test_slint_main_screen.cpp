@@ -118,6 +118,19 @@ int main() {
     ui->on_waterfall_clicked([&](float x, bool) { ++wfClicks; wfX = x; });
     ui->on_title_drag([&](float dx, float dy) { dragX = dx; dragY = dy; });
     ui->on_shortcut([&](slint::SharedString id) { shortcuts.push_back(std::string(id)); });
+    // The window carries no chord of its own (docs 6.56): it names the key and asks the host. This stand-in is a table of two chords and records what it was asked.
+    std::vector<std::string> keyAsks;
+    ui->on_key_answer([&](slint::SharedString key, bool ctrl, bool shift, bool alt, bool glyphShifted) {
+        keyAsks.push_back(std::string(key) + (ctrl ? "|ctrl" : "") + (shift ? "|shift" : "") + (alt ? "|alt" : "") + (glyphShifted ? "|glyph" : ""));
+        const std::string k(key);
+        if (k == "F2" && ctrl) { return slint::SharedString("startStop"); }
+        if (k == "M" && !ctrl) { return slint::SharedString("mute"); }
+        if (k == "T" && !ctrl) { return slint::SharedString("quickTune"); }
+        if (k == "F3" && !ctrl) { return slint::SharedString("bankView"); }
+        if (k == "Plus" && !ctrl) { return slint::SharedString("volumeUp"); }
+        if (k == "Delete" && ctrl) { return slint::SharedString("zoomReset"); }
+        return slint::SharedString();
+    });
 
     ui->window().show();   // what size does the window itself ask for? (the live window opened at its minimum height)
     { const auto sz = ui->window().size(); std::printf("the window asks for %u x %u\n", sz.width, sz.height); }
@@ -325,6 +338,13 @@ int main() {
     keyTap(ui->window(), u8"+");
     ctrlTap(ui->window(), slint::platform::key_codes::Delete);
     CHECK(shortcuts == std::vector<std::string>({"startStop", "mute", "quickTune", "bankView", "volumeUp", "zoomReset"}));
+    // what the window asked: the key by its chord name and the three modifiers, "+" as the Plus key with the glyph flag (the character is one typed with Shift), nothing hard-wired; the Control key going down is asked too, with no key name (the host answers "" and the window rejects it)
+    CHECK(keyAsks == std::vector<std::string>({"|ctrl", "F2|ctrl", "M", "T", "F3", "Plus|glyph", "|ctrl", "Delete|ctrl"}));
+    // a press the host does not answer is not accepted: no shortcut, and a plain letter the table does not hold is left for whatever has the focus
+    shortcuts.clear();
+    keyAsks.clear();
+    keyTap(ui->window(), u8"g");
+    CHECK(shortcuts.empty() && keyAsks == std::vector<std::string>({"G"}));
 
     // ---- the fold: the sections panel gives its width to the centre ----
     click(ui->window(), 32, 836);                       // FOLD at the rail's foot
