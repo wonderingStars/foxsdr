@@ -68,6 +68,7 @@
 #include "host_logic.hpp"
 #include "input_script.hpp"
 #include "kit_publish.hpp"
+#include "cjk_register.hpp"
 #include "patch_publish.hpp"
 #include "transmit_publish.hpp"
 #include "plugin_kit.hpp"
@@ -290,10 +291,16 @@ int main(int argc, char** argv) {
             }
         }
         if (const char* env = std::getenv("FOXSDR_LANGUAGE"); env != nullptr && env[0] != '\0') { languageSetting = env; }
+        // A CJK language is drawable only where the machine has a face for it (docs 6.62): a saved Japanese on a machine with no Japanese face is kept but not applied, as the classic window does.
+        cascade::i18n::setDrawablePredicate(&foxsdr::slintfonts::languageDrawable);
         const std::string inForce = cascade::i18n::setLanguage(languageSetting);
         const char* how = "english";
         if (inForce != "en") { how = slint::select_bundled_translation(inForce) ? "bundled" : "not bundled"; }
         std::fprintf(stderr, "foxsdr-slint: language %s (%s)\n", inForce.c_str(), how);
+        // THE CJK FACES (docs 6.62): the system's own, chosen as the classic window chooses them, registered with this window (nothing for a language that needs none).
+        const foxsdr::slintfonts::Registered faces = foxsdr::slintfonts::registerForLanguage(ui->window(), inForce);
+        ui->global<Theme>().set_cjk_family(ss(faces.family));
+        if (!faces.labels.empty()) { std::fprintf(stderr, "foxsdr-slint: CJK faces %s, font-family \"%s\"\n", faces.labels.c_str(), faces.family.c_str()); }
     }
 
     ui->set_version(ss(cascade::versionString()));
@@ -1369,6 +1376,8 @@ int main(int argc, char** argv) {
             return "list.<list>.count|names|details|values, not " + name;
         }
         if (name.rfind("fact.", 0) == 0) { return world.fact(name.c_str(), out) ? std::string() : "no fact " + name; }
+        if (name == "ui.language") { out = cascade::i18n::current(); return std::string(); }   // the code in force (docs 6.62: the CJK drive scripts read it and the face named below)
+        if (name == "ui.cjkFamily") { out = std::string(ui->global<Theme>().get_cjk_family()); return std::string(); }
         if (name.rfind("transmit.", 0) == 0) { return transmitBank.readState(name, out); }   // the Transmit page's page / key / sent / withheld read-back (transmit_publish.hpp)
         // cfg.<field>: the interface half of the settings AS THE HOST HOLDS IT (host_duties interfaceHalf, kept by every bank's saveInterfaceHalf) - the
         // read-back for a control whose value never reaches the engine (the theme, the trail style, the diagnostics switch...). Scalars and strings;

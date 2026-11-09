@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <optional>
 
+#include "cjk_register.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/feature_request.hpp"
@@ -332,6 +333,9 @@ void SystemPublisher::applyWindow(const Effect& e) {
         const std::string inForce = cascade::i18n::setLanguage(e.value);
         const bool ok = slint::select_bundled_translation(inForce);
         std::fprintf(stderr, "foxsdr-slint: language %s (%s)\n", inForce.c_str(), ok ? (inForce == "en" ? "english" : "bundled") : "not bundled");
+        const foxsdr::slintfonts::Registered faces = foxsdr::slintfonts::registerForLanguage(ui_.window(), inForce);   // docs 6.62: the system's CJK face for the new language, or Inter again
+        ui_.global<Theme>().set_cjk_family(slint::SharedString(faces.family));
+        if (!faces.labels.empty()) { std::fprintf(stderr, "foxsdr-slint: CJK faces %s, font-family \"%s\"\n", faces.labels.c_str(), faces.family.c_str()); }
     }
     if ((e.apply & kApplyDiagnostics) != 0u) { duties_.diagnosticsChanged(); }
     if ((e.apply & kApplyUpdateCheck) != 0u) {
@@ -628,6 +632,13 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
 ReadOptions SystemPublisher::buildOptions() {
     // the monitor's scale as a whole percent (the Auto row's "% here")
     opts_.monitor_percent = std::clamp(static_cast<int>(std::lround(static_cast<double>(ui_.window().scale_factor()) * 100.0)), 50, 400);
+    if (opts_.language_reason.empty()) {
+        // The languages this machine has no face for, and why (docs 6.62; cached, so the font files are read once): the list greys them and says so beside the name.
+        for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+            const std::string reason = foxsdr::slintfonts::languageUnavailableReason(l.code);
+            if (!reason.empty()) { opts_.language_reason.emplace_back(l.code, reason); }
+        }
+    }
     opts_.log_path = cc::DiagLog::instance().filePath();
     opts_.reports_path = duties_.about().diagnosticsDir.empty() ? std::string() : cc::diagCrashDir();
     opts_.gps_ports_waiting = serialAsked_ && state_.listSeq == serialAskedSeq_ && nowS() - serialAskedAt_ < 2.0;

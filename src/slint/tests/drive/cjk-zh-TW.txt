@@ -1,0 +1,16 @@
+#! frames=300 bank=0 open=transmit FOXSDR_LANGUAGE=zh-TW
+# cjk-zh-TW (docs 6.62): the Slint window in zh-TW - the system's CJK face is named as the window's typeface (Theme.cjk-family), so no catalogue string is drawn as a box or left blank. Four pages are
+# captured for a person to read: the Transmit page (torn off over the main screen with its strip, spectrum toolbar and SIGNAL bank), then the DECODE bank (F2), the TOOLS bank (F3) and
+# the SYSTEM bank (F5), each with the Transmit page still over it. The proof that no character is missing is test_slint_cjk_zh-TW (every code point the catalogue uses, rendered through the same text engine) and test_slint_host_glyphs; the state reads here
+# are the window's own record of what it did: the language in force and the face named.
+10 state ui.language == zh-TW
+state ui.cjkFamily == "Microsoft JhengHei UI"
++1 shot "cjk-zh-TW-transmit.png"
++1 key f2
++10 shot "cjk-zh-TW-decode.png"
++1 key f3
++10 shot "cjk-zh-TW-tools.png"
++1 key f5
++10 shot "cjk-zh-TW-system.png"
++1 key f1
++10 dump

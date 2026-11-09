@@ -150,6 +150,14 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/gui/transmit_page.cpp"
                 "${FOXSDR_REPO_ROOT}/src/dsp/modulator.cpp")
         endif()
+        if(unit STREQUAL "glyphs")
+            # The glyph coverage (docs 6.62): the CJK face chooser over the classic's scripts.cpp and its stb_truetype probe, against the catalogues the engine carries (slint_i18n) and the
+            # typefaces the window embeds. Nothing of Slint.
+            list(APPEND _extra
+                "${CMAKE_CURRENT_SOURCE_DIR}/../cjk_fonts.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/scripts.cpp"
+                "${FOXSDR_REPO_ROOT}/src/gui/font_probe.cpp")
+        endif()
         if(unit STREQUAL "patch")
             # The PATCH page's logic (phase 3, the patch allowance) quotes the core's pure units rather than copying them: the grants of the SIGNAL family's commands, the airport table
             # (airband_data, for the tower blueprints), the presets' rules (patch_presets with the diagnostic log it reports a dropped entry to). patch_graph, patch_io, patch_plan,
@@ -161,6 +169,10 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp")
         endif()
         foxsdr_slint_logic_test(${name} ${_extra})
+        if(unit STREQUAL "glyphs")
+            target_include_directories(${name} PRIVATE "${FOXSDR_REPO_ROOT}/third_party/imgui")
+            target_compile_definitions(${name} PRIVATE FOXSDR_GLYPH_FONT_DIR="${FOXSDR_REPO_ROOT}/third_party/fonts")
+        endif()
         if(unit STREQUAL "tools")
             target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
             if(MSVC)
@@ -196,6 +208,19 @@ foreach(src ${_foxsdr_slint_test_sources})
         foxsdr_slint_logic_test(${name})
     elseif(family STREQUAL "main_screen")
         foxsdr_slint_ui_test(${name} "${FOXSDR_SLINT_UI_DIR}/main.slint")
+    elseif(family STREQUAL "cjk")
+        # The CJK glyphs of the window (docs 6.62): the specimen's one line of text rendered per character, once per language (the registered faces accumulate in a process, so each
+        # language is its own run). The unit chooses the system faces exactly as main.cpp does (cjk_fonts.cpp over the classic's scripts.cpp and the stb_truetype probe).
+        add_executable(${name} ${name}.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../cjk_fonts.cpp" "${FOXSDR_REPO_ROOT}/src/core/scripts.cpp" "${FOXSDR_REPO_ROOT}/src/gui/font_probe.cpp")
+        target_link_libraries(${name} PRIVATE slint_render_harness slint_i18n)
+        target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/third_party/imgui")
+        set_property(TARGET ${name} PROPERTY SLINT_EMBED_RESOURCES embed-files)
+        slint_target_sources(${name} "${FOXSDR_SLINT_UI_DIR}/specimens/${family}_specimen.slint")
+        foxsdr_slint_copy_dll(${name})
+        foreach(lang ja ko zh-CN zh-TW)
+            add_test(NAME ${name}_${lang} COMMAND ${name} ${lang})
+            set_tests_properties(${name}_${lang} PROPERTIES LABELS "slint")
+        endforeach()
     elseif(EXISTS "${FOXSDR_SLINT_UI_DIR}/specimens/${family}_specimen.slint")
         foxsdr_slint_ui_test(${name} "${FOXSDR_SLINT_UI_DIR}/specimens/${family}_specimen.slint")
     else()

@@ -1,0 +1,24 @@
+// The CJK family's specimen (docs 6.62): ONE line of text in the window's own UI typeface (Theme.font-ui), set from the test. test_slint_cjk.cpp registers the system's CJK faces
+// the way main.cpp does, renders each character a catalogue uses and compares the pictures: a character no face of the chain has is drawn as the face's missing-glyph box, and
+// the same box comes out for every such character, so a picture that many different characters share IS the box (the test counts them).
+import { Theme } from "../theme.slint";
+export { Theme }
+
+export component CjkSpecimen inherits Window {
+    in property <string> sample: "";
+    in property <string> family: Theme.font-ui;
+    in property <int> weight: 500;
+    width: 64px;
+    height: 48px;
+    background: Theme.bg;
+
+    Text {
+        x: 8px;
+        y: 6px;
+        text: root.sample;
+        color: Theme.fg;
+        font-family: root.family;
+        font-size: 28px;
+        font-weight: root.weight;
+    }
+}

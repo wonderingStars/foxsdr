@@ -28,10 +28,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/SlintDll.cmake")
 # /ENTRY:mainCRTStartup; the terminal comes back for --version, the tool modes and the bounded runs through the same bootProcess
 # and its AttachConsole (core/console_owner.hpp), so a harness that reads pipes (ctest, Git Bash, release.ps1) sees every line.
 # The icon resource is the one file cascade.exe embeds, so Explorer, the shortcuts and Add/Remove Programs show the fox.
-set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp signal_logic.cpp signal_publish.cpp system_logic.cpp system_publish.cpp tools_logic.cpp tools_publish.cpp extend_logic.cpp extend_publish.cpp patch_logic.cpp patch_publish.cpp transmit_logic.cpp transmit_publish.cpp input_script.cpp
+set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp signal_logic.cpp signal_publish.cpp system_logic.cpp system_publish.cpp tools_logic.cpp tools_publish.cpp extend_logic.cpp extend_publish.cpp patch_logic.cpp patch_publish.cpp transmit_logic.cpp transmit_publish.cpp cjk_fonts.cpp input_script.cpp
     "${CMAKE_SOURCE_DIR}/src/gui/track_info_cache.cpp"
     "${CMAKE_SOURCE_DIR}/src/gui/transmit_page.cpp"
-    "${CMAKE_SOURCE_DIR}/src/gui/module_census.cpp")
+    "${CMAKE_SOURCE_DIR}/src/gui/module_census.cpp"
+    "${CMAKE_SOURCE_DIR}/src/gui/font_probe.cpp")
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")
@@ -49,6 +50,8 @@ target_include_directories(foxsdr-slint PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
     "${CMAKE_SOURCE_DIR}/third_party/foxsdr_api"
     "${CMAKE_SOURCE_DIR}/third_party/glfw/deps")   # stb_image_write for the screenshot key
+# The CJK face probe (docs 6.62) is the classic window's own stb_truetype reader, which includes the vendored header by its bare name.
+set_source_files_properties("${CMAKE_SOURCE_DIR}/src/gui/font_probe.cpp" PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/third_party/imgui")
 # Fonts and icons are compiled INTO the executable (the SDK default would embed a path on this machine).
 set_property(TARGET foxsdr-slint PROPERTY SLINT_EMBED_RESOURCES embed-files)
 

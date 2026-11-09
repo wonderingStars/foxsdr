@@ -2262,7 +2262,7 @@ NOT DRIVABLE by reason: readout 835, other 201, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1404 | Language | dropdown/combo | DRIVEN+ASSERTED | system-language.txt | choose "Language" "English" (last step); state cfg.language == en; other languages come from runtime catalogues and re-label the window |
+| 1404 | Language | dropdown/combo | DRIVEN+ASSERTED | cjk-ja.txt | FOXSDR_LANGUAGE=ja: state ui.language == ja and ui.cjkFamily == "Yu Gothic" (the face the window names), then the Transmit page, the DECODE, TOOLS and SYSTEM banks captured; test_slint_cjk_ja renders every code point of the ja catalogue through the same typeface with no box; the same for ko: ui.cjkFamily == "Malgun Gothic"; the same for zh-CN: ui.cjkFamily == "Microsoft YaHei UI"; the same for zh-TW: ui.cjkFamily == "Microsoft JhengHei UI"; FOXSDR_SLINT_LANGUAGE_CHANGE=ja: the dropdown's whole run-time path (save, setLanguage, bundled translation, the CJK face) - state ui.language == ja, ui.cjkFamily == "Yu Gothic", cfg.language == ja; choose "Language" "English" (last step); state cfg.language == en; other languages come from runtime catalogues and re-label the window |
 | 1405 | Machine-translation hint | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1406 | SUGGEST A BETTER TRANSLATION | button | NOT DRIVABLE | - | drawn only for a machine-translated language; opens the bug page, withheld in a bounded run |
 | 1407 | Country | dropdown/combo (tall) | DRIVEN+ASSERTED | system-language.txt | click "Country"; type filter "Austria"; click "Austria"; state cfg.country == AT; expect "Country" value equals "Austria" |
