@@ -41,10 +41,13 @@
 #include "core/serial_port.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 #include <nlohmann/json.hpp>
 
@@ -1581,16 +1584,83 @@ bool ConfigStore::writeFile(const std::string& path, const std::string& text,
         }
     }
 
+    // THE DATED COPY (docs/engine-stage4.md 6.48). Before the file is replaced, the version a user had is kept beside it as
+    // "<file>.<YYYYMMDD-HHMMSS>.bak", and only the newest kBackupsKept such copies stay: a tester whose lists came back empty
+    // after a run (the 2026-11-03 shrink from 8,228 to 5,770 bytes) can put the last good one back by hand. Best effort, like
+    // the temp file's removal: a copy that cannot be made never refuses the save, and an unchanged text makes no copy at all
+    // (the engine writes the whole document on every change, most of them a moving counter). Never for a file that is not
+    // there yet, and never more than one copy a second - a second save within the second overwrites the same name.
+    const std::string backup = backupBeforeReplace(target, text);
+
     fs::rename(tmp, target, ec);
     if (ec) {
         // Target locked, permission lost, etc. The old config is untouched —
-        // that is the whole point — but the temp must not accumulate.
+        // that is the whole point — but the temp must not accumulate. A dated
+        // copy made a moment ago is the old config: it goes back under its name.
         std::error_code ignored;
         fs::remove(tmp, ignored);
+        if (!backup.empty()) { fs::rename(backup, target, ignored); }
         error = "config: atomic replace of \"" + path + "\" failed: " + ec.message();
         return false;
     }
     return true;
+}
+
+std::string ConfigStore::backupName(const std::string& path, std::time_t when) {
+    char stamp[32];
+    std::tm t{};
+#ifdef _WIN32
+    localtime_s(&t, &when);
+#else
+    localtime_r(&when, &t);
+#endif
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &t);
+    return path + "." + stamp + ".bak";
+}
+
+std::vector<std::string> ConfigStore::backupsOf(const std::string& path) {
+    std::vector<std::string> out;
+    const fs::path target(path);
+    const std::string stem = target.filename().string() + ".";
+    std::error_code ec;
+    const fs::path dir = target.parent_path().empty() ? fs::path(".") : target.parent_path();
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        const std::string name = e.path().filename().string();
+        // "<file>.<15-char stamp>.bak": the stamp is digits and one dash, so a user's own "config.json.old.bak" is not ours
+        if (name.size() != stem.size() + 15 + 4 || name.rfind(stem, 0) != 0 || name.compare(name.size() - 4, 4, ".bak") != 0) { continue; }
+        bool stampOk = true;
+        for (std::size_t i = stem.size(); i < stem.size() + 15; ++i) {
+            const char c = name[i];
+            if (!(std::isdigit(static_cast<unsigned char>(c)) || (i == stem.size() + 8 && c == '-'))) { stampOk = false; }
+        }
+        if (stampOk) { out.push_back(e.path().string()); }
+    }
+    std::sort(out.begin(), out.end());   // the stamp sorts oldest first
+    return out;
+}
+
+std::string ConfigStore::backupBeforeReplace(const fs::path& target, const std::string& newText) {
+    std::error_code ec;
+    if (!fs::is_regular_file(target, ec)) { return std::string(); }
+    {
+        std::ifstream old(target, std::ios::binary);
+        if (!old) { return std::string(); }
+        std::string oldText((std::istreambuf_iterator<char>(old)), std::istreambuf_iterator<char>());
+        if (oldText == newText) { return std::string(); }
+    }
+    // A RENAME, not a copy: the old file becomes the dated copy in one atomic step (so there is never a half-written copy),
+    // and a file another process holds open without delete sharing refuses the rename exactly as it refuses the replace
+    // that follows - nothing is left behind, which tests/test_config.cpp's atomicity block counts on.
+    const std::string copy = backupName(target.string(), std::time(nullptr));
+    fs::rename(target, copy, ec);
+    if (ec) { return std::string(); }
+    std::vector<std::string> have = backupsOf(target.string());
+    while (have.size() > kBackupsKept) {
+        if (have.front() == copy) { break; }   // never the one just made
+        fs::remove(have.front(), ec);
+        have.erase(have.begin());
+    }
+    return copy;
 }
 
 bool ConfigStore::save(const std::string& path, const AppConfig& cfg, std::string& error) {

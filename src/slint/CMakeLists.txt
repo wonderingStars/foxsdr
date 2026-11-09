@@ -149,6 +149,22 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(slint_drive_ledger PROPERTIES LABELS "headless;slint" TIMEOUT 60)
 endif()
 
+# THE SETTINGS ROUND TRIP (tests/test_slint_config_roundtrip.cpp, docs 6.48): a real-shaped profile through foxsdr-slint and cascade for one
+# bounded run each, untouched and with one scripted change, compared field by field. It builds the seed with ConfigStore (the engine library)
+# and compares the documents with the JSON library; it starts both windows, so it is a gui test (the hidden-desktop pass).
+add_executable(test_slint_config_roundtrip tests/test_slint_config_roundtrip.cpp)
+target_compile_features(test_slint_config_roundtrip PRIVATE cxx_std_20)
+target_include_directories(test_slint_config_roundtrip PRIVATE "${CMAKE_SOURCE_DIR}/tests" "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_slint_config_roundtrip PRIVATE cascade_engine cascade_json)
+target_compile_definitions(test_slint_config_roundtrip PRIVATE FOXSDR_SLINT_EXE="$<TARGET_FILE:foxsdr-slint>")
+add_dependencies(test_slint_config_roundtrip foxsdr-slint)
+if(TARGET cascade)
+    target_compile_definitions(test_slint_config_roundtrip PRIVATE FOXSDR_CASCADE_EXE="$<TARGET_FILE:cascade>")
+    add_dependencies(test_slint_config_roundtrip cascade)
+endif()
+add_test(NAME test_slint_config_roundtrip COMMAND test_slint_config_roundtrip)
+set_tests_properties(test_slint_config_roundtrip PROPERTIES LABELS "gui" TIMEOUT 600)
+
 # The translation generator's own tests (tools/test_slint_po.py): temp-dir fixtures, nothing of the build tree. -I keeps the
 # interpreter out of the current directory and the user's site-packages (the script is standard-library only).
 if(Python3_Interpreter_FOUND)

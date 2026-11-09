@@ -136,6 +136,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -1500,6 +1502,18 @@ public:
     // and it is the seam gui::ConfigWriter's worker calls: the same
     // atomicity guarantee, on a thread that is not the GUI thread's.
     static bool writeFile(const std::string& path, const std::string& text, std::string& error);
+
+    // THE DATED COPIES (docs/engine-stage4.md 6.48): writeFile() keeps the version it replaces as "<path>.<YYYYMMDD-HHMMSS>.bak"
+    // beside the file and prunes to the newest kBackupsKept, so a user can put a last good settings file back by hand. No copy
+    // when the text is unchanged or the file is not there yet; a copy that fails never refuses the save.
+    static constexpr std::size_t kBackupsKept = 5;
+    static std::string backupName(const std::string& path, std::time_t when);
+    // The copies writeFile() made for `path`, oldest first (by their stamp); a file of another shape is not listed.
+    static std::vector<std::string> backupsOf(const std::string& path);
+
+private:
+    // The dated copy it made ("" = none), so a failed replace can put it back.
+    static std::string backupBeforeReplace(const std::filesystem::path& target, const std::string& newText);
 };
 
 }  // namespace cascade::core
