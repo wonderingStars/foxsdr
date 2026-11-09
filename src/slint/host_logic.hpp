@@ -141,6 +141,18 @@ private:
 std::string rateLine(const FoxReceiverState& state);                 // "2.400 MS/s · ch 12.5 kHz · underruns 0"
 std::string sourceLine(const FoxReceiverState& state, const std::string& band);  // "RTL-SDR Blog V4 · 2 m amateur"
 std::string modeHint(const FoxReceiverState& state);                 // "Passband 12.5 kHz · step 12.5 kHz · more in Signal › Radio"
+// ---- the bookmark names on the spectrum (docs 6.52) ----
+// The row each bookmark's name lands on, or -1 for a name left off (its tick still shows). The classic window's rule
+// (gui/bookmark_marker_geometry.hpp, 0.99.54): favourites are placed first so they win whichever row they land on;
+// a name's extent runs from 3 px right of its tick for charPx a character, must clear 6 px of every name already on
+// a row, and tries the rows from the top; a name that would run off the right edge, or an empty one, is not placed.
+// `rows` is the budget: 1 with "Stack close names" off, 3 (kBookmarkNameMaxRows) with it on. One answer per mark,
+// in the marks' own order.
+struct BookmarkName { double pos = 0.0; std::string label; bool favourite = false; };   // pos 0..1 of the plot width
+constexpr int kBookmarkNameMaxRows = 3;
+constexpr double kBookmarkNameGapPx = 6.0;
+std::vector<int> bookmarkNameRows(const std::vector<BookmarkName>& marks, double widthPx, double charPx, int rows);
+
 std::string tuneHint(bool converterActive);
 std::string biasHint(bool present, bool on);
 std::string waterfallFootRight(const FoxReceiverState& state, const std::string& decoder);  // "NFM · decoding: APRS", "STOPPED"

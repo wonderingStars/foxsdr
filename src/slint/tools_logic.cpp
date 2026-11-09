@@ -885,7 +885,11 @@ Effect applyPositionSet(const std::string& latText, const std::string& lonText) 
 
 Effect applyBookmarkName(const std::string& text) { return localEffect(Local::BookmarkName, text); }
 
-Effect applyBookmarkAdd(const std::string& name, const std::string& groupTyped) {
+Effect applyBookmarkAdd(const std::string& nameTyped, const std::string& groupTyped, double tunedHz) {
+    // An empty name (or blanks) with the tune known: the bookmark is named by its frequency, the figure its list row shows ("100.3000 MHz") - the engine
+    // refuses an empty name silently, which left the classic's and this window's key doing nothing visible (6.46 finding 1).
+    std::string name = nameTyped;
+    if (name.find_first_not_of(" \t") == std::string::npos && tunedHz > 0.0) { name = cc::formatText("%.4f MHz", tunedHz / 1.0e6); }
     // Under the group box's name when it has one (FOXAPP_OP_BOOKMARK_GROUP, action 0: the engine adds it as BOOKMARK_ADD does, into that group); with none, the ordinary BOOKMARK_ADD.
     const std::string group = trimmedGroupName(groupTyped);
     if (group.empty()) { return commandEffect(make(cmd::makeText(FOXAPI_OP_BOOKMARK_ADD, name))); }

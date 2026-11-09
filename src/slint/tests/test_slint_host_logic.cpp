@@ -61,6 +61,30 @@ int main() {
         CHECK(std::string(placeName(10)) == "");
     }
 
+    // ---- the bookmark names on the spectrum (docs 6.52): the classic window's stacking rule ----
+    {
+        // two names a few pixels apart: the second takes the row below with stacking on, and is left off with it off
+        std::vector<BookmarkName> close{{0.50, "Repeater", false}, {0.51, "Simplex", false}};
+        CHECK((bookmarkNameRows(close, 1000.0, 6.5, 3) == std::vector<int>{0, 1}));
+        CHECK((bookmarkNameRows(close, 1000.0, 6.5, 1) == std::vector<int>{0, -1}));
+        // far apart: both on the top row
+        std::vector<BookmarkName> apart{{0.10, "A", false}, {0.90, "B", false}};
+        CHECK((bookmarkNameRows(apart, 1000.0, 6.5, 3) == std::vector<int>{0, 0}));
+        // a favourite later in the list is placed first, so it wins the top row and the plain one stacks under it
+        std::vector<BookmarkName> fav{{0.50, "Plain", false}, {0.505, "Star", true}};
+        CHECK((bookmarkNameRows(fav, 1000.0, 6.5, 3) == std::vector<int>{1, 0}));
+        // four names on one spot: three rows at most, the fourth is left off; an empty name takes no row and gets none
+        std::vector<BookmarkName> pile{{0.5, "One", false}, {0.5, "", false}, {0.5, "Two", false}, {0.5, "Three", false}, {0.5, "Four", false}};
+        CHECK((bookmarkNameRows(pile, 1000.0, 6.5, 3) == std::vector<int>{0, -1, 1, 2, -1}));
+        CHECK((bookmarkNameRows(pile, 1000.0, 6.5, 9) == std::vector<int>{0, -1, 1, 2, -1}));   // the budget is capped at three
+        // a name that would run off the right edge is not placed; just clear of the gap, two names share a row
+        std::vector<BookmarkName> edge{{0.99, "Long name here", false}};
+        CHECK((bookmarkNameRows(edge, 1000.0, 6.5, 3) == std::vector<int>{-1}));
+        std::vector<BookmarkName> gap{{0.100, "AB", false}, {0.122, "CD", false}};   // 100+3 .. 116, then 122+3 = 125 > 116 + 6
+        CHECK((bookmarkNameRows(gap, 1000.0, 6.5, 3) == std::vector<int>{0, 0}));
+        CHECK(bookmarkNameRows({}, 1000.0, 6.5, 3).empty());
+    }
+
     // ---- modes: the strip's segment, the table's codes, the tuning step per mode ----
     {
         CHECK(std::string(modeName(FOXAPI_DEMOD_NFM)) == "NFM");

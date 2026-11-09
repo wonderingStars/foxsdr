@@ -566,7 +566,10 @@ Effect applyPositionLon(const std::string& text);
 Effect applyPositionSet(const std::string& latText, const std::string& lonText);
 
 Effect applyBookmarkName(const std::string& text);
-Effect applyBookmarkAdd(const std::string& name, const std::string& group);
+// `tunedHz`: the receiver's tune, which NAMES the bookmark when the name box is empty ("100.3000 MHz", the list's own figure) - the engine
+// takes no bookmark with an empty name and the classic window's key did nothing visible (docs 6.46 finding 1, closed in 6.52); 0 = unknown, the
+// empty name goes as typed.
+Effect applyBookmarkAdd(const std::string& name, const std::string& group, double tunedHz = 0.0);
 Effect applyBookmarkGroup(const std::string& text);
 Effect applyBookmarkImportPath(const std::string& text);
 Effect applyBookmarkImport(const BookmarksModel& m);

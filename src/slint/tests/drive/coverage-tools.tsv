@@ -14,8 +14,8 @@
 1626	ASSERTED	tools-bookmarks.txt	type "Search bookmarks" "Sec"; expect value equals "Sec"; ctrl+a, backspace; expect value equals "" (a view filter: only the widget holds it)
 1627	DRIVEN	tools-bookmarks-rows.txt	choose "Group filter" "Aviation"; expect "Group filter" value contains "Aviation" (the filter is a view state with no engine read-back)
 1628	ASSERTED	tools-bookmarks.txt	click "Favourites only" twice; expect checked true / false (panel-local, no engine read-back)
-1629	ASSERTED	tools-bookmarks.txt; tools-bookmarks-options.txt	click "On the spectrum"; expect checked false/true and Stack close names enabled follows; the cfg.bookmarkMarkers read-back is PARKED as a finding (the host never saves it)
-1630	ASSERTED	tools-bookmarks.txt; tools-bookmarks-options.txt	click "Stack close names"; expect checked false; the cfg.bookmarkStackNames read-back is PARKED as a finding (the host never saves it)
+1629	ASSERTED	tools-bookmarks.txt; tools-bookmarks-options.txt	click "On the spectrum"; expect checked false/true and Stack close names enabled follows; state cfg.bookmarkMarkers false/true (saved since docs 6.52; the spectrum's marks read it)
+1630	ASSERTED	tools-bookmarks.txt; tools-bookmarks-options.txt	click "Stack close names"; expect checked false/true; state cfg.bookmarkStackNames false/true (saved since docs 6.52; the names stack onto three rows by it)
 1632	NOT_DRIVABLE	-	the key copies / opens the exported file: clipboard and shell withheld in a bounded run
 1633	ASSERTED	tools-bookmarks-rows.txt	click "Remove this group"; state count.bookmarkGroups == 0 (label from the run-2 dump)
 1634	ASSERTED	tools-bookmarks-rows.txt	click "Rename this group"; type "new group name" "Flying"; key enter; state list.bookmarkGroups.names contains Flying

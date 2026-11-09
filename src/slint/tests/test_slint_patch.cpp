@@ -1276,12 +1276,31 @@ int main() {
             const int x0 = NX + static_cast<int>(std::lround(ui->get_n_decoders_x0()));
             const auto dat = flow(dw, NX + 10, x0, true, NX + 10 + 232, 4);
             const int dY = NY + static_cast<int>(std::lround(ui->get_n_decoders_y()));
-            CHECK(ui->get_n_decoder_rows() == dat.back().row + 1 && dat.back().row >= 1);
+            // THE ROWS ARE CAPPED (docs 6.52): the narrow band wraps these decoders into three rows or more, and the band shows two of them with a
+            // fold key on the third row ("All N decoders"); the keys of the folded rows are not there to press. The fold key unfolds them all (one
+            // row more, the key's own, under them) and folds them away again.
+            const int allRows = dat.back().row + 1;
+            CHECK(allRows >= 3);
+            CHECK(ui->get_n_decoder_rows() == 3);
+            // the two rows that show fire their keys; a folded key's place is empty (its row is below the fold key's, so the test needs four rows for that)
+            for (std::size_t i = 0; i < dat.size(); ++i) {
+                if (dat[i].row >= 2 && dat[i].row < 3) { continue; }   // the fold key's own row: a press there unfolds, tested below on purpose
+                const int y = dY + dat[i].row * 24;
+                const auto r = hitF(dat[i].x + dat[i].w / 2, y + 10);
+                if (dat[i].row < 2) { CHECKV(isOnly(r, "decoder-pressed " + std::to_string(i)), "narrow decoder key %zu: %s", i, join(r).c_str()); }
+                else { CHECKV(r.empty(), "folded decoder key %zu fired %s", i, join(r).c_str()); }
+            }
+            CHECK(ui->get_n_decoder_rows() == 3);
+            // the fold key sits at the band's own left edge (root.x0, 10 px in), under the two rows; it fires no event of the page: it unfolds
+            CHECK(hitF(NX + 10 + 8, dY + 2 * 24 + 10).empty());
+            CHECKV(ui->get_n_decoder_rows() == allRows + 1, "rows after the fold key: %d, expected %d", ui->get_n_decoder_rows(), allRows + 1);
             for (std::size_t i = 0; i < dat.size(); ++i) {
                 const int y = dY + dat[i].row * 24;
                 const auto r = hitF(dat[i].x + dat[i].w / 2, y + 10);
-                CHECKV(isOnly(r, "decoder-pressed " + std::to_string(i)), "narrow decoder key %zu: %s", i, join(r).c_str());
+                CHECKV(isOnly(r, "decoder-pressed " + std::to_string(i)), "unfolded decoder key %zu: %s", i, join(r).c_str());
             }
+            CHECK(hitF(NX + 10 + 8, dY + allRows * 24 + 10).empty());   // "Fewer decoders", under them all
+            CHECKV(ui->get_n_decoder_rows() == 3, "rows after Fewer decoders: %d", ui->get_n_decoder_rows());
         }
         // the information pane's help branch, wrapped in 260 px; the verdict in tone err
         CHECK(f.countNear(NX + NW - 260 + 8, NY + 8, NX + NW - 6, NY + 28, blendOver(wb.chip_err_bg, strip), 4) > 100);

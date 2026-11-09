@@ -258,18 +258,21 @@ int main() {
         const int by = rowY(7) + (kRow - 14) / 2;
         CHECKV(f0.near(x0, by + 7, lineStrong) && f0.near(x0 + 13, by + 7, lineStrong) && f0.near(x0 + 3, by + 3, field, 0) && f0.near(x0 + 14, by + 7, panel, 0), "Enlarge every reading is a 14 px empty box");
         CHECK(f0.countNear(x0 + 22, rowY(7) + 4, x0 + 190, rowY(7) + 20, fg, 60) >= 40);
-        // row 10: the Band plan tick (ticked); row 11: Size and Colour share the line, 6 px apart, each half of it
-        CHECKV(f0.countNear(x0, rowY(10) + 5, x0 + 14, rowY(10) + 19, accent, 0) >= 100, "Band plan is ticked");
-        CHECKV(f0.near(x0, rowY(11) + 12, keyLine) && f0.near(R - 1, rowY(11) + 12, keyLine) && f0.near(x0, rowY(11), panel, 0), "Size starts at the left edge, Colour ends at the right");
+        // row 10: Trail style, a 150 px dropdown flush right under the Trail width slider (docs 6.52)
+        CHECKV(dropAt(f0, rowY(10), R, 150), "Trail style: a 150 px dropdown");
+        CHECK(f0.countNear(x0, rowY(10) + 5, x0 + 80, rowY(10) + 19, fgSoft, 60) >= 15);
+        // row 11: the Band plan tick (ticked); row 12: Size and Colour share the line, 6 px apart, each half of it
+        CHECKV(f0.countNear(x0, rowY(11) + 5, x0 + 14, rowY(11) + 19, accent, 0) >= 100, "Band plan is ticked");
+        CHECKV(f0.near(x0, rowY(12) + 12, keyLine) && f0.near(R - 1, rowY(12) + 12, keyLine) && f0.near(x0, rowY(12), panel, 0), "Size starts at the left edge, Colour ends at the right");
         int sizeEnd = -1, colourStart = -1;
         for (int x = x0 + 40; x < R - 40; ++x) {
-            if (f0.near(x, rowY(11) + 3, panel, 0) && sizeEnd < 0) { sizeEnd = x; }
-            if (sizeEnd >= 0 && colourStart < 0 && !f0.near(x, rowY(11) + 3, panel, 0)) { colourStart = x; }
+            if (f0.near(x, rowY(12) + 3, panel, 0) && sizeEnd < 0) { sizeEnd = x; }
+            if (sizeEnd >= 0 && colourStart < 0 && !f0.near(x, rowY(12) + 3, panel, 0)) { colourStart = x; }
         }
         CHECKV(sizeEnd - x0 == 124 && colourStart - sizeEnd == 6 && R - colourStart == 124, "Size %d wide, a gap of %d, Colour %d wide", sizeEnd - x0, colourStart - sizeEnd, R - colourStart);
-        // row 12: Region (150), row 13: the plan status in the good tone
-        CHECKV(dropAt(f0, rowY(12), R, 150), "Region: a 150 px dropdown");
-        CHECKV(f0.countNear(x0, rowY(13), R, rowY(13) + 14, goodFg, 40) >= 60, "the plan status is green: %d", f0.countNear(x0, rowY(13), R, rowY(13) + 14, goodFg, 40));
+        // row 13: Region (150), row 14: the plan status in the good tone
+        CHECKV(dropAt(f0, rowY(13), R, 150), "Region: a 150 px dropdown");
+        CHECKV(f0.countNear(x0, rowY(14), R, rowY(14) + 14, goodFg, 40) >= 60, "the plan status is green: %d", f0.countNear(x0, rowY(14), R, rowY(14) + 14, goodFg, 40));
         // the second Display (a2): the error variant - Tuner switches unticked, Enlarge ticked, icons at the top, the status red, and no card
         const int T2 = yOf(ui->get_a2_y()) + kSecRow + kBodyPad;
         CHECKV(f0.countNear(x0, T2 + 6 * kPitch + 5, x0 + 14, T2 + 6 * kPitch + 19, accent, 0) == 0, "a2: Tuner switches is not ticked");
@@ -277,8 +280,8 @@ int main() {
         const int clen = common.end - common.start + 1;
         CHECKV(f0.near(common.start + clen, T2 + 8 * kPitch + 12, sliderKnob, 6), "a2: the icon knob is at the end of the track");
         CHECKV(f0.near(common.start, T2 + 2 * kPitch + 12, sliderKnob, 6), "a2: the Min dB knob is at the start");
-        CHECKV(f0.countNear(x0, T2 + 13 * kPitch, R, T2 + 13 * kPitch + 30, errFg, 40) >= 100, "a2: the plan error is red: %d", f0.countNear(x0, T2 + 13 * kPitch, R, T2 + 13 * kPitch + 30, errFg, 40));
-        CHECK(f0.countNear(x0, T2 + 13 * kPitch, R, T2 + 13 * kPitch + 30, goodFg, 40) == 0);
+        CHECKV(f0.countNear(x0, T2 + 14 * kPitch, R, T2 + 14 * kPitch + 30, errFg, 40) >= 100, "a2: the plan error is red: %d", f0.countNear(x0, T2 + 14 * kPitch, R, T2 + 14 * kPitch + 30, errFg, 40));
+        CHECK(f0.countNear(x0, T2 + 14 * kPitch, R, T2 + 14 * kPitch + 30, goodFg, 40) == 0);
         CHECK(f0.countNear(x0, T2, R, T2 + 440, card, 0) == 0);
     }
 
@@ -492,19 +495,24 @@ int main() {
         pr = popupRow(R - 150, rowY(5), 1);
         e = press(pr.first, pr.second);
         CHECKV(e.name == "display-figures" && e.args == "1", "Counter figures row 1: '%s' '%s'", e.name.c_str(), e.args.c_str());
-        clk(R - 60, rowY(12) + 12);
+        clk(R - 60, rowY(10) + 12);   // Trail style (docs 6.52): row 1 is Ribbon
         shot();
-        pr = popupRow(R - 150, rowY(12), 2);
+        pr = popupRow(R - 150, rowY(10), 1);
+        e = press(pr.first, pr.second);
+        CHECKV(e.name == "display-trail-style" && e.args == "1", "Trail style row 1: '%s' '%s'", e.name.c_str(), e.args.c_str());
+        clk(R - 60, rowY(13) + 12);
+        shot();
+        pr = popupRow(R - 150, rowY(13), 2);
         e = press(pr.first, pr.second);
         CHECKV(e.name == "display-region" && e.args == "2", "Region row 2: '%s' '%s'", e.name.c_str(), e.args.c_str());
-        clk(x0 + 30, rowY(11) + 12);
+        clk(x0 + 30, rowY(12) + 12);
         shot();
-        pr = popupRow(x0, rowY(11), 2);
+        pr = popupRow(x0, rowY(12), 2);
         e = press(pr.first, pr.second);
         CHECKV(e.name == "display-band-size" && e.args == "2", "Band size row 2: '%s' '%s'", e.name.c_str(), e.args.c_str());
-        clk(R - 30, rowY(11) + 12);
+        clk(R - 30, rowY(12) + 12);
         shot();
-        pr = popupRow(R - 124, rowY(11), 1);
+        pr = popupRow(R - 124, rowY(12), 1);
         e = press(pr.first, pr.second);
         CHECKV(e.name == "display-band-colour" && e.args == "1", "Band colour row 1: '%s' '%s'", e.name.c_str(), e.args.c_str());
         park();
@@ -517,7 +525,7 @@ int main() {
         CHECKV(e.name == "display-enlarge" && e.args == "1", "Enlarge: '%s' '%s'", e.name.c_str(), e.args.c_str());
         park();
         CHECK(shot().countNear(x0, rowY(7) + 5, x0 + 14, rowY(7) + 19, accent, 0) == 0);
-        e = press(x0 + 40, rowY(10) + 12);
+        e = press(x0 + 40, rowY(11) + 12);
         CHECKV(e.name == "display-band-plan" && e.args == "0", "Band plan: '%s' '%s'", e.name.c_str(), e.args.c_str());
         park();
         // the sliders: a drag from the knob to the middle of the track reports about 0.5 (display-db-min, display-icon-px, display-trail-px)

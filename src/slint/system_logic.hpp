@@ -39,6 +39,7 @@
 //   display-enlarge(on)          applyDisplayEnlarge   save readingsScale = 1.4 | 1.0 (kEnlargedReadings)
 //   display-icon-px(v)           applyDisplayIconPx    save aircraftIconPx (16..96) and mapTrailWidthPx pulled down to the new wingspan (drawTrailWidthControl)
 //   display-trail-px(v)          applyDisplayTrailPx   save mapTrailWidthPx (1 .. the wingspan of the icon in force)
+//   display-trail-style(i)       applyDisplayTrailStyle  save mapTrailStyle = 0 (Line) | 1 (Ribbon); the map applies it through slintmap::mapLookOf (docs 6.44)
 //   display-band-plan(on)        applyDisplayBandPlan  save bandPlanOverlay
 //   display-band-size(i)         applyDisplayBandSize  save bandPlanSize = small | medium | large
 //   display-band-colour(i)       applyDisplayBandColour  save bandPlanPalette = classic | vivid | mono
@@ -160,6 +161,8 @@ struct DisplayModel {
     std::string icon_text;                 // "48 px"
     float trail_px = 4.f;
     std::string trail_text;
+    std::vector<SelectItem> trail_styles;  // Line, Ribbon (id = line | ribbon): mapTrailStyle 0 | 1 (docs 6.52, tick row 364)
+    int trail_style_index = 0;
     bool band_plan = true;
     std::vector<SelectItem> band_sizes;    // Small, Medium, Large
     int band_size_index = 0;
@@ -567,6 +570,7 @@ Effect applyDisplayTunerSwitches(const cascade::core::AppConfig& cur, bool on);
 Effect applyDisplayEnlarge(const cascade::core::AppConfig& cur, bool on);
 Effect applyDisplayIconPx(const cascade::core::AppConfig& cur, float px);
 Effect applyDisplayTrailPx(const cascade::core::AppConfig& cur, float px);
+Effect applyDisplayTrailStyle(const cascade::core::AppConfig& cur, int index);
 Effect applyDisplayBandPlan(const cascade::core::AppConfig& cur, bool on);
 Effect applyDisplayBandSize(const cascade::core::AppConfig& cur, int index);
 Effect applyDisplayBandColour(const cascade::core::AppConfig& cur, int index);

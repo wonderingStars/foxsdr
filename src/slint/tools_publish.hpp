@@ -37,6 +37,13 @@ class ToolsPublisher {
 public:
     struct Hooks {
         std::function<void()> openImportDialog;   // the SIGNAL bank's "Import a frequency list" dialog (the Bookmarks Import key with an empty box)
+        // THE TWO SPECTRUM OPTIONS OF THE BOOKMARKS PANEL (docs 6.52, tick rows 1629-1630): "On the spectrum" and "Stack close names" are the interface
+        // half's bookmarkMarkers and bookmarkStackNames, which the classic window saves and reads back at start. Until 6.52 this publisher kept them in
+        // its panel options alone, so both reset to on at every launch and the spectrum never read them. The host hands their saved values in here
+        // and saves each change through this hook (HostDuties::saveInterfaceHalf); main.cpp reads the half when it builds the spectrum's marks.
+        bool onSpectrum = true;
+        bool stackNames = true;
+        std::function<void(bool onSpectrum, bool stackNames)> saveBookmarkOptions;
     };
     ToolsPublisher(MainWindow& ui, foxsdr::slintkit::PluginKit& kit, const FoxEngineApi* api, FoxSession* session, bool bounded, Hooks hooks);
     ~ToolsPublisher();

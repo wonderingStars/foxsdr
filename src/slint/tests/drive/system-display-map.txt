@@ -28,6 +28,13 @@ state cfg.mapTrailWidthPx == 4
 +10 state cfg.aircraftIconPx < 25
 state cfg.mapTrailWidthPx < 20
 
+# Trail style (docs 6.52, tick row 364): Line by default; the box sits under Trail width and saves mapTrailStyle (0 line, 1 ribbon)
++2 state cfg.mapTrailStyle == 0
++1 choose "Trail style" "Ribbon"
++10 state cfg.mapTrailStyle == 1
++2 choose "Trail style" "Line"
++10 state cfg.mapTrailStyle == 0
+
 # Band plan: the overlay is off in the scratch profile (the dump: checked=false). "Band plan"#1 is this checkbox; the scope header's
 # "Band plan" key is a button further on in the dump.
 +2 expect "Band plan"#1 checked equals "false"

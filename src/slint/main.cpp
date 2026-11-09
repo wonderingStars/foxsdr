@@ -78,6 +78,14 @@
 
 using namespace foxsdr::slinthost;
 
+// THE TUNE STEPS, with the words the menu shows (docs 6.52): the key wore fmtKHz's "25.0 kHz" while its menu row said "25 kHz" - one table
+// names both, so the key reads what the row the user picked read; a step the table does not hold (a saved value) falls back to fmtKHz.
+constexpr std::array<std::pair<const char*, double>, 9> kTuneSteps{{{"1 kHz", 1000}, {"5 kHz", 5000}, {"6.25 kHz", 6250}, {"9 kHz", 9000}, {"10 kHz", 10000}, {"12.5 kHz", 12500}, {"25 kHz", 25000}, {"50 kHz", 50000}, {"100 kHz", 100000}}};
+static std::string tuneStepLabel(double hz) {
+    for (const auto& s : kTuneSteps) { if (std::fabs(hz - s.second) < 1e-9) { return s.first; } }
+    return fmtKHz(hz);
+}
+
 namespace {
 
 std::string lower(std::string s) {
@@ -95,6 +103,10 @@ std::int64_t nowMs() { return std::chrono::duration_cast<std::chrono::millisecon
 constexpr std::uint32_t kSpecW = 1024, kSpecH = 340;   // the spectrum trace's painted resolution (image-fit fill scales it)
 constexpr std::uint32_t kWfW = 1024, kWfH = 238;       // the waterfall picture: one row per published frame
 constexpr double kZoomPerNotch = 1.3;
+// The bookmark names' stacking rule works in pixels (docs 6.52): the plot is taken at the trace's painted width, and a caption glyph (Theme.font-cap,
+// 10 px) at 6 px - the window never hands its plot width back here, and the rule needs only the proportions to decide which names touch.
+constexpr double kSpectrumPlotWidthPx = kSpecW;
+constexpr double kSpectrumCapCharPx = 6.0;
 static_assert(sizeof(Rgba) == sizeof(slint::Rgba8Pixel));
 
 // Two persistent buffers per well, alternated: the one the window still shows is never written, so begin() never
@@ -407,6 +419,15 @@ int main(int argc, char** argv) {
     // opens the SIGNAL bank's import dialog. A bounded run writes no clipboard and opens no folder. FOXSDR_SLINT_MARKERS=1 opens the Markers sheet for a capture.
     foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
     toolsHooks.openImportDialog = [&] { ui->global<SignalEvents>().invoke_recorder_import(); };
+    // the two spectrum options are the interface half's (docs 6.52): read at start, saved on each tick of a box, read again every tick by the spectrum's marks
+    toolsHooks.onSpectrum = duties.interfaceHalf().bookmarkMarkers;
+    toolsHooks.stackNames = duties.interfaceHalf().bookmarkStackNames;
+    toolsHooks.saveBookmarkOptions = [&duties](bool onSpectrum, bool stackNames) {
+        cascade::core::AppConfig half = duties.interfaceHalf();
+        half.bookmarkMarkers = onSpectrum;
+        half.bookmarkStackNames = stackNames;
+        (void)duties.saveInterfaceHalf(half);
+    };
     foxsdr::slinttools::ToolsPublisher toolsBank(*ui, kit, api, session, bounded.bounded(), toolsHooks);
     toolsBank.wire();
     if (std::getenv("FOXSDR_SLINT_MARKERS") != nullptr) { toolsBank.openMarkers(); }
@@ -671,9 +692,8 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Item, 406, ("Yes, remove all " + std::to_string(lists.markers.size())).c_str()));
                 break;
             case MenuKind::TuneStep: {
-                const std::array<std::pair<const char*, double>, 9> steps{{{"1 kHz", 1000}, {"5 kHz", 5000}, {"6.25 kHz", 6250}, {"9 kHz", 9000}, {"10 kHz", 10000}, {"12.5 kHz", 12500}, {"25 kHz", 25000}, {"50 kHz", 50000}, {"100 kHz", 100000}}};
                 e.push_back(entry(MenuItemKind::Heading, 0, "Tune step"));
-                for (std::size_t i = 0; i < steps.size(); ++i) { e.push_back(entry(MenuItemKind::Radio, 501 + static_cast<int>(i), steps[i].first, "", std::fabs(tuneStepHz - steps[i].second) < 1e-9)); }
+                for (std::size_t i = 0; i < kTuneSteps.size(); ++i) { e.push_back(entry(MenuItemKind::Radio, 501 + static_cast<int>(i), kTuneSteps[i].first, "", std::fabs(tuneStepHz - kTuneSteps[i].second) < 1e-9)); }
                 break;
             }
             case MenuKind::Modes:   // the compact strip's picker: the eight modes as radio items
@@ -726,9 +746,8 @@ int main(int argc, char** argv) {
             case 701: case 702: case 703: case 704: case 705: case 706: case 707: case 708: setMode(demodOfIndex(id - 701)); break;
             default:
                 if (id >= 501 && id <= 509) {
-                    const double steps[9] = {1000, 5000, 6250, 9000, 10000, 12500, 25000, 50000, 100000};
-                    tuneStepHz = steps[id - 501];
-                    ui->set_tune_step_text(ss(fmtKHz(tuneStepHz)));
+                    tuneStepHz = kTuneSteps[static_cast<std::size_t>(id - 501)].second;
+                    ui->set_tune_step_text(ss(tuneStepLabel(tuneStepHz)));
                 }
                 break;
         }
@@ -1023,7 +1042,7 @@ int main(int argc, char** argv) {
         const double lo = 3000.0, hi = std::max(lo + 1.0, 0.9 * state.channelRateHz);
         ui->set_passband_norm(static_cast<float>(std::clamp((state.bandwidthHz - lo) / (hi - lo), 0.0, 1.0)));
         ui->set_passband_text(ss(fmtKHz(state.bandwidthHz)));
-        ui->set_tune_step_text(ss(fmtKHz(tuneStepHz)));
+        ui->set_tune_step_text(ss(tuneStepLabel(tuneStepHz)));
         std::string band;
         for (const auto& b : lists.bands) { if (state.tunedHz >= b.startHz && state.tunedHz <= b.stopHz) { band = b.name; break; } }
         ui->set_source_line(ss(sourceLine(state, band)));
@@ -1129,10 +1148,17 @@ int main(int argc, char** argv) {
                 std::string sig; for (const auto& b : ribbon) { sig += fmt("%.5f|", b.from) + fmt("%.5f|", b.to) + std::string(b.label) + ";"; }
                 if (sigs.changed("ribbon", sig)) { ui->set_ribbon(std::make_shared<slint::VectorModel<BandSegment>>(std::move(ribbon))); }
             }
+            // THE BOOKMARK MARKS (docs 6.52): none while "On the spectrum" is off (bookmarkMarkers, as the classic drawBookmarkMarkers has it); the
+            // names stack onto up to three rows while "Stack close names" is on (bookmarkStackNames), one row otherwise - bookmarkNameRows is the rule.
             std::vector<BookmarkMark> bms;
-            for (const auto& b : lists.bookmarks) { const double f = fracOf(b.hz, v.centreHz, v.spanHz); if (f >= 0 && f <= 1 && bms.size() < 64) { bms.push_back({static_cast<float>(f), ss(b.name), b.favourite}); } }
+            if (duties.interfaceHalf().bookmarkMarkers) {
+                std::vector<BookmarkName> names;
+                for (const auto& b : lists.bookmarks) { const double f = fracOf(b.hz, v.centreHz, v.spanHz); if (f >= 0 && f <= 1 && names.size() < 64) { names.push_back({f, b.name, b.favourite}); } }
+                const std::vector<int> rows = bookmarkNameRows(names, kSpectrumPlotWidthPx, kSpectrumCapCharPx, duties.interfaceHalf().bookmarkStackNames ? kBookmarkNameMaxRows : 1);
+                for (std::size_t i = 0; i < names.size(); ++i) { bms.push_back({static_cast<float>(names[i].pos), ss(names[i].label), names[i].favourite, rows[i]}); }
+            }
             {
-                std::string sig; for (const auto& b : bms) { sig += fmt("%.5f|", b.pos) + std::string(b.label) + (b.favourite ? "*" : "") + ";"; }
+                std::string sig; for (const auto& b : bms) { sig += fmt("%.5f|", b.pos) + std::string(b.label) + (b.favourite ? "*" : "") + fmt("%d;", b.row); }
                 if (sigs.changed("bookmarks", sig)) { ui->set_bookmarks(std::make_shared<slint::VectorModel<BookmarkMark>>(std::move(bms))); }
             }
             std::vector<PluginMark> marks;

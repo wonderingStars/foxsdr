@@ -13,6 +13,7 @@
 159	ASSERTED	system-display-map.txt	slider "Min dB" 0.1, slider "Max dB" 0.95; state dbMin < -125, state dbMax > 5
 160	ASSERTED	system-display-map.txt	slider "Aircraft icons" 0.9 then 0.0; state cfg.aircraftIconPx > 70 then < 25
 161	ASSERTED	system-display-map.txt	slider "Trail width" 0.5; state cfg.mapTrailWidthPx > 8
+364	ASSERTED	system-display-map.txt	choose "Trail style" "Ribbon"; state cfg.mapTrailStyle == 1 (docs 6.52: the box the Slint window lacked)
 163	ASSERTED	system-display-map.txt	click "Band plan"#1 x2; state cfg.bandPlanOverlay true/false (size and colour: rows 1400, 1401)
 1388	ASSERTED	system-scale.txt	choose "Interface size" "125%"; state cfg.interfaceScale == 125
 1390	ASSERTED	system-display.txt	choose "Theme" x6; state cfg.uiTheme and the preset fields

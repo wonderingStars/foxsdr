@@ -213,6 +213,9 @@ ToolsPublisher::ToolsPublisher(MainWindow& ui, foxsdr::slintkit::PluginKit& kit,
     : ui_(ui), kit_(kit), api_(api), session_(session), bounded_(bounded), hooks_(std::move(hooks)), table_(api, session), lists_(std::make_unique<Lists>()),
       jobs_(std::make_unique<Jobs>()), pending_(std::make_unique<Pending>()), lastSet_(std::make_unique<Last>()) {
     opts_.cache = &cache_;
+    // the saved spectrum options (docs 6.52): the boxes open as the last session left them, as the classic window's do
+    opts_.on_spectrum = hooks_.onSpectrum;
+    opts_.stack_names = hooks_.stackNames;
 }
 
 ToolsPublisher::~ToolsPublisher() = default;
@@ -644,8 +647,14 @@ void ToolsPublisher::applyLocal(const Effect& e) {
             opts_.rename_draft = e.text;   // the rename field opens with the group's own name, as the ImGui key seeds it
             break;
         case Local::BookmarkFavourites: opts_.favourites_only = e.flag; break;
-        case Local::BookmarkOnSpectrum: opts_.on_spectrum = e.flag; break;
-        case Local::BookmarkStack: opts_.stack_names = e.flag; break;
+        case Local::BookmarkOnSpectrum:
+            opts_.on_spectrum = e.flag;
+            if (hooks_.saveBookmarkOptions) { hooks_.saveBookmarkOptions(opts_.on_spectrum, opts_.stack_names); }   // bookmarkMarkers (docs 6.52)
+            break;
+        case Local::BookmarkStack:
+            opts_.stack_names = e.flag;
+            if (hooks_.saveBookmarkOptions) { hooks_.saveBookmarkOptions(opts_.on_spectrum, opts_.stack_names); }   // bookmarkStackNames (docs 6.52)
+            break;
         case Local::BookmarkRenameDraft: opts_.rename_draft = e.text; break;
         case Local::BookmarkRenameOpen:
             opts_.rename_open = e.flag;
@@ -1081,7 +1090,7 @@ void ToolsPublisher::wire() {
 
     // ---- Bookmarks ----
     ev.on_bookmark_name([this](slint::SharedString t) { exec(applyBookmarkName(std::string(t)), "bookmark-name"); });
-    ev.on_bookmark_add([this] { exec(applyBookmarkAdd(opts_.name_draft, opts_.group_draft), "bookmark-add"); });
+    ev.on_bookmark_add([this] { exec(applyBookmarkAdd(opts_.name_draft, opts_.group_draft, state_.tunedHz), "bookmark-add"); });
     ev.on_bookmark_group([this](slint::SharedString t) { exec(applyBookmarkGroup(std::string(t)), "bookmark-group"); });
     ev.on_bookmark_import_path([this](slint::SharedString t) { exec(applyBookmarkImportPath(std::string(t)), "bookmark-import-path"); });
     ev.on_bookmark_import([this] {

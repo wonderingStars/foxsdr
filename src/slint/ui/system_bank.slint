@@ -39,6 +39,7 @@ export struct DisplayModel {
     freq-displays: [SelectItem], freq-display-index: int, figures: [SelectItem], figures-index: int,
     tuner-switches: bool, enlarge-readings: bool,
     icon-px: float, icon-text: string, trail-px: float, trail-text: string,                  // 0..1 and the host's "48 px"
+    trail-styles: [SelectItem], trail-style-index: int,                                      // Line, Ribbon (mapTrailStyle; docs 6.52)
     band-plan: bool, band-sizes: [SelectItem], band-size-index: int, band-colours: [SelectItem], band-colour-index: int,
     regions: [SelectItem], region-index: int, plan-status: string, plan-status-tone: ChipTone,
     region-preview: string,                            // ADDED: the Region box's closed text (the plan's name, or "(all installed)" while region-index is -1)
@@ -138,6 +139,7 @@ export global SystemEvents {
     callback display-enlarge(bool);
     callback display-icon-px(float);               // 0..1
     callback display-trail-px(float);
+    callback display-trail-style(int);
     callback display-band-plan(bool);
     callback display-band-size(int);
     callback display-band-colour(int);
@@ -814,6 +816,8 @@ export component DisplayBody inherits VerticalLayout {
     display-icon-px(a) => { SystemEvents.display-icon-px(a); }
     callback display-trail-px(float);
     display-trail-px(a) => { SystemEvents.display-trail-px(a); }
+    callback display-trail-style(int);
+    display-trail-style(a) => { SystemEvents.display-trail-style(a); }
     callback display-band-plan(bool);
     display-band-plan(a) => { SystemEvents.display-band-plan(a); }
     callback display-band-size(int);
@@ -899,6 +903,20 @@ export component DisplayBody inherits VerticalLayout {
         value: root.model.trail-px;
         tooltip: root.model.trail-tooltip;
         changed(v) => { root.display-trail-px(v); }
+    }
+    // the trail style (docs 6.52, tick row 364): the classic map page's Line / Ribbon combo, here under the width it goes with
+    Line {
+        RowLabel { text: @tr("Trail style"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: Pick.label(root.model.trail-styles, root.model.trail-style-index);
+            items: root.model.trail-styles;
+            selected: root.model.trail-style-index;
+            label: @tr("Trail style");
+            popup-min-w: 110px;
+            tooltip: @tr("How the aircraft trails are drawn on the maps and the radar scope: a line, or a ribbon that covers more of the map under it.");
+            picked(i) => { root.display-trail-style(i); }
+        }
     }
     Line { Tick { horizontal-stretch: 1; label: @tr("Band plan"); on: root.model.band-plan; toggled(v) => { root.display-band-plan(v); } } }
     if root.model.band-plan : Line {

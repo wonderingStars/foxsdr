@@ -108,7 +108,7 @@ struct Synced {
 };
 
 struct SystemPublisher::Lists {
-    Synced<::SelectItem> scales, themes, freqDisplays, figures, bandSizes, bandColours, regions, languages, countries, gpsPorts, bauds, problemKinds;
+    Synced<::SelectItem> scales, themes, freqDisplays, figures, trailStyles, bandSizes, bandColours, regions, languages, countries, gpsPorts, bauds, problemKinds;
     Synced<slint::SharedString> serialPorts, usagePayload, featureEvidence, bugEvidence;
     Synced<::KeyGroup> keyGroups;
     std::vector<Synced<::KeyRow>> keyRows;
@@ -422,6 +422,8 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
     o.icon_text = ss(m.icon_text);
     o.trail_px = toNorm(m.trail_px, m.trail_min, m.trail_max);
     o.trail_text = ss(m.trail_text);
+    o.trail_styles = lists_->trailStyles.set(items(m.trail_styles));
+    o.trail_style_index = m.trail_style_index;
     o.band_plan = m.band_plan;
     o.band_sizes = lists_->bandSizes.set(items(m.band_sizes));
     o.band_size_index = m.band_size_index;
@@ -769,6 +771,7 @@ void SystemPublisher::wire() {
         const DisplayModel& d = last_.display;
         execute(applyDisplayTrailPx(cur(), std::round(fromNorm(v, d.trail_min, d.trail_max))), "display-trail-px");
     });
+    ev.on_display_trail_style([this, cur](int i) { execute(applyDisplayTrailStyle(cur(), i), "display-trail-style"); });
     ev.on_display_band_plan([this, cur](bool on) { execute(applyDisplayBandPlan(cur(), on), "display-band-plan"); });
     ev.on_display_band_size([this, cur](int i) { execute(applyDisplayBandSize(cur(), i), "display-band-size"); });
     ev.on_display_band_colour([this, cur](int i) { execute(applyDisplayBandColour(cur(), i), "display-band-colour"); });

@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1963 | 381 | 82 | 1500 | 0 |
+| 1963 | 383 | 82 | 1498 | 0 |
 
-Of the 1128 rows that are controls (the 835 readout-like rows left out): 381 asserted, 82 driven without a read-back, 665 not drivable.
+Of the 1128 rows that are controls (the 835 readout-like rows left out): 383 asserted, 82 driven without a read-back, 663 not drivable.
 
-NOT DRIVABLE by reason: readout 835, other 194, needs a signal (no fixture) 120, deferred 115, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120, deferred 114, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
 
 ## Per section
 
@@ -68,7 +68,7 @@ NOT DRIVABLE by reason: readout 835, other 194, needs a signal (no fixture) 120,
 | DECODE bank and plugin host — Picture window ("<PLUGIN> IMAGE") | 8 | 0 | 0 | 8 | 4 | 0 |
 | DECODE bank and plugin host — Panel window (plugin's own table) | 5 | 0 | 0 | 5 | 2 | 0 |
 | DECODE bank and plugin host — Instrument window | 6 | 0 | 0 | 6 | 4 | 0 |
-| DECODE bank and plugin host — Map page (generic, non-satellite) - brief, map agent owns the detail | 17 | 0 | 0 | 17 | 3 | 0 |
+| DECODE bank and plugin host — Map page (generic, non-satellite) - brief, map agent owns the detail | 17 | 1 | 0 | 16 | 3 | 0 |
 | DECODE bank and plugin host — Target details (window) | 5 | 0 | 0 | 5 | 2 | 0 |
 | DECODE bank and plugin host — Fitted modules (window; rail key "Plugins"): top bar and list | 15 | 2 | 2 | 11 | 6 | 0 |
 | DECODE bank and plugin host — Module page (click a name) | 14 | 0 | 0 | 14 | 7 | 0 |
@@ -191,7 +191,7 @@ NOT DRIVABLE by reason: readout 835, other 194, needs a signal (no fixture) 120,
 | Fitted modules — Module page (click a row) | 12 | 0 | 0 | 12 | 5 | 0 |
 | Fitted modules — Retired modules ("Disabled" rows on the rail, under the store row) | 5 | 0 | 0 | 5 | 2 | 0 |
 | Patch — rail entries (the main window's other face) | 2 | 0 | 0 | 2 | 0 | 0 |
-| Patch — top band: transport, parts bin, decoder row, blueprints | 9 | 2 | 2 | 5 | 3 | 0 |
+| Patch — top band: transport, parts bin, decoder row, blueprints | 9 | 3 | 2 | 4 | 3 | 0 |
 | Patch — information pane (top-right of the band) | 5 | 0 | 0 | 5 | 5 | 0 |
 | Patch — canvas (patch_view.cpp) | 12 | 0 | 3 | 9 | 2 | 0 |
 | Patch — node faces (drawn over the plate) | 13 | 3 | 0 | 10 | 8 | 0 |
@@ -802,7 +802,7 @@ NOT DRIVABLE by reason: readout 835, other 194, needs a signal (no fixture) 120,
 | 361 | Coverage | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 362 | Trails | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 363 | Altitude colours | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
-| 364 | Trail style | dropdown/combo | NOT DRIVABLE | - | deferred: the SAVED style (mapTrailStyle: 0 line, 1 ribbon, the classic map page writes it) is applied by the map - main.cpp -> KitPublisher::setMapLook -> fillMap -> TileCompositor::setTrailLook (docs 6.44) - but no trail-style dropdown is drawn in the Slint window (the kit map page has no menu for it, row 1713): applied, not settable |
+| 364 | Trail style | dropdown/combo | DRIVEN+ASSERTED | system-display-map.txt | choose "Trail style" "Ribbon"; state cfg.mapTrailStyle == 1 (docs 6.52: the box the Slint window lacked) |
 | 365 | Trail width | slider | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 366 | Reset coverage | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 367 | Coverage status | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -2592,8 +2592,8 @@ NOT DRIVABLE by reason: readout 835, other 194, needs a signal (no fixture) 120,
 | 1626 | Search box | text field | DRIVEN+ASSERTED | tools-bookmarks.txt | type "Search bookmarks" "Sec"; expect value equals "Sec"; ctrl+a, backspace; expect value equals "" (a view filter: only the widget holds it) |
 | 1627 | Group filter | dropdown/combo | DRIVEN | tools-bookmarks-rows.txt | choose "Group filter" "Aviation"; expect "Group filter" value contains "Aviation" (the filter is a view state with no engine read-back) |
 | 1628 | Favourites only | checkbox | DRIVEN+ASSERTED | tools-bookmarks.txt | click "Favourites only" twice; expect checked true / false (panel-local, no engine read-back) |
-| 1629 | On the spectrum | checkbox | DRIVEN+ASSERTED | tools-bookmarks.txt; tools-bookmarks-options.txt | click "On the spectrum"; expect checked false/true and Stack close names enabled follows; the cfg.bookmarkMarkers read-back is PARKED as a finding (the host never saves it) |
-| 1630 | Stack close names | checkbox | DRIVEN+ASSERTED | tools-bookmarks.txt; tools-bookmarks-options.txt | click "Stack close names"; expect checked false; the cfg.bookmarkStackNames read-back is PARKED as a finding (the host never saves it) |
+| 1629 | On the spectrum | checkbox | DRIVEN+ASSERTED | tools-bookmarks.txt; tools-bookmarks-options.txt | click "On the spectrum"; expect checked false/true and Stack close names enabled follows; state cfg.bookmarkMarkers false/true (saved since docs 6.52; the spectrum's marks read it) |
+| 1630 | Stack close names | checkbox | DRIVEN+ASSERTED | tools-bookmarks.txt; tools-bookmarks-options.txt | click "Stack close names"; expect checked false/true; state cfg.bookmarkStackNames false/true (saved since docs 6.52; the names stack onto three rows by it) |
 | 1631 | Count line | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1632 | Export for SDR# | button (small) | NOT DRIVABLE | - | the key copies / opens the exported file: clipboard and shell withheld in a bounded run |
 | 1633 | Remove this group | button (small) | DRIVEN+ASSERTED | tools-bookmarks-rows.txt | click "Remove this group"; state count.bookmarkGroups == 0 (label from the run-2 dump) |
@@ -2946,7 +2946,7 @@ NOT DRIVABLE by reason: readout 835, other 194, needs a signal (no fixture) 120,
 | 1890 | PRESETS | button | DRIVEN+ASSERTED | patch-band | click PRESETS twice; state pages contains "PATCH PRESETS" after the first |
 | 1891 | Run readout | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1892 | Part keys (7) | button | DRIVEN+ASSERTED | patch-band | click Channel, Demod, Spectrum, Speaker, Text out, Map, Radio; state count.patchNodes 2..8 after each |
-| 1893 | Decoders row | readout + buttons | NOT DRIVABLE | - | no decoder is fitted in the scratch profile, so the Decoders row is empty and has no keys |
+| 1893 | Decoders row | readout + buttons | DRIVEN+ASSERTED | patch-decoders.txt | plugins=all: expect "More decoders" (the fold key under the two rows the row is capped at, docs 6.52); click it, expect "Fewer decoders"; click, expect "More decoders" |
 | 1894 | No-decoder note | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1895 | Blueprints | dropdown/combo (tall) | NOT DRIVABLE | - | no Blueprints key in the testing API's element tree (the dump lists none) |
 | 1896 | Blueprint note | readout | NOT DRIVABLE | - | a readout, not a control |

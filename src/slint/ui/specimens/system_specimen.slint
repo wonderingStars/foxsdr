@@ -58,6 +58,7 @@ component SpecDisplay inherits DisplayBody {
     display-enlarge(a) => { Rec.rec("display-enlarge", a ? "1" : "0"); }
     display-icon-px(a) => { Rec.rec("display-icon-px", "" + a); }
     display-trail-px(a) => { Rec.rec("display-trail-px", "" + a); }
+    display-trail-style(a) => { Rec.rec("display-trail-style", "" + a); }
     display-band-plan(a) => { Rec.rec("display-band-plan", a ? "1" : "0"); }
     display-band-size(a) => { Rec.rec("display-band-size", "" + a); }
     display-band-colour(a) => { Rec.rec("display-band-colour", "" + a); }
@@ -211,6 +212,7 @@ export component SystemSpecimen inherits Window {
         figures-index: 0,
         tuner-switches: true, enlarge-readings: false,
         icon-px: 0.4, icon-text: "48 px", trail-px: 0.1, trail-text: "4 px",
+        trail-styles: [{ label: "Line", id: "line", enabled: true, note: "" }, { label: "Ribbon", id: "ribbon", enabled: true, note: "" }], trail-style-index: 0,
         band-plan: true,
         band-sizes: [
             { label: "Small", id: "", enabled: true, note: "" },
@@ -242,6 +244,7 @@ export component SystemSpecimen inherits Window {
         figures: [{ label: "Enlarged figures", id: "enlarged", enabled: true, note: "" }], figures-index: 0,
         tuner-switches: false, enlarge-readings: true,
         icon-px: 1.0, icon-text: "96 px", trail-px: 0.0, trail-text: "1 px",
+        trail-styles: [{ label: "Line", id: "line", enabled: true, note: "" }, { label: "Ribbon", id: "ribbon", enabled: true, note: "" }], trail-style-index: 1,
         band-plan: true,
         band-sizes: [{ label: "Large", id: "", enabled: true, note: "" }], band-size-index: 0,
         band-colours: [{ label: "Plain", id: "", enabled: true, note: "" }], band-colour-index: 0,

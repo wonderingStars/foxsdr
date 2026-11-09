@@ -2,7 +2,7 @@
 1889	DRIVEN	patch-band	click ALL OFF; FOXAPI_OP_PATCH_ALL_OFF is withheld in a bounded run, only the key staying enabled is read
 1890	ASSERTED	patch-band	click PRESETS twice; state pages contains "PATCH PRESETS" after the first
 1892	ASSERTED	patch-band	click Channel, Demod, Spectrum, Speaker, Text out, Map, Radio; state count.patchNodes 2..8 after each
-1893	NOT_DRIVABLE	-	no decoder is fitted in the scratch profile, so the Decoders row is empty and has no keys
+1893	ASSERTED	patch-decoders.txt	plugins=all: expect "More decoders" (the fold key under the two rows the row is capped at, docs 6.52); click it, expect "Fewer decoders"; click, expect "More decoders"
 1895	NOT_DRIVABLE	-	no Blueprints key in the testing API's element tree (the dump lists none)
 1902	NOT_DRIVABLE	-	a pointer drag / wheel gesture; the scripted input has no drag or wheel verb
 1903	DRIVEN	patch-canvas	click "-"#2; canvas zoom has no read-back

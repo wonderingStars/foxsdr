@@ -245,6 +245,11 @@ DisplayModel readDisplay(TableReader& t, const cc::AppConfig& iface, const FoxRe
     m.icon_max = static_cast<float>(kAircraftIconMaxPx);
     m.trail_min = static_cast<float>(kTrailWidthMinPx);
     m.trail_max = static_cast<float>(wing);
+    // THE TRAIL STYLE (docs 6.52, tick row 364): the classic map page's Line / Ribbon combo, saved as mapTrailStyle (0 line, 1 ribbon; config.cpp
+    // reads anything else as a line). It was applied by the Slint map since 6.44 but had no control; it sits under Trail width, where the width is.
+    m.trail_styles.push_back(SelectItem{std::string(tr("Line")), "line"});
+    m.trail_styles.push_back(SelectItem{std::string(tr("Ribbon")), "ribbon"});
+    m.trail_style_index = iface.mapTrailStyle == 1 ? 1 : 0;
     m.scale_tooltip = std::string(tr("Makes the whole bench bigger, fonts and controls together. "
                         "Auto follows this monitor's own Windows display scaling; a "
                         "fixed percentage overrides it. Ctrl+= / Ctrl+- step through "
@@ -1336,6 +1341,12 @@ Effect applyDisplayBandPlan(const cc::AppConfig& cur, bool on) {
     cc::AppConfig half = cur;
     half.bandPlanOverlay = on;
     return saved(on != cur.bandPlanOverlay, half);
+}
+Effect applyDisplayTrailStyle(const cc::AppConfig& cur, int index) {
+    if (index < 0 || index > 1) { return {}; }
+    cc::AppConfig half = cur;
+    half.mapTrailStyle = index;
+    return saved(half.mapTrailStyle != cur.mapTrailStyle, half);
 }
 Effect applyDisplayBandSize(const cc::AppConfig& cur, int index) {
     if (index < 0 || index > 2) { return {}; }

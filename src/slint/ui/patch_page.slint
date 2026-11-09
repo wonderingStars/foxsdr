@@ -699,7 +699,12 @@ component PatchBand inherits Rectangle {
     out property <length> decoders-y: root.parts-y + root.parts-h + 6px;
     // the decoders' caption, then the keys; with none, the host's sentence
     out property <length> decoders-x0: root.x0 + dcap.width + 6px;
-    out property <int> decoder-rows: root.model.decoders.length == 0 ? 1 : dec-flow.last-row + 1;
+    // THE DECODER ROWS ARE CAPPED (docs 6.52): with 43 decoder keys the FlowRow wrapped into ten rows and the band stood about 380 px tall, leaving
+    // the canvas 200 px (6.45). Two rows show by default; a key under them says how many more there are and unfolds the rest (a third row when folded).
+    property <bool> decoders-expanded: false;
+    property <int> all-decoder-rows: root.model.decoders.length == 0 ? 1 : dec-flow.last-row + 1;
+    property <bool> dec-overflow: root.all-decoder-rows > 2;
+    out property <int> decoder-rows: root.model.decoders.length == 0 ? 1 : root.decoders-expanded ? root.all-decoder-rows + 1 : min(root.all-decoder-rows, 2) + (root.dec-overflow ? 1 : 0);
     property <length> no-dec-h: root.model.decoders.length == 0 ? nodec.height : 0px;
     property <length> decoders-h: root.model.decoders.length == 0 ? max(Theme.key-xs-h, root.no-dec-h) : root.decoder-rows * Theme.key-xs-h + (root.decoder-rows - 1) * 4px;
     out property <length> blueprints-y: root.model.blueprints-shown ? root.decoders-y + root.decoders-h + 6px : -1px;
@@ -803,7 +808,7 @@ component PatchBand inherits Rectangle {
             items: root.model.decoders;
         }
         for d[i] in root.model.decoders : Key {
-            visible: i < 64;
+            visible: i < 64 && (root.decoders-expanded || dec-flow.r-of(i) < 2);
             x: root.x0 + dec-flow.x-of(i);
             y: root.decoders-y + dec-flow.r-of(i) * (Theme.key-xs-h + 4px);
             width: dec-flow.w-of(i);
@@ -813,6 +818,20 @@ component PatchBand inherits Rectangle {
             label: d.label;
             tooltip: d.tooltip;
             clicked => { root.decoder-pressed(d.index); }
+        }
+        // the fold key of the capped decoder rows: under the two rows while folded, under them all while unfolded
+        dmore := Key {
+            visible: root.dec-overflow;
+            x: root.x0;
+            y: root.decoders-y + (root.decoders-expanded ? root.all-decoder-rows : 2) * (Theme.key-xs-h + 4px);
+            width: min(self.preferred-width, root.avail);
+            min-width: 0px;
+            xs: true;
+            min-w: 0px;
+            label: root.decoders-expanded ? @tr("Fewer decoders") : @tr("All {} decoders", root.model.decoders.length);
+            accessible-label: root.decoders-expanded ? @tr("Fewer decoders") : @tr("More decoders");   // a fixed name for the scripted input, whatever the count
+            tooltip: @tr("Two rows of decoder keys show here; this key shows them all, or folds them away again.");
+            clicked => { root.decoders-expanded = !root.decoders-expanded; }
         }
         nodec := Note {
             x: root.x0 + dcap.width + 6px;

@@ -1,0 +1,13 @@
+#! frames=500 view=patch plugins=all
+# patch-decoders (docs 6.52): the PATCH band's Decoders row with every catalogue plugin fitted (tick row 1893). With 43 plugins the
+# FlowRow of decoder keys wrapped into ten rows and stood the band about 380 px tall, leaving the canvas 200 px (6.45); the row is
+# capped at two rows and a fold key under them ("All N decoders", accessible name "More decoders") shows the rest, then folds them
+# away again ("Fewer decoders"). A decoder key on the first row adds its node to the draft, read back through the engine's graph.
+10 state count.patchNodes == 1
+state kit.plugins == 43
++1 expect "More decoders" enabled equals "true"
++1 click "More decoders"
++5 expect "Fewer decoders" enabled equals "true"
++1 click "Fewer decoders"
++5 expect "More decoders" enabled equals "true"
++1 dump

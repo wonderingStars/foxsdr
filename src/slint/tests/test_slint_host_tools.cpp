@@ -952,6 +952,12 @@ void bookmarkEffects() {
     CHECK(e.commands.size() == 1 && fcOf(e, 0).op == FOXAPI_OP_BOOKMARK_ADD && commandText(cmdOf(e, 0)) == "Tower" && cmdOf(e, 0).grant == FOXAPI_GRANT_SETTINGS);
     e = applyBookmarkAdd("", " \t ");
     CHECK(e.commands.size() == 1 && fcOf(e, 0).op == FOXAPI_OP_BOOKMARK_ADD && commandText(cmdOf(e, 0)).empty());
+    // an empty name with the tune known is named by the frequency, the list row's own figure (6.46 finding 1, docs 6.52); blanks count as empty; a group keeps its op
+    e = applyBookmarkAdd("", "", 100300000.0);
+    CHECK(e.commands.size() == 1 && fcOf(e, 0).op == FOXAPI_OP_BOOKMARK_ADD && commandText(cmdOf(e, 0)) == "100.3000 MHz");
+    e = applyBookmarkAdd(" \t", "Air", 118500000.0);
+    CHECK(fcOf(e, 0).op == FOXAPP_OP_BOOKMARK_GROUP && commandText(cmdOf(e, 0)) == std::string("Air\x1F") + "118.5000 MHz");
+    CHECK(commandText(cmdOf(applyBookmarkAdd("Tower", "", 100300000.0), 0)) == "Tower");   // a typed name is never replaced
     e = applyBookmarkAdd("Tower", "  LUGANO ");
     CHECK(e.commands.size() == 1 && fcOf(e, 0).op == FOXAPP_OP_BOOKMARK_GROUP && fcOf(e, 0).ival[0] == 0 && commandText(cmdOf(e, 0)) == std::string("LUGANO\x1F") + "Tower");
     e = applyBookmarkAdd("", "G");

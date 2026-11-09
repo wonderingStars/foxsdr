@@ -52,7 +52,7 @@ import { TooltipFace } from "tooltip.slint";
 export struct AxisTick { pos: float, label: string }              // pos 0..1 of the plot width
 export struct DbTick { pos: float, label: string }                // pos 0..1 of the plot height, 0 = top
 export struct BandSegment { from: float, to: float, label: string, color: color }   // transparent -> Theme.bandplan
-export struct BookmarkMark { pos: float, label: string, favourite: bool }
+export struct BookmarkMark { pos: float, label: string, favourite: bool, row: int }   // row: the name's row under the header (0 top, up to 2 with "Stack close names"), -1 unnamed (docs 6.52)
 export struct PluginMark { pos: float, width: float, label: string, color: color, dashed: bool }   // width 0 = a point
 export struct UserMarker { pos: float, label: string }            // the spectrum draws the line only; the label is the waterfall tab
 // One channel of the airband block on the air: a bright band while its squelch is open, a faint one while shut.
@@ -538,9 +538,9 @@ export component SpectrumView inherits Rectangle {
         color: root.mark-colour(m.color);
     }
     for b in root.bookmarks : Text {
-        visible: b.label != "";
+        visible: b.label != "" && b.row >= 0;
         x: root.gutter-w + root.snap(root.plot-w * b.pos) - 8px;
-        y: 60px;
+        y: 60px + b.row * 14px;   // stacked names (docs 6.52): the row the host chose, a line each
         height: 14px;
         text: b.label;
         vertical-alignment: center;

@@ -220,6 +220,7 @@ core::AppConfig displayConfig() {
     c.readingsScale = 1.4f;
     c.aircraftIconPx = 64;
     c.mapTrailWidthPx = 9;
+    c.mapTrailStyle = 1;
     c.bandPlanOverlay = true;
     c.bandPlanSize = "large";
     c.bandPlanPalette = "mono";
@@ -255,6 +256,8 @@ void displayReads() {
     CHECK(m.figures.size() == 2 && at(m.figures, 0).label == "Normal size" && at(m.figures, 1).label == "Enlarged figures" && m.figures_index == 1);
     CHECK(!m.tuner_switches && m.enlarge_readings);
     CHECK(m.icon_px == 64.f && m.icon_text == "64 px" && m.trail_px == 9.f && m.trail_text == "9 px" && m.trail_max == 57.f && m.trail_min == 1.f);
+    // the trail style (docs 6.52): Line / Ribbon, the saved ribbon ticked
+    CHECK(m.trail_styles.size() == 2 && at(m.trail_styles, 0).label == "Line" && at(m.trail_styles, 0).id == "line" && at(m.trail_styles, 1).label == "Ribbon" && at(m.trail_styles, 1).id == "ribbon" && m.trail_style_index == 1);
     CHECK(m.band_plan && m.band_options_shown);
     CHECK(m.band_sizes.size() == 3 && at(m.band_sizes, 0).label == "Small" && at(m.band_sizes, 2).label == "Large" && m.band_size_index == 2);
     CHECK(m.band_colours.size() == 3 && at(m.band_colours, 0).label == "Classic" && at(m.band_colours, 1).label == "Vivid" && at(m.band_colours, 2).label == "Mono" && m.band_colour_index == 2);
@@ -306,6 +309,7 @@ void displayReads() {
     const DisplayModel md = readDisplay(none, odd, stateWith(-110, 0), o);
     CHECK(md.scale_index == 0 && md.theme_index == 0 && md.freq_display_index == 0 && md.band_size_index == 0 && md.band_colour_index == 0);
     CHECK(md.icon_px == 96.f && md.trail_px == 1.f && !md.range_manual && md.figures_index == 0 && md.tuner_switches && !md.enlarge_readings);
+    CHECK(md.trail_style_index == 0);   // anything but 1 is a line (config.cpp reads it so too)
 
     // the pure helpers
     CHECK(scaleIndexOf("auto") == 0 && scaleIndexOf("100") == 1 && scaleIndexOf("250") == 6 && scaleIndexOf("") == 0 && scaleIndexOf("99") == 0);
@@ -968,6 +972,11 @@ void displayEffects() {
     CHECK(e.save && e.half.bandPlanSize == "small" && changedFields(c, e.half) == Names{"bandPlanSize"} && applyDisplayBandSize(c, 2).empty() && applyDisplayBandSize(c, 5).empty());
     e = applyDisplayBandColour(c, 1);
     CHECK(e.save && e.half.bandPlanPalette == "vivid" && changedFields(c, e.half) == Names{"bandPlanPalette"} && applyDisplayBandColour(c, 2).empty() && applyDisplayBandColour(c, -1).empty());
+    // the trail style (docs 6.52): 0 line, 1 ribbon; the style in force and anything outside the two are nothing
+    const int otherStyle = c.mapTrailStyle == 1 ? 0 : 1;
+    e = applyDisplayTrailStyle(c, otherStyle);
+    CHECK(e.save && e.half.mapTrailStyle == otherStyle && changedFields(c, e.half) == Names{"mapTrailStyle"});
+    CHECK(applyDisplayTrailStyle(c, c.mapTrailStyle).empty() && applyDisplayTrailStyle(c, 2).empty() && applyDisplayTrailStyle(c, -1).empty());
 
     // the Region picker is an op, and nothing for the plan already in force
     StubTable t = plansTable();

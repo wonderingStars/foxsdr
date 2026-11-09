@@ -466,6 +466,35 @@ std::string biasHint(bool present, bool on) {
     if (!present) { return cascade::i18n::tr("No bias tee on this radio"); }
     return on ? std::string(cascade::i18n::tr("On \xC2\xB7 4.5 V on the cable")) : std::string(cascade::i18n::tr("Off \xC2\xB7 4.5 V on the cable \xC2\xB7 asks first"));
 }
+std::vector<int> bookmarkNameRows(const std::vector<BookmarkName>& marks, double widthPx, double charPx, int rows) {
+    std::vector<int> out(marks.size(), -1);
+    if (rows < 1) { rows = 1; }
+    if (rows > kBookmarkNameMaxRows) { rows = kBookmarkNameMaxRows; }
+    std::vector<std::vector<std::pair<double, double>>> placedByRow(static_cast<std::size_t>(rows));
+    // favourites first (pass 0), then the rest, as AppWindow::drawBookmarkMarkers walks them
+    for (int pass = 0; pass < 2; ++pass) {
+        for (std::size_t i = 0; i < marks.size(); ++i) {
+            const BookmarkName& b = marks[i];
+            if ((pass == 0) != b.favourite || b.label.empty()) { continue; }
+            const double x = b.pos * widthPx;
+            const double a = x + 3.0, e = a + charPx * static_cast<double>(b.label.size());
+            if (e > widthPx) { continue; }   // it would run off the right edge
+            for (std::size_t r = 0; r < placedByRow.size(); ++r) {
+                bool clash = false;
+                for (const auto& p : placedByRow[r]) {
+                    if (a < p.second + kBookmarkNameGapPx && e + kBookmarkNameGapPx > p.first) { clash = true; break; }
+                }
+                if (!clash) {
+                    out[i] = static_cast<int>(r);
+                    placedByRow[r].emplace_back(a, e);
+                    break;
+                }
+            }
+        }
+    }
+    return out;
+}
+
 std::string waterfallFootRight(const FoxReceiverState& s, const std::string& decoder) {
     if (!(s.flags & FOXAPI_RX_RUNNING)) { return cascade::i18n::tr("STOPPED"); }
     return joinDot({modeName(s.demodMode), decoder.empty() ? std::string(cascade::i18n::tr("receiving")) : cascade::core::formatText(cascade::i18n::tr("decoding: %s"), decoder.c_str())});
