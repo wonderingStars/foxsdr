@@ -358,7 +358,14 @@ int main() {
         engine_api_test::setEnv("CASCADE_DECODE_TEST", "1");
         const auto run = [&](bool report) {
             engine_api_test::setEnv("CASCADE_PLUGIN_STATUS", report ? "1" : "");
+            // cmd.exe (_popen) strips the OUTER pair of quotes of a line that starts with two, so the whole line is wrapped in a second
+            // pair there; /bin/sh (popen) has no such rule and reads the wrapped line as ONE word - "<path>/cascade --frames 120 2>&1" -
+            // and answers "not found" (Linux CI, 2026-11-09), so the line is the plain quoted path there.
+#if defined(_WIN32)
             const std::string cmd = std::string("\"\"") + (app / exeName).string() + "\" --frames 120 2>&1\"";
+#else
+            const std::string cmd = std::string("\"") + (app / exeName).string() + "\" --frames 120 2>&1";
+#endif
             std::vector<std::string> lines;
 #if defined(_WIN32)
             FILE* pipe = _popen(cmd.c_str(), "r");
