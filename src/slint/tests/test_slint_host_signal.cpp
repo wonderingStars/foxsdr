@@ -288,6 +288,26 @@ int main() {
         r.t.facts["fact.source.iqOpening"] = "0";
         CHECK(readSource(r.t, r.s, r.o).iq_note.empty());   // the header is not being read any more
 
+        // THE BOX, BROWSE AND OPEN (docs 6.63): Browse is drawn only where a file dialog exists, both keys grey while the header is being read, and the box's own line
+        // (Open over an empty box on a machine with no dialog) rides above the disk-wait line
+        r.o.iq_browse_offered = true;
+        m = readSource(r.t, r.s, r.o);
+        CHECK(m.iq_browse && !m.iq_opening);
+        r.t.facts["fact.source.iqOpening"] = "1";
+        r.o.iq_open_wait_s = 2.4;
+        CHECK(readSource(r.t, r.s, r.o).iq_opening);
+        r.o.iq_box_note = "Type or paste the path of a WAV recording, then press Open.";
+        CHECK(readSource(r.t, r.s, r.o).iq_note == "Type or paste the path of a WAV recording, then press Open.\nWaiting for the disk to open the file: 2 s");
+        r.t.facts["fact.source.iqOpening"] = "0";
+        CHECK(readSource(r.t, r.s, r.o).iq_note == "Type or paste the path of a WAV recording, then press Open.");
+        r.o.iq_box_note.clear();
+        r.o.iq_browse_offered = false;
+        CHECK(!readSource(r.t, r.s, r.o).iq_browse);
+        // another variant never carries the I/Q box's keys
+        Rig other = generator();
+        other.o.iq_browse_offered = true;
+        CHECK(!readSource(other.t, other.s, other.o).iq_browse);
+
         Rig p = generator();
         p.t.lists[FOXAPI_LIST_DEVICES].clear();
         devices(p, 4);
@@ -892,6 +912,30 @@ int main() {
         c = opIqOpen("C:\\iq\\a.wav");
         CHECK(c.valid && c.q.c.op == FOXAPI_OP_SELECT_SOURCE && textOf(c.q.c, c.q.longText) == "file:C:\\iq\\a.wav");
         CHECK(!opIqOpen("").valid);
+        c = opIqRow();
+        CHECK(c.valid && c.q.c.op == FOXAPI_OP_SELECT_SOURCE && textOf(c.q.c, c.q.longText) == "row:iqfile");
+
+        // WHAT OPEN DOES WITH THE BOX (docs 6.63, the classic's openIqFile): the box cleaned; an empty one is the file dialog, or - with none - its own line
+        {
+            IqOpenPlan plan = planIqOpen("C:\\iq\\a.wav", true);
+            CHECK(plan.path == "C:\\iq\\a.wav" && !plan.browse && plan.note.empty() && plan.log.empty());
+            CHECK(plan.open.valid && textOf(plan.open.q.c, plan.open.q.longText) == "file:C:\\iq\\a.wav");
+            // Explorer's "Copy as path" quotes, and a pasted line's trailing space and line break, come off; a quote inside a name stays
+            plan = planIqOpen("  \"C:\\iq\\a b.wav\" \r\n", true);
+            CHECK(plan.path == "C:\\iq\\a b.wav" && textOf(plan.open.q.c, plan.open.q.longText) == "file:C:\\iq\\a b.wav");
+            plan = planIqOpen("C:\\iq\\say \"hi\".wav", false);
+            CHECK(plan.path == "C:\\iq\\say \"hi\".wav" && plan.open.valid);
+            // an EMPTY box (or one holding nothing worth opening) is not a file that would not open
+            for (const char* empty : {"", "   ", "\"\"", " \"  \" "}) {
+                plan = planIqOpen(empty, true);
+                CHECK(plan.browse && plan.path.empty() && !plan.open.valid && plan.note.empty());
+                plan = planIqOpen(empty, false);
+                CHECK(!plan.browse && !plan.open.valid && plan.note == "Type or paste the path of a WAV recording, then press Open." &&
+                      plan.log == "source: Open pressed with no I/Q file named and no file dialog to offer");
+            }
+            // the log line names no file
+            CHECK(planIqOpen("", false).log.find(".wav") == std::string::npos);
+        }
         const std::string longPath = "C:\\" + std::string(300, 'x') + ".wav";
         c = opIqOpen(longPath);
         CHECK(c.valid && !c.q.longText.empty() && textOf(c.q.c, c.q.longText) == "file:" + longPath);

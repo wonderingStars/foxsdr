@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1968 | 386 | 82 | 1500 | 0 |
+| 1973 | 393 | 82 | 1498 | 0 |
 
-Of the 1131 rows that are controls (the 837 readout-like rows left out): 386 asserted, 82 driven without a read-back, 663 not drivable.
+Of the 1136 rows that are controls (the 837 readout-like rows left out): 393 asserted, 82 driven without a read-back, 661 not drivable.
 
-NOT DRIVABLE by reason: readout 837, other 193, needs a signal (no fixture) 120, deferred 114, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 837, other 193, needs a signal (no fixture) 120, deferred 114, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 4, no plugin fitted 1.
 
 ## Per section
 
@@ -135,7 +135,7 @@ NOT DRIVABLE by reason: readout 837, other 193, needs a signal (no fixture) 120,
 | SIGNAL bank — Source (rail section): header | 1 | 0 | 0 | 1 | 0 | 0 |
 | SIGNAL bank — Source (rail section): faults, advice and hints | 9 | 0 | 0 | 9 | 9 | 0 |
 | SIGNAL bank — Source (rail section): the source list and its keys | 10 | 3 | 0 | 7 | 4 | 0 |
-| SIGNAL bank — Source (rail section): I/Q file, Pluto and rtl_tcp | 8 | 0 | 0 | 8 | 2 | 0 |
+| SIGNAL bank — Source (rail section): I/Q file, Pluto and rtl_tcp | 8 | 2 | 0 | 6 | 2 | 0 |
 | SIGNAL bank — Source (rail section): sound card | 11 | 0 | 0 | 11 | 4 | 0 |
 | SIGNAL bank — Source (rail section): the open radio | 13 | 0 | 0 | 13 | 3 | 0 |
 | SIGNAL bank — Source (rail section): Airspy panel | 10 | 0 | 0 | 10 | 2 | 0 |
@@ -197,6 +197,7 @@ NOT DRIVABLE by reason: readout 837, other 193, needs a signal (no fixture) 120,
 | Patch — node faces (drawn over the plate) | 13 | 3 | 0 | 10 | 8 | 0 |
 | Patch — inspector drawer (right of the canvas; appears when a node is selected) | 24 | 0 | 0 | 24 | 9 | 0 |
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
+| SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 
 ## Every row
@@ -2009,8 +2010,8 @@ NOT DRIVABLE by reason: readout 837, other 193, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1235 | I/Q file path | text field | NOT DRIVABLE | - | another source variant: the I/Q file card is drawn only with that source selected, which needs a file (no file chooser in a bounded run) |
-| 1236 | I/Q file Open | button | NOT DRIVABLE | - | another source variant: the I/Q file card is drawn only with that source selected, which needs a file (no file chooser in a bounded run) |
+| 1235 | I/Q file path | text field | DRIVEN+ASSERTED | signal-source-iqfile.txt | type / press / key ctrl+a, backspace, enter on "I/Q file path"; expect value equals (docs 6.63: a bounded run has the dialog and clipboard seams, so the card is reachable) |
+| 1236 | I/Q file Open | button | DRIVEN+ASSERTED | signal-source-iqfile.txt | click "Open" over a typed path, a quoted path and an empty box; state deviceName contains the fixture |
 | 1237 | Pluto address | text field | NOT DRIVABLE | - | another source variant (Pluto / rtl_tcp card, drawn only with that source selected) and needs the network, withheld in a bounded run |
 | 1238 | Pluto Open | button | NOT DRIVABLE | - | another source variant (Pluto / rtl_tcp card, drawn only with that source selected) and needs the network, withheld in a bounded run |
 | 1239 | Pluto help | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -3043,6 +3044,16 @@ NOT DRIVABLE by reason: readout 837, other 193, needs a signal (no fixture) 120,
 | 1961 | REPLACE / CANCEL | button | NOT DRIVABLE | - | REPLACE / CANCEL need a name already taken; not reached in this round |
 | 1962 | Delete preset? | dialog (modal) | DRIVEN+ASSERTED | patch-presets | click DELETE on the selected preset; the Delete preset? panel then answers DELETE#2 and the note is read |
 | 1963 | DELETE / CANCEL | button | DRIVEN+ASSERTED | patch-presets | click DELETE#2 on the Delete preset? question; expect the note Deleted "Probe2". label |
+
+### SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 1969 | I/Q file Browse | button | DRIVEN+ASSERTED | signal-source-iqfile.txt | click "Browse..." (FOXSDR_FILE_PICK answers the dialog); expect "I/Q file path" value, state deviceName contains ais-decoder |
+| 1970 | I/Q file Open over an empty box | button (behaviour) | DRIVEN+ASSERTED | signal-source-iqfile.txt | click "Open" with the box empty: the dialog's choice is opened (state deviceName contains ais-decoder) |
+| 1971 | I/Q file path: a copied file pastes | text field (behaviour) | DRIVEN+ASSERTED | signal-source-iqfile.txt | press the box, key ctrl+v; expect value equals the clipboard file (FOXSDR_FILE_CLIPBOARD); the log holds the paste line |
+| 1972 | I/Q file path: a quoted path is cleaned | text field (behaviour) | DRIVEN+ASSERTED | signal-source-iqfile.txt | type a quoted path with a trailing space, click "Open"; expect value equals the cleaned path, state deviceName contains aprs-decoder |
+| 1973 | I/Q open refused: the log | behaviour | DRIVEN+ASSERTED | signal-source-iqfile.txt | Open on a file that is not there: the source stays (state deviceName), and the run's diagnostic log holds "source: the I/Q file did not open" (header logcontains) |
 
 ### SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63)
 

@@ -67,6 +67,8 @@ component SpecSource inherits SourceBody {
     ppm-committed(a) => { Rec.rec("ppm-committed", a); }
     iq-path-committed(a) => { Rec.rec("iq-path-committed", a); }
     iq-open() => { Rec.rec("iq-open", ""); }
+    iq-browse() => { Rec.rec("iq-browse", ""); }
+    iq-paste() => { Rec.rec("iq-paste", ""); return true; }
     pluto-address-committed(a) => { Rec.rec("pluto-address-committed", a); }
     pluto-open() => { Rec.rec("pluto-open", ""); }
     rtltcp-address-committed(a) => { Rec.rec("rtltcp-address-committed", a); }
@@ -319,7 +321,7 @@ export component SignalSpecimen inherits Window {
     in-out property <TransmitModel> m-tx: { chip: "FAULT", tone: ChipTone.err, available: true, armed: false, keyed: false, fault: "The transmitter stopped answering." };
     in-out property <SourceModel> m-iq: {
         device-label: "I/Q file", devices: [{ label: "I/Q file", id: "iq", enabled: true, note: "" }], device-index: 0, refresh-enabled: true, setup-key-label: "RADIO SETUP",
-        variant: 1, iq-path: "C:\\iq\\pass-0412.cu8", iq-note: "Waiting for the disk to open the file: 2 s",
+        variant: 1, iq-path: "C:\\iq\\pass-0412.cu8", iq-note: "Waiting for the disk to open the file: 2 s", iq-browse: true,
     };
     in-out property <SourceModel> m-pluto: {
         device-label: "ADALM-Pluto", devices: [{ label: "ADALM-Pluto", id: "pluto", enabled: true, note: "" }], device-index: 0, refresh-enabled: true, setup-key-label: "RADIO SETUP",

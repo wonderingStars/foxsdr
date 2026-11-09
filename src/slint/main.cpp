@@ -319,6 +319,7 @@ int main(int argc, char** argv) {
     // THE SIGNAL BANK'S BODIES (signal_publish.hpp): the Source, Radio, Audio filters, Sinks, Transmit, Recorder and Frequency correction models, the Radio-setup
     // page and the import dialog, published from signal_logic's reads once a tick (after the kit's) and wired to the engine's ops.
     foxsdr::slintsignal::SignalPublisher signalBank(*ui, kit, api, session);
+    signalBank.setBounded(bounded.bounded());   // the I/Q row's file seams (FOXSDR_FILE_PICK, FOXSDR_FILE_CLIPBOARD) exist only in a bounded run
     signalBank.wire();
     if (std::getenv("FOXSDR_SLINT_SETUP") != nullptr) { signalBank.raiseSetupForCapture(); }     // a bounded run's capture of the Radio-setup page
     if (std::getenv("FOXSDR_SLINT_IMPORT") != nullptr) { signalBank.raiseImportForCapture(); }   // ...and of the recorder's import dialog

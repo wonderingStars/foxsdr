@@ -1819,8 +1819,8 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1235 | I/Q file path | text field | PRESENT | variant 1 card: LineInput, commits on Enter and on focus lost, the draft is the host's (local); no file chooser, as in the ImGui build |
-| 1236 | I/Q file Open | button | PRESENT | Open key -> SELECT_SOURCE 'file:' + path (nothing for an empty path); the 'waiting for the disk' line (iq-note) shows after 1 s; the key and the field are not greyed while an open is pending |
+| 1235 | I/Q file path | text field | PRESENT | variant 1 card: LineInput, commits on Enter and on focus lost, the draft is the host's (local); since docs 6.63 Ctrl+V takes a copied FILE's path (rows 1971, 1972 and the Browse key, row 1969, give it the chooser the first build lacked) |
+| 1236 | I/Q file Open | button | PRESENT | Open key -> iq-open -> planIqOpen: SELECT_SOURCE 'file:' + the box CLEANED (core::typedIqPath); an empty box is the file dialog (row 1970); the 'waiting for the disk' line (iq-note) shows after 1 s, and since docs 6.63 Browse and Open grey while the header is being read (iq-opening, as the classic's BeginDisabled) |
 | 1237 | Pluto address | text field | PRESENT | variant 2 card: LineInput -> FOXAPP_OP_SET_PLUTO_URI; not greyed while an open is pending |
 | 1238 | Pluto Open | button | PRESENT | Open key -> SELECT_SOURCE 'open-pluto:uri=' + the typed address |
 | 1239 | Pluto help | readout | PRESENT | the card's dim Note (pluto-help) |
@@ -2872,6 +2872,18 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 
 Subtotal: PRESENT 142, RELOCATED 35, DEFERRED 11, total 188 (rows 1776 to 1963).
 
+## SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63)
+
+The classic window's I/Q-file row got a Browse key, an Open that is the file dialog over an empty box, a paste for a copied file, a cleaned path and a log line for a refused open (claude/iq-file-open-paste-112c87, folded in docs 6.59). These are the Slint row's own, numbered after the last inventory row; the pure decisions are `core/iq_file_box.hpp`'s, the file read is `core/clipboard_files.*`, the submissions are the classic's (SELECT_SOURCE "row:iqfile" and "file:<path>").
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1969 | I/Q file Browse | button | PRESENT | small Key beside Open (iq-browse), drawn only where a file dialog exists (SourceModel::iq_browse): core::pickFile opens beside the path in the box, else in the recordings folder, WAV recordings first; a choice is SELECT_SOURCE "row:iqfile" then "file:<path>" (the classic's openIqFileAt), a cancel changes nothing and is logged ('the I/Q file dialog was closed without a choice'); the choice is logged without its name |
+| 1970 | I/Q file Open over an empty box | button (behaviour) | PRESENT | planIqOpen: an empty box (or spaces, or a pair of quotes round nothing) is the file dialog where there is one (never a 'cannot open file: ' with nothing after the colon), else the box's own line 'Type or paste the path of a WAV recording, then press Open.' and a log line |
+| 1971 | I/Q file path: a copied file pastes | text field (behaviour) | PRESENT | LineInput files-paste: a FocusScope's capture-key-pressed offers Ctrl+V to the host first (iq-paste -> core::firstFileOnClipboard, the CF_HDROP list Explorer's Copy puts there); true = the box takes the first file's path, false = the box pastes text as ever; logged without the name |
+| 1972 | I/Q file path: a quoted path is cleaned | text field (behaviour) | PRESENT | Open tries core::typedIqPath(box): whitespace and ONE pair of double quotes (Explorer's 'Copy as path') off, a quote inside a name stays; the box then shows what is tried |
+| 1973 | I/Q open refused: the log | behaviour | PRESENT | the engine's (Engine::pollIqOpen, the same submission the classic makes): 'source: the I/Q file did not open: <reason>' with the path replaced by '(the file)' (PRIVACY.md: the log never carries a file name); the full sentence stays on screen in the Source section's red line |
+
 ## SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63)
 
 The classic window's notice for a copy the update service has withdrawn (field-early-warning; `drawUpdateBanner`, `app_window_updates.cpp`) is not in the 0.99.104 inventory, so these rows are the Slint window's own, numbered after the last inventory row. The facts are the classic's: `UpdateInfo::runningWithdrawn` and `offerWithdrawn` (`core/updater.hpp`), read by `HostDuties::updateStatus`/`updateCardFor` and `readUpdates`.
@@ -2888,15 +2900,15 @@ The classic window's notice for a copy the update service has withdrawn (field-e
 
 | Status | Rows |
 |---|---|
-| PRESENT | 1532 |
+| PRESENT | 1537 |
 | RELOCATED | 198 |
 | DEFERRED | 238 |
 | TODO (unclassified) | 0 |
-| Total | 1968 |
+| Total | 1973 |
 
 Phase 2 alone: PRESENT 890, RELOCATED 34, DEFERRED 11, total 935.
 
-Phase 3, the SIGNAL bank alone: PRESENT 122, RELOCATED 17, DEFERRED 37, total 176.
+Phase 3, the SIGNAL bank alone: PRESENT 127, RELOCATED 17, DEFERRED 37, total 181 (the five rows after 1968 are docs 6.63's).
 
 Phase 3, the SYSTEM bank alone: PRESENT 100, RELOCATED 17, DEFERRED 25, total 142 (the five rows after 1963 are docs 6.63's).
 

@@ -15,6 +15,7 @@
 #include "core/engine_vocab.hpp"
 #include "core/freq_converter.hpp"
 #include "core/i18n.hpp"
+#include "core/iq_file_box.hpp"
 #include "core/ppm_correction.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/section_reads.hpp"
@@ -931,8 +932,12 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
     // ---- the variant cards ----
     if (row == 1) {
         m.iq_path = o.iq_path;
+        m.iq_browse = o.iq_browse_offered;
         // DISABLED WHILE THE HEADER IS BEING READ: the engine reads it on a worker (fact.source.iqOpening); a wait of a second or more says it is the disk's.
-        if (factOf(t, "fact.source.iqOpening") == "1") { m.iq_note = diskWaitLine(o.iq_open_wait_s); }
+        m.iq_opening = factOf(t, "fact.source.iqOpening") == "1";
+        if (m.iq_opening) { m.iq_note = diskWaitLine(o.iq_open_wait_s); }
+        // The box's own line (an Open over an empty box on a machine with no file dialog) rides above the wait line.
+        if (!o.iq_box_note.empty()) { m.iq_note = m.iq_note.empty() ? o.iq_box_note : o.iq_box_note + "\n" + m.iq_note; }
     }
     if (m.variant == kVariantPluto) {
         m.pluto_address = factOf(t, "fact.source.plutoUri");
@@ -1380,6 +1385,23 @@ Command opPpmCommitted(const std::string& text, double stored) {
 Command opIqOpen(const std::string& path) {
     if (path.empty()) { return {}; }
     return make(cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "file:" + path));
+}
+Command opIqRow() { return make(cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "row:iqfile")); }
+IqOpenPlan planIqOpen(const std::string& typed, bool pickOffered) {
+    IqOpenPlan p;
+    p.path = cc::typedIqPath(typed);
+    if (!p.path.empty()) {
+        p.open = opIqOpen(p.path);
+        return p;
+    }
+    // AN EMPTY BOX IS NOT A FILE THAT WOULD NOT OPEN (a tester's "the Open does nothing", 0.99.101): the dialog where there is one, else what the box is for.
+    if (pickOffered) {
+        p.browse = true;
+    } else {
+        p.note = tr("Type or paste the path of a WAV recording, then press Open.");
+        p.log = "source: Open pressed with no I/Q file named and no file dialog to offer";
+    }
+    return p;
 }
 Command opPlutoAddress(const std::string& text) { return make(cmd::makeText(FOXAPP_OP_SET_PLUTO_URI, text)); }
 Command opPlutoOpen(const std::string& address) { return make(cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "open-pluto:uri=" + address)); }

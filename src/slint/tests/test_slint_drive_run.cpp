@@ -21,6 +21,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -95,6 +96,7 @@ struct Header {
     std::string config;    // a JSON file used as the run's settings seed instead of the generator profile (docs 6.51: a real radio's profile); relative = under tests/drive/fixtures
     bool userRadios = false;  // radios=user: the user's own SoapySDR vendor modules stay reachable (docs 6.51) - a hardware run on a real radio
     bool updateCheck = false; // updatecheck=on: the generator profile's "Check for updates at startup" tick is ON (it is off otherwise: a bounded run asks nobody)
+    std::vector<std::string> logContains;   // logcontains=<text, underscores for spaces>: the run's diagnostic log must hold the text afterwards (docs 6.63: "a refused open reaches the log")
     std::string manifest;     // manifest=<file>: foxsdr.com's answer, canned (FOXSDR_FAKE_UPDATE_MANIFEST, core/updater.hpp); relative = under tests/drive/fixtures (docs 6.63)
     std::map<std::string, std::string> env;
 };
@@ -127,6 +129,11 @@ Header parseHeader(const std::string& script) {
             else if (key == "radios") { h.userRadios = (value == "user"); }   // the user's SoapySDR modules (docs 6.51: a hardware run)
             else if (key == "updatecheck") { h.updateCheck = (value == "on"); }   // the Updates tick on (docs 6.63: the kill switch's notice)
             else if (key == "manifest") { h.manifest = value; }                   // the canned update answer (docs 6.63)
+            else if (key == "logcontains") {                                      // a line the run must have written to its diagnostic log (docs 6.63)
+                std::string text = value;
+                std::replace(text.begin(), text.end(), '_', ' ');
+                h.logContains.push_back(text);
+            }
             else if (key.rfind("FOXSDR_", 0) == 0 || key.rfind("CASCADE_", 0) == 0) { h.env[key] = value; }
         }
     }
@@ -173,6 +180,14 @@ int main(int argc, char** argv) {
             CHECK(!script.empty());
             return testSummary("test_slint_drive_run");
         }
+    }
+    // {fixtures} in a script or its header is the fixtures folder (forward slashes, which Windows takes as well as backslashes and which need no escaping inside a quoted
+    // step): a step can name a recording the same on every machine (docs 6.63). FOXSDR_DRIVE_FIXTURES_DIR names another folder.
+    {
+        const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
+        const std::string dirText = ((fx != nullptr && *fx != '\0') ? fs::path(fx) : fs::path(FOXSDR_DRIVE_FIXTURES_DIR)).generic_string();
+        const std::string token = "{fixtures}";
+        for (std::size_t at = script.find(token); at != std::string::npos; at = script.find(token, at + dirText.size())) { script.replace(at, token.size(), dirText); }
     }
     const Header h = parseHeader(script);
 
@@ -345,6 +360,17 @@ int main(int argc, char** argv) {
     CHECK(r.exitCode == 0);
     CHECK(finished);
     CHECK(clean);
+    // THE LOG (docs 6.63): the lines a script's header asks for (`logcontains=`) are looked for in every file the run's diagnostic folder holds.
+    for (const std::string& want : h.logContains) {
+        bool found = false;
+        std::error_code lec;
+        for (const auto& entry : fs::recursive_directory_iterator(dir / "diag", fs::directory_options::skip_permission_denied, lec)) {
+            if (!entry.is_regular_file(lec)) { continue; }
+            if (readFile(entry.path()).find(want) != std::string::npos) { found = true; break; }
+        }
+        if (!found) { std::printf("  the run's log does not hold \"%s\"\n", want.c_str()); }
+        CHECK(found);
+    }
     // FOXSDR_DRIVE_VERBOSE=1 prints the whole run (a script author reads its `dump` from here); a failed run prints it anyway.
     const char* verbose = std::getenv("FOXSDR_DRIVE_VERBOSE");
     if (r.exitCode != 0 || !finished || !clean || (verbose != nullptr && *verbose == '1')) {

@@ -716,6 +716,31 @@ int main() {
         CHECKV(!evs.empty() && evs.back().name == "iq-path-committed" && evs.back().args == "C:\\iq\\pass-0412.cu8x", "the I/Q path commits: '%s'", evs.empty() ? "" : evs.back().args.c_str());
         e = press(xd + kBodyW - 9 - 20, fy6 + 12);
         CHECKV(e.name == "iq-open", "I/Q Open: '%s'", e.name.c_str());
+        // BROWSE (docs 6.63) sits left of Open: two key fills at the right end of the row, the first is Browse
+        {
+            const Frame fr = shot();
+            std::vector<std::pair<int, int>> runs;
+            for (int x = xd + kBodyW / 2; x < xd + kBodyW; ++x) {
+                if (!fr.near(x, fy6 + 3, keyBg)) { continue; }
+                if (!runs.empty() && x - runs.back().second <= 2) { runs.back().second = x; } else { runs.emplace_back(x, x); }
+            }
+            // (the text box's own fill and the label of Open break the runs up; the widest unbroken fill left of Open is Browse)
+            const int openX = xd + kBodyW - 9 - 20;
+            std::pair<int, int> browse{0, 0};
+            for (const auto& r : runs) {
+                if (r.second < openX - 20 && r.second - r.first > browse.second - browse.first) { browse = r; }
+            }
+            CHECKV(browse.second - browse.first >= 40, "I/Q row: a Browse key left of Open (widest fill %d px)", browse.second - browse.first);
+            e = press((browse.first + browse.second) / 2, fy6 + 12);
+            CHECKV(e.name == "iq-browse", "I/Q Browse: '%s'", e.name.c_str());
+            e = press(openX, fy6 + 12);
+            CHECKV(e.name == "iq-open", "I/Q Open beside Browse: '%s'", e.name.c_str());
+            // Ctrl+V in the box is offered to the host first (a copied FILE is not text); the host took it, so nothing else is pasted
+            evs.clear();
+            clk(xd + 9 + 60, fy6 + 12);
+            ctrlTap(win, u8"v");
+            CHECKV(!evs.empty() && evs.back().name == "iq-paste", "Ctrl+V in the I/Q box asks the host: '%s'", evs.empty() ? "" : evs.back().name.c_str());
+        }
         const int T7 = yOf(ui->get_d7_y()) + kSecRow + kBodyPad, fy7 = T7 + 2 * kPitch + 1 + 6 + 13 + 4;
         e = press(xd + kBodyW - 9 - 20, fy7 + 12);
         CHECKV(e.name == "pluto-open", "Pluto Open: '%s'", e.name.c_str());

@@ -35,7 +35,12 @@
 //   ppm-toggled(on)                opPpmToggled         FOXAPP_OP_SET_PPM 0x8426  ival[0] = on, num[0] = the stored value
 //   ppm-committed(text)            opPpmCommitted       FOXAPP_OP_SET_PPM 0x8426  ival[0] = 1, num[0] = sanitisePpm(text); nothing when it is the stored value or not a number
 //   iq-path-committed(path)        [local]              the draft text (ReadOptions::iq_path is it, given back each publish)
-//   iq-open()                      opIqOpen             FOXAPI_OP_SELECT_SOURCE 0x0302  text = "file:" + path (a path past 255 bytes rides in the long text); nothing for an empty path
+//   iq-open()                      planIqOpen/opIqOpen  FOXAPI_OP_SELECT_SOURCE 0x0302  text = "file:" + path (a path past 255 bytes rides in the long text), the path being the box CLEANED
+//                                                       (core::typedIqPath: whitespace and one pair of quotes off); an EMPTY box opens the file dialog (iq-browse) where the machine has
+//                                                       one and otherwise says what the box is for (docs 6.63; the classic's openIqFile)
+//   iq-browse()                    opIqRow + opIqOpen   [local] the system's file dialog (core::pickFile, "I/Q recordings (*.wav)" first); a choice is "row:iqfile" then "file:<path>"
+//                                                       (the classic's openIqFileAt); a cancel changes nothing and says so in the log
+//   iq-paste() -> bool             [local]              Ctrl+V in the box with a FILE on the clipboard (core::firstFileOnClipboard): the box takes its path; false = not a file, the box pastes text as ever
 //   pluto-address-committed(s)     opPlutoAddress       FOXAPP_OP_SET_PLUTO_URI 0x8418  text = s, sent for each edit
 //   pluto-open()                   opPlutoOpen          FOXAPI_OP_SELECT_SOURCE 0x0302  text = "open-pluto:uri=" + the typed address
 //   rtltcp-address-committed(s)    opRtlTcpAddress      FOXAPP_OP_SET_RTLTCP_ADDR 0x8424  text = s
@@ -154,6 +159,8 @@ struct SourceModel {
     int variant = 0;   // 0 none, 1 I/Q file, 2 Pluto, 3 rtl_tcp, 4 sound card, 5 Airspy, 6 radio extras (device options), 7 converter in force
     // the variant cards
     std::string iq_path, iq_note;
+    bool iq_browse = false;                // the Browse key is drawn: this machine has a file dialog (ReadOptions::iq_browse_offered)
+    bool iq_opening = false;               // the header is being read on a worker (fact.source.iqOpening): Browse and Open are greyed
     std::string pluto_address, pluto_help;
     std::string rtltcp_address, rtltcp_help;
     std::string card_busy, card_none;
@@ -318,6 +325,8 @@ struct SignalModels {
 // What the publisher owns and hands in each time (the drafts, the clocks, the pages' open flags, the probe's answer).
 struct ReadOptions {
     std::string iq_path;                         // the I/Q path box
+    std::string iq_box_note;                     // the box's own line ("Type or paste the path of a WAV recording, then press Open."), "" none
+    bool iq_browse_offered = false;              // a file dialog exists on this machine (core::filePickAvailable, or the bounded run's seam)
     double iq_open_wait_s = 0.0;                 // seconds since Open was pressed on the I/Q file (the line shows from 1 s); 0 none out
     std::vector<std::string> patch_held;         // names of the hardware radios a running patch holds
     std::string converter_lo_bad;                // the LO text the last commit could not read; "" none
@@ -445,6 +454,18 @@ Command opBiasTee(bool on, const std::string& radioKey);
 Command opPpmToggled(bool on, double stored);
 Command opPpmCommitted(const std::string& text, double stored);
 Command opIqOpen(const std::string& path);
+Command opIqRow();   // SELECT_SOURCE "row:iqfile": the Source combo moves to the I/Q file row, so what follows is drawn where it happens
+// WHAT OPEN DOES WITH THE BOX (the classic's AppWindow::openIqFile, docs 6.63), pure: `typed` is the box's text. The path is core::typedIqPath(typed) - Explorer's
+// "Copy as path" quotes and a pasted line's trailing space come off, and the box shows what is tried. An EMPTY box is not a file that would not open:
+// where a file dialog is offered the answer is `browse`; where none is, `note` says what the box is for (and `log` is the line for the log).
+struct IqOpenPlan {
+    std::string path;       // the box cleaned; "" = nothing to open
+    bool browse = false;    // open the file dialog
+    std::string note;       // the box's line when there is nothing to open and no dialog ("" otherwise)
+    std::string log;        // the log line for that case ("" none)
+    Command open;           // SELECT_SOURCE "file:<path>"; invalid when path is empty
+};
+IqOpenPlan planIqOpen(const std::string& typed, bool pickOffered);
 Command opPlutoAddress(const std::string& text);
 Command opPlutoOpen(const std::string& address);
 Command opRtlTcpAddress(const std::string& text);
