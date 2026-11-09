@@ -1,0 +1,10 @@
+#! frames=160 bank=4 sections=4:2
+# system-ppm: Frequency correction (tick row 1414 is RELOCATED to the SIGNAL family's body, but the SYSTEM section still lists the
+# "PPM frequency correction" checkbox in the dump). The switch sends FOXAPP_OP_SET_PPM; no engine flag or cfg field reads it back
+# (ppmCorrection is Engine-owned), so the read-back is the checkbox's own checked value after the table round trip.
+10 state running == 1
+expect "PPM frequency correction" checked equals "false"
++1 click "PPM frequency correction"
++20 expect "PPM frequency correction" checked equals "true"
++3 click "PPM frequency correction"
++20 expect "PPM frequency correction" checked equals "false"

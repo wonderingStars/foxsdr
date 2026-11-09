@@ -1,0 +1,28 @@
+#! frames=200 bank=4 sections=4:1
+# system-language: Language & country (tick rows 1404, 1407, 1409). Country first, then the Language change LAST (it re-labels the
+# window: nothing is driven after it). The Language list's rows are the catalogues' own names, which the dump cannot list; "English"
+# is the one row that is always there and always drawable, so it is the pick (auto -> en: saved, applied, nothing re-worded).
+# The comboboxes are labelled by their row label ("Country", "Language"), as in the Display dump.
+10 state running == 1
+state cfg.country != AT
+state cfg.language == auto
+
+# Country: a FILTERED LONG LIST (only the first rows are instantiated): open it, narrow it with keys, click the row; then "Not set"
+# (the first row of the unfiltered list)
++1 click "Country"
+# typed with keys: the filter field has the focus when the popup opens; a pointer click at a popup element lands outside it (docs 6.47)
++4 key A   # the popup field takes the focus a moment after it opens (its focus-grab timer): a key sent earlier is lost
+key u
+key s
+key t
++3 click "Austria"   # the narrowed rows exist a frame after the host has filtered
++10 state cfg.country == AT
+expect "Country" value equals "Austria"
++2 click "Country"
++1 click "Not set"
++10 state cfg.country != AT
+expect "Country" value equals "Not set"
+
+# Language, last
++3 choose "Language" "English"
++20 state cfg.language == en

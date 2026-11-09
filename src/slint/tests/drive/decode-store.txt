@@ -1,0 +1,10 @@
+#! frames=140 bank=1
+# decode-store: the DECODE bank's "Plugin store" row opens the Plugin store page (tick rows 278, 1803 as opener) and the page's own
+# Close key ("Close PLUGIN STORE", an IconKey in the tab, tick row 326) closes it again. Read-back: KitPublisher::pagesLine.
+10 state running == 1
+state bank == 1
+state pages == "pages:"
++1 click "Plugin store"
++10 state pages contains "PLUGIN STORE"
++3 click "Close PLUGIN STORE"
++10 state pages == "pages:"

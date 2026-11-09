@@ -1,0 +1,44 @@
+#! frames=200 bank=3 sections=3:0
+# extend-web: the EXTEND bank, Web access body (tick rows 1776-1794; rows 1777-1785 and 1787 drive state)
+#
+# BOUNDED RUN, UI-ONLY: src/slint/extend_publish.cpp withholds EVERY engine command of the EXTEND bank ("bounded run - op ... not
+# sent"), so no engine read-back (state webListening, fact.web.*, list.servers.*) can change and none is checked here. This script
+# checks the UI itself with `expect`: the Web access edits are LOCAL drafts (applyWebServe/Reach/Port/User/Password/Confirm, a mismatching
+# Set password) that the model shows while dirty, so a checkbox toggles its checked state, a field keeps what was typed, a combobox
+# is relabelled with its new value, and Apply lights ("Apply") when a draft is dirty. What lives in the engine (listening, the port
+# actually bound, the stored password, Clear password) is NOT COVERED: see coverage-extend.tsv.
+10 expect "Serve a browser page" checked equals "false"
+expect "Applied" enabled equals "false"
+
+# Serve a browser page: a local draft, dirty, so Apply lights
++2 click "Serve a browser page"
++3 expect "Serve a browser page" checked equals "true"
+expect "Apply" enabled equals "true"
+
+# Reachable from: the DropKey keeps its fixed label and shows the choice as its value
++2 choose "Reachable from" "Every network interface"
++4 expect "Reachable from" value equals "Every network interface"
+
+# Port and User name: typed, committed on Enter, kept
++2 type "Port" "9090"
++1 key enter
++3 expect "Port" value equals "9090"
++2 type "User name" "operator"
++1 key enter
++3 expect "User name" value equals "operator"
+
+# SHOW / HIDE reveals both password fields (a local key)
++2 click "Show the password"
++3 expect "Hide the password" enabled equals "true"
++2 click "Hide the password"
++3 expect "Show the password" enabled equals "true"
+
+# Password and Confirm that differ: Set password is a LOCAL refusal (nothing sent), both boxes wiped, the error line drawn
++2 type "Password" "alpha-one"
++1 key enter
++2 type "Confirm" "beta-two"
++1 key enter
++2 click "Set password"
++4 expect "the two passwords do not match" label contains "do not match"
+expect "Password" value equals ""
+expect "Confirm" value equals ""

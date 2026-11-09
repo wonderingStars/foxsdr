@@ -1,0 +1,19 @@
+#! frames=240 bank=1
+# decode-store-controls: the Plugin store page's own local controls (tick rows 1806-1808, 1811), labels from the dump of the open page.
+# The store's engine commands (CHECK NOW, GET, UPDATE...) are withheld in a bounded run (extend_publish.cpp), so only these [local]
+# effects exist, read back from the control itself (expect), never from the engine. The search box is two textinput rows (the
+# SearchBox and its inner TextInput); #2 is the one that takes typing.
+10 state running == 1
++1 click "Plugin store"
++10 state pages contains "PLUGIN STORE"
++3 expect "BROWSE" checked equals "true"
++1 click "UPDATES (0)"
++3 expect "UPDATES (0)" checked equals "true"
++1 expect "BROWSE" checked equals "false"
++1 click "BROWSE"
++3 expect "BROWSE" checked equals "true"
++1 expect "UPDATES (0)" checked equals "false"
++1 type "Search plugins"#2 "adsb"
++3 expect "Search plugins"#2 value equals "adsb"
++1 click "SITES"
++5 expect "Site address" enabled equals "true"

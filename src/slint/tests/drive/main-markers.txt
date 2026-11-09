@@ -1,0 +1,14 @@
+#! frames=120 bank=0 sections=0:2
+# main-markers: the toolbar's Markers key opens the Markers sheet; with no markers its Copy and Clear all keys are disabled, and Close
+# shuts it. A marker can only be dropped from the waterfall's right-click menu (Drop marker here), which the scripted input has no verb
+# for, so the sheet's list, Copy and Clear all stay untouched. The sheet's Close is the second "Close" (the title bar's is the first).
+# An expect cannot assert that a control is gone, so the closing is only clicked (the run's later steps still reach the main window).
+10 expect "Markers" enabled equals "true"
++1 state count.freqMarkers == 0
++1 click "Markers"
++8 expect "Copy markers to clipboard" enabled equals "false"
++1 expect "Clear all markers" enabled equals "false"
++1 expect "Close"#2 enabled equals "true"
++1 click "Close"#2
++8 expect "Markers" enabled equals "true"
++1 state count.freqMarkers == 0

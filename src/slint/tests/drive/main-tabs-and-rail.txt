@@ -1,0 +1,28 @@
+#! frames=260 bank=0 sections=0:2
+# main-tabs-and-rail: the centre tabs, the five bank keys, the FOLD key and the title rail's Notifications key
+10 state view == 0
++1 click "PATCH"
++5 state view == 1
++1 click "SCOPE"
++5 state view == 2
++1 click "RECEIVER"
++5 state view == 0
++1 state bank == 0
++1 click "DECODE"
++5 state bank == 1
++1 click "TOOLS"
++5 state bank == 2
++1 click "EXTEND"
++5 state bank == 3
++1 click "SYSTEM"
++5 state bank == 4
++1 click "SIGNAL"
++5 state bank == 0
++1 click "Notifications"
++5 state bank == 4
++1 click "SIGNAL"
++5 state bank == 0
++1 click "FOLD"
++8 expect "SHOW" enabled equals "true"
++1 click "SHOW"
++8 expect "FOLD" enabled equals "true"

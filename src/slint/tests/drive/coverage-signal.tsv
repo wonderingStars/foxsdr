@@ -1,0 +1,69 @@
+1225	NOT_DRIVABLE	signal-source	choosing another source changes the receiver and faults it without hardware; the script only reads the closed key (expect Source#2 value equals Signal generator) before and after Refresh
+1226	NOT_DRIVABLE	-	rows are this machine's sources; choosing one would leave the generator and fault the receiver without hardware
+1227	ASSERTED	signal-source	click Refresh; state count.devices >= 1; expect Refresh enabled equals true
+1228	ASSERTED	signal-source	click on, click off; expect Look for network USRPs checked true then false (Engine-owned field, the tick is the read-back)
+1229	ASSERTED	signal-source-setup	click RADIO SETUP; expect Don't show this again checked equals false (the sheet opened)
+1235	NOT_DRIVABLE	-	another source variant: the I/Q file card is drawn only with that source selected, which needs a file (no file chooser in a bounded run)
+1236	NOT_DRIVABLE	-	another source variant: the I/Q file card is drawn only with that source selected, which needs a file (no file chooser in a bounded run)
+1237	NOT_DRIVABLE	-	another source variant (Pluto / rtl_tcp card, drawn only with that source selected) and needs the network, withheld in a bounded run
+1238	NOT_DRIVABLE	-	another source variant (Pluto / rtl_tcp card, drawn only with that source selected) and needs the network, withheld in a bounded run
+1240	NOT_DRIVABLE	-	another source variant (Pluto / rtl_tcp card, drawn only with that source selected) and needs the network, withheld in a bounded run
+1241	NOT_DRIVABLE	-	another source variant (Pluto / rtl_tcp card, drawn only with that source selected) and needs the network, withheld in a bounded run
+1245	NOT_DRIVABLE	-	another source variant: the sound-card card is drawn only with a sound-card source selected; rows are this machine's audio devices
+1246	NOT_DRIVABLE	-	another source variant: the sound-card card is drawn only with a sound-card source selected; rows are this machine's audio devices
+1247	NOT_DRIVABLE	-	another source variant: the sound-card card is drawn only with a sound-card source selected; rows are this machine's audio devices
+1248	NOT_DRIVABLE	-	another source variant: the sound-card card is drawn only with a sound-card source selected; rows are this machine's audio devices
+1249	NOT_DRIVABLE	-	another source variant: the sound-card card is drawn only with a sound-card source selected; rows are this machine's audio devices
+1250	NOT_DRIVABLE	-	another source variant: the sound-card card is drawn only with a sound-card source selected; rows are this machine's audio devices
+1251	NOT_DRIVABLE	-	another source variant: the sound-card card is drawn only with a sound-card source selected; rows are this machine's audio devices
+1254	NOT_DRIVABLE	-	needs a radio: the device's sample rates are not drawn for the signal generator
+1256	NOT_DRIVABLE	-	needs a radio with more than one antenna port
+1258	NOT_DRIVABLE	-	needs a radio: Auto gain and the gain stages are not drawn for the signal generator
+1260	NOT_DRIVABLE	-	needs a radio: Auto gain and the gain stages are not drawn for the signal generator
+1261	NOT_DRIVABLE	-	needs a radio with a bias tee
+1262	NOT_DRIVABLE	-	needs a radio: the Radio extras card is drawn only on a radio model that has the option
+1263	NOT_DRIVABLE	-	needs a radio: the Radio extras card is drawn only on a radio model that has the option
+1264	NOT_DRIVABLE	-	needs a radio: the Radio extras card is drawn only on a radio model that has the option
+1265	NOT_DRIVABLE	-	needs a radio: the Radio extras card is drawn only on a radio model that has the option
+1266	NOT_DRIVABLE	-	needs a radio: the Radio extras card is drawn only on a radio model that has the option
+1267	NOT_DRIVABLE	-	needs an Airspy radio: its card is drawn only for that source
+1270	NOT_DRIVABLE	-	needs an Airspy radio: its card is drawn only for that source
+1271	NOT_DRIVABLE	-	needs an Airspy radio: its card is drawn only for that source
+1272	NOT_DRIVABLE	-	needs an Airspy radio: its card is drawn only for that source
+1273	NOT_DRIVABLE	-	needs an Airspy radio: its card is drawn only for that source
+1274	NOT_DRIVABLE	-	needs an Airspy radio: its card is drawn only for that source
+1275	NOT_DRIVABLE	-	needs an Airspy radio: its card is drawn only for that source
+1276	NOT_DRIVABLE	-	needs an Airspy radio: its card is drawn only for that source
+1278	ASSERTED	signal-source-converter	choose Converter mode Down-converter, later Off; expect Converter mode value equals Down-converter / Off (the engine's stored converter list)
+1280	ASSERTED	signal-source-converter	type Local oscillator 100 MHz; key enter; expect Local oscillator value contains 100
+1281	ASSERTED	signal-source-converter	click 125 MHz; expect Local oscillator value contains 125 (only the 125 MHz key is driven, the other two are not)
+1282	ASSERTED	signal-source-converter	click on, click off; expect Inverts the spectrum checked true then false (stored converter setting)
+1286	ASSERTED	signal-ppm	click PPM frequency correction#1; state fact.ppm.on == 1 then == 0; expect checked
+1289	NOT_DRIVABLE	-	needs a radio: the ppm value field and its step arrows are not drawn for the generator (fact.ppm.method na)
+1295	NOT_DRIVABLE	-	needs a radio with a bias tee: the sheet opens only from the BIAS TEE key or Source Bias tee tick, neither enabled for the generator
+1299	NOT_DRIVABLE	-	needs a radio with a bias tee: the sheet opens only from the BIAS TEE key or Source Bias tee tick, neither enabled for the generator
+1300	NOT_DRIVABLE	-	needs a radio with a bias tee: the sheet opens only from the BIAS TEE key or Source Bias tee tick, neither enabled for the generator
+1302	ASSERTED	signal-source-setup	click RADIO SETUP; expect Don't show this again checked equals false (the sheet's own tick exists)
+1305	NOT_DRIVABLE	-	a plain-text list of findings, no state to change
+1306	NOT_DRIVABLE	-	local effects withheld in a bounded run (driver install, browser link) and only drawn per finding with an install target
+1308	NOT_DRIVABLE	-	local effects withheld in a bounded run (driver install, browser link) and only drawn per finding with an install target
+1310	NOT_DRIVABLE	-	restarts the host's USB probe and a device scan; no stable read-back, left undriven in a bounded run
+1311	ASSERTED	signal-source-setup	click, click; expect Don't show this again checked true then false
+1315	ASSERTED	signal-radio	slider Passband 0.1 then 0.9; state bandwidthHz < 100000, > 3000, then > 120000 (the Passband slider takes the width list's place)
+1319	ASSERTED	signal-radio	click Stereo; state stereo == 0; click; state stereo == 1; expect checked
+1324	ASSERTED	signal-audio-filters	click on, click off; state nr == 1 / == 0; expect checked
+1325	ASSERTED	signal-audio-filters	slider Strength 0.8 then 0.1; state nrStrength > 0.65 then < 0.35
+1326	ASSERTED	signal-audio-filters	click on, click off; state notch == 1 / == 0; expect checked
+1327	ASSERTED	signal-audio-filters	slider Freq 0.3 then 0.9; state notchHz < 400, > 10, then > 3000
+1328	DRIVEN	signal-audio-filters	slider Q 0.85; no notchQ in readState, only the slider's own value is read (expect Q value contains 8), not an engine read-back
+1329	ASSERTED	signal-audio-filters	click on, click off; state autoNotch == 1 / == 0; expect checked
+1332	NOT_DRIVABLE	-	rows are this machine's audio devices
+1334	ASSERTED	signal-sinks	choose Audio buffer 240 ms, 960 ms, AUTOMATIC; state fact.audio.bufferMs == 240 / 960 / 0; state sinkOpen == 1
+1367	ASSERTED	signal-recorder	click Record IQ; state recordingIq == 1; state count.recordings >= 1
+1368	NOT_DRIVABLE	-	the Starting IQ state is too short to catch reliably on the worker; its cancel is not driven
+1370	ASSERTED	signal-recorder	click Stop IQ; state recordingIq == 0; expect Record IQ enabled equals true
+1372	ASSERTED	signal-recorder	click Record audio; state recordingAudio == 1; state count.recordings >= 1
+1373	NOT_DRIVABLE	-	the Starting audio state is too short to catch reliably on the worker; its cancel is not driven
+1375	ASSERTED	signal-recorder	click Stop audio; state recordingAudio == 0; expect Record audio enabled equals true
+1380	ASSERTED	signal-recorder	click Import; expect Browse... enabled equals true (the dialog opened)
+1386	DRIVEN	signal-recorder	click Cancel; the dialog closing is not read back (no engine state, no element left to expect absent)

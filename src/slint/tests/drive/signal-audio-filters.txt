@@ -1,0 +1,38 @@
+#! frames=300 bank=0 sections=0:3
+# signal-audio-filters: the Audio filters section (tick rows 1324-1329). Strength, Freq and Q are greyed until their tick is on, so each
+# tick comes first. Freq is logarithmic 10 Hz .. 20 kHz (61 % = about 1 kHz at the start).
+10 state running == 1
+state nr == 0
+state notch == 0
+state autoNotch == 0
+# Noise reduction and its Strength
++1 click "Noise reduction"
++20 state nr == 1
++1 expect "Noise reduction" checked equals "true"
++1 slider "Strength" 0.8
++20 state nrStrength > 0.65
++1 slider "Strength" 0.1
++20 state nrStrength < 0.35
++1 click "Noise reduction"
++20 state nr == 0
+# Notch, its Freq (log track: 0.3 -> about 100 Hz) and Q
++1 click "Notch"
++20 state notch == 1
++1 expect "Notch" checked equals "true"
++1 slider "Freq" 0.3
++20 state notchHz < 400
++1 state notchHz > 10
++1 slider "Freq" 0.9
++20 state notchHz > 3000
+# Q has no engine read-back in readState (no notchQ name): the slider's own value is read, which the model rewrites from the engine; 0.85 reads 84-86 %
++1 slider "Q" 0.85
++20 expect "Q" value contains "8"
++1 click "Notch"
++20 state notch == 0
+# Auto notch
++1 click "Auto notch"
++20 state autoNotch == 1
++1 expect "Auto notch" checked equals "true"
++1 click "Auto notch"
++20 state autoNotch == 0
++1 state running == 1

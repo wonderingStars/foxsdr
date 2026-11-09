@@ -1,0 +1,47 @@
+1888	DRIVEN	patch-band	click START; FOXAPI_OP_PATCH_RUN is withheld in a bounded run, so only the key staying enabled is read
+1889	DRIVEN	patch-band	click ALL OFF; FOXAPI_OP_PATCH_ALL_OFF is withheld in a bounded run, only the key staying enabled is read
+1890	ASSERTED	patch-band	click PRESETS twice; state pages contains "PATCH PRESETS" after the first
+1892	ASSERTED	patch-band	click Channel, Demod, Spectrum, Speaker, Text out, Map, Radio; state count.patchNodes 2..8 after each
+1893	NOT_DRIVABLE	-	no decoder is fitted in the scratch profile, so the Decoders row is empty and has no keys
+1895	NOT_DRIVABLE	-	no Blueprints key in the testing API's element tree (the dump lists none)
+1902	NOT_DRIVABLE	-	a pointer drag / wheel gesture; the scripted input has no drag or wheel verb
+1903	DRIVEN	patch-canvas	click "-"#2; canvas zoom has no read-back
+1904	DRIVEN	patch-canvas	click "+"#2; canvas zoom has no read-back
+1905	DRIVEN	patch-canvas	click Fit; the view has no read-back
+1906	NOT_DRIVABLE	-	a node plate is selected or moved by a pointer press or drag on the canvas, which has no label in the element tree
+1907	NOT_DRIVABLE	-	the close key is painted on the plate on hover, no label in the element tree
+1908	NOT_DRIVABLE	-	a pointer drag of the brass corner
+1909	NOT_DRIVABLE	-	a wire needs a pointer drag between ports
+1910	NOT_DRIVABLE	-	a wire needs a pointer drag between ports
+1912	NOT_DRIVABLE	-	the Delete key needs a selected node, selected only by a pointer press on the plate
+1914	ASSERTED	patch-canvas	click ON then OFF on the Radio face; expect the key's label flips OFF then ON
+1916	ASSERTED	patch-canvas	type Centre (MHz) 100.5, key enter; expect its value contains 100.5
+1919	ASSERTED	patch-canvas	type Frequency (MHz) 100.6, key enter; expect its value contains 100.6
+1920	NOT_DRIVABLE	-	the Demod face was not in any dump yet (patch-canvas now adds a Demod node and dumps it); needs a third round
+1921	NOT_DRIVABLE	-	the Demod face was not in any dump yet (patch-canvas now adds a Demod node and dumps it); needs a third round
+1927	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1928	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1929	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1930	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1931	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1932	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1934	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1935	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1936	NOT_DRIVABLE	-	the inspector needs a selected Decoder node and no decoder is fitted
+1938	NOT_DRIVABLE	-	the inspector needs a selected Decoder node and no decoder is fitted
+1942	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1947	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1948	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1950	NOT_DRIVABLE	-	the inspector opens only when a node is selected, by a pointer press on a plate; no label yet
+1951	DRIVEN	patch-presets	click row Probe, expect LOAD enabled, click LOAD; a bounded run withholds the patch STOP the load sends first, so the load is refused and the engine graph (2 nodes) cannot show it
+1952	DRIVEN	patch-presets	click LOAD; refused in a bounded run (the patch STOP is withheld), state count.patchNodes stays 2
+1953	ASSERTED	patch-presets	click SAVE AS...; type Name Probe, expect Name value equals Probe
+1954	ASSERTED	patch-presets	click RENAME, type Name Probe2, click RENAME#2; expect the row Probe2 label
+1955	ASSERTED	patch-presets	click DELETE then the question DELETE#2; expect the note Deleted "Probe2". label
+1956	ASSERTED	patch-presets	type Name Probe; expect Name value equals Probe
+1957	ASSERTED	patch-presets	click SAVE then RENAME#2; expect the row labels Probe and Probe2
+1958	DRIVEN	patch-presets	click CANCEL on the name row; expect the row Probe unchanged (the closed name row cannot be read as absent)
+1961	NOT_DRIVABLE	-	REPLACE / CANCEL need a name already taken; not reached in this round
+1963	ASSERTED	patch-presets	click DELETE#2 on the Delete preset? question; expect the note Deleted "Probe2". label
+1960	NOT_DRIVABLE	-	the Replace preset? panel needs a name already taken; not reached in this round
+1962	ASSERTED	patch-presets	click DELETE on the selected preset; the Delete preset? panel then answers DELETE#2 and the note is read

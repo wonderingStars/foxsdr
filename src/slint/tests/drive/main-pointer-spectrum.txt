@@ -1,0 +1,8 @@
+#! frames=100 bank=0 sections=0:2
+# main-pointer-spectrum: a pointer click (press = down and up at the control's centre) on the spectrum plot, off the VFO band
+# (the band sits at 100.3 MHz, the plot's centre is the radio's centre 100.0 MHz): FOXAPP_OP_VFO_TO_ABSOLUTE, snapped to the tune step.
+10 state tunedHz == 100300000
++1 press "Spectrum · 1024 bin"
++15 state tunedHz != 100300000
+state tunedHz > 99700000
+state tunedHz < 100300000

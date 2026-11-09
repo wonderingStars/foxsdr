@@ -1,0 +1,50 @@
+#! frames=360 bank=4 sections=4:0
+# system-display-map: the Display body, part 2 - the waterfall range sliders, the aircraft icon and trail sizes, the band plan overlay
+# and its Size / Colour (tick rows 1391, 1392, 1397-1401). The dB sliders reach the engine (SET_DISPLAY_RANGE: `state dbMin / dbMax`);
+# the map sizes and the overlay are interface-half settings (cfg.*). The track maps ~0.36 -> -110 dB and ~0.83 -> 0 dB (the dump's
+# values), so the targets below are tolerant.
+10 state running == 1
+state dbMin == -110
+state dbMax == 0
+
+# Min dB: low on the track = a lower floor
++1 slider "Min dB" 0.1
++15 state dbMin < -125
++1 expect "Min dB" value contains "%"
+
+# Max dB: high on the track = a higher ceiling
++2 slider "Max dB" 0.95
++15 state dbMax > 5
+
+# Aircraft icons and trail width: defaults 48 px and 4 px. Widen the trail first (its ceiling is the icon's wingspan), then the icons.
++2 state cfg.aircraftIconPx == 48
+state cfg.mapTrailWidthPx == 4
++1 slider "Trail width" 0.5
++10 state cfg.mapTrailWidthPx > 8
++2 slider "Aircraft icons" 0.9
++10 state cfg.aircraftIconPx > 70
+# the smallest icons pull the wider trail down with them
++2 slider "Aircraft icons" 0.0
++10 state cfg.aircraftIconPx < 25
+state cfg.mapTrailWidthPx < 20
+
+# Band plan: the overlay is off in the scratch profile (the dump: checked=false). "Band plan"#1 is this checkbox; the scope header's
+# "Band plan" key is a button further on in the dump.
++2 expect "Band plan"#1 checked equals "false"
++1 click "Band plan"#1
++10 state cfg.bandPlanOverlay == true
+expect "Band plan"#1 checked equals "true"
+
+# Size (default small) and Colour (default classic) are drawn only while the overlay is on. Their labels are not in the dump (the
+# section was dumped with the overlay off): the combobox is guessed to be labelled by its row label "Size" / "Colour".
++3 choose "Size" "Large"
++10 state cfg.bandPlanSize == large
++2 choose "Size" "Medium"
++10 state cfg.bandPlanSize == medium
++2 choose "Colour" "Vivid"
++10 state cfg.bandPlanPalette == vivid
++2 choose "Colour" "Mono"
++10 state cfg.bandPlanPalette == mono
+
++2 click "Band plan"#1
++10 state cfg.bandPlanOverlay == false

@@ -1,0 +1,9 @@
+#! frames=120 bank=1
+# decode-target-details: the "Target details" row (tick row 312) is a drawer toggle (decodeOpen_["details"]), not a page, so
+# pagesLine does not change; its Go to on map / Follow keys (316-317, 375-376) need a target and are NOT DRIVABLE.
+# "Target maps" (row 319) is the blocked no-tracker row: checked here as disabled (a guard, not a state change).
+10 state running == 1
+state pages == "pages:"
+expect "Target maps" enabled equals "false"
++1 click "Target details"
++5 state pages == "pages:"

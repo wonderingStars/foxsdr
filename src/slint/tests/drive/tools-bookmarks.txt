@@ -1,0 +1,41 @@
+#! frames=420 bank=2 sections=2:2
+# tools-bookmarks: the Bookmarks body (tick rows 1618-1631). Add, the group field, the search box and the three option boxes.
+# The panel-local boxes (search, Favourites only, On the spectrum, Stack close names) have no engine read-back: they are read through the
+# widget (`expect ... checked / value`); the cfg read-back is in tools-bookmarks-options.txt. The row's keys, the group filter, rename and
+# remove need labels that only exist once rows and a group exist: the two dumps below give the parent those labels.
+10 state running == 1
+state count.bookmarks == 0
++1 type "Bookmark name" "Probe"
++1 click "Add current"
++25 state count.bookmarks == 1
+state list.bookmarks.names contains Probe
+# a second bookmark under a typed group (FOXAPP_OP_BOOKMARK_GROUP action 0)
++1 type "Bookmark name" "Second"
++1 type "Group" "Aviation"
++1 key enter
++1 click "Add current"
++25 state count.bookmarks == 2
+state list.bookmarks.names contains Second
+state list.bookmarkGroups.names contains Aviation
+# the search box (a view filter: only the widget holds it)
++1 type "Search bookmarks" "Sec"
++2 expect "Search bookmarks" value equals "Sec"
++1 key ctrl+a
++1 key backspace
++2 expect "Search bookmarks" value equals ""
+# the option boxes
++1 click "Favourites only"
++2 expect "Favourites only" checked equals "true"
++1 click "Favourites only"
++2 expect "Favourites only" checked equals "false"
++1 expect "Stack close names" enabled equals "true"
++1 click "Stack close names"
++2 expect "Stack close names" checked equals "false"
++1 click "On the spectrum"
++2 expect "On the spectrum" checked equals "false"
++1 expect "Stack close names" enabled equals "false"
++1 click "On the spectrum"
++2 expect "On the spectrum" checked equals "true"
++1 expect "Stack close names" enabled equals "true"
+# the labels the rows and the group controls carry once two bookmarks and a group exist (group pick arrow, group filter, row keys)
++5 dump

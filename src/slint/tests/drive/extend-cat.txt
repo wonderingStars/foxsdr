@@ -1,0 +1,16 @@
+#! frames=100 bank=3 sections=3:1
+# extend-cat: the EXTEND bank, CAT body (tick rows 1795-1801; rows 1797-1799 change state)
+#
+# BOUNDED RUN, UI-ONLY: src/slint/extend_publish.cpp withholds EVERY engine command of the EXTEND bank ("bounded run - op ... not
+# sent"), so no engine read-back (fact.cat.*, list.servers.*) can change and none is checked here. The CAT checkboxes (Accept CAT
+# connections, Reachable from other machines) are NOT driven: applyCatAccept / applyCatReachable send SERVER_CONFIG, and readCat shows
+# the typed draft only while an engine answer is pending (server_asks_pending > 0, never in a bounded run), so Tick's
+# `box.checked = root.on` puts the box back to the engine fact and a click changes nothing visible. The Port field is the one
+# UI check: a typed value is kept in the field (the commit sends nothing in this run). Listening itself is NOT COVERED.
+10 expect "Accept CAT connections" checked equals "false"
+expect "Reachable from other machines" checked equals "false"
+expect "Port" value equals "4532"
+
++2 type "Port" "5000"
++1 key enter
++3 expect "Port" value equals "5000"

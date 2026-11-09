@@ -1,0 +1,121 @@
+2	NOT_DRIVABLE	-	a container, not a control: its keys are rows 10-12 and the drag is row 13
+5	NOT_DRIVABLE	-	a container, not a control: its tabs are rows 68-69 and the spectrum and waterfall rows below
+7	ASSERTED	main-tabs-and-rail.txt	click the SCOPE tab; state view == 2 (the instrument entry that also reaches it needs a radar)
+10	NOT_DRIVABLE	-	would hide the bounded run's window: told not to drive it
+11	NOT_DRIVABLE	-	would resize the bounded run's window: told not to drive it
+12	NOT_DRIVABLE	-	would end the run before its last tick
+13	NOT_DRIVABLE	-	a pointer drag: the scripted input has no drag verb
+15	NOT_DRIVABLE	-	a pointer drag on the window edge: the scripted input has no drag verb
+16	ASSERTED	main-strip.txt	click the Stop key then the Start key; state running == 0 then == 1, and the key's label flips
+21	NOT_DRIVABLE	-	disabled in the run (enabled=false in the dump): the signal generator has no bias tee, so the question sheet cannot open
+24	DRIVEN	main-editor-probe.txt	press "1 MHz digit" opens the typed editor, Esc closes it; nothing read back yet (the editor field's label is not known until the probe's dump is read). The wheel over a figure has no verb (row 146)
+26	ASSERTED	main-counter.txt	click Step <digit> digit up for 10 MHz .. 1 Hz (main-counter-high.txt: 100 MHz); state tunedHz moves by the digit and expect the digit's value. The GHz digit is not driven (outside the generator's range); auto-repeat on a held key needs a held pointer
+27	ASSERTED	main-counter.txt	click Step <digit> digit down twice for 10 MHz .. 1 Hz (main-counter-high.txt: 100 MHz); state tunedHz falls by the digit. The GHz digit is not driven
+32	NOT_DRIVABLE	-	a right-click menu: the scripted input has no right-click verb
+33	NOT_DRIVABLE	-	the TextInput exists only while editing and its label is not known yet (main-editor-probe.txt dumps it); the T key that also opens it has no key name
+37	NOT_DRIVABLE	-	a counter right-click menu row: no right-click verb
+38	NOT_DRIVABLE	-	a counter right-click submenu row: no right-click verb
+39	NOT_DRIVABLE	-	a counter right-click menu row (Nixie / Neon / Plain): no right-click verb
+41	NOT_DRIVABLE	-	needs a radio: the signal generator has no gain stage (the Gain slider reads 0 % with no enabled flag)
+43	NOT_DRIVABLE	-	needs a radio: the generator has no AGC (the Gain lane's AUTO key is dimmed)
+44	ASSERTED	main-dials.txt	slider "Squelch" 0.5; state squelchDb between -80 and -40
+46	ASSERTED	main-dials.txt	click AUTO (the Squelch lane's, the second) twice; state squelchDb == -200 then -85
+47	ASSERTED	main-dials.txt	slider "VOLUME" 0.25 then 0.9; state volume in range. The + and - keys have no key name (row 122)
+52	NOT_DRIVABLE	-	a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3)
+53	NOT_DRIVABLE	-	a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3)
+54	NOT_DRIVABLE	-	a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3)
+55	NOT_DRIVABLE	-	a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3)
+57	NOT_DRIVABLE	-	the banner and its Stop plugin key appear only while a plugin mutes the sound: no plugin is fitted in the run, no label in the dump
+59	ASSERTED	main-tabs-and-rail.txt	click FOLD; expect "SHOW" enabled equals true (the key's own label flips; the fold has no engine state)
+60	ASSERTED	main-tabs-and-rail.txt	click SHOW; expect "FOLD" enabled equals true (the key's own label flips back)
+61	ASSERTED	main-tabs-and-rail.txt	click SIGNAL; state bank == 0
+62	ASSERTED	main-tabs-and-rail.txt	click DECODE; state bank == 1
+63	ASSERTED	main-tabs-and-rail.txt	click TOOLS; state bank == 2
+64	ASSERTED	main-tabs-and-rail.txt	click EXTEND; state bank == 3
+65	ASSERTED	main-tabs-and-rail.txt	click SYSTEM; state bank == 4
+68	ASSERTED	main-tabs-and-rail.txt	click the RECEIVER tab; state view == 0
+69	ASSERTED	main-tabs-and-rail.txt	click the PATCH tab; state view == 1
+73	ASSERTED	main-tabs-and-rail.txt	the folded rail's SHOW key: click it after FOLD; expect "FOLD" enabled equals true
+84	NOT_DRIVABLE	-	no label in the element tree (the status bar's tail is cut off the dump); it opens a companion page with no read-back
+85	NOT_DRIVABLE	-	no label in the element tree (the status bar's tail is cut off the dump); it opens a companion page with no read-back
+88	NOT_DRIVABLE	-	the team message card is hidden until the engine's table carries a message (the run's has none)
+92	NOT_DRIVABLE	-	the update card is hidden and the network is withheld in a bounded run
+94	NOT_DRIVABLE	-	the update card is hidden and the network is withheld in a bounded run
+95	NOT_DRIVABLE	-	the update card is hidden (Linux only, opens a link): the network and shell are withheld in a bounded run
+96	NOT_DRIVABLE	-	the update card is hidden: no update is offered in a bounded run
+103	NOT_DRIVABLE	-	the Microsoft Store update card is hidden: no Store state in a hermetic run
+108	NOT_DRIVABLE	-	the question sheet cannot open: the BIAS TEE key is disabled (no bias tee on the generator, needs a radio)
+109	NOT_DRIVABLE	-	the question sheet cannot open: the BIAS TEE key is disabled (no bias tee on the generator, needs a radio)
+114	NOT_DRIVABLE	-	the did-not-close-normally offer shows only after a crashed previous run: a fresh scratch profile has none
+117	NOT_DRIVABLE	-	the beta tester link prompt shows only for a tester link: none in a hermetic run
+120	NOT_DRIVABLE	-	the key verb takes ctrl+<letter> and f1..f12 only, not ctrl+f2; the Stop / Start key itself is asserted under row 16
+121	NOT_DRIVABLE	-	the key verb has no plain letter keys (M)
+122	NOT_DRIVABLE	-	the key verb has no + or - key; the volume slider is asserted under row 47
+123	NOT_DRIVABLE	-	the key verb has no shift modifier or page keys
+124	ASSERTED	main-shortcuts.txt	key ctrl+f; state mode == NFM
+125	NOT_DRIVABLE	-	the key verb has no shift modifier (WFM is reached from the MODE picker in main-mode.txt)
+126	ASSERTED	main-shortcuts.txt	key ctrl+a; state mode == AM
+127	ASSERTED	main-shortcuts.txt	key ctrl+d; state mode == DSB
+128	ASSERTED	main-shortcuts.txt	key ctrl+u; state mode == USB
+129	ASSERTED	main-shortcuts.txt	key ctrl+c; state mode == CW
+130	ASSERTED	main-shortcuts.txt	key ctrl+l; state mode == LSB
+131	ASSERTED	main-shortcuts.txt	key ctrl+r; state mode == RAW
+132	NOT_DRIVABLE	-	the key verb has no modified arrow keys
+133	NOT_DRIVABLE	-	the key verb has no modified page keys
+134	NOT_DRIVABLE	-	the key verb has no plain letter keys (T)
+135	NOT_DRIVABLE	-	the key verb has no ctrl+plus or ctrl+minus; the span keys do the same zoom (rows 203-205)
+136	NOT_DRIVABLE	-	the key verb has no ctrl+delete; the Full span key does the same (row 205)
+137	NOT_DRIVABLE	-	the key verb has no shift modifier or plain letter keys (Shift+R)
+139	NOT_DRIVABLE	-	writes a screenshot file only, nothing to read back (the shot verb covers the capture itself)
+140	NOT_DRIVABLE	-	would maximise the bounded run's window: told not to drive it
+141	ASSERTED	main-shortcuts.txt	key f1..f5; state bank == 0..4
+142	ASSERTED	main-shortcuts.txt	key f7; state bank == 4 (the Key bindings section it opens is not read back)
+143	NOT_DRIVABLE	-	writes a screenshot file only, nothing to read back (the shot verb covers the capture itself)
+144	DRIVEN	main-editor-probe.txt	press a counter digit to open the editor, key escape; nothing read back (it clears editor flags that have no engine state)
+146	NOT_DRIVABLE	-	the scripted input has no wheel verb
+179	ASSERTED	main-pointer-spectrum.txt	press the spectrum plot's centre; state tunedHz moved off 100.3 MHz (unverified until the first run: press on an image)
+191	NOT_DRIVABLE	-	a pointer drag on the splitter: the scripted input has no drag verb (the "Resize" slider has no read-back for its ratio)
+192	ASSERTED	main-pointer-spectrum.txt	press the plot off the VFO band; state tunedHz between 99.7 and 100.3 MHz (unverified until the first run)
+193	NOT_DRIVABLE	-	a pointer drag: no drag verb
+194	NOT_DRIVABLE	-	a pointer drag: no drag verb
+195	NOT_DRIVABLE	-	a double-click: the scripted input has no double-click verb
+196	NOT_DRIVABLE	-	a right-click: the scripted input has no right-click verb
+197	NOT_DRIVABLE	-	the scripted input has no wheel verb
+198	NOT_DRIVABLE	-	the scripted input has no wheel verb
+203	ASSERTED	main-spectrum-keys.txt	click "+" twice; expect the SPAN chip's words 1.538 then 1.183 MHz (no engine state)
+204	ASSERTED	main-spectrum-keys.txt	click the minus key; expect the SPAN chip back at 1.538 MHz
+205	ASSERTED	main-spectrum-keys.txt	click Full span; expect the SPAN chip at 2.000 MHz
+206	ASSERTED	main-pointer-waterfall.txt	press the waterfall's centre; state tunedHz between 99.7 and 100.3 MHz (unverified until the first run: press on an image)
+207	NOT_DRIVABLE	-	a pointer drag: no drag verb
+208	NOT_DRIVABLE	-	a double-click: no double-click verb
+209	NOT_DRIVABLE	-	a right-click: no right-click verb
+210	NOT_DRIVABLE	-	the scripted input has no wheel verb
+215	ASSERTED	main-spectrum-keys.txt	the toolbar's TRACE Normal key (same trace-mode as the menu item, which needs a right-click): click; expect it checked, Peak hold and Average unchecked (no engine state)
+216	ASSERTED	main-spectrum-keys.txt	the toolbar's TRACE Peak hold key (same trace-mode as the menu item): click; expect it checked
+217	ASSERTED	main-spectrum-keys.txt	the toolbar's TRACE Average key (same trace-mode as the menu item): click; expect it checked
+218	NOT_DRIVABLE	-	a menu separator, not a control
+219	NOT_DRIVABLE	-	a right-click menu row: no right-click verb
+220	NOT_DRIVABLE	-	a right-click menu row: no right-click verb
+221	NOT_DRIVABLE	-	a right-click menu row: no right-click verb
+222	NOT_DRIVABLE	-	a right-click menu slider: no right-click verb
+223	NOT_DRIVABLE	-	a pointer to the Display block rows 232-238, not a control
+224	NOT_DRIVABLE	-	the waterfall's right-click menu: no right-click verb, so no marker can be dropped
+225	NOT_DRIVABLE	-	the waterfall's right-click menu (needs a marker and a right-click): no right-click verb
+226	NOT_DRIVABLE	-	a menu separator, not a control
+227	ASSERTED	main-markers.txt	click the toolbar's Markers key (the sheet the menu item lists); expect the sheet's Copy and Clear all keys present and disabled, state count.freqMarkers == 0
+228	NOT_DRIVABLE	-	disabled with no markers (main-markers.txt asserts that) and the clipboard is withheld in a bounded run
+229	NOT_DRIVABLE	-	the waterfall's right-click menu: no right-click verb
+230	NOT_DRIVABLE	-	the waterfall's right-click menu, and no marker to remove: no right-click verb
+231	NOT_DRIVABLE	-	a pointer to the Display block rows 232-238, not a control
+233	ASSERTED	main-spectrum-keys.txt	the toolbar's RANGE Auto key (same range mode as the menu radio): click; expect it checked, state dbMin == -110 and dbMax == 0
+234	ASSERTED	main-spectrum-keys.txt	the toolbar's RANGE Manual key (same range mode as the menu radio): click; expect it checked; a manual range alone moves neither limit
+236	NOT_DRIVABLE	-	a slider in the right-click menu: no right-click verb
+237	NOT_DRIVABLE	-	a slider in the right-click menu: no right-click verb
+238	NOT_DRIVABLE	-	a right-click menu row: no right-click verb
+239	DRIVEN	main-markers.txt	click Markers opens the sheet (its Copy key appears), click its Close; an expect cannot assert that a control is gone, so the closing is not read back
+250	NOT_DRIVABLE	-	disabled with no markers (main-markers.txt asserts that) and the clipboard is withheld in a bounded run
+251	NOT_DRIVABLE	-	disabled until a marker exists (main-markers.txt asserts that); a marker needs the waterfall's right-click, which has no verb
+252	NOT_DRIVABLE	-	shown only after Clear all markers is enabled, which needs a marker: no right-click verb to drop one
+268	DRIVEN	main-spectrum-keys.txt	click the toolbar's Band plan key twice; only expect enabled: the toggle has no engine state and the key has no checked flag
+272	NOT_DRIVABLE	-	a slider in the right-click Display block: no right-click verb
+273	NOT_DRIVABLE	-	a slider in the right-click Display block: no right-click verb

@@ -1,0 +1,33 @@
+#! frames=500 view=patch
+# patch-presets: the PATCH PRESETS page - SAVE AS..., the Name field, SAVE, the row, LOAD, RENAME, CANCEL, DELETE.
+# A bounded run withholds the patch's STOP (FOXAPI_RX_PATCH_RUNNING) that a LOAD sends ahead of the document, so a LOAD is refused
+# and the engine's graph does not change: LOAD is only driven (node count stays 2). The preset list is the host's: a row is read
+# back through its text label, which a list row carries without any enabled / value.
+10 state count.patchNodes == 1
++1 click "PRESETS"
++10 state pages contains "PATCH PRESETS"
++1 click "SAVE AS..."
++5 type "Name" "Probe"
++2 expect "Name" value equals "Probe"
++1 click "SAVE"
++5 expect "Probe" label equals "Probe"
++1 click "PRESETS"
++10 click "Channel"
++20 state count.patchNodes == 2
++1 click "PRESETS"
++10 click "Probe"
++5 expect "LOAD" enabled equals "true"
++1 click "LOAD"
++25 state count.patchNodes == 2
++1 click "RENAME"
++5 type "Name" "Probe2"
++2 click "CANCEL"
++5 expect "Probe" label equals "Probe"
++1 click "RENAME"
++5 type "Name" "Probe2"
++2 click "RENAME"#2
++10 expect "Probe2" label equals "Probe2"
++1 click "DELETE"
++5 click "DELETE"#2
++10 expect "Deleted \"Probe2\"." label equals "Deleted \"Probe2\"."
++1 dump

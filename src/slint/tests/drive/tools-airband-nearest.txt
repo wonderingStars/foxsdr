@@ -1,0 +1,20 @@
+#! frames=260 bank=2 sections=2:1
+# tools-airband-nearest: "Nearest airports" is dead until the receiver has a position, and the position fields live in the Radar body.
+# So: set the position there, fold the Radar row, open the Airband row, press Nearest airports and dump the list's labels.
+# (Folding a section by clicking its row is the same press the panel takes from a user.)
+10 state running == 1
+state positionSet == 0
++1 type "Latitude" "51.4775"
++1 key enter
++1 type "Longitude" "-0.4614"
++1 key enter
++3 click "Set RX here"
++25 state positionSet == 1
++1 click "Radar"
++5 click "Airband"
++5 expect "Nearest airports" enabled equals "true"
++1 click "Nearest airports"
++5 dump
++1 expect "Hide" enabled equals "true"
++1 click "Hide"
++5 expect "Nearest airports" enabled equals "true"

@@ -1,0 +1,67 @@
+1524	NOT_DRIVABLE	-	the bank is selected by each script's bank= header; the F3 shortcut is asserted by main-shortcuts.txt (state bank == 2); the rail key itself belongs to the main bank author
+1554	NOT_DRIVABLE	-	container of rows 1559-1564 (the offers and the typed entry), no state of its own
+1559	NOT_DRIVABLE	-	disabled while no track has been heard: the generator publishes none
+1560	NOT_DRIVABLE	-	disabled without a map page: no map in the bounded run
+1562	ASSERTED	tools-radar.txt	type "Latitude" "51.4775"; key enter; expect "Latitude" value contains "51.4775"; Set RX here becomes enabled
+1563	ASSERTED	tools-radar.txt	type "Longitude" "-0.4614"; key enter; expect "Longitude" value contains "-0.4614"
+1564	ASSERTED	tools-radar.txt	click "Set RX here"; state positionSet == 1 (also in tools-airband-nearest.txt)
+1618	ASSERTED	tools-bookmarks.txt	type "Bookmark name" "Probe"; click "Add current"; state list.bookmarks.names contains Probe
+1619	ASSERTED	tools-bookmarks.txt	click "Add current" twice; state count.bookmarks == 1, then == 2
+1620	ASSERTED	tools-bookmarks.txt	type "Group" "Aviation"; key enter; click "Add current"; state list.bookmarkGroups.names contains Aviation
+1621	ASSERTED	tools-bookmarks-rows.txt	type "Group" "Zed"; choose "Pick a group" "Aviation"; expect "Group" value equals "Aviation"
+1622	NOT_DRIVABLE	-	the import path needs a file on disk and the clipboard/shell are withheld in a bounded run
+1623	NOT_DRIVABLE	-	opens a native file dialog (empty path) or reads a file: not drivable in a bounded run
+1626	ASSERTED	tools-bookmarks.txt	type "Search bookmarks" "Sec"; expect value equals "Sec"; ctrl+a, backspace; expect value equals "" (a view filter: only the widget holds it)
+1627	DRIVEN	tools-bookmarks-rows.txt	choose "Group filter" "Aviation"; expect "Group filter" value contains "Aviation" (the filter is a view state with no engine read-back)
+1628	ASSERTED	tools-bookmarks.txt	click "Favourites only" twice; expect checked true / false (panel-local, no engine read-back)
+1629	ASSERTED	tools-bookmarks.txt; tools-bookmarks-options.txt	click "On the spectrum"; expect checked false/true and Stack close names enabled follows; the cfg.bookmarkMarkers read-back is PARKED as a finding (the host never saves it)
+1630	ASSERTED	tools-bookmarks.txt; tools-bookmarks-options.txt	click "Stack close names"; expect checked false; the cfg.bookmarkStackNames read-back is PARKED as a finding (the host never saves it)
+1632	NOT_DRIVABLE	-	the key copies / opens the exported file: clipboard and shell withheld in a bounded run
+1633	ASSERTED	tools-bookmarks-rows.txt	click "Remove this group"; state count.bookmarkGroups == 0 (label from the run-2 dump)
+1634	ASSERTED	tools-bookmarks-rows.txt	click "Rename this group"; type "new group name" "Flying"; key enter; state list.bookmarkGroups.names contains Flying
+1635	ASSERTED	tools-bookmarks-rows.txt	type "new group name" "Flying"; expect "new group name" value equals "Flying" (field label from the source, confirmed by the dump after Rename this group)
+1636	ASSERTED	tools-bookmarks-rows.txt	key enter in the rename field; state list.bookmarkGroups.names contains Flying (the Rename key beside it is not clicked: Enter does the same)
+1637	NOT_DRIVABLE	-	no checkbox label for the row's scan Tick in the element tree (the rows dump shows only Favourite, the row and Delete this bookmark)
+1638	ASSERTED	tools-bookmarks-rows.txt	click "Favourite"#1; expect "Favourite"#1 checked equals "true" (panel-local)
+1639	DRIVEN	tools-bookmarks-rows.txt	click "Probe  100.3000 MHz"; state tunedHz == 100300000 (the generator already has that frequency, so the read-back cannot tell a tune from nothing)
+1640	NOT_DRIVABLE	-	a right-click is not a script verb (click / press only)
+1641	NOT_DRIVABLE	-	behind the right-click menu: not reachable by a script verb
+1643	NOT_DRIVABLE	-	behind the right-click menu: not reachable by a script verb
+1644	ASSERTED	tools-bookmarks-rows.txt	click "Delete this bookmark"#1; state count.bookmarks == 1
+1657	ASSERTED	tools-scanner.txt	click "Ticked frequencies (0)" twice; expect checked true/false; state fact.scanner.listMode == 1 / 0
+1658	ASSERTED	tools-scanner.txt	type "Start MHz" "90"; key enter; expect "Start MHz" value contains "90" (the scanner config is not in readState: the control's own value)
+1659	ASSERTED	tools-scanner.txt	type "Stop MHz" "92"; key enter; expect "Stop MHz" value contains "92" (the scanner config is not in readState: the control's own value)
+1660	ASSERTED	tools-scanner.txt	type "Step kHz" "200"; key enter; expect "Step kHz" value contains "200" (the scanner config is not in readState: the control's own value)
+1661	ASSERTED	tools-scanner.txt	type "Dwell ms" "80"; key enter; expect "Dwell ms" value contains "80" (the scanner config is not in readState: the control's own value)
+1662	ASSERTED	tools-scanner.txt	type "Hold ms" "1500"; key enter; expect "Hold ms" value contains "1500" (the scanner config is not in readState: the control's own value)
+1663	ASSERTED	tools-scanner.txt	type "Resume ms" "400"; key enter; expect "Resume ms" value contains "400" (the scanner config is not in readState: the control's own value)
+1664	ASSERTED	tools-scanner.txt	type "Listen ms" "100"; key enter; expect "Listen ms" value contains "100" (the scanner config is not in readState: the control's own value)
+1665	ASSERTED	tools-scanner.txt	click "Start scan"; state scanner == 1
+1666	ASSERTED	tools-scanner.txt	click "Stop scan"; state scanner == 0
+1667	DRIVEN	tools-scanner.txt	click "Skip"; state scanner == 1 still: the engine's skip has no read-back
+1669	NOT_DRIVABLE	-	an engine reaction to a retune, not a Slint control or a script verb
+1671	ASSERTED	tools-airband.txt	type "Airport code" "egll"; expect value equals "EGLL" (upper-cased)
+1672	ASSERTED	tools-airband.txt	click "Look up": unknown code state count.bookmarks == 0, then EGLL state count.bookmarks > 0
+1673	ASSERTED	tools-airband-nearest.txt	expect "Nearest airports" enabled true after Set RX here; click it; the list row "EGLL  London Heathrow Airport" appears in the dump
+1674	DRIVEN	tools-airband-nearest.txt	click "Hide"; expect "Nearest airports" enabled true: the list vanishing has no read-back
+1678	ASSERTED	tools-airband.txt	type "Preset" "Probe"; key enter; Add then state count.bookmarks == 1, export, remove
+1679	ASSERTED	tools-airband.txt	type "Frequency (MHz)" "121.5"; key enter; Add enables and adds the row
+1680	ASSERTED	tools-airband.txt	choose "Mode" "NFM"; expect "Mode" value equals "NFM" (the first run's log shows ok; the key keeps the label "Mode")
+1681	ASSERTED	tools-airband.txt	type "name" "Guard"; key enter; state list.bookmarks.names contains Guard
+1682	ASSERTED	tools-airband.txt	click "Add"; state count.bookmarks == 1
+1684	NOT_DRIVABLE	-	the import path needs a file on disk; an empty path opens a native dialog
+1685	NOT_DRIVABLE	-	reads a file / opens a native dialog: not drivable in a bounded run
+1686	ASSERTED	tools-airband.txt	click "Export CSV"; state fact.bookmarks.export.count == 1
+1687	ASSERTED	tools-airband.txt	click "Remove preset"; state count.bookmarks == 0
+1689	NOT_DRIVABLE	-	opens the folder in the shell: withheld in a bounded run
+1690	DRIVEN	tools-airband.txt	choose "Group" "Every ticked AM or NFM frequency"; expect "Group" value contains "Every" (before the scroll; the filter is a view state)
+1692	DRIVEN	tools-airband.txt	click "Untick all", click "Tick all"; expect enabled true (after `scroll "Tick all" 500`, no engine read-back name for the tick count)
+1693	ASSERTED	tools-airband.txt	click "Busiest first" twice; expect checked true / false (panel-local)
+1695	NOT_DRIVABLE	-	the row's tick checkbox has no label in the element tree (the first run's dump lists only the row and its dash text)
+1697	ASSERTED	tools-airband.txt	click "113.7500  ATIS Heathrow"; state tunedHz == 113750000 (before the scroll)
+1699	ASSERTED	tools-airband.txt	slider "Squelch"#2 0.2; state fact.airband.squelchDb < -55 (after `scroll "Tick all" 500`)
+1700	DRIVEN	tools-airband.txt	click "Above the noise" while listening; state fact.airband.listening == 1 only: the rule needs channel levels
+1701	ASSERTED	tools-airband.txt	type "Hold" "4"; key enter; state fact.airband.holdS == 4 (after `scroll "Tick all" 500`)
+1702	ASSERTED	tools-airband.txt	click "LISTEN"; state fact.airband.listening == 1 (after `scroll "Tick all" 500`)
+1703	ASSERTED	tools-airband.txt	click "STOP"; state fact.airband.listening == 0 (after `scroll "Tick all" 500`)
+1704	NOT_DRIVABLE	-	drawn only when the monitor has more than one block of channels; the one EGLL preset has a single block (unverified)

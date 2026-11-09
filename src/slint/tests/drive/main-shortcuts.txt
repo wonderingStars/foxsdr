@@ -1,0 +1,33 @@
+#! frames=320 bank=0 sections=0:2
+# main-shortcuts: the keys the driver can send (ctrl+<letter>, f1..f12) to the root FocusScope of main.slint. Nothing is clicked first,
+# so the focus is where the window left it at start. Not drivable by `key`: M + - T Shift+R, Ctrl+Up/Down/PageUp/PageDown, Ctrl+Delete,
+# Ctrl+F2, Ctrl+Shift+F, Ctrl++/-: see COVERAGE-main.md.
+10 state mode == WFM
++1 key ctrl+f
++15 state mode == NFM
++1 key ctrl+a
++15 state mode == AM
++1 key ctrl+d
++15 state mode == DSB
++1 key ctrl+u
++15 state mode == USB
++1 key ctrl+c
++15 state mode == CW
++1 key ctrl+l
++15 state mode == LSB
++1 key ctrl+r
++15 state mode == RAW
++1 key f2
++4 state bank == 1
++1 key f3
++4 state bank == 2
++1 key f4
++4 state bank == 3
++1 key f5
++4 state bank == 4
++1 key f1
++4 state bank == 0
++1 key f7
++4 state bank == 4
++1 key f1
++4 state bank == 0

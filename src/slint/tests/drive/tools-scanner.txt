@@ -1,0 +1,44 @@
+#! frames=420 bank=2 sections=2:3
+# tools-scanner: the Scanner body (tick rows 1657-1667). The fields are read back through the widget (the scanner's range / timing are not
+# in the readState names); the run itself through the engine flag `scanner`. If the engine refuses the scan on the generator the
+# `state scanner == 1` step fails - kept on purpose (docs/engine-stage4.md 6.46 finding 2).
+10 state running == 1
+state scanner == 0
+# Ticked frequencies: the list mode (nothing ticked, so Start scan is dead while it is on)
++1 click "Ticked frequencies (0)"
++20 expect "Ticked frequencies (0)" checked equals "true"
+state fact.scanner.listMode == 1
++1 expect "Start scan" enabled equals "false"
++1 click "Ticked frequencies (0)"
++20 expect "Ticked frequencies (0)" checked equals "false"
+state fact.scanner.listMode == 0
+# the range fields
++1 type "Start MHz" "90"
++1 key enter
++5 expect "Start MHz" value contains "90"
++1 type "Stop MHz" "92"
++1 key enter
++5 expect "Stop MHz" value contains "92"
++1 type "Step kHz" "200"
++1 key enter
++5 expect "Step kHz" value contains "200"
+# the timing fields (FOXAPI_OP_SCANNER_CONFIG)
++1 type "Dwell ms" "80"
++1 key enter
++5 expect "Dwell ms" value contains "80"
++1 type "Hold ms" "1500"
++1 key enter
++5 expect "Hold ms" value contains "1500"
++1 type "Resume ms" "400"
++1 key enter
++5 expect "Resume ms" value contains "400"
++1 type "Listen ms" "100"
++1 key enter
++5 expect "Listen ms" value contains "100"
+# run, skip, stop
++1 click "Start scan"
++30 state scanner == 1
++1 click "Skip"
++15 state scanner == 1
++1 click "Stop scan"
++30 state scanner == 0

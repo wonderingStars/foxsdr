@@ -1,0 +1,9 @@
+#! frames=120 bank=1
+# decode-plugins-drawer: the "Turn on and off plugins" row (tick row 293) is a drawer toggle (KitPublisher decodeOpen_["plugins"]),
+# not a page: no engine state and no pagesLine entry change. The only read-back is that no page opened and the click was accepted;
+# with nothing fitted the drawer holds only the sentence "No fitted module carries a decoder of any kind" (read from the dump), so
+# its own controls (rows 295-311) are NOT DRIVABLE here.
+10 state running == 1
+state pages == "pages:"
++1 click "Turn on and off plugins"
++5 state pages == "pages:"

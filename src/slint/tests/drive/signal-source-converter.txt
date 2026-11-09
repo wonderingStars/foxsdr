@@ -1,0 +1,26 @@
+#! frames=300 bank=0 sections=0:1
+# signal-source-converter: the Converter card of the Source section (tick rows 1278, 1280, 1282). The dump (Source open) lists only
+# "Converter mode"; the Local oscillator field, the 125/100/2 MHz keys and the Inverts tick appear once a mode other than Off is chosen, with
+# the labels of signal_bank.slint (UNVERIFIED against a dump of the converted state). The read-back is the card's own model, which the engine
+# supplies (FOXAPI_LIST_CONVERTERS, the stored setting), so a value that did not reach the engine does not come back.
+10 state running == 1
+expect "Converter mode" value equals "Off"
++1 choose "Converter mode" "Down-converter"
++25 expect "Converter mode" value equals "Down-converter"
+# the Local oscillator field typed and committed with Enter
++1 type "Local oscillator" "100 MHz"
++2 key enter
++25 expect "Local oscillator" value contains "100"
+# a quick key sets the oscillator
++1 click "125 MHz"
++25 expect "Local oscillator" value contains "125"
+# the inverts tick, on then off
++1 click "Inverts the spectrum (LO above the signal)"
++25 expect "Inverts the spectrum (LO above the signal)" checked equals "true"
++1 click "Inverts the spectrum (LO above the signal)"
++25 expect "Inverts the spectrum (LO above the signal)" checked equals "false"
+# put it back to Off
++1 choose "Converter mode" "Off"
++25 expect "Converter mode" value equals "Off"
++1 state running == 1
++1 state faulted == 0

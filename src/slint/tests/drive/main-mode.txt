@@ -1,0 +1,20 @@
+#! frames=300 bank=0 sections=0:2
+# main-mode: the MODE picker of the compact strip (the window is below 1760 px wide); the combobox is labelled by its current value
+10 state mode == WFM
++1 choose "WFM" "AM"
++15 state mode == AM
++1 expect "AM" value equals "AM"
++1 choose "AM" "NFM"
++15 state mode == NFM
++1 choose "NFM" "DSB"
++15 state mode == DSB
++1 choose "DSB" "USB"
++15 state mode == USB
++1 choose "USB" "CW"
++15 state mode == CW
++1 choose "CW" "LSB"
++15 state mode == LSB
++1 choose "LSB" "RAW"
++15 state mode == RAW
++1 choose "RAW" "WFM"
++15 state mode == WFM

@@ -1,0 +1,8 @@
+#! frames=100 bank=0 sections=0:2
+# main-pointer-waterfall: a pointer click (press = down and up at the control's centre) on the waterfall picture: a press under
+# 450 ms and 4 px tunes to the clicked frequency, the centre of the view (100.0 MHz) while the VFO sits at 100.3 MHz.
+10 state tunedHz == 100300000
++1 press "Waterfall"
++15 state tunedHz != 100300000
+state tunedHz > 99700000
+state tunedHz < 100300000

@@ -1,0 +1,23 @@
+#! frames=240 bank=4 sections=4:3
+# system-updates: Updates (tick rows 1420-1422). The channel is chosen first (with the check off nothing is asked), then the startup
+# check is switched on and off again; with the network withheld the check itself finds nothing, the setting is what is read back.
+# The scratch profile's check is off (the dump: checked=false) and the channel stable.
+10 state running == 1
+state cfg.updateCheckEnabled == false
+state cfg.updateChannel == stable
+
++1 click "Every release (beta)"
++10 state cfg.updateChannel == beta
+expect "Every release (beta)" checked equals "true"
+expect "Stable releases" checked equals "false"
++2 click "Stable releases"
++10 state cfg.updateChannel == stable
+expect "Stable releases" checked equals "true"
+expect "Every release (beta)" checked equals "false"
+
++2 click "Check for updates at startup"
++10 state cfg.updateCheckEnabled == true
+expect "Check for updates at startup" checked equals "true"
++2 click "Check for updates at startup"
++10 state cfg.updateCheckEnabled == false
+expect "Check for updates at startup" checked equals "false"

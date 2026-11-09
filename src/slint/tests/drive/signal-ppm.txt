@@ -1,0 +1,13 @@
+#! frames=150 bank=0 sections=0:7
+# signal-ppm: the Frequency correction section (tick row 1286). The switch is for every radio; the engine's fact.ppm.on is the read-back.
+# With the signal generator there is no crystal to correct (fact.ppm.method "na"): the ppm value field and its two step arrows (rows 1289)
+# are not drawn, so they are not driven. "#1" is the tick (the field, if it were drawn, carries the same name after it).
+10 state running == 1
+state fact.ppm.on == 0
++1 click "PPM frequency correction"#1
++20 state fact.ppm.on == 1
++1 expect "PPM frequency correction"#1 checked equals "true"
++1 click "PPM frequency correction"#1
++20 state fact.ppm.on == 0
++1 expect "PPM frequency correction"#1 checked equals "false"
++1 state running == 1

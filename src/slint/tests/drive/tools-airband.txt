@@ -1,0 +1,78 @@
+#! frames=600 bank=2 sections=2:4
+# tools-airband: the Airband body (tick rows 1671-1704): the offline lookup, a typed row, the preset export / remove, the options and
+# LISTEN / STOP. "Nearest airports" needs a receiver position, which only the Radar body can set: tools-airband-nearest.txt.
+# The body is taller than the window: everything ABOVE is done first, then `scroll "Airport code" 700` brings the lower part (Tick all,
+# Squelch, Hold, LISTEN / STOP, Next block) into the element tree; the controls above may have left the window after it.
+# The Mode read-back: the run showed `choose "Mode" "NFM"` then `expect "Mode" value equals "NFM"` ok (the key keeps the label "Mode",
+# its value is the picked row); the default is AM.
+# The Airband squelch is the SECOND "Squelch" slider (the receiver strip's is the first). The engine facts are fact.airband.*.
+10 state running == 1
+state count.bookmarks == 0
+# a code the table does not know: nothing is added
++1 type "Airport code" "zzzz9"
++1 key enter
++2 expect "Look up" enabled equals "true"
++1 click "Look up"
++10 state count.bookmarks == 0
+# a typed row (FOXAPP_OP_BOOKMARK_ADD_ROWS) into the preset "Probe"
++1 type "Preset" "Probe"
++1 key enter
++1 type "Frequency (MHz)" "121.5"
++1 key enter
++1 choose "Mode" "NFM"
++2 expect "Mode" value equals "NFM"
++1 type "name" "Guard"
++1 key enter
++2 expect "Add" enabled equals "true"
++1 click "Add"
++25 state count.bookmarks == 1
+state list.bookmarks.names contains Guard
+# the preset's CSV export (the engine writes the file; the folder key is not driven)
++1 expect "Export CSV" enabled equals "true"
++1 click "Export CSV"
++30 state fact.bookmarks.export.count == 1
+# remove the preset again
++1 expect "Remove preset" enabled equals "true"
++1 click "Remove preset"
++25 state count.bookmarks == 0
+# the offline lookup of a real airport adds its frequency rows
++1 type "Airport code" "egll"
++1 key enter
++2 expect "Airport code" value equals "EGLL"
++1 click "Look up"
++30 state count.bookmarks > 0
+# options of the channel list
++1 click "Busiest first"
++2 expect "Busiest first" checked equals "true"
++1 click "Busiest first"
++2 expect "Busiest first" checked equals "false"
+# a channel row tunes the receiver (the label is the row text as the first dump listed it)
++1 click "113.7500  ATIS Heathrow"
++20 state tunedHz == 113750000
+# the airport group's bulk ticks (drawn for an airport group only, not for the "every ticked" list; no engine read-back name known: driven)
++1 click "Untick all"
++10 expect "Untick all" enabled equals "true"
++1 click "Tick all"
++10 expect "Tick all" enabled equals "true"
+# the group filter: back to the whole ticked list
++1 choose "Group" "Every ticked AM or NFM frequency"
++5 expect "Group" value contains "Every"
+# THE SCROLL: the body's lower part comes into the window (one dump per state: this one is the scrolled state)
++1 scroll "Airport code" 700
++3 dump
+# the monitor's own controls (sent to the engine; read back as facts)
++1 slider "Squelch"#2 0.2
++20 state fact.airband.squelchDb < -55
++1 type "Hold" "4"
++1 key enter
++20 state fact.airband.holdS == 4
++1 click "LISTEN"
++30 state fact.airband.listening == 1
+# SECOND DUMP (the listening state): STOP, Above the noise, Next block, the channel rows. Steps after it are unverified.
++1 dump
++1 click "Above the noise"
++10 state fact.airband.listening == 1
+# listening added a status line above the key, which pushed STOP below the window: scroll again at a control still in view
++1 scroll "Hold" 300
++3 click "STOP"
++30 state fact.airband.listening == 0

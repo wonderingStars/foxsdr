@@ -1,0 +1,42 @@
+#! frames=260 bank=1
+# decode-fitted: the DECODE bank's "Plugins" row opens the Fitted modules page (tick rows 289, 378) and its top bar is driven: the
+# Search box (379; two textinput rows, #2 takes typing), the six state chips (380; checkboxes, all checked at the start; a click
+# toggles the filter, read back from the chip itself), SCAN AGAIN (381) and RESET WINDOW SIZES (382) (no named read-back: the
+# receiver must simply stay running), and the page Close key (326). The module rows (386-405) need a fitted module: NOT DRIVABLE.
+10 state running == 1
+state pages == "pages:"
++1 click "Plugins"
++10 state pages contains "Fitted modules"
++3 type "Search fitted modules"#2 "adsb"
++3 expect "Search fitted modules"#2 value equals "adsb"
++1 expect "FED 0" checked equals "true"
++1 click "FED 0"
++3 expect "FED 0" checked equals "false"
++1 click "FED 0"
++3 expect "FED 0" checked equals "true"
++1 click "IDLE 0"
++3 expect "IDLE 0" checked equals "false"
++1 click "IDLE 0"
++3 expect "IDLE 0" checked equals "true"
++1 click "NOT DECODING 0"
++3 expect "NOT DECODING 0" checked equals "false"
++1 click "NOT DECODING 0"
++3 expect "NOT DECODING 0" checked equals "true"
++1 click "TAKES NO SIGNAL 0"
++3 expect "TAKES NO SIGNAL 0" checked equals "false"
++1 click "TAKES NO SIGNAL 0"
++3 expect "TAKES NO SIGNAL 0" checked equals "true"
++1 click "STOPPED 0"
++3 expect "STOPPED 0" checked equals "false"
++1 click "STOPPED 0"
++3 expect "STOPPED 0" checked equals "true"
++1 click "REFUSED 0"
++3 expect "REFUSED 0" checked equals "false"
++1 click "REFUSED 0"
++3 expect "REFUSED 0" checked equals "true"
++1 click "SCAN AGAIN"
++10 state running == 1
++1 click "RESET WINDOW SIZES"
++5 state running == 1
++1 click "Close Fitted modules"
++10 state pages == "pages:"

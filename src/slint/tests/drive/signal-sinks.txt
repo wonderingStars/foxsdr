@@ -1,0 +1,18 @@
+#! frames=250 bank=0 sections=0:4
+# signal-sinks: the Sinks section (tick rows 1332, 1334). The Sound device rows are named by this machine's audio hardware, which the dump
+# of the closed key does not show, so the device choice is not driven; the Audio buffer keys are ("AUTOMATIC", "120 ms" .. "960 ms").
+# fact.audio.bufferMs is the engine's own value (0 = AUTOMATIC).
+10 state running == 1
+state fact.audio.bufferMs == 0
++1 choose "Audio buffer" "240 ms"
++25 state fact.audio.bufferMs == 240
++1 expect "Audio buffer" value contains "240"
+# the sink is reopened for a new depth: it must be open again afterwards
++30 state sinkOpen == 1
++1 choose "Audio buffer" "960 ms"
++25 state fact.audio.bufferMs == 960
++1 choose "Audio buffer" "AUTOMATIC"
++25 state fact.audio.bufferMs == 0
++1 expect "Audio buffer" value contains "AUTOMATIC"
++30 state sinkOpen == 1
++1 state running == 1

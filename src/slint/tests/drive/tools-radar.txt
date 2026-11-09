@@ -1,0 +1,16 @@
+#! frames=160 bank=2 sections=2:1
+# tools-radar: the Radar body's receiver position (tick rows 1559-1564). Row 1564 "Set RX here" is the only state-changing PRESENT row
+# reachable on the generator: the traffic / map offers are disabled (no tracks, no map page), the "Radar scope" key is a Deferred stub.
+10 state running == 1
+state positionSet == 0
+# the key is dead until the pair is a position the engine accepts (0,0 is refused)
++1 expect "Set RX here" enabled equals "false"
++1 type "Latitude" "51.4775"
++1 key enter
++1 type "Longitude" "-0.4614"
++1 key enter
++3 expect "Latitude" value contains "51.4775"
++1 expect "Longitude" value contains "-0.4614"
++1 expect "Set RX here" enabled equals "true"
++1 click "Set RX here"
++25 state positionSet == 1

@@ -1,0 +1,70 @@
+147	ASSERTED	system-display.txt	choose "Theme" "Today's bench"; state cfg.uiTheme == today (the look is saved, not applied: the row is DEFERRED, the setting is real)
+148	ASSERTED	system-display.txt	choose "Theme" "Bench Classic XL"; state cfg.uiTheme == classic-xl (the look is saved, not applied: the row is DEFERRED, the setting is real)
+149	ASSERTED	system-display.txt	choose "Theme" "Night Watch"; state cfg.uiTheme == night (the look is saved, not applied: the row is DEFERRED, the setting is real)
+150	ASSERTED	system-display.txt	choose "Theme" "Glass Cockpit"; state cfg.uiTheme == glass (the look is saved, not applied: the row is DEFERRED, the setting is real)
+151	ASSERTED	system-display.txt	choose "Theme" "Daylight Lab"; state cfg.uiTheme == daylight (the look is saved, not applied: the row is DEFERRED, the setting is real)
+152	ASSERTED	system-display.txt	choose "Theme" "Field Radio"; state cfg.uiTheme == field (the look is saved, not applied: the row is DEFERRED, the setting is real)
+153	ASSERTED	system-scale.txt	choose "Interface size" "125%"; state cfg.interfaceScale == 125
+154	ASSERTED	system-display.txt	choose "Theme" x6; state cfg.uiTheme and the preset fields; expect "Theme" value
+155	ASSERTED	system-display.txt	choose "Frequency display" Neon / Plain / Nixie tubes; state cfg.tunerDisplayStyle
+156	ASSERTED	system-display.txt	choose "Counter figures" Enlarged figures / Normal size; state cfg.counterScale
+157	ASSERTED	system-display.txt	click "Tuner switches" x2; state cfg.counterSwitches; expect checked
+158	ASSERTED	system-display.txt	click "Enlarge every reading" x2; state cfg.readingsScale; expect checked
+159	ASSERTED	system-display-map.txt	slider "Min dB" 0.1, slider "Max dB" 0.95; state dbMin < -125, state dbMax > 5
+160	ASSERTED	system-display-map.txt	slider "Aircraft icons" 0.9 then 0.0; state cfg.aircraftIconPx > 70 then < 25
+161	ASSERTED	system-display-map.txt	slider "Trail width" 0.5; state cfg.mapTrailWidthPx > 8
+163	ASSERTED	system-display-map.txt	click "Band plan"#1 x2; state cfg.bandPlanOverlay true/false (size and colour: rows 1400, 1401)
+1388	ASSERTED	system-scale.txt	choose "Interface size" "125%"; state cfg.interfaceScale == 125
+1390	ASSERTED	system-display.txt	choose "Theme" x6; state cfg.uiTheme and the preset fields
+1391	ASSERTED	system-display-map.txt	slider "Min dB" 0.1; state dbMin < -125
+1392	ASSERTED	system-display-map.txt	slider "Max dB" 0.95; state dbMax > 5
+1393	ASSERTED	system-display.txt	choose "Frequency display" Neon / Plain / Nixie tubes; state cfg.tunerDisplayStyle
+1394	ASSERTED	system-display.txt	choose "Counter figures" Enlarged figures / Normal size; state cfg.counterScale
+1395	ASSERTED	system-display.txt	click "Tuner switches" x2; state cfg.counterSwitches; expect checked
+1396	ASSERTED	system-display.txt	click "Enlarge every reading" x2; state cfg.readingsScale; expect checked
+1397	ASSERTED	system-display-map.txt	slider "Aircraft icons" 0.9 then 0.0; state cfg.aircraftIconPx
+1398	ASSERTED	system-display-map.txt	slider "Trail width" 0.5; state cfg.mapTrailWidthPx > 8
+1399	ASSERTED	system-display-map.txt	click "Band plan"#1 x2; state cfg.bandPlanOverlay
+1400	ASSERTED	system-display-map.txt	choose "Size" Large / Medium; state cfg.bandPlanSize
+1401	ASSERTED	system-display-map.txt	choose "Colour" Vivid / Mono; state cfg.bandPlanPalette
+1402	NOT_DRIVABLE	-	the Region dropdown is drawn only with the overlay on and more than one plan; the test profile has no plan list to choose between (no label in the dump)
+1404	ASSERTED	system-language.txt	choose "Language" "English" (last step); state cfg.language == en; other languages come from runtime catalogues and re-label the window
+1406	NOT_DRIVABLE	-	drawn only for a machine-translated language; opens the bug page, withheld in a bounded run
+1407	ASSERTED	system-language.txt	click "Country"; type filter "Austria"; click "Austria"; state cfg.country == AT; expect "Country" value equals "Austria"
+1408	ASSERTED	system-language.txt	type "Type to narrow the list" "Austria" in the open Country popup; the Austria row is then clicked and cfg.country == AT
+1409	ASSERTED	system-language.txt	click "Country"; click "Not set"; state cfg.country != AT; expect "Country" value equals "Not set"
+1412	NOT_DRIVABLE	-	drawn only for a country whose catalogue differs from the language; no label in the dump
+1414	ASSERTED	system-ppm.txt	click "PPM frequency correction" x2; expect checked true then false (no engine flag or cfg field; row is RELOCATED)
+1420	ASSERTED	system-updates.txt	click "Check for updates at startup" x2; state cfg.updateCheckEnabled
+1421	ASSERTED	system-updates.txt	click "Stable releases"; state cfg.updateChannel == stable
+1422	ASSERTED	system-updates.txt	click "Every release (beta)"; state cfg.updateChannel == beta
+1428	NOT_DRIVABLE	-	drawn only while an update is offered and its card dismissed; needs the network
+1439	DRIVEN	system-serial.txt	click "Refresh"; state count.serialPorts >= 0 (weak: the machine has no serial port, so the list stays empty and nothing distinguishes a refresh)
+1442	ASSERTED	system-serial.txt	choose "Baud rate" 19200 / 4800 / 115200 / 9600; state cfg.gpsBaud (the GPS port dropdown and Read position / Stop need a serial port and hardware: not drivable)
+1445	ASSERTED	system-keys.txt	click a rebound key cap then "Reset to defaults"; expect the cap label returns to "Mute the sound M"
+1448	ASSERTED	system-keys.txt	click a cap, key escape (label unchanged); click "Mute the sound M", key f6; expect label "Mute the sound F6"; only two of the caps are exercised
+1452	ASSERTED	system-diagnostics.txt	click the checkbox x2; state cfg.diagnosticsEnabled
+1454	ASSERTED	system-diagnostics.txt	click the checkbox x2; state cfg.diagnosticsMinidump
+1459	NOT_DRIVABLE	-	opens a folder; withheld in a bounded run
+1462	NOT_DRIVABLE	-	a local disclosure toggle with no read-back (text rows only)
+1476	ASSERTED	system-usage.txt	click "Send anonymous usage reports" x2; expect checked true then false (Engine-owned flag, no cfg read-back)
+1479	NOT_DRIVABLE	-	a local disclosure toggle with no read-back (text rows only)
+1480	NOT_DRIVABLE	-	opens a link; withheld in a bounded run
+1484	NOT_DRIVABLE	-	Unlink: the Beta tester section (8) is hidden in the sections list, so no dump and no label; needs a linked tester or the network
+1486	NOT_DRIVABLE	-	Remove code: the Beta tester section (8) is hidden in the sections list, so no dump and no label; needs a linked tester or the network
+1488	NOT_DRIVABLE	-	Tester code field: the Beta tester section (8) is hidden in the sections list, so no dump and no label; needs a linked tester or the network
+1489	NOT_DRIVABLE	-	Use this code: the Beta tester section (8) is hidden in the sections list, so no dump and no label; needs a linked tester or the network
+1491	NOT_DRIVABLE	-	Show / Hide what is sent: the Beta tester section (8) is hidden in the sections list, so no dump and no label; needs a linked tester or the network
+1498	NOT_DRIVABLE	-	Request a feature page, Message box: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1500	NOT_DRIVABLE	-	Request a feature page, Contact: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1503	NOT_DRIVABLE	-	Request a feature page, SEND: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1507	NOT_DRIVABLE	-	Report a bug page, Kind: bug: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1508	NOT_DRIVABLE	-	Report a bug page, Kind: dislike: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1510	NOT_DRIVABLE	-	Report a bug page, Message box: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1513	NOT_DRIVABLE	-	Report a bug page, Contact: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1515	NOT_DRIVABLE	-	Report a bug page, Attach the diagnostics log: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1516	NOT_DRIVABLE	-	Report a bug page, Attach the SDRplay diagnostic too: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1517	NOT_DRIVABLE	-	Report a bug page, Show what will be sent: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1518	NOT_DRIVABLE	-	Report a bug page, Attachment preview: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1521	NOT_DRIVABLE	-	Report a bug page, SEND: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
+1441	NOT_DRIVABLE	-	the port list is a table of read-only rows (no port on the test machine, nothing to pick); the Refresh button is row 1439

@@ -1,0 +1,116 @@
+277	ASSERTED	decode-bank-key.txt	click SIGNAL then click DECODE; state bank == 0 then == 1
+278	ASSERTED	decode-store.txt	click "Plugin store"; state pages contains "PLUGIN STORE"
+281	ASSERTED	decode-store-catalogue.txt	type Catalogue, key enter; state fact.store.url == the typed URL; expect value
+285	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card)
+287	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card)
+288	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card)
+289	ASSERTED	decode-fitted.txt	click "Plugins"; state pages contains "Fitted modules"
+293	DRIVEN	decode-plugins-drawer.txt	click "Turn on and off plugins"; a drawer toggle with no engine state: only state pages unchanged is read back
+295	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+299	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+302	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+303	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+304	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+305	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+306	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+307	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+308	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+311	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+312	DRIVEN	decode-target-details.txt	click "Target details"; a drawer toggle with no engine state: only state pages unchanged is read back
+316	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no target, so the key is not drawn)
+317	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no target, so the key is not drawn)
+318	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no track-source plugin, so no map page row)
+319	NOT_DRIVABLE	-	the blocked "Target maps" row is disabled by design; decode-target-details.txt only expects it disabled (enabled == false)
+320	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+321	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+322	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+326	ASSERTED	decode-store.txt	click "Close PLUGIN STORE"; state pages == "pages:" (also "Close Fitted modules" in decode-fitted.txt)
+332	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+333	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+335	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+338	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+339	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+342	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+344	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+346	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+347	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+349	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+351	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+353	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+356	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+357	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+360	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+361	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+362	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+363	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+365	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+366	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+369	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+371	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+375	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no target, so the key is not drawn)
+376	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no target, so the key is not drawn)
+377	NOT_DRIVABLE	-	the Target details page is opened only by a target; with none the row opens a drawer, not a page: no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+379	ASSERTED	decode-fitted.txt	type "Search fitted modules"#2; expect value equals the typed text (the filter has no engine read-back)
+380	ASSERTED	decode-fitted.txt	click each of the six chips (FED, IDLE, NOT DECODING, TAKES NO SIGNAL, STOPPED, REFUSED) twice; expect checked false then true
+381	DRIVEN	decode-fitted.txt	click "SCAN AGAIN"; FOXAPI_OP_PLUGIN_RESCAN has no named read-back: state running == 1 only
+382	DRIVEN	decode-fitted.txt	click "RESET WINDOW SIZES"; no read-back (no torn window exists): state running == 1 only
+386	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+388	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+389	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+390	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+393	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+395	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+398	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+399	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+400	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+401	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+403	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+407	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+408	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+409	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+436	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1802	ASSERTED	decode-store-catalogue.txt	type Catalogue, key enter; state fact.store.url == the typed URL; expect value
+1806	ASSERTED	decode-store-controls.txt	type "Search plugins"#2; expect value equals "adsb" (a [local] box: no engine read-back)
+1807	ASSERTED	decode-store-controls.txt	click BROWSE; expect checked true, "UPDATES (0)" checked false
+1808	ASSERTED	decode-store-controls.txt	click "UPDATES (0)"; expect checked true, BROWSE checked false
+1810	NOT_DRIVABLE	-	withheld in a bounded run (network): FOXAPI_OP_STORE_FETCH is not sent
+1811	ASSERTED	decode-store-controls.txt	click SITES; expect "Site address" enabled true (the panel opened)
+1812	NOT_DRIVABLE	-	drawn only while a transfer runs; none runs in a bounded run (network)
+1817	NOT_DRIVABLE	-	withheld in a bounded run (network): the catalogue is never fetched, so no card, update row or foot key exists
+1818	NOT_DRIVABLE	-	withheld in a bounded run (network): the catalogue is never fetched, so no card, update row or foot key exists
+1819	NOT_DRIVABLE	-	withheld in a bounded run (network): the catalogue is never fetched, so no card, update row or foot key exists
+1823	NOT_DRIVABLE	-	withheld in a bounded run (network): the catalogue is never fetched, so no card, update row or foot key exists
+1825	NOT_DRIVABLE	-	withheld in a bounded run (network): drawn only with a catalogue loaded / updates listed
+1827	NOT_DRIVABLE	-	withheld in a bounded run (network): drawn only with a catalogue loaded / updates listed
+1828	NOT_DRIVABLE	-	withheld in a bounded run (network): the catalogue is never fetched, so no card, update row or foot key exists
+1829	NOT_DRIVABLE	-	withheld in a bounded run (network): the catalogue is never fetched, so no card, update row or foot key exists
+1831	NOT_DRIVABLE	-	withheld in a bounded run (network): no catalogue and no old plugin versions; the command is withheld
+1833	NOT_DRIVABLE	-	withheld in a bounded run (network): no catalogue and no old plugin versions; the command is withheld
+1834	NOT_DRIVABLE	-	withheld in a bounded run (network): no catalogue and no old plugin versions; the command is withheld
+1836	NOT_DRIVABLE	-	needs a listed site; FOXAPP_OP_STORE_SITE is withheld in a bounded run
+1837	ASSERTED	decode-store-sites.txt	type "Site address"; expect value equals the typed text ([local] draft)
+1838	NOT_DRIVABLE	-	FOXAPP_OP_STORE_SITE is withheld in a bounded run; decode-store-sites.txt only expects ADD disabled with no address
+1839	ASSERTED	decode-store-sites.txt	click the consent sentence twice; expect checked true then false
+1841	NOT_DRIVABLE	-	withheld in a bounded run (network): a plugin page opens from a card and no card exists
+1843	NOT_DRIVABLE	-	withheld in a bounded run (network): a plugin page opens from a card and no card exists
+1850	NOT_DRIVABLE	-	withheld in a bounded run (network): a plugin page opens from a card and no card exists
+1852	NOT_DRIVABLE	-	withheld in a bounded run (network): a plugin page opens from a card and no card exists
+1856	ASSERTED	decode-fitted.txt	type "Search fitted modules"#2; expect value equals the typed text (the filter has no engine read-back)
+1857	ASSERTED	decode-fitted.txt	click each of the six chips (FED, IDLE, NOT DECODING, TAKES NO SIGNAL, STOPPED, REFUSED) twice; expect checked false then true
+1858	DRIVEN	decode-fitted.txt	click "RESET WINDOW SIZES"; no read-back (no torn window exists): state running == 1 only
+1859	DRIVEN	decode-fitted.txt	click "SCAN AGAIN"; FOXAPI_OP_PLUGIN_RESCAN has no named read-back: state running == 1 only
+1864	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1865	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1866	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1867	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1869	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1870	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1873	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1874	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1875	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1876	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1877	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row
+1882	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card)
+1883	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card)
+1884	NOT_DRIVABLE	-	no plugin fitted in the drive run: the per-plugin smoke (docs 6.49) drives this row (no retired plugin file, so no Disabled card)
+1832	NOT_DRIVABLE	-	withheld in a bounded run (network): the cleanup panel opens only from CLEAN UP OLD VERSIONS, which needs a catalogue and old versions

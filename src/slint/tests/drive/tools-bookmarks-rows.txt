@@ -1,0 +1,39 @@
+#! frames=360 bank=2 sections=2:2
+# tools-bookmarks-rows: the row keys and the group keys of the Bookmarks body (tick rows 1621, 1627, 1633-1636, 1638, 1639, 1644).
+# Labels are from the run-2 dump: with two rows there are two "Favourite" / "Delete this bookmark" controls, the first row (Probe) is #1.
+# The group keys (Remove this group, Rename this group) exist only with a group chosen in "Group filter"; then only that group's rows show.
+10 state running == 1
++1 type "Bookmark name" "Probe"
++1 click "Add current"
++25 state count.bookmarks == 1
++1 type "Bookmark name" "Second"
++1 type "Group" "Aviation"
++1 key enter
++1 click "Add current"
++25 state count.bookmarks == 2
+# the star of the first row
++1 click "Favourite"#1
++15 expect "Favourite"#1 checked equals "true"
+# the row tunes (to the frequency the generator already has: the read-back cannot tell a tune from nothing)
++1 click "Probe  100.3000 MHz"
++15 state tunedHz == 100300000
+# delete the first row: the second (grouped) one stays
++1 click "Delete this bookmark"#1
++20 state count.bookmarks == 1
+# the group pick arrow fills the Group field from the group list
++1 type "Group" "Zed"
++2 expect "Group" value equals "Zed"
++1 choose "Pick a group" "Aviation"
++5 expect "Group" value equals "Aviation"
+# the group filter, then the group keys that it makes appear
++1 choose "Group filter" "Aviation"
++5 expect "Group filter" value contains "Aviation"
++1 click "Rename this group"
++3 dump
+# the rename field's label ("new group name") is from the source, the dump above confirms it
++1 type "new group name" "Flying"
++2 expect "new group name" value equals "Flying"
++1 key enter
++25 state list.bookmarkGroups.names contains Flying
++1 click "Remove this group"
++25 state count.bookmarkGroups == 0

@@ -1,0 +1,7 @@
+#! frames=100 bank=0 sections=0:2
+# main-editor-probe: a pointer click on a counter digit opens the typed frequency editor (row 33); its TextInput exists only while
+# editing, so this dumps the tree with the editor open (stderr) for the next author, then Esc cancels it (row 144). No read-back yet.
+10 press "1 MHz digit"
++6 dump
++1 key escape
++6 dump

@@ -1,0 +1,20 @@
+#! frames=160 bank=4 sections=4:4
+# system-serial: Serial ports (tick rows 1439, 1442). Refresh sends FOXAPI_OP_SCAN_SERIAL_PORTS; the list may be empty on the test
+# machine, so the read-back is that the list answers (count >= 0) and the key is still enabled. The baud rate is the interface half's
+# gpsBaud (the dump: combobox "Baud rate" value "9600", labelled by its row label). The GPS port combobox has no items without a
+# serial port and "Read position from GPS" is disabled in the dump: not driven (see COVERAGE-system.md).
+10 state running == 1
+state cfg.gpsBaud == 9600
++1 click "Refresh"
++20 state count.serialPorts >= 0
+expect "Refresh" enabled equals "true"
+
++2 choose "Baud rate" "19200"
++10 state cfg.gpsBaud == 19200
+expect "Baud rate" value equals "19200"
++2 choose "Baud rate" "4800"
++10 state cfg.gpsBaud == 4800
++2 choose "Baud rate" "115200"
++10 state cfg.gpsBaud == 115200
++2 choose "Baud rate" "9600"
++10 state cfg.gpsBaud == 9600

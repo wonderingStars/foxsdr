@@ -1,0 +1,8 @@
+#! frames=140 bank=0 sections=0:2
+# main-counter-high: the 100 MHz digit's switches. Kept apart because the generator's tuning limits are not read from source: a refused
+# 200.3 MHz is a finding about the range, not about the switch. (The GHz digit is not driven: 1.1 GHz is certainly outside the generator.)
+10 state tunedHz == 100300000
++1 click "Step 100 MHz digit up"
++10 state tunedHz == 200300000
++1 click "Step 100 MHz digit down"
++10 state tunedHz == 100300000

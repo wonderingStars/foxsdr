@@ -372,9 +372,13 @@ component LineInput inherits Rectangle {
         input.text = root.value;
         if (root.grab-focus) { input.focus(); }
     }
-    // a field that appears in a popup has no window to take the keyboard from at its init: it asks once, a moment later
+    // a field that appears in a popup has no window to take the keyboard from at its init: it asks once, on the next turn of the
+    // event loop. ONE MILLISECOND, NOT THIRTY (docs 6.47): a 30 ms timer still pending while the popup was closed by a second click
+    // within a slow frame was torn down with the field during that event and slint_cpp.dll 1.18.1 faulted in Timer::stop
+    // (crash-20261109-024408, reproduced by closing the popup one tick after opening it); due on the next loop turn, the timer has
+    // fired before any second input can arrive. Focus at init alone does not take in a popup (checked: the typed filter did nothing).
     Timer {
-        interval: 30ms;
+        interval: 1ms;
         running: root.grab-focus && !root.grabbed;
         triggered => {
             input.focus();
@@ -536,6 +540,7 @@ component DropRow inherits Rectangle {
     accessible-role: list-item;
     accessible-label: root.item.label;
     accessible-enabled: root.item.enabled;
+    accessible-action-default => { if (root.item.enabled) { root.activated(); } }   // a screen reader's (or the scripted input's) pick of this row
     if root.chosen : Image {
         x: 5px;
         y: (parent.height - self.height) / 2;

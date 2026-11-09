@@ -1,0 +1,10 @@
+#! frames=160 bank=1
+# decode-store-catalogue: the DECODE bank's Catalogue field (tick row 281): committed on Enter, FOXAPP_OP_SET_CATALOGUE_URL, read back
+# from the engine's fact store.url (engine_api_lists.cpp). The network is withheld; nothing is fetched by this.
+10 state running == 1
+state fact.store.url contains foxsdr-plugins
++1 type "Catalogue" "https://example.invalid/foxsdr/index.json"
++2 expect "Catalogue" value equals "https://example.invalid/foxsdr/index.json"
++1 key enter
++20 state fact.store.url == "https://example.invalid/foxsdr/index.json"
++1 expect "Catalogue" value equals "https://example.invalid/foxsdr/index.json"

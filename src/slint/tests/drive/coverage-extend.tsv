@@ -1,0 +1,12 @@
+1777	ASSERTED	extend-web.txt	click "Serve a browser page"; expect checked equals true and expect "Apply" enabled (UI's own value only: the engine command is withheld in a bounded run)
+1778	ASSERTED	extend-web.txt	choose "Reachable from" "Every network interface"; expect "Reachable from" value equals "Every network interface" (UI's own value only: the draft is local, nothing reaches the engine)
+1780	ASSERTED	extend-web.txt	type "Port" "9090"; key enter; expect "Port" value equals "9090" (UI's own value only: the bound port is withheld in a bounded run)
+1781	ASSERTED	extend-web.txt	type "User name" "operator"; key enter; expect "User name" value equals "operator" (UI's own value only)
+1783	ASSERTED	extend-web.txt	type "Password" "alpha-one"; key enter; expect "Password" value equals "" after the mismatch wipe; SHOW/HIDE keys click "Show the password"/"Hide the password" and expect the label flips (UI only: masked, never read back)
+1784	ASSERTED	extend-web.txt	type "Confirm" "beta-two"; key enter; expect "Confirm" value equals "" after the mismatch wipe (UI only: masked)
+1785	ASSERTED	extend-web.txt	click "Set password" with differing boxes; expect the line "do not match" and both boxes wiped (the local refusal, UI only; the matching case sends SERVER_CONFIG, withheld in a bounded run)
+1786	NOT_DRIVABLE	-	not drawn without a stored password record, and no password can be stored in a bounded run (SERVER_CONFIG withheld)
+1787	NOT_DRIVABLE	-	its effect is the SERVER_CONFIG command, withheld in a bounded run; the script only expects the key lit after an edit (Apply enabled) and does not click it
+1797	NOT_DRIVABLE	-	withheld in a bounded run: SERVER_CONFIG is not sent and the Tick reverts to the engine fact, so a click changes nothing visible; initial unchecked state is expected only
+1798	ASSERTED	extend-cat.txt	type "Port" "5000"; key enter; expect "Port" value equals "5000" (UI's own value only: the listener restart is withheld in a bounded run)
+1799	NOT_DRIVABLE	-	withheld in a bounded run: SERVER_CONFIG bindAll is not sent and the Tick reverts to the engine fact; initial unchecked state is expected only

@@ -132,6 +132,10 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/plugin_store_reasons.cpp")
         endif()
+        if(unit STREQUAL "input")
+            # The scripted input's parser and driver (docs 6.47): ../input_script.cpp, no Slint - the fake target in the test stands for the window.
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../input_script.cpp")
+        endif()
         if(unit STREQUAL "patch")
             # The PATCH page's logic (phase 3, the patch allowance) quotes the core's pure units rather than copying them: the grants of the SIGNAL family's commands, the airport table
             # (airband_data, for the tower blueprints), the presets' rules (patch_presets with the diagnostic log it reports a dropped entry to). patch_graph, patch_io, patch_plan,

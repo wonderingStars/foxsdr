@@ -1,0 +1,75 @@
+#! frames=420 bank=4 sections=4:0
+# system-display: the Display body, part 1 - themes, the frequency display face, counter figures, tuner switches, enlarged readings
+# (tick rows 1388-1396 and 147-154). Every control is read back from the interface half (cfg.*). The six looks are one Workbench skin
+# in this window: the key and the preset's counter / switches / readings / face are what is saved. A combobox here is labelled by its
+# ROW LABEL ("Theme"), not by its value (the dump: combobox "Theme" value="Today's bench").
+10 state running == 1
+state cfg.uiTheme == today
+state cfg.tunerDisplayStyle == nixie
+state cfg.counterScale == 1
+state cfg.counterSwitches == true
+
+# Night Watch: neon face, counter and readings at 1
++1 choose "Theme" "Night Watch"
++10 state cfg.uiTheme == night
+state cfg.tunerDisplayStyle == neon
+state cfg.counterScale == 1
+expect "Theme" value equals "Night Watch"
+expect "Frequency display" value equals "Neon"
+
+# Bench Classic XL: counter figures doubled, switches put away, readings 1.4
++2 choose "Theme" "Bench Classic XL"
++10 state cfg.uiTheme == classic-xl
+state cfg.counterScale == 2
+state cfg.counterSwitches == false
+state cfg.readingsScale > 1.39
+state cfg.readingsScale < 1.41
+state cfg.tunerDisplayStyle == nixie
+expect "Counter figures" value equals "Enlarged figures"
+expect "Tuner switches" checked equals "false"
+expect "Enlarge every reading" checked equals "true"
+
+# Glass Cockpit, Daylight Lab, Field Radio: plain face, everything back to 1 / on
++2 choose "Theme" "Glass Cockpit"
++10 state cfg.uiTheme == glass
+state cfg.tunerDisplayStyle == plain
+state cfg.counterScale == 1
+state cfg.counterSwitches == true
+state cfg.readingsScale == 1
++2 choose "Theme" "Daylight Lab"
++10 state cfg.uiTheme == daylight
++2 choose "Theme" "Field Radio"
++10 state cfg.uiTheme == field
++2 choose "Theme" "Today's bench"
++10 state cfg.uiTheme == today
+state cfg.tunerDisplayStyle == nixie
+
+# Frequency display: Nixie tubes / Neon / Plain
++2 choose "Frequency display" "Neon"
++10 state cfg.tunerDisplayStyle == neon
++2 choose "Frequency display" "Plain"
++10 state cfg.tunerDisplayStyle == plain
++2 choose "Frequency display" "Nixie tubes"
++10 state cfg.tunerDisplayStyle == nixie
+
+# Counter figures: Normal size / Enlarged figures
++2 choose "Counter figures" "Enlarged figures"
++10 state cfg.counterScale == 2
++2 choose "Counter figures" "Normal size"
++10 state cfg.counterScale == 1
+
+# Tuner switches (on by default)
++2 click "Tuner switches"
++10 state cfg.counterSwitches == false
+expect "Tuner switches" checked equals "false"
++2 click "Tuner switches"
++10 state cfg.counterSwitches == true
+expect "Tuner switches" checked equals "true"
+
+# Enlarge every reading (off by default; on = 1.4)
++2 click "Enlarge every reading"
++10 state cfg.readingsScale > 1.39
+expect "Enlarge every reading" checked equals "true"
++2 click "Enlarge every reading"
++10 state cfg.readingsScale == 1
+expect "Enlarge every reading" checked equals "false"

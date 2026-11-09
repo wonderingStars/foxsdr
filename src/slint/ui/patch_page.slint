@@ -362,6 +362,7 @@ component DropRow inherits Rectangle {
     accessible-role: list-item;
     accessible-label: root.item.label;
     accessible-enabled: root.item.enabled;
+    accessible-action-default => { if (root.item.enabled) { root.activated(); } }   // a screen reader's (or the scripted input's) pick of this row
     if root.chosen : Image {
         x: 5px;
         y: (parent.height - self.height) / 2;

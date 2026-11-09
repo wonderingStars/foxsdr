@@ -1,0 +1,28 @@
+#! frames=400 view=patch
+# patch-band: the PATCH band - the seven part keys, ALL OFF, START, PRESETS (tick rows 1888-1892).
+# The part key "Radio" is the SECOND "Radio" (the SIGNAL bank's Radio section row comes first in the tree).
+# A bounded run answers only SET_PATCH_GRAPH and SET_PATCH_PAGE_OPEN, so a part key's new node is read back
+# through the engine's graph lists; START / ALL OFF (running) are withheld and only driven.
+10 state count.patchNodes == 1
++1 click "Channel"
++20 state count.patchNodes == 2
++1 click "Demod"
++20 state count.patchNodes == 3
++1 click "Spectrum"
++20 state count.patchNodes == 4
++1 click "Speaker"
++20 state count.patchNodes == 5
++1 click "Text out"
++20 state count.patchNodes == 6
++1 click "Map"
++20 state count.patchNodes == 7
++1 click "Radio"#2
++20 state count.patchNodes == 8
++1 click "ALL OFF"
++10 expect "START" enabled equals "true"
++1 click "START"
++10 expect "ALL OFF" enabled equals "true"
++1 click "PRESETS"
++10 state pages contains "PATCH PRESETS"
++1 click "PRESETS"
++10 dump

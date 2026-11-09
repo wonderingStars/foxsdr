@@ -1,0 +1,9 @@
+#! frames=140 bank=0 sections=0:2
+# main-strip: the STOP / START key of the receiver strip (tick rows 16, 120 by key)
+10 state running == 1
++1 click "Stop the receiver (Ctrl+F2)"
++25 state running == 0
++1 expect "Start the receiver (Ctrl+F2)" enabled equals "true"
++1 click "Start the receiver (Ctrl+F2)"
++30 state running == 1
++1 expect "Stop the receiver (Ctrl+F2)" enabled equals "true"

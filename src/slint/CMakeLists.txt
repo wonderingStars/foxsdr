@@ -28,7 +28,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/SlintDll.cmake")
 # /ENTRY:mainCRTStartup; the terminal comes back for --version, the tool modes and the bounded runs through the same bootProcess
 # and its AttachConsole (core/console_owner.hpp), so a harness that reads pipes (ctest, Git Bash, release.ps1) sees every line.
 # The icon resource is the one file cascade.exe embeds, so Explorer, the shortcuts and Add/Remove Programs show the fox.
-set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp signal_logic.cpp signal_publish.cpp system_logic.cpp system_publish.cpp tools_logic.cpp tools_publish.cpp extend_logic.cpp extend_publish.cpp patch_logic.cpp patch_publish.cpp
+set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp signal_logic.cpp signal_publish.cpp system_logic.cpp system_publish.cpp tools_logic.cpp tools_publish.cpp extend_logic.cpp extend_publish.cpp patch_logic.cpp patch_publish.cpp input_script.cpp
     "${CMAKE_SOURCE_DIR}/src/gui/track_info_cache.cpp"
     "${CMAKE_SOURCE_DIR}/src/gui/module_census.cpp")
 if(WIN32)
@@ -85,7 +85,15 @@ else()
     message(STATUS "foxsdr-slint: Python 3 not found - the window is built English-only (no bundled translations)")
 endif()
 
+# THE ELEMENT DEBUG INFO (docs 6.47). The scripted input (input_target.hpp) finds a control by its accessible label through the
+# testing API's element tree, and that tree is EMPTY unless the Slint compiler emitted the element debug info (the runtime's
+# collect_elements counts 0 elements per item and logs "The use of the ElementHandle API requires the presence of debug info").
+# SlintMacro.cmake sets SLINT_EMIT_DEBUG_INFO=1 only for an SDK built with SYSTEM_TESTING, which this one is not (its features:
+# TESTING without SYSTEM_TESTING), so the variable is handed to the macro here: it reads the caller's SLINT_COMPILER_ENV_VARS.
+# The cost is the element names and counts in the generated code; nothing of the window's behaviour changes.
+set(SLINT_COMPILER_ENV_VARS SLINT_EMIT_DEBUG_INFO=1)
 slint_target_sources(foxsdr-slint ui/main.slint)
+unset(SLINT_COMPILER_ENV_VARS)
 if(Python3_Interpreter_FOUND)
     # THE LIMIT. slint_target_sources registers the generated header's command with DEPENDS on the compiler and main.slint only (its
     # depfile adds the imported .slint files, never the .po files it bundles) and the macro offers no hook for more. A changed
@@ -115,6 +123,31 @@ target_include_directories(test_slint_duties PRIVATE
 target_compile_definitions(test_slint_duties PRIVATE FOXSDR_SLINT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME test_slint_duties COMMAND test_slint_duties)
 set_tests_properties(test_slint_duties PROPERTIES LABELS "slint" TIMEOUT 120)
+
+# THE SCRIPTED INPUT'S DRIVEN RUNS (input_script.hpp, docs 6.47): test_slint_drive_run spawns foxsdr-slint itself on a scratch profile
+# with FOXSDR_INPUT_SCRIPT, so it is built after the window and carries the gui label (it opens a window: the hidden-desktop pass) next to
+# drive (so the drive suite can be run on its own: ctest -L drive - not "slint-drive", which ctest -L slint would match and open windows). Each script of tests/drive/*.txt is one more test,
+# slint_drive_<name>, run by the same program; a script added later is picked up at the next build (CONFIGURE_DEPENDS).
+add_executable(test_slint_drive_run tests/test_slint_drive_run.cpp)
+target_compile_features(test_slint_drive_run PRIVATE cxx_std_20)
+target_include_directories(test_slint_drive_run PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+target_compile_definitions(test_slint_drive_run PRIVATE FOXSDR_SLINT_EXE="$<TARGET_FILE:foxsdr-slint>")
+add_dependencies(test_slint_drive_run foxsdr-slint)
+add_test(NAME test_slint_drive_run COMMAND test_slint_drive_run)
+set_tests_properties(test_slint_drive_run PROPERTIES LABELS "gui;drive" TIMEOUT 300)
+file(GLOB _foxsdr_slint_drive_scripts CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/drive/*.txt")
+foreach(_script ${_foxsdr_slint_drive_scripts})
+    get_filename_component(_drive_name "${_script}" NAME_WE)
+    add_test(NAME slint_drive_${_drive_name} COMMAND test_slint_drive_run "${_script}")
+    set_tests_properties(slint_drive_${_drive_name} PROPERTIES LABELS "gui;drive" TIMEOUT 600)
+endforeach()
+
+# THE COVERAGE LEDGER (tools/slint_drive_ledger.py, docs 6.47): every row of docs/slint-port-tick.md classified from tests/drive/coverage.tsv
+# into docs/slint-drive-coverage.md; the check fails when the committed ledger is stale or a control row is unclassified - no silent gaps.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME slint_drive_ledger COMMAND Python3::Interpreter -I "${CMAKE_SOURCE_DIR}/tools/slint_drive_ledger.py" --check)
+    set_tests_properties(slint_drive_ledger PROPERTIES LABELS "headless;slint" TIMEOUT 60)
+endif()
 
 # The translation generator's own tests (tools/test_slint_po.py): temp-dir fixtures, nothing of the build tree. -I keeps the
 # interpreter out of the current directory and the user's site-packages (the script is standard-library only).

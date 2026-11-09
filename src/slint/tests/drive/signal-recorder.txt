@@ -1,0 +1,28 @@
+#! frames=400 bank=0 sections=0:6
+# signal-recorder: the Recorder section (tick rows 1367-1375 and the Import key). Each key reads "Record ..." until the take is open, then
+# "Stop ..." (signal_logic recorderLabel; between them "Starting IQ - click to cancel"), so the stop is a click on the new label. The takes go to
+# the scratch profile's Documents/SDR-recordings. The Import key opens the import dialog (a local sheet); Browse... is NOT driven (a file chooser).
+10 state running == 1
+state recordingIq == 0
+state recordingAudio == 0
+# Record IQ
++1 click "Record IQ"
++30 state recordingIq == 1
++1 expect "Stop IQ" enabled equals "true"
++1 state count.recordings >= 1
++5 click "Stop IQ"
++30 state recordingIq == 0
++1 expect "Record IQ" enabled equals "true"
+# Record audio
++1 click "Record audio"
++30 state recordingAudio == 1
++1 expect "Stop audio" enabled equals "true"
++1 state count.recordings >= 1
++5 click "Stop audio"
++30 state recordingAudio == 0
++1 expect "Record audio" enabled equals "true"
+# Import: the dialog opens (its Browse... key exists), Cancel closes it
++1 click "Import"
++10 expect "Browse..." enabled equals "true"
++1 click "Cancel"
++10 state running == 1

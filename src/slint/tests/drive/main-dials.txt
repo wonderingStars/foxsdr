@@ -1,0 +1,16 @@
+#! frames=200 bank=0 sections=0:2
+# main-dials: the VOLUME and SQUELCH sliders and the SQUELCH AUTO key (the GAIN lane needs a radio: see COVERAGE-main.md)
+10 state volume > 0.45
++1 slider "VOLUME" 0.25
++15 state volume > 0.15
+state volume < 0.35
++1 slider "VOLUME" 0.9
++15 state volume > 0.75
++1 state squelchDb == -120
++1 slider "Squelch" 0.5
++15 state squelchDb > -80
+state squelchDb < -40
++1 click "AUTO"#2
++15 state squelchDb == -200
++1 click "AUTO"#2
++15 state squelchDb == -85

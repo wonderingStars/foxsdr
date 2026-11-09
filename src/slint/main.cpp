@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <type_traits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -63,6 +64,7 @@
 #include "extend_publish.hpp"
 #include "host_duties.hpp"
 #include "host_logic.hpp"
+#include "input_script.hpp"
 #include "kit_publish.hpp"
 #include "patch_publish.hpp"
 #include "plugin_kit.hpp"
@@ -72,6 +74,7 @@
 #include "tools_publish.hpp"
 
 #include "main.h"  // generated from ui/main.slint by slint_target_sources
+#include "input_target.hpp"   // after main.h: the scripted input drives the generated MainWindow's elements (docs 6.47)
 
 using namespace foxsdr::slinthost;
 
@@ -866,17 +869,28 @@ int main(int argc, char** argv) {
     ui->on_palette_activated([&](int id) { if (id >= 0 && id < static_cast<int>(paletteActions.size())) { paletteActions[static_cast<std::size_t>(id)].run(); } });
 
     // ---- the shortcuts, by config id (the key table of the ImGui window; rebinding is the SYSTEM bank's, phase 3) ----
-    const auto screenshot = [&] {
+    // A PNG of the window to `path` ("" = the refusal); the screenshot key stamps a name under the settings file's screenshots folder,
+    // the scripted input's `shot` names its own file (relative to that folder, or absolute).
+    const auto screenshotTo = [&](const std::string& pathIn) -> std::string {
         auto shot = ui->window().take_snapshot();
-        if (!shot) { std::fprintf(stderr, "foxsdr-slint: the snapshot was refused\n"); return; }
+        if (!shot) { return "the snapshot was refused"; }
         std::filesystem::path dir = std::filesystem::path(configPath).parent_path() / "screenshots";
-        std::error_code ec; std::filesystem::create_directories(dir, ec);
-        const std::time_t t = std::time(nullptr); char stamp[32]; std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&t));
-        const std::string path = (dir / (std::string("foxsdr-") + stamp + ".png")).string();
+        std::filesystem::path path(pathIn);
+        if (path.is_relative()) { path = dir / path; }
+        std::error_code ec; std::filesystem::create_directories(path.parent_path(), ec);
         std::vector<unsigned char> out;
         const auto sink = [](void* ctx, void* data, int size) { auto* v = static_cast<std::vector<unsigned char>*>(ctx); const auto* b = static_cast<const unsigned char*>(data); v->insert(v->end(), b, b + size); };
         stbi_write_png_to_func(sink, &out, static_cast<int>(shot->width()), static_cast<int>(shot->height()), 4, shot->begin(), static_cast<int>(shot->width()) * 4);
-        if (std::FILE* f = std::fopen(path.c_str(), "wb")) { std::fwrite(out.data(), 1, out.size(), f); std::fclose(f); std::fprintf(stderr, "foxsdr-slint: screenshot %s\n", path.c_str()); }
+        std::FILE* f = std::fopen(path.string().c_str(), "wb");
+        if (f == nullptr) { return "cannot write " + path.string(); }
+        std::fwrite(out.data(), 1, out.size(), f); std::fclose(f);
+        std::fprintf(stderr, "foxsdr-slint: screenshot %s\n", path.string().c_str());
+        return std::string();
+    };
+    const auto screenshot = [&] {
+        const std::time_t t = std::time(nullptr); char stamp[32]; std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&t));
+        const std::string why = screenshotTo(std::string("foxsdr-") + stamp + ".png");
+        if (!why.empty()) { std::fprintf(stderr, "foxsdr-slint: %s\n", why.c_str()); }
     };
     ui->on_shortcut([&](slint::SharedString idS) {
         const std::string id(idS);
@@ -1205,12 +1219,155 @@ int main(int argc, char** argv) {
         if (!languageChangeCapture.empty() && ++captureTicks == 60) { systemBank.languageChangeForCapture(languageChangeCapture); }
     };
 
+    // THE SCRIPTED INPUT (input_script.hpp, input_target.hpp; docs 6.47): FOXSDR_INPUT_SCRIPT names a file of steps that a bounded run plays
+    // against this window's controls by their accessible labels, each step's effect read back from the engine through the table by name
+    // (`state`). Only in a bounded run, like every other hook here; a script that does not parse ends the run before the window opens
+    // (exit 2), a step that fails or is never reached makes the run exit 3.
+    const auto readState = [&](const std::string& name, std::string& out) -> std::string {
+        static const std::pair<const char*, std::uint32_t> flagNames[] = {
+            {"running", FOXAPI_RX_RUNNING}, {"deviceOpen", FOXAPI_RX_DEVICE_OPEN}, {"faulted", FOXAPI_RX_FAULTED}, {"muted", FOXAPI_RX_MUTED},
+            {"squelchOpen", FOXAPI_RX_SQUELCH_OPEN}, {"stereo", FOXAPI_RX_STEREO_ENABLED}, {"stereoActive", FOXAPI_RX_STEREO_ACTIVE}, {"nr", FOXAPI_RX_NR},
+            {"notch", FOXAPI_RX_NOTCH}, {"autoNotch", FOXAPI_RX_AUTO_NOTCH}, {"agc", FOXAPI_RX_DEVICE_AGC}, {"agcSupported", FOXAPI_RX_AGC_SUPPORTED},
+            {"recordingIq", FOXAPI_RX_RECORDING_IQ}, {"recordingAudio", FOXAPI_RX_RECORDING_AUDIO}, {"scanner", FOXAPI_RX_SCANNER_ACTIVE},
+            {"decoderActive", FOXAPI_RX_DECODER_ACTIVE}, {"txAvailable", FOXAPI_RX_TX_AVAILABLE}, {"txKeyed", FOXAPI_RX_TX_KEYED}, {"sinkOpen", FOXAPI_RX_SINK_OPEN},
+            {"webListening", FOXAPI_RX_WEB_LISTENING}, {"biasTeePresent", FOXAPI_RX_BIAS_TEE_PRESENT}, {"biasTeeOn", FOXAPI_RX_BIAS_TEE_ON},
+            {"patchRunning", FOXAPI_RX_PATCH_RUNNING}, {"deviceOpening", FOXAPI_RX_DEVICE_OPENING}, {"positionSet", FOXAPI_RX_POSITION_SET}};
+        for (const auto& f : flagNames) { if (name == f.first) { out = (state.flags & f.second) ? "1" : "0"; return std::string(); } }
+        static const std::pair<const char*, std::uint32_t> listNames[] = {
+            {"modes", FOXAPI_LIST_MODES}, {"bandwidths", FOXAPI_LIST_BANDWIDTHS}, {"devices", FOXAPI_LIST_DEVICES}, {"sampleRates", FOXAPI_LIST_SAMPLE_RATES},
+            {"gains", FOXAPI_LIST_GAINS}, {"antennas", FOXAPI_LIST_ANTENNAS}, {"bookmarks", FOXAPI_LIST_BOOKMARKS}, {"decoders", FOXAPI_LIST_DECODERS},
+            {"plugins", FOXAPI_LIST_PLUGINS}, {"catalogue", FOXAPI_LIST_CATALOGUE}, {"audioDevices", FOXAPI_LIST_AUDIO_DEVICES}, {"freqMarkers", FOXAPI_LIST_FREQ_MARKERS},
+            {"marks", FOXAPI_LIST_MARKERS}, {"bandPlan", FOXAPI_LIST_BAND_PLAN}, {"presets", FOXAPI_LIST_PRESETS}, {"deviceOptions", FOXAPI_LIST_DEVICE_OPTIONS},
+            {"serialPorts", FOXAPI_LIST_SERIAL_PORTS}, {"userPresets", FOXAPI_LIST_USER_PRESETS}, {"bookmarkGroups", FOXAPI_LIST_BOOKMARK_GROUPS},
+            {"statusLines", FOXAPI_LIST_STATUS_LINES}, {"converters", FOXAPI_LIST_CONVERTERS}, {"patchNodes", FOXAPI_LIST_PATCH_NODES}, {"patchWires", FOXAPI_LIST_PATCH_WIRES},
+            {"recordings", FOXAPI_LIST_RECORDINGS}, {"decoderLines", FOXAPI_LIST_DECODER_LINES}, {"bandPlans", FOXAPI_LIST_BAND_PLANS}, {"muteCauses", FOXAPI_LIST_MUTE_CAUSES},
+            {"pluginCommands", FOXAPI_LIST_PLUGIN_COMMANDS}, {"servers", FOXAPI_LIST_SERVERS}, {"airbandChannels", FOXAPI_LIST_AIRBAND_CHANNELS},
+            {"pluginSettings", FOXAPI_LIST_PLUGIN_SETTINGS}, {"storeUpdates", FOXAPI_LIST_STORE_UPDATES}, {"gps", FOXAPI_LIST_GPS}, {"patchPresetsList", FOXAPI_LIST_PATCH_PARTS}};
+        // count.<list> / list.<list>.count|names|details|values - <list> a name above or the table's number; names and details are joined by " | "
+        if (name.rfind("count.", 0) == 0 || name.rfind("list.", 0) == 0) {
+            const bool count = name.rfind("count.", 0) == 0;
+            std::string spec = name.substr(count ? 6 : 5);
+            std::string what = "count";
+            if (!count) {
+                const std::size_t dot = spec.find('.');
+                if (dot == std::string::npos) { return "list.<list>.count|names|details|values, not " + name; }
+                what = spec.substr(dot + 1);
+                spec = spec.substr(0, dot);
+            }
+            std::uint32_t id = 0;
+            for (const auto& l : listNames) { if (spec == l.first) { id = l.second; } }
+            if (id == 0 && !spec.empty() && std::isdigit(static_cast<unsigned char>(spec[0]))) { id = static_cast<std::uint32_t>(std::atoi(spec.c_str())); }
+            if (id == 0) { return "no list named " + spec; }
+            int n = 0;
+            std::string joined;
+            readList(id, [&](const FoxListItem& it) {
+                ++n;
+                const std::string piece = what == "names" ? std::string(it.name) : what == "details" ? std::string(it.detail) : fmt("%.6f", it.value[0]);
+                joined += (joined.empty() ? "" : " | ") + piece;
+            });
+            if (what == "count") { out = std::to_string(n); return std::string(); }
+            if (what == "names" || what == "details" || what == "values") { out = joined; return std::string(); }
+            return "list.<list>.count|names|details|values, not " + name;
+        }
+        if (name.rfind("fact.", 0) == 0) { return world.fact(name.c_str(), out) ? std::string() : "no fact " + name; }
+        // cfg.<field>: the interface half of the settings AS THE HOST HOLDS IT (host_duties interfaceHalf, kept by every bank's saveInterfaceHalf) - the
+        // read-back for a control whose value never reaches the engine (the theme, the trail style, the diagnostics switch...). Scalars and strings;
+        // a bool reads "true" / "false". An Engine-owned field reads the value the host loaded at start, not the engine's: ask the engine's state for those.
+        if (name.rfind("cfg.", 0) == 0) {
+            const std::string field = name.substr(4);
+            const cascade::core::AppConfig& half = duties.interfaceHalf();
+            bool hit = false, supported = true;
+            cascade::core::forEachConfigField([&](const char* n, cascade::core::ConfigOwner, bool, auto member) {
+                if (hit || field != n) { return; }
+                hit = true;
+                using T = std::decay_t<decltype(half.*member)>;
+                if constexpr (std::is_same_v<T, bool>) { out = (half.*member) ? "true" : "false"; }
+                else if constexpr (std::is_same_v<T, std::string>) { out = half.*member; }
+                else if constexpr (std::is_floating_point_v<T>) { out = fmt("%.6f", static_cast<double>(half.*member)); }
+                else if constexpr (std::is_integral_v<T> || std::is_enum_v<T>) { out = std::to_string(static_cast<long long>(half.*member)); }
+                else { supported = false; }
+            });
+            if (!hit) { return "no settings field named " + field; }
+            if (!supported) { return "cfg." + field + " is not a scalar or a string"; }
+            return std::string();
+        }
+        if (name == "tunedHz") { out = fmt("%.6f", state.tunedHz); return std::string(); }
+        if (name == "centreHz") { out = fmt("%.6f", state.centreHz); return std::string(); }
+        if (name == "vfoOffsetHz") { out = fmt("%.6f", state.vfoOffsetHz); return std::string(); }
+        if (name == "sampleRateHz") { out = fmt("%.6f", state.sampleRateHz); return std::string(); }
+        if (name == "channelRateHz") { out = fmt("%.6f", state.channelRateHz); return std::string(); }
+        if (name == "bandwidthHz") { out = fmt("%.6f", state.bandwidthHz); return std::string(); }
+        if (name == "squelchDb") { out = fmt("%.6f", state.squelchDb); return std::string(); }
+        if (name == "volume") { out = fmt("%.6f", state.volume); return std::string(); }
+        if (name == "dbMin") { out = fmt("%.6f", state.dbMin); return std::string(); }
+        if (name == "dbMax") { out = fmt("%.6f", state.dbMax); return std::string(); }
+        if (name == "nrStrength") { out = fmt("%.6f", state.nrStrength); return std::string(); }
+        if (name == "notchHz") { out = fmt("%.6f", state.notchHz); return std::string(); }
+        if (name == "txFrequencyHz") { out = fmt("%.6f", state.txFrequencyHz); return std::string(); }
+        if (name == "demodMode") { out = std::to_string(state.demodMode); return std::string(); }
+        if (name == "mode") { out = modeName(state.demodMode); return std::string(); }
+        if (name == "deemphasis") { out = std::to_string(state.deemphasis); return std::string(); }
+        if (name == "decodersRunning") { out = std::to_string(state.decodersRunning); return std::string(); }
+        if (name == "decodersFitted") { out = std::to_string(state.decodersFitted); return std::string(); }
+        if (name == "decoderLinesTotal") { out = std::to_string(state.decoderLinesTotal); return std::string(); }
+        if (name == "gainDb") {
+            FoxListItem it{}; it.structSize = sizeof(it);
+            if (api->read_list(session, FOXAPI_LIST_GAINS, 0, &it) <= 0) { return std::string("no gain stage"); }
+            out = fmt("%.6f", it.value[3]); return std::string();
+        }
+        if (name == "deviceName") { out = state.deviceName; return std::string(); }
+        if (name == "sinkName") { out = state.sinkName; return std::string(); }
+        if (name == "faultMessage") { out = state.faultMessage; return std::string(); }
+        if (name == "audioMutedBy") { out = state.audioMutedBy; return std::string(); }
+        if (name == "bank") { out = std::to_string(ui->get_bank_index()); return std::string(); }
+        if (name == "view") { out = std::to_string(ui->get_view_index()); return std::string(); }
+        if (name == "pages") { out = publisher.pagesLine(); return std::string(); }
+        if (name == "tick") { out = std::to_string(bounded.ticks() + 1); return std::string(); }
+        return "no state named " + name;
+    };
+    std::unique_ptr<foxsdr::slintdrive::SlintDriveTarget<MainWindow>> driveTarget;
+    std::unique_ptr<foxsdr::slintdrive::Driver> drive;
+    bool scriptRefused = false;
+    if (const char* scriptPath = std::getenv("FOXSDR_INPUT_SCRIPT"); scriptPath != nullptr && scriptPath[0] != '\0' && bounded.bounded()) {
+        std::string text;
+        if (std::FILE* f = std::fopen(scriptPath, "rb")) {
+            char buf[4096]; std::size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) { text.append(buf, n); }
+            std::fclose(f);
+        } else {
+            std::fprintf(stderr, "foxsdr-slint: input script: cannot read %s\n", scriptPath);
+            scriptRefused = true;
+        }
+        if (!scriptRefused) {
+            foxsdr::slintdrive::Script script = foxsdr::slintdrive::parseInputScript(text);
+            for (const auto& e : script.errors) { std::fprintf(stderr, "foxsdr-slint: input script: %s\n", e.c_str()); }
+            if (!script.errors.empty()) {
+                std::fprintf(stderr, "foxsdr-slint: input script refused: %zu bad line(s) in %s\n", script.errors.size(), scriptPath);
+                scriptRefused = true;
+            } else {
+                std::fprintf(stderr, "foxsdr-slint: input script: %zu steps from %s\n", script.steps.size(), scriptPath);
+                driveTarget = std::make_unique<foxsdr::slintdrive::SlintDriveTarget<MainWindow>>(ui, readState, screenshotTo);
+                drive = std::make_unique<foxsdr::slintdrive::Driver>(std::move(script), *driveTarget);
+            }
+        }
+    }
+    const auto driveSay = [](const std::string& line) { std::fprintf(stderr, "foxsdr-slint: %s\n", line.c_str()); };
+
     // THE TICK = THE FRAME: the screen's reads, then the housekeeping (the sentinel's beat, the senders, the sweep, the update check), then the
     // update card if the duties changed it, then the bounded run's count. `--frames N` is N ticks and exit 0 (BoundedRun); a real session never
     // ends itself.
+    std::optional<slint::PhysicalSize> wantedSize;   // FOXSDR_SLINT_SIZE, below
     slint::Timer tick;
     tick.start(slint::TimerMode::Repeated, std::chrono::milliseconds(33), [&] {
+        if (wantedSize.has_value() && bounded.ticks() < 3) {
+            ui->window().set_size(*wantedSize);
+            if (bounded.ticks() == 2) {
+                const auto sz = ui->window().size();
+                std::fprintf(stderr, "foxsdr-slint: bounded run: window size now %ux%u\n", sz.width, sz.height);
+            }
+        }
         onTick();
+        if (drive) { drive->tick(bounded.ticks() + 1, driveSay); }   // this tick's number: the steps due now, after the screen's reads
         TickInput in;
         in.deviceOpening = (state.flags & FOXAPI_RX_DEVICE_OPENING) != 0;
         duties.poll(in);
@@ -1221,9 +1378,22 @@ int main(int argc, char** argv) {
         }
     });
 
-    // `--frames 0` produces no frame at all: the window is neither shown nor run.
-    if (!bounded.skipsLoop()) {
+    // `--frames 0` produces no frame at all: the window is neither shown nor run. A refused script runs nothing either (exit 2 below).
+    if (!bounded.skipsLoop() && !scriptRefused) {
         ui->show();
+        // A bounded run's window size, FOXSDR_SLINT_SIZE=<w>x<h> in pixels (docs 6.47): a drive script whose section body is taller than the
+        // default window reaches the controls below its bottom edge only when the window is tall enough - the element tree lists what is
+        // laid out inside the window, nothing clipped away. The screen follows the real size at the next tick (set_win_w / set_win_h).
+        if (const char* sizeEnv = std::getenv("FOXSDR_SLINT_SIZE"); sizeEnv != nullptr && bounded.bounded()) {
+            unsigned w = 0, h = 0;
+            if (std::sscanf(sizeEnv, "%ux%u", &w, &h) == 2 && w >= 624 && h >= 400 && w <= 8192 && h <= 8192) {
+                ui->window().set_size(slint::PhysicalSize({w, h}));
+                wantedSize = slint::PhysicalSize({w, h});   // asked again on the first ticks: a size set before the window is mapped was not kept
+                std::fprintf(stderr, "foxsdr-slint: bounded run: window size %ux%u (FOXSDR_SLINT_SIZE)\n", w, h);
+            } else {
+                std::fprintf(stderr, "foxsdr-slint: FOXSDR_SLINT_SIZE=%s is not <w>x<h> within 624x400..8192x8192 - the default size stays\n", sizeEnv);
+            }
+        }
         duties.windowUp();
         slint::run_event_loop();
     }
@@ -1252,6 +1422,11 @@ int main(int argc, char** argv) {
     duties.closed();
     api->close_session(session);
 
+    int exitCode = scriptRefused ? 2 : 0;
+    if (drive) {
+        std::fprintf(stderr, "foxsdr-slint: %s\n", drive->summaryLine().c_str());
+        if (!drive->allRun()) { exitCode = 3; }
+    }
     if (bounded.bounded()) {
         // What the kit holds at the end of a bounded run: the evidence that the port answered on this thread.
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", kitLine.c_str());
@@ -1270,7 +1445,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "foxsdr-slint: bounded run: update card shown=%d headline=\"%s\" primary=\"%s\" progress=%.2f; about: %s\n",
                      ui->get_update_shown() ? 1 : 0, std::string(ui->get_update_headline()).c_str(), std::string(ui->get_update_primary()).c_str(),
                      static_cast<double>(ui->get_update_progress()), about.c_str());
-        std::fprintf(stderr, "%s\n", bounded.exitLine(0).c_str());
+        std::fprintf(stderr, "%s\n", bounded.exitLine(exitCode).c_str());
     }
-    return 0;
+    return exitCode;
 }

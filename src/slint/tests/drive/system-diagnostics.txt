@@ -1,0 +1,20 @@
+#! frames=240 bank=4 sections=4:6
+# system-diagnostics: Diagnostics (tick rows 1452, 1454). Both switches are interface-half settings read back with cfg.*; the dump
+# has the record switch ON (checked=true) and the memory dump OFF. Each is flipped and put back.
+10 state running == 1
+state cfg.diagnosticsEnabled == true
+state cfg.diagnosticsMinidump == false
+
++1 click "Record crashes and freezes, and send the report next time"
++10 state cfg.diagnosticsEnabled == false
+expect "Record crashes and freezes, and send the report next time" checked equals "false"
++2 click "Record crashes and freezes, and send the report next time"
++10 state cfg.diagnosticsEnabled == true
+expect "Record crashes and freezes, and send the report next time" checked equals "true"
+
++2 click "Also write a full memory dump beside a crash report"
++10 state cfg.diagnosticsMinidump == true
+expect "Also write a full memory dump beside a crash report" checked equals "true"
++2 click "Also write a full memory dump beside a crash report"
++10 state cfg.diagnosticsMinidump == false
+expect "Also write a full memory dump beside a crash report" checked equals "false"

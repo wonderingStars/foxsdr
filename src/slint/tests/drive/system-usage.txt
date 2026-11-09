@@ -1,0 +1,11 @@
+#! frames=200 bank=4 sections=4:7
+# system-usage: Usage reporting (tick row 1476). The consent is the desktop's own FOXAPP_OP_TELEMETRY_CONSENT (Engine-owned
+# telemetryEnabled: cfg.* would read the start value), so the read-back is the checkbox's checked value and the Off line's text after
+# the engine's fact comes back. Nothing is transmitted in a bounded run (no network). It is switched on and off again.
+10 state running == 1
+expect "Send anonymous usage reports" checked equals "false"
++1 click "Send anonymous usage reports"
++25 expect "Send anonymous usage reports" checked equals "true"
++3 click "Send anonymous usage reports"
++25 expect "Send anonymous usage reports" checked equals "false"
++2 expect "Off. Nothing is transmitted." label contains "Off"

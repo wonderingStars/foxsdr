@@ -1,0 +1,12 @@
+#! frames=150 bank=0 sections=0:1
+# signal-source-setup: RADIO SETUP (tick row 1229) opens the RadioSetupSheet, a local sheet of the window (not a kit page: `state pages` does
+# not name it), whose "Don't show this again" tick is driven (row 1311; the host saves it). The sheet is left open at the end: its Close key
+# shares the label "Close" with the title bar's (which quits the window), so it is not driven. UNVERIFIED: the sheet's labels were not dumped.
+10 state running == 1
++1 click "RADIO SETUP"
++15 expect "Don't show this again" checked equals "false"
++1 click "Don't show this again"
++10 expect "Don't show this again" checked equals "true"
++1 click "Don't show this again"
++10 expect "Don't show this again" checked equals "false"
++1 state running == 1

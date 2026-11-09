@@ -1,0 +1,15 @@
+#! frames=240 bank=1
+# decode-store-sites: the Plugin store's SITES panel, local effects only (tick rows 1811, 1837, 1839), labels from the dump of the open
+# panel. ADD (1838) is greyed until a valid address and REMOVE (1836) needs a listed site; both send FOXAPP_OP_STORE_SITE, which a
+# bounded run withholds, so ADD is only checked to be disabled with no address.
+10 state running == 1
++1 click "Plugin store"
++10 state pages contains "PLUGIN STORE"
++3 click "SITES"
++5 expect "ADD" enabled equals "false"
++1 type "Site address" "https://example.invalid/plugins"
++3 expect "Site address" value equals "https://example.invalid/plugins"
++1 click "Plugins from this site are not reviewed by FoxSDR. They run with the same access as this application. Only add a site you trust."
++3 expect "Plugins from this site are not reviewed by FoxSDR. They run with the same access as this application. Only add a site you trust." checked equals "true"
++1 click "Plugins from this site are not reviewed by FoxSDR. They run with the same access as this application. Only add a site you trust."
++3 expect "Plugins from this site are not reviewed by FoxSDR. They run with the same access as this application. Only add a site you trust." checked equals "false"

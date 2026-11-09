@@ -1,0 +1,8 @@
+#! frames=120 bank=1
+# decode-bank-key: the DECODE RailKey (tick row 277) and the bank switch it makes; `state bank` is the read-back (0 SIGNAL, 1 DECODE).
+10 state running == 1
+state bank == 1
++1 click "SIGNAL"
++5 state bank == 0
++1 click "DECODE"
++5 state bank == 1

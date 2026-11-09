@@ -1,0 +1,21 @@
+#! frames=260 bank=4 sections=4:5
+# system-keys: Key bindings (tick rows 1445, 1448). cfg.keyBindings is a list, not readable, so the read-back is the key cap's own
+# accessible label ("<action> <chord>", the dump: "Mute the sound M"). Capture: a click on the cap listens, the next chord binds it,
+# Esc leaves it alone, "Reset to defaults" puts the stock table back. The "Press a key..." / rebound label text after a capture is
+# a guess from the dump's naming ("Volume up Plus"): UNVERIFIED, the first thing to check if this script fails.
+10 state running == 1
+expect "Mute the sound M" label equals "Mute the sound M"
+
+# Esc leaves the binding alone
++1 click "Squelch up Ctrl+Shift+PageUp"
++5 key escape
++8 expect "Squelch up Ctrl+Shift+PageUp" label equals "Squelch up Ctrl+Shift+PageUp"
+
+# Rebind Mute to F6
++2 click "Mute the sound M"
++5 key f6
++12 expect "Mute the sound F6" label equals "Mute the sound F6"
+
+# Reset to defaults puts M back
++3 click "Reset to defaults"
++12 expect "Mute the sound M" label equals "Mute the sound M"

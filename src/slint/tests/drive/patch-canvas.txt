@@ -1,0 +1,22 @@
+#! frames=300 view=patch
+# patch-canvas: the canvas keys and the Radio node's face (tick rows 1903-1905, 1914, 1916, 1919).
+# The canvas keys are the SECOND "-" / "+" (the spectrum's own come first); zoom has no read-back, so they are driven.
+10 state count.patchNodes == 1
++1 click "−"#2
++5 click "+"#2
++5 click "Fit"
++5 click "ON"
++5 expect "OFF" enabled equals "true"
++1 click "OFF"
++5 expect "ON" enabled equals "true"
++1 type "Centre (MHz)" "100.5"
++2 key enter
++5 expect "Centre (MHz)" value contains "100.5"
++1 click "Channel"
++20 state count.patchNodes == 2
++1 type "Frequency (MHz)" "100.6"
++2 key enter
++5 expect "Frequency (MHz)" value contains "100.6"
++1 click "Demod"
++20 state count.patchNodes == 3
++5 dump

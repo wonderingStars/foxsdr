@@ -1,0 +1,61 @@
+#! frames=420 bank=0 sections=0:2
+# main-counter: the up and down switches of the counter digits 10 MHz .. 1 Hz (GHz and 100 MHz are in main-counter-high).
+# Per digit: up (+d), down twice (-d), up (back to the start).
+10 state tunedHz == 100300000
++1 click "Step 1 MHz digit up"
++10 state tunedHz == 101300000
++1 expect "1 MHz digit" value equals "1"
++1 click "Step 1 MHz digit down"
++4 click "Step 1 MHz digit down"
++10 state tunedHz == 99300000
++1 click "Step 1 MHz digit up"
++10 state tunedHz == 100300000
++1 click "Step 10 MHz digit up"
++10 state tunedHz == 110300000
++1 click "Step 10 MHz digit down"
++4 click "Step 10 MHz digit down"
++10 state tunedHz == 90300000
++1 click "Step 10 MHz digit up"
++10 state tunedHz == 100300000
++1 click "Step 100 kHz digit up"
++10 state tunedHz == 100400000
++1 click "Step 100 kHz digit down"
++4 click "Step 100 kHz digit down"
++10 state tunedHz == 100200000
++1 click "Step 100 kHz digit up"
++10 state tunedHz == 100300000
++1 click "Step 10 kHz digit up"
++10 state tunedHz == 100310000
++1 click "Step 10 kHz digit down"
++4 click "Step 10 kHz digit down"
++10 state tunedHz == 100290000
++1 click "Step 10 kHz digit up"
++10 state tunedHz == 100300000
++1 click "Step 1 kHz digit up"
++10 state tunedHz == 100301000
++1 click "Step 1 kHz digit down"
++4 click "Step 1 kHz digit down"
++10 state tunedHz == 100299000
++1 click "Step 1 kHz digit up"
++10 state tunedHz == 100300000
++1 click "Step 100 Hz digit up"
++10 state tunedHz == 100300100
++1 click "Step 100 Hz digit down"
++4 click "Step 100 Hz digit down"
++10 state tunedHz == 100299900
++1 click "Step 100 Hz digit up"
++10 state tunedHz == 100300000
++1 click "Step 10 Hz digit up"
++10 state tunedHz == 100300010
++1 click "Step 10 Hz digit down"
++4 click "Step 10 Hz digit down"
++10 state tunedHz == 100299990
++1 click "Step 10 Hz digit up"
++10 state tunedHz == 100300000
++1 click "Step 1 Hz digit up"
++10 state tunedHz == 100300001
++1 click "Step 1 Hz digit down"
++4 click "Step 1 Hz digit down"
++10 state tunedHz == 100299999
++1 click "Step 1 Hz digit up"
++10 state tunedHz == 100300000

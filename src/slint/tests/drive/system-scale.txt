@@ -1,0 +1,7 @@
+#! frames=120 bank=4 sections=4:0
+# system-scale: Interface size (tick row 1388; the dump: combobox "Interface size" value "Auto (follows Windows, 100% here)").
+# Choosing a step resizes the whole window, so this is its own script and nothing is driven after the change: only the read-back.
+10 state running == 1
+state cfg.interfaceScale == auto
++1 choose "Interface size" "125%"
++20 state cfg.interfaceScale == 125

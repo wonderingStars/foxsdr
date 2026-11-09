@@ -1,0 +1,32 @@
+#! frames=300 bank=0 sections=0:2
+# signal-radio: the Radio section of the SIGNAL bank (tick rows 1319, and the Passband, Tune step and Follow rows of the Radio body).
+# The generator starts in WFM with the channel at 200 kHz (Passband slider 83 % = 150 kHz, track 3 kHz .. 0.9 * channel rate = 180 kHz).
+10 state running == 1
+state stereo == 1
+# Stereo (FOXAPI_OP_SET_STEREO): off, then on again
++1 expect "Stereo" checked equals "true"
++1 click "Stereo"
++20 state stereo == 0
++1 expect "Stereo" checked equals "false"
++1 click "Stereo"
++20 state stereo == 1
++1 expect "Stereo" checked equals "true"
+# Passband slider (FOXAPI_OP_SET_BANDWIDTH): low then high on the track
++1 slider "Passband" 0.1
++20 state bandwidthHz < 100000
++1 state bandwidthHz > 3000
++1 slider "Passband" 0.9
++20 state bandwidthHz > 120000
+# Tune step: the key is labelled by its current value (fmtKHz: "25.0 kHz") while the menu rows say "25 kHz"; local to the host (no engine value).
++1 expect "12.5 kHz" value equals "12.5 kHz"
++1 choose "12.5 kHz" "25 kHz"
++10 expect "25.0 kHz" label equals "25.0 kHz"
++1 choose "25.0 kHz" "12.5 kHz"
++10 expect "12.5 kHz" label equals "12.5 kHz"
+# Follow the band plan's mode when retuning: held by the host (main.cpp followBandPlan, no engine or cfg field), so the tick is the read-back
++1 expect "Follow the band plan's mode when retuning" checked equals "true"
++1 click "Follow the band plan's mode when retuning"
++5 expect "Follow the band plan's mode when retuning" checked equals "false"
++1 click "Follow the band plan's mode when retuning"
++5 expect "Follow the band plan's mode when retuning" checked equals "true"
++1 state running == 1

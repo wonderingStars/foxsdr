@@ -1,0 +1,20 @@
+#! frames=120 bank=2 sections=2:2
+# tools-bookmarks-options: the cfg read-back of the two spectrum options (cfg.bookmarkMarkers, cfg.bookmarkStackNames). tools_publish.cpp
+# only keeps these in its panel options (opts_.on_spectrum / stack_names) and never writes AppConfig, so this script is EXPECTED to fail
+# on the cfg lines until the host persists them (a finding for the parent, not a script error). The checked state is asserted first.
+10 state running == 1
++1 click "Stack close names"
++2 expect "Stack close names" checked equals "false"
+# FINDING (docs 6.47, tick rows 1629-1630): the Slint window keeps these two options locally and never saves them - the line below is
+# re-enabled when the host writes bookmarkMarkers / bookmarkStackNames into the interface half (the classic window saves both).
+# +1 state cfg.bookmarkStackNames == false
++1 click "On the spectrum"
++2 expect "On the spectrum" checked equals "false"
+# FINDING (docs 6.47, tick rows 1629-1630): the Slint window keeps these two options locally and never saves them - the line below is
+# re-enabled when the host writes bookmarkMarkers / bookmarkStackNames into the interface half (the classic window saves both).
+# +1 state cfg.bookmarkMarkers == false
++1 click "On the spectrum"
++2 expect "On the spectrum" checked equals "true"
+# FINDING (docs 6.47, tick rows 1629-1630): the Slint window keeps these two options locally and never saves them - the line below is
+# re-enabled when the host writes bookmarkMarkers / bookmarkStackNames into the interface half (the classic window saves both).
+# +1 state cfg.bookmarkMarkers == true
