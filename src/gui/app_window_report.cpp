@@ -251,6 +251,7 @@ void AppWindow::drawFeatureRequestPage() {
         ImGui::PopStyleColor();
     }
 
+    bool sendStartedNow = false;
     if (pressed && canSend) {
         cascade::core::FeatureRequestPayload payload;
         payload.text = featureRequestText_;
@@ -265,7 +266,13 @@ void AppWindow::drawFeatureRequestPage() {
         // line or an embedded control character.
         featureRequestSentChars_ =
             cascade::core::featureRequestTextCharCount(featureRequestText_);
-        featureRequestSender_.send(cascade::core::featureRequestEndpoint(), payload, nowEpoch);
+        if (featureRequestSender_.send(cascade::core::featureRequestEndpoint(), payload, nowEpoch)) { sendStartedNow = true; }
+        // THE PAGE HAS NOT SEEN "Sending" YET, but the sender is in it: send() set the state before it started its worker, and the state
+        // read at the top of this frame is the one from before. What the end of the frame remembers is therefore Sending (below), so the
+        // frame that first sees the answer - even when the answer is already there, as it is for a refused connection on Linux (a
+        // loopback refusal returns in microseconds; WinHTTP's takes long enough to be drawn as "Sending..." first) - is the transition
+        // out of Sending: its one log line is written and a sent request's words are cleared. Without this the line and the clear
+        // depended on a frame having drawn between the press and the answer (Linux CI, 2026-11-09: test_problem_report_app).
     }
 
     // --- the status line -------------------------------------------------
@@ -329,7 +336,7 @@ void AppWindow::drawFeatureRequestPage() {
     if (cascade::core::featureRequestClearsTextNow(featureRequestLastLoggedState_, state)) {
         featureRequestText_.clear();
     }
-    featureRequestLastLoggedState_ = state;
+    featureRequestLastLoggedState_ = sendStartedNow ? cascade::core::FeatureRequestState::Sending : state;
 }
 
 // --- REPORT A BUG / DISLIKE (see core/problem_report.hpp) -------------------
@@ -654,6 +661,7 @@ void AppWindow::drawProblemReportPage() {
         ImGui::PopStyleColor();
     }
 
+    bool sendStartedNow = false;
     if (pressed && canSend) {
         cascade::core::ProblemReportPayload payload;
         payload.kind = problemReportKind_;
@@ -686,7 +694,13 @@ void AppWindow::drawProblemReportPage() {
                 cascade::gui::census::note("problem:sent:attachment:", a.reportClass);
             }
         }
-        problemReportSender_.send(cascade::core::problemReportEndpoint(), payload, nowEpoch);
+        if (problemReportSender_.send(cascade::core::problemReportEndpoint(), payload, nowEpoch)) { sendStartedNow = true; }
+        // THE PAGE HAS NOT SEEN "Sending" YET, but the sender is in it: send() set the state before it started its worker, and the state
+        // read at the top of this frame is the one from before. What the end of the frame remembers is therefore Sending (below), so the
+        // frame that first sees the answer - even when the answer is already there, as it is for a refused connection on Linux (a
+        // loopback refusal returns in microseconds; WinHTTP's takes long enough to be drawn as "Sending..." first) - is the transition
+        // out of Sending: its one log line is written and a sent request's words are cleared. Without this the line and the clear
+        // depended on a frame having drawn between the press and the answer (Linux CI, 2026-11-09: test_problem_report_app).
     }
 
     // --- the status line -------------------------------------------------
@@ -763,7 +777,7 @@ void AppWindow::drawProblemReportPage() {
     if (cascade::core::featureRequestClearsTextNow(problemReportLastLoggedState_, state)) {
         problemReportText_.clear();
     }
-    problemReportLastLoggedState_ = state;
+    problemReportLastLoggedState_ = sendStartedNow ? cascade::core::FeatureRequestState::Sending : state;
 }
 
 }  // namespace cascade::gui
