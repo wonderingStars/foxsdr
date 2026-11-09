@@ -432,3 +432,124 @@ export component StopKey inherits Rectangle {
     }
     TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
 }
+
+// THE NAME OF A PRESSED KEY in the chord text the config stores, "" for a key a chord cannot use (the table is src/gui/key_bindings.cpp's kKeys; the physical
+// Equal key is "Plus"). ONE function for the two readers of the keyboard: the Key bindings capture (system_bank.slint KeyCap) and the window's dispatch (main.slint
+// root FocusScope, docs 6.56), so what the capture saves is what the dispatch looks for. A shifted glyph ("+", "_", "!") names the key it is made on.
+export global KeyNames {
+    pure public function name(t: string) -> string {
+        let u = t.to-uppercase();
+        if (u == "A") { return "A"; }   // not-translated: chord key names (the config text form)
+        if (u == "B") { return "B"; }   // not-translated: chord key names (the config text form)
+        if (u == "C") { return "C"; }   // not-translated: chord key names (the config text form)
+        if (u == "D") { return "D"; }   // not-translated: chord key names (the config text form)
+        if (u == "E") { return "E"; }   // not-translated: chord key names (the config text form)
+        if (u == "F") { return "F"; }   // not-translated: chord key names (the config text form)
+        if (u == "G") { return "G"; }   // not-translated: chord key names (the config text form)
+        if (u == "H") { return "H"; }   // not-translated: chord key names (the config text form)
+        if (u == "I") { return "I"; }   // not-translated: chord key names (the config text form)
+        if (u == "J") { return "J"; }   // not-translated: chord key names (the config text form)
+        if (u == "K") { return "K"; }   // not-translated: chord key names (the config text form)
+        if (u == "L") { return "L"; }   // not-translated: chord key names (the config text form)
+        if (u == "M") { return "M"; }   // not-translated: chord key names (the config text form)
+        if (u == "N") { return "N"; }   // not-translated: chord key names (the config text form)
+        if (u == "O") { return "O"; }   // not-translated: chord key names (the config text form)
+        if (u == "P") { return "P"; }   // not-translated: chord key names (the config text form)
+        if (u == "Q") { return "Q"; }   // not-translated: chord key names (the config text form)
+        if (u == "R") { return "R"; }   // not-translated: chord key names (the config text form)
+        if (u == "S") { return "S"; }   // not-translated: chord key names (the config text form)
+        if (u == "T") { return "T"; }   // not-translated: chord key names (the config text form)
+        if (u == "U") { return "U"; }   // not-translated: chord key names (the config text form)
+        if (u == "V") { return "V"; }   // not-translated: chord key names (the config text form)
+        if (u == "W") { return "W"; }   // not-translated: chord key names (the config text form)
+        if (u == "X") { return "X"; }   // not-translated: chord key names (the config text form)
+        if (u == "Y") { return "Y"; }   // not-translated: chord key names (the config text form)
+        if (u == "Z") { return "Z"; }   // not-translated: chord key names (the config text form)
+        if (t == "0") { return "0"; }   // not-translated: chord key names (the config text form)
+        if (t == "1") { return "1"; }   // not-translated: chord key names (the config text form)
+        if (t == "2") { return "2"; }   // not-translated: chord key names (the config text form)
+        if (t == "3") { return "3"; }   // not-translated: chord key names (the config text form)
+        if (t == "4") { return "4"; }   // not-translated: chord key names (the config text form)
+        if (t == "5") { return "5"; }   // not-translated: chord key names (the config text form)
+        if (t == "6") { return "6"; }   // not-translated: chord key names (the config text form)
+        if (t == "7") { return "7"; }   // not-translated: chord key names (the config text form)
+        if (t == "8") { return "8"; }   // not-translated: chord key names (the config text form)
+        if (t == "9") { return "9"; }   // not-translated: chord key names (the config text form)
+        if (t == "!") { return "1"; }   // not-translated: chord key names (the config text form)
+        if (t == "@") { return "2"; }   // not-translated: chord key names (the config text form)
+        if (t == "#") { return "3"; }   // not-translated: chord key names (the config text form)
+        if (t == "$") { return "4"; }   // not-translated: chord key names (the config text form)
+        if (t == "%") { return "5"; }   // not-translated: chord key names (the config text form)
+        if (t == "^") { return "6"; }   // not-translated: chord key names (the config text form)
+        if (t == "&") { return "7"; }   // not-translated: chord key names (the config text form)
+        if (t == "*") { return "8"; }   // not-translated: chord key names (the config text form)
+        if (t == "(") { return "9"; }   // not-translated: chord key names (the config text form)
+        if (t == ")") { return "0"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F1) { return "F1"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F2) { return "F2"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F3) { return "F3"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F4) { return "F4"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F5) { return "F5"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F6) { return "F6"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F7) { return "F7"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F8) { return "F8"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F9) { return "F9"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F10) { return "F10"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F11) { return "F11"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.F12) { return "F12"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Tab) { return "Tab"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Backtab) { return "Tab"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.LeftArrow) { return "Left"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.RightArrow) { return "Right"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.UpArrow) { return "Up"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.DownArrow) { return "Down"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.PageUp) { return "PageUp"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.PageDown) { return "PageDown"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Home) { return "Home"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.End) { return "End"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Insert) { return "Insert"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Delete) { return "Delete"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Space) { return "Space"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Return) { return "Enter"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Menu) { return "Menu"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.CapsLock) { return "CapsLock"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.ScrollLock) { return "ScrollLock"; }   // not-translated: chord key names (the config text form)
+        if (t == Key.Pause) { return "Pause"; }   // not-translated: chord key names (the config text form)
+        if (t == "-") { return "Minus"; }   // not-translated: chord key names (the config text form)
+        if (t == "_") { return "Minus"; }   // not-translated: chord key names (the config text form)
+        if (t == "=") { return "Plus"; }   // not-translated: chord key names (the config text form)
+        if (t == "+") { return "Plus"; }   // not-translated: chord key names (the config text form)
+        if (t == ",") { return "Comma"; }   // not-translated: chord key names (the config text form)
+        if (t == "<") { return "Comma"; }   // not-translated: chord key names (the config text form)
+        if (t == ".") { return "Period"; }   // not-translated: chord key names (the config text form)
+        if (t == ">") { return "Period"; }   // not-translated: chord key names (the config text form)
+        if (t == "/") { return "Slash"; }   // not-translated: chord key names (the config text form)
+        if (t == "?") { return "Slash"; }   // not-translated: chord key names (the config text form)
+        if (t == ";") { return "Semicolon"; }   // not-translated: chord key names (the config text form)
+        if (t == ":") { return "Semicolon"; }   // not-translated: chord key names (the config text form)
+        if (t == "[") { return "LeftBracket"; }   // not-translated: chord key names (the config text form)
+        if (t == "{") { return "LeftBracket"; }   // not-translated: chord key names (the config text form)
+        if (t == "]") { return "RightBracket"; }   // not-translated: chord key names (the config text form)
+        if (t == "}") { return "RightBracket"; }   // not-translated: chord key names (the config text form)
+        if (t == "`") { return "GraveAccent"; }   // not-translated: chord key names (the config text form)
+        if (t == "~") { return "GraveAccent"; }   // not-translated: chord key names (the config text form)
+        if (t == "'") { return "Apostrophe"; }   // not-translated: chord key names (the config text form)
+        if (t == "\"") { return "Apostrophe"; }   // not-translated: chord key names (the config text form)
+        if (t == "\\") { return "Backslash"; }   // not-translated: chord key names (the config text form)
+        if (t == "|") { return "Backslash"; }   // not-translated: chord key names (the config text form)
+        return "";
+    }
+    // the character was made with Shift held on a standard keyboard ("+" on "=", "_" on "-", "!" on "1", ...): the Shift is the glyph's, not necessarily the chord's
+    pure public function glyph-shifted(t: string) -> bool {
+        if (t == "+" || t == "_" || t == "<" || t == ">" || t == "?" || t == ":" || t == "{" || t == "}" || t == "|" || t == "~") { return true; }   // not-translated: the characters typed with Shift
+        if (t == "!" || t == "@" || t == "#" || t == "$" || t == "%" || t == "^" || t == "&" || t == "*" || t == "(" || t == ")") { return true; }   // not-translated: the characters typed with Shift
+        if (t == "\"") { return true; }   // not-translated: the characters typed with Shift
+        return false;
+    }
+}
+
+// The keyboard handed back (docs 6.56). A control that held the focus for a moment - a Key bindings cap listening for its new chord - gives it up by counting
+// here; the window's root FocusScope (main.slint) watches the count and takes the focus, so the shortcuts answer again at once.
+export global KeyFocus {
+    in-out property <int> released;
+}

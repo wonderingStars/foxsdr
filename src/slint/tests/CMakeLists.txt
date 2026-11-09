@@ -94,7 +94,12 @@ foreach(src ${_foxsdr_slint_test_sources})
         if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../${unit}_compositor.cpp")
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../${unit}_compositor.cpp")
         endif()
-        if(unit STREQUAL "system")
+        if(unit STREQUAL "system" OR unit STREQUAL "keydispatch")
+            # The keyboard's dispatch (docs 6.56, ../key_dispatch.cpp) stands on the SYSTEM bank's key table, so both tests build the SYSTEM bank's logic with it.
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../key_dispatch.cpp")
+            if(unit STREQUAL "keydispatch")
+                list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../system_logic.cpp")
+            endif()
             # The SYSTEM bank's logic (docs 6.39) quotes the core's pure units rather than copying them: the grants of the SIGNAL family's commands, the
             # country table, the feature-request and problem-report rules, the tester-code rules and the serial-port name rule. None of them includes ImGui.
             list(APPEND _extra
@@ -168,7 +173,7 @@ foreach(src ${_foxsdr_slint_test_sources})
                 target_compile_definitions(${name} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
             endif()
         endif()
-        if(unit STREQUAL "system")
+        if(unit STREQUAL "system" OR unit STREQUAL "keydispatch")
             target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
             if(MSVC)
                 target_compile_options(${name} PRIVATE /utf-8)

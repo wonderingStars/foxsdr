@@ -6,6 +6,7 @@
 // It also READS the ImGui window's sources for the few tables the Slint program has to carry a copy of (the key table, the themes, a handful of
 // constants), so a change there that is not followed here fails this test: gui/key_bindings.cpp includes imgui.h and the Slint program links no ImGui.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "key_dispatch.hpp"
 #include "system_logic.hpp"
 #include "test_check.hpp"
 
@@ -1162,6 +1163,45 @@ void keyEffects() {
     e = applyKeysReset(c);
     CHECK(e.save && e.half.keyBindings.empty() && e.local == Local::CaptureCancel);
     CHECK(!applyKeysReset(core::AppConfig{}).save && applyKeysReset(core::AppConfig{}).local == Local::CaptureCancel);
+
+    // A SAVED REBINDING IS ANSWERED (docs 6.56). What the Key bindings body does on a capture is the Effect above; the publisher hands its half to
+    // HostDuties::saveInterfaceHalf, which keeps it at once, and the window's dispatch reads the table from THAT half on every press (main.cpp
+    // on_key_answer). So the dispatch table changes with the half, in the same breath, and no restart sits between the capture and the key.
+    {
+        const auto answer = [](const core::AppConfig& half, const char* key, bool ctrl = false, bool shift = false) {
+            KeyPress p;
+            p.key = key;
+            p.ctrl = ctrl;
+            p.shift = shift;
+            return shortcutForPress(p, keyTableFromConfig(half.keyBindings));
+        };
+        core::AppConfig half;                                                   // the stock table
+        CHECK(answer(half, "F1") == "bankSignal" && answer(half, "F6").empty() && answer(half, "M") == "mute");
+        // capture F6 onto "Bank: SIGNAL PATH": the saved half answers F6 and no longer F1
+        e = applyKeysCaptured(half, "bankSignal", "F6");
+        CHECK(e.save);
+        half = e.half;
+        CHECK(answer(half, "F6") == "bankSignal" && answer(half, "F1").empty() && answer(half, "F2") == "bankDecode");
+        // capture a chord with modifiers onto a mode key, the text the cap builds ("Ctrl+J")
+        e = applyKeysCaptured(half, "modeAM", "Ctrl+J");
+        half = e.half;
+        CHECK(answer(half, "J", true) == "modeAM" && answer(half, "A", true).empty());
+        // a clash is saved, shown, and answered by the first action in table order (volumeUp is row 2, modeAM row 8, mute row 1)
+        e = applyKeysCaptured(half, "volumeUp", "Ctrl+J");
+        half = e.half;
+        CHECK(clashCount(keyTableFromConfig(half.keyBindings)) == 2 && answer(half, "J", true) == "volumeUp");
+        e = applyKeysCaptured(half, "mute", "Ctrl+J");
+        half = e.half;
+        CHECK(answer(half, "J", true) == "mute");
+        // Backspace on a cap clears it: the action answers nothing, and its old chord is not handed to another action
+        e = applyKeysClear(half, "bankSignal");
+        half = e.half;
+        CHECK(answer(half, "F6").empty() && answer(half, "F1").empty());
+        // Reset to defaults gives every stock chord back
+        e = applyKeysReset(half);
+        half = e.half;
+        CHECK(half.keyBindings.empty() && answer(half, "F1") == "bankSignal" && answer(half, "F6").empty() && answer(half, "A", true) == "modeAM" && answer(half, "J", true).empty());
+    }
 }
 
 void diagnosticsUsageTesterEffects() {

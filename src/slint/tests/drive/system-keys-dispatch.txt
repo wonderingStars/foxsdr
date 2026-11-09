@@ -1,0 +1,50 @@
+#! frames=600 bank=4 sections=4:5 size=1500x2600
+# system-keys-dispatch: a saved rebinding is ANSWERED (docs 6.56). system-keys.txt proves the capture and the save; this proves the window obeys
+# the table it saved, with no restart: a bank key moved from F1 to F6 answers F6 and no longer F1, a cleared key answers nothing, a mode key moved
+# to Ctrl+J answers Ctrl+J and not Ctrl+A, and "Reset to defaults" gives the stock chords back. The read-back is the engine's / the host's own state
+# (bank, mode), never the key cap's label alone. The window starts on mode WFM and bank 4 with the Key bindings body open.
+10 state bank == 4
+10 state mode == WFM
+
+# F1 (Bank: SIGNAL PATH) -> F6
++2 click "Bank: SIGNAL PATH F1"
++5 key f6
++12 expect "Bank: SIGNAL PATH F6" label equals "Bank: SIGNAL PATH F6"
++3 key f1
++10 state bank == 4
++2 key f6
++10 state bank == 0
+
+# back to the SYSTEM bank by F5 (stock), and clear Bank: DECODE (F2): F2 then answers nothing
++2 key f5
++10 state bank == 4
++2 click "Bank: DECODE F2"
++5 key backspace
++12 expect "Bank: DECODE None" label equals "Bank: DECODE None"
++3 key f2
++10 state bank == 4
+
+# Mode: AM (Ctrl+A) -> Ctrl+J
++2 click "Mode: AM Ctrl+A"
++5 key ctrl+j
++12 expect "Mode: AM Ctrl+J" label equals "Mode: AM Ctrl+J"
++3 key ctrl+a
++10 state mode == WFM
++2 key ctrl+j
++10 state mode == AM
+
+# Reset to defaults: F1 answers again, F6 no longer does, Ctrl+A is AM, Ctrl+J nothing
++3 click "Reset to defaults"
++12 expect "Bank: SIGNAL PATH F1" label equals "Bank: SIGNAL PATH F1"
++3 key ctrl+f
++10 state mode == NFM
++2 key ctrl+a
++10 state mode == AM
++2 key ctrl+f
++10 state mode == NFM
++2 key ctrl+j
++10 state mode == NFM
++2 key f6
++10 state bank == 4
++2 key f1
++10 state bank == 0

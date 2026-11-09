@@ -2328,10 +2328,10 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 1444 | Help text | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1445 | Reset to defaults | button | DRIVEN+ASSERTED | system-keys.txt | click a rebound key cap then "Reset to defaults"; expect the cap label returns to "Mute the sound M" |
+| 1445 | Reset to defaults | button | DRIVEN+ASSERTED | system-keys.txt | click a rebound key cap then "Reset to defaults"; expect the cap label returns to "Mute the sound M"; "Reset to defaults" then the stock chords answer again (F1 -> bank 0, Ctrl+A -> AM) and the rebound ones do not (docs 6.56) |
 | 1446 | Group heading | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1447 | Action name | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1448 | Key cap (one per action) | key (momentary, capture) | DRIVEN+ASSERTED | system-keys.txt | click a cap, key escape (label unchanged); click "Mute the sound M", key f6; expect label "Mute the sound F6"; only two of the caps are exercised |
+| 1448 | Key cap (one per action) | key (momentary, capture) | DRIVEN+ASSERTED | system-keys.txt | click a cap, key escape (label unchanged); click "Mute the sound M", key f6; expect label "Mute the sound F6"; only two of the caps are exercised; capture F6 onto "Bank: SIGNAL PATH", Backspace on "Bank: DECODE", Ctrl+J onto "Mode: AM"; the window answers the new chord (state bank / mode) and not the old one, a cleared key answers nothing (docs 6.56) |
 | 1449 | Clash note | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1450 | Footer | readout | NOT DRIVABLE | - | a readout, not a control |
 
