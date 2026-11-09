@@ -64,7 +64,7 @@ int main() {
     CHECK(after.seconds < 20.0);  // it did not run the engine for the 30 seconds before it answering
 
     // Nothing was written anywhere under the isolated profile or the working directory.
-    CHECK(emt::tree(home).size() == 1);  // the "tmp" directory this test made
+    CHECK(emt::treeSansInstanceLock(home).size() == 1);  // the "tmp" directory this test made (the window application's instance lock aside: engine_main_proc.hpp)
 
     std::error_code ec;
     fs::remove_all(root, ec);

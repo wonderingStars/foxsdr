@@ -435,6 +435,40 @@ inline std::vector<std::string> tree(const fs::path& root) {
     return out;
 }
 
+// tree(), without the single-instance lock the window application leaves on Linux (core/tester_link.cpp, claimPrimaryInstanceAt): a launch
+// of `cascade` - even `cascade --version`, which is answered after the claim by design (process_boot.cpp, step 4) - takes the lock by creating
+// <settings folder>/instance.lock, and since the claim makes its folder (a fresh profile has none) that is a folder and a zero-byte file. The
+// tests that assert "nothing was written under the profile" mean the program's data, not the lock; the folder is dropped with it only when the
+// lock was all it held. Windows holds the same claim as a named mutex, which leaves nothing on disk, so there this equals tree().
+inline std::vector<std::string> treeSansInstanceLock(const fs::path& root) {
+    std::vector<std::string> all = tree(root);
+    const std::string lockName = "instance.lock 0";
+    std::vector<std::string> kept;
+    std::vector<std::string> lockDirs;
+    for (const std::string& e : all) {
+        const bool isLock = e == lockName || (e.size() > lockName.size() && e.compare(e.size() - lockName.size() - 1, std::string::npos, "/" + lockName) == 0);
+        if (isLock) {
+            lockDirs.push_back(e.size() == lockName.size() ? std::string() : e.substr(0, e.size() - lockName.size()));  // "foxsdr/"
+        } else {
+            kept.push_back(e);
+        }
+    }
+    std::vector<std::string> out;
+    for (const std::string& e : kept) {
+        bool emptiedByLock = false;
+        for (const std::string& d : lockDirs) {
+            if (e == d && !d.empty()) {
+                emptiedByLock = true;
+                for (const std::string& other : kept) {
+                    if (other != d && other.compare(0, d.size(), d) == 0) { emptiedByLock = false; }
+                }
+            }
+        }
+        if (!emptiedByLock) { out.push_back(e); }
+    }
+    return out;
+}
+
 // A private scratch directory for one test.
 inline fs::path scratch(const char* tag) {
     const fs::path p = fs::temp_directory_path() /
