@@ -93,6 +93,7 @@ struct Header {
     std::string mode;      // the demodulation mode at start (NFM WFM AM DSB USB CW LSB RAW), with iqfile
     std::string bandwidth; // the passband in Hz at start, with iqfile
     std::string config;    // a JSON file used as the run's settings seed instead of the generator profile (docs 6.51: a real radio's profile); relative = under tests/drive/fixtures
+    bool userRadios = false;  // radios=user: the user's own SoapySDR vendor modules stay reachable (docs 6.51) - a hardware run on a real radio
     std::map<std::string, std::string> env;
 };
 
@@ -121,6 +122,7 @@ Header parseHeader(const std::string& script) {
             else if (key == "mode") { h.mode = value; }
             else if (key == "bandwidth") { h.bandwidth = value; }
             else if (key == "config") { h.config = value; }                   // the settings seed file (docs 6.51)
+            else if (key == "radios") { h.userRadios = (value == "user"); }   // the user's SoapySDR modules (docs 6.51: a hardware run)
             else if (key.rfind("FOXSDR_", 0) == 0 || key.rfind("CASCADE_", 0) == 0) { h.env[key] = value; }
         }
     }
@@ -210,6 +212,23 @@ int main(int argc, char** argv) {
         // no plugins for this run, whatever the build tree's exe folder holds
         fs::create_directories(dir / "local" / "foxsdr" / "plugins", ec);
         setEnv("CASCADE_PLUGIN_DIR_TEST", (dir / "local" / "foxsdr" / "plugins").string());
+    }
+    // THE USER'S RADIOS (docs 6.51): SoapySDR's vendor modules are looked for under the USER'S folders (source/soapy_modules.cpp candidateVendorRoots:
+    // %USERPROFILE%\radioconda\Library, %LOCALAPPDATA%\radioconda\Library, Program Files\PothosSDR, SOAPY_SDR_ROOT), and this run is about to
+    // redirect USERPROFILE and LOCALAPPDATA into the scratch profile - after which a saved B200 "did not reopen (absent)", the finding that cost
+    // the first five-minute run its radio. A script that says `radios=user` keeps the per-user root reachable through SOAPY_SDR_ROOT, read
+    // BEFORE the redirect; a run that does not say so stays hermetic (no module of the user's is loaded).
+    if (h.userRadios && std::getenv("SOAPY_SDR_ROOT") == nullptr) {
+        for (const char* base : {"USERPROFILE", "LOCALAPPDATA"}) {
+            const char* v = std::getenv(base);
+            if (v == nullptr || *v == '\0') { continue; }
+            const fs::path root = fs::path(v) / "radioconda" / "Library";
+            if (fs::is_directory(root / "lib" / "SoapySDR", ec)) {
+                setEnv("SOAPY_SDR_ROOT", root.string());
+                std::printf("  radios=user: SOAPY_SDR_ROOT=%s\n", root.string().c_str());
+                break;
+            }
+        }
     }
     fs::create_directories(dir / "home", ec);
     fs::create_directories(dir / "diag", ec);

@@ -1,0 +1,38 @@
+{
+  "autoGainByRadio": {},
+  "bandPlanOverlay": false,
+  "bandwidthHz": 200000.0,
+  "biasTee": {},
+  "centerHz": 1090000000.0,
+  "diagnosticsEnabled": false,
+  "lookForNetworkUsrps": false,
+  "mainView": "receiver",
+  "manualGainByRadio": {
+    "uhd|serial=EDR04ZDB2": {
+      "PGA": 76.0
+    }
+  },
+  "mode": "RAW",
+  "nativeArgs": "",
+  "pluginRun": {
+    "adsb-decoder": "always"
+  },
+  "pluginTuneAllowed": [
+    "adsb-decoder-1.9.1-abi3-win-x64.dll"
+  ],
+  "ppm": {},
+  "ppmCorrection": false,
+  "rxLatDeg": 53.803634409277315,
+  "rxLonDeg": -2.3182009578078455,
+  "rxPositionSet": true,
+  "sampleRateHz": 2399999.9925202015,
+  "soapyAntenna": "RX2",
+  "soapyArgs": "driver=uhd, label=B200 EDR04ZDB2, name=, product=B200, serial=EDR04ZDB2, type=b200",
+  "sourceKind": "soapy",
+  "squelchAuto": false,
+  "squelchDb": -120.0,
+  "telemetryEnabled": false,
+  "updateCheckEnabled": false,
+  "vfoOffsetHz": 0.0,
+  "volume": 0.5
+}

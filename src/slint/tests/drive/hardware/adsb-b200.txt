@@ -1,0 +1,20 @@
+#! frames=9100 plugins=adsb-decoder config=adsb-b200.json radios=user bank=1 FOXSDR_ADSB_LOG=C:/Users/steve/foxsdr-wt/engine-stage4/adsb-slint-frames.csv
+# adsb-b200 (docs 6.51): FIVE MINUTES OF REAL 1090 MHz on the owner's B200 (serial EDR04ZDB2, PGA 76 dB, 2.4 MS/s - the profile
+# fixtures/adsb-b200.json mirrors the owner's own settings) through the Slint window, the adsb-decoder plugin started by its pluginRun
+# "always", radios=user keeping the owner's SoapyUHD module reachable (soapy_modules.cpp looks under the user profile the run redirects), the plugin's own frame log (FOXSDR_ADSB_LOG, a CSV of every accepted frame with its time) written beside the repo for the
+# count per minute and the distinct ICAO addresses - the same log the classic window writes in adsb-classic.bat, so the two runs compare
+# like with like. NOT A CTEST (this folder is not globbed): it needs the radio; run it by hand through drive-run.bat on the hidden desktop.
+120 state deviceOpen == 1
+state deviceName contains B200
+state running == 1
+state centreHz == 1090000000
+state mode == RAW
+state kit.plugins == 1
++60 state decodersRunning >= 1
+# a minute in: frames have arrived (the B200 at 1090 MHz sees traffic within seconds in this location)
+1900 state count.decoderLines >= 1
+state kit.tracks >= 1
+# the end of the five minutes: the kit's view of the traffic (the CSV holds the frame-by-frame record)
+9000 state kit.tracks >= 1
+state kit.mapPages >= 1
++1 shot "adsb-b200.png"
