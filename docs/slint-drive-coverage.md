@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1963 | 383 | 82 | 1498 | 0 |
+| 1968 | 386 | 82 | 1500 | 0 |
 
-Of the 1128 rows that are controls (the 835 readout-like rows left out): 383 asserted, 82 driven without a read-back, 663 not drivable.
+Of the 1131 rows that are controls (the 837 readout-like rows left out): 386 asserted, 82 driven without a read-back, 663 not drivable.
 
-NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120, deferred 114, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 837, other 193, needs a signal (no fixture) 120, deferred 114, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
 
 ## Per section
 
@@ -197,6 +197,7 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | Patch — node faces (drawn over the plate) | 13 | 3 | 0 | 10 | 8 | 0 |
 | Patch — inspector drawer (right of the canvas; appears when a node is selected) | 24 | 0 | 0 | 24 | 9 | 0 |
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
+| SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 
 ## Every row
 
@@ -3042,4 +3043,14 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | 1961 | REPLACE / CANCEL | button | NOT DRIVABLE | - | REPLACE / CANCEL need a name already taken; not reached in this round |
 | 1962 | Delete preset? | dialog (modal) | DRIVEN+ASSERTED | patch-presets | click DELETE on the selected preset; the Delete preset? panel then answers DELETE#2 and the note is read |
 | 1963 | DELETE / CANCEL | button | DRIVEN+ASSERTED | patch-presets | click DELETE#2 on the Delete preset? question; expect the note Deleted "Probe2". label |
+
+### SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 1964 | Withdrawn status | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1965 | Withdrawn advice | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1966 | Open foxsdr.com (withdrawn) | button (small) | DRIVEN+ASSERTED | system-updates-withdrawn-nofix.txt | click "Open foxsdr.com" (a bounded run opens no browser: the effect on the window is none, the card stays); the key is read back with expect enabled |
+| 1967 | Not now (withdrawn) | button (small) | DRIVEN+ASSERTED | system-updates-withdrawn-nofix.txt | click "Not now"#2; state update.shown == 0, then click "Show it again"; state update.shown == 1 |
+| 1968 | Withdrawn card | card | DRIVEN+ASSERTED | system-updates-withdrawn-fix.txt | state update.shown / update.withdrawn / update.headline / update.note / update.primary over three canned answers (withdrawn-fix: Download update; withdrawn-nofix and withdrawn-offer: no key) |
 

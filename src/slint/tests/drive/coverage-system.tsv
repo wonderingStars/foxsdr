@@ -69,3 +69,6 @@
 1518	NOT_DRIVABLE	-	Report a bug page, Attachment preview: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
 1521	NOT_DRIVABLE	-	Report a bug page, SEND: the page is not in any dump (no label to drive); SEND is withheld in a bounded run
 1441	NOT_DRIVABLE	-	the port list is a table of read-only rows (no port on the test machine, nothing to pick); the Refresh button is row 1439
+1966	ASSERTED	system-updates-withdrawn-nofix.txt	click "Open foxsdr.com" (a bounded run opens no browser: the effect on the window is none, the card stays); the key is read back with expect enabled
+1967	ASSERTED	system-updates-withdrawn-nofix.txt	click "Not now"#2; state update.shown == 0, then click "Show it again"; state update.shown == 1
+1968	ASSERTED	system-updates-withdrawn-fix.txt	state update.shown / update.withdrawn / update.headline / update.note / update.primary over three canned answers (withdrawn-fix: Download update; withdrawn-nofix and withdrawn-offer: no key)

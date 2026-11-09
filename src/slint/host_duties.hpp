@@ -141,6 +141,7 @@ struct UpdateView {
     bool dismissed = false;          // "Not now", for this launch
     bool packaged = false;           // a Microsoft Store copy: its own banner, not this card
     bool installerHere = false;      // Windows: there is an installer to download and run
+    std::string runningVersion;      // the version running, for the withdrawn notice's sentence
     cascade::core::UpdateInfo info;  // the last successful check's answer
     UpdateStage stage = UpdateStage::Idle;
     float progress = 0.f;            // 0..1 while Downloading
@@ -151,6 +152,7 @@ struct UpdateCardModel {
     bool shown = false;
     std::string headline;
     bool critical = false;
+    bool withdrawn = false;          // the running version was withdrawn (the kill switch): the card is drawn in the warning tone
     std::vector<std::string> notes;  // per release: its version (and "(important)"), then its lines
     std::string primary;             // the key's label, "" = none
     float progress = -1.f;           // 0..1 replaces the key by a bar; -1 = no bar
@@ -171,7 +173,8 @@ struct UpdateStatus {
     bool newer = false;
     bool critical = false;
     bool dismissed = false;
-    std::string newVersion;     // the version offered, when newer
+    bool runningWithdrawn = false;   // the service has withdrawn the version RUNNING (core::UpdateInfo::runningWithdrawn): the kill switch's notice
+    std::string newVersion;     // the version offered, when newer (never a withdrawn one: `newer` is false for it)
     std::string error;          // a check's or a download's failure
     int unseenMessages = 0;
 };

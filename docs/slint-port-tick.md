@@ -2872,21 +2872,33 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 
 Subtotal: PRESENT 142, RELOCATED 35, DEFERRED 11, total 188 (rows 1776 to 1963).
 
+## SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63)
+
+The classic window's notice for a copy the update service has withdrawn (field-early-warning; `drawUpdateBanner`, `app_window_updates.cpp`) is not in the 0.99.104 inventory, so these rows are the Slint window's own, numbered after the last inventory row. The facts are the classic's: `UpdateInfo::runningWithdrawn` and `offerWithdrawn` (`core/updater.hpp`), read by `HostDuties::updateStatus`/`updateCardFor` and `readUpdates`.
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 1964 | Withdrawn status | readout | PRESENT | Note status-line in the amber tone: 'FoxSDR <running version> has been withdrawn: the FoxSDR team found a problem with it.' (UpdatesFacts::running_withdrawn; website copy, check on); the Updates chip reads RECALL (amber, lit) in place of NEW / IMPT; plain English on purpose, as the classic's notice, so it does not wait for the catalogues |
+| 1965 | Withdrawn advice | readout | PRESENT | Note withdrawn-advice under the status: 'We recommend updating to FoxSDR <version>.' while a good build is offered, else 'A fixed version is not ready yet. foxsdr.com will have it as soon as it is.'; a withdrawn RELEASE is never offered (`offer_withdrawn`: no 'is available', no Show it again, no Download) |
+| 1966 | Open foxsdr.com (withdrawn) | button (small) | PRESENT | small Key (site-label) -> updates-open-site -> applyUpdatesOpenSite: [local] OpenUrl kHomepageUrl; drawn only while no good build is offered yet |
+| 1967 | Not now (withdrawn) | button (small) | PRESENT | small Key (dismiss-label) beside Open foxsdr.com -> updates-withdrawn-dismiss -> applyUpdatesWithdrawnNotNow: apply UpdateDismiss (HostDuties::updateDismissed: the card goes for this launch); Show it again brings it back |
+| 1968 | Withdrawn card | card | PRESENT | the update Card at the foot of the sections panel in the warning tone (UpdateCardModel::withdrawn -> main.slint update-withdrawn): the headline is the withdrawn sentence, the note the advice, and the primary key is Download update while a good build is offered and none otherwise (the Updates row carries Open foxsdr.com); never shown for a Store copy or with the check off |
+
 # Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM, TOOLS and EXTEND banks of phase 3)
 
 | Status | Rows |
 |---|---|
-| PRESENT | 1527 |
+| PRESENT | 1532 |
 | RELOCATED | 198 |
 | DEFERRED | 238 |
 | TODO (unclassified) | 0 |
-| Total | 1963 |
+| Total | 1968 |
 
 Phase 2 alone: PRESENT 890, RELOCATED 34, DEFERRED 11, total 935.
 
 Phase 3, the SIGNAL bank alone: PRESENT 122, RELOCATED 17, DEFERRED 37, total 176.
 
-Phase 3, the SYSTEM bank alone: PRESENT 95, RELOCATED 17, DEFERRED 25, total 137.
+Phase 3, the SYSTEM bank alone: PRESENT 100, RELOCATED 17, DEFERRED 25, total 142 (the five rows after 1963 are docs 6.63's).
 
 Phase 3, the TOOLS bank and the map rows alone: PRESENT 88, RELOCATED 75, DEFERRED 89, total 252.
 

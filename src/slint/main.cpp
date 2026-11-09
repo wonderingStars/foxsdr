@@ -331,6 +331,7 @@ int main(int argc, char** argv) {
         ui->set_update_shown(c.shown);
         ui->set_update_headline(ss(c.headline));
         ui->set_update_critical(c.critical);
+        ui->set_update_withdrawn(c.withdrawn);
         ui->set_update_notes(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(notes)));
         ui->set_update_primary(ss(c.primary));
         ui->set_update_progress(c.progress);
@@ -1359,6 +1360,17 @@ int main(int argc, char** argv) {
             if (what == "count") { out = std::to_string(n); return std::string(); }
             if (what == "names" || what == "details" || what == "values") { out = joined; return std::string(); }
             return "list.<list>.count|names|details|values, not " + name;
+        }
+        // update.<shown|headline|note|primary|withdrawn>: the update card as the duties made it (docs 6.63: the kill switch's notice is read back through these)
+        if (name.rfind("update.", 0) == 0) {
+            const UpdateCardModel& card = duties.card();
+            const std::string what = name.substr(7);
+            if (what == "shown") { out = card.shown ? "1" : "0"; return std::string(); }
+            if (what == "headline") { out = card.headline; return std::string(); }
+            if (what == "note") { out = card.note; return std::string(); }
+            if (what == "primary") { out = card.primary; return std::string(); }
+            if (what == "withdrawn") { out = card.withdrawn ? "1" : "0"; return std::string(); }
+            return "update.shown|headline|note|primary|withdrawn, not " + name;
         }
         if (name.rfind("fact.", 0) == 0) { return world.fact(name.c_str(), out) ? std::string() : "no fact " + name; }
         // cfg.<field>: the interface half of the settings AS THE HOST HOLDS IT (host_duties interfaceHalf, kept by every bank's saveInterfaceHalf) - the

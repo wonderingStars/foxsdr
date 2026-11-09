@@ -94,6 +94,8 @@ struct Header {
     std::string bandwidth; // the passband in Hz at start, with iqfile
     std::string config;    // a JSON file used as the run's settings seed instead of the generator profile (docs 6.51: a real radio's profile); relative = under tests/drive/fixtures
     bool userRadios = false;  // radios=user: the user's own SoapySDR vendor modules stay reachable (docs 6.51) - a hardware run on a real radio
+    bool updateCheck = false; // updatecheck=on: the generator profile's "Check for updates at startup" tick is ON (it is off otherwise: a bounded run asks nobody)
+    std::string manifest;     // manifest=<file>: foxsdr.com's answer, canned (FOXSDR_FAKE_UPDATE_MANIFEST, core/updater.hpp); relative = under tests/drive/fixtures (docs 6.63)
     std::map<std::string, std::string> env;
 };
 
@@ -123,6 +125,8 @@ Header parseHeader(const std::string& script) {
             else if (key == "bandwidth") { h.bandwidth = value; }
             else if (key == "config") { h.config = value; }                   // the settings seed file (docs 6.51)
             else if (key == "radios") { h.userRadios = (value == "user"); }   // the user's SoapySDR modules (docs 6.51: a hardware run)
+            else if (key == "updatecheck") { h.updateCheck = (value == "on"); }   // the Updates tick on (docs 6.63: the kill switch's notice)
+            else if (key == "manifest") { h.manifest = value; }                   // the canned update answer (docs 6.63)
             else if (key.rfind("FOXSDR_", 0) == 0 || key.rfind("CASCADE_", 0) == 0) { h.env[key] = value; }
         }
     }
@@ -259,7 +263,7 @@ int main(int argc, char** argv) {
         f << text;
     } else {
         std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
-        f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"mainView\": \"receiver\", \"bandPlanOverlay\": false";
+        f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": " << (h.updateCheck ? "true" : "false") << ", \"mainView\": \"receiver\", \"bandPlanOverlay\": false";
         if (h.iqfile.empty()) {
             f << ", \"sourceKind\": \"siggen\"";
         } else {
@@ -304,6 +308,18 @@ int main(int argc, char** argv) {
     // "CASCADE_DECODE_TEST=" (empty) keeps the receiver stopped for a script that wants that.
     setEnv("CASCADE_DECODE_TEST", "1");
     for (const auto& [k, v] : h.env) { setEnv(k.c_str(), v); }
+    // THE CANNED UPDATE ANSWER (docs 6.63): a script that says `manifest=` is given foxsdr.com's answer as a file, under the fixtures folder when relative; every other
+    // run has none (the test process may have inherited one), so the check is never asked and never answered.
+    {
+        fs::path m(h.manifest);
+        if (!h.manifest.empty() && m.is_relative()) {
+            const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
+            m = (fx != nullptr && *fx != '\0') ? fs::path(fx) / m : fs::path(FOXSDR_DRIVE_FIXTURES_DIR) / m;
+        }
+        if (!h.manifest.empty() && !fs::exists(m)) { std::printf("  the manifest %s does not exist\n", m.string().c_str()); }
+        CHECK(h.manifest.empty() || fs::exists(m));
+        setEnv("FOXSDR_FAKE_UPDATE_MANIFEST", h.manifest.empty() ? std::string() : m.string());
+    }
 
     const std::string exe = FOXSDR_SLINT_EXE;
     const Run r = run("\"" + exe + "\" --frames " + std::to_string(h.frames) + " 2>&1");

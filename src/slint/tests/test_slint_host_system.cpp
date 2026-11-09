@@ -532,6 +532,74 @@ void updatesReads() {
     CHECK(updatesStatus(true, f).text.empty() && updatesChip(true, f).word == "IDLE");
 }
 
+// ---- The kill switch in the Updates row (docs 6.63) ----
+void updatesWithdrawn() {
+    core::AppConfig c;
+    ReadOptions o;
+    o.updates.build_version = "0.99.105";
+    o.updates.started = true;
+    o.updates.running_withdrawn = true;
+
+    // withdrawn, nothing good offered yet: the amber sentence, the advice, foxsdr.com's key and Not now
+    UpdatesModel m = readUpdates(c, o);
+    CHECK(c.updateCheckEnabled);
+    CHECK(m.status_line == "FoxSDR 0.99.105 has been withdrawn: the FoxSDR team found a problem with it.");
+    CHECK(m.status_tone == Tone::Warn);                            // the warning colour and not the error one
+    CHECK(m.withdrawn_advice == "A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+    CHECK(m.site_label == "Open foxsdr.com" && m.dismiss_label == "Not now");
+    CHECK(updatesChip(true, o.updates).word == "RECALL" && updatesChip(true, o.updates).tone == Tone::Warn && updatesChip(true, o.updates).lit);
+    StubTable noTable;
+    CHECK(readSystem(noTable, c, stateWith(-110, 0), o).chips[kRowUpdates].word == "RECALL");
+
+    // withdrawn, and a good build is offered: the advice names it, and there is nothing else to press (the card carries the download)
+    o.updates.newer = true;
+    o.updates.new_version = "0.99.109";
+    m = readUpdates(c, o);
+    CHECK(m.withdrawn_advice == "We recommend updating to FoxSDR 0.99.109.");
+    CHECK(m.site_label.empty() && m.dismiss_label.empty());
+    CHECK(m.status_tone == Tone::Warn);
+
+    // the notice put away: the facts stay on the page, "Not now" goes and "Show it again" is offered
+    o.updates.newer = false;
+    o.updates.dismissed = true;
+    m = readUpdates(c, o);
+    CHECK(m.dismiss_label.empty() && !m.site_label.empty() && m.show_again);
+    o.updates.dismissed = false;
+    CHECK(!readUpdates(c, o).show_again);
+
+    // a withdrawn RELEASE is never offered, whatever `newer` says
+    UpdatesFacts g;
+    g.build_version = "0.99.105";
+    g.started = true;
+    g.newer = true;
+    g.new_version = "0.99.108";
+    g.offer_withdrawn = true;
+    ReadOptions go;
+    go.updates = g;
+    const UpdatesModel gm = readUpdates(c, go);
+    CHECK(gm.status_line == "up to date" && !gm.show_again && updatesChip(true, g).word == "OK" && !updatesChip(true, g).lit);
+
+    // no notice for a Store copy (its own banner), nor with the check switched off
+    UpdatesFacts s = o.updates;
+    s.packaged = true;
+    ReadOptions so;
+    so.updates = s;
+    CHECK(readUpdates(c, so).withdrawn_advice.empty() && updatesChip(true, s).word != "RECALL");
+    core::AppConfig off = c;
+    off.updateCheckEnabled = false;
+    const UpdatesModel om = readUpdates(off, o);
+    CHECK(om.withdrawn_advice.empty() && om.site_label.empty() && updatesChip(false, o.updates).word == "OFF");
+
+    // an ordinary copy shows none of it
+    UpdatesFacts n;
+    n.build_version = "0.99.105";
+    n.started = true;
+    ReadOptions no;
+    no.updates = n;
+    const UpdatesModel nm = readUpdates(c, no);
+    CHECK(nm.withdrawn_advice.empty() && nm.site_label.empty() && nm.dismiss_label.empty() && nm.status_line == "up to date");
+}
+
 // ---- Serial ports and the GPS row ----
 void serialReads() {
     StubTable t;
@@ -1082,6 +1150,10 @@ void updatesSerialEffects() {
     CHECK(!e.save && (e.apply & kApplyUpdateShowAgain) != 0);
     e = applyUpdatesTeamMessage();
     CHECK(e.local == Local::OpenTeamMessages && !e.save);
+    e = applyUpdatesOpenSite();
+    CHECK(e.local == Local::OpenUrl && e.text == core::kHomepageUrl && !e.save && e.apply == kApplyNone);   // a link, no command, no setting
+    e = applyUpdatesWithdrawnNotNow();
+    CHECK(!e.save && e.apply == kApplyUpdateDismiss && e.commands.empty() && e.local == Local::None);
 
     // serial ports and the GPS row
     Command r = opSerialRefresh();
@@ -1312,6 +1384,7 @@ int main() {
     displayReads();
     languageReads();
     updatesReads();
+    updatesWithdrawn();
     serialReads();
     keyReads();
     diagnosticsUsageTesterReads();

@@ -154,6 +154,7 @@ export component MainWindow inherits Window {
     in-out property <bool> follow-band-plan: true;
     in property <bool> team-message-shown; in property <string> team-message-date; in property <[string]> team-message-lines; in property <bool> team-message-important;
     in property <bool> update-shown; in property <string> update-headline; in property <bool> update-critical; in property <[string]> update-notes;
+    in property <bool> update-withdrawn;     // docs 6.63: the running version was withdrawn (the kill switch): the card is amber and says so
     in property <string> update-primary: @tr("Download update"); in property <float> update-progress: -1; in property <string> update-note; in property <string> update-error;
     in property <string> source-line: @tr("Signal generator");
     in property <string> rate-line: "2.000 MS/s · ch 200.0 kHz · underruns 0";   // not-translated: sample data (a rate with its units) the host replaces
@@ -564,7 +565,7 @@ export component MainWindow inherits Window {
                                 team := Card { x: 10px; y: 10px; width: parent.width - 20px; title: @tr("Message from the FoxSDR team"); subtitle: root.team-message-date; critical: root.team-message-important; lines: root.team-message-lines; primary-label: @tr("Seen"); primary-clicked => { root.team-message-seen(); } }
                             }
                             if root.update-shown : Rectangle { height: upd.preferred-height + 10px;
-                                upd := Card { x: 10px; y: 10px; width: parent.width - 20px; title: root.update-headline; subtitle: @tr("you are running {}", root.version); critical: root.update-critical; lines: root.update-notes;
+                                upd := Card { x: 10px; y: 10px; width: parent.width - 20px; title: root.update-headline; subtitle: @tr("you are running {}", root.version); critical: root.update-critical; tone: root.update-withdrawn ? CardTone.warn : CardTone.neutral; lines: root.update-notes;
                                     primary-label: root.update-primary; secondary-label: @tr("Not now"); progress: root.update-progress; note: root.update-note; error: root.update-error;
                                     primary-clicked => { root.update-primary-clicked(); } secondary-clicked => { root.update-dismissed(); } }
                             }

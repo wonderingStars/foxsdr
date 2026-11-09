@@ -1,0 +1,20 @@
+#! frames=260 bank=4 sections=4:3 updatecheck=on manifest=update-withdrawn-nofix.json
+# system-updates-withdrawn-nofix (docs 6.63): the kill switch. The canned answer says the running version was withdrawn and the newest the service has is no
+# newer, so the window tells the copy so, offers no download, and gives the way out: the card's sentence and the Updates row's Open foxsdr.com and Not now.
+# A bounded run opens no browser, so Open foxsdr.com is pressed for its effect on the window (none) and the run's log.
+80 state update.shown == 1
+state update.withdrawn == 1
+state update.headline contains "has been withdrawn: the FoxSDR team found a problem with it."
+state update.note == "A fixed version is not ready yet. foxsdr.com will have it as soon as it is."
+state update.primary == ""
+expect "Open foxsdr.com" enabled equals "true"
++2 click "Open foxsdr.com"
++3 state update.shown == 1
+
+# Not now (the Updates row's, the second of the two) puts the notice away: the card goes, and the row offers Show it again
++2 click "Not now"#2
++5 state update.shown == 0
+expect "Show it again" enabled equals "true"
++2 click "Show it again"
++5 state update.shown == 1
+state update.withdrawn == 1

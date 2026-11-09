@@ -342,6 +342,10 @@ void SystemPublisher::applyWindow(const Effect& e) {
         duties_.updateShowAgain();
         if (hooks_.updateCardChanged) { hooks_.updateCardChanged(); }
     }
+    if ((e.apply & kApplyUpdateDismiss) != 0u) {
+        duties_.updateDismissed();
+        if (hooks_.updateCardChanged) { hooks_.updateCardChanged(); }
+    }
 }
 
 void SystemPublisher::applyLocal(const Effect& e) {
@@ -475,6 +479,9 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
     o.packaged = m.packaged;
     o.show_again = m.show_again;
     o.show_again_label = ss(m.show_again_label);
+    o.withdrawn_advice = ss(m.withdrawn_advice);
+    o.site_label = ss(m.site_label);
+    o.dismiss_label = ss(m.dismiss_label);
     return o;
 }
 
@@ -640,6 +647,7 @@ ReadOptions SystemPublisher::buildOptions() {
     f.newer = u.newer;
     f.critical = u.critical;
     f.dismissed = u.dismissed;
+    f.running_withdrawn = u.runningWithdrawn;
     f.new_version = u.newVersion;
     f.error = u.error;
     f.build_version = cascade::versionString();
@@ -790,6 +798,8 @@ void SystemPublisher::wire() {
     ev.on_updates_channel([this, cur](int i) { execute(applyUpdatesChannel(cur(), i, last_.updates.packaged), "updates-channel"); });
     ev.on_updates_team_message([this] { execute(applyUpdatesTeamMessage(), "updates-team-message"); });
     ev.on_updates_show_again([this] { execute(applyUpdatesShowAgain(), "updates-show-again"); });
+    ev.on_updates_open_site([this] { execute(applyUpdatesOpenSite(), "updates-open-site"); });
+    ev.on_updates_withdrawn_dismiss([this] { execute(applyUpdatesWithdrawnNotNow(), "updates-withdrawn-dismiss"); });
 
     // ---- Serial ports ----
     ev.on_serial_refresh([this] {
