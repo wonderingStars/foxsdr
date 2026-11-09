@@ -39,6 +39,7 @@
 
 #include "core/host_image.hpp"
 #include "core/plugin_abi.h"
+#include "core/plugin_run.hpp"
 #include "core/plugin_repo.hpp"
 #include "engine/engine.hpp"
 #include "engine_api_test_env.hpp"
@@ -348,8 +349,12 @@ int main() {
             std::ofstream c(cfg, std::ios::binary | std::ios::trunc);
             c << text << "\n";
         };
-        writeConfig("{ \"pluginRun\": { \"fixture_stage1_plugin\": \"always\", \"fixture_group13_plugin\": \"always\", "
-                    "\"fixture_group14_plugin\": \"always\" } }");
+        // The pins are named by each fixture's RUN ID, from its own file name, as the host does: "fixture_stage1_plugin.dll" is "fixture_stage1_plugin" on Windows,
+        // but the Linux build names the module "libfixture_stage1_plugin.so", whose id keeps the "lib" - and keys written for the Windows names pinned nothing there
+        // (Linux CI, 2026-11-09: "plugin run: always=3 idle=3", no panel, no track, where "always=3 idle=0" and four tracks were expected).
+        const auto pin = [&](const char* module) { return std::string("\"") + cascade::core::pluginRunId(fileOf(module)) + "\": \"always\""; };
+        const std::string pins = "{ \"pluginRun\": { " + pin(FIXTURE_STAGE1_PLUGIN) + ", " + pin(FIXTURE_GROUP13_PLUGIN) + ", " + pin(FIXTURE_GROUP14_PLUGIN) + " } }";
+        writeConfig(pins.c_str());
         engine_api_test::setEnv("CASCADE_CONFIG_TEST", cfg.string());
         engine_api_test::setEnv("FOXSDR_DIAG_DIR", (scratch / "diag").string());
         engine_api_test::setEnv("FOXSDR_CRASH_URL", "http://127.0.0.1:9/");
