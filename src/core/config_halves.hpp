@@ -119,6 +119,7 @@ struct ConfigFieldInfo {
     X(bookmarkStackNames,      Interface, false) \
     X(spectrumTraceMode,       Interface, false) \
     X(spectrumAverageMs,       Interface, false) \
+    X(view3d,                  Interface, false) \
     X(mapTrailStyle,           Interface, false) \
     X(aircraftIconPx,          Interface, false) \
     X(mapTrailWidthPx,         Interface, false) \

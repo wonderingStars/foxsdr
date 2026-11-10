@@ -656,6 +656,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.spectrumTraceMode =
         traceModeName(traceModeFromName(out.spectrumTraceMode));
     getInt(j, "spectrumAverageMs", out.spectrumAverageMs);
+    getString(j, "view3d", out.view3d);
+    if (out.view3d.size() > 1024) { out.view3d.clear(); }   // the text of five or ten views is a few hundred bytes: more is not ours
     out.spectrumAverageMs = static_cast<int>(
         clampTraceAverageMs(static_cast<double>(out.spectrumAverageMs)));
     getInt(j, "mapTrailStyle", out.mapTrailStyle);
@@ -1375,6 +1377,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["bookmarkStackNames"] = cfg.bookmarkStackNames;
     j["spectrumTraceMode"] = cfg.spectrumTraceMode;
     j["spectrumAverageMs"] = cfg.spectrumAverageMs;
+    j["view3d"] = cfg.view3d;
     j["mapTrailStyle"] = cfg.mapTrailStyle;
     j["aircraftIconPx"] = cfg.aircraftIconPx;
     j["mapTrailWidthPx"] = cfg.mapTrailWidthPx;

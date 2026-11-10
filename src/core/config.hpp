@@ -636,6 +636,11 @@ struct AppConfig {
     std::string spectrumTraceMode = "normal";
     int spectrumAverageMs = 1000;
 
+    // THE 3D VIEWS OF THE SLINT WINDOW (docs/engine-stage4.md 6.64): which pages show their 3D view instead of the 2D one (the 2D view is the default), each one's
+    // camera (azimuth, elevation, zoom) and its small choices, as one text, `name:key=value,...;name:...` (src/slint/view3d_prefs.hpp reads and writes it, leniently: a
+    // malformed entry is skipped and every value is clamped). The ImGui window neither reads nor writes it; it keeps what it finds.
+    std::string view3d;
+
     // HOW a trail is drawn, not whether: 0 = line, 1 = ribbon. An integer with
     // named values rather than a bool, because a third style costs one entry
     // here instead of a second flag that can contradict the first - two bools
