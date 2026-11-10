@@ -283,6 +283,62 @@ void testRadios() {
     CHECK_EQ(viewer.run(cmd(FOXAPI_OP_RADIO_FOCUS, 0, 1)).status(), FOXAPI_NO_CHANGE);
 }
 
+// THE AUDIO AGC AND THE NOISE BLANKER (docs/API.md 6.19): both ops address one radio, the settings come back in the state and move the mode group, the
+// ranges are refused, and the measurements move nothing.
+void testAgcAndNoiseBlanker() {
+    testing::Engine e(api());
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    FoxReceiverState st = s.state();
+    CHECK_EQ(st.agcMode, static_cast<uint32_t>(FOXAPI_AGC_AUTO));
+    CHECK_EQ(st.nbEnabled, 0u);
+    CHECK_EQ(st.nbThresholdDb, 15.0);
+    const uint64_t before = st.modeSeq;
+    FoxCommand agc = cmd(FOXAPI_OP_SET_AGC, -12.0, FOXAPI_AGC_OFF);
+    agc.ival[1] = 1;
+    CHECK_EQ(s.run(agc).status(), FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.agcMode, static_cast<uint32_t>(FOXAPI_AGC_OFF));
+    CHECK_EQ(st.agcFixedGainDb, -12.0);
+    CHECK_EQ(st.agcGainDb, -12.0);
+    CHECK(st.modeSeq > before);
+    FoxCommand nb = cmd(FOXAPI_OP_SET_NB, 22.5, 1);
+    nb.ival[1] = 1;
+    CHECK_EQ(s.run(nb).status(), FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.nbEnabled, 1u);
+    CHECK_EQ(st.nbThresholdDb, 22.5);
+    CHECK_EQ(st.nbBlankedPct, 0.0);
+    // The ranges: mode 0..4, fixed gain -20..+40, threshold 6..30 (only when carried).
+    FoxCommand bad = cmd(FOXAPI_OP_SET_AGC, 0.0, 5);
+    CHECK_EQ(s.run(bad).status(), FOXAPI_OUT_OF_RANGE);
+    bad = cmd(FOXAPI_OP_SET_AGC, 40.5, 4);
+    bad.ival[1] = 1;
+    CHECK_EQ(s.run(bad).status(), FOXAPI_OUT_OF_RANGE);
+    bad.num[0] = -20.5;
+    CHECK_EQ(s.run(bad).status(), FOXAPI_OUT_OF_RANGE);
+    bad = cmd(FOXAPI_OP_SET_NB, 5.9, 1);
+    bad.ival[1] = 1;
+    CHECK_EQ(s.run(bad).status(), FOXAPI_OUT_OF_RANGE);
+    bad.num[0] = 30.1;
+    CHECK_EQ(s.run(bad).status(), FOXAPI_OUT_OF_RANGE);
+    bad = cmd(FOXAPI_OP_SET_NB, 99.0, 1);   // not carried (ival[1] = 0): not checked
+    CHECK_EQ(s.run(bad).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().nbThresholdDb, 22.5);
+    // The target: radio 1 and the focus land, radio 2 is NO_DEVICE, ALL is for RUN alone.
+    agc = cmd(FOXAPI_OP_SET_AGC, 0.0, FOXAPI_AGC_SLOW);
+    agc.target = 2;
+    CHECK_EQ(s.run(agc).status(), FOXAPI_NO_DEVICE);
+    agc.target = FOXAPI_TARGET_ALL_RADIOS;
+    CHECK_EQ(s.run(agc).status(), FOXAPI_BAD_ARGUMENT);
+    agc.target = 1;
+    CHECK_EQ(s.run(agc).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().agcMode, static_cast<uint32_t>(FOXAPI_AGC_SLOW));
+    nb = cmd(FOXAPI_OP_SET_NB, 0.0, 0);
+    nb.target = 2;
+    CHECK_EQ(s.run(nb).status(), FOXAPI_NO_DEVICE);
+    CHECK_EQ(s.state().nbEnabled, 1u);
+}
+
 void testBatchAndQueueBound() {
     testing::Engine e(api());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -1077,6 +1133,7 @@ int main() {
     testTuningAndClamps();
     testRefusals();
     testRadios();
+    testAgcAndNoiseBlanker();
     testBatchAndQueueBound();
     testRefusalsAreResults();
     testRefusedFlagMeansNothingChanged();

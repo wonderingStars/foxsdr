@@ -2466,6 +2466,16 @@ engine does, with one live receiver:
   reached), in words that name the holder ("in use by Radio 1", "in use by patch radio 3"). Absent for a node that was not refused; not published while the patch
   page is closed. The refused node is never opened.
 
+### 9.20 The audio AGC choice and the noise blanker (multi-radio lane C; docs/multi-radio-records/agc-nb-wiring.md)
+
+Appended; the API stays 0.3 and the plugin ABI stays 3. Specified in third_party/foxsdr_api/reference/docs/API.md 6.19.
+
+* `FOXAPI_OP_SET_AGC` (0x0111) and `FOXAPI_OP_SET_NB` (0x0112), grant SETTINGS, receiver-scoped (`radio_scope.hpp` lists 49 ops now: the target addresses them).
+  The fixed gain is -20..+40 dB (a held gain below -20 is frozen at -20); the threshold 6..30 dB. Range refusals at the submit; `Engine::applyCommand` clamps and flags.
+* `FoxReceiverState` appended after `rxLonDeg`: `agcMode`, `agcFixedGainDb`, `agcGainDb`, `nbEnabled`, `nbThresholdDb`, `nbBlankedPct`, `nbStandingDown`. The four
+  settings move `modeSeq`; the three measurements move nothing.
+* The settings file gains `agcMode`, `agcFixedGainDb`, `nbEnabled`, `nbThresholdDb` (Engine half). The web profile is NOT extended (the web page has no control).
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

@@ -717,6 +717,7 @@ public:
         case FOXAPI_OP_SET_BANDWIDTH: case FOXAPI_OP_SET_SQUELCH: case FOXAPI_OP_SET_VOLUME:
         case FOXAPI_OP_SET_MUTED: case FOXAPI_OP_SET_DEEMPHASIS: case FOXAPI_OP_SET_STEREO:
         case FOXAPI_OP_SET_NR: case FOXAPI_OP_SET_NOTCH: case FOXAPI_OP_SET_AUTO_NOTCH:
+        case FOXAPI_OP_SET_AGC: case FOXAPI_OP_SET_NB:
         case FOXAPI_OP_SET_DISPLAY_RANGE: case FOXAPI_OP_SELECT_SOURCE: case FOXAPI_OP_SET_SAMPLE_RATE:
         case FOXAPI_OP_SET_GAIN: case FOXAPI_OP_SET_DEVICE_AGC: case FOXAPI_OP_BOOKMARK_TUNE:
             return true;
@@ -1174,6 +1175,10 @@ private:
         bool stereo = true;
         bool nr = false;
         double nrStrength = 0.5;
+        uint32_t agcMode = FOXAPI_AGC_AUTO;
+        double agcFixedGainDb = 0.0;
+        bool nbEnabled = false;
+        double nbThresholdDb = 15.0;
         bool notch = false;
         double notchHz = 1000.0;
         double notchQ = 30.0;
@@ -1329,6 +1334,7 @@ private:
         case FOXAPI_OP_SET_BANDWIDTH: case FOXAPI_OP_SET_SQUELCH: case FOXAPI_OP_SET_VOLUME:
         case FOXAPI_OP_SET_MUTED: case FOXAPI_OP_SET_DEEMPHASIS: case FOXAPI_OP_SET_STEREO:
         case FOXAPI_OP_SET_NR: case FOXAPI_OP_SET_NOTCH: case FOXAPI_OP_SET_AUTO_NOTCH:
+        case FOXAPI_OP_SET_AGC: case FOXAPI_OP_SET_NB:
         case FOXAPI_OP_SET_DISPLAY_RANGE: case FOXAPI_OP_SCAN_DEVICES:
         case FOXAPI_OP_SELECT_SOURCE: case FOXAPI_OP_SET_SAMPLE_RATE: case FOXAPI_OP_SET_GAIN:
         case FOXAPI_OP_SET_DEVICE_AGC: case FOXAPI_OP_BOOKMARK_ADD: case FOXAPI_OP_BOOKMARK_TUNE:
@@ -1393,6 +1399,10 @@ private:
             return (c.ival[0] >= 0 && c.ival[0] <= 2) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_NR:
             return (c.ival[1] == 0 || (v >= 0.0 && v <= 1.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_AGC:
+            return (c.ival[0] >= 0 && c.ival[0] <= 4 && (c.ival[1] == 0 || (v >= -20.0 && v <= 40.0))) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_NB:
+            return (c.ival[1] == 0 || (v >= 6.0 && v <= 30.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_NOTCH:
             return (c.ival[1] == 0 || (v >= 10.0 && v <= 20000.0 && c.num[1] >= 0.1 && c.num[1] <= 1000.0))
                        ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
@@ -1759,6 +1769,19 @@ private:
         case FOXAPI_OP_SET_NR:
             m_.nr = c.ival[0] != 0;
             if (c.ival[1] != 0) m_.nrStrength = v;
+            bump(kMode);
+            break;
+        case FOXAPI_OP_SET_AGC:
+            // the mode first, then the fixed gain (the real engine's order: entering Off freezes the gain held)
+            m_.agcMode = static_cast<uint32_t>(c.ival[0]);
+            if (c.ival[1] != 0) m_.agcFixedGainDb = v;
+            r.applied[0] = m_.agcFixedGainDb;
+            bump(kMode);
+            break;
+        case FOXAPI_OP_SET_NB:
+            m_.nbEnabled = c.ival[0] != 0;
+            if (c.ival[1] != 0) m_.nbThresholdDb = v;
+            r.applied[0] = m_.nbThresholdDb;
             bump(kMode);
             break;
         case FOXAPI_OP_SET_NOTCH:
@@ -2555,6 +2578,13 @@ private:
         s.dbMin = m_.dbMin;
         s.dbMax = m_.dbMax;
         s.nrStrength = m_.nrStrength;
+        s.agcMode = m_.agcMode;
+        s.agcFixedGainDb = m_.agcFixedGainDb;
+        s.agcGainDb = m_.agcMode == FOXAPI_AGC_OFF ? m_.agcFixedGainDb : 0.0;  // a measurement: the mock has no loop, it reads unity unless fixed
+        s.nbEnabled = m_.nbEnabled ? 1u : 0u;
+        s.nbThresholdDb = m_.nbThresholdDb;
+        s.nbBlankedPct = 0.0;  // a measurement: the mock hears no clicks
+        s.nbStandingDown = 0u;
         s.notchHz = m_.notchHz;
         s.notchQ = m_.notchQ;
         s.pilotLevel = (f & FOXAPI_RX_STEREO_ACTIVE) ? 1.0 : 0.0;

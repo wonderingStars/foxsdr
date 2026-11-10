@@ -245,9 +245,12 @@ addresses one RADIO, it is the radio's number (6.18). App today:
 ### 6.4 Demodulator and audio DSP — `FOXAPI_CAP_AUDIO_DSP`, `FOXAPI_CAP_RDS`
 State: `demodMode`, `deemphasis`, `STEREO_ENABLED`, `STEREO_ACTIVE`,
 `pilotLevel`, `NR` + `nrStrength`, `NOTCH` + `notchHz` + `notchQ`,
-`AUTO_NOTCH`. Commands: `SET_MODE` (bandwidth moves to the mode's default,
-as the mode keys do), `SET_DEEMPHASIS`, `SET_STEREO`, `SET_NR`, `SET_NOTCH`,
-`SET_AUTO_NOTCH`. List: `MODES` (mode, default bandwidth), `BANDWIDTHS`.
+`AUTO_NOTCH`, and (0.3, 6.19) the audio AGC's `agcMode` / `agcFixedGainDb` /
+`agcGainDb` and the noise blanker's `nbEnabled` / `nbThresholdDb` /
+`nbBlankedPct` / `nbStandingDown`. Commands: `SET_MODE` (bandwidth moves to the
+mode's default, as the mode keys do), `SET_DEEMPHASIS`, `SET_STEREO`, `SET_NR`,
+`SET_NOTCH`, `SET_AUTO_NOTCH`, `SET_AGC`, `SET_NB`. List: `MODES` (mode, default
+bandwidth), `BANDWIDTHS`.
 **GAP**: RDS fields (PI, PS, PTY, RadioText, group and error counts), and
 the auto-notch readout (engaged, frequency).
 
@@ -452,6 +455,42 @@ The reference engine in `mock_engine/` has ONE radio and room for two (so radio 
 is a number it knows and has nothing at); it publishes no facts (its capability
 word has no `FACTS`), implements the target rule, the focus and the two reads.
 
+### 6.19 The audio AGC and the noise blanker (0.3, additive: no capability bit)
+
+Two audio features of ONE radio, both appended (rule 4); the API stays 0.3.
+
+* **AGC choice.** `FOXAPI_OP_SET_AGC` (0x0111): `ival[0]` = the mode, `FOXAPI_AGC_AUTO` 0
+  (the loop as it always was, and the default), `FAST` 1, `MEDIUM` 2, `SLOW` 3
+  (the gain recovers from a 20 dB drop to within 3 dB in about 0.1 s, 0.5 s and 2 s,
+  whatever the channel rate; a 20 dB rise is pulled back in about 4 ms) or `OFF` 4
+  (the gain does not move). `ival[1]` = 1 means `num[0]` is the fixed gain in dB,
+  −20 to +40 (the gain `OFF` applies; −20 is below unity because entering `OFF`
+  freezes the gain the loop held, and a held gain below −20 dB is frozen at −20).
+  Send the mode and the gain in ONE command: the engine sets the mode first and
+  the fixed gain after it. An out-of-range mode, or a gain outside the range when
+  it is carried, is `OUT_OF_RANGE` at the submit; a local command applied
+  outside the range is clamped (`FOXAPI_RESULT_CLAMPED`).
+* **Noise blanker.** `FOXAPI_OP_SET_NB` (0x0112): `ival[0]` = on/off (off is the
+  default), `ival[1]` = 1 means `num[0]` is the threshold, 6 to 30 dB above the
+  average magnitude (default 15). It removes short wide-band clicks at the
+  channel rate before the narrow filter; the meter, the scope and the decoders of
+  that radio hear the blanked signal, the I/Q recorder and I/Q plugins do not. A
+  quarter of the last 100 ms blanked means a strong signal, not a click, and the
+  blanker stands down.
+* **Both address ONE radio** (`FoxCommand::target`, 6.18).
+* **State**, appended after `rxLonDeg`: `agcMode`, `agcFixedGainDb` (in `OFF` the
+  gain in force), `agcGainDb` (the gain in use now, a measurement), `nbEnabled`,
+  `nbThresholdDb`, `nbBlankedPct` (0..100 of the last 100 ms, a measurement; 0
+  while off or standing down) and `nbStandingDown` (1 while the blanker lets
+  everything through). The first, second, fourth and fifth move `modeSeq` (and
+  `seq`); the measurements move nothing. `FOXAPI_MIN_RECEIVER_STATE` is unchanged.
+* **Saved** by the engine (`agcMode`, `agcFixedGainDb`, `nbEnabled`,
+  `nbThresholdDb`); a file without them loads as Auto, 0 dB, off, 15 dB.
+
+The reference engine keeps the settings and publishes them; it has no audio loop
+or blanker, so `agcGainDb` reads the fixed gain in `OFF` and 0 otherwise, and the
+blanked share is 0.
+
 ## 7. Mechanics
 
 ### 7.1 Reads (snapshots)
@@ -634,6 +673,8 @@ Implemented by the mock engine (and exercised by `tests/`):
 | `SET_MUTED`, `SET_STEREO`, `SET_AUTO_NOTCH` | SETTINGS | ival0 0/1 | |
 | `SET_DEEMPHASIS` | SETTINGS | ival0 0/1/2 | |
 | `SET_NR` | SETTINGS | ival0 on, ival1 set-strength, num0 0–1 | |
+| `SET_AGC` | SETTINGS, addresses one radio | ival0 mode 0–4 (`FOXAPI_AGC_*`), ival1 set-fixed-gain, num0 dB | mode −1/5 → `OUT_OF_RANGE`; fixed gain −20 – +40 dB (6.19) |
+| `SET_NB` | SETTINGS, addresses one radio | ival0 on, ival1 set-threshold, num0 dB | 6 – 30 dB above the average (6.19) |
 | `SET_NOTCH` | SETTINGS | ival0 on, ival1 set, num0 10–20000 Hz, num1 Q 0.1–1000 | |
 | `SET_DISPLAY_RANGE` | SETTINGS | num0 min, num1 max dB | −200 – +40; 10 dB minimum span |
 | `SCAN_DEVICES`, `SELECT_SOURCE`, `SET_SAMPLE_RATE`, `SET_GAIN`, `SET_DEVICE_AGC` | SETTINGS | as header | id/rate/stage must be listed |
