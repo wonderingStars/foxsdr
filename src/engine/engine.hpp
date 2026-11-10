@@ -91,6 +91,7 @@
 #include "core/audio_open.hpp"
 #include "core/bias_tee.hpp"
 #include "core/device_scan_plan.hpp"
+#include "engine/device_ledger.hpp"
 #include "engine/engine_host.hpp"
 #include "engine/engine_types.hpp"
 #include "engine/fox_engine_api.hpp"
@@ -2063,6 +2064,13 @@ private:
         cascade::source::SoundCardSettings card;
     };
     PatchMainKeep patchMainKeep_;
+    // THE DEVICE LEDGER (engine/device_ledger.hpp, multi-radio stage 2): who holds which radio - a receiver slot, a patch radio node or the
+    // transmitter - and the one limit on radios open in total. Rebuilt from the state above by rebuildDeviceLedger() on every patchReconcile (so it
+    // cannot drift), after the receiver's radio has been lent. A patch radio node whose claim is refused is never opened, and
+    // patchLedgerRefusal_ says why in words that name the holder ("in use by patch radio 3"); it is a fact (fact.patch.refusal.<node>).
+    DeviceLedger deviceLedger_{kMaxReceivers};
+    std::map<cascade::core::patch::NodeId, std::string> patchLedgerRefusal_;
+    void rebuildDeviceLedger();
     // One device a patch Radio can be set to, for the inspector's list.
     struct PatchDeviceChoice {
         std::string key;     // core/patch_devices.hpp

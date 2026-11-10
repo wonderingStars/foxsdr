@@ -1197,6 +1197,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // The receiver's radio as a Radio node would name it (the lent one, else the open one), and the air centre it was
     // last tuned to ("" when it never was): what a new Radio starts on.
     fact("patch.receiverRadio", patchReceiverRadioKey(), true);
+    // A Radio node the device ledger refused (multi-radio stage 2): the words that name who holds its device ("in use by patch radio 3",
+    // "in use by Radio 1"), or that state the limit on open radios. One fact per refused node, by node id; absent for a node that was not refused.
+    for (const auto& [node, why] : patchLedgerRefusal_) { fact("patch.refusal." + std::to_string(node), why, false); }
     {
         std::string centre;
         if (const std::optional<double> c = carriedAirCentre()) {
