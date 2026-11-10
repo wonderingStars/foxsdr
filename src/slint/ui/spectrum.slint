@@ -87,7 +87,11 @@ component Hair inherits Rectangle {
 export component SpectrumView inherits Rectangle {
     // ---- the sheet's geometry ----
     out property <length> gutter-w: 44px;
-    out property <length> plot-top: 76px;
+    // COMPACT is the multi-radio pane's well (docs/multi-radio-records/screen-s1-s2.md): the 76 px header gives way to the ribbon and its names alone; the caption, caveat,
+    // trace-mode label, peak block and SPAN chip are not drawn (the pane's readout row carries the peak and the span), and the plugin-mark and bookmark names sit just inside
+    // the plot's top edge. Everything else - the plot's interaction, the axes, the VFO band - is as in the full well.
+    in property <bool> compact: false;
+    out property <length> plot-top: root.compact ? (root.ribbon-h > 0px ? root.ribbon-h + 15px : 0px) : 76px;
     out property <length> axis-h: 18px;
     out property <length> plot-w: Math.max(0px, root.width - root.gutter-w);
     out property <length> plot-h: Math.max(0px, root.height - root.plot-top - root.axis-h);
@@ -347,7 +351,7 @@ export component SpectrumView inherits Rectangle {
     for seg in root.bands : Text {
         property <length> lx: root.gutter-w + root.snap(root.plot-w * Math.clamp(seg.from, 0, 1));
         property <length> rx: root.gutter-w + root.snap(root.plot-w * Math.clamp(seg.to, 0, 1));
-        property <bool> under-header: header.width > 0px && self.x < header.x + header.width + 8px && self.x + self.width > header.x - 4px;
+        property <bool> under-header: !root.compact && header.width > 0px && self.x < header.x + header.width + 8px && self.x + self.width > header.x - 4px;
         visible: root.ribbon-h > 0px && seg.label != "" && self.rx - self.lx >= 24px;
         x: self.lx + 4px;
         y: self.under-header ? header.y + header.height + 1px : root.ribbon-h + 2px;
@@ -401,7 +405,8 @@ export component SpectrumView inherits Rectangle {
     header := Rectangle {
         x: 52px;
         y: 14px;
-        width: header-row.preferred-width;
+        visible: !root.compact;
+        width: root.compact ? 0px : header-row.preferred-width;
         height: 14px;
         header-row := HorizontalLayout {
             spacing: 14px;
@@ -435,7 +440,7 @@ export component SpectrumView inherits Rectangle {
     }
 
     // the airband captions, on the row under the header: the block on the air and what is being heard
-    if root.airband-block != "" || root.airband-hearing != "" : HorizontalLayout {
+    if !root.compact && (root.airband-block != "" || root.airband-hearing != "") : HorizontalLayout {
         x: 52px;
         y: 44px;
         height: 14px;
@@ -462,7 +467,7 @@ export component SpectrumView inherits Rectangle {
     }
 
     // the peak block, right-aligned 16 px from the right at y 12: cap, then the figure and its age
-    if root.show-peak && (root.peak-text != "" || root.peak-age != "") : Rectangle {
+    if !root.compact && root.show-peak && (root.peak-text != "" || root.peak-age != "") : Rectangle {
         x: 0px;
         y: 12px;
         width: root.width - 16px;
@@ -507,7 +512,7 @@ export component SpectrumView inherits Rectangle {
     }
 
     // the SPAN chip, right 16, top 58 (it overlaps the top two pixels of the plot, as on the sheet)
-    if root.span-text != "" : Chip {
+    if !root.compact && root.span-text != "" : Chip {
         label: root.span-text;
         mono: true;
         x: root.width - 16px - self.width;
@@ -521,7 +526,7 @@ export component SpectrumView inherits Rectangle {
         mono: true;
         background: Theme.cursor-chip-bg;
         border-color: Theme.cursor-chip-line;
-        y: root.plot-top + 44px;
+        y: root.plot-top + (root.compact ? 8px : 44px);
         x: self.line-x + 6px + self.width > root.width - 2px ? self.line-x - 6px - self.width : self.line-x + 6px;
     }
 
@@ -529,7 +534,7 @@ export component SpectrumView inherits Rectangle {
     for m in root.plugin-marks : Text {
         visible: m.label != "";
         x: root.gutter-w + root.snap(root.plot-w * m.pos);
-        y: 60px;
+        y: root.compact ? root.plot-top + 2px : 60px;
         height: 14px;
         text: m.label;
         vertical-alignment: center;
@@ -540,7 +545,7 @@ export component SpectrumView inherits Rectangle {
     for b in root.bookmarks : Text {
         visible: b.label != "" && b.row >= 0;
         x: root.gutter-w + root.snap(root.plot-w * b.pos) - 8px;
-        y: 60px + b.row * 14px;   // stacked names (docs 6.52): the row the host chose, a line each
+        y: (root.compact ? root.plot-top + 2px : 60px) + b.row * 14px;   // stacked names (docs 6.52): the row the host chose, a line each
         height: 14px;
         text: b.label;
         vertical-alignment: center;

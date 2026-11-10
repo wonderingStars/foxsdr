@@ -135,6 +135,11 @@ export struct Skin {
     trace-live: color,
     trace-peak: color,
     trace-average: color,
+    // ---- the radios of the multi-radio screen: R1 blue, R2 amber, R3 green, R4 violet; radios 5 to 8 reuse them by position (the tag carries the number) ----
+    radio-1: color,
+    radio-2: color,
+    radio-3: color,
+    radio-4: color,
     vfo: color,
     vfo-fill: color,
     bandplan: color,
@@ -196,7 +201,7 @@ export global Workbench {
         slider-track: #2b2f37, slider-fill: #f5a524, slider-knob: #e6e8ec, slider-knob-ring: #1d2026, slider-disabled-fill: #5a606b, slider-disabled-knob: #8a93a0,
         level-bar: #3ddc84,
         meter-face: #0f1114, meter-ink: #c9ced6, meter-needle: #f5a524, meter-led-low: #3ddc84, meter-led-mid: #f5a524, meter-led-high: #ff5c5c, meter-peak: #ffd27a,
-        trace-live: #7ad7ff, trace-peak: #ff9f43, trace-average: #f1ead6, vfo: #f5a524, vfo-fill: #f5a52422, bandplan: #2a3b5a, bandplan-fg: #8fb3e0,
+        trace-live: #7ad7ff, trace-peak: #ff9f43, trace-average: #f1ead6, radio-1: #4da3ff, radio-2: #f5a524, radio-3: #3ddc84, radio-4: #b48cff, vfo: #f5a524, vfo-fill: #f5a52422, bandplan: #2a3b5a, bandplan-fg: #8fb3e0,
         mark: #d4b060, mark-fill: #d4b06022, bookmark: #f5c66b, bookmark-tick: #f5a524, marker: #e6e8ec, cursor: #e6e8ec66,
         cursor-chip-bg: #0d0f12dd, cursor-chip-line: #434955, graticule: #1e2229, axis-fg: #7d8694,
         wf-floor: #0a1430, wf-mid: #1b3a6a, wf-high: #2e86c1, wf-hot: #f5a524, wf-peak: #ffffff, wf-vfo: #ffd27a, wf-key-bg: #0d0f12dd,
@@ -230,7 +235,7 @@ export global NightWatch {
         slider-track: #3a1410, slider-fill: #ff6a4c, slider-knob: #ff7a62, slider-knob-ring: #100505, slider-disabled-fill: #5a2a22, slider-disabled-knob: #8a4a3e,
         level-bar: #ff5a3c,
         meter-face: #140606, meter-ink: #e87766, meter-needle: #ff5a3c, meter-led-low: #a82a1c, meter-led-mid: #ff5a3c, meter-led-high: #ffe1d8, meter-peak: #ff9a70,
-        trace-live: #ff6a4c, trace-peak: #ffb09c, trace-average: #ffd2c6, vfo: #ff5a3c, vfo-fill: #ff5a3c22, bandplan: #3a1410, bandplan-fg: #e87766,
+        trace-live: #ff6a4c, trace-peak: #ffb09c, trace-average: #ffd2c6, radio-1: #ff6a4c, radio-2: #ffd2c6, radio-3: #b83a26, radio-4: #ff9a80, vfo: #ff5a3c, vfo-fill: #ff5a3c22, bandplan: #3a1410, bandplan-fg: #e87766,
         mark: #cf5d4d, mark-fill: #cf5d4d22, bookmark: #ff8a70, bookmark-tick: #ff5a3c, marker: #ffd2c6, cursor: #ff8a7266,
         cursor-chip-bg: #040101dd, cursor-chip-line: #5a1a12, graticule: #2a0f0b, axis-fg: #b04c3e,
         wf-floor: #140303, wf-mid: #4a0c07, wf-high: #c0281a, wf-hot: #ff9a70, wf-peak: #ffe1d8, wf-vfo: #ff8a70, wf-key-bg: #040101dd,
@@ -333,6 +338,14 @@ export global Theme {
     out property <color> trace-live: skin.trace-live;
     out property <color> trace-peak: skin.trace-peak;
     out property <color> trace-average: skin.trace-average;
+    out property <color> radio-1: skin.radio-1;
+    out property <color> radio-2: skin.radio-2;
+    out property <color> radio-3: skin.radio-3;
+    out property <color> radio-4: skin.radio-4;
+    // The colour of radio number n (1-based; 0 and below read as the first): the four colours by position, so radios 5 to 8 repeat them and the tag's number tells them apart.
+    public pure function radio-colour(n: int) -> color {
+        return Math.mod(Math.max(n, 1) - 1, 4) == 0 ? root.radio-1 : Math.mod(Math.max(n, 1) - 1, 4) == 1 ? root.radio-2 : Math.mod(Math.max(n, 1) - 1, 4) == 2 ? root.radio-3 : root.radio-4;
+    }
     out property <color> vfo: skin.vfo;
     out property <color> vfo-fill: skin.vfo-fill;
     out property <color> bandplan: skin.bandplan;

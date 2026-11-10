@@ -1,0 +1,62 @@
+// The radio pane's specimen: six panes of the multi-radio screen on one sheet, fed with fake data by the test (tests/test_slint_radio_pane.cpp), so the pane is
+// seen with several radios, in every skin, before the workspace (S3) places it in the window.
+//
+//   x, y, w, h        what
+//   0, 0, 556, 353    pane 1, the selected one (the hand-over's 2 x 2 pane size)
+//   562, 0, 556, 353  pane 2
+//   0, 359, 556, 353  pane 3
+//   562, 359, 556, 353 pane 4
+//   1124, 0, 420, 353  pane 5 (a short pane: the lamps lose their captions, the long device name elides; it takes the colour of radio 1 by position)
+//   1124, 359, 420, 353 pane 6 (the same, the colour of radio 2)
+//
+// The test sets `panes` (RadioPaneData, 1-based radio numbers) and `selected-radio`, and reads back what a click reported: `last-event` names the callback, `last-radio`
+// the radio it carried, `last-x` the fraction, `events` how many came.
+import { Theme, Skin, Workbench, NightWatch } from "../theme.slint";
+import { RadioPane, RadioPaneData } from "../radio_pane.slint";
+import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker } from "../spectrum.slint";
+import { AgeTick } from "../waterfall.slint";
+import { TipLayer } from "../tooltip.slint";
+export { Theme, Skin, Workbench, NightWatch }
+export { RadioPaneData, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, AgeTick }
+
+export component RadioPaneSpecimen inherits Window {
+    width: 1560px;
+    height: 720px;
+    background: Theme.bg;
+
+    in-out property <[RadioPaneData]> panes;
+    in-out property <int> selected-radio: 1;
+    in-out property <int> ribbon-size: 2;
+
+    in-out property <string> last-event;
+    in-out property <int> last-radio;
+    in-out property <float> last-x;
+    in-out property <bool> last-shift;
+    in-out property <int> last-notches;
+    in-out property <int> events;
+
+    for d[i] in root.panes : RadioPane {
+        x: [0px, 562px, 0px, 562px, 1124px, 1124px][min(i, 5)];
+        y: [0px, 0px, 359px, 359px, 0px, 359px][min(i, 5)];
+        width: i < 4 ? 556px : 420px;
+        height: 353px;
+        data: d;
+        selected: d.radio == root.selected-radio;
+        ribbon-size: root.ribbon-size;
+        squelch-caption: "SQL"; volume-caption: "VOL"; rate-caption: "RATE"; bias-caption: "BIAS"; peak-caption: "PEAK";   // the hand-over's short words (a specimen is a test sheet, not shipped)
+        select-requested(r) => { root.last-event = "select"; root.last-radio = r; root.events += 1; }
+        stop-clicked(r) => { root.last-event = "stop"; root.last-radio = r; root.events += 1; }
+        spectrum-clicked(r, x, shift) => { root.last-event = "spectrum-click"; root.last-radio = r; root.last-x = x; root.last-shift = shift; root.events += 1; }
+        spectrum-wheel(r, x, n, shift) => { root.last-event = "spectrum-wheel"; root.last-radio = r; root.last-x = x; root.last-notches = n; root.last-shift = shift; root.events += 1; }
+        waterfall-clicked(r, x, shift) => { root.last-event = "waterfall-click"; root.last-radio = r; root.last-x = x; root.last-shift = shift; root.events += 1; }
+        band-dragged(r, dx) => { root.last-event = "band-drag"; root.last-radio = r; root.last-x = dx; root.events += 1; }
+    }
+
+    // two hidden panes that only report the caption rule at a wide and at a narrow width
+    probe-wide := RadioPane { visible: false; width: 556px; height: 353px; }
+    probe-narrow := RadioPane { visible: false; width: 420px; height: 353px; }
+    out property <bool> wide-captions: probe-wide.captions-shown;
+    out property <bool> narrow-captions: probe-narrow.captions-shown;
+
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

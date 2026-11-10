@@ -72,6 +72,7 @@
 #include "kit_publish.hpp"
 #include "cjk_register.hpp"
 #include "patch_publish.hpp"
+#include "radio_view.hpp"
 #include "transmit_publish.hpp"
 #include "scope_publish.hpp"
 #include "view3d_publish.hpp"
@@ -108,45 +109,11 @@ slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
 std::string sigOf(const std::vector<Tick>& t) { std::string s; for (const auto& k : t) { s += fmt("%.6f|", k.frac) + k.label + ";"; } return s; }
 std::int64_t nowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
-constexpr std::uint32_t kSpecW = 1024, kSpecH = 340;   // the spectrum trace's painted resolution (image-fit fill scales it)
-constexpr std::uint32_t kWfW = 1024, kWfH = 238;       // the waterfall picture: one row per published frame
 constexpr double kZoomPerNotch = 1.3;
 // The bookmark names' stacking rule works in pixels (docs 6.52): the plot is taken at the trace's painted width, and a caption glyph (Theme.font-cap,
 // 10 px) at 6 px - the window never hands its plot width back here, and the rule needs only the proportions to decide which names touch.
-constexpr double kSpectrumPlotWidthPx = kSpecW;
+// (The painted width is the radio's own: RadioView::wells.size.traceW, radio_view.hpp.)
 constexpr double kSpectrumCapCharPx = 6.0;
-static_assert(sizeof(Rgba) == sizeof(slint::Rgba8Pixel));
-
-// Two persistent buffers per well, alternated: the one the window still shows is never written, so begin() never
-// detaches (copies) and nothing is allocated per frame. `detaches` counts the times it did anyway.
-struct WellBuffers {
-    std::array<slint::SharedPixelBuffer<slint::Rgba8Pixel>, 2> trace{slint::SharedPixelBuffer<slint::Rgba8Pixel>(kSpecW, kSpecH), slint::SharedPixelBuffer<slint::Rgba8Pixel>(kSpecW, kSpecH)};
-    std::array<slint::SharedPixelBuffer<slint::Rgba8Pixel>, 2> waterfall{slint::SharedPixelBuffer<slint::Rgba8Pixel>(kWfW, kWfH), slint::SharedPixelBuffer<slint::Rgba8Pixel>(kWfW, kWfH)};
-    std::array<const void*, 2> tracePtr{nullptr, nullptr};
-    std::array<const void*, 2> wfPtr{nullptr, nullptr};
-    std::vector<Rgba> picture = std::vector<Rgba>(kWfW * kWfH, Rgba{0x06, 0x07, 0x0a, 255});  // the canonical waterfall picture
-    int which = 0;
-    int detaches = 0;
-    int frames = 0;
-
-    Rgba* traceMemory() {
-        auto& b = trace[static_cast<std::size_t>(which)];
-        auto* p = b.begin();
-        if (tracePtr[static_cast<std::size_t>(which)] != nullptr && tracePtr[static_cast<std::size_t>(which)] != p) { ++detaches; }
-        tracePtr[static_cast<std::size_t>(which)] = p;
-        return reinterpret_cast<Rgba*>(p);
-    }
-    Rgba* waterfallMemory() {
-        auto& b = waterfall[static_cast<std::size_t>(which)];
-        auto* p = b.begin();
-        if (wfPtr[static_cast<std::size_t>(which)] != nullptr && wfPtr[static_cast<std::size_t>(which)] != p) { ++detaches; }
-        wfPtr[static_cast<std::size_t>(which)] = p;
-        return reinterpret_cast<Rgba*>(p);
-    }
-    slint::Image traceImage() { return slint::Image(trace[static_cast<std::size_t>(which)]); }
-    slint::Image waterfallImage() { return slint::Image(waterfall[static_cast<std::size_t>(which)]); }
-    void flip() { which ^= 1; ++frames; }
-};
 
 // What the host reads from the table's lists when listSeq moves.
 struct ListsSnapshot {
@@ -364,15 +331,11 @@ int main(int argc, char** argv) {
     FoxReceiverState state{}; state.structSize = sizeof(state);
     ListsSnapshot lists;
     std::uint64_t lastListSeq = ~0ull;
-    WellBuffers wells;
-    TraceState traceState;
-    std::vector<float> bins(16384);
-    std::vector<float> frame;                 // the last published frame (dBFS per bin)
-    FoxSpectrumInfo lastInfo{}; lastInfo.structSize = sizeof(lastInfo);
-    std::uint64_t sinceSeq = 0;
-    std::deque<std::int64_t> frameTimes;      // publish stamps for the lines/s and history figures
-    std::int64_t lastFrameMs = 0;
-    ViewWindow view{0, 0};                    // the zoomed window; spanHz 0 = the full span
+    // THE RADIOS' PICTURES (radio_view.hpp, docs/multi-radio-records/screen-s1-s2.md): everything one radio's picture needs - its state, spectrum, trace, the two
+    // pixel buffers, the zoom window, the signature cache of its figures - is a RadioView; `state` below stays the SELECTED radio's state, read once a tick for the
+    // strip, the panels and the banks. Slots are made on first use; with one radio only slot 0 exists and the window is today's.
+    RadioSet radios;
+    const auto selected = [&]() -> RadioView& { return radios.selectedView(); };
     int traceMode = 1;                        // 0 normal 1 peak hold 2 average
     double averageLengthS = 1.0;
     bool rangeManual = false;
@@ -381,11 +344,8 @@ int main(int argc, char** argv) {
     bool showNudges = true;
     Face face = Face::Plain;
     bool followBandPlan = true;                // the engine's switch (fact.bandPlan.followMode), read when the lists move
-    // THE PICTURE FOLLOWS A RETUNE THAT LEAVES IT (core/view_follow.hpp, 2026-11-09): the tuned frequency as the last tick saw it (NaN before the
-    // first), and the tick of the last drag of the band, so the picture is never moved under the hand (ten ticks of truce after a drag's last move).
-    double lastTunedHz = std::numeric_limits<double>::quiet_NaN();
+    // (THE PICTURE FOLLOWS A RETUNE THAT LEAVES IT, core/view_follow.hpp, 2026-11-09: the radio's lastTunedHz and lastBandDragTick are its RadioView's.)
     int tickNo = 0;
-    int lastBandDragTick = -1000;
     int bankIndex = 0;
     if (const char* bankEnv = std::getenv("FOXSDR_SLINT_BANK")) { bankIndex = std::clamp(std::atoi(bankEnv), 0, 4); }   // a bounded run's self-capture: the bank to show
     // SIGNAL's Source, Radio and Sinks rows open (Audio filters and Recorder closed), as the ImGui window; TOOLS' Bookmarks, Scanner and Airband (rows 2, 3, 4); EXTEND's Web access and CAT (the contract: both open); SYSTEM's Display and Key bindings (the LOGICAL rows of
@@ -537,8 +497,10 @@ int main(int argc, char** argv) {
     if (std::getenv("FOXSDR_SLINT_PATCH_PROBE") != nullptr) { patchBank.enableProbe(); }
 
     // ---- commands: every key becomes one submit() ----
-    const auto submit = [&](FoxCommand c) {
+    // `radio` is the radio's number (slot + 1) a pane's gesture aims at; 0 = the selected radio, the engine's focus (FoxCommand.target, radio_view.hpp aimAt).
+    const auto submit = [&](FoxCommand c, std::uint32_t radio = 0) {
         c.structSize = sizeof(c);
+        aimAt(c, radio);
         FoxSubmitResult r{}; r.structSize = sizeof(r);
         const int32_t rc = api->submit(session, &c, 1, &r);
         if (rc < 0) { std::fprintf(stderr, "foxsdr-slint: submit op 0x%04x refused by the call: %d\n", c.op, rc); }
@@ -553,25 +515,12 @@ int main(int argc, char** argv) {
     const auto setDisplayRange = [&](double lo, double hi) { FoxCommand c = op(FOXAPI_OP_SET_DISPLAY_RANGE); c.num[0] = lo; c.num[1] = hi; submit(c); };
 
     // ---- the view window and its fractions ----
-    const auto fullCentre = [&] { return lastInfo.spanHz > 0 ? lastInfo.centreHz : state.centreHz; };
-    const auto fullSpan = [&] { return lastInfo.spanHz > 0 ? lastInfo.spanHz : state.sampleRateHz; };
-    const auto currentView = [&]() -> ViewWindow {
-        if (view.spanHz > 0 && view.spanHz < fullSpan()) { return view; }
-        return {fullCentre(), fullSpan()};
-    };
-    const auto frac = [&](double hz) { const ViewWindow v = currentView(); return static_cast<float>(fracOf(hz, v.centreHz, v.spanHz)); };
-    const auto hzAtFrac = [&](double f) { const ViewWindow v = currentView(); return hzAt(f, v.centreHz, v.spanHz); };
-    const auto dbAtFrac = [&](double f) -> double {
-        if (frame.empty() || !(lastInfo.spanHz > 0)) { return state.dbMin; }
-        const double hz = hzAtFrac(f);
-        const double fullFrac = fracOf(hz, lastInfo.centreHz, lastInfo.spanHz);
-        const std::size_t i = static_cast<std::size_t>(std::clamp(fullFrac, 0.0, 0.999999) * static_cast<double>(frame.size()));
-        return frame[std::min(i, frame.size() - 1)];
-    };
-    const auto zoomView = [&](double factor, double aboutFrac) {
-        view = zoomAbout(currentView(), fullCentre(), fullSpan(), factor, aboutFrac, std::max(1.0, state.sampleRateHz / 1000.0));
-        if (view.spanHz >= fullSpan() * 0.999) { view = {0, 0}; }
-    };
+    // (the selected radio's picture; a pane's gestures call the same methods on the pane's own RadioView)
+    const auto currentView = [&]() -> ViewWindow { return selected().currentView(); };
+    const auto frac = [&](double hz) { return selected().frac(hz); };
+    const auto hzAtFrac = [&](double f) { return selected().hzAtFrac(f); };
+    const auto dbAtFrac = [&](double f) -> double { return selected().dbAtFrac(f); };
+    const auto zoomView = [&](double factor, double aboutFrac) { selected().zoom(factor, aboutFrac); };
 
     // ---- the lists, re-read when listSeq moves ----
     const auto readList = [&](std::uint32_t list, const std::function<void(const FoxListItem&)>& each) {
@@ -738,7 +687,7 @@ int main(int argc, char** argv) {
                 menuMarkerNear = -1;
                 for (std::size_t i = 0; i < lists.markers.size(); ++i) {
                     const ViewWindow v = currentView();
-                    if (std::fabs(fracOf(lists.markers[i].hz, v.centreHz, v.spanHz) - fracOf(menuHz, v.centreHz, v.spanHz)) * 980.0 <= 6.0) { menuMarkerNear = static_cast<int>(i); break; }
+                    if (std::fabs(fracOf(lists.markers[i].hz, v.centreHz, v.spanHz) - fracOf(menuHz, v.centreHz, v.spanHz)) * selected().plot.w <= 6.0) { menuMarkerNear = static_cast<int>(i); break; }
                 }
                 e.push_back(entry(MenuItemKind::Item, 401, "Drop marker here", fmt("%.3f MHz", menuHz / 1e6).c_str(), false, menuHz > 0 && lists.markers.size() < 200));
                 if (menuMarkerNear >= 0) { e.push_back(entry(MenuItemKind::Item, 402, ("Remove marker M" + std::to_string(lists.markers[static_cast<std::size_t>(menuMarkerNear)].id)).c_str())); }
@@ -823,8 +772,8 @@ int main(int argc, char** argv) {
             case 111: face = Face::Nixie; applyFace(); break;
             case 112: face = Face::Drum; applyFace(); break;
             case 113: face = Face::Plain; applyFace(); break;
-            case 201: case 202: case 203: traceMode = id - 201; ui->set_trace_mode(traceMode); resetTrace(traceState); break;
-            case 204: resetTrace(traceState); break;
+            case 201: case 202: case 203: traceMode = id - 201; ui->set_trace_mode(traceMode); resetTrace(selected().traceState); break;
+            case 204: resetTrace(selected().traceState); break;
             case 211: case 212: case 213: case 214: case 215: case 216: case 217: {
                 const double presets[7] = {0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0};
                 averageLengthS = presets[id - 211];
@@ -832,8 +781,8 @@ int main(int argc, char** argv) {
             }
             case 301: rangeManual = false; ui->set_range_manual(false); setDisplayRange(-110, 0); break;
             case 302: rangeManual = true; ui->set_range_manual(true); break;
-            case 305: rangeManual = false; ui->set_range_manual(false); setDisplayRange(-110, 0); traceMode = 0; ui->set_trace_mode(0); resetTrace(traceState); break;
-            case 401: { FoxCommand c = op(FOXAPP_OP_MARKER_DROP); c.num[0] = menuHz; c.num[1] = 2.0 * currentView().spanHz / 980.0; submit(c); break; }
+            case 305: rangeManual = false; ui->set_range_manual(false); setDisplayRange(-110, 0); traceMode = 0; ui->set_trace_mode(0); resetTrace(selected().traceState); break;
+            case 401: { FoxCommand c = op(FOXAPP_OP_MARKER_DROP); c.num[0] = menuHz; c.num[1] = 2.0 * currentView().spanHz / selected().plot.w; submit(c); break; }
             case 402: if (menuMarkerNear >= 0) { FoxCommand c = op(FOXAPP_OP_MARKER_REMOVE); c.ival[0] = static_cast<int64_t>(lists.markers[static_cast<std::size_t>(menuMarkerNear)].id); submit(c); } break;
             case 403: toolsBank.openMarkers(); break;
             case 404: ui->global<ToolsEvents>().invoke_markers_copy(); break;
@@ -915,11 +864,11 @@ int main(int argc, char** argv) {
     // ---- centre ----
     ui->on_view_selected([&](int i) { ui->set_view_index(i); patchBank.setViewShown(i == 1); });
     // (the page tabs, the "+ Window" tab, the torn windows and every page body are the plugin kit's: kit_publish.cpp wires them)
-    ui->on_trace_mode_selected([&](int i) { traceMode = i; ui->set_trace_mode(i); resetTrace(traceState); });
+    ui->on_trace_mode_selected([&](int i) { traceMode = i; ui->set_trace_mode(i); resetTrace(selected().traceState); });
     ui->on_range_manual_selected([&](bool manual) { rangeManual = manual; ui->set_range_manual(manual); if (!manual) { setDisplayRange(-110, 0); } });
     ui->on_markers_clicked([&] { toolsBank.openMarkers(); });   // the toolbar's Markers key opens the Markers sheet (the marker menu is the waterfall's right-click)
     ui->on_band_plan_toggled([&] { bandPlanOn = !bandPlanOn; ui->set_band_plan_on(bandPlanOn); });
-    ui->on_zoom([&](int dir) { if (dir == 0) { view = {0, 0}; } else { zoomView(dir > 0 ? kZoomPerNotch : 1.0 / kZoomPerNotch, 0.5); } });
+    ui->on_zoom([&](int dir) { if (dir == 0) { selected().resetView(); } else { zoomView(dir > 0 ? kZoomPerNotch : 1.0 / kZoomPerNotch, 0.5); } });
     const auto hover = [&](float x, float y) {
         hoverX = x; hoverY = y;
         const bool visible = x >= 0 && y >= 0;
@@ -934,8 +883,8 @@ int main(int argc, char** argv) {
     };
     ui->on_spectrum_clicked(clickTune);
     ui->on_waterfall_clicked(clickTune);
-    ui->on_spectrum_double_clicked([&](float) { view = {0, 0}; });
-    ui->on_waterfall_double_clicked([&] { view = {0, 0}; });
+    ui->on_spectrum_double_clicked([&](float) { selected().resetView(); });
+    ui->on_waterfall_double_clicked([&] { selected().resetView(); });
     ui->on_spectrum_menu_requested([&](float x, float px, float py) { menuHz = hzAtFrac(x); openMenu(MenuKind::Trace, px + 360.f, py + 172.f); });
     ui->on_waterfall_menu_requested([&](float x, float px, float py) { menuHz = hzAtFrac(x); openMenu(MenuKind::Marker, px + 360.f, py + 172.f); });
     // A DRAG OF THE BAND moves the VFO inside the baseband (SET_VFO_OFFSET, clamped by the engine as the ImGui window's drag is) and not the SOURCE: it sent
@@ -946,7 +895,7 @@ int main(int argc, char** argv) {
         FoxCommand c = op(FOXAPI_OP_SET_VFO_OFFSET);
         c.num[0] = state.tunedHz + dx * currentView().spanHz - state.centreHz;
         submit(c);
-        lastBandDragTick = tickNo;
+        selected().lastBandDragTick = tickNo;
     });
     ui->on_edge_dragged([&](float half) { FoxCommand c = op(FOXAPP_OP_SET_BANDWIDTH_DRAG); c.num[0] = 2.0 * half * currentView().spanHz; submit(c); });
     const auto wheel = [&](float x, int notches, bool shift) {
@@ -955,7 +904,7 @@ int main(int argc, char** argv) {
     };
     ui->on_spectrum_wheel(wheel);
     ui->on_waterfall_wheel(wheel);
-    ui->on_waterfall_panned([&](float dx) { view = panBy(currentView(), fullCentre(), fullSpan(), dx); if (view.spanHz >= fullSpan() * 0.999) { view = {0, 0}; } });
+    ui->on_waterfall_panned([&](float dx) { selected().pan(dx); });
     ui->on_marker_hovered([&](int i) {
         if (i >= 0 && i < static_cast<int>(lists.markers.size())) {
             const auto& m = lists.markers[static_cast<std::size_t>(i)];
@@ -1045,7 +994,7 @@ int main(int argc, char** argv) {
         else if (id == "tuneStepUp") { stepTune(1, tuneStepHz); } else if (id == "tuneStepDown") { stepTune(-1, tuneStepHz); }
         else if (id == "tuneSpanUp") { stepTune(1, currentView().spanHz); } else if (id == "tuneSpanDown") { stepTune(-1, currentView().spanHz); }
         else if (id == "quickTune") { ui->invoke_edit_requested(); }
-        else if (id == "zoomIn") { zoomView(kZoomPerNotch, 0.5); } else if (id == "zoomOut") { zoomView(1.0 / kZoomPerNotch, 0.5); } else if (id == "zoomReset") { view = {0, 0}; }
+        else if (id == "zoomIn") { zoomView(kZoomPerNotch, 0.5); } else if (id == "zoomOut") { zoomView(1.0 / kZoomPerNotch, 0.5); } else if (id == "zoomReset") { selected().resetView(); }
         else if (id == "record") { FoxCommand c = op(FOXAPI_OP_RECORD_AUDIO); c.ival[0] = (state.flags & FOXAPI_RX_RECORDING_AUDIO) ? 0 : 1; submit(c); }
         else if (id == "screenshot") { screenshot(); }
         else if (id == "fullscreen") { ui->window().set_maximized(!ui->window().is_maximized()); }
@@ -1090,6 +1039,195 @@ int main(int argc, char** argv) {
         ui->set_win_h(static_cast<float>(h) / scale());
     });
 
+    // ---- the pictures: one pane's work per visible pane, then its figures into the window ----
+    // The plot of layout One: the pixels the spectrum and waterfall boxes of ui/main.slint lay their axes over. A pane's plot is its own size, passed the same way.
+    const PlotSize layoutOnePlot{980, 330};
+    // The radio's spectrum frame. Today's engine API has one spectrum, the focused radio's; the per-radio read (read_radio_spectrum, engine stage 3) answers here by rv.slot.
+    const auto readSpectrum = [&](RadioView& rv, FoxSpectrumInfo& info) -> int32_t {
+        return api->read_spectrum(session, rv.sinceSeq, &info, rv.bins.data(), static_cast<uint32_t>(rv.bins.size()));
+    };
+    // PER VISIBLE PANE: follow a retune that leaves the picture, read the radio's spectrum, paint its trace and waterfall on a new frame, and derive the figures around them
+    // (axes laid out over `plot`, ribbon, marks, peak) into rv.fig. Touches no window property; `selectedRadio` adds the one thing only the selected radio feeds, the 3D history.
+    const auto paneTick = [&](RadioView& rv, const PlotSize& plot, bool selectedRadio) {
+        rv.plot = plot;
+        PaneFigures& fig = rv.fig;
+        fig = PaneFigures{};
+        const FoxReceiverState& st = rv.state;
+        // THE PICTURE FOLLOWS A RETUNE THAT LEAVES IT (a beta tester, 2026-11-09: the waterfall left on 7 MHz after a switch to 3.5 MHz): a zoomed picture
+        // (view.spanHz > 0) is a window in absolute Hz that no retune touched; when the tuned frequency moved since the last tick and landed outside it, the
+        // picture is recentred on it at the same width, inside the baseband the source now delivers (core/view_follow.hpp, the rule shared with the ImGui
+        // window). Not within ten ticks of a drag of the band: the hand has it.
+        if (rv.view.spanHz > 0 && tickNo - rv.lastBandDragTick > 10) {
+            const double full = rv.fullSpan();
+            const cascade::core::ViewFollow f = cascade::core::recentreOnRetune(rv.view.centreHz - rv.view.spanHz / 2.0, rv.view.centreHz + rv.view.spanHz / 2.0,
+                                                                                st.centreHz - full / 2.0, st.centreHz + full / 2.0, rv.lastTunedHz, st.tunedHz);
+            if (f.moved) { rv.view = {0.5 * (f.lowHz + f.highHz), f.highHz - f.lowHz}; }
+        }
+        rv.lastTunedHz = st.tunedHz;
+        // the spectrum: only when the engine published a newer frame
+        FoxSpectrumInfo info{}; info.structSize = sizeof(info);
+        const int32_t rc = readSpectrum(rv, info);
+        const ViewWindow v = rv.currentView();
+        fig.view = v;
+        if (rc == FOXAPI_OK && info.copied > 0 && isNewFrame(info.seq, rv.sinceSeq)) {
+            fig.newFrame = true;
+            rv.sinceSeq = info.seq;
+            rv.lastInfo = info;
+            rv.frame.assign(rv.bins.begin(), rv.bins.begin() + info.copied);
+            const std::vector<float>& frame = rv.frame;
+            const std::int64_t t = nowMs();
+            rv.lastFrameMs = t;
+            rv.frameTimes.push_back(t);
+            while (rv.frameTimes.size() > 2 && t - rv.frameTimes.front() > 5000) { rv.frameTimes.pop_front(); }
+            const double fps = rv.frameTimes.size() >= 2 ? 1000.0 * static_cast<double>(rv.frameTimes.size() - 1) / static_cast<double>(std::max<std::int64_t>(1, rv.frameTimes.back() - rv.frameTimes.front())) : 0.0;
+            // the zoomed window: the bins inside it
+            const ViewWindow cur = rv.currentView();
+            const std::size_t b0 = static_cast<std::size_t>(std::clamp(fracOf(cur.centreHz - cur.spanHz / 2.0, info.centreHz, info.spanHz), 0.0, 1.0) * frame.size());
+            const std::size_t b1 = std::max(b0 + 1, static_cast<std::size_t>(std::clamp(fracOf(cur.centreHz + cur.spanHz / 2.0, info.centreHz, info.spanHz), 0.0, 1.0) * frame.size()));
+            const float* sub = frame.data() + b0;
+            const std::size_t subN = std::min(b1, frame.size()) - b0;
+            const foxsdr::slinthost::TraceMode mode = traceMode == 1 ? foxsdr::slinthost::TraceMode::PeakHold : traceMode == 2 ? foxsdr::slinthost::TraceMode::Average : foxsdr::slinthost::TraceMode::Normal;
+            rv.traceState.averageAlpha = static_cast<float>(fps > 0 ? 1.0 - std::exp(-1.0 / (averageLengthS * fps)) : 0.1);
+            const PictureSize& px = rv.wells.size;
+            paintTrace(rv.wells.traceMemory(), px.traceW, px.traceH, sub, subN, st.dbMin, st.dbMax, rv.traceState, mode,
+                       Rgba{0x7a, 0xd7, 0xff, 255}, Rgba{0xff, 0x9f, 0x43, 255}, Rgba{0xf1, 0xea, 0xd6, 255});
+            scrollWaterfallRow(rv.wells.picture.data(), px.wfW, px.wfH, sub, subN, st.dbMin, st.dbMax);
+            if (selectedRadio) {   // the 3D surface's history: one row of levels a frame, of THIS frequency window (a zoom, a pan or a retune starts it again)
+                const auto q = [](double x) { return static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(x))); };
+                const std::uint64_t windowKey = q(cur.centreHz) * 1000003ull ^ q(cur.spanHz) * 998244353ull ^ q(info.centreHz) * 31ull ^ q(info.spanHz) ^ (static_cast<std::uint64_t>(info.binCount) << 40);
+                view3dBank.pushWaterfallFrame(t, sub, subN, windowKey);
+            }
+            std::memcpy(rv.wells.waterfallMemory(), rv.wells.picture.data(), sizeof(Rgba) * px.wfW * px.wfH);
+            // the figures around the wells
+            fig.spectrumCaption = "Spectrum \xC2\xB7 " + std::to_string(info.binCount) + " bin" + (cur.spanHz < info.spanHz * 0.999 ? " \xC2\xB7 zoom" : "");
+            fig.spanText = spanText(cur.spanHz);
+            const double history = fps > 0 ? px.wfH / fps : 0.0;
+            fig.footLeft = fps > 0 ? fmt("%.0f lines/s", fps) + " \xC2\xB7 " + fmt("%.0f s of history", history) : std::string();
+            fig.ageTicks = ageTicks(history, px.wfH);
+            // the peak inside the passband
+            const double lo = fracOf(st.tunedHz - st.bandwidthHz / 2.0, info.centreHz, info.spanHz), hi = fracOf(st.tunedHz + st.bandwidthHz / 2.0, info.centreHz, info.spanHz);
+            const std::size_t p0 = static_cast<std::size_t>(std::clamp(lo, 0.0, 1.0) * frame.size()), p1 = std::max(p0 + 1, static_cast<std::size_t>(std::clamp(hi, 0.0, 1.0) * frame.size()));
+            float peak = -300.f;
+            for (std::size_t i = p0; i < p1 && i < frame.size(); ++i) { peak = std::max(peak, frame[i]); }
+            fig.showPeak = peak > -299.f;
+            fig.peakText = fmt("%.1f dBFS", peak);
+            fig.peakAge = "now";
+            fig.peakAgeSet = true;
+        } else if (rv.lastFrameMs > 0) {
+            const double age = static_cast<double>(nowMs() - rv.lastFrameMs) / 1000.0;
+            fig.peakAge = age < 0.25 ? "now" : fmt("%.1f s ago", age);
+            fig.peakAgeSet = true;
+        }
+        // the axes and overlays follow the view every tick (a zoom or pan changes them without a new frame)
+        fig.freqTicks = frequencyTicks(v.centreHz, v.spanHz, plot.w);
+        fig.dbTicks = dbTicks(st.dbMin, st.dbMax, plot.h);
+        fig.vfoPos = rv.frac(st.tunedHz);
+        fig.vfoHalf = static_cast<float>(v.spanHz > 0 ? st.bandwidthHz / 2.0 / v.spanHz : 0.0);
+        for (const auto& b : lists.bands) {
+            const double f0 = fracOf(b.startHz, v.centreHz, v.spanHz), f1 = fracOf(b.stopHz, v.centreHz, v.spanHz);
+            if (f1 < 0 || f0 > 1) { continue; }
+            fig.ribbon.push_back({static_cast<float>(std::clamp(f0, 0.0, 1.0)), static_cast<float>(std::clamp(f1, 0.0, 1.0)), b.name});
+        }
+        // THE BOOKMARK MARKS (docs 6.52): none while "On the spectrum" is off (bookmarkMarkers, as the classic drawBookmarkMarkers has it); the
+        // names stack onto up to three rows while "Stack close names" is on (bookmarkStackNames), one row otherwise - bookmarkNameRows is the rule.
+        if (duties.interfaceHalf().bookmarkMarkers) {
+            std::vector<BookmarkName> names;
+            for (const auto& b : lists.bookmarks) { const double f = fracOf(b.hz, v.centreHz, v.spanHz); if (f >= 0 && f <= 1 && names.size() < 64) { names.push_back({f, b.name, b.favourite}); } }
+            const std::vector<int> rows = bookmarkNameRows(names, static_cast<double>(rv.wells.size.traceW), kSpectrumCapCharPx, duties.interfaceHalf().bookmarkStackNames ? kBookmarkNameMaxRows : 1);
+            for (std::size_t i = 0; i < names.size(); ++i) { fig.bookmarks.push_back({static_cast<float>(names[i].pos), names[i].label, names[i].favourite, rows[i]}); }
+        }
+        for (const auto& m : lists.marks) {
+            const double f = fracOf(m.hz, v.centreHz, v.spanHz);
+            const double w = m.span && v.spanHz > 0 ? m.widthHz / v.spanHz : 0.0;
+            if (f + w < 0 || f > 1) { continue; }
+            const std::uint8_t a = static_cast<std::uint8_t>(std::max<std::uint32_t>(0x60, m.rgba & 0xffu));
+            FigureMark fm{static_cast<float>(f), static_cast<float>(w), m.name, 0, 0, 0, 0, m.dashed};
+            if (m.rgba != 0) { fm.a = a; fm.r = static_cast<std::uint8_t>(m.rgba >> 24); fm.g = static_cast<std::uint8_t>(m.rgba >> 16); fm.b = static_cast<std::uint8_t>(m.rgba >> 8); }
+            fig.marks.push_back(fm);
+            if (!m.spectrumOnly) { fig.wfMarks.push_back(fm); }
+        }
+        for (const auto& m : lists.markers) {
+            const double f = fracOf(m.hz, v.centreHz, v.spanHz);
+            if (f < 0 || f > 1) { continue; }
+            fig.markers.push_back({static_cast<float>(f), "M" + std::to_string(m.id) + " " + fmt("%.3f MHz", m.hz / 1e6)});
+        }
+        fig.markerCount = static_cast<int>(lists.markers.size());
+        fig.keyFoot = "FLOOR " + fmt("%.0f dB", st.dbMin) + " \xC2\xB7 CEILING " + fmt("%.0f dB", st.dbMax) + (rangeManual ? " \xC2\xB7 manual" : " \xC2\xB7 auto");
+        for (int i = 0; i < 5; ++i) { fig.keyLabels.push_back(fmt("%.0f", st.dbMin + (st.dbMax - st.dbMin) * i / 4.0)); }
+        fig.footTuned = fmtMHz(st.tunedHz);
+        fig.footRest = " \xC2\xB7 " + waterfallFootRight(st, lists.decodersFed.empty() ? std::string() : lists.decodersFed.front());
+    };
+    // THE MAIN WINDOW'S PICTURE (layout One): the selected radio's pane figures as the properties of ui/main.slint, each model set only when its content changed.
+    const auto publishPicture = [&](RadioView& rv) {
+        const PaneFigures& fig = rv.fig;
+        Signatures& psigs = rv.sigs;
+        if (fig.newFrame) {
+            ui->set_trace_image(rv.wells.traceImage());
+            ui->set_waterfall_image(rv.wells.waterfallImage());
+            rv.wells.flip();
+            ui->set_spectrum_caption(ss(fig.spectrumCaption));
+            ui->set_span_text(ss(fig.spanText));
+            ui->set_waterfall_foot_left(ss(fig.footLeft));
+            if (psigs.changed("age", sigOf(fig.ageTicks))) {
+                std::vector<AgeTick> ticks;
+                for (const auto& tk : fig.ageTicks) { ticks.push_back({static_cast<float>(tk.frac == 0.0 ? 22.0 / rv.wells.size.wfH : tk.frac), ss(tk.label)}); }   // "now" sits under the Age caption, as the sheet draws it
+                ui->set_age_ticks(std::make_shared<slint::VectorModel<AgeTick>>(std::move(ticks)));
+            }
+            ui->set_show_peak(fig.showPeak);
+            ui->set_peak_text(ss(fig.peakText));
+        }
+        if (fig.peakAgeSet) { ui->set_peak_age(ss(fig.peakAge)); }
+        if (psigs.changed("freq", sigOf(fig.freqTicks))) { std::vector<AxisTick> ft; for (const auto& tk : fig.freqTicks) { ft.push_back({static_cast<float>(tk.frac), ss(tk.label)}); } ui->set_freq_ticks(std::make_shared<slint::VectorModel<AxisTick>>(std::move(ft))); }
+        if (psigs.changed("db", sigOf(fig.dbTicks))) { std::vector<DbTick> dt; for (const auto& tk : fig.dbTicks) { dt.push_back({static_cast<float>(tk.frac), ss(tk.label)}); } ui->set_db_ticks(std::make_shared<slint::VectorModel<DbTick>>(std::move(dt))); }
+        ui->set_vfo_pos(fig.vfoPos);
+        ui->set_vfo_half(fig.vfoHalf);
+        ui->set_show_vfo(true);
+        {
+            std::string sig; for (const auto& b : fig.ribbon) { sig += fmt("%.5f|", b.from) + fmt("%.5f|", b.to) + b.label + ";"; }
+            if (psigs.changed("ribbon", sig)) {
+                std::vector<BandSegment> ribbon;
+                for (const auto& b : fig.ribbon) { ribbon.push_back({b.from, b.to, ss(b.label), slint::Color::from_argb_uint8(0, 0, 0, 0)}); }
+                ui->set_ribbon(std::make_shared<slint::VectorModel<BandSegment>>(std::move(ribbon)));
+            }
+        }
+        {
+            std::string sig; for (const auto& b : fig.bookmarks) { sig += fmt("%.5f|", b.pos) + b.label + (b.favourite ? "*" : "") + fmt("%d;", b.row); }
+            if (psigs.changed("bookmarks", sig)) {
+                std::vector<BookmarkMark> bms;
+                for (const auto& b : fig.bookmarks) { bms.push_back({b.pos, ss(b.label), b.favourite, b.row}); }
+                ui->set_bookmarks(std::make_shared<slint::VectorModel<BookmarkMark>>(std::move(bms)));
+            }
+        }
+        {
+            const auto toMark = [](const FigureMark& m) { return PluginMark{m.pos, m.width, ss(m.label), slint::Color::from_argb_uint8(m.a, m.r, m.g, m.b), m.dashed}; };
+            std::string sig; for (const auto& m : fig.marks) { sig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + m.label + (m.dashed ? "d" : "") + ";"; }
+            std::string wsig; for (const auto& m : fig.wfMarks) { wsig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + ";"; }
+            if (psigs.changed("marks", sig)) { std::vector<PluginMark> marks; for (const auto& m : fig.marks) { marks.push_back(toMark(m)); } ui->set_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::move(marks))); }
+            if (psigs.changed("wfmarks", wsig)) { std::vector<PluginMark> wfMarks; for (const auto& m : fig.wfMarks) { wfMarks.push_back(toMark(m)); } ui->set_wf_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::move(wfMarks))); }
+        }
+        {
+            std::string sig; for (const auto& m : fig.markers) { sig += fmt("%.5f|", m.pos) + m.label + ";"; }
+            if (psigs.changed("markers", sig)) {
+                std::vector<UserMarker> ums;
+                for (const auto& m : fig.markers) { ums.push_back({m.pos, ss(m.label)}); }
+                ui->set_markers(std::make_shared<slint::VectorModel<UserMarker>>(std::move(ums)));
+            }
+        }
+        ui->set_marker_count(fig.markerCount);
+        ui->set_key_foot(ss(fig.keyFoot));
+        {
+            std::string sig; for (const auto& k : fig.keyLabels) { sig += k + ";"; }
+            if (psigs.changed("keylabels", sig)) {
+                std::vector<slint::SharedString> keyLabels;
+                for (const auto& k : fig.keyLabels) { keyLabels.push_back(ss(k)); }
+                ui->set_key_labels(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(keyLabels)));
+            }
+        }
+        ui->set_waterfall_foot_tuned(ss(fig.footTuned));
+        ui->set_waterfall_foot_rest(ss(fig.footRest));
+        if (hoverX >= 0) { ui->set_cursor_text(ss(cursorText(rv.hzAtFrac(hoverX), rv.dbAtFrac(hoverX)))); }
+    };
+
     // ---- the tick: heartbeat, read_state, lists, read_spectrum, poll_results -> properties ----
     const auto onTick = [&] {
         (void)api->heartbeat(session);
@@ -1105,17 +1243,7 @@ int main(int argc, char** argv) {
             ui->set_follow_band_plan(followBandPlan);
         }
         ++tickNo;
-        // THE PICTURE FOLLOWS A RETUNE THAT LEAVES IT (a beta tester, 2026-11-09: the waterfall left on 7 MHz after a switch to 3.5 MHz): a zoomed picture
-        // (view.spanHz > 0) is a window in absolute Hz that no retune touched; when the tuned frequency moved since the last tick and landed outside it, the
-        // picture is recentred on it at the same width, inside the baseband the source now delivers (core/view_follow.hpp, the rule shared with the ImGui
-        // window). Not within ten ticks of a drag of the band: the hand has it.
-        if (view.spanHz > 0 && tickNo - lastBandDragTick > 10) {
-            const double full = fullSpan();
-            const cascade::core::ViewFollow f = cascade::core::recentreOnRetune(view.centreHz - view.spanHz / 2.0, view.centreHz + view.spanHz / 2.0,
-                                                                                state.centreHz - full / 2.0, state.centreHz + full / 2.0, lastTunedHz, state.tunedHz);
-            if (f.moved) { view = {0.5 * (f.lowHz + f.highHz), f.highHz - f.lowHz}; }
-        }
-        lastTunedHz = state.tunedHz;
+        selected().state = state;   // the selected radio's picture works from the state the strip reads (until the per-radio read of engine stage 3)
         const bool running = (state.flags & FOXAPI_RX_RUNNING) != 0;
 
         // the strip
@@ -1224,138 +1352,10 @@ int main(int argc, char** argv) {
         }
         if (sigs.changed("status", cardSig)) { ui->set_status(std::make_shared<slint::VectorModel<StatusCard>>(std::move(cards))); }
 
-        // the spectrum: only when the engine published a newer frame
-        FoxSpectrumInfo info{}; info.structSize = sizeof(info);
-        const int32_t rc = api->read_spectrum(session, sinceSeq, &info, bins.data(), static_cast<uint32_t>(bins.size()));
-        const ViewWindow v = currentView();
-        if (rc == FOXAPI_OK && info.copied > 0 && isNewFrame(info.seq, sinceSeq)) {
-            sinceSeq = info.seq;
-            lastInfo = info;
-            frame.assign(bins.begin(), bins.begin() + info.copied);
-            const std::int64_t t = nowMs();
-            lastFrameMs = t;
-            frameTimes.push_back(t);
-            while (frameTimes.size() > 2 && t - frameTimes.front() > 5000) { frameTimes.pop_front(); }
-            const double fps = frameTimes.size() >= 2 ? 1000.0 * static_cast<double>(frameTimes.size() - 1) / static_cast<double>(std::max<std::int64_t>(1, frameTimes.back() - frameTimes.front())) : 0.0;
-            // the zoomed window: the bins inside it
-            const ViewWindow cur = currentView();
-            const std::size_t b0 = static_cast<std::size_t>(std::clamp(fracOf(cur.centreHz - cur.spanHz / 2.0, info.centreHz, info.spanHz), 0.0, 1.0) * frame.size());
-            const std::size_t b1 = std::max(b0 + 1, static_cast<std::size_t>(std::clamp(fracOf(cur.centreHz + cur.spanHz / 2.0, info.centreHz, info.spanHz), 0.0, 1.0) * frame.size()));
-            const float* sub = frame.data() + b0;
-            const std::size_t subN = std::min(b1, frame.size()) - b0;
-            if (traceState.peak.size() == kSpecW && (b0 != 0 || subN != frame.size())) { /* a zoomed hold keeps its columns: columns are the view's */ }
-            const foxsdr::slinthost::TraceMode mode = traceMode == 1 ? foxsdr::slinthost::TraceMode::PeakHold : traceMode == 2 ? foxsdr::slinthost::TraceMode::Average : foxsdr::slinthost::TraceMode::Normal;
-            traceState.averageAlpha = static_cast<float>(fps > 0 ? 1.0 - std::exp(-1.0 / (averageLengthS * fps)) : 0.1);
-            paintTrace(wells.traceMemory(), kSpecW, kSpecH, sub, subN, state.dbMin, state.dbMax, traceState, mode,
-                       Rgba{0x7a, 0xd7, 0xff, 255}, Rgba{0xff, 0x9f, 0x43, 255}, Rgba{0xf1, 0xea, 0xd6, 255});
-            scrollWaterfallRow(wells.picture.data(), kWfW, kWfH, sub, subN, state.dbMin, state.dbMax);
-            {   // the 3D surface's history: one row of levels a frame, of THIS frequency window (a zoom, a pan or a retune starts it again)
-                const auto q = [](double v) { return static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(v))); };
-                const std::uint64_t windowKey = q(cur.centreHz) * 1000003ull ^ q(cur.spanHz) * 998244353ull ^ q(info.centreHz) * 31ull ^ q(info.spanHz) ^ (static_cast<std::uint64_t>(info.binCount) << 40);
-                view3dBank.pushWaterfallFrame(t, sub, subN, windowKey);
-            }
-            std::memcpy(wells.waterfallMemory(), wells.picture.data(), sizeof(Rgba) * kWfW * kWfH);
-            ui->set_trace_image(wells.traceImage());
-            ui->set_waterfall_image(wells.waterfallImage());
-            wells.flip();
-            // the figures around the wells
-            ui->set_spectrum_caption(ss("Spectrum \xC2\xB7 " + std::to_string(info.binCount) + " bin" + (cur.spanHz < info.spanHz * 0.999 ? " \xC2\xB7 zoom" : "")));
-            ui->set_span_text(ss(spanText(cur.spanHz)));
-            const double history = fps > 0 ? kWfH / fps : 0.0;
-            ui->set_waterfall_foot_left(ss(fps > 0 ? fmt("%.0f lines/s", fps) + " \xC2\xB7 " + fmt("%.0f s of history", history) : std::string()));
-            {
-                const auto at = ageTicks(history, kWfH);
-                if (sigs.changed("age", sigOf(at))) {
-                    std::vector<AgeTick> ticks;
-                    for (const auto& tk : at) { ticks.push_back({static_cast<float>(tk.frac == 0.0 ? 22.0 / kWfH : tk.frac), ss(tk.label)}); }   // "now" sits under the Age caption, as the sheet draws it
-                    ui->set_age_ticks(std::make_shared<slint::VectorModel<AgeTick>>(std::move(ticks)));
-                }
-            }
-            // the peak inside the passband
-            const double lo = fracOf(state.tunedHz - state.bandwidthHz / 2.0, info.centreHz, info.spanHz), hi = fracOf(state.tunedHz + state.bandwidthHz / 2.0, info.centreHz, info.spanHz);
-            const std::size_t p0 = static_cast<std::size_t>(std::clamp(lo, 0.0, 1.0) * frame.size()), p1 = std::max(p0 + 1, static_cast<std::size_t>(std::clamp(hi, 0.0, 1.0) * frame.size()));
-            float peak = -300.f;
-            for (std::size_t i = p0; i < p1 && i < frame.size(); ++i) { peak = std::max(peak, frame[i]); }
-            ui->set_show_peak(peak > -299.f);
-            ui->set_peak_text(ss(fmt("%.1f dBFS", peak)));
-            ui->set_peak_age(ss("now"));
-        } else if (lastFrameMs > 0) {
-            const double age = static_cast<double>(nowMs() - lastFrameMs) / 1000.0;
-            ui->set_peak_age(ss(age < 0.25 ? "now" : fmt("%.1f s ago", age)));
-        }
-        // the axes and overlays follow the view every tick (a zoom or pan changes them without a new frame)
-        {
-            {
-                const auto fts = frequencyTicks(v.centreHz, v.spanHz, 980);
-                if (sigs.changed("freq", sigOf(fts))) { std::vector<AxisTick> ft; for (const auto& tk : fts) { ft.push_back({static_cast<float>(tk.frac), ss(tk.label)}); } ui->set_freq_ticks(std::make_shared<slint::VectorModel<AxisTick>>(std::move(ft))); }
-                const auto dts = dbTicks(state.dbMin, state.dbMax, 330);
-                if (sigs.changed("db", sigOf(dts))) { std::vector<DbTick> dt; for (const auto& tk : dts) { dt.push_back({static_cast<float>(tk.frac), ss(tk.label)}); } ui->set_db_ticks(std::make_shared<slint::VectorModel<DbTick>>(std::move(dt))); }
-            }
-            ui->set_vfo_pos(frac(state.tunedHz));
-            ui->set_vfo_half(static_cast<float>(v.spanHz > 0 ? state.bandwidthHz / 2.0 / v.spanHz : 0.0));
-            ui->set_show_vfo(true);
-            std::vector<BandSegment> ribbon;
-            for (const auto& b : lists.bands) {
-                const double f0 = fracOf(b.startHz, v.centreHz, v.spanHz), f1 = fracOf(b.stopHz, v.centreHz, v.spanHz);
-                if (f1 < 0 || f0 > 1) { continue; }
-                ribbon.push_back({static_cast<float>(std::clamp(f0, 0.0, 1.0)), static_cast<float>(std::clamp(f1, 0.0, 1.0)), ss(b.name), slint::Color::from_argb_uint8(0, 0, 0, 0)});
-            }
-            {
-                std::string sig; for (const auto& b : ribbon) { sig += fmt("%.5f|", b.from) + fmt("%.5f|", b.to) + std::string(b.label) + ";"; }
-                if (sigs.changed("ribbon", sig)) { ui->set_ribbon(std::make_shared<slint::VectorModel<BandSegment>>(std::move(ribbon))); }
-            }
-            // THE BOOKMARK MARKS (docs 6.52): none while "On the spectrum" is off (bookmarkMarkers, as the classic drawBookmarkMarkers has it); the
-            // names stack onto up to three rows while "Stack close names" is on (bookmarkStackNames), one row otherwise - bookmarkNameRows is the rule.
-            std::vector<BookmarkMark> bms;
-            if (duties.interfaceHalf().bookmarkMarkers) {
-                std::vector<BookmarkName> names;
-                for (const auto& b : lists.bookmarks) { const double f = fracOf(b.hz, v.centreHz, v.spanHz); if (f >= 0 && f <= 1 && names.size() < 64) { names.push_back({f, b.name, b.favourite}); } }
-                const std::vector<int> rows = bookmarkNameRows(names, kSpectrumPlotWidthPx, kSpectrumCapCharPx, duties.interfaceHalf().bookmarkStackNames ? kBookmarkNameMaxRows : 1);
-                for (std::size_t i = 0; i < names.size(); ++i) { bms.push_back({static_cast<float>(names[i].pos), ss(names[i].label), names[i].favourite, rows[i]}); }
-            }
-            {
-                std::string sig; for (const auto& b : bms) { sig += fmt("%.5f|", b.pos) + std::string(b.label) + (b.favourite ? "*" : "") + fmt("%d;", b.row); }
-                if (sigs.changed("bookmarks", sig)) { ui->set_bookmarks(std::make_shared<slint::VectorModel<BookmarkMark>>(std::move(bms))); }
-            }
-            std::vector<PluginMark> marks;
-            std::vector<PluginMark> wfMarks;
-            for (const auto& m : lists.marks) {
-                const double f = fracOf(m.hz, v.centreHz, v.spanHz);
-                const double w = m.span && v.spanHz > 0 ? m.widthHz / v.spanHz : 0.0;
-                if (f + w < 0 || f > 1) { continue; }
-                const std::uint8_t a = static_cast<std::uint8_t>(std::max<std::uint32_t>(0x60, m.rgba & 0xffu));
-                const slint::Color colour = m.rgba == 0 ? slint::Color::from_argb_uint8(0, 0, 0, 0) : slint::Color::from_argb_uint8(a, static_cast<std::uint8_t>(m.rgba >> 24), static_cast<std::uint8_t>(m.rgba >> 16), static_cast<std::uint8_t>(m.rgba >> 8));
-                marks.push_back({static_cast<float>(f), static_cast<float>(w), ss(m.name), colour, m.dashed});
-                if (!m.spectrumOnly) { wfMarks.push_back({static_cast<float>(f), static_cast<float>(w), ss(m.name), colour, m.dashed}); }
-            }
-            {
-                std::string sig; for (const auto& m : marks) { sig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + std::string(m.label) + (m.dashed ? "d" : "") + ";"; }
-                std::string wsig; for (const auto& m : wfMarks) { wsig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + ";"; }
-                if (sigs.changed("marks", sig)) { ui->set_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::move(marks))); }
-                if (sigs.changed("wfmarks", wsig)) { ui->set_wf_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::move(wfMarks))); }
-            }
-            std::vector<UserMarker> ums;
-            for (const auto& m : lists.markers) {
-                const double f = fracOf(m.hz, v.centreHz, v.spanHz);
-                if (f < 0 || f > 1) { continue; }
-                const slint::SharedString label = ss("M" + std::to_string(m.id) + " " + fmt("%.3f MHz", m.hz / 1e6));
-                ums.push_back({static_cast<float>(f), label});
-            }
-            {
-                std::string sig; for (const auto& m : ums) { sig += fmt("%.5f|", m.pos) + std::string(m.label) + ";"; }
-                if (sigs.changed("markers", sig)) { ui->set_markers(std::make_shared<slint::VectorModel<UserMarker>>(std::move(ums))); }
-            }
-            ui->set_marker_count(static_cast<int>(lists.markers.size()));
-            ui->set_key_foot(ss("FLOOR " + fmt("%.0f dB", state.dbMin) + " \xC2\xB7 CEILING " + fmt("%.0f dB", state.dbMax) + (rangeManual ? " \xC2\xB7 manual" : " \xC2\xB7 auto")));
-            {
-                std::vector<slint::SharedString> keyLabels; std::string sig;
-                for (int i = 0; i < 5; ++i) { keyLabels.push_back(ss(fmt("%.0f", state.dbMin + (state.dbMax - state.dbMin) * i / 4.0))); sig += std::string(keyLabels.back()) + ";"; }
-                if (sigs.changed("keylabels", sig)) { ui->set_key_labels(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(keyLabels))); }
-            }
-            ui->set_waterfall_foot_tuned(ss(fmtMHz(state.tunedHz)));
-            ui->set_waterfall_foot_rest(ss(" \xC2\xB7 " + waterfallFootRight(state, lists.decodersFed.empty() ? std::string() : lists.decodersFed.front())));
-            if (hoverX >= 0) { ui->set_cursor_text(ss(cursorText(hzAtFrac(hoverX), dbAtFrac(hoverX)))); }
-        }
+        // THE PICTURES: the per-pane work for each pane on screen (layout One: the selected radio's, the only one), then its figures into the window
+        paneTick(selected(), layoutOnePlot, true);
+        publishPicture(selected());
+        const ViewWindow v = selected().fig.view;   // the window the figures were laid out for (before this tick's frame moved the baseband)
 
         // answers: log anything the engine refused (a refusal UI is the notices of phase 3)
         FoxCommandResult r[8]; for (auto& x2 : r) { x2.structSize = sizeof(x2); }
@@ -1679,7 +1679,7 @@ int main(int argc, char** argv) {
     }
 
     tick.stop();
-    std::fprintf(stderr, "foxsdr-slint: %d frames painted, %d buffer detaches (0 = every frame reused its buffer)\n", wells.frames, wells.detaches);
+    std::fprintf(stderr, "foxsdr-slint: %d frames painted, %d buffer detaches (0 = every frame reused its buffer)\n", selected().wells.frames, selected().wells.detaches);
 
     // THE END, in the order src/main.cpp and app_window.cpp hold: the window's part (the sentinel's first shutdown step, the sweep stopped and
     // its memory kept, the senders cancelled, the last half of the settings handed to the engine) while the engine is still running; then the

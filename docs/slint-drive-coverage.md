@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2130 | 517 | 83 | 1530 | 0 |
+| 2142 | 517 | 83 | 1542 | 0 |
 
-Of the 1243 rows that are controls (the 887 readout-like rows left out): 517 asserted, 83 driven without a read-back, 643 not drivable.
+Of the 1248 rows that are controls (the 894 readout-like rows left out): 517 asserted, 83 driven without a read-back, 648 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 213, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 894, other 213, needs a signal (no fixture) 120, relocated 86, deferred 77, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -200,7 +200,7 @@ NOT DRIVABLE by reason: readout 887, other 213, needs a signal (no fixture) 120,
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 56 | 30 | 1 | 25 | 19 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 68 | 30 | 1 | 37 | 26 | 0 |
 
 ## Every row
 
@@ -3233,4 +3233,16 @@ NOT DRIVABLE by reason: readout 887, other 213, needs a signal (no fixture) 120,
 | 4091 | Satellites: the satellites deck (position well, layers, targets register, next passes, Doppler, GRANT RECEIVER CONTROL) | page | NOT DRIVABLE | - | a readout, not a control |
 | 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | DRIVEN+ASSERTED | globe-solar-system.txt | state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script) |
 | 4101 | 3D globes: the honest empty states | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4200 | Radio pane: R-tag (Select Radio n) | key | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
+| 4201 | Radio pane: device name (elides first) | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4202 | Radio pane: frequency (never elided) | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4203 | Radio pane: mode chip | chip | NOT DRIVABLE | - | a readout, not a control |
+| 4204 | Radio pane: RUN, DEC, MUTE, FAIL lamps (captions drop in a short pane) | lamp | NOT DRIVABLE | - | a readout, not a control |
+| 4205 | Radio pane: STOP / START key (Stop Radio n) | key | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
+| 4206 | Radio pane: readout row (GAIN, SQL, VOL, RATE, BIAS, decoder chip, PEAK, SPAN) | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4207 | Radio pane: spectrum gestures (click to tune, double-click, wheel, band drag, edge drag, right-click menu) | gesture | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
+| 4208 | Radio pane: waterfall gestures (click to tune, pan, wheel, double-click, right-click menu) | gesture | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
+| 4209 | Radio pane: splitter between spectrum and waterfall | gesture | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
+| 4210 | Radio pane: selection outline in the radio's colour | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 4211 | Radio pane: the compact spectrum (no 76 px header) | well/plot | NOT DRIVABLE | - | a readout, not a control |
 

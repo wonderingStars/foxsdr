@@ -44,7 +44,7 @@ function(foxsdr_slint_ui_test name slint_file)
     set_property(TARGET ${name} PROPERTY SLINT_EMBED_RESOURCES embed-files)   # fonts and icons inside the test binary, as in the product
     # The TRANSMIT page's test finds its controls by their accessible labels through the element tree (as the window's scripted input does), which is empty unless the
     # compiler emitted the element debug info (src/slint/CMakeLists.txt says why the variable is handed over).
-    if(name STREQUAL "test_slint_transmit")
+    if(name STREQUAL "test_slint_transmit" OR name STREQUAL "test_slint_radio_pane")
         set(SLINT_COMPILER_ENV_VARS SLINT_EMIT_DEBUG_INFO=1)
     endif()
     slint_target_sources(${name} "${slint_file}")
@@ -268,6 +268,14 @@ foreach(src ${_foxsdr_slint_test_sources})
             add_test(NAME ${name}_${lang} COMMAND ${name} ${lang})
             set_tests_properties(${name}_${lang} PROPERTIES LABELS "slint")
         endforeach()
+    elseif(family STREQUAL "radio_view")
+        # The host's per-radio struct (docs/multi-radio-records/screen-s1-s2.md, S1, ../radio_view.hpp): header-only, but it owns Slint pixel buffers, so it links Slint (no .slint file).
+        add_executable(${name} ${name}.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp")
+        target_link_libraries(${name} PRIVATE slint_render_harness slint_i18n)
+        target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api")
+        foxsdr_slint_copy_dll(${name})
+        add_test(NAME ${name} COMMAND ${name})
+        set_tests_properties(${name} PROPERTIES LABELS "slint")
     elseif(EXISTS "${FOXSDR_SLINT_UI_DIR}/specimens/${family}_specimen.slint")
         foxsdr_slint_ui_test(${name} "${FOXSDR_SLINT_UI_DIR}/specimens/${family}_specimen.slint")
     else()
