@@ -1,0 +1,46 @@
+#! frames=700 bank=1 plugins=satellites open=module:satellites-1.1.2-abi3-win-x64.dll size=1600x1000
+# globe-satellites: THE SATELLITE TRACKING GLOBE (docs 6.65): the Satellites map page offers VIEW FLAT MAP / 3D GLOBE. The globe draws the satellites the plugin publishes (at their altitude,
+# true to scale up to 1 600 km, held there above it, coloured by orbit class), the ground tracks it predicts, the selected satellite's footprint, the receiver and the line to it, with the
+# night side shaded for the clock. The time scrubber and the pass timeline need predictions the plugin does not publish (docs 6.65 lists what they would need). The satellites deck
+# stays deferred. State: globe.satellites.
+120 state kit.plugins >= 1
++1 click "START"
++40 expect "STOP" enabled equals "true"
++1 click "< FITTED"
++10 state pages == "pages: Fitted modules"
++1 click "Satellites map"
++10 state pages contains "Satellites map"
++3 expect "FLAT MAP" checked equals "true"
++1 expect "3D GLOBE" checked equals "false"
++1 state globe.satellites contains "globe=0"
++1 click "3D GLOBE"
++10 state globe.satellites contains "globe=1"
++1 state globe.satellites contains "composed=1"
++1 expect "3D GLOBE" checked equals "true"
+# LAYERS
++1 expect "FOOTPRINT" checked equals "true"
++1 click "FOOTPRINT"
++5 expect "FOOTPRINT" checked equals "false"
++1 state globe.satellites contains "composed=1"
++1 click "FOOTPRINT"
++5 expect "FOOTPRINT" checked equals "true"
++1 expect "GROUND TRACKS" checked equals "true"
++1 click "GROUND TRACKS"
++5 expect "GROUND TRACKS" checked equals "false"
++1 click "GROUND TRACKS"
++5 expect "GROUND TRACKS" checked equals "true"
+# the camera
++1 press "3D GLOBE view"
++3 key left
++5 state globe.satellites contains "lon=5.0"
++1 key down
++5 state globe.satellites contains "lat=25.0"
++1 scroll "3D GLOBE view" -120
++5 state globe.satellites contains "zoom=1.12"
++1 key 0
++5 state globe.satellites contains "lon=0.0 lat=20.0 zoom=1.00"
+# back to the plugin's flat map
++1 click "FLAT MAP"
++5 state globe.satellites contains "globe=0"
+# what the view remembers is written to the settings file (the framework's one view3d text, 0.4 s after the last change)
++20 state fact.config.interface contains "satellites:"

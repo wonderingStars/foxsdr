@@ -24,4 +24,9 @@
 4067	ASSERTED	globe-solar-system.txt	press the well, key left / right / up / down, scroll, key 0: state globe.solar spin / tilt / zoom
 4068	DRIVEN	globe-solar-system.txt	the keys while the 3D view is off are pressed and the camera stays (state globe.solar spin=20); the interception while it is on is unit-tested (applySolarPlateKey): the module page is not reachable with the 3D view on in a scripted run
 4069	ASSERTED	globe-solar-system.txt	expect "The positions agree with the plugin's own panel." label
+4080	ASSERTED	globe-satellites.txt	click "3D GLOBE" / "FLAT MAP"; state globe.satellites globe=1 / globe=0
+4082	ASSERTED	globe-satellites.txt	click "FOOTPRINT"; expect checked false / true
+4083	ASSERTED	globe-satellites.txt	click "GROUND TRACKS"; expect checked false / true
+4084	NOT_DRIVABLE	-	needs a tracked satellite: the plugin publishes tracks only from fetched TLEs, none in a scripted run
+4086	ASSERTED	globe-satellites.txt	press the well, key left / down, scroll, key 0: state globe.satellites lon / lat / zoom
 4100	ASSERTED	globe-solar-system.txt	state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script)
