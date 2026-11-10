@@ -829,6 +829,16 @@ add_executable(foxsdr-reports tools/report-reader/main.cpp)
 # Engine only: the reader resolves reports against symbols/ and draws nothing.
 target_link_libraries(foxsdr-reports PRIVATE cascade_engine)
 
+# multi_radio_load - multi-radio engine stage 0 (docs/multi-radio-engine-design.md section 10): N bare Pipelines in one
+# process, each with its own paced source, DSP thread and real audio stream at volume zero; prints ring drops, underruns,
+# per-thread and whole-process CPU. A measuring tool, not a test: not registered with ctest and not part of the default
+# build (build it by name). Windows only (Toolhelp, WASAPI endpoint query). Its sibling foxsdr-engine.exe is the
+# enumeration child for --device-mix.
+if(WIN32)
+    add_executable(multi_radio_load EXCLUDE_FROM_ALL tools/multi_radio_load/main.cpp)
+    target_link_libraries(multi_radio_load PRIVATE cascade_engine psapi propsys ole32)
+endif()
+
 # ---------------------------------------------------------------------------
 # foxsdr-engine - the receiver with no window (engine extraction stage 7b)
 # ---------------------------------------------------------------------------
