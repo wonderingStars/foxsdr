@@ -287,6 +287,20 @@ void sectionFt8() {
     CHECK(!parseFt8Line("120015 xx  0.3 1243 ~  CQ K1ABC FN42", d));
     CHECK(!parseFt8Line("120015 -12  0.3 1243 CQ K1ABC FN42", d));          // the plugin's tilde is the mark of a decode
 
+    // the wall-clock time of a decode: the most recent such time of day, not more than a minute ahead
+    {
+        Ft8Decode t;
+        CHECK(parseFt8Line("235945 -12  0.3 1243 ~  CQ K1ABC FN42", t));
+        const std::int64_t day = 86400000LL, base = 20000LL * day;       // some midnight
+        CHECK(ft8LineTimeMs(t, base + 12 * 3600000LL) == base - 15000);   // 23:59:45 read at noon is yesterday's
+        CHECK(ft8LineTimeMs(t, base + 23 * 3600000LL + 59 * 60000LL + 50000) == base + 86400000LL - 15000);   // read five seconds later: today's
+        CHECK(ft8LineTimeMs(t, base + 5000) == base - 15000);             // read just after midnight
+        Ft8Decode u;
+        CHECK(parseFt8Line("120015 -12  0.3 1243 ~  CQ K1ABC FN42", u));
+        CHECK(ft8LineTimeMs(u, base + 12 * 3600000LL + 20000) == base + 12 * 3600000LL + 15000);
+        CHECK(ft8LineTimeMs(u, base + 12 * 3600000LL + 10000) == base + 12 * 3600000LL + 15000);   // the clock is a few seconds behind the decoder: slack of a minute
+        CHECK(ft8LineTimeMs(u, base + 12 * 3600000LL - 120000) == base - 86400000LL + 12 * 3600000LL + 15000);   // two minutes ahead: yesterday's
+    }
     Ft8Heard h;
     CHECK(ft8Heard("CQ DX K1ABC FN42", h) && h.call == "K1ABC" && h.locator == "FN42");
     CHECK(ft8Heard("CQ K1ABC FN42", h) && h.call == "K1ABC");

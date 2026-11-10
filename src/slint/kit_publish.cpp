@@ -127,6 +127,7 @@ std::vector<TableRow> tableRows(const std::vector<CascadePanelRow>& rows, std::s
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 KitPublisher::KitPublisher(MainWindow& ui, PluginKit& kit) : ui_(ui), kit_(kit), pagesModel_(std::make_shared<slint::VectorModel<PageTab>>()), storeModel_(blankStore()), patchPresetsModel_(blankPatchPresets()), transmitModel_(blankTransmit()) {
+    globe_ = std::make_unique<GlobePublisher>(kit_);
     ui_.set_pages(pagesModel_);
 }
 KitPublisher::~KitPublisher() = default;
@@ -223,6 +224,13 @@ std::size_t KitPublisher::openMapPages() const {
 }
 
 void KitPublisher::openFromEnv(const std::string& spec) { envSpec_ = spec; envApplied_ = spec.empty(); }
+
+std::string KitPublisher::globeState(const std::string& what) const {
+    if (what == "status") { return globe_->statusLine(); }
+    static const std::pair<const char*, const char*> names[] = {{"propagation", "Propagation Tools"}, {"ft8", "FT8"}, {"goes", "GOES HRIT / LRIT"}, {"solar", "Solar System View"}, {"satellites", "Satellites"}};
+    for (const auto& n : names) { if (what == n.first) { return globe_->stateText(n.second); } }
+    return "globe.propagation|ft8|goes|solar|satellites|status, not globe." + what;
+}
 
 std::string KitPublisher::pagesLine() const {
     std::string s = "pages:";
@@ -987,6 +995,7 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
     }
     t.chip_tone = p.kind == 11 ? transmitChipTone_ : p.kind == 9 ? storeChipTone_ : chipIdle || std::string(t.chip) == "IDLE" || std::string(t.chip) == "WAIT" || std::string(t.chip).empty() ? ChipTone::Neutral : ChipTone::Good;   // the engine's own chip words (teleprinter, beacon, meter, weather) stay English
     sig += std::string(t.chip);
+    globe_->fill(p.plugin, p.kind, state, t.globe, sig);   // the 3D view a plugin page offers beside its own (docs 6.65)
     return t;
 }
 
@@ -1235,12 +1244,14 @@ void KitPublisher::publish(const FoxReceiverState& state) {
         if (!last.empty()) { showPage(last); }
     }
     publishDecodeBank(state);
+    globe_->tick(state);
     publishPages(state);
     publishMuteQuestion();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 void KitPublisher::wire() {
+    globe_->wire(ui_, [this](int i) { return i >= 0 && i < static_cast<int>(pages_.size()) ? pages_[static_cast<std::size_t>(i)].plugin : std::string(); });
     // ---- the DECODE bank ----
     ui_.global<::KitEvents>().on_decode_row_clicked([this](int i) {
         auto rows = ui_.get_decode_rows();
@@ -1600,7 +1611,11 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_page_module_grant([this, page](int i, int kind, bool on) { Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr; if (r != nullptr) { kit_.setGrant(r->file, kind, on); } });
     ui_.global<::KitEvents>().on_page_module_command([this, page](int i, int c) {
         Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr;
-        if (r != nullptr && c >= 0 && c < static_cast<int>(r->commands.size())) { kit_.pressCommand(r->file, r->commands[static_cast<std::size_t>(c)].id); }
+        if (r != nullptr && c >= 0 && c < static_cast<int>(r->commands.size())) {
+            // the Solar System View's ROTATE / TILT / ZOOM keys drive the 3D camera while the 3D view is on (docs 6.65): the plugin is not sent them then
+            if (globe_->takeCommand(r->name, r->commands[static_cast<std::size_t>(c)].label)) { return; }
+            kit_.pressCommand(r->file, r->commands[static_cast<std::size_t>(c)].id);
+        }
     });
     ui_.global<::KitEvents>().on_page_module_reenable([this, page](int i) { Page* p = page(i); if (p != nullptr) { kit_.reenable(p->file); } });
     ui_.global<::KitEvents>().on_page_module_keep([this, page](int i, bool on) { Page* p = page(i); if (p != nullptr) { kit_.setRunMode(p->file, on ? 1 : 0); } });

@@ -28,6 +28,7 @@ import { MapTarget, LegendRow, MapPane } from "map.slint";
 import { StoreModel, StorePage } from "extend_bank.slint";
 import { PatchPresetsModel, PatchPresetsPage } from "patch_page.slint";
 import { TransmitPageModel, TransmitPage } from "transmit_page.slint";
+import { GlobeModel, GlobeViewBar, GlobeBody } from "globe_views.slint";
 
 export { PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow }
@@ -295,6 +296,8 @@ export struct PageTab {
     patch-presets: PatchPresetsModel,
     // 11 Transmit page
     transmit: TransmitPageModel,
+    // the 3D view a plugin page offers beside its own (globe_views.slint, docs 6.65): the VIEW bar over kinds 2, 3 and 5, and the 3D body in place of theirs
+    globe: GlobeModel,
 }
 
 // The bar every plugin page starts with: the presets and the settings fold (the order of the ImGui window's four loops).
@@ -478,6 +481,10 @@ export component PageBody inherits Rectangle {
             settings-toggled(p) => { root.settings-toggled(p); } setting-committed(p, id, t) => { root.setting-committed(p, id, t); }
             setting-toggled(p, id, v) => { root.setting-toggled(p, id, v); } browse-clicked(p, id) => { root.browse-clicked(p, id); } }
 
+        // THE 3D VIEW (docs 6.65): the VIEW bar when the page offers one, and its body instead of the picture, panel or map below while it is on
+        if root.page.globe.offered : GlobeViewBar { model: root.page.globe; index: root.index; }
+        if root.page.globe.active : GlobeBody { vertical-stretch: 1; model: root.page.globe; index: root.index; }
+
         // 1 Decoder output: the per-decoder preset bars, then the log
         if root.page.kind == 1 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
             for b[bi] in root.page.bars : HorizontalLayout { spacing: 6px; padding-left: 10px; padding-right: 10px; padding-top: 4px; padding-bottom: 4px;
@@ -488,11 +495,11 @@ export component PageBody inherits Rectangle {
                 clear-clicked => { root.log-clear(root.index); } follow-toggled(v) => { root.log-follow(root.index, v); } }
         }
         // 2 picture
-        if root.page.kind == 2 : PicturePane { vertical-stretch: 1; picture: root.page.picture; have: root.page.have; status: root.page.status; interactive: root.page.interactive;
+        if root.page.kind == 2 && !root.page.globe.active : PicturePane { vertical-stretch: 1; picture: root.page.picture; have: root.page.have; status: root.page.status; interactive: root.page.interactive;
             pic-w: root.page.pic-w; pic-h: root.page.pic-h; save-enabled: root.page.save-enabled; save-note: root.page.save-note;
             pressed(x, y) => { root.picture-pressed(root.index, x, y); } save-clicked => { root.picture-save(root.index); } }
         // 3 panel
-        if root.page.kind == 3 : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+        if root.page.kind == 3 && !root.page.globe.active : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
             row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } column-resized(c, w) => { root.column-resized(root.index, c, w); } }
         // 4 instrument: the face, then its memory beneath when the plugin feeds rows
         if root.page.kind == 4 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
@@ -502,7 +509,7 @@ export component PageBody inherits Rectangle {
                 row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } }
         }
         // 5 map: the toolbar, then the list at the left and the pane at the right
-        if root.page.kind == 5 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
+        if root.page.kind == 5 && !root.page.globe.active : VerticalLayout { spacing: 0px; vertical-stretch: 1;
             MapToolbar { map: root.page.map; index: root.index;
                 fit(p) => { root.map-fit(p); } set-rx(p) => { root.map-set-rx(p); } on-screen(p, v) => { root.map-on-screen(p, v); } coverage(p, v) => { root.map-coverage(p, v); }
                 trails(p, v) => { root.map-trails(p, v); } alt-colours(p, v) => { root.map-alt-colours(p, v); } reset-coverage(p) => { root.map-reset-coverage(p); }

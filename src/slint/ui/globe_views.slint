@@ -1,0 +1,263 @@
+// FoxSDR Slint front end - THE GLOBE VIEWS (docs/engine-stage4.md 6.65): the 3D views a plugin page offers beside its own - the HF propagation globe, the FT8 reception
+// globe, the GOES disk, the interactive solar system and the satellite tracking globe. A page that offers one shows a VIEW bar (the page's own view / the 3D one);
+// with the 3D view on, the page's body is a GlobeBody: the picture the host composed (src/slint/globe_compositor.*) in a well that turns under a drag and zooms under
+// the wheel, with a column beside it of the view's controls, readouts and chips. EVERYTHING in the column is the host's list (the controls are a model, not a
+// component per view), so a view's controls are added in globe_publish.cpp and a drive script finds each one by its label.
+//
+// WHAT THE HOST GIVES (GlobeModel): `offered` - the page shows the VIEW bar; `active` - the 3D view is the body; the picture and `have`; `empty-note` - the honest
+// empty state drawn over the well in the page's own wording; the screen labels over the picture (`labels`, in well fractions); `controls`, `readouts` and `chips`;
+// the hint. WHAT IT TAKES BACK is GlobeEvents: every gesture of every globe page is one callback carrying the page's index first.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import { Theme } from "theme.slint";
+import { Caption, Key, SegGroup, SegKey } from "keys.slint";
+import { Checkbox } from "fields.slint";
+import { Slider } from "sliders.slint";
+import { Chip, ChipTone } from "chips.slint";
+
+export global GlobeEvents {
+    callback view-chosen(int, bool);              // page, the 3D view on
+    callback segment-chosen(int, int, int);       // page, control id, option index
+    callback toggled(int, int, bool);             // page, control id, on
+    callback slid(int, int, float);               // page, control id, position 0..1
+    callback key-pressed(int, int);               // page, control id
+    callback chip-pressed(int, int);              // page, chip index
+    callback dragged(int, length, length);        // page, the pointer's travel since the press
+    callback drag-ended(int);
+    callback wheeled(int, float);                 // page, notches (positive in)
+    callback reset(int);                          // RESET VIEW
+    callback resized(int, length, length);        // the well's size
+}
+
+export struct GlobeLabelModel {
+    x: float,         // 0..1 of the well across
+    y: float,         // 0..1 of the well down
+    text: string,
+    color: color,
+}
+
+// A control of the column: kind 0 segments (options, value = the lit one), 1 checkbox (value 0 / 1), 2 slider (value 0..1000, value-text beside it), 3 key, 4 readout (label + value-text).
+export struct GlobeControl {
+    id: int,
+    kind: int,
+    label: string,
+    options: [string],
+    value: int,
+    value-text: string,
+    enabled: bool,
+    tooltip: string,
+}
+
+export struct GlobeChipModel {
+    text: string,
+    color: color,      // the swatch before the words
+    on: bool,
+    pressable: bool,
+}
+
+export struct GlobeModel {
+    offered: bool,
+    active: bool,
+    kind: int,
+    flat-label: string,
+    globe-label: string,
+    view-caption: string,
+    picture: image,
+    have: bool,
+    empty-note: string,
+    labels: [GlobeLabelModel],
+    controls: [GlobeControl],
+    readouts: [string],
+    chips: [GlobeChipModel],
+    hint: string,
+    reset-label: string,
+}
+
+// The VIEW bar: the page's own view and the 3D one, as two keys of one group.
+export component GlobeViewBar inherits Rectangle {
+    in property <GlobeModel> model;
+    in property <int> index;
+    height: Theme.seg-h + 12px;
+    background: Theme.panel;
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 4px;
+        spacing: 8px;
+        alignment: start;
+        Caption { label: root.model.view-caption; vertical-alignment: center; }
+        SegGroup {
+            SegKey { label: root.model.flat-label; on: !root.model.active; tooltip: @tr("The page as the plugin draws it"); clicked => { GlobeEvents.view-chosen(root.index, false); } }
+            SegKey { label: root.model.globe-label; on: root.model.active; tooltip: @tr("The same data on a 3D view you can turn"); clicked => { GlobeEvents.view-chosen(root.index, true); } }
+        }
+    }
+}
+
+// The well: the composed picture, over it the screen labels and the honest empty state; a drag turns, the wheel zooms.
+component GlobeWell inherits Rectangle {
+    in property <GlobeModel> model;
+    in property <int> index;
+    background: Theme.well-deep;
+    clip: true;
+    accessible-role: groupbox;
+    accessible-label: root.model.empty-note != "" ? root.model.empty-note : root.model.globe-label;
+
+    init => { GlobeEvents.resized(root.index, root.width, root.height); }
+    changed width => { GlobeEvents.resized(root.index, root.width, root.height); }
+    changed height => { GlobeEvents.resized(root.index, root.width, root.height); }
+
+    Image { x: 0px; y: 0px; width: parent.width; height: parent.height; source: root.model.picture; image-fit: fill; }
+    for l in root.model.labels : Text {
+        x: l.x * root.width + 6px;
+        y: l.y * root.height - 7px;
+        text: l.text;
+        color: l.color;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        accessible-role: none;
+    }
+    area := TouchArea {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.move) {
+                if (self.pressed) { GlobeEvents.dragged(root.index, self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
+            } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) {
+                GlobeEvents.drag-ended(root.index);
+            }
+        }
+        scroll-event(e) => {
+            if (e.delta-y == 0px) { return EventResult.reject; }
+            GlobeEvents.wheeled(root.index, e.delta-y > 0px ? 1.0 : -1.0);
+            return EventResult.accept;
+        }
+    }
+    if root.model.empty-note != "" : Rectangle {
+        x: 12px; y: 12px;
+        width: parent.width - 24px;
+        height: note.preferred-height + 16px;
+        background: Theme.panel.with-alpha(0.82);
+        border-radius: Theme.radius;
+        note := Text {
+            x: 8px; y: 8px;
+            width: parent.width - 16px;
+            text: root.model.empty-note;
+            color: Theme.fg-soft;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+    }
+    Text {
+        x: 10px; y: parent.height - 18px;
+        width: parent.width - 20px;
+        text: root.model.hint;
+        color: Theme.dim;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-hint;
+        overflow: elide;
+        accessible-role: none;
+    }
+}
+
+// The body of a page with the 3D view on: the well, and at its right the column of controls, readouts and chips.
+export component GlobeBody inherits Rectangle {
+    in property <GlobeModel> model;
+    in property <int> index;
+    background: Theme.panel;
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 8px;
+        GlobeWell { horizontal-stretch: 1; model: root.model; index: root.index; }
+        Flickable {
+            width: 264px;
+            viewport-height: column.preferred-height;
+            column := VerticalLayout {
+                width: parent.width;
+                spacing: 8px;
+                alignment: start;
+                for c in root.model.controls : VerticalLayout {
+                    spacing: 3px;
+                    // segments
+                    if c.kind == 0 : VerticalLayout {
+                        spacing: 3px;
+                        Caption { label: c.label; }
+                        HorizontalLayout {
+                            alignment: start;
+                            SegGroup {
+                                small: true;
+                                for o[oi] in c.options : SegKey {
+                                    small: true;
+                                    label: o;
+                                    on: oi == c.value;
+                                    enabled: c.enabled;
+                                    tooltip: c.tooltip;
+                                    clicked => { GlobeEvents.segment-chosen(root.index, c.id, oi); }
+                                }
+                            }
+                        }
+                    }
+                    // checkbox
+                    if c.kind == 1 : Checkbox {
+                        label: c.label;
+                        checked: c.value != 0;
+                        enabled: c.enabled;
+                        tooltip: c.tooltip;
+                        toggled(v) => { GlobeEvents.toggled(root.index, c.id, v); }
+                    }
+                    // slider
+                    if c.kind == 2 : VerticalLayout {
+                        spacing: 3px;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Caption { label: c.label; horizontal-stretch: 1; }
+                            Text { text: c.value-text; color: Theme.fg-soft; font-family: Theme.font-mono; font-size: Theme.font-small; vertical-alignment: center; }
+                        }
+                        Slider {
+                            value: c.value / 1000.0;
+                            enabled: c.enabled;
+                            tooltip: c.tooltip;
+                            accessible-label: c.label;
+                            changed(v) => { GlobeEvents.slid(root.index, c.id, v); }
+                        }
+                    }
+                    // key
+                    if c.kind == 3 : HorizontalLayout {
+                        alignment: start;
+                        Key { label: c.label; small: true; min-w: 0px; enabled: c.enabled; tooltip: c.tooltip; clicked => { GlobeEvents.key-pressed(root.index, c.id); } }
+                    }
+                    // readout
+                    if c.kind == 4 : VerticalLayout {
+                        spacing: 2px;
+                        Caption { label: c.label; }
+                        Text { text: c.value-text; color: Theme.fg; font-family: Theme.font-ui; font-size: Theme.font-small; wrap: word-wrap; }
+                    }
+                }
+                for r in root.model.readouts : Text {
+                    text: r;
+                    color: Theme.fg-soft;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
+                }
+                for ch[ci] in root.model.chips : Rectangle {
+                    height: 22px;
+                    border-radius: Theme.radius-chip;
+                    background: ch.on ? Theme.accent.with-alpha(0.22) : Theme.chip-bg;
+                    border-width: Theme.hairline;
+                    border-color: ch.on ? Theme.accent : Theme.chip-line;
+                    accessible-role: button;
+                    accessible-label: ch.text;
+                    accessible-enabled: ch.pressable;
+                    accessible-action-default => { if (ch.pressable) { GlobeEvents.chip-pressed(root.index, ci); } }
+                    HorizontalLayout {
+                        padding-left: 6px; padding-right: 6px;
+                        spacing: 6px;
+                        Rectangle { width: 8px; height: 8px; y: (parent.height - 8px) / 2; border-radius: 4px; background: ch.color; }
+                        Text { text: ch.text; color: Theme.fg; font-family: Theme.font-ui; font-size: Theme.font-small; vertical-alignment: center; overflow: elide; accessible-role: none; }
+                    }
+                    TouchArea { enabled: ch.pressable; clicked => { GlobeEvents.chip-pressed(root.index, ci); } }
+                }
+                Key { label: root.model.reset-label; small: true; min-w: 0px; tooltip: @tr("Back to the starting view"); clicked => { GlobeEvents.reset(root.index); } }
+            }
+        }
+    }
+}

@@ -1551,6 +1551,8 @@ int main(int argc, char** argv) {
             out = std::to_string(n);
             return std::string();
         }
+        // globe.<propagation|ft8|goes|solar|satellites|status>: the 3D views' state (globe_publish.hpp stateText, docs 6.65)
+        if (name.rfind("globe.", 0) == 0) { out = publisher.globeState(name.substr(6)); return std::string(); }
         // scope.<what>: the scope modes' own state (scope_publish.hpp readState: demodOpen, signal, live, audioCount, bins, segments, ..., radarOn, range ...)
         if (name.rfind("scope.", 0) == 0) { return scopeBank.readState(name.substr(6), out); }
         if (name == "bank") { out = std::to_string(ui->get_bank_index()); return std::string(); }

@@ -56,6 +56,9 @@ struct ViewState {
     int dayOffset = 0;                    // whole days from today, -366..+366
     double tiltDeg = 55.0;                // degrees above the ecliptic plane the camera looks down from
     double spinDeg = 20.0;                // turn of the system about the ecliptic pole
+    // satellites
+    bool footprints = true;
+    bool groundTracks = true;
     // GOES: the spacecraft the picture came from
     int goesSatellite = 0;                // 0 East, 1 West
 };
@@ -170,6 +173,9 @@ struct Ft8Decode {
 // One decoder line as the plugin prints it, after the host's plugin tag is stripped: "%02d%02d%02d %3d %4.1f %4d ~  %s" (the plugin's format string), e.g.
 // "120015 -12  0.3 1243 ~  CQ DX K1ABC FN42". False for any other line (the start line, the diagnostics).
 bool parseFt8Line(const std::string& text, Ft8Decode& out);
+// The wall-clock time (UTC milliseconds since 1970) of a decode: its HHMMSS is the most recent such time of day that is not more than a minute after `nowUnixMs`
+// (the clock's slack), so a line read after midnight but stamped 23:59:45 is yesterday's.
+std::int64_t ft8LineTimeMs(const Ft8Decode& d, std::int64_t nowUnixMs);
 struct Ft8Heard {
     std::string call, locator;    // the station that SENT the message and the locator it carried (4 or 6 characters)
 };

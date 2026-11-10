@@ -19,6 +19,7 @@
 #include <slint.h>
 
 #include "main.h"
+#include "globe_publish.hpp"
 #include "map_compositor.hpp"
 #include "plugin_kit.hpp"
 #include "signatures.hpp"
@@ -40,6 +41,8 @@ public:
     // half's aircraftIconPx, mapTrailWidthPx and mapTrailStyle: handed in every tick, applied to every map page's compositor and targets at the next publish.
     void setMapLook(const slintmap::MapLook& look) { look_ = look; }
     const slintmap::MapLook& mapLook() const { return look_; }
+    // THE 3D VIEWS (globe_publish.hpp, docs 6.65): the state the drive scripts read ("globe.<propagation|ft8|goes|solar|satellites>", "globe.status").
+    std::string globeState(const std::string& what) const;
     // The count of open pages (for the bounded run's evidence).
     std::size_t pageCount() const { return pages_.size(); }
     std::size_t openMapPages() const;
@@ -153,6 +156,7 @@ private:
     PluginKit& kit_;
     slintmap::MapLook look_;                          // what the maps are drawn with: the classic window's standard until the first setMapLook
     foxsdr::slinthost::Signatures sigs_;
+    std::unique_ptr<GlobePublisher> globe_;               // the 3D views of the plugin pages that offer one (docs 6.65)
     std::vector<Page> pages_;
     std::shared_ptr<slint::VectorModel<PageTab>> pagesModel_;
     std::string pagesSig_;

@@ -353,6 +353,14 @@ bool parseFt8Line(const std::string& text, Ft8Decode& out) {
     return true;
 }
 
+std::int64_t ft8LineTimeMs(const Ft8Decode& d, std::int64_t nowUnixMs) {
+    constexpr std::int64_t kDay = 86400000;
+    const std::int64_t dayStart = (nowUnixMs / kDay) * kDay;
+    std::int64_t t = dayStart + (static_cast<std::int64_t>(d.hour) * 3600 + d.minute * 60 + d.second) * 1000;
+    if (t > nowUnixMs + 60000) { t -= kDay; }
+    return t;
+}
+
 bool looksLikeCallsign(const std::string& token) {
     if (token.size() < 3 || token.size() > 12) { return false; }
     bool digit = false, letter = false;
