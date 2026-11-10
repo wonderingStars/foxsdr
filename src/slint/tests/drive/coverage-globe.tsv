@@ -5,4 +5,10 @@
 4006	ASSERTED	globe-propagation.txt	expect "about 2 hops" enabled equals "false" (a legend chip, not a key)
 4008	ASSERTED	globe-propagation.txt	expect "HOME POSITION" label; type "Your locator" "IO91wm": state globe.propagation lon=-0.1 lat=51.5
 4009	ASSERTED	globe-propagation.txt	key 0 (the well's own reset): state globe.propagation lon=0.0 lat=20.0 zoom=1.00
+4020	ASSERTED	globe-ft8.txt	click "3D GLOBE" / "LIST"; state globe.ft8 globe=1 / globe=0
+4022	ASSERTED	globe-ft8.txt	click "20 m" / "2 m" / "160 m" / "ALL"; state globe.ft8 band=5 / 12 / 1 / 0
+4023	ASSERTED	globe-ft8.txt	click "15 min" / "24 h" / "1 h"; state globe.ft8 window=15 / 1440 / 60
+4024	ASSERTED	globe-ft8.txt	expect "0 stations on 0 bands" label (nothing is fed here)
+4025	ASSERTED	globe-ft8.txt	expect "FURTHEST HEARD" label
+4028	ASSERTED	globe-ft8.txt	press the well, key left / up, scroll, RESET VIEW; type "Locator" "IO91wm": state globe.ft8 lon=-0.1 lat=51.5
 4100	ASSERTED	globe-solar-system.txt	state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script)

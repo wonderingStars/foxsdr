@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1992 | 447 | 82 | 1463 | 0 |
+| 2001 | 453 | 82 | 1466 | 0 |
 
-Of the 1154 rows that are controls (the 838 readout-like rows left out): 447 asserted, 82 driven without a read-back, 625 not drivable.
+Of the 1160 rows that are controls (the 841 readout-like rows left out): 453 asserted, 82 driven without a read-back, 625 not drivable.
 
-NOT DRIVABLE by reason: readout 838, other 207, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 70, deferred 61, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 841, other 207, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 70, deferred 61, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,7 +199,7 @@ NOT DRIVABLE by reason: readout 838, other 207, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 14 | 8 | 0 | 6 | 5 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 23 | 14 | 0 | 9 | 8 | 0 |
 
 ## Every row
 
@@ -3087,6 +3087,15 @@ NOT DRIVABLE by reason: readout 838, other 207, needs a signal (no fixture) 120,
 | 4010 | Propagation: sample city chips (NYC, SF, Sao Paulo, Sydney, Tokyo, Delhi, Johannesburg) | chip | NOT DRIVABLE | - | a readout, not a control |
 | 4011 | Propagation: per-path reliability colour | picture | NOT DRIVABLE | - | a readout, not a control |
 | 4012 | Propagation: the plugin's plate keys, settings and panel | key | NOT DRIVABLE | - | relocated: unchanged: NEXT PAGE / PREV PAGE / REFRESH / NEXT HOUR / PREV HOUR stay on the module page, the 13 settings fields in the fold above the VIEW bar and the "Propagation Tools" panel as its own page |
+| 4020 | FT8: VIEW LIST / 3D GLOBE | segment key | DRIVEN+ASSERTED | globe-ft8.txt | click "3D GLOBE" / "LIST"; state globe.ft8 globe=1 / globe=0 |
+| 4021 | FT8: the globe | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4022 | FT8: BAND | segment key | DRIVEN+ASSERTED | globe-ft8.txt | click "20 m" / "2 m" / "160 m" / "ALL"; state globe.ft8 band=5 / 12 / 1 / 0 |
+| 4023 | FT8: TIME WINDOW | segment key | DRIVEN+ASSERTED | globe-ft8.txt | click "15 min" / "24 h" / "1 h"; state globe.ft8 window=15 / 1440 / 60 |
+| 4024 | FT8: stations heard readout | readout | DRIVEN+ASSERTED | globe-ft8.txt | expect "0 stations on 0 bands" label (nothing is fed here) |
+| 4025 | FT8: FURTHEST HEARD | readout | DRIVEN+ASSERTED | globe-ft8.txt | expect "FURTHEST HEARD" label |
+| 4026 | FT8: band legend | chip | NOT DRIVABLE | - | a readout, not a control |
+| 4027 | FT8: reporter count and countries ("47 reporters - 12 countries") | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4028 | FT8: camera, DRAG TO ROTATE, RESET VIEW | gesture | DRIVEN+ASSERTED | globe-ft8.txt | press the well, key left / up, scroll, RESET VIEW; type "Locator" "IO91wm": state globe.ft8 lon=-0.1 lat=51.5 |
 | 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | DRIVEN+ASSERTED | globe-solar-system.txt | state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script) |
 | 4101 | 3D globes: the honest empty states | readout | NOT DRIVABLE | - | a readout, not a control |
 
