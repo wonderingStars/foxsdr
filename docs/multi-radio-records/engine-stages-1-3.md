@@ -15,7 +15,7 @@ Commits (oldest first):
 | c97403f1 | Engine: the receiver's health counters move into Receiver (group 4) |
 | a52e1ab9 | Engine: the receiver's published snapshot moves into Receiver (group 5) |
 | fb5c59bb | Engine: DeviceLedger, and the patch radios' use of the one device through it (stage 2) |
-| (stage 3) | see `git log` - Engine: addressing (session focus, target, RADIO_FOCUS, per-radio reads, fact.radio.*) |
+| 08382b36 | Engine: addressing - session focus, FoxCommand.target, RADIO_FOCUS, per-radio reads, fact.radio.* (stage 3) |
 
 ## Stage 1: Receiver extracted from Engine (a pure move, slot 0 only)
 
@@ -143,7 +143,10 @@ tests/test_mock_engine.cpp}`, `tests/test_radio_scope.cpp`, `tests/test_engine_a
 * The mock engine: edited and compiled against three small stand-ins for the `common/*` headers it includes (not vendored here, so nothing under `reference/` builds in this tree;
   the stand-ins are in the build folder, not committed): `test_mock_engine` 393 checks passed, 2 failed - the two version-gate checks (`engineApi(0, 2)` expected non-null, `engineApi(0, 3)`
   expected null), which expect API 0.2 and fail against the 0.3 header vendored before this change. The new `testRadios` passes.
-* Headless and window gates: see the report of the lane (the numbers are in its final message and in the commit message of the stage 3 commit).
+* `ctest -L "headless|slint"`: `99% tests passed, 6 tests failed out of 740`: the 5 source-locating tests (pass from the worktree root) and test_record_finish_async_stepped (failed under
+  load, passes alone at 28.9 s). `ctest -L gui` on the hidden desktop: `99% tests passed, 1 tests failed out of 225`: test_deck_knobs_app, which failed in this gate and in stage 2's (it
+  started early, beside other window tests) and passes alone (116 s), and beside the same sixteen co-running tests (`-j4`, 116 s); the cause is unproven and it is treated as a load flake. It
+  passed in the stage 1 gate, where it started late.
 
 ## What is not covered, in one list
 
