@@ -12,3 +12,14 @@
 3012	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
 3013	ASSERTED	waterfall-3d.txt	press "Waterfall"; key left / up / + / - / 0; state view3d.wf.azimuth, elevation, zoom
 3020	ASSERTED	waterfall-3d.txt	state cfg.view3d contains waterfall:on=1 after the toggle and waterfall:on=0 after the way back (the host-held interface half; a real run writes it, test_config and test_slint_host_view3d hold the field and the text)
+3022	ASSERTED	radar-3d.txt	click "PPI"; state view3d.radar.on 1 -> 0, scope.tubeW > 300 again
+3023	ASSERTED	radar-3d.txt	click "3D AIRSPACE"; state view3d.radar.on 0 -> 1, cfg.view3d contains radar:on=1
+3024	ASSERTED	radar-3d.txt	state view3d.radar.renders, aircraft, onground, pixels, labels (what the renderer drew from the plotted aircraft)
+3025	ASSERTED	radar-3d.txt	slider "TILT" 0.5; state view3d.radar.tilt 43..47
+3026	ASSERTED	radar-3d.txt	click "x1"; state view3d.radar.scale == 0
+3027	ASSERTED	radar-3d.txt	click "x2"; state view3d.radar.scale == 1
+3028	ASSERTED	radar-3d.txt	click "x4"; state view3d.radar.scale == 2
+3029	ASSERTED	radar-3d.txt	click "RESET VIEW"; state view3d.radar.tilt 26, azimuth -40
+3030	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3031	ASSERTED	radar-3d.txt	press "Airspace"; key left, +, -; state view3d.radar.azimuth, zoom
+3041	ASSERTED	radar-3d.txt	state cfg.view3d contains radar:on=1 and radar:on=0 after the way back

@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1999 | 452 | 82 | 1465 | 0 |
+| 2020 | 462 | 82 | 1476 | 0 |
 
-Of the 1160 rows that are controls (the 839 readout-like rows left out): 452 asserted, 82 driven without a read-back, 626 not drivable.
+Of the 1172 rows that are controls (the 848 readout-like rows left out): 462 asserted, 82 driven without a read-back, 628 not drivable.
 
-NOT DRIVABLE by reason: readout 839, other 208, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 62, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 848, other 209, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 63, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,7 +199,7 @@ NOT DRIVABLE by reason: readout 839, other 208, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
-| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 21 | 13 | 0 | 8 | 6 | 0 |
+| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 42 | 23 | 0 | 19 | 15 | 0 |
 
 ## Every row
 
@@ -3096,4 +3096,25 @@ NOT DRIVABLE by reason: readout 839, other 208, needs a signal (no fixture) 120,
 | 3019 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
 | 3020 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | waterfall-3d.txt | state cfg.view3d contains waterfall:on=1 after the toggle and waterfall:on=0 after the way back (the host-held interface half; a real run writes it, test_config and test_slint_host_view3d hold the field and the text) |
 | 3021 | Right-click marker menu on the surface | gesture | NOT DRIVABLE | - | deferred: the 2D waterfall's right-click menu (Drop marker here at the frequency under the pointer) needs the pixel unprojected onto the surface; the 2D view and the toolbar's Markers key still drop and list markers |
+| 3022 | VIEW PPI | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "PPI"; state view3d.radar.on 1 -> 0, scope.tubeW > 300 again |
+| 3023 | VIEW 3D AIRSPACE | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "3D AIRSPACE"; state view3d.radar.on 0 -> 1, cfg.view3d contains radar:on=1 |
+| 3024 | The airspace | picture | DRIVEN+ASSERTED | radar-3d.txt | state view3d.radar.renders, aircraft, onground, pixels, labels (what the renderer drew from the plotted aircraft) |
+| 3025 | TILT | slider | DRIVEN+ASSERTED | radar-3d.txt | slider "TILT" 0.5; state view3d.radar.tilt 43..47 |
+| 3026 | ALTITUDE SCALE x1 | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "x1"; state view3d.radar.scale == 0 |
+| 3027 | ALTITUDE SCALE x2 | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "x2"; state view3d.radar.scale == 1 |
+| 3028 | ALTITUDE SCALE x4 | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "x4"; state view3d.radar.scale == 2 |
+| 3029 | RESET VIEW (airspace) | key | DRIVEN+ASSERTED | radar-3d.txt | click "RESET VIEW"; state view3d.radar.tilt 26, azimuth -40 |
+| 3030 | Drag to rotate, wheel to zoom, double-click to reset (airspace) | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3031 | The well's keys (airspace) | keys | DRIVEN+ASSERTED | radar-3d.txt | press "Airspace"; key left, +, -; state view3d.radar.azimuth, zoom |
+| 3032 | Altitude key | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3033 | Aircraft labels | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3034 | Range rings, spokes, antenna | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3035 | Axis ticks and captions | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3036 | Corner readouts | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3037 | Trails in the air | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3038 | Selection and emergency marks | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3039 | Unknown altitude | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3040 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3041 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | radar-3d.txt | state cfg.view3d contains radar:on=1 and radar:on=0 after the way back |
+| 3042 | Click an aircraft on the airspace to select it | gesture | NOT DRIVABLE | - | deferred: needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
 

@@ -2931,6 +2931,32 @@ The 3D view is an ADDED view toggle everywhere; the 2D screen keeps everything i
 | 3020 | The view and the camera are remembered | setting | PRESENT | AppConfig::view3d, one text for every 3D view (view3d_prefs); the ImGui window carries it through |
 | 3021 | Right-click marker menu on the surface | gesture | DEFERRED | the 2D waterfall's right-click menu (Drop marker here at the frequency under the pointer) needs the pixel unprojected onto the surface; the 2D view and the toolbar's Markers key still drop and list markers |
 
+### The radar scope's 3D AIRSPACE (THREED.md section 2, tab SCOPE, VIEW PPI / 3D AIRSPACE)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3022 | VIEW PPI | key (segment) | PRESENT | Scene3DViewToggleInline "PPI" in the scope's bar (beside the RANGE stepper, only with a receiver position) -> View3D.radar-view-selected(false): the plan-position tube comes back |
+| 3023 | VIEW 3D AIRSPACE | key (segment) | PRESENT | -> radar-view-selected(true); the tube is replaced by the airspace, the gauges, the LCD panel and the deck stay; saved in the interface half (view3d) |
+| 3024 | The airspace | picture | PRESENT | the aircraft the scope plots (radar_logic's frame decides which), from the antenna: positions by the classic's own range and bearing, altitude in feet, course, trail; painted by the CPU renderer (radar3d_compositor) only while the SCOPE tab is up in 3D |
+| 3025 | TILT | slider | PRESENT | Scene3DCameraBar SliderGroup 5 to 85 degrees over View3D.radar-elevation (26 by default); no AZIMUTH slider (the drag and the arrow keys turn it) |
+| 3026 | ALTITUDE SCALE x1 | key (segment) | PRESENT | the height's exaggeration, 0.55 of the range at FL400 (the default) |
+| 3027 | ALTITUDE SCALE x2 | key (segment) | PRESENT | twice as high |
+| 3028 | ALTITUDE SCALE x4 | key (segment) | PRESENT | four times |
+| 3029 | RESET VIEW (airspace) | key | PRESENT | TILT 26, azimuth -40, zoom 1 |
+| 3030 | Drag to rotate, wheel to zoom, double-click to reset (airspace) | gesture | PRESENT | Scene3DWell: the 2D tube's drag pans, its wheel steps the range, its click selects; in 3D the drag turns the camera and the wheel zooms (the RANGE stepper in the bar still steps the range) |
+| 3031 | The well's keys (airspace) | keys | PRESENT | after a press: the arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3032 | Altitude key | readout | PRESENT | Scene3DRampKey down the well's right edge: FL400 to FL0 on the ramp the aircraft are coloured by (the picture is the renderer's own Ramp) |
+| 3033 | Aircraft labels | overlay/marker | PRESENT | "BAW123 FL310": the callsign (else the id) and the flight level, in the aircraft's colour, for the selected one and the nearest up to eight |
+| 3034 | Range rings, spokes, antenna | overlay/marker | PRESENT | four rings and twelve bearing spokes on the ground, the antenna's pink cross at the middle, a vertical drop line and shadow under each aircraft, a short vector along its course |
+| 3035 | Axis ticks and captions | overlay/marker | PRESENT | five ticks per axis (NM east and north from minus the range to plus it, flight levels 0 to 400) and the captions "NM E", "NM N", "FL" |
+| 3036 | Corner readouts | readout | PRESENT | the tube's own corner words over the airspace: "n PLOTTED", the range, "MODE ADS-B", the receiver position |
+| 3037 | Trails in the air | overlay/marker | PRESENT | the scope's TRAILS option (off / line / ribbon) draws each plotted aircraft's trail through the air at the altitudes it was heard at, coloured by level |
+| 3038 | Selection and emergency marks | overlay/marker | PRESENT | a white ring round the aircraft selected on the HOME list, a red one round an emergency |
+| 3039 | Unknown altitude | overlay/marker | PRESENT | an aircraft with no altitude stands ON THE GROUND as a grey diamond labelled "NO ALT" - never at an invented height |
+| 3040 | Empty state | readout | PRESENT | with nothing plotted the HOME list's own empty title ("NOTHING BEING HEARD" / "NOTHING CURRENT") over the empty box |
+| 3041 | The view and the camera are remembered | setting | PRESENT | view3d, name radar: on, azimuth, elevation, zoom, ALTITUDE SCALE |
+| 3042 | Click an aircraft on the airspace to select it | gesture | DEFERRED | needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
+
 # Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM, TOOLS and EXTEND banks of phase 3)
 
 | Status | Rows |

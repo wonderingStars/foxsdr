@@ -31,6 +31,22 @@ export global View3D {
     callback wf-depth-selected(int);
     callback wf-shading-selected(int);
     callback wf-reset-view();                             // RESET VIEW went back to the defaults (the camera properties already did)
+
+    // ---- the radar scope's 3D AIRSPACE (the SCOPE tab, VIEW PPI / 3D AIRSPACE) ----
+    in-out property <bool> radar-on: false;               // the 3D AIRSPACE screen is up (the plan-position tube is the default)
+    in property <image> radar-picture;
+    in property <[Scene3DLabel]> radar-labels;
+    in property <string> radar-empty;
+    in-out property <float> radar-azimuth: -40;
+    in-out property <float> radar-elevation: 26;          // TILT
+    in-out property <float> radar-zoom: 1;
+    in property <int> radar-scale: 0;                     // ALTITUDE SCALE: 0 x1, 1 x2, 2 x4
+    in property <image> radar-key-ramp;                   // the altitude key's ramp
+    in-out property <int> radar-w;
+    in-out property <int> radar-h;
+    callback radar-view-selected(bool);
+    callback radar-scale-selected(int);
+    callback radar-reset-view();
 }
 
 // VIEW: the 2D screen / the 3D one. `label-3d` is the page's own word (3D SURFACE, 3D AIRSPACE, 3D TUNNEL, 3D TRACK); the 2D label is the page's own too (2D, PPI, VECTOR, TABLE, MAP).
@@ -51,6 +67,29 @@ export component Scene3DViewToggle inherits Rectangle {
             small: true;
             SegKey { label: root.label-2d; small: true; min-w: 0px; on: !root.three-d; enabled: root.enabled; tooltip: root.tooltip-2d; clicked => { root.selected(false); } }
             SegKey { label: root.label-3d; small: true; min-w: 0px; on: root.three-d; enabled: root.enabled; tooltip: root.tooltip-3d; clicked => { root.selected(true); } }
+        }
+    }
+}
+
+// The same switch on one line (caption beside the segments), for a bar that is one line high.
+export component Scene3DViewToggleInline inherits Rectangle {
+    in property <bool> three-d;
+    in property <string> label-2d: "2D";
+    in property <string> label-3d;
+    in property <string> caption: @tr("VIEW");
+    in property <string> tooltip-2d;
+    in property <string> tooltip-3d;
+    callback selected(bool);
+    width: box.preferred-width; height: box.preferred-height;
+    box := HorizontalLayout {
+        spacing: 6px;
+        VerticalLayout { alignment: center; Caption { label: root.caption; font-size: Theme.font-tiny; } }
+        VerticalLayout { alignment: center;
+            SegGroup {
+                small: true;
+                SegKey { label: root.label-2d; small: true; min-w: 0px; on: !root.three-d; tooltip: root.tooltip-2d; clicked => { root.selected(false); } }
+                SegKey { label: root.label-3d; small: true; min-w: 0px; on: root.three-d; tooltip: root.tooltip-3d; clicked => { root.selected(true); } }
+            }
         }
     }
 }
@@ -131,5 +170,65 @@ export component Wf3DView inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// The radar scope's TILT and ALTITUDE SCALE strip (THREED.md section 2): TILT is the camera's elevation (the azimuth is the drag's), ALTITUDE SCALE x1 / x2 / x4 the height's exaggeration.
+export component Radar3DBar inherits Rectangle {
+    Scene3DCameraBar {
+        x: 0px; y: 0px; width: parent.width;
+        elevation <=> View3D.radar-elevation;
+        azimuth <=> View3D.radar-azimuth;
+        min-elevation: 5; max-elevation: 85;
+        elevation-caption: @tr("TILT");
+        show-azimuth: false;
+        reset-clicked => { View3D.radar-azimuth = -40; View3D.radar-elevation = 26; View3D.radar-zoom = 1; View3D.radar-reset-view(); }
+        VerticalLayout { alignment: center; width: 150px; spacing: 3px;
+            Caption { label: @tr("ALTITUDE SCALE"); font-size: Theme.font-tiny; }
+            SegGroup { small: true;
+                SegKey { label: "x1"; small: true; min-w: 0px; on: View3D.radar-scale == 0; clicked => { View3D.radar-scale-selected(0); } }
+                SegKey { label: "x2"; small: true; min-w: 0px; on: View3D.radar-scale == 1; clicked => { View3D.radar-scale-selected(1); } }
+                SegKey { label: "x4"; small: true; min-w: 0px; on: View3D.radar-scale == 2; clicked => { View3D.radar-scale-selected(2); } }
+            }
+        }
+    }
+    height: 54px;
+}
+
+// The radar scope's 3D well: the airspace picture, its labels, the corner readouts of the tube (the same words), and the altitude key down the right edge.
+export component Radar3DWell inherits Rectangle {
+    in property <string> plotted-text;
+    in property <string> range-corner;
+    in property <string> mode-text;
+    in property <string> rx-text;
+    in property <[string]> key-ticks: ["FL400", "FL300", "FL200", "FL100", "FL0"];   // not-translated: the flight levels' own notation
+    out property <int> pixel-w: well.pixel-w;
+    out property <int> pixel-h: well.pixel-h;
+    init => { View3D.radar-w = well.pixel-w; View3D.radar-h = well.pixel-h; }
+    changed pixel-w => { View3D.radar-w = root.pixel-w; }
+    changed pixel-h => { View3D.radar-h = root.pixel-h; }
+    well := Scene3DWell {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        picture: View3D.radar-picture;
+        labels: View3D.radar-labels;
+        empty-text: View3D.radar-empty;
+        label: @tr("Airspace");
+        default-azimuth: -40; default-elevation: 26;
+        azimuth <=> View3D.radar-azimuth;
+        elevation <=> View3D.radar-elevation;
+        zoom <=> View3D.radar-zoom;
+        min-elevation: 5; max-elevation: 85;
+        reset-view => { View3D.radar-reset-view(); }
+    }
+    Text { x: 8px; y: 6px; text: root.plotted-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
+    if root.range-corner != "" : Text { x: parent.width - self.preferred-width - 8px; y: 6px; text: root.range-corner; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
+    Text { x: 8px; y: parent.height - self.preferred-height - 22px; text: root.mode-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.fg-soft; }   // (a line above the well's hint)
+    Text { x: parent.width - self.preferred-width - 8px; y: parent.height - self.preferred-height - 22px; text: root.rx-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.fg-soft; }
+    Scene3DRampKey {
+        x: parent.width - self.width - 10px; y: 30px;
+        title: @tr("ALTITUDE");
+        ramp: View3D.radar-key-ramp;
+        ticks: root.key-ticks;
+        vertical: true;
     }
 }

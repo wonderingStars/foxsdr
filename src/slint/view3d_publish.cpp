@@ -11,6 +11,7 @@
 #include "core/config.hpp"
 #include "core/i18n.hpp"
 #include "scene3d_slint.hpp"
+#include "radar3d_compositor.hpp"
 #include "view3d_prefs.hpp"
 #include "waterfall3d_logic.hpp"
 
@@ -37,6 +38,13 @@ ViewState waterfallDefaults() {
     const scene3d::Camera c = waterfall3dDefaultCamera();
     setCamera(s, c);
     s.opt = {1, 0, 0, 0};   // HISTORY DEPTH 60 s, SHADING Height
+    return s;
+}
+
+ViewState radarDefaults() {
+    ViewState s;
+    setCamera(s, radar3dDefaultCamera());
+    s.opt = {0, 0, 0, 0};   // ALTITUDE SCALE x1
     return s;
 }
 
@@ -73,6 +81,16 @@ struct View3DPublisher::Impl {
     int renderW = 0, renderH = 0;
     int appliedShading = -1;
 
+    // ---- the radar scope's 3D airspace ----
+    ViewState radar = radarDefaults();
+    scene3d::SceneSurface radarSurface;
+    scene3d::Scene radarScene;
+    std::string radarSig;
+    std::size_t radarRenders = 0, radarAircraft = 0, radarOnGround = 0, radarTrailSegs = 0, radarPixels = 0, radarLabels = 0, radarTags = 0;
+    double radarLastMs = 0.0, radarWorstMs = 0.0;
+    int radarW = 0, radarH = 0;
+    bool radarRampSet = false;
+
     Impl(MainWindow& u, foxsdr::slinthost::HostDuties& d, bool b) : ui(u), duties(d), bounded(b) {}
 
     void load() {
@@ -81,6 +99,8 @@ struct View3DPublisher::Impl {
         wf = prefs.get(kViewWaterfall, waterfallDefaults());
         wf.opt[0] = std::clamp(wf.opt[0], 0, 2);
         wf.opt[1] = std::clamp(wf.opt[1], 0, 1);
+        radar = prefs.get(kViewRadar, radarDefaults());
+        radar.opt[0] = std::clamp(radar.opt[0], 0, 2);
     }
 
     void apply() {
@@ -93,12 +113,19 @@ struct View3DPublisher::Impl {
         g.set_wf_shading(wf.opt[1]);
         takeRoom(wf.on);
         wfSig.clear();
+        g.set_radar_on(radar.on);
+        g.set_radar_azimuth(radar.azimuth);
+        g.set_radar_elevation(radar.elevation);
+        g.set_radar_zoom(radar.zoom);
+        g.set_radar_scale(radar.opt[0]);
+        radarSig.clear();
     }
 
     // THE SAVE: the text of every view, when it changed, into the interface half (a bounded run keeps it in the host's copy, which `state cfg.view3d` reads, and writes no file:
     // that file is named only by a scratch run's CASCADE_CONFIG_TEST, as for every other bank).
     void save() {
         prefs.set(kViewWaterfall, wf);
+        prefs.set(kViewRadar, radar);
         const std::string text = prefs.serialize();
         if (text == savedText) { return; }
         savedText = text;
@@ -115,6 +142,66 @@ struct View3DPublisher::Impl {
     }
 
     void markSave(std::int64_t nowMs) { wfDirtySave = true; wfSaveAtMs = nowMs + kSaveSettleMs; }
+
+    // THE RADAR AIRSPACE: the camera read back (TILT, a drag, a key), the picture repainted while the scope is up, in 3D and something moved.
+    void radarPublish(const Radar3dFeed& feed, std::int64_t nowMs) {
+        const auto& g = ui.global<View3D>();
+        const float az = g.get_radar_azimuth(), el = g.get_radar_elevation(), zm = g.get_radar_zoom();
+        if (az != radar.azimuth || el != radar.elevation || zm != radar.zoom) {
+            scene3d::Camera c = cameraOf(radar);
+            c.azimuthDeg = az;
+            c.elevationDeg = el;
+            c.zoom = zm;
+            setCamera(radar, scene3d::clamped(c));
+            markSave(nowMs);
+        }
+        if (wfDirtySave && nowMs >= wfSaveAtMs) { wfDirtySave = false; save(); }
+        if (!radar.on || !feed.shown) { return; }
+        int w = g.get_radar_w(), h = g.get_radar_h();
+        if (w < 64 || h < 64) { w = 700; h = 480; }
+        radarW = std::min(w, kMaxW);
+        radarH = std::min(h, kMaxH);
+        if (!radarRampSet) {
+            g.set_radar_key_ramp(scene3d::rampImage(radar3dRamp(), true, 96));
+            radarRampSet = true;
+        }
+        char b[64];
+        std::string sig = std::to_string(radarW) + "x" + std::to_string(radarH) + "|" + numSig(radar.azimuth) + numSig(radar.elevation) + numSig(radar.zoom) + std::to_string(radar.opt[0]) + "|" +
+                          std::to_string(feed.trailMode) + "|" + numSig(feed.rangeNm) + "|" + feed.emptyText + "|";
+        for (const Radar3dAircraft& a : feed.aircraft) {
+            std::snprintf(b, sizeof(b), "%.2f,%.2f,%.0f,%.0f,%d%d,%zu;", a.eastNm, a.northNm, a.altFt, a.courseDeg, a.selected ? 1 : 0, a.emergency ? 1 : 0, a.trail.size());
+            sig += a.id + a.label + b;
+        }
+        if (sig == radarSig) { return; }
+        radarSig = sig;
+        Radar3dInput in;
+        in.rangeNm = feed.rangeNm;
+        in.aircraft = feed.aircraft;
+        in.scaleIndex = radar.opt[0];
+        in.trails = feed.trailMode;
+        in.camera = cameraOf(radar);
+        in.noAlt = cascade::i18n::tr("NO ALT");
+        const double t0 = nowMsReal();
+        scene3d::Rgba* mem = radarSurface.begin(radarW, radarH);
+        const Radar3dResult res = paintRadar3d(radarScene, mem, radarW, radarH, in);
+        g.set_radar_picture(radarSurface.image());
+        radarSurface.flip();
+        radarLastMs = nowMsReal() - t0;
+        radarWorstMs = std::max(radarWorstMs, radarLastMs);
+        ++radarRenders;
+        radarAircraft = res.aircraft;
+        radarOnGround = res.onGround;
+        radarTrailSegs = res.trailSegments;
+        radarPixels = radarScene.pixelsWritten();
+        radarLabels = res.labels.size();
+        radarTags = 0;
+        for (const scene3d::Label3D& l : res.labels) { radarTags += l.kind == 2 ? 1 : 0; }
+        std::vector<Scene3DLabel> labels;
+        labels.reserve(res.labels.size());
+        for (const scene3d::Label3D& l : res.labels) { labels.push_back({l.x, l.y, ss(l.text), colourOf(l.rgba), l.align, l.kind}); }
+        g.set_radar_labels(std::make_shared<slint::VectorModel<Scene3DLabel>>(std::move(labels)));
+        g.set_radar_empty(ss(feed.emptyText));
+    }
 
     void waterfall(const Wf3dContext& ctx) {
         lastNowMs = ctx.nowMs;
@@ -219,6 +306,29 @@ void View3DPublisher::wire() {
         i.wfSig.clear();
         i.save();
     });
+    g.on_radar_view_selected([this](bool on) {
+        Impl& i = *impl_;
+        i.radar.on = on;
+        ui_.global<View3D>().set_radar_on(on);
+        i.radarSig.clear();
+        i.save();
+    });
+    g.on_radar_scale_selected([this](int s) {
+        Impl& i = *impl_;
+        i.radar.opt[0] = std::clamp(s, 0, 2);
+        ui_.global<View3D>().set_radar_scale(i.radar.opt[0]);
+        i.radarSig.clear();
+        i.save();
+    });
+    g.on_radar_reset_view([this] {
+        Impl& i = *impl_;
+        const ViewState d = radarDefaults();
+        i.radar.azimuth = d.azimuth;
+        i.radar.elevation = d.elevation;
+        i.radar.zoom = d.zoom;
+        i.radarSig.clear();
+        i.save();
+    });
     g.on_wf_reset_view([this] {
         Impl& i = *impl_;
         const ViewState d = waterfallDefaults();
@@ -236,8 +346,9 @@ void View3DPublisher::pushWaterfallFrame(std::int64_t tMs, const float* bins, st
 }
 
 void View3DPublisher::publish(const Wf3dContext& wf) { impl_->waterfall(wf); }
+void View3DPublisher::publishRadar(const Radar3dFeed& feed, std::int64_t nowMs) { impl_->radarPublish(feed, nowMs); }
 
-int View3DPublisher::detaches() const { return impl_->surface.detaches(); }
+int View3DPublisher::detaches() const { return impl_->surface.detaches() + impl_->radarSurface.detaches(); }
 
 std::string View3DPublisher::readState(const std::string& what, std::string& out) const {
     const Impl& m = *impl_;
@@ -259,14 +370,28 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "wf.data") { out = m.hasData ? "1" : "0"; return std::string(); }
     if (what == "wf.w") { out = std::to_string(m.renderW); return std::string(); }
     if (what == "wf.h") { out = std::to_string(m.renderH); return std::string(); }
-    return "view3d.wf.on|azimuth|elevation|zoom|depth|shading|renders|triangles|pixels|labels|span|realrows|rows|data|w|h, not view3d." + what;
+    if (what == "radar.on") { out = m.radar.on ? "1" : "0"; return std::string(); }
+    if (what == "radar.azimuth") { return num(m.radar.azimuth); }
+    if (what == "radar.tilt" || what == "radar.elevation") { return num(m.radar.elevation); }
+    if (what == "radar.zoom") { return num(m.radar.zoom); }
+    if (what == "radar.scale") { out = std::to_string(m.radar.opt[0]); return std::string(); }
+    if (what == "radar.renders") { out = std::to_string(m.radarRenders); return std::string(); }
+    if (what == "radar.aircraft") { out = std::to_string(m.radarAircraft); return std::string(); }
+    if (what == "radar.onground") { out = std::to_string(m.radarOnGround); return std::string(); }
+    if (what == "radar.trails") { out = std::to_string(m.radarTrailSegs); return std::string(); }
+    if (what == "radar.pixels") { out = std::to_string(m.radarPixels); return std::string(); }
+    if (what == "radar.tags") { out = std::to_string(m.radarTags); return std::string(); }
+    if (what == "radar.labels") { out = std::to_string(m.radarLabels); return std::string(); }
+    if (what == "radar.w") { out = std::to_string(m.radarW); return std::string(); }
+    if (what == "radar.h") { out = std::to_string(m.radarH); return std::string(); }
+    return "view3d.wf.on|azimuth|elevation|zoom|depth|shading|renders|triangles|pixels|labels|span|realrows|rows|data|w|h, or view3d.radar.on|azimuth|tilt|zoom|scale|renders|aircraft|onground|trails|pixels|labels|tags|w|h, not view3d." + what;
 }
 
 std::string View3DPublisher::summaryLine() const {
     const Impl& m = *impl_;
-    char b[256];
-    std::snprintf(b, sizeof(b), "view3d: waterfall on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu triangles, %zu rows kept, %zu saves, %d buffer detaches", m.wf.on ? 1 : 0, m.renders, m.lastRenderMs,
-                  m.worstRenderMs, m.lastTriangles, m.history.size(), m.saves, m.surface.detaches());
+    char b[640];
+    std::snprintf(b, sizeof(b), "view3d: waterfall on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu triangles, %zu rows kept, %zu saves, %d buffer detaches; radar on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu aircraft (%zu without altitude), %zu trail segments, %d buffer detaches", m.wf.on ? 1 : 0, m.renders, m.lastRenderMs,
+                  m.worstRenderMs, m.lastTriangles, m.history.size(), m.saves, m.surface.detaches(), m.radar.on ? 1 : 0, m.radarRenders, m.radarLastMs, m.radarWorstMs, m.radarAircraft, m.radarOnGround, m.radarTrailSegs, m.radarSurface.detaches());
     return b;
 }
 
