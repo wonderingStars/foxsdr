@@ -1,0 +1,50 @@
+#! frames=700 bank=1 plugins=goes open=module:goes-0.2.0-abi3-win-x64.dll size=1600x1000
+# globe-goes: THE GOES DISK (docs 6.65): the GOES HRIT / LRIT picture page offers VIEW FLAT / 3D GLOBE. The globe is seen from the spacecraft's longitude (GOES-East 75.2 W, GOES-West
+# 137.0 W: the operator says which sent the picture, both HRIT presets share 1694.1 MHz), the received picture draped on the sphere through the fixed-grid navigation, a dashed disk edge,
+# the sub-satellite point, the receiver. No signal is fed here, so there is no picture: the globe says so. SPACECRAFT, the look angle from the receiver, the camera by the keyboard.
+# State: globe.goes.
+120 state kit.plugins >= 1
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state pages contains "GOES HRIT / LRIT image"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
++1 click "GOES HRIT / LRIT image"#2
++5 expect "FLAT" checked equals "true"
++1 expect "3D GLOBE" checked equals "false"
++1 state globe.goes contains "globe=0"
++1 click "3D GLOBE"
++10 state globe.goes contains "globe=1"
++1 state globe.goes contains "composed=1"
+# the globe is seen from GOES-East's longitude
++1 state globe.goes contains "lon=-75.2 lat=0.0"
++1 expect "GOES-East" checked equals "true"
++1 click "GOES-West"
++5 state globe.goes contains "sat=1"
++1 state globe.goes contains "lon=-137.0"
++1 expect "GOES-West" checked equals "true"
++1 click "GOES-East"
++5 state globe.goes contains "sat=0"
++1 state globe.goes contains "lon=-75.2"
+# the readouts: the sub-satellite point, and the look angle needs the receiver position
++1 expect "SUB-SATELLITE POINT" label equals "SUB-SATELLITE POINT"
++1 expect "0.00 N 75.20 W" label equals "0.00 N 75.20 W"
++1 expect "LOOK ANGLE" label equals "LOOK ANGLE"
++1 expect "Set the receiver position for the look angle" label equals "Set the receiver position for the look angle"
+# the camera
++1 press "3D GLOBE view"
++3 key left
++5 state globe.goes contains "lon=-70.2"
++1 key up
++5 state globe.goes contains "lat=-5.0"
++1 scroll "3D GLOBE view" -120
++5 state globe.goes contains "zoom=1.12"
++1 key 0
++5 state globe.goes contains "lon=-75.2 lat=0.0 zoom=1.00"
+# choosing the other spacecraft takes an untouched camera with it
++1 click "GOES-West"
++5 state globe.goes contains "lon=-137.0 lat=0.0"
++1 click "FLAT"
++5 state globe.goes contains "globe=0"
+# what the view remembers is written to the settings file (the framework's one view3d text, 0.4 s after the last change)
++20 state fact.config.interface contains "goes:"

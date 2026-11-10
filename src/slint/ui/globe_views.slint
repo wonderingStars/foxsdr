@@ -1,0 +1,237 @@
+// FoxSDR Slint front end - THE GLOBE VIEWS (docs/engine-stage4.md 6.65): the 3D views a plugin page offers beside its own - the HF propagation globe, the FT8 reception globe, the GOES
+// disk, the interactive solar system and the satellite tracking globe. A page that offers one shows a VIEW bar (the page's own view / the 3D one); with the 3D view on, the page's body
+// is a GlobeBody: the 3D framework's well (ui/scene3d.slint Scene3DWell: the picture the host composed, drag to rotate, wheel to zoom, double-click to reset) with a column beside it of
+// the view's controls, readouts and chips. EVERYTHING in the column is the host's list (the controls are a model, not a component per view), so a view's controls are added in
+// globe_publish.cpp and a drive script finds each one by its label.
+//
+// THE CAMERA. The well's azimuth, elevation and zoom are the host's camera in the framework's own terms (globe_compositor.hpp says how a globe uses them: azimuth is the longitude the view
+// is centred on, elevation the latitude; the orbits view's azimuth is the spin and elevation the tilt). The host owns them: it pushes new values when ITS side moved the camera (a reset, a
+// plate key, a satellite picked) by moving `cam-seq`, and the well tells the host about every move of its own through GlobeEvents.camera-moved.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import { Theme } from "theme.slint";
+import { Caption, Key, SegGroup, SegKey } from "keys.slint";
+import { Checkbox } from "fields.slint";
+import { Slider } from "sliders.slint";
+import { Scene3DWell, Scene3DLabel } from "scene3d.slint";
+
+export global GlobeEvents {
+    callback view-chosen(int, bool);              // page, the 3D view on
+    callback segment-chosen(int, int, int);       // page, control id, option index
+    callback toggled(int, int, bool);             // page, control id, on
+    callback slid(int, int, float);               // page, control id, position 0..1
+    callback key-pressed(int, int);               // page, control id
+    callback chip-pressed(int, int);              // page, chip index
+    callback camera-moved(int, float, float, float);   // page, azimuth, elevation, zoom: the well's own move (a drag, the wheel, a key)
+    callback reset(int);                          // RESET VIEW (the well has already gone back to its defaults)
+    callback resized(int, int, int);              // page, the well's size in logical pixels
+}
+
+// A control of the column: kind 0 segments (options, value = the lit one; a long list is several controls of one id in rows, each row's `base` the index of its first option), 1 checkbox (value 0 / 1), 2 slider (value 0..1000, value-text beside it), 3 key, 4 readout (label + value-text).
+export struct GlobeControl {
+    id: int,
+    kind: int,
+    label: string,
+    options: [string],
+    base: int,
+    value: int,
+    value-text: string,
+    enabled: bool,
+    tooltip: string,
+}
+
+export struct GlobeChipModel {
+    text: string,
+    color: color,      // the swatch before the words
+    on: bool,
+    pressable: bool,
+}
+
+export struct GlobeModel {
+    offered: bool,
+    active: bool,
+    kind: int,
+    flat-label: string,
+    globe-label: string,
+    view-caption: string,
+    picture: image,
+    have: bool,
+    empty-note: string,
+    labels: [Scene3DLabel],
+    controls: [GlobeControl],
+    readouts: [string],
+    chips: [GlobeChipModel],
+    hint: string,
+    reset-label: string,
+    // the camera, in the well's terms
+    cam-az: float,
+    cam-el: float,
+    cam-zoom: float,
+    cam-seq: int,
+    default-az: float,
+    default-el: float,
+    default-zoom: float,
+    min-el: float,
+    max-el: float,
+    min-zoom: float,
+    max-zoom: float,
+    deg-per-pixel: float,
+}
+
+// The VIEW bar: the page's own view and the 3D one, as two keys of one group.
+export component GlobeViewBar inherits Rectangle {
+    in property <GlobeModel> model;
+    in property <int> index;
+    height: Theme.seg-h + 12px;
+    background: Theme.panel;
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 4px;
+        spacing: 8px;
+        alignment: start;
+        Caption { label: root.model.view-caption; vertical-alignment: center; }
+        SegGroup {
+            SegKey { label: root.model.flat-label; on: !root.model.active; tooltip: @tr("The page as the plugin draws it"); clicked => { GlobeEvents.view-chosen(root.index, false); } }
+            SegKey { label: root.model.globe-label; on: root.model.active; tooltip: @tr("The same data on a 3D view you can turn"); clicked => { GlobeEvents.view-chosen(root.index, true); } }
+        }
+    }
+}
+
+// The body of a page with the 3D view on: the well, and at its right the column of controls, readouts and chips.
+export component GlobeBody inherits Rectangle {
+    in property <GlobeModel> model;
+    in property <int> index;
+    background: Theme.panel;
+
+    property <int> seen-seq: -1;
+    // the host moved the camera (or this is the first time): the well takes the host's numbers
+    function sync() {
+        if (root.model.cam-seq != root.seen-seq) {
+            root.seen-seq = root.model.cam-seq;
+            well.azimuth = root.model.cam-az;
+            well.elevation = root.model.cam-el;
+            well.zoom = root.model.cam-zoom;
+        }
+    }
+    init => { root.sync(); }
+    changed model => { root.sync(); }
+
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 8px;
+        well := Scene3DWell {
+            horizontal-stretch: 1;
+            picture: root.model.picture;
+            labels: root.model.labels;
+            label: root.model.globe-label + " " + @tr("view");
+            hint: root.model.hint;
+            empty-text: root.model.empty-note;
+            default-azimuth: root.model.default-az;
+            default-elevation: root.model.default-el;
+            default-zoom: root.model.default-zoom;
+            min-elevation: root.model.min-el;
+            max-elevation: root.model.max-el;
+            min-zoom: root.model.min-zoom;
+            max-zoom: root.model.max-zoom;
+            deg-per-pixel: root.model.deg-per-pixel;
+            property <int> pw: self.pixel-w;
+            property <int> ph: self.pixel-h;
+            changed pw => { GlobeEvents.resized(root.index, self.pixel-w, self.pixel-h); }
+            changed ph => { GlobeEvents.resized(root.index, self.pixel-w, self.pixel-h); }
+            init => { GlobeEvents.resized(root.index, self.pixel-w, self.pixel-h); }
+            camera-moved => { GlobeEvents.camera-moved(root.index, self.azimuth, self.elevation, self.zoom); }
+            reset-view => { GlobeEvents.reset(root.index); }
+        }
+        Flickable {
+            width: 264px;
+            viewport-height: column.preferred-height;
+            column := VerticalLayout {
+                width: parent.width;
+                spacing: 8px;
+                alignment: start;
+                for c in root.model.controls : VerticalLayout {
+                    spacing: 3px;
+                    // segments
+                    if c.kind == 0 : VerticalLayout {
+                        spacing: 3px;
+                        if c.label != "" : Caption { label: c.label; }
+                        HorizontalLayout {
+                            alignment: start;
+                            SegGroup {
+                                small: true;
+                                for o[oi] in c.options : SegKey {
+                                    small: true;
+                                    label: o;
+                                    on: c.base + oi == c.value;
+                                    enabled: c.enabled;
+                                    tooltip: c.tooltip;
+                                    clicked => { GlobeEvents.segment-chosen(root.index, c.id, c.base + oi); }
+                                }
+                            }
+                        }
+                    }
+                    // checkbox
+                    if c.kind == 1 : Checkbox {
+                        label: c.label;
+                        checked: c.value != 0;
+                        enabled: c.enabled;
+                        tooltip: c.tooltip;
+                        toggled(v) => { GlobeEvents.toggled(root.index, c.id, v); }
+                    }
+                    // slider
+                    if c.kind == 2 : VerticalLayout {
+                        spacing: 3px;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Caption { label: c.label; horizontal-stretch: 1; }
+                            Text { text: c.value-text; color: Theme.fg-soft; font-family: Theme.font-mono; font-size: Theme.font-small; vertical-alignment: center; }
+                        }
+                        Slider {
+                            value: c.value / 1000.0;
+                            enabled: c.enabled;
+                            tooltip: c.tooltip;
+                            accessible-label: c.label;
+                            changed(v) => { GlobeEvents.slid(root.index, c.id, v); }
+                        }
+                    }
+                    // key
+                    if c.kind == 3 : HorizontalLayout {
+                        alignment: start;
+                        Key { label: c.label; small: true; min-w: 0px; enabled: c.enabled; tooltip: c.tooltip; clicked => { GlobeEvents.key-pressed(root.index, c.id); } }
+                    }
+                    // readout
+                    if c.kind == 4 : VerticalLayout {
+                        spacing: 2px;
+                        Caption { label: c.label; }
+                        Text { text: c.value-text; color: Theme.fg; font-family: Theme.font-ui; font-size: Theme.font-small; wrap: word-wrap; }
+                    }
+                }
+                for r in root.model.readouts : Text {
+                    text: r;
+                    color: Theme.fg-soft;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
+                }
+                for ch[ci] in root.model.chips : Rectangle {
+                    height: 22px;
+                    border-radius: Theme.radius-chip;
+                    background: ch.on ? Theme.accent.with-alpha(0.22) : Theme.chip-bg;
+                    border-width: Theme.hairline;
+                    border-color: ch.on ? Theme.accent : Theme.chip-line;
+                    accessible-role: button;
+                    accessible-label: ch.text;
+                    accessible-enabled: ch.pressable;
+                    accessible-action-default => { if (ch.pressable) { GlobeEvents.chip-pressed(root.index, ci); } }
+                    HorizontalLayout {
+                        padding-left: 6px; padding-right: 6px;
+                        spacing: 6px;
+                        Rectangle { width: 8px; height: 8px; y: (parent.height - 8px) / 2; border-radius: 4px; background: ch.color; }
+                        Text { text: ch.text; color: Theme.fg; font-family: Theme.font-ui; font-size: Theme.font-small; vertical-alignment: center; overflow: elide; accessible-role: none; }
+                    }
+                    TouchArea { enabled: ch.pressable; clicked => { GlobeEvents.chip-pressed(root.index, ci); } }
+                }
+                Key { label: root.model.reset-label; small: true; min-w: 0px; tooltip: @tr("Back to the starting view"); clicked => { well.reset(); } }
+            }
+        }
+    }
+}

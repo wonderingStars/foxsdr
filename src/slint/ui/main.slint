@@ -62,6 +62,9 @@ export { Theme, Skin, Workbench, NightWatch, DigitFace, MeterStyle, ChipTone, La
          ScopeEvents, DemodModel, MpxMarkItem, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel }
 export { TxChoice, TransmitPageModel, TransmitEvents }
 export { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow }   // the 3D views' state and their labels (docs 6.64): the host's view3d_publish sets the global and answers its callbacks
+import { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel } from "globe_views.slint";
+import { Scene3DLabel } from "scene3d.slint";   // the 3D views of the plugin pages (docs 6.65): their model and gestures reach C++ through main.h
+export { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel, Scene3DLabel }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }

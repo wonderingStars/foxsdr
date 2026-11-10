@@ -34,6 +34,8 @@ set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp p
     "${CMAKE_SOURCE_DIR}/src/gui/track_photo_cache.cpp"
     "${CMAKE_SOURCE_DIR}/src/gui/module_census.cpp"
     "${CMAKE_SOURCE_DIR}/src/gui/font_probe.cpp")
+# THE GLOBE VIEWS (docs 6.65): the geometry, the planets, the rules, what each view draws, its picture and its publisher. Their tests are registered by tests/CMakeLists.txt.
+list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic.cpp globe_draw.cpp globe_compositor.cpp globe_publish.cpp)
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")

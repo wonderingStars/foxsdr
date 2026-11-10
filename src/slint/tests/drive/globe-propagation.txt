@@ -1,0 +1,58 @@
+#! frames=900 bank=1 plugins=propagation-tools open=module:propagation-tools-0.1.0-abi3-win-x64.dll size=1600x1000
+# globe-propagation: THE HF PROPAGATION GLOBE (docs 6.65): the Propagation Tools picture page offers VIEW PICTURE / 3D GLOBE. The globe draws the day / night edge and the greyline band
+# for the clock, HOME (the plugin's locator, else the receiver position), the plugin's TARGET locator and the NCDXF/IARU beacons its panel says are on air, as skywave arcs coloured by
+# their hop count. BAND shows the beacons of one band, GREYLINE toggles the twilight band. The camera by the keyboard (no drag verb in the scripted input): left / right turn the
+# centre longitude 5 degrees, up / down the latitude, the wheel zooms, 0 resets. State: globe.propagation.
+120 state kit.plugins >= 1
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state pages contains "Propagation Tools image"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
++1 click "Propagation Tools image"#2
++5 expect "PICTURE" checked equals "true"
++1 expect "3D GLOBE" checked equals "false"
++1 state globe.propagation contains "globe=0"
++1 click "3D GLOBE"
++10 state globe.propagation contains "globe=1"
++1 state globe.propagation contains "composed=1"
++1 expect "3D GLOBE" checked equals "true"
+# BAND and GREYLINE
++1 expect "ALL" checked equals "true"
++1 state globe.propagation contains "band=0"
++1 click "20 m"
++5 state globe.propagation contains "band=1"
++1 expect "20 m" checked equals "true"
++1 click "10 m"
++5 state globe.propagation contains "band=5"
++1 click "ALL"
++5 state globe.propagation contains "band=0"
++1 expect "GREYLINE" checked equals "true"
++1 click "GREYLINE"
++5 state globe.propagation contains "greyline=0"
++1 click "GREYLINE"
++5 state globe.propagation contains "greyline=1"
+# the legend of the hops: about, never exact
++1 expect "about 2 hops" enabled equals "false"
+# the camera, with no home known (no locator, no receiver position): the globe starts at 0, 20
++1 state globe.propagation contains "lon=0.0 lat=20.0"
++1 press "3D GLOBE view"
++3 key left
++5 state globe.propagation contains "lon=5.0"
++1 key down
++5 state globe.propagation contains "lat=25.0"
++1 scroll "3D GLOBE view" -120
++5 state globe.propagation contains "zoom=1.12"
++1 key 0
++5 state globe.propagation contains "lon=0.0 lat=20.0 zoom=1.00"
+# a locator in the plugin's settings makes HOME known: an untouched camera centres on it
++1 click "Plugin settings"#2
++3 type "Your locator" "IO91wm"
++1 key enter
++40 state globe.propagation contains "lon=-0.1 lat=51.5"
++1 expect "HOME POSITION" label equals "HOME POSITION"
+# the plugin's own view comes back
++1 click "PICTURE"
++5 state globe.propagation contains "globe=0"
+# what the view remembers is written to the settings file (the framework's one view3d text, 0.4 s after the last change)
++20 state fact.config.interface contains "propagation:"

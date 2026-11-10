@@ -162,6 +162,17 @@ foreach(src ${_foxsdr_slint_test_sources})
             # The radar scope's painter draws with the demod scope's Canvas (scope_compositor.cpp), which paints the demod tube with scope_logic.cpp's state object.
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../scope_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../scope_compositor.cpp")
         endif()
+        if(unit STREQUAL "globe")
+            # The globe views' rules (docs 6.65): globe_logic.cpp stands on the geometry (globe_scene.cpp, over the flat map's coastline rings in map_compositor.cpp) and the
+            # planets (solar_ephemeris.cpp); nothing of Slint.
+            list(APPEND _extra
+                "${CMAKE_CURRENT_SOURCE_DIR}/../globe_scene.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../globe_draw.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../scene3d.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../view3d_prefs.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../solar_ephemeris.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../map_compositor.cpp")
+        endif()
         if(unit STREQUAL "glyphs")
             # The glyph coverage (docs 6.62): the CJK face chooser over the classic's scripts.cpp and its stb_truetype probe, against the catalogues the engine carries (slint_i18n) and the
             # typefaces the window embeds. Nothing of Slint.
@@ -227,6 +238,9 @@ foreach(src ${_foxsdr_slint_test_sources})
                 target_link_libraries(${name} PRIVATE winhttp)
             endif()
         endif()
+    elseif(family STREQUAL "globe_scene")
+        # The globe views' geometry (docs 6.65, ../globe_scene.cpp): pure maths over the flat map's coastline rings (../map_compositor.cpp), no Slint.
+        foxsdr_slint_logic_test(${name} "${CMAKE_CURRENT_SOURCE_DIR}/../globe_scene.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../map_compositor.cpp")
     elseif(family STREQUAL "scene3d")
         # THE SHARED 3D SCENE FRAMEWORK (docs 6.64): the CPU renderer, headless. Its colour ramps quote host_logic's heat(), which speaks through i18n.
         foxsdr_slint_logic_test(${name} "${CMAKE_CURRENT_SOURCE_DIR}/../scene3d.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp")

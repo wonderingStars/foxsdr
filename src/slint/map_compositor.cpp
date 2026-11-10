@@ -690,6 +690,21 @@ std::uint64_t tileKey(std::uint32_t z, std::uint64_t x, std::uint64_t y) {
 
 }  // namespace
 
+const std::vector<CoastRing>& coastlineRings() {
+    static const std::vector<CoastRing> out = [] {
+        std::vector<CoastRing> v;
+        for (const Ring& r : coastRings()) {
+            CoastRing c;
+            c.lon = r.lon;
+            c.lat = r.lat;
+            c.closed = r.closed;
+            v.push_back(std::move(c));
+        }
+        return v;
+    }();
+    return out;
+}
+
 // ========================================================================================================================
 // the compositor
 // ========================================================================================================================

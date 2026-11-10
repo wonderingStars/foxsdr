@@ -1,0 +1,83 @@
+#! frames=900 bank=1 plugins=solar-system-view open=module:solar-system-view-0.1.0-abi3-win-x64.dll size=1600x1000
+# globe-solar-system: THE INTERACTIVE SOLAR SYSTEM (docs 6.65): the Solar System View's picture page offers VIEW PAGES / 3D ORBITS; the 3D body draws the Sun, the planets on their
+# orbit rings (the host places them from Standish's elements and checks them against the plugin's own panel), the Earth and the Moon's ring. The page's own view is the default
+# and its plate keys still reach the plugin until the 3D view is on. Controls: SCALE LOG / LINEAR, SHOW MOON, the DATE slider (within a year of today) and TODAY, RESET VIEW, and the
+# well's camera by the keyboard (the scripted input has no drag verb; the well's pointer drag is held by test_slint_scene3d_well): left / right turn the spin, up / down the tilt,
+# the wheel zooms, 0 resets. The state names are globe.solar (globe_publish.hpp stateText).
+120 state kit.plugins >= 1
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# the plugin's plate keys while the 3D view is off: the plugin's, the camera is not touched
++1 click "ROTATE RIGHT"
++5 state globe.solar contains "globe=0"
++1 state globe.solar contains "spin=20"
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
++1 click "Solar System View image"#1
++10 state pages contains "Solar System View image"
+# the VIEW bar: the page's own view is the default
++3 expect "PAGES" checked equals "true"
++1 expect "3D ORBITS" checked equals "false"
++1 click "3D ORBITS"
++10 state globe.solar contains "globe=1"
++1 state globe.solar contains "composed=1"
++1 expect "3D ORBITS" checked equals "true"
++1 expect "PAGES" checked equals "false"
+# SCALE
++1 expect "LOG" checked equals "true"
++1 click "LINEAR"
++5 state globe.solar contains "log=0"
++1 expect "LINEAR" checked equals "true"
++1 click "LOG"
++5 state globe.solar contains "log=1"
+# SHOW MOON
++1 expect "SHOW MOON" checked equals "true"
++1 click "SHOW MOON"
++5 expect "SHOW MOON" checked equals "false"
++1 state globe.solar contains "moon=0"
++1 click "SHOW MOON"
++5 state globe.solar contains "moon=1"
+# DATE and TODAY
++1 slider "DATE" 1.0
++5 state globe.solar contains "day=36"
++1 slider "DATE" 0.0
++5 state globe.solar contains "day=-36"
++1 click "TODAY"
++5 state globe.solar contains "day=0"
+# the camera: the well takes the focus from a press, the arrow keys turn it
++1 press "3D ORBITS view"
++3 key left
++5 state globe.solar contains "spin=25"
++1 key right
++3 key right
++5 state globe.solar contains "spin=15"
++1 key down
++5 state globe.solar contains "tilt=60"
++1 key up
++3 key up
++5 state globe.solar contains "tilt=50"
++1 scroll "3D ORBITS view" -120
++5 state globe.solar contains "zoom=1.12"
++1 scroll "3D ORBITS view" 120
++5 state globe.solar contains "zoom=1.00"
+# 0 and RESET VIEW both go back to the starting camera
++1 key left
++3 key 0
++5 state globe.solar contains "spin=20 tilt=55"
++1 key left
++5 state globe.solar contains "spin=25"
++1 click "RESET VIEW"
++5 state globe.solar contains "spin=20 tilt=55"
++1 state globe.solar contains "zoom=1.00"
+# the readouts and the chips of the column
++1 expect "TILT / SPIN / ZOOM" label equals "TILT / SPIN / ZOOM"
++1 expect "MOON" label equals "MOON"
++1 expect "The positions agree with the plugin's own panel." label equals "The positions agree with the plugin's own panel."
+# back to the plugin's own view
++1 click "PAGES"
++5 state globe.solar contains "globe=0"
++1 expect "PAGES" checked equals "true"
++1 click "3D ORBITS"
++5 state globe.solar contains "globe=1"
+# what the view remembers is written to the settings file (the framework's one view3d text, 0.4 s after the last change)
++20 state fact.config.interface contains "solar:"

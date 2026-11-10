@@ -1,0 +1,32 @@
+4001	ASSERTED	globe-propagation.txt	click "3D GLOBE" / "PICTURE"; state globe.propagation globe=1 / globe=0
+4003	ASSERTED	globe-propagation.txt	press the well, key left / down, scroll, key 0: state globe.propagation lon / lat / zoom (the scripted input has no drag verb; the pointer drag is held by test_slint_scene3d_well)
+4004	ASSERTED	globe-propagation.txt	click "20 m" / "10 m" / "ALL"; state globe.propagation band=1 / 5 / 0
+4005	ASSERTED	globe-propagation.txt	click "GREYLINE"; state globe.propagation greyline=0 / 1
+4006	ASSERTED	globe-propagation.txt	expect "about 2 hops" enabled equals "false" (a legend chip, not a key)
+4008	ASSERTED	globe-propagation.txt	expect "HOME POSITION" label; type "Your locator" "IO91wm": state globe.propagation lon=-0.1 lat=51.5
+4009	ASSERTED	globe-propagation.txt	key 0 (the well's own reset): state globe.propagation lon=0.0 lat=20.0 zoom=1.00
+4020	ASSERTED	globe-ft8.txt	click "3D GLOBE" / "LIST"; state globe.ft8 globe=1 / globe=0
+4022	ASSERTED	globe-ft8.txt	click "20 m" / "2 m" / "160 m" / "ALL"; state globe.ft8 band=5 / 12 / 1 / 0
+4023	ASSERTED	globe-ft8.txt	click "15 min" / "24 h" / "1 h"; state globe.ft8 window=15 / 1440 / 60
+4024	ASSERTED	globe-ft8.txt	expect "0 stations on 0 bands" label (nothing is fed here)
+4025	ASSERTED	globe-ft8.txt	expect "FURTHEST HEARD" label
+4028	ASSERTED	globe-ft8.txt	press the well, key left / up, scroll, RESET VIEW; type "Locator" "IO91wm": state globe.ft8 lon=-0.1 lat=51.5
+4040	ASSERTED	globe-goes.txt	click "3D GLOBE" / "FLAT"; state globe.goes globe=1 / globe=0
+4042	ASSERTED	globe-goes.txt	click "GOES-West" / "GOES-East"; state globe.goes sat=1 / 0, lon=-137.0 / -75.2
+4043	ASSERTED	globe-goes.txt	expect "0.00 N 75.20 W" label
+4045	ASSERTED	globe-goes.txt	expect "Set the receiver position for the look angle" label
+4046	ASSERTED	globe-goes.txt	press the well, key left / up, scroll, key 0: state globe.goes lon / lat / zoom
+4060	ASSERTED	globe-solar-system.txt	click "3D ORBITS" / "PAGES"; state globe.solar globe=1 / globe=0
+4062	ASSERTED	globe-solar-system.txt	click "LINEAR" / "LOG"; state globe.solar log=0 / 1
+4063	ASSERTED	globe-solar-system.txt	click "SHOW MOON"; state globe.solar moon=0 / 1
+4064	ASSERTED	globe-solar-system.txt	slider "DATE" 1.0 / 0.0; state globe.solar day=366 / -366
+4065	ASSERTED	globe-solar-system.txt	click "TODAY"; state globe.solar day=0
+4067	ASSERTED	globe-solar-system.txt	press the well, key left / right / up / down, scroll, key 0: state globe.solar spin / tilt / zoom
+4068	DRIVEN	globe-solar-system.txt	the keys while the 3D view is off are pressed and the camera stays (state globe.solar spin=20); the interception while it is on is unit-tested (applySolarPlateKey): the module page is not reachable with the 3D view on in a scripted run
+4069	ASSERTED	globe-solar-system.txt	expect "The positions agree with the plugin's own panel." label
+4080	ASSERTED	globe-satellites.txt	click "3D GLOBE" / "FLAT MAP"; state globe.satellites globe=1 / globe=0
+4082	ASSERTED	globe-satellites.txt	click "FOOTPRINT"; expect checked false / true
+4083	ASSERTED	globe-satellites.txt	click "GROUND TRACKS"; expect checked false / true
+4084	NOT_DRIVABLE	-	needs a tracked satellite: the plugin publishes tracks only from fetched TLEs, none in a scripted run
+4086	ASSERTED	globe-satellites.txt	press the well, key left / down, scroll, key 0: state globe.satellites lon / lat / zoom
+4100	ASSERTED	globe-solar-system.txt	state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script)

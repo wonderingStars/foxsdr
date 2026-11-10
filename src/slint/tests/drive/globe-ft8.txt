@@ -1,0 +1,62 @@
+#! frames=800 bank=1 plugins=ft8-decoder open=module:ft8-decoder-1.1.1-abi3-win-x64.dll size=1600x1000
+# globe-ft8: THE FT8 RECEPTION GLOBE (docs 6.65): the FT8 panel page offers VIEW LIST / 3D GLOBE (the LIST is the plugin's own "FT8 - PSK Reporter" table). The globe draws a great-circle
+# path from the receiver (the plugin's Locator, else the receiver position) to the locator carried by each station the decoder printed, coloured by band. BAND, TIME WINDOW, the count
+# of stations heard and the furthest are the host's, from those lines only (no signal is fed here: the globe is empty and says so). The camera by the keyboard. State: globe.ft8.
+120 state kit.plugins >= 1
++1 click "START"
++40 expect "STOP" enabled equals "true"
++1 state pages contains "FT8 - PSK Reporter"
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "FT8 - PSK Reporter"#2
++5 expect "LIST" checked equals "true"
++1 expect "3D GLOBE" checked equals "false"
++1 state globe.ft8 contains "globe=0"
++1 click "3D GLOBE"
++10 state globe.ft8 contains "globe=1"
++1 state globe.ft8 contains "composed=1"
++1 expect "3D GLOBE" checked equals "true"
++1 expect "LIST" checked equals "false"
+# BAND: ALL and the FT8 bands, in rows
++1 expect "ALL" checked equals "true"
++1 click "20 m"
++5 state globe.ft8 contains "band=5"
++1 expect "20 m" checked equals "true"
++1 click "2 m"
++5 state globe.ft8 contains "band=12"
++1 click "160 m"
++5 state globe.ft8 contains "band=1"
++1 click "ALL"
++5 state globe.ft8 contains "band=0"
+# TIME WINDOW
++1 expect "1 h" checked equals "true"
++1 click "15 min"
++5 state globe.ft8 contains "window=15"
++1 click "24 h"
++5 state globe.ft8 contains "window=1440"
++1 click "1 h"
++5 state globe.ft8 contains "window=60"
+# the readouts: nothing heard yet, said so
++1 expect "HEARD" label equals "HEARD"
++1 expect "Stations: 0  Bands: 0" label equals "Stations: 0  Bands: 0"
++1 expect "FURTHEST HEARD" label equals "FURTHEST HEARD"
+# the camera
++1 press "3D GLOBE view"
++3 key left
++5 state globe.ft8 contains "lon=5.0"
++1 key up
++5 state globe.ft8 contains "lat=15.0"
++1 scroll "3D GLOBE view" -120
++5 state globe.ft8 contains "zoom=1.12"
++1 click "RESET VIEW"
++5 state globe.ft8 contains "lon=0.0 lat=20.0 zoom=1.00"
+# a locator in the plugin's settings is the receiver: an untouched camera centres on it
++1 click "Plugin settings"#2
++3 type "Locator" "IO91wm"
++1 key enter
++40 state globe.ft8 contains "lon=-0.1 lat=51.5"
+# the plugin's own list comes back
++1 click "LIST"
++5 state globe.ft8 contains "globe=0"
+# what the view remembers is written to the settings file (the framework's one view3d text, 0.4 s after the last change)
++20 state fact.config.interface contains "ft8:"

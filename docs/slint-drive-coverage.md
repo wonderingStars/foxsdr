@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2074 | 487 | 82 | 1505 | 0 |
+| 2130 | 517 | 83 | 1530 | 0 |
 
-Of the 1206 rows that are controls (the 868 readout-like rows left out): 487 asserted, 82 driven without a read-back, 637 not drivable.
+Of the 1243 rows that are controls (the 887 readout-like rows left out): 517 asserted, 83 driven without a read-back, 643 not drivable.
 
-NOT DRIVABLE by reason: readout 868, other 212, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 68, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 213, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -200,6 +200,7 @@ NOT DRIVABLE by reason: readout 868, other 212, needs a signal (no fixture) 120,
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 56 | 30 | 1 | 25 | 19 | 0 |
 
 ## Every row
 
@@ -3171,4 +3172,65 @@ NOT DRIVABLE by reason: readout 868, other 212, needs a signal (no fixture) 120,
 | 3094 | PREDICTED LANDING chip | readout | NOT DRIVABLE | - | a readout, not a control |
 | 3095 | TIME SCRUBBER with a play key | slider | NOT DRIVABLE | - | deferred: the host's record starts when it began listening, not at the launch; a scrubber over it is a feature of its own |
 | 3096 | LAUNCH marker | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+
+### 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 4001 | Propagation: VIEW PICTURE / 3D GLOBE | segment key | DRIVEN+ASSERTED | globe-propagation.txt | click "3D GLOBE" / "PICTURE"; state globe.propagation globe=1 / globe=0 |
+| 4002 | Propagation: the globe | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4003 | Propagation: DRAG TO ROTATE | gesture | DRIVEN+ASSERTED | globe-propagation.txt | press the well, key left / down, scroll, key 0: state globe.propagation lon / lat / zoom (the scripted input has no drag verb; the pointer drag is held by test_slint_scene3d_well) |
+| 4004 | Propagation: BAND select | segment key | DRIVEN+ASSERTED | globe-propagation.txt | click "20 m" / "10 m" / "ALL"; state globe.propagation band=1 / 5 / 0 |
+| 4005 | Propagation: GREYLINE | checkbox | DRIVEN+ASSERTED | globe-propagation.txt | click "GREYLINE"; state globe.propagation greyline=0 / 1 |
+| 4006 | Propagation: PATH legend | chip | DRIVEN+ASSERTED | globe-propagation.txt | expect "about 2 hops" enabled equals "false" (a legend chip, not a key) |
+| 4007 | Propagation: path chips (name, distance, bearing) | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4008 | Propagation: HOME and SUN OVER readouts | readout | DRIVEN+ASSERTED | globe-propagation.txt | expect "HOME POSITION" label; type "Your locator" "IO91wm": state globe.propagation lon=-0.1 lat=51.5 |
+| 4009 | Propagation: RESET VIEW | key | DRIVEN+ASSERTED | globe-propagation.txt | key 0 (the well's own reset): state globe.propagation lon=0.0 lat=20.0 zoom=1.00 |
+| 4010 | Propagation: sample city chips (NYC, SF, Sao Paulo, Sydney, Tokyo, Delhi, Johannesburg) | chip | NOT DRIVABLE | - | a readout, not a control |
+| 4011 | Propagation: per-path reliability colour | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4012 | Propagation: the plugin's plate keys, settings and panel | key | NOT DRIVABLE | - | relocated: unchanged: NEXT PAGE / PREV PAGE / REFRESH / NEXT HOUR / PREV HOUR stay on the module page, the 13 settings fields in the fold above the VIEW bar and the "Propagation Tools" panel as its own page |
+| 4020 | FT8: VIEW LIST / 3D GLOBE | segment key | DRIVEN+ASSERTED | globe-ft8.txt | click "3D GLOBE" / "LIST"; state globe.ft8 globe=1 / globe=0 |
+| 4021 | FT8: the globe | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4022 | FT8: BAND | segment key | DRIVEN+ASSERTED | globe-ft8.txt | click "20 m" / "2 m" / "160 m" / "ALL"; state globe.ft8 band=5 / 12 / 1 / 0 |
+| 4023 | FT8: TIME WINDOW | segment key | DRIVEN+ASSERTED | globe-ft8.txt | click "15 min" / "24 h" / "1 h"; state globe.ft8 window=15 / 1440 / 60 |
+| 4024 | FT8: stations heard readout | readout | DRIVEN+ASSERTED | globe-ft8.txt | expect "0 stations on 0 bands" label (nothing is fed here) |
+| 4025 | FT8: FURTHEST HEARD | readout | DRIVEN+ASSERTED | globe-ft8.txt | expect "FURTHEST HEARD" label |
+| 4026 | FT8: band legend | chip | NOT DRIVABLE | - | a readout, not a control |
+| 4027 | FT8: reporter count and countries ("47 reporters - 12 countries") | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4028 | FT8: camera, DRAG TO ROTATE, RESET VIEW | gesture | DRIVEN+ASSERTED | globe-ft8.txt | press the well, key left / up, scroll, RESET VIEW; type "Locator" "IO91wm": state globe.ft8 lon=-0.1 lat=51.5 |
+| 4040 | GOES: VIEW FLAT / 3D GLOBE | segment key | DRIVEN+ASSERTED | globe-goes.txt | click "3D GLOBE" / "FLAT"; state globe.goes globe=1 / globe=0 |
+| 4041 | GOES: the globe | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4042 | GOES: SPACECRAFT | segment key | DRIVEN+ASSERTED | globe-goes.txt | click "GOES-West" / "GOES-East"; state globe.goes sat=1 / 0, lon=-137.0 / -75.2 |
+| 4043 | GOES: SUB-SAT marker and label | readout | DRIVEN+ASSERTED | globe-goes.txt | expect "0.00 N 75.20 W" label |
+| 4044 | GOES: DISK EDGE | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4045 | GOES: LOOK ANGLE | readout | DRIVEN+ASSERTED | globe-goes.txt | expect "Set the receiver position for the look angle" label |
+| 4046 | GOES: camera, DRAG TO ROTATE, RESET VIEW | gesture | DRIVEN+ASSERTED | globe-goes.txt | press the well, key left / up, scroll, key 0: state globe.goes lon / lat / zoom |
+| 4047 | GOES: BAND select (ABI 1-16) | segment key | NOT DRIVABLE | - | deferred: needs data: the received picture carries no band; the product id is only in the decoder's "image name" text. What would do it: the plugin publishing the band of the picture it holds |
+| 4048 | GOES: SEGMENTS progress (14 of 16) | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4049 | GOES: SATELLITE select GOES 16 / 18 / 19 | segment key | NOT DRIVABLE | - | deferred: needs data: the spacecraft the plugin is receiving is in goes.cfg and not published; the host offers the two operational longitudes (East, West) and the operator picks. What would do it: the plugin publishing the spacecraft id of the picture |
+| 4060 | Solar system: VIEW PAGES / 3D ORBITS | segment key | DRIVEN+ASSERTED | globe-solar-system.txt | click "3D ORBITS" / "PAGES"; state globe.solar globe=1 / globe=0 |
+| 4061 | Solar system: the orbits | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4062 | Solar system: SCALE LOG / LINEAR | segment key | DRIVEN+ASSERTED | globe-solar-system.txt | click "LINEAR" / "LOG"; state globe.solar log=0 / 1 |
+| 4063 | Solar system: SHOW MOON | checkbox | DRIVEN+ASSERTED | globe-solar-system.txt | click "SHOW MOON"; state globe.solar moon=0 / 1 |
+| 4064 | Solar system: DATE scrubber | slider | DRIVEN+ASSERTED | globe-solar-system.txt | slider "DATE" 1.0 / 0.0; state globe.solar day=366 / -366 |
+| 4065 | Solar system: TODAY | key | DRIVEN+ASSERTED | globe-solar-system.txt | click "TODAY"; state globe.solar day=0 |
+| 4066 | Solar system: planet chips | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4067 | Solar system: DRAG TO ROTATE, tilt, zoom | gesture | DRIVEN+ASSERTED | globe-solar-system.txt | press the well, key left / right / up / down, scroll, key 0: state globe.solar spin / tilt / zoom |
+| 4068 | Solar system: ROTATE LEFT / ROTATE RIGHT / TILT / ZOOM IN / ZOOM OUT plate keys | key | DRIVEN | globe-solar-system.txt | the keys while the 3D view is off are pressed and the camera stays (state globe.solar spin=20); the interception while it is on is unit-tested (applySolarPlateKey): the module page is not reachable with the 3D view on in a scripted run |
+| 4069 | Solar system: agreement with the plugin's panel | readout | DRIVEN+ASSERTED | globe-solar-system.txt | expect "The positions agree with the plugin's own panel." label |
+| 4070 | Solar system: Uranus and Neptune chips, an Earth chip | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4080 | Satellites: VIEW FLAT MAP / 3D GLOBE | segment key | DRIVEN+ASSERTED | globe-satellites.txt | click "3D GLOBE" / "FLAT MAP"; state globe.satellites globe=1 / globe=0 |
+| 4081 | Satellites: the globe | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4082 | Satellites: FOOTPRINT | checkbox | DRIVEN+ASSERTED | globe-satellites.txt | click "FOOTPRINT"; expect checked false / true |
+| 4083 | Satellites: GROUND TRACKS | checkbox | DRIVEN+ASSERTED | globe-satellites.txt | click "GROUND TRACKS"; expect checked false / true |
+| 4084 | Satellites: satellite chips | chip (key) | NOT DRIVABLE | - | needs a tracked satellite: the plugin publishes tracks only from fetched TLEs, none in a scripted run |
+| 4085 | Satellites: the selected satellite's readouts | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4086 | Satellites: DRAG TO ROTATE, RESET VIEW | gesture | DRIVEN+ASSERTED | globe-satellites.txt | press the well, key left / down, scroll, key 0: state globe.satellites lon / lat / zoom |
+| 4087 | Satellites: NIGHT SIDE layer toggle | checkbox | NOT DRIVABLE | - | deferred: the night side is always shaded; the switch was not built in this pass |
+| 4088 | Satellites: 3D ORBIT PATH | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4089 | Satellites: time scrubber (-30 min to +90 min, NOW, PLAY) | slider | NOT DRIVABLE | - | deferred: needs data: positions at other times - the plugin publishes the present position and one ground track. What would do it: a plugin API addition publishing predicted positions with times, or the elements to propagate them |
+| 4090 | Satellites: pass timeline (24 h) | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4091 | Satellites: the satellites deck (position well, layers, targets register, next passes, Doppler, GRANT RECEIVER CONTROL) | page | NOT DRIVABLE | - | a readout, not a control |
+| 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | DRIVEN+ASSERTED | globe-solar-system.txt | state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script) |
+| 4101 | 3D globes: the honest empty states | readout | NOT DRIVABLE | - | a readout, not a control |
 
