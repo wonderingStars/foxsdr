@@ -8,5 +8,5 @@ lamps.slint:220	ELIDE	a status chip's detail: a chip squeezed by a long language
 sections.slint:187	ELIDE	a SelectKey value longer than its key: value-elided puts the value in the tip before the tooltip (test_slint_elided)	
 sections.slint:82	ELIDE	a section header name longer than the room before its chip: name-elided puts the name in the tip before the tooltip (test_slint_elided)	
 sliders.slint:216	ELIDE	a slider lane's caption squeezed by the lane's readout: caption-elided puts the caption in the slider's tip before the host's tooltip (not exercised by a hover test - the same TipTimer rule)	
-tools_bank.slint:311	ELIDE	a field's placeholder longer than the field: placeholder-elided puts the placeholder in the field's tip while the field is empty (not exercised by a hover test - the same TipTimer rule)	
+tools_bank.slint:312	ELIDE	a field's placeholder longer than the field: placeholder-elided puts the placeholder in the field's tip while the field is empty (not exercised by a hover test - the same TipTimer rule)	
 tooltip.slint:118	ELIDE	ElidedHint (the strip's hint lines, the counter plate's caption, the age axis, and the row labels of the SYSTEM, SIGNAL and EXTEND banks, which inherit it): the component's own tip says the whole text when it is elided (test_slint_elided)	
