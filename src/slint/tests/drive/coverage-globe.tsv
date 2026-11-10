@@ -11,4 +11,9 @@
 4024	ASSERTED	globe-ft8.txt	expect "0 stations on 0 bands" label (nothing is fed here)
 4025	ASSERTED	globe-ft8.txt	expect "FURTHEST HEARD" label
 4028	ASSERTED	globe-ft8.txt	press the well, key left / up, scroll, RESET VIEW; type "Locator" "IO91wm": state globe.ft8 lon=-0.1 lat=51.5
+4040	ASSERTED	globe-goes.txt	click "3D GLOBE" / "FLAT"; state globe.goes globe=1 / globe=0
+4042	ASSERTED	globe-goes.txt	click "GOES-West" / "GOES-East"; state globe.goes sat=1 / 0, lon=-137.0 / -75.2
+4043	ASSERTED	globe-goes.txt	expect "0.00 N 75.20 W" label
+4045	ASSERTED	globe-goes.txt	expect "Set the receiver position for the look angle" label
+4046	ASSERTED	globe-goes.txt	press the well, key left / up, scroll, key 0: state globe.goes lon / lat / zoom
 4100	ASSERTED	globe-solar-system.txt	state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script)

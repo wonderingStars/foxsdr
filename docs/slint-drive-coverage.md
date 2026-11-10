@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2001 | 453 | 82 | 1466 | 0 |
+| 2011 | 458 | 82 | 1471 | 0 |
 
-Of the 1160 rows that are controls (the 841 readout-like rows left out): 453 asserted, 82 driven without a read-back, 625 not drivable.
+Of the 1167 rows that are controls (the 844 readout-like rows left out): 458 asserted, 82 driven without a read-back, 627 not drivable.
 
-NOT DRIVABLE by reason: readout 841, other 207, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 70, deferred 61, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 844, other 207, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 70, deferred 63, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,7 +199,7 @@ NOT DRIVABLE by reason: readout 841, other 207, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 23 | 14 | 0 | 9 | 8 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 33 | 19 | 0 | 14 | 11 | 0 |
 
 ## Every row
 
@@ -3096,6 +3096,16 @@ NOT DRIVABLE by reason: readout 841, other 207, needs a signal (no fixture) 120,
 | 4026 | FT8: band legend | chip | NOT DRIVABLE | - | a readout, not a control |
 | 4027 | FT8: reporter count and countries ("47 reporters - 12 countries") | readout | NOT DRIVABLE | - | a readout, not a control |
 | 4028 | FT8: camera, DRAG TO ROTATE, RESET VIEW | gesture | DRIVEN+ASSERTED | globe-ft8.txt | press the well, key left / up, scroll, RESET VIEW; type "Locator" "IO91wm": state globe.ft8 lon=-0.1 lat=51.5 |
+| 4040 | GOES: VIEW FLAT / 3D GLOBE | segment key | DRIVEN+ASSERTED | globe-goes.txt | click "3D GLOBE" / "FLAT"; state globe.goes globe=1 / globe=0 |
+| 4041 | GOES: the globe | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4042 | GOES: SPACECRAFT | segment key | DRIVEN+ASSERTED | globe-goes.txt | click "GOES-West" / "GOES-East"; state globe.goes sat=1 / 0, lon=-137.0 / -75.2 |
+| 4043 | GOES: SUB-SAT marker and label | readout | DRIVEN+ASSERTED | globe-goes.txt | expect "0.00 N 75.20 W" label |
+| 4044 | GOES: DISK EDGE | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4045 | GOES: LOOK ANGLE | readout | DRIVEN+ASSERTED | globe-goes.txt | expect "Set the receiver position for the look angle" label |
+| 4046 | GOES: camera, DRAG TO ROTATE, RESET VIEW | gesture | DRIVEN+ASSERTED | globe-goes.txt | press the well, key left / up, scroll, key 0: state globe.goes lon / lat / zoom |
+| 4047 | GOES: BAND select (ABI 1-16) | segment key | NOT DRIVABLE | - | deferred: needs data: the received picture carries no band; the product id is only in the decoder's "image name" text. What would do it: the plugin publishing the band of the picture it holds |
+| 4048 | GOES: SEGMENTS progress (14 of 16) | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4049 | GOES: SATELLITE select GOES 16 / 18 / 19 | segment key | NOT DRIVABLE | - | deferred: needs data: the spacecraft the plugin is receiving is in goes.cfg and not published; the host offers the two operational longitudes (East, West) and the operator picks. What would do it: the plugin publishing the spacecraft id of the picture |
 | 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | DRIVEN+ASSERTED | globe-solar-system.txt | state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script) |
 | 4101 | 3D globes: the honest empty states | readout | NOT DRIVABLE | - | a readout, not a control |
 
