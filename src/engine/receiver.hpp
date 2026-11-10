@@ -298,6 +298,68 @@ struct Receiver {
     // the antenna is a property of the user's cabling, not of a session.
     std::vector<std::string> deviceAntennas_;
     std::string deviceAntenna_;
+    // ---- settings mirrors ----
+    bool vfoBandwidthDragged_ = false;
+    // THE USER'S OWN MUTE, kept apart from the plugin mute (mutedBy_ and the
+    // rest). They are different things with different lifetimes: a plugin's
+    // mute is recomputed from the tuning every frame in updateAudioMute, and
+    // one that also cleared a user's mute would make the Mute key stop working
+    // the moment a decoder was running. The pipeline is told the OR of the two.
+    bool userMuted_ = false;
+    // Display range for both the spectrum axis and the waterfall colormap.
+    float dbMin_ = -110.0f;
+    float dbMax_ = 0.0f;
+    // Radio/Sinks control state. The pipeline owns the live DSP values; these
+    // mirrors exist because ImGui widgets edit by pointer. Defaults match the
+    // pipeline's own defaults (WFM, 150 kHz bandwidth, -50 dB squelch) except
+    // the VFO offset, which the constructor pushes to +300 kHz so the demo
+    // tone 0 sits on the VFO - near-silent in WFM (an unmodulated carrier
+    // demodulates to DC), a clean 700 Hz sidetone in CW.
+    float volume_ = 0.5f;
+    int modeIndex_ = 1;                              // WFM
+    float vfoOffsetKhz_ = 300.0f;
+    // WHICH OF THE OFFERED BANDWIDTH STEPS THE VFO IS ON, or -1 for none of
+    // them: a plugin preset may ask for a width the list does not carry (the
+    // NOAA APT one asks for 40 kHz), and the combo then letters the real
+    // figure and ticks nothing. It used to be the NEAREST step, which made the
+    // control show 12.5k over a 40 kHz VFO and apply that 12.5k on the next
+    // click. Never used to index kBwHz without a literal step beside it.
+    int bandwidthIndex_ = 1;                         // 150k
+    float squelchDb_ = -50.0f;
+    int deemphIndex_ = 0;  // index into kDeemphUs; 0 = 50 us (global default)
+    // Last REQUESTED VFO bandwidth (Hz): combo presets and band-edge drags
+    // both land here, and this is what the overlay and the config store use.
+    // (The combo keeps showing its last preset after an edge drag - the combo
+    // is a preset picker, not a readback; the overlay is the truth.)
+    double vfoBandwidthHz_ = 150000.0;
+    // --- Scanner state (P6) -----------------------------------------------------
+    // The Scanner itself is a pure state machine (core/scanner.hpp); these
+    // mirrors exist because ImGui edits by pointer. Defaults come from
+    // Scanner::Params's own member initializers so the two can never drift.
+    // --- P7 feature state -----------------------------------------------------
+    // Panel mirrors for the pipeline's stereo / NR / notch settings (ImGui
+    // edits by pointer). Defaults match AppConfig's, which match the
+    // pipeline's own construction defaults, so the three can never disagree
+    // before the first user click.
+    bool stereoEnabled_ = true;
+    bool nrEnabled_ = false;
+    float nrStrength_ = 0.5f;
+    bool notchEnabled_ = false;
+    float notchFreqHz_ = 1000.0f;
+    float notchQ_ = 30.0f;
+    bool autoNotch_ = false;
+    // AUTOMATIC SQUELCH (stub campaign B12, engine_squelch_auto.cpp; 0.99.74): the top bar's AUTO key under the SQUELCH dial, the engine's so that a headless engine,
+    // a web page and a CAT client honour it too. While squelchAuto_ is lit the pass keeps the receiver's threshold 8 dB over the noise floor measured under the
+    // channel (noiseFloor_: the quietest of the last ten seconds, a carrier that holds the gate open never teaching it) or, while the Airband monitor listens,
+    // re-applies the monitor's own "above the noise" rule. A hand on any threshold - an accepted SET_SQUELCH, the monitor's squelch or its above-the-noise key - turns
+    // it off (squelchAutoOff); a threshold restored from the config does not.
+    bool squelchAuto_ = false;
+    cascade::core::NoiseFloorTracker noiseFloor_;
+    double squelchAutoSetS_ = -1.0e9;       // when the rule last moved a threshold (it is judged four times a second)
+    double squelchAutoAbsHz_ = 0.0;         // the channel the floor was measured on: another one is another floor
+    double squelchAutoBwHz_ = 0.0;
+    int squelchAutoMode_ = -1;
+    bool squelchAutoOnAirband_ = false;     // the rule was last applied to the monitor's squelch
 };  // struct Receiver
 
 }  // namespace cascade::engine
