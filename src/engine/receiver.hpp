@@ -130,6 +130,9 @@ std::string closedLabel;
 bool savedRadioRetry = false;
 };
 
+// WHAT THE AUTOMATIC AUDIO BUFFER LAST DID (it was Engine::AudioLeadNote; Engine keeps the name as an alias).
+enum class AudioLeadNote { kNone, kRaised, kRestored, kLowered };
+
 struct Receiver {
     explicit Receiver(cascade::core::Pipeline::Config cfg) : pipeline_(cfg) {}
     Receiver(const Receiver&) = delete;
@@ -392,6 +395,59 @@ struct Receiver {
     // change (source switch, Soapy rate change) finalizes the take: a WAV
     // whose header rate disagrees with its samples would replay detuned.
     double iqRecordRateHz_ = 0.0;
+    // ---- health counters ----
+    // Output-stream watchdog (see pollAudioHealth). The note is shown in the
+    // Sinks panel: a stream that had to be restarted is something the user
+    // should be told about, because the alternative reading of the same
+    // event - audio that stopped and came back on its own - is indistinguish-
+    // able from a fault in their radio.
+    double lastAudioProbeSec_ = 0.0;
+    int audioRecoveries_ = 0;
+    std::string audioHealthNote_;
+    int audioBufferAutoMs_ = 0;
+    AudioLeadNote audioLeadNote_ = AudioLeadNote::kNone;
+    int audioLeadNoteMs_ = 0;
+    int audioLeadNoteCount_ = 0;
+    int audioLeadQuietMinutes_ = 0;                                    // consecutive quiet, played minutes (the way back down)
+    // THE DEVICE OPEN, OFF THIS THREAD. Field report "hang ntdll.dll @
+    // InitializeWaveHandles" (0.96.4): picking an output device put the GUI
+    // thread inside waveOutOpen for 57 seconds. See core/audio_open.hpp for the
+    // whole argument; what matters here is that nothing on this thread may
+    // query the sink while inFlight() is true.
+    cascade::gui::AudioOpen audioOpen_;
+    // Once-a-minute starvation digest (see pollAudioHealth). Sampled every
+    // frame - not gated behind the 1 Hz watchdog above - because a ring can
+    // dip and recover well inside a second at 48 kHz, and a low-water mark
+    // read only once a second would miss most of the dips it exists to
+    // report. SIZE_MAX so the very first frame's real reading always beats
+    // the sentinel instead of needing a separate "have we sampled yet" flag.
+    double lastAudioLogSec_ = 0.0;
+    std::size_t audioRingLowWaterFrames_ = SIZE_MAX;
+    std::uint64_t audioUnderrunsAtLogStart_ = 0;
+    std::uint64_t audioPrimingAtLogStart_ = 0;
+    // A MINUTE THAT RELOADED PLUGINS IS NOT JUDGED (master 0.99.102, 8c0a4f41; the 0.99.104 merge). The 2026-10-29 field report: 27 starved
+    // callbacks during nine store installs in one minute raised the buffer to 960 ms - a deliberate stall of the thread that reloads, read as
+    // "this computer fell behind", costing a second of audio latency for the next quarter hour. pluginScans_ (declared further down, with the
+    // lists' fingerprint) already counts every rescanPlugins() before any work, early return included - master's pluginRescans_ is this
+    // counter, so there is no second one; the mark is where it stood when the minute opened. The first load (Engine::initialise) is consumed
+    // into the mark right after it, so the session's first minute is still judged on its own figures.
+    std::uint64_t audioRescansAtLogStart_ = 0;
+    // A USER'S STOP IS NOT THE MACHINE FALLING BEHIND (master 0.99.102, bde914f6): each stop of a running receiver starves the sink's last
+    // callback once, and three stops in a minute met the raise threshold on their own. receiverStops_ counts them (stopReceiver, running
+    // stops only); the mark is where the count stood when the minute opened. closeAudioMinute subtracts the minute's stops from its starved
+    // callbacks before judging a raise - one callback per stop, never below zero. The pass thread's, like closeAudioMinute.
+    std::uint64_t receiverStops_ = 0;
+    std::uint64_t audioStopsAtLogStart_ = 0;
+    // The pipeline ring's minute (pollDspMinute / closeDspMinute): its own clock, and the monotonic pipeline counters as they stood when
+    // it last closed (the drop and read counts, and - master 0.99.101 - the writes that were cut).
+    double lastDspLogSec_ = 0.0;
+    std::uint64_t dspDroppedAtMinute_ = 0;
+    std::uint64_t dspReadAtMinute_ = 0;
+    std::uint64_t dspCutAtMinute_ = 0;
+    // The session's maxima of the two marks closeDspMinute takes each minute (the ring's high water, the longest DSP block), for the
+    // bundle's dsp-ring line; publishRingFigures() adds the minute still open to them and publishes (core::setRingFigures).
+    std::size_t dspRingHighWaterSession_ = 0;
+    std::uint64_t dspBlockLongestNsSession_ = 0;
 };  // struct Receiver
 
 }  // namespace cascade::engine
