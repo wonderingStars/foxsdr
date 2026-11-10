@@ -1,0 +1,53 @@
+// The 3D well's specimen sheet (tests/test_slint_scene3d_well.cpp, docs 6.64): the well, the camera bar and a colour key on a 780 x 520 ground.
+//
+//   x,   y,   w,   h - what
+//  20,  20, 600, 380 - Scene3DWell: the picture the test paints with the CPU renderer, the labels it publishes, the camera as three two-way properties of the sheet
+//  20, 410, 600,  46 - Scene3DCameraBar: ELEVATION and AZIMUTH sliders over the same two properties, then RESET VIEW (which calls the well's reset())
+// 636,  20,  --,  -- - Scene3DRampKey, vertical, three ticks
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { Scene3DWell, Scene3DCameraBar, Scene3DRampKey, Scene3DLabel } from "../scene3d.slint";
+export { Theme, Skin, Workbench, Scene3DLabel }
+
+export component Scene3DWellSpecimen inherits Window {
+    width: 780px;
+    height: 520px;
+    background: Theme.bg;
+
+    in property <image> picture;
+    in property <image> ramp;
+    in property <[Scene3DLabel]> labels;
+    in property <string> empty-text;
+    in-out property <float> azimuth: -58;
+    in-out property <float> elevation: 32;
+    in-out property <float> zoom: 1;
+    in-out property <int> resets;
+    in-out property <int> moves;
+    out property <int> well-w: well.pixel-w;
+    out property <int> well-h: well.pixel-h;
+    out property <bool> well-focus: well.has-focus;
+
+    well := Scene3DWell {
+        x: 20px; y: 20px; width: 600px; height: 380px;
+        picture: root.picture;
+        labels: root.labels;
+        empty-text: root.empty-text;
+        azimuth <=> root.azimuth;
+        elevation <=> root.elevation;
+        zoom <=> root.zoom;
+        reset-view => { root.resets += 1; }
+        camera-moved => { root.moves += 1; }
+    }
+    Scene3DCameraBar {
+        x: 20px; y: 410px; width: 600px;
+        elevation <=> root.elevation;
+        azimuth <=> root.azimuth;
+        camera-changed => { root.moves += 1; }
+        reset-clicked => { well.reset(); }
+    }
+    Scene3DRampKey {
+        x: 636px; y: 20px;
+        title: @tr("Altitude");
+        ramp: root.ramp;
+        ticks: ["FL400", "FL200", "FL0"];
+    }
+}

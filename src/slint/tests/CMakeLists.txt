@@ -180,6 +180,11 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/patch_presets.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp")
         endif()
+        if(unit MATCHES "3d$")
+            # THE 3D VIEWS (docs 6.64): test_slint_host_<view>3d.cpp and test_slint_host_view3d.cpp compile the shared renderer and the remembered-view text with the view's own
+            # <view>3d_logic.cpp / <view>3d_compositor.cpp (found above). The renderer's ramps quote host_logic's heat(), which is already in the list.
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../scene3d.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../view3d_prefs.cpp")
+        endif()
         foxsdr_slint_logic_test(${name} ${_extra})
         if(unit STREQUAL "glyphs")
             target_include_directories(${name} PRIVATE "${FOXSDR_REPO_ROOT}/third_party/imgui")
@@ -216,6 +221,16 @@ foreach(src ${_foxsdr_slint_test_sources})
                 target_link_libraries(${name} PRIVATE winhttp)
             endif()
         endif()
+    elseif(family STREQUAL "scene3d")
+        # THE SHARED 3D SCENE FRAMEWORK (docs 6.64): the CPU renderer, headless. Its colour ramps quote host_logic's heat(), which speaks through i18n.
+        foxsdr_slint_logic_test(${name} "${CMAKE_CURRENT_SOURCE_DIR}/../scene3d.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp")
+        target_link_libraries(${name} PRIVATE slint_i18n)
+    elseif(family STREQUAL "scene3d_well")
+        # The 3D well in a window (docs 6.64): the specimen sheet is the Slint half, the renderer and its adapter (scene3d_slint.hpp) the C++ half.
+        foxsdr_slint_ui_test(${name} "${FOXSDR_SLINT_UI_DIR}/specimens/scene3d_well_specimen.slint")
+        target_sources(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../scene3d.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp")
+        target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api")
+        target_link_libraries(${name} PRIVATE slint_i18n)
     elseif(family STREQUAL "house_rules")
         foxsdr_slint_logic_test(${name})
     elseif(family STREQUAL "main_screen")

@@ -1494,6 +1494,7 @@ private:
     // spectrum; the held trace is drawn in bold over the live one. spectrumHold_ is the receiver's, patchHolds_ one per Spectrum part (its axis is its own columns).
     cascade::core::TraceMode spectrumTraceMode_ = cascade::core::TraceMode::Normal;
     double spectrumAverageMs_ = cascade::core::kTraceAverageDefaultMs;
+    std::string view3d_;                                          // the Slint window's 3D views' setting (docs 6.64), carried through this window unread so a save keeps it
     cascade::core::TraceHold spectrumHold_;                       // the receiver's
     std::map<cascade::core::patch::NodeId, cascade::core::TraceHold> patchHolds_;
     std::uint64_t spectrumHoldSeq_ = ~std::uint64_t{0};            // the frame the receiver's hold last took

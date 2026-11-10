@@ -203,6 +203,8 @@ AppConfig junkConfig() {
     c.bookmarkStackNames = false;
     c.spectrumTraceMode = "peak";
     c.spectrumAverageMs = 250;
+    // The 3D views' remembered view and camera (docs 6.64): a text, away from its empty default.
+    c.view3d = "waterfall:on=1,az=-30.00,el=50.00,zoom=2.00,o0=2";
     // Away from its default AND out of range, the same rule every other
     // clamped field here follows.
     c.mapTrailStyle = 99;
@@ -402,6 +404,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.bookmarkStackNames == b.bookmarkStackNames);
     CHECK(a.spectrumTraceMode == b.spectrumTraceMode);
     CHECK(a.spectrumAverageMs == b.spectrumAverageMs);
+    CHECK(a.view3d == b.view3d);
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
     CHECK(a.aircraftIconPx == b.aircraftIconPx);
     CHECK(a.mapTrailWidthPx == b.mapTrailWidthPx);
