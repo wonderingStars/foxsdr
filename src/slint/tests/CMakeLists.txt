@@ -44,7 +44,7 @@ function(foxsdr_slint_ui_test name slint_file)
     set_property(TARGET ${name} PROPERTY SLINT_EMBED_RESOURCES embed-files)   # fonts and icons inside the test binary, as in the product
     # The TRANSMIT page's test finds its controls by their accessible labels through the element tree (as the window's scripted input does), which is empty unless the
     # compiler emitted the element debug info (src/slint/CMakeLists.txt says why the variable is handed over).
-    if(name STREQUAL "test_slint_transmit")
+    if(name STREQUAL "test_slint_transmit" OR name STREQUAL "test_slint_radio_pane")
         set(SLINT_COMPILER_ENV_VARS SLINT_EMIT_DEBUG_INFO=1)
     endif()
     slint_target_sources(${name} "${slint_file}")

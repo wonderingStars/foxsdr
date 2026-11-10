@@ -1,0 +1,365 @@
+// FoxSDR Slint front end - RADIO PANE: one radio's pane of the multi-radio screen (docs/multi-radio-screen-design.md 3.4, built in S2).
+// Measurements are the hand-over's pane (556 x 353 in a 2 x 2 grid at 1440 x 900):
+//
+//   header        30 px   R-tag (the radio's colour), device name, frequency, mode chip, the four lamps RUN / DEC / MUTE / FAIL, STOP / START
+//   readout row   28 px   GAIN, SQL, VOL, RATE, BIAS, the decoder chip, then the peak and SPAN at the right (they left the spectrum's own 76 px header)
+//   spectrum      the compact SpectrumView (its header is not drawn; the ribbon and its names are the only thing above the plot)
+//   splitter      6 px    resizes spectrum against waterfall inside this pane
+//   waterfall     the WaterfallView without its strength key (the key is the receiver view's)
+//
+// THE HEADER'S OVERFLOW RULE (design 3.5, answer 9): the frequency never gives way; the device name elides first (the full name is its tip); below `caption-min-width`
+// the four lamps lose their captions and keep them in the tooltip (the caption-less Lamp), so the row still fits at about 480 px.
+//
+// THE RADIO IS IN EVERY CONTROL'S NAME: "Stop Radio 2", "Select Radio 2", "Radio 2 spectrum", "Radio 2 waterfall" (the sentences come from the host in `RadioPaneData`, the figures'
+// labels are "Radio 2: <caption> <value>"), so labels stay unique with several panes on a screen, a
+// screen reader says which radio, and the drive language needs no parent scope. Every callback carries the radio's number (RadioPaneData.radio, 1-based) as its first
+// argument; the pane draws and reports, it decides nothing: selecting, retuning and stopping are the host's (the workspace, S3).
+//
+// Everything the pane shows arrives in ONE `RadioPaneData`, the element of the host's pane model; positions that come from a frequency are fractions 0..1 of the plot
+// (the host does the arithmetic, as for the receiver view). The pane picture's size is not fixed here: the images fill their wells.
+import { Theme } from "theme.slint";
+import { Chip, ChipTone, LampState } from "chips.slint";
+import { Lamp } from "lamps.slint";
+import { Key } from "keys.slint";
+import { Splitter } from "tabs.slint";
+import { ElidedHint } from "tooltip.slint";
+import { SpectrumView, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode } from "spectrum.slint";
+import { WaterfallView, AgeTick } from "waterfall.slint";
+
+export struct RadioPaneData {
+    radio: int,                      // the radio's number, 1-based: R1 is 1. Names the tag and colours the pane by position
+    // THE WORDS OF THE LABELS, built by the host in the interface language (each is a sentence with the radio's number in it, so it cannot be assembled here):
+    prefix: string,                  // "Radio 2": the front of every figure's label ("Radio 2: GAIN 32 dB") and the pane's own label
+    select-label: string,            // "Select Radio 2"
+    stop-label: string,              // "Stop Radio 2" while it runs, "Start Radio 2" while it does not
+    spectrum-label: string,          // "Radio 2 spectrum"
+    waterfall-label: string,         // "Radio 2 waterfall"
+    resize-label: string,            // "Resize Radio 2"
+    device: string,                  // "RTL-SDR #0" - elided first when the header is short
+    frequency: string,               // "145.500000 MHz" - never elided
+    mode: string,                    // "NFM"
+    running: bool,
+    decoding: bool,
+    muted: bool,
+    failed: bool,
+    gain: string,                    // the readout row's figures, formatted by the host: "32 dB", "AUTO"
+    squelch: string,
+    volume: string,
+    rate: string,
+    bias-tee: bool,
+    decoder: string,                 // what runs on this radio: "APRS"; "" draws no chip
+    peak: string,                    // "-41.2 dBFS"
+    span: string,                    // "SPAN 2.400 MHz"
+    trace: image,
+    picture: image,
+    trace-mode: int,                 // 0 normal, 1 peak hold, 2 average
+    freq-ticks: [AxisTick],
+    db-ticks: [DbTick],
+    age-ticks: [AgeTick],
+    axis-unit: string,
+    bands: [BandSegment],
+    bookmarks: [BookmarkMark],
+    marks: [PluginMark],
+    wf-marks: [PluginMark],
+    markers: [UserMarker],
+    vfo-pos: float,
+    vfo-half: float,
+    show-vfo: bool,
+    cursor-visible: bool,
+    cursor-pos: float,
+    cursor-text: string,
+    foot-left: string,
+    foot-tuned: string,
+    foot-rest: string,
+}
+
+// One figure of the readout row: a 9 px caption and its value in the mono face.
+component Readout inherits Rectangle {
+    in property <string> prefix;                        // "Radio 2": every label names its radio, so two panes never share one
+    in property <string> caption;
+    in property <string> value;
+    in property <color> ink: Theme.fg-soft;
+    width: row.preferred-width;
+    accessible-role: text;
+    accessible-label: root.prefix + ": " + root.caption + " " + root.value;
+    row := HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+        Text {
+            text: root.caption.to-uppercase();
+            vertical-alignment: center;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-tiny;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: Theme.font-tiny * 0.08;
+            color: Theme.muted;
+        }
+        Text {
+            text: root.value;
+            vertical-alignment: center;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-cap;
+            font-weight: Theme.weight-semibold;
+            color: root.ink;
+        }
+    }
+}
+
+export component RadioPane inherits Rectangle {
+    in property <RadioPaneData> data;
+    in property <bool> selected;                       // the pane the strip, the sections panel and the banks show: a 2 px outline in the radio's colour
+    in property <int> ribbon-size: 2;                  // 0 none, 1 small, 2 medium, 3 large; the toolbar's Band plan key sets 0 for every pane
+    in property <length> caption-min-width: 480px;     // below this the lamps lose their captions
+    // The readout captions. The defaults are words the catalogues already hold, so they are long (SQUELCH, VOLUME, SAMPLE RATE, BIAS TEE, PEAK IN PASSBAND); the host
+    // passes the hand-over's short words (SQL, VOL, RATE, BIAS, PEAK) once the catalogues have them (docs/multi-radio-records/screen-s1-s2.md, decision 1).
+    in property <string> gain-caption: @tr("GAIN");
+    in property <string> squelch-caption: @tr("SQUELCH");
+    in property <string> volume-caption: @tr("VOLUME");
+    in property <string> rate-caption: @tr("SAMPLE RATE");
+    in property <string> bias-caption: @tr("BIAS TEE");
+    in property <string> peak-caption: @tr("PEAK IN PASSBAND");
+    in-out property <float> split-ratio: 0.45;         // the spectrum's share of the body under the readout row
+    out property <color> tint: Theme.radio-colour(root.data.radio);
+    out property <bool> captions-shown: root.width >= root.caption-min-width;
+
+    callback select-requested(int);                    // radio: a click on the tag, the header or the readout row
+    callback stop-clicked(int);                        // radio: the STOP / START key
+    callback spectrum-hover(int, float, float);        // radio, xfrac, yfrac; (-1, -1) on leave
+    callback spectrum-clicked(int, float, bool);       // radio, xfrac, shift
+    callback spectrum-double-clicked(int, float);
+    callback spectrum-menu-requested(int, float, length, length);   // radio, xfrac, pointer position in the pane's spectrum
+    callback band-dragged(int, float);                 // radio, dxfrac
+    callback edge-dragged(int, float);                 // radio, half-width fraction
+    callback spectrum-wheel(int, float, int, bool);    // radio, xfrac, notches, shift
+    callback waterfall-hover(int, float, float);
+    callback waterfall-clicked(int, float, bool);
+    callback waterfall-panned(int, float);
+    callback waterfall-double-clicked(int);
+    callback waterfall-menu-requested(int, float, length, length);
+    callback waterfall-wheel(int, float, int, bool);
+    callback marker-hovered(int, int);                 // radio, marker index
+
+    private property <length> header-h: 30px;
+    // THE READOUT ROW holds what fits, in this order of loss: PEAK first, then the decoder chip, BIAS, RATE, VOL, SQL, GAIN; SPAN is pinned at the right and never goes.
+    // Each left-hand figure is shown whole or not at all, and PEAK only when it clears the last one shown.
+    private property <length> gap: 7px;                // between two readouts
+    private property <length> left-limit: span.x - root.gap;
+    private property <bool> gain-fits: gain.x + gain.width <= root.left-limit;
+    private property <bool> sql-fits: sql.x + sql.width <= root.left-limit;
+    private property <bool> vol-fits: vol.x + vol.width <= root.left-limit;
+    private property <bool> rate-fits: rate.x + rate.width <= root.left-limit;
+    private property <bool> bias-fits: bias.x + bias.width <= root.left-limit;
+    private property <bool> deco-fits: root.data.decoder != "" && deco.x + deco.width <= root.left-limit;
+    private property <length> left-end: root.deco-fits ? deco.x + deco.width : root.bias-fits ? bias.x + bias.width : root.rate-fits ? rate.x + rate.width
+        : root.vol-fits ? vol.x + vol.width : root.sql-fits ? sql.x + sql.width : root.gain-fits ? gain.x + gain.width : 8px;
+    private property <length> readout-h: 28px;
+    private property <length> body-h: max(0px, root.height - root.header-h - root.readout-h);
+    private property <length> spec-h: max(60px, (root.body-h - Theme.splitter-h) * root.split-ratio);
+
+    background: Theme.well-deep;
+    clip: true;
+    accessible-role: groupbox;
+    accessible-label: root.data.prefix;
+
+    // ---- header (30 px) ----
+    header := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.header-h;
+        background: Theme.panel;
+        // anything not a control of its own selects the pane
+        TouchArea { clicked => { root.select-requested(root.data.radio); } }
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 8px;
+            alignment: stretch;
+            // the R-tag: the radio's colour with its number; a press selects the radio
+            tag := Rectangle {
+                width: 30px;
+                height: 18px;
+                y: (root.header-h - self.height) / 2;
+                border-radius: 4px;
+                background: root.tint;
+                accessible-role: button;
+                accessible-label: root.data.select-label;
+                accessible-action-default => { root.select-requested(root.data.radio); }
+                Text {
+                    text: "R" + root.data.radio;   // not-translated: the radio's tag
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-cap;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.bg;
+                }
+                TouchArea { clicked => { root.select-requested(root.data.radio); } }
+            }
+            // the device name: the first thing to give way
+            ElidedHint {
+                text: root.data.device;
+                ink: Theme.fg-soft;
+                font-size: Theme.font-small;
+                font-weight: 600;
+                horizontal-stretch: 1;
+                min-width: 0px;
+                accessible-role: text;
+                accessible-label: root.data.prefix + ": " + root.data.device;
+            }
+            // the frequency: never elided, never shrunk
+            Text {
+                text: root.data.frequency;
+                vertical-alignment: center;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-body;
+                font-weight: Theme.weight-semibold;
+                color: Theme.accent-soft;
+                horizontal-stretch: 0;
+                accessible-role: text;
+                accessible-label: root.data.prefix + ": " + root.data.frequency;
+            }
+            Chip {
+                label: root.data.mode;
+                mono: true;
+                y: (root.header-h - self.height) / 2;
+                accessible-label: root.data.prefix + ": " + root.data.mode;
+            }
+            // the four lamps; a short pane keeps the dots and moves the words into the tooltips
+            Lamp { caption: root.captions-shown ? @tr("RUN") : ""; tooltip: @tr("RUN"); state: root.data.running ? LampState.green : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
+            Lamp { caption: root.captions-shown ? @tr("DEC") : ""; tooltip: @tr("DEC"); state: root.data.decoding ? LampState.green : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
+            Lamp { caption: root.captions-shown ? @tr("MUTE") : ""; tooltip: @tr("MUTE"); state: root.data.muted ? LampState.amber : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
+            Lamp { caption: root.captions-shown ? @tr("FAIL") : ""; tooltip: @tr("FAIL"); state: root.data.failed ? LampState.red : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
+            Key {
+                label: root.data.running ? @tr("STOP") : @tr("START");
+                small: true;
+                danger: root.data.running;
+                y: (root.header-h - self.height) / 2;
+                accessible-label: root.data.stop-label;
+                clicked => { root.stop-clicked(root.data.radio); }
+            }
+        }
+        Rectangle { x: 0px; y: parent.height - Theme.hairline; width: parent.width; height: Theme.hairline; background: Theme.line; }
+    }
+
+    // ---- readout row (28 px) ----
+    readouts := Rectangle {
+        x: 0px;
+        y: root.header-h;
+        width: root.width;
+        height: root.readout-h;
+        background: Theme.strip;
+        clip: true;
+        TouchArea { clicked => { root.select-requested(root.data.radio); } }
+        // PLACED, NOT LAID OUT: a row that cannot hold everything drops its LAST items whole (never half a figure), so each readout is hidden when it would pass `left-limit`
+        // (the `*-fits` rules above); SPAN is pinned at the right and keeps its place, PEAK beside it appears from `caption-min-width` up when it clears the rest. A layout would shrink them all instead.
+        gain := Readout { x: 8px; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.gain-caption; value: root.data.gain; visible: root.gain-fits; }
+        sql := Readout { x: gain.x + gain.width + root.gap; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.squelch-caption; value: root.data.squelch; visible: root.sql-fits; }
+        vol := Readout { x: sql.x + sql.width + root.gap; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.volume-caption; value: root.data.volume; visible: root.vol-fits; }
+        rate := Readout { x: vol.x + vol.width + root.gap; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.rate-caption; value: root.data.rate; visible: root.rate-fits; }
+        bias := Readout { x: rate.x + rate.width + root.gap; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.bias-caption; value: root.data.bias-tee ? @tr("ON") : @tr("OFF"); ink: root.data.bias-tee ? Theme.lamp-amber : Theme.fg-soft; visible: root.bias-fits; }
+        deco := Chip {
+            x: bias.x + bias.width + root.gap;
+            y: (root.readout-h - self.height) / 2;
+            visible: root.deco-fits;
+            label: root.data.decoder;
+            tone: ChipTone.good;
+            accessible-label: root.data.prefix + ": " + root.data.decoder;
+        }
+        span := Chip {
+            x: root.width - 8px - self.width;
+            y: (root.readout-h - self.height) / 2;
+            label: root.data.span;
+            mono: true;
+            accessible-label: root.data.prefix + ": " + root.data.span;
+        }
+        peak := Readout {
+            x: span.x - root.gap - self.width;
+            y: 0px;
+            height: root.readout-h;
+            visible: root.captions-shown && self.x >= root.left-end + root.gap;
+            prefix: root.data.prefix;
+            caption: root.peak-caption;
+            value: root.data.peak;
+            ink: Theme.accent-soft;
+        }
+        Rectangle { x: 0px; y: parent.height - Theme.hairline; width: parent.width; height: Theme.hairline; background: Theme.line; }
+    }
+
+    // ---- the wells ----
+    spectrum := SpectrumView {
+        x: 0px;
+        y: root.header-h + root.readout-h;
+        width: root.width;
+        height: root.spec-h;
+        compact: true;
+        trace: root.data.trace;
+        db-ticks: root.data.db-ticks;
+        freq-ticks: root.data.freq-ticks;
+        axis-unit: root.data.axis-unit;
+        trace-mode: root.data.trace-mode == 1 ? TraceMode.peak-hold : root.data.trace-mode == 2 ? TraceMode.average : TraceMode.normal;
+        vfo-pos: root.data.vfo-pos;
+        vfo-half: root.data.vfo-half;
+        show-vfo: root.data.show-vfo;
+        bands: root.data.bands;
+        ribbon-size: root.ribbon-size;
+        bookmarks: root.data.bookmarks;
+        plugin-marks: root.data.marks;
+        user-markers: root.data.markers;
+        cursor-visible: root.data.cursor-visible;
+        cursor-pos: root.data.cursor-pos;
+        cursor-text: root.data.cursor-text;
+        accessible-label: root.data.spectrum-label;
+        hover(x, y) => { root.spectrum-hover(root.data.radio, x, y); }
+        clicked(x, shift) => { root.spectrum-clicked(root.data.radio, x, shift); }
+        double-clicked(x) => { root.spectrum-double-clicked(root.data.radio, x); }
+        right-clicked(x, px, py) => { root.spectrum-menu-requested(root.data.radio, x, px, py); }
+        band-dragged(dx) => { root.band-dragged(root.data.radio, dx); }
+        edge-dragged(h) => { root.edge-dragged(root.data.radio, h); }
+        wheel(x, n, shift) => { root.spectrum-wheel(root.data.radio, x, n, shift); }
+    }
+    Splitter {
+        x: 0px;
+        y: root.header-h + root.readout-h + root.spec-h;
+        width: root.width;
+        accessible-label: root.data.resize-label;
+        moved(dy) => { root.split-ratio = max(0.1, min(0.9, root.split-ratio + dy / max(1px, root.body-h - Theme.splitter-h))); }
+    }
+    waterfall := WaterfallView {
+        x: 0px;
+        y: root.header-h + root.readout-h + root.spec-h + Theme.splitter-h;
+        width: root.width;
+        height: max(0px, root.body-h - root.spec-h - Theme.splitter-h);
+        picture: root.data.picture;
+        age-ticks: root.data.age-ticks;
+        show-key: false;
+        foot-left: root.data.foot-left;
+        foot-tuned: root.data.foot-tuned;
+        foot-rest: root.data.foot-rest;
+        vfo-pos: root.data.vfo-pos;
+        show-vfo: root.data.show-vfo;
+        plugin-marks: root.data.wf-marks;
+        user-markers: root.data.markers;
+        cursor-visible: root.data.cursor-visible;
+        cursor-pos: root.data.cursor-pos;
+        cursor-text: root.data.cursor-text;
+        accessible-label: root.data.waterfall-label;
+        hover(x, y) => { root.waterfall-hover(root.data.radio, x, y); }
+        clicked(x, shift) => { root.waterfall-clicked(root.data.radio, x, shift); }
+        panned(dx) => { root.waterfall-panned(root.data.radio, dx); }
+        double-clicked => { root.waterfall-double-clicked(root.data.radio); }
+        right-clicked(x, px, py) => { root.waterfall-menu-requested(root.data.radio, x, px, py); }
+        wheel(x, n, shift) => { root.waterfall-wheel(root.data.radio, x, n, shift); }
+        marker-hovered(i) => { root.marker-hovered(root.data.radio, i); }
+    }
+
+    // ---- the selection outline: 2 px in the radio's colour over the pane, taking no input; an unselected pane has a hairline ----
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        border-width: root.selected ? 2px : Theme.hairline;
+        border-color: root.selected ? root.tint : Theme.line;
+    }
+}
