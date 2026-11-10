@@ -19,6 +19,7 @@
 #include "host_duties.hpp"
 #include "main.h"
 #include "radar3d_logic.hpp"
+#include "tunnel3d_logic.hpp"
 #include "waterfall3d_compositor.hpp"
 
 namespace foxsdr::slintview3d {
@@ -49,6 +50,9 @@ public:
     void publish(const Wf3dContext& wf);
     // The radar scope's 3D AIRSPACE (the SCOPE tab): what the scope plots this tick (ScopePublisher::radar3dFeed). Repainted only while the scope is up with a position and the 3D view is chosen.
     void publishRadar(const Radar3dFeed& feed, std::int64_t nowMs);
+    // The demod scope's 3D TUNNEL (the DEMOD SCOPE window on a baseband input): the newest I/Q samples (ScopePublisher::tunnel3dFeed). Repainted only while the window is open on I/Q or VECTOR
+    // with the tunnel chosen and something moved.
+    void publishTunnel(const TunnelFeed& feed, std::int64_t nowMs);
 
     // The drive script's read-back (`state view3d.<what>`): fills `out` and returns "" or says what it does not know.
     std::string readState(const std::string& what, std::string& out) const;

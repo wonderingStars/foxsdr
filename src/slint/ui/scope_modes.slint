@@ -13,7 +13,7 @@ import { Key } from "keys.slint";
 import { Checkbox } from "fields.slint";
 import { TornWindow } from "tabs.slint";
 import { PositionOffers, PositionOffersView } from "tools_bank.slint";
-import { View3D, Scene3DViewToggleInline, Radar3DBar, Radar3DWell } from "scene3d_views.slint";   // the 3D AIRSPACE (docs 6.64)
+import { View3D, Scene3DViewToggleInline, Radar3DBar, Radar3DWell, Tunnel3DControls, Tunnel3DWell } from "scene3d_views.slint";   // the 3D AIRSPACE (docs 6.64)
 
 // ---- the demod scope ----
 export struct MpxMarkItem {
@@ -244,8 +244,14 @@ export component DemodScopeWindow inherits Rectangle {
                 LatchKey { label: @tr("AVG"); on: root.model.display == 1; tooltip: @tr("Average successive traces. A spectrum settles into its steady shape;\na waveform sheds its noise if it repeats (a tone), and fades towards\nthe centre if it does not (speech) - that is what averaging does."); clicked => { root.demod-display(1); } }
                 LatchKey { label: @tr("PERSIST"); on: root.model.display == 2; tooltip: @tr("Keep a fading memory of the trace behind the live one, like a\nlong-persistence tube: peaks and excursions stay visible for a moment."); clicked => { root.demod-display(2); } }
             }
+            // --- THE 3D TUNNEL (docs 6.64): VIEW VECTOR / 3D TUNNEL on a baseband input (I/Q or VECTOR); in 3D its strip: TIME DEPTH, COLOUR BY, RESET VIEW ---
+            if root.model.baseband : HorizontalLayout { spacing: 12px; alignment: start; height: 28px;
+                Scene3DViewToggleInline { three-d: View3D.tunnel-on; label-2d: @tr("VECTOR"); label-3d: @tr("3D TUNNEL"); selected(on) => { View3D.tunnel-view-selected(on); } }
+            }
+            if root.model.baseband && View3D.tunnel-on : Tunnel3DControls { }
             // --- the tube takes what is left ---
-            DemodTube { model: root.model; vertical-stretch: 1; sized(w, h) => { root.demod-resized(w, h); } }
+            if !(View3D.tunnel-on && root.model.baseband) : DemodTube { model: root.model; vertical-stretch: 1; sized(w, h) => { root.demod-resized(w, h); } }
+            if View3D.tunnel-on && root.model.baseband : Tunnel3DWell { vertical-stretch: 1; caption: root.model.caption; }
         }
     }
 }

@@ -222,6 +222,24 @@ foxsdr::slintview3d::Radar3dFeed ScopePublisher::radar3dFeed() const {
     return feed;
 }
 
+foxsdr::slintview3d::TunnelFeed ScopePublisher::tunnel3dFeed() const {
+    foxsdr::slintview3d::TunnelFeed f;
+    const Impl& d = *impl_;
+    f.shown = d.demod.open && cascade::gui::scopeSignalIsBaseband(d.demod.signalNow());
+    if (!f.shown) { return f; }
+    const DemodFeed& feed = d.demod.feed();
+    f.live = d.demod.live();
+    f.rateHz = feed.iqRateHz;
+    if (feed.iqI != nullptr && feed.iqQ != nullptr && feed.iqCount > 0) {
+        f.i.assign(feed.iqI, feed.iqI + feed.iqCount);
+        f.q.assign(feed.iqQ, feed.iqQ + feed.iqCount);
+    }
+    const DemodReadouts r = d.demod.readouts();
+    f.dead = r.dead;
+    f.caption = r.caption;
+    return f;
+}
+
 void ScopePublisher::radarPublish(const FoxReceiverState& state, double nowS) {
     Impl& d = *impl_;
     const bool on = ui_.get_view_index() == 2;

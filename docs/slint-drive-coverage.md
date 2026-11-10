@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2020 | 462 | 82 | 1476 | 0 |
+| 2037 | 470 | 82 | 1485 | 0 |
 
-Of the 1172 rows that are controls (the 848 readout-like rows left out): 462 asserted, 82 driven without a read-back, 628 not drivable.
+Of the 1182 rows that are controls (the 855 readout-like rows left out): 470 asserted, 82 driven without a read-back, 630 not drivable.
 
-NOT DRIVABLE by reason: readout 848, other 209, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 63, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 855, other 210, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 64, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,7 +199,7 @@ NOT DRIVABLE by reason: readout 848, other 209, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
-| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 42 | 23 | 0 | 19 | 15 | 0 |
+| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 59 | 31 | 0 | 28 | 22 | 0 |
 
 ## Every row
 
@@ -3117,4 +3117,21 @@ NOT DRIVABLE by reason: readout 848, other 209, needs a signal (no fixture) 120,
 | 3040 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
 | 3041 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | radar-3d.txt | state cfg.view3d contains radar:on=1 and radar:on=0 after the way back |
 | 3042 | Click an aircraft on the airspace to select it | gesture | NOT DRIVABLE | - | deferred: needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
+| 3043 | VIEW VECTOR | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "VECTOR"#2 (the toggle's own key); state view3d.tunnel.on 1 -> 0, cfg.view3d contains tunnel:on=0 |
+| 3044 | VIEW 3D TUNNEL | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "3D TUNNEL"; state view3d.tunnel.on 0 -> 1, cfg.view3d contains tunnel:on=1 |
+| 3045 | The tunnel | picture | DRIVEN+ASSERTED | tunnel-3d.txt | state view3d.tunnel.renders, points, pixels, labels, w, h (what the renderer drew from the scope's I/Q) |
+| 3046 | TIME DEPTH | slider | DRIVEN+ASSERTED | tunnel-3d.txt | slider "TIME DEPTH" 0 / 1 / 0.5333; state view3d.tunnel.depth 0 / 15 / 8 and depthms, points |
+| 3047 | COLOUR BY Time / Level | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "Time" / "Level"; state view3d.tunnel.colour 0 / 1 |
+| 3048 | RESET VIEW (tunnel) | key | DRIVEN+ASSERTED | tunnel-3d.txt | click "RESET VIEW"; state view3d.tunnel.azimuth -35, zoom 1 |
+| 3049 | Drag to rotate, wheel to zoom, double-click to reset (tunnel) | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3050 | The well's keys (tunnel) | keys | DRIVEN+ASSERTED | tunnel-3d.txt | press "Tunnel"; key left, +; state view3d.tunnel.azimuth, zoom |
+| 3051 | Small 2D constellation | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3052 | Axis ticks and captions | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3053 | The scope's caption and its sentence when nothing arrives | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3054 | EVM readout | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3055 | SNR readout | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3056 | SYMBOL RATE readout | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3057 | LOCK lamp | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
+| 3058 | COLOUR BY Symbol | key (segment) | NOT DRIVABLE | - | deferred: needs symbol decisions; COLOUR BY Level takes its place, true to the samples |
+| 3059 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | tunnel-3d.txt | state cfg.view3d contains tunnel:on=1 and tunnel:on=0 after the way back |
 

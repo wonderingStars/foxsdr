@@ -9,7 +9,8 @@
 // View3D is the global every 3D view's state lives in (the host's publisher, view3d_publish.cpp, sets it and answers its callbacks), so main.slint carries one line per view and
 // the views of the next lane add theirs here without touching the pages they sit in.
 import { Theme } from "theme.slint";
-import { SegGroup, SegKey, Caption } from "keys.slint";
+import { SegGroup, SegKey, Caption, Key as KeyButton } from "keys.slint";   // (aliased: the `Key` of a key-pressed handler is the key-name namespace)
+import { SliderGroup } from "sliders.slint";
 import { Scene3DWell, Scene3DCameraBar, Scene3DRampKey, Scene3DLabel } from "scene3d.slint";
 export { Scene3DLabel }
 
@@ -47,6 +48,24 @@ export global View3D {
     callback radar-view-selected(bool);
     callback radar-scale-selected(int);
     callback radar-reset-view();
+
+    // ---- the demod scope's 3D TUNNEL (the DEMOD SCOPE window on a baseband input, VIEW VECTOR / 3D TUNNEL) ----
+    in-out property <bool> tunnel-on: false;              // the tunnel is chosen (it shows while the input is I/Q or VECTOR; the vector figure is the default)
+    in property <image> tunnel-picture;
+    in property <[Scene3DLabel]> tunnel-labels;
+    in property <string> tunnel-empty;
+    in-out property <float> tunnel-azimuth: -35;
+    in-out property <float> tunnel-elevation: 18;
+    in-out property <float> tunnel-zoom: 1;
+    in property <float> tunnel-depth-pos: 0.5333;         // TIME DEPTH's slider, 0..1 (sixteen detents; 40 ms is the ninth)
+    in property <string> tunnel-depth-text;               // "40 ms"
+    in property <int> tunnel-colour: 0;                   // COLOUR BY: 0 Time, 1 Level
+    in-out property <int> tunnel-w;
+    in-out property <int> tunnel-h;
+    callback tunnel-view-selected(bool);
+    callback tunnel-depth-moved(float);
+    callback tunnel-colour-selected(int);
+    callback tunnel-reset-view();
 }
 
 // VIEW: the 2D screen / the 3D one. `label-3d` is the page's own word (3D SURFACE, 3D AIRSPACE, 3D TUNNEL, 3D TRACK); the 2D label is the page's own too (2D, PPI, VECTOR, TABLE, MAP).
@@ -231,4 +250,52 @@ export component Radar3DWell inherits Rectangle {
         ticks: root.key-ticks;
         vertical: true;
     }
+}
+
+// The demod scope's TIME DEPTH, COLOUR BY and RESET VIEW, shown while the 3D TUNNEL is up. EVM, SNR, SYMBOL RATE, LOCK and COLOUR BY Symbol are not here: the host sees samples, not symbols (docs 6.64).
+export component Tunnel3DControls inherits Rectangle {
+    height: 54px;
+    HorizontalLayout {
+        spacing: 14px; alignment: start;
+        VerticalLayout { alignment: center; width: 170px;
+            SliderGroup {
+                caption: @tr("TIME DEPTH");
+                readout: View3D.tunnel-depth-text;
+                value: View3D.tunnel-depth-pos;
+                changed(v) => { View3D.tunnel-depth-moved(v); }
+            }
+        }
+        VerticalLayout { alignment: center; width: 130px; spacing: 3px;
+            Caption { label: @tr("COLOUR BY"); font-size: Theme.font-tiny; }
+            SegGroup { small: true;
+                SegKey { label: @tr("Time"); small: true; min-w: 0px; on: View3D.tunnel-colour == 0; clicked => { View3D.tunnel-colour-selected(0); } }
+                SegKey { label: @tr("Level"); small: true; min-w: 0px; on: View3D.tunnel-colour == 1; clicked => { View3D.tunnel-colour-selected(1); } }
+            }
+        }
+        VerticalLayout { alignment: center; KeyButton { label: @tr("RESET VIEW"); small: true; clicked => {
+            View3D.tunnel-azimuth = -35; View3D.tunnel-elevation = 18; View3D.tunnel-zoom = 1; View3D.tunnel-reset-view(); } } }
+    }
+}
+
+// The tunnel's well: the picture (the 2D constellation inset is painted into it), its axis labels, the scope's own caption of the input in the corner.
+export component Tunnel3DWell inherits Rectangle {
+    in property <string> caption;
+    out property <int> pixel-w: well.pixel-w;
+    out property <int> pixel-h: well.pixel-h;
+    init => { View3D.tunnel-w = well.pixel-w; View3D.tunnel-h = well.pixel-h; }
+    changed pixel-w => { View3D.tunnel-w = root.pixel-w; }
+    changed pixel-h => { View3D.tunnel-h = root.pixel-h; }
+    well := Scene3DWell {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        picture: View3D.tunnel-picture;
+        labels: View3D.tunnel-labels;
+        empty-text: View3D.tunnel-empty;
+        label: @tr("Tunnel");
+        default-azimuth: -35; default-elevation: 18;
+        azimuth <=> View3D.tunnel-azimuth;
+        elevation <=> View3D.tunnel-elevation;
+        zoom <=> View3D.tunnel-zoom;
+        reset-view => { View3D.tunnel-reset-view(); }
+    }
+    Text { x: parent.width - self.preferred-width - 8px; y: 6px; text: root.caption; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.fg-soft; }
 }

@@ -23,3 +23,12 @@
 3030	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
 3031	ASSERTED	radar-3d.txt	press "Airspace"; key left, +, -; state view3d.radar.azimuth, zoom
 3041	ASSERTED	radar-3d.txt	state cfg.view3d contains radar:on=1 and radar:on=0 after the way back
+3043	ASSERTED	tunnel-3d.txt	click "VECTOR"#2 (the toggle's own key); state view3d.tunnel.on 1 -> 0, cfg.view3d contains tunnel:on=0
+3044	ASSERTED	tunnel-3d.txt	click "3D TUNNEL"; state view3d.tunnel.on 0 -> 1, cfg.view3d contains tunnel:on=1
+3045	ASSERTED	tunnel-3d.txt	state view3d.tunnel.renders, points, pixels, labels, w, h (what the renderer drew from the scope's I/Q)
+3046	ASSERTED	tunnel-3d.txt	slider "TIME DEPTH" 0 / 1 / 0.5333; state view3d.tunnel.depth 0 / 15 / 8 and depthms, points
+3047	ASSERTED	tunnel-3d.txt	click "Time" / "Level"; state view3d.tunnel.colour 0 / 1
+3048	ASSERTED	tunnel-3d.txt	click "RESET VIEW"; state view3d.tunnel.azimuth -35, zoom 1
+3049	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3050	ASSERTED	tunnel-3d.txt	press "Tunnel"; key left, +; state view3d.tunnel.azimuth, zoom
+3059	ASSERTED	tunnel-3d.txt	state cfg.view3d contains tunnel:on=1 and tunnel:on=0 after the way back

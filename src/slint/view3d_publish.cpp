@@ -7,11 +7,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "core/config.hpp"
 #include "core/i18n.hpp"
 #include "scene3d_slint.hpp"
 #include "radar3d_compositor.hpp"
+#include "tunnel3d_compositor.hpp"
 #include "view3d_prefs.hpp"
 #include "waterfall3d_logic.hpp"
 
@@ -33,6 +35,14 @@ std::string numSig(double v) {
     return b;
 }
 
+// "40 ms": TIME DEPTH's readout (the unit is the same in every language)
+std::string kTunnelDepthLabels(int index) {
+    const double ms = kTunnelDepthsMs[static_cast<std::size_t>(std::clamp(index, 0, 15))];
+    char b[24];
+    std::snprintf(b, sizeof(b), "%.0f ms", ms);
+    return b;
+}
+
 ViewState waterfallDefaults() {
     ViewState s;
     const scene3d::Camera c = waterfall3dDefaultCamera();
@@ -45,6 +55,13 @@ ViewState radarDefaults() {
     ViewState s;
     setCamera(s, radar3dDefaultCamera());
     s.opt = {0, 0, 0, 0};   // ALTITUDE SCALE x1
+    return s;
+}
+
+ViewState tunnelDefaults() {
+    ViewState s;
+    setCamera(s, tunnelDefaultCamera());
+    s.opt = {kTunnelDefaultDepth, 0, 0, 0};   // TIME DEPTH 40 ms, COLOUR BY Time
     return s;
 }
 
@@ -91,6 +108,16 @@ struct View3DPublisher::Impl {
     int radarW = 0, radarH = 0;
     bool radarRampSet = false;
 
+    // ---- the demod scope's 3D tunnel ----
+    ViewState tunnel = tunnelDefaults();
+    scene3d::SceneSurface tunnelSurface;
+    scene3d::Scene tunnelScene;
+    std::string tunnelSig;
+    std::size_t tunnelRenders = 0, tunnelPoints = 0, tunnelPixels = 0, tunnelLabels = 0;
+    double tunnelLastMs = 0.0, tunnelWorstMs = 0.0, tunnelDepthMs = 0.0;
+    int tunnelW = 0, tunnelH = 0;
+    std::string depthText;
+
     Impl(MainWindow& u, foxsdr::slinthost::HostDuties& d, bool b) : ui(u), duties(d), bounded(b) {}
 
     void load() {
@@ -101,6 +128,9 @@ struct View3DPublisher::Impl {
         wf.opt[1] = std::clamp(wf.opt[1], 0, 1);
         radar = prefs.get(kViewRadar, radarDefaults());
         radar.opt[0] = std::clamp(radar.opt[0], 0, 2);
+        tunnel = prefs.get(kViewTunnel, tunnelDefaults());
+        tunnel.opt[0] = std::clamp(tunnel.opt[0], 0, 15);
+        tunnel.opt[1] = std::clamp(tunnel.opt[1], 0, 1);
     }
 
     void apply() {
@@ -119,6 +149,14 @@ struct View3DPublisher::Impl {
         g.set_radar_zoom(radar.zoom);
         g.set_radar_scale(radar.opt[0]);
         radarSig.clear();
+        g.set_tunnel_on(tunnel.on);
+        g.set_tunnel_azimuth(tunnel.azimuth);
+        g.set_tunnel_elevation(tunnel.elevation);
+        g.set_tunnel_zoom(tunnel.zoom);
+        g.set_tunnel_depth_pos(sliderOfDepthIndex(tunnel.opt[0]));
+        g.set_tunnel_colour(tunnel.opt[1]);
+        g.set_tunnel_depth_text(ss(kTunnelDepthLabels(tunnel.opt[0])));
+        tunnelSig.clear();
     }
 
     // THE SAVE: the text of every view, when it changed, into the interface half (a bounded run keeps it in the host's copy, which `state cfg.view3d` reads, and writes no file:
@@ -126,6 +164,7 @@ struct View3DPublisher::Impl {
     void save() {
         prefs.set(kViewWaterfall, wf);
         prefs.set(kViewRadar, radar);
+        prefs.set(kViewTunnel, tunnel);
         const std::string text = prefs.serialize();
         if (text == savedText) { return; }
         savedText = text;
@@ -142,6 +181,68 @@ struct View3DPublisher::Impl {
     }
 
     void markSave(std::int64_t nowMs) { wfDirtySave = true; wfSaveAtMs = nowMs + kSaveSettleMs; }
+
+    // THE TUNNEL: the camera read back, the picture repainted while the demod window is open on a baseband input, in 3D, and the samples or the choices moved.
+    void tunnelPublish(const TunnelFeed& feed, std::int64_t nowMs) {
+        const auto& g = ui.global<View3D>();
+        const float az = g.get_tunnel_azimuth(), el = g.get_tunnel_elevation(), zm = g.get_tunnel_zoom();
+        if (az != tunnel.azimuth || el != tunnel.elevation || zm != tunnel.zoom) {
+            scene3d::Camera c = cameraOf(tunnel);
+            c.azimuthDeg = az;
+            c.elevationDeg = el;
+            c.zoom = zm;
+            setCamera(tunnel, scene3d::clamped(c));
+            markSave(nowMs);
+        }
+        if (wfDirtySave && nowMs >= wfSaveAtMs) { wfDirtySave = false; save(); }
+        if (!tunnel.on || !feed.shown) { return; }
+        int w = g.get_tunnel_w(), h = g.get_tunnel_h();
+        if (w < 64 || h < 64) { w = 700; h = 300; }
+        tunnelW = std::min(w, kMaxW);
+        tunnelH = std::min(h, kMaxH);
+        const double avail = availableMs(feed.i.size(), feed.rateHz);
+        tunnelDepthMs = effectiveDepthMs(tunnel.opt[0], avail, feed.rateHz);
+        const std::size_t take = samplesFor(tunnelDepthMs, feed.rateHz, feed.i.size());
+        // the signature: the choices, the size, the camera and the newest samples (a hash of the ones drawn, so a steady carrier does not repaint at the tick rate)
+        std::uint64_t hsh = 1469598103934665603ull;
+        for (std::size_t k = feed.i.size() - take; k < feed.i.size(); k += std::max<std::size_t>(1, take / 64)) {
+            std::uint32_t a, b2;
+            std::memcpy(&a, &feed.i[k], sizeof(a));
+            std::memcpy(&b2, &feed.q[k], sizeof(b2));
+            hsh = (hsh ^ a) * 1099511628211ull;
+            hsh = (hsh ^ b2) * 1099511628211ull;
+        }
+        std::string sig = std::to_string(tunnelW) + "x" + std::to_string(tunnelH) + "|" + numSig(tunnel.azimuth) + numSig(tunnel.elevation) + numSig(tunnel.zoom) + std::to_string(tunnel.opt[0]) + "|" +
+                          std::to_string(tunnel.opt[1]) + "|" + std::to_string(take) + "|" + std::to_string(hsh) + "|" + (feed.live ? "L" : "-") + feed.dead;
+        if (sig == tunnelSig) { return; }
+        tunnelSig = sig;
+        TunnelInput in;
+        if (take > 0) {
+            in.i = feed.i.data() + (feed.i.size() - take);
+            in.q = feed.q.data() + (feed.q.size() - take);
+        }
+        in.n = take;
+        in.rateHz = feed.rateHz;
+        in.colourBy = tunnel.opt[1];
+        in.camera = cameraOf(tunnel);
+        const double t0 = nowMsReal();
+        scene3d::Rgba* mem = tunnelSurface.begin(tunnelW, tunnelH);
+        const TunnelResult res = paintTunnel(tunnelScene, mem, tunnelW, tunnelH, in);
+        g.set_tunnel_picture(tunnelSurface.image());
+        tunnelSurface.flip();
+        tunnelLastMs = nowMsReal() - t0;
+        tunnelWorstMs = std::max(tunnelWorstMs, tunnelLastMs);
+        ++tunnelRenders;
+        tunnelPoints = res.points;
+        tunnelPixels = tunnelScene.pixelsWritten();
+        tunnelLabels = res.labels.size();
+        std::vector<Scene3DLabel> labels;
+        labels.reserve(res.labels.size());
+        for (const scene3d::Label3D& l : res.labels) { labels.push_back({l.x, l.y, ss(l.text), colourOf(l.rgba), l.align, l.kind}); }
+        g.set_tunnel_labels(std::make_shared<slint::VectorModel<Scene3DLabel>>(std::move(labels)));
+        // the honest empty state: the scope's own sentence while no samples arrive
+        g.set_tunnel_empty(ss(take == 0 || !feed.live ? feed.dead : std::string()));
+    }
 
     // THE RADAR AIRSPACE: the camera read back (TILT, a drag, a key), the picture repainted while the scope is up, in 3D and something moved.
     void radarPublish(const Radar3dFeed& feed, std::int64_t nowMs) {
@@ -306,6 +407,38 @@ void View3DPublisher::wire() {
         i.wfSig.clear();
         i.save();
     });
+    g.on_tunnel_view_selected([this](bool on) {
+        Impl& i = *impl_;
+        i.tunnel.on = on;
+        ui_.global<View3D>().set_tunnel_on(on);
+        i.tunnelSig.clear();
+        i.save();
+    });
+    g.on_tunnel_depth_moved([this](float v) {
+        Impl& i = *impl_;
+        i.tunnel.opt[0] = depthIndexOfSlider(v);
+        const auto& gl = ui_.global<View3D>();
+        gl.set_tunnel_depth_pos(sliderOfDepthIndex(i.tunnel.opt[0]));
+        gl.set_tunnel_depth_text(ss(kTunnelDepthLabels(i.tunnel.opt[0])));
+        i.tunnelSig.clear();
+        i.save();
+    });
+    g.on_tunnel_colour_selected([this](int c) {
+        Impl& i = *impl_;
+        i.tunnel.opt[1] = std::clamp(c, 0, 1);
+        ui_.global<View3D>().set_tunnel_colour(i.tunnel.opt[1]);
+        i.tunnelSig.clear();
+        i.save();
+    });
+    g.on_tunnel_reset_view([this] {
+        Impl& i = *impl_;
+        const ViewState d = tunnelDefaults();
+        i.tunnel.azimuth = d.azimuth;
+        i.tunnel.elevation = d.elevation;
+        i.tunnel.zoom = d.zoom;
+        i.tunnelSig.clear();
+        i.save();
+    });
     g.on_radar_view_selected([this](bool on) {
         Impl& i = *impl_;
         i.radar.on = on;
@@ -347,8 +480,9 @@ void View3DPublisher::pushWaterfallFrame(std::int64_t tMs, const float* bins, st
 
 void View3DPublisher::publish(const Wf3dContext& wf) { impl_->waterfall(wf); }
 void View3DPublisher::publishRadar(const Radar3dFeed& feed, std::int64_t nowMs) { impl_->radarPublish(feed, nowMs); }
+void View3DPublisher::publishTunnel(const TunnelFeed& feed, std::int64_t nowMs) { impl_->tunnelPublish(feed, nowMs); }
 
-int View3DPublisher::detaches() const { return impl_->surface.detaches() + impl_->radarSurface.detaches(); }
+int View3DPublisher::detaches() const { return impl_->surface.detaches() + impl_->radarSurface.detaches() + impl_->tunnelSurface.detaches(); }
 
 std::string View3DPublisher::readState(const std::string& what, std::string& out) const {
     const Impl& m = *impl_;
@@ -370,6 +504,19 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "wf.data") { out = m.hasData ? "1" : "0"; return std::string(); }
     if (what == "wf.w") { out = std::to_string(m.renderW); return std::string(); }
     if (what == "wf.h") { out = std::to_string(m.renderH); return std::string(); }
+    if (what == "tunnel.on") { out = m.tunnel.on ? "1" : "0"; return std::string(); }
+    if (what == "tunnel.azimuth") { return num(m.tunnel.azimuth); }
+    if (what == "tunnel.elevation") { return num(m.tunnel.elevation); }
+    if (what == "tunnel.zoom") { return num(m.tunnel.zoom); }
+    if (what == "tunnel.depth") { out = std::to_string(m.tunnel.opt[0]); return std::string(); }
+    if (what == "tunnel.depthms") { return num(m.tunnelDepthMs); }
+    if (what == "tunnel.colour") { out = std::to_string(m.tunnel.opt[1]); return std::string(); }
+    if (what == "tunnel.renders") { out = std::to_string(m.tunnelRenders); return std::string(); }
+    if (what == "tunnel.points") { out = std::to_string(m.tunnelPoints); return std::string(); }
+    if (what == "tunnel.pixels") { out = std::to_string(m.tunnelPixels); return std::string(); }
+    if (what == "tunnel.labels") { out = std::to_string(m.tunnelLabels); return std::string(); }
+    if (what == "tunnel.w") { out = std::to_string(m.tunnelW); return std::string(); }
+    if (what == "tunnel.h") { out = std::to_string(m.tunnelH); return std::string(); }
     if (what == "radar.on") { out = m.radar.on ? "1" : "0"; return std::string(); }
     if (what == "radar.azimuth") { return num(m.radar.azimuth); }
     if (what == "radar.tilt" || what == "radar.elevation") { return num(m.radar.elevation); }
@@ -384,14 +531,14 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "radar.labels") { out = std::to_string(m.radarLabels); return std::string(); }
     if (what == "radar.w") { out = std::to_string(m.radarW); return std::string(); }
     if (what == "radar.h") { out = std::to_string(m.radarH); return std::string(); }
-    return "view3d.wf.on|azimuth|elevation|zoom|depth|shading|renders|triangles|pixels|labels|span|realrows|rows|data|w|h, or view3d.radar.on|azimuth|tilt|zoom|scale|renders|aircraft|onground|trails|pixels|labels|tags|w|h, not view3d." + what;
+    return "view3d.wf.on|azimuth|elevation|zoom|depth|shading|renders|triangles|pixels|labels|span|realrows|rows|data|w|h, or view3d.radar.on|azimuth|tilt|zoom|scale|renders|aircraft|onground|trails|pixels|labels|tags|w|h, or view3d.tunnel.on|azimuth|elevation|zoom|depth|depthms|colour|renders|points|pixels|labels|w|h, not view3d." + what;
 }
 
 std::string View3DPublisher::summaryLine() const {
     const Impl& m = *impl_;
-    char b[640];
-    std::snprintf(b, sizeof(b), "view3d: waterfall on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu triangles, %zu rows kept, %zu saves, %d buffer detaches; radar on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu aircraft (%zu without altitude), %zu trail segments, %d buffer detaches", m.wf.on ? 1 : 0, m.renders, m.lastRenderMs,
-                  m.worstRenderMs, m.lastTriangles, m.history.size(), m.saves, m.surface.detaches(), m.radar.on ? 1 : 0, m.radarRenders, m.radarLastMs, m.radarWorstMs, m.radarAircraft, m.radarOnGround, m.radarTrailSegs, m.radarSurface.detaches());
+    char b[900];
+    std::snprintf(b, sizeof(b), "view3d: waterfall on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu triangles, %zu rows kept, %zu saves, %d buffer detaches; radar on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu aircraft (%zu without altitude), %zu trail segments, %d buffer detaches; tunnel on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu points, %d buffer detaches", m.wf.on ? 1 : 0, m.renders, m.lastRenderMs,
+                  m.worstRenderMs, m.lastTriangles, m.history.size(), m.saves, m.surface.detaches(), m.radar.on ? 1 : 0, m.radarRenders, m.radarLastMs, m.radarWorstMs, m.radarAircraft, m.radarOnGround, m.radarTrailSegs, m.radarSurface.detaches(), m.tunnel.on ? 1 : 0, m.tunnelRenders, m.tunnelLastMs, m.tunnelWorstMs, m.tunnelPoints, m.tunnelSurface.detaches());
     return b;
 }
 

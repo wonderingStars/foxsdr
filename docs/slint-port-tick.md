@@ -2957,6 +2957,28 @@ The 3D view is an ADDED view toggle everywhere; the 2D screen keeps everything i
 | 3041 | The view and the camera are remembered | setting | PRESENT | view3d, name radar: on, azimuth, elevation, zoom, ALTITUDE SCALE |
 | 3042 | Click an aircraft on the airspace to select it | gesture | DEFERRED | needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
 
+### The demod scope's 3D TUNNEL (THREED.md section 4, DEMOD SCOPE with input I/Q, VIEW VECTOR / 3D TUNNEL)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3043 | VIEW VECTOR | key (segment) | PRESENT | Scene3DViewToggleInline "VECTOR" under the DISPLAY row, shown on a baseband input (I/Q or VECTOR); the vector figure is the default and is untouched |
+| 3044 | VIEW 3D TUNNEL | key (segment) | PRESENT | -> View3D.tunnel-view-selected(true): the glass is replaced by the tunnel (a choice that outlives the input: AUDIO, SPEC and MPX show their own glass, I/Q and VECTOR the tunnel again) |
+| 3045 | The tunnel | picture | PRESENT | the channel's baseband I and Q across, time along, each sample a point, faint rings marking the cross-section; the newest samples the TIME DEPTH asks for, from the scope's own I/Q tap; painted by the CPU renderer only while the window is open on a baseband input with the tunnel chosen |
+| 3046 | TIME DEPTH | slider | PRESENT | sixteen detents 2 ms to 250 ms, 40 ms by default, never more than the tap holds (100 ms at the channel's 48 kHz); the readout beside the caption ("40 ms") says the depth in force |
+| 3047 | COLOUR BY Time / Level | key (segment) | PRESENT | Time: cyan at the oldest sample to magenta at the newest; Level: the sample's distance from the middle on the viridis ramp |
+| 3048 | RESET VIEW (tunnel) | key | PRESENT | azimuth -35, elevation 18, zoom 1 |
+| 3049 | Drag to rotate, wheel to zoom, double-click to reset (tunnel) | gesture | PRESENT | Scene3DWell's TouchArea, as the other views' |
+| 3050 | The well's keys (tunnel) | keys | PRESENT | after a press: the arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3051 | Small 2D constellation | overlay/marker | PRESENT | the newest 600 samples in the plane, I across and Q up, in a square in the picture's top left corner (the same colours as the tunnel) |
+| 3052 | Axis ticks and captions | overlay/marker | PRESENT | five ticks per axis (time in ms from 0 to the depth, I and Q across the range that fits the samples: 0.05 to 10 in 1-2-5 steps) and the captions "time (ms)", "I", "Q" |
+| 3053 | The scope's caption and its sentence when nothing arrives | readout | PRESENT | the scope's own caption of the input in the picture's top right corner; "NO SAMPLES - RECEIVER STOPPED" / "NO BASEBAND IN THE TAP" (the scope's words) over the empty tunnel |
+| 3054 | EVM readout | readout | DEFERRED | needs the demodulator's error-vector measure per symbol; the host's scope sees samples, not symbols |
+| 3055 | SNR readout | readout | DEFERRED | needs a signal-to-noise estimate of the modulation (the channel's own power is the SIG gauge on the radar scope and the receiver's signal readout); no plugin or engine surface publishes one for this tap |
+| 3056 | SYMBOL RATE readout | readout | DEFERRED | needs a symbol clock (a decoder plugin's, e.g. a baud rate it published for the tap) |
+| 3057 | LOCK lamp | lamp/indicator | DEFERRED | needs a demodulator's lock state for the tap |
+| 3058 | COLOUR BY Symbol | key (segment) | DEFERRED | needs symbol decisions; COLOUR BY Level takes its place, true to the samples |
+| 3059 | The view and the camera are remembered | setting | PRESENT | view3d, name tunnel: on, azimuth, elevation, zoom, TIME DEPTH, COLOUR BY |
+
 # Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM, TOOLS and EXTEND banks of phase 3)
 
 | Status | Rows |

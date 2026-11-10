@@ -1387,6 +1387,7 @@ int main(int argc, char** argv) {
             if (wf3d.visible) { for (const auto& m : lists.markers) { wf3d.markers.push_back({m.hz, "M" + std::to_string(m.id) + " " + fmt("%.3f MHz", m.hz / 1e6)}); } }
             view3dBank.publish(wf3d);
             view3dBank.publishRadar(scopeBank.radar3dFeed(), wf3d.nowMs);   // the radar scope's 3D airspace: its feed is empty unless the SCOPE tab is up with a position
+            view3dBank.publishTunnel(scopeBank.tunnel3dFeed(), wf3d.nowMs); // the demod scope's 3D tunnel: its feed is empty unless the window is open on a baseband input
         }
         toolsBank.setScopeFacts(scopeBank.demodSignal(), scopeBank.demodOpen(), scopeBank.demodLive(), scopeBank.radarOn());
         toolsBank.publish(state, systemBank.models().serial.gps);

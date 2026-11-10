@@ -18,7 +18,7 @@ expect "More gain" enabled equals "false"
 +8 state scope.signal == 2
 state scope.iqCount > 1000
 state scope.bins == 0
-+1 click "VECTOR"
++1 click "VECTOR"#1
 +8 state scope.signal == 3
 state scope.iqCount > 1000
 # the multiplex's key is absent outside WFM (this receiver is on AM)
