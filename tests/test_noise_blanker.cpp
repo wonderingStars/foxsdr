@@ -234,8 +234,8 @@ void testBlockImprovement() {
     const double improvement = db(off) - db(on);
     std::printf("  block fixture: residual off %.2f dB, on %.2f dB, improvement %.2f dB, blanked %.2f%%\n",
                 db(off), db(on), improvement, nb.blankedPercent());
-    // The floor the lane measured (about 21 dB), pinned with margin.
-    CHECK(improvement > 15.0);
+    // The floor measured with the 0.025 ms guards (24.2 dB; 20.95 dB with 0.05 ms, pinned at 15), same margin.
+    CHECK(improvement > 18.0);
     CHECK(nb.blankedPercent() > 0.5f);
     CHECK(nb.blankedPercent() < 3.0f);
     CHECK(!nb.standingDown());
@@ -362,7 +362,7 @@ void testStandDown() {
         const double offP = residualPower(tailIn, kChannelHz, kToneHz, 0, M);
         const double onP = residualPower(tail, kChannelHz, kToneHz, 0, M);
         std::printf("  resume after stand-down: improvement %.2f dB\n", db(offP) - db(onP));
-        CHECK(db(offP) - db(onP) > 12.0);
+        CHECK(db(offP) - db(onP) > 15.2);
     }
     // A strong signal that appears (40 dB step) is not a click: after the
     // average catches up, it is passed whole and the share is zero.
@@ -515,7 +515,7 @@ void testVfoHook() {
     const double onP = residualPower(b, chan, kToneHz, 20000, 1);
     std::printf("  Vfo through the 3 kHz filter: residual off %.2f dB, on %.2f dB, improvement %.2f dB, blanked %.2f%%\n",
                 db(offP), db(onP), db(offP) - db(onP), on.noiseBlankerBlankedPercent());
-    CHECK(db(offP) - db(onP) > 15.0);
+    CHECK(db(offP) - db(onP) > 17.9);
     CHECK(on.noiseBlankerBlankedPercent() > 0.5f);
     CHECK(on.noiseBlankerBlankedPercent() < 5.0f);
 
@@ -546,7 +546,7 @@ void testVfoHook() {
     const double wOff = residualPower(e, chan, kToneHz, 20000, Mw);
     const double wOn = residualPower(f, chan, kToneHz, 20000, Mw);
     std::printf("  Vfo wide (no narrow stage): improvement %.2f dB\n", db(wOff) - db(wOn));
-    CHECK(db(wOff) - db(wOn) > 10.0);
+    CHECK(db(wOff) - db(wOn) > 11.8);
 
     // The settings survive a bandwidth change and a reset.
     on.setNoiseBlankerThresholdDb(22.0f);

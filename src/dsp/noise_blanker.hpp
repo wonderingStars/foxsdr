@@ -51,8 +51,8 @@ public:
 
     static constexpr double kAverageS = 0.020;
     static constexpr double kLookAheadS = 0.00015;
-    static constexpr double kPreGuardS = 0.00005;
-    static constexpr double kPostGuardS = 0.00005;
+    static constexpr double kPreGuardS = 0.000025;
+    static constexpr double kPostGuardS = 0.000025;
     static constexpr double kRampS = 0.000025;
     static constexpr double kShareWindowS = 0.100;
     static constexpr double kStandDownShare = 0.25;
@@ -62,6 +62,10 @@ public:
     // every sample above zero is "above threshold").
     static constexpr std::size_t kMinAveraged = 8;
     static constexpr float kAbsoluteFloor = 1.0e-6f;
+    // The guard before and after a click is never shorter than this many samples, at any channel rate. Before
+    // this floor the pre-guard was round(0.05 ms x rate), 0 samples under 10 kHz, and the post-guard the same with a
+    // floor of 1 sample (now both 0.025 ms: they would round to 0 under 20 kHz).
+    static constexpr std::size_t kMinGuardSamples = 2;
 
     explicit NoiseBlanker(double sampleRateHz = 200000.0) { setSampleRateHz(sampleRateHz); }
 
@@ -70,8 +74,8 @@ public:
         if (!(hz > 0.0)) { hz = 200000.0; }
         rateHz_ = hz;
         look_ = std::max<std::size_t>(1, static_cast<std::size_t>(std::lround(kLookAheadS * hz)));
-        pre_ = static_cast<std::size_t>(std::lround(kPreGuardS * hz));
-        post_ = std::max<std::size_t>(1, static_cast<std::size_t>(std::lround(kPostGuardS * hz)));
+        pre_ = std::max<std::size_t>(kMinGuardSamples, static_cast<std::size_t>(std::lround(kPreGuardS * hz)));
+        post_ = std::max<std::size_t>(kMinGuardSamples, static_cast<std::size_t>(std::lround(kPostGuardS * hz)));
         ramp_ = std::max<std::size_t>(1, static_cast<std::size_t>(std::lround(kRampS * hz)));
         // The look-ahead must cover the ramp-down and the pre-guard, or the
         // window would have to start before the click was seen.

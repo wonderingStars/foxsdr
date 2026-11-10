@@ -236,7 +236,7 @@ void testRunningChain() {
     rec.stop();
     std::printf("  chain: audio residual off %.2f dB, on %.2f dB (improvement %.2f dB), blanked %.2f%%\n",
                 offDb, onDb, offDb - onDb, pct);
-    CHECK(offDb - onDb > 10.0);
+    CHECK(offDb - onDb > 13.0);
     CHECK(pct > 0.3f);
     CHECK(pct < 5.0f);
 
