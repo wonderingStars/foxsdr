@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1978 | 439 | 82 | 1457 | 0 |
+| 2074 | 487 | 82 | 1505 | 0 |
 
-Of the 1145 rows that are controls (the 833 readout-like rows left out): 439 asserted, 82 driven without a read-back, 624 not drivable.
+Of the 1206 rows that are controls (the 868 readout-like rows left out): 487 asserted, 82 driven without a read-back, 637 not drivable.
 
-NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 61, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 868, other 212, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 68, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,6 +199,7 @@ NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
+| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
 
 ## Every row
 
@@ -3069,4 +3070,105 @@ NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120,
 | 1976 | Open foxsdr.com (withdrawn) | button (small) | DRIVEN+ASSERTED | system-updates-withdrawn-nofix.txt | click "Open foxsdr.com" (a bounded run opens no browser: the effect on the window is none, the card stays); the key is read back with expect enabled |
 | 1977 | Not now (withdrawn) | button (small) | DRIVEN+ASSERTED | system-updates-withdrawn-nofix.txt | click "Not now"#2; state update.shown == 0, then click "Show it again"; state update.shown == 1 |
 | 1978 | Withdrawn card | card | DRIVEN+ASSERTED | system-updates-withdrawn-fix.txt | state update.shown / update.withdrawn / update.headline / update.note / update.primary over three canned answers (withdrawn-fix: Download update; withdrawn-nofix and withdrawn-offer: no key) |
+
+### 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 3001 | VIEW 2D | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "2D" in the surface strip; state view3d.wf.on 1 -> 0 and cfg.view3d contains waterfall:on=0 |
+| 3002 | VIEW 3D SURFACE | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "3D SURFACE"; state view3d.wf.on 0 -> 1, cfg.view3d contains waterfall:on=1 |
+| 3003 | The surface | picture | DRIVEN+ASSERTED | waterfall-3d.txt | state view3d.wf.renders, triangles, pixels, data, realrows (what the renderer drew from the live history) |
+| 3004 | ELEVATION | slider | DRIVEN+ASSERTED | waterfall-3d.txt | slider "ELEVATION" 0.5; state view3d.wf.elevation 44..49 |
+| 3005 | AZIMUTH | slider | DRIVEN+ASSERTED | waterfall-3d.txt | slider "AZIMUTH" 0.75; state view3d.wf.azimuth 85..95 |
+| 3006 | HISTORY DEPTH 30 s | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "30 s"; state view3d.wf.depth == 0 |
+| 3007 | HISTORY DEPTH 60 s | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "60 s"; state view3d.wf.depth == 1 |
+| 3008 | HISTORY DEPTH 120 s | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "120 s"; state view3d.wf.depth == 2 |
+| 3009 | SHADING Height | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "Height"; state view3d.wf.shading == 0 |
+| 3010 | SHADING Colour ramp | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "Colour ramp"; state view3d.wf.shading == 1 |
+| 3011 | RESET VIEW | key | DRIVEN+ASSERTED | waterfall-3d.txt | click "RESET VIEW"; state view3d.wf.elevation 32, azimuth -58, zoom 1 |
+| 3012 | Drag to rotate, wheel to zoom, double-click to reset | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3013 | The well's keys | keys | DRIVEN+ASSERTED | waterfall-3d.txt | press "Waterfall"; key left / up / + / - / 0; state view3d.wf.azimuth, elevation, zoom |
+| 3014 | Axis captions and tick values | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3015 | VFO line down the surface | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3016 | User markers | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3017 | Strength key plate | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3018 | Foot lines | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3019 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3020 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | waterfall-3d.txt | state cfg.view3d contains waterfall:on=1 after the toggle and waterfall:on=0 after the way back (the host-held interface half; a real run writes it, test_config and test_slint_host_view3d hold the field and the text) |
+| 3021 | Right-click marker menu on the surface | gesture | NOT DRIVABLE | - | deferred: the 2D waterfall's right-click menu (Drop marker here at the frequency under the pointer) needs the pixel unprojected onto the surface; the 2D view and the toolbar's Markers key still drop and list markers |
+| 3022 | VIEW PPI | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "PPI"; state view3d.radar.on 1 -> 0, scope.tubeW > 300 again |
+| 3023 | VIEW 3D AIRSPACE | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "3D AIRSPACE"; state view3d.radar.on 0 -> 1, cfg.view3d contains radar:on=1 |
+| 3024 | The airspace | picture | DRIVEN+ASSERTED | radar-3d.txt | state view3d.radar.renders, aircraft, onground, pixels, labels (what the renderer drew from the plotted aircraft) |
+| 3025 | TILT | slider | DRIVEN+ASSERTED | radar-3d.txt | slider "TILT" 0.5; state view3d.radar.tilt 43..47 |
+| 3026 | ALTITUDE SCALE x1 | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "x1"; state view3d.radar.scale == 0 |
+| 3027 | ALTITUDE SCALE x2 | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "x2"; state view3d.radar.scale == 1 |
+| 3028 | ALTITUDE SCALE x4 | key (segment) | DRIVEN+ASSERTED | radar-3d.txt | click "x4"; state view3d.radar.scale == 2 |
+| 3029 | RESET VIEW (airspace) | key | DRIVEN+ASSERTED | radar-3d.txt | click "RESET VIEW"; state view3d.radar.tilt 26, azimuth -40 |
+| 3030 | Drag to rotate, wheel to zoom, double-click to reset (airspace) | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3031 | The well's keys (airspace) | keys | DRIVEN+ASSERTED | radar-3d.txt | press "Airspace"; key left, +, -; state view3d.radar.azimuth, zoom |
+| 3032 | Altitude key | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3033 | Aircraft labels | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3034 | Range rings, spokes, antenna | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3035 | Axis ticks and captions | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3036 | Corner readouts | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3037 | Trails in the air | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3038 | Selection and emergency marks | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3039 | Unknown altitude | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3040 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3041 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | radar-3d.txt | state cfg.view3d contains radar:on=1 and radar:on=0 after the way back |
+| 3042 | Click an aircraft on the airspace to select it | gesture | NOT DRIVABLE | - | deferred: needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
+| 3043 | VIEW VECTOR | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "VECTOR"#2 (the toggle's own key); state view3d.tunnel.on 1 -> 0, cfg.view3d contains tunnel:on=0 |
+| 3044 | VIEW 3D TUNNEL | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "3D TUNNEL"; state view3d.tunnel.on 0 -> 1, cfg.view3d contains tunnel:on=1 |
+| 3045 | The tunnel | picture | DRIVEN+ASSERTED | tunnel-3d.txt | state view3d.tunnel.renders, points, pixels, labels, w, h (what the renderer drew from the scope's I/Q) |
+| 3046 | TIME DEPTH | slider | DRIVEN+ASSERTED | tunnel-3d.txt | slider "TIME DEPTH" 0 / 1 / 0.5333; state view3d.tunnel.depth 0 / 15 / 8 and depthms, points |
+| 3047 | COLOUR BY Time / Level | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "Time" / "Level"; state view3d.tunnel.colour 0 / 1 |
+| 3048 | RESET VIEW (tunnel) | key | DRIVEN+ASSERTED | tunnel-3d.txt | click "RESET VIEW"; state view3d.tunnel.azimuth -35, zoom 1 |
+| 3049 | Drag to rotate, wheel to zoom, double-click to reset (tunnel) | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3050 | The well's keys (tunnel) | keys | DRIVEN+ASSERTED | tunnel-3d.txt | press "Tunnel"; key left, +; state view3d.tunnel.azimuth, zoom |
+| 3051 | Small 2D constellation | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3052 | Axis ticks and captions | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3053 | The scope's caption and its sentence when nothing arrives | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3054 | EVM readout | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3055 | SNR readout | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3056 | SYMBOL RATE readout | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3057 | LOCK lamp | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
+| 3058 | COLOUR BY Symbol | key (segment) | NOT DRIVABLE | - | deferred: needs symbol decisions; COLOUR BY Level takes its place, true to the samples |
+| 3059 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | tunnel-3d.txt | state cfg.view3d contains tunnel:on=1 and tunnel:on=0 after the way back |
+| 3060 | VIEW TABLE | key (segment) | DRIVEN+ASSERTED | survey-3d.txt | click "TABLE"; state view3d.survey.on 1 -> 0, cfg.view3d contains survey:on=0 |
+| 3061 | VIEW 3D SURFACE | key (segment) | DRIVEN+ASSERTED | survey-3d.txt | click "3D SURFACE"; state view3d.survey.on 0 -> 1, cfg.view3d contains survey:on=1 |
+| 3062 | The surface | picture | DRIVEN+ASSERTED | survey-3d.txt | state view3d.survey.renders, channels, triangles, pixels, labels, first (the real plugin row) |
+| 3063 | ELEVATION | slider | DRIVEN+ASSERTED | survey-3d.txt | slider "ELEVATION" 0.5; state view3d.survey.elevation 44..49 |
+| 3064 | AZIMUTH | slider | DRIVEN+ASSERTED | survey-3d.txt | slider "AZIMUTH" 0.75; state view3d.survey.azimuth 85..95 |
+| 3065 | RESET VIEW | key | DRIVEN+ASSERTED | survey-3d.txt | click "RESET VIEW"; state view3d.survey.elevation 36, azimuth -52 |
+| 3066 | Drag to rotate, wheel to zoom, double-click to reset | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3067 | The well's keys | keys | DRIVEN+ASSERTED | survey-3d.txt | press "Survey"; key left, +, 0; state view3d.survey.azimuth, zoom |
+| 3068 | CHANNEL RANK | readout | DRIVEN+ASSERTED | survey-3d.txt | state view3d.survey.ranked >= 3 (the rank numbers placed; the list quotes the same rows) |
+| 3069 | Axis ticks and captions | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3070 | Rank numbers on the ridges | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3071 | TIME WINDOW 6 h / 24 h / 7 d | select | NOT DRIVABLE | - | deferred: needs a time-binned history of the survey; the plugin publishes only its current table |
+| 3072 | PERCENTILE FLOOR | slider | NOT DRIVABLE | - | deferred: needs the survey's per-bin samples to re-derive a noise floor; the host only has each channel's peak and its level over the plugin's own floor |
+| 3073 | MERGE WIDTH | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3074 | SWEEP BAND | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3075 | EXPORT CSV | key | NOT DRIVABLE | - | deferred: the plugin already writes survey.csv beside survey.cfg; a host-side export of the table needs a save dialog |
+| 3076 | Hour (UTC) axis | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3077 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | survey-3d.txt | state cfg.view3d contains survey:on=1 and survey:on=0 after the way back |
+| 3078 | VIEW MAP | key (segment) | DRIVEN+ASSERTED | sonde-3d.txt | click "MAP"; state view3d.sonde.on 1 -> 0, cfg.view3d contains sonde:on=0 |
+| 3079 | VIEW 3D TRACK | key (segment) | DRIVEN+ASSERTED | sonde-3d.txt | click "3D TRACK"; state view3d.sonde.on 0 -> 1, cfg.view3d contains sonde:on=1 |
+| 3080 | The track | picture | DRIVEN+ASSERTED | sonde-3d.txt | state view3d.sonde.renders, samples, pixels, labels on the empty page (the drawing of a heard track is held by test_slint_host_sonde3d: no radiosonde fixture) |
+| 3081 | ELEVATION | slider | DRIVEN+ASSERTED | sonde-3d.txt | slider "ELEVATION" 0.5; state view3d.sonde.elevation 44..49 |
+| 3082 | AZIMUTH | slider | DRIVEN+ASSERTED | sonde-3d.txt | slider "AZIMUTH" 0.75; state view3d.sonde.azimuth 85..95 |
+| 3083 | RESET VIEW | key | DRIVEN+ASSERTED | sonde-3d.txt | click "RESET VIEW"; state view3d.sonde.elevation 22, azimuth -48 |
+| 3084 | Drag to rotate, wheel to zoom, double-click to reset | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3085 | The well's keys | keys | DRIVEN+ASSERTED | sonde-3d.txt | press "Balloon track"; key left, +, 0; state view3d.sonde.azimuth, zoom |
+| 3086 | Altitude ladder | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3087 | Legend | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3088 | FOLLOW BALLOON | key (latched) | NOT DRIVABLE | - | needs a heard balloon (no radiosonde recording among the fixtures); the script reads back that the key is greyed (expect "FOLLOW BALLOON" enabled false) while none is heard |
+| 3089 | ASCENT RATE | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3090 | The balloon's tag | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3091 | Axis ticks and captions | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3092 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3093 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | sonde-3d.txt | state cfg.view3d contains sonde:on=1 and sonde:on=0 after the way back |
+| 3094 | PREDICTED LANDING chip | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3095 | TIME SCRUBBER with a play key | slider | NOT DRIVABLE | - | deferred: the host's record starts when it began listening, not at the launch; a scrubber over it is a feature of its own |
+| 3096 | LAUNCH marker | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 

@@ -3,6 +3,7 @@
 #include "kit_publish.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -939,6 +940,12 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
     PageTab t{};
     t.id = ss(p.id);
     t.kind = p.kind;
+    {   // WHICH PAGES HAVE A 3D VIEW (docs 6.64): the Survey Engine's panel (by the plugin's title) and the Radiosondes' map; a page of another plugin is untouched
+        std::string lowered = p.title + " " + p.plugin;
+        for (char& ch : lowered) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+        if (p.kind == 3 && lowered.find("survey") != std::string::npos) { t.view3d = 1; }
+        else if (p.kind == 5 && lowered.find("radiosonde") != std::string::npos) { t.view3d = 2; }
+    }
     t.title = ss(p.title);
     t.chip = ss("");
     t.chip_tone = ChipTone::Neutral;

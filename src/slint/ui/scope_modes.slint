@@ -13,6 +13,7 @@ import { Key } from "keys.slint";
 import { Checkbox } from "fields.slint";
 import { TornWindow } from "tabs.slint";
 import { PositionOffers, PositionOffersView } from "tools_bank.slint";
+import { View3D, Scene3DViewToggleInline, Radar3DBar, Radar3DWell, Tunnel3DControls, Tunnel3DWell } from "scene3d_views.slint";   // the 3D AIRSPACE (docs 6.64)
 
 // ---- the demod scope ----
 export struct MpxMarkItem {
@@ -243,8 +244,14 @@ export component DemodScopeWindow inherits Rectangle {
                 LatchKey { label: @tr("AVG"); on: root.model.display == 1; tooltip: @tr("Average successive traces. A spectrum settles into its steady shape;\na waveform sheds its noise if it repeats (a tone), and fades towards\nthe centre if it does not (speech) - that is what averaging does."); clicked => { root.demod-display(1); } }
                 LatchKey { label: @tr("PERSIST"); on: root.model.display == 2; tooltip: @tr("Keep a fading memory of the trace behind the live one, like a\nlong-persistence tube: peaks and excursions stay visible for a moment."); clicked => { root.demod-display(2); } }
             }
+            // --- THE 3D TUNNEL (docs 6.64): VIEW VECTOR / 3D TUNNEL on a baseband input (I/Q or VECTOR); in 3D its strip: TIME DEPTH, COLOUR BY, RESET VIEW ---
+            if root.model.baseband : HorizontalLayout { spacing: 12px; alignment: start; height: 28px;
+                Scene3DViewToggleInline { three-d: View3D.tunnel-on; label-2d: @tr("VECTOR"); label-3d: @tr("3D TUNNEL"); selected(on) => { View3D.tunnel-view-selected(on); } }
+            }
+            if root.model.baseband && View3D.tunnel-on : Tunnel3DControls { }
             // --- the tube takes what is left ---
-            DemodTube { model: root.model; vertical-stretch: 1; sized(w, h) => { root.demod-resized(w, h); } }
+            if !(View3D.tunnel-on && root.model.baseband) : DemodTube { model: root.model; vertical-stretch: 1; sized(w, h) => { root.demod-resized(w, h); } }
+            if View3D.tunnel-on && root.model.baseband : Tunnel3DWell { vertical-stretch: 1; caption: root.model.caption; }
         }
     }
 }
@@ -560,7 +567,9 @@ export component RadarScopeView inherits Rectangle {
     background: Theme.bg;
     // THE TUBE'S SIDE: what is left of the height after the bar and the deck, and of the width after the gauges and the panel
     property <length> panel-w: root.model.lcd-shown && root.width >= 900px ? 300px : 0px;
-    property <length> side: max(0px, min(root.height - 36px - 110px - 24px, root.width - 2 * 62px - root.panel-w - 5 * 8px));
+    property <length> bar3d: View3D.radar-on && root.model.has-rx ? 54px : 0px;     // the TILT / ALTITUDE SCALE strip of the 3D AIRSPACE
+    property <length> avail-w: max(0px, root.width - 2 * 62px - root.panel-w - 5 * 8px);
+    property <length> side: max(0px, min(root.height - 36px - 110px - 24px - root.bar3d, root.avail-w));
 
     VerticalLayout {
         padding: 8px; spacing: 8px;
@@ -573,9 +582,11 @@ export component RadarScopeView inherits Rectangle {
             Key { label: "-"; small: true; min-w: 28px; enabled: root.model.can-down; accessible-label: @tr("Range down"); clicked => { ScopeEvents.radar-range(-1); } }
             VerticalLayout { alignment: center; Text { text: root.model.range-text; font-size: Theme.font-small; font-family: Theme.font-mono; color: Theme.digit; min-width: 70px; horizontal-alignment: center; } }
             Key { label: "+"; small: true; min-w: 28px; enabled: root.model.can-up; accessible-label: @tr("Range up"); clicked => { ScopeEvents.radar-range(1); } }
-            VerticalLayout { alignment: center; Text { text: @tr("the mouse wheel over the scope steps it too"); font-size: Theme.font-tiny; color: Theme.dim; } }
+            if root.model.has-rx : VerticalLayout { alignment: center; Scene3DViewToggleInline { three-d: View3D.radar-on; label-2d: "PPI"; label-3d: @tr("3D AIRSPACE"); selected(on) => { View3D.radar-view-selected(on); } } }   // not-translated: the plan-position indicator's own acronym
+            if !View3D.radar-on : VerticalLayout { alignment: center; Text { text: @tr("the mouse wheel over the scope steps it too"); font-size: Theme.font-tiny; color: Theme.dim; } }
         }
         Rectangle { height: Theme.hairline; background: Theme.line; }
+        if View3D.radar-on && root.model.has-rx : Radar3DBar { }
 
         // ---- no position: the empty state, the offers ----
         if !root.model.has-rx : VerticalLayout {
@@ -591,7 +602,11 @@ export component RadarScopeView inherits Rectangle {
             HorizontalLayout {
                 spacing: 8px; alignment: center; vertical-stretch: 1;
                 Gauge { height: root.side; caption: @tr("SIG"); lit: root.model.sig-lit; reading: root.model.sig-text; }
-                RadarTube { width: root.side; height: root.side; model: root.model; sized(w, h) => { ScopeEvents.radar-resized(w, h); } }
+                if !View3D.radar-on : RadarTube { width: root.side; height: root.side; model: root.model; sized(w, h) => { ScopeEvents.radar-resized(w, h); } }
+                if View3D.radar-on : Radar3DWell {
+                    width: min(root.avail-w, root.side * 1.5); height: root.side;
+                    plotted-text: root.model.plotted-text; range-corner: root.model.range-corner; mode-text: root.model.mode-text; rx-text: root.model.rx-text;
+                }
                 Gauge { height: root.side; caption: @tr("ALT"); lit: root.model.alt-lit; reading: root.model.alt-text; tone: Theme.lamp-amber; }
                 if root.panel-w > 0px : RadarLcd { width: root.panel-w; height: root.side; model: root.model; }
             }

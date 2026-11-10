@@ -262,6 +262,7 @@ AppConfig populated() {
     c.bookmarkStackNames = false;
     c.spectrumTraceMode = "peak";
     c.spectrumAverageMs = 250;
+    c.view3d = "waterfall:on=1,az=-30.00,el=50.00,zoom=2.00,o0=2";
     c.mapTrailStyle = 1;
     c.aircraftIconPx = 64;
     c.mapTrailWidthPx = 6;

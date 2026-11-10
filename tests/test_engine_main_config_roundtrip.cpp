@@ -210,6 +210,7 @@ AppConfig seeded() {
     c.bookmarkStackNames = false;
     c.spectrumTraceMode = "peak";
     c.spectrumAverageMs = 250;
+    c.view3d = "waterfall:on=1,az=-30.00,el=50.00,zoom=2.00,o0=2";
     c.mapListOnScreenOnly = true;
     c.pluginSites = {"https://plugins.example.test/index.json"};
     c.pluginStoreX = 11;

@@ -2901,6 +2901,135 @@ The classic window's notice for a copy the update service has withdrawn (field-e
 | 1977 | Not now (withdrawn) | button (small) | PRESENT | small Key (dismiss-label) beside Open foxsdr.com -> updates-withdrawn-dismiss -> applyUpdatesWithdrawnNotNow: apply UpdateDismiss (HostDuties::updateDismissed: the card goes for this launch); Show it again brings it back |
 | 1978 | Withdrawn card | card | PRESENT | the update Card at the foot of the sections panel in the warning tone (UpdateCardModel::withdrawn -> main.slint update-withdrawn): the headline is the withdrawn sentence, the note the advice, and the primary key is Download update while a good build is offered and none otherwise (the Updates row carries Open foxsdr.com); never shown for a Store copy or with the check off |
 
+## 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range)
+
+The 3D view is an ADDED view toggle everywhere; the 2D screen keeps everything it had and stays the default. A control or readout the spec marks NEW or [proposed] whose value the host cannot obtain today is not drawn and is listed DEFERRED with what it needs.
+
+### The receiver's 3D SURFACE (THREED.md section 1, tab RECEIVER, VIEW 2D / 3D SURFACE)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3001 | VIEW 2D | key (segment) | PRESENT | Scene3DViewToggle "2D" in the surface's strip -> View3D.wf-view-selected(false) -> View3DPublisher: the 2D waterfall comes back, the user's split with it |
+| 3002 | VIEW 3D SURFACE | key (segment) | PRESENT | Scene3DViewToggle "3D SURFACE" on a small plate over the 2D waterfall's top left (the strength key is on its right) -> wf-view-selected(true); the choice is saved in the interface half (view3d) |
+| 3003 | The surface | picture | PRESENT | the live waterfall history (one row of levels a frame, 192 columns, up to 125 s) as a lit height field in an axis box, painted by the CPU renderer (scene3d, waterfall3d_compositor); a hole where the history is not yet that deep; repainted only while the RECEIVER tab is up and something moved |
+| 3004 | ELEVATION | slider | PRESENT | Scene3DCameraBar SliderGroup 4 to 89 degrees over View3D.wf-elevation, the well's own property (32 by default) |
+| 3005 | AZIMUTH | slider | PRESENT | Scene3DCameraBar SliderGroup -180 to 180 degrees over View3D.wf-azimuth (-58 by default) |
+| 3006 | HISTORY DEPTH 30 s | key (segment) | PRESENT | segment of HISTORY DEPTH -> wf-depth-selected(0); the age axis and the rows follow |
+| 3007 | HISTORY DEPTH 60 s | key (segment) | PRESENT | the default |
+| 3008 | HISTORY DEPTH 120 s | key (segment) | PRESENT | the longest the history keeps (125 s) |
+| 3009 | SHADING Height | key (segment) | PRESENT | one hue, lighter with level (the default) |
+| 3010 | SHADING Colour ramp | key (segment) | PRESENT | the strength key's own colours (host_logic heat()); the key plate shows the same ramp |
+| 3011 | RESET VIEW | key | PRESENT | the camera back to 32 degrees up, -58 around, zoom 1 (the well's reset(); double-click and Home do the same) |
+| 3012 | Drag to rotate, wheel to zoom, double-click to reset | gesture | PRESENT | Scene3DWell's TouchArea: 0.45 degrees per pixel, 1.12 per wheel notch, clamped (scene3d.hpp dragged() and zoomed() hold the rules for the host and the tests) |
+| 3013 | The well's keys | keys | PRESENT | after a press the well has the focus: the arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3014 | Axis captions and tick values | overlay/marker | PRESENT | "MHz", "Age (s)" and "dB" captions and five ticks per axis as Slint Text at the projected positions of the box's edges |
+| 3015 | VFO line down the surface | overlay/marker | PRESENT | an amber line along the surface at the tuned frequency (and on the floor), with its frequency at the near end; none when the VFO is outside the window or there is no data |
+| 3016 | User markers | overlay/marker | PRESENT | a dashed ivory line per marker along the surface and its tab ("M1 145.212 MHz", the 2D tab's words) at the far end |
+| 3017 | Strength key plate | readout | PRESENT | Scene3DRampKey over the well's top right: the ramp the surface uses, the dB scale and the FLOOR / CEILING foot of the 2D plate |
+| 3018 | Foot lines | readout | PRESENT | the 2D waterfall's foot: lines per second and the history, the tuned frequency, mode and decoder |
+| 3019 | Empty state | readout | PRESENT | "No spectrum yet - its radio is not running." (the page's own words) while no row of the history is on the grid and the receiver is stopped |
+| 3020 | The view and the camera are remembered | setting | PRESENT | AppConfig::view3d, one text for every 3D view (view3d_prefs); the ImGui window carries it through |
+| 3021 | Right-click marker menu on the surface | gesture | DEFERRED | the 2D waterfall's right-click menu (Drop marker here at the frequency under the pointer) needs the pixel unprojected onto the surface; the 2D view and the toolbar's Markers key still drop and list markers |
+
+### The radar scope's 3D AIRSPACE (THREED.md section 2, tab SCOPE, VIEW PPI / 3D AIRSPACE)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3022 | VIEW PPI | key (segment) | PRESENT | Scene3DViewToggleInline "PPI" in the scope's bar (beside the RANGE stepper, only with a receiver position) -> View3D.radar-view-selected(false): the plan-position tube comes back |
+| 3023 | VIEW 3D AIRSPACE | key (segment) | PRESENT | -> radar-view-selected(true); the tube is replaced by the airspace, the gauges, the LCD panel and the deck stay; saved in the interface half (view3d) |
+| 3024 | The airspace | picture | PRESENT | the aircraft the scope plots (radar_logic's frame decides which), from the antenna: positions by the classic's own range and bearing, altitude in feet, course, trail; painted by the CPU renderer (radar3d_compositor) only while the SCOPE tab is up in 3D |
+| 3025 | TILT | slider | PRESENT | Scene3DCameraBar SliderGroup 5 to 85 degrees over View3D.radar-elevation (26 by default); no AZIMUTH slider (the drag and the arrow keys turn it) |
+| 3026 | ALTITUDE SCALE x1 | key (segment) | PRESENT | the height's exaggeration, 0.55 of the range at FL400 (the default) |
+| 3027 | ALTITUDE SCALE x2 | key (segment) | PRESENT | twice as high |
+| 3028 | ALTITUDE SCALE x4 | key (segment) | PRESENT | four times |
+| 3029 | RESET VIEW (airspace) | key | PRESENT | TILT 26, azimuth -40, zoom 1 |
+| 3030 | Drag to rotate, wheel to zoom, double-click to reset (airspace) | gesture | PRESENT | Scene3DWell: the 2D tube's drag pans, its wheel steps the range, its click selects; in 3D the drag turns the camera and the wheel zooms (the RANGE stepper in the bar still steps the range) |
+| 3031 | The well's keys (airspace) | keys | PRESENT | after a press: the arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3032 | Altitude key | readout | PRESENT | Scene3DRampKey down the well's right edge: FL400 to FL0 on the ramp the aircraft are coloured by (the picture is the renderer's own Ramp) |
+| 3033 | Aircraft labels | overlay/marker | PRESENT | "BAW123 FL310": the callsign (else the id) and the flight level, in the aircraft's colour, for the selected one and the nearest up to eight |
+| 3034 | Range rings, spokes, antenna | overlay/marker | PRESENT | four rings and twelve bearing spokes on the ground, the antenna's pink cross at the middle, a vertical drop line and shadow under each aircraft, a short vector along its course |
+| 3035 | Axis ticks and captions | overlay/marker | PRESENT | five ticks per axis (NM east and north from minus the range to plus it, flight levels 0 to 400) and the captions "NM E", "NM N", "FL" |
+| 3036 | Corner readouts | readout | PRESENT | the tube's own corner words over the airspace: "n PLOTTED", the range, "MODE ADS-B", the receiver position |
+| 3037 | Trails in the air | overlay/marker | PRESENT | the scope's TRAILS option (off / line / ribbon) draws each plotted aircraft's trail through the air at the altitudes it was heard at, coloured by level |
+| 3038 | Selection and emergency marks | overlay/marker | PRESENT | a white ring round the aircraft selected on the HOME list, a red one round an emergency |
+| 3039 | Unknown altitude | overlay/marker | PRESENT | an aircraft with no altitude stands ON THE GROUND as a grey diamond labelled "NO ALT" - never at an invented height |
+| 3040 | Empty state | readout | PRESENT | with nothing plotted the HOME list's own empty title ("NOTHING BEING HEARD" / "NOTHING CURRENT") over the empty box |
+| 3041 | The view and the camera are remembered | setting | PRESENT | view3d, name radar: on, azimuth, elevation, zoom, ALTITUDE SCALE |
+| 3042 | Click an aircraft on the airspace to select it | gesture | DEFERRED | needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
+
+### The demod scope's 3D TUNNEL (THREED.md section 4, DEMOD SCOPE with input I/Q, VIEW VECTOR / 3D TUNNEL)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3043 | VIEW VECTOR | key (segment) | PRESENT | Scene3DViewToggleInline "VECTOR" under the DISPLAY row, shown on a baseband input (I/Q or VECTOR); the vector figure is the default and is untouched |
+| 3044 | VIEW 3D TUNNEL | key (segment) | PRESENT | -> View3D.tunnel-view-selected(true): the glass is replaced by the tunnel (a choice that outlives the input: AUDIO, SPEC and MPX show their own glass, I/Q and VECTOR the tunnel again) |
+| 3045 | The tunnel | picture | PRESENT | the channel's baseband I and Q across, time along, each sample a point, faint rings marking the cross-section; the newest samples the TIME DEPTH asks for, from the scope's own I/Q tap; painted by the CPU renderer only while the window is open on a baseband input with the tunnel chosen |
+| 3046 | TIME DEPTH | slider | PRESENT | sixteen detents 2 ms to 250 ms, 40 ms by default, never more than the tap holds (100 ms at the channel's 48 kHz); the readout beside the caption ("40 ms") says the depth in force |
+| 3047 | COLOUR BY Time / Level | key (segment) | PRESENT | Time: cyan at the oldest sample to magenta at the newest; Level: the sample's distance from the middle on the viridis ramp |
+| 3048 | RESET VIEW (tunnel) | key | PRESENT | azimuth -35, elevation 18, zoom 1 |
+| 3049 | Drag to rotate, wheel to zoom, double-click to reset (tunnel) | gesture | PRESENT | Scene3DWell's TouchArea, as the other views' |
+| 3050 | The well's keys (tunnel) | keys | PRESENT | after a press: the arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3051 | Small 2D constellation | overlay/marker | PRESENT | the newest 600 samples in the plane, I across and Q up, in a square in the picture's top left corner (the same colours as the tunnel) |
+| 3052 | Axis ticks and captions | overlay/marker | PRESENT | five ticks per axis (time in ms from 0 to the depth, I and Q across the range that fits the samples: 0.05 to 10 in 1-2-5 steps) and the captions "time (ms)", "I", "Q" |
+| 3053 | The scope's caption and its sentence when nothing arrives | readout | PRESENT | the scope's own caption of the input in the picture's top right corner; "NO SAMPLES - RECEIVER STOPPED" / "NO BASEBAND IN THE TAP" (the scope's words) over the empty tunnel |
+| 3054 | EVM readout | readout | DEFERRED | needs the demodulator's error-vector measure per symbol; the host's scope sees samples, not symbols |
+| 3055 | SNR readout | readout | DEFERRED | needs a signal-to-noise estimate of the modulation (the channel's own power is the SIG gauge on the radar scope and the receiver's signal readout); no plugin or engine surface publishes one for this tap |
+| 3056 | SYMBOL RATE readout | readout | DEFERRED | needs a symbol clock (a decoder plugin's, e.g. a baud rate it published for the tap) |
+| 3057 | LOCK lamp | lamp/indicator | DEFERRED | needs a demodulator's lock state for the tap |
+| 3058 | COLOUR BY Symbol | key (segment) | DEFERRED | needs symbol decisions; COLOUR BY Level takes its place, true to the samples |
+| 3059 | The view and the camera are remembered | setting | PRESENT | view3d, name tunnel: on, azimuth, elevation, zoom, TIME DEPTH, COLOUR BY |
+
+### The Survey Engine page's 3D SURFACE (THREED2.md section 4, the plugin's panel page, VIEW TABLE / 3D SURFACE)
+
+The plugin publishes one row per channel (frequency, width, guess, peak, over floor, seen as "dwells seen / dwells made", band), sorted by activity, and NO HISTORY BY HOUR: the surface is therefore frequency by OCCUPANCY (the Seen share) by level, each channel a ridge as wide as its width, as high as its peak over the floor and as long as its Seen share. The design's hour axis and the controls that need the plugin's configuration or history are not drawn (rows 3071-3076, DEFERRED).
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3060 | VIEW TABLE | key (segment) | PRESENT | Scene3DViewToggleInline on the page, above the plugin's own table (the default, untouched) |
+| 3061 | VIEW 3D SURFACE | key (segment) | PRESENT | -> View3D.survey-view-selected(true); the table is replaced by the surface and the CHANNEL RANK list; saved in the interface half (view3d) |
+| 3062 | The surface | picture | PRESENT | the panel's rows read back through their headings (view3d_publish surveyFeedNow, survey3d_logic channelOfCells; a status row is skipped) and drawn as lit ridges in an axis box by the CPU renderer, only while the page is on screen with the surface chosen |
+| 3063 | ELEVATION | slider | PRESENT | Scene3DCameraBar, 4 to 89 degrees, 36 by default |
+| 3064 | AZIMUTH | slider | PRESENT | -180 to 180 degrees, -52 by default |
+| 3065 | RESET VIEW | key | PRESENT | the camera back to its defaults |
+| 3066 | Drag to rotate, wheel to zoom, double-click to reset | gesture | PRESENT | Scene3DWell's TouchArea |
+| 3067 | The well's keys | keys | PRESENT | after a press: arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3068 | CHANNEL RANK | readout | PRESENT | the busiest six channels, the panel's own cells quoted: rank, frequency ("144.8500 MHz") and Seen ("4/13"); the page's own words, never a bare percentage |
+| 3069 | Axis ticks and captions | overlay/marker | PRESENT | five ticks per axis (frequency in MHz across the channels' span, Seen 0 to 100, level in dB from the floor to the strongest peak) and the captions "MHz", "Seen (%)", "dB" |
+| 3070 | Rank numbers on the ridges | overlay/marker | PRESENT | the rank at the far end of each of the busiest six ridges, as high as the ridge |
+| 3071 | TIME WINDOW 6 h / 24 h / 7 d | select | DEFERRED | needs a time-binned history of the survey; the plugin publishes only its current table |
+| 3072 | PERCENTILE FLOOR | slider | DEFERRED | needs the survey's per-bin samples to re-derive a noise floor; the host only has each channel's peak and its level over the plugin's own floor |
+| 3073 | MERGE WIDTH | readout | DEFERRED | the plugin's merge radius is a key of its survey.cfg, which the host does not read; no panel row carries it |
+| 3074 | SWEEP BAND | readout | DEFERRED | the configured sweep band is in survey.cfg too; the status lines that say it do not reach the host's decoder output in a bounded run (docs 6.50) |
+| 3075 | EXPORT CSV | key | DEFERRED | the plugin already writes survey.csv beside survey.cfg; a host-side export of the table needs a save dialog |
+| 3076 | Hour (UTC) axis | overlay/marker | DEFERRED | needs the occupancy by hour of day; the surface's depth is the Seen share instead |
+| 3077 | The view and the camera are remembered | setting | PRESENT | view3d, name survey: on, azimuth, elevation, zoom |
+
+### The Radiosondes map page's 3D TRACK (THREED2.md section 1, the plugin's map page, VIEW MAP / 3D TRACK)
+
+The host's picture of a balloon is its TRACK (the current latitude, longitude, altitude, course, speed) and the plugin's PATH (the ground trail: latitudes and longitudes only). The ascent's altitudes are therefore RECORDED BY THE HOST from the moment it hears the balloon (sonde3d_logic SondeHistory, every tick, up to 16 balloons and 4000 samples each): the 3D track is what has been heard since this window has been listening, not the balloon's whole flight.
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3078 | VIEW MAP | key (segment) | PRESENT | SondeViewBar's toggle above the page's toolbar (found by PageTab.view3d == 2: a map page of a plugin whose name says radiosonde); the map, its list and its toolbar are the default and untouched |
+| 3079 | VIEW 3D TRACK | key (segment) | PRESENT | -> View3D.sonde-view-selected(true): the list and the map pane are replaced by the 3D track; the page's toolbar (the three band presets, Fit, Set RX here, the checkboxes) stays; saved in the interface half (view3d) |
+| 3080 | The track | picture | PRESENT | the heard track as a line through an axis box (km east, km north, altitude km): the ascent coloured by altitude (viridis), a dot at the last heard position with a drop line, a white star at the burst and a dashed pink descent after it, the plugin's ground trail in cyan on the floor, an orange triangle at the receiver; painted by the CPU renderer only while the page is on screen with the 3D track chosen |
+| 3081 | ELEVATION | slider | PRESENT | Scene3DCameraBar, 4 to 89 degrees, 22 by default |
+| 3082 | AZIMUTH | slider | PRESENT | -180 to 180 degrees, -48 by default |
+| 3083 | RESET VIEW | key | PRESENT | the camera back to its defaults |
+| 3084 | Drag to rotate, wheel to zoom, double-click to reset | gesture | PRESENT | Scene3DWell's TouchArea |
+| 3085 | The well's keys | keys | PRESENT | after a press: arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3086 | Altitude ladder | readout | PRESENT | down the well's right edge: the altitude ramp 0 to 35 km, a tick at the burst's altitude once a burst was seen, a pointer at the balloon's altitude with its figure ("18.5 km"); the box's altitude axis grows past 35 km for a higher balloon |
+| 3087 | Legend | readout | PRESENT | a plate: BURST (white), DESCENT (dashed pink), RX (orange), GROUND TRACK (cyan), in the renderer's own colours |
+| 3088 | FOLLOW BALLOON | key (latched) | PRESENT | the map page's own follow, on the balloon followed, else selected, else heard last (MapPage::followedId); greyed while no balloon is heard, lit while the page follows it; the 2D page's "Stop following" key shows the same state |
+| 3089 | ASCENT RATE | readout | PRESENT | computed from the host's own samples (the altitude change over the last 8 to 90 s), on the legend plate: "ASCENT RATE +5.1 m/s"; absent until 8 s of track |
+| 3090 | The balloon's tag | overlay/marker | PRESENT | "S4720113  18460 m  +5.1 m/s": the id, the altitude and the climb rate at the balloon's last heard position; the burst's own label "BURST 31 km" beside the star |
+| 3091 | Axis ticks and captions | overlay/marker | PRESENT | five ticks east and north in km over the heard extent (at least 5 km across, padded), an altitude tick every 5 km, and the captions "km E", "km N", "ALTITUDE km" |
+| 3092 | Empty state | readout | PRESENT | while no balloon has been heard: the page's own "No targets. Decoded aircraft, ships and stations appear here." over the empty box |
+| 3093 | The view and the camera are remembered | setting | PRESENT | view3d, name sonde: on, azimuth, elevation, zoom |
+| 3094 | PREDICTED LANDING chip | readout | DEFERRED | needs a landing predictor (a wind model and a descent profile); nothing the host holds predicts one |
+| 3095 | TIME SCRUBBER with a play key | slider | DEFERRED | the host's record starts when it began listening, not at the launch; a scrubber over it is a feature of its own |
+| 3096 | LAUNCH marker | overlay/marker | DEFERRED | the first position heard is not a launch unless the balloon was on the ground, which the host cannot know; the receiver's own position is drawn as RX |
+
 # Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM, TOOLS and EXTEND banks of phase 3)
 
 | Status | Rows |

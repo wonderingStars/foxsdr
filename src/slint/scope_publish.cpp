@@ -6,7 +6,10 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <limits>
+#include <map>
 #include <vector>
 
 #include "core/app_commands.hpp"
@@ -169,6 +172,73 @@ slint::Color colorOf(std::uint32_t rgba) {
 }
 
 }  // namespace
+
+foxsdr::slintview3d::Radar3dFeed ScopePublisher::radar3dFeed() const {
+    using namespace foxsdr::slintview3d;
+    const Impl& d = *impl_;
+    Radar3dFeed feed;
+    const RadarFrame& f = d.radar.frame();
+    feed.shown = ui_.get_view_index() == 2 && f.hasRx;
+    if (!feed.shown) { return feed; }
+    feed.rangeNm = static_cast<double>(f.rangeNm);
+    feed.trailMode = d.radar.optTrail();
+    feed.plottedText = f.plottedText;
+    feed.rangeCorner = f.rangeCornerText;
+    feed.modeText = f.modeText;
+    feed.rxText = f.rxText;
+    feed.emptyText = f.plotted == 0 ? f.homeEmptyTitle : std::string();
+    std::map<std::string, const cascade::core::HostTrack*> byId;
+    for (const cascade::core::HostTrack& h : d.kit.tracks()) { byId[h.t.id] = &h; }
+    const std::map<std::string, std::vector<RadarScope::TrailPoint>>& raw = d.radar.rawTrails();
+    const double rxLat = d.lastIn.rxLatDeg, rxLon = d.lastIn.rxLonDeg;
+    const auto relative = [&](double lat, double lon, double& e, double& n) {
+        const cascade::gui::ScopePolar p = cascade::gui::scopeRelative(rxLat, rxLon, lat, lon);
+        polarToEastNorth(p.rangeNm, p.bearingDeg, e, n);
+    };
+    for (const RadarTarget& t : f.targets) {
+        const auto it = byId.find(t.id);
+        if (it == byId.end()) { continue; }
+        const cascade::core::HostTrack& h = *it->second;
+        Radar3dAircraft a;
+        a.id = t.id;
+        a.label = t.label;
+        a.selected = t.selected;
+        a.emergency = t.emergency;
+        relative(h.t.latDeg, h.t.lonDeg, a.eastNm, a.northNm);
+        a.altFt = std::isfinite(h.t.altM) ? h.t.altM * 3.28084 : std::numeric_limits<double>::quiet_NaN();
+        a.courseDeg = std::isfinite(h.t.courseDeg) ? h.t.courseDeg : std::numeric_limits<double>::quiet_NaN();
+        const auto tr = raw.find(t.id);
+        if (tr != raw.end()) {
+            a.trail.reserve(tr->second.size());
+            for (const RadarScope::TrailPoint& p : tr->second) {
+                Radar3dTrailPoint q;
+                relative(p.lat, p.lon, q.eastNm, q.northNm);
+                q.altFt = std::isfinite(p.altM) ? p.altM * 3.28084 : std::numeric_limits<double>::quiet_NaN();
+                a.trail.push_back(q);
+            }
+        }
+        feed.aircraft.push_back(std::move(a));
+    }
+    return feed;
+}
+
+foxsdr::slintview3d::TunnelFeed ScopePublisher::tunnel3dFeed() const {
+    foxsdr::slintview3d::TunnelFeed f;
+    const Impl& d = *impl_;
+    f.shown = d.demod.open && cascade::gui::scopeSignalIsBaseband(d.demod.signalNow());
+    if (!f.shown) { return f; }
+    const DemodFeed& feed = d.demod.feed();
+    f.live = d.demod.live();
+    f.rateHz = feed.iqRateHz;
+    if (feed.iqI != nullptr && feed.iqQ != nullptr && feed.iqCount > 0) {
+        f.i.assign(feed.iqI, feed.iqI + feed.iqCount);
+        f.q.assign(feed.iqQ, feed.iqQ + feed.iqCount);
+    }
+    const DemodReadouts r = d.demod.readouts();
+    f.dead = r.dead;
+    f.caption = r.caption;
+    return f;
+}
 
 void ScopePublisher::radarPublish(const FoxReceiverState& state, double nowS) {
     Impl& d = *impl_;

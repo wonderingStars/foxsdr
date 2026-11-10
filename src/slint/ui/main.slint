@@ -38,6 +38,7 @@ import { Checkbox } from "fields.slint";
 import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
 import { AgeTick, WaterfallView } from "waterfall.slint";
+import { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow, Scene3DViewToggle, Wf3DView } from "scene3d_views.slint";
 import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
 import { ScopeEvents, DemodModel, MpxMarkItem, DemodScopeWindow, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel, RadarScopeView } from "scope_modes.slint";
 import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
@@ -60,6 +61,7 @@ export { Theme, Skin, Workbench, NightWatch, DigitFace, MeterStyle, ChipTone, La
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents,
          ScopeEvents, DemodModel, MpxMarkItem, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel }
 export { TxChoice, TransmitPageModel, TransmitEvents }
+export { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow }   // the 3D views' state and their labels (docs 6.64): the host's view3d_publish sets the global and answers its callbacks
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -673,7 +675,7 @@ export component MainWindow inherits Window {
                             wheel(x, n, shift) => { root.spectrum-wheel(x, n, shift); }
                         }
                         Splitter { x: 0; y: spectrum.height; width: parent.width; moved(dy) => { root.split-ratio = max(0.1, min(0.9, root.split-ratio + dy / max(1px, parent.height - Theme.splitter-h))); } }
-                        WaterfallView {
+                        if !View3D.wf-on : WaterfallView {
                             x: 0; y: spectrum.height + Theme.splitter-h; width: parent.width; height: max(0px, parent.height - spectrum.height - Theme.splitter-h);
                             picture: root.waterfall-image; age-ticks: root.age-ticks;
                             show-key: root.show-strength-key; key-labels: root.key-labels; key-foot: root.key-foot; key-manual: root.range-manual; key-coverage: root.key-coverage;
@@ -690,6 +692,20 @@ export component MainWindow inherits Window {
                             right-clicked(x, px, py) => { root.waterfall-menu-requested(x, px, py); }
                             wheel(x, n, shift) => { root.waterfall-wheel(x, n, shift); }
                             marker-hovered(i) => { root.marker-hovered(i); }
+                        }
+                        // THE 3D SURFACE (docs 6.64): the VIEW toggle sits on the 2D waterfall's top left (the strength key is on its right); the surface takes the waterfall's place and carries the toggle in its own strip
+                        if !View3D.wf-on : Rectangle {
+                            x: 44px + 10px; y: spectrum.height + Theme.splitter-h + 8px; width: wf3d-toggle.width + 12px; height: wf3d-toggle.height + 10px;
+                            background: Theme.wf-key-bg; border-width: Theme.hairline; border-color: Theme.line; border-radius: Theme.radius-panel;
+                            wf3d-toggle := Scene3DViewToggle {
+                                x: 6px; y: 5px; three-d: false; label-3d: @tr("3D SURFACE");
+                                selected(on) => { View3D.wf-view-selected(on); }
+                            }
+                        }
+                        if View3D.wf-on : Wf3DView {
+                            x: 0; y: spectrum.height + Theme.splitter-h; width: parent.width; height: max(0px, parent.height - spectrum.height - Theme.splitter-h);
+                            show-key: root.show-strength-key; key-labels: root.key-labels; key-foot: root.key-foot;
+                            foot-left: root.waterfall-foot-left; foot-tuned: root.waterfall-foot-tuned; foot-rest: root.waterfall-foot-rest;
                         }
                     }
                     if root.view-index == 1 : PatchPage { model: root.patch-model; canvas: root.canvas-model; inspector: root.inspector-model; }

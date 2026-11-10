@@ -17,8 +17,10 @@
 #include "host_duties.hpp"
 #include "main.h"
 #include "plugin_kit.hpp"
+#include "radar3d_logic.hpp"
 #include "radar_logic.hpp"
 #include "scope_logic.hpp"
+#include "tunnel3d_logic.hpp"
 
 namespace foxsdr::slintscope {
 
@@ -47,6 +49,13 @@ public:
     bool demodOpen() const;
     int demodSignal() const;       // for the rail row's chip
     bool demodLive() const;
+
+    // THE 3D AIRSPACE'S FEED (docs 6.64): the aircraft the scope plots (positions from the antenna in nautical miles, altitude in feet, course, trail), its range and TRAILS option and the tube's
+    // corner words, as of the last publish; `shown` is false unless the SCOPE tab is up with a position. Read each tick by View3DPublisher.
+    foxsdr::slintview3d::Radar3dFeed radar3dFeed() const;
+    // THE 3D TUNNEL'S FEED (docs 6.64): the newest baseband I/Q samples of the demod scope's tap with their rate and the scope's own sentences; `shown` is false unless the demod window is open
+    // on a baseband input (I/Q or VECTOR). Read each tick by View3DPublisher.
+    foxsdr::slintview3d::TunnelFeed tunnel3dFeed() const;
 
     // The drive script's read-back (`state scope.<what>`): fills `out` and returns "" or says what it does not know.
     std::string readState(const std::string& what, std::string& out) const;

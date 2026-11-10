@@ -130,6 +130,8 @@ float radarSweepDegrees(double nowS);
 // ---- the instrument ----
 class RadarScope {
 public:
+    // One kept point of a trail: where and how high (the 3D view draws the altitude the tube's flat trail drops).
+    struct TrailPoint { double lat, lon, altM; };
     // THE SETTINGS that persist (the Interface half's scopeRangeNm): snapped to the ladder.
     void setRangeNm(int nm) { rangeNm_ = cascade::core::clampScopeRangeNm(nm); }
     int rangeNm() const { return rangeNm_; }
@@ -171,10 +173,10 @@ public:
     int lcdScreen() const { return lcdScreen_; }
     const std::vector<RadarTrail>& trails() const { return trailsOut_; }   // as of the last update, in tube pixels
     const std::vector<std::string>& trailKeys() const { return trailKeys_; }
+    const std::map<std::string, std::vector<TrailPoint>>& rawTrails() const { return trails_; }   // every kept trail by track id, as of the last update (docs 6.64: the 3D airspace)
     std::size_t trailPointCount() const;           // every point of every trail kept (<= 256 per track, <= 256 tracks)
 
 private:
-    struct TrailPoint { double lat, lon, altM; };
     int rangeNm_ = cascade::gui::kScopeDefaultRangeNm;
     float tubeW_ = 0.f, tubeH_ = 0.f;
     bool lcdShown_ = true, dirty_ = true;

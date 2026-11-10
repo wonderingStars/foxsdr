@@ -1,0 +1,90 @@
+#! frames=900 bank=1 sections=2:1 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1600x1600
+# radar-3d (docs 6.64, specs/THREED.md section 2): the radar scope's VIEW PPI / 3D AIRSPACE. On the synthetic ADS-B recording (ICAO 4D2025, FOXSDR1, 35000 ft, about 13 NM from the receiver) the scope's
+# bar gets a VIEW toggle: "3D AIRSPACE" swaps the plan-position tube for the airspace (range rings and the antenna on the ground, the aircraft at its altitude with its callsign and flight level),
+# keeping the gauges, the LCD panel and the deck; in its strip TILT (the camera's elevation, 26 degrees), ALTITUDE SCALE x1 / x2 / x4 and RESET VIEW; the well takes drag, wheel, the arrow keys.
+# The renderer's own counts are read back (state view3d.radar.*): aircraft drawn, how many without an altitude, trail segments, pixels written, labels.
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.tracks >= 1
++1 key f3
++4 state bank == 2
++1 type "Latitude" "51.4775"
++1 key enter
++1 type "Longitude" "-0.4614"
++1 key enter
++3 click "Set RX here"
++25 state positionSet == 1
++1 click "Radar scope"
++12 state scope.radarOn == 1
++20 state scope.plotted >= 1
+# the plan-position tube is the default
+state view3d.radar.on == 0
+state view3d.radar.renders == 0
+state scope.tubeW > 300
++1 click "3D AIRSPACE"
++10 state view3d.radar.on == 1
+state view3d.radar.renders >= 1
+state view3d.radar.aircraft >= 1
+state view3d.radar.onground == 0
+state view3d.radar.pixels > 3000
+state view3d.radar.labels >= 16
+state view3d.radar.tags == 1
+state view3d.radar.w > 300
+state view3d.radar.h > 200
+state cfg.view3d contains "radar:on=1"
+shot "radar-3d.png"
+# TILT is the camera's elevation: 5 to 85 degrees, 26 by default
+state view3d.radar.tilt > 25
+state view3d.radar.tilt < 27
++1 slider "TILT" 0.5
++6 state view3d.radar.tilt > 43
+state view3d.radar.tilt < 47
+# ALTITUDE SCALE: the height's exaggeration, x1 by default
+state view3d.radar.scale == 0
++1 click "x2"
++4 state view3d.radar.scale == 1
++1 click "x4"
++4 state view3d.radar.scale == 2
+shot "radar-3d-x4.png"
++1 click "x1"
++4 state view3d.radar.scale == 0
+# the well takes the keys once pressed: the arrows turn by 5 degrees, + and - zoom
++1 press "Airspace"
++12 key left
++3 state view3d.radar.azimuth > -36
+state view3d.radar.azimuth < -34
++1 key +
++3 state view3d.radar.zoom > 1.1
+state view3d.radar.zoom < 1.14
++1 key -
++3 state view3d.radar.zoom > 0.99
+state view3d.radar.zoom < 1.01
+shot "radar-3d-turned.png"
+# RESET VIEW: the defaults again
++1 click "RESET VIEW"
++6 state view3d.radar.tilt > 25.9
+state view3d.radar.tilt < 26.1
+state view3d.radar.azimuth > -40.1
+state view3d.radar.azimuth < -39.9
+# the scope's own range ladder still drives it: at 10 NM the aircraft (13 NM out) is no longer plotted, so none is drawn and the page says so
++1 click "Range down"
++1 click "Range down"
++1 click "Range down"
++1 click "Range down"
++12 state scope.range == 10
+state scope.plotted == 0
+state view3d.radar.aircraft == 0
+state view3d.radar.pixels > 500
++1 click "Range up"
++14 state scope.plotted >= 1
+state view3d.radar.aircraft >= 1
+# the scope's TRAILS option shows in the air: LINE (the default) keeps the trail from the moment it was first seen
+state scope.trailPoints >= 1
+# back to the plan-position tube
++1 click "PPI"
++8 state view3d.radar.on == 0
+state cfg.view3d contains "radar:on=0"
+state scope.radarOn == 1
+state scope.tubeW > 300
+shot "radar-3d-back.png"

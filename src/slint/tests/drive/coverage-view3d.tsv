@@ -1,0 +1,54 @@
+3001	ASSERTED	waterfall-3d.txt	click "2D" in the surface strip; state view3d.wf.on 1 -> 0 and cfg.view3d contains waterfall:on=0
+3002	ASSERTED	waterfall-3d.txt	click "3D SURFACE"; state view3d.wf.on 0 -> 1, cfg.view3d contains waterfall:on=1
+3003	ASSERTED	waterfall-3d.txt	state view3d.wf.renders, triangles, pixels, data, realrows (what the renderer drew from the live history)
+3004	ASSERTED	waterfall-3d.txt	slider "ELEVATION" 0.5; state view3d.wf.elevation 44..49
+3005	ASSERTED	waterfall-3d.txt	slider "AZIMUTH" 0.75; state view3d.wf.azimuth 85..95
+3006	ASSERTED	waterfall-3d.txt	click "30 s"; state view3d.wf.depth == 0
+3007	ASSERTED	waterfall-3d.txt	click "60 s"; state view3d.wf.depth == 1
+3008	ASSERTED	waterfall-3d.txt	click "120 s"; state view3d.wf.depth == 2
+3009	ASSERTED	waterfall-3d.txt	click "Height"; state view3d.wf.shading == 0
+3010	ASSERTED	waterfall-3d.txt	click "Colour ramp"; state view3d.wf.shading == 1
+3011	ASSERTED	waterfall-3d.txt	click "RESET VIEW"; state view3d.wf.elevation 32, azimuth -58, zoom 1
+3012	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3013	ASSERTED	waterfall-3d.txt	press "Waterfall"; key left / up / + / - / 0; state view3d.wf.azimuth, elevation, zoom
+3020	ASSERTED	waterfall-3d.txt	state cfg.view3d contains waterfall:on=1 after the toggle and waterfall:on=0 after the way back (the host-held interface half; a real run writes it, test_config and test_slint_host_view3d hold the field and the text)
+3022	ASSERTED	radar-3d.txt	click "PPI"; state view3d.radar.on 1 -> 0, scope.tubeW > 300 again
+3023	ASSERTED	radar-3d.txt	click "3D AIRSPACE"; state view3d.radar.on 0 -> 1, cfg.view3d contains radar:on=1
+3024	ASSERTED	radar-3d.txt	state view3d.radar.renders, aircraft, onground, pixels, labels (what the renderer drew from the plotted aircraft)
+3025	ASSERTED	radar-3d.txt	slider "TILT" 0.5; state view3d.radar.tilt 43..47
+3026	ASSERTED	radar-3d.txt	click "x1"; state view3d.radar.scale == 0
+3027	ASSERTED	radar-3d.txt	click "x2"; state view3d.radar.scale == 1
+3028	ASSERTED	radar-3d.txt	click "x4"; state view3d.radar.scale == 2
+3029	ASSERTED	radar-3d.txt	click "RESET VIEW"; state view3d.radar.tilt 26, azimuth -40
+3030	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3031	ASSERTED	radar-3d.txt	press "Airspace"; key left, +, -; state view3d.radar.azimuth, zoom
+3041	ASSERTED	radar-3d.txt	state cfg.view3d contains radar:on=1 and radar:on=0 after the way back
+3043	ASSERTED	tunnel-3d.txt	click "VECTOR"#2 (the toggle's own key); state view3d.tunnel.on 1 -> 0, cfg.view3d contains tunnel:on=0
+3044	ASSERTED	tunnel-3d.txt	click "3D TUNNEL"; state view3d.tunnel.on 0 -> 1, cfg.view3d contains tunnel:on=1
+3045	ASSERTED	tunnel-3d.txt	state view3d.tunnel.renders, points, pixels, labels, w, h (what the renderer drew from the scope's I/Q)
+3046	ASSERTED	tunnel-3d.txt	slider "TIME DEPTH" 0 / 1 / 0.5333; state view3d.tunnel.depth 0 / 15 / 8 and depthms, points
+3047	ASSERTED	tunnel-3d.txt	click "Time" / "Level"; state view3d.tunnel.colour 0 / 1
+3048	ASSERTED	tunnel-3d.txt	click "RESET VIEW"; state view3d.tunnel.azimuth -35, zoom 1
+3049	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3050	ASSERTED	tunnel-3d.txt	press "Tunnel"; key left, +; state view3d.tunnel.azimuth, zoom
+3059	ASSERTED	tunnel-3d.txt	state cfg.view3d contains tunnel:on=1 and tunnel:on=0 after the way back
+3060	ASSERTED	survey-3d.txt	click "TABLE"; state view3d.survey.on 1 -> 0, cfg.view3d contains survey:on=0
+3061	ASSERTED	survey-3d.txt	click "3D SURFACE"; state view3d.survey.on 0 -> 1, cfg.view3d contains survey:on=1
+3062	ASSERTED	survey-3d.txt	state view3d.survey.renders, channels, triangles, pixels, labels, first (the real plugin row)
+3063	ASSERTED	survey-3d.txt	slider "ELEVATION" 0.5; state view3d.survey.elevation 44..49
+3064	ASSERTED	survey-3d.txt	slider "AZIMUTH" 0.75; state view3d.survey.azimuth 85..95
+3065	ASSERTED	survey-3d.txt	click "RESET VIEW"; state view3d.survey.elevation 36, azimuth -52
+3066	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3067	ASSERTED	survey-3d.txt	press "Survey"; key left, +, 0; state view3d.survey.azimuth, zoom
+3068	ASSERTED	survey-3d.txt	state view3d.survey.ranked >= 3 (the rank numbers placed; the list quotes the same rows)
+3077	ASSERTED	survey-3d.txt	state cfg.view3d contains survey:on=1 and survey:on=0 after the way back
+3078	ASSERTED	sonde-3d.txt	click "MAP"; state view3d.sonde.on 1 -> 0, cfg.view3d contains sonde:on=0
+3079	ASSERTED	sonde-3d.txt	click "3D TRACK"; state view3d.sonde.on 0 -> 1, cfg.view3d contains sonde:on=1
+3080	ASSERTED	sonde-3d.txt	state view3d.sonde.renders, samples, pixels, labels on the empty page (the drawing of a heard track is held by test_slint_host_sonde3d: no radiosonde fixture)
+3081	ASSERTED	sonde-3d.txt	slider "ELEVATION" 0.5; state view3d.sonde.elevation 44..49
+3082	ASSERTED	sonde-3d.txt	slider "AZIMUTH" 0.75; state view3d.sonde.azimuth 85..95
+3083	ASSERTED	sonde-3d.txt	click "RESET VIEW"; state view3d.sonde.elevation 22, azimuth -48
+3084	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3085	ASSERTED	sonde-3d.txt	press "Balloon track"; key left, +, 0; state view3d.sonde.azimuth, zoom
+3088	NOT_DRIVABLE	-	needs a heard balloon (no radiosonde recording among the fixtures); the script reads back that the key is greyed (expect "FOLLOW BALLOON" enabled false) while none is heard
+3093	ASSERTED	sonde-3d.txt	state cfg.view3d contains sonde:on=1 and sonde:on=0 after the way back

@@ -1,0 +1,483 @@
+// FoxSDR Slint front end - THE 3D VIEWS' SCREENS (docs/engine-stage4.md 6.64): what surrounds the 3D well on each page that gained one, kept out of main.slint so the pages stay as they were.
+//
+//   Scene3DViewToggle   the VIEW switch every 3D view has: two segments, the 2D screen (the default) and the 3D one
+//   Wf3DView            the receiver's lower well in its 3D SURFACE view (specs/THREED.md section 1): the control strip (VIEW, ELEVATION, AZIMUTH, HISTORY DEPTH, SHADING, RESET VIEW),
+//                       the well, the strength key over it and the foot under it with the same words as the 2D waterfall's foot
+//
+// The 2D screen of each page is untouched and stays the default; main.slint instantiates the 3D screen INSTEAD of the 2D well while the view is 3D, and the toggle in both.
+//
+// View3D is the global every 3D view's state lives in (the host's publisher, view3d_publish.cpp, sets it and answers its callbacks), so main.slint carries one line per view and
+// the views of the next lane add theirs here without touching the pages they sit in.
+import { Theme } from "theme.slint";
+import { SegGroup, SegKey, Caption, Key as KeyButton } from "keys.slint";   // (aliased: the `Key` of a key-pressed handler is the key-name namespace)
+import { SliderGroup } from "sliders.slint";
+import { TableRow, Table } from "table.slint";
+import { Scene3DWell, Scene3DCameraBar, Scene3DRampKey, Scene3DLabel } from "scene3d.slint";
+export { Scene3DLabel }
+
+// One row of the CHANNEL RANK list: the Survey Engine panel's own cells for a channel, quoted.
+export struct SurveyRankRow { rank: string, freq: string, seen: string, band: string }
+
+// One row of the 3D TRACK's legend: a swatch in the host's colour (the renderer's own), dashed or solid, and its words.
+export struct SondeLegendRow { color: color, text: string, dashed: bool }
+
+export global View3D {
+    // ---- the receiver's waterfall as a surface ----
+    in-out property <bool> wf-on: false;                  // the 3D SURFACE screen is up (the 2D waterfall is the default)
+    in property <image> wf-picture;
+    in property <[Scene3DLabel]> wf-labels;
+    in property <string> wf-empty;                        // the honest empty state's words while there is nothing to draw
+    in-out property <float> wf-azimuth: -58;
+    in-out property <float> wf-elevation: 32;
+    in-out property <float> wf-zoom: 1;
+    in property <int> wf-depth: 1;                        // HISTORY DEPTH: 0 30 s, 1 60 s, 2 120 s
+    in property <int> wf-shading: 0;                      // SHADING: 0 Height, 1 Colour ramp
+    in property <image> wf-key-ramp;                      // the strength key's ramp, painted from the renderer's own Ramp
+    in-out property <int> wf-w;                           // the well's size in logical pixels, for the host to render at
+    in-out property <int> wf-h;
+    callback wf-view-selected(bool);                      // VIEW: true = 3D SURFACE
+    callback wf-depth-selected(int);
+    callback wf-shading-selected(int);
+    callback wf-reset-view();                             // RESET VIEW went back to the defaults (the camera properties already did)
+
+    // ---- the radar scope's 3D AIRSPACE (the SCOPE tab, VIEW PPI / 3D AIRSPACE) ----
+    in-out property <bool> radar-on: false;               // the 3D AIRSPACE screen is up (the plan-position tube is the default)
+    in property <image> radar-picture;
+    in property <[Scene3DLabel]> radar-labels;
+    in property <string> radar-empty;
+    in-out property <float> radar-azimuth: -40;
+    in-out property <float> radar-elevation: 26;          // TILT
+    in-out property <float> radar-zoom: 1;
+    in property <int> radar-scale: 0;                     // ALTITUDE SCALE: 0 x1, 1 x2, 2 x4
+    in property <image> radar-key-ramp;                   // the altitude key's ramp
+    in-out property <int> radar-w;
+    in-out property <int> radar-h;
+    callback radar-view-selected(bool);
+    callback radar-scale-selected(int);
+    callback radar-reset-view();
+
+    // ---- the demod scope's 3D TUNNEL (the DEMOD SCOPE window on a baseband input, VIEW VECTOR / 3D TUNNEL) ----
+    in-out property <bool> tunnel-on: false;              // the tunnel is chosen (it shows while the input is I/Q or VECTOR; the vector figure is the default)
+    in property <image> tunnel-picture;
+    in property <[Scene3DLabel]> tunnel-labels;
+    in property <string> tunnel-empty;
+    in-out property <float> tunnel-azimuth: -35;
+    in-out property <float> tunnel-elevation: 18;
+    in-out property <float> tunnel-zoom: 1;
+    in property <float> tunnel-depth-pos: 0.5333;         // TIME DEPTH's slider, 0..1 (sixteen detents; 40 ms is the ninth)
+    in property <string> tunnel-depth-text;               // "40 ms"
+    in property <int> tunnel-colour: 0;                   // COLOUR BY: 0 Time, 1 Level
+    in-out property <int> tunnel-w;
+    in-out property <int> tunnel-h;
+    callback tunnel-view-selected(bool);
+    callback tunnel-depth-moved(float);
+    callback tunnel-colour-selected(int);
+    callback tunnel-reset-view();
+
+    // ---- the Survey Engine page's 3D SURFACE (the plugin's panel page, VIEW TABLE / 3D SURFACE) ----
+    in-out property <bool> survey-on: false;              // the surface is chosen (the table is the default)
+    in property <image> survey-picture;
+    in property <[Scene3DLabel]> survey-labels;
+    in property <[SurveyRankRow]> survey-rank;            // CHANNEL RANK: the busiest six
+    in-out property <float> survey-azimuth: -52;
+    in-out property <float> survey-elevation: 36;
+    in-out property <float> survey-zoom: 1;
+    in-out property <int> survey-w;
+    in-out property <int> survey-h;
+    callback survey-view-selected(bool);
+    callback survey-reset-view();
+
+    // ---- the Radiosondes map page's 3D TRACK (the plugin's map page, VIEW MAP / 3D TRACK) ----
+    in-out property <bool> sonde-on: false;               // the 3D track is chosen (the map is the default)
+    in property <image> sonde-picture;
+    in property <[Scene3DLabel]> sonde-labels;
+    in property <string> sonde-empty;                     // the honest empty state's words while no balloon has been heard
+    in-out property <float> sonde-azimuth: -48;
+    in-out property <float> sonde-elevation: 22;
+    in-out property <float> sonde-zoom: 1;
+    in-out property <int> sonde-w;
+    in-out property <int> sonde-h;
+    in property <float> sonde-alt-frac: -1;               // the balloon's altitude on the ladder, 0..1, -1 none
+    in property <float> sonde-burst-frac: -1;             // the burst's, -1 none
+    in property <string> sonde-alt-text;                  // "18.5 km"
+    in property <string> sonde-rate-text;                 // "+5.1 m/s", "" unknown
+    in property <string> sonde-burst-text;                // "BURST 31 km", "" none
+    in property <image> sonde-key-ramp;                   // the altitude ramp, painted from the renderer's own
+    in property <[SondeLegendRow]> sonde-legend;
+    in property <bool> sonde-follow-shown: false;         // a balloon is heard (FOLLOW BALLOON has something to follow)
+    in property <bool> sonde-following: false;            // the map page's own follow is on this balloon
+    callback sonde-view-selected(bool);
+    callback sonde-follow();                              // FOLLOW BALLOON: the map page's own follow / stop following
+    callback sonde-reset-view();
+}
+
+// VIEW: the 2D screen / the 3D one. `label-3d` is the page's own word (3D SURFACE, 3D AIRSPACE, 3D TUNNEL, 3D TRACK); the 2D label is the page's own too (2D, PPI, VECTOR, TABLE, MAP).
+export component Scene3DViewToggle inherits Rectangle {
+    in property <bool> three-d;
+    in property <string> label-2d: "2D";
+    in property <string> label-3d;
+    in property <string> caption: @tr("VIEW");
+    in property <string> tooltip-2d;
+    in property <string> tooltip-3d;
+    in property <bool> enabled: true;
+    callback selected(bool);        // true = the 3D screen was asked for
+    width: box.preferred-width; height: box.preferred-height;
+    box := VerticalLayout {
+        spacing: 3px;
+        Caption { label: root.caption; font-size: Theme.font-tiny; }
+        SegGroup {
+            small: true;
+            SegKey { label: root.label-2d; small: true; min-w: 0px; on: !root.three-d; enabled: root.enabled; tooltip: root.tooltip-2d; clicked => { root.selected(false); } }
+            SegKey { label: root.label-3d; small: true; min-w: 0px; on: root.three-d; enabled: root.enabled; tooltip: root.tooltip-3d; clicked => { root.selected(true); } }
+        }
+    }
+}
+
+// The same switch on one line (caption beside the segments), for a bar that is one line high.
+export component Scene3DViewToggleInline inherits Rectangle {
+    in property <bool> three-d;
+    in property <string> label-2d: "2D";
+    in property <string> label-3d;
+    in property <string> caption: @tr("VIEW");
+    in property <string> tooltip-2d;
+    in property <string> tooltip-3d;
+    callback selected(bool);
+    width: box.preferred-width; height: box.preferred-height;
+    box := HorizontalLayout {
+        spacing: 6px;
+        VerticalLayout { alignment: center; Caption { label: root.caption; font-size: Theme.font-tiny; } }
+        VerticalLayout { alignment: center;
+            SegGroup {
+                small: true;
+                SegKey { label: root.label-2d; small: true; min-w: 0px; on: !root.three-d; tooltip: root.tooltip-2d; clicked => { root.selected(false); } }
+                SegKey { label: root.label-3d; small: true; min-w: 0px; on: root.three-d; tooltip: root.tooltip-3d; clicked => { root.selected(true); } }
+            }
+        }
+    }
+}
+
+// The receiver's waterfall as a surface. Everything the 2D waterfall's foot says is still said (lines per second and the history, the tuned frequency, the mode and decoder).
+export component Wf3DView inherits Rectangle {
+    // the 2D waterfall's own words, passed in by the page (they are properties of the main window)
+    in property <bool> show-key: true;
+    in property <[string]> key-labels;
+    in property <string> key-title: @tr("Strength");
+    in property <string> key-foot;
+    in property <string> foot-left;
+    in property <string> foot-tuned;
+    in property <string> foot-rest;
+    out property <int> pixel-w: well.pixel-w;
+    out property <int> pixel-h: well.pixel-h;
+    init => { View3D.wf-w = well.pixel-w; View3D.wf-h = well.pixel-h; }
+    changed pixel-w => { View3D.wf-w = root.pixel-w; }
+    changed pixel-h => { View3D.wf-h = root.pixel-h; }
+
+    VerticalLayout {
+        spacing: 0px;
+        Scene3DCameraBar {
+            elevation <=> View3D.wf-elevation;
+            azimuth <=> View3D.wf-azimuth;
+            reset-clicked => { well.reset(); }
+            VerticalLayout { alignment: center; width: 156px; spacing: 3px;
+                Caption { label: @tr("HISTORY DEPTH"); font-size: Theme.font-tiny; }
+                SegGroup { small: true;
+                    SegKey { label: "30 s"; small: true; min-w: 0px; on: View3D.wf-depth == 0; clicked => { View3D.wf-depth-selected(0); } }
+                    SegKey { label: "60 s"; small: true; min-w: 0px; on: View3D.wf-depth == 1; clicked => { View3D.wf-depth-selected(1); } }
+                    SegKey { label: "120 s"; small: true; min-w: 0px; on: View3D.wf-depth == 2; clicked => { View3D.wf-depth-selected(2); } }
+                }
+            }
+            VerticalLayout { alignment: center; width: 190px; spacing: 3px;
+                Caption { label: @tr("SHADING"); font-size: Theme.font-tiny; }
+                SegGroup { small: true;
+                    SegKey { label: @tr("Height"); small: true; min-w: 0px; on: View3D.wf-shading == 0; clicked => { View3D.wf-shading-selected(0); } }
+                    SegKey { label: @tr("Colour ramp"); small: true; min-w: 0px; on: View3D.wf-shading == 1; clicked => { View3D.wf-shading-selected(1); } }
+                }
+            }
+            VerticalLayout { alignment: center;
+                Scene3DViewToggle { three-d: true; label-3d: @tr("3D SURFACE"); selected(on) => { View3D.wf-view-selected(on); } }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            well := Scene3DWell {
+                x: 0px; y: 0px; width: parent.width; height: parent.height;
+                picture: View3D.wf-picture;
+                labels: View3D.wf-labels;
+                empty-text: View3D.wf-empty;
+                label: @tr("Waterfall");
+                azimuth <=> View3D.wf-azimuth;
+                elevation <=> View3D.wf-elevation;
+                zoom <=> View3D.wf-zoom;
+                reset-view => { View3D.wf-reset-view(); }
+            }
+            if root.show-key && View3D.wf-empty == "" : Scene3DRampKey {
+                x: parent.width - self.width - 14px; y: 10px;
+                title: root.key-title;
+                ramp: View3D.wf-key-ramp;
+                ticks: root.key-labels;
+                vertical: false;
+                foot: root.key-foot;
+            }
+        }
+        Rectangle {
+            height: 28px;
+            Rectangle { y: 0px; height: Theme.hairline; width: parent.width; background: Theme.line; }
+            HorizontalLayout {
+                padding-left: 14px; padding-right: 14px; padding-top: Theme.hairline; spacing: 12px;
+                Text { text: root.foot-left; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.muted; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 0px;
+                    Text { text: root.foot-tuned; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.accent-soft; vertical-alignment: center; }
+                    Text { text: root.foot-rest; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.muted; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+}
+
+// The radar scope's TILT and ALTITUDE SCALE strip (THREED.md section 2): TILT is the camera's elevation (the azimuth is the drag's), ALTITUDE SCALE x1 / x2 / x4 the height's exaggeration.
+export component Radar3DBar inherits Rectangle {
+    Scene3DCameraBar {
+        x: 0px; y: 0px; width: parent.width;
+        elevation <=> View3D.radar-elevation;
+        azimuth <=> View3D.radar-azimuth;
+        min-elevation: 5; max-elevation: 85;
+        elevation-caption: @tr("TILT");
+        show-azimuth: false;
+        reset-clicked => { View3D.radar-azimuth = -40; View3D.radar-elevation = 26; View3D.radar-zoom = 1; View3D.radar-reset-view(); }
+        VerticalLayout { alignment: center; width: 150px; spacing: 3px;
+            Caption { label: @tr("ALTITUDE SCALE"); font-size: Theme.font-tiny; }
+            SegGroup { small: true;
+                SegKey { label: "x1"; small: true; min-w: 0px; on: View3D.radar-scale == 0; clicked => { View3D.radar-scale-selected(0); } }
+                SegKey { label: "x2"; small: true; min-w: 0px; on: View3D.radar-scale == 1; clicked => { View3D.radar-scale-selected(1); } }
+                SegKey { label: "x4"; small: true; min-w: 0px; on: View3D.radar-scale == 2; clicked => { View3D.radar-scale-selected(2); } }
+            }
+        }
+    }
+    height: 54px;
+}
+
+// The radar scope's 3D well: the airspace picture, its labels, the corner readouts of the tube (the same words), and the altitude key down the right edge.
+export component Radar3DWell inherits Rectangle {
+    in property <string> plotted-text;
+    in property <string> range-corner;
+    in property <string> mode-text;
+    in property <string> rx-text;
+    in property <[string]> key-ticks: ["FL400", "FL300", "FL200", "FL100", "FL0"];   // not-translated: the flight levels' own notation
+    out property <int> pixel-w: well.pixel-w;
+    out property <int> pixel-h: well.pixel-h;
+    init => { View3D.radar-w = well.pixel-w; View3D.radar-h = well.pixel-h; }
+    changed pixel-w => { View3D.radar-w = root.pixel-w; }
+    changed pixel-h => { View3D.radar-h = root.pixel-h; }
+    well := Scene3DWell {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        picture: View3D.radar-picture;
+        labels: View3D.radar-labels;
+        empty-text: View3D.radar-empty;
+        label: @tr("Airspace");
+        default-azimuth: -40; default-elevation: 26;
+        azimuth <=> View3D.radar-azimuth;
+        elevation <=> View3D.radar-elevation;
+        zoom <=> View3D.radar-zoom;
+        min-elevation: 5; max-elevation: 85;
+        reset-view => { View3D.radar-reset-view(); }
+    }
+    Text { x: 8px; y: 6px; text: root.plotted-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
+    if root.range-corner != "" : Text { x: parent.width - self.preferred-width - 8px; y: 6px; text: root.range-corner; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
+    Text { x: 8px; y: parent.height - self.preferred-height - 22px; text: root.mode-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.fg-soft; }   // (a line above the well's hint)
+    Text { x: parent.width - self.preferred-width - 8px; y: parent.height - self.preferred-height - 22px; text: root.rx-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.fg-soft; }
+    Scene3DRampKey {
+        x: parent.width - self.width - 10px; y: 30px;
+        title: @tr("ALTITUDE");
+        ramp: View3D.radar-key-ramp;
+        ticks: root.key-ticks;
+        vertical: true;
+    }
+}
+
+// The demod scope's TIME DEPTH, COLOUR BY and RESET VIEW, shown while the 3D TUNNEL is up. EVM, SNR, SYMBOL RATE, LOCK and COLOUR BY Symbol are not here: the host sees samples, not symbols (docs 6.64).
+export component Tunnel3DControls inherits Rectangle {
+    height: 54px;
+    HorizontalLayout {
+        spacing: 14px; alignment: start;
+        VerticalLayout { alignment: center; width: 170px;
+            SliderGroup {
+                caption: @tr("TIME DEPTH");
+                readout: View3D.tunnel-depth-text;
+                value: View3D.tunnel-depth-pos;
+                changed(v) => { View3D.tunnel-depth-moved(v); }
+            }
+        }
+        VerticalLayout { alignment: center; width: 130px; spacing: 3px;
+            Caption { label: @tr("COLOUR BY"); font-size: Theme.font-tiny; }
+            SegGroup { small: true;
+                SegKey { label: @tr("Time"); small: true; min-w: 0px; on: View3D.tunnel-colour == 0; clicked => { View3D.tunnel-colour-selected(0); } }
+                SegKey { label: @tr("Level"); small: true; min-w: 0px; on: View3D.tunnel-colour == 1; clicked => { View3D.tunnel-colour-selected(1); } }
+            }
+        }
+        VerticalLayout { alignment: center; KeyButton { label: @tr("RESET VIEW"); small: true; clicked => {
+            View3D.tunnel-azimuth = -35; View3D.tunnel-elevation = 18; View3D.tunnel-zoom = 1; View3D.tunnel-reset-view(); } } }
+    }
+}
+
+// The tunnel's well: the picture (the 2D constellation inset is painted into it), its axis labels, the scope's own caption of the input in the corner.
+export component Tunnel3DWell inherits Rectangle {
+    in property <string> caption;
+    out property <int> pixel-w: well.pixel-w;
+    out property <int> pixel-h: well.pixel-h;
+    init => { View3D.tunnel-w = well.pixel-w; View3D.tunnel-h = well.pixel-h; }
+    changed pixel-w => { View3D.tunnel-w = root.pixel-w; }
+    changed pixel-h => { View3D.tunnel-h = root.pixel-h; }
+    well := Scene3DWell {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        picture: View3D.tunnel-picture;
+        labels: View3D.tunnel-labels;
+        empty-text: View3D.tunnel-empty;
+        label: @tr("Tunnel");
+        default-azimuth: -35; default-elevation: 18;
+        azimuth <=> View3D.tunnel-azimuth;
+        elevation <=> View3D.tunnel-elevation;
+        zoom <=> View3D.tunnel-zoom;
+        reset-view => { View3D.tunnel-reset-view(); }
+    }
+    Text { x: parent.width - self.preferred-width - 8px; y: 6px; text: root.caption; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.fg-soft; }
+}
+
+// The Survey Engine's panel page with a VIEW toggle: the plugin's own table (the default) or the occupancy surface with the CHANNEL RANK list beside it. The table's callbacks pass through unchanged.
+export component SurveyPanelPage inherits Rectangle {
+    in property <[string]> columns;
+    in property <[TableRow]> rows;
+    in property <[length]> widths;
+    in property <string> empty-text;
+    callback row-pressed(int);
+    callback clicked(int);
+    callback column-resized(int, length);
+    VerticalLayout {
+        spacing: 0px;
+        if !View3D.survey-on : HorizontalLayout { height: 36px; padding-left: 10px; alignment: start;
+            VerticalLayout { alignment: center;
+                Scene3DViewToggleInline { three-d: false; label-2d: @tr("TABLE"); label-3d: @tr("3D SURFACE"); selected(on) => { View3D.survey-view-selected(on); } } }
+        }
+        if View3D.survey-on : Scene3DCameraBar {
+            elevation <=> View3D.survey-elevation;
+            azimuth <=> View3D.survey-azimuth;
+            reset-clicked => { View3D.survey-azimuth = -52; View3D.survey-elevation = 36; View3D.survey-zoom = 1; View3D.survey-reset-view(); }
+            VerticalLayout { alignment: center;
+                Scene3DViewToggleInline { three-d: true; label-2d: @tr("TABLE"); label-3d: @tr("3D SURFACE"); selected(on) => { View3D.survey-view-selected(on); } } }
+        }
+        if !View3D.survey-on : Table { vertical-stretch: 1; columns: root.columns; rows: root.rows; column-widths: root.widths; empty-text: root.empty-text;
+            row-pressed(r) => { root.row-pressed(r); } clicked(r) => { root.clicked(r); } column-resized(c, w) => { root.column-resized(c, w); } }
+        if View3D.survey-on : HorizontalLayout {
+            vertical-stretch: 1; spacing: 0px;
+            Rectangle {
+                horizontal-stretch: 1;
+                well := Scene3DWell {
+                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    picture: View3D.survey-picture;
+                    labels: View3D.survey-labels;
+                    empty-text: root.rows.length == 0 ? root.empty-text : "";
+                    label: @tr("Survey");
+                    default-azimuth: -52; default-elevation: 36;
+                    azimuth <=> View3D.survey-azimuth;
+                    elevation <=> View3D.survey-elevation;
+                    zoom <=> View3D.survey-zoom;
+                    reset-view => { View3D.survey-reset-view(); }
+                }
+                init => { View3D.survey-w = well.pixel-w; View3D.survey-h = well.pixel-h; }
+                changed width => { View3D.survey-w = well.pixel-w; }
+                changed height => { View3D.survey-h = well.pixel-h; }
+            }
+            Rectangle {
+                width: 250px;
+                background: Theme.wf-key-bg;
+                Rectangle { x: 0px; width: Theme.hairline; height: parent.height; background: Theme.line; }
+                VerticalLayout {
+                    padding: 10px; spacing: 6px; alignment: start;
+                    Caption { label: @tr("CHANNEL RANK"); font-size: Theme.font-tiny; }
+                    for r in View3D.survey-rank : HorizontalLayout { spacing: 8px;
+                        Text { text: r.rank; width: 16px; font-family: Theme.font-mono; font-size: Theme.font-small; font-weight: Theme.weight-semibold; color: Theme.accent-soft; }
+                        VerticalLayout { spacing: 0px;
+                            Text { text: r.freq; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.fg; overflow: elide; }
+                            Text { text: r.seen; font-family: Theme.font-ui; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The Radiosondes map page's VIEW strip: the toggle (MAP / 3D TRACK) always, and in 3D the camera sliders, RESET VIEW and FOLLOW BALLOON (the page's own follow, on the balloon heard).
+export component SondeViewBar inherits Rectangle {
+    if !View3D.sonde-on : HorizontalLayout { height: 36px; padding-left: 10px; alignment: start;
+        VerticalLayout { alignment: center;
+            Scene3DViewToggleInline { three-d: false; label-2d: @tr("MAP"); label-3d: @tr("3D TRACK"); selected(on) => { View3D.sonde-view-selected(on); } } }
+    }
+    if View3D.sonde-on : Scene3DCameraBar {
+        x: 0px; y: 0px; width: parent.width;
+        elevation <=> View3D.sonde-elevation;
+        azimuth <=> View3D.sonde-azimuth;
+        reset-clicked => { View3D.sonde-azimuth = -48; View3D.sonde-elevation = 22; View3D.sonde-zoom = 1; View3D.sonde-reset-view(); }
+        VerticalLayout { alignment: center;
+            Scene3DViewToggleInline { three-d: true; label-2d: @tr("MAP"); label-3d: @tr("3D TRACK"); selected(on) => { View3D.sonde-view-selected(on); } } }
+        VerticalLayout { alignment: center;
+            KeyButton { label: @tr("FOLLOW BALLOON"); small: true; on: View3D.sonde-following; enabled: View3D.sonde-follow-shown; clicked => { View3D.sonde-follow(); } } }
+    }
+    height: View3D.sonde-on ? 54px : 36px;
+}
+
+// The Radiosondes 3D track's well: the picture, the altitude ladder down its right edge (0 to 35 km, a tick at the burst, a pointer at the balloon), the legend plate and the ascent rate.
+export component SondeWell inherits Rectangle {
+    out property <int> pixel-w: well.pixel-w;
+    out property <int> pixel-h: well.pixel-h;
+    property <length> ladder-h: max(40px, root.height - 130px);
+    init => { View3D.sonde-w = well.pixel-w; View3D.sonde-h = well.pixel-h; }
+    changed pixel-w => { View3D.sonde-w = root.pixel-w; }
+    changed pixel-h => { View3D.sonde-h = root.pixel-h; }
+    well := Scene3DWell {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        picture: View3D.sonde-picture;
+        labels: View3D.sonde-labels;
+        empty-text: View3D.sonde-empty;
+        label: @tr("Balloon track");
+        default-azimuth: -48; default-elevation: 22;
+        azimuth <=> View3D.sonde-azimuth;
+        elevation <=> View3D.sonde-elevation;
+        zoom <=> View3D.sonde-zoom;
+        reset-view => { View3D.sonde-reset-view(); }
+    }
+    // the legend
+    Rectangle {
+        x: 10px; y: 10px; width: legend.preferred-width + 20px; height: legend.preferred-height + 16px;
+        background: Theme.wf-key-bg; border-width: Theme.hairline; border-color: Theme.line; border-radius: Theme.radius-panel;
+        legend := VerticalLayout {
+            padding: 8px + Theme.hairline; spacing: 4px;
+            for r in View3D.sonde-legend : HorizontalLayout { spacing: 8px;
+                Rectangle { width: 16px; height: 10px;
+                    Rectangle { x: 0px; y: 4px; width: parent.width; height: r.dashed ? 0px : 3px; background: r.color; }
+                    if r.dashed : Rectangle { x: 0px; y: 4px; width: 5px; height: 3px; background: r.color; }
+                    if r.dashed : Rectangle { x: 10px; y: 4px; width: 5px; height: 3px; background: r.color; }
+                }
+                Text { text: r.text; font-family: Theme.font-ui; font-size: Theme.font-cap; color: Theme.fg-soft; vertical-alignment: center; }
+            }
+            if View3D.sonde-rate-text != "" : Text { text: View3D.sonde-rate-text; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.accent-soft; }
+        }
+    }
+    // the altitude ladder
+    Rectangle {
+        x: parent.width - 86px; y: 30px; width: 76px; height: root.ladder-h + 20px;
+        Image { x: 0px; y: 24px; width: 8px; height: root.ladder-h; source: View3D.sonde-key-ramp; image-fit: fill; }
+        for t[i] in ["35", "30", "25", "20", "15", "10", "5", "0"] : Text {   // not-translated: kilometres
+            x: 14px; y: 24px + root.ladder-h * (i / 7.0) - self.preferred-height / 2;
+            text: t; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.dim;
+        }
+        if View3D.sonde-burst-frac >= 0 : Rectangle {
+            x: -4px; y: 24px + root.ladder-h * (1.0 - View3D.sonde-burst-frac); width: 20px; height: 2px; background: Theme.fg;
+        }
+        if View3D.sonde-alt-frac >= 0 : Rectangle {
+            x: -8px; y: 24px + root.ladder-h * (1.0 - View3D.sonde-alt-frac) - 1px; width: 24px; height: 3px; background: Theme.accent;
+            Text { x: 44px; y: -6px; text: View3D.sonde-alt-text; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.accent-soft; }
+        }
+        Text { x: 0px; y: 0px; text: @tr("ALTITUDE"); font-family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold; letter-spacing: Theme.cap-spacing * 0.9; color: Theme.muted; }
+    }
+}

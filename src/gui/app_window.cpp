@@ -21594,6 +21594,7 @@ cascade::core::AppConfig AppWindow::applyWindowHalf(const cascade::core::AppConf
     // engine with the rest of its half (Engine::applyConfig), and which window is in force is put over it here.
     setSpectrumTraceMode(cascade::core::traceModeFromName(cfg.spectrumTraceMode));
     setSpectrumAverageMs(static_cast<double>(cfg.spectrumAverageMs));
+    view3d_ = cfg.view3d;   // the Slint window's 3D views' remembered view and camera (docs 6.64): this window does not use it, and keeps it for the file
     restoreDisplayRange(cfg);
     radioSetupDontShow_ = cfg.radioSetupDontShow;   // the RADIO SETUP page's "Don't show this again" tick (stub campaign B8)
     // Told at once, so the engine's FIRST pass already knows (it starts "showing"): a window that opens on the receiver
@@ -21827,6 +21828,7 @@ void AppWindow::buildInterfaceHalf(cascade::core::AppConfig& cfg, bool bookkeepi
     // the engine holds is the window IN FORCE, which Automatic makes the standard one); the mode says which. A field not written here would be silently kept by loadedCfg_.
     cfg.spectrumTraceMode = cascade::core::traceModeName(spectrumTraceMode_);
     cfg.spectrumAverageMs = static_cast<int>(std::lround(spectrumAverageMs_));
+    cfg.view3d = view3d_;
     cfg.dbMin = displayRange_.manualPair().floorDb;
     cfg.dbMax = displayRange_.manualPair().ceilingDb;
     cfg.waterfallRangeMode = cascade::core::rangeModeName(displayRange_.mode());

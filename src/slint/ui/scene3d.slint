@@ -1,0 +1,241 @@
+// FoxSDR Slint front end - THE 3D VIEW'S WELL (docs/engine-stage4.md 6.64): the one reusable component every 3D view of the window sits in.
+//
+// The picture is drawn by the CPU renderer (src/slint/scene3d.*, a pure rasteriser into a host-owned RGBA buffer, no OpenGL): the host hands it over as an `image` whenever the
+// camera or the data moved. Everything that is WORDS is a Slint item over it: the host projects 3D positions to fractions (0..1) of the picture and publishes them as
+// Scene3DLabel rows; the well places a Text at each (src/slint/scene3d.hpp addLabel). Nothing here knows what the scene is.
+//
+//   Scene3DWell       the picture, the labels, drag to rotate, wheel to zoom, double-click and Home to reset, the arrow keys, +/- keys; the camera is three TWO-WAY properties
+//                     (azimuth, elevation, zoom) so a slider elsewhere moves it and a drag moves the slider; it reports its pixel size so the host renders at it
+//   Scene3DCameraBar  ELEVATION and AZIMUTH sliders and the RESET VIEW key, the strip every 3D view carries; a view's own controls go in as children
+//   Scene3DRampKey    the colour key plate (a ramp picture painted by the host from the same Ramp the renderer used, so the key is true to the picture), horizontal or vertical
+//
+// THE RULES THE HOST SHARES (scene3d.hpp): a drag of (dx, dy) pixels turns the camera by kDegPerPixel = 0.45 degrees per pixel (azimuth -dx, elevation +dy), a wheel notch scales
+// the zoom by kZoomPerNotch = 1.12, elevation stays in [min-elevation, max-elevation] and zoom in [min-zoom, max-zoom]. The numbers are repeated below as properties because a
+// Slint component cannot include the C++ header; tests/test_slint_scene3d_well.cpp holds the two copies together.
+import { Theme } from "theme.slint";
+import { Key as KeyButton } from "keys.slint";   // (aliased: the `Key` of a key-pressed handler is the key-name namespace)
+import { SliderGroup } from "sliders.slint";
+
+export struct Scene3DLabel {
+    x: float,                 // 0..1 of the picture's width
+    y: float,                 // 0..1 of its height
+    text: string,
+    color: color,
+    align: int,               // 0 centred on the anchor, 1 the text starts at it, 2 the text ends at it
+    kind: int,                // 0 axis tick, 1 axis caption, 2 marker or aircraft label, 3 a note
+}
+
+export component Scene3DWell inherits Rectangle {
+    // ---- what it shows ----
+    in property <image> picture;
+    in property <[Scene3DLabel]> labels;
+    in property <string> label: @tr("3D view");             // the accessible name: a scripted input and a screen reader find the well by it
+    in property <string> hint: @tr("Drag to rotate - wheel to zoom - double-click to reset");
+    in property <string> empty-text;                        // the honest empty state: shown over the well while it is not empty
+    in property <bool> show-hint: true;
+    in property <bool> enabled: true;
+    // ---- the camera: two-way ----
+    in-out property <float> azimuth: -58;                   // degrees; 0 looks north from the south, positive moves the eye east
+    in-out property <float> elevation: 32;                  // degrees above the horizon
+    in-out property <float> zoom: 1;
+    in property <float> default-azimuth: -58;
+    in property <float> default-elevation: 32;
+    in property <float> default-zoom: 1;
+    in property <float> min-elevation: 4;
+    in property <float> max-elevation: 89;
+    in property <float> min-zoom: 0.35;
+    in property <float> max-zoom: 5;
+    in property <float> deg-per-pixel: 0.45;                // scene3d.hpp kDegPerPixel
+    in property <float> zoom-per-notch: 1.12;               // scene3d.hpp kZoomPerNotch
+    in property <float> key-step: 5;                        // degrees per arrow key
+    // ---- what it reports ----
+    out property <int> pixel-w: Math.round(root.width / 1px);   // the size the host renders at (logical pixels)
+    out property <int> pixel-h: Math.round(root.height / 1px);
+    out property <bool> has-focus: fs.has-focus;
+    out property <bool> dragging: area.pressed;
+    callback reset-view();                                  // after the camera went back to its defaults (the host persists it)
+    callback camera-moved();                                // after any change of the camera by the pointer or a key
+
+    background: Theme.well-deep;
+    clip: true;
+    forward-focus: fs;
+    accessible-role: image;
+    accessible-label: root.label;
+    accessible-description: root.hint;
+
+    public function reset() {
+        root.azimuth = root.default-azimuth;
+        root.elevation = root.default-elevation;
+        root.zoom = root.default-zoom;
+        root.reset-view();
+    }
+    function turn(daz: float, del: float) {
+        root.azimuth = root.azimuth + daz;
+        if (root.azimuth > 180) { root.azimuth = root.azimuth - 360; }
+        if (root.azimuth < -180) { root.azimuth = root.azimuth + 360; }
+        root.elevation = Math.max(root.min-elevation, Math.min(root.max-elevation, root.elevation + del));
+        root.camera-moved();
+    }
+    function zoom-by(notches: float) {
+        root.zoom = Math.max(root.min-zoom, Math.min(root.max-zoom, root.zoom * Math.pow(root.zoom-per-notch, notches)));
+        root.camera-moved();
+    }
+
+    Image { width: parent.width; height: parent.height; source: root.picture; image-fit: fill; }
+
+    // the labels: a Text at each projected anchor
+    for l in root.labels : Text {
+        x: l.x * root.width - (l.align == 0 ? self.width / 2 : l.align == 2 ? self.width : 0px);
+        y: l.y * root.height - self.height / 2;
+        text: l.text;
+        color: l.color;
+        font-family: l.kind == 2 ? Theme.font-ui : Theme.font-mono;
+        font-size: l.kind == 1 ? Theme.font-small : Theme.font-cap;
+        font-weight: l.kind == 2 ? Theme.weight-semibold : Theme.weight-medium;
+        accessible-role: none;
+    }
+
+    if root.empty-text != "" : Text {
+        x: 16px; y: 0px; width: max(0px, root.width - 32px); height: root.height;
+        text: root.empty-text;
+        wrap: word-wrap;
+        color: Theme.dim;
+        font-family: Theme.font-ui; font-size: Theme.font-small;
+        horizontal-alignment: center; vertical-alignment: center;
+    }
+    if root.show-hint && root.hint != "" && root.empty-text == "" : Text {
+        x: 10px; y: root.height - self.height - 6px; width: max(0px, root.width - 20px);
+        text: root.hint;
+        overflow: elide;
+        color: Theme.dim;
+        font-family: Theme.font-ui; font-size: Theme.font-hint;
+        horizontal-alignment: right;
+        accessible-role: none;
+    }
+    if fs.has-focus : Rectangle {   // the keyboard focus: a hairline ring just inside the well
+        width: root.width; height: root.height;
+        border-width: 2px; border-color: Theme.focus;
+    }
+
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (!root.enabled) { return reject; }
+            if (e.text == Key.LeftArrow) { root.turn(root.key-step, 0); return accept; }
+            if (e.text == Key.RightArrow) { root.turn(-root.key-step, 0); return accept; }
+            if (e.text == Key.UpArrow) { root.turn(0, -root.key-step); return accept; }
+            if (e.text == Key.DownArrow) { root.turn(0, root.key-step); return accept; }
+            if (e.text == "+" || e.text == "=") { root.zoom-by(1); return accept; }
+            if (e.text == "-") { root.zoom-by(-1); return accept; }
+            if (e.text == Key.Home || e.text == "0") { root.reset(); return accept; }
+            return reject;
+        }
+    }
+    area := TouchArea {
+        property <length> last-x;
+        property <length> last-y;
+        enabled: root.enabled;
+        mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                self.last-x = self.mouse-x;
+                self.last-y = self.mouse-y;
+                fs.focus();
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.turn(-(self.mouse-x - self.last-x) / 1px * root.deg-per-pixel, (self.mouse-y - self.last-y) / 1px * root.deg-per-pixel);
+                self.last-x = self.mouse-x;
+                self.last-y = self.mouse-y;
+            }
+        }
+        double-clicked => { root.reset(); }
+        scroll-event(e) => {
+            if (e.delta-y == 0px) { return reject; }
+            root.zoom-by(e.delta-y > 0px ? 1 : -1);
+            return accept;
+        }
+    }
+}
+
+// The strip every 3D view carries: ELEVATION (and, unless the view has none, AZIMUTH) as sliders over the well's own properties, the view's own controls as children, and RESET VIEW.
+export component Scene3DCameraBar inherits Rectangle {
+    in-out property <float> elevation: 32;
+    in-out property <float> azimuth: -58;
+    in property <float> min-elevation: 4;
+    in property <float> max-elevation: 89;
+    in property <string> elevation-caption: @tr("ELEVATION");
+    in property <string> azimuth-caption: @tr("AZIMUTH");
+    in property <string> reset-label: @tr("RESET VIEW");
+    in property <bool> show-azimuth: true;
+    in property <bool> enabled: true;
+    callback camera-changed();
+    callback reset-clicked();
+
+    height: 54px;
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; spacing: 16px;
+        alignment: start;
+        VerticalLayout { alignment: center; width: 170px;
+            SliderGroup {
+                caption: root.elevation-caption;
+                readout: Math.round(root.elevation) + "°";
+                value: (root.elevation - root.min-elevation) / (root.max-elevation - root.min-elevation);
+                enabled: root.enabled;
+                changed(v) => { root.elevation = root.min-elevation + v * (root.max-elevation - root.min-elevation); root.camera-changed(); }
+            }
+        }
+        if root.show-azimuth : VerticalLayout { alignment: center; width: 170px;
+            SliderGroup {
+                caption: root.azimuth-caption;
+                readout: Math.round(root.azimuth) + "°";
+                value: (root.azimuth + 180) / 360;
+                enabled: root.enabled;
+                changed(v) => { root.azimuth = -180 + v * 360; root.camera-changed(); }
+            }
+        }
+        @children
+        VerticalLayout { alignment: center; KeyButton { label: root.reset-label; small: true; enabled: root.enabled; clicked => { root.reset-clicked(); } } }
+    }
+}
+
+// A colour key plate. `ramp` is a picture the host paints from the renderer's own Ramp (one pixel wide for a vertical key, one high for a horizontal one), so the key can never
+// drift from the colours in the picture; `ticks` are the scale's words, first to last (a vertical key reads from the top down).
+export component Scene3DRampKey inherits Rectangle {
+    in property <string> title;
+    in property <image> ramp;
+    in property <[string]> ticks;
+    in property <bool> vertical: true;
+    in property <string> foot;
+
+    background: Theme.wf-key-bg;
+    border-width: Theme.hairline; border-color: Theme.line; border-radius: Theme.radius-panel;
+    width: box.preferred-width; height: box.preferred-height;
+    box := VerticalLayout {
+        padding: 8px + Theme.hairline; spacing: 5px;
+        Text {
+            text: root.title.to-uppercase();
+            font-family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold;
+            letter-spacing: Theme.cap-spacing * 0.9;
+            color: Theme.muted;
+        }
+        if root.vertical : HorizontalLayout {
+            spacing: 6px; alignment: start;
+            Image { source: root.ramp; width: 10px; height: 140px; image-fit: fill; }
+            VerticalLayout {
+                alignment: space-between; height: 140px;
+                for t in root.ticks : Text { text: t; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.dim; vertical-alignment: center; }
+            }
+        }
+        if !root.vertical : VerticalLayout {
+            spacing: 3px;
+            Image { source: root.ramp; width: 180px; height: 8px; image-fit: fill; }
+            HorizontalLayout {
+                alignment: space-between;
+                for t in root.ticks : Text { text: t; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.dim; }
+            }
+        }
+        if root.foot != "" : Text { text: root.foot; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.muted; }
+    }
+}

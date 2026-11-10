@@ -1,0 +1,74 @@
+#! frames=620 bank=2 iqfile=scope.wav centre=100000000 mode=AM bandwidth=3000 FOXSDR_SLINT_DEMOD_SCOPE=2
+# tunnel-3d (docs 6.64, specs/THREED.md section 4): the DEMOD SCOPE's VIEW VECTOR / 3D TUNNEL. On a baseband input (I/Q or VECTOR) the window gets a VIEW toggle under the DISPLAY row; "3D TUNNEL"
+# swaps the glass for the tunnel - the channel's I and Q across, time along, each sample a point - with TIME DEPTH (sixteen detents, 40 ms by default, never more than the tap holds: 100 ms of
+# the scope.wav channel at 48 kHz), COLOUR BY Time / Level and RESET VIEW in a strip, and a small 2D constellation of the newest samples in the picture's corner. The scope.wav fixture is an AM
+# carrier on the VFO with a 100 Hz tone, so the tunnel is a ring of samples, not a QPSK's four clusters (the pure test paints those). state view3d.tunnel.* reads back what the renderer drew.
+# NOT HERE, on purpose: EVM, SNR, SYMBOL RATE, LOCK and COLOUR BY Symbol - the host sees samples, not symbols (docs 6.64 lists them as deferred, needing a demodulator's symbol clock).
+30 state running == 1
++10 state scope.live == 1
+state scope.signal == 2
+state scope.iqCount > 1000
+# the vector figure is the default; the tunnel has drawn nothing yet
+state view3d.tunnel.on == 0
+state view3d.tunnel.renders == 0
++1 click "3D TUNNEL"
++10 state view3d.tunnel.on == 1
+state view3d.tunnel.renders >= 1
+state view3d.tunnel.points > 500
+state view3d.tunnel.pixels > 5000
+state view3d.tunnel.labels >= 15
+state view3d.tunnel.depth == 8
+state view3d.tunnel.depthms > 39
+state view3d.tunnel.depthms < 41
+state view3d.tunnel.w > 300
+state view3d.tunnel.h > 100
+state cfg.view3d contains "tunnel:on=1"
+shot "tunnel-3d.png"
+# TIME DEPTH: the slider's ends are 2 ms and the longest the tap holds (100 ms here, 4800 samples)
++1 slider "TIME DEPTH" 0
++6 state view3d.tunnel.depth == 0
+state view3d.tunnel.depthms < 2.5
+state view3d.tunnel.points < 120
++1 slider "TIME DEPTH" 1
++6 state view3d.tunnel.depth == 15
+state view3d.tunnel.depthms > 90
+state view3d.tunnel.points > 4000
+shot "tunnel-3d-deep.png"
++1 slider "TIME DEPTH" 0.5333
++6 state view3d.tunnel.depth == 8
+# COLOUR BY: Time (cyan to magenta) or Level
+state view3d.tunnel.colour == 0
++1 click "Level"
++4 state view3d.tunnel.colour == 1
+shot "tunnel-3d-level.png"
++1 click "Time"
++4 state view3d.tunnel.colour == 0
+# the well takes the keys once pressed
++1 press "Tunnel"
++12 key left
++3 state view3d.tunnel.azimuth > -31
+state view3d.tunnel.azimuth < -29
++1 key +
++3 state view3d.tunnel.zoom > 1.1
+state view3d.tunnel.zoom < 1.14
++1 click "RESET VIEW"
++6 state view3d.tunnel.azimuth > -35.1
+state view3d.tunnel.azimuth < -34.9
+state view3d.tunnel.zoom > 0.99
+state view3d.tunnel.zoom < 1.01
+# the choice outlives the input: AUDIO is not a baseband input (the glass and its own keys come back), I/Q shows the tunnel again
++1 click "AUDIO"
++8 state scope.signal == 0
+state view3d.tunnel.on == 1
++1 click "I/Q"
++8 state scope.signal == 2
+state view3d.tunnel.on == 1
+state view3d.tunnel.points > 500
+# VECTOR is a baseband input too; the toggle's own "VECTOR" (the second key of that name) goes back to the vector figure
++1 click "VECTOR"#1
++8 state scope.signal == 3
+state view3d.tunnel.on == 1
++1 click "VECTOR"#2
++8 state view3d.tunnel.on == 0
+state cfg.view3d contains "tunnel:on=0"
+shot "tunnel-3d-back.png"
