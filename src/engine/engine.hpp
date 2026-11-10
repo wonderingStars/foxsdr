@@ -196,6 +196,22 @@ private:
     // THE RECEIVERS (engine/receiver.hpp): one radio each, kMaxReceivers slots, slot 0 always present and today's receiver. Declared before every
     // member that is one radio's, because the references of the same name below are bound to slot 0 when the engine is built.
     std::array<std::unique_ptr<Receiver>, kMaxReceivers> receivers_;
+    // WHICH SLOTS HOLD A RECEIVER, bit i = slot i (multi-radio stage 3). Slot 0 always does. The engine API host reads it from the thread that submits
+    // a command, to answer at once whether a command's target names a radio (engine/radio_scope.hpp); the slots themselves are the pass's. One word, so
+    // the engine's limit (kMaxReceivers) must fit in 32 bits - it does, with room (static_assert below).
+    std::atomic<std::uint32_t> receiverMask_{1u};
+    static_assert(kMaxReceivers <= 32, "receiverMask_ is one 32-bit word");
+    // Whether the engine has a radio numbered `radio` (from 1; false for 0 and for any number past kMaxReceivers).
+    bool receiverLive(std::uint32_t radio) const {
+        return radio >= 1u && radio <= kMaxReceivers && ((receiverMask_.load(std::memory_order_acquire) >> (radio - 1u)) & 1u) != 0u;
+    }
+    // How many radios the engine has (fact.radio.count).
+    std::size_t receiverCount() const;
+    // The state word and the label of a radio for fact.radio.<n>.* (engine_api_lists.cpp).
+    const char* radioStateWord(std::uint32_t radio);
+    std::string radioLabel();
+    // The source generation of radio `radio` (a live one): the guard that drops a command asked of a radio that has gone since.
+    std::uint64_t receiverSourceGen(std::uint32_t radio) const { return receivers_[radio - 1u]->sourceGen_.load(); }
 
     // NO DEFAULT MEMBER INITIALISERS, on purpose: GCC refuses them on a
     // nested struct used by an inline static member of the enclosing class

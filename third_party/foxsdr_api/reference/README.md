@@ -23,3 +23,10 @@ licence as this application. `../foxsdr_api.h` itself is MIT.
 
 Do not edit these copies. A new API version is vendored by copying the files
 again from the commit that defines it and updating the commit above.
+
+ONE EXCEPTION, 2026-11-10 (multi-radio engine, stage 3; docs/multi-radio-records/engine-stages-1-3.md): the additive "several radios" vocabulary was
+written into `../foxsdr_api.h`, `docs/API.md` (6.18), `mock_engine/mock_engine.cpp` and `tests/test_mock_engine.cpp` (`testRadios`) here, because this is
+where the specification and its reference engine live. The mock includes three headers of the `foxsdr-api` repository that are not vendored
+(`common/audio_ring.hpp`, `common/seqlock.hpp`, `common/struct_io.hpp`), so nothing here builds in this repository; the edit was compiled and run against
+three small stand-ins for them (in the build folder, not committed): 393 checks, 2 failed - the two version-gate checks at test_mock_engine.cpp:30 and :33,
+which expect API 0.2 and fail against the 0.3 header already vendored here, before this change.

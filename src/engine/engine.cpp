@@ -14,6 +14,7 @@
 #include "core/patch_io.hpp"
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
+#include "engine/radio_scope.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cctype>
@@ -93,6 +94,12 @@ using cascade::gui::formatBandwidth;
 // The Pipeline is built exactly as the window built it: the same rate, FFT
 // length and smoothing (core/receiver_tables.hpp), audio on.
 Engine::Engine() : Engine(ownHost_) {}
+
+std::size_t Engine::receiverCount() const {
+    std::size_t n = 0;
+    for (std::uint32_t mask = receiverMask_.load(std::memory_order_acquire); mask != 0u; mask >>= 1u) { n += mask & 1u; }
+    return n;
+}
 
 Engine::Engine(EngineHost& host)
     : host_(&host),
@@ -6921,6 +6928,14 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
     // plugin host API, the widgets' own spans) - see docs/engine-stage1.md.
     for (const double v : c.num) {
         if (!std::isfinite(v)) { return refuse(FOXAPI_BAD_ARGUMENT, "not a finite number"); }
+    }
+    // THE RADIO THE COMMAND IS FOR (multi-radio stage 3, engine/radio_scope.hpp): an op that addresses one radio, sent with a target that names no radio
+    // the engine has, is refused NO_DEVICE here, for every way a command arrives (the API host has already said so at the submit, with the sender's own
+    // focus; a local command has none, so it is the first radio's). Only slot 0 carries a receiver until RADIO_ADD (stage 4), and every handler below acts on it.
+    {
+        const RadioPick pick = pickRadio(c.op, c.target, 1u, [this](std::uint32_t n) { return receiverLive(n); });
+        if (pick.status == FOXAPI_NO_DEVICE) { return refuse(FOXAPI_NO_DEVICE, "there is no radio with that number"); }
+        if (pick.status != FOXAPI_OK) { return refuse(pick.status, "a target of all radios is for RUN alone"); }
     }
     const bool on = c.ival[0] != 0;
     const std::string text = cmd::textOf(c, longText);

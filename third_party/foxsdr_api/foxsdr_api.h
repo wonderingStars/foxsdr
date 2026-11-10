@@ -473,7 +473,11 @@ typedef struct FoxSpectrumInfo {
 typedef struct FoxCommand {
     uint32_t structSize;
     uint32_t op;                /* FOXAPI_OP_* */
-    uint32_t target;            /* object id where an op has several (VFO, decoder); 0 = default */
+    uint32_t target;            /* object id where an op has several (VFO, decoder); 0 = default. MULTI-RADIO (0.3, additive): for an op that addresses ONE radio (the
+                                 * receiver's tuning, mode, audio, device and recording ops - the list is docs/API.md, "Several radios") 0 = the session's FOCUSED
+                                 * radio (FOXAPI_OP_RADIO_FOCUS; R1 until the session says otherwise), 1..N = that radio, FOXAPI_TARGET_ALL_RADIOS for FOXAPI_OP_RUN
+                                 * alone. A target that names no radio the engine has is refused FOXAPI_NO_DEVICE; every other op ignores it. N is never
+                                 * assumed: the engine's limit is the fact fact.radio.max. */
     uint32_t flags;             /* reserved, 0 */
     double num[4];
     int64_t ival[2];
@@ -608,6 +612,9 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SCAN_SERIAL_PORTS 0x0F03u /* 0.3; LOCAL sessions only; result arrives as FOXAPI_LIST_SERIAL_PORTS changing */
 #define FOXAPI_OP_SERVER_CONFIG     0x1001u /* text: JSON (web + CAT listeners); LOCAL sessions only */
 #define FOXAPI_OP_UPDATE_CHECK      0x1101u /* ival[0]: 1 = check now, 2 = enable at start, 3 = disable */
+/* 0.3, multi-radio (additive; no capability bit - an interface tests FOXAPI_HAS on read_radio_state, and the fact fact.radio.max). */
+#define FOXAPI_OP_RADIO_FOCUS       0x1201u /* ival[0]: the radio number, from 1. Sets THIS SESSION's focused radio (grant: VIEW); the commands of the session that name no radio (target 0), and its read_state, read_spectrum and single-radio lists, then follow that radio. NO_DEVICE: no such radio. NO_CHANGE: it is the focus already. On a change every seq group of THIS session's read_state (seq, tuneSeq, modeSeq, deviceSeq, audioSeq, displaySeq, txSeq, listSeq, rdsSeq, scanSeq) moves by one, so an interface redraws everything exactly as it does after a source change. Another session's focus is not touched. */
+#define FOXAPI_TARGET_ALL_RADIOS    0xFFFFFFFFu     /* FoxCommand::target for FOXAPI_OP_RUN alone: every radio the engine has (Start together, STOP ALL); refused (BAD_ARGUMENT) for any other op */
 
 #define FOXAPI_TX_MODE_CW  0u
 #define FOXAPI_TX_MODE_AM  1u
@@ -1107,6 +1114,16 @@ typedef struct FoxEngineApi {
      * `*out` is NULL unless the answer is OK. */
     int32_t (FOXAPI_CALL *get_local_extension)(FoxEngine *engine, uint32_t extension, const FoxLocalExtensionArgs *args,
                                                void **out);
+
+    /* ---- 0.3, multi-radio (additive; FOXAPI_HAS is the test - there is no capability bit) ---------------------------------------------- */
+
+    /* One radio's published state, exactly as read_state gives the focused one: radio 1..N, or 0 for this session's focused radio. NO_DEVICE
+     * when the engine has no such radio. The `grants` and the key flags are this session's, as in read_state. */
+    int32_t (FOXAPI_CALL *read_radio_state)(FoxSession *session, uint32_t radio, FoxReceiverState *out);
+    /* One radio's newest spectrum frame, exactly as read_spectrum reads the focused one (sinceSeq, FOXAPI_NO_CHANGE, the bins): radio 1..N, or
+     * 0 for this session's focused radio. NO_DEVICE when the engine has no such radio. */
+    int32_t (FOXAPI_CALL *read_radio_spectrum)(FoxSession *session, uint32_t radio, uint64_t sinceSeq,
+                                               FoxSpectrumInfo *info, float *bins, uint32_t cap);
 } FoxEngineApi;
 
 /* True when the table covers member `m`: the engine was built with it. */
