@@ -1,0 +1,50 @@
+#! frames=312 bank=1 plugins=all open=module:propagation-tools-0.1.0-abi3-win-x64.dll size=1600x1600
+# plugin-settings-back-to-back: the fields of a plugin settings form committed one after another with NO tick between one field's Enter and the next
+# field's typing (Propagation Tools, 11 text and number fields), every value read back at the end. A running plugin makes the host republish its page
+# rows several times a second; a form that is rebuilt by such a republish loses the text typed since the last one, and the Enter that follows
+# has nothing to commit (the box shows the stored value again).
+120 state kit.plugins == 43
++1 click "START"
++40 expect "STOP" enabled equals "true"
+# START opened the plugin's image page, whose settings fold is "Plugin settings" (groupbox #1, fold key #2)
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
++1 click "Propagation Tools image"#1
+# START opened the image page, so the first click closes it; the second opens it again and shows it
++5 click "Propagation Tools image"#1
++10 state pages contains "Propagation Tools image"
++1 click "Plugin settings"#2
++3 state list.pluginSettings.names contains "Your locator"
++3 type "Your locator" "IO91wm"
++1 key enter
++0 type "Target locator" "JN58td"
++1 key enter
++0 type "Engine" "empirical"
++1 key enter
++0 type "VOACAP program (optional)" "voacapw.exe"
++1 key enter
++0 type "Sunspot number (0 = from SFI)" "120"
++1 key enter
++0 type "Transmit power, W" "50"
++1 key enter
++0 type "Antenna" "dipole_hd"
++1 key enter
++0 type "Isotropic gain, dBi" "3"
++1 key enter
++0 type "Noise at 3 MHz, -dBW" "150"
++1 key enter
++0 type "Required SNR, dB" "20"
++1 key enter
++0 type "Map threshold, REL %" "60"
++1 key enter
++30 expect "Your locator" value equals "IO91wm"
+expect "Target locator" value equals "JN58td"
+expect "Engine" value equals "empirical"
+expect "VOACAP program (optional)" value equals "voacapw.exe"
+expect "Sunspot number (0 = from SFI)" value equals "120"
+expect "Transmit power, W" value equals "50"
+expect "Antenna" value equals "dipole_hd"
+expect "Isotropic gain, dBi" value equals "3"
+expect "Noise at 3 MHz, -dBW" value equals "150"
+expect "Required SNR, dB" value equals "20"
+expect "Map threshold, REL %" value equals "60"

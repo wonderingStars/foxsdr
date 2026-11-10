@@ -177,6 +177,14 @@ export component PluginSettingsForm inherits Rectangle {
     property <bool> two-up: root.width >= 300px;
     property <length> inner-w: root.width - 24px;
     property <length> half-w: (root.inner-w - 10px) / 2;
+    // The number of rows of the two-up body, held in a property of its own that is written only when the model OBJECT changes. `for s in
+    // Math.ceil(root.fields.length / 2)` is an integer model rebuilt whenever anything it reads is dirty, and it reads `root.fields`, which
+    // the host sets again with every republish of the page's row (several a second on a running plugin's page): every cell of the form was
+    // destroyed and made again, the box in mid-edit with it, and the Enter that followed had nothing to commit. A model set in place by the
+    // host (set_row_data) does not touch this property.
+    property <int> pairs: 0;
+    init => { root.pairs = Math.ceil(root.fields.length / 2); }
+    changed fields => { root.pairs = Math.ceil(root.fields.length / 2); }
 
     height: col.preferred-height;
     accessible-role: groupbox;
@@ -266,7 +274,7 @@ export component PluginSettingsForm inherits Rectangle {
             padding-top: 4px;
             padding-bottom: 8px;
             spacing: 8px;
-            for s in Math.ceil(root.fields.length / 2) : SettingSlot {
+            for s in root.pairs : SettingSlot {
                 left: root.fields[2 * s];
                 right: root.fields[2 * s + 1];
                 has-right: 2 * s + 1 < root.fields.length;
