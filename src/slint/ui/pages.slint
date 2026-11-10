@@ -28,7 +28,7 @@ import { MapTarget, LegendRow, MapPane } from "map.slint";
 import { StoreModel, StorePage } from "extend_bank.slint";
 import { PatchPresetsModel, PatchPresetsPage } from "patch_page.slint";
 import { TransmitPageModel, TransmitPage } from "transmit_page.slint";
-import { SurveyPanelPage } from "scene3d_views.slint";   // the 3D views of two plugin pages (docs 6.64)
+import { SurveyPanelPage, SondeViewBar, SondeWell, View3D } from "scene3d_views.slint";   // the 3D views of two plugin pages (docs 6.64)
 
 export { PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow }
@@ -508,11 +508,13 @@ export component PageBody inherits Rectangle {
         }
         // 5 map: the toolbar, then the list at the left and the pane at the right
         if root.page.kind == 5 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
+            if root.page.view3d == 2 : SondeViewBar { }
             MapToolbar { map: root.page.map; index: root.index;
                 fit(p) => { root.map-fit(p); } set-rx(p) => { root.map-set-rx(p); } on-screen(p, v) => { root.map-on-screen(p, v); } coverage(p, v) => { root.map-coverage(p, v); }
                 trails(p, v) => { root.map-trails(p, v); } alt-colours(p, v) => { root.map-alt-colours(p, v); } reset-coverage(p) => { root.map-reset-coverage(p); }
                 stop-following(p) => { root.map-stop-following(p); } sort-clicked(p) => { root.map-sort-clicked(p); } sort-dir(p) => { root.map-sort-dir(p); } }
-            HorizontalLayout { spacing: 0px; vertical-stretch: 1;
+            if root.page.view3d == 2 && View3D.sonde-on : SondeWell { vertical-stretch: 1; }
+            if !(root.page.view3d == 2 && View3D.sonde-on) : HorizontalLayout { spacing: 0px; vertical-stretch: 1;
                 VerticalLayout { width: 260px; spacing: 4px;
                     HorizontalLayout { spacing: 6px; padding-left: 8px; padding-right: 8px;
                         Text { text: @tr("Sort"); font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }

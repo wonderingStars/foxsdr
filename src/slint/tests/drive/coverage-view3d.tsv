@@ -42,3 +42,13 @@
 3067	ASSERTED	survey-3d.txt	press "Survey"; key left, +, 0; state view3d.survey.azimuth, zoom
 3068	ASSERTED	survey-3d.txt	state view3d.survey.ranked >= 3 (the rank numbers placed; the list quotes the same rows)
 3077	ASSERTED	survey-3d.txt	state cfg.view3d contains survey:on=1 and survey:on=0 after the way back
+3078	ASSERTED	sonde-3d.txt	click "MAP"; state view3d.sonde.on 1 -> 0, cfg.view3d contains sonde:on=0
+3079	ASSERTED	sonde-3d.txt	click "3D TRACK"; state view3d.sonde.on 0 -> 1, cfg.view3d contains sonde:on=1
+3080	ASSERTED	sonde-3d.txt	state view3d.sonde.renders, samples, pixels, labels on the empty page (the drawing of a heard track is held by test_slint_host_sonde3d: no radiosonde fixture)
+3081	ASSERTED	sonde-3d.txt	slider "ELEVATION" 0.5; state view3d.sonde.elevation 44..49
+3082	ASSERTED	sonde-3d.txt	slider "AZIMUTH" 0.75; state view3d.sonde.azimuth 85..95
+3083	ASSERTED	sonde-3d.txt	click "RESET VIEW"; state view3d.sonde.elevation 22, azimuth -48
+3084	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3085	ASSERTED	sonde-3d.txt	press "Balloon track"; key left, +, 0; state view3d.sonde.azimuth, zoom
+3088	NOT_DRIVABLE	-	needs a heard balloon (no radiosonde recording among the fixtures); the script reads back that the key is greyed (expect "FOLLOW BALLOON" enabled false) while none is heard
+3093	ASSERTED	sonde-3d.txt	state cfg.view3d contains sonde:on=1 and sonde:on=0 after the way back

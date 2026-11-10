@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2055 | 479 | 82 | 1494 | 0 |
+| 2074 | 487 | 82 | 1505 | 0 |
 
-Of the 1195 rows that are controls (the 860 readout-like rows left out): 479 asserted, 82 driven without a read-back, 634 not drivable.
+Of the 1206 rows that are controls (the 868 readout-like rows left out): 487 asserted, 82 driven without a read-back, 637 not drivable.
 
-NOT DRIVABLE by reason: readout 860, other 211, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 67, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 868, other 212, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 68, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,7 +199,7 @@ NOT DRIVABLE by reason: readout 860, other 211, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
-| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 77 | 40 | 0 | 37 | 27 | 0 |
+| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
 
 ## Every row
 
@@ -3152,4 +3152,23 @@ NOT DRIVABLE by reason: readout 860, other 211, needs a signal (no fixture) 120,
 | 3075 | EXPORT CSV | key | NOT DRIVABLE | - | deferred: the plugin already writes survey.csv beside survey.cfg; a host-side export of the table needs a save dialog |
 | 3076 | Hour (UTC) axis | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 3077 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | survey-3d.txt | state cfg.view3d contains survey:on=1 and survey:on=0 after the way back |
+| 3078 | VIEW MAP | key (segment) | DRIVEN+ASSERTED | sonde-3d.txt | click "MAP"; state view3d.sonde.on 1 -> 0, cfg.view3d contains sonde:on=0 |
+| 3079 | VIEW 3D TRACK | key (segment) | DRIVEN+ASSERTED | sonde-3d.txt | click "3D TRACK"; state view3d.sonde.on 0 -> 1, cfg.view3d contains sonde:on=1 |
+| 3080 | The track | picture | DRIVEN+ASSERTED | sonde-3d.txt | state view3d.sonde.renders, samples, pixels, labels on the empty page (the drawing of a heard track is held by test_slint_host_sonde3d: no radiosonde fixture) |
+| 3081 | ELEVATION | slider | DRIVEN+ASSERTED | sonde-3d.txt | slider "ELEVATION" 0.5; state view3d.sonde.elevation 44..49 |
+| 3082 | AZIMUTH | slider | DRIVEN+ASSERTED | sonde-3d.txt | slider "AZIMUTH" 0.75; state view3d.sonde.azimuth 85..95 |
+| 3083 | RESET VIEW | key | DRIVEN+ASSERTED | sonde-3d.txt | click "RESET VIEW"; state view3d.sonde.elevation 22, azimuth -48 |
+| 3084 | Drag to rotate, wheel to zoom, double-click to reset | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3085 | The well's keys | keys | DRIVEN+ASSERTED | sonde-3d.txt | press "Balloon track"; key left, +, 0; state view3d.sonde.azimuth, zoom |
+| 3086 | Altitude ladder | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3087 | Legend | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3088 | FOLLOW BALLOON | key (latched) | NOT DRIVABLE | - | needs a heard balloon (no radiosonde recording among the fixtures); the script reads back that the key is greyed (expect "FOLLOW BALLOON" enabled false) while none is heard |
+| 3089 | ASCENT RATE | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3090 | The balloon's tag | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3091 | Axis ticks and captions | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3092 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3093 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | sonde-3d.txt | state cfg.view3d contains sonde:on=1 and sonde:on=0 after the way back |
+| 3094 | PREDICTED LANDING chip | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3095 | TIME SCRUBBER with a play key | slider | NOT DRIVABLE | - | deferred: the host's record starts when it began listening, not at the launch; a scrubber over it is a feature of its own |
+| 3096 | LAUNCH marker | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 

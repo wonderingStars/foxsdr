@@ -14,6 +14,7 @@
 #include "core/i18n.hpp"
 #include "scene3d_slint.hpp"
 #include "radar3d_compositor.hpp"
+#include "sonde3d_compositor.hpp"
 #include "survey3d_compositor.hpp"
 #include "tunnel3d_compositor.hpp"
 #include "view3d_prefs.hpp"
@@ -78,6 +79,12 @@ std::string lowerOf(std::string s) {
     return s;
 }
 
+ViewState sondeDefaults() {
+    ViewState s;
+    setCamera(s, sonde3dDefaultCamera());
+    return s;
+}
+
 slint::Color colourOf(std::uint32_t rgba) {
     return slint::Color::from_argb_uint8(static_cast<std::uint8_t>(rgba & 0xffu), static_cast<std::uint8_t>(rgba >> 24), static_cast<std::uint8_t>(rgba >> 16), static_cast<std::uint8_t>(rgba >> 8));
 }
@@ -133,6 +140,164 @@ struct View3DPublisher::Impl {
     std::string depthText;
 
     Impl(MainWindow& u, foxsdr::slinthost::HostDuties& d, bool b, foxsdr::slintkit::PluginKit& k) : ui(u), duties(d), bounded(b), kit(k) {}
+
+    // ---- the Radiosondes' 3D track ----
+    ViewState sonde = sondeDefaults();
+    SondeHistory sondeHist;
+    scene3d::SceneSurface sondeSurface;
+    scene3d::Scene sondeScene;
+    std::string sondeSig;
+    std::size_t sondeRenders = 0, sondeSamples = 0, sondeAscent = 0, sondeDescent = 0, sondePixels = 0, sondeLabels = 0, sondeBalloons = 0;
+    double sondeLastMs = 0.0, sondeWorstMs = 0.0;
+    int sondeW = 0, sondeH = 0;
+    bool sondeBurst = false, sondeRampSet = false;
+    std::string sondeId, sondePlugin;
+
+    static bool isSondePlugin(const std::string& name) { return lowerOf(name).find("radiosonde") != std::string::npos; }
+
+    // THE TRACK RECORD: every tick the kit's balloon tracks (tracks of a Radiosondes plugin) are taken into the history, whatever page is showing.
+    void sondeRecord(const View3DPublisher::SondeContext& ctx) {
+        const double nowS = static_cast<double>(ctx.nowMs) / 1000.0;
+        std::vector<std::string> live;
+        for (const cascade::core::HostTrack& t : kit.tracks()) {
+            if (!isSondePlugin(t.plugin)) { continue; }
+            sondePlugin = t.plugin;
+            live.push_back(t.t.id);
+            sondeHist.add(t.t.id, nowS, t.t.latDeg, t.t.lonDeg, t.t.altM);
+        }
+        sondeHist.prune(live, nowS, 3600.0);
+        sondeBalloons = sondeHist.trackCount();
+    }
+
+    // Which balloon: the one the map page follows, else the one selected, else the one heard last.
+    std::string sondePick() const {
+        const cascade::core::HostTrack* newest = nullptr;
+        for (const cascade::core::HostTrack& t : kit.tracks()) {
+            if (!isSondePlugin(t.plugin)) { continue; }
+            if (newest == nullptr || t.t.ageMs < newest->t.ageMs) { newest = &t; }
+        }
+        if (!sondePlugin.empty()) {
+            if (const foxsdr::slintkit::MapPage* pg = foxsdr::slintkit::findMapPage(kit.mapPages(), sondePlugin)) {
+                if (!pg->followedId.empty() && sondeHist.of(pg->followedId) != nullptr) { return pg->followedId; }
+                if (!pg->selectedId.empty() && sondeHist.of(pg->selectedId) != nullptr) { return pg->selectedId; }
+            }
+        }
+        return newest != nullptr ? newest->t.id : std::string();
+    }
+
+    void sondePublish(const View3DPublisher::SondeContext& ctx) {
+        sondeRecord(ctx);
+        const auto& g = ui.global<View3D>();
+        const float az = g.get_sonde_azimuth(), el = g.get_sonde_elevation(), zm = g.get_sonde_zoom();
+        if (az != sonde.azimuth || el != sonde.elevation || zm != sonde.zoom) {
+            scene3d::Camera c = cameraOf(sonde);
+            c.azimuthDeg = az;
+            c.elevationDeg = el;
+            c.zoom = zm;
+            setCamera(sonde, scene3d::clamped(c));
+            markSave(ctx.nowMs);
+        }
+        if (wfDirtySave && ctx.nowMs >= wfSaveAtMs) { wfDirtySave = false; save(); }
+        if (!sonde.on || !pageShown(2)) { return; }
+
+        const std::string id = sondePick();
+        const std::vector<SondeSample>* hist = id.empty() ? nullptr : sondeHist.of(id);
+        sondeId = id;
+        // FOLLOW BALLOON: shown while a balloon is heard; lit while the map page follows it
+        bool following = false;
+        if (!sondePlugin.empty()) { if (const foxsdr::slintkit::MapPage* pg = foxsdr::slintkit::findMapPage(kit.mapPages(), sondePlugin)) { following = !id.empty() && pg->followedId == id; } }
+        g.set_sonde_follow_shown(hist != nullptr);
+        g.set_sonde_following(following);
+        if (!sondeRampSet) {
+            g.set_sonde_key_ramp(scene3d::rampImage(sonde3dRamp(), true, 96));
+            std::vector<SondeLegendRow> legend;
+            legend.push_back({colourOf(0xFFFFFFFFu), ss(cascade::i18n::tr("BURST")), false});
+            legend.push_back({colourOf(0xFF6996FFu), ss(cascade::i18n::tr("DESCENT")), true});
+            legend.push_back({colourOf(0xF5A524FFu), ss(cascade::i18n::tr("RX")), false});
+            legend.push_back({colourOf(0x56B0CCFFu), ss(cascade::i18n::tr("GROUND TRACK")), false});
+            g.set_sonde_legend(std::make_shared<slint::VectorModel<SondeLegendRow>>(std::move(legend)));
+            sondeRampSet = true;
+        }
+        int w = g.get_sonde_w(), h = g.get_sonde_h();
+        if (w < 64 || h < 64) { w = 700; h = 360; }
+        sondeW = std::min(w, kMaxW);
+        sondeH = std::min(h, kMaxH);
+        const SondeDerived d = hist != nullptr ? deriveSonde(*hist) : SondeDerived{};
+        char b[96];
+        std::string sig = std::to_string(sondeW) + "x" + std::to_string(sondeH) + "|" + numSig(sonde.azimuth) + numSig(sonde.elevation) + numSig(sonde.zoom) + "|" + id + "|" + (ctx.hasRx ? "R" : "-");
+        std::snprintf(b, sizeof(b), "%zu|%.0f|%.1f|", hist != nullptr ? hist->size() : std::size_t{0}, d.currentAltM, d.climbMs);
+        sig += b;
+        if (ctx.hasRx) { sig += numSig(ctx.rxLatDeg) + numSig(ctx.rxLonDeg); }
+        if (sig == sondeSig) { return; }
+        sondeSig = sig;
+
+        SondeInput in;
+        in.camera = cameraOf(sonde);
+        in.captionAlt = std::string(cascade::i18n::tr("ALTITUDE")) + " km";
+        double lat0 = 0.0, lon0 = 0.0;
+        if (hist != nullptr && !hist->empty()) {
+            lat0 = hist->front().lat;
+            lon0 = hist->front().lon;
+            for (const SondeSample& s : *hist) {
+                SondeLocal l;
+                localKm(lat0, lon0, s.lat, s.lon, l.eastKm, l.northKm);
+                l.altKm = std::isfinite(s.altM) ? s.altM / 1000.0 : std::numeric_limits<double>::quiet_NaN();
+                in.track.push_back(l);
+            }
+            in.burst = d.burst;
+            in.burstIndex = d.maxIndex;
+            // the plugin's own ground trail of this balloon
+            for (const cascade::core::HostPath& p : kit.paths()) {
+                if (!isSondePlugin(p.plugin) || p.id != id) { continue; }
+                for (const CascadePathPoint& pt : p.points) {
+                    double e = 0.0, n = 0.0;
+                    localKm(lat0, lon0, pt.latDeg, pt.lonDeg, e, n);
+                    in.ground.emplace_back(e, n);
+                }
+                break;
+            }
+            // the tag at the balloon: serial, altitude, climb
+            char tb[128];
+            if (std::isfinite(d.currentAltM)) { std::snprintf(tb, sizeof(tb), "%s  %.0f m", id.c_str(), d.currentAltM); }
+            else { std::snprintf(tb, sizeof(tb), "%s", id.c_str()); }
+            in.tag = tb;
+            const std::string rate = climbText(d.climbMs, d.haveClimb);
+            if (!rate.empty()) { in.tag += "  " + rate; }
+            if (d.burst && std::isfinite(d.maxAltM)) { in.burstLabel = std::string(cascade::i18n::tr("BURST")) + " " + formatKm(d.maxAltM / 1000.0) + " km"; }
+        }
+        if (ctx.hasRx) {
+            in.haveRx = true;
+            const double olat = hist != nullptr && !hist->empty() ? lat0 : ctx.rxLatDeg, olon = hist != nullptr && !hist->empty() ? lon0 : ctx.rxLonDeg;
+            localKm(olat, olon, ctx.rxLatDeg, ctx.rxLonDeg, in.rxEastKm, in.rxNorthKm);
+        }
+        const double t0 = nowMsReal();
+        scene3d::Rgba* mem = sondeSurface.begin(sondeW, sondeH);
+        const SondeResult res = paintSonde3d(sondeScene, mem, sondeW, sondeH, in);
+        g.set_sonde_picture(sondeSurface.image());
+        sondeSurface.flip();
+        sondeLastMs = nowMsReal() - t0;
+        sondeWorstMs = std::max(sondeWorstMs, sondeLastMs);
+        ++sondeRenders;
+        sondeSamples = in.track.size();
+        sondeAscent = res.ascentSegments;
+        sondeDescent = res.descentSegments;
+        sondePixels = sondeScene.pixelsWritten();
+        sondeLabels = res.labels.size();
+        sondeBurst = res.burst;
+        std::vector<Scene3DLabel> labels;
+        labels.reserve(res.labels.size());
+        for (const scene3d::Label3D& l : res.labels) { labels.push_back({l.x, l.y, ss(l.text), colourOf(l.rgba), l.align, l.kind}); }
+        g.set_sonde_labels(std::make_shared<slint::VectorModel<Scene3DLabel>>(std::move(labels)));
+        // the ladder's pointer and tick, and the readouts
+        g.set_sonde_alt_frac(static_cast<float>(hist != nullptr ? ladderFraction(d.currentAltM) : -1.0));
+        g.set_sonde_burst_frac(static_cast<float>(d.burst ? ladderFraction(d.maxAltM) : -1.0));
+        char at[32];
+        std::snprintf(at, sizeof(at), "%.1f km", std::isfinite(d.currentAltM) ? d.currentAltM / 1000.0 : 0.0);
+        g.set_sonde_alt_text(ss(std::isfinite(d.currentAltM) ? std::string(at) : std::string()));
+        const std::string rate = climbText(d.climbMs, d.haveClimb);
+        g.set_sonde_rate_text(ss(rate.empty() ? std::string() : std::string(cascade::i18n::tr("ASCENT RATE")) + " " + rate));
+        g.set_sonde_empty(ss(hist == nullptr ? std::string(cascade::i18n::tr("No targets. Decoded aircraft, ships and stations appear here.")) : std::string()));
+    }
 
     // ---- the Survey Engine's 3D surface ----
     ViewState survey = surveyDefaults();
@@ -243,6 +408,7 @@ struct View3DPublisher::Impl {
         tunnel.opt[0] = std::clamp(tunnel.opt[0], 0, 15);
         tunnel.opt[1] = std::clamp(tunnel.opt[1], 0, 1);
         survey = prefs.get(kViewSurvey, surveyDefaults());
+        sonde = prefs.get(kViewSonde, sondeDefaults());
     }
 
     void apply() {
@@ -274,6 +440,11 @@ struct View3DPublisher::Impl {
         g.set_survey_elevation(survey.elevation);
         g.set_survey_zoom(survey.zoom);
         surveySig.clear();
+        g.set_sonde_on(sonde.on);
+        g.set_sonde_azimuth(sonde.azimuth);
+        g.set_sonde_elevation(sonde.elevation);
+        g.set_sonde_zoom(sonde.zoom);
+        sondeSig.clear();
     }
 
     // THE SAVE: the text of every view, when it changed, into the interface half (a bounded run keeps it in the host's copy, which `state cfg.view3d` reads, and writes no file:
@@ -283,6 +454,7 @@ struct View3DPublisher::Impl {
         prefs.set(kViewRadar, radar);
         prefs.set(kViewTunnel, tunnel);
         prefs.set(kViewSurvey, survey);
+        prefs.set(kViewSonde, sonde);
         const std::string text = prefs.serialize();
         if (text == savedText) { return; }
         savedText = text;
@@ -525,6 +697,28 @@ void View3DPublisher::wire() {
         i.wfSig.clear();
         i.save();
     });
+    g.on_sonde_view_selected([this](bool on) {
+        Impl& i = *impl_;
+        i.sonde.on = on;
+        ui_.global<View3D>().set_sonde_on(on);
+        i.sondeSig.clear();
+        i.save();
+    });
+    g.on_sonde_follow([this] {
+        Impl& i = *impl_;
+        if (i.sondePlugin.empty() || i.sondeId.empty()) { return; }
+        if (foxsdr::slintkit::MapPage* pg = foxsdr::slintkit::findMapPage(i.kit.mapPages(), i.sondePlugin)) { pg->followedId = pg->followedId == i.sondeId ? std::string() : i.sondeId; }
+        i.sondeSig.clear();
+    });
+    g.on_sonde_reset_view([this] {
+        Impl& i = *impl_;
+        const ViewState d = sondeDefaults();
+        i.sonde.azimuth = d.azimuth;
+        i.sonde.elevation = d.elevation;
+        i.sonde.zoom = d.zoom;
+        i.sondeSig.clear();
+        i.save();
+    });
     g.on_survey_view_selected([this](bool on) {
         Impl& i = *impl_;
         i.survey.on = on;
@@ -616,8 +810,9 @@ void View3DPublisher::publish(const Wf3dContext& wf) { impl_->waterfall(wf); }
 void View3DPublisher::publishRadar(const Radar3dFeed& feed, std::int64_t nowMs) { impl_->radarPublish(feed, nowMs); }
 void View3DPublisher::publishTunnel(const TunnelFeed& feed, std::int64_t nowMs) { impl_->tunnelPublish(feed, nowMs); }
 void View3DPublisher::publishSurvey(std::int64_t nowMs) { impl_->surveyPublish(nowMs); }
+void View3DPublisher::publishSonde(const SondeContext& ctx) { impl_->sondePublish(ctx); }
 
-int View3DPublisher::detaches() const { return impl_->surface.detaches() + impl_->radarSurface.detaches() + impl_->tunnelSurface.detaches() + impl_->surveySurface.detaches(); }
+int View3DPublisher::detaches() const { return impl_->surface.detaches() + impl_->radarSurface.detaches() + impl_->tunnelSurface.detaches() + impl_->surveySurface.detaches() + impl_->sondeSurface.detaches(); }
 
 std::string View3DPublisher::readState(const std::string& what, std::string& out) const {
     const Impl& m = *impl_;
@@ -639,6 +834,21 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "wf.data") { out = m.hasData ? "1" : "0"; return std::string(); }
     if (what == "wf.w") { out = std::to_string(m.renderW); return std::string(); }
     if (what == "wf.h") { out = std::to_string(m.renderH); return std::string(); }
+    if (what == "sonde.on") { out = m.sonde.on ? "1" : "0"; return std::string(); }
+    if (what == "sonde.azimuth") { return num(m.sonde.azimuth); }
+    if (what == "sonde.elevation") { return num(m.sonde.elevation); }
+    if (what == "sonde.zoom") { return num(m.sonde.zoom); }
+    if (what == "sonde.renders") { out = std::to_string(m.sondeRenders); return std::string(); }
+    if (what == "sonde.balloons") { out = std::to_string(m.sondeBalloons); return std::string(); }
+    if (what == "sonde.samples") { out = std::to_string(m.sondeSamples); return std::string(); }
+    if (what == "sonde.ascent") { out = std::to_string(m.sondeAscent); return std::string(); }
+    if (what == "sonde.descent") { out = std::to_string(m.sondeDescent); return std::string(); }
+    if (what == "sonde.burst") { out = m.sondeBurst ? "1" : "0"; return std::string(); }
+    if (what == "sonde.pixels") { out = std::to_string(m.sondePixels); return std::string(); }
+    if (what == "sonde.labels") { out = std::to_string(m.sondeLabels); return std::string(); }
+    if (what == "sonde.id") { out = m.sondeId; return std::string(); }
+    if (what == "sonde.w") { out = std::to_string(m.sondeW); return std::string(); }
+    if (what == "sonde.h") { out = std::to_string(m.sondeH); return std::string(); }
     if (what == "survey.on") { out = m.survey.on ? "1" : "0"; return std::string(); }
     if (what == "survey.azimuth") { return num(m.survey.azimuth); }
     if (what == "survey.elevation") { return num(m.survey.elevation); }
@@ -679,14 +889,14 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "radar.labels") { out = std::to_string(m.radarLabels); return std::string(); }
     if (what == "radar.w") { out = std::to_string(m.radarW); return std::string(); }
     if (what == "radar.h") { out = std::to_string(m.radarH); return std::string(); }
-    return "view3d.wf.on|azimuth|elevation|zoom|depth|shading|renders|triangles|pixels|labels|span|realrows|rows|data|w|h, or view3d.radar.on|azimuth|tilt|zoom|scale|renders|aircraft|onground|trails|pixels|labels|tags|w|h, or view3d.tunnel.on|azimuth|elevation|zoom|depth|depthms|colour|renders|points|pixels|labels|w|h, or view3d.survey.on|azimuth|elevation|zoom|renders|channels|triangles|pixels|ranked|labels|first|w|h, not view3d." + what;
+    return "view3d.wf.on|azimuth|elevation|zoom|depth|shading|renders|triangles|pixels|labels|span|realrows|rows|data|w|h, or view3d.radar.on|azimuth|tilt|zoom|scale|renders|aircraft|onground|trails|pixels|labels|tags|w|h, or view3d.tunnel.on|azimuth|elevation|zoom|depth|depthms|colour|renders|points|pixels|labels|w|h, or view3d.survey.on|azimuth|elevation|zoom|renders|channels|triangles|pixels|ranked|labels|first|w|h, or view3d.sonde.on|azimuth|elevation|zoom|renders|balloons|samples|ascent|descent|burst|pixels|labels|id|w|h, not view3d." + what;
 }
 
 std::string View3DPublisher::summaryLine() const {
     const Impl& m = *impl_;
-    char b[1200];
-    std::snprintf(b, sizeof(b), "view3d: waterfall on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu triangles, %zu rows kept, %zu saves, %d buffer detaches; radar on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu aircraft (%zu without altitude), %zu trail segments, %d buffer detaches; tunnel on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu points, %d buffer detaches; survey on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu channels, %zu triangles, %d buffer detaches", m.wf.on ? 1 : 0, m.renders, m.lastRenderMs,
-                  m.worstRenderMs, m.lastTriangles, m.history.size(), m.saves, m.surface.detaches(), m.radar.on ? 1 : 0, m.radarRenders, m.radarLastMs, m.radarWorstMs, m.radarAircraft, m.radarOnGround, m.radarTrailSegs, m.radarSurface.detaches(), m.tunnel.on ? 1 : 0, m.tunnelRenders, m.tunnelLastMs, m.tunnelWorstMs, m.tunnelPoints, m.tunnelSurface.detaches(), m.survey.on ? 1 : 0, m.surveyRenders, m.surveyLastMs, m.surveyWorstMs, m.surveyChannels, m.surveyTriangles, m.surveySurface.detaches());
+    char b[1500];
+    std::snprintf(b, sizeof(b), "view3d: waterfall on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu triangles, %zu rows kept, %zu saves, %d buffer detaches; radar on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu aircraft (%zu without altitude), %zu trail segments, %d buffer detaches; tunnel on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu points, %d buffer detaches; survey on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu channels, %zu triangles, %d buffer detaches; sonde on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu balloons, %zu samples, %d buffer detaches", m.wf.on ? 1 : 0, m.renders, m.lastRenderMs,
+                  m.worstRenderMs, m.lastTriangles, m.history.size(), m.saves, m.surface.detaches(), m.radar.on ? 1 : 0, m.radarRenders, m.radarLastMs, m.radarWorstMs, m.radarAircraft, m.radarOnGround, m.radarTrailSegs, m.radarSurface.detaches(), m.tunnel.on ? 1 : 0, m.tunnelRenders, m.tunnelLastMs, m.tunnelWorstMs, m.tunnelPoints, m.tunnelSurface.detaches(), m.survey.on ? 1 : 0, m.surveyRenders, m.surveyLastMs, m.surveyWorstMs, m.surveyChannels, m.surveyTriangles, m.surveySurface.detaches(), m.sonde.on ? 1 : 0, m.sondeRenders, m.sondeLastMs, m.sondeWorstMs, m.sondeBalloons, m.sondeSamples, m.sondeSurface.detaches());
     return b;
 }
 

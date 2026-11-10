@@ -38,7 +38,7 @@ import { Checkbox } from "fields.slint";
 import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
 import { AgeTick, WaterfallView } from "waterfall.slint";
-import { View3D, Scene3DLabel, SurveyRankRow, Scene3DViewToggle, Wf3DView } from "scene3d_views.slint";
+import { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow, Scene3DViewToggle, Wf3DView } from "scene3d_views.slint";
 import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
 import { ScopeEvents, DemodModel, MpxMarkItem, DemodScopeWindow, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel, RadarScopeView } from "scope_modes.slint";
 import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, PortDot, FaceModel, CanvasNode, CanvasWire, Refusal, CanvasModel, InspectorRadio,
@@ -61,7 +61,7 @@ export { Theme, Skin, Workbench, NightWatch, DigitFace, MeterStyle, ChipTone, La
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents,
          ScopeEvents, DemodModel, MpxMarkItem, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel }
 export { TxChoice, TransmitPageModel, TransmitEvents }
-export { View3D, Scene3DLabel, SurveyRankRow }   // the 3D views' state and their labels (docs 6.64): the host's view3d_publish sets the global and answers its callbacks
+export { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow }   // the 3D views' state and their labels (docs 6.64): the host's view3d_publish sets the global and answers its callbacks
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }

@@ -180,6 +180,12 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/patch_presets.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp")
         endif()
+        if(unit STREQUAL "perf3d")
+            # the frame time of every 3D view (docs 6.64) runs every view's painter
+            foreach(_v waterfall radar tunnel survey sonde)
+                list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../${_v}3d_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../${_v}3d_compositor.cpp")
+            endforeach()
+        endif()
         if(unit MATCHES "3d$")
             # THE 3D VIEWS (docs 6.64): test_slint_host_<view>3d.cpp and test_slint_host_view3d.cpp compile the shared renderer and the remembered-view text with the view's own
             # <view>3d_logic.cpp / <view>3d_compositor.cpp (found above). The renderer's ramps quote host_logic's heat(), which is already in the list.

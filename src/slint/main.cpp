@@ -1389,6 +1389,14 @@ int main(int argc, char** argv) {
             view3dBank.publishRadar(scopeBank.radar3dFeed(), wf3d.nowMs);   // the radar scope's 3D airspace: its feed is empty unless the SCOPE tab is up with a position
             view3dBank.publishTunnel(scopeBank.tunnel3dFeed(), wf3d.nowMs); // the demod scope's 3D tunnel: its feed is empty unless the window is open on a baseband input
             view3dBank.publishSurvey(wf3d.nowMs);                           // the Survey Engine page's 3D surface: read from the kit's panel, only while that page is on screen
+            {   // the Radiosondes page's 3D track: the host records the balloons' heard altitudes every tick, draws only while that page is on screen
+                foxsdr::slintview3d::View3DPublisher::SondeContext sc;
+                sc.nowMs = wf3d.nowMs;
+                sc.hasRx = (state.flags & FOXAPI_RX_POSITION_SET) != 0u;
+                sc.rxLatDeg = state.rxLatDeg;
+                sc.rxLonDeg = state.rxLonDeg;
+                view3dBank.publishSonde(sc);
+            }
         }
         toolsBank.setScopeFacts(scopeBank.demodSignal(), scopeBank.demodOpen(), scopeBank.demodLive(), scopeBank.radarOn());
         toolsBank.publish(state, systemBank.models().serial.gps);

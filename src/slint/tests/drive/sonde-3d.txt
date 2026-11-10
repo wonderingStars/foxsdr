@@ -1,0 +1,58 @@
+#! frames=500 bank=1 plugins=all open=module:radiosonde-decoder-0.1.0-abi3-win-x64.dll size=1600x1600
+# sonde-3d (docs 6.64, specs/THREED2.md section 1): the Radiosondes map page's VIEW MAP / 3D TRACK. There is NO radiosonde recording among the drive fixtures, so no balloon is ever heard here: this script
+# proves what an empty page does - the VIEW toggle on the page, the strip in 3D (ELEVATION, AZIMUTH, RESET VIEW, FOLLOW BALLOON greyed because nothing is heard), the honest empty state in the
+# picture's place, the map and its list back on MAP - and the camera. The track itself (the history of heard altitudes, the burst, the climb rate, the ascent / descent drawing, the ground trail,
+# the receiver) is held by test_slint_host_sonde3d against a synthetic flight (docs 6.64: UNVERIFIED on a live balloon).
+120 state kit.plugins == 43
++1 click "START"
++40 expect "STOP" enabled equals "true"
+state pages contains "Radiosondes (EXPERIMENTAL) map"
+state decodersRunning >= 1
+# START opens the page: open the plugin's map page as a tab and show it
++1 click "< FITTED"
++10 state pages contains "Fitted modules"
++1 click "Radiosondes (EXPERIMENTAL) map"#1
++5 click "Radiosondes (EXPERIMENTAL) map"#1
++10 state pages contains "Radiosondes (EXPERIMENTAL) map"
+# the map is the default; nothing has been drawn and no balloon is known
+state view3d.sonde.on == 0
+state view3d.sonde.renders == 0
+state view3d.sonde.balloons == 0
++1 click "3D TRACK"
++12 state view3d.sonde.on == 1
+state view3d.sonde.renders >= 1
+state view3d.sonde.samples == 0
+state view3d.sonde.pixels > 500
+state view3d.sonde.labels >= 18
+state cfg.view3d contains "sonde:on=1"
+expect "FOLLOW BALLOON" enabled equals "false"
+shot "sonde-3d-empty.png"
+# the camera
+state view3d.sonde.elevation > 21
+state view3d.sonde.elevation < 23
++1 slider "ELEVATION" 0.5
++6 state view3d.sonde.elevation > 44
+state view3d.sonde.elevation < 49
++1 slider "AZIMUTH" 0.75
++6 state view3d.sonde.azimuth > 85
+state view3d.sonde.azimuth < 95
++1 click "RESET VIEW"
++6 state view3d.sonde.elevation > 21.9
+state view3d.sonde.elevation < 22.1
+state view3d.sonde.azimuth > -48.1
+state view3d.sonde.azimuth < -47.9
++1 press "Balloon track"
++12 key left
++3 state view3d.sonde.azimuth > -44
+state view3d.sonde.azimuth < -42
++1 key +
++3 state view3d.sonde.zoom > 1.1
+state view3d.sonde.zoom < 1.14
++1 key 0
++4 state view3d.sonde.zoom > 0.99
+state view3d.sonde.zoom < 1.01
+# back to the map and its list
++1 click "MAP"
++8 state view3d.sonde.on == 0
+state cfg.view3d contains "sonde:on=0"
+shot "sonde-3d-back.png"

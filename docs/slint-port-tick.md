@@ -3004,6 +3004,32 @@ The plugin publishes one row per channel (frequency, width, guess, peak, over fl
 | 3076 | Hour (UTC) axis | overlay/marker | DEFERRED | needs the occupancy by hour of day; the surface's depth is the Seen share instead |
 | 3077 | The view and the camera are remembered | setting | PRESENT | view3d, name survey: on, azimuth, elevation, zoom |
 
+### The Radiosondes map page's 3D TRACK (THREED2.md section 1, the plugin's map page, VIEW MAP / 3D TRACK)
+
+The host's picture of a balloon is its TRACK (the current latitude, longitude, altitude, course, speed) and the plugin's PATH (the ground trail: latitudes and longitudes only). The ascent's altitudes are therefore RECORDED BY THE HOST from the moment it hears the balloon (sonde3d_logic SondeHistory, every tick, up to 16 balloons and 4000 samples each): the 3D track is what has been heard since this window has been listening, not the balloon's whole flight.
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3078 | VIEW MAP | key (segment) | PRESENT | SondeViewBar's toggle above the page's toolbar (found by PageTab.view3d == 2: a map page of a plugin whose name says radiosonde); the map, its list and its toolbar are the default and untouched |
+| 3079 | VIEW 3D TRACK | key (segment) | PRESENT | -> View3D.sonde-view-selected(true): the list and the map pane are replaced by the 3D track; the page's toolbar (the three band presets, Fit, Set RX here, the checkboxes) stays; saved in the interface half (view3d) |
+| 3080 | The track | picture | PRESENT | the heard track as a line through an axis box (km east, km north, altitude km): the ascent coloured by altitude (viridis), a dot at the last heard position with a drop line, a white star at the burst and a dashed pink descent after it, the plugin's ground trail in cyan on the floor, an orange triangle at the receiver; painted by the CPU renderer only while the page is on screen with the 3D track chosen |
+| 3081 | ELEVATION | slider | PRESENT | Scene3DCameraBar, 4 to 89 degrees, 22 by default |
+| 3082 | AZIMUTH | slider | PRESENT | -180 to 180 degrees, -48 by default |
+| 3083 | RESET VIEW | key | PRESENT | the camera back to its defaults |
+| 3084 | Drag to rotate, wheel to zoom, double-click to reset | gesture | PRESENT | Scene3DWell's TouchArea |
+| 3085 | The well's keys | keys | PRESENT | after a press: arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3086 | Altitude ladder | readout | PRESENT | down the well's right edge: the altitude ramp 0 to 35 km, a tick at the burst's altitude once a burst was seen, a pointer at the balloon's altitude with its figure ("18.5 km"); the box's altitude axis grows past 35 km for a higher balloon |
+| 3087 | Legend | readout | PRESENT | a plate: BURST (white), DESCENT (dashed pink), RX (orange), GROUND TRACK (cyan), in the renderer's own colours |
+| 3088 | FOLLOW BALLOON | key (latched) | PRESENT | the map page's own follow, on the balloon followed, else selected, else heard last (MapPage::followedId); greyed while no balloon is heard, lit while the page follows it; the 2D page's "Stop following" key shows the same state |
+| 3089 | ASCENT RATE | readout | PRESENT | computed from the host's own samples (the altitude change over the last 8 to 90 s), on the legend plate: "ASCENT RATE +5.1 m/s"; absent until 8 s of track |
+| 3090 | The balloon's tag | overlay/marker | PRESENT | "S4720113  18460 m  +5.1 m/s": the id, the altitude and the climb rate at the balloon's last heard position; the burst's own label "BURST 31 km" beside the star |
+| 3091 | Axis ticks and captions | overlay/marker | PRESENT | five ticks east and north in km over the heard extent (at least 5 km across, padded), an altitude tick every 5 km, and the captions "km E", "km N", "ALTITUDE km" |
+| 3092 | Empty state | readout | PRESENT | while no balloon has been heard: the page's own "No targets. Decoded aircraft, ships and stations appear here." over the empty box |
+| 3093 | The view and the camera are remembered | setting | PRESENT | view3d, name sonde: on, azimuth, elevation, zoom |
+| 3094 | PREDICTED LANDING chip | readout | DEFERRED | needs a landing predictor (a wind model and a descent profile); nothing the host holds predicts one |
+| 3095 | TIME SCRUBBER with a play key | slider | DEFERRED | the host's record starts when it began listening, not at the launch; a scrubber over it is a feature of its own |
+| 3096 | LAUNCH marker | overlay/marker | DEFERRED | the first position heard is not a launch unless the balloon was on the ground, which the host cannot know; the receiver's own position is drawn as RX |
+
 # Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM, TOOLS and EXTEND banks of phase 3)
 
 | Status | Rows |

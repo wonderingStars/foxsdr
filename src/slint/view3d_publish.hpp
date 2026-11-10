@@ -20,6 +20,7 @@
 #include "main.h"
 #include "plugin_kit.hpp"
 #include "radar3d_logic.hpp"
+#include "sonde3d_logic.hpp"
 #include "survey3d_logic.hpp"
 #include "tunnel3d_logic.hpp"
 #include "waterfall3d_compositor.hpp"
@@ -57,6 +58,14 @@ public:
     void publishTunnel(const TunnelFeed& feed, std::int64_t nowMs);
     // The Survey Engine page's 3D SURFACE: reads the plugin's panel from the kit itself. Repainted only while that page is on screen (docked and current, or torn off) with the surface chosen.
     void publishSurvey(std::int64_t nowMs);
+    // The Radiosondes map page's 3D TRACK: the host records each balloon's heard positions and altitudes from the kit's tracks every tick (the track is what it has heard since it has been
+    // listening) and draws the one selected, followed or most recent. Repainted only while that page is on screen with the 3D track chosen.
+    struct SondeContext {
+        std::int64_t nowMs = 0;
+        bool hasRx = false;
+        double rxLatDeg = 0.0, rxLonDeg = 0.0;
+    };
+    void publishSonde(const SondeContext& ctx);
 
     // The drive script's read-back (`state view3d.<what>`): fills `out` and returns "" or says what it does not know.
     std::string readState(const std::string& what, std::string& out) const;
