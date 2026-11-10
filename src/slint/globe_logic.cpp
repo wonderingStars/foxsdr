@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "core/i18n.hpp"
+
 namespace foxsdr::globe {
 
 namespace {
@@ -73,19 +75,19 @@ ViewKind viewKindFor(const std::string& name) {
 
 const char* flatViewLabel(ViewKind k) {
     switch (k) {
-        case ViewKind::Propagation: return "PICTURE";
-        case ViewKind::Ft8: return "LIST";
-        case ViewKind::Goes: return "FLAT";
-        case ViewKind::SolarSystem: return "PAGES";
-        case ViewKind::Satellites: return "FLAT MAP";
+        case ViewKind::Propagation: return FOX_TR_NOOP("PICTURE");
+        case ViewKind::Ft8: return FOX_TR_NOOP("LIST");
+        case ViewKind::Goes: return FOX_TR_NOOP("FLAT");
+        case ViewKind::SolarSystem: return FOX_TR_NOOP("PAGES");
+        case ViewKind::Satellites: return FOX_TR_NOOP("FLAT MAP");
         default: return "";
     }
 }
 const char* globeViewLabel(ViewKind k) {
     switch (k) {
-        case ViewKind::SolarSystem: return "3D ORBITS";
+        case ViewKind::SolarSystem: return FOX_TR_NOOP("3D ORBITS");
         case ViewKind::None: return "";
-        default: return "3D GLOBE";
+        default: return FOX_TR_NOOP("3D GLOBE");
     }
 }
 
@@ -197,6 +199,22 @@ void fromPrefs(ViewState& v, ViewKind k, const slintview3d::ViewState& p) {
         case ViewKind::Satellites: v.footprints = p.opt[0] != 0; v.groundTracks = p.opt[1] != 0; break;
         default: break;
     }
+}
+
+bool applySolarPlateKey(ViewState& v, const std::string& label) {
+    auto is = [&](const char* want) {
+        if (label.size() != std::char_traits<char>::length(want)) { return false; }
+        for (std::size_t i = 0; i < label.size(); ++i) { if (std::toupper(static_cast<unsigned char>(label[i])) != want[i]) { return false; } }
+        return true;
+    };
+    if (is("ROTATE LEFT")) { v.spinDeg = std::fmod(v.spinDeg - 10.0 + 360.0, 360.0); }
+    else if (is("ROTATE RIGHT")) { v.spinDeg = std::fmod(v.spinDeg + 10.0, 360.0); }
+    else if (is("TILT")) { v.tiltDeg = v.tiltDeg + 10.0 > 85.0 ? 10.0 : v.tiltDeg + 10.0; }
+    else if (is("ZOOM IN")) { zoomCamera(v.camera, 1.0); }
+    else if (is("ZOOM OUT")) { zoomCamera(v.camera, -1.0); }
+    else { return false; }
+    v.cameraSet = true;
+    return true;
 }
 
 // ---- numbers and words ----
@@ -379,11 +397,11 @@ PropagationScene buildPropagationScene(const PropagationFacts& facts, bool rxKno
     if (!facts.homeLocator.empty() && locatorToLatLon(facts.homeLocator, loc)) {
         s.homeKnown = true;
         s.home = loc;
-        s.homeSource = "the plugin's locator";
+        s.homeSource = FOX_TR_NOOP("the plugin's locator");
     } else if (rxKnown) {
         s.homeKnown = true;
         s.home = rx;
-        s.homeSource = "the receiver position";
+        s.homeSource = FOX_TR_NOOP("the receiver position");
     }
     if (!s.homeKnown) { return s; }
     s.markers.push_back({"HOME", s.home, 1, 0xFFFFFFFFu});

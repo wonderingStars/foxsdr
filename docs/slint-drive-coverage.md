@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1978 | 439 | 82 | 1457 | 0 |
+| 1980 | 440 | 82 | 1458 | 0 |
 
-Of the 1145 rows that are controls (the 833 readout-like rows left out): 439 asserted, 82 driven without a read-back, 624 not drivable.
+Of the 1146 rows that are controls (the 834 readout-like rows left out): 440 asserted, 82 driven without a read-back, 624 not drivable.
 
-NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 61, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 834, other 207, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 61, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,6 +199,7 @@ NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 2 | 1 | 0 | 1 | 1 | 0 |
 
 ## Every row
 
@@ -3069,4 +3070,11 @@ NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120,
 | 1976 | Open foxsdr.com (withdrawn) | button (small) | DRIVEN+ASSERTED | system-updates-withdrawn-nofix.txt | click "Open foxsdr.com" (a bounded run opens no browser: the effect on the window is none, the card stays); the key is read back with expect enabled |
 | 1977 | Not now (withdrawn) | button (small) | DRIVEN+ASSERTED | system-updates-withdrawn-nofix.txt | click "Not now"#2; state update.shown == 0, then click "Show it again"; state update.shown == 1 |
 | 1978 | Withdrawn card | card | DRIVEN+ASSERTED | system-updates-withdrawn-fix.txt | state update.shown / update.withdrawn / update.headline / update.note / update.primary over three canned answers (withdrawn-fix: Download update; withdrawn-nofix and withdrawn-offer: no key) |
+
+### 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | DRIVEN+ASSERTED | globe-solar-system.txt | state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script) |
+| 4101 | 3D globes: the honest empty states | readout | NOT DRIVABLE | - | a readout, not a control |
 

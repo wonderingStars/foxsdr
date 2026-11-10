@@ -64,6 +64,10 @@ struct ViewState {
     int goesSatellite = 0;                // 0 East, 1 West
 };
 inline constexpr int kDayOffsetLimit = 366;
+// The Solar System View's plate keys, as camera moves while its 3D view is on: ROTATE LEFT / ROTATE RIGHT turn the system 10 degrees about the ecliptic pole, TILT raises the
+// camera 10 degrees (back to 10 after 85), ZOOM IN / ZOOM OUT scale by a step; either case. True when the label is one of them (the state moved); false for any other key
+// (NEXT PAGE, PREVIOUS PAGE, NEXT CHANNEL belong to the plugin).
+bool applySolarPlateKey(ViewState& v, const std::string& label);
 
 // WHAT A VIEW REMEMBERS (the framework's one setting, AppConfig::view3d, view3d_prefs.hpp): the chosen view, the camera and up to four small choices of each. The framework keeps a
 // camera's elevation in 4..89 degrees, so a globe's centre latitude (-85..85) is stored on that scale and the orbits view's tilt (5..85) as it is; option 3 says whether the camera

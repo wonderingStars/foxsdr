@@ -27,12 +27,13 @@ export global GlobeEvents {
     callback resized(int, int, int);              // page, the well's size in logical pixels
 }
 
-// A control of the column: kind 0 segments (options, value = the lit one), 1 checkbox (value 0 / 1), 2 slider (value 0..1000, value-text beside it), 3 key, 4 readout (label + value-text).
+// A control of the column: kind 0 segments (options, value = the lit one; a long list is several controls of one id in rows, each row's `base` the index of its first option), 1 checkbox (value 0 / 1), 2 slider (value 0..1000, value-text beside it), 3 key, 4 readout (label + value-text).
 export struct GlobeControl {
     id: int,
     kind: int,
     label: string,
     options: [string],
+    base: int,
     value: int,
     value-text: string,
     enabled: bool,
@@ -152,7 +153,7 @@ export component GlobeBody inherits Rectangle {
                     // segments
                     if c.kind == 0 : VerticalLayout {
                         spacing: 3px;
-                        Caption { label: c.label; }
+                        if c.label != "" : Caption { label: c.label; }
                         HorizontalLayout {
                             alignment: start;
                             SegGroup {
@@ -160,10 +161,10 @@ export component GlobeBody inherits Rectangle {
                                 for o[oi] in c.options : SegKey {
                                     small: true;
                                     label: o;
-                                    on: oi == c.value;
+                                    on: c.base + oi == c.value;
                                     enabled: c.enabled;
                                     tooltip: c.tooltip;
-                                    clicked => { GlobeEvents.segment-chosen(root.index, c.id, oi); }
+                                    clicked => { GlobeEvents.segment-chosen(root.index, c.id, c.base + oi); }
                                 }
                             }
                         }

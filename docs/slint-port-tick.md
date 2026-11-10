@@ -2920,3 +2920,10 @@ Phase 3, the SYSTEM bank alone: PRESENT 100, RELOCATED 17, DEFERRED 25, total 14
 Phase 3, the TOOLS bank and the map rows alone: PRESENT 88, RELOCATED 75, DEFERRED 89, total 252.
 
 Phase 3, the EXTEND bank, the Plugin store, the Fitted modules window and the patch rows alone: PRESENT 142, RELOCATED 35, DEFERRED 11, total 188.
+
+## 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | PRESENT | one entry each in the framework's view3d setting (propagation, ft8, goes, solar, satellites): the view, the camera and four small choices, written 0.4 s after the last change and read when a view is first used; the 2D view is the default |
+| 4101 | 3D globes: the honest empty states | readout | PRESENT | no home / no receiver position, no station heard, no picture, no satellite tracked, no beacon on air: the well says so in the page's own wording and draws what it can; no sample numbers |

@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdio>
 
+#include "core/i18n.hpp"
+
 namespace foxsdr::globe {
 
 namespace {
@@ -168,7 +170,7 @@ GlobeDrawList drawPropagation(const PropagationScene& scene, const ViewState& vi
     l.camera = view.cameraSet ? view.camera : initialCamera(ViewKind::Propagation, scene.homeKnown, scene.home);
     addGraticule(l, 30.0, 1.002);
     if (!scene.homeKnown) {
-        l.emptyNote = "Set your locator in the plugin's settings, or the receiver position, to draw the paths.";
+        l.emptyNote = FOX_TR_NOOP("Set your locator in the plugin's settings, or the receiver position, to draw the paths.");
         return l;
     }
     for (const GlobePath& p : scene.paths) {
@@ -194,7 +196,7 @@ GlobeDrawList drawFt8(const std::vector<Ft8Spot>& spots, bool rxKnown, const Lat
     l.texture = earth;
     l.camera = view.cameraSet ? view.camera : initialCamera(ViewKind::Ft8, rxKnown, rx);
     addGraticule(l, 30.0, 1.002);
-    if (!rxKnown) { l.emptyNote = "Set the receiver position (or the plugin's locator) to draw the paths."; }
+    if (!rxKnown) { l.emptyNote = FOX_TR_NOOP("Set the receiver position (or the plugin's locator) to draw the paths."); }
     const Ft8Summary sum = summariseSpots(spots);
     for (const Ft8Spot& s : spots) {
         const std::uint32_t colour = bandColour(s.bandId);
@@ -218,7 +220,7 @@ GlobeDrawList drawFt8(const std::vector<Ft8Spot>& spots, bool rxKnown, const Lat
         d.label = "RX";
         l.markers.push_back(std::move(d));
     }
-    if (spots.empty() && rxKnown) { l.emptyNote = "No stations heard yet in this time window."; }
+    if (spots.empty() && rxKnown) { l.emptyNote = FOX_TR_NOOP("No stations heard yet in this time window."); }
     return l;
 }
 
@@ -321,7 +323,7 @@ GlobeDrawList drawSatellites(const SatSceneIn& in, const ViewState& view, const 
     l.texture = earth;
     l.camera = view.cameraSet ? view.camera : initialCamera(ViewKind::Satellites, in.rxKnown, in.rx);
     addGraticule(l, 30.0, 1.002);
-    if (in.sats.empty() && in.paths.empty()) { l.emptyNote = "No satellites are being tracked yet."; }
+    if (in.sats.empty() && in.paths.empty()) { l.emptyNote = FOX_TR_NOOP("No satellites are being tracked yet."); }
     if (in.groundTracks) {
         for (const SatPathIn& p : in.paths) {
             Polyline pl;

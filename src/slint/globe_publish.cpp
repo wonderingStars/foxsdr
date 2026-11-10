@@ -24,10 +24,11 @@ std::shared_ptr<slint::Model<slint::SharedString>> strings(const std::vector<std
     for (const auto& s : v) { out.push_back(ss(s)); }
     return model(std::move(out));
 }
-std::string T(const char* english) { return std::string(cascade::i18n::tr(english)); }
-template <class... A> std::string F(const char* english, A... a) {
+// tr() is the catalogue's lookup (tools/i18n_keys.py finds every key by the call "tr(" with a literal); F formats an already translated sentence.
+std::string tr(const char* english) { return std::string(cascade::i18n::tr(english)); }
+template <class... A> std::string F(const std::string& format, A... a) {
     std::string out;
-    cascade::core::formatUtf8(out, cascade::i18n::tr(english), a...);
+    cascade::core::formatUtf8(out, format.c_str(), a...);
     return out;
 }
 slint::Color colour(std::uint32_t argb) { return slint::Color::from_argb_encoded(argb); }
@@ -47,6 +48,19 @@ bool iequals(const std::string& a, const std::string& b) {
     ::GlobeControl c{};
     c.id = id; c.kind = 0; c.label = ss(label); c.options = strings(options); c.value = value; c.enabled = true; c.tooltip = ss(tip);
     return c;
+}
+// A long list of options as rows of at most five (the column is 264 px wide): one control per row, the same id, each row's `base` the index of its first option; only the
+// first row carries the caption.
+std::vector<::GlobeControl> segsRows(int id, const std::string& label, const std::vector<std::string>& options, int value, const std::string& tip = std::string()) {
+    std::vector<::GlobeControl> rows;
+    constexpr std::size_t kRow = 5;
+    for (std::size_t at = 0; at < options.size(); at += kRow) {
+        const std::vector<std::string> part(options.begin() + static_cast<std::ptrdiff_t>(at), options.begin() + static_cast<std::ptrdiff_t>(std::min(options.size(), at + kRow)));
+        ::GlobeControl c = segs(id, at == 0 ? label : std::string(), part, value, tip);
+        c.base = static_cast<int>(at);
+        rows.push_back(c);
+    }
+    return rows;
 }
 ::GlobeControl checkbox(int id, const std::string& label, bool on, const std::string& tip = std::string()) {
     ::GlobeControl c{};
@@ -181,7 +195,13 @@ std::vector<PanelRowText> GlobePublisher::panelRows(const std::string& plugin) c
 
 void GlobePublisher::tick(const FoxReceiverState& state) {
     flushPrefs();
-    if (kit_.decoderLines().empty()) { return; }
+    // nothing to read unless an FT8 line arrived since the last look
+    bool fresh = false;
+    for (const DecoderLine& l : kit_.decoderLines()) { if (l.id > ft8LastId_ && l.plugin == "FT8") { fresh = true; break; } }
+    if (!fresh) {
+        if (!kit_.decoderLines().empty()) { ft8LastId_ = std::max(ft8LastId_, kit_.decoderLines().back().id); }
+        return;
+    }
     const std::int64_t now = unixMs();
     // the receiver the stations are measured from: the plugin's own locator, else the host's position
     LatLon rx;
@@ -235,7 +255,7 @@ void GlobePublisher::finish(Surface& s, const GlobeDrawList& list, const std::st
     }
     m.labels = model(std::move(labels));
     sig += "G" + s.composeKey + (s.composed ? "c" : "n");
-    if (!list.emptyNote.empty()) { m.empty_note = ss(T(list.emptyNote.c_str())); }
+    if (!list.emptyNote.empty()) { m.empty_note = ss(tr(list.emptyNote.c_str())); }
 }
 
 // ---- the model of a page ----
@@ -250,11 +270,11 @@ void GlobePublisher::fill(const std::string& plugin, int pageKind, const FoxRece
     m.offered = true;
     m.active = s.view.globeOn;
     m.kind = static_cast<int>(s.kind);
-    m.flat_label = ss(T(flatViewLabel(s.kind)));
-    m.globe_label = ss(T(globeViewLabel(s.kind)));
-    m.view_caption = ss(T("VIEW"));
-    m.reset_label = ss(T("RESET VIEW"));
-    m.hint = ss(T("Drag to rotate - wheel to zoom"));
+    m.flat_label = ss(tr(flatViewLabel(s.kind)));
+    m.globe_label = ss(tr(globeViewLabel(s.kind)));
+    m.view_caption = ss(tr("VIEW"));
+    m.reset_label = ss(tr("RESET VIEW"));
+    m.hint = ss(tr("Drag to rotate - wheel to zoom"));
     sig += std::string("V") + (s.view.globeOn ? "1" : "0") + std::to_string(static_cast<int>(s.kind));
     if (!s.view.globeOn) { return; }
     switch (s.kind) {
@@ -309,7 +329,7 @@ void GlobePublisher::fillPropagation(Surface& s, const FoxReceiverState& st, ::G
     if (s.earth.empty() || s.earth.key != bake) { bakeEarth(s.earth, land(), &sun, s.view.greyline); }
     s.initial = initialCamera(ViewKind::Propagation, scene.homeKnown, scene.home);
     GlobeDrawList list = drawPropagation(scene, s.view, s.earth);
-    if (scene.homeKnown && scene.paths.empty()) { list.emptyNote = "The plugin's panel shows no target locator and no beacon on air in this band yet: no path to draw."; }
+    if (scene.homeKnown && scene.paths.empty()) { list.emptyNote = FOX_TR_NOOP("The plugin's panel shows no target locator and no beacon on air in this band yet: no path to draw."); }
     std::string key = "P" + std::to_string(bake) + "b" + std::to_string(bandSel) + "g" + (s.view.greyline ? "1" : "0");
     for (const GlobePath& p : scene.paths) { key += p.label + std::to_string(p.hops); }
     key += scene.homeKnown ? latLonText(scene.home) : "-";
@@ -317,20 +337,20 @@ void GlobePublisher::fillPropagation(Surface& s, const FoxReceiverState& st, ::G
     finish(s, list, key, m, sig);
 
     std::vector<::GlobeControl> c;
-    std::vector<std::string> bandOpts{T("ALL")};
+    std::vector<std::string> bandOpts{tr("ALL")};
     for (std::size_t i = 1; i < sizeof(kPropBands) / sizeof(kPropBands[0]); ++i) { bandOpts.push_back(bandName(kPropBands[i])); }
-    c.push_back(segs(kBand, T("BAND"), bandOpts, bandSel, T("Shows the beacons on air on this band only")));
-    c.push_back(checkbox(kGreyline, T("GREYLINE"), s.view.greyline, T("Marks the band of twilight along the day / night edge, where HF often travels furthest")));
-    c.push_back(readout(T("HOME POSITION"), scene.homeKnown ? F("%s (%s)", latLonText(scene.home).c_str(), T(scene.homeSource.c_str()).c_str()) : T("not set")));
-    c.push_back(readout(T("SUN OVER"), latLonText(LatLon{sun.subLatDeg, sun.subLonDeg})));
+    for (const ::GlobeControl& r : segsRows(kBand, tr("BAND"), bandOpts, bandSel, tr("Shows the beacons on air on this band only"))) { c.push_back(r); }
+    c.push_back(checkbox(kGreyline, tr("GREYLINE"), s.view.greyline, tr("Marks the band of twilight along the day / night edge, where HF often travels furthest")));
+    c.push_back(readout(tr("HOME POSITION"), scene.homeKnown ? F(std::string("%s (%s)"), latLonText(scene.home).c_str(), tr(scene.homeSource.c_str()).c_str()) : tr("not set")));
+    c.push_back(readout(tr("SUN OVER"), latLonText(LatLon{sun.subLatDeg, sun.subLonDeg})));
     m.controls = model(std::move(c));
     std::vector<::GlobeChipModel> chips;
     for (const GlobePath& p : scene.paths) { chips.push_back(chip(pathChipText(p), p.argb)); }
     // the legend: the colour is the number of hops, counted at 4 000 km a hop, so every one is "about"
-    chips.push_back(chip(T("about 1 hop"), hopColour(1)));
-    chips.push_back(chip(T("about 2 hops"), hopColour(2)));
-    chips.push_back(chip(T("about 3 hops"), hopColour(3)));
-    chips.push_back(chip(T("about 4 or more hops"), hopColour(4)));
+    chips.push_back(chip(tr("about 1 hop"), hopColour(1)));
+    chips.push_back(chip(tr("about 2 hops"), hopColour(2)));
+    chips.push_back(chip(tr("about 3 hops"), hopColour(3)));
+    chips.push_back(chip(tr("about 4 or more hops"), hopColour(4)));
     m.chips = model(std::move(chips));
 }
 
@@ -367,21 +387,21 @@ void GlobePublisher::fillFt8(Surface& s, const FoxReceiverState& st, ::GlobeMode
 
     const Ft8Summary sum = summariseSpots(spots);
     std::vector<::GlobeControl> c;
-    std::vector<std::string> bandOpts{T("ALL")};
+    std::vector<std::string> bandOpts{tr("ALL")};
     for (std::size_t i = 1; i < sizeof(kFt8Bands) / sizeof(kFt8Bands[0]); ++i) { bandOpts.push_back(bandName(kFt8Bands[i])); }
-    c.push_back(segs(kFt8Band, T("BAND"), bandOpts, bandSel, T("Shows the stations heard on this band only")));
-    c.push_back(segs(kFt8Window, T("TIME WINDOW"), {T("15 min"), T("1 h"), T("24 h")}, winSel, T("How far back the stations heard are drawn")));
-    c.push_back(readout(T("HEARD"), F(sum.stations == 1 ? "%d station on %d band" : "%d stations on %d bands", sum.stations, sum.bands)));
-    c.push_back(readout(T("FURTHEST HEARD"), sum.hasFurthest ? sum.furthest.call + "  " + kmText(sum.furthest.km) + "  " + bearingText(sum.furthest.bearingDeg) : T("none yet")));
-    c.push_back(readout(T("RECEIVER"), rxKnown ? latLonText(rx) : T("not set")));
+    for (const ::GlobeControl& r : segsRows(kFt8Band, tr("BAND"), bandOpts, bandSel, tr("Shows the stations heard on this band only"))) { c.push_back(r); }
+    c.push_back(segs(kFt8Window, tr("TIME WINDOW"), {tr("15 min"), tr("1 h"), tr("24 h")}, winSel, tr("How far back the stations heard are drawn")));
+    c.push_back(readout(tr("HEARD"), F(tr("Stations: %d  Bands: %d"), sum.stations, sum.bands)));
+    c.push_back(readout(tr("FURTHEST HEARD"), sum.hasFurthest ? sum.furthest.call + "  " + kmText(sum.furthest.km) + "  " + bearingText(sum.furthest.bearingDeg) : tr("none yet")));
+    c.push_back(readout(tr("RECEIVER"), rxKnown ? latLonText(rx) : tr("not set")));
     m.controls = model(std::move(c));
     std::vector<::GlobeChipModel> chips;
     std::vector<int> bandsSeen;
     for (const Ft8Spot& sp : spots) { if (std::find(bandsSeen.begin(), bandsSeen.end(), sp.bandId) == bandsSeen.end()) { bandsSeen.push_back(sp.bandId); } }
     std::sort(bandsSeen.begin(), bandsSeen.end());
-    for (int b : bandsSeen) { chips.push_back(chip(b == 0 ? T("other band") : bandName(b), bandColour(b))); }
+    for (int b : bandsSeen) { chips.push_back(chip(b == 0 ? tr("other band") : bandName(b), bandColour(b))); }
     m.chips = model(std::move(chips));
-    m.readouts = strings({T("These are the stations the decoder printed, not who reported whom.")});
+    m.readouts = strings({tr("These are the stations the decoder printed, not who reported whom.")});
 }
 
 // ---- 3. GOES ----
@@ -407,26 +427,26 @@ void GlobePublisher::fillGoes(Surface& s, const FoxReceiverState& st, ::GlobeMod
     }
     s.initial = GlobeCamera{lon, 0.0, 1.0};
     GlobeDrawList list = drawGoes(s.view, lon, rxKnown, rx, *surface);
-    if (!have) { list.emptyNote = "Waiting for the first image..."; }
+    if (!have) { list.emptyNote = FOX_TR_NOOP("Waiting for the first image..."); }
     std::string key = "G" + std::to_string(sat) + (have ? "r" + std::to_string(s.goesRevision) : std::string("n")) + (rxKnown ? latLonText(rx) : "-");
     key += num(list.camera.centreLonDeg, 2) + "," + num(list.camera.centreLatDeg, 2) + "," + num(list.camera.zoom, 2);
     finish(s, list, key, m, sig);
 
     std::vector<::GlobeControl> c;
-    c.push_back(segs(kGoesSat, T("SPACECRAFT"), {std::string(goesSatellite(0).name), std::string(goesSatellite(1).name)}, sat, T("Which spacecraft the received picture came from: GOES-East sits over 75.2 W, GOES-West over 137.0 W")));
+    c.push_back(segs(kGoesSat, tr("SPACECRAFT"), {std::string(goesSatellite(0).name), std::string(goesSatellite(1).name)}, sat, tr("Which spacecraft the received picture came from: GOES-East sits over 75.2 W, GOES-West over 137.0 W")));
     std::string look;
-    if (!rxKnown) { look = T("Set the receiver position for the look angle"); }
+    if (!rxKnown) { look = tr("Set the receiver position for the look angle"); }
     else {
         const LookAngle la = goesLook(rx, lon);
-        look = la.visible ? F("el %.1f deg  az %.1f deg", la.elevationDeg, la.azimuthDeg) : T("below the horizon from the receiver");
+        look = la.visible ? F(tr("el %.1f deg  az %.1f deg"), la.elevationDeg, la.azimuthDeg) : tr("below the horizon from the receiver");
     }
-    c.push_back(readout(T("LOOK ANGLE"), look));
-    c.push_back(readout(T("SUB-SATELLITE POINT"), latLonText(LatLon{0.0, lon})));
+    c.push_back(readout(tr("LOOK ANGLE"), look));
+    c.push_back(readout(tr("SUB-SATELLITE POINT"), latLonText(LatLon{0.0, lon})));
     if (have) {
-        c.push_back(readout(T("PICTURE"), F(img->complete ? "%ux%u  complete  frame %llu" : "%ux%u  receiving...  frame %llu", static_cast<unsigned>(img->width), static_cast<unsigned>(img->height), static_cast<unsigned long long>(img->sequence))));
+        c.push_back(readout(tr("PICTURE"), F(img->complete ? tr("%ux%u  complete  frame %llu") : tr("%ux%u  receiving...  frame %llu"), static_cast<unsigned>(img->width), static_cast<unsigned>(img->height), static_cast<unsigned long long>(img->sequence))));
     }
     m.controls = model(std::move(c));
-    m.readouts = strings({T("The picture is taken to be the ABI full-disk frame: the disc touches the picture's edges.")});
+    m.readouts = strings({tr("The picture is taken to be the ABI full-disk frame: the disc touches the picture's edges.")});
 }
 
 // ---- 4. the solar system ----
@@ -441,26 +461,26 @@ void GlobePublisher::fillSolar(Surface& s, const FoxReceiverState&, ::GlobeModel
     finish(s, list, key, m, sig);
 
     std::vector<::GlobeControl> c;
-    c.push_back(segs(kScale, T("SCALE"), {T("LOG"), T("LINEAR")}, s.view.logScale ? 0 : 1, T("LOG keeps the inner planets off the Sun (knee 0.1 AU); LINEAR is true to scale")));
-    c.push_back(checkbox(kMoon, T("SHOW MOON"), s.view.showMoon, T("The Moon on a ring about the Earth, not to scale")));
-    c.push_back(slider(kDate, T("DATE"), (s.view.dayOffset + kDayOffsetLimit) * 1000 / (2 * kDayOffsetLimit), dateText(jd) + (s.view.dayOffset == 0 ? "  " + T("TODAY") : std::string()),
-                       T("Where the planets are on another date, within a year of today")));
-    c.push_back(keyControl(kToday, T("TODAY"), T("Back to today's date")));
-    c.push_back(readout(T("TILT / SPIN / ZOOM"), F("%d deg  %d deg  %.1fx", static_cast<int>(std::lround(s.view.tiltDeg)), static_cast<int>(std::lround(s.view.spinDeg)), list.camera.zoom)));
+    c.push_back(segs(kScale, tr("SCALE"), {tr("LOG"), tr("LINEAR")}, s.view.logScale ? 0 : 1));
+    c.push_back(checkbox(kMoon, tr("SHOW MOON"), s.view.showMoon, tr("The Moon on a ring about the Earth, not to scale")));
+    c.push_back(slider(kDate, tr("DATE"), (s.view.dayOffset + kDayOffsetLimit) * 1000 / (2 * kDayOffsetLimit), dateText(jd) + (s.view.dayOffset == 0 ? "  " + tr("TODAY") : std::string()),
+                       tr("Where the planets are on another date, within a year of today")));
+    c.push_back(keyControl(kToday, tr("TODAY"), tr("Back to today's date")));
+    c.push_back(readout(tr("TILT / SPIN / ZOOM"), F(tr("%d deg  %d deg  %.1fx"), static_cast<int>(std::lround(s.view.tiltDeg)), static_cast<int>(std::lround(s.view.spinDeg)), list.camera.zoom)));
     // the Moon: the phase from the host's own figures
-    c.push_back(readout(T("MOON"), F("%.0f km  %.0f %% lit", scene.moon.distanceKm, scene.moon.illuminatedFraction * 100.0)));
+    c.push_back(readout(tr("MOON"), F(tr("%.0f km  %.0f %% lit"), scene.moon.distanceKm, scene.moon.illuminatedFraction * 100.0)));
     // the check of the host's planets against the plugin's own panel for today
     if (s.view.dayOffset == 0) {
         const SolarPanelFacts pf = readSolarPanel([this] { std::vector<PanelRowText> r = panelRows("Solar System View"); return r; }());
         if (!pf.planets.empty()) {
             const PanelCheck ck = checkAgainstPanel(pf, todayJd);
-            c.push_back(readout(T("CHECK"), ck.ok ? T("The positions agree with the plugin's own panel.") : F("These figures differ from the plugin's panel: %s", ck.worst.c_str())));
+            c.push_back(readout(tr("CHECK"), ck.ok ? tr("The positions agree with the plugin's own panel.") : F(tr("These figures differ from the plugin's panel: %s"), ck.worst.c_str())));
         }
     }
     m.controls = model(std::move(c));
     std::vector<::GlobeChipModel> chips;
     for (const BodyView& b : scene.bodies) { chips.push_back(chip(planetChipText(b), b.argb)); }
-    chips.push_back(chip(F("Earth %.3f AU from the Sun", scene.bodies.empty() ? 0.0 : solar::earthSunDistanceAu(jd)), 0xFF4DA3FFu));
+    chips.push_back(chip(F(tr("Earth %.3f AU from the Sun"), scene.bodies.empty() ? 0.0 : solar::earthSunDistanceAu(jd)), 0xFF4DA3FFu));
     m.chips = model(std::move(chips));
 }
 
@@ -513,18 +533,18 @@ void GlobePublisher::fillSatellites(Surface& s, const std::string& plugin, const
     finish(s, list, key, m, sig);
 
     std::vector<::GlobeControl> c;
-    c.push_back(checkbox(kFootprint, T("FOOTPRINT"), s.view.footprints, T("The circle on the ground the selected satellite can see")));
-    c.push_back(checkbox(kTracks, T("GROUND TRACKS"), s.view.groundTracks, T("The ground tracks the plugin predicts")));
+    c.push_back(checkbox(kFootprint, tr("FOOTPRINT"), s.view.footprints, tr("The circle on the ground the selected satellite can see")));
+    c.push_back(checkbox(kTracks, tr("GROUND TRACKS"), s.view.groundTracks, tr("The ground tracks the plugin predicts")));
     const SatIn* sel = nullptr;
     for (const SatIn& sat : in.sats) { if (sat.id == selected) { sel = &sat; } }
     if (sel != nullptr) {
         const SatReadout r = satReadout(*sel, rxKnown, rx);
-        c.push_back(readout(T("SELECTED"), r.label + (r.hasAlt ? "  " + num(r.altKm, 0) + " km" : std::string())));
-        c.push_back(readout(T("SUB-POINT"), latLonText(r.sub)));
+        c.push_back(readout(tr("SELECTED"), r.label + (r.hasAlt ? "  " + num(r.altKm, 0) + " km" : std::string())));
+        c.push_back(readout(tr("SUB-POINT"), latLonText(r.sub)));
         if (r.hasLook) {
-            c.push_back(readout(T("FROM THE RECEIVER"), F("%s  el %.0f deg  az %.0f deg", kmText(r.look.slantRangeKm).c_str(), r.look.elevationDeg, r.look.azimuthDeg) + (r.look.visible ? std::string() : "  " + T("below the horizon"))));
+            c.push_back(readout(tr("FROM THE RECEIVER"), F(tr("%s  el %.0f deg  az %.0f deg"), kmText(r.look.slantRangeKm).c_str(), r.look.elevationDeg, r.look.azimuthDeg) + (r.look.visible ? std::string() : "  " + tr("below the horizon"))));
         } else {
-            c.push_back(readout(T("FROM THE RECEIVER"), rxKnown ? T("needs the satellite's altitude") : T("Set the receiver position")));
+            c.push_back(readout(tr("FROM THE RECEIVER"), rxKnown ? tr("needs the satellite's altitude") : tr("Set the receiver position")));
         }
     }
     m.controls = model(std::move(c));
@@ -632,13 +652,7 @@ bool GlobePublisher::takeCommand(const std::string& plugin, const std::string& l
     if (viewKindFor(plugin) != ViewKind::SolarSystem) { return false; }
     Surface& s = surfaceFor(plugin);
     if (!s.view.globeOn) { return false; }
-    if (iequals(label, "ROTATE LEFT")) { s.view.spinDeg = std::fmod(s.view.spinDeg - 10.0 + 360.0, 360.0); }
-    else if (iequals(label, "ROTATE RIGHT")) { s.view.spinDeg = std::fmod(s.view.spinDeg + 10.0, 360.0); }
-    else if (iequals(label, "TILT")) { s.view.tiltDeg = s.view.tiltDeg + 10.0 > 85.0 ? 10.0 : s.view.tiltDeg + 10.0; }
-    else if (iequals(label, "ZOOM IN")) { GlobeCamera c = s.view.camera; zoomCamera(c, 1.0); s.view.camera.zoom = c.zoom; }
-    else if (iequals(label, "ZOOM OUT")) { GlobeCamera c = s.view.camera; zoomCamera(c, -1.0); s.view.camera.zoom = c.zoom; }
-    else { return false; }
-    s.view.cameraSet = true;
+    if (!applySolarPlateKey(s.view, label)) { return false; }
     ++s.camSeq;
     changed(s);
     return true;

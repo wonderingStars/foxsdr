@@ -19,6 +19,7 @@
 #include "test_check.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -101,6 +102,30 @@ void sectionViews() {
     CHECK_NEAR(zz.zoom, kZoomMin, 1e-12);
     zoomCamera(zz, std::nan(""));
     CHECK_NEAR(zz.zoom, kZoomMin, 1e-12);
+    // the Solar System View's plate keys drive the 3D camera
+    {
+        ViewState v;
+        v.spinDeg = 20.0; v.tiltDeg = 55.0; v.camera.zoom = 1.0;
+        CHECK(applySolarPlateKey(v, "ROTATE RIGHT") && v.spinDeg == 30.0 && v.cameraSet);
+        CHECK(applySolarPlateKey(v, "rotate left") && v.spinDeg == 20.0);
+        for (int i = 0; i < 3; ++i) { applySolarPlateKey(v, "ROTATE LEFT"); }
+        CHECK(v.spinDeg == 350.0);                                          // the turn wraps below zero
+        for (int i = 0; i < 2; ++i) { applySolarPlateKey(v, "ROTATE RIGHT"); }
+        CHECK(v.spinDeg == 10.0);                                           // and above 360
+        CHECK(applySolarPlateKey(v, "TILT") && v.tiltDeg == 65.0);
+        CHECK(applySolarPlateKey(v, "TILT") && v.tiltDeg == 75.0);
+        CHECK(applySolarPlateKey(v, "TILT") && v.tiltDeg == 85.0);
+        CHECK(applySolarPlateKey(v, "TILT") && v.tiltDeg == 10.0);          // past the top it starts again at the lowest
+        CHECK(applySolarPlateKey(v, "ZOOM IN") && std::fabs(v.camera.zoom - 1.25) < 1e-12);
+        CHECK(applySolarPlateKey(v, "ZOOM OUT") && applySolarPlateKey(v, "ZOOM OUT") && std::fabs(v.camera.zoom - 0.8) < 1e-12);
+        for (int i = 0; i < 40; ++i) { applySolarPlateKey(v, "ZOOM IN"); }
+        CHECK(v.camera.zoom == kZoomMax);
+        ViewState fresh;
+        for (const char* other : {"NEXT PAGE", "PREVIOUS PAGE", "NEXT CHANNEL", "", "ROTATE", "TILT ", "rotate  left"}) {
+            CHECK(!applySolarPlateKey(fresh, other));
+        }
+        CHECK(!fresh.cameraSet && fresh.spinDeg == ViewState{}.spinDeg && fresh.tiltDeg == ViewState{}.tiltDeg);   // the plugin's own keys move nothing here
+    }
     CHECK_NEAR(defaultCamera(ViewKind::Goes).centreLonDeg, -75.2, 1e-12);
     CHECK_NEAR(defaultCamera(ViewKind::Goes).centreLatDeg, 0.0, 1e-12);
     CHECK_NEAR(defaultCamera(ViewKind::Propagation).zoom, 1.0, 1e-12);
@@ -909,6 +934,11 @@ void sectionDraw() {
 // ------------------------------------------------------------------------------------------------------------------------
 namespace s3 = foxsdr::scene3d;
 
+const SunPosition& noonForTiming() {
+    static const SunPosition sun = sunPosition(julianDay(2025, 3, 20, 12, 0, 0.0));
+    return sun;
+}
+
 struct Picture {
     int w = 0, h = 0;
     std::vector<s3::Rgba> px;
@@ -1105,6 +1135,36 @@ void sectionCompositor() {
     const int closedN = [&] { ring.lines = {sq}; const Picture p = paintList(comp, ring, W, H); int n = 0; for (const s3::Rgba& c : p.px) { if (c.r > 200 && c.g < 80) { ++n; } } return n; }();
     CHECK(closedN > openN * 1.2);
 
+    // ---- the frame time: a globe with the baked earth, 40 arcs, 60 markers in a 960 x 700 well (a big page's well), and the bake itself ----
+    {
+        GlobeDrawList heavy = tex;
+        heavy.texture = ocean;
+        heavy.camera = GlobeCamera{-0.1, 51.5, 1.0};
+        for (const Polyline& g : graticule(30.0, 3.0, 1.002)) { DrawLine l; l.points = g; l.argb = 0x55AEBFDFu; heavy.lines.push_back(l); }
+        for (int i = 0; i < 40; ++i) {
+            DrawLine l;
+            l.points = skywaveArc(LatLon{51.5, -0.1}, LatLon{-60.0 + 3.0 * i, -170.0 + 8.5 * i}, 2, 300.0, 6.0, 24);
+            l.argb = 0xFFF5A524u;
+            l.widthPx = 2.0f;
+            heavy.lines.push_back(l);
+        }
+        for (int i = 0; i < 60; ++i) { DrawMarker m; m.at = toUnit(-60.0 + 2.0 * i, -170.0 + 5.5 * i) * 1.004; m.argb = 0xFF5FD28Au; m.label = i % 10 == 0 ? "stn" : ""; heavy.markers.push_back(m); }
+        GlobeCompositor timing;
+        std::vector<s3::Rgba> big(960u * 700u);
+        std::vector<s3::Label3D> tl;
+        const auto t0 = std::chrono::steady_clock::now();
+        const int reps = 20;
+        for (int i = 0; i < reps; ++i) { CHECK(timing.paint(heavy, big.data(), 960, 700, tl)); }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / reps;
+        Texture tb;
+        static const LandMask landForBake(1440, 720);
+        const auto b0 = std::chrono::steady_clock::now();
+        bakeEarth(tb, landForBake, &noonForTiming(), true);
+        const double bakeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - b0).count();
+        std::printf("  frame time: a 960 x 700 globe with 40 arcs and 60 markers %.1f ms per paint; one earth bake (1024 x 512, sun and greyline) %.1f ms\n", ms, bakeMs);
+        CHECK(ms < 250.0);
+        CHECK(bakeMs < 500.0);
+    }
     // ---- the orbits: the Sun at the middle, north (+Y) up and east (+X) right from above, the tilt turns the ring into an ellipse ----
     GlobeDrawList orb;
     orb.space = GlobeDrawList::Space::Orbits;
