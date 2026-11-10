@@ -108,6 +108,16 @@ Vfo::Vfo(double inputRateHz, unsigned decimation, double bandwidthHz)
       stages_(designStages(bandwidth_)) {
     assert(inputRateHz > 0.0);
     assert(decimation >= 1);
+    nb_.setSampleRateHz(channelRateHz());
+    placeNoiseBlanker();
+}
+
+void Vfo::placeNoiseBlanker() {
+    // The narrow design appends one stage (decimation 1) after the channel
+    // filter; the blanker goes in front of it. designStages decides "narrow"
+    // from this same bandwidth and rate, with this same comparison.
+    const bool narrow = bandwidth_ < kNarrowBelowChannelFraction * channelRateHz();
+    nbStage_ = (narrow && stages_.size() >= 2) ? stages_.size() - 2 : stages_.size() - 1;
 }
 
 double Vfo::clampBandwidth(double bw) const {
@@ -218,6 +228,7 @@ void Vfo::setBandwidthHz(double bw) {
     // Fresh FirDecimators: new taps, zero history, grid phase 0. See the
     // header for why history is not carried across a redesign.
     stages_ = designStages(bandwidth_);
+    placeNoiseBlanker();
 }
 
 double Vfo::channelRateHz() const {
@@ -259,6 +270,8 @@ std::size_t Vfo::process(const std::complex<float>* in, std::size_t n,
             std::vector<std::complex<float>>& buf = stageBufs_[s];
             buf.resize(stages_[s].outputCapacity(stageN));
             stageN = stages_[s].process(stageIn, stageN, buf.data());
+            // The blanker, in place, on the channel filter's own output.
+            if (s == nbStage_ && nb_.enabled()) { nb_.process(buf.data(), buf.data(), stageN); }
             stageIn = buf.data();
         }
         const std::size_t take = std::min(stageN, outCap - produced);
@@ -274,6 +287,7 @@ void Vfo::reset() {
     for (FirDecimator& s : stages_) {
         s.reset();  // history to zeros, grid back to sample 0
     }
+    nb_.reset();
 }
 
 }  // namespace cascade::dsp

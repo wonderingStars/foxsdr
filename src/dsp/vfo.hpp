@@ -9,6 +9,7 @@
 
 #include "dsp/fir.hpp"
 #include "dsp/nco.hpp"
+#include "dsp/noise_blanker.hpp"
 
 namespace cascade::dsp {
 
@@ -93,9 +94,32 @@ public:
     // narrow bandwidth).
     std::size_t stageCount() const noexcept { return stages_.size(); }
 
+    // THE NOISE BLANKER'S HOOK. Off by default; while off it costs one flag test
+    // per stage per block and adds no delay. It sits at the channel rate on the
+    // output of the LAST DECIMATING stage - the channel filter proper - and so,
+    // when the bandwidth is narrow (see kNarrowBelowChannelFraction), BEFORE the
+    // extra narrow stage that would smear a click, and otherwise on the final
+    // output. When the channel rate is the input rate (decimation 1) it is the
+    // same place: after the one filter. While on, everything downstream lags
+    // the input by noiseBlankerLookAheadSamples() channel samples.
+    // The settings survive setBandwidthHz() and reset(); a rebuilt Vfo starts
+    // from the defaults, so the owner of a rebuild copies them across.
+    void setNoiseBlankerEnabled(bool on) { nb_.setEnabled(on); }
+    bool noiseBlankerEnabled() const { return nb_.enabled(); }
+    void setNoiseBlankerThresholdDb(float db) { nb_.setThresholdDb(db); }
+    float noiseBlankerThresholdDb() const { return nb_.thresholdDb(); }
+    // Share of the last 100 ms actually blanked, percent; and the stand-down flag.
+    float noiseBlankerBlankedPercent() const { return nb_.blankedPercent(); }
+    bool noiseBlankerStandingDown() const { return nb_.standingDown(); }
+    std::size_t noiseBlankerLookAheadSamples() const { return nb_.lookAheadSamples(); }
+    // Which stage's output the blanker works on (index into the stage list).
+    std::size_t noiseBlankerStage() const noexcept { return nbStage_; }
+
 private:
     double clampBandwidth(double bw) const;
     std::vector<FirDecimator> designStages(double bw) const;
+    // Re-derives nbStage_ from stages_ and bandwidth_; after every redesign.
+    void placeNoiseBlanker();
 
     double inputRate_;
     unsigned decimFactor_;
@@ -112,6 +136,8 @@ private:
     // intermediate buffer per stage boundary.
     std::vector<std::complex<float>> mixBuf_;
     std::vector<std::vector<std::complex<float>>> stageBufs_;
+    NoiseBlanker nb_;
+    std::size_t nbStage_ = 0;
 };
 
 }  // namespace cascade::dsp

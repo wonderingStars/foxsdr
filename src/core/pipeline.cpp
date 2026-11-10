@@ -390,6 +390,8 @@ void Pipeline::publishParamMirrorsLocked() {
     mirrorStereoEnabled_.store(stereoEnabled_, std::memory_order_relaxed);
     mirrorAgcMode_.store(static_cast<int>(agc_.mode()), std::memory_order_relaxed);
     mirrorAgcFixedDb_.store(agc_.fixedGainDb(), std::memory_order_relaxed);
+    mirrorNbEnabled_.store(vfo_.noiseBlankerEnabled(), std::memory_order_relaxed);
+    mirrorNbThresholdDb_.store(vfo_.noiseBlankerThresholdDb(), std::memory_order_relaxed);
     // The post-resampler blocks do not exist yet on the constructor's first
     // pass (rebuildChannelBlocks runs before they are made), so each is guarded
     // rather than assumed - the alternative is a null dereference on every
@@ -1173,6 +1175,33 @@ float Pipeline::agcGainDb() const {
     return agcGainDb_.load(std::memory_order_relaxed);
 }
 
+void Pipeline::setNoiseBlankerEnabled(bool on) {
+    post([this, on] { vfo_.setNoiseBlankerEnabled(on); },
+         [this, on] { mirrorNbEnabled_.store(on, std::memory_order_relaxed); });
+}
+
+bool Pipeline::noiseBlankerEnabled() const {
+    return mirrorNbEnabled_.load(std::memory_order_relaxed);
+}
+
+void Pipeline::setNoiseBlankerThresholdDb(float db) {
+    // No verbatim mirror: the block clamps the request, and the getter reports
+    // what is in use (published when the command has run).
+    post([this, db] { vfo_.setNoiseBlankerThresholdDb(db); });
+}
+
+float Pipeline::noiseBlankerThresholdDb() const {
+    return mirrorNbThresholdDb_.load(std::memory_order_relaxed);
+}
+
+float Pipeline::noiseBlankerBlankedPercent() const {
+    return nbBlankedPct_.load(std::memory_order_relaxed);
+}
+
+bool Pipeline::noiseBlankerStandingDown() const {
+    return nbStandingDown_.load(std::memory_order_relaxed);
+}
+
 void Pipeline::setNotchEnabled(bool on) {
     post(
         [this, on] {
@@ -1416,8 +1445,14 @@ bool Pipeline::setInputRateHz(double rateHz) {
         const cascade::dsp::DemodMode mode = demod_.mode();
 
         vfoDecim_ = decim;
+        // The blanker's settings belong to the user, not to the filter that is
+        // being rebuilt around the new rate; its signal state restarts.
+        const bool nbOn = vfo_.noiseBlankerEnabled();
+        const float nbThresholdDb = vfo_.noiseBlankerThresholdDb();
         vfo_ = cascade::dsp::Vfo(rateHz, decim, vfoBandwidthHz_);
         vfo_.setOffsetHz(offset);
+        vfo_.setNoiseBlankerThresholdDb(nbThresholdDb);
+        vfo_.setNoiseBlankerEnabled(nbOn);
 
         // The demodulator MUST be rebuilt at the new channel rate: every mode
         // bakes the rate into its coefficients (CW/SSB BFO frequencies, WFM
@@ -1974,6 +2009,8 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     dspBeat("demod");
     chanBuf_.resize(n / vfoDecim_ + 1);
     const std::size_t m = vfo_.process(in, n, chanBuf_.data(), chanBuf_.size());
+    nbBlankedPct_.store(vfo_.noiseBlankerBlankedPercent(), std::memory_order_relaxed);
+    nbStandingDown_.store(vfo_.noiseBlankerStandingDown(), std::memory_order_relaxed);
     if (m == 0) { return; }
 
     // S-meter: channel power (post-filter, pre-demod), snapshotted for the GUI.

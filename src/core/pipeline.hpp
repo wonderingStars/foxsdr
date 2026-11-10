@@ -513,6 +513,29 @@ public:
     float agcFixedGainDb() const;
     float agcGainDb() const;
 
+    // --- Noise blanker ----------------------------------------------------------
+    // Off by default. Removes short wide-band clicks at the channel rate, in the
+    // Vfo, before the narrow filter (see dsp/noise_blanker.hpp and Vfo's hook).
+    // EVERYTHING fed from the channel hears the blanked signal - audio, S-meter,
+    // scope and decoders on this radio; the raw block (I/Q recorder, I/Q plugins,
+    // patch) is upstream and is not touched. Posted like noise reduction.
+    //   setNoiseBlankerEnabled       on/off (verbatim mirror).
+    //   setNoiseBlankerThresholdDb   dB above the average magnitude, clamped to
+    //                                6..30 (default 15); the getter reports the
+    //                                clamped value once the command has run.
+    //   noiseBlankerBlankedPercent   share of the last 100 ms blanked, percent;
+    //                                0 when off or standing down.
+    //   noiseBlankerStandingDown     true while more than a quarter of the last
+    //                                100 ms would be blanked and the signal is
+    //                                therefore let through.
+    // Published once per block.
+    void setNoiseBlankerEnabled(bool on);
+    bool noiseBlankerEnabled() const;
+    void setNoiseBlankerThresholdDb(float db);
+    float noiseBlankerThresholdDb() const;
+    float noiseBlankerBlankedPercent() const;
+    bool noiseBlankerStandingDown() const;
+
     void setNotchEnabled(bool on);
     bool notchEnabled() const;
     void setNotchFrequencyHz(double hz);
@@ -1179,6 +1202,10 @@ private:
     std::atomic<int> mirrorAgcMode_{0};          // Agc::Mode
     std::atomic<float> mirrorAgcFixedDb_{0.0f};
     std::atomic<float> agcGainDb_{0.0f};         // live, once per block
+    std::atomic<bool> mirrorNbEnabled_{false};
+    std::atomic<float> mirrorNbThresholdDb_{15.0f};
+    std::atomic<float> nbBlankedPct_{0.0f};      // live, once per block
+    std::atomic<bool> nbStandingDown_{false};
     std::atomic<bool> mirrorNotchEnabled_{false};
     std::atomic<double> mirrorNotchHz_{0.0};
     std::atomic<double> mirrorNotchQ_{0.0};

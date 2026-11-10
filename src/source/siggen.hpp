@@ -40,6 +40,15 @@ public:
     // lower disables the noise entirely (exact zeros, not a tiny residue).
     void setNoiseFloorDb(float db);
 
+    // Impulses: a click of `widthSamples` samples (real, amplitude
+    // 10^(levelDb/20), 0 dB = full scale) every 1/rateHz seconds, added to the
+    // tones and the noise. A fixture for impulse-noise tests; periodic and
+    // deterministic, so any chunking of the same length gives the identical
+    // samples. rateHz <= 0 (the default) or widthSamples < 1 switches them off,
+    // and with them off generate() is exactly what it was before this existed.
+    void setImpulses(double rateHz, float levelDb, int widthSamples);
+    void clearImpulses();
+
     // Pull model: fills dst with n samples. Tone phase and the noise stream
     // both carry across calls, so any block-size chunking of the same total
     // length produces the identical sample sequence bit-for-bit.
@@ -60,6 +69,11 @@ private:
     std::mutex mutex_;
     std::array<Tone, 4> tones_{};
     float noiseSigma_ = 0.0f;  // per-component (I or Q) std dev; 0 = disabled
+    // Impulses (see setImpulses). A period of 0 is "off".
+    std::uint64_t impulsePeriod_ = 0;   // samples between click starts
+    std::uint64_t impulseWidth_ = 0;    // samples per click
+    std::uint64_t impulsePos_ = 0;      // position in the period of the next sample
+    float impulseAmp_ = 0.0f;
     // Fixed seed, not a random device: the project testing protocol bans
     // unseeded randomness, and a deterministic stream is what makes the
     // chunking-invariance guarantee of generate() testable bit-exactly.

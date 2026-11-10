@@ -56,6 +56,27 @@ void SigGen::setNoiseFloorDb(float db) {
     noiseSigma_ = std::sqrt(std::pow(10.0f, db * (1.0f / 10.0f)) * 0.5f);
 }
 
+void SigGen::setImpulses(double rateHz, float levelDb, int widthSamples) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!(rateHz > 0.0) || widthSamples < 1) {
+        impulsePeriod_ = 0;
+        return;
+    }
+    const std::uint64_t width = static_cast<std::uint64_t>(widthSamples);
+    const double period = std::floor(sampleRateHz_ / rateHz + 0.5);
+    // At least one clear sample between clicks, or "impulses" would be a DC step.
+    impulsePeriod_ = std::max<std::uint64_t>(width + 1, period > 1.0e15 ? 1000000000000000ull
+                                                                       : static_cast<std::uint64_t>(period));
+    impulseWidth_ = width;
+    impulseAmp_ = std::pow(10.0f, levelDb * (1.0f / 20.0f));
+    impulsePos_ %= impulsePeriod_;
+}
+
+void SigGen::clearImpulses() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    impulsePeriod_ = 0;
+}
+
 float SigGen::gaussian() noexcept {
     // Irwin-Hall: the sum of 12 U(0,1) draws has variance 12 * (1/12) = 1 and
     // mean 6, so (sum - 6) is zero-mean, unit-variance, and close to Gaussian
@@ -105,6 +126,14 @@ void SigGen::generate(std::complex<float>* dst, std::size_t n) {
                 dst[done + i] += t.amp * tmp[i];
             }
             done += m;
+        }
+    }
+    // Impulses last, after everything the generator already did, so with them
+    // off nothing above is touched.
+    if (impulsePeriod_ != 0) {
+        for (std::size_t i = 0; i < n; ++i) {
+            if (impulsePos_ < impulseWidth_) { dst[i] += impulseAmp_; }
+            if (++impulsePos_ == impulsePeriod_) { impulsePos_ = 0; }
         }
     }
 }
