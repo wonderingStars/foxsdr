@@ -127,4 +127,12 @@ private:
     Impl* impl_;
 };
 
+// THE COASTLINE'S RINGS (docs 6.65): the flat map's own rings - the closed runs of the Natural Earth data, the fragments chained end to end, Antarctica taken to the
+// pole - handed out for the globe views' land mask. Degrees; longitude CONTINUOUS (a ring that crosses the antimeridian runs past +/-180). Built once.
+struct CoastRing {
+    std::vector<double> lon, lat;
+    bool closed = false;              // an open line (a stub that joined nothing) is never filled
+};
+const std::vector<CoastRing>& coastlineRings();
+
 }  // namespace foxsdr::slintmap
