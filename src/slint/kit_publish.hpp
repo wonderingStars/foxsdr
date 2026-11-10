@@ -43,6 +43,8 @@ public:
     const slintmap::MapLook& mapLook() const { return look_; }
     // THE 3D VIEWS (globe_publish.hpp, docs 6.65): the state the drive scripts read ("globe.<propagation|ft8|goes|solar|satellites>", "globe.status").
     std::string globeState(const std::string& what) const;
+    // The two ends of the framework's view3d setting, for what the globe views remember (main.cpp gives them the interface half).
+    void setViewPrefsHooks(std::function<std::string()> load, std::function<void(const std::string&)> save);
     // The count of open pages (for the bounded run's evidence).
     std::size_t pageCount() const { return pages_.size(); }
     std::size_t openMapPages() const;

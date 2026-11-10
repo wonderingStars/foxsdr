@@ -14,6 +14,7 @@
 
 #include "globe_scene.hpp"
 #include "solar_ephemeris.hpp"
+#include "view3d_prefs.hpp"
 
 namespace foxsdr::globe {
 
@@ -63,6 +64,17 @@ struct ViewState {
     int goesSatellite = 0;                // 0 East, 1 West
 };
 inline constexpr int kDayOffsetLimit = 366;
+
+// WHAT A VIEW REMEMBERS (the framework's one setting, AppConfig::view3d, view3d_prefs.hpp): the chosen view, the camera and up to four small choices of each. The framework keeps a
+// camera's elevation in 4..89 degrees, so a globe's centre latitude (-85..85) is stored on that scale and the orbits view's tilt (5..85) as it is; option 3 says whether the camera
+// was ever touched (a camera never touched follows the home, the receiver or the spacecraft, and is not frozen into the setting). The options: propagation band index, greyline;
+// FT8 band index, window index; GOES spacecraft; solar system log scale, moon; satellites footprint, ground tracks.
+const char* prefsName(ViewKind k);                                   // "propagation", "ft8", "goes", "solar", "satellites"
+slintview3d::ViewState prefsDefaults(ViewKind k);                    // off, with the view's own default choices
+slintview3d::ViewState toPrefs(const ViewState& v, ViewKind k);
+void fromPrefs(ViewState& v, ViewKind k, const slintview3d::ViewState& p);
+float latitudeToElevation(double latDeg);                            // -85..85 -> 4..89
+double elevationToLatitude(float elevationDeg);
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------------------
 // numbers and words

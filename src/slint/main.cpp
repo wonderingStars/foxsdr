@@ -316,6 +316,14 @@ int main(int argc, char** argv) {
     // the kit's state after each tick and wired to it once.
     foxsdr::slintkit::KitPublisher publisher(*ui, kit);
     publisher.wire();
+    // WHAT THE 3D VIEWS REMEMBER (docs 6.65): the view, camera and small choices of every globe view, in the framework's one interface-half text (view3d_prefs.hpp)
+    publisher.setViewPrefsHooks([&duties] { return duties.interfaceHalf().view3d; },
+                                [&duties](const std::string& text) {
+                                    cascade::core::AppConfig half = duties.interfaceHalf();
+                                    if (half.view3d == text) { return; }
+                                    half.view3d = text;
+                                    (void)duties.saveInterfaceHalf(half);
+                                });
     // A bounded run's self-capture: the pages FOXSDR_SLINT_OPEN names are opened once the plugins are known, and FOXSDR_SLINT_SHOT=1 saves a
     // screenshot of the window at the last tick (the screenshot key's own path). Never set in a release; the GUI test gate's idiom.
     // FOXSDR_SLINT_STORE_PAGE=<catalogue id> (below) opens the store page on that plugin, so it names the page "store" for the kit as well.

@@ -39,6 +39,7 @@ struct Texture {
     int width = 0, height = 0;                   // equirectangular: column 0 is the -180 meridian, row 0 the north edge
     std::vector<std::uint32_t> argb;
     std::uint64_t key = 0;                       // what it was baked from (for the caller's cache)
+    std::uint64_t revision = 0;                  // moves with every bake (a GOES picture has no key of its own): the renderer's copy follows it
     bool empty() const { return argb.empty(); }
 };
 // The land and sea, shaded by the Sun when `sun` is given: day colours where the Sun is up, night colours where it is not, a smooth ramp across +/- 6 degrees of solar
@@ -79,7 +80,6 @@ struct GlobeDrawList {
     enum class Space { Globe, Orbits } space = Space::Globe;
     GlobeCamera camera;                          // Globe: the point looked at and the zoom. Orbits: centreLon = spin, centreLat = tilt above the ecliptic, zoom
     bool sphere = true;
-    double sphereRadius = 1.0;
     Texture texture;                             // the surface (Globe)
     std::vector<DrawLine> lines;
     std::vector<DrawMarker> markers;

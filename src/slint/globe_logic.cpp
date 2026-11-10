@@ -112,6 +112,93 @@ void zoomCamera(GlobeCamera& cam, double steps) {
     cam.zoom = std::clamp(cam.zoom * std::pow(1.25, steps), kZoomMin, kZoomMax);
 }
 
+// ---- what a view remembers ----
+
+const char* prefsName(ViewKind k) {
+    switch (k) {
+        case ViewKind::Propagation: return "propagation";
+        case ViewKind::Ft8: return "ft8";
+        case ViewKind::Goes: return "goes";
+        case ViewKind::SolarSystem: return "solar";
+        case ViewKind::Satellites: return "satellites";
+        default: return "";
+    }
+}
+
+float latitudeToElevation(double latDeg) {
+    const double lat = std::clamp(latDeg, -85.0, 85.0);
+    return static_cast<float>(4.0 + (lat + 85.0) / 170.0 * 85.0);
+}
+double elevationToLatitude(float elevationDeg) {
+    return std::clamp((static_cast<double>(elevationDeg) - 4.0) / 85.0 * 170.0 - 85.0, -85.0, 85.0);
+}
+
+slintview3d::ViewState prefsDefaults(ViewKind k) {
+    slintview3d::ViewState p;
+    p.on = false;
+    switch (k) {
+        case ViewKind::Propagation: p.opt = {0, 1, 0, 0}; break;      // every band, the greyline on
+        case ViewKind::Ft8: p.opt = {0, 1, 0, 0}; break;              // every band, the 1 h window
+        case ViewKind::SolarSystem: p.opt = {1, 1, 0, 0}; break;      // log scale, the Moon shown
+        case ViewKind::Satellites: p.opt = {1, 1, 0, 0}; break;       // footprint and ground tracks on
+        default: break;
+    }
+    return p;
+}
+
+slintview3d::ViewState toPrefs(const ViewState& v, ViewKind k) {
+    slintview3d::ViewState p = prefsDefaults(k);
+    p.on = v.globeOn;
+    p.zoom = static_cast<float>(std::clamp(v.camera.zoom, 0.35, 5.0));
+    if (k == ViewKind::SolarSystem) {
+        double spin = std::fmod(v.spinDeg, 360.0);
+        if (spin < 0.0) { spin += 360.0; }
+        p.azimuth = static_cast<float>(spin > 180.0 ? spin - 360.0 : spin);
+        p.elevation = static_cast<float>(std::clamp(v.tiltDeg, 5.0, 85.0));
+    } else {
+        p.azimuth = static_cast<float>(normalizeLon(v.camera.centreLonDeg));
+        p.elevation = latitudeToElevation(v.camera.centreLatDeg);
+    }
+    switch (k) {
+        case ViewKind::Propagation: p.opt[0] = std::clamp(v.bandId, 0, 5); p.opt[1] = v.greyline ? 1 : 0; break;
+        case ViewKind::Ft8: p.opt[0] = std::clamp(v.bandId, 0, 12); p.opt[1] = v.windowMinutes <= 15 ? 0 : (v.windowMinutes <= 60 ? 1 : 2); break;
+        case ViewKind::Goes: p.opt[0] = std::clamp(v.goesSatellite, 0, 1); break;
+        case ViewKind::SolarSystem: p.opt[0] = v.logScale ? 1 : 0; p.opt[1] = v.showMoon ? 1 : 0; break;
+        case ViewKind::Satellites: p.opt[0] = v.footprints ? 1 : 0; p.opt[1] = v.groundTracks ? 1 : 0; break;
+        default: break;
+    }
+    p.opt[3] = v.cameraSet ? 1 : 0;
+    return p;
+}
+
+void fromPrefs(ViewState& v, ViewKind k, const slintview3d::ViewState& p) {
+    v.globeOn = p.on;
+    v.cameraSet = p.opt[3] != 0;
+    if (v.cameraSet) {
+        v.camera.zoom = std::clamp(static_cast<double>(p.zoom), kZoomMin, kZoomMax);
+        if (k == ViewKind::SolarSystem) {
+            v.spinDeg = std::fmod(static_cast<double>(p.azimuth) + 360.0, 360.0);
+            v.tiltDeg = std::clamp(static_cast<double>(p.elevation), 5.0, 85.0);
+        } else {
+            v.camera.centreLonDeg = normalizeLon(p.azimuth);
+            v.camera.centreLatDeg = elevationToLatitude(p.elevation);
+        }
+    }
+    switch (k) {
+        case ViewKind::Propagation: v.bandId = std::clamp(p.opt[0], 0, 5); v.greyline = p.opt[1] != 0; break;
+        case ViewKind::Ft8: {
+            v.bandId = std::clamp(p.opt[0], 0, 12);
+            const int w = std::clamp(p.opt[1], 0, 2);
+            v.windowMinutes = w == 0 ? 15 : (w == 1 ? 60 : 1440);
+            break;
+        }
+        case ViewKind::Goes: v.goesSatellite = std::clamp(p.opt[0], 0, 1); break;
+        case ViewKind::SolarSystem: v.logScale = p.opt[0] != 0; v.showMoon = p.opt[1] != 0; break;
+        case ViewKind::Satellites: v.footprints = p.opt[0] != 0; v.groundTracks = p.opt[1] != 0; break;
+        default: break;
+    }
+}
+
 // ---- numbers and words ----
 
 std::string kmText(double km) {

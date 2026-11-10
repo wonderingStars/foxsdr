@@ -225,6 +225,8 @@ std::size_t KitPublisher::openMapPages() const {
 
 void KitPublisher::openFromEnv(const std::string& spec) { envSpec_ = spec; envApplied_ = spec.empty(); }
 
+void KitPublisher::setViewPrefsHooks(std::function<std::string()> load, std::function<void(const std::string&)> save) { globe_->setViewPrefsHooks(std::move(load), std::move(save)); }
+
 std::string KitPublisher::globeState(const std::string& what) const {
     if (what == "status") { return globe_->statusLine(); }
     static const std::pair<const char*, const char*> names[] = {{"propagation", "Propagation Tools"}, {"ft8", "FT8"}, {"goes", "GOES HRIT / LRIT"}, {"solar", "Solar System View"}, {"satellites", "Satellites"}};

@@ -1,19 +1,19 @@
-// FoxSDR Slint front end - THE GLOBE VIEWS (docs/engine-stage4.md 6.65): the 3D views a plugin page offers beside its own - the HF propagation globe, the FT8 reception
-// globe, the GOES disk, the interactive solar system and the satellite tracking globe. A page that offers one shows a VIEW bar (the page's own view / the 3D one);
-// with the 3D view on, the page's body is a GlobeBody: the picture the host composed (src/slint/globe_compositor.*) in a well that turns under a drag and zooms under
-// the wheel, with a column beside it of the view's controls, readouts and chips. EVERYTHING in the column is the host's list (the controls are a model, not a
-// component per view), so a view's controls are added in globe_publish.cpp and a drive script finds each one by its label.
+// FoxSDR Slint front end - THE GLOBE VIEWS (docs/engine-stage4.md 6.65): the 3D views a plugin page offers beside its own - the HF propagation globe, the FT8 reception globe, the GOES
+// disk, the interactive solar system and the satellite tracking globe. A page that offers one shows a VIEW bar (the page's own view / the 3D one); with the 3D view on, the page's body
+// is a GlobeBody: the 3D framework's well (ui/scene3d.slint Scene3DWell: the picture the host composed, drag to rotate, wheel to zoom, double-click to reset) with a column beside it of
+// the view's controls, readouts and chips. EVERYTHING in the column is the host's list (the controls are a model, not a component per view), so a view's controls are added in
+// globe_publish.cpp and a drive script finds each one by its label.
 //
-// WHAT THE HOST GIVES (GlobeModel): `offered` - the page shows the VIEW bar; `active` - the 3D view is the body; the picture and `have`; `empty-note` - the honest
-// empty state drawn over the well in the page's own wording; the screen labels over the picture (`labels`, in well fractions); `controls`, `readouts` and `chips`;
-// the hint. WHAT IT TAKES BACK is GlobeEvents: every gesture of every globe page is one callback carrying the page's index first.
+// THE CAMERA. The well's azimuth, elevation and zoom are the host's camera in the framework's own terms (globe_compositor.hpp says how a globe uses them: azimuth is the longitude the view
+// is centred on, elevation the latitude; the orbits view's azimuth is the spin and elevation the tilt). The host owns them: it pushes new values when ITS side moved the camera (a reset, a
+// plate key, a satellite picked) by moving `cam-seq`, and the well tells the host about every move of its own through GlobeEvents.camera-moved.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import { Theme } from "theme.slint";
 import { Caption, Key, SegGroup, SegKey } from "keys.slint";
 import { Checkbox } from "fields.slint";
 import { Slider } from "sliders.slint";
-import { Chip, ChipTone } from "chips.slint";
+import { Scene3DWell, Scene3DLabel } from "scene3d.slint";
 
 export global GlobeEvents {
     callback view-chosen(int, bool);              // page, the 3D view on
@@ -22,18 +22,9 @@ export global GlobeEvents {
     callback slid(int, int, float);               // page, control id, position 0..1
     callback key-pressed(int, int);               // page, control id
     callback chip-pressed(int, int);              // page, chip index
-    callback dragged(int, length, length);        // page, the pointer's travel since the press
-    callback drag-ended(int);
-    callback wheeled(int, float);                 // page, notches (positive in)
-    callback reset(int);                          // RESET VIEW
-    callback resized(int, length, length);        // the well's size
-}
-
-export struct GlobeLabelModel {
-    x: float,         // 0..1 of the well across
-    y: float,         // 0..1 of the well down
-    text: string,
-    color: color,
+    callback camera-moved(int, float, float, float);   // page, azimuth, elevation, zoom: the well's own move (a drag, the wheel, a key)
+    callback reset(int);                          // RESET VIEW (the well has already gone back to its defaults)
+    callback resized(int, int, int);              // page, the well's size in logical pixels
 }
 
 // A control of the column: kind 0 segments (options, value = the lit one), 1 checkbox (value 0 / 1), 2 slider (value 0..1000, value-text beside it), 3 key, 4 readout (label + value-text).
@@ -65,12 +56,25 @@ export struct GlobeModel {
     picture: image,
     have: bool,
     empty-note: string,
-    labels: [GlobeLabelModel],
+    labels: [Scene3DLabel],
     controls: [GlobeControl],
     readouts: [string],
     chips: [GlobeChipModel],
     hint: string,
     reset-label: string,
+    // the camera, in the well's terms
+    cam-az: float,
+    cam-el: float,
+    cam-zoom: float,
+    cam-seq: int,
+    default-az: float,
+    default-el: float,
+    default-zoom: float,
+    min-el: float,
+    max-el: float,
+    min-zoom: float,
+    max-zoom: float,
+    deg-per-pixel: float,
 }
 
 // The VIEW bar: the page's own view and the 3D one, as two keys of one group.
@@ -91,82 +95,51 @@ export component GlobeViewBar inherits Rectangle {
     }
 }
 
-// The well: the composed picture, over it the screen labels and the honest empty state; a drag turns, the wheel zooms.
-component GlobeWell inherits Rectangle {
-    in property <GlobeModel> model;
-    in property <int> index;
-    background: Theme.well-deep;
-    clip: true;
-    accessible-role: groupbox;
-    accessible-label: root.model.empty-note != "" ? root.model.empty-note : root.model.globe-label;
-
-    init => { GlobeEvents.resized(root.index, root.width, root.height); }
-    changed width => { GlobeEvents.resized(root.index, root.width, root.height); }
-    changed height => { GlobeEvents.resized(root.index, root.width, root.height); }
-
-    Image { x: 0px; y: 0px; width: parent.width; height: parent.height; source: root.model.picture; image-fit: fill; }
-    for l in root.model.labels : Text {
-        x: l.x * root.width + 6px;
-        y: l.y * root.height - 7px;
-        text: l.text;
-        color: l.color;
-        font-family: Theme.font-ui;
-        font-size: Theme.font-small;
-        accessible-role: none;
-    }
-    area := TouchArea {
-        x: 0px; y: 0px; width: parent.width; height: parent.height;
-        mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
-        pointer-event(e) => {
-            if (e.kind == PointerEventKind.move) {
-                if (self.pressed) { GlobeEvents.dragged(root.index, self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
-            } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) {
-                GlobeEvents.drag-ended(root.index);
-            }
-        }
-        scroll-event(e) => {
-            if (e.delta-y == 0px) { return EventResult.reject; }
-            GlobeEvents.wheeled(root.index, e.delta-y > 0px ? 1.0 : -1.0);
-            return EventResult.accept;
-        }
-    }
-    if root.model.empty-note != "" : Rectangle {
-        x: 12px; y: 12px;
-        width: parent.width - 24px;
-        height: note.preferred-height + 16px;
-        background: Theme.panel.with-alpha(0.82);
-        border-radius: Theme.radius;
-        note := Text {
-            x: 8px; y: 8px;
-            width: parent.width - 16px;
-            text: root.model.empty-note;
-            color: Theme.fg-soft;
-            font-family: Theme.font-ui;
-            font-size: Theme.font-small;
-            wrap: word-wrap;
-        }
-    }
-    Text {
-        x: 10px; y: parent.height - 18px;
-        width: parent.width - 20px;
-        text: root.model.hint;
-        color: Theme.dim;
-        font-family: Theme.font-ui;
-        font-size: Theme.font-hint;
-        overflow: elide;
-        accessible-role: none;
-    }
-}
-
 // The body of a page with the 3D view on: the well, and at its right the column of controls, readouts and chips.
 export component GlobeBody inherits Rectangle {
     in property <GlobeModel> model;
     in property <int> index;
     background: Theme.panel;
+
+    property <int> seen-seq: -1;
+    // the host moved the camera (or this is the first time): the well takes the host's numbers
+    function sync() {
+        if (root.model.cam-seq != root.seen-seq) {
+            root.seen-seq = root.model.cam-seq;
+            well.azimuth = root.model.cam-az;
+            well.elevation = root.model.cam-el;
+            well.zoom = root.model.cam-zoom;
+        }
+    }
+    init => { root.sync(); }
+    changed model => { root.sync(); }
+
     HorizontalLayout {
         padding: 8px;
         spacing: 8px;
-        GlobeWell { horizontal-stretch: 1; model: root.model; index: root.index; }
+        well := Scene3DWell {
+            horizontal-stretch: 1;
+            picture: root.model.picture;
+            labels: root.model.labels;
+            label: root.model.globe-label + " " + @tr("view");
+            hint: root.model.hint;
+            empty-text: root.model.empty-note;
+            default-azimuth: root.model.default-az;
+            default-elevation: root.model.default-el;
+            default-zoom: root.model.default-zoom;
+            min-elevation: root.model.min-el;
+            max-elevation: root.model.max-el;
+            min-zoom: root.model.min-zoom;
+            max-zoom: root.model.max-zoom;
+            deg-per-pixel: root.model.deg-per-pixel;
+            property <int> pw: self.pixel-w;
+            property <int> ph: self.pixel-h;
+            changed pw => { GlobeEvents.resized(root.index, self.pixel-w, self.pixel-h); }
+            changed ph => { GlobeEvents.resized(root.index, self.pixel-w, self.pixel-h); }
+            init => { GlobeEvents.resized(root.index, self.pixel-w, self.pixel-h); }
+            camera-moved => { GlobeEvents.camera-moved(root.index, self.azimuth, self.elevation, self.zoom); }
+            reset-view => { GlobeEvents.reset(root.index); }
+        }
         Flickable {
             width: 264px;
             viewport-height: column.preferred-height;
@@ -256,7 +229,7 @@ export component GlobeBody inherits Rectangle {
                     }
                     TouchArea { enabled: ch.pressable; clicked => { GlobeEvents.chip-pressed(root.index, ci); } }
                 }
-                Key { label: root.model.reset-label; small: true; min-w: 0px; tooltip: @tr("Back to the starting view"); clicked => { GlobeEvents.reset(root.index); } }
+                Key { label: root.model.reset-label; small: true; min-w: 0px; tooltip: @tr("Back to the starting view"); clicked => { well.reset(); } }
             }
         }
     }

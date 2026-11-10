@@ -11,6 +11,11 @@ namespace foxsdr::globe {
 
 namespace {
 
+std::uint64_t nextRevision() {
+    static std::uint64_t counter = 0;
+    return ++counter;
+}
+
 std::uint32_t mix(std::uint32_t a, std::uint32_t b, double t) {
     t = std::clamp(t, 0.0, 1.0);
     auto ch = [&](int shift) {
@@ -97,6 +102,7 @@ void bakeEarth(Texture& out, const LandMask& land, const SunPosition* sun, bool 
     out.height = height;
     out.argb.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0u);
     out.key = earthBakeKey(sun, greyline, width, height);
+    out.revision = nextRevision();
     Vec3 s{0, 0, 1};
     if (sun != nullptr) { s = toUnit(sun->subLatDeg, sun->subLonDeg); }
     std::vector<double> cl(static_cast<std::size_t>(width)), sl(static_cast<std::size_t>(width));
@@ -132,6 +138,7 @@ void bakeGoes(Texture& out, const std::vector<std::uint8_t>& pixels, int w, int 
     out.height = height;
     out.argb.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), pal.oceanDay);
     out.key = 0;
+    out.revision = nextRevision();
     const std::size_t bpp = rgb ? 3u : 1u;
     if (w <= 0 || h <= 0 || pixels.size() < static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * bpp) { return; }
     for (int r = 0; r < height; ++r) {

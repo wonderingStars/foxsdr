@@ -10,7 +10,10 @@
 //      scales, the orbit rings, the panel reader and the check of the host's figures against the plugin's
 //   G. the satellite readout and the orbit classes
 //   H. what each view draws (globe_draw.*): the baked earth and GOES surfaces, and the five draw lists
+//   J. what a view remembers (the framework's one setting: the camera on its elevation scale, the options, other views' entries left alone)
+//   I. the picture (globe_compositor.*, on the 3D framework's renderer): the turn of the globe, the silhouette, the texture's orientation, depth hiding, lines, the orbits
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "globe_compositor.hpp"
 #include "globe_draw.hpp"
 #include "globe_logic.hpp"
 #include "test_check.hpp"
@@ -18,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -902,6 +906,364 @@ void sectionDraw() {
     CHECK(drawSatellites(norx, view, shaded).markers.size() == 3u);
 }
 
+// ------------------------------------------------------------------------------------------------------------------------
+namespace s3 = foxsdr::scene3d;
+
+struct Picture {
+    int w = 0, h = 0;
+    std::vector<s3::Rgba> px;
+    s3::Rgba at(int x, int y) const { return px[static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)]; }
+};
+bool isBackground(const s3::Rgba& c) { return c.r == 11 && c.g == 13 && c.b == 18; }
+
+s3::ScreenPoint projectOf(const GlobeCompositor& comp, const GlobeCamera& cam, const Vec3& v) {
+    const Vec3 r = rotate(rotationFor(cam), v);
+    return comp.scene().project(s3::Vec3{static_cast<float>(r.x), static_cast<float>(r.y), static_cast<float>(r.z)});
+}
+
+Picture paintList(GlobeCompositor& comp, const GlobeDrawList& list, int w, int h, std::vector<s3::Label3D>* labels = nullptr) {
+    Picture p;
+    p.w = w;
+    p.h = h;
+    p.px.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), s3::Rgba{1, 2, 3, 4});
+    std::vector<s3::Label3D> lab;
+    CHECK(comp.paint(list, p.px.data(), w, h, lab));
+    if (labels != nullptr) { *labels = lab; }
+    return p;
+}
+
+void sectionCompositor() {
+    // ---- the turn: the centre of the view goes to +Z, north goes up the picture, east goes right ----
+    for (const LatLon& c : {LatLon{0, 0}, LatLon{51.5, -0.1}, LatLon{-40, 150}, LatLon{80, -120}, LatLon{-85, 30}, LatLon{10, 180}}) {
+        GlobeCamera cam;
+        cam.centreLatDeg = c.lat;
+        cam.centreLonDeg = c.lon;
+        const Rotation r = rotationFor(cam);
+        const Vec3 centre = rotate(r, toUnit(c));
+        CHECK_NEAR(centre.x, 0.0, 1e-12);
+        CHECK_NEAR(centre.y, 0.0, 1e-12);
+        CHECK_NEAR(centre.z, 1.0, 1e-12);
+        const Vec3 north = rotate(r, toUnit(std::min(89.0, c.lat + 5.0), c.lon));
+        CHECK(north.y > 0.0 && std::fabs(north.x) < 1e-9);                     // five degrees north is straight up the picture
+        const Vec3 east = rotate(r, toUnit(c.lat, c.lon + 5.0));
+        CHECK(east.x > 0.0);                                                    // five degrees east is to the right
+        CHECK_NEAR(length(rotate(r, Vec3{0.3, -0.5, 0.7})), length(Vec3{0.3, -0.5, 0.7}), 1e-12);   // a turn keeps lengths
+    }
+    CHECK(toRgba(0xFF112233u).r == 0x11 && toRgba(0xFF112233u).g == 0x22 && toRgba(0xFF112233u).b == 0x33 && toRgba(0x80112233u).a == 0x80);
+    CHECK(toLabelRgba(0x80112233u) == 0x11223380u);
+
+    GlobeCompositor comp;
+    const int W = 480, H = 360;
+    // ---- an empty list is the plain background; a size under 16 is refused; the same list gives the same bytes ----
+    GlobeDrawList none;
+    none.sphere = false;
+    const Picture bg = paintList(comp, none, W, H);
+    bool allBg = true;
+    for (const s3::Rgba& c : bg.px) { if (!isBackground(c)) { allBg = false; } }
+    CHECK(allBg);
+    std::vector<s3::Rgba> tiny(64, s3::Rgba{});
+    std::vector<s3::Label3D> lab;
+    CHECK(!comp.paint(none, tiny.data(), 8, 8, lab));
+    CHECK(!comp.paint(none, nullptr, W, H, lab));
+
+    // ---- a lit sphere: round, centred, the size the framework's sceneRadius promises, the corners untouched ----
+    ViewState view;
+    Texture ocean;
+    {
+        static const LandMask land(1440, 720);
+        bakeEarth(ocean, land, nullptr, false);
+    }
+    GlobeDrawList sphere = drawPropagation(buildPropagationScene(PropagationFacts{}, false, LatLon{}, 0), view, ocean);
+    sphere.lines.clear();
+    sphere.camera = GlobeCamera{0.0, 0.0, 1.0};
+    const Picture ps = paintList(comp, sphere, W, H);
+    CHECK(isBackground(ps.at(2, 2)) && isBackground(ps.at(W - 3, H - 3)) && isBackground(ps.at(2, H - 3)));
+    CHECK(!isBackground(ps.at(W / 2, H / 2)));
+    int left = -1, right = -1, top = -1, bottom = -1;
+    for (int x = 0; x < W; ++x) { if (!isBackground(ps.at(x, H / 2))) { if (left < 0) { left = x; } right = x; } }
+    for (int y = 0; y < H; ++y) { if (!isBackground(ps.at(W / 2, y))) { if (top < 0) { top = y; } bottom = y; } }
+    const double diamH = right - left + 1, diamV = bottom - top + 1;
+    std::printf("  globe silhouette in %dx%d: %.0f x %.0f px (the shorter side is %d)\n", W, H, diamH, diamV, H);
+    CHECK_NEAR(diamH, diamV, 3.0);                                                            // a circle
+    CHECK(diamH > 0.70 * H && diamH < 0.90 * H);                                              // the sphere fills about 0.85 of the shorter side (sceneRadius 1.18)
+    CHECK_NEAR((left + right) / 2.0, W / 2.0, 2.0);
+    CHECK_NEAR((top + bottom) / 2.0, H / 2.0, 2.0);
+    // zoom 2 doubles it
+    GlobeDrawList zoomed = sphere;
+    zoomed.camera.zoom = 2.0;
+    const Picture pz = paintList(comp, zoomed, W, H);
+    int zl = -1, zr = -1;
+    for (int x = 0; x < W; ++x) { if (!isBackground(pz.at(x, H / 2))) { if (zl < 0) { zl = x; } zr = x; } }
+    CHECK(zl == -1 || (zr - zl + 1) > 1.8 * diamH || (zl == 0 && zr == W - 1));
+    // the same list gives the same bytes
+    const Picture ps2 = paintList(comp, sphere, W, H);
+    CHECK(ps.px.size() == ps2.px.size() && std::memcmp(ps.px.data(), ps2.px.data(), ps.px.size() * sizeof(s3::Rgba)) == 0);
+
+    // ---- the texture is on the sphere the right way round: west red, east green, north blue (centre 0, 0) ----
+    Texture flags;
+    flags.width = 64;
+    flags.height = 32;
+    flags.key = 4242;
+    flags.revision = 4242;
+    flags.argb.assign(64u * 32u, 0xFF808080u);
+    for (int r = 0; r < 32; ++r) {
+        for (int c = 0; c < 64; ++c) {
+            const std::size_t i = static_cast<std::size_t>(r) * 64u + static_cast<std::size_t>(c);
+            if (r < 8) { flags.argb[i] = 0xFF0000FFu; }               // north of 45 N: blue
+            else if (c < 32) { flags.argb[i] = 0xFFFF0000u; }         // west of Greenwich: red
+            else { flags.argb[i] = 0xFF00FF00u; }                     // east: green
+        }
+    }
+    GlobeDrawList tex = sphere;
+    tex.texture = flags;
+    const Picture pt = paintList(comp, tex, W, H);
+    {
+        // the scene's projection is of the LAST paint, which was `sphere`: repaint with the texture and keep it
+        (void)paintList(comp, tex, W, H);
+        const s3::ScreenPoint west = projectOf(comp, tex.camera, toUnit(0.0, -30.0)), east = projectOf(comp, tex.camera, toUnit(0.0, 30.0)), nrth = projectOf(comp, tex.camera, toUnit(70.0, 0.0)), mid = projectOf(comp, tex.camera, toUnit(0.0, 0.0));
+        CHECK_NEAR(mid.x, W / 2.0, 1.5);
+        CHECK_NEAR(mid.y, H / 2.0, 5.0);               // the camera is 1 degree short of the zenith (the framework's limit is 89): the point under it sits a few pixels high
+        CHECK(west.x < mid.x && east.x > mid.x && nrth.y < mid.y);                  // west is left, east is right, north is up
+        const s3::Rgba cw = pt.at(static_cast<int>(west.x), static_cast<int>(west.y));
+        const s3::Rgba ce = pt.at(static_cast<int>(east.x), static_cast<int>(east.y));
+        const s3::Rgba cn = pt.at(static_cast<int>(nrth.x), static_cast<int>(nrth.y));
+        CHECK(cw.r > 200 && cw.g < 60 && cw.b < 60);
+        CHECK(ce.g > 200 && ce.r < 60 && ce.b < 60);
+        CHECK(cn.b > 200 && cn.r < 60 && cn.g < 60);
+    }
+    // a texture that changes under the same key is picked up through its revision
+    tex.texture.revision = 4243;
+    for (std::uint32_t& c : tex.texture.argb) { c = 0xFFFFFF00u; }
+    const Picture py = paintList(comp, tex, W, H);
+    CHECK(py.at(W / 2, H / 2).r > 200 && py.at(W / 2, H / 2).g > 200 && py.at(W / 2, H / 2).b < 60);
+
+    // ---- a southern, far-side centre: (-40, 150) is turned to the middle of the picture, which the framework's own camera (elevation >= 4) could not have shown ----
+    GlobeDrawList south = tex;
+    south.camera = GlobeCamera{150.0, -40.0, 1.0};
+    DrawMarker pin;
+    pin.at = toUnit(-40.0, 150.0) * 1.004;
+    pin.argb = 0xFFFF00FFu;
+    pin.sizePx = 9.0f;
+    south.markers.push_back(pin);
+    DrawMarker back = pin;
+    back.at = toUnit(40.0, -30.0) * 1.004;                                    // the antipode: behind the globe
+    back.label = "far side";
+    south.markers.push_back(back);
+    DrawMarker front = pin;
+    front.at = toUnit(-30.0, 160.0) * 1.004;
+    front.argb = 0xFF00FFFFu;
+    front.label = "near side";
+    south.markers.push_back(front);
+    std::vector<s3::Label3D> labels;
+    const Picture pn = paintList(comp, south, W, H, &labels);
+    const s3::Rgba pinC = pn.at(W / 2, H / 2);
+    CHECK(pinC.r > 200 && pinC.g < 60 && pinC.b > 200);                         // the magenta pin is at the middle
+    bool sawFar = false, sawNear = false;
+    for (const s3::Label3D& l : labels) { if (l.text == "far side") { sawFar = true; } if (l.text == "near side") { sawNear = true; } }
+    CHECK(sawNear);
+    CHECK(!sawFar);                                                            // a label behind the globe is not offered
+    // the antipode's marker is not drawn: the pixel at the middle is the pin, not a second marker; and its label anchor is the near side's only
+    for (const s3::Label3D& l : labels) { if (l.text == "near side") { CHECK(l.x > 0.0f && l.x < 1.0f && l.y > 0.0f && l.y < 1.0f); CHECK(l.align == 1 && l.kind == 2); } }
+
+    // ---- lines: a green great-circle arc is on the picture, a dashed one has gaps, a closed one closes ----
+    GlobeDrawList lines = tex;
+    lines.texture = Texture{};
+    lines.camera = GlobeCamera{0.0, 0.0, 1.0};
+    DrawLine eq;
+    eq.points = greatCircleArc(LatLon{0, -40}, LatLon{0, 40}, 60, 0.0);
+    for (Vec3& p : eq.points) { p = p * 1.002; }
+    eq.argb = 0xFF00FF00u;
+    eq.widthPx = 3.0f;
+    lines.lines.push_back(eq);
+    const Picture pl = paintList(comp, lines, W, H);
+    int greenHits = 0;
+    for (int i = 0; i < 20; ++i) {
+        const double lon = -35.0 + 70.0 * i / 19.0;
+        const s3::ScreenPoint sp = projectOf(comp, lines.camera, toUnit(0.0, lon) * 1.002);
+        const s3::Rgba c = pl.at(static_cast<int>(sp.x), static_cast<int>(sp.y));
+        if (c.g > 200 && c.r < 80 && c.b < 80) { ++greenHits; }
+    }
+    CHECK(greenHits >= 19);
+    auto litPixels = [&](const Picture& p) { int n = 0; for (const s3::Rgba& c : p.px) { if (c.g > 200 && c.r < 80 && c.b < 80) { ++n; } } return n; };
+    const int solidN = litPixels(pl);
+    lines.lines[0].dashed = true;
+    const Picture pd = paintList(comp, lines, W, H);
+    const int dashedN = litPixels(pd);
+    std::printf("  line pixels: solid %d dashed %d\n", solidN, dashedN);
+    CHECK(dashedN > 0 && dashedN < solidN * 0.8);                               // a dashed line is not a solid one
+    // a closed line closes: a ring of 8 points about the middle has its last side drawn
+    GlobeDrawList ring;
+    ring.sphere = false;
+    ring.camera = GlobeCamera{0.0, 0.0, 1.0};
+    DrawLine sq;
+    sq.points = {toUnit(10, -10), toUnit(10, 10), toUnit(-10, 10), toUnit(-10, -10)};
+    sq.argb = 0xFFFF0000u;
+    sq.widthPx = 3.0f;
+    sq.closed = false;
+    const int openN = [&] { ring.lines = {sq}; const Picture p = paintList(comp, ring, W, H); int n = 0; for (const s3::Rgba& c : p.px) { if (c.r > 200 && c.g < 80) { ++n; } } return n; }();
+    sq.closed = true;
+    const int closedN = [&] { ring.lines = {sq}; const Picture p = paintList(comp, ring, W, H); int n = 0; for (const s3::Rgba& c : p.px) { if (c.r > 200 && c.g < 80) { ++n; } } return n; }();
+    CHECK(closedN > openN * 1.2);
+
+    // ---- the orbits: the Sun at the middle, north (+Y) up and east (+X) right from above, the tilt turns the ring into an ellipse ----
+    GlobeDrawList orb;
+    orb.space = GlobeDrawList::Space::Orbits;
+    orb.sphere = false;
+    orb.camera = GlobeCamera{0.0, 89.0, 1.0};
+    DrawMarker sunM;
+    sunM.at = Vec3{0, 0, 0};
+    sunM.argb = 0xFFFFD27Au;
+    sunM.sizePx = 9.0f;
+    sunM.hiddenBehind = false;
+    DrawMarker xM = sunM;
+    xM.at = Vec3{0.5, 0, 0};
+    xM.argb = 0xFFFF0000u;
+    xM.label = "east";
+    DrawMarker yM = sunM;
+    yM.at = Vec3{0, 0.5, 0};
+    yM.argb = 0xFF00FF00u;
+    orb.markers = {sunM, xM, yM};
+    const Picture po = paintList(comp, orb, W, H);
+    const s3::ScreenPoint sx = comp.scene().project(s3::Vec3{0.5f, 0, 0}), sy = comp.scene().project(s3::Vec3{0, 0.5f, 0}), s0 = comp.scene().project(s3::Vec3{0, 0, 0});
+    CHECK_NEAR(s0.x, W / 2.0, 1.5);
+    CHECK_NEAR(s0.y, H / 2.0, 1.5);
+    CHECK(sx.x > s0.x + 20.0f && std::fabs(sx.y - s0.y) < 6.0f);
+    CHECK(sy.y < s0.y - 20.0f && std::fabs(sy.x - s0.x) < 6.0f);
+    const s3::Rgba cx = po.at(static_cast<int>(sx.x), static_cast<int>(sx.y));
+    CHECK(cx.r > 200 && cx.g < 60);
+    const s3::Rgba cs = po.at(W / 2, H / 2);
+    CHECK(cs.r > 200 && cs.g > 150 && cs.b < 160);                           // the Sun
+    GlobeDrawList tilted = orb;
+    tilted.camera.centreLatDeg = 30.0;
+    (void)paintList(comp, tilted, W, H);
+    const s3::ScreenPoint ty = comp.scene().project(s3::Vec3{0, 0.5f, 0});
+    const s3::ScreenPoint tx = comp.scene().project(s3::Vec3{0.5f, 0, 0});
+    CHECK(std::fabs(ty.y - H / 2.0) < 0.75 * std::fabs(sy.y - s0.y));       // tilted, the far axis is foreshortened
+    CHECK(std::fabs(tx.x - W / 2.0) > 0.9 * std::fabs(sx.x - s0.x));        // and the near one is not
+    // the spin turns the system about the pole: a quarter turn puts +X where +Y was
+    GlobeDrawList spun = orb;
+    spun.camera.centreLonDeg = 90.0;
+    (void)paintList(comp, spun, W, H);
+    const s3::ScreenPoint spX = comp.scene().project(s3::Vec3{0.5f, 0, 0});
+    CHECK(std::fabs(spX.x - W / 2.0) < 6.0 && std::fabs(spX.y - H / 2.0) > 20.0);
+}
+
+// ------------------------------------------------------------------------------------------------------------------------
+void sectionPrefs() {
+    namespace v3 = foxsdr::slintview3d;
+    // the latitude scale: -85 .. 85 on the framework's 4 .. 89 elevation, and back
+    CHECK_NEAR(latitudeToElevation(-85.0), 4.0, 1e-4);
+    CHECK_NEAR(latitudeToElevation(85.0), 89.0, 1e-4);
+    CHECK_NEAR(latitudeToElevation(0.0), 46.5, 1e-4);
+    CHECK_NEAR(latitudeToElevation(-200.0), 4.0, 1e-4);
+    for (double lat = -85.0; lat <= 85.0; lat += 5.0) { CHECK_NEAR(elevationToLatitude(latitudeToElevation(lat)), lat, 1e-3); }
+    CHECK_NEAR(elevationToLatitude(0.0f), -85.0, 1e-9);                        // outside the scale: held
+    CHECK_NEAR(elevationToLatitude(200.0f), 85.0, 1e-9);
+    // names and defaults
+    CHECK(std::string(prefsName(ViewKind::Propagation)) == "propagation" && std::string(prefsName(ViewKind::Ft8)) == "ft8" && std::string(prefsName(ViewKind::Goes)) == "goes" &&
+          std::string(prefsName(ViewKind::SolarSystem)) == "solar" && std::string(prefsName(ViewKind::Satellites)) == "satellites" && std::string(prefsName(ViewKind::None)).empty());
+    // the defaults are what a fresh ViewState is: off, the page's own view
+    for (ViewKind k : {ViewKind::Propagation, ViewKind::Ft8, ViewKind::Goes, ViewKind::SolarSystem, ViewKind::Satellites}) {
+        ViewState fresh;
+        const v3::ViewState d = prefsDefaults(k);
+        CHECK(!d.on);
+        ViewState read;
+        read.bandId = 99; read.greyline = false; read.windowMinutes = 5; read.logScale = false; read.showMoon = false; read.footprints = false; read.groundTracks = false; read.goesSatellite = 1;
+        fromPrefs(read, k, d);
+        CHECK(!read.globeOn && !read.cameraSet);
+        // the defaults read back as a fresh view's choices
+        if (k == ViewKind::Propagation) { CHECK(read.bandId == 0 && read.greyline == fresh.greyline); }
+        if (k == ViewKind::Ft8) { CHECK(read.bandId == 0 && read.windowMinutes == fresh.windowMinutes); }
+        if (k == ViewKind::Goes) { CHECK(read.goesSatellite == fresh.goesSatellite); }
+        if (k == ViewKind::SolarSystem) { CHECK(read.logScale == fresh.logScale && read.showMoon == fresh.showMoon); }
+        if (k == ViewKind::Satellites) { CHECK(read.footprints == fresh.footprints && read.groundTracks == fresh.groundTracks); }
+    }
+    // every kind's state survives the text of the setting
+    {
+        ViewState a;
+        a.globeOn = true; a.cameraSet = true;
+        a.camera = GlobeCamera{-122.4, -37.8, 2.5};
+        a.bandId = 3; a.greyline = false;
+        const std::string text = [&] { v3::ViewPrefs p; p.set("propagation", toPrefs(a, ViewKind::Propagation)); return p.serialize(); }();
+        const v3::ViewState got = v3::ViewPrefs::parse(text).get("propagation", prefsDefaults(ViewKind::Propagation));
+        ViewState b;
+        fromPrefs(b, ViewKind::Propagation, got);
+        CHECK(b.globeOn && b.cameraSet && b.bandId == 3 && !b.greyline);
+        CHECK_NEAR(b.camera.centreLonDeg, -122.4, 0.01);
+        CHECK_NEAR(b.camera.centreLatDeg, -37.8, 0.02);             // a southern latitude: the framework's 4..89 elevation scale carries it
+        CHECK_NEAR(b.camera.zoom, 2.5, 1e-6);
+    }
+    {
+        ViewState a;
+        a.globeOn = true; a.windowMinutes = 1440; a.bandId = 12;
+        v3::ViewPrefs p;
+        p.set("ft8", toPrefs(a, ViewKind::Ft8));
+        ViewState b;
+        fromPrefs(b, ViewKind::Ft8, v3::ViewPrefs::parse(p.serialize()).get("ft8", prefsDefaults(ViewKind::Ft8)));
+        CHECK(b.globeOn && !b.cameraSet && b.windowMinutes == 1440 && b.bandId == 12);
+        a.windowMinutes = 15;
+        p.set("ft8", toPrefs(a, ViewKind::Ft8));
+        fromPrefs(b, ViewKind::Ft8, v3::ViewPrefs::parse(p.serialize()).get("ft8", prefsDefaults(ViewKind::Ft8)));
+        CHECK(b.windowMinutes == 15);
+    }
+    {
+        ViewState a;
+        a.globeOn = true; a.cameraSet = true; a.spinDeg = 300.0; a.tiltDeg = 70.0; a.camera.zoom = 1.6; a.logScale = false; a.showMoon = false;
+        v3::ViewPrefs p;
+        p.set("solar", toPrefs(a, ViewKind::SolarSystem));
+        ViewState b;
+        fromPrefs(b, ViewKind::SolarSystem, v3::ViewPrefs::parse(p.serialize()).get("solar", prefsDefaults(ViewKind::SolarSystem)));
+        CHECK(b.globeOn && b.cameraSet && !b.logScale && !b.showMoon);
+        CHECK_NEAR(b.spinDeg, 300.0, 0.01);                          // 300 degrees of spin is -60 in the framework's -180..180
+        CHECK_NEAR(b.tiltDeg, 70.0, 1e-4);
+        CHECK_NEAR(b.camera.zoom, 1.6, 1e-5);
+    }
+    {
+        ViewState a;
+        a.globeOn = true; a.goesSatellite = 1; a.footprints = false; a.groundTracks = false;
+        v3::ViewPrefs p;
+        p.set("goes", toPrefs(a, ViewKind::Goes));
+        p.set("satellites", toPrefs(a, ViewKind::Satellites));
+        ViewState g, s;
+        fromPrefs(g, ViewKind::Goes, v3::ViewPrefs::parse(p.serialize()).get("goes", prefsDefaults(ViewKind::Goes)));
+        fromPrefs(s, ViewKind::Satellites, v3::ViewPrefs::parse(p.serialize()).get("satellites", prefsDefaults(ViewKind::Satellites)));
+        CHECK(g.globeOn && g.goesSatellite == 1);
+        CHECK(s.globeOn && !s.footprints && !s.groundTracks);
+    }
+    // a camera never touched is not frozen: it reads back untouched, whatever it was showing
+    {
+        ViewState a;
+        a.globeOn = true; a.cameraSet = false; a.camera = GlobeCamera{33.0, 44.0, 3.0};
+        ViewState b;
+        fromPrefs(b, ViewKind::Propagation, toPrefs(a, ViewKind::Propagation));
+        CHECK(b.globeOn && !b.cameraSet && b.camera.zoom == 1.0 && b.camera.centreLonDeg == 0.0);
+    }
+    // another view's entry, written by the framework's own views, is not disturbed by this one's
+    {
+        v3::ViewPrefs p = v3::ViewPrefs::parse("waterfall:on=1,az=-40,el=20,zoom=1.5");
+        ViewState a;
+        a.globeOn = true;
+        p.set("solar", toPrefs(a, ViewKind::SolarSystem));
+        const v3::ViewPrefs q = v3::ViewPrefs::parse(p.serialize());
+        CHECK(q.get("waterfall", v3::ViewState{}).on);
+        CHECK(q.get("solar", v3::ViewState{}).on);
+        CHECK(!q.get("goes", v3::ViewState{}).on);
+    }
+    // a hostile or newer setting is read leniently: out of range options are held
+    {
+        v3::ViewState wild;
+        wild.on = true;
+        wild.opt = {15, 15, 15, 1};
+        ViewState b;
+        fromPrefs(b, ViewKind::Propagation, wild);
+        CHECK(b.bandId == 5);
+        fromPrefs(b, ViewKind::Ft8, wild);
+        CHECK(b.bandId == 12 && b.windowMinutes == 1440);
+        fromPrefs(b, ViewKind::Goes, wild);
+        CHECK(b.goesSatellite == 1);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -913,5 +1275,7 @@ int main() {
     sectionSolar();
     sectionSatellites();
     sectionDraw();
+    sectionCompositor();
+    sectionPrefs();
     return testSummary("test_slint_host_globe");
 }

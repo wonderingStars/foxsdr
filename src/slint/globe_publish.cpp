@@ -31,6 +31,7 @@ template <class... A> std::string F(const char* english, A... a) {
     return out;
 }
 slint::Color colour(std::uint32_t argb) { return slint::Color::from_argb_encoded(argb); }
+slint::Color labelColour(std::uint32_t rgba) { return slint::Color::from_argb_encoded(((rgba & 0xFFu) << 24) | ((rgba >> 8) & 0x00FFFFFFu)); }   // 0xRRGGBBAA -> ARGB
 std::int64_t unixMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); }
 std::int64_t steadyMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 std::string cell(const char* c) { return std::string(c, ::strnlen(c, CASCADE_PANEL_CELL_CHARS)); }
@@ -91,6 +92,30 @@ std::string bandName(int id) { const Band* b = bandById(id); return b != nullptr
 GlobePublisher::GlobePublisher(PluginKit& kit) : kit_(kit) {}
 GlobePublisher::~GlobePublisher() = default;
 
+void GlobePublisher::setViewPrefsHooks(std::function<std::string()> load, std::function<void(const std::string&)> save) {
+    loadPrefs_ = std::move(load);
+    savePrefs_ = std::move(save);
+}
+
+void GlobePublisher::changed(Surface& s) {
+    s.touched = true;
+    prefsDirty_ = true;
+    prefsChangedAtMs_ = steadyMs();
+}
+
+void GlobePublisher::flushPrefs() {
+    if (!prefsDirty_ || !savePrefs_ || !loadPrefs_ || steadyMs() - prefsChangedAtMs_ < 400) { return; }
+    prefsDirty_ = false;
+    slintview3d::ViewPrefs prefs = slintview3d::ViewPrefs::parse(loadPrefs_());   // the other views' entries are kept as they are
+    for (const auto& kv : surfaces_) {
+        if (kv.second->touched && kv.second->kind != ViewKind::None) { prefs.set(prefsName(kv.second->kind), toPrefs(kv.second->view, kv.second->kind)); }
+    }
+    const std::string text = prefs.serialize();
+    if (text == lastSavedPrefs_) { return; }
+    lastSavedPrefs_ = text;
+    savePrefs_(text);
+}
+
 bool GlobePublisher::offers(const std::string& plugin, int pageKind) const {
     switch (viewKindFor(plugin)) {
         case ViewKind::Propagation:
@@ -106,8 +131,17 @@ GlobePublisher::Surface& GlobePublisher::surfaceFor(const std::string& plugin) {
     auto it = surfaces_.find(plugin);
     if (it == surfaces_.end()) {
         it = surfaces_.emplace(plugin, std::make_unique<Surface>()).first;
-        it->second->kind = viewKindFor(plugin);
-        it->second->view.camera = defaultCamera(it->second->kind);
+        Surface& s = *it->second;
+        s.kind = viewKindFor(plugin);
+        s.view.camera = defaultCamera(s.kind);
+        s.initial = s.view.camera;
+        if (loadPrefs_) {
+            // the framework's one setting: this view's entry, or its defaults when it has none (a view that is not listed is off)
+            const slintview3d::ViewPrefs prefs = slintview3d::ViewPrefs::parse(loadPrefs_());
+            fromPrefs(s.view, s.kind, prefs.get(prefsName(s.kind), prefsDefaults(s.kind)));
+            s.touched = false;
+        }
+        s.shown = s.view.camera;
     }
     return *it->second;
 }
@@ -146,6 +180,7 @@ std::vector<PanelRowText> GlobePublisher::panelRows(const std::string& plugin) c
 // ---- once per publish ----
 
 void GlobePublisher::tick(const FoxReceiverState& state) {
+    flushPrefs();
     if (kit_.decoderLines().empty()) { return; }
     const std::int64_t now = unixMs();
     // the receiver the stations are measured from: the plugin's own locator, else the host's position
@@ -177,17 +212,11 @@ void GlobePublisher::finish(Surface& s, const GlobeDrawList& list, const std::st
     const int w = std::max(64, s.w > 0 ? s.w : 640), h = std::max(64, s.h > 0 ? s.h : 480);
     const std::string full = key + "|" + std::to_string(w) + "x" + std::to_string(h);
     if (!s.composed || s.composeKey != full) {
-        std::vector<std::uint8_t> rgba;
-        std::vector<ScreenLabel> labels;
-        if (compositor_.compose(list, w, h, rgba, labels)) {
-            const int next = s.which ^ 1;
-            if (s.buffers[static_cast<std::size_t>(next)].width() != static_cast<unsigned>(w) || s.buffers[static_cast<std::size_t>(next)].height() != static_cast<unsigned>(h)) {
-                s.buffers[static_cast<std::size_t>(next)] = slint::SharedPixelBuffer<slint::Rgba8Pixel>(static_cast<unsigned>(w), static_cast<unsigned>(h));
-            }
-            slint::Rgba8Pixel* px = s.buffers[static_cast<std::size_t>(next)].begin();
-            const std::size_t count = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
-            for (std::size_t i = 0; i < count && i * 4u + 3u < rgba.size(); ++i) { px[i] = {rgba[4 * i], rgba[4 * i + 1], rgba[4 * i + 2], rgba[4 * i + 3]}; }
-            s.which = next;
+        std::vector<scene3d::Label3D> labels;
+        scene3d::Rgba* px = s.surface.begin(w, h);
+        if (compositor_.paint(list, px, s.surface.width(), s.surface.height(), labels)) {
+            s.image = s.surface.image();
+            s.surface.flip();
             s.labels = std::move(labels);
             s.composed = true;
             s.composeKey = full;
@@ -196,11 +225,11 @@ void GlobePublisher::finish(Surface& s, const GlobeDrawList& list, const std::st
         }
     }
     s.shown = list.camera;
-    if (s.composed) { m.picture = slint::Image(s.buffers[static_cast<std::size_t>(s.which)]); m.have = true; }
-    std::vector<::GlobeLabelModel> labels;
-    for (const ScreenLabel& l : s.labels) {
-        ::GlobeLabelModel lm{};
-        lm.x = l.x; lm.y = l.y; lm.text = ss(l.text); lm.color = colour(l.argb);
+    if (s.composed) { m.picture = s.image; m.have = true; }
+    std::vector<::Scene3DLabel> labels;
+    for (const scene3d::Label3D& l : s.labels) {
+        ::Scene3DLabel lm{};
+        lm.x = l.x; lm.y = l.y; lm.text = ss(l.text); lm.color = labelColour(l.rgba); lm.align = l.align; lm.kind = l.kind;
         labels.push_back(lm);
         sig += l.text + std::to_string(static_cast<int>(l.x * 1000)) + "," + std::to_string(static_cast<int>(l.y * 1000)) + ";";
     }
@@ -212,7 +241,7 @@ void GlobePublisher::finish(Surface& s, const GlobeDrawList& list, const std::st
 // ---- the model of a page ----
 
 void GlobePublisher::fill(const std::string& plugin, int pageKind, const FoxReceiverState& state, ::GlobeModel& m, std::string& sig) {
-    m.labels = model(std::vector<::GlobeLabelModel>{});
+    m.labels = model(std::vector<::Scene3DLabel>{});
     m.controls = model(std::vector<::GlobeControl>{});
     m.readouts = strings({});
     m.chips = model(std::vector<::GlobeChipModel>{});
@@ -236,6 +265,23 @@ void GlobePublisher::fill(const std::string& plugin, int pageKind, const FoxRece
         case ViewKind::Satellites: fillSatellites(s, plugin, state, m, sig); break;
         default: break;
     }
+    // the camera, in the well's terms (ui/globe_views.slint): the host's numbers, pushed again when cam-seq moves
+    const bool orbits = s.kind == ViewKind::SolarSystem;
+    m.cam_az = static_cast<float>(s.shown.centreLonDeg);
+    m.cam_el = static_cast<float>(s.shown.centreLatDeg);
+    m.cam_zoom = static_cast<float>(s.shown.zoom);
+    m.cam_seq = s.camSeq;
+    m.default_az = static_cast<float>(s.initial.centreLonDeg);
+    m.default_el = static_cast<float>(s.initial.centreLatDeg);
+    m.default_zoom = static_cast<float>(s.initial.zoom);
+    m.min_el = orbits ? 5.0f : -85.0f;
+    m.max_el = 85.0f;
+    m.min_zoom = static_cast<float>(kZoomMin);
+    m.max_zoom = static_cast<float>(kZoomMax);
+    // a globe turns with the pointer: the sphere is about 0.42 of the shorter side in radius at zoom 1 (globe_compositor.hpp)
+    const double well = static_cast<double>(std::min(s.w > 0 ? s.w : 480, s.h > 0 ? s.h : 480));
+    m.deg_per_pixel = orbits ? 0.45f : static_cast<float>((180.0 / kPi) / (0.42 * well * std::max(0.1, s.shown.zoom)));
+    sig += "C" + std::to_string(s.camSeq) + "," + num(m.deg_per_pixel, 3);
     // the whole column's words ride the signature: a changed control, readout or chip sets the page again
     std::string cs;
     for (int i = 0; i < static_cast<int>(m.controls->row_count()); ++i) {
@@ -261,6 +307,7 @@ void GlobePublisher::fillPropagation(Surface& s, const FoxReceiverState& st, ::G
     const SunPosition sun = sunPosition(jd);
     const std::uint64_t bake = earthBakeKey(&sun, s.view.greyline, 1024, 512);
     if (s.earth.empty() || s.earth.key != bake) { bakeEarth(s.earth, land(), &sun, s.view.greyline); }
+    s.initial = initialCamera(ViewKind::Propagation, scene.homeKnown, scene.home);
     GlobeDrawList list = drawPropagation(scene, s.view, s.earth);
     if (scene.homeKnown && scene.paths.empty()) { list.emptyNote = "The plugin's panel shows no target locator and no beacon on air in this band yet: no path to draw."; }
     std::string key = "P" + std::to_string(bake) + "b" + std::to_string(bandSel) + "g" + (s.view.greyline ? "1" : "0");
@@ -274,7 +321,7 @@ void GlobePublisher::fillPropagation(Surface& s, const FoxReceiverState& st, ::G
     for (std::size_t i = 1; i < sizeof(kPropBands) / sizeof(kPropBands[0]); ++i) { bandOpts.push_back(bandName(kPropBands[i])); }
     c.push_back(segs(kBand, T("BAND"), bandOpts, bandSel, T("Shows the beacons on air on this band only")));
     c.push_back(checkbox(kGreyline, T("GREYLINE"), s.view.greyline, T("Marks the band of twilight along the day / night edge, where HF often travels furthest")));
-    c.push_back(readout(T("HOME"), scene.homeKnown ? F("%s (%s)", latLonText(scene.home).c_str(), T(scene.homeSource.c_str()).c_str()) : T("not set")));
+    c.push_back(readout(T("HOME POSITION"), scene.homeKnown ? F("%s (%s)", latLonText(scene.home).c_str(), T(scene.homeSource.c_str()).c_str()) : T("not set")));
     c.push_back(readout(T("SUN OVER"), latLonText(LatLon{sun.subLatDeg, sun.subLonDeg})));
     m.controls = model(std::move(c));
     std::vector<::GlobeChipModel> chips;
@@ -310,6 +357,7 @@ void GlobePublisher::fillFt8(Surface& s, const FoxReceiverState& st, ::GlobeMode
     const SunPosition sun = sunPosition(julianDay(now / 1000));
     const std::uint64_t bake = earthBakeKey(&sun, false, 1024, 512);
     if (s.earth.empty() || s.earth.key != bake) { bakeEarth(s.earth, land(), &sun, false); }
+    s.initial = initialCamera(ViewKind::Ft8, rxKnown, rx);
     const GlobeDrawList list = drawFt8(spots, rxKnown, rx, s.view, s.earth);
     std::string key = "F" + std::to_string(bake) + "b" + std::to_string(bandSel) + "w" + std::to_string(winSel) + "n" + std::to_string(spots.size());
     if (!spots.empty()) { key += std::to_string(spots.front().atMs) + "," + std::to_string(spots.back().atMs); }
@@ -357,6 +405,7 @@ void GlobePublisher::fillGoes(Surface& s, const FoxReceiverState& st, ::GlobeMod
         if (s.earth.empty() || s.earth.key != earthBakeKey(nullptr, false, 1024, 512)) { bakeEarth(s.earth, land(), nullptr, false); }
         surface = &s.earth;
     }
+    s.initial = GlobeCamera{lon, 0.0, 1.0};
     GlobeDrawList list = drawGoes(s.view, lon, rxKnown, rx, *surface);
     if (!have) { list.emptyNote = "Waiting for the first image..."; }
     std::string key = "G" + std::to_string(sat) + (have ? "r" + std::to_string(s.goesRevision) : std::string("n")) + (rxKnown ? latLonText(rx) : "-");
@@ -386,6 +435,7 @@ void GlobePublisher::fillSolar(Surface& s, const FoxReceiverState&, ::GlobeModel
     const double todayJd = julianDay(unixMs() / 1000);
     const double jd = dateOfOffset(todayJd, s.view.dayOffset);
     const OrbitScene scene = buildOrbitScene(jd, s.view.logScale, s.view.showMoon);
+    s.initial = GlobeCamera{20.0, 55.0, 1.0};
     const GlobeDrawList list = drawOrbits(scene, s.view);
     std::string key = "S" + dateText(jd) + (s.view.logScale ? "L" : "N") + (s.view.showMoon ? "m" : "-") + num(s.view.spinDeg, 1) + "," + num(s.view.tiltDeg, 1) + "," + num(list.camera.zoom, 2);
     finish(s, list, key, m, sig);
@@ -454,6 +504,7 @@ void GlobePublisher::fillSatellites(Surface& s, const std::string& plugin, const
     const SunPosition sun = sunPosition(julianDay(now / 1000));
     const std::uint64_t bake = earthBakeKey(&sun, false, 1024, 512);
     if (s.earth.empty() || s.earth.key != bake) { bakeEarth(s.earth, land(), &sun, false); }
+    s.initial = initialCamera(ViewKind::Satellites, rxKnown, rx);
     const GlobeDrawList list = drawSatellites(in, s.view, s.earth);
     std::string key = "T" + std::to_string(bake) + selected + (s.view.footprints ? "f" : "-") + (s.view.groundTracks ? "t" : "-") + (rxKnown ? latLonText(rx) : "-");
     for (const SatIn& sat : in.sats) { key += sat.id + num(sat.at.lat, 2) + "," + num(sat.at.lon, 2) + ";"; }
@@ -497,23 +548,26 @@ void GlobePublisher::gesture(int page, const std::function<void(Surface&)>& f) {
 void GlobePublisher::wire(::MainWindow& ui, std::function<std::string(int)> pluginOfPage) {
     pluginOfPage_ = std::move(pluginOfPage);
     auto& ev = ui.global<::GlobeEvents>();
-    ev.on_view_chosen([this](int p, bool on) { gesture(p, [on](Surface& s) { s.view.globeOn = on; }); });
+    ev.on_view_chosen([this](int p, bool on) { gesture(p, [this, on](Surface& s) { s.view.globeOn = on; changed(s); }); });
     ev.on_segment_chosen([this](int p, int id, int idx) {
-        gesture(p, [id, idx](Surface& s) {
+        gesture(p, [this, id, idx](Surface& s) {
             switch (s.kind) {
                 case ViewKind::Propagation: if (id == kBand) { s.view.bandId = idx; } break;
                 case ViewKind::Ft8:
                     if (id == kFt8Band) { s.view.bandId = idx; }
                     else if (id == kFt8Window && idx >= 0 && idx < 3) { s.view.windowMinutes = kWindows[idx]; }
                     break;
-                case ViewKind::Goes: if (id == kGoesSat) { s.view.goesSatellite = std::clamp(idx, 0, kGoesSatelliteCount - 1); s.view.cameraSet = false; } break;
+                case ViewKind::Goes:
+                    if (id == kGoesSat) { s.view.goesSatellite = std::clamp(idx, 0, kGoesSatelliteCount - 1); s.view.cameraSet = false; ++s.camSeq; }
+                    break;
                 case ViewKind::SolarSystem: if (id == kScale) { s.view.logScale = idx == 0; } break;
                 default: break;
             }
+            changed(s);
         });
     });
     ev.on_toggled([this](int p, int id, bool on) {
-        gesture(p, [id, on](Surface& s) {
+        gesture(p, [this, id, on](Surface& s) {
             switch (s.kind) {
                 case ViewKind::Propagation: if (id == kGreyline) { s.view.greyline = on; } break;
                 case ViewKind::SolarSystem: if (id == kMoon) { s.view.showMoon = on; } break;
@@ -523,6 +577,7 @@ void GlobePublisher::wire(::MainWindow& ui, std::function<std::string(int)> plug
                     break;
                 default: break;
             }
+            changed(s);
         });
     });
     ev.on_slid([this](int p, int id, float v) {
@@ -538,47 +593,38 @@ void GlobePublisher::wire(::MainWindow& ui, std::function<std::string(int)> plug
     ev.on_chip_pressed([this](int p, int idx) {
         gesture(p, [this, idx](Surface& s) {
             if (s.kind == ViewKind::Satellites && idx >= 0 && idx < static_cast<int>(s.chipIds.size())) {
-                satelliteSelected_ = s.chipIds[static_cast<std::size_t>(idx)];
                 MapPage* pg = findMapPage(kit_.mapPages(), "Satellites");
-                if (pg != nullptr) { pg->selectedId = satelliteSelected_; }
+                if (pg != nullptr) { pg->selectedId = s.chipIds[static_cast<std::size_t>(idx)]; }
             }
         });
     });
-    ev.on_dragged([this](int p, float dx, float dy) {
-        gesture(p, [dx, dy](Surface& s) {
-            if (!s.dragging) { s.dragging = true; s.dragBase = s.shown; s.spinBase = s.view.spinDeg; s.tiltBase = s.view.tiltDeg; }
-            const double well = static_cast<double>(std::min(s.w, s.h) > 0 ? std::min(s.w, s.h) : 480);
+    // the well's own move of the camera (a drag, the wheel, a key): the host takes its numbers
+    ev.on_camera_moved([this](int p, float az, float el, float zoom) {
+        gesture(p, [this, az, el, zoom](Surface& s) {
+            const double z = std::clamp(static_cast<double>(zoom), kZoomMin, kZoomMax);
             if (s.kind == ViewKind::SolarSystem) {
-                s.view.spinDeg = std::fmod(s.spinBase - dx * 0.4 + 720.0, 360.0);
-                s.view.tiltDeg = std::clamp(s.tiltBase + dy * 0.3, 5.0, 85.0);
-                s.view.camera.zoom = s.shown.zoom;
+                s.view.spinDeg = std::fmod(static_cast<double>(az) + 720.0, 360.0);
+                s.view.tiltDeg = std::clamp(static_cast<double>(el), 5.0, 85.0);
+                s.view.camera.zoom = z;
             } else {
-                GlobeCamera cam = s.dragBase;
-                dragCamera(cam, dx, dy, well);
-                s.view.camera = cam;
+                s.view.camera = GlobeCamera{normalizeLon(az), std::clamp(static_cast<double>(el), -85.0, 85.0), z};
             }
             s.view.cameraSet = true;
-        });
-    });
-    ev.on_drag_ended([this](int p) { gesture(p, [](Surface& s) { s.dragging = false; }); });
-    ev.on_wheeled([this](int p, float notches) {
-        gesture(p, [notches](Surface& s) {
-            GlobeCamera cam = s.view.cameraSet ? s.view.camera : s.shown;
-            zoomCamera(cam, notches);
-            if (s.kind == ViewKind::SolarSystem) { s.view.camera.zoom = cam.zoom; } else { s.view.camera = cam; }
-            s.view.cameraSet = true;
+            changed(s);
         });
     });
     ev.on_reset([this](int p) {
-        gesture(p, [](Surface& s) {
+        gesture(p, [this](Surface& s) {
             s.view.cameraSet = false;
             s.view.camera = defaultCamera(s.kind);
             s.view.spinDeg = 20.0;
             s.view.tiltDeg = 55.0;
+            ++s.camSeq;
+            changed(s);
         });
     });
-    ev.on_resized([this](int p, float w, float h) {
-        gesture(p, [w, h](Surface& s) { s.w = std::max(64, static_cast<int>(w)); s.h = std::max(64, static_cast<int>(h)); });
+    ev.on_resized([this](int p, int w, int h) {
+        gesture(p, [w, h](Surface& s) { s.w = std::max(64, w); s.h = std::max(64, h); });
     });
 }
 
@@ -589,9 +635,12 @@ bool GlobePublisher::takeCommand(const std::string& plugin, const std::string& l
     if (iequals(label, "ROTATE LEFT")) { s.view.spinDeg = std::fmod(s.view.spinDeg - 10.0 + 360.0, 360.0); }
     else if (iequals(label, "ROTATE RIGHT")) { s.view.spinDeg = std::fmod(s.view.spinDeg + 10.0, 360.0); }
     else if (iequals(label, "TILT")) { s.view.tiltDeg = s.view.tiltDeg + 10.0 > 85.0 ? 10.0 : s.view.tiltDeg + 10.0; }
-    else if (iequals(label, "ZOOM IN")) { GlobeCamera c = s.view.camera; zoomCamera(c, 1.0); s.view.camera.zoom = c.zoom; s.view.cameraSet = true; }
-    else if (iequals(label, "ZOOM OUT")) { GlobeCamera c = s.view.camera; zoomCamera(c, -1.0); s.view.camera.zoom = c.zoom; s.view.cameraSet = true; }
+    else if (iequals(label, "ZOOM IN")) { GlobeCamera c = s.view.camera; zoomCamera(c, 1.0); s.view.camera.zoom = c.zoom; }
+    else if (iequals(label, "ZOOM OUT")) { GlobeCamera c = s.view.camera; zoomCamera(c, -1.0); s.view.camera.zoom = c.zoom; }
     else { return false; }
+    s.view.cameraSet = true;
+    ++s.camSeq;
+    changed(s);
     return true;
 }
 
