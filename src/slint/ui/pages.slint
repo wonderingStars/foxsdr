@@ -28,6 +28,7 @@ import { MapTarget, LegendRow, MapPane } from "map.slint";
 import { StoreModel, StorePage } from "extend_bank.slint";
 import { PatchPresetsModel, PatchPresetsPage } from "patch_page.slint";
 import { TransmitPageModel, TransmitPage } from "transmit_page.slint";
+import { SurveyPanelPage } from "scene3d_views.slint";   // the 3D views of two plugin pages (docs 6.64)
 
 export { PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow }
@@ -249,6 +250,7 @@ export struct DetailsModel {
 export struct PageTab {
     id: string,
     kind: int,
+    view3d: int,              // the page has a 3D view: 0 none, 1 the Survey Engine's surface, 2 the Radiosondes' track (docs 6.64)
     title: string,
     chip: string,
     chip-tone: ChipTone,
@@ -492,7 +494,10 @@ export component PageBody inherits Rectangle {
             pic-w: root.page.pic-w; pic-h: root.page.pic-h; save-enabled: root.page.save-enabled; save-note: root.page.save-note;
             pressed(x, y) => { root.picture-pressed(root.index, x, y); } save-clicked => { root.picture-save(root.index); } }
         // 3 panel
-        if root.page.kind == 3 : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+        if root.page.kind == 3 && root.page.view3d != 1 : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+            row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } column-resized(c, w) => { root.column-resized(root.index, c, w); } }
+        // 3 panel, the Survey Engine's: the same table behind a VIEW toggle, or the occupancy surface (scene3d_views.slint)
+        if root.page.kind == 3 && root.page.view3d == 1 : SurveyPanelPage { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; widths: root.page.widths; empty-text: root.page.empty-text;
             row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } column-resized(c, w) => { root.column-resized(root.index, c, w); } }
         // 4 instrument: the face, then its memory beneath when the plugin feeds rows
         if root.page.kind == 4 : VerticalLayout { spacing: 0px; vertical-stretch: 1;

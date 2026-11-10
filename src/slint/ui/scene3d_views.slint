@@ -11,8 +11,12 @@
 import { Theme } from "theme.slint";
 import { SegGroup, SegKey, Caption, Key as KeyButton } from "keys.slint";   // (aliased: the `Key` of a key-pressed handler is the key-name namespace)
 import { SliderGroup } from "sliders.slint";
+import { TableRow, Table } from "table.slint";
 import { Scene3DWell, Scene3DCameraBar, Scene3DRampKey, Scene3DLabel } from "scene3d.slint";
 export { Scene3DLabel }
+
+// One row of the CHANNEL RANK list: the Survey Engine panel's own cells for a channel, quoted.
+export struct SurveyRankRow { rank: string, freq: string, seen: string, band: string }
 
 export global View3D {
     // ---- the receiver's waterfall as a surface ----
@@ -66,6 +70,19 @@ export global View3D {
     callback tunnel-depth-moved(float);
     callback tunnel-colour-selected(int);
     callback tunnel-reset-view();
+
+    // ---- the Survey Engine page's 3D SURFACE (the plugin's panel page, VIEW TABLE / 3D SURFACE) ----
+    in-out property <bool> survey-on: false;              // the surface is chosen (the table is the default)
+    in property <image> survey-picture;
+    in property <[Scene3DLabel]> survey-labels;
+    in property <[SurveyRankRow]> survey-rank;            // CHANNEL RANK: the busiest six
+    in-out property <float> survey-azimuth: -52;
+    in-out property <float> survey-elevation: 36;
+    in-out property <float> survey-zoom: 1;
+    in-out property <int> survey-w;
+    in-out property <int> survey-h;
+    callback survey-view-selected(bool);
+    callback survey-reset-view();
 }
 
 // VIEW: the 2D screen / the 3D one. `label-3d` is the page's own word (3D SURFACE, 3D AIRSPACE, 3D TUNNEL, 3D TRACK); the 2D label is the page's own too (2D, PPI, VECTOR, TABLE, MAP).
@@ -298,4 +315,68 @@ export component Tunnel3DWell inherits Rectangle {
         reset-view => { View3D.tunnel-reset-view(); }
     }
     Text { x: parent.width - self.preferred-width - 8px; y: 6px; text: root.caption; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.fg-soft; }
+}
+
+// The Survey Engine's panel page with a VIEW toggle: the plugin's own table (the default) or the occupancy surface with the CHANNEL RANK list beside it. The table's callbacks pass through unchanged.
+export component SurveyPanelPage inherits Rectangle {
+    in property <[string]> columns;
+    in property <[TableRow]> rows;
+    in property <[length]> widths;
+    in property <string> empty-text;
+    callback row-pressed(int);
+    callback clicked(int);
+    callback column-resized(int, length);
+    VerticalLayout {
+        spacing: 0px;
+        if !View3D.survey-on : HorizontalLayout { height: 36px; padding-left: 10px; alignment: start;
+            VerticalLayout { alignment: center;
+                Scene3DViewToggleInline { three-d: false; label-2d: @tr("TABLE"); label-3d: @tr("3D SURFACE"); selected(on) => { View3D.survey-view-selected(on); } } }
+        }
+        if View3D.survey-on : Scene3DCameraBar {
+            elevation <=> View3D.survey-elevation;
+            azimuth <=> View3D.survey-azimuth;
+            reset-clicked => { View3D.survey-azimuth = -52; View3D.survey-elevation = 36; View3D.survey-zoom = 1; View3D.survey-reset-view(); }
+            VerticalLayout { alignment: center;
+                Scene3DViewToggleInline { three-d: true; label-2d: @tr("TABLE"); label-3d: @tr("3D SURFACE"); selected(on) => { View3D.survey-view-selected(on); } } }
+        }
+        if !View3D.survey-on : Table { vertical-stretch: 1; columns: root.columns; rows: root.rows; column-widths: root.widths; empty-text: root.empty-text;
+            row-pressed(r) => { root.row-pressed(r); } clicked(r) => { root.clicked(r); } column-resized(c, w) => { root.column-resized(c, w); } }
+        if View3D.survey-on : HorizontalLayout {
+            vertical-stretch: 1; spacing: 0px;
+            Rectangle {
+                horizontal-stretch: 1;
+                well := Scene3DWell {
+                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    picture: View3D.survey-picture;
+                    labels: View3D.survey-labels;
+                    empty-text: root.rows.length == 0 ? root.empty-text : "";
+                    label: @tr("Survey");
+                    default-azimuth: -52; default-elevation: 36;
+                    azimuth <=> View3D.survey-azimuth;
+                    elevation <=> View3D.survey-elevation;
+                    zoom <=> View3D.survey-zoom;
+                    reset-view => { View3D.survey-reset-view(); }
+                }
+                init => { View3D.survey-w = well.pixel-w; View3D.survey-h = well.pixel-h; }
+                changed width => { View3D.survey-w = well.pixel-w; }
+                changed height => { View3D.survey-h = well.pixel-h; }
+            }
+            Rectangle {
+                width: 250px;
+                background: Theme.wf-key-bg;
+                Rectangle { x: 0px; width: Theme.hairline; height: parent.height; background: Theme.line; }
+                VerticalLayout {
+                    padding: 10px; spacing: 6px; alignment: start;
+                    Caption { label: @tr("CHANNEL RANK"); font-size: Theme.font-tiny; }
+                    for r in View3D.survey-rank : HorizontalLayout { spacing: 8px;
+                        Text { text: r.rank; width: 16px; font-family: Theme.font-mono; font-size: Theme.font-small; font-weight: Theme.weight-semibold; color: Theme.accent-soft; }
+                        VerticalLayout { spacing: 0px;
+                            Text { text: r.freq; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.fg; overflow: elide; }
+                            Text { text: r.seen; font-family: Theme.font-ui; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

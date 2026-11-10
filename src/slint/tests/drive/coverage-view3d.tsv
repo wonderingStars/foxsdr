@@ -32,3 +32,13 @@
 3049	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
 3050	ASSERTED	tunnel-3d.txt	press "Tunnel"; key left, +; state view3d.tunnel.azimuth, zoom
 3059	ASSERTED	tunnel-3d.txt	state cfg.view3d contains tunnel:on=1 and tunnel:on=0 after the way back
+3060	ASSERTED	survey-3d.txt	click "TABLE"; state view3d.survey.on 1 -> 0, cfg.view3d contains survey:on=0
+3061	ASSERTED	survey-3d.txt	click "3D SURFACE"; state view3d.survey.on 0 -> 1, cfg.view3d contains survey:on=1
+3062	ASSERTED	survey-3d.txt	state view3d.survey.renders, channels, triangles, pixels, labels, first (the real plugin row)
+3063	ASSERTED	survey-3d.txt	slider "ELEVATION" 0.5; state view3d.survey.elevation 44..49
+3064	ASSERTED	survey-3d.txt	slider "AZIMUTH" 0.75; state view3d.survey.azimuth 85..95
+3065	ASSERTED	survey-3d.txt	click "RESET VIEW"; state view3d.survey.elevation 36, azimuth -52
+3066	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3067	ASSERTED	survey-3d.txt	press "Survey"; key left, +, 0; state view3d.survey.azimuth, zoom
+3068	ASSERTED	survey-3d.txt	state view3d.survey.ranked >= 3 (the rank numbers placed; the list quotes the same rows)
+3077	ASSERTED	survey-3d.txt	state cfg.view3d contains survey:on=1 and survey:on=0 after the way back

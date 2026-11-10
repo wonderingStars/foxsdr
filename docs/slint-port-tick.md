@@ -2979,6 +2979,31 @@ The 3D view is an ADDED view toggle everywhere; the 2D screen keeps everything i
 | 3058 | COLOUR BY Symbol | key (segment) | DEFERRED | needs symbol decisions; COLOUR BY Level takes its place, true to the samples |
 | 3059 | The view and the camera are remembered | setting | PRESENT | view3d, name tunnel: on, azimuth, elevation, zoom, TIME DEPTH, COLOUR BY |
 
+### The Survey Engine page's 3D SURFACE (THREED2.md section 4, the plugin's panel page, VIEW TABLE / 3D SURFACE)
+
+The plugin publishes one row per channel (frequency, width, guess, peak, over floor, seen as "dwells seen / dwells made", band), sorted by activity, and NO HISTORY BY HOUR: the surface is therefore frequency by OCCUPANCY (the Seen share) by level, each channel a ridge as wide as its width, as high as its peak over the floor and as long as its Seen share. The design's hour axis and the controls that need the plugin's configuration or history are not drawn (rows 3071-3076, DEFERRED).
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3060 | VIEW TABLE | key (segment) | PRESENT | Scene3DViewToggleInline on the page, above the plugin's own table (the default, untouched) |
+| 3061 | VIEW 3D SURFACE | key (segment) | PRESENT | -> View3D.survey-view-selected(true); the table is replaced by the surface and the CHANNEL RANK list; saved in the interface half (view3d) |
+| 3062 | The surface | picture | PRESENT | the panel's rows read back through their headings (view3d_publish surveyFeedNow, survey3d_logic channelOfCells; a status row is skipped) and drawn as lit ridges in an axis box by the CPU renderer, only while the page is on screen with the surface chosen |
+| 3063 | ELEVATION | slider | PRESENT | Scene3DCameraBar, 4 to 89 degrees, 36 by default |
+| 3064 | AZIMUTH | slider | PRESENT | -180 to 180 degrees, -52 by default |
+| 3065 | RESET VIEW | key | PRESENT | the camera back to its defaults |
+| 3066 | Drag to rotate, wheel to zoom, double-click to reset | gesture | PRESENT | Scene3DWell's TouchArea |
+| 3067 | The well's keys | keys | PRESENT | after a press: arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3068 | CHANNEL RANK | readout | PRESENT | the busiest six channels, the panel's own cells quoted: rank, frequency ("144.8500 MHz") and Seen ("4/13"); the page's own words, never a bare percentage |
+| 3069 | Axis ticks and captions | overlay/marker | PRESENT | five ticks per axis (frequency in MHz across the channels' span, Seen 0 to 100, level in dB from the floor to the strongest peak) and the captions "MHz", "Seen (%)", "dB" |
+| 3070 | Rank numbers on the ridges | overlay/marker | PRESENT | the rank at the far end of each of the busiest six ridges, as high as the ridge |
+| 3071 | TIME WINDOW 6 h / 24 h / 7 d | select | DEFERRED | needs a time-binned history of the survey; the plugin publishes only its current table |
+| 3072 | PERCENTILE FLOOR | slider | DEFERRED | needs the survey's per-bin samples to re-derive a noise floor; the host only has each channel's peak and its level over the plugin's own floor |
+| 3073 | MERGE WIDTH | readout | DEFERRED | the plugin's merge radius is a key of its survey.cfg, which the host does not read; no panel row carries it |
+| 3074 | SWEEP BAND | readout | DEFERRED | the configured sweep band is in survey.cfg too; the status lines that say it do not reach the host's decoder output in a bounded run (docs 6.50) |
+| 3075 | EXPORT CSV | key | DEFERRED | the plugin already writes survey.csv beside survey.cfg; a host-side export of the table needs a save dialog |
+| 3076 | Hour (UTC) axis | overlay/marker | DEFERRED | needs the occupancy by hour of day; the surface's depth is the Seen share instead |
+| 3077 | The view and the camera are remembered | setting | PRESENT | view3d, name survey: on, azimuth, elevation, zoom |
+
 # Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM, TOOLS and EXTEND banks of phase 3)
 
 | Status | Rows |

@@ -4,6 +4,7 @@
 #include "view3d_publish.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -13,6 +14,7 @@
 #include "core/i18n.hpp"
 #include "scene3d_slint.hpp"
 #include "radar3d_compositor.hpp"
+#include "survey3d_compositor.hpp"
 #include "tunnel3d_compositor.hpp"
 #include "view3d_prefs.hpp"
 #include "waterfall3d_logic.hpp"
@@ -65,6 +67,17 @@ ViewState tunnelDefaults() {
     return s;
 }
 
+ViewState surveyDefaults() {
+    ViewState s;
+    setCamera(s, survey3dDefaultCamera());
+    return s;
+}
+
+std::string lowerOf(std::string s) {
+    for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+    return s;
+}
+
 slint::Color colourOf(std::uint32_t rgba) {
     return slint::Color::from_argb_uint8(static_cast<std::uint8_t>(rgba & 0xffu), static_cast<std::uint8_t>(rgba >> 24), static_cast<std::uint8_t>(rgba >> 16), static_cast<std::uint8_t>(rgba >> 8));
 }
@@ -75,6 +88,7 @@ struct View3DPublisher::Impl {
     MainWindow& ui;
     foxsdr::slinthost::HostDuties& duties;
     bool bounded;
+    foxsdr::slintkit::PluginKit& kit;
     ViewPrefs prefs;
     std::string savedText;
 
@@ -118,7 +132,104 @@ struct View3DPublisher::Impl {
     int tunnelW = 0, tunnelH = 0;
     std::string depthText;
 
-    Impl(MainWindow& u, foxsdr::slinthost::HostDuties& d, bool b) : ui(u), duties(d), bounded(b) {}
+    Impl(MainWindow& u, foxsdr::slinthost::HostDuties& d, bool b, foxsdr::slintkit::PluginKit& k) : ui(u), duties(d), bounded(b), kit(k) {}
+
+    // ---- the Survey Engine's 3D surface ----
+    ViewState survey = surveyDefaults();
+    scene3d::SceneSurface surveySurface;
+    scene3d::Scene surveyScene;
+    std::string surveySig;
+    std::size_t surveyRenders = 0, surveyChannels = 0, surveyTriangles = 0, surveyPixels = 0, surveyRanked = 0, surveyLabels = 0;
+    double surveyLastMs = 0.0, surveyWorstMs = 0.0;
+    int surveyW = 0, surveyH = 0;
+    std::string surveyFirstRow;
+
+    // The page is on screen: a page of the kit with this 3D kind, docked and current, or torn off into a window.
+    bool pageShown(int view3dKind) const {
+        const auto model = ui.get_pages();
+        if (!model) { return false; }
+        for (std::size_t i = 0; i < model->row_count(); ++i) {
+            const auto t = model->row_data(i);
+            if (!t || t->view3d != view3dKind) { continue; }
+            if (t->torn || ui.get_view_index() == 3 + static_cast<int>(i)) { return true; }
+        }
+        return false;
+    }
+
+    // The Survey Engine's panel from the kit, as channels. A panel whose title says "survey"; rows whose frequency does not read (the status rows) are skipped.
+    SurveyFeed surveyFeedNow() const {
+        SurveyFeed f;
+        for (const cascade::core::HostPanel& p : kit.panels()) {
+            if (lowerOf(p.title + " " + p.plugin).find("survey") == std::string::npos) { continue; }
+            f.shown = true;
+            for (const CascadePanelRow& r : p.rows) {
+                std::vector<std::string> cells;
+                for (std::size_t c = 0; c < p.headings.size() && c < CASCADE_PANEL_MAX_COLUMNS; ++c) { cells.emplace_back(r.cells[c]); }
+                SurveyChannel ch;
+                if (channelOfCells(p.headings, cells, ch)) { f.channels.push_back(std::move(ch)); }
+                else if (f.status.empty() && !cells.empty()) { f.status = cells[0]; }
+            }
+            break;
+        }
+        return f;
+    }
+
+    void surveyPublish(std::int64_t nowMs) {
+        const auto& g = ui.global<View3D>();
+        const float az = g.get_survey_azimuth(), el = g.get_survey_elevation(), zm = g.get_survey_zoom();
+        if (az != survey.azimuth || el != survey.elevation || zm != survey.zoom) {
+            scene3d::Camera c = cameraOf(survey);
+            c.azimuthDeg = az;
+            c.elevationDeg = el;
+            c.zoom = zm;
+            setCamera(survey, scene3d::clamped(c));
+            markSave(nowMs);
+        }
+        if (wfDirtySave && nowMs >= wfSaveAtMs) { wfDirtySave = false; save(); }
+        if (!survey.on || !pageShown(1)) { return; }
+        const SurveyFeed feed = surveyFeedNow();
+        int w = g.get_survey_w(), h = g.get_survey_h();
+        if (w < 64 || h < 64) { w = 640; h = 360; }
+        surveyW = std::min(w, kMaxW);
+        surveyH = std::min(h, kMaxH);
+        char b[96];
+        std::string sig = std::to_string(surveyW) + "x" + std::to_string(surveyH) + "|" + numSig(survey.azimuth) + numSig(survey.elevation) + numSig(survey.zoom) + "|";
+        for (const SurveyChannel& c : feed.channels) {
+            std::snprintf(b, sizeof(b), "%.0f,%.0f,%.1f,%.1f,%.1f;", c.freqHz, c.widthHz, c.peakDb, c.overDb, c.seenPct);
+            sig += b;
+        }
+        if (sig == surveySig) { return; }
+        surveySig = sig;
+        SurveyInput in;
+        in.channels = feed.channels;
+        in.camera = cameraOf(survey);
+        in.captionSeen = cascade::i18n::tr("Seen (%)");
+        const double t0 = nowMsReal();
+        scene3d::Rgba* mem = surveySurface.begin(surveyW, surveyH);
+        const SurveyResult res = paintSurvey3d(surveyScene, mem, surveyW, surveyH, in);
+        g.set_survey_picture(surveySurface.image());
+        surveySurface.flip();
+        surveyLastMs = nowMsReal() - t0;
+        surveyWorstMs = std::max(surveyWorstMs, surveyLastMs);
+        ++surveyRenders;
+        surveyChannels = feed.channels.size();
+        surveyTriangles = res.triangles;
+        surveyPixels = surveyScene.pixelsWritten();
+        surveyRanked = res.ranked;
+        surveyLabels = res.labels.size();
+        surveyFirstRow = feed.channels.empty() ? std::string() : feed.channels.front().raw;
+        std::vector<Scene3DLabel> labels;
+        labels.reserve(res.labels.size());
+        for (const scene3d::Label3D& l : res.labels) { labels.push_back({l.x, l.y, ss(l.text), colourOf(l.rgba), l.align, l.kind}); }
+        g.set_survey_labels(std::make_shared<slint::VectorModel<Scene3DLabel>>(std::move(labels)));
+        // CHANNEL RANK: the busiest six, the panel's own cells
+        std::vector<SurveyRankRow> rank;
+        for (std::size_t i = 0; i < feed.channels.size() && i < 6; ++i) {
+            const SurveyChannel& c = feed.channels[i];
+            rank.push_back({ss(std::to_string(i + 1)), ss(c.freqText), ss(c.seenText), ss(c.band)});
+        }
+        g.set_survey_rank(std::make_shared<slint::VectorModel<SurveyRankRow>>(std::move(rank)));
+    }
 
     void load() {
         prefs = ViewPrefs::parse(duties.interfaceHalf().view3d);
@@ -131,6 +242,7 @@ struct View3DPublisher::Impl {
         tunnel = prefs.get(kViewTunnel, tunnelDefaults());
         tunnel.opt[0] = std::clamp(tunnel.opt[0], 0, 15);
         tunnel.opt[1] = std::clamp(tunnel.opt[1], 0, 1);
+        survey = prefs.get(kViewSurvey, surveyDefaults());
     }
 
     void apply() {
@@ -157,6 +269,11 @@ struct View3DPublisher::Impl {
         g.set_tunnel_colour(tunnel.opt[1]);
         g.set_tunnel_depth_text(ss(kTunnelDepthLabels(tunnel.opt[0])));
         tunnelSig.clear();
+        g.set_survey_on(survey.on);
+        g.set_survey_azimuth(survey.azimuth);
+        g.set_survey_elevation(survey.elevation);
+        g.set_survey_zoom(survey.zoom);
+        surveySig.clear();
     }
 
     // THE SAVE: the text of every view, when it changed, into the interface half (a bounded run keeps it in the host's copy, which `state cfg.view3d` reads, and writes no file:
@@ -165,6 +282,7 @@ struct View3DPublisher::Impl {
         prefs.set(kViewWaterfall, wf);
         prefs.set(kViewRadar, radar);
         prefs.set(kViewTunnel, tunnel);
+        prefs.set(kViewSurvey, survey);
         const std::string text = prefs.serialize();
         if (text == savedText) { return; }
         savedText = text;
@@ -376,7 +494,7 @@ struct View3DPublisher::Impl {
     }
 };
 
-View3DPublisher::View3DPublisher(MainWindow& ui, foxsdr::slinthost::HostDuties& duties, bool bounded) : impl_(std::make_unique<Impl>(ui, duties, bounded)), ui_(ui) {
+View3DPublisher::View3DPublisher(MainWindow& ui, foxsdr::slinthost::HostDuties& duties, bool bounded, foxsdr::slintkit::PluginKit& kit) : impl_(std::make_unique<Impl>(ui, duties, bounded, kit)), ui_(ui) {
     impl_->load();
 }
 View3DPublisher::~View3DPublisher() = default;
@@ -405,6 +523,22 @@ void View3DPublisher::wire() {
         i.wf.opt[1] = std::clamp(s, 0, 1);
         ui_.global<View3D>().set_wf_shading(i.wf.opt[1]);
         i.wfSig.clear();
+        i.save();
+    });
+    g.on_survey_view_selected([this](bool on) {
+        Impl& i = *impl_;
+        i.survey.on = on;
+        ui_.global<View3D>().set_survey_on(on);
+        i.surveySig.clear();
+        i.save();
+    });
+    g.on_survey_reset_view([this] {
+        Impl& i = *impl_;
+        const ViewState d = surveyDefaults();
+        i.survey.azimuth = d.azimuth;
+        i.survey.elevation = d.elevation;
+        i.survey.zoom = d.zoom;
+        i.surveySig.clear();
         i.save();
     });
     g.on_tunnel_view_selected([this](bool on) {
@@ -481,8 +615,9 @@ void View3DPublisher::pushWaterfallFrame(std::int64_t tMs, const float* bins, st
 void View3DPublisher::publish(const Wf3dContext& wf) { impl_->waterfall(wf); }
 void View3DPublisher::publishRadar(const Radar3dFeed& feed, std::int64_t nowMs) { impl_->radarPublish(feed, nowMs); }
 void View3DPublisher::publishTunnel(const TunnelFeed& feed, std::int64_t nowMs) { impl_->tunnelPublish(feed, nowMs); }
+void View3DPublisher::publishSurvey(std::int64_t nowMs) { impl_->surveyPublish(nowMs); }
 
-int View3DPublisher::detaches() const { return impl_->surface.detaches() + impl_->radarSurface.detaches() + impl_->tunnelSurface.detaches(); }
+int View3DPublisher::detaches() const { return impl_->surface.detaches() + impl_->radarSurface.detaches() + impl_->tunnelSurface.detaches() + impl_->surveySurface.detaches(); }
 
 std::string View3DPublisher::readState(const std::string& what, std::string& out) const {
     const Impl& m = *impl_;
@@ -504,6 +639,19 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "wf.data") { out = m.hasData ? "1" : "0"; return std::string(); }
     if (what == "wf.w") { out = std::to_string(m.renderW); return std::string(); }
     if (what == "wf.h") { out = std::to_string(m.renderH); return std::string(); }
+    if (what == "survey.on") { out = m.survey.on ? "1" : "0"; return std::string(); }
+    if (what == "survey.azimuth") { return num(m.survey.azimuth); }
+    if (what == "survey.elevation") { return num(m.survey.elevation); }
+    if (what == "survey.zoom") { return num(m.survey.zoom); }
+    if (what == "survey.renders") { out = std::to_string(m.surveyRenders); return std::string(); }
+    if (what == "survey.channels") { out = std::to_string(m.surveyChannels); return std::string(); }
+    if (what == "survey.triangles") { out = std::to_string(m.surveyTriangles); return std::string(); }
+    if (what == "survey.pixels") { out = std::to_string(m.surveyPixels); return std::string(); }
+    if (what == "survey.ranked") { out = std::to_string(m.surveyRanked); return std::string(); }
+    if (what == "survey.labels") { out = std::to_string(m.surveyLabels); return std::string(); }
+    if (what == "survey.first") { out = m.surveyFirstRow; return std::string(); }
+    if (what == "survey.w") { out = std::to_string(m.surveyW); return std::string(); }
+    if (what == "survey.h") { out = std::to_string(m.surveyH); return std::string(); }
     if (what == "tunnel.on") { out = m.tunnel.on ? "1" : "0"; return std::string(); }
     if (what == "tunnel.azimuth") { return num(m.tunnel.azimuth); }
     if (what == "tunnel.elevation") { return num(m.tunnel.elevation); }
@@ -531,14 +679,14 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "radar.labels") { out = std::to_string(m.radarLabels); return std::string(); }
     if (what == "radar.w") { out = std::to_string(m.radarW); return std::string(); }
     if (what == "radar.h") { out = std::to_string(m.radarH); return std::string(); }
-    return "view3d.wf.on|azimuth|elevation|zoom|depth|shading|renders|triangles|pixels|labels|span|realrows|rows|data|w|h, or view3d.radar.on|azimuth|tilt|zoom|scale|renders|aircraft|onground|trails|pixels|labels|tags|w|h, or view3d.tunnel.on|azimuth|elevation|zoom|depth|depthms|colour|renders|points|pixels|labels|w|h, not view3d." + what;
+    return "view3d.wf.on|azimuth|elevation|zoom|depth|shading|renders|triangles|pixels|labels|span|realrows|rows|data|w|h, or view3d.radar.on|azimuth|tilt|zoom|scale|renders|aircraft|onground|trails|pixels|labels|tags|w|h, or view3d.tunnel.on|azimuth|elevation|zoom|depth|depthms|colour|renders|points|pixels|labels|w|h, or view3d.survey.on|azimuth|elevation|zoom|renders|channels|triangles|pixels|ranked|labels|first|w|h, not view3d." + what;
 }
 
 std::string View3DPublisher::summaryLine() const {
     const Impl& m = *impl_;
-    char b[900];
-    std::snprintf(b, sizeof(b), "view3d: waterfall on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu triangles, %zu rows kept, %zu saves, %d buffer detaches; radar on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu aircraft (%zu without altitude), %zu trail segments, %d buffer detaches; tunnel on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu points, %d buffer detaches", m.wf.on ? 1 : 0, m.renders, m.lastRenderMs,
-                  m.worstRenderMs, m.lastTriangles, m.history.size(), m.saves, m.surface.detaches(), m.radar.on ? 1 : 0, m.radarRenders, m.radarLastMs, m.radarWorstMs, m.radarAircraft, m.radarOnGround, m.radarTrailSegs, m.radarSurface.detaches(), m.tunnel.on ? 1 : 0, m.tunnelRenders, m.tunnelLastMs, m.tunnelWorstMs, m.tunnelPoints, m.tunnelSurface.detaches());
+    char b[1200];
+    std::snprintf(b, sizeof(b), "view3d: waterfall on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu triangles, %zu rows kept, %zu saves, %d buffer detaches; radar on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu aircraft (%zu without altitude), %zu trail segments, %d buffer detaches; tunnel on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu points, %d buffer detaches; survey on=%d, %zu renders, last %.2f ms, worst %.2f ms, %zu channels, %zu triangles, %d buffer detaches", m.wf.on ? 1 : 0, m.renders, m.lastRenderMs,
+                  m.worstRenderMs, m.lastTriangles, m.history.size(), m.saves, m.surface.detaches(), m.radar.on ? 1 : 0, m.radarRenders, m.radarLastMs, m.radarWorstMs, m.radarAircraft, m.radarOnGround, m.radarTrailSegs, m.radarSurface.detaches(), m.tunnel.on ? 1 : 0, m.tunnelRenders, m.tunnelLastMs, m.tunnelWorstMs, m.tunnelPoints, m.tunnelSurface.detaches(), m.survey.on ? 1 : 0, m.surveyRenders, m.surveyLastMs, m.surveyWorstMs, m.surveyChannels, m.surveyTriangles, m.surveySurface.detaches());
     return b;
 }
 

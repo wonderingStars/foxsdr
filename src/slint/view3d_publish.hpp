@@ -18,7 +18,9 @@
 
 #include "host_duties.hpp"
 #include "main.h"
+#include "plugin_kit.hpp"
 #include "radar3d_logic.hpp"
+#include "survey3d_logic.hpp"
 #include "tunnel3d_logic.hpp"
 #include "waterfall3d_compositor.hpp"
 
@@ -37,7 +39,7 @@ struct Wf3dContext {
 
 class View3DPublisher {
 public:
-    View3DPublisher(MainWindow& ui, foxsdr::slinthost::HostDuties& duties, bool bounded);
+    View3DPublisher(MainWindow& ui, foxsdr::slinthost::HostDuties& duties, bool bounded, foxsdr::slintkit::PluginKit& kit);
     ~View3DPublisher();
     View3DPublisher(const View3DPublisher&) = delete;
     View3DPublisher& operator=(const View3DPublisher&) = delete;
@@ -53,6 +55,8 @@ public:
     // The demod scope's 3D TUNNEL (the DEMOD SCOPE window on a baseband input): the newest I/Q samples (ScopePublisher::tunnel3dFeed). Repainted only while the window is open on I/Q or VECTOR
     // with the tunnel chosen and something moved.
     void publishTunnel(const TunnelFeed& feed, std::int64_t nowMs);
+    // The Survey Engine page's 3D SURFACE: reads the plugin's panel from the kit itself. Repainted only while that page is on screen (docked and current, or torn off) with the surface chosen.
+    void publishSurvey(std::int64_t nowMs);
 
     // The drive script's read-back (`state view3d.<what>`): fills `out` and returns "" or says what it does not know.
     std::string readState(const std::string& what, std::string& out) const;

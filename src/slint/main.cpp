@@ -444,7 +444,7 @@ int main(int argc, char** argv) {
     scopeBank.wire();
     if (const char* e = std::getenv("FOXSDR_SLINT_DEMOD_SCOPE"); e != nullptr && bounded.bounded()) { scopeBank.openDemodForCapture(e[0] >= '0' && e[0] <= '4' ? e[0] - '0' : -1); }
     // THE 3D VIEWS (view3d_publish.hpp, docs 6.64): the receiver's waterfall as a surface; the views of the other pages are published here too as they land
-    foxsdr::slintview3d::View3DPublisher view3dBank(*ui, duties, bounded.bounded());
+    foxsdr::slintview3d::View3DPublisher view3dBank(*ui, duties, bounded.bounded(), kit);
     view3dBank.wire();
     foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
     toolsHooks.demodScopeClicked = [&] { scopeBank.toggleDemod(); };
@@ -1388,6 +1388,7 @@ int main(int argc, char** argv) {
             view3dBank.publish(wf3d);
             view3dBank.publishRadar(scopeBank.radar3dFeed(), wf3d.nowMs);   // the radar scope's 3D airspace: its feed is empty unless the SCOPE tab is up with a position
             view3dBank.publishTunnel(scopeBank.tunnel3dFeed(), wf3d.nowMs); // the demod scope's 3D tunnel: its feed is empty unless the window is open on a baseband input
+            view3dBank.publishSurvey(wf3d.nowMs);                           // the Survey Engine page's 3D surface: read from the kit's panel, only while that page is on screen
         }
         toolsBank.setScopeFacts(scopeBank.demodSignal(), scopeBank.demodOpen(), scopeBank.demodLive(), scopeBank.radarOn());
         toolsBank.publish(state, systemBank.models().serial.gps);

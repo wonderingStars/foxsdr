@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2037 | 470 | 82 | 1485 | 0 |
+| 2055 | 479 | 82 | 1494 | 0 |
 
-Of the 1182 rows that are controls (the 855 readout-like rows left out): 470 asserted, 82 driven without a read-back, 630 not drivable.
+Of the 1195 rows that are controls (the 860 readout-like rows left out): 479 asserted, 82 driven without a read-back, 634 not drivable.
 
-NOT DRIVABLE by reason: readout 855, other 210, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 64, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 860, other 211, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 67, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,7 +199,7 @@ NOT DRIVABLE by reason: readout 855, other 210, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
-| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 59 | 31 | 0 | 28 | 22 | 0 |
+| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 77 | 40 | 0 | 37 | 27 | 0 |
 
 ## Every row
 
@@ -3134,4 +3134,22 @@ NOT DRIVABLE by reason: readout 855, other 210, needs a signal (no fixture) 120,
 | 3057 | LOCK lamp | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
 | 3058 | COLOUR BY Symbol | key (segment) | NOT DRIVABLE | - | deferred: needs symbol decisions; COLOUR BY Level takes its place, true to the samples |
 | 3059 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | tunnel-3d.txt | state cfg.view3d contains tunnel:on=1 and tunnel:on=0 after the way back |
+| 3060 | VIEW TABLE | key (segment) | DRIVEN+ASSERTED | survey-3d.txt | click "TABLE"; state view3d.survey.on 1 -> 0, cfg.view3d contains survey:on=0 |
+| 3061 | VIEW 3D SURFACE | key (segment) | DRIVEN+ASSERTED | survey-3d.txt | click "3D SURFACE"; state view3d.survey.on 0 -> 1, cfg.view3d contains survey:on=1 |
+| 3062 | The surface | picture | DRIVEN+ASSERTED | survey-3d.txt | state view3d.survey.renders, channels, triangles, pixels, labels, first (the real plugin row) |
+| 3063 | ELEVATION | slider | DRIVEN+ASSERTED | survey-3d.txt | slider "ELEVATION" 0.5; state view3d.survey.elevation 44..49 |
+| 3064 | AZIMUTH | slider | DRIVEN+ASSERTED | survey-3d.txt | slider "AZIMUTH" 0.75; state view3d.survey.azimuth 85..95 |
+| 3065 | RESET VIEW | key | DRIVEN+ASSERTED | survey-3d.txt | click "RESET VIEW"; state view3d.survey.elevation 36, azimuth -52 |
+| 3066 | Drag to rotate, wheel to zoom, double-click to reset | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3067 | The well's keys | keys | DRIVEN+ASSERTED | survey-3d.txt | press "Survey"; key left, +, 0; state view3d.survey.azimuth, zoom |
+| 3068 | CHANNEL RANK | readout | DRIVEN+ASSERTED | survey-3d.txt | state view3d.survey.ranked >= 3 (the rank numbers placed; the list quotes the same rows) |
+| 3069 | Axis ticks and captions | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3070 | Rank numbers on the ridges | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3071 | TIME WINDOW 6 h / 24 h / 7 d | select | NOT DRIVABLE | - | deferred: needs a time-binned history of the survey; the plugin publishes only its current table |
+| 3072 | PERCENTILE FLOOR | slider | NOT DRIVABLE | - | deferred: needs the survey's per-bin samples to re-derive a noise floor; the host only has each channel's peak and its level over the plugin's own floor |
+| 3073 | MERGE WIDTH | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3074 | SWEEP BAND | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3075 | EXPORT CSV | key | NOT DRIVABLE | - | deferred: the plugin already writes survey.csv beside survey.cfg; a host-side export of the table needs a save dialog |
+| 3076 | Hour (UTC) axis | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3077 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | survey-3d.txt | state cfg.view3d contains survey:on=1 and survey:on=0 after the way back |
 

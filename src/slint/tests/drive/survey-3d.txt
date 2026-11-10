@@ -1,0 +1,60 @@
+#! frames=900 bank=1 plugins=survey-engine open=module:survey-engine-0.1.1-abi3-win-x64.dll iqfile=tones3.wav centre=145000000 mode=RAW bandwidth=480000 FOXSDR_SURVEY_DIR=C:\Users\steve\foxsdr-wt\engine-stage4\src\slint\tests\drive\fixtures\survey-engine-profile size=1600x1600
+# survey-3d (docs 6.64, specs/THREED2.md section 4): the Survey Engine page's VIEW TABLE / 3D SURFACE. The three carriers of tones3.wav (144.85, 145.05 and 145.20 MHz) are surveyed with 2 s dwells (the
+# fixture profile's survey.cfg; the FOXSDR_SURVEY_DIR path is absolute, as the fixture-survey-engine script's, and is the engine-stage4 checkout's - edit it on another checkout). The panel's rows are the channels the plugin
+# publishes (frequency, width, guess, peak, over floor, seen, band); the page's table is the default, "3D SURFACE" shows them as ridges over frequency and occupancy with the CHANNEL RANK list beside the picture.
+# state view3d.survey.* reads back what the renderer drew from the panel's cells: channels read, triangles, pixels written, rank numbers placed, the first row as the panel said it.
+120 state kit.plugins == 1
+state deviceName contains tones3
++1 click "START"
++60 state decodersRunning >= 1
++2 state kit.panels >= 1
++300 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "Survey Engine"
++3 state pages contains "Survey Engine"
+# the table is the default; nothing has been drawn
+state view3d.survey.on == 0
+state view3d.survey.renders == 0
++1 click "3D SURFACE"
++12 state view3d.survey.on == 1
+state view3d.survey.renders >= 1
+state cfg.view3d contains "survey:on=1"
+state view3d.survey.channels >= 3
+state view3d.survey.triangles > 1000
+state view3d.survey.pixels > 5000
+state view3d.survey.ranked >= 3
+state view3d.survey.labels >= 18
+state view3d.survey.w > 300
+state view3d.survey.h > 150
+state view3d.survey.first contains "MHz"
+shot "survey-3d.png"
+# the camera: ELEVATION and AZIMUTH sliders, RESET VIEW, and the well's keys once pressed
+state view3d.survey.elevation > 35
+state view3d.survey.elevation < 37
++1 slider "ELEVATION" 0.5
++6 state view3d.survey.elevation > 44
+state view3d.survey.elevation < 49
++1 slider "AZIMUTH" 0.75
++6 state view3d.survey.azimuth > 85
+state view3d.survey.azimuth < 95
++1 click "RESET VIEW"
++6 state view3d.survey.elevation > 35.9
+state view3d.survey.elevation < 36.1
+state view3d.survey.azimuth > -52.1
+state view3d.survey.azimuth < -51.9
++1 press "Survey"
++12 key left
++3 state view3d.survey.azimuth > -48
+state view3d.survey.azimuth < -46
++1 key +
++3 state view3d.survey.zoom > 1.1
+state view3d.survey.zoom < 1.14
++1 key 0
++4 state view3d.survey.zoom > 0.99
+state view3d.survey.zoom < 1.01
+shot "survey-3d-keys.png"
+# back to the plugin's own table
++1 click "TABLE"
++8 state view3d.survey.on == 0
+state cfg.view3d contains "survey:on=0"
+shot "survey-3d-back.png"
