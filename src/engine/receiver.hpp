@@ -360,6 +360,38 @@ struct Receiver {
     double squelchAutoBwHz_ = 0.0;
     int squelchAutoMode_ = -1;
     bool squelchAutoOnAirband_ = false;     // the rule was last applied to the monitor's squelch
+    // ---- recorders ----
+    // THE DISK IS NOT TOUCHED ON THE PASS (0.99.63 / 0.99.65; gui/record_start.hpp, core/record_finish.hpp). Recorder::start's create_directories
+    // and fopen waited for the disk on the control thread - whose key the transmitter judges by its heartbeat - and a slow one froze the pass.
+    // A start is PREPARED here (the cheap half: a refusal that needs no disk is reported at once), its file opened by RecordStart's worker and
+    // ARMED when it arrives (pollRecordStarts); a stop detaches the file without touching the disk and RecordFinisher closes it on a worker.
+    // A Record pressed while the previous take's file is still being closed is remembered (iqStartQueued_ / audioStartQueued_) and starts the
+    // moment that file is closed, so a Stop followed by a Record in one breath still gives the take that was asked for and an open never
+    // lands beside a file still being finalised (a file name has a one-second resolution).
+    cascade::gui::RecordStart iqStart_;
+    cascade::gui::RecordStart audioStart_;
+    bool iqStartQueued_ = false;
+    bool audioStartQueued_ = false;
+    std::shared_ptr<cascade::core::RecordFinisher::Ticket> iqFinish_;
+    std::shared_ptr<cascade::core::RecordFinisher::Ticket> audioFinish_;
+    // --- Recorder state (P6) --------------------------------------------------
+    // Two independent Recorder instances so IQ and audio takes can run
+    // simultaneously (each records ONE kind at a time by its contract). The
+    // pipeline holds non-owning pointers to them only while a take is live;
+    // stop*Recording clears the pointer before stopping the recorder.
+    cascade::core::Recorder iqRecorder_;
+    cascade::core::Recorder audioRecorder_;
+    std::string recordError_;  // red text in the Recorder section; "" = none
+    // Why a take ended when nothing went WRONG (the user changed source):
+    // muted text in the Recorder section and its own field on the web page,
+    // so it never lights FAIL there. Cleared with recordError_ by a Record.
+    std::string recordNotice_;
+    double iqRecordStartS_ = 0.0;     // ImGui::GetTime() at take start, for
+    double audioRecordStartS_ = 0.0;  // the elapsed-wall-time readout
+    // Input rate the live IQ take's WAV header was written for. A rate-follow
+    // change (source switch, Soapy rate change) finalizes the take: a WAV
+    // whose header rate disagrees with its samples would replay detuned.
+    double iqRecordRateHz_ = 0.0;
 };  // struct Receiver
 
 }  // namespace cascade::engine

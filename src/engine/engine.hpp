@@ -843,19 +843,12 @@ private:
     // that could drift from the one on screen. Returns whether a take started;
     // the error, when it did not, is in recordError_ exactly as before.
     bool startAudioRecording();
-    // THE DISK IS NOT TOUCHED ON THE PASS (0.99.63 / 0.99.65; gui/record_start.hpp, core/record_finish.hpp). Recorder::start's create_directories
-    // and fopen waited for the disk on the control thread - whose key the transmitter judges by its heartbeat - and a slow one froze the pass.
-    // A start is PREPARED here (the cheap half: a refusal that needs no disk is reported at once), its file opened by RecordStart's worker and
-    // ARMED when it arrives (pollRecordStarts); a stop detaches the file without touching the disk and RecordFinisher closes it on a worker.
-    // A Record pressed while the previous take's file is still being closed is remembered (iqStartQueued_ / audioStartQueued_) and starts the
-    // moment that file is closed, so a Stop followed by a Record in one breath still gives the take that was asked for and an open never
-    // lands beside a file still being finalised (a file name has a one-second resolution).
-    cascade::gui::RecordStart iqStart_;
-    cascade::gui::RecordStart audioStart_;
-    bool iqStartQueued_ = false;
-    bool audioStartQueued_ = false;
-    std::shared_ptr<cascade::core::RecordFinisher::Ticket> iqFinish_;
-    std::shared_ptr<cascade::core::RecordFinisher::Ticket> audioFinish_;
+    cascade::gui::RecordStart& iqStart_ = receivers_[0]->iqStart_;
+    cascade::gui::RecordStart& audioStart_ = receivers_[0]->audioStart_;
+    bool& iqStartQueued_ = receivers_[0]->iqStartQueued_;
+    bool& audioStartQueued_ = receivers_[0]->audioStartQueued_;
+    std::shared_ptr<cascade::core::RecordFinisher::Ticket>& iqFinish_ = receivers_[0]->iqFinish_;
+    std::shared_ptr<cascade::core::RecordFinisher::Ticket>& audioFinish_ = receivers_[0]->audioFinish_;
     void pollRecordStarts(double nowS);
     void finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, double nowS);
     void finishTake(bool iq);
@@ -1695,25 +1688,14 @@ private:
     std::string& deviceAntenna_ = receivers_[0]->deviceAntenna_;
     std::string iqOpenPath_;  // last successfully opened IQ file (persisted;
 
-    // --- Recorder state (P6) --------------------------------------------------
-    // Two independent Recorder instances so IQ and audio takes can run
-    // simultaneously (each records ONE kind at a time by its contract). The
-    // pipeline holds non-owning pointers to them only while a take is live;
-    // stop*Recording clears the pointer before stopping the recorder.
-    cascade::core::Recorder iqRecorder_;
-    cascade::core::Recorder audioRecorder_;
+    cascade::core::Recorder& iqRecorder_ = receivers_[0]->iqRecorder_;
+    cascade::core::Recorder& audioRecorder_ = receivers_[0]->audioRecorder_;
     std::string recordDir_;    // %USERPROFILE%/Documents/SDR-recordings
-    std::string recordError_;  // red text in the Recorder section; "" = none
-    // Why a take ended when nothing went WRONG (the user changed source):
-    // muted text in the Recorder section and its own field on the web page,
-    // so it never lights FAIL there. Cleared with recordError_ by a Record.
-    std::string recordNotice_;
-    double iqRecordStartS_ = 0.0;     // ImGui::GetTime() at take start, for
-    double audioRecordStartS_ = 0.0;  // the elapsed-wall-time readout
-    // Input rate the live IQ take's WAV header was written for. A rate-follow
-    // change (source switch, Soapy rate change) finalizes the take: a WAV
-    // whose header rate disagrees with its samples would replay detuned.
-    double iqRecordRateHz_ = 0.0;
+    std::string& recordError_ = receivers_[0]->recordError_;
+    std::string& recordNotice_ = receivers_[0]->recordNotice_;
+    double& iqRecordStartS_ = receivers_[0]->iqRecordStartS_;
+    double& audioRecordStartS_ = receivers_[0]->audioRecordStartS_;
+    double& iqRecordRateHz_ = receivers_[0]->iqRecordRateHz_;
 
     // --- Bookmarks state (P6) --------------------------------------------------
     // Loaded at startup from FreqManager::defaultPath() and saved after every
