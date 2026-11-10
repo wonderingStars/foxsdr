@@ -43,6 +43,7 @@
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
 #include "engine/plugin_ui_port.hpp"
+#include "engine/radio_scope.hpp"
 #include "core/receiver_tables.hpp"
 #include "net/status_compose.hpp"
 #include "net/web_audio.hpp"
@@ -503,6 +504,13 @@ struct ApiSession : FoxSession {
     std::array<SaferSlot, kSaferKinds> safer{};
 
     std::atomic<bool> releaseFirst{false};
+
+    // THIS SESSION'S FOCUSED RADIO (multi-radio stage 3; FOXAPI_OP_RADIO_FOCUS): the radio, from 1, that its commands naming no radio, its read_state, its
+    // read_spectrum and its single-radio lists mean. R1 until it says otherwise. Per SESSION, never the engine's: the web remote or CAT cannot be redirected
+    // by a click in the window, and a web user cannot retune the radio the desktop user just selected. focusBump counts the changes: every seq group of the
+    // session's read_state carries it, so a change moves them all (engine/radio_scope.hpp, bumpSeqs).
+    std::atomic<std::uint32_t> focus{1u};
+    std::atomic<std::uint64_t> focusBump{0};
 };
 
 struct Pending {
@@ -517,6 +525,7 @@ struct Pending {
     std::string principal;        // ApiSession::principal of the sender ("local" needs no allocation)
     std::string longText;         // submit_text's text (API 0.3); empty for every other command
     InternalKind internal = InternalKind::None;  // the sender's internal kind (stage 5a): which tier, and whose profile a refusal names
+    std::uint32_t radio = 1u;  // the radio the command is for (a radio-scoped op that passed validate): from 1, or FOXAPI_TARGET_ALL_RADIOS for RUN
 };
 
 // ---------------------------------------------------------------------------
@@ -859,15 +868,24 @@ public:
 
     // ---- reads -------------------------------------------------------------
 
-    int32_t readState(ApiSession* s, FoxReceiverState* out) {
+    // THE SESSION'S FOCUSED RADIO'S state (read_state).
+    int32_t readState(ApiSession* s, FoxReceiverState* out) { return readRadioState(s, 0u, out); }
+
+    // One radio's state (read_radio_state): radio 1..N, or 0 for the session's focused radio. NO_DEVICE for a radio the engine does not have. The seq groups
+    // of the FOCUSED radio carry the session's focus changes (bumpSeqs), so a change of focus moves them all.
+    int32_t readRadioState(ApiSession* s, std::uint32_t radio, FoxReceiverState* out) {
         if (out == nullptr || out->structSize < FOXAPI_MIN_RECEIVER_STATE) { return FOXAPI_BAD_ARGUMENT; }
+        const std::uint32_t focus = s->focus.load(std::memory_order_acquire);
+        if (radio == 0u) { radio = focus; }
+        if (!engine_.receiverLive(radio)) { return FOXAPI_NO_DEVICE; }
         cascade::core::PublishedState p;
-        if (!engine_.receiverSnapshot_->read(p)) { return FOXAPI_BUSY; }
+        if (!engine_.receivers_[radio - 1u]->receiverSnapshot_->read(p)) { return FOXAPI_BUSY; }
         FoxReceiverState st = p.rx;
         st.structSize = sizeof(st);
         st.grants = s->grants;
         if (p.app.txKeyOwner != 0 && p.app.txKeyOwner == s->id) { st.flags |= FOXAPI_RX_TX_KEY_MINE; }
         if (s->releaseFirst.load(std::memory_order_relaxed)) { st.flags |= FOXAPI_RX_TX_LATCH_RELEASE_FIRST; }
+        if (radio == focus) { bumpSeqs(st, s->focusBump.load(std::memory_order_acquire)); }
         return copyOut(st, out, FOXAPI_MIN_RECEIVER_STATE);
     }
 
@@ -878,10 +896,17 @@ public:
         spectrum_.publish(bins, count, centreHz, spanHz, unixMs());
     }
 
-    int32_t readSpectrum(uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
+    // The session's focused radio's spectrum (read_spectrum); radio 1..N or 0 (the focus) for read_radio_spectrum. Only radio 1 has a ring until RADIO_ADD
+    // (stage 4) gives every other slot its own, here, beside this one: NO_DEVICE for a radio the engine does not have.
+    int32_t readSpectrum(ApiSession* s, uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
+        return readRadioSpectrum(s, 0u, since, info, bins, cap);
+    }
+    int32_t readRadioSpectrum(ApiSession* s, std::uint32_t radio, uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
         if (info == nullptr || info->structSize < FOXAPI_MIN_SPECTRUM_INFO || (bins == nullptr && cap != 0)) {
             return FOXAPI_BAD_ARGUMENT;
         }
+        if (radio == 0u) { radio = s->focus.load(std::memory_order_acquire); }
+        if (!engine_.receiverLive(radio) || radio != 1u) { return FOXAPI_NO_DEVICE; }
         FoxSpectrumInfo local{};
         local.structSize = sizeof(local);
         const int32_t r = spectrum_.read(since, local, bins, cap);
@@ -983,7 +1008,16 @@ public:
             if (kind < 0 && s->pending >= kMaxPendingPerSession) {
                 r.status = FOXAPI_BUSY;
             } else {
-                Pending p{c, 0, s->id, s->flags, refused, kind, false, gen, s->principal, {}, s->internal};
+                // THE RADIO THIS COMMAND IS FOR, and that radio's source generation (the guard that drops a command asked of a radio that has gone since is
+                // per radio): validate has refused a target that names no radio, so a scoped command that is not refused names a live one.
+                std::uint64_t cgen = gen;
+                std::uint32_t cradio = 1u;
+                if (refused == FOXAPI_OK && isRadioScopedOp(c.op)) {
+                    const RadioPick pick = pickRadio(c.op, c.target, s->focus.load(), [this](std::uint32_t n) { return engine_.receiverLive(n); });
+                    cradio = pick.radio;
+                    if (pick.radio != FOXAPI_TARGET_ALL_RADIOS && engine_.receiverLive(pick.radio)) { cgen = engine_.receiverSourceGen(pick.radio); }
+                }
+                Pending p{c, 0, s->id, s->flags, refused, kind, false, cgen, s->principal, {}, s->internal, cradio};
                 if (longText != nullptr && refused == FOXAPI_OK) { p.longText = *longText; }
                 if (kind < 0) {
                     r.status = FOXAPI_OK;
@@ -1414,6 +1448,7 @@ private:
             case FOXAPP_OP_STORE_SITE: case FOXAPP_OP_STORE_PICTURES_WANT: case FOXAPP_OP_STORE_CLEAN_OLD:
             case FOXAPP_OP_TELEMETRY_CONSENT: case FOXAPP_OP_SET_CATALOGUE_URL:
                 return FOXAPI_GRANT_ADMIN;
+            case FOXAPI_OP_RADIO_FOCUS:   // a session's own view of the engine: nothing is changed in it (VIEW, always granted)
             case FOXAPI_OP_PROBLEM_REPORT: case FOXAPI_OP_FEATURE_REQUEST: case FOXAPP_OP_NOTE_PANEL:
             case FOXAPP_OP_SET_PATCH_PAGE_OPEN: case FOXAPP_OP_TRACK_INFO_LINE: case FOXAPP_OP_PLUGIN_USE:
                 return FOXAPI_GRANT_VIEW;
@@ -1657,7 +1692,7 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
     if (!finite(c) || !textTerminated(c)) { return FOXAPI_BAD_ARGUMENT; }
     const bool remote = (s.flags & FOXAPI_SESSION_REMOTE) != 0u;
     const bool keyOp = c.op == FOXAPI_OP_TX_PTT || c.op == FOXAPI_OP_TX_LATCH || c.op == FOXAPI_OP_TX_REMOTE_ARM;
-    if (c.op != FOXAPI_OP_SETTING_SET && !keyOp && !cascade::core::cmd::isKnownOp(c.op)) {
+    if (c.op != FOXAPI_OP_SETTING_SET && c.op != FOXAPI_OP_RADIO_FOCUS && !keyOp && !cascade::core::cmd::isKnownOp(c.op)) {
         return FOXAPI_UNSUPPORTED;  // a newer interface's op, or one not implemented: it degrades
     }
     // AN ENGINE-INTERNAL SESSION SPEAKS ITS PROFILE'S OPS AND NO OTHER (stage 5a). An op on the profile needs no ADMIN grant even
@@ -1683,8 +1718,18 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
     // transmitter it may only press and release the PTT, and pressing needs
     // the local operator's standing consent (TX_REMOTE_ARM, below).
     if (remote && grantFor(c.op) == FOXAPI_GRANT_TRANSMIT && c.op != FOXAPI_OP_TX_PTT) { return FOXAPI_DENIED; }
+    // WHICH RADIO (multi-radio stage 3): an op that addresses one radio, sent with a target that names no radio the engine has, is refused NO_DEVICE now, at
+    // the submit; the target ALL_RADIOS is for RUN alone. The sender's focus answers a target of 0.
+    {
+        const RadioPick pick = pickRadio(c.op, c.target, s.focus.load(), [this](std::uint32_t n) { return engine_.receiverLive(n); });
+        if (pick.status != FOXAPI_OK) { return pick.status; }
+    }
     const double v = c.num[0];
     switch (c.op) {
+        case FOXAPI_OP_RADIO_FOCUS:
+            // The radio's number, from 1: a number the engine does not number at all is out of range, one it has no radio at is NO_DEVICE.
+            if (c.ival[0] < 1 || c.ival[0] > static_cast<long long>(kMaxReceivers)) { return FOXAPI_OUT_OF_RANGE; }
+            return engine_.receiverLive(static_cast<std::uint32_t>(c.ival[0])) ? FOXAPI_OK : FOXAPI_NO_DEVICE;
         case FOXAPI_OP_SET_CENTRE:
         case FOXAPI_OP_SET_FREQUENCY:
             return (v > 0.0 && v <= 6.0e9) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
@@ -1817,9 +1862,12 @@ const char* ApiHostImpl::refusalText(const Pending& p) {
             }
             return "this session does not hold the grant for that";
         case FOXAPI_OUT_OF_RANGE: return "a value is outside what the engine accepts";
-        case FOXAPI_BAD_ARGUMENT: return "the command is malformed (NaN, unterminated or empty text)";
+        case FOXAPI_BAD_ARGUMENT:
+            if (p.cmd.target == FOXAPI_TARGET_ALL_RADIOS && isRadioScopedOp(p.cmd.op)) { return "a target of all radios is for RUN alone"; }
+            return "the command is malformed (NaN, unterminated or empty text)";
         case FOXAPI_UNSUPPORTED: return "this engine does not implement that command";
-        case FOXAPI_NO_DEVICE: return "there is no transmitter open";
+        case FOXAPI_NO_DEVICE:
+            return (isRadioScopedOp(p.cmd.op) || p.cmd.op == FOXAPI_OP_RADIO_FOCUS) ? "there is no radio with that number" : "there is no transmitter open";
         default: return "refused";
     }
 }
@@ -1849,9 +1897,44 @@ void ApiHostImpl::apply(const Pending& p) {
     // A radio command asked of a radio that has gone since it was submitted
     // is not applied to the one there now (the local queue's rule,
     // Engine::drainLocalCommands).
-    if (p.sourceGen != engine_.sourceGen_.load() && isDeviceScopedOp(c.op)) {
+    // ...and the same for a radio that is gone altogether (a slot closed since the submit), and per RADIO: the generation is the addressed radio's.
+    const bool scoped = isRadioScopedOp(c.op) && p.radio != FOXAPI_TARGET_ALL_RADIOS;
+    if (scoped && !engine_.receiverLive(p.radio)) {
+        r.status = FOXAPI_NO_DEVICE;
+        copyText(r.message, "there is no radio with that number");
+        finish();
+        return;
+    }
+    if (p.sourceGen != (scoped ? engine_.receiverSourceGen(p.radio) : engine_.sourceGen_.load()) && isDeviceScopedOp(c.op)) {
         r.status = FOXAPI_NO_DEVICE;
         copyText(r.message, "the radio this was sent for has closed since");
+        finish();
+        return;
+    }
+    if (c.op == FOXAPI_OP_RADIO_FOCUS) {
+        // A SESSION'S OP, applied here where the sender is known (like the key ops): its focus is the session's, and it moves nothing else.
+        std::shared_ptr<ApiSession> sess;
+        {
+            std::lock_guard<std::mutex> lk(sessionsMutex_);
+            const auto it = sessions_.find(p.sessionId);
+            if (it != sessions_.end()) { sess = it->second; }
+        }
+        const std::uint32_t radio = c.ival[0] < 1 || c.ival[0] > static_cast<long long>(kMaxReceivers) ? 0u : static_cast<std::uint32_t>(c.ival[0]);
+        if (sess == nullptr) {
+            r.status = FOXAPI_DETACHED;
+            copyText(r.message, "the session closed before this command was applied");
+        } else if (!engine_.receiverLive(radio)) {
+            r.status = FOXAPI_NO_DEVICE;
+            copyText(r.message, "there is no radio with that number");
+        } else if (sess->focus.load() == radio) {
+            r.status = FOXAPI_NO_CHANGE;
+            r.applied[0] = static_cast<double>(radio);
+            copyText(r.message, "that radio is the focus already");
+        } else {
+            sess->focus.store(radio, std::memory_order_release);
+            sess->focusBump.fetch_add(1, std::memory_order_acq_rel);
+            r.applied[0] = static_cast<double>(radio);
+        }
         finish();
         return;
     }
@@ -3277,7 +3360,15 @@ int32_t FOXAPI_CALL apiReadState(FoxSession* s, FoxReceiverState* out) {
 
 int32_t FOXAPI_CALL apiReadSpectrum(FoxSession* s, uint64_t since, FoxSpectrumInfo* info, float* bins,
                                     uint32_t cap) {
-    return onSession(s, [&](ApiSession* x) { return x->host->readSpectrum(since, info, bins, cap); });
+    return onSession(s, [&](ApiSession* x) { return x->host->readSpectrum(x, since, info, bins, cap); });
+}
+
+int32_t FOXAPI_CALL apiReadRadioState(FoxSession* s, uint32_t radio, FoxReceiverState* out) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readRadioState(x, radio, out); });
+}
+
+int32_t FOXAPI_CALL apiReadRadioSpectrum(FoxSession* s, uint32_t radio, uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readRadioSpectrum(x, radio, since, info, bins, cap); });
 }
 
 int32_t FOXAPI_CALL apiSubmit(FoxSession* s, const FoxCommand* c, uint32_t n, FoxSubmitResult* r) {
@@ -3388,6 +3479,9 @@ const FoxEngineApi kApi = {
     apiReadNodeSpectrum,
     apiSubmitText,
     apiGetLocalExtension,
+    // 0.3, multi-radio (stage 3): no capability bit - FOXAPI_HAS is the test.
+    apiReadRadioState,
+    apiReadRadioSpectrum,
 };
 
 }  // namespace

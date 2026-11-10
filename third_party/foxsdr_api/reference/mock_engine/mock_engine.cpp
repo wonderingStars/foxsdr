@@ -356,6 +356,10 @@ struct Session : FoxSession {
     // never to a session, because a session can close and reopen.
     std::string principal;
     std::atomic<bool> detached{false}; // its token was revoked: every call answers DETACHED
+    // THIS SESSION'S FOCUSED RADIO (docs/API.md, "Several radios"): the radio, from 1, that its commands naming no radio and its read_state, read_spectrum
+    // mean; set by FOXAPI_OP_RADIO_FOCUS. focusBump counts the changes and is added to every seq group of the state this session reads.
+    std::atomic<uint32_t> focus{1u};
+    std::atomic<uint64_t> focusBump{0};
 
     std::mutex m;  // guards everything below, down to `safer`
     std::deque<FoxCommandResult> results;
@@ -700,13 +704,56 @@ public:
 
     // ---- reads -------------------------------------------------------------
 
-    int32_t readState(Session* s, FoxReceiverState* out) {
+    // The mock has ONE radio and room for kMaxRadios: radio 2 is a number the engine knows and has nothing at (NO_DEVICE), which is what a client of the
+    // real engine meets for every number past its count.
+    static constexpr uint32_t kMaxRadios = 2;
+    static bool radioLive(uint32_t radio) { return radio == 1u; }
+
+    // The ops that address ONE radio, of the ops this engine implements (the real engine's list is larger: docs/API.md, "Several radios").
+    static bool scopedOp(uint32_t op) {
+        switch (op) {
+        case FOXAPI_OP_RUN: case FOXAPI_OP_SET_CENTRE: case FOXAPI_OP_SET_FREQUENCY:
+        case FOXAPI_OP_SET_VFO_OFFSET: case FOXAPI_OP_STEP_TUNE: case FOXAPI_OP_SET_MODE:
+        case FOXAPI_OP_SET_BANDWIDTH: case FOXAPI_OP_SET_SQUELCH: case FOXAPI_OP_SET_VOLUME:
+        case FOXAPI_OP_SET_MUTED: case FOXAPI_OP_SET_DEEMPHASIS: case FOXAPI_OP_SET_STEREO:
+        case FOXAPI_OP_SET_NR: case FOXAPI_OP_SET_NOTCH: case FOXAPI_OP_SET_AUTO_NOTCH:
+        case FOXAPI_OP_SET_DISPLAY_RANGE: case FOXAPI_OP_SELECT_SOURCE: case FOXAPI_OP_SET_SAMPLE_RATE:
+        case FOXAPI_OP_SET_GAIN: case FOXAPI_OP_SET_DEVICE_AGC: case FOXAPI_OP_BOOKMARK_TUNE:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    int32_t readState(Session* s, FoxReceiverState* out) { return readRadioState(s, 0u, out); }
+
+    int32_t readRadioState(Session* s, uint32_t radio, FoxReceiverState* out) {
         if (out == nullptr || out->structSize < FOXAPI_MIN_RECEIVER_STATE) {
             return FOXAPI_BAD_ARGUMENT;
+        }
+        const uint32_t focus = s->focus.load();
+        if (radio == 0u) {
+            radio = focus;
+        }
+        if (!radioLive(radio)) {
+            return FOXAPI_NO_DEVICE;
         }
         Published p;
         if (!state_.load(p)) {
             return FOXAPI_BUSY;
+        }
+        if (radio == focus) {
+            const uint64_t by = s->focusBump.load();
+            p.st.seq += by;
+            p.st.tuneSeq += by;
+            p.st.modeSeq += by;
+            p.st.deviceSeq += by;
+            p.st.audioSeq += by;
+            p.st.displaySeq += by;
+            p.st.txSeq += by;
+            p.st.listSeq += by;
+            p.st.rdsSeq += by;
+            p.st.scanSeq += by;
         }
         p.st.grants = s->grants;
         if (p.keyOwner != 0 && p.keyOwner == s->id) {
@@ -718,10 +765,20 @@ public:
         return copyOut(p.st, out, FOXAPI_MIN_RECEIVER_STATE);
     }
 
-    int32_t readSpectrum(uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
+    int32_t readSpectrum(Session* s, uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
+        return readRadioSpectrum(s, 0u, since, info, bins, cap);
+    }
+
+    int32_t readRadioSpectrum(Session* s, uint32_t radio, uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
         if (info == nullptr || info->structSize < FOXAPI_MIN_SPECTRUM_INFO ||
             (bins == nullptr && cap != 0)) {
             return FOXAPI_BAD_ARGUMENT;
+        }
+        if (radio == 0u) {
+            radio = s->focus.load();
+        }
+        if (!radioLive(radio)) {
+            return FOXAPI_NO_DEVICE;
         }
         FoxSpectrumInfo local{};
         local.structSize = sizeof(local);
@@ -1253,6 +1310,8 @@ private:
             return FOXAPI_GRANT_TRANSMIT;
         case FOXAPI_OP_SETTING_SET:
             return FOXAPI_GRANT_ADMIN;
+        case FOXAPI_OP_RADIO_FOCUS:
+            return FOXAPI_GRANT_VIEW;
         default:
             return FOXAPI_GRANT_SETTINGS;
         }
@@ -1277,7 +1336,7 @@ private:
         case FOXAPI_OP_TX_PTT: case FOXAPI_OP_TX_LATCH: case FOXAPI_OP_TX_SET_MODE:
         case FOXAPI_OP_TX_SET_FREQUENCY: case FOXAPI_OP_TX_SET_POWER: case FOXAPI_OP_SETTING_SET:
         case FOXAPI_OP_TX_REMOTE_ARM: case FOXAPI_OP_BOOKMARK_FAVOURITE:
-        case FOXAPI_OP_BOOKMARK_REMOVE_GROUP:
+        case FOXAPI_OP_BOOKMARK_REMOVE_GROUP: case FOXAPI_OP_RADIO_FOCUS:
             break;
         default:
             // A newer interface's op, or one this engine does not implement:
@@ -1295,8 +1354,23 @@ private:
             c.op != FOXAPI_OP_TX_PTT) {
             return FOXAPI_DENIED;
         }
+        // WHICH RADIO: an op that addresses one radio, with a target that names no radio this engine has, is NO_DEVICE; ALL_RADIOS is for RUN alone.
+        if (scopedOp(c.op)) {
+            if (c.target == FOXAPI_TARGET_ALL_RADIOS) {
+                if (c.op != FOXAPI_OP_RUN) {
+                    return FOXAPI_BAD_ARGUMENT;
+                }
+            } else if (!radioLive(c.target == 0u ? s.focus.load() : c.target)) {
+                return FOXAPI_NO_DEVICE;
+            }
+        }
         const double v = c.num[0];
         switch (c.op) {
+        case FOXAPI_OP_RADIO_FOCUS:
+            if (c.ival[0] < 1 || c.ival[0] > static_cast<long long>(kMaxRadios)) {
+                return FOXAPI_OUT_OF_RANGE;
+            }
+            return radioLive(static_cast<uint32_t>(c.ival[0])) ? FOXAPI_OK : FOXAPI_NO_DEVICE;
         case FOXAPI_OP_SET_CENTRE:
             return (v > 0.0 && v <= kMaxCentreHz) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_FREQUENCY:
@@ -1568,6 +1642,35 @@ private:
                                     ? "the session was detached before this command was applied"
                                     : "the session closed before this command was applied");
             finish();  // nobody reads it; kept for the invariant
+            return;
+        }
+        if (c.op == FOXAPI_OP_RADIO_FOCUS) {
+            // A session's op: its focus is its own, and it moves nothing else.
+            std::shared_ptr<Session> sess;
+            {
+                std::lock_guard<std::mutex> lk(sessionsMutex_);
+                auto it = sessions_.find(p.sessionId);
+                if (it != sessions_.end()) {
+                    sess = it->second;
+                }
+            }
+            const uint32_t radio = static_cast<uint32_t>(c.ival[0]);
+            if (sess == nullptr) {
+                fail(FOXAPI_DETACHED, "the session closed before this command was applied");
+            } else if (!radioLive(radio)) {
+                fail(FOXAPI_NO_DEVICE, "there is no radio with that number");
+            } else if (sess->focus.load() == radio) {
+                fail(FOXAPI_NO_CHANGE, "that radio is the focus already");
+                r.applied[0] = static_cast<double>(radio);
+            } else {
+                sess->focus.store(radio);
+                sess->focusBump.fetch_add(1);
+                r.applied[0] = static_cast<double>(radio);
+            }
+            if (r.status != FOXAPI_OK) {
+                r.flags |= FOXAPI_RESULT_REFUSED;
+            }
+            finish();
             return;
         }
         const double v = c.num[0];
@@ -2252,9 +2355,15 @@ private:
             }
             return "this session does not hold the grant for that";
         case FOXAPI_OUT_OF_RANGE: return "a value is outside what the engine accepts";
-        case FOXAPI_BAD_ARGUMENT: return "the command is malformed (NaN, unterminated or empty text)";
+        case FOXAPI_BAD_ARGUMENT:
+            if (p.cmd.target == FOXAPI_TARGET_ALL_RADIOS && scopedOp(p.cmd.op)) {
+                return "a target of all radios is for RUN alone";
+            }
+            return "the command is malformed (NaN, unterminated or empty text)";
         case FOXAPI_UNSUPPORTED: return "this engine does not implement that command";
-        case FOXAPI_NO_DEVICE: return "there is no transmitter open";
+        case FOXAPI_NO_DEVICE:
+            return (scopedOp(p.cmd.op) || p.cmd.op == FOXAPI_OP_RADIO_FOCUS) ? "there is no radio with that number"
+                                                                              : "there is no transmitter open";
         default: return "refused";
         }
     }
@@ -2744,9 +2853,18 @@ int32_t FOXAPI_CALL apiReadState(FoxSession* s, FoxReceiverState* out) {
     return onSession(s, [&](Session* x) { return x->engine->readState(x, out); });
 }
 
+int32_t FOXAPI_CALL apiReadRadioState(FoxSession* s, uint32_t radio, FoxReceiverState* out) {
+    return onSession(s, [&](Session* x) { return x->engine->readRadioState(x, radio, out); });
+}
+
+int32_t FOXAPI_CALL apiReadRadioSpectrum(FoxSession* s, uint32_t radio, uint64_t since, FoxSpectrumInfo* info,
+                                         float* bins, uint32_t cap) {
+    return onSession(s, [&](Session* x) { return x->engine->readRadioSpectrum(x, radio, since, info, bins, cap); });
+}
+
 int32_t FOXAPI_CALL apiReadSpectrum(FoxSession* s, uint64_t since, FoxSpectrumInfo* info,
                                     float* bins, uint32_t cap) {
-    return onSession(s, [&](Session* x) { return x->engine->readSpectrum(since, info, bins, cap); });
+    return onSession(s, [&](Session* x) { return x->engine->readSpectrum(x, since, info, bins, cap); });
 }
 
 int32_t FOXAPI_CALL apiSubmit(FoxSession* s, const FoxCommand* c, uint32_t n, FoxSubmitResult* r) {
@@ -2826,6 +2944,14 @@ const FoxEngineApi kApi = {
     apiReadImage,
     apiLogin,
     apiLogout,
+    // The 0.3 members this engine does not implement (read_scope, read_node_spectrum, submit_text, get_local_extension): not provided.
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    // 0.3, multi-radio: one radio (and room for two), so radio 2 is NO_DEVICE.
+    apiReadRadioState,
+    apiReadRadioSpectrum,
 };
 
 }  // namespace

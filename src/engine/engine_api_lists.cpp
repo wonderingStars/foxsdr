@@ -169,6 +169,24 @@ void Engine::refreshApiPluginKeys() {
     }
 }
 
+// THE WORD FOR A RADIO'S STATE (fact.radio.<n>.state): lent while the patch page has its radio, opening while its device is being opened, faulted while its
+// pipeline says it has failed, running while it runs, else stopped. (A radio that is not there has no word: its facts are absent.)
+const char* Engine::radioStateWord(std::uint32_t radio) {
+    if (radio != 1u) { return "stopped"; }
+    if (patchMainKeep_.valid) { return "lent"; }
+    if (deviceOpenPending_) { return "opening"; }
+    if (!apiFaultText_.empty()) { return "faulted"; }
+    return pipeline_.running() ? "running" : "stopped";
+}
+
+// The open radio's name for a person: its model, else what the receiver is on instead of a radio.
+std::string Engine::radioLabel() {
+    if (patchMainKeep_.valid) { return patchMainKeep_.label; }
+    if (device_ != nullptr) { return deviceModel_; }
+    if (sourceKind_ == "file") { return "I/Q file"; }
+    return "Signal generator";
+}
+
 std::uint64_t Engine::apiListsFingerprint() {
     Fingerprint f;
     f.value(modeIndex_);
@@ -520,6 +538,15 @@ std::uint64_t Engine::apiListsFingerprint() {
     for (const auto& e : patchRadioError_) {
         f.value(e.first);
         f.text(e.second);
+    }
+    // The device ledger's refusals (fact.patch.refusal.<node>), and the radios (fact.radio.*, multi-radio stage 3): how many there are and each one's state.
+    for (const auto& e : patchLedgerRefusal_) {
+        f.value(e.first);
+        f.text(e.second);
+    }
+    f.value(receiverMask_.load(std::memory_order_acquire));
+    for (std::uint32_t n = 1; n <= kMaxReceivers; ++n) {
+        if (receiverLive(n)) { f.text(radioStateWord(n)); }
     }
     // The I/Q recordings the Radio's device list offers (API 0.3 8.12: PATCH_DEVICES, with each one's rate): by what each
     // names, not their number - a relisting that finds other files must rebuild the list.
@@ -1197,6 +1224,30 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // The receiver's radio as a Radio node would name it (the lent one, else the open one), and the air centre it was
     // last tuned to ("" when it never was): what a new Radio starts on.
     fact("patch.receiverRadio", patchReceiverRadioKey(), true);
+    // A Radio node the device ledger refused (multi-radio stage 2): the words that name who holds its device ("in use by patch radio 3",
+    // "in use by Radio 1"), or that state the limit on open radios. One fact per refused node, by node id; absent for a node that was not refused.
+    for (const auto& [node, why] : patchLedgerRefusal_) { fact("patch.refusal." + std::to_string(node), why, false); }
+    // THE RADIOS (multi-radio stage 3): how many the engine has and the most it can have (a client reads the limit here and never hard-codes it), and for
+    // each radio that exists, keyed by its number from 1: its state (empty is never published - a radio that is not there has no facts - opening, running,
+    // stopped, faulted, lent), the device it holds ("" on the generator or a file: the key a patch Radio node would name), its label, its audio route
+    // (both, left, right, none: only "both" until slots 1 and up carry audio) and the decoder plugins running on it, their module files separated by commas.
+    fact("radio.count", std::to_string(receiverCount()));
+    fact("radio.max", std::to_string(kMaxReceivers));
+    for (std::uint32_t n = 1; n <= kMaxReceivers; ++n) {
+        if (!receiverLive(n)) { continue; }
+        const std::string pre = "radio." + std::to_string(n) + ".";
+        fact(pre + "state", radioStateWord(n));
+        fact(pre + "device", n == 1u ? patchReceiverRadioKey() : std::string());
+        fact(pre + "label", n == 1u ? radioLabel() : std::string());
+        fact(pre + "audio", "both");
+        std::string running;
+        for (const ApiListBlock::Plugin& p : b.plugins) {
+            if (!p.decoder || !p.running) { continue; }
+            if (!running.empty()) { running += ','; }
+            running += p.key;
+        }
+        fact(pre + "plugins", n == 1u ? running : std::string());
+    }
     {
         std::string centre;
         if (const std::optional<double> c = carriedAirCentre()) {

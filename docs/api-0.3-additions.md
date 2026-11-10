@@ -2444,6 +2444,28 @@ One new application op; nothing else of the table moves.
   master's window (0.99.81) called `PluginRunner::imagePress` itself; on this branch the window holds no runner, and the click had no route at all after the
   0.99.84 merge (found by the 0.99.100 merge, which needs it for the fax chart in the Radiofax recorder, master 0.99.98).
 
+### 9.19 Several radios: addressing, and the patch's refusals (multi-radio stages 2 and 3; docs/multi-radio-records/engine-stages-1-3.md)
+
+Everything here is appended; the API stays 0.3 and the plugin ABI stays 3. The specification is third_party/foxsdr_api/reference/docs/API.md 6.18; what this
+engine does, with one live receiver:
+
+* `FOXAPI_OP_RADIO_FOCUS` (0x1201, grant VIEW, `ival[0]`: the radio's number from 1) sets THE SESSION'S focused radio. NO_DEVICE: no radio with that number (every
+  number but 1 until a second radio exists); OUT_OF_RANGE: not a number the engine numbers (0, negative, past `fact.radio.max`); NO_CHANGE: the focus already. It is
+  a session's op: the API host applies it, `Engine::applyCommand` does not (`isKnownOp` is false for it, like SETTING_SET and the key ops).
+* `FoxCommand::target` is read for the ops `engine/radio_scope.hpp` lists (47 of them: the receiver's tuning, mode, audio and display, the source and the device
+  controls, the recorders, a bookmark's tune, the scanner). 0: the session's focus; a number: that radio; `FOXAPI_TARGET_ALL_RADIOS` for RUN alone. A number that
+  names no radio is refused NO_DEVICE at the submit ("there is no radio with that number") and again where the command is applied (the local queue's commands too:
+  `Engine::applyCommand` holds them to the same rule, with radio 1 as their focus). Every other op ignores the target. The `sourceGen` guard is per radio.
+* Table members `read_radio_state` and `read_radio_spectrum` (appended after `get_local_extension`; no capability bit - `FOXAPI_HAS` is the test): one radio's state
+  and newest spectrum frame, `radio` 0 meaning the focus; NO_DEVICE for a radio the engine does not have. `read_state` and `read_spectrum` are the focused radio's;
+  the seq groups of a session's focused-radio state carry its focus changes, so a change moves them all.
+* Facts: `fact.radio.count`, `fact.radio.max` (`kMaxReceivers`, eight: no client hard-codes it) and, for each radio that exists (keyed by its number from 1),
+  `fact.radio.<n>.state` (opening, running, stopped, faulted, lent), `.device` (the device key; empty on the generator or a file; the lent radio's key while it is lent),
+  `.label`, `.audio` (always `both` for now) and `.plugins` (the running decoder modules, comma-separated). A radio that is not there has no facts.
+* `fact.patch.refusal.<node id>` (stage 2): a patch Radio node that the device ledger refused (another holder has its device, or the limit on radios open in total is
+  reached), in words that name the holder ("in use by Radio 1", "in use by patch radio 3"). Absent for a node that was not refused; not published while the patch
+  page is closed. The refused node is never opened.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

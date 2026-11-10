@@ -223,6 +223,66 @@ void testRefusals() {
     CHECK_EQ(tuner.run(cmd(FOXAPI_OP_SET_MODE, 0, FOXAPI_DEMOD_NFM)).status(), FOXAPI_DENIED);
 }
 
+// SEVERAL RADIOS (docs/API.md, "Several radios"): the mock has ONE radio and room for two, so a client meets, in miniature, every answer it will meet from
+// the real engine: radio 2 is a number the engine knows and has nothing at.
+void testRadios() {
+    CHECK(FOXAPI_HAS(api(), read_radio_state));
+    CHECK(FOXAPI_HAS(api(), read_radio_spectrum));
+    testing::Engine e(api());
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    // A target that names no radio is NO_DEVICE for an op that addresses one, and nothing changes; 0 (the focus) and 1 land.
+    FoxCommand vol = cmd(FOXAPI_OP_SET_VOLUME, 0.25);
+    vol.target = 2;
+    testing::Outcome r = s.run(vol);
+    CHECK_EQ(r.status(), FOXAPI_NO_DEVICE);
+    CHECK((r.result.flags & FOXAPI_RESULT_REFUSED) != 0u);
+    CHECK(s.state().volume != 0.25f);
+    vol.target = 0;
+    CHECK_EQ(s.run(vol).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().volume, 0.25f);
+    vol.target = 1;
+    vol.num[0] = 0.5;
+    CHECK_EQ(s.run(vol).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().volume, 0.5f);
+    // ALL_RADIOS is for RUN alone.
+    vol.target = FOXAPI_TARGET_ALL_RADIOS;
+    CHECK_EQ(s.run(vol).status(), FOXAPI_BAD_ARGUMENT);
+    FoxCommand run = cmd(FOXAPI_OP_RUN, 0, 1);
+    run.target = FOXAPI_TARGET_ALL_RADIOS;
+    CHECK_EQ(s.run(run).status(), FOXAPI_OK);
+    // An op that is not about a radio ignores the target.
+    FoxCommand mark = cmd(FOXAPI_OP_BOOKMARK_ADD, 0, 0, "x");
+    mark.target = 9;
+    CHECK_EQ(s.run(mark).status(), FOXAPI_OK);
+    // The focus: out of range, no such radio, the focus already.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RADIO_FOCUS, 0, 0)).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RADIO_FOCUS, 0, 3)).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RADIO_FOCUS, 0, 2)).status(), FOXAPI_NO_DEVICE);
+    r = s.run(cmd(FOXAPI_OP_RADIO_FOCUS, 0, 1));
+    CHECK_EQ(r.status(), FOXAPI_NO_CHANGE);
+    CHECK((r.result.flags & FOXAPI_RESULT_REFUSED) != 0u);
+    // The per-radio reads: radio 1 and the focus are read_state; radio 2 is NO_DEVICE.
+    FoxReceiverState a{};
+    a.structSize = sizeof(a);
+    FoxReceiverState b{};
+    b.structSize = sizeof(b);
+    FoxReceiverState c{};
+    c.structSize = sizeof(c);
+    CHECK_EQ(api()->read_radio_state(s.raw(), 1, &a), FOXAPI_OK);
+    CHECK_EQ(api()->read_radio_state(s.raw(), 0, &b), FOXAPI_OK);
+    CHECK_EQ(api()->read_radio_state(s.raw(), 2, &c), FOXAPI_NO_DEVICE);
+    CHECK_EQ(a.centreHz, b.centreHz);
+    CHECK_EQ(a.volume, 0.5f);
+    std::vector<float> bins(512);
+    FoxSpectrumInfo info{};
+    info.structSize = sizeof(info);
+    CHECK_EQ(api()->read_radio_spectrum(s.raw(), 2, 0, &info, bins.data(), static_cast<uint32_t>(bins.size())), FOXAPI_NO_DEVICE);
+    CHECK_EQ(api()->read_radio_spectrum(s.raw(), 3, 0, &info, bins.data(), static_cast<uint32_t>(bins.size())), FOXAPI_NO_DEVICE);
+    // A session given the VIEW grant alone may set its focus (it changes nothing in the engine).
+    testing::Session viewer(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
+    CHECK_EQ(viewer.run(cmd(FOXAPI_OP_RADIO_FOCUS, 0, 1)).status(), FOXAPI_NO_CHANGE);
+}
+
 void testBatchAndQueueBound() {
     testing::Engine e(api());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -1016,6 +1076,7 @@ int main() {
     testSpectrum();
     testTuningAndClamps();
     testRefusals();
+    testRadios();
     testBatchAndQueueBound();
     testRefusalsAreResults();
     testRefusedFlagMeansNothingChanged();

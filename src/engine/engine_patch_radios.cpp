@@ -98,18 +98,6 @@ const char* destKind(const pc::AudioDest* dest) {
 // the node taking the file's rate must not reopen it.
 std::string openedAs(const pc::Node& n) { return pc::radioOpenIdentity(n.device, radioRate(n)); }
 
-// Whether an EARLIER radio in the graph already has this node's device - the
-// DeviceTwice rule, answered without a compile so the reconcile can use it.
-bool deviceTakenEarlier(const pc::Graph& g, const pc::Node& n) {
-    for (const pc::Node& other : g.nodes()) {
-        if (other.id == n.id) { return false; }
-        if (other.kind == pc::NodeKind::Radio && pc::sameDevice(other.device, n.device)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 std::unique_ptr<cascade::source::SigGenSource> makePatchGenerator(double rateHz, double centreHz) {
     auto g = std::make_unique<cascade::source::SigGenSource>(rateHz);
     // The same picture the receiver's generator draws, so a patch built on
@@ -177,6 +165,36 @@ std::string Engine::patchReceiverRadioKey() const {
     if (patchMainKeep_.valid) { return pc::makeDeviceKey(patchMainKeep_.kind, patchMainKeep_.args); }
     if (device_ != nullptr) { return pc::makeDeviceKey(sourceKind_, deviceArgs_); }
     return std::string();
+}
+
+// THE DEVICE LEDGER, REBUILT (engine/device_ledger.hpp). Every receiver slot is a holder (it is an open radio whether it is on a device or on the generator),
+// holding the radio it has open - or nothing while it has lent it to the patch, which the ledger records as a loan. Then every patch Radio node that names a
+// device claims it, in graph order and whether or not it is switched on (a node that is off still names the device: the plan's DeviceTwice rule); a node counts
+// toward the limit on open radios only while it is on and the patch runs. A refused claim is kept, in words that name the holder, and the node is never opened.
+void Engine::rebuildDeviceLedger() {
+    deviceLedger_.clear();
+    patchLedgerRefusal_.clear();
+    for (std::size_t slot = 0; slot < receivers_.size(); ++slot) {
+        if (!receivers_[slot]) { continue; }
+        std::string key;
+        if (slot == 0) {
+            if (!patchMainKeep_.valid) {
+                // What the receiver would lend (the same question the loan asks, with the patch taken as running): its device, or its sound card.
+                const cascade::gui::ReceiverLoan held = cascade::gui::receiverSourceForPatch(true, sourceKind_, device_ != nullptr, deviceOpenPending_, deviceArgs_,
+                                                                                            soundCardOpenPending_, soundCardLive_);
+                if (held.take) { key = pc::makeDeviceKey(held.kind, held.args); }
+            }
+        }
+        deviceLedger_.claim(key, DeviceHolder::receiver(slot), true);
+    }
+    if (patchMainKeep_.valid) {
+        deviceLedger_.lend(DeviceHolder::receiver(0), pc::makeDeviceKey(patchMainKeep_.kind, patchMainKeep_.args));
+    }
+    for (const pc::Node& n : patchGraph_.nodes()) {
+        if (n.kind != pc::NodeKind::Radio || n.device.empty()) { continue; }
+        const DeviceLedger::Claim c = deviceLedger_.claim(n.device, DeviceHolder::patchNode(n.id), patchRunning_ && n.on);
+        if (!c.granted()) { patchLedgerRefusal_[n.id] = c.refusal; }
+    }
 }
 
 std::vector<pc::RadioInfo> Engine::patchRadioInfos() const {
@@ -356,6 +374,9 @@ void Engine::patchReconcile() {
         // AppWindow::testerNoteFacts, stub campaign B15.)
     }
 
+    // WHO HOLDS WHICH RADIO, from the state as it stands now: after the receiver's radio has been lent, and before the radios that should run are chosen.
+    rebuildDeviceLedger();
+
     // --- which radios should run ------------------------------------------------
     // A radio runs while the patch runs AND its own switch is on. A radio
     // switched off forgets why it last failed, so switching it on again is
@@ -369,7 +390,7 @@ void Engine::patchReconcile() {
             continue;
         }
         if (!patchRunning_) { continue; }
-        if (deviceTakenEarlier(patchGraph_, n)) { continue; }   // DeviceTwice: never opened
+        if (patchLedgerRefusal_.count(n.id) != 0) { continue; }   // DeviceTwice (or the limit): never opened; the ledger says who holds it
         wanted.insert(n.id);
     }
 
@@ -959,6 +980,7 @@ void Engine::compilePatchPlan() {
 void Engine::pumpPatch() {
     syncPatchGraphVersion();
     if (!patchPageOpen_) {
+        patchLedgerRefusal_.clear();   // nothing is judged while the page is closed
         // CLOSING THE PAGE STOPS THE PATCH. The page took the radios over when it opened, so handing them back when
         // it closes is the only symmetric answer - and a patch still playing from a window you have closed is a
         // receiver whose controls you cannot find. SINCE 0.99.40 "CLOSED" IS "THE RECEIVER VIEW WAS CHOSEN": the

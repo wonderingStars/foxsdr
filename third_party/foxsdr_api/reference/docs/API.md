@@ -238,7 +238,8 @@ channel moves; VFO offset kept, centre follows — the counter's rule),
 `SET_VFO_OFFSET` (clamped into the band), `STEP_TUNE` (±n × step, the
 counter's switches and wheel, TUNE UP/DN, the key bindings),
 `SET_BANDWIDTH` (clamped to 0.9 × channel rate), `SET_SQUELCH`.
-One VFO in 0.2; `FoxCommand::target` is reserved for VFO n. App today:
+One VFO in 0.2; `FoxCommand::target` is reserved for VFO n - and, for an op that
+addresses one RADIO, it is the radio's number (6.18). App today:
 `retuneSourceHz`, `tuneAbsoluteHz`, `setVfoToAbsoluteHz`, `Pipeline`.
 
 ### 6.4 Demodulator and audio DSP — `FOXAPI_CAP_AUDIO_DSP`, `FOXAPI_CAP_RDS`
@@ -403,6 +404,53 @@ Commands `SET_POSITION`, `GPS`, `SET_BAND_PLAN`; lists `SERIAL_PORTS`,
 `UPDATE_CHECK` (ADMIN), `SERVER_CONFIG` (web and CAT listeners, JSON, LOCAL
 + ADMIN only). **GAP**: update result and install (arguably the host
 application's job, not the engine's).
+
+### 6.18 Several radios (0.3, additive: no capability bit, `FOXAPI_HAS` is the test)
+
+The engine may run more than one radio, each a full receiver (its own device,
+tuning, mode, filter, squelch, volume, audio, spectrum and recordings). A
+client that knows nothing of this keeps working on the first radio, unchanged.
+Everything below is appended (rule 4): nothing in 0.2 or 0.3 moved, and the API
+stays 0.3.
+
+* **Radio numbers** run from 1 (R1). The engine's limit is the fact
+  `fact.radio.max` - no client hard-codes it - and the number of radios it has
+  now is `fact.radio.count`. A radio has facts `fact.radio.<n>.state` (`opening`,
+  `running`, `stopped`, `faulted` or `lent`: the patch page has taken its
+  radio), `.device` (the device key, empty on the generator or a file), `.label`,
+  `.audio` (the route: `both`, `left`, `right` or `none`) and `.plugins` (the
+  decoder modules running on it, comma-separated). A radio that does not exist has
+  no facts.
+* **The focus rule.** Every SESSION has a focused radio, R1 until it says
+  otherwise (`FOXAPI_OP_RADIO_FOCUS`, grant VIEW, `ival[0]` = the number). A
+  command, a `read_state`, a `read_spectrum` or a single-radio list read that names
+  no radio means that session's focused radio. Focus is per session, never the
+  engine's: the web remote cannot be redirected by a click in the window. The
+  answers are `NO_DEVICE` (no such radio), `OUT_OF_RANGE` (not a number the engine
+  numbers) and `NO_CHANGE` (it is the focus already). A change moves every seq
+  group of that session's `read_state` (`seq`, `tuneSeq`, `modeSeq`, `deviceSeq`,
+  `audioSeq`, `displaySeq`, `txSeq`, `listSeq`, `rdsSeq`, `scanSeq`) by one, so an
+  interface redraws everything exactly as after a source change.
+* **`FoxCommand::target`**, for an op that addresses ONE radio (the receiver's
+  tuning, mode, audio and display ops, the source and every device control, the
+  recorders, a bookmark's tune and the scanner - the list is
+  `isRadioScopedOp` in `src/engine/radio_scope.hpp`): `0` = the session's
+  focused radio, `1..N` = that radio, `FOXAPI_TARGET_ALL_RADIOS` (0xFFFFFFFF) for
+  `RUN` alone (Start together, STOP ALL; `BAD_ARGUMENT` for any other op). A
+  number that names no radio the engine has is `NO_DEVICE`, answered as a refused
+  result at once (rule 2) with the message "there is no radio with that number".
+  Every other op ignores `target`. The `sourceGen` guard that drops a command
+  asked of a radio that has closed since is per radio.
+* **Per-radio reads**: `read_radio_state(session, radio, out)` and
+  `read_radio_spectrum(session, radio, sinceSeq, info, bins, cap)`, `radio` 1..N
+  or 0 for the focus; `NO_DEVICE` for a radio the engine does not have. Test
+  with `FOXAPI_HAS`, never a capability bit.
+* **Plugins and the plugin ABI** are untouched (ABI 3): a command a plugin sends
+  is aimed at the radio its code runs on, never at a focus (a later stage).
+
+The reference engine in `mock_engine/` has ONE radio and room for two (so radio 2
+is a number it knows and has nothing at); it publishes no facts (its capability
+word has no `FACTS`), implements the target rule, the focus and the two reads.
 
 ## 7. Mechanics
 
@@ -833,5 +881,5 @@ banks, OpenSettings → I.
 12. Diagnostics: last-run-crashed, report text, reports folder.
 13. Update result and install (probably the host's, not the engine's).
 14. Spectrum sub-range / higher resolution for zoom; waterfall backlog.
-15. Multi-VFO (`target` reserved).
+15. Multi-VFO (`target` reserved for the VFO's own number; the radio's number is 6.18).
 16. A settings catalogue (keys, types, ranges).
