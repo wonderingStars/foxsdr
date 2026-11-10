@@ -70,6 +70,7 @@
 #include "key_dispatch.hpp"
 #include "look_logic.hpp"
 #include "kit_publish.hpp"
+#include "cjk_register.hpp"
 #include "patch_publish.hpp"
 #include "transmit_publish.hpp"
 #include "scope_publish.hpp"
@@ -293,10 +294,16 @@ int main(int argc, char** argv) {
             }
         }
         if (const char* env = std::getenv("FOXSDR_LANGUAGE"); env != nullptr && env[0] != '\0') { languageSetting = env; }
+        // A CJK language is drawable only where the machine has a face for it (docs 6.62): a saved Japanese on a machine with no Japanese face is kept but not applied, as the classic window does.
+        cascade::i18n::setDrawablePredicate(&foxsdr::slintfonts::languageDrawable);
         const std::string inForce = cascade::i18n::setLanguage(languageSetting);
         const char* how = "english";
         if (inForce != "en") { how = slint::select_bundled_translation(inForce) ? "bundled" : "not bundled"; }
         std::fprintf(stderr, "foxsdr-slint: language %s (%s)\n", inForce.c_str(), how);
+        // THE CJK FACES (docs 6.62): the system's own, chosen as the classic window chooses them, registered with this window (nothing for a language that needs none).
+        const foxsdr::slintfonts::Registered faces = foxsdr::slintfonts::registerForLanguage(ui->window(), inForce);
+        ui->global<Theme>().set_cjk_family(ss(faces.family));
+        if (!faces.labels.empty()) { std::fprintf(stderr, "foxsdr-slint: CJK faces %s, font-family \"%s\"\n", faces.labels.c_str(), faces.family.c_str()); }
     }
 
     ui->set_version(ss(cascade::versionString()));
@@ -1439,6 +1446,8 @@ int main(int argc, char** argv) {
             return "list.<list>.count|names|details|values, not " + name;
         }
         if (name.rfind("fact.", 0) == 0) { return world.fact(name.c_str(), out) ? std::string() : "no fact " + name; }
+        if (name == "ui.language") { out = cascade::i18n::current(); return std::string(); }   // the code in force (docs 6.62: the CJK drive scripts read it and the face named below)
+        if (name == "ui.cjkFamily") { out = std::string(ui->global<Theme>().get_cjk_family()); return std::string(); }
         if (name.rfind("transmit.", 0) == 0) { return transmitBank.readState(name, out); }   // the Transmit page's page / key / sent / withheld read-back (transmit_publish.hpp)
         // cfg.<field>: the interface half of the settings AS THE HOST HOLDS IT (host_duties interfaceHalf, kept by every bank's saveInterfaceHalf) - the
         // read-back for a control whose value never reaches the engine (the theme, the trail style, the diagnostics switch...). Scalars and strings;
@@ -1641,6 +1650,17 @@ int main(int argc, char** argv) {
         if (!drive->allRun()) { exitCode = 3; }
     }
     if (bounded.bounded()) {
+#ifdef FOXSDR_SLINT_PROBE
+        // The clip probe (docs 6.62, probe/CMakeLists.txt): every Text of the probe build carries an accessible-description that says how much room it has (tools/slint-clip-probe.py), read here
+        // through the testing API once the window has settled and printed between two marker lines, with the window's size. tools/slint_clip_sweep.py reads what lies between them.
+        std::fprintf(stderr, "CLIPPROBE-LOG begin\n");
+        slint::testing::ElementHandle::visit_elements(ui, [](const slint::testing::ElementHandle& e) {
+            const auto d = e.accessible_description();
+            if (d.has_value() && std::string_view(*d).substr(0, 9) == "CLIPPROBE") { std::fprintf(stderr, "%s\n", std::string(*d).c_str()); }
+        });
+        std::fprintf(stderr, "CLIPPROBE-WINDOW %d %d\n", static_cast<int>(ui->window().size().width), static_cast<int>(ui->window().size().height));
+        std::fprintf(stderr, "CLIPPROBE-LOG end\n");
+#endif
         // What the kit holds at the end of a bounded run: the evidence that the port answered on this thread.
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", kitLine.c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", signalBank.summaryLine().c_str());

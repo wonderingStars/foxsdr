@@ -496,6 +496,7 @@ def main(argv=None):
     ap.add_argument('--stamp', help='touched only when a .po was written (or does not exist)')
     ap.add_argument('--missing', metavar='CODE', help='list the msgids that CODE has no value for')
     ap.add_argument('--quiet', action='store_true')
+    ap.add_argument('--domain', default=DOMAIN, help='the .po file name (the Slint compiler looks for <target name>.po; the clip probe is a second target, docs 6.62)')
     args = ap.parse_args(argv)
     # A build log is a pipe in the console's code page: a msgid with an ellipsis must not kill the run.
     for stream in (sys.stdout, sys.stderr):
@@ -519,7 +520,7 @@ def main(argv=None):
         codes.add(code)
         lookup = Lookup(strings)
         data, st = build_po(code, name_en, messages, lookup, warn)
-        path = os.path.join(args.out_dir, code, 'LC_MESSAGES', DOMAIN + '.po')
+        path = os.path.join(args.out_dir, code, 'LC_MESSAGES', args.domain + '.po')
         if write_if_changed(path, data):
             written += 1
         if not args.quiet:
@@ -533,7 +534,7 @@ def main(argv=None):
     # A language whose catalogue was removed must not stay bundled.
     if os.path.isdir(args.out_dir):
         for d in sorted(os.listdir(args.out_dir)):
-            stale = os.path.join(args.out_dir, d, 'LC_MESSAGES', DOMAIN + '.po')
+            stale = os.path.join(args.out_dir, d, 'LC_MESSAGES', args.domain + '.po')
             if d not in codes and os.path.isfile(stale):
                 os.remove(stale)
                 written += 1

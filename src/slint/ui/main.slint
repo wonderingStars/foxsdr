@@ -13,7 +13,7 @@
 
 import { Theme, Skin, Workbench, NightWatch, DigitFace, MeterStyle } from "theme.slint";
 import { Chip, LampDot, ChipTone, LampState } from "chips.slint";
-import { TipTimer, TipLayer } from "tooltip.slint";
+import { TipTimer, TipLayer, ElidedHint } from "tooltip.slint";
 import { Caption, Key, KeyNames, KeyFocus, SegGroup, SegKey, RailKey, StopKey } from "keys.slint";
 import { Lamp, StatusChip, VLine } from "lamps.slint";
 import { FrequencyCounter } from "digits.slint";
@@ -459,7 +459,7 @@ export component MainWindow inherits Window {
                             if root.compact-strip : SelectKey { value: root.modes[root.mode-index]; tooltip: @tr("Mode - the eight modes as a list (Ctrl+F ... Ctrl+R)");
                                 clicked => { root.mode-picker-requested(self.absolute-position.x, self.absolute-position.y + self.height); } }
                         }
-                        Text { text: root.mode-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; max-width: root.compact-strip ? 130px : 440px; }
+                        ElidedHint { text: root.mode-hint; max-width: root.compact-strip ? 130px : 440px; }
                     }
                     VLine { y: (parent.height - 72px) / 2; }
 
@@ -489,14 +489,19 @@ export component MainWindow inherits Window {
 
                     VerticalLayout { // antenna power: the BIAS TEE hazard key, as wide as the key
                         spacing: 6px; alignment: center; horizontal-stretch: 0; width: 120px;
-                        Caption { label: @tr("Antenna power"); }
+                        Rectangle {   // the caption elides in the 120 px lane (ALIMENTATION DE L'ANTENNE): its tip says it (docs 6.62)
+                            height: antenna-caption.preferred-height;
+                            antenna-caption := Caption { x: 0px; y: 0px; width: parent.width; label: @tr("Antenna power"); }
+                            antenna-caption-area := TouchArea { }
+                            TipTimer { x: 0px; y: 0px; hovered: antenna-caption-area.has-hover; text: antenna-caption.preferred-width > antenna-caption.width + 0.5px ? antenna-caption.text : ""; anchor-h: parent.height; }
+                        }
                         HorizontalLayout { alignment: start;
                             Key { label: @tr("BIAS TEE"); hazard: true; on: root.bias-tee-on; enabled: root.bias-tee-present; min-w: 120px; height: 36px;
                                 show-lamp: true; lamp: root.bias-tee-on ? LampState.amber : LampState.off;
                                 tooltip: root.bias-tooltip; accessible-label: root.bias-tee-on ? @tr("Bias tee on") : @tr("Bias tee off - asks before switching on");
                                 clicked => { if (root.bias-tee-on) { root.bias-tee-clicked(); } else { root.bias-question-open = true; } } }
                         }
-                        Text { text: root.bias-hint; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+                        ElidedHint { text: root.bias-hint; }
                     }
                 }
             }
@@ -594,8 +599,8 @@ export component MainWindow inherits Window {
                     Rectangle { height: 44px;
                         Rectangle { y: 0; height: Theme.hairline; width: parent.width; background: Theme.line; }
                         VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 8px; spacing: 2px;
-                            Text { text: root.source-line; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
-                            Text { text: root.converter-line != "" ? root.converter-line : root.rate-line; font-size: Theme.font-hint; color: root.converter-line != "" ? Theme.chip-warn-fg : Theme.dim; font-family: Theme.font-mono; overflow: elide; }
+                            ElidedHint { text: root.source-line; }
+                            ElidedHint { text: root.converter-line != "" ? root.converter-line : root.rate-line; ink: root.converter-line != "" ? Theme.chip-warn-fg : Theme.dim; family: Theme.font-mono; }
                         }
                     }
                 }
@@ -621,12 +626,12 @@ export component MainWindow inherits Window {
                                 Tab { label: @tr("+ Window"); tooltip: @tr("Open a decoder window as a tab"); clicked => { root.add-window-clicked(); } }
                             }
                             HorizontalLayout { spacing: 6px; alignment: end;
-                                VerticalLayout { alignment: center; Caption { label: @tr("Trace"); font-size: Theme.font-tiny; } }
+                                VerticalLayout { alignment: center; Caption { label: @tr("Trace"); font-size: Theme.font-tiny; visible: self.width + 0.5px >= self.preferred-width; }   /* squeezed below its words it is left out, not drawn as a sliver (docs 6.62) */ }
                                 VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
                                     SegKey { label: @tr("Normal"); small: true; min-w: 0px; on: root.trace-mode == 0; clicked => { root.trace-mode-selected(0); } }
                                     SegKey { label: @tr("Peak hold"); small: true; min-w: 0px; on: root.trace-mode == 1; clicked => { root.trace-mode-selected(1); } }
                                     SegKey { label: @tr("Average"); small: true; min-w: 0px; on: root.trace-mode == 2; clicked => { root.trace-mode-selected(2); } } } } }
-                                VerticalLayout { alignment: center; Caption { label: @tr("Range"); font-size: Theme.font-tiny; } }
+                                VerticalLayout { alignment: center; Caption { label: @tr("Range"); font-size: Theme.font-tiny; visible: self.width + 0.5px >= self.preferred-width; } }
                                 VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
                                     SegKey { label: @tr("Auto"); small: true; min-w: 0px; on: !root.range-manual; tooltip: @tr("Automatic: the standard window, -110 to 0 dB on the receiver"); clicked => { root.range-manual-selected(false); } }
                                     SegKey { label: @tr("Manual"); small: true; min-w: 0px; on: root.range-manual; tooltip: @tr("Manual: the Floor and Ceiling of the Display block"); clicked => { root.range-manual-selected(true); } } } } }
@@ -703,11 +708,15 @@ export component MainWindow inherits Window {
             // A Rectangle with a width of its own stops that climb (tests/test_slint_constraints.cpp), and clips what still does not fit.
             Rectangle { x: 0; y: 0; width: parent.width; height: parent.height; clip: true;
                 HorizontalLayout { padding-left: 4px; spacing: 0px; alignment: start;
-                    for c[i] in root.status : StatusChip {
-                        key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp; lines: c.lines; max-detail-w: 364px;
-                        value-color: c.tone == ChipTone.good ? Theme.chip-good-fg : c.tone == ChipTone.warn ? Theme.accent-soft : c.tone == ChipTone.err ? Theme.chip-err-fg : Theme.fg;
-                        tooltip: c.detail;
-                        clicked => { root.status-clicked(i); }
+                    for c[i] in root.status : Rectangle {   // a chip may be squeezed down to its lamp, key and value; its detail elides first (docs 6.62)
+                        min-width: chip.min-content-width; preferred-width: chip.content-width; max-width: chip.content-width;
+                        chip := StatusChip {
+                            x: 0px; y: 0px; width: parent.width;
+                            key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp; lines: c.lines; max-detail-w: 364px;
+                            value-color: c.tone == ChipTone.good ? Theme.chip-good-fg : c.tone == ChipTone.warn ? Theme.accent-soft : c.tone == ChipTone.err ? Theme.chip-err-fg : Theme.fg;
+                            tooltip: c.detail;
+                            clicked => { root.status-clicked(i); }
+                        }
                     }
                     Rectangle { horizontal-stretch: 1; }
                     VerticalLayout { alignment: center; Key { label: @tr("Request a feature"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Ask for a feature"); clicked => { root.feature-request-clicked(); } } }

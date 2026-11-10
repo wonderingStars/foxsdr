@@ -28,11 +28,12 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/SlintDll.cmake")
 # /ENTRY:mainCRTStartup; the terminal comes back for --version, the tool modes and the bounded runs through the same bootProcess
 # and its AttachConsole (core/console_owner.hpp), so a harness that reads pipes (ctest, Git Bash, release.ps1) sees every line.
 # The icon resource is the one file cascade.exe embeds, so Explorer, the shortcuts and Add/Remove Programs show the fox.
-set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp signal_logic.cpp signal_publish.cpp system_logic.cpp system_publish.cpp key_dispatch.cpp look_logic.cpp tools_logic.cpp tools_publish.cpp extend_logic.cpp extend_publish.cpp patch_logic.cpp patch_publish.cpp transmit_logic.cpp transmit_publish.cpp scope_logic.cpp scope_compositor.cpp scope_publish.cpp radar_logic.cpp radar_compositor.cpp input_script.cpp
+set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp plugin_kit.cpp kit_publish.cpp map_compositor.cpp signal_logic.cpp signal_publish.cpp system_logic.cpp system_publish.cpp key_dispatch.cpp look_logic.cpp cjk_fonts.cpp tools_logic.cpp tools_publish.cpp extend_logic.cpp extend_publish.cpp patch_logic.cpp patch_publish.cpp transmit_logic.cpp transmit_publish.cpp scope_logic.cpp scope_compositor.cpp scope_publish.cpp radar_logic.cpp radar_compositor.cpp input_script.cpp
     "${CMAKE_SOURCE_DIR}/src/gui/track_info_cache.cpp"
     "${CMAKE_SOURCE_DIR}/src/gui/transmit_page.cpp"
     "${CMAKE_SOURCE_DIR}/src/gui/track_photo_cache.cpp"
-    "${CMAKE_SOURCE_DIR}/src/gui/module_census.cpp")
+    "${CMAKE_SOURCE_DIR}/src/gui/module_census.cpp"
+    "${CMAKE_SOURCE_DIR}/src/gui/font_probe.cpp")
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")
@@ -61,6 +62,8 @@ target_include_directories(foxsdr-slint PRIVATE
     "${CMAKE_SOURCE_DIR}/third_party/foxsdr_api"
     "${CMAKE_SOURCE_DIR}/third_party/glfw/deps"     # stb_image_write for the screenshot key
     "${CMAKE_SOURCE_DIR}/third_party/imgui")        # HEADER ONLY: gui/scope_view.hpp (the radar scope's pure maths, docs 6.57) includes gui/aircraft_icons.hpp which includes imgui.h; nothing of ImGui is linked
+# The CJK face probe (docs 6.62) is the classic window's own stb_truetype reader, which includes the vendored header by its bare name.
+set_source_files_properties("${CMAKE_SOURCE_DIR}/src/gui/font_probe.cpp" PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/third_party/imgui")
 # Fonts and icons are compiled INTO the executable (the SDK default would embed a path on this machine).
 set_property(TARGET foxsdr-slint PROPERTY SLINT_EMBED_RESOURCES embed-files)
 
@@ -130,6 +133,12 @@ add_custom_target(foxsdr_slint_stage_resources ALL
     COMMENT "Staging resources/bandplans beside foxsdr-slint"
     VERBATIM)
 add_dependencies(foxsdr-slint foxsdr_slint_stage_resources)
+
+# THE CLIP PROBE (docs 6.62), on request only: cmake -DFOXSDR_SLINT_CLIP_PROBE=ON adds the target foxsdr-slint-probe (never part of ALL); see probe/CMakeLists.txt.
+option(FOXSDR_SLINT_CLIP_PROBE "Also configure foxsdr-slint-probe, the window built from a copy of ui/ whose Text elements report an overflow (tools/slint_clip_sweep.py)" OFF)
+if(FOXSDR_SLINT_CLIP_PROBE AND Python3_Interpreter_FOUND)
+    add_subdirectory(probe)
+endif()
 
 # The render and host-logic tests (ctest label `slint`); see tests/CMakeLists.txt.
 add_subdirectory(tests)
@@ -218,4 +227,7 @@ set_tests_properties(test_slint_retune_run PROPERTIES LABELS "gui" TIMEOUT 300)
 if(Python3_Interpreter_FOUND)
     add_test(NAME test_slint_po COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/test_slint_po.py")
     set_tests_properties(test_slint_po PROPERTIES LABELS "slint" TIMEOUT 60)
+    # The clip probe's source transform and the sweep's line parser (docs 6.62; tools/test_slint_clip_probe.py), the same way.
+    add_test(NAME test_slint_clip_probe COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/test_slint_clip_probe.py")
+    set_tests_properties(test_slint_clip_probe PROPERTIES LABELS "slint" TIMEOUT 60)
 endif()

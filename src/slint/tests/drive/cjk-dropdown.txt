@@ -1,0 +1,11 @@
+#! frames=260 bank=4 sections=4:1 FOXSDR_SLINT_LANGUAGE_CHANGE=ja
+# cjk-dropdown (docs 6.62): the Language dropdown's whole path at RUN TIME (system_publish.cpp languageChangeForCapture: as if the dropdown had picked the code - save, setLanguage,
+# select_bundled_translation, then the system face named as Theme.cjk-family, then the re-publish) to a CJK language. The popup's rows past the first screenful are not instantiated, so the pick
+# itself cannot be clicked by label (system-language.txt says the same); the capture seam is the dropdown's own effect. Started in English; at tick 60 the change is made.
+10 state ui.language == en
+state ui.cjkFamily == ""
+state cfg.language == auto
++100 state ui.language == ja
+state ui.cjkFamily == "Yu Gothic"
+state cfg.language == ja
++1 shot "cjk-dropdown-ja.png"

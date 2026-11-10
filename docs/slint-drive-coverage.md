@@ -209,7 +209,7 @@ NOT DRIVABLE by reason: readout 831, other 207, needs a signal (no fixture) 120,
 | 3 | Deck (toolbar) | Directly under the rail, full width | NOT DRIVABLE | - | relocated: the 104 px receiver strip |
 | 4 | FUNCTION SELECT rail | Left column under the deck | NOT DRIVABLE | - | relocated: the 64 px icon rail + the 296 px sections panel |
 | 5 | Centre | Between rail and status column: spectrum, waterfall, pages (, aw.cpp:13463) - inventoried elsewhere. Replaced by the Patch canvas when the PATCH view key is pressed (, aw.cpp:4761) | NOT DRIVABLE | - | a container, not a control: its tabs are rows 68-69 and the spectrum and waterfall rows below |
-| 6 | STATUS column | Right column under the deck | NOT DRIVABLE | - | relocated: the 28 px status bar of seven chips |
+| 6 | STATUS column | Right column under the deck | NOT DRIVABLE | - | relocated: the 28 px status bar of seven chips; since 6.62 a chip squeezed by a long language gives up its detail first (the detail elides, the tip says it) so the right-hand chips and the two keys stay inside the window |
 | 7 | Scope mode | Replaces rail + centre + status column; the deck stays. Entered from a radar/instrument;  leaves it when nothing is being typed and no popup is open (, aw.cpp:20136, Esc at ~20160) - inventoried elsewhere | DRIVEN+ASSERTED | main-tabs-and-rail.txt | click the SCOPE tab; state view == 2 (the instrument entry that also reaches it needs a radar) |
 | 8 | Floating windows | Plugin windows, pages, markers, import dialog etc. are separate top-level ImGui windows drawn over the root (, aw.cpp:21884; dialogs list at aw.cpp:4770-4782) | NOT DRIVABLE | - | relocated: pages and plugin windows dock as tabs or tear off (Tab, TornWindow, WindowChrome built; phase-3 content) |
 
@@ -2262,7 +2262,7 @@ NOT DRIVABLE by reason: readout 831, other 207, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1404 | Language | dropdown/combo | DRIVEN+ASSERTED | system-language.txt | choose "Language" "English" (last step); state cfg.language == en; other languages come from runtime catalogues and re-label the window |
+| 1404 | Language | dropdown/combo | DRIVEN+ASSERTED | cjk-ja.txt | FOXSDR_LANGUAGE=ja: state ui.language == ja and ui.cjkFamily == "Yu Gothic" (the face the window names), then the Transmit page, the DECODE, TOOLS and SYSTEM banks captured; test_slint_cjk_ja renders every code point of the ja catalogue through the same typeface with no box; the same for ko: ui.cjkFamily == "Malgun Gothic"; the same for zh-CN: ui.cjkFamily == "Microsoft YaHei UI"; the same for zh-TW: ui.cjkFamily == "Microsoft JhengHei UI"; FOXSDR_SLINT_LANGUAGE_CHANGE=ja: the dropdown's whole run-time path (save, setLanguage, bundled translation, the CJK face) - state ui.language == ja, ui.cjkFamily == "Yu Gothic", cfg.language == ja; choose "Language" "English" (last step); state cfg.language == en; other languages come from runtime catalogues and re-label the window |
 | 1405 | Machine-translation hint | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1406 | SUGGEST A BETTER TRANSLATION | button | NOT DRIVABLE | - | drawn only for a machine-translated language; opens the bug page, withheld in a bounded run |
 | 1407 | Country | dropdown/combo (tall) | DRIVEN+ASSERTED | system-language.txt | click "Country"; type filter "Austria"; click "Austria"; state cfg.country == AT; expect "Country" value equals "Austria" |

@@ -212,8 +212,8 @@ export component SliderGroup inherits Rectangle {
     // the caption: the cap look (10px / 600 / 0.8px, upper-case, muted), elided before it can reach the readout. Where the room
     // is under two cap-sized letters (a letter and the ellipsis is 19px) it is left out: an elided Text still draws its ellipsis
     // (11px) when it has less room than that, and the dots would run into the readout (the 106px lanes of a 1440px window).
-    // The Slider below keeps the caption as its accessible label, and the host's tooltip names the lane.
-    Text {
+    // The Slider below keeps the caption as its accessible label, and the host's tooltip names the lane; an elided caption is also said in that tip (docs 6.62).
+    caption-text := Text {
         x: 0px; y: 0px;
         width: Math.max(0px, readout-text.x - 6px);
         visible: self.width >= 2 * Theme.font-cap;
@@ -227,13 +227,14 @@ export component SliderGroup inherits Rectangle {
         vertical-alignment: center;
         overflow: elide;
     }
+    property <bool> caption-elided: caption-text.visible && caption-text.preferred-width > caption-text.width + 0.5px;
     Slider {
         x: 0px;
         y: root.caption-h + root.gap;
         width: root.width;
         value: root.value;                      // the host's number flows in; the slider keeps the user's position itself
         enabled: root.enabled;
-        tooltip: root.tooltip;
+        tooltip: root.caption-elided ? root.caption.to-uppercase() + (root.tooltip != "" ? "  -  " + root.tooltip : "") : root.tooltip;
         accessible-label: root.caption;
         changed(v) => { root.changed(v); }
     }

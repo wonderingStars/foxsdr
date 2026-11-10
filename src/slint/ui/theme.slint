@@ -354,8 +354,13 @@ export global Theme {
     out property <color> wf-peak: skin.wf-peak;
     out property <color> wf-vfo: skin.wf-vfo;
     out property <color> wf-key-bg: skin.wf-key-bg;
-    out property <string> font-ui: skin.font-ui;
-    out property <string> font-mono: skin.font-mono;
+    // THE CJK FACE (docs 6.62). A language written in Han, kana or Hangul has no glyph in Inter or JetBrains Mono, and Slint takes ONE family per Text (a list is not parsed, a registered
+    // face is not a glyph fallback), so the host names the system face that draws the language here and every typeface of the window becomes it; "" is every other language. The big
+    // tuner digits keep the bench's mono face (font-digits): no translated word is ever drawn in them.
+    in property <string> cjk-family: "";
+    out property <string> font-ui: root.cjk-family != "" ? root.cjk-family : skin.font-ui;
+    out property <string> font-mono: root.cjk-family != "" ? root.cjk-family : skin.font-mono;
+    out property <string> font-digits: skin.font-mono;
     out property <length> radius: skin.radius;
     out property <length> radius-panel: skin.radius-panel;
     out property <length> radius-seg: skin.radius-seg;

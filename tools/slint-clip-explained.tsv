@@ -1,0 +1,12 @@
+# The clip sweep's EXPLAINED items (docs 6.62): site, kind, reason and optionally the box width in px the explanation is for. site is file:line of the Text in src/slint/ui;
+# tools/test_slint_clip_probe.py checks that every site still names a Text, so an edit that moves one makes the sweep report it again instead of silently covering another line.
+digits.slint:94	OUT	the digit glow: two rings of faint copies of the numeral are drawn around it, offset on purpose (glow-reach); they are light, not text anyone reads, and the numeral itself is inside its box	34
+keys.slint:201	ELIDE	a Key given less than its label asks for (an explicit width, a fixed cell): Key.squeezed puts the label in the tip before the tooltip (test_slint_elided)	
+keys.slint:347	ELIDE	a RailKey caption longer than the 64 px rail: caption-elided puts the caption in the tip before the tooltip (test_slint_elided)	
+keys.slint:58	ELIDE	the receiver strip's antenna-power caption in its 120 px lane: the caption has a tip of its own (main.slint antenna-caption; NOT exercised by a hover test - it is the same TouchArea and TipTimer pair as the tested ones). The toolbar's Trace and Range captions hide themselves when squeezed (visible binding) and are not reported	120
+lamps.slint:220	ELIDE	a status chip's detail: a chip squeezed by a long language gives up its detail first (StatusChip, main.slint) and its tooltip is the whole detail (tooltip: c.detail, which predates this change)	
+sections.slint:187	ELIDE	a SelectKey value longer than its key: value-elided puts the value in the tip before the tooltip (test_slint_elided)	
+sections.slint:82	ELIDE	a section header name longer than the room before its chip: name-elided puts the name in the tip before the tooltip (test_slint_elided)	
+sliders.slint:216	ELIDE	a slider lane's caption squeezed by the lane's readout: caption-elided puts the caption in the slider's tip before the host's tooltip (not exercised by a hover test - the same TipTimer rule)	
+tools_bank.slint:311	ELIDE	a field's placeholder longer than the field: placeholder-elided puts the placeholder in the field's tip while the field is empty (not exercised by a hover test - the same TipTimer rule)	
+tooltip.slint:118	ELIDE	ElidedHint (the strip's hint lines, the counter plate's caption, the age axis, and the row labels of the SYSTEM, SIGNAL and EXTEND banks, which inherit it): the component's own tip says the whole text when it is elided (test_slint_elided)	
