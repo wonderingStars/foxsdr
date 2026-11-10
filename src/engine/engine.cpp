@@ -96,8 +96,8 @@ Engine::Engine() : Engine(ownHost_) {}
 
 Engine::Engine(EngineHost& host)
     : host_(&host),
-      pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
-                                                /*audioEnabled=*/true}),
+      receivers_(Receiver::makeSlots(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
+                                                                     /*audioEnabled=*/true})),
       api_(std::make_unique<ApiHost>(*this, std::string())) {
     // THE RECOVERY COUNTERS' BASELINE IS THIS MOMENT (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). The watch used to take the first reading
     // its first poll made as the baseline, which is right for counters that cannot move before the first frame and wrong for the plugin containment's and the

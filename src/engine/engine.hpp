@@ -26,6 +26,7 @@
 #ifndef CASCADE_ENGINE_ENGINE_HPP
 #define CASCADE_ENGINE_ENGINE_HPP
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -95,6 +96,7 @@
 #include "engine/fox_engine_api.hpp"
 #include "engine/server_host.hpp"
 #include "engine/pass_stats.hpp"
+#include "engine/receiver.hpp"
 #include "core/running_view.hpp"
 #include "core/source_fallback.hpp"
 #include "engine/saved_radio_retry.hpp"
@@ -189,6 +191,10 @@ private:
     // window's hang watchdog is paused by the window itself, around the stepped run's wait, AppWindow::stepPass. It stays a pointer for the
     // fallback teardown above.)
     EngineHost* host_;
+
+    // THE RECEIVERS (engine/receiver.hpp): one radio each, kMaxReceivers slots, slot 0 always present and today's receiver. Declared before every
+    // member that is one radio's, because the references of the same name below are bound to slot 0 when the engine is built.
+    std::array<std::unique_ptr<Receiver>, kMaxReceivers> receivers_;
 
     // NO DEFAULT MEMBER INITIALISERS, on purpose: GCC refuses them on a
     // nested struct used by an inline static member of the enclosing class
@@ -1027,12 +1033,7 @@ private:
     // surfaces the reason in sourceError_.
     void followInputRate();
 
-    // DSP pipeline plus the two live display widgets it feeds. The views are
-    // held by unique_ptr for two reasons: the forward declarations above, and
-    // the waterfall's GL texture, whose deletion needs the creating GL context
-    // current — run() tears the view down explicitly before destroying the
-    // context, because AppWindow itself outlives it (destroyed in main()).
-    cascade::core::Pipeline pipeline_;
+    cascade::core::Pipeline& pipeline_ = receivers_[0]->pipeline_;
 
     // Display range for both the spectrum axis and the waterfall colormap.
     float dbMin_ = -110.0f;
