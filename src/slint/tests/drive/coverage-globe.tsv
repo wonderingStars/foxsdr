@@ -16,4 +16,12 @@
 4043	ASSERTED	globe-goes.txt	expect "0.00 N 75.20 W" label
 4045	ASSERTED	globe-goes.txt	expect "Set the receiver position for the look angle" label
 4046	ASSERTED	globe-goes.txt	press the well, key left / up, scroll, key 0: state globe.goes lon / lat / zoom
+4060	ASSERTED	globe-solar-system.txt	click "3D ORBITS" / "PAGES"; state globe.solar globe=1 / globe=0
+4062	ASSERTED	globe-solar-system.txt	click "LINEAR" / "LOG"; state globe.solar log=0 / 1
+4063	ASSERTED	globe-solar-system.txt	click "SHOW MOON"; state globe.solar moon=0 / 1
+4064	ASSERTED	globe-solar-system.txt	slider "DATE" 1.0 / 0.0; state globe.solar day=366 / -366
+4065	ASSERTED	globe-solar-system.txt	click "TODAY"; state globe.solar day=0
+4067	ASSERTED	globe-solar-system.txt	press the well, key left / right / up / down, scroll, key 0: state globe.solar spin / tilt / zoom
+4068	DRIVEN	globe-solar-system.txt	the keys while the 3D view is off are pressed and the camera stays (state globe.solar spin=20); the interception while it is on is unit-tested (applySolarPlateKey): the module page is not reachable with the 3D view on in a scripted run
+4069	ASSERTED	globe-solar-system.txt	expect "The positions agree with the plugin's own panel." label
 4100	ASSERTED	globe-solar-system.txt	state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script)

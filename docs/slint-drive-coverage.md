@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2011 | 458 | 82 | 1471 | 0 |
+| 2022 | 465 | 83 | 1474 | 0 |
 
-Of the 1167 rows that are controls (the 844 readout-like rows left out): 458 asserted, 82 driven without a read-back, 627 not drivable.
+Of the 1175 rows that are controls (the 847 readout-like rows left out): 465 asserted, 83 driven without a read-back, 627 not drivable.
 
-NOT DRIVABLE by reason: readout 844, other 207, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 70, deferred 63, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 847, other 207, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 70, deferred 63, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,7 +199,7 @@ NOT DRIVABLE by reason: readout 844, other 207, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 33 | 19 | 0 | 14 | 11 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 44 | 26 | 1 | 17 | 14 | 0 |
 
 ## Every row
 
@@ -3106,6 +3106,17 @@ NOT DRIVABLE by reason: readout 844, other 207, needs a signal (no fixture) 120,
 | 4047 | GOES: BAND select (ABI 1-16) | segment key | NOT DRIVABLE | - | deferred: needs data: the received picture carries no band; the product id is only in the decoder's "image name" text. What would do it: the plugin publishing the band of the picture it holds |
 | 4048 | GOES: SEGMENTS progress (14 of 16) | readout | NOT DRIVABLE | - | a readout, not a control |
 | 4049 | GOES: SATELLITE select GOES 16 / 18 / 19 | segment key | NOT DRIVABLE | - | deferred: needs data: the spacecraft the plugin is receiving is in goes.cfg and not published; the host offers the two operational longitudes (East, West) and the operator picks. What would do it: the plugin publishing the spacecraft id of the picture |
+| 4060 | Solar system: VIEW PAGES / 3D ORBITS | segment key | DRIVEN+ASSERTED | globe-solar-system.txt | click "3D ORBITS" / "PAGES"; state globe.solar globe=1 / globe=0 |
+| 4061 | Solar system: the orbits | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4062 | Solar system: SCALE LOG / LINEAR | segment key | DRIVEN+ASSERTED | globe-solar-system.txt | click "LINEAR" / "LOG"; state globe.solar log=0 / 1 |
+| 4063 | Solar system: SHOW MOON | checkbox | DRIVEN+ASSERTED | globe-solar-system.txt | click "SHOW MOON"; state globe.solar moon=0 / 1 |
+| 4064 | Solar system: DATE scrubber | slider | DRIVEN+ASSERTED | globe-solar-system.txt | slider "DATE" 1.0 / 0.0; state globe.solar day=366 / -366 |
+| 4065 | Solar system: TODAY | key | DRIVEN+ASSERTED | globe-solar-system.txt | click "TODAY"; state globe.solar day=0 |
+| 4066 | Solar system: planet chips | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4067 | Solar system: DRAG TO ROTATE, tilt, zoom | gesture | DRIVEN+ASSERTED | globe-solar-system.txt | press the well, key left / right / up / down, scroll, key 0: state globe.solar spin / tilt / zoom |
+| 4068 | Solar system: ROTATE LEFT / ROTATE RIGHT / TILT / ZOOM IN / ZOOM OUT plate keys | key | DRIVEN | globe-solar-system.txt | the keys while the 3D view is off are pressed and the camera stays (state globe.solar spin=20); the interception while it is on is unit-tested (applySolarPlateKey): the module page is not reachable with the 3D view on in a scripted run |
+| 4069 | Solar system: agreement with the plugin's panel | readout | DRIVEN+ASSERTED | globe-solar-system.txt | expect "The positions agree with the plugin's own panel." label |
+| 4070 | Solar system: Uranus and Neptune chips, an Earth chip | readout | NOT DRIVABLE | - | a readout, not a control |
 | 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | DRIVEN+ASSERTED | globe-solar-system.txt | state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script) |
 | 4101 | 3D globes: the honest empty states | readout | NOT DRIVABLE | - | a readout, not a control |
 
