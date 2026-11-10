@@ -1147,6 +1147,17 @@ endif()
 if(TEST test_display_query_app)
     set_tests_properties(test_display_query_app PROPERTIES TIMEOUT 600)
 endif()
+# These two classic-window tests wait on the wall clock (the display-query test for 2.0 s of
+# quiet, the radio-setup test for its USB probe thread, about 94 ms) while a bounded
+# `--frames N` run counts frames. With the monitor powered off the frame loop paces on vsync
+# and the bounded run ends about ten times too fast, so both fail. FOXSDR_FRAME_CAP_HZ
+# (FrameCap::fromEnvironment, src/gui/frame_log.cpp) paces the frames at 60 Hz whatever the
+# display does; a test-environment setting only, the application is unchanged.
+foreach(_t test_display_query_app test_radio_setup_app)
+    if(TEST ${_t})
+        set_property(TEST ${_t} APPEND PROPERTY ENVIRONMENT "FOXSDR_FRAME_CAP_HZ=60")
+    endif()
+endforeach()
 # The row-keys test starts the real application twelve times (a layout run, the window open, a
 # press of HD2, of HD1 then HD2, the three that must press nothing and the control for the click's
 # geometry, an instrument's memory rows opened and pressed, and the module's page with sixteen
