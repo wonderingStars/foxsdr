@@ -661,6 +661,43 @@ int main() {
         const int kyp = T3b + yOf(ui->get_b3_body_h()) - kBodyPadBottom - kBodyPad - 24;
         e = press(xb + 40, kyp + 12);
         CHECKV(e.name == "updates-show-again", "Show it again: '%s'", e.name.c_str());
+        // THE KILL SWITCH (docs 6.63) on b6: the amber "has been withdrawn" status and the advice under it, then Open foxsdr.com and Not now side by side
+        {
+            const Frame fr = shot();
+            const int T6b = yOf(ui->get_b6_y()) + kSecRow + kBodyPad;
+            const int bottom = T6b + yOf(ui->get_b6_body_h()) - kBodyPadBottom - kBodyPad;
+            const int ky = bottom - 24;
+            CHECKV(fr.countNear(xb, ky - 34, Rb, ky - 6, warnFg, 40) >= 120, "b6: the withdrawn status and its advice are amber (%d)", fr.countNear(xb, ky - 34, Rb, ky - 6, warnFg, 40));
+            // the two small keys: runs of the key fill just under the top border (above the glyphs) give the left and right edge of each
+            std::vector<std::pair<int, int>> runs;
+            for (int x = xb; x < Rb; ++x) {
+                if (!fr.near(x, ky + 3, keyBg)) { continue; }
+                if (!runs.empty() && x - runs.back().second <= 2) { runs.back().second = x; } else { runs.emplace_back(x, x); }
+            }
+            CHECKV(runs.size() == 2, "b6: two keys on the row (%zu runs; row y %d, b6 y %d, body %d, xb %d..%d)", runs.size(), ky, yOf(ui->get_b6_y()), yOf(ui->get_b6_body_h()), xb, Rb);
+            if (runs.size() == 2) {
+                e = press((runs[0].first + runs[0].second) / 2, ky + 12);
+                CHECKV(e.name == "updates-open-site", "Open foxsdr.com: '%s'", e.name.c_str());
+                e = press((runs[1].first + runs[1].second) / 2, ky + 12);
+                CHECKV(e.name == "updates-withdrawn-dismiss", "Not now: '%s'", e.name.c_str());
+            }
+            // the same notice with its keys gone (a fixed build is offered, or the notice was put away): the body is one key row shorter
+            const int hRecall = yOf(ui->get_b6_body_h());
+            auto mr = ui->get_m_upd_recall();
+            mr.site_label = "";
+            mr.dismiss_label = "";
+            mr.withdrawn_advice = "We recommend updating to FoxSDR 0.99.106.";
+            ui->set_m_upd_recall(mr);
+            shot();
+            CHECKV(yOf(ui->get_b6_body_h()) < hRecall - 20, "b6: no keys, a shorter body (%d -> %d)", hRecall, yOf(ui->get_b6_body_h()));
+            mr.site_label = "Open foxsdr.com";
+            mr.dismiss_label = "Not now";
+            mr.withdrawn_advice = "A fixed version is not ready yet. foxsdr.com will have it as soon as it is.";
+            ui->set_m_upd_recall(mr);
+            shot();
+            CHECK(yOf(ui->get_b6_body_h()) == hRecall);
+            park();
+        }
         // the Store copy has no channel radios: `packaged` takes both lines and the help away
         auto m = ui->get_m_upd_ok();
         const int h0 = yOf(ui->get_b2_body_h());

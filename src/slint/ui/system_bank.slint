@@ -63,6 +63,8 @@ export struct UpdatesModel {
     check-label: string, stable-label: string, beta-label: string,   // ADDED: the host's words for the tick and the two radios
     packaged: bool,                                    // ADDED: a Microsoft Store copy has no channel radios and no help
     show-again: bool, show-again-label: string,        // ADDED: the small "Show it again" key (offered while an update is offered and its banner was dismissed)
+    withdrawn-advice: string,                          // ADDED (docs 6.63): the kill switch - what to do about a withdrawn copy, under the amber status line
+    site-label: string, dismiss-label: string,         // ADDED: "Open foxsdr.com" and "Not now", only while no fixed build is offered yet
 }
 
 export struct GpsRow {
@@ -153,6 +155,8 @@ export global SystemEvents {
     callback updates-channel(int);
     callback updates-team-message();
     callback updates-show-again();                 // ADDED: the small "Show it again" key
+    callback updates-open-site();                  // ADDED (docs 6.63): "Open foxsdr.com" on the withdrawn notice
+    callback updates-withdrawn-dismiss();          // ADDED: "Not now" on the withdrawn notice
     callback serial-refresh();
     callback gps-port(int);
     callback gps-baud(int);
@@ -1045,6 +1049,10 @@ export component UpdatesBody inherits VerticalLayout {
     updates-team-message() => { SystemEvents.updates-team-message(); }
     callback updates-show-again();
     updates-show-again() => { SystemEvents.updates-show-again(); }
+    callback updates-open-site();
+    updates-open-site() => { SystemEvents.updates-open-site(); }
+    callback updates-withdrawn-dismiss();
+    updates-withdrawn-dismiss() => { SystemEvents.updates-withdrawn-dismiss(); }
 
     spacing: 6px;
     alignment: start;
@@ -1087,6 +1095,12 @@ export component UpdatesBody inherits VerticalLayout {
         }
     }
     if root.model.status-line != "" : Note { text: root.model.status-line; tone: root.model.status-tone; }
+    if root.model.withdrawn-advice != "" : Note { text: root.model.withdrawn-advice; tone: root.model.status-tone; }
+    if root.model.site-label != "" : Line {
+        Mid { Key { label: root.model.site-label; small: true; min-w: 0px; clicked => { root.updates-open-site(); } } }
+        if root.model.dismiss-label != "" : Mid { Key { label: root.model.dismiss-label; small: true; min-w: 0px; clicked => { root.updates-withdrawn-dismiss(); } } }
+        Rectangle { horizontal-stretch: 1; }
+    }
     if root.model.show-again && root.model.show-again-label != "" : Line {
         Mid { Key { label: root.model.show-again-label; small: true; min-w: 0px; clicked => { root.updates-show-again(); } } }
         Rectangle { horizontal-stretch: 1; }

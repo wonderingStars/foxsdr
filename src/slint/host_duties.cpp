@@ -209,11 +209,31 @@ UpdateCardModel updateCardFor(const UpdateView& v) {
     UpdateCardModel c;
     // HIDDEN, as drawUpdateBanner hides it: the Updates tick is off, "Not now" was pressed, a Store copy (its own banner), or nothing
     // newer is offered. A failed CHECK is never shown either: the user did not ask.
-    if (!v.enabled || v.dismissed || v.packaged || !v.info.newer) { return c; }
+    //
+    // THE KILL SWITCH (field-early-warning, docs 6.63): a release the service has WITHDRAWN is never offered (`newer` is false for it, and
+    // `offerWithdrawn` is checked here too so a stale copy of the answer cannot talk this card into offering one), and a RUNNING copy that was
+    // withdrawn is told so, in the warning tone, with the way out: the update when a good build is offered, foxsdr.com when none is yet. The
+    // sentences are plain English on purpose, as in drawUpdateBanner: a safety notice must not wait for the catalogues to be translated.
+    const bool offered = v.info.newer && !v.info.offerWithdrawn;
+    const bool recall = v.info.runningWithdrawn;
+    if (!v.enabled || v.dismissed || v.packaged || (!offered && !recall)) { return c; }
     c.shown = true;
+    c.withdrawn = recall;
+    std::string advice;
+    if (recall) {
+        advice = offered ? cascade::core::formatText("We recommend updating to FoxSDR %s.", v.info.version.c_str())
+                         : std::string("A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+        c.headline = cascade::core::formatText("FoxSDR %s has been withdrawn: the FoxSDR team found a problem with it.", v.runningVersion.c_str());
+        if (!offered) {
+            // Nothing to download: the sentence and "Not now" (the card's own key), no primary. The Updates section carries Open foxsdr.com.
+            c.note = advice;
+            c.error = v.error;
+            return c;
+        }
+    }
     c.critical = v.info.critical;
     // Amber for an ordinary update, red for one that fixes a build which could not do its job: the server's `critical` flag.
-    c.headline = v.info.critical ? cascade::core::formatText(cascade::i18n::tr("Important update: FoxSDR %s"), v.info.version.c_str()) : cascade::core::formatText(cascade::i18n::tr("%s is available"), ("FoxSDR " + v.info.version).c_str());
+    if (!recall) c.headline = v.info.critical ? cascade::core::formatText(cascade::i18n::tr("Important update: FoxSDR %s"), v.info.version.c_str()) : cascade::core::formatText(cascade::i18n::tr("%s is available"), ("FoxSDR " + v.info.version).c_str());
     // WHAT IT FIXES, in the author's words, for every release between the one running and the one offered: a version, then its lines.
     for (const core::ReleaseNote& n : v.info.notes) {
         c.notes.push_back(n.version + (n.critical ? std::string(cascade::i18n::tr("  (important)")) : std::string()));
@@ -241,6 +261,7 @@ UpdateCardModel updateCardFor(const UpdateView& v) {
             case UpdateStage::Installing: c.primary = cascade::i18n::tr("Starting the installer..."); break;
         }
     }
+    if (recall) { c.note = c.note.empty() ? advice : advice + "\n" + c.note; }
     c.error = v.error;
     return c;
 }
@@ -428,7 +449,7 @@ void HostDuties::pollUpdate() {
 }
 
 void HostDuties::startDownload() {
-    if (updatePending_ || !update_.newer) { return; }
+    if (updatePending_ || !update_.newer || update_.offerWithdrawn) { return; }   // a withdrawn release is never downloaded
     updatePending_ = true;
     stage_ = UpdateStage::Downloading;
     progress_ = 0.f;
@@ -472,6 +493,7 @@ void HostDuties::refreshCard() {
     v.dismissed = updateDismissed_;
     v.packaged = w_.inPackage();
     v.installerHere = cfg_.installerHere;
+    v.runningVersion = cfg_.version;
     v.info = update_;
     v.stage = stage_;
     v.progress = progress_;
@@ -606,9 +628,10 @@ UpdateStatus HostDuties::updateStatus() const {
     s.packaged = w_.inPackage();
     s.started = updateAsked_;
     s.pending = updatePending_;
-    s.newer = update_.newer;
+    s.newer = update_.newer && !update_.offerWithdrawn;
     s.critical = update_.critical;
     s.dismissed = updateDismissed_;
+    s.runningWithdrawn = update_.runningWithdrawn;
     s.newVersion = update_.version;
     s.error = updateError_;
     for (const core::TeamMessage& m : update_.messages) {

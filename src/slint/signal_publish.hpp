@@ -16,6 +16,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,11 @@ public:
     const SignalModels& models() const { return last_; }
     std::size_t commandsSent() const { return sent_; }
 
+    // A BOUNDED RUN'S FILE SEAMS (docs 6.63; the classic's FOXSDR_FILE_PICK): FOXSDR_FILE_PICK=<path> is the file the I/Q row's file dialog "chooses" (set and empty = cancelled),
+    // FOXSDR_FILE_CLIPBOARD=<path> the file Ctrl+V finds on the clipboard (set and empty = none). A native dialog cannot be pressed from a test, and the desk's clipboard is
+    // never the test's. Read only when the run is bounded, so a release can never be steered by them; call once, after construction and before wire().
+    void setBounded(bool bounded);
+
     // A bounded run's self-capture (FOXSDR_SLINT_SETUP=1, FOXSDR_SLINT_IMPORT=1): raises the Radio-setup page / the import dialog. Never set in a release.
     void raiseSetupForCapture();
     void raiseImportForCapture();
@@ -84,6 +90,10 @@ private:
     std::function<void(const std::string&, const std::string&)> presetImport_;
     void importPath(const std::string& typed);
     void importBrowse();
+    // The I/Q file row (docs 6.63): Open (the box cleaned; an empty box is the dialog), Browse (the dialog; a choice is opened) and Ctrl+V with a copied file.
+    void iqOpen();
+    void iqBrowse();
+    bool iqPaste();
     void updateClocks();
     double nowS() const;
 
@@ -112,6 +122,8 @@ private:
     std::int64_t lastReadMs_ = 0;
     bool forceRead_ = true;
     bool txPageOpen_ = false;
+    bool bounded_ = false;
+    std::optional<std::string> filePickSeam_, fileClipboardSeam_;   // the bounded run's seams (setBounded)
     bool plutoDraftSet_ = false, rtltcpDraftSet_ = false;
     std::string plutoDraft_, rtltcpDraft_;
 

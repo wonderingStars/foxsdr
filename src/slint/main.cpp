@@ -330,6 +330,7 @@ int main(int argc, char** argv) {
     // THE SIGNAL BANK'S BODIES (signal_publish.hpp): the Source, Radio, Audio filters, Sinks, Transmit, Recorder and Frequency correction models, the Radio-setup
     // page and the import dialog, published from signal_logic's reads once a tick (after the kit's) and wired to the engine's ops.
     foxsdr::slintsignal::SignalPublisher signalBank(*ui, kit, api, session);
+    signalBank.setBounded(bounded.bounded());   // the I/Q row's file seams (FOXSDR_FILE_PICK, FOXSDR_FILE_CLIPBOARD) exist only in a bounded run
     signalBank.wire();
     if (std::getenv("FOXSDR_SLINT_SETUP") != nullptr) { signalBank.raiseSetupForCapture(); }     // a bounded run's capture of the Radio-setup page
     if (std::getenv("FOXSDR_SLINT_IMPORT") != nullptr) { signalBank.raiseImportForCapture(); }   // ...and of the recorder's import dialog
@@ -342,6 +343,7 @@ int main(int argc, char** argv) {
         ui->set_update_shown(c.shown);
         ui->set_update_headline(ss(c.headline));
         ui->set_update_critical(c.critical);
+        ui->set_update_withdrawn(c.withdrawn);
         ui->set_update_notes(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(notes)));
         ui->set_update_primary(ss(c.primary));
         ui->set_update_progress(c.progress);
@@ -1444,6 +1446,17 @@ int main(int argc, char** argv) {
             if (what == "count") { out = std::to_string(n); return std::string(); }
             if (what == "names" || what == "details" || what == "values") { out = joined; return std::string(); }
             return "list.<list>.count|names|details|values, not " + name;
+        }
+        // update.<shown|headline|note|primary|withdrawn>: the update card as the duties made it (docs 6.63: the kill switch's notice is read back through these)
+        if (name.rfind("update.", 0) == 0) {
+            const UpdateCardModel& card = duties.card();
+            const std::string what = name.substr(7);
+            if (what == "shown") { out = card.shown ? "1" : "0"; return std::string(); }
+            if (what == "headline") { out = card.headline; return std::string(); }
+            if (what == "note") { out = card.note; return std::string(); }
+            if (what == "primary") { out = card.primary; return std::string(); }
+            if (what == "withdrawn") { out = card.withdrawn ? "1" : "0"; return std::string(); }
+            return "update.shown|headline|note|primary|withdrawn, not " + name;
         }
         if (name.rfind("fact.", 0) == 0) { return world.fact(name.c_str(), out) ? std::string() : "no fact " + name; }
         if (name == "ui.language") { out = cascade::i18n::current(); return std::string(); }   // the code in force (docs 6.62: the CJK drive scripts read it and the face named below)

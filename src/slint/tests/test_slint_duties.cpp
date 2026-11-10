@@ -466,6 +466,68 @@ int main() {
         CHECK(!(updateCardFor(v) == updateCardFor(plain)));
     }
 
+    // ---- THE KILL SWITCH on the card (docs 6.63): a withdrawn copy is told so; a withdrawn release is never offered ----
+    {
+        // running version withdrawn, a good build offered: the amber card names both, and the key is still Download
+        UpdateView v;
+        v.enabled = true;
+        v.installerHere = true;
+        v.runningVersion = "0.99.105";
+        v.info = newerInfo();
+        v.info.runningWithdrawn = true;
+        UpdateCardModel c = updateCardFor(v);
+        CHECK(c.shown && c.withdrawn);
+        CHECK(c.headline == "FoxSDR 0.99.105 has been withdrawn: the FoxSDR team found a problem with it.");
+        CHECK(c.note == "We recommend updating to FoxSDR 9.9.9.\n30.0 MB, verified against its published checksum before anything runs");
+        CHECK(c.primary == "Download update");
+        CHECK(!c.notes.empty() && c.notes.front() == "9.9.9");   // the release notes still ride along
+
+        // running version withdrawn, nothing good yet: the sentence, no key but the card's own Not now (the row carries Open foxsdr.com)
+        UpdateView none;
+        none.enabled = true;
+        none.installerHere = true;
+        none.runningVersion = "0.99.105";
+        none.info.newer = false;
+        none.info.version = "0.99.104";
+        none.info.runningWithdrawn = true;
+        c = updateCardFor(none);
+        CHECK(c.shown && c.withdrawn && !c.critical);
+        CHECK(c.headline == "FoxSDR 0.99.105 has been withdrawn: the FoxSDR team found a problem with it.");
+        CHECK(c.note == "A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+        CHECK(c.primary.empty() && c.progress < 0.f && c.notes.empty());
+
+        // ...and the person can put it away, as the classic's Not now does; a Store copy and a switched-off check never see it
+        UpdateView away = none;
+        away.dismissed = true;
+        CHECK(!updateCardFor(away).shown);
+        UpdateView store = none;
+        store.packaged = true;
+        CHECK(!updateCardFor(store).shown);
+        UpdateView off = none;
+        off.enabled = false;
+        CHECK(!updateCardFor(off).shown);
+
+        // the withdrawn RELEASE is never offered, even when a hand-built answer still says newer
+        UpdateView bad;
+        bad.enabled = true;
+        bad.installerHere = true;
+        bad.info = newerInfo();
+        bad.info.offerWithdrawn = true;
+        CHECK(!updateCardFor(bad).shown);
+        bad.info.runningWithdrawn = true;
+        bad.runningVersion = "0.99.105";
+        c = updateCardFor(bad);
+        CHECK(c.shown && c.primary.empty() && c.note == "A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+
+        // the ordinary card is unchanged
+        UpdateView plain;
+        plain.enabled = true;
+        plain.installerHere = true;
+        plain.info = newerInfo();
+        c = updateCardFor(plain);
+        CHECK(c.shown && !c.withdrawn && c.headline == "Important update: FoxSDR 9.9.9");
+    }
+
     // ---- an interactive start ----
     {
         FakeWorld w;
@@ -723,6 +785,30 @@ int main() {
         CHECK(!h.card().shown);                                    // "Not now" hides it for this launch
         h.poll({});
         CHECK(!h.card().shown);
+
+        // THE KILL SWITCH through the duties (docs 6.63): the status the Updates row reads, the card, and no download of a withdrawn release
+        {
+            FakeWorld wf;
+            HostDuties wd(wf, [] {});
+            wf.facts["fact.config.interface"] = interfaceDoc(true, true);
+            wd.start(interactive());
+            wf.checkReady = true;
+            wf.checkOutcome.ok = true;
+            wf.checkOutcome.info = newerInfo();
+            wf.checkOutcome.info.runningWithdrawn = true;
+            wf.checkOutcome.info.offerWithdrawn = true;   // an inconsistent answer: the offer is withdrawn too, `newer` still set
+            wd.poll({});
+            const UpdateStatus st = wd.updateStatus();
+            CHECK(st.runningWithdrawn);
+            CHECK(!st.newer);                                      // the row is never told to offer it
+            CHECK(wd.card().shown && wd.card().withdrawn && wd.card().primary.empty());
+            wd.updatePrimaryClicked();                             // a key press that reaches startDownload is refused
+            CHECK(countOf(wf.calls, "downloadStart:9.9.9") == 0);
+            wd.updateDismissed();
+            CHECK(!wd.card().shown);                               // Not now puts the notice away
+            wd.updateShowAgain();
+            CHECK(wd.card().shown && wd.card().withdrawn);         // and Show it again brings it back
+        }
 
         FakeWorld k;
         HostDuties m(k, [] {});

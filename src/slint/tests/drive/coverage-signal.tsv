@@ -3,8 +3,6 @@
 1227	ASSERTED	signal-source	click Refresh; state count.devices >= 1; expect Refresh enabled equals true
 1228	ASSERTED	signal-source	click on, click off; expect Look for network USRPs checked true then false (Engine-owned field, the tick is the read-back)
 1229	ASSERTED	signal-source-setup	click RADIO SETUP; expect Don't show this again checked equals false (the sheet opened)
-1235	NOT_DRIVABLE	-	another source variant: the I/Q file card is drawn only with that source selected, which needs a file (no file chooser in a bounded run)
-1236	NOT_DRIVABLE	-	another source variant: the I/Q file card is drawn only with that source selected, which needs a file (no file chooser in a bounded run)
 1237	NOT_DRIVABLE	-	another source variant (Pluto / rtl_tcp card, drawn only with that source selected) and needs the network, withheld in a bounded run
 1238	NOT_DRIVABLE	-	another source variant (Pluto / rtl_tcp card, drawn only with that source selected) and needs the network, withheld in a bounded run
 1240	NOT_DRIVABLE	-	another source variant (Pluto / rtl_tcp card, drawn only with that source selected) and needs the network, withheld in a bounded run
@@ -67,3 +65,10 @@
 1375	ASSERTED	signal-recorder	click Stop audio; state recordingAudio == 0; expect Record audio enabled equals true
 1380	ASSERTED	signal-recorder	click Import; expect Browse... enabled equals true (the dialog opened)
 1386	DRIVEN	signal-recorder	click Cancel; the dialog closing is not read back (no engine state, no element left to expect absent)
+1235	ASSERTED	signal-source-iqfile.txt	type / press / key ctrl+a, backspace, enter on "I/Q file path"; expect value equals (docs 6.63: a bounded run has the dialog and clipboard seams, so the card is reachable)
+1236	ASSERTED	signal-source-iqfile.txt	click "Open" over a typed path, a quoted path and an empty box; state deviceName contains the fixture
+1969	ASSERTED	signal-source-iqfile.txt	click "Browse..." (FOXSDR_FILE_PICK answers the dialog); expect "I/Q file path" value, state deviceName contains ais-decoder
+1970	ASSERTED	signal-source-iqfile.txt	click "Open" with the box empty: the dialog's choice is opened (state deviceName contains ais-decoder)
+1971	ASSERTED	signal-source-iqfile.txt	press the box, key ctrl+v; expect value equals the clipboard file (FOXSDR_FILE_CLIPBOARD); the log holds the paste line
+1972	ASSERTED	signal-source-iqfile.txt	type a quoted path with a trailing space, click "Open"; expect value equals the cleaned path, state deviceName contains aprs-decoder
+1973	ASSERTED	signal-source-iqfile.txt	Open on a file that is not there: the source stays (state deviceName), and the run's diagnostic log holds "source: the I/Q file did not open" (header logcontains)

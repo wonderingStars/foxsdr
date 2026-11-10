@@ -21,6 +21,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -94,6 +95,9 @@ struct Header {
     std::string bandwidth; // the passband in Hz at start, with iqfile
     std::string config;    // a JSON file used as the run's settings seed instead of the generator profile (docs 6.51: a real radio's profile); relative = under tests/drive/fixtures
     bool userRadios = false;  // radios=user: the user's own SoapySDR vendor modules stay reachable (docs 6.51) - a hardware run on a real radio
+    bool updateCheck = false; // updatecheck=on: the generator profile's "Check for updates at startup" tick is ON (it is off otherwise: a bounded run asks nobody)
+    std::vector<std::string> logContains;   // logcontains=<text, underscores for spaces>: the run's diagnostic log must hold the text afterwards (docs 6.63: "a refused open reaches the log")
+    std::string manifest;     // manifest=<file>: foxsdr.com's answer, canned (FOXSDR_FAKE_UPDATE_MANIFEST, core/updater.hpp); relative = under tests/drive/fixtures (docs 6.63)
     std::map<std::string, std::string> env;
 };
 
@@ -123,6 +127,13 @@ Header parseHeader(const std::string& script) {
             else if (key == "bandwidth") { h.bandwidth = value; }
             else if (key == "config") { h.config = value; }                   // the settings seed file (docs 6.51)
             else if (key == "radios") { h.userRadios = (value == "user"); }   // the user's SoapySDR modules (docs 6.51: a hardware run)
+            else if (key == "updatecheck") { h.updateCheck = (value == "on"); }   // the Updates tick on (docs 6.63: the kill switch's notice)
+            else if (key == "manifest") { h.manifest = value; }                   // the canned update answer (docs 6.63)
+            else if (key == "logcontains") {                                      // a line the run must have written to its diagnostic log (docs 6.63)
+                std::string text = value;
+                std::replace(text.begin(), text.end(), '_', ' ');
+                h.logContains.push_back(text);
+            }
             else if (key.rfind("FOXSDR_", 0) == 0 || key.rfind("CASCADE_", 0) == 0) { h.env[key] = value; }
         }
     }
@@ -169,6 +180,14 @@ int main(int argc, char** argv) {
             CHECK(!script.empty());
             return testSummary("test_slint_drive_run");
         }
+    }
+    // {fixtures} in a script or its header is the fixtures folder (forward slashes, which Windows takes as well as backslashes and which need no escaping inside a quoted
+    // step): a step can name a recording the same on every machine (docs 6.63). FOXSDR_DRIVE_FIXTURES_DIR names another folder.
+    {
+        const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
+        const std::string dirText = ((fx != nullptr && *fx != '\0') ? fs::path(fx) : fs::path(FOXSDR_DRIVE_FIXTURES_DIR)).generic_string();
+        const std::string token = "{fixtures}";
+        for (std::size_t at = script.find(token); at != std::string::npos; at = script.find(token, at + dirText.size())) { script.replace(at, token.size(), dirText); }
     }
     const Header h = parseHeader(script);
     // {FIXTURES} in a script is the fixtures folder, forward slashes (a file the script types into a path box: docs 6.61's airband-import.csv).
@@ -265,7 +284,7 @@ int main(int argc, char** argv) {
         f << text;
     } else {
         std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
-        f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"mainView\": \"receiver\", \"bandPlanOverlay\": false";
+        f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": " << (h.updateCheck ? "true" : "false") << ", \"mainView\": \"receiver\", \"bandPlanOverlay\": false";
         if (h.iqfile.empty()) {
             f << ", \"sourceKind\": \"siggen\"";
         } else {
@@ -310,6 +329,18 @@ int main(int argc, char** argv) {
     // "CASCADE_DECODE_TEST=" (empty) keeps the receiver stopped for a script that wants that.
     setEnv("CASCADE_DECODE_TEST", "1");
     for (const auto& [k, v] : h.env) { setEnv(k.c_str(), v); }
+    // THE CANNED UPDATE ANSWER (docs 6.63): a script that says `manifest=` is given foxsdr.com's answer as a file, under the fixtures folder when relative; every other
+    // run has none (the test process may have inherited one), so the check is never asked and never answered.
+    {
+        fs::path m(h.manifest);
+        if (!h.manifest.empty() && m.is_relative()) {
+            const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
+            m = (fx != nullptr && *fx != '\0') ? fs::path(fx) / m : fs::path(FOXSDR_DRIVE_FIXTURES_DIR) / m;
+        }
+        if (!h.manifest.empty() && !fs::exists(m)) { std::printf("  the manifest %s does not exist\n", m.string().c_str()); }
+        CHECK(h.manifest.empty() || fs::exists(m));
+        setEnv("FOXSDR_FAKE_UPDATE_MANIFEST", h.manifest.empty() ? std::string() : m.string());
+    }
 
     // The window under test; FOXSDR_DRIVE_EXE names another build of it for this run (docs 6.62: the clip sweep runs the probe build, whose Text elements report an overflow).
     std::string exe = FOXSDR_SLINT_EXE;
@@ -337,6 +368,17 @@ int main(int argc, char** argv) {
     CHECK(r.exitCode == 0);
     CHECK(finished);
     CHECK(clean);
+    // THE LOG (docs 6.63): the lines a script's header asks for (`logcontains=`) are looked for in every file the run's diagnostic folder holds.
+    for (const std::string& want : h.logContains) {
+        bool found = false;
+        std::error_code lec;
+        for (const auto& entry : fs::recursive_directory_iterator(dir / "diag", fs::directory_options::skip_permission_denied, lec)) {
+            if (!entry.is_regular_file(lec)) { continue; }
+            if (readFile(entry.path()).find(want) != std::string::npos) { found = true; break; }
+        }
+        if (!found) { std::printf("  the run's log does not hold \"%s\"\n", want.c_str()); }
+        CHECK(found);
+    }
     // FOXSDR_DRIVE_VERBOSE=1 prints the whole run (a script author reads its `dump` from here); a failed run prints it anyway.
     const char* verbose = std::getenv("FOXSDR_DRIVE_VERBOSE");
     if (r.exitCode != 0 || !finished || !clean || (verbose != nullptr && *verbose == '1')) {

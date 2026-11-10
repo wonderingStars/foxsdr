@@ -14,6 +14,7 @@
 #include <iterator>
 #include <thread>
 
+#include "core/clipboard_files.hpp"
 #include "core/config_halves.hpp"
 #include "core/device_scan_plan.hpp"
 #include "core/diag_log.hpp"
@@ -23,6 +24,7 @@
 #include "core/freq_converter.hpp"
 #include "core/freq_import.hpp"
 #include "core/i18n.hpp"
+#include "core/iq_file_box.hpp"
 #include "core/radio_setup.hpp"
 #include "core/thread_beats.hpp"
 #include "core/utf8_text.hpp"
@@ -485,6 +487,77 @@ void SignalPublisher::importBrowse() {
     if (cascade::core::pickFile(rq, chosen) && !chosen.empty()) { importPath(chosen); }
 }
 
+void SignalPublisher::setBounded(bool bounded) {
+    bounded_ = bounded;
+    if (!bounded) { return; }
+    if (const char* pick = std::getenv("FOXSDR_FILE_PICK"); pick != nullptr) { filePickSeam_ = std::string(pick); }
+    if (const char* clip = std::getenv("FOXSDR_FILE_CLIPBOARD"); clip != nullptr) { fileClipboardSeam_ = std::string(clip); }
+}
+
+// OPEN ON THE I/Q FILE ROW (the classic's AppWindow::openIqFile, docs 6.63). The box is cleaned (Explorer's "Copy as path" quotes and a pasted line's trailing space come off) and
+// shows what is tried; SELECT_SOURCE "file:<path>" is the engine's (it opens the header on a worker and logs a refusal without the path, Engine::pollIqOpen). An EMPTY box is
+// not a file that would not open: where there is a file dialog it opens, and where there is none the box says what it is for.
+void SignalPublisher::iqOpen() {
+    forceRead_ = true;
+    const std::string typed = opts_.iq_path.empty() ? last_.source.iq_path : opts_.iq_path;
+    const IqOpenPlan plan = planIqOpen(typed, opts_.iq_browse_offered);
+    if (plan.browse) {
+        opts_.iq_box_note.clear();
+        iqBrowse();
+        return;
+    }
+    if (!plan.note.empty()) {
+        opts_.iq_box_note = plan.note;
+        cascade::core::diagLogf("%s", plan.log.c_str());
+        return;
+    }
+    opts_.iq_box_note.clear();
+    opts_.iq_path = plan.path;
+    send(plan.open);
+}
+
+// BROWSE: the system's file dialog, through the same core::pickFile the import dialog's Browse key uses - opening beside the path in the box, else in the recordings folder,
+// with the WAV recordings offered first. A choice moves the Source combo to the I/Q file row ("row:iqfile") and opens the file; a cancel changes nothing and is said in the log
+// so a report of "Open does nothing" can be told from a dialog that was dismissed. The log never carries the file's name (PRIVACY.md).
+void SignalPublisher::iqBrowse() {
+    forceRead_ = true;
+    if (fact("fact.source.iqOpening") == "1") { return; }
+    cascade::core::FilePickRequest rq;
+    rq.title = tr("Choose a recording to play");
+    rq.startFrom = cascade::core::pickStartPath(opts_.iq_path, fact("fact.recorder.dir"), "recording.wav");
+    rq.recordings = true;
+    rq.recordingsName = tr("I/Q recordings (*.wav)");
+    rq.allFilesName = tr("All files (*.*)");
+    std::string chosen;
+    bool got = false;
+    if (filePickSeam_.has_value()) {
+        chosen = *filePickSeam_;
+        got = !chosen.empty();
+    } else {
+        got = cascade::core::pickFile(rq, chosen);
+    }
+    if (!got || chosen.empty()) {
+        cascade::core::diagLogf("source: the I/Q file dialog was closed without a choice");
+        return;
+    }
+    cascade::core::diagLogf("source: a recording was chosen in the I/Q file dialog");
+    opts_.iq_path = chosen;
+    opts_.iq_box_note.clear();
+    sendAll({opIqRow(), opIqOpen(chosen)});
+}
+
+// CTRL+V in the box with a FILE copied in Explorer: the clipboard holds a list of files, not text, and the text box's own paste knows only text. The box takes the first
+// file's path (the user presses Open; the quotes and spaces of whatever else they type are cleaned there). False = no file on the clipboard, so the box pastes text as ever.
+bool SignalPublisher::iqPaste() {
+    const std::string file = fileClipboardSeam_.has_value() ? *fileClipboardSeam_ : cascade::core::firstFileOnClipboard();
+    if (file.empty()) { return false; }
+    opts_.iq_path = file;
+    opts_.iq_box_note.clear();
+    forceRead_ = true;
+    cascade::core::diagLogf("source: a file was pasted into the I/Q file box");
+    return true;
+}
+
 void SignalPublisher::pollImport() {
     ImportState& im = *import_;
     ImportState::Lookup o;
@@ -592,6 +665,8 @@ void SignalPublisher::updateClocks() {
     o.variant = m.variant;
     o.iq_path = ss(m.iq_path);
     o.iq_note = ss(m.iq_note);
+    o.iq_browse = m.iq_browse;
+    o.iq_opening = m.iq_opening;
     o.pluto_address = ss(m.pluto_address);
     o.pluto_help = ss(m.pluto_help);
     o.rtltcp_address = ss(m.rtltcp_address);
@@ -850,6 +925,8 @@ std::string SignalPublisher::summaryLine() const {
 // ---------------------------------------------------------------------------------------------------------------------------------
 void SignalPublisher::wire() {
     auto&& ev = ui_.global<::SignalEvents>();
+    // The Browse key is drawn only where there is a file dialog to open - the system's on Windows, zenity or kdialog on Linux, the bounded run's seam - never a key that does nothing.
+    opts_.iq_browse_offered = filePickSeam_.has_value() || cascade::core::filePickAvailable();
     // ---- Source ----
     ev.on_source_device_selected([this](int i) { send(opDeviceSelected(table_, last_.source, i)); });
     ev.on_source_refresh([this] { if (last_.source.refresh_enabled) { send(opRefresh()); } });
@@ -869,7 +946,9 @@ void SignalPublisher::wire() {
     ev.on_ppm_committed([this](slint::SharedString t) { send(opPpmCommitted(std::string(t), last_.source.ppm_value)); });
     // ---- the variants ----
     ev.on_iq_path_committed([this](slint::SharedString p) { opts_.iq_path = std::string(p); forceRead_ = true; });   // [local]: the draft
-    ev.on_iq_open([this] { send(opIqOpen(opts_.iq_path.empty() ? last_.source.iq_path : opts_.iq_path)); });
+    ev.on_iq_open([this] { iqOpen(); });
+    ev.on_iq_browse([this] { iqBrowse(); });
+    ev.on_iq_paste([this]() { return iqPaste(); });
     ev.on_pluto_address_committed([this](slint::SharedString t) { plutoDraft_ = std::string(t); plutoDraftSet_ = true; send(opPlutoAddress(plutoDraft_)); });
     ev.on_pluto_open([this] { send(opPlutoOpen(plutoDraftSet_ ? plutoDraft_ : last_.source.pluto_address)); });
     ev.on_rtltcp_address_committed([this](slint::SharedString t) { rtltcpDraft_ = std::string(t); rtltcpDraftSet_ = true; send(opRtlTcpAddress(rtltcpDraft_)); });

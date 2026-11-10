@@ -1,0 +1,10 @@
+#! frames=260 bank=4 sections=4:3 updatecheck=on manifest=update-withdrawn-fix.json
+# system-updates-withdrawn-fix (docs 6.63): the kill switch with a good build out. The running version was withdrawn and 9.9.9 is offered, so the card says the copy
+# was withdrawn, recommends updating to 9.9.9 and keeps its Download update key; the Updates row has nothing of its own to press (no Open foxsdr.com).
+# Download update is not pressed: a bounded run would fetch from foxsdr.com.
+80 state update.shown == 1
+state update.withdrawn == 1
+state update.headline contains "has been withdrawn: the FoxSDR team found a problem with it."
+state update.note contains "We recommend updating to FoxSDR 9.9.9."
+state update.primary == "Download update"
+expect "Download update" enabled equals "true"

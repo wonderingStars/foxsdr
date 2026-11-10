@@ -13,6 +13,7 @@
 //          b3    Updates / UPDATE          Beta lit, the amber status line, Show it again                                                                m-upd-new
 //          b4    Serial ports / 2          intro, Refresh, the one-column table of two ports, the GPS receiver rule, the GPS row (listening), the note   m-ser
 //          b5    Serial ports / NONE       default-forwarding: the empty line, the GPS row not listening                                                  m-ser-none
+//          b6    Updates / RECALL          the kill switch (docs 6.63): the amber "has been withdrawn" status, the advice under it, Open foxsdr.com + Not now   m-upd-recall
 //   C  622  c1    Key bindings / CHANGED    help, Receiver (+ Reset) with four rows - one listening, one clashing - then Mode with two rows, the footer   m-keys
 //          c2    Key bindings / DEFAULT    default-forwarding to SystemEvents, nothing listening                                                         m-keys-plain
 //   D  928  d1    Diagnostics / ON          the amber offer, explanation, the tick, the sent text, the disclosure (open), the dump tick and note, paths, ledger, keys, SDRplay   m-diag
@@ -78,6 +79,8 @@ component SpecUpdates inherits UpdatesBody {
     updates-channel(a) => { Rec.rec("updates-channel", "" + a); }
     updates-team-message() => { Rec.rec("updates-team-message", ""); }
     updates-show-again() => { Rec.rec("updates-show-again", ""); }
+    updates-open-site() => { Rec.rec("updates-open-site", ""); }
+    updates-withdrawn-dismiss() => { Rec.rec("updates-withdrawn-dismiss", ""); }
 }
 
 component SpecSerial inherits SerialPortsBody {
@@ -151,6 +154,8 @@ export component SystemSpecimen inherits Window {
     out property <length> b4-body-h: b4.body-height;
     out property <length> b5-y: b5.y;
     out property <length> b5-body-h: b5.body-height;
+    out property <length> b6-y: b6.y;
+    out property <length> b6-body-h: b6.body-height;
     out property <length> c1-y: c1.y;
     out property <length> c1-body-h: c1.body-height;
     out property <length> c2-y: c2.y;
@@ -165,7 +170,7 @@ export component SystemSpecimen inherits Window {
     out property <length> d4-body-h: d4.body-height;
     out property <length> d5-y: d5.y;
     out property <length> d5-body-h: d5.body-height;
-    out property <length> pages-y: max(max(a2.y + a2.height, b5.y + b5.height), max(c2.y + c2.height, d5.y + d5.height)) + 24px;
+    out property <length> pages-y: max(max(a2.y + a2.height, b6.y + b6.height), max(c2.y + c2.height, d5.y + d5.height)) + 24px;
     out property <length> probe-y: root.height + 10px;
     out property <length> p1-w: p1.width;
     out property <length> p2-w: p2.width;
@@ -294,6 +299,14 @@ export component SystemSpecimen inherits Window {
         privacy: "Checking sends nothing about you.",
         version-line: "FoxSDR 0.99.105",
         status-line: "FoxSDR 0.99.106 is available", status-tone: ChipTone.warn, show-again: true, show-again-label: "Show it again",
+    };
+    in-out property <UpdatesModel> m-upd-recall: {
+        check-at-startup: true, channel-index: 0,
+        version-line: "this build: 0.99.105",
+        status-line: "FoxSDR 0.99.105 has been withdrawn: the FoxSDR team found a problem with it.", status-tone: ChipTone.warn,
+        withdrawn-advice: "A fixed version is not ready yet. foxsdr.com will have it as soon as it is.",
+        site-label: "Open foxsdr.com", dismiss-label: "Not now",
+        packaged: false, show-again: false,
     };
     in-out property <SerialPortsModel> m-ser: {
         intro: "The serial ports on this computer. A GPS receiver on one of them can tell FoxSDR where it is.",
@@ -425,6 +438,8 @@ export component SystemSpecimen inherits Window {
         SpecSerial { model: root.m-ser; } }
     b5 := Section { x: 316px; y: b4.y + b4.height + 10px; width: 296px; small: true; open: true; name: "Serial ports"; chip: "NONE";
         SerialPortsBody { model: root.m-ser-none; } }
+    b6 := Section { x: 316px; y: b5.y + b5.height + 10px; width: 296px; small: true; open: true; name: "Updates"; chip: "RECALL"; tone: ChipTone.warn;
+        SpecUpdates { model: root.m-upd-recall; } }
 
     // ============================ column C (x 622) ============================
     c1 := Section { x: 622px; y: 10px; width: 296px; small: true; open: true; name: "Key bindings"; chip: "CHANGED"; tone: ChipTone.warn;

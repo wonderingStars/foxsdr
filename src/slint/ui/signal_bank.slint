@@ -49,6 +49,7 @@ export struct SourceModel {
     card-can-open: bool,                               // ADDED (docs 6.61): a sound card is chosen, so the card's Open key answers; false = greyed
     variant: int,                                      // 0 none, 1 I/Q file, 2 Pluto, 3 rtl_tcp, 4 sound card, 5 Airspy, 6 radio extras, 7 converter
     iq-path: string, iq-note: string,
+    iq-browse: bool, iq-opening: bool,                 // ADDED (docs 6.63): Browse is drawn (a file dialog exists); the header is being read, Browse and Open are greyed
     pluto-address: string, pluto-help: string,
     rtltcp-address: string, rtltcp-help: string,
     card-busy: string, card-none: string, cards: [SelectItem], card-index: int, card-format-index: int, card-channel-index: int,
@@ -104,6 +105,8 @@ export global SignalEvents {
     callback ppm-committed(string);
     callback iq-path-committed(string);
     callback iq-open();
+    callback iq-browse();                          // ADDED (docs 6.63): the system's file dialog; a choice is opened
+    callback iq-paste() -> bool;                   // ADDED: Ctrl+V with a FILE on the clipboard; true = the host took its path into the box
     callback pluto-address-committed(string);
     callback pluto-open();
     callback rtltcp-address-committed(string);
@@ -293,7 +296,9 @@ component LineInput inherits Rectangle {
     in property <bool> error;
     in property <string> tooltip;
     in property <string> name;                          // the accessible label
+    in property <bool> files-paste;                     // docs 6.63: Ctrl+V asks the host first whether a FILE is on the clipboard (the I/Q file box); false = never
     callback committed(string);
+    callback paste-files() -> bool;                     // true = the host took the clipboard's file (and published its path as `value`)
     out property <bool> has-focus: input.has-focus;
     out property <string> text: input.text;
 
@@ -313,6 +318,14 @@ component LineInput inherits Rectangle {
         root.dirty = false;
     }
 
+    // Ctrl+V is offered to the host first (docs 6.63): a FILE copied in Explorer is on the clipboard as a list of files, which the text box cannot take.
+    fs := FocusScope {
+        capture-key-pressed(event) => {
+            if (root.files-paste && (event.modifiers.control || event.modifiers.meta) && (event.text == "v" || event.text == "V" || event.text == "\u{16}")) {
+                if (root.paste-files()) { return EventResult.accept; }
+            }
+            return EventResult.reject;
+        }
     area := TouchArea {
         mouse-cursor: root.enabled ? MouseCursor.text : MouseCursor.default;
         clicked => { if (root.enabled) { input.focus(); } }
@@ -358,6 +371,7 @@ component LineInput inherits Rectangle {
                 }
             }
         }
+    }
     }
     if input.has-focus : Rectangle {
         x: -3px;
@@ -670,6 +684,10 @@ export component SourceBody inherits VerticalLayout {
     iq-path-committed(a) => { SignalEvents.iq-path-committed(a); }
     callback iq-open();
     iq-open() => { SignalEvents.iq-open(); }
+    callback iq-browse();
+    iq-browse() => { SignalEvents.iq-browse(); }
+    callback iq-paste() -> bool;
+    iq-paste() => { return SignalEvents.iq-paste(); }
     callback pluto-address-committed(string);
     pluto-address-committed(a) => { SignalEvents.pluto-address-committed(a); }
     callback pluto-open();
@@ -796,8 +814,9 @@ export component SourceBody inherits VerticalLayout {
     if root.model.variant == 1 : VariantCard {
         tag: @tr("I/Q file");
         Line {
-            LineInput { horizontal-stretch: 1; value: root.model.iq-path; name: @tr("I/Q file path"); committed(t) => { root.iq-path-committed(t); } }
-            Mid { Key { label: @tr("Open"); xs: true; clicked => { root.iq-open(); } } }
+            LineInput { horizontal-stretch: 1; value: root.model.iq-path; name: @tr("I/Q file path"); files-paste: true; committed(t) => { root.iq-path-committed(t); } paste-files() => { return root.iq-paste(); } }
+            if root.model.iq-browse : Mid { Key { label: @tr("Browse..."); xs: true; enabled: !root.model.iq-opening; clicked => { root.iq-browse(); } } }
+            Mid { Key { label: @tr("Open"); xs: true; enabled: !root.model.iq-opening; clicked => { root.iq-open(); } } }
         }
         if root.model.iq-note != "" : Note { text: root.model.iq-note; }
     }

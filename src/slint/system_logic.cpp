@@ -422,14 +422,27 @@ LanguageModel readLanguage(TableReader& t, const cc::AppConfig& iface, const Rea
 // =================================================================================================================================
 // Updates
 
+namespace {
+// THE KILL SWITCH (docs 6.63; the classic's drawUpdateBanner, app_window_updates.cpp): the notice is for a website copy whose check is on and whose running version
+// the service withdrew. A Store copy has the Store's banner instead. A withdrawn RELEASE is never offered - `newer` is false for it in core::UpdateInfo, and the
+// flag is read here too so a stale or hand-built answer cannot make the row recommend one.
+bool withdrawnNotice(bool enabled, const UpdatesFacts& f) { return enabled && !f.packaged && f.running_withdrawn; }
+bool updateOffered(const UpdatesFacts& f) { return f.packaged ? f.store_offered : (f.newer && !f.offer_withdrawn); }
+}  // namespace
+
 RowChip updatesChip(bool enabled, const UpdatesFacts& f) {
     RowChip c;
     c.word = std::string(tr("OFF"));
     if (!enabled) { return c; }
-    const bool offered = f.packaged ? f.store_offered : f.newer;
+    const bool offered = updateOffered(f);
     const bool important = f.packaged ? f.store_mandatory : f.critical;
     if (f.packaged && f.store_installing) {
         c.word = std::string(tr("STORE"));
+        c.tone = Tone::Warn;
+        c.lit = true;
+    } else if (withdrawnNotice(enabled, f)) {
+        // Plain English, as the classic's notice is: a safety word must not wait for 33 catalogues.
+        c.word = "RECALL";
         c.tone = Tone::Warn;
         c.lit = true;
     } else if (offered) {
@@ -452,11 +465,15 @@ UpdatesStatus updatesStatus(bool enabled, const UpdatesFacts& f) {
         s.text = std::string(tr("checking is off, so you will not be told about a new version"));
     } else if (f.pending) {
         s.text = std::string(tr("checking..."));
+    } else if (withdrawnNotice(enabled, f)) {
+        // The warning colour and not the error one: a gentle notice that recommends updating. Plain English on purpose (see the chip).
+        s.text = cc::formatText("FoxSDR %s has been withdrawn: the FoxSDR team found a problem with it.", f.build_version.c_str());
+        s.tone = Tone::Warn;
     } else if (f.packaged && f.store_offered) {
         // No version number: the Store does not give one.
         s.text = std::string(tr("the Microsoft Store has an update for this copy"));
         s.tone = f.store_mandatory ? Tone::Err : Tone::Warn;
-    } else if (!f.packaged && f.newer) {
+    } else if (!f.packaged && f.newer && !f.offer_withdrawn) {
         s.text = cc::formatText(tr("%s is available"), f.new_version.c_str());
         s.tone = f.critical ? Tone::Err : Tone::Warn;
     } else if (f.started && f.error.empty()) {
@@ -502,8 +519,19 @@ UpdatesModel readUpdates(const cc::AppConfig& iface, const ReadOptions& o) {
     m.status_line = s.text;
     m.status_tone = s.tone;
     m.show_again_label = std::string(tr("Show it again"));
-    const bool offered = f.packaged ? f.store_offered : f.newer;
-    m.show_again = enabled && !f.pending && offered && f.dismissed;
+    const bool offered = updateOffered(f);
+    const bool recall = withdrawnNotice(enabled, f);
+    m.show_again = enabled && !f.pending && (offered || recall) && f.dismissed;
+    if (recall) {
+        // What to do about it: the update when a good build is offered; when none is yet, the sentence, foxsdr.com's key and "Not now" (the classic's three).
+        const bool fix = !f.packaged && f.newer && !f.offer_withdrawn;
+        m.withdrawn_advice = fix ? cc::formatText("We recommend updating to FoxSDR %s.", f.new_version.c_str())
+                                 : std::string("A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+        if (!fix) {
+            m.site_label = std::string(tr("Open foxsdr.com"));
+            if (!f.dismissed) { m.dismiss_label = std::string(tr("Not now")); }
+        }
+    }
     return m;
 }
 
@@ -1480,6 +1508,19 @@ Effect applyUpdatesShowAgain() {
 Effect applyUpdatesTeamMessage() {
     Effect e;
     e.local = Local::OpenTeamMessages;
+    return e;
+}
+
+Effect applyUpdatesOpenSite() {
+    Effect e;
+    e.local = Local::OpenUrl;
+    e.text = cc::kHomepageUrl;
+    return e;
+}
+
+Effect applyUpdatesWithdrawnNotNow() {
+    Effect e;
+    e.apply = kApplyUpdateDismiss;
     return e;
 }
 

@@ -71,3 +71,6 @@
 1441	NOT_DRIVABLE	-	the port list is a table of read-only rows (no port on the test machine, nothing to pick); the Refresh button is row 1439
 1448	ASSERTED	system-keys-dispatch.txt	capture F6 onto "Bank: SIGNAL PATH", Backspace on "Bank: DECODE", Ctrl+J onto "Mode: AM"; the window answers the new chord (state bank / mode) and not the old one, a cleared key answers nothing (docs 6.56)
 1445	ASSERTED	system-keys-dispatch.txt	"Reset to defaults" then the stock chords answer again (F1 -> bank 0, Ctrl+A -> AM) and the rebound ones do not (docs 6.56)
+1976	ASSERTED	system-updates-withdrawn-nofix.txt	click "Open foxsdr.com" (a bounded run opens no browser: the effect on the window is none, the card stays); the key is read back with expect enabled
+1977	ASSERTED	system-updates-withdrawn-nofix.txt	click "Not now"#2; state update.shown == 0, then click "Show it again"; state update.shown == 1
+1978	ASSERTED	system-updates-withdrawn-fix.txt	state update.shown / update.withdrawn / update.headline / update.note / update.primary over three canned answers (withdrawn-fix: Download update; withdrawn-nofix and withdrawn-offer: no key)

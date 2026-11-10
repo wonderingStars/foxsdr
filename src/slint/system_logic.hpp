@@ -55,6 +55,8 @@
 //   updates-channel(i)           applyUpdatesChannel   save updateChannel = stable | beta; apply UpdateCheck when it changed and the check is on; nothing for a Store copy
 //   updates-team-message()       [local]               the publisher brings the team message cards forward (the cards are the duties', not this bank's)
 //   (show it again)              applyUpdatesShowAgain apply UpdateShowAgain (HostDuties::updateShowAgain)
+//   updates-open-site()          applyUpdatesOpenSite  [local] open foxsdr.com in the browser (Local::OpenUrl) - the withdrawn notice with no fixed build yet
+//   updates-withdrawn-dismiss()  applyUpdatesWithdrawnNotNow  apply UpdateDismiss (HostDuties::updateDismissed): the classic's "Not now" on that notice
 //   serial-refresh()             opSerialRefresh       FOXAPI_OP_SCAN_SERIAL_PORTS 0x0F03 (the answer is the SERIAL_PORTS list changing)
 //   gps-port(i)                  applyGpsPort          save gpsPort = ports[i] (nothing to save for the port already chosen); ops FOXAPP_OP_CLEAR_STATUS 0x840C x2
 //                                                      (FOXAPP_STATUS_GPS_REFUSAL 1, FOXAPP_STATUS_GPS_RESULT 6) - sent for any pick, as the Selectable fires; nothing while listening
@@ -216,6 +218,10 @@ struct UpdatesModel {
     bool show_again = false;               // "Show it again" is offered (an update is offered and the banner was dismissed)
     std::string show_again_label;
     std::string stable_label, beta_label;  // "Stable releases", "Every release (beta)"
+    // ---- the kill switch (docs 6.63): the version RUNNING was withdrawn by the service. The status line above says so (warning tone); these are the rest ----
+    std::string withdrawn_advice;          // "We recommend updating to FoxSDR 0.99.109." / "A fixed version is not ready yet. foxsdr.com will have it as soon as it is." ("" when not withdrawn)
+    std::string site_label;                // "Open foxsdr.com" - only while no good build is offered yet ("" otherwise)
+    std::string dismiss_label;             // "Not now" - same condition, and only while the notice has not been put away
 };
 
 struct GpsRow {
@@ -389,6 +395,8 @@ struct ReportInputs {
 struct UpdatesFacts {                       // HostDuties::updateStatus() (+ the Store flow's, which the duties defer)
     bool packaged = false, started = false, pending = false;
     bool newer = false, critical = false, dismissed = false;
+    bool running_withdrawn = false;         // UpdateInfo::runningWithdrawn: the service withdrew the version running (the classic's update_.runningWithdrawn)
+    bool offer_withdrawn = false;           // UpdateInfo::offerWithdrawn: the version offered was withdrawn - it is NOT offered, whatever `newer` says
     bool store_offered = false, store_mandatory = false, store_installing = false;
     std::string new_version, error, build_version, package_name;
     int unseen_messages = 0;
@@ -517,6 +525,7 @@ enum Apply : unsigned {
     kApplyDiagnostics = 1u << 4,  // HostDuties::diagnosticsChanged(enabled, minidump)
     kApplyUpdateCheck = 1u << 5,  // HostDuties::updateSettingChanged()
     kApplyUpdateShowAgain = 1u << 6,   // HostDuties::updateShowAgain()
+    kApplyUpdateDismiss = 1u << 7,     // HostDuties::updateDismissed(): "Not now" on the withdrawn notice
 };
 // What is local (the publisher keeps the state) or leaves the program without a command.
 enum class Local {
@@ -586,6 +595,8 @@ Effect applyUpdatesCheck(const cascade::core::AppConfig& cur, bool on);
 Effect applyUpdatesChannel(const cascade::core::AppConfig& cur, int index, bool packaged);
 Effect applyUpdatesShowAgain();
 Effect applyUpdatesTeamMessage();
+Effect applyUpdatesOpenSite();         // [local] open foxsdr.com (the withdrawn notice, while no fixed build is out yet)
+Effect applyUpdatesWithdrawnNotNow();  // apply UpdateDismiss
 
 Command opSerialRefresh();
 Effect applySerialRefresh();

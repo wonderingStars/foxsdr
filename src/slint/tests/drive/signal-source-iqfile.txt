@@ -1,0 +1,42 @@
+#! frames=900 bank=0 sections=0:1 FOXSDR_FILE_PICK={fixtures}/ais-decoder.wav FOXSDR_FILE_CLIPBOARD={fixtures}/aprs-decoder.wav logcontains=source:_the_I/Q_file_did_not_open logcontains=source:_a_file_was_pasted_into_the_I/Q_file_box logcontains=source:_a_recording_was_chosen_in_the_I/Q_file_dialog
+# signal-source-iqfile (docs 6.63): the Source section's I/Q-file row in the Slint window, the way a tester (0.99.101) needed it. FOXSDR_FILE_PICK is the file the
+# dialog "chooses" and FOXSDR_FILE_CLIPBOARD the file Ctrl+V finds on the clipboard (both seams exist only in a bounded run); the recordings are two of docs 6.50's fixtures.
+10 state running == 1
++1 choose "Source"#2 "IQ file"
++5 expect "Browse..." enabled equals "true"
+expect "I/Q file path" value equals ""
+
+# 1. A copied FILE pastes as its path (the clipboard holds a file list, not text): Ctrl+V in the box, nothing opened yet
++1 press "I/Q file path"
++2 key ctrl+v
++5 expect "I/Q file path" value equals "{fixtures}/aprs-decoder.wav"
+state deviceName contains Signal
+
+# 2. Open over an EMPTY box opens the file dialog (here: the seam's answer, ais-decoder) and plays what was chosen
++1 press "I/Q file path"
++2 key ctrl+a
++1 key backspace
++1 key enter
++3 expect "I/Q file path" value equals ""
++1 click "Open"
++40 expect "I/Q file path" value equals "{fixtures}/ais-decoder.wav"
+state deviceName contains ais-decoder
+
+# 3. A quoted path with a trailing space ("Copy as path", a pasted line) is cleaned: the box shows what is tried, and the file plays
++1 type "I/Q file path" "\"{fixtures}/aprs-decoder.wav\" "
++1 key enter
++2 click "Open"
++40 expect "I/Q file path" value equals "{fixtures}/aprs-decoder.wav"
+state deviceName contains aprs-decoder
+
+# 4. A file that will not open leaves the source as it was and reaches the log (the header's logcontains: "the I/Q file did not open", without the path)
++1 type "I/Q file path" "{fixtures}/no-such-recording.wav"
++1 key enter
++2 click "Open"
++40 state deviceName contains aprs-decoder
+
+# 5. Browse is the same dialog: the file it chooses is opened
++1 click "Browse..."
++40 expect "I/Q file path" value equals "{fixtures}/ais-decoder.wav"
+state deviceName contains ais-decoder
+state running == 1
