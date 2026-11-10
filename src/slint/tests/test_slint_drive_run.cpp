@@ -305,7 +305,9 @@ int main(int argc, char** argv) {
     setEnv("CASCADE_DECODE_TEST", "1");
     for (const auto& [k, v] : h.env) { setEnv(k.c_str(), v); }
 
-    const std::string exe = FOXSDR_SLINT_EXE;
+    // The window under test; FOXSDR_DRIVE_EXE names another build of it for this run (docs 6.62: the clip sweep runs the probe build, whose Text elements report an overflow).
+    std::string exe = FOXSDR_SLINT_EXE;
+    if (const char* other = std::getenv("FOXSDR_DRIVE_EXE"); other != nullptr && *other != '\0') { exe = other; }
     const Run r = run("\"" + exe + "\" --frames " + std::to_string(h.frames) + " 2>&1");
     const std::string ticks = std::to_string(h.frames) + " of " + std::to_string(h.frames) + " ticks, exit 0";
     const bool finished = r.out.find(ticks) != std::string::npos;

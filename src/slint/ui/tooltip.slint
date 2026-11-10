@@ -95,6 +95,45 @@ export component TipTimer {
     }
 }
 
+// A one-line piece of text that elides when its box is short of the words and then says the whole of itself in the tip (docs 6.62, the clip sweep: the receiver strip's hint lines, the
+// counter plate's caption, the age axis). It sits where the Text sat: a layout reads its natural width as the preferred width and no minimum, so a longer translation never widens the row; a
+// parent that is not a layout gives it an explicit width and height. The text is never shortened, only given a tip.
+export component ElidedHint inherits Rectangle {
+    in property <string> text;
+    in property <color> ink: Theme.dim;
+    in property <string> family: Theme.font-ui;
+    in property <length> font-size: Theme.font-hint;
+    in property <int> font-weight: 400;
+    in property <length> letter-spacing: 0px;
+    in property <TextHorizontalAlignment> horizontal-alignment: TextHorizontalAlignment.left;
+    // `pointer: false` for a hint that sits over something that owns the pointer (the counter plate's right-click menu): it then draws no TouchArea of its own and the owner says when
+    // the pointer is over it through `hovered`.
+    in property <bool> pointer: true;
+    in property <bool> hovered;
+    out property <bool> elided: label.preferred-width > label.width + 0.5px;
+    property <bool> own-hover;
+    min-width: 0px;
+    preferred-width: label.preferred-width;
+    preferred-height: label.preferred-height;
+    label := Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.ink;
+        font-family: root.family;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        letter-spacing: root.letter-spacing;
+        horizontal-alignment: root.horizontal-alignment;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.pointer : TouchArea { changed has-hover => { root.own-hover = self.has-hover; } }
+    TipTimer { x: 0px; y: 0px; hovered: root.pointer ? root.own-hover : root.hovered; text: root.elided ? root.text : ""; anchor-h: root.height; }
+}
+
 // The layer: the LAST element of a Window, zero-sized at its origin, drawing the tip over everything (torn-off
 // pages and sheets included). `win-w` / `win-h` are the window's size, which a component cannot read itself.
 // No TouchArea: the pointer events go through to what is under the tip.

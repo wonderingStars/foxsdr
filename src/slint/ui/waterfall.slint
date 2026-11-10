@@ -28,7 +28,7 @@
 // round(delta-y / 120) notches, at least one, wheel UP positive (Slint's delta-y is positive for a wheel turned up).
 import { Theme } from "theme.slint";
 import { Chip, ChipTone } from "chips.slint";
-import { TooltipFace } from "tooltip.slint";
+import { TooltipFace, ElidedHint } from "tooltip.slint";
 import { PluginMark, UserMarker } from "spectrum.slint";
 
 export struct AgeTick { pos: float, label: string }
@@ -299,20 +299,20 @@ export component WaterfallView inherits Rectangle {
     dbl := Timer { interval: 500ms; running: false; triggered => { self.running = false; } }
 
     // ================= the age strip =================
-    Text {
-        x: 6px; y: 4px;
+    ElidedHint {   // the age caption shares the gutter with the age ticks: a longer word elides and its tip says it (docs 6.62; ВОЗРАСТ was cut at the gutter's edge)
+        x: 6px; y: 4px; width: max(0px, root.gutter-w - 8px); height: self.preferred-height;
         text: root.age-caption.to-uppercase();
-        font-family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold;
+        family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold;
         letter-spacing: Theme.cap-spacing * 0.9;
-        color: Theme.dim;
+        ink: Theme.dim;
     }
-    for t in root.age-ticks : Text {
+    for t in root.age-ticks : ElidedHint {
         x: 8px; y: t.pos * root.pic-h;
         width: max(0px, root.gutter-w - 10px);
-        overflow: elide;
+        height: self.preferred-height;
         text: t.label;
-        font-family: Theme.font-mono; font-size: Theme.font-cap;
-        color: Theme.dim;
+        family: Theme.font-mono; font-size: Theme.font-cap;
+        ink: Theme.dim;
     }
     // ================= the picture =================
     pic := Rectangle {

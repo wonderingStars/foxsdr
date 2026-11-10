@@ -322,6 +322,13 @@ component LineInput inherits Rectangle {
             overflow: elide;
             accessible-role: none;
         }
+        placeholder-probe := Text {   // what the placeholder asks for, to know whether it was elided (the Text above exists only while the field is empty)
+            visible: false;
+            width: 0px;
+            text: root.placeholder;
+            font-family: root.mono ? Theme.font-mono : Theme.font-ui;
+            font-size: Theme.font-small;
+        }
         input := TextInput {
             x: root.pad;
             y: 0px;
@@ -364,7 +371,8 @@ component LineInput inherits Rectangle {
         border-color: Theme.focus;
         border-radius: Theme.radius + 3px;
     }
-    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
+    property <bool> placeholder-elided: root.placeholder != "" && placeholder-probe.preferred-width > root.width - 2 * root.pad + 0.5px;
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.placeholder-elided && input.text == "" ? root.placeholder + (root.tooltip != "" ? "  -  " + root.tooltip : "") : root.tooltip; anchor-h: root.height; }
 }
 
 // One row of a dropdown's list: the tick of the chosen one, the label, the dim note at the right; a greyed row cannot be picked.

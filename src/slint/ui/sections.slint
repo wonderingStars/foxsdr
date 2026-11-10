@@ -78,8 +78,8 @@ export component Section inherits Rectangle {
             y: (parent.height - self.height) / 2;
             state: root.dot;
         }
-        // The name elides before it touches the chip (8 px of air).
-        Text {
+        // The name elides before it touches the chip (8 px of air), and the tip then says it (docs 6.62).
+        name-text := Text {
             x: parent.name-x;
             y: 0px;
             height: parent.height;
@@ -103,7 +103,8 @@ export component Section inherits Rectangle {
             mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
             clicked => { if (root.enabled) { root.clicked(); } }
         }
-        TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: parent.height; }
+        property <bool> name-elided: name-text.preferred-width > name-text.width + 0.5px;
+        TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: row.name-elided ? root.name + (root.tooltip != "" ? "  -  " + root.tooltip : "") : root.tooltip; anchor-h: parent.height; }
     }
 
     // The open body: the panel ground, the sheet's padding (4 12 12 30), 10 px between lines, a rule underneath.
@@ -137,8 +138,8 @@ export component Section inherits Rectangle {
 // children sit side by side with the sheet's usual 6 px between them). The row grows with a taller control.
 export component BodyRow inherits Rectangle {
     in property <string> label;
-    min-height: Theme.field-h;
-    HorizontalLayout {
+    min-height: max(Theme.field-h, body-row-layout.preferred-height);   // the label wraps (docs 6.62): the row grows by the line
+    body-row-layout := HorizontalLayout {
         spacing: 8px;
         alignment: space-between;
         Text {
@@ -149,7 +150,7 @@ export component BodyRow inherits Rectangle {
             font-weight: Theme.weight-semibold;
             letter-spacing: Theme.cap-spacing;
             vertical-alignment: center;
-            overflow: elide;
+            wrap: word-wrap;   // a longer label takes a second line, never an ellipsis (docs 6.62): the row's minimum height grows with it
         }
         VerticalLayout {
             alignment: center;
@@ -182,6 +183,7 @@ export component SelectKey inherits Rectangle {
     accessible-enabled: root.enabled;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
 
+    property <bool> value-elided: val.preferred-width > val.width + 0.5px;
     val := Text {
         x: 8px;
         y: 0px;
@@ -208,5 +210,5 @@ export component SelectKey inherits Rectangle {
         mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
         clicked => { if (root.enabled) { root.clicked(); } }
     }
-    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: parent.height; }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.value-elided ? root.value + (root.tooltip != "" ? "  -  " + root.tooltip : "") : root.tooltip; anchor-h: parent.height; }
 }

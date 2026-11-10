@@ -28,7 +28,7 @@ import { Caption, Key } from "keys.slint";
 import { Checkbox } from "fields.slint";
 import { Slider } from "sliders.slint";
 import { SelectKey } from "sections.slint";
-import { TipTimer } from "tooltip.slint";
+import { TipTimer, ElidedHint } from "tooltip.slint";
 import { SelectItem } from "signal_bank.slint";
 
 // The models. The contract's fields come first in each; the ADDED ones are the ImGui window's own words and states that the contract left out (the host,
@@ -202,8 +202,8 @@ global Pick {
 // A row of a body: 24 px (.rw min-height), the children side by side 8 px apart.
 component Line inherits Rectangle {
     in property <length> gap: 8px;
-    height: Theme.field-h;
-    HorizontalLayout {
+    height: max(Theme.field-h, line-row.preferred-height);   // a label that wraps (docs 6.62) makes the row taller by its second line; with one line the row is the 24 px it always was
+    line-row := HorizontalLayout {
         spacing: root.gap;
         @children
     }
@@ -236,15 +236,13 @@ component MonoNote inherits Text {
     color: Theme.dim;
 }
 
-// The .lb label of a row: 11 px / 500, fg-soft, elided before it can widen the row.
-component RowLabel inherits Text {
-    min-width: 0px;
-    overflow: elide;
-    font-family: Theme.font-ui;
+// The .lb label of a row: 11 px / 500, fg-soft, elided before it can widen the row, and the tip says it when it was (docs 6.62). Wrapping it was tried and measured: the Display block's
+// "Frequency display" took a second line in English and the rows below it moved, against the artboard's 24 px rows (test_slint_system), so the row keeps its height and the label its tip.
+component RowLabel inherits ElidedHint {
+    horizontal-stretch: 0;   // a Text asks for none; a Rectangle would ask for 1 and take room from the field beside it
+    ink: Theme.fg-soft;
     font-size: Theme.font-small;
     font-weight: Theme.weight-medium;
-    color: Theme.fg-soft;
-    vertical-alignment: center;
 }
 
 // A figure of a row: the mono 11 px readout.
@@ -694,10 +692,10 @@ component SliderRow inherits Rectangle {
     in property <string> tooltip;
     in property <length> label-w: 84px;
     callback changed(float);
-    height: Theme.field-h;
-    HorizontalLayout {
+    height: max(Theme.field-h, slider-row-layout.preferred-height);   // a label that wraps (docs 6.62) makes the row taller by its second line
+    slider-row-layout := HorizontalLayout {
         spacing: 0px;
-        RowLabel { width: root.label-w; text: root.label; color: root.enabled ? Theme.fg-soft : Theme.disabled; }
+        RowLabel { width: root.label-w; text: root.label; ink: root.enabled ? Theme.fg-soft : Theme.disabled; }
         VerticalLayout {
             alignment: center;
             padding-left: 8px;

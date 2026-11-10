@@ -122,6 +122,12 @@ add_custom_target(foxsdr_slint_stage_resources ALL
     VERBATIM)
 add_dependencies(foxsdr-slint foxsdr_slint_stage_resources)
 
+# THE CLIP PROBE (docs 6.62), on request only: cmake -DFOXSDR_SLINT_CLIP_PROBE=ON adds the target foxsdr-slint-probe (never part of ALL); see probe/CMakeLists.txt.
+option(FOXSDR_SLINT_CLIP_PROBE "Also configure foxsdr-slint-probe, the window built from a copy of ui/ whose Text elements report an overflow (tools/slint_clip_sweep.py)" OFF)
+if(FOXSDR_SLINT_CLIP_PROBE AND Python3_Interpreter_FOUND)
+    add_subdirectory(probe)
+endif()
+
 # The render and host-logic tests (ctest label `slint`); see tests/CMakeLists.txt.
 add_subdirectory(tests)
 
@@ -209,4 +215,7 @@ set_tests_properties(test_slint_retune_run PROPERTIES LABELS "gui" TIMEOUT 300)
 if(Python3_Interpreter_FOUND)
     add_test(NAME test_slint_po COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/test_slint_po.py")
     set_tests_properties(test_slint_po PROPERTIES LABELS "slint" TIMEOUT 60)
+    # The clip probe's source transform and the sweep's line parser (docs 6.62; tools/test_slint_clip_probe.py), the same way.
+    add_test(NAME test_slint_clip_probe COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/test_slint_clip_probe.py")
+    set_tests_properties(test_slint_clip_probe PROPERTIES LABELS "slint" TIMEOUT 60)
 endif()

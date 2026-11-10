@@ -30,7 +30,7 @@
 // cells + the same again = 397 x 58. A 22 px mono dot advances 0.6 em = 13.2 px; the dot cell is rounded to 13 px so
 // every column lands on a whole pixel.
 import { Theme, DigitFace } from "theme.slint";
-import { TipTimer } from "tooltip.slint";
+import { TipTimer, ElidedHint } from "tooltip.slint";
 
 export component Digit inherits Rectangle {
     in property <int> value;
@@ -280,7 +280,7 @@ export component FrequencyCounter inherits Rectangle {
         border-radius: Theme.radius-panel;
     }
     for g in [1, 4, 7] : Text {
-        x: root.digit-x(g) - root.dot-w; y: root.bw + root.pad-y; width: root.dot-w; height: Theme.digit-h;
+        x: root.digit-x(g) - root.dot-w - 1px; y: root.bw + root.pad-y; width: root.dot-w + 2px; height: Theme.digit-h;   // 2 px wider than the dot: its box was 1 px short of the glyph (docs 6.62)
         text: ".";
         color: Theme.knob-ring;
         font-family: Theme.font-digits;
@@ -291,7 +291,7 @@ export component FrequencyCounter inherits Rectangle {
     }
 
     // ---- right-click anywhere on the plate and the engraved rows (the Digits forward theirs) ----
-    TouchArea {
+    plate-area := TouchArea {
         enabled: root.enabled && !root.editing;
         pointer-event(e) => {
             if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
@@ -328,18 +328,17 @@ export component FrequencyCounter inherits Rectangle {
         vertical-alignment: center;
         accessible-role: none;
     }
-    Text {
+    ElidedHint {
+        pointer: false;   // the plate's own TouchArea owns the pointer here (right-click opens the counter's menu): it says when the pointer is on this line
+        hovered: plate-area.has-hover && plate-area.mouse-y >= root.plate-h + 2px + root.unit-h;
         x: root.bw + root.pad-x; y: root.plate-h + 2px + root.unit-h;
         width: root.plate-w - 2 * (root.bw + root.pad-x); height: root.caption-h;
         text: root.converter-text != "" ? root.converter-text : "TYPE R-390   SER. 1157";   // not-translated: the counter plate's engraved model legend, not a sentence
-        color: (root.converter-text != "" && root.converter-warn) ? Theme.chip-warn-fg : Theme.faint;
-        font-family: Theme.font-mono;   // not font-digits: the converter's own words are translated and CJK ones need the language's face (docs 6.62)
+        ink: (root.converter-text != "" && root.converter-warn) ? Theme.chip-warn-fg : Theme.faint;
+        family: Theme.font-mono;   // not font-digits: the converter's own words are translated and CJK ones need the language's face (docs 6.62)
         font-size: Theme.font-tiny;
         letter-spacing: 0.9px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        overflow: elide;
-        accessible-role: text;
+        horizontal-alignment: TextHorizontalAlignment.center;
     }
 
     // ---- the typed editor, over the figures while `editing` ----

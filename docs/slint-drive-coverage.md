@@ -209,7 +209,7 @@ NOT DRIVABLE by reason: readout 835, other 201, needs a signal (no fixture) 120,
 | 3 | Deck (toolbar) | Directly under the rail, full width | NOT DRIVABLE | - | relocated: the 104 px receiver strip |
 | 4 | FUNCTION SELECT rail | Left column under the deck | NOT DRIVABLE | - | relocated: the 64 px icon rail + the 296 px sections panel |
 | 5 | Centre | Between rail and status column: spectrum, waterfall, pages (, aw.cpp:13463) - inventoried elsewhere. Replaced by the Patch canvas when the PATCH view key is pressed (, aw.cpp:4761) | NOT DRIVABLE | - | a container, not a control: its tabs are rows 68-69 and the spectrum and waterfall rows below |
-| 6 | STATUS column | Right column under the deck | NOT DRIVABLE | - | relocated: the 28 px status bar of seven chips |
+| 6 | STATUS column | Right column under the deck | NOT DRIVABLE | - | relocated: the 28 px status bar of seven chips; since 6.62 a chip squeezed by a long language gives up its detail first (the detail elides, the tip says it) so the right-hand chips and the two keys stay inside the window |
 | 7 | Scope mode | Replaces rail + centre + status column; the deck stays. Entered from a radar/instrument;  leaves it when nothing is being typed and no popup is open (, aw.cpp:20136, Esc at ~20160) - inventoried elsewhere | DRIVEN+ASSERTED | main-tabs-and-rail.txt | click the SCOPE tab; state view == 2 (the instrument entry that also reaches it needs a radar) |
 | 8 | Floating windows | Plugin windows, pages, markers, import dialog etc. are separate top-level ImGui windows drawn over the root (, aw.cpp:21884; dialogs list at aw.cpp:4770-4782) | NOT DRIVABLE | - | relocated: pages and plugin windows dock as tabs or tear off (Tab, TornWindow, WindowChrome built; phase-3 content) |
 

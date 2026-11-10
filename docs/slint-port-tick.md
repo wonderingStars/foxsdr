@@ -12,7 +12,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 3 | Deck (toolbar) | Directly under the rail, full width | RELOCATED | the 104 px receiver strip |
 | 4 | FUNCTION SELECT rail | Left column under the deck | RELOCATED | the 64 px icon rail + the 296 px sections panel |
 | 5 | Centre | Between rail and status column: spectrum, waterfall, pages (, aw.cpp:13463) - inventoried elsewhere. Replaced by the Patch canvas when the PATCH view key is pressed (, aw.cpp:4761) | PRESENT | tab row + spectrum + splitter + waterfall; the PATCH tab is the PatchPage (rows 1888 to 1963), the SCOPE tab still shows the phase-3 stub |
-| 6 | STATUS column | Right column under the deck | RELOCATED | the 28 px status bar of seven chips |
+| 6 | STATUS column | Right column under the deck | RELOCATED | the 28 px status bar of seven chips; since 6.62 a chip squeezed by a long language gives up its detail first (the detail elides, the tip says it) so the right-hand chips and the two keys stay inside the window |
 | 7 | Scope mode | Replaces rail + centre + status column; the deck stays. Entered from a radar/instrument;  leaves it when nothing is being typed and no popup is open (, aw.cpp:20136, Esc at ~20160) - inventoried elsewhere | PRESENT | the SCOPE tab; the instrument face is a phase-3 stub |
 | 8 | Floating windows | Plugin windows, pages, markers, import dialog etc. are separate top-level ImGui windows drawn over the root (, aw.cpp:21884; dialogs list at aw.cpp:4770-4782) | RELOCATED | pages and plugin windows dock as tabs or tear off (Tab, TornWindow, WindowChrome built; phase-3 content) |
 
@@ -117,11 +117,11 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 58 | Plate title | readout | RELOCATED | the status bar has no plate title |
 | 59 | Rail fold key | button | PRESENT | the rail's FOLD key folds the sections panel to the icon rail (animated) |
 | 60 | Rail unfold key | button | PRESENT | the same key reads SHOW when folded |
-| 61 | Bank key SIGNAL | key (latched toggle, radio group; lamp strip beneath) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5 |
-| 62 | Bank key DECODE | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5 |
-| 63 | Bank key TOOLS | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5 |
-| 64 | Bank key EXTEND | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5 |
-| 65 | Bank key SYSTEM | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5 |
+| 61 | Bank key SIGNAL | key (latched toggle, radio group; lamp strip beneath) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5; a caption longer than the 64 px rail elides and the tip says it first (6.62) |
+| 62 | Bank key DECODE | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5; a caption longer than the 64 px rail elides and the tip says it first (6.62) |
+| 63 | Bank key TOOLS | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5; a caption longer than the 64 px rail elides and the tip says it first (6.62) |
+| 64 | Bank key EXTEND | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5; a caption longer than the 64 px rail elides and the tip says it first (6.62) |
+| 65 | Bank key SYSTEM | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5; a caption longer than the 64 px rail elides and the tip says it first (6.62) |
 | 66 | Bank group caption | readout | PRESENT | the panel's head caption |
 | 67 | Bank curtain | readout (animation) | DEFERRED | the enamel fade is the ImGui window's; the panel width animates on fold instead (cosmetic) |
 | 68 | View key RECEIVER | key (latched, 2-way) | RELOCATED | the RECEIVER tab of the tab row (Workbench IA 4) |

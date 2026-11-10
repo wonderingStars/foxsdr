@@ -1552,6 +1552,17 @@ int main(int argc, char** argv) {
         if (!drive->allRun()) { exitCode = 3; }
     }
     if (bounded.bounded()) {
+#ifdef FOXSDR_SLINT_PROBE
+        // The clip probe (docs 6.62, probe/CMakeLists.txt): every Text of the probe build carries an accessible-description that says how much room it has (tools/slint-clip-probe.py), read here
+        // through the testing API once the window has settled and printed between two marker lines, with the window's size. tools/slint_clip_sweep.py reads what lies between them.
+        std::fprintf(stderr, "CLIPPROBE-LOG begin\n");
+        slint::testing::ElementHandle::visit_elements(ui, [](const slint::testing::ElementHandle& e) {
+            const auto d = e.accessible_description();
+            if (d.has_value() && std::string_view(*d).substr(0, 9) == "CLIPPROBE") { std::fprintf(stderr, "%s\n", std::string(*d).c_str()); }
+        });
+        std::fprintf(stderr, "CLIPPROBE-WINDOW %d %d\n", static_cast<int>(ui->window().size().width), static_cast<int>(ui->window().size().height));
+        std::fprintf(stderr, "CLIPPROBE-LOG end\n");
+#endif
         // What the kit holds at the end of a bounded run: the evidence that the port answered on this thread.
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", kitLine.c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", signalBank.summaryLine().c_str());
