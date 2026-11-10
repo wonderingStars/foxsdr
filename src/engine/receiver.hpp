@@ -335,10 +335,6 @@ struct Receiver {
     // (The combo keeps showing its last preset after an edge drag - the combo
     // is a preset picker, not a readback; the overlay is the truth.)
     double vfoBandwidthHz_ = 150000.0;
-    // --- Scanner state (P6) -----------------------------------------------------
-    // The Scanner itself is a pure state machine (core/scanner.hpp); these
-    // mirrors exist because ImGui edits by pointer. Defaults come from
-    // Scanner::Params's own member initializers so the two can never drift.
     // --- P7 feature state -----------------------------------------------------
     // Panel mirrors for the pipeline's stereo / NR / notch settings (ImGui
     // edits by pointer). Defaults match AppConfig's, which match the
@@ -448,6 +444,13 @@ struct Receiver {
     // bundle's dsp-ring line; publishRingFigures() adds the minute still open to them and publishes (core::setRingFigures).
     std::size_t dspRingHighWaterSession_ = 0;
     std::uint64_t dspBlockLongestNsSession_ = 0;
+    // ---- published state ----
+    // THE ONE RECEIVER SNAPSHOT (engine stage 2, core/receiver_snapshot.hpp),
+    // declared first so the API core can be built on it: publishReceiverState
+    // fills it once a frame, and the plugin host API, the web server and CAT
+    // all answer from it. Shared, because plugin bridges outlive this window.
+    std::shared_ptr<cascade::core::ReceiverSnapshot> receiverSnapshot_ =
+        std::make_shared<cascade::core::ReceiverSnapshot>();
 };  // struct Receiver
 
 }  // namespace cascade::engine

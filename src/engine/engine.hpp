@@ -1748,12 +1748,7 @@ private:
     // WINDOW'S PluginUi is destroyed before the engine, after ~AppWindow has taken the plugin system down in
     // that order; the bridges it leaves behind answer "detached" - plugin_ui.cpp.)
     //
-    // THE ONE RECEIVER SNAPSHOT (engine stage 2, core/receiver_snapshot.hpp),
-    // declared first so the API core can be built on it: publishReceiverState
-    // fills it once a frame, and the plugin host API, the web server and CAT
-    // all answer from it. Shared, because plugin bridges outlive this window.
-    std::shared_ptr<cascade::core::ReceiverSnapshot> receiverSnapshot_ =
-        std::make_shared<cascade::core::ReceiverSnapshot>();
+    std::shared_ptr<cascade::core::ReceiverSnapshot>& receiverSnapshot_ = receivers_[0]->receiverSnapshot_;
     // THE PLUGIN SYSTEM'S ENGINE HALF (the pump move's step P3). The API core - the grants, the stop set, the plugins' request
     // queues, settings, command keys and the request_tune records, all thread-safe by their own lock - is the ENGINE'S, created
     // here; the plugin UI (the track sources, panels and instruments the window polls, the basemap and the track-info client)
@@ -2801,6 +2796,10 @@ private:
     std::string sinkNameLastGood_;
 
     cascade::core::Scanner scanner_;
+    // --- Scanner state (P6) -----------------------------------------------------
+    // The Scanner itself is a pure state machine (core/scanner.hpp); these
+    // mirrors exist because ImGui edits by pointer. Defaults come from
+    // Scanner::Params's own member initializers so the two can never drift.
     double scanStartMhz_ = cascade::core::Scanner::Params{}.startHz / 1.0e6;
     double scanStopMhz_ = cascade::core::Scanner::Params{}.stopHz / 1.0e6;
     double scanStepKhz_ = cascade::core::Scanner::Params{}.stepHz / 1.0e3;
