@@ -839,6 +839,12 @@ if(WIN32)
     target_link_libraries(multi_radio_load PRIVATE cascade_engine psapi propsys ole32)
 endif()
 
+# nb_real_noise - measures the noise blanker on a REAL I/Q recording of power-line impulse noise through the real Vfo, and
+# times its cost (docs/multi-radio-records/agc-nb-blocks.md, "Real power-line noise"). Off-line tool taking the WAV path as an
+# argument: not a test, not registered with ctest, not part of the default build (build it by name).
+add_executable(nb_real_noise EXCLUDE_FROM_ALL tools/nb_real_noise/main.cpp)
+target_link_libraries(nb_real_noise PRIVATE cascade_engine)
+
 # ---------------------------------------------------------------------------
 # foxsdr-engine - the receiver with no window (engine extraction stage 7b)
 # ---------------------------------------------------------------------------

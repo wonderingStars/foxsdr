@@ -241,3 +241,157 @@ Build: `cmake --build D:/foxsdr-build/mr-dsp --config Release --parallel` exit 0
 4. Look-ahead 0.15 ms as designed, but the window uses 0.05 ms before and after (the look-ahead only has to cover
    ramp plus pre-guard, 0.075 ms), so the lag is longer than the window needs; kept at the design figure.
 5. Disabling the blanker removes the 0.15 ms delay at that instant.
+
+## Real power-line noise (leon2001)
+
+Added 2026-11-10 on the same branch. Tool: `tools/nb_real_noise/main.cpp` (off-line, `EXCLUDE_FROM_ALL`, links `cascade_engine`,
+build by name: `cmake --build D:/foxsdr-build/mr-dsp --config Release --parallel --target nb_real_noise`). No product code changed
+(`src/` untouched). It feeds the recording block by block through the real `Vfo` (the product's channel path with the blanker hook) at a
+chosen offset and bandwidth, and measures power on 1 ms bins of the `Vfo` output (after the narrow filter), from 1 s into each pass.
+
+The recording: `leon2001.wav` (sm5bsz.com, Linrad blanker test file), 2 channels PCM16, 96 kHz, natural power-line pulses. It is
+untrusted local test data and is NOT in the tree; the tool takes its path as an argument. Nothing derived from the samples is stored in the
+tree except the figures below.
+
+### Facts about the file that differ from the brief
+
+* It is 7,823,360 frames = 81.5 s at 96 kHz (the brief said 163 s; that is the number of frames over 48 kHz).
+* The `Vfo` chose decimation 1 (`round(96000 / 200000) = 0`, folded to 1): channel rate 96,000 Hz = input rate. The blanker look-ahead is
+  14 samples (0.146 ms); at this rate the 0.05 ms guards are 5 samples and the 0.025 ms ramp 2 samples (200 kHz in the product gives
+  twice as many samples for the same times, so a guard result here is coarse, see caveats).
+* The long-term spectrum is flat at about -13 dB (re one unnormalised FFT unit) because the impulses fill every 340 ms frame; the real
+  noise floor, found from the 25th percentile of 5.3 ms frames, is about 39 dB lower (-52 dB). The mean power of a 3 kHz channel is 20 dB
+  above its median (impulse-dominated); this is a dense, strong impulse recording.
+
+### I/Q orientation: UNDECIDED
+
+The criterion in the brief (the strong signal must sit at +24 kHz) cannot be applied: there is NO strong signal at +/-24 kHz in either
+orientation. Evidence (`spectrum`, which prints both orientations): narrow lines of the mean spectrum are at +2183 Hz and -7087 Hz
+(with I = left; both mirror with I = right) and nothing near 24 kHz; the quiet-frame spectrum shows lines at DC, -7125, +2250 and
+-19688 Hz (8 dB over the floor) and only a faint -24375 Hz line (2.8 dB over the floor), which is +24375 Hz if I is the right channel.
+That would favour I = right, but it is the weak line, not a strong signal, and the stronger +/-19.7 kHz line has no counterpart in the
+brief, so I did not decide. The blanker figures do not depend on it: the blanker works on magnitude and the filters are real, so the
+mirrored run (`--iq rl`, offsets negated) printed identical numbers line for line (diffed). Only the sideband of a USB/LSB audio file
+depends on it. Default in the tool: `--iq lr` (I = left).
+
+Chosen channels (all with I = left): QUIET at +28000 Hz (no line within +/-12 kHz, which is what the blanker's own channel filter passes;
+a 3 kHz and a 500 Hz bandwidth); SIGNAL at +2183 Hz (the strongest narrow line, drifting 2140 to 2340 Hz; modulation unknown); second
+station at -7087 Hz (the stronger of the two by median power in 3 kHz: -69.5 dB against -71.6 dB).
+
+### Command lines
+
+```
+nb_real_noise.exe <wav> spectrum
+nb_real_noise.exe <wav> measure --quiet 28000 --sig 2183 --strong -7087      (tables 1, 2, 5; add --thr N for another threshold)
+nb_real_noise.exe <wav> sweep   --quiet 28000 --sig 2183                    (table 3, and 4 with the guard copy below)
+nb_real_noise.exe <wav> cpu     --sig 2183                                  (table 6)
+nb_real_noise.exe <wav> audio   --sig -7087 --mode am  --best 24 --out D:/foxsdr-build/mr-dsp/nb-audio --start 20 --dur 30
+nb_real_noise.exe <wav> audio   --sig 2183  --mode usb --best 24 --out D:/foxsdr-build/mr-dsp/nb-audio --start 20 --dur 30 --gain <G of the AM run>
+```
+(run with a working directory outside the tree; all figures here are from the Release build at tip 9b42201d plus the tool.)
+
+### 1 and 2. Default threshold (15 dB), product guards (0.05 ms)
+
+Power in dB re full scale squared, 1 ms bins. "Drop" = OFF minus ON.
+
+| Channel | OFF mean / median / p99 | ON mean / median / p99 | drop mean / median / p99 | blanked | stood down |
+|---|---|---|---|---|---|
+| quiet 3 kHz (+28000) | -65.75 / -86.30 / -58.71 | -72.50 / -90.93 / -59.33 | 6.76 / 4.63 / 0.62 | 16.9 % | 17.6 % |
+| quiet 500 Hz (+28000) | -70.64 / -87.95 / -61.51 | -77.30 / -96.12 / -63.50 | 6.66 / 8.17 / 1.99 | 16.9 % | 17.6 % |
+| signal 3 kHz (+2183) | -63.27 / -71.63 / -55.42 | -66.83 / -82.86 / -56.79 | 3.56 / 11.23 / 1.37 | 14.5 % | 3.1 % |
+
+(Signal mean) / (quiet 3 kHz mean): OFF 2.48 dB, ON 5.67 dB: a gain in signal-to-noise of 3.20 dB (the signal channel keeps its own power,
+the noise channel loses 6.8 dB). A second view, line to the noise beside it in 43 ms frames, medians (`lineStats`): 6.30 dB OFF, 9.53 dB
+ON, gain 3.23 dB; weak because the line is modulated and wanders, so it is a cross-check, not the figure.
+
+### 3. Threshold sweep, product guards (0.05 ms), quiet 3 kHz channel unless stated
+
+| thr dB | blanked % | stood down % | drop mean | drop median | drop p99 | 500 Hz drop mean / p99 | signal blanked % / stood % | signal mean/quiet mean gain |
+|---|---|---|---|---|---|---|---|---|
+| 6 | 8.78 | 68.8 | 1.49 | 2.88 | 0.10 | 1.48 / 0.38 | 11.56 / 53.1 | 0.04 |
+| 9 | 11.93 | 50.7 | 2.67 | 3.71 | 0.20 | 2.67 / 0.73 | 14.66 / 28.1 | 0.22 |
+| 12 | 14.76 | 32.8 | 4.36 | 4.25 | 0.34 | 4.32 / 1.18 | 15.33 / 9.8 | 1.01 |
+| 15 (default) | 16.90 | 17.6 | 6.76 | 4.63 | 0.62 | 6.66 / 1.99 | 14.49 / 3.1 | 3.20 |
+| 18 | 17.23 | 9.6 | 8.99 | 4.77 | 1.14 | 8.91 / 3.01 | 12.69 / 1.7 | 6.27 |
+| 21 | 16.90 | 5.4 | 11.15 | 4.85 | 1.94 | 11.00 / 4.49 | 10.40 / 0.7 | 9.14 |
+| 24 | 16.02 | 2.4 | 12.23 | 4.86 | 2.69 | 12.16 / 5.80 | 8.05 / 0.2 | 10.77 |
+| 27 (extra) | 13.68 | 0.8 | 8.82 | 4.61 | 1.32 | 8.79 / 3.18 | 5.45 / 0.0 | 7.85 |
+| 30 | 3.40 | 0.0 | 1.07 | 1.85 | 0.05 | 1.07 / 0.25 | 0.74 / 0.0 | 0.95 |
+
+Best threshold on this recording (product guards): 24 dB, by the drop of the mean (12.23 dB) and of the 99th percentile (2.69 dB), with
+the blanker standing down 2.4 % of the time. The default 15 dB gives 6.76 dB and 0.62 dB and stands down 17.6 % of the time; 6 and 9 dB
+stand down most of the time (68.8 %, 50.7 %) and gain almost nothing. 30 dB is nearly blind (the pulses seldom exceed 30 dB over the average).
+
+Why the 99th percentile barely moves: `[diag]` in `measure` (1 ms blocks, stand-down flag per bin): at 15 dB, 96.8 % of the strongest 1 % of
+the ON bins fell inside a stand-down, i.e. the strongest bursts are the ones the 25 % rule hands through. The blanker blanks about 17 % of the
+stream here (a 5-sample guard on each side of every pulse), so dense bursts cross the 25 % line of the last 100 ms.
+
+### 4. Guards: 0.025 ms against 0.05 ms
+
+The guards are private `static constexpr` members, so this is a COPY of `noise_blanker.hpp` in a scratch build, not the tree:
+`D:/foxsdr-build/mr-dsp/nb-guard/` (own CMake project, `copy025/dsp/noise_blanker.hpp` with `kPreGuardS` and `kPostGuardS` = 0.000025, put
+first on the include path; the tool is compiled together with `src/dsp/vfo.cpp` and linked to the same `cascade_engine.lib`; `copy050/` is a
+byte copy of the real header and its build `nb_guard050.exe` printed `measure` output identical to the in-tree tool, so the scratch path
+reproduces the product). Same file, channels and sweep:
+
+| thr dB | blanked % | stood down % | drop mean | drop median | drop p99 | 500 Hz drop mean / p99 | signal mean/quiet mean gain |
+|---|---|---|---|---|---|---|---|
+| 6 | 13.64 | 45.3 | 3.34 | 4.43 | 0.28 | 3.31 / 0.87 | 1.24 |
+| 9 | 16.64 | 20.2 | 6.54 | 5.22 | 0.60 | 6.52 / 1.92 | 3.21 |
+| 12 | 16.94 | 4.7 | 11.94 | 5.34 | 2.37 | 11.94 / 5.41 | 8.23 |
+| 15 | 15.06 | 1.7 | 15.62 | 5.07 | 21.39 | 15.51 / 18.11 | 12.07 |
+| 18 | 13.57 | 0.1 | 21.83 | 4.90 | 23.91 | 21.86 / 25.08 | 19.09 |
+| 21 | 12.19 | 0.0 | 22.88 | 4.69 | 23.24 | 22.83 / 24.57 | 20.85 |
+| 24 | 10.85 | 0.0 | 18.28 | 4.36 | 21.60 | 18.33 / 22.35 | 16.81 |
+| 27 | 8.55 | 0.0 | 9.23 | 3.67 | 1.39 | 9.26 / 3.45 | 8.25 |
+| 30 | 0.74 | 0.0 | 0.35 | 0.62 | 0.01 | 0.35 / 0.08 | 0.22 |
+
+With 0.025 ms the blanker stands down on only 1.7 % at 15 dB, and the 99th percentile falls 21 dB; the best threshold is 21 dB (22.88 dB
+mean, 23.24 dB p99). So on this recording the guard length is a larger lever than the threshold: the 0.05 ms guard makes the would-be
+blanked share cross the 25 % stand-down line. This is a measurement on one recording at 96 kHz (2-sample guards); the generated-click
+record above preferred the shorter guard too (24.2 against 20.9 dB) with the opposite worry that real clicks have skirts. Not applied, per the
+rules of this task.
+
+### 5. Harm check (15 dB, product guards)
+
+The mean of a station's channel is mostly impulse power, so its change is not a measure of harm. The harm figure is the station level on
+the 1 ms bins in which the QUIET channel (blanker off) shows no impulse (under 4x its own median; 61.9 % of all bins), ON against OFF:
+
+| Station (3 kHz) | OFF mean / median / p99 | ON mean / median / p99 | blanked | stood down | level change on impulse-free bins | of those bins, lost over 3 dB |
+|---|---|---|---|---|---|---|
+| -7087 Hz (strongest by median) | -64.38 / -69.47 / -57.15 | -69.08 / -82.97 / -59.89 | 14.7 % | 3.6 % | -0.008 dB | 3.63 % |
+| +2183 Hz | -63.27 / -71.63 / -55.42 | -66.83 / -82.86 / -56.79 | 14.5 % | 3.1 % | -0.061 dB | 2.78 % |
+
+(Mean change -4.70 dB and -3.56 dB: that is the impulse power removed from their channels, not the stations. The 3 % of bins that lose over
+3 dB are the neighbours of blanked windows and the 0.15 ms delay shifting a 1 ms bin edge.)
+
+### 6. CPU cost (best of five, OFF and ON interleaved so both meet the same background load)
+
+| Measurement | OFF | ON | blanker adds |
+|---|---|---|---|
+| A. recording through `Vfo(96000, 1, 3000)` (channel rate 96 kHz), per input sample | 198.55 ns | 202.67 ns | 4.12 ns (2.1 %) |
+| B. synthetic 2.4 MS/s through `Vfo(2400000, 12, 3000)` (channel rate 200 kHz), per input sample | 47.18 ns (11.32 % of one core at 2.4 MS/s) | 47.57 ns (11.42 %) | 0.39 ns = 0.094 % of one core |
+| C. `NoiseBlanker::process` alone, per channel sample | | | 4.18 ns on the recording (many blanked samples), 3.20 ns synthetic |
+
+At the product's geometry (2.4 MS/s, 200 kHz channel) the blanker costs 0.06 to 0.09 % of one core; even at a 2.4 MHz channel (decimation 1)
+it would be 1.0 %. Two earlier runs of this table, taken while other sessions were loading the machine and with OFF and ON in separate
+loops, were inconsistent (one had ON faster than OFF) and were discarded; the interleaved figures agree with C.
+
+### 7. Audio for listening (outside the tree)
+
+`D:\foxsdr-build\mr-dsp\nb-audio\`: `am_off.wav`, `am_on15.wav`, `am_on24_best.wav` (station at -7087 Hz, AM, 10 kHz channel) and
+`usb_off.wav`, `usb_on15.wav`, `usb_on24_best.wav` (station at +2183 Hz, USB, 12 kHz channel as the pipeline gives a sideband mode 4 x 3 kHz).
+30 s from t = 20 s, 48 kHz mono PCM16, ALL SIX with the same gain 192.555 (the loudest file, `am_on24_best`, peaks at 0.9; the Vfo ->
+product `Demodulator` -> `RationalResampler(1, 2)` chain, no AGC). `Pipeline` was not used: it needs a source and opens a real audio
+stream. The modulation of the two stations is not known (the AM or USB choice is a guess), and the sideband of the USB file depends on the
+undecided I/Q orientation.
+
+### Caveats and UNVERIFIED
+
+* One recording, 96 kHz, 81.5 s; its pulses are dense and strong, one kind of noise. The figures say nothing about ignition or fence noise.
+* The best threshold and the guard preference are from one recording and one channel geometry (96 kHz; the product runs the blanker at about
+  200 kHz where the guards are twice as many samples). Not tuned in the product.
+* Power drops are measured on the `Vfo` output after the narrow filter, on 1 ms bins; blanked and stand-down shares are the blanker's own
+  100 ms readouts sampled every 10 ms of signal.
+* The audio files were not listened to by the author of this section.
+* The quiet channel was picked by a spectrum search with the median spectrum and by eye from the quiet-frame spectrum, not optimised.
