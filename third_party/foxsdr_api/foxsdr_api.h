@@ -397,8 +397,26 @@ typedef struct FoxReceiverState {
      * restored from the saved configuration). ---- */
     double rxLatDeg;                   /* the receiver's latitude, degrees north */
     double rxLonDeg;                   /* the receiver's longitude, degrees east */
+    /* ---- 0.3 (AGC choice and noise blanker; docs/API.md 6.19): the audio AGC and the noise
+     * blanker of THIS radio. agcMode, agcFixedGainDb, nbEnabled and nbThresholdDb are the
+     * audio DSP's settings and move modeSeq; agcGainDb and nbBlankedPct are measurements
+     * (like signalDb) and move nothing. ---- */
+    uint32_t agcMode;                  /* FOXAPI_AGC_* */
+    double agcFixedGainDb;             /* the gain Off applies, dB, -20..+40 (the gain frozen at the switch while in Off) */
+    double agcGainDb;                  /* the gain in use now, dB - measured */
+    uint32_t nbEnabled;                /* 0/1 */
+    double nbThresholdDb;              /* 6..30 dB above the average magnitude */
+    double nbBlankedPct;               /* share of the last 100 ms blanked, 0..100; 0 while off or standing down - measured */
+    uint32_t nbStandingDown;           /* 1 while the blanker lets everything through because a quarter of the last 100 ms would go - measured */
 } FoxReceiverState;
 
+
+/* FoxReceiverState::agcMode and FOXAPI_OP_SET_AGC ival[0] */
+#define FOXAPI_AGC_AUTO   0u /* the audio AGC as it always was (default) */
+#define FOXAPI_AGC_FAST   1u /* constant-slew: a 20 dB drop recovered to within 3 dB in about 0.1 s */
+#define FOXAPI_AGC_MEDIUM 2u /* about 0.5 s */
+#define FOXAPI_AGC_SLOW   3u /* about 2 s */
+#define FOXAPI_AGC_OFF    4u /* the gain frozen at the value held at the switch; agcFixedGainDb sets it */
 
 /* FoxReceiverState::txFlags (0.3) */
 #define FOXAPI_TX_SPLIT         0x00000001u /* TX_SET_SPLIT on: not following the receiver */
@@ -541,6 +559,8 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_NOTCH         0x010Eu /* ival[0]: 0/1; num[0]: Hz; num[1]: Q (ival[1]=1 to set them) */
 #define FOXAPI_OP_SET_AUTO_NOTCH    0x010Fu /* ival[0]: 0/1 */
 #define FOXAPI_OP_SET_BAND_FOLLOW   0x0110u /* ival[0]: 0/1 - a retune into another band of the band plan adopts that band's conventional mode (fact.bandPlan.followMode) */
+#define FOXAPI_OP_SET_AGC           0x0111u /* ival[0]: FOXAPI_AGC_* 0..4; ival[1]=1: num[0] is the fixed gain, dB, -20..+40 (set after the mode). Addresses one radio (target) */
+#define FOXAPI_OP_SET_NB            0x0112u /* ival[0]: 0/1; ival[1]=1: num[0] is the blanker threshold, dB above the average, 6..30. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */
 #define FOXAPI_OP_SET_BAND_PLAN     0x0202u /* text: selection name */

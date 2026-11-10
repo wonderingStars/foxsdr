@@ -1,4 +1,6 @@
 {
+    "agcFixedGainDb": 0.0,
+    "agcMode": 0,
     "aircraftIconPx": 48,
     "airspy": {},
     "autoNotch": false,
@@ -61,6 +63,8 @@
     "notchEnabled": false,
     "notchFreqHz": 1000.0,
     "notchQ": 30.0,
+    "nbEnabled": false,
+    "nbThresholdDb": 15.0,
     "nrEnabled": false,
     "nrStrength": 0.5,
     "patch": "",

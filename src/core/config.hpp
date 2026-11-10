@@ -65,6 +65,7 @@
 //                                         combo; an out-of-range index would
 //                                         read past that table)
 //   - nrStrength  clamped to [0, 1]      (module contract)
+//   - agcMode clamped to [0, 4], agcFixedGainDb to [-20, 40], nbThresholdDb to [6, 30] (the blocks' own ranges)
 //   - notchFreqHz clamped to [10, 20000] (audible span inside the 48 kHz
 //                                         sink's Nyquist; the Notch clamps
 //                                         again internally, but a NaN or a
@@ -416,6 +417,13 @@ struct AppConfig {
     int deemphasisIndex = 0;  // 0 = 50 us, 1 = 75 us, 2 = off (kDeemphUs order)
     bool nrEnabled = false;
     float nrStrength = 0.5f;
+    // AGC choice and noise blanker (multi-radio lane C; docs/multi-radio-records/agc-nb-wiring.md). agcMode is FOXAPI_AGC_* (0 Auto, 1 Fast,
+    // 2 Medium, 3 Slow, 4 Off); agcFixedGainDb is the gain Off applies; the threshold is dB above the average magnitude. A file without the keys
+    // loads as Auto, 0 dB, blanker off, 15 dB: the audio as it always was.
+    int agcMode = 0;
+    float agcFixedGainDb = 0.0f;
+    bool nbEnabled = false;
+    float nbThresholdDb = 15.0f;
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;

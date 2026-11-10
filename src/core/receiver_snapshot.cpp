@@ -126,6 +126,10 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
     const bool mode = first || f.demodMode != o.demodMode || f.bandwidthHz != o.bandwidthHz ||
                       f.squelchDb != o.squelchDb || f.deemphasis != o.deemphasis ||
                       f.nrStrength != o.nrStrength || f.notchHz != o.notchHz ||
+                      // the audio AGC's mode and fixed gain, the noise blanker's switch and threshold (agcGainDb, nbBlankedPct and
+                      // nbStandingDown are measurements, like signalDb: they move nothing)
+                      f.agcMode != o.agcMode || f.agcFixedGainDb != o.agcFixedGainDb || f.nbEnabled != o.nbEnabled ||
+                      f.nbThresholdDb != o.nbThresholdDb ||
                       f.notchQ != o.notchQ || changed(f.flags, o.flags, kModeFlags);
     const bool device = first || changed(f.flags, o.flags, kDeviceFlags) ||
                         f.sampleRateHz != o.sampleRateHz || f.channelRateHz != o.channelRateHz ||

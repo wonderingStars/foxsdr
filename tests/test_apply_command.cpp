@@ -436,6 +436,15 @@ struct AppWindowTestAccess {
     static bool nrPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseReductionEnabled(); }); }
     static float nrStrength(AppWindow& a) { return rd(a, [&] { return th::engine(a).nrStrength_; }); }
     static float nrStrengthPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseReductionStrength(); }); }
+    // AGC choice and noise blanker: the Receiver's mirrors and the pipeline's own readbacks.
+    static int agcModeRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->agcMode_; }); }
+    static int agcModePipe(AppWindow& a) { return rd(a, [&] { return static_cast<int>(th::engine(a).pipeline_.agcMode()); }); }
+    static float agcFixedRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->agcFixedGainDb_; }); }
+    static float agcFixedPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.agcFixedGainDb(); }); }
+    static bool nbRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->nbEnabled_; }); }
+    static bool nbPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseBlankerEnabled(); }); }
+    static float nbThresholdRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->nbThresholdDb_; }); }
+    static float nbThresholdPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseBlankerThresholdDb(); }); }
     static bool notch(AppWindow& a) {
         return rd(a, [&] { return th::engine(a).notchEnabled_ && th::engine(a).pipeline_.notchEnabled(); });
     }
@@ -1105,6 +1114,62 @@ void receiverOps(AppWindow& a) {
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NR, 0, 0))));
         CHECK(!A::nr(a) && !A::nrPipe(a));
         CHECK(A::nrStrength(a) == 0.7f);
+    }
+
+    covering(FOXAPI_OP_SET_AGC);
+    {
+        // Default: Auto. Every mode lands in the Receiver's mirror and in the pipeline.
+        CHECK(A::agcModeRx(a) == 0 && A::agcModePipe(a) == 0);
+        for (int m = 0; m <= 4; ++m) {
+            CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_AGC, m, 0))));
+            CHECK(A::agcModeRx(a) == m && A::agcModePipe(a) == m);
+        }
+        // The mode first, then the fixed gain: Off with 12 dB leaves 12 dB in force (not the gain held at the switch).
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_AGC, 0, 0))));
+        FoxCommand off = ints(FOXAPI_OP_SET_AGC, 4, 1);
+        off.num[0] = 12.0;
+        const FoxCommandResult r = A::apply(a, off);
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 12.0);
+        CHECK(A::agcModeRx(a) == 4 && A::agcFixedRx(a) == 12.0f && A::agcFixedPipe(a) == 12.0f);
+        // The widened range: -20 is kept, below it clamps to -20 and says so, above 40 clamps to 40.
+        off.num[0] = -20.0;
+        CHECK(ok(A::apply(a, off)));
+        CHECK(A::agcFixedRx(a) == -20.0f && A::agcFixedPipe(a) == -20.0f);
+        off.num[0] = -35.0;
+        const FoxCommandResult lo = A::apply(a, off);
+        CHECK(ok(lo) && (lo.flags & FOXAPI_RESULT_CLAMPED) != 0u && A::agcFixedRx(a) == -20.0f);
+        off.num[0] = 90.0;
+        const FoxCommandResult hi = A::apply(a, off);
+        CHECK(ok(hi) && (hi.flags & FOXAPI_RESULT_CLAMPED) != 0u && A::agcFixedRx(a) == 40.0f && A::agcFixedPipe(a) == 40.0f);
+        // A mode alone leaves the fixed gain alone; a mode out of range is refused and changes nothing.
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_AGC, 2, 0))));
+        CHECK(A::agcFixedRx(a) == 40.0f && A::agcModeRx(a) == 2);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_AGC, 5, 0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_AGC, -1, 0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::agcModeRx(a) == 2 && A::agcModePipe(a) == 2);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_AGC, 0, 0))));
+    }
+
+    covering(FOXAPI_OP_SET_NB);
+    {
+        CHECK(!A::nbRx(a) && !A::nbPipe(a) && A::nbThresholdRx(a) == 15.0f);
+        FoxCommand on = ints(FOXAPI_OP_SET_NB, 1, 1);
+        on.num[0] = 22.5;
+        CHECK(ok(A::apply(a, on)));
+        CHECK(A::nbRx(a) && A::nbPipe(a));
+        CHECK(A::nbThresholdRx(a) == 22.5f && A::nbThresholdPipe(a) == 22.5f);
+        // The switch alone leaves the threshold alone.
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NB, 0, 0))));
+        CHECK(!A::nbRx(a) && !A::nbPipe(a) && A::nbThresholdRx(a) == 22.5f);
+        // The range 6..30: clamped and said so.
+        on.num[0] = 2.0;
+        const FoxCommandResult lo = A::apply(a, on);
+        CHECK(ok(lo) && (lo.flags & FOXAPI_RESULT_CLAMPED) != 0u && A::nbThresholdRx(a) == 6.0f && A::nbThresholdPipe(a) == 6.0f);
+        on.num[0] = 80.0;
+        const FoxCommandResult hi = A::apply(a, on);
+        CHECK(ok(hi) && (hi.flags & FOXAPI_RESULT_CLAMPED) != 0u && A::nbThresholdRx(a) == 30.0f && A::nbThresholdPipe(a) == 30.0f);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NB, 0, 0))));
     }
 
     covering(FOXAPP_OP_SET_NR_STRENGTH);

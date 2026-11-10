@@ -59,8 +59,11 @@ public:
     // Common to the three timed modes: 17 dB in 4.25 ms, inside the 10 ms the
     // design asks for.
     static constexpr float kTimedAttackDbPerS = 4000.0f;
-    // The fixed-gain range, dB above unity: the range of the loop (0 to 100x).
-    static constexpr float kFixedGainMinDb = 0.0f;
+    // The fixed-gain range, dB above unity: -20 to +40 (the loop's top, 100x). The
+    // floor is below unity because entering Off freezes the gain the loop HELD,
+    // which can be under 0 dB on a strong signal; a held gain under -20 dB is
+    // frozen at -20.
+    static constexpr float kFixedGainMinDb = -20.0f;
     static constexpr float kFixedGainMaxDb = 40.0f;
     // The multiplicative loops cannot leave zero by themselves, so they stop
     // at -60 dB (the input is demodulated audio, nominally within +-1).
@@ -99,7 +102,14 @@ public:
     // it as the fixed gain.
     void setMode(Mode m) {
         if (m == Mode::Off && mode_ != Mode::Off) {
-            fixedGain_ = gain_;
+            // Clamped to the fixed-gain range (written so NaN lands on unity).
+            const float lo = std::pow(10.0f, kFixedGainMinDb * (1.0f / 20.0f));
+            const float hi = std::pow(10.0f, kFixedGainMaxDb * (1.0f / 20.0f));
+            float held = gain_;
+            if (!(held >= lo)) { held = (held == held) ? lo : 1.0f; }
+            if (held > hi) { held = hi; }
+            fixedGain_ = held;
+            gain_ = held;
         }
         mode_ = m;
         computeTimedFactors();
@@ -111,14 +121,14 @@ public:
     // gain (see setMode), so a caller that wants a given fixed gain sets it
     // AFTER the mode.
     void setFixedGainDb(float db) {
-        // Written as a negated compare so a NaN lands on the minimum.
-        if (!(db >= kFixedGainMinDb)) { db = kFixedGainMinDb; }
+        // A NaN lands on unity (0 dB), not on the new, negative minimum.
+        if (db != db) { db = 0.0f; }
+        if (db < kFixedGainMinDb) { db = kFixedGainMinDb; }
         db = std::min(db, kFixedGainMaxDb);
         fixedGain_ = std::pow(10.0f, db * (1.0f / 20.0f));
         if (mode_ == Mode::Off) { gain_ = fixedGain_; }
     }
-    // The fixed gain in force, dB. After a switch to Off it is the frozen
-    // value, which may lie below kFixedGainMinDb.
+    // The fixed gain in force, dB: always inside [kFixedGainMinDb, kFixedGainMaxDb].
     float fixedGainDb() const {
         return fixedGain_ > 1.0e-6f ? 20.0f * std::log10(fixedGain_) : -120.0f;
     }

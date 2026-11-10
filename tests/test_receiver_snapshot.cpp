@@ -553,6 +553,15 @@ void countersMoveByGroup() {
          [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_POSITION_SET; }, "seq"},
         {"the receiver's latitude", [](PublishedState& p) { p.rx.rxLatDeg = 51.5; }, "seq"},
         {"the receiver's longitude", [](PublishedState& p) { p.rx.rxLonDeg = -0.12; }, "seq"},
+        // The audio AGC and the noise blanker (multi-radio lane C): the four settings are the audio DSP's, the mode group (not the ABI's, like noise
+        // reduction); the gain in use, the blanked share and the stand-down are measurements and move nothing.
+        {"the AGC mode", [](PublishedState& p) { p.rx.agcMode = FOXAPI_AGC_SLOW; }, "seq mode"},
+        {"the AGC fixed gain", [](PublishedState& p) { p.rx.agcFixedGainDb = -12.0; }, "seq mode"},
+        {"the AGC gain in use (a measurement)", [](PublishedState& p) { p.rx.agcGainDb = 17.5; }, ""},
+        {"the noise blanker switched on", [](PublishedState& p) { p.rx.nbEnabled = 1; }, "seq mode"},
+        {"the noise blanker threshold", [](PublishedState& p) { p.rx.nbThresholdDb = 22.0; }, "seq mode"},
+        {"the noise blanker blanked share (a measurement)", [](PublishedState& p) { p.rx.nbBlankedPct = 3.5; }, ""},
+        {"the noise blanker standing down (a measurement)", [](PublishedState& p) { p.rx.nbStandingDown = 1; }, ""},
         // API 0.3 8.6, the scanner: its seven settings are a group of their own (scanSeq, and
         // seq with it); the scanner's state word and its frequency are live state that moves seq
         // alone (the scanner flag, which the state already had, is the same).
@@ -639,7 +648,14 @@ void rdsGroupAndLayout() {
     // sourceFlagsGroup and positionGroup below.)
     CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, rxLonDeg) + sizeof(double));
     CHECK(FOXAPI_MIN_RECEIVER_STATE <= sizeof(FoxReceiverState));
-    CHECK(sizeof(FoxReceiverState) - FOXAPI_MIN_RECEIVER_STATE < 8u);  // only the struct's own tail padding
+    // The AGC and noise blanker members (lane C) are appended after rxLonDeg, in this order, which the old minimum does not include;
+    // after them only the struct's own tail padding.
+    CHECK(offsetof(FoxReceiverState, agcMode) == FOXAPI_MIN_RECEIVER_STATE);
+    CHECK(offsetof(FoxReceiverState, agcGainDb) == offsetof(FoxReceiverState, agcFixedGainDb) + sizeof(double));
+    CHECK(offsetof(FoxReceiverState, nbBlankedPct) == offsetof(FoxReceiverState, nbThresholdDb) + sizeof(double));
+    CHECK(offsetof(FoxReceiverState, nbEnabled) > offsetof(FoxReceiverState, agcGainDb));
+    CHECK(offsetof(FoxReceiverState, nbStandingDown) > offsetof(FoxReceiverState, nbBlankedPct));
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, nbStandingDown) + sizeof(std::uint32_t)) < 8u);
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
     // The six RDS bits are one word's low bits, each its own.
     const std::uint32_t bits[] = {FOXAPI_RDS_SYNCED, FOXAPI_RDS_PI_VALID, FOXAPI_RDS_PS_VALID,
@@ -711,7 +727,14 @@ void scanGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, sourceFlags) == offsetof(FoxReceiverState, scanListenMs) + 4u);
     CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, rxLonDeg) + sizeof(double));
     CHECK(FOXAPI_MIN_RECEIVER_STATE <= sizeof(FoxReceiverState));
-    CHECK(sizeof(FoxReceiverState) - FOXAPI_MIN_RECEIVER_STATE < 8u);  // only the struct's own tail padding
+    // The AGC and noise blanker members (lane C) are appended after rxLonDeg, in this order, which the old minimum does not include;
+    // after them only the struct's own tail padding.
+    CHECK(offsetof(FoxReceiverState, agcMode) == FOXAPI_MIN_RECEIVER_STATE);
+    CHECK(offsetof(FoxReceiverState, agcGainDb) == offsetof(FoxReceiverState, agcFixedGainDb) + sizeof(double));
+    CHECK(offsetof(FoxReceiverState, nbBlankedPct) == offsetof(FoxReceiverState, nbThresholdDb) + sizeof(double));
+    CHECK(offsetof(FoxReceiverState, nbEnabled) > offsetof(FoxReceiverState, agcGainDb));
+    CHECK(offsetof(FoxReceiverState, nbStandingDown) > offsetof(FoxReceiverState, nbBlankedPct));
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, nbStandingDown) + sizeof(std::uint32_t)) < 8u);
     // The state words are 0..3, each its own.
     CHECK(FOXAPI_SCANNER_IDLE == 0u && FOXAPI_SCANNER_SCANNING == 1u && FOXAPI_SCANNER_PAUSED == 2u &&
           FOXAPI_SCANNER_HOLDING == 3u);
@@ -771,7 +794,8 @@ void positionGroup() {
     CHECK(offsetof(FoxReceiverState, rxLatDeg) < offsetof(FoxReceiverState, sourceFlags) + 8u);
     CHECK(offsetof(FoxReceiverState, rxLonDeg) == offsetof(FoxReceiverState, rxLatDeg) + sizeof(double));
     CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, rxLonDeg) + sizeof(double));
-    CHECK(sizeof(FoxReceiverState) == FOXAPI_MIN_RECEIVER_STATE);
+    CHECK(sizeof(FoxReceiverState) >= FOXAPI_MIN_RECEIVER_STATE);
+    CHECK(offsetof(FoxReceiverState, agcMode) == FOXAPI_MIN_RECEIVER_STATE);  // lane C appended the AGC and blanker members after it
     // The flag is the next free bit of the word: one bit, and no other condition's.
     CHECK(FOXAPI_RX_POSITION_SET == 0x40000000u);
     CHECK((FOXAPI_RX_POSITION_SET & (FOXAPI_RX_POSITION_SET - 1u)) == 0u);

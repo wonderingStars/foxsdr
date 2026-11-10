@@ -87,6 +87,10 @@ struct ConfigFieldInfo {
     X(deemphasisIndex,         Engine,    false) \
     X(nrEnabled,               Engine,    false) \
     X(nrStrength,              Engine,    false) \
+    X(agcMode,                 Engine,    false) \
+    X(agcFixedGainDb,          Engine,    false) \
+    X(nbEnabled,               Engine,    false) \
+    X(nbThresholdDb,           Engine,    false) \
     X(notchEnabled,            Engine,    false) \
     X(notchFreqHz,             Engine,    false) \
     X(notchQ,                  Engine,    false) \

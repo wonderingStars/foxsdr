@@ -502,6 +502,10 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getInt(j, "deemphasisIndex", out.deemphasisIndex);
     getBool(j, "nrEnabled", out.nrEnabled);
     getFloat(j, "nrStrength", out.nrStrength);
+    getInt(j, "agcMode", out.agcMode);
+    getFloat(j, "agcFixedGainDb", out.agcFixedGainDb);
+    getBool(j, "nbEnabled", out.nbEnabled);
+    getFloat(j, "nbThresholdDb", out.nbThresholdDb);
     getBool(j, "notchEnabled", out.notchEnabled);
     getDouble(j, "notchFreqHz", out.notchFreqHz);
     getDouble(j, "notchQ", out.notchQ);
@@ -1015,6 +1019,11 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     if (out.deemphasisIndex < 0) { out.deemphasisIndex = 0; }
     if (out.deemphasisIndex > 2) { out.deemphasisIndex = 2; }
     out.nrStrength = clampf(out.nrStrength, 0.0f, 1.0f);
+    // AGC choice and noise blanker: out of range lands on the nearest end (a NaN cannot be in JSON, but "not >=" keeps one off the filters).
+    if (out.agcMode < 0) { out.agcMode = 0; }
+    if (out.agcMode > 4) { out.agcMode = 4; }
+    out.agcFixedGainDb = !(out.agcFixedGainDb >= -20.0f) ? -20.0f : clampf(out.agcFixedGainDb, -20.0f, 40.0f);
+    out.nbThresholdDb = !(out.nbThresholdDb >= 6.0f) ? 6.0f : clampf(out.nbThresholdDb, 6.0f, 30.0f);
     out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
     out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
     // At least kMinRangeSpanDb apart, which is the rule every writer of this pair follows (the
@@ -1336,6 +1345,10 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["deemphasisIndex"] = cfg.deemphasisIndex;
     j["nrEnabled"] = cfg.nrEnabled;
     j["nrStrength"] = cfg.nrStrength;
+    j["agcMode"] = cfg.agcMode;
+    j["agcFixedGainDb"] = cfg.agcFixedGainDb;
+    j["nbEnabled"] = cfg.nbEnabled;
+    j["nbThresholdDb"] = cfg.nbThresholdDb;
     j["notchEnabled"] = cfg.notchEnabled;
     j["notchFreqHz"] = cfg.notchFreqHz;
     j["notchQ"] = cfg.notchQ;

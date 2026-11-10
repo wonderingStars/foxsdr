@@ -500,7 +500,7 @@ public:
     // applies it between blocks, the getters read mirrors.
     //   setAgcMode        the mode takes effect with the gain held at that moment
     //                     (entering Off freezes it).
-    //   setAgcFixedGain   dB above unity, clamped to 0..40; it is the gain Off
+    //   setAgcFixedGain   dB above unity, clamped to -20..+40; it is the gain Off
     //                     applies, and takes effect at once while the mode is Off.
     //                     Set it AFTER the mode: entering Off freezes the held
     //                     gain, which a fixed gain set earlier does not survive.

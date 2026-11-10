@@ -1750,6 +1750,14 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
             return (c.ival[0] >= 0 && c.ival[0] <= 2) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_NR:
             return (c.ival[1] == 0 || (v >= 0.0 && v <= 1.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_AGC:
+            // the mode 0..4; with ival[1] = 1 the fixed gain too, -20..+40 dB
+            return (c.ival[0] >= 0 && c.ival[0] <= static_cast<long long>(FOXAPI_AGC_OFF) && (c.ival[1] == 0 || (v >= -20.0 && v <= 40.0)))
+                       ? FOXAPI_OK
+                       : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_NB:
+            // with ival[1] = 1 the threshold, 6..30 dB above the average
+            return (c.ival[1] == 0 || (v >= 6.0 && v <= 30.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_NOTCH:
             return (c.ival[1] == 0 || (v >= 10.0 && v <= 20000.0 && c.num[1] >= 0.1 && c.num[1] <= 1000.0))
                        ? FOXAPI_OK

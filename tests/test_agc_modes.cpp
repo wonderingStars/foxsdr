@@ -249,9 +249,13 @@ void testOffHoldsTheGain() {
     CHECK_NEAR(o2[10], loud[10] * std::pow(10.0, 12.0 / 20.0), 1e-3);
     CHECK_NEAR(agc.gainDb(), 12.0, 1e-3);
 
-    // Range: 0 to 40 dB, NaN lands on 0.
+    // Range: -20 to +40 dB (below unity is real: entering Off freezes a held gain that can be
+    // under 0 dB), NaN lands on 0.
     agc.setFixedGainDb(-7.0f);
-    CHECK_NEAR(agc.fixedGainDb(), 0.0, 1e-4);
+    CHECK_NEAR(agc.fixedGainDb(), -7.0, 1e-3);
+    CHECK_NEAR(agc.gain(), std::pow(10.0, -7.0 / 20.0), 1e-5);
+    agc.setFixedGainDb(-55.0f);
+    CHECK_NEAR(agc.fixedGainDb(), -20.0, 1e-3);
     agc.setFixedGainDb(90.0f);
     CHECK_NEAR(agc.fixedGainDb(), 40.0, 1e-3);
     agc.setFixedGainDb(std::numeric_limits<float>::quiet_NaN());
@@ -276,6 +280,36 @@ void testOffHoldsTheGain() {
     CHECK_NEAR(agc.gain(), 10.0, 1e-4);
     agc.reset();
     CHECK(agc.gain() == 1.0f);
+}
+
+// Entering Off freezes the gain the loop HELD, which on a strong signal is under unity: the fixed-gain
+// range is -20 to +40 dB, a held gain inside it is kept exactly, and one below -20 dB is frozen at -20.
+void testOffFreezesAHeldGainBelowUnity() {
+    const double fs = 400000.0;
+    {
+        Agc agc = makeAgc(fs);
+        std::vector<float> loud(200000);
+        for (std::size_t i = 0; i < loud.size(); ++i) { loud[i] = 1.5f * std::sin(0.2f * static_cast<float>(i)); }
+        std::vector<float> out(loud.size());
+        agc.process(loud.data(), out.data(), loud.size());
+        const float held = agc.gain();
+        CHECK(held < 1.0f && held > 0.2f);  // between -14 and 0 dB
+        agc.setMode(Agc::Mode::Off);
+        CHECK(agc.gain() == held);
+        CHECK_NEAR(agc.fixedGainDb(), 20.0 * std::log10(held), 1e-3);
+        CHECK(agc.fixedGainDb() < 0.0f);
+    }
+    {
+        Agc agc = makeAgc(fs);
+        std::vector<float> huge(300000);
+        for (std::size_t i = 0; i < huge.size(); ++i) { huge[i] = 80.0f * std::sin(0.2f * static_cast<float>(i)); }
+        std::vector<float> out(huge.size());
+        agc.process(huge.data(), out.data(), huge.size());
+        CHECK(agc.gainDb() < -20.0f);  // the loop went below the floor
+        agc.setMode(Agc::Mode::Off);
+        CHECK_NEAR(agc.fixedGainDb(), -20.0, 1e-3);  // clamped to -20
+        CHECK_NEAR(agc.gainDb(), -20.0, 1e-3);
+    }
 }
 
 void testNonFiniteInEveryMode() {
@@ -363,6 +397,7 @@ int main() {
     testTimedModesRecoveryAtTwoRates();
     testTimedRecoveryIsLevelIndependent();
     testOffHoldsTheGain();
+    testOffFreezesAHeldGainBelowUnity();
     testNonFiniteInEveryMode();
     testRealAndComplexAgree();
     testSteadyToneRipple();

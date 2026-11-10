@@ -343,6 +343,12 @@ struct Receiver {
     bool stereoEnabled_ = true;
     bool nrEnabled_ = false;
     float nrStrength_ = 0.5f;
+    // AGC choice and noise blanker (lane C): the engine's mirrors, FOXAPI_AGC_* and dB. agcFixedGainDb_ is the value last set or loaded; while the
+    // mode is Off the pipeline's own (the gain frozen at the switch) is the truth and is what is published and saved (agcFixedGainShown, engine.cpp).
+    int agcMode_ = 0;
+    float agcFixedGainDb_ = 0.0f;
+    bool nbEnabled_ = false;
+    float nbThresholdDb_ = 15.0f;
     bool notchEnabled_ = false;
     float notchFreqHz_ = 1000.0f;
     float notchQ_ = 30.0f;

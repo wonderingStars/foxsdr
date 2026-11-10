@@ -78,7 +78,7 @@ const std::set<std::string>& engineWritten() {
         "airspy", "audioBufferMs", "audioBufferAutoMs", "ppmCorrection", "ppm", "autoGainByRadio",
         "manualGainByRadio", "plutoUri", "rtlTcpAddr", "iqFilePath", "soundCard", "centerHz", "mode", "bandwidthHz",
         "squelchDb", "squelchAuto", "volume", "dbMin", "dbMax", "vfoOffsetHz", "sampleRateHz", "stereoEnabled", "deemphasisIndex",
-        "nrEnabled", "nrStrength", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
+        "nrEnabled", "nrStrength", "agcMode", "agcFixedGainDb", "nbEnabled", "nbThresholdDb", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
         "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed", "pluginTransmitAllowed",
@@ -136,6 +136,12 @@ AppConfig seeded() {
     c.squelchAuto = false;
     c.nrEnabled = true;
     c.nrStrength = 0.75f;
+    // AGC choice and noise blanker (lane C), away from their defaults: Off WITH a fixed gain below unity (the engine must set the mode first and the
+    // gain after it, or the saved gain would be the one Off froze), the blanker on at a non-default threshold.
+    c.agcMode = 4;
+    c.agcFixedGainDb = -7.5f;
+    c.nbEnabled = true;
+    c.nbThresholdDb = 22.5f;
     c.notchEnabled = true;
     c.notchFreqHz = 1500.0;
     c.deemphasisIndex = 1;
@@ -404,6 +410,7 @@ int main() {
     CHECK(afterFirst["mode"] == "USB");
     CHECK(afterFirst["squelchDb"] == -80.0);
     CHECK(afterFirst["nrEnabled"] == true);
+    CHECK(afterFirst["agcMode"] == 4 && afterFirst["agcFixedGainDb"] == -7.5 && afterFirst["nbEnabled"] == true && afterFirst["nbThresholdDb"] == 22.5);
     CHECK(afterFirst["notchEnabled"] == true);
     CHECK(afterFirst["deemphasisIndex"] == 1);
     CHECK(afterFirst["stereoEnabled"] == false);
@@ -424,6 +431,7 @@ int main() {
         const Check c2 = compareNonEngine(afterFirst, afterSecond, "second run");
         CHECK(c2.differing == 0);
         CHECK(afterSecond["pluginRun"] == afterFirst["pluginRun"]);
+        CHECK(afterSecond["agcMode"] == 4 && afterSecond["agcFixedGainDb"] == -7.5 && afterSecond["nbEnabled"] == true && afterSecond["nbThresholdDb"] == 22.5);
         CHECK(afterSecond["pluginSites"] == afterFirst["pluginSites"]);
         CHECK(afterSecond["telemetryLaunches"] == 2);
         CHECK(afterSecond["telemetryCrashes"] == 0);       // the first run ended cleanly: nothing to count

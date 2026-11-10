@@ -477,6 +477,17 @@ double floatAsDecimal(float f) {
     return d;
 }
 
+// THE FIXED GAIN OF A RECEIVER'S AGC AS PUBLISHED AND SAVED (lane C): in Off the pipeline's own value is the truth - entering Off froze the gain the loop
+// held, which is not what was last set - and in every other mode it is the value last set or loaded, which is what Off will use if the user sets it
+// next (the engine sets the mode first and the fixed gain after it, so that a loaded value survives the switch).
+float agcFixedGainShown(const Receiver& rx) {
+    if (rx.agcMode_ == static_cast<int>(FOXAPI_AGC_OFF)) {
+        const float live = rx.pipeline_.agcFixedGainDb();
+        if (std::isfinite(live)) { return live; }
+    }
+    return rx.agcFixedGainDb_;
+}
+
 // A scanner timing as the state publishes it (API 0.3 8.6): whole milliseconds, rounded to the
 // nearest (a half goes up), 0 for a negative or NaN - which Scanner::configure floors the same
 // way - and saturating at the top of a uint32.
@@ -4722,6 +4733,18 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     r.dbMin = floatAsDecimal(dbMin_);
     r.dbMax = floatAsDecimal(dbMax_);
     r.nrStrength = floatAsDecimal(nrStrength_);
+    {
+        // THE AUDIO AGC AND THE NOISE BLANKER (lane C). The four settings move modeSeq; the gain in use, the blanked share and the stand-down are
+        // measurements, published like signalDb (receiver_snapshot.cpp).
+        const Receiver& rx0 = *receivers_[0];
+        r.agcMode = static_cast<std::uint32_t>(rx0.agcMode_);
+        r.agcFixedGainDb = floatAsDecimal(agcFixedGainShown(rx0));
+        r.agcGainDb = static_cast<double>(pipeline_.agcGainDb());
+        r.nbEnabled = rx0.nbEnabled_ ? 1u : 0u;
+        r.nbThresholdDb = floatAsDecimal(rx0.nbThresholdDb_);
+        r.nbBlankedPct = static_cast<double>(pipeline_.noiseBlankerBlankedPercent());
+        r.nbStandingDown = pipeline_.noiseBlankerStandingDown() ? 1u : 0u;
+    }
     r.notchHz = floatAsDecimal(notchFreqHz_);
     r.notchQ = floatAsDecimal(notchQ_);
     r.pilotLevel = static_cast<double>(pipeline_.pilotLevel());
@@ -7118,6 +7141,37 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             }
             res.applied[0] = nrStrength_;
             return res;
+        case FOXAPI_OP_SET_AGC: {
+            // RECEIVER-SCOPED (radio_scope.hpp): the receiver the command names, and its state in the Receiver struct (no Engine alias).
+            if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(FOXAPI_AGC_OFF)) { return refuse(FOXAPI_OUT_OF_RANGE, "no such AGC mode"); }
+            Receiver& rx = *receivers_[pickRadio(c.op, c.target, 1u, [this](std::uint32_t n) { return receiverLive(n); }).radio - 1u];
+            // THE MODE FIRST, THE FIXED GAIN AFTER IT: entering Off freezes the gain the loop held, which a fixed gain set earlier would not survive.
+            rx.agcMode_ = static_cast<int>(c.ival[0]);
+            rx.pipeline_.setAgcMode(static_cast<cascade::dsp::Agc::Mode>(rx.agcMode_));
+            if (c.ival[1] == 1) {
+                float db = static_cast<float>(c.num[0]);
+                if (db < cascade::dsp::Agc::kFixedGainMinDb) { db = cascade::dsp::Agc::kFixedGainMinDb; res.flags |= FOXAPI_RESULT_CLAMPED; }
+                if (db > cascade::dsp::Agc::kFixedGainMaxDb) { db = cascade::dsp::Agc::kFixedGainMaxDb; res.flags |= FOXAPI_RESULT_CLAMPED; }
+                rx.agcFixedGainDb_ = db;
+                rx.pipeline_.setAgcFixedGain(db);
+            }
+            res.applied[0] = floatAsDecimal(agcFixedGainShown(rx));
+            return res;
+        }
+        case FOXAPI_OP_SET_NB: {
+            Receiver& rx = *receivers_[pickRadio(c.op, c.target, 1u, [this](std::uint32_t n) { return receiverLive(n); }).radio - 1u];
+            rx.nbEnabled_ = on;
+            rx.pipeline_.setNoiseBlankerEnabled(rx.nbEnabled_);
+            if (c.ival[1] == 1) {
+                float db = static_cast<float>(c.num[0]);
+                if (db < cascade::dsp::NoiseBlanker::kMinThresholdDb) { db = cascade::dsp::NoiseBlanker::kMinThresholdDb; res.flags |= FOXAPI_RESULT_CLAMPED; }
+                if (db > cascade::dsp::NoiseBlanker::kMaxThresholdDb) { db = cascade::dsp::NoiseBlanker::kMaxThresholdDb; res.flags |= FOXAPI_RESULT_CLAMPED; }
+                rx.nbThresholdDb_ = db;
+                rx.pipeline_.setNoiseBlankerThresholdDb(db);
+            }
+            res.applied[0] = floatAsDecimal(rx.nbThresholdDb_);
+            return res;
+        }
         case FOXAPP_OP_SET_NR_STRENGTH:
             nrStrength_ = static_cast<float>(c.num[0]);
             pipeline_.setNoiseReductionStrength(nrStrength_);
@@ -8853,6 +8907,18 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     nrStrength_ = cfg.nrStrength;
     pipeline_.setNoiseReductionStrength(nrStrength_);
     pipeline_.setNoiseReductionEnabled(nrEnabled_);
+    {
+        // AGC choice and noise blanker: the loader has clamped all four. Mode FIRST, the fixed gain after it.
+        Receiver& rx = *receivers_[0];
+        rx.agcMode_ = cfg.agcMode;
+        rx.agcFixedGainDb_ = cfg.agcFixedGainDb;
+        rx.nbEnabled_ = cfg.nbEnabled;
+        rx.nbThresholdDb_ = cfg.nbThresholdDb;
+        rx.pipeline_.setAgcMode(static_cast<cascade::dsp::Agc::Mode>(rx.agcMode_));
+        rx.pipeline_.setAgcFixedGain(rx.agcFixedGainDb_);
+        rx.pipeline_.setNoiseBlankerThresholdDb(rx.nbThresholdDb_);
+        rx.pipeline_.setNoiseBlankerEnabled(rx.nbEnabled_);
+    }
     notchFreqHz_ = static_cast<float>(cfg.notchFreqHz);
     notchQ_ = static_cast<float>(cfg.notchQ);
     pipeline_.setNotchFrequencyHz(cfg.notchFreqHz);
@@ -9379,6 +9445,13 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.deemphasisIndex = deemphIndex_;
     cfg.nrEnabled = nrEnabled_;
     cfg.nrStrength = nrStrength_;
+    {
+        const Receiver& rx = *receivers_[0];
+        cfg.agcMode = rx.agcMode_;
+        cfg.agcFixedGainDb = agcFixedGainShown(rx);
+        cfg.nbEnabled = rx.nbEnabled_;
+        cfg.nbThresholdDb = rx.nbThresholdDb_;
+    }
     cfg.notchEnabled = notchEnabled_;
     cfg.notchFreqHz = static_cast<double>(notchFreqHz_);
     cfg.notchQ = static_cast<double>(notchQ_);
@@ -9455,6 +9528,14 @@ void Engine::initialise() {
     pipeline_.setStereoEnabled(stereoEnabled_);
     pipeline_.setNoiseReductionEnabled(nrEnabled_);
     pipeline_.setNoiseReductionStrength(nrStrength_);
+    {
+        // AGC and blanker: mode first, then the fixed gain (see applyConfig above).
+        Receiver& rx = *receivers_[0];
+        rx.pipeline_.setAgcMode(static_cast<cascade::dsp::Agc::Mode>(rx.agcMode_));
+        rx.pipeline_.setAgcFixedGain(rx.agcFixedGainDb_);
+        rx.pipeline_.setNoiseBlankerThresholdDb(rx.nbThresholdDb_);
+        rx.pipeline_.setNoiseBlankerEnabled(rx.nbEnabled_);
+    }
     pipeline_.setNotchEnabled(notchEnabled_);
     pipeline_.setNotchFrequencyHz(static_cast<double>(notchFreqHz_));
     pipeline_.setNotchQ(static_cast<double>(notchQ_));

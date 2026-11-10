@@ -154,6 +154,10 @@ AppConfig junkConfig() {
     c.deemphasisIndex = 99;
     c.nrEnabled = true;
     c.nrStrength = -4.0f;
+    c.agcMode = 9;              // AGC choice and noise blanker: out of range, every one
+    c.agcFixedGainDb = -99.0f;
+    c.nbEnabled = true;
+    c.nbThresholdDb = 99.0f;
     c.notchEnabled = true;
     c.notchFreqHz = -1.0;
     c.notchQ = 1e9;
@@ -379,6 +383,10 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.deemphasisIndex == b.deemphasisIndex);
     CHECK(a.nrEnabled == b.nrEnabled);
     CHECK(a.nrStrength == b.nrStrength);
+    CHECK(a.agcMode == b.agcMode);
+    CHECK(a.agcFixedGainDb == b.agcFixedGainDb);
+    CHECK(a.nbEnabled == b.nbEnabled);
+    CHECK(a.nbThresholdDb == b.nbThresholdDb);
     CHECK(a.notchEnabled == b.notchEnabled);
     CHECK(a.notchFreqHz == b.notchFreqHz);
     CHECK(a.notchQ == b.notchQ);
@@ -898,6 +906,10 @@ int main() {
         in.deemphasisIndex = 1;   // 75 us
         in.nrEnabled = true;
         in.nrStrength = 0.375f;   // dyadic: exact through float<->double<->text
+        in.agcMode = 3;           // Slow (default Auto)
+        in.agcFixedGainDb = -7.5f;  // below unity: the widened range (default 0)
+        in.nbEnabled = true;      // (default off)
+        in.nbThresholdDb = 22.5f; // (default 15)
         in.notchEnabled = true;
         in.notchFreqHz = 1234.5;
         in.notchQ = 42.25;
@@ -2174,6 +2186,20 @@ int main() {
         CHECK(writeText(path, "{\"nrStrength\":0.25}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.nrStrength == 0.25f);
+
+        // AGC choice and noise blanker: a file without the keys loads as the audio always was; each key is clamped to its block's range.
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.agcMode == 0 && out.agcFixedGainDb == 0.0f && !out.nbEnabled && out.nbThresholdDb == 15.0f);
+        CHECK(writeText(path, "{\"agcMode\":9,\"agcFixedGainDb\":-99.0,\"nbThresholdDb\":99.0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.agcMode == 4 && out.agcFixedGainDb == -20.0f && out.nbThresholdDb == 30.0f);
+        CHECK(writeText(path, "{\"agcMode\":-2,\"agcFixedGainDb\":77.0,\"nbThresholdDb\":1.0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.agcMode == 0 && out.agcFixedGainDb == 40.0f && out.nbThresholdDb == 6.0f);
+        CHECK(writeText(path, "{\"agcMode\":2,\"agcFixedGainDb\":-20.0,\"nbEnabled\":true,\"nbThresholdDb\":6.0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.agcMode == 2 && out.agcFixedGainDb == -20.0f && out.nbEnabled && out.nbThresholdDb == 6.0f);
 
         // notch frequency stays inside the audible span of the 48 kHz sink,
         // and Q inside the biquad's useful range.

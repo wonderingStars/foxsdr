@@ -81,7 +81,9 @@ void testSettersAndMirrors() {
     p.setAgcFixedGain(90.0f);
     CHECK_NEAR(p.agcFixedGainDb(), 40.0, 1e-3);
     p.setAgcFixedGain(-5.0f);
-    CHECK_NEAR(p.agcFixedGainDb(), 0.0, 1e-3);
+    CHECK_NEAR(p.agcFixedGainDb(), -5.0, 1e-3);
+    p.setAgcFixedGain(-35.0f);
+    CHECK_NEAR(p.agcFixedGainDb(), -20.0, 1e-3);
     p.setAgcFixedGain(std::nanf(""));
     CHECK_NEAR(p.agcFixedGainDb(), 0.0, 1e-3);
 }
