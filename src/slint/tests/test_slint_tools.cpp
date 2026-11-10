@@ -498,7 +498,8 @@ int main() {
         evs.clear();
         clk(x0b + 40, ky + 24 + 10);
         const Frame r = shot();
-        CHECKV(evs.empty(), "opening the rename row asks the host nothing");
+        // opening the row asks the host once (docs 6.61): it seeds the field with the group's own name, as the ImGui key does
+        CHECKV(evs.size() == 1 && evs[0].name == "bookmark-rename-open" && evs[0].args == "1", "opening the rename row asks the host to seed the field: %s", names(evs).c_str());
         const int ry = ky + 44 + 6;
         CHECKV(r.near(x0b + 12, ry, keyLine, 0) && r.near(Rb - 1, ry + 12, keyLine) && r.near(Rb - 40, ry, keyLine), "the rename row: the field and the Rename key");
         typeInto(x0b + 40, ry + 12, "Beacons", false);

@@ -68,6 +68,7 @@
 #include "host_logic.hpp"
 #include "input_script.hpp"
 #include "key_dispatch.hpp"
+#include "look_logic.hpp"
 #include "kit_publish.hpp"
 #include "patch_publish.hpp"
 #include "transmit_publish.hpp"
@@ -435,7 +436,7 @@ int main(int argc, char** argv) {
     foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
     toolsHooks.demodScopeClicked = [&] { scopeBank.toggleDemod(); };
     toolsHooks.radarScopeClicked = [&] { scopeBank.toggleRadar(); };
-    toolsHooks.openImportDialog = [&] { ui->global<SignalEvents>().invoke_recorder_import(); };
+    toolsHooks.openImportDialog = [&](const std::string& preset) { signalBank.openImportForPreset(preset); };
     // the two spectrum options are the interface half's (docs 6.52): read at start, saved on each tick of a box, read again every tick by the spectrum's marks
     toolsHooks.onSpectrum = duties.interfaceHalf().bookmarkMarkers;
     toolsHooks.stackNames = duties.interfaceHalf().bookmarkStackNames;
@@ -447,6 +448,7 @@ int main(int argc, char** argv) {
     };
     foxsdr::slinttools::ToolsPublisher toolsBank(*ui, kit, api, session, bounded.bounded(), toolsHooks);
     toolsBank.wire();
+    signalBank.setPresetImport([&](const std::string& path, const std::string& preset) { toolsBank.importIntoPreset(path, preset); });   // the import dialog opened for an Airband preset (docs 6.61)
     if (std::getenv("FOXSDR_SLINT_MARKERS") != nullptr) { toolsBank.openMarkers(); }
     // A bounded run's self-capture of the gestures that touch nothing but the window (never set in a release): at tick 60 the Bookmarks search is typed, the Radar fold's
     // position boxes are filled (the Set RX here key is NOT pressed) and the Airband code, frequency and name boxes are typed - the whole path of a gesture: callback,
@@ -755,6 +757,44 @@ int main(int argc, char** argv) {
         s.digit_face = face == Face::Nixie ? DigitFace::Nixie : face == Face::Drum ? DigitFace::Drum : DigitFace::Plain;
         ui->global<Theme>().set_skin(s);
     };
+    // THE WINDOW'S LOOK (docs 6.61, look_logic.hpp): the saved theme names the skin, the saved tuner style the counter face, the saved interface size the
+    // window's scale. Read from the interface half once a tick (a pick in SYSTEM > Display is saved there at once) and at the first tick: what changed since the
+    // last look is applied, nothing else - so a counter face picked from the menu stays until the saved style moves.
+    foxsdr::slintlook::ScaleFollower scaleFollower;
+    std::string lookTheme, lookStyle;
+    bool lookStarted = false;
+    const auto applyLook = [&] {
+        const cascade::core::AppConfig& half = duties.interfaceHalf();
+        if (!lookStarted || half.uiTheme != lookTheme || half.tunerDisplayStyle != lookStyle) {
+            const bool themeMoved = !lookStarted || half.uiTheme != lookTheme;
+            lookStarted = true;
+            lookTheme = half.uiTheme;
+            lookStyle = half.tunerDisplayStyle;
+            if (themeMoved) {
+                const foxsdr::slintlook::SkinId id = foxsdr::slintlook::skinOfTheme(half.uiTheme);
+                ui->global<Theme>().set_skin(id == foxsdr::slintlook::SkinId::NightWatch ? ui->global<NightWatch>().get_value() : ui->global<Workbench>().get_value());
+                std::fprintf(stderr, "foxsdr-slint: look: theme '%s' is drawn in the %s skin\n", half.uiTheme.c_str(), foxsdr::slintlook::skinName(id));
+            }
+            const foxsdr::slintlook::CounterFace cf = foxsdr::slintlook::faceOfStyle(half.tunerDisplayStyle);
+            face = cf == foxsdr::slintlook::CounterFace::Drum ? Face::Drum : cf == foxsdr::slintlook::CounterFace::Plain ? Face::Plain : Face::Nixie;
+            applyFace();
+        }
+        const float cur = ui->window().scale_factor();
+        const foxsdr::slintlook::ScalePlan plan = scaleFollower.plan(half.interfaceScale, cur);
+        systemBank.setOsScale(plan.os);   // the Auto row says what the system reports, never the pinned number
+        if (plan.change) {
+            const auto sz = ui->window().size();
+            ui->window().dispatch_scale_factor_change_event(plan.want);
+            if (!ui->window().is_maximized()) {   // the logical size stays: the window grows with the scale
+                const auto ns = foxsdr::slintlook::sizeForScale(sz.width, sz.height, cur, plan.want);
+                ui->window().set_size(slint::PhysicalSize({ns.first, ns.second}));
+            }
+            scaleFollower.applied(plan.want);
+            std::fprintf(stderr, "foxsdr-slint: look: interface size '%s' = scale %.2f (the system's %.2f)\n", half.interfaceScale.c_str(), static_cast<double>(plan.want), static_cast<double>(plan.os));
+        } else {
+            scaleFollower.applied(cur);
+        }
+    };
     ui->on_menu_activated([&](int id) {
         switch (id) {
             case 101: case 102: case 104: std::fprintf(stderr, "foxsdr-slint: counter scale %d: the interface-size setting of phase 2\n", id); break;
@@ -993,8 +1033,18 @@ int main(int argc, char** argv) {
         else if (id == "bankSystem") { bankIndex = 4; ui->set_bank_index(4); }
         else if (id == "openSettings") { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(5); }
         else if (id == "escape" && scopeBank.radarOn() && !ui->get_editing() && !ui->get_about_open()) { scopeBank.leaveRadar(); }   // the radar scope's second way out (aw.cpp 13589): not while a field is being edited
-        else if (id == "escape") { ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); }
-        else if (id == "uiSizeAuto") { std::fprintf(stderr, "foxsdr-slint: the interface size is phase 2's (%s)\n", id.c_str()); }
+        else if (id == "escape") {
+            // ONE LAYER A PRESS (docs 6.61, key_dispatch.hpp escapeStep): the import dialog, then the Plugin store's plugin page (back to the grid), else the overlays
+            foxsdr::slintsystem::EscapeState open;
+            open.importDialog = ui->get_import_dialog().shown;
+            open.storePluginPage = extendBank.models().store.plugin.shown;
+            switch (foxsdr::slintsystem::escapeStep(open)) {
+                case foxsdr::slintsystem::EscapeStep::ImportDialog: ui->global<SignalEvents>().invoke_import_closed(); break;
+                case foxsdr::slintsystem::EscapeStep::StorePluginPage: ui->global<ExtendEvents>().invoke_store_plugin_back(); break;
+                case foxsdr::slintsystem::EscapeStep::Overlays: ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); break;
+            }
+        }
+        else if (id == "uiSizeAuto") { systemBank.setInterfaceSize(0); }   // Ctrl+0: back to Auto (saved; the look takes it on the next tick)
         else { std::fprintf(stderr, "foxsdr-slint: shortcut %s is not bound here\n", id.c_str()); }
     });
 
@@ -1411,6 +1461,31 @@ int main(int argc, char** argv) {
             if (!supported) { return "cfg." + field + " is not a scalar or a string"; }
             return std::string();
         }
+        // look.<what>: what the window is DRAWN with (docs 6.61), read from the window itself, not from the settings: scale (Window::scale_factor), width / height (the
+        // logical size the screen lays out in), bg (the ground colour in force, "#rrggbb"), accent, face (nixie / neon / plain)
+        // shown.<what>: whether a dialog or page is up (docs 6.61): import (the import dialog), storePlugin (the Plugin store's plugin page), about
+        if (name.rfind("shown.", 0) == 0) {
+            const std::string what = name.substr(6);
+            if (what == "import") { out = ui->get_import_dialog().shown ? "1" : "0"; return std::string(); }
+            if (what == "storePlugin") { out = extendBank.models().store.plugin.shown ? "1" : "0"; return std::string(); }
+            if (what == "about") { out = ui->get_about_open() ? "1" : "0"; return std::string(); }
+            return "shown.import|storePlugin|about, not " + name;
+        }
+        if (name.rfind("look.", 0) == 0) {
+            const std::string what = name.substr(5);
+            const auto hex = [](const slint::Color& c) {
+                char b[16];
+                std::snprintf(b, sizeof(b), "#%02x%02x%02x", static_cast<unsigned>(c.red()), static_cast<unsigned>(c.green()), static_cast<unsigned>(c.blue()));
+                return std::string(b);
+            };
+            if (what == "scale") { out = fmt("%.2f", static_cast<double>(ui->window().scale_factor())); return std::string(); }
+            if (what == "width") { out = fmt("%.0f", static_cast<double>(ui->get_win_w())); return std::string(); }
+            if (what == "height") { out = fmt("%.0f", static_cast<double>(ui->get_win_h())); return std::string(); }
+            if (what == "bg") { out = hex(ui->global<Theme>().get_bg()); return std::string(); }
+            if (what == "accent") { out = hex(ui->global<Theme>().get_accent()); return std::string(); }
+            if (what == "face") { out = face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain"; return std::string(); }
+            return "look.scale|width|height|bg|accent|face, not " + name;
+        }
         if (name == "tunedHz") { out = fmt("%.6f", state.tunedHz); return std::string(); }
         if (name == "centreHz") { out = fmt("%.6f", state.centreHz); return std::string(); }
         if (name == "vfoOffsetHz") { out = fmt("%.6f", state.vfoOffsetHz); return std::string(); }
@@ -1503,6 +1578,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "foxsdr-slint: bounded run: window size now %ux%u\n", sz.width, sz.height);
             }
         }
+        applyLook();
         onTick();
         if (drive) { drive->tick(bounded.ticks() + 1, driveSay); }   // this tick's number: the steps due now, after the screen's reads
         TickInput in;

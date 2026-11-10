@@ -195,6 +195,23 @@ void glyphShift() {
     CHECK(shortcutForPress(press("M", false, true, false, false), def).empty());
 }
 
+// Esc takes ONE layer: the dialog on top, then the plugin page, else the small overlays (docs 6.61)
+void escapeLayers() {
+    EscapeState s;
+    CHECK(escapeStep(s) == EscapeStep::Overlays);               // nothing open: the editor / About / bias sheet are what Esc closes
+    s.storePluginPage = true;
+    CHECK(escapeStep(s) == EscapeStep::StorePluginPage);        // a plugin's page: back to the browse grid
+    s.importDialog = true;
+    CHECK(escapeStep(s) == EscapeStep::ImportDialog);           // the dialog is above the page: it goes first
+    s.storePluginPage = false;
+    CHECK(escapeStep(s) == EscapeStep::ImportDialog);
+    s.importDialog = false;
+    CHECK(escapeStep(s) == EscapeStep::Overlays);
+    // and the key that asks is still the fixed one: bare Escape answers "escape" whatever the table holds
+    const KeyTable def = defaultKeyTable();
+    CHECK(shortcutForPress(press("Escape"), def) == kShortcutEscape);
+}
+
 }  // namespace
 
 int main() {
@@ -205,5 +222,6 @@ int main() {
     clashes();
     fixedChords();
     glyphShift();
+    escapeLayers();
     return testSummary("test_slint_host_keydispatch");
 }

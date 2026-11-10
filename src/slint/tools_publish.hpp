@@ -36,7 +36,7 @@ namespace foxsdr::slinttools {
 class ToolsPublisher {
 public:
     struct Hooks {
-        std::function<void()> openImportDialog;   // the SIGNAL bank's "Import a frequency list" dialog (the Bookmarks Import key with an empty box)
+        std::function<void(const std::string& preset)> openImportDialog;   // the SIGNAL bank's "Import a frequency list" dialog (an Import key over an empty box): the Airband's names its preset, the Bookmarks' is "" (docs 6.61)
         // THE TWO SPECTRUM OPTIONS OF THE BOOKMARKS PANEL (docs 6.52, tick rows 1629-1630): "On the spectrum" and "Stack close names" are the interface
         // half's bookmarkMarkers and bookmarkStackNames, which the classic window saves and reads back at start. Until 6.52 this publisher kept them in
         // its panel options alone, so both reset to on at every launch and the spectrum never read them. The host hands their saved values in here
@@ -81,6 +81,8 @@ public:
     // The Markers sheet: opened by the spectrum toolbar's Markers key, the marker menu's "List markers..." and the bounded run's capture. The sheet's own Close
     // key tells the host through markers-closed.
     void openMarkers();
+    // The Airband import for a path typed in the SIGNAL bank's import dialog, which was opened for `preset` (docs 6.61): the lookup the section's own Import key starts.
+    void importIntoPreset(const std::string& path, const std::string& preset);
     // The Radar fold was opened: nothing here needs asking (the serial scan is the SYSTEM publisher's, started by the caller).
 
     // A bounded run's evidence: the bookmark count and its count line, the scanner status, the airband hearing line and row count, the marker count.

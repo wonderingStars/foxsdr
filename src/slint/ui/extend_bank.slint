@@ -51,6 +51,7 @@ export struct StoreCategory { heading: string, cards: [StoreCard] }
 
 export struct StoreSite {
     address: string, remove-label: string,
+    remove-enabled: bool,                              // ADDED (docs 6.61): false while a transfer runs - the list does not change under it (REMOVE is greyed)
     status: string,                                    // ADDED: the site's status line (amber: "That address did not answer"); "" none
 }
 
@@ -77,6 +78,7 @@ export struct StoreModel {
     cancel-label: string,                              // ADDED: CANCEL, drawn only while a transfer runs ("" = hidden); callback store-cancel
     site-error: string,                                // ADDED: the refusal of the last ADD (amber), under the address field
     add-reason: string,                                // ADDED: why ADD is greyed ("" = ADD answers); shown dim under the field
+    check-enabled: bool,                               // ADDED (docs 6.61): CHECK NOW / CHECK AGAIN is greyed while a transfer or a picture is in flight or no address is set
 }
 
 // EVERY GESTURE OF THE BODIES AND OF THE STORE PAGE, as one global the host wires (ui->global<ExtendEvents>().on_...). A store gesture that names a card or an
@@ -1303,6 +1305,7 @@ export component StorePage inherits Rectangle {
         width: self.preferred-width;
         small: true;
         label: root.model.check-label != "" ? root.model.check-label : @tr("CHECK AGAIN");
+        enabled: root.model.check-enabled;
         clicked => { root.store-check(); }
     }
     sites-key := Key {
@@ -1364,7 +1367,7 @@ export component StorePage inherits Rectangle {
                             spacing: 8px;
                             height: Theme.field-h;
                             Text { horizontal-stretch: 1; min-width: 0px; text: s.address; overflow: elide; color: Theme.fg; font-family: Theme.font-ui; font-size: Theme.font-small; vertical-alignment: center; }
-                            Mid { Key { xs: true; label: s.remove-label != "" ? s.remove-label : @tr("REMOVE"); tooltip: @tr("Forgets the site. Plugins you already fitted from it stay, and they get no more updates."); clicked => { root.store-site-remove(i); } } }
+                            Mid { Key { xs: true; enabled: s.remove-enabled; label: s.remove-label != "" ? s.remove-label : @tr("REMOVE"); tooltip: @tr("Forgets the site. Plugins you already fitted from it stay, and they get no more updates."); clicked => { root.store-site-remove(i); } } }
                         }
                         if s.status != "" : Note { wrap-w: root.iw - 16px; text: s.status; tone: ChipTone.warn; }
                     }

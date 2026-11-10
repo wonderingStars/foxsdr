@@ -1,0 +1,31 @@
+#! frames=360 bank=2 sections=2:2
+# tools-bookmarks-rename-key: the "Rename this group" KEY (docs 6.61). The key used to toggle its field inside the body and never call the host, so the field
+# showed whatever draft the host last held: a name typed and abandoned came back the next time the field was opened. The ImGui key seeds the field with the
+# group's own name every time it opens (applyBookmarkRenameOpen); so does this one, through the bookmark-rename-open callback.
+10 state running == 1
++1 type "Bookmark name" "Second"
++1 type "Group" "Aviation"
++1 key enter
++1 click "Add current"
++25 state count.bookmarks == 1
++1 choose "Group filter" "Aviation"
++5 expect "Group filter" value contains "Aviation"
+# open: seeded with the group's name
++1 click "Rename this group"
++5 expect "new group name" value equals "Aviation"
+# a name typed and abandoned (the key closes the field, nothing is renamed). PRESS, the real pointer gesture: the click takes the focus from the field, which
+# commits what was typed to the host (an accessibility click would not)
++1 type "new group name" "Flying"
++2 expect "new group name" value equals "Flying"
++1 key tab
++2 expect "new group name" value equals "Flying"
++1 press "Rename this group"
++8 state list.bookmarkGroups.names contains Aviation
+# open again: the group's own name, not the abandoned text
++1 press "Rename this group"
++8 expect "new group name" value equals "Aviation"
+# and a rename from the seeded field still works: the group follows its new name
++1 type "new group name" "Flying"
++1 key enter
++25 state list.bookmarkGroups.names contains Flying
++3 state list.bookmarkGroups.names != Aviation

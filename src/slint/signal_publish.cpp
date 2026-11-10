@@ -423,6 +423,14 @@ void SignalPublisher::importPath(const std::string& typed) {
     opts_.import_reason.clear();
     forceRead_ = true;
     if (p.empty()) { return; }
+    if (!opts_.import_preset.empty()) {
+        // A PRESET'S IMPORT is the Airband section's (app_window_import_dialog.cpp importBookmarkFile -> airbandImportFile): its rows take the preset's name and tick.
+        // The section reads the file on its worker and says how it went in its own note; the dialog's job is done.
+        if (presetImport_) { presetImport_(p, opts_.import_preset); }
+        opts_.import_shown = false;
+        opts_.import_preset.clear();
+        return;
+    }
     if (opts_.import_kind == 1) {
         send(opImportPath(p, 1));
         opts_.import_shown = false;   // the source is opened: the dialog's job is done
@@ -448,6 +456,15 @@ void SignalPublisher::importPath(const std::string& typed) {
         (void)cascade::core::importFrequencyFileIn(p, dir, o.tried);
         return o;
     });
+}
+
+// The dialog, opened for a preset (the Airband Import key over an empty box) or plain (preset ""): the preset's rows join it, as the ImGui dialog's forPreset says.
+void SignalPublisher::openImportForPreset(const std::string& preset) {
+    opts_.import_shown = true;
+    opts_.import_reason.clear();
+    opts_.import_kind = 0;
+    opts_.import_preset = preset;
+    forceRead_ = true;
 }
 
 void SignalPublisher::importBrowse() {
@@ -590,6 +607,7 @@ void SignalPublisher::updateClocks() {
     o.card_rates = lists_->cardRates.set(items(m.card_rates));
     o.card_rate_index = m.card_rate_index;
     o.card_receives = ss(m.card_receives);
+    o.card_can_open = m.card_can_open;   // greyed with no sound card chosen (docs 6.61): the effect sent nothing then
     o.card_warning = ss(m.card_warning);
     o.airspy_decimations = lists_->decimations.set(items(m.airspy_decimations));
     o.airspy_decimation_index = m.airspy_decimation_index;
@@ -743,6 +761,8 @@ void SignalPublisher::updateClocks() {
     o.error = ss(note);
     o.kinds = lists_->importKinds.set(items(m.kinds));
     o.kind_index = m.kind_index;
+    o.preset = ss(m.preset);
+    o.preset_line = ss(m.preset_line);
     return o;
 }
 
@@ -767,7 +787,7 @@ void SignalPublisher::publish(const FoxReceiverState& state) {
                                     m.source.error_line, m.source.mismatch_note, m.source.advisory, m.source.advisory_tone, m.source.stopped_line, m.source.variant,
                                     m.source.iq_path, m.source.iq_note, m.source.pluto_address, m.source.pluto_help, m.source.rtltcp_address, m.source.rtltcp_help,
                                     m.source.card_busy, m.source.card_none, m.source.cards, m.source.card_index, m.source.card_format_index, m.source.card_channel_index,
-                                    m.source.card_swap_iq, m.source.card_centre_mhz, m.source.card_rates, m.source.card_rate_index, m.source.card_receives,
+                                    m.source.card_swap_iq, m.source.card_centre_mhz, m.source.card_rates, m.source.card_rate_index, m.source.card_receives, m.source.card_can_open,
                                     m.source.card_warning, m.source.airspy_decimations, m.source.airspy_decimation_index, m.source.airspy_hardware_rate,
                                     m.source.airspy_gain_mode, m.source.airspy_gain_norm, m.source.airspy_lna_agc, m.source.airspy_mixer_agc, m.source.airspy_lna,
                                     m.source.airspy_mixer, m.source.airspy_vga, m.source.options, m.source.converter_shown, m.source.converter_mode,
@@ -797,7 +817,7 @@ void SignalPublisher::publish(const FoxReceiverState& state) {
     if (sigs_.changed("setup", cat(m.setup.shown, m.setup.title, m.setup.lines, m.setup.unbound, m.setup.keys, m.setup.busy, opts_.setup_dont_show))) {
         ui_.set_radio_setup(mapSetup(m.setup));
     }
-    if (sigs_.changed("import", cat(m.import.shown, m.import.path, m.import.error, m.import.kinds, m.import.kind_index, m.import.reading_line))) {
+    if (sigs_.changed("import", cat(m.import.shown, m.import.path, m.import.error, m.import.kinds, m.import.kind_index, m.import.reading_line, m.import.preset, m.import.preset_line))) {
         ui_.set_import_dialog(mapImport(m.import));
     }
 }
@@ -903,12 +923,7 @@ void SignalPublisher::wire() {
     // ---- Recorder ----
     ev.on_recorder_iq([this] { send(opRecorderIq(last_.recorder)); });
     ev.on_recorder_audio([this] { send(opRecorderAudio(last_.recorder)); });
-    ev.on_recorder_import([this] {   // [local]: the import dialog
-        opts_.import_shown = true;
-        opts_.import_reason.clear();
-        opts_.import_kind = 0;
-        forceRead_ = true;
-    });
+    ev.on_recorder_import([this] { openImportForPreset(std::string()); });   // [local]: the import dialog (the plain frequency-list import)
     // ---- the Radio setup page ----
     ev.on_setup_key([this](slint::SharedString id) {
         const std::string key(id);
@@ -930,7 +945,7 @@ void SignalPublisher::wire() {
     ev.on_import_path_committed([this](slint::SharedString t) { importPath(std::string(t)); });
     ev.on_import_kind([this](int i) { opts_.import_kind = std::clamp(i, 0, 1); opts_.import_reason.clear(); forceRead_ = true; });
     ev.on_import_open([this] { importBrowse(); });
-    ev.on_import_closed([this] { opts_.import_shown = false; opts_.import_reason.clear(); forceRead_ = true; });
+    ev.on_import_closed([this] { opts_.import_shown = false; opts_.import_reason.clear(); opts_.import_preset.clear(); forceRead_ = true; });
 }
 
 }  // namespace foxsdr::slintsignal

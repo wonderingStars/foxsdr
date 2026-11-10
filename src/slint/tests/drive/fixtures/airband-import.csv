@@ -1,0 +1,4 @@
+frequency_mhz,name,group,mode,bandwidth_hz
+118.0,Tower A,Other,AM,25000
+119.5,Tower B,Other,AM,25000
+121.5,Guard,Other,AM,25000

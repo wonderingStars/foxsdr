@@ -171,6 +171,12 @@ int main(int argc, char** argv) {
         }
     }
     const Header h = parseHeader(script);
+    // {FIXTURES} in a script is the fixtures folder, forward slashes (a file the script types into a path box: docs 6.61's airband-import.csv).
+    {
+        const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
+        const std::string fixtures = fs::path((fx != nullptr && *fx != 0) ? fx : FOXSDR_DRIVE_FIXTURES_DIR).generic_string();
+        for (std::size_t at = script.find("{FIXTURES}"); at != std::string::npos; at = script.find("{FIXTURES}", at + fixtures.size())) { script.replace(at, 10, fixtures); }
+    }
 
     const fs::path dir = fs::temp_directory_path() / ("foxsdr-slint-drive-" + tag + "-" + std::to_string(pid()));
     std::error_code ec;

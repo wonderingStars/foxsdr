@@ -226,7 +226,7 @@ export component SignalSpecimen inherits Window {
             { label: "96000 Hz", id: "", enabled: true, note: "" },
             { label: "192000 Hz", id: "", enabled: true, note: "(exclusive)" },
         ],
-        card-rate-index: 0, card-receives: "Receives 7.076 MHz to 7.124 MHz.",
+        card-rate-index: 0, card-receives: "Receives 7.076 MHz to 7.124 MHz.", card-can-open: true,
     };
     in-out property <SourceModel> m-card-real: {
         device-label: "Sound card", look-for-usrps: true, refresh-enabled: true, setup-key-label: "RADIO SETUP",

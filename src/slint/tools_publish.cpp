@@ -314,6 +314,8 @@ void ToolsPublisher::startBookmarkLookup(const std::string& path) {
 
 // THE PRESET'S IMPORT: the file read and parsed on a worker, the preset's name and tick put on every row, the rows cut into chunks (the AM and NFM ones ticked,
 // whatever the file said). One read at a time; a press made while one is out is remembered (the last one, with the preset it was pressed for).
+void ToolsPublisher::importIntoPreset(const std::string& path, const std::string& preset) { exec(applyAirbandImportInto(path, preset), "airband-import-dialog"); }
+
 void ToolsPublisher::startPresetImport(const std::string& path, const std::string& preset) {
     Jobs& j = *jobs_;
     if (j.preset.pending()) {
@@ -389,7 +391,7 @@ void ToolsPublisher::pollJobs() {
                 const auto extension = std::filesystem::path(std::u8string(p.begin(), p.end())).extension().u8string();
                 const std::string kind(extension.begin(), extension.end());
                 cc::diagWarnf("bookmarks: an import (%s) failed", kind.c_str());
-                if (hooks_.openImportDialog) { hooks_.openImportDialog(); }   // "Import a frequency list" opens on a read with no rows
+                if (hooks_.openImportDialog) { hooks_.openImportDialog(std::string()); }   // "Import a frequency list" opens on a read with no rows
             } else {
                 run.active = true;
                 run.group = j.presetName;
@@ -672,7 +674,7 @@ void ToolsPublisher::applyLocal(const Effect& e) {
             break;
         case Local::BookmarkMenu: opts_.menu_row = e.number; break;
         case Local::OpenImportDialog:
-            if (hooks_.openImportDialog) { hooks_.openImportDialog(); }
+            if (hooks_.openImportDialog) { hooks_.openImportDialog(e.flag ? e.text : std::string()); }   // an Airband Import over an empty box names its preset (docs 6.61)
             break;
         case Local::ImportLookup: startBookmarkLookup(e.text); break;
         case Local::PresetImportLookup: startPresetImport(e.text, e.text2); break;
@@ -1108,8 +1110,13 @@ void ToolsPublisher::wire() {
     ev.on_bookmark_export([this] { exec(applyBookmarkExport(last_.bookmarks), "bookmark-export"); });
     ev.on_bookmark_remove_group([this] { exec(applyBookmarkRemoveGroup(last_.bookmarks), "bookmark-remove-group"); });
     ev.on_bookmark_rename_draft([this](slint::SharedString t) { exec(applyBookmarkRenameDraft(std::string(t)), "bookmark-rename-draft"); });
-    // The UI's "Rename this group" key only opens the field (its own state, no round trip), so the one callback that reaches the host is the field's own Rename:
-    // always applyBookmarkRename (applyBookmarkRenameOpen, the ImGui key's toggle, has no caller).
+    // The UI's "Rename this group" key shows and hides the field itself and tells the host which (docs 6.61): applyBookmarkRenameOpen seeds the draft with the group's own
+    // name every time, as the ImGui key does, so a name typed and abandoned does not come back. The field's own Rename is applyBookmarkRename.
+    ev.on_bookmark_rename_open([this](bool open) {
+        BookmarksModel m = last_.bookmarks;
+        m.rename_open = !open;   // the effect is the key's TOGGLE: it lands on what the field now is
+        exec(applyBookmarkRenameOpen(m), "bookmark-rename-open");
+    });
     ev.on_bookmark_rename([this] {
         BookmarksModel m = last_.bookmarks;
         m.rename_draft = opts_.rename_draft;

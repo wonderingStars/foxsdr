@@ -795,6 +795,13 @@ int main() {
         o.import_wait_s = 5.0;
         CHECK(readImportDialog(o).reading_line.empty());
         CHECK(!readImportDialog(ReadOptions{}).shown);
+        CHECK(d.preset.empty());   // the plain import names no preset
+        // opened for an Airband preset (docs 6.61): the dialog names it, and a preset's import is a frequency list - no "Import as" choice
+        o.import_preset = "Towers";
+        const ImportDialogModel pd = readImportDialog(o);
+        CHECK(pd.shown && pd.preset == "Towers" && pd.kinds.empty() && pd.path == o.import_path);
+        CHECK(pd.preset_line == "The rows will join the preset \"Towers\".");   // English in force: the sentence the ImGui dialog says (and the catalogues translate)
+        CHECK(d.preset_line.empty());
 
         Rig r;
         r.o.setup_shown = true;

@@ -46,6 +46,7 @@ export struct SourceModel {
     ppm-on: bool, ppm-radio-line: string, ppm-text: string, ppm-note: string, ppm-refusal: string,
     error-line: string, mismatch-note: string, advisory: string, advisory-tone: ChipTone, stopped-line: string,
     stopped-advice: string,                            // ADDED: the dim "Reconnect it and pick the source again..." line under the red one
+    card-can-open: bool,                               // ADDED (docs 6.61): a sound card is chosen, so the card's Open key answers; false = greyed
     variant: int,                                      // 0 none, 1 I/Q file, 2 Pluto, 3 rtl_tcp, 4 sound card, 5 Airspy, 6 radio extras, 7 converter
     iq-path: string, iq-note: string,
     pluto-address: string, pluto-help: string,
@@ -86,7 +87,7 @@ export struct RadioSetupModel {
     dont-show: bool,                                   // ADDED: the "Don't show this again" tick (saved by the host)
 }
 
-export struct ImportDialogModel { shown: bool, path: string, error: string, kinds: [SelectItem], kind-index: int }
+export struct ImportDialogModel { shown: bool, path: string, error: string, kinds: [SelectItem], kind-index: int, preset: string, preset-line: string }
 
 // EVERY GESTURE OF THE BODIES, as one global the host wires (ui->global<SignalEvents>().on_...). Index arguments are positions in the model's lists.
 export global SignalEvents {
@@ -873,7 +874,7 @@ export component SourceBody inherits VerticalLayout {
                 label: @tr("Sample rate");
                 picked(i) => { root.card-rate-selected(i); }
             }
-            Mid { Key { label: @tr("Open"); xs: true; clicked => { root.card-open(); } } }
+            Mid { Key { label: @tr("Open"); xs: true; enabled: root.model.card-can-open; clicked => { root.card-open(); } } }
         }
         if root.model.card-receives != "" : Note { text: root.model.card-receives; }
         if root.model.card-warning != "" : Note { text: root.model.card-warning; tone: ChipTone.warn; }
@@ -1312,14 +1313,25 @@ component SheetFrame inherits Rectangle {
                 clicked => { root.dismissed(); }
             }
         }
-        content := VerticalLayout {
+        // Esc DISMISSES THE SHEET (docs 6.61): the keyboard is the sheet's while it is up, and a key its fields do not take bubbles up to this scope. The window's own
+        // shortcuts stay with the window's root scope, which a sheet in front of it does not reach.
+        sheet-keys := FocusScope {
             x: Theme.hairline;
             y: Theme.win-title-h + Theme.hairline;
             width: parent.width - 2 * Theme.hairline;
             height: parent.height - Theme.win-title-h - 2 * Theme.hairline;
-            padding: 12px;
-            spacing: 10px;
-            @children
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if (e.text == Key.Escape) { root.dismissed(); return accept; }
+                return reject;
+            }
+            content := VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 12px;
+                spacing: 10px;
+                @children
+            }
         }
     }
 }
@@ -1407,6 +1419,8 @@ export component ImportDialog inherits Rectangle {
         sheet-w: 460px;
         dismissed => { root.import-closed(); }
         if root.model.error != "" : Note { text: root.model.error; }
+        // an import opened for an Airband preset says where the rows go (the ImGui dialog's forPreset line)
+        if root.model.preset-line != "" : Note { text: root.model.preset-line; }
         if root.model.kinds.length > 0 : Line {
             RowLabel { text: @tr("Import as"); horizontal-stretch: 1; }
             DropKey {

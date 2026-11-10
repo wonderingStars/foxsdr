@@ -1263,15 +1263,20 @@ ImportDialogModel readImportDialog(const ReadOptions& o) {
     if (!m.shown) { return m; }
     m.path = o.import_path;
     m.error = o.import_reason;
+    m.preset = o.import_preset;
+    if (!m.preset.empty()) { m.preset_line = cc::formatText(tr("The rows will join the preset \"%s\"."), m.preset.c_str()); }
     SelectItem freq;
     freq.label = tr("Frequency lists (*.xml, *.csv)");
     freq.id = "frequencies";
     SelectItem iq;
     iq.label = tr("IQ file");
     iq.id = "iq";
-    m.kinds.push_back(std::move(freq));
-    m.kinds.push_back(std::move(iq));
-    m.kind_index = std::clamp(o.import_kind, 0, 1);
+    // An import for a PRESET is a frequency list and nothing else (the ImGui dialog's forPreset): no "Import as" choice.
+    if (m.preset.empty()) {
+        m.kinds.push_back(std::move(freq));
+        m.kinds.push_back(std::move(iq));
+        m.kind_index = std::clamp(o.import_kind, 0, 1);
+    }
     if (o.import_reading) { m.reading_line = diskWaitLine(o.import_wait_s); }
     return m;
 }

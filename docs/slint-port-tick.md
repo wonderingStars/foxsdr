@@ -251,26 +251,26 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 142 | F7 | Settings and key bindings - goes to SYSTEM and opens the Key bindings row (openSettings) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 143 | F12 | Always saves a screenshot (hard-wired, not in the table) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 144 | Esc | Cancels the counter editor, the key-capture, a dialog; leaves Scope mode when nothing is being edited and no popup is open | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
-| 145 | Ctrl+= / Ctrl+- / Ctrl+0 | Interface size: step up / step down through 100-250%, Ctrl+0 back to Auto. Not rebindable; ignored while text is being typed | DEFERRED | the interface size (window scale) is phase 2; the chords are bound and log their request |
+| 145 | Ctrl+= / Ctrl+- / Ctrl+0 | Interface size: step up / step down through 100-250%, Ctrl+0 back to Auto. Not rebindable; ignored while text is being typed | DEFERRED | Ctrl+0 (back to Auto) is answered and applied: key-dispatch names uiSizeAuto, main.cpp saves interfaceScale = auto through SystemPublisher::setInterfaceSize and the window's look moves the scale on the next tick (docs 6.61, drive system-look.txt: pin 150%, Ctrl+0, scale 1.00). Ctrl+= and Ctrl+- are NOT the interface size here: the key table binds them to the band zoom (Ctrl+Plus / Ctrl+Minus), so stepping the size through 100-250% by the keyboard stays deferred; the dropdown steps it |
 | 146 | Mouse wheel over a counter figure, a dial | Tunes that digit / turns the dial | PRESENT | wheel over a figure steps it; wheel over a slider moves it 5 % |
 
 ## Main window frame — Themes and sizes
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 147 | Today's bench () | The default brass-and-enamel bench; serif ("bench-serif") fonts, Nixie counter | DEFERRED | the ImGui themes are not ported: Workbench is the Slint filling and the canvas skins are the owner's choice (one struct, one assignment) |
-| 148 | Bench Classic XL () | Today's palette, counter figures doubled, switches put away, every reading 1.4x | DEFERRED | the ImGui themes are not ported: Workbench is the Slint filling and the canvas skins are the owner's choice (one struct, one assignment) |
-| 149 | Night Watch () | Dark red-black palette with red sheen/highlights (preserves night vision); mono fonts, flat keys | DEFERRED | the ImGui themes are not ported: Workbench is the Slint filling and the canvas skins are the owner's choice (one struct, one assignment) |
-| 150 | Glass Cockpit () | Dark blue-grey; sans UI font, condensed captions, chrome knobs, radius 8 | DEFERRED | the ImGui themes are not ported: Workbench is the Slint filling and the canvas skins are the owner's choice (one struct, one assignment) |
-| 151 | Daylight Lab () | Light grey/white; sans fonts, chrome knobs, radius 6 | DEFERRED | the ImGui themes are not ported: Workbench is the Slint filling and the canvas skins are the owner's choice (one struct, one assignment) |
-| 152 | Field Radio () | Olive/khaki; mono body with stencil captions | DEFERRED | the ImGui themes are not ported: Workbench is the Slint filling and the canvas skins are the owner's choice (one struct, one assignment) |
+| 147 | Today's bench () | The default brass-and-enamel bench; serif ("bench-serif") fonts, Nixie counter | PRESENT | Workbench is the Slint filling and what the saved key 'today' is drawn in (look_logic skinOfTheme, applied at start and on a pick; drive system-look.txt reads look.bg / look.accent); the Nixie counter face comes with it (tunerDisplayStyle nixie). The serif fonts of the classic are not part of Workbench (Inter) |
+| 148 | Bench Classic XL () | Today's palette, counter figures doubled, switches put away, every reading 1.4x | DEFERRED | drawn in Workbench with the Nixie face (docs 6.61); the doubled counter figures, the put-away switches and the 1.4x readings are saved but not applied (rows 35, 36, 40, 156-158: the counter scale has no home in the Slint counter yet) |
+| 149 | Night Watch () | Dark red-black palette with red sheen/highlights (preserves night vision); mono fonts, flat keys | PRESENT | the ONE ported skin besides Workbench (docs 6.61): theme.slint NightWatch, the classic's makeNight palette mapped role by role (red-only; the reading pairs 4.5:1, test_slint_theme), the mono typeface, flat keys (2 px radius, no shadow), neon counter face; installed with one assignment (Theme.skin) at start and when 'night' is picked, no component changed (test_slint_main_screen renders the whole screen in it, drive system-look.txt reads look.bg #070303) |
+| 150 | Glass Cockpit () | Dark blue-grey; sans UI font, condensed captions, chrome knobs, radius 8 | DEFERRED | drawn in Workbench's colours with the plain counter face (docs 6.61: look_logic skinOfTheme names Workbench for every key but 'night'); the dark blue-grey skin with its sans fonts and radius 8 is one more NightWatch-style value of the Skin struct, not yet made |
+| 151 | Daylight Lab () | Light grey/white; sans fonts, chrome knobs, radius 6 | DEFERRED | drawn in Workbench's colours with the plain counter face (docs 6.61: look_logic skinOfTheme names Workbench for every key but 'night'); the light skin is one more Skin value, not yet made |
+| 152 | Field Radio () | Olive/khaki; mono body with stencil captions | DEFERRED | drawn in Workbench's colours with the plain counter face (docs 6.61: look_logic skinOfTheme names Workbench for every key but 'night'); the olive skin is one more Skin value, not yet made |
 
 ## Main window frame — Themes and sizes: the Display section's settings
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 153 | Interface size | dropdown "Interface size" | DEFERRED | the SYSTEM > Display body is a phase-3 bank; the chords are bound |
-| 154 | Theme | dropdown "Theme" | DEFERRED | the SYSTEM > Display body is a phase-3 bank |
+| 153 | Interface size | dropdown "Interface size" | PRESENT | the Display body's DropKey (row 1388); the window's scale follows it live (docs 6.61) |
+| 154 | Theme | dropdown "Theme" | PRESENT | the Display body's DropKey (row 1390); the window's skin and counter face follow it live (docs 6.61) |
 | 155 | Frequency display | dropdown "Frequency display" | PRESENT | the counter menu's Counter face |
 | 156 | Counter figures | dropdown "Counter figures" | DEFERRED | the SYSTEM > Display body is a phase-3 bank |
 | 157 | Tuner switches | checkbox "Tuner switches" | PRESENT | the counter menu's Show tuner switches |
@@ -1840,7 +1840,7 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 | 1248 | Swap I/Q | checkbox | PRESENT | Tick -> SOUND_CARD_FORM, field SWAP_IQ; drawn only with I/Q (stereo) |
 | 1249 | Centre (MHz) | number field | PRESENT | LineInput (mono, right) -> two commands, SOUND_CARD_FORM (centre) then FOXAPP_OP_SOUNDCARD_IQ_CENTRE; drawn only with I/Q (stereo) |
 | 1250 | Sample rate | dropdown/combo | PRESENT | DropKey of the card's rates (exclusive rows lettered '(exclusive)'; their row tooltip is not drawn) -> SOUND_CARD_FORM, field RATE |
-| 1251 | Open | button | PRESENT | Open key -> SELECT_SOURCE 'soundcard:open'; sends nothing while no card is chosen, but the key itself is not greyed |
+| 1251 | Open | button | PRESENT | Open key -> SELECT_SOURCE 'soundcard:open'; greyed while no sound card is chosen (SourceModel.card-can-open, docs 6.61; test_slint_signal reads the greyed look and that it asks nothing) |
 | 1252 | Receives line | readout | PRESENT | dim Note (card-receives) |
 | 1253 | Missing-card note | readout | PRESENT | amber Note (card-warning) |
 
@@ -2039,9 +2039,9 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1380 | Dialog | dialog | PRESENT | ImportDialog: a 460 px sheet with a close key; the backdrop and Cancel close it; Esc does not (the escape handler of main.cpp closes the editor, About and the bias sheet only) |
+| 1380 | Dialog | dialog | PRESENT | ImportDialog: a 460 px sheet with a close key; the backdrop, Cancel and Esc close it (docs 6.61: SheetFrame's key scope takes the keyboard while the sheet is up and dismisses on Esc; the root handler's escapeStep names the dialog first); drive escape-leaves-dialog.txt |
 | 1381 | Reason line | readout | PRESENT | Note at the top (import-reason, error) |
-| 1382 | Preset note | readout | DEFERRED | not found in signal_bank.slint: ImportDialogModel has no preset field (the airband preset import belongs to the TOOLS bank) |
+| 1382 | Preset note | readout | PRESENT | ImportDialogModel.preset (docs 6.61): an import opened for an Airband preset says 'The rows will join the preset "X".' where 'Import as' stood, and offers no I/Q file; a path typed in it is the section's own preset import (test_slint_signal renders it; drive tools-airband-import.txt reads the rows landing in the preset) |
 | 1383 | Drop zone | drag/gesture | DEFERRED | drawn as words only; no file-drop event is wired into the Slint window (not found in signal_bank.slint, main.slint or main.cpp), so a dropped file imports nothing; the path field is the way in |
 | 1384 | or / Browse... | button | DEFERRED | the OS file chooser: a path field takes its place (Enter imports: FOXAPP_OP_BOOKMARK_IMPORT_FILE for a frequency list, SELECT_SOURCE 'file:' for an I/Q recording); the Browse key is drawn and calls import-open, the host's local pickFile |
 | 1385 | Reading line | readout | DEFERRED | not found in signal_bank.slint: reading_line is a host extra with no field in the Slint ImportDialogModel |
@@ -2056,9 +2056,9 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 1387 | Section chip | readout + lamp | RELOCATED | the Section row 'Display' of bank 4 carries the chip (PLAN / PLAIN) and the lamp (lit while the overlay draws): system_logic readSystem fills SystemModels.chips[0]; main.cpp sectionsFor still draws a static '--' chip and no dot until the SYSTEM publisher feeds the rows |
-| 1388 | Interface size | dropdown/combo | DEFERRED | DisplayBody DropKey (Auto + six steps) -> display-scale -> applyDisplayScale: save interfaceScale, apply Scale (uiscale::setChoice); the value is saved but nothing in the Slint window reads the factor (main.cpp logs the Ctrl+= chords as phase 2's) and the publisher is not in the tree, so whether it would apply live or only at the next start is unverified |
+| 1388 | Interface size | dropdown/combo | PRESENT | DropKey (Auto + six steps) -> display-scale -> applyDisplayScale: save interfaceScale; main.cpp applyLook (look_logic ScaleFollower) reads the interface half every tick and dispatches the scale to the window (Window::dispatch_scale_factor_change_event), keeping the logical size by resizing the window unless it is maximised: a maximised window lays out in 1/scale as many logical pixels, as the classic's scale does. 'Auto' follows the system's own number, remembered apart from the one dispatched (the Auto row's '% here' quotes it). Live and at the first tick, no restart (drive system-look.txt: 200% = scale 2.00 and 800 x 450 logical, back to Auto = 1.00; Ctrl+0) |
 | 1389 | Interface size tooltip | tooltip | PRESENT | the DropKey's tooltip (scale-tooltip, the ImGui hint through tr()) |
-| 1390 | Theme | dropdown/combo | DEFERRED | DropKey of the six looks -> display-theme -> applyDisplayTheme: save uiTheme plus the preset's counter and readings sizes, apply Skin = the key; Workbench is the only Skin in theme.slint, so the look is saved, not applied (phase-1 rows 147-152) |
+| 1390 | Theme | dropdown/combo | PRESENT | DropKey of the six looks -> display-theme -> applyDisplayTheme: save uiTheme plus the preset's counter, readings and tuner style; main.cpp applyLook reads them every tick: 'night' installs the NightWatch skin, every other key Workbench, and the counter face follows the saved tuner style (docs 6.61; drive system-look.txt reads look.bg, look.accent, look.face for Night Watch, Today's bench and Glass Cockpit) |
 | 1391 | Min dB | slider | PRESENT | SliderRow (readout db-min-text) -> display-db-min (0..1 of the track) -> applyDisplayDbMin: save dbMin / dbMax with the other end pushed back (clampManualRange) and waterfallRangeMode manual, op FOXAPI_OP_SET_DISPLAY_RANGE; the publisher maps track to dB (unverified) |
 | 1392 | Max dB | slider | PRESENT | SliderRow -> display-db-max -> applyDisplayDbMax: the same save and FOXAPI_OP_SET_DISPLAY_RANGE with the ceiling as the end that was moved |
 | 1393 | Frequency display | dropdown/combo | PRESENT | DropKey Nixie / Neon / Plain -> display-freq-display -> applyDisplayFreqDisplay: save tunerDisplayStyle; the strip's face is main.cpp applyFace, driven by the counter menu (row 155) and not read back from the saved half yet (unverified until the publisher) |
@@ -2421,7 +2421,7 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1631 | Count line | readout | PRESENT | Note count-line ('n shown of m') |
 | 1632 | Export for SDR# | button (small) | PRESENT | xs Key in a KeyFlow (wraps under the next keys in a narrow column), label empty (key not drawn) for an empty view, disabled while an export is written -> bookmark-export -> applyBookmarkExport: FOXAPP_OP_BOOKMARK_EXPORT with the ids of the rows shown |
 | 1633 | Remove this group | button (small) | PRESENT | xs Key, drawn only with a group chosen -> bookmark-remove-group -> applyBookmarkRemoveGroup: FOXAPI_OP_BOOKMARK_REMOVE_GROUP and the filter back to every group; no confirmation, as in the ImGui window |
-| 1634 | Rename this group | button (small) | PRESENT | xs Key (lit while open) that toggles BookmarksBody's own `renaming` flag with no call to the host: applyBookmarkRenameOpen (the ImGui key seeds the field with the group's name) has no callback, so the rename field shows whatever BookmarksModel.rename-draft holds, not the group's name |
+| 1634 | Rename this group | button (small) | PRESENT | xs Key (lit while open) that shows / hides BookmarksBody's rename field and tells the host (bookmark-rename-open -> applyBookmarkRenameOpen): the draft is seeded with the group's own name every time it opens, so a name typed and abandoned does not come back (docs 6.61; drive tools-bookmarks-rename-key.txt, RED first: 'it reads Flying') |
 | 1635 | Rename field | text field | PRESENT | LineInput 'new group name', drawn while renaming -> bookmark-rename-draft on commit; Enter -> bookmark-rename (applyBookmarkRename) and the field closes |
 | 1636 | Rename | button | PRESENT | Key 'Rename' beside the field: flushes it -> bookmark-rename -> applyBookmarkRename: FOXAPP_OP_BOOKMARK_GROUP action 2 (from + 0x1F + to; merges when the name exists), nothing for an empty or unchanged name; the filter follows the group |
 | 1637 | Row scan checkbox | checkbox | PRESENT | Tick (14 px) with the tooltip on each row -> bookmark-tick(id, on) -> FOXAPP_OP_BOOKMARK_TICK |
@@ -2442,12 +2442,12 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 |---|---|---|---|---|
 | 1648 | Dialog | dialog | RELOCATED | the SIGNAL family's ImportDialog (row 1380), shared with this bank: opened by an empty Import path |
 | 1649 | Reason line | readout | RELOCATED | the SIGNAL family's ImportDialog reason line (row 1381) |
-| 1650 | Preset line | readout | DEFERRED | ImportDialogModel has no preset field, so the Airband Import with an empty box opens the plain dialog and its rows would join no preset (row 1382); not found in tools_bank.slint |
+| 1650 | Preset line | readout | PRESENT | the dialog's preset line (row 1382): the Airband Import over an empty box opens the dialog for the preset, and its rows join it (docs 6.61) |
 | 1651 | Drop zone | overlay/marker | DEFERRED | the drop zone is words only in the SIGNAL family's dialog and no file-drop event is wired (row 1383) |
 | 1652 | or / Browse... | button | DEFERRED | the SIGNAL family's dialog has a path field in place of the system file chooser (row 1384) |
 | 1653 | Waiting line | readout | DEFERRED | the SIGNAL family's dialog has no reading line (row 1385) |
 | 1654 | Cancel | button | RELOCATED | the SIGNAL family's Cancel key (row 1386) |
-| 1655 | Escape | key (keyboard) | DEFERRED | Esc does not close the dialog: the escape handler of main.cpp clears the editor, About and the bias sheet only (row 1380) |
+| 1655 | Escape | key (keyboard) | PRESENT | Esc closes the dialog: key_dispatch escapeStep takes the import dialog first, then the store's plugin page, else the overlays; the sheet's own key scope covers a focused field (docs 6.61; drive escape-leaves-dialog.txt) |
 
 ## TOOLS bank — Scanner (rail section)
 
@@ -2487,7 +2487,7 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1682 | Add | button | PRESENT | Key with the tooltip, disabled with no frequency -> airband-add -> applyAirbandAdd: FOXAPP_OP_BOOKMARK_ADD_ROWS with one ticked AM or NFM row in the preset (ask TypedRow); a frequency parseMhz refuses gives the 'could not read frequency' note |
 | 1683 | Note | readout | PRESENT | Note note (AirbandModel.note: outcomes and refusals) |
 | 1684 | Import path | text field | PRESENT | LineInput 'SDR# frequencies.xml or .csv - its path' -> airband-import-path on commit -> [local] AirbandImportPath |
-| 1685 | Import | button | PRESENT | Key, disabled while a read is out (import-busy) -> airband-import -> applyAirbandImport: a path = [local] PresetImportLookup (the publisher's worker sends the rows as ADD_ROWS chunks); an empty box = [local] OpenImportDialog for the preset, but the dialog has no preset field (row 971), so the rows would join no preset |
+| 1685 | Import | button | PRESENT | Key, disabled while a read is out (import-busy) -> airband-import -> applyAirbandImport: a path = [local] PresetImportLookup (the publisher's worker sends the rows as ADD_ROWS chunks); an empty box = [local] OpenImportDialog for the preset, whose dialog names it, and a path typed there is applyAirbandImportInto (docs 6.61; drive tools-airband-import.txt imports the fixture airband-import.csv and reads three rows in the group Towers, none in the file's own group) |
 | 1686 | Export CSV | button | PRESENT | Key in a KeyFlow, disabled with no rows or while an export is written -> airband-export -> applyAirbandExport: FOXAPP_OP_BOOKMARK_EXPORT action 1 with the preset (ask ExportPreset) |
 | 1687 | Remove preset | button | PRESENT | Key beside it, disabled with no rows -> airband-remove-preset -> applyAirbandRemovePreset: FOXAPI_OP_BOOKMARK_REMOVE_GROUP with the preset (ask RemoveGroup); whether the engine stops LISTEN on it is not read here |
 | 1688 | Preset note | readout | PRESENT | Note preset-note |
@@ -2660,7 +2660,7 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 | 1807 | BROWSE tab | key (latched) | PRESENT | SegKey in the SegGroup, lit while tab is 0 -> store-tab(0) -> applyStoreTab: [local] tab, page closed |
 | 1808 | UPDATES (n) tab | key (latched) | PRESENT | SegKey 'UPDATES (n)' (n from the model's updates), lit while tab is 1 -> store-tab(1) -> applyStoreTab |
 | 1809 | Catalogue line | readout | PRESENT | Note under the bar in the model's tone (amber for 'could not refresh', muted otherwise); it wraps, so the full text needs no hover |
-| 1810 | CHECK NOW / CHECK AGAIN | button | PRESENT | Key check-key -> store-check -> applyStoreCheck: FOXAPI_OP_STORE_FETCH; the key is never greyed (StoreModel has no check-enabled field, check_enabled is a host extra) and the effect does nothing while a transfer or a picture is in flight or the catalogue URL is empty |
+| 1810 | CHECK NOW / CHECK AGAIN | button | PRESENT | Key check-key -> store-check -> applyStoreCheck: FOXAPI_OP_STORE_FETCH; greyed while a transfer or a picture is in flight or the catalogue URL is empty (StoreModel.check-enabled, docs 6.61; test_slint_extend) |
 | 1811 | SITES | button | PRESENT | Key sites-key, lit while the panel is open, always enabled -> store-sites-toggle -> applyStoreSitesToggle: [local] sites_open |
 | 1812 | CANCEL | button | PRESENT | ADDED: a danger Key drawn only while cancel-label is not empty -> store-cancel (ADDED, not in the contract) -> applyStoreCancel: FOXAPI_OP_STORE_CANCEL while busy |
 | 1813 | Install/source error | readout | PRESENT | Note top-error (error tone) and top-warning (warn tone) at the top of both lists, hidden while a plugin page is open |
@@ -2691,7 +2691,7 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 1835 | Site list | list | PRESENT | the panel's rows (address Text, elided) with 'No sites added.' beside the SITES caption when empty; drawn while sites-open and no plugin page is open; the eight-site limit is the host's list |
-| 1836 | REMOVE | button (per site) | PRESENT | Key xs per site with the 'plugins already fitted stay' tooltip -> store-site-remove(i) -> applyStoreSiteRemove: FOXAPP_OP_STORE_SITE (remove); not greyed while a transfer runs (no field), the effect does nothing then |
+| 1836 | REMOVE | button (per site) | PRESENT | Key xs per site with the 'plugins already fitted stay' tooltip -> store-site-remove(i) -> applyStoreSiteRemove: FOXAPP_OP_STORE_SITE (remove); greyed while a transfer runs (StoreSite.remove-enabled, docs 6.61; test_slint_extend) |
 | 1837 | Site address | text field | PRESENT | LineInput (placeholder 'https://') -> store-site-draft on each edit -> applyStoreSiteDraft: [local] site_draft, the refusal cleared |
 | 1838 | ADD | button | PRESENT | Key greyed while add-reason is not empty (ADDED: the reason is a dim Note under the field) -> store-site-add -> applyStoreSiteAdd: the address checked (a refusal is a [local] site error), else FOXAPP_OP_STORE_SITE and the field and tick cleared |
 | 1839 | Consent tick | checkbox (+ clickable sentence) | PRESENT | SentenceTick (the sentence is the click target) -> store-consent -> applyStoreConsent: [local] consent; each ADD clears it |
@@ -2701,7 +2701,7 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1841 | < BROWSE | button | PRESENT | Key -> store-plugin-back -> applyStorePluginBack: [local] page closed, tab 0; Esc also returns in the window and is not wired (no Esc handling in extend_bank.slint or pages.slint: DEFERRED) |
+| 1841 | < BROWSE | button | PRESENT | Key -> store-plugin-back -> applyStorePluginBack: [local] page closed, tab 0; Esc also returns (docs 6.61: key_dispatch escapeStep names the plugin page after the dialog; the pure rule is held by test_slint_host_keydispatch; the live page needs a catalogue and is not drivable offline - UNVERIFIED live) |
 | 1842 | Header | readout | PRESENT | GlyphTile, the name, the meta line (maker, version, size, platforms, host) joined to the origin note with a middle dot, and the BadgeFlow badges |
 | 1843 | Page key | button | PRESENT | StoreKey at the top right -> store-plugin-key -> applyStorePluginKey: as the card's key with the page's own tick (GET greyed until the notice tick); no amber version-note and no progress line beside it (StorePluginPage has no field for either) |
 | 1844 | Install report/error | readout | PRESENT | Note report in report-tone (green, or the error tone) for this plugin only |

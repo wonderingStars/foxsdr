@@ -780,6 +780,31 @@ int main() {
             ui->set_m_store_narrow(m);
             shot();
         }
+        // DEAD KEYS ARE GREYED (docs 6.61): with a transfer running (check-enabled and remove-enabled false) CHECK AGAIN and REMOVE are drawn disabled and ask nothing
+        {
+            auto m = ui->get_m_store_narrow();
+            const Frame before = shot();
+            m.check_enabled = false;
+            auto sites = std::make_shared<slint::VectorModel<StoreSite>>();
+            for (std::size_t i = 0; i < m.sites->row_count(); ++i) { StoreSite s = *m.sites->row_data(i); s.remove_enabled = false; sites->push_back(s); }
+            m.sites = sites;
+            ui->set_m_store_narrow(m);
+            const Frame g = shot();
+            int changed = 0;   // the keys' ground changes to the disabled one: pixels differ in the top bar and the site row
+            for (int x = nx + 4; x < nx + 120; ++x) { const auto a = g.at(x, kyN + 12), b = before.at(x, kyN + 12); if (a.r != b.r || a.g != b.g || a.b != b.b) { ++changed; } }
+            CHECKV(changed > 20, "a greyed CHECK AGAIN is drawn differently (%d pixels changed)", changed);
+            Ev ec = hitFwd(nx + 20, kyN + 12);
+            CHECKV(ec.name.empty(), "a greyed CHECK AGAIN asks for nothing: '%s'", ec.name.c_str());
+            Ev er = hitFwd(nx + 12 + 8 + 459 - 10, rmT + 10);
+            CHECKV(er.name.empty(), "a greyed REMOVE asks for nothing: '%s'", er.name.c_str());
+            m = ui->get_m_store_narrow();
+            m.check_enabled = true;
+            auto sites2 = std::make_shared<slint::VectorModel<StoreSite>>();
+            for (std::size_t i = 0; i < m.sites->row_count(); ++i) { StoreSite s = *m.sites->row_data(i); s.remove_enabled = true; sites2->push_back(s); }
+            m.sites = sites2;
+            ui->set_m_store_narrow(m);
+            shot();
+        }
         std::vector<int> kk;
         {
             bool in = false;

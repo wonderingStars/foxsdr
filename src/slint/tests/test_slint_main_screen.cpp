@@ -138,6 +138,25 @@ int main() {
     Frame f = renderAt(W, H);
     CHECK(f.width == W && f.height == H);
     f.savePng(shotDir() + "main-screen.png");
+    // THE SECOND SKIN ON THE WHOLE SCREEN (docs 6.61): Night Watch installed with one assignment repaints the main screen in its red-black ground and leaves none of
+    // Workbench's blue-black behind; the strip's lit accent is Night Watch's. Then Workbench again, pixel for pixel the picture above.
+    {
+        const int total = static_cast<int>(W * H);
+        const auto share = [&](const Frame& fr, std::uint32_t rgbv) { return fr.countNear(0, 0, static_cast<int>(W), static_cast<int>(H), rgb(rgbv), 6); };
+        CHECK(share(f, 0x15171b) > total / 20);   // Workbench's ground is a real share of this picture...
+        ui->global<Theme>().set_skin(ui->global<NightWatch>().get_value());
+        Frame night = renderAt(W, H);
+        night.savePng(shotDir() + "main-screen-night.png");
+        CHECK(share(night, 0x070303) > total / 20);      // ...and Night Watch's takes its place
+        CHECK(share(night, 0x15171b) < total / 200);     // nothing of Workbench's ground is left
+        CHECK(share(night, 0x262a32) < total / 200);     // nor its key ground
+        CHECK(night.countNear(0, 0, static_cast<int>(W), static_cast<int>(H), rgb(0xf5a524), 12) < total / 1000);   // nor its amber
+        ui->global<Theme>().set_skin(ui->global<Workbench>().get_value());
+        Frame back = renderAt(W, H);
+        int differing = 0;
+        for (std::size_t i = 0; i < back.px.size(); ++i) { if (back.px[i].r != f.px[i].r || back.px[i].g != f.px[i].g || back.px[i].b != f.px[i].b) { ++differing; } }
+        CHECK(differing == 0);
+    }
     // the strip's content does not fit the sheet's 1440 by the sheet's own numbers (counter 386 + eight mode keys 434 +
     // three lanes of 120 + ...): below 1760 px the mode segment folds into one picker key, above it the eight keys show
     {

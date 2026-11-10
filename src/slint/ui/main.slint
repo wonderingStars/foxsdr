@@ -11,7 +11,7 @@
 // row is here, relocated here as the Workbench IA says (deck meters into the status bar and the level line,
 // mode keys onto the strip, status cards into the status bar), or deferred with its reason in that list.
 
-import { Theme, Skin, Workbench, DigitFace, MeterStyle } from "theme.slint";
+import { Theme, Skin, Workbench, NightWatch, DigitFace, MeterStyle } from "theme.slint";
 import { Chip, LampDot, ChipTone, LampState } from "chips.slint";
 import { TipTimer, TipLayer } from "tooltip.slint";
 import { Caption, Key, KeyNames, KeyFocus, SegGroup, SegKey, RailKey, StopKey } from "keys.slint";
@@ -45,7 +45,7 @@ import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, Port
 import { TxChoice, TransmitPageModel, TransmitEvents } from "transmit_page.slint";   // the Transmit page (kit page kind 11; docs 6.58): its model and gestures reach C++ through main.h
 import { AboutSlint } from "std-widgets.slint";
 
-export { Theme, Skin, Workbench, DigitFace, MeterStyle, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
+export { Theme, Skin, Workbench, NightWatch, DigitFace, MeterStyle, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
          AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode, AgeTick, PaletteResult,
          KitEvents, DecodeRow, PluginEntry, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
