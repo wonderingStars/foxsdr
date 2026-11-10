@@ -9,7 +9,9 @@
 //   F. the solar system: Standish's elements against JPL Horizons (2026-11-10 00:00 UT) for all seven planets and the Moon, the Mars opposition of January 2025, the
 //      scales, the orbit rings, the panel reader and the check of the host's figures against the plugin's
 //   G. the satellite readout and the orbit classes
+//   H. what each view draws (globe_draw.*): the baked earth and GOES surfaces, and the five draw lists
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "globe_draw.hpp"
 #include "globe_logic.hpp"
 #include "test_check.hpp"
 
@@ -648,6 +650,244 @@ void sectionSatellites() {
     CHECK(orbitClassColour(870.0) == 0xFFF5A524u);
 }
 
+// ------------------------------------------------------------------------------------------------------------------------
+std::uint32_t texel(const Texture& t, double lat, double lon) {
+    const int c = std::clamp(static_cast<int>((normalizeLon(lon) + 180.0) * t.width / 360.0), 0, t.width - 1);
+    const int r = std::clamp(static_cast<int>((90.0 - lat) * t.height / 180.0), 0, t.height - 1);
+    return t.argb[static_cast<std::size_t>(r) * static_cast<std::size_t>(t.width) + static_cast<std::size_t>(c)];
+}
+int chan(std::uint32_t argb, int shift) { return static_cast<int>((argb >> shift) & 0xFFu); }
+double angleDeg(const Vec3& a, const Vec3& b) { return std::acos(std::clamp(dot(normalized(a), normalized(b)), -1.0, 1.0)) * kRadToDeg; }
+
+void sectionDraw() {
+    const Palette& pal = palette();
+    static const LandMask land(1440, 720);
+    // ---- the earth bake ----
+    Texture lit, shaded;
+    bakeEarth(lit, land, nullptr, false);
+    CHECK(lit.width == 1024 && lit.height == 512 && lit.argb.size() == 1024u * 512u);
+    CHECK(texel(lit, 51.5, -0.1) == pal.landDay);              // London: land, lit (no sun given)
+    CHECK(texel(lit, 45.0, -30.0) == pal.oceanDay);            // the North Atlantic
+    CHECK(texel(lit, 0.0, -150.0) == pal.oceanDay);
+    const SunPosition noon = sunPosition(julianDay(2025, 3, 20, 12, 0, 0.0));
+    bakeEarth(shaded, land, &noon, false);
+    CHECK_NEAR(noon.subLatDeg, 0.0, 3.0);
+    const LatLon sub{noon.subLatDeg, noon.subLonDeg};
+    CHECK(texel(shaded, sub.lat, sub.lon) == texel(lit, sub.lat, sub.lon));            // under the Sun: the day colour
+    const double antiLon = normalizeLon(sub.lon + 180.0);
+    CHECK(texel(shaded, -sub.lat, antiLon) == pal.oceanNight || texel(shaded, -sub.lat, antiLon) == pal.landNight);    // the antipode: the night colour
+    // land and sea keep their own colours under the Sun
+    int dayLand = 0, dayOcean = 0;
+    for (int i = 0; i < 200; ++i) {
+        // the texel's own centre: the bake asks the mask there
+        const double lat0 = -60.0 + 120.0 * i / 200.0, lon0 = sub.lon - 40.0 + 80.0 * ((i * 37) % 200) / 200.0;
+        const double lat = 90.0 - (std::floor((90.0 - lat0) * 512.0 / 180.0) + 0.5) * 180.0 / 512.0;
+        const double lon = -180.0 + (std::floor((normalizeLon(lon0) + 180.0) * 1024.0 / 360.0) + 0.5) * 360.0 / 1024.0;
+        if (land.land(lat, lon)) { ++dayLand; CHECK(texel(shaded, lat, lon) == pal.landDay); } else { ++dayOcean; CHECK(texel(shaded, lat, lon) == pal.oceanDay); }
+    }
+    CHECK(dayLand > 5 && dayOcean > 5);
+    // the terminator is a smooth ramp: on the terminator the colour is half way between night and day
+    const LatLon edge = fromVec(terminator(noon, 0.0, 360, 1.0)[90]);
+    const std::uint32_t atEdge = texel(shaded, edge.lat, edge.lon);
+    const bool edgeLand = land.land(edge.lat, edge.lon);
+    CHECK(atEdge != (edgeLand ? pal.landDay : pal.oceanDay) && atEdge != (edgeLand ? pal.landNight : pal.oceanNight));
+    // the greyline tint warms the band and leaves the rest alone
+    Texture grey;
+    bakeEarth(grey, land, &noon, true);
+    CHECK(texel(grey, edge.lat, edge.lon) != texel(shaded, edge.lat, edge.lon));
+    CHECK(texel(grey, sub.lat, sub.lon) == texel(shaded, sub.lat, sub.lon));
+    CHECK(texel(grey, -sub.lat, antiLon) == texel(shaded, -sub.lat, antiLon));
+    // the bake key: a quarter of a degree of the Sun's longitude moves it, a hundredth does not, the greyline flag and the size do
+    SunPosition moved = noon;
+    moved.subLonDeg += 0.01;
+    CHECK(earthBakeKey(&noon, false, 1024, 512) == earthBakeKey(&moved, false, 1024, 512));
+    moved.subLonDeg += 0.3;
+    CHECK(earthBakeKey(&noon, false, 1024, 512) != earthBakeKey(&moved, false, 1024, 512));
+    CHECK(earthBakeKey(&noon, false, 1024, 512) != earthBakeKey(&noon, true, 1024, 512));
+    CHECK(earthBakeKey(&noon, false, 1024, 512) != earthBakeKey(&noon, false, 512, 256));
+    CHECK(earthBakeKey(nullptr, false, 1024, 512) != earthBakeKey(&noon, false, 1024, 512));
+    CHECK(shaded.key == earthBakeKey(&noon, false, 1024, 512));
+    Texture small;
+    bakeEarth(small, land, &noon, false, 1, 1);               // clamped to a usable size
+    CHECK(small.width >= 16 && small.height >= 8);
+
+    // ---- the GOES bake ----
+    const int pw = 64, ph = 64;
+    std::vector<std::uint8_t> white(static_cast<std::size_t>(pw) * ph, 255u);
+    Texture goes;
+    bakeGoes(goes, white, pw, ph, false, -75.2);
+    CHECK(goes.width == 1024 && goes.height == 512);
+    CHECK(chan(texel(goes, 0.0, -75.2), 16) > 200 && chan(texel(goes, 0.0, -75.2), 0) > 200);        // the middle of the disc is the picture's white
+    CHECK(texel(goes, 0.0, -75.2 + 100.0) == pal.oceanDay);                                             // behind the limb: the plain ocean
+    CHECK(texel(goes, 0.0, -75.2 - 100.0) == pal.oceanDay);
+    CHECK(texel(goes, 88.0, -75.2) == pal.oceanDay);                                                    // beyond the frame at the pole
+    // a black picture is nothing received: the ocean
+    std::vector<std::uint8_t> black(static_cast<std::size_t>(pw) * ph, 0u);
+    Texture goes0;
+    bakeGoes(goes0, black, pw, ph, false, -75.2);
+    CHECK(texel(goes0, 0.0, -75.2) == pal.oceanDay);
+    // the picture's own geometry: a picture white only on its right half shows white east of the sub-satellite meridian and ocean to the west
+    std::vector<std::uint8_t> half(static_cast<std::size_t>(pw) * ph, 0u);
+    for (int y = 0; y < ph; ++y) { for (int x = pw / 2; x < pw; ++x) { half[static_cast<std::size_t>(y) * pw + x] = 255u; } }
+    Texture goesH;
+    bakeGoes(goesH, half, pw, ph, false, -75.2);
+    CHECK(chan(texel(goesH, 0.0, -75.2 + 30.0), 16) > 200);
+    CHECK(texel(goesH, 0.0, -75.2 - 30.0) == pal.oceanDay);
+    // rgb: a red picture keeps its red
+    std::vector<std::uint8_t> red(static_cast<std::size_t>(pw) * ph * 3u, 0u);
+    for (std::size_t i = 0; i < red.size(); i += 3) { red[i] = 255u; }
+    Texture goesR;
+    bakeGoes(goesR, red, pw, ph, true, -75.2);
+    CHECK(chan(texel(goesR, 0.0, -75.2), 16) > 200 && chan(texel(goesR, 0.0, -75.2), 8) < 100);
+    // too few pixels, no size: the plain ocean, no crash
+    Texture goesS;
+    bakeGoes(goesS, std::vector<std::uint8_t>(10, 255u), pw, ph, false, -75.2);
+    CHECK(texel(goesS, 0.0, -75.2) == pal.oceanDay);
+    bakeGoes(goesS, white, 0, 0, false, -75.2);
+    CHECK(texel(goesS, 0.0, -75.2) == pal.oceanDay);
+
+    // ---- altitude lift, initial camera ----
+    CHECK_NEAR(altitudeLift(870.0), 870.0 / kEarthRadiusKm, 1e-12);
+    CHECK_NEAR(altitudeLift(35786.0), 0.25, 1e-12);
+    CHECK(altitudeLift(0.0) == 0.0 && altitudeLift(-5.0) == 0.0 && altitudeLift(std::nan("")) == 0.0);
+    CHECK_NEAR(initialCamera(ViewKind::Propagation, true, LatLon{51.5, -0.1}).centreLonDeg, -0.1, 1e-12);
+    CHECK_NEAR(initialCamera(ViewKind::Propagation, false, LatLon{51.5, -0.1}).centreLatDeg, 20.0, 1e-12);
+    CHECK_NEAR(initialCamera(ViewKind::Goes, true, LatLon{51.5, -0.1}).centreLonDeg, -75.2, 1e-12);
+    CHECK_NEAR(initialCamera(ViewKind::Satellites, true, LatLon{89.9, 10.0}).centreLatDeg, 85.0, 1e-12);
+
+    // ---- the propagation list ----
+    const PropagationFacts pfacts = readPropagationPanel(propagationPanel());
+    const PropagationScene pscene = buildPropagationScene(pfacts, true, LatLon{10, 10}, 0);
+    ViewState view;
+    const GlobeDrawList pl = drawPropagation(pscene, view, shaded);
+    CHECK(pl.space == GlobeDrawList::Space::Globe && pl.sphere && pl.emptyNote.empty());
+    CHECK_NEAR(pl.camera.centreLonDeg, pscene.home.lon, 1e-9);                       // untouched: centred on home
+    const std::size_t grat = graticule(30.0, 3.0, 1.0).size();
+    CHECK(pl.lines.size() == grat + pscene.paths.size());
+    CHECK(pl.markers.size() == pscene.markers.size());
+    CHECK(pl.markers[0].shape == MarkerShape::Triangle && pl.markers[0].label == "HOME");
+    // a path's arc touches the ground at both ends and lifts to the shell between (300 km drawn 6x)
+    const DrawLine& arc = pl.lines[grat + 1];
+    CHECK(arc.argb == pscene.paths[1].argb);
+    double rmax = 0.0;
+    for (const Vec3& p : arc.points) { rmax = std::max(rmax, length(p)); }
+    CHECK_NEAR(rmax, 1.0 + 300.0 * 6.0 / kEarthRadiusKm, 1e-3);
+    CHECK_NEAR(length(arc.points.front()), 1.0, 1e-9);
+    // a touched camera is kept
+    ViewState touched;
+    touched.cameraSet = true;
+    touched.camera = GlobeCamera{33.0, 44.0, 2.0};
+    CHECK_NEAR(drawPropagation(pscene, touched, shaded).camera.zoom, 2.0, 1e-12);
+    // no home: an honest empty state and no paths
+    const GlobeDrawList pe = drawPropagation(buildPropagationScene(PropagationFacts{}, false, LatLon{}, 0), view, shaded);
+    CHECK(!pe.emptyNote.empty() && pe.lines.size() == grat && pe.markers.empty());
+
+    // ---- the FT8 list ----
+    std::vector<Ft8Spot> spots;
+    Ft8Spot a;
+    a.call = "K1ABC"; a.bandId = 6; a.at = LatLon{42.5, -71.0}; a.km = 5200.0;
+    Ft8Spot b;
+    b.call = "ZL1ABC"; b.bandId = 4; b.at = LatLon{-36.5, 175.0}; b.km = 18300.0;
+    spots = {a, b};
+    const LatLon rx{51.5208, -0.125};
+    const GlobeDrawList fl = drawFt8(spots, true, rx, view, shaded);
+    const std::size_t g30 = graticule(30.0, 3.0, 1.0).size();
+    CHECK(fl.lines.size() == g30 + 2u);
+    CHECK((fl.lines[g30].argb & 0x00FFFFFFu) == (bandColour(6) & 0x00FFFFFFu) && (fl.lines[g30].argb >> 24) < 0xFFu);   // band colour, a little translucent
+    CHECK((fl.lines[g30 + 1].argb & 0x00FFFFFFu) == (bandColour(4) & 0x00FFFFFFu));
+    CHECK(fl.markers.size() == 3u);                                                   // two stations and the receiver
+    CHECK(fl.markers[1].label == "ZL1ABC" && fl.markers[0].label.empty());           // only the furthest is named
+    CHECK(fl.markers[2].shape == MarkerShape::Triangle && fl.markers[2].label == "RX");
+    CHECK(fl.emptyNote.empty());
+    // a longer path lifts higher
+    double ra = 0, rb = 0;
+    for (const Vec3& p : fl.lines[g30].points) { ra = std::max(ra, length(p)); }
+    for (const Vec3& p : fl.lines[g30 + 1].points) { rb = std::max(rb, length(p)); }
+    CHECK(rb > ra && ra > 1.02);
+    // nothing heard: the empty state; no receiver position: dots only and a note
+    CHECK(!drawFt8({}, true, rx, view, shaded).emptyNote.empty());
+    const GlobeDrawList fn = drawFt8(spots, false, rx, view, shaded);
+    CHECK(fn.lines.size() == g30 && fn.markers.size() == 2u && !fn.emptyNote.empty());
+
+    // ---- the GOES list ----
+    const GlobeDrawList gl = drawGoes(view, -75.2, true, LatLon{40.7, -74.0}, goes);
+    const std::size_t g15 = graticule(15.0, 3.0, 1.0).size();
+    CHECK(gl.lines.size() == g15 + 1u);
+    const DrawLine& limb = gl.lines.back();
+    CHECK(limb.dashed && limb.closed && limb.argb == pal.limb);
+    for (const Vec3& p : limb.points) { CHECK_NEAR(angleDeg(p, toUnit(0.0, -75.2)), footprintAngularRadiusDeg(kGoesAltitudeKm, 0.0), 1e-6); }
+    CHECK(gl.markers.size() == 2u);
+    CHECK(gl.markers[0].shape == MarkerShape::Square && gl.markers[0].label == "SUB-SAT 0.0 N 75.2 W");
+    CHECK(gl.markers[1].label == "RX" && gl.markers[1].argb == 0xFFFF6B9Du);
+    CHECK_NEAR(gl.camera.centreLonDeg, -75.2, 1e-12);
+    CHECK(drawGoes(view, -137.0, false, LatLon{}, goes).markers.size() == 1u);
+    CHECK(drawGoes(view, -137.0, false, LatLon{}, goes).markers[0].label == "SUB-SAT 0.0 N 137.0 W");
+
+    // ---- the orbits list ----
+    const double jd = julianDay(2026, 11, 10, 0, 0, 0.0);
+    ViewState ov;
+    ov.spinDeg = 33.0;
+    ov.tiltDeg = 48.0;
+    const GlobeDrawList ol = drawOrbits(buildOrbitScene(jd, true, true), ov);
+    CHECK(ol.space == GlobeDrawList::Space::Orbits && !ol.sphere);
+    CHECK_NEAR(ol.camera.centreLonDeg, 33.0, 1e-12);
+    CHECK_NEAR(ol.camera.centreLatDeg, 48.0, 1e-12);
+    CHECK(ol.lines.size() == 8u + 1u);                                              // seven planets' rings, the Earth's, the Moon's ring
+    CHECK(ol.markers.size() == 1u + 7u + 1u + 1u);                                  // the Sun, seven planets, the Earth, the Moon
+    CHECK(ol.markers[0].sizePx > 8.0f && ol.markers[0].argb == pal.sun);
+    CHECK(ol.markers[3].label == "Mars");
+    for (const DrawLine& l : ol.lines) { CHECK(!l.surface && l.closed); }
+    const GlobeDrawList ol2 = drawOrbits(buildOrbitScene(jd, true, false), ov);
+    CHECK(ol2.lines.size() == 8u && ol2.markers.size() == 9u);                       // no Moon: no marker and no ring
+    // the scale switch moves the planets: Mercury is much further out on the log scale
+    const GlobeDrawList lin = drawOrbits(buildOrbitScene(jd, false, true), ov);
+    CHECK(length(ol.markers[1].at) > 3.0 * length(lin.markers[1].at));
+
+    // ---- the satellite list ----
+    SatSceneIn si;
+    SatIn noaa;
+    noaa.id = "33591"; noaa.label = "NOAA 19"; noaa.at = LatLon{58.2, -18.4}; noaa.altKm = 870.0; noaa.hasAlt = true;
+    SatIn geo;
+    geo.id = "41866"; geo.label = "GOES 16"; geo.at = LatLon{0.0, -75.2}; geo.altKm = 35786.0; geo.hasAlt = true;
+    SatIn bare;
+    bare.id = "x"; bare.at = LatLon{0.0, 0.0};
+    si.sats = {noaa, geo, bare};
+    SatPathIn track;
+    track.id = "33591"; track.dashed = true;
+    for (int i = 0; i < 20; ++i) { track.points.push_back(LatLon{-80.0 + 8.0 * i, -20.0 + i}); }
+    si.paths = {track};
+    si.selectedId = "33591";
+    si.rxKnown = true;
+    si.rx = rx;
+    const GlobeDrawList sl = drawSatellites(si, view, shaded);
+    // graticule + the ground track + the selected footprint + the slant line
+    CHECK(sl.lines.size() == g30 + 3u);
+    CHECK(sl.lines[g30].dashed && !sl.lines[g30].closed);
+    CHECK(sl.lines[g30 + 1].closed && sl.lines[g30 + 1].argb == 0xFF6FD3FFu);
+    CHECK(sl.lines[g30 + 2].dashed && sl.lines[g30 + 2].points.size() == 2u);
+    CHECK(sl.markers.size() == 4u);                                                  // three satellites and the receiver
+    CHECK(sl.markers[0].sizePx > sl.markers[1].sizePx);                              // the selected one is larger
+    CHECK(sl.markers[0].argb == orbitClassColour(870.0) && sl.markers[1].argb == orbitClassColour(35786.0));
+    CHECK(sl.markers[2].argb == pal.white);                                          // no altitude: no class colour
+    CHECK_NEAR(length(sl.markers[0].at), 1.0 + altitudeLift(870.0) + 0.004, 1e-9);
+    CHECK_NEAR(length(sl.markers[1].at), 1.25 + 0.004, 1e-9);                        // not to scale above 1 600 km
+    CHECK(sl.markers[3].label == "RX");
+    CHECK(sl.emptyNote.empty());
+    // the layers switch off
+    SatSceneIn off = si;
+    off.footprints = false;
+    off.groundTracks = false;
+    CHECK(drawSatellites(off, view, shaded).lines.size() == g30 + 1u);              // graticule + the slant line
+    // nothing tracked: the empty state; a selected satellite without an altitude has no footprint and no slant line
+    CHECK(!drawSatellites(SatSceneIn{}, view, shaded).emptyNote.empty());
+    SatSceneIn noAlt = si;
+    noAlt.selectedId = "x";
+    CHECK(drawSatellites(noAlt, view, shaded).lines.size() == g30 + 1u);             // graticule + the ground track only
+    SatSceneIn norx = si;
+    norx.rxKnown = false;
+    CHECK(drawSatellites(norx, view, shaded).markers.size() == 3u);
+}
+
 }  // namespace
 
 int main() {
@@ -658,5 +898,6 @@ int main() {
     sectionGoes();
     sectionSolar();
     sectionSatellites();
+    sectionDraw();
     return testSummary("test_slint_host_globe");
 }

@@ -167,6 +167,7 @@ foreach(src ${_foxsdr_slint_test_sources})
             # planets (solar_ephemeris.cpp); nothing of Slint.
             list(APPEND _extra
                 "${CMAKE_CURRENT_SOURCE_DIR}/../globe_scene.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../globe_draw.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/../solar_ephemeris.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/../map_compositor.cpp")
         endif()
