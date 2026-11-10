@@ -88,6 +88,11 @@ void seqlockNeverTears() {
             for (std::uint64_t& x : v.w) { x = n; }
             box.store(v);
             ++n;
+            // A GAP BETWEEN STORES. A writer that stores back to back leaves a reader no window at all in which the sequence is even: on the Arm64 runner
+            // (weaker ordering, 4 cores for 4 busy threads) three readers completed 8 827 reads in the 1.5 s against 7.2 million stores and 773 664 busy
+            // answers, below the 10 000 the test wants to call the race real (CI run 42715867661, 2026-11-09: "FAIL test_receiver_snapshot.cpp:127
+            // reads.load() > 10000u"). The seqlock is exactly as exposed to a tear with a gap of a few hundred nanoseconds, and the readers have windows.
+            for (volatile int gap = 0; gap < 300; gap = gap + 1) {}
         }
         writes.store(n);
     });

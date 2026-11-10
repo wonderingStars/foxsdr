@@ -654,6 +654,22 @@ void testKickFallback() {
         CHECK(!k.times.empty());
         if (!k.times.empty()) { lastKick = k.times.back(); }
     }
+    // THE LAST KICK'S PASS CAN STILL BE ON ITS WAY when the kicker stops: the kick is a wake, and the control thread picks it up when the scheduler
+    // lets it - microseconds on a desk, longer on a loaded Arm64 runner (Linux CI, 2026-11-09: "FAIL test_pass_control.cpp:683 d.kickedPasses == 0u"
+    // on the Arm64 job only: the count of the 1.5 s window held the one pass the last kick started after the window had opened). The window opens
+    // once the kicked-pass count has held still for 60 ms - nothing kicks any more, so it can only stop moving - and the timer's passes are what
+    // the window then counts.
+    {
+        std::uint64_t seen = e.passStats().kickedPasses;
+        int still = 0;
+        for (int i = 0; i < 100 && still < 3; ++i) {  // (2 s at most)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            const std::uint64_t now = e.passStats().kickedPasses;
+            still = (now == seen) ? still + 1 : 0;
+            seen = now;
+        }
+        CHECK(still >= 3);
+    }
     const Engine::PassStats before = e.passStats();
     std::this_thread::sleep_for(std::chrono::milliseconds(1500));
     const Engine::PassStats d = statsDiff(e.passStats(), before);

@@ -198,6 +198,12 @@ void scaled(const char* what, float at100, float at150, double tol = 0.03) {
     CHECK_NEAR(ratio, 1.5, tol);
 }
 
+// Where in a diagnostics log the window's placement record starts: the Windows line or the X11 one (see the seam's test below).
+std::size_t placedAt(const std::string& diag) {
+    const std::size_t win = diag.find("caption removed;");
+    return win != std::string::npos ? win : diag.find("window placed;");
+}
+
 }  // namespace
 
 int main() {
@@ -374,15 +380,17 @@ int main() {
     CHECK(b.savedScale == "100");
 
     // --- the capture seam FOXSDR_WINDOW_POS is READ (the pending gui tests set it) ------
-    // The application logs where the window ended up once its caption is removed:
-    // "frame: caption removed; window X,Y WxH client WxH at CX,CY". With the seam set the
+    // The application logs where the window ended up: on Windows once its caption is removed,
+    // "frame: caption removed; window X,Y WxH client WxH at CX,CY", and on X11 once it is shown,
+    // "frame: window placed; client WxH at CX,CY" (Linux CI, 2026-11-09: the first line is a
+    // Windows-only record, so the seam was never read there). With the seam set the
     // client area is within a window frame's width of the asked-for position; without it
     // the window is wherever the window manager put it, which is not that.
     {
         const Result p = once("pos", "100", "100", "310,260");
         CHECK(p.ok);
         int cx = -1000, cy = -1000;
-        const std::size_t at = p.diag.find("caption removed;");
+        const std::size_t at = placedAt(p.diag);
         if (at != std::string::npos) {
             const std::size_t atc = p.diag.find(" at ", at);
             if (atc != std::string::npos) {
@@ -394,7 +402,7 @@ int main() {
         CHECK(std::abs(cy - 260) <= 48);
         // ...and the 100% run above, with no seam, is not there.
         int ax = -1000, ay = -1000;
-        const std::size_t at0 = a.diag.find("caption removed;");
+        const std::size_t at0 = placedAt(a.diag);
         if (at0 != std::string::npos) {
             const std::size_t atc = a.diag.find(" at ", at0);
             if (atc != std::string::npos) {

@@ -142,7 +142,7 @@ int main() {
     CHECK(helper.exitCode == 2);
 
     // None of the above wrote anything under the isolated profile or the working directory.
-    CHECK(emt::tree(home).size() == 1);  // the "tmp" directory this test made
+    CHECK(emt::treeSansInstanceLock(home).size() == 1);  // the "tmp" directory this test made (the window application's instance lock aside: engine_main_proc.hpp)
 
     std::error_code ec;
     fs::remove_all(root, ec);

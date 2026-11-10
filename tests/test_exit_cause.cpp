@@ -440,7 +440,13 @@ void testRealSentinelReports() {
         const ReportListing l = listRecentReports(dir.string(), now);
         CHECK(l.readable && l.newest.size() == 1);
         if (l.newest.size() != 1) { continue; }
-        CHECK(l.newest[0].writtenEpoch > 0 && l.newest[0].writtenEpoch <= static_cast<std::int64_t>(now));
+        const bool epochInRange = l.newest[0].writtenEpoch > 0 && l.newest[0].writtenEpoch <= static_cast<std::int64_t>(now);
+        if (!epochInRange) {  // (the numbers a failure needs: the Arm64 runner failed this on 5 rows of 11 and nothing said by how much)
+            std::printf("  %s: report written at epoch %lld, the clock now reads %lld (%+lld s)\n", row.name,
+                        static_cast<long long>(l.newest[0].writtenEpoch), static_cast<long long>(now),
+                        static_cast<long long>(l.newest[0].writtenEpoch) - static_cast<long long>(now));
+        }
+        CHECK(epochInRange);
         const std::int64_t at = l.newest[0].writtenEpoch;
         const ExitVerdict v = classifyPreviousExit(l, at - 60, at);
         if (v.cls != row.expect) {

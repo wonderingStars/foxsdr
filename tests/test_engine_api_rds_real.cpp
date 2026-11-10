@@ -20,8 +20,11 @@
 //   2. rdsGroups climbs while rdsSeq stays still (a measurement moves nothing)
 //   3. stereo forced off: the lock stays, the lamp goes - the third state the
 //      rail letters ("ST (forced mono)")
-//   4. a retune forgets it all (the pipeline resets its decoders): the flags,
-//      the texts and the lock clear, rdsSeq moves
+//   4. a retune forgets it all (the pipeline resets its decoders): the flags
+//      and the texts clear, rdsSeq moves
+//   5. the pilot lock follows the pilot: with nothing on the air it clears and
+//      stays clear (not asserted straight after the retune: the transmitter is
+//      still in the channel there and the decoder finds it again at once)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
@@ -54,6 +57,29 @@ namespace {
 constexpr const char* kHooks = "testHooks=1;token=s3cret";
 
 const FoxEngineApi* api() { return cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR); }
+
+// AN UNMODULATED CARRIER: nothing on the air, so no pilot, no subcarrier and no words anywhere in it. Paced by the pipeline in real time, like the transmitter.
+class QuietCarrierSource : public cascade::source::IqSource {
+public:
+    bool start() override { running_ = true; return true; }
+    void stop() override { running_ = false; }
+    bool running() const override { return running_; }
+    bool selfPaced() const override { return false; }
+    double sampleRateHz() const override { return fmrds::kInputRateHz; }
+    bool setSampleRateHz(double) override { return false; }
+    double centerFrequencyHz() const override { return centerHz_; }
+    bool setCenterFrequencyHz(double hz) override { centerHz_ = hz; return true; }
+    std::size_t read(std::complex<float>* dst, std::size_t n) override {
+        for (std::size_t i = 0; i < n; ++i) { dst[i] = std::complex<float>(1.0f, 0.0f); }
+        return n;
+    }
+    const char* name() const override { return "Unmodulated carrier"; }
+    const char* lastError() const override { return ""; }
+
+private:
+    bool running_ = false;
+    double centerHz_ = 0.0;
+};
 
 // Passes until `done` holds (at most timeoutMs).
 template <class F>
@@ -183,7 +209,22 @@ int main() {
     CHECK_EQ(std::string(st.rdsRadioText), std::string());
     CHECK((st.rdsFlags & FOXAPI_RDS_PI_VALID) == 0u);
     CHECK(st.rdsSeq > before.rdsSeq);
+    // 5. THE PILOT LOCK FOLLOWS THE PILOT. The retune above leaves the transmitter 100 kHz off the channel's centre but still inside its 220 kHz, so the
+    // pilot decoder, reset by the retune, finds the pilot again within a few passes: whether a look made after the retune sees the lock clear or set
+    // again is the pace of the machine, and both polling for "clear" and reading it in the reset's own snapshot failed on a slow Linux runner (CI runs
+    // 42647585347 and 42699719524, 2026-11-09: "PILOT_LOCKED 0" and then "PILOT_LOCKED 1" in the line printed just before the check). Narrowing the
+    // channel did not make it stable either (the detector flickers on noise: 1 run in 15 of this test never saw it clear). What can be asserted without
+    // a race is the lock leaving when the pilot does: the station is replaced by an unmodulated carrier - nothing on the air to find a pilot in - and the
+    // lock must clear, and stay clear.
+    cascade::gui::AppWindowTestAccess::installSource(eng, std::make_unique<QuietCarrierSource>());
     CHECK(passUntil(eng, [&] { return (s.state().flags & FOXAPI_RX_PILOT_LOCKED) == 0u; }, 10000));
+    // (what the old transmitter left in the pipeline's buffers is still being read for a moment after the swap - let it go through before "stays clear")
+    (void)passUntil(eng, [] { return false; }, 1500);
+    for (int i = 0; i < 40; ++i) {
+        eng.controlPass();
+        CHECK((s.state().flags & FOXAPI_RX_PILOT_LOCKED) == 0u);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
 
     return check::finish("test_engine_api_rds_real");
 }

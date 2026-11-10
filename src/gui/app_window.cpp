@@ -1274,6 +1274,18 @@ int AppWindow::run(int frames) {
     cascade::gui::installFilePaste();
     glfwShowWindow(window);
     cascade::core::diagLogf("window: window shown; the Dear ImGui backends are up");
+#if !defined(_WIN32)
+    // WHERE THE WINDOW ENDED UP, on record, for the platforms that have no frame hook to say it (Windows logs "frame: caption removed;
+    // window ... client ... at X,Y" from win_frame.cpp; tests/test_ui_scale_app reads that line, or this one, to prove that
+    // FOXSDR_WINDOW_POS is honoured). X11 only: GLFW cannot read a window's position under Wayland (it reports an error and answers
+    // 0,0), and a line of zeros would be a false record.
+    if (glfwGetPlatform() == GLFW_PLATFORM_X11) {
+        int px = 0, py = 0, pw = 0, ph = 0;
+        glfwGetWindowPos(window, &px, &py);
+        glfwGetWindowSize(window, &pw, &ph);
+        cascade::core::diagLogf("frame: window placed; client %dx%d at %d,%d", pw, ph, px, py);
+    }
+#endif
     glUp_ = true;   // from here closeWindow() has the GL context, ImGui and GLFW to take down (shell retirement R8)
     // The baseline the later `resources:` lines are read against (0.99.103).
     resourcesSaidAt_ = glfwGetTime();

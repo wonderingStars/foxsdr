@@ -1025,9 +1025,11 @@ endif()
 if(TEST test_team_message_app)
     set_tests_properties(test_team_message_app PROPERTIES TIMEOUT 300)
 endif()
-# The report-page test starts the real application 26 times, 110 frames each (stub campaign B14): the same bound.
+# The report-page test starts the real application 26 times, 110 frames each (stub campaign B14): the same bound on a desk; 900 s for the Linux
+# runners, where the frames are drawn by a software renderer: the x86-64 runner took 214 s and the Arm64 runner ran past 300 s (release/0.99.108's
+# run, 2026-11-09: "Timeout 300.11 sec").
 if(TEST test_problem_report_app)
-    set_tests_properties(test_problem_report_app PROPERTIES TIMEOUT 300)
+    set_tests_properties(test_problem_report_app PROPERTIES TIMEOUT 900)
 endif()
 # The beta-tester section test starts the real application about twenty times (stub campaign B15), a few of them holding the frame loop for real time while a worker
 # claims a link and a loopback site answers: the same bound. test_tester_host_only starts the engine and the window once each against a stand-in site.

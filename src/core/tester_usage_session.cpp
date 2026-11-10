@@ -133,7 +133,13 @@ std::string testerUsagePlatform() {
 }
 
 namespace {
-constexpr char kDefaultTesterUsageEndpoint[] = "https://foxsdr.com/api/tester-usage";
+// A POINTER READ THROUGH A VOLATILE, not a constexpr array: with the array the optimiser turns std::string(kDefault...) into immediate
+// stores of the text in 8-byte pieces (x86-64, GCC), and the address then appears in the program image nowhere as a string. A
+// tester-only half of the program is proved absent from the engine's image by searching both images for this address
+// (tests/test_tester_host_only.cpp, "the built images"), and that proof needs the window's copy to be findable - the control that
+// shows the search can see what it looks for (Linux CI, 2026-11-09: "cascade: NO"). The pointer's target is a whole literal in the
+// image, and the read cannot be folded away.
+const char* const volatile kDefaultTesterUsageEndpoint = "https://foxsdr.com/api/tester-usage";
 }  // namespace
 
 std::string testerUsageEndpoint() {

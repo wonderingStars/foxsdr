@@ -39,6 +39,7 @@
 
 #include "core/host_image.hpp"
 #include "core/plugin_abi.h"
+#include "core/plugin_run.hpp"
 #include "core/plugin_repo.hpp"
 #include "engine/engine.hpp"
 #include "engine_api_test_env.hpp"
@@ -348,8 +349,12 @@ int main() {
             std::ofstream c(cfg, std::ios::binary | std::ios::trunc);
             c << text << "\n";
         };
-        writeConfig("{ \"pluginRun\": { \"fixture_stage1_plugin\": \"always\", \"fixture_group13_plugin\": \"always\", "
-                    "\"fixture_group14_plugin\": \"always\" } }");
+        // The pins are named by each fixture's RUN ID, from its own file name, as the host does: "fixture_stage1_plugin.dll" is "fixture_stage1_plugin" on Windows,
+        // but the Linux build names the module "libfixture_stage1_plugin.so", whose id keeps the "lib" - and keys written for the Windows names pinned nothing there
+        // (Linux CI, 2026-11-09: "plugin run: always=3 idle=3", no panel, no track, where "always=3 idle=0" and four tracks were expected).
+        const auto pin = [&](const char* module) { return std::string("\"") + cascade::core::pluginRunId(fileOf(module)) + "\": \"always\""; };
+        const std::string pins = "{ \"pluginRun\": { " + pin(FIXTURE_STAGE1_PLUGIN) + ", " + pin(FIXTURE_GROUP13_PLUGIN) + ", " + pin(FIXTURE_GROUP14_PLUGIN) + " } }";
+        writeConfig(pins.c_str());
         engine_api_test::setEnv("CASCADE_CONFIG_TEST", cfg.string());
         engine_api_test::setEnv("FOXSDR_DIAG_DIR", (scratch / "diag").string());
         engine_api_test::setEnv("FOXSDR_CRASH_URL", "http://127.0.0.1:9/");
@@ -358,7 +363,14 @@ int main() {
         engine_api_test::setEnv("CASCADE_DECODE_TEST", "1");
         const auto run = [&](bool report) {
             engine_api_test::setEnv("CASCADE_PLUGIN_STATUS", report ? "1" : "");
+            // cmd.exe (_popen) strips the OUTER pair of quotes of a line that starts with two, so the whole line is wrapped in a second
+            // pair there; /bin/sh (popen) has no such rule and reads the wrapped line as ONE word - "<path>/cascade --frames 120 2>&1" -
+            // and answers "not found" (Linux CI, 2026-11-09), so the line is the plain quoted path there.
+#if defined(_WIN32)
             const std::string cmd = std::string("\"\"") + (app / exeName).string() + "\" --frames 120 2>&1\"";
+#else
+            const std::string cmd = std::string("\"") + (app / exeName).string() + "\" --frames 120 2>&1";
+#endif
             std::vector<std::string> lines;
 #if defined(_WIN32)
             FILE* pipe = _popen(cmd.c_str(), "r");
