@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1963 | 383 | 82 | 1498 | 0 |
+| 1963 | 387 | 82 | 1494 | 0 |
 
-Of the 1128 rows that are controls (the 835 readout-like rows left out): 383 asserted, 82 driven without a read-back, 663 not drivable.
+Of the 1130 rows that are controls (the 833 readout-like rows left out): 387 asserted, 82 driven without a read-back, 661 not drivable.
 
-NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120, deferred 114, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 6, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 833, other 193, needs a signal (no fixture) 120, deferred 113, relocated 85, withheld in a bounded run 69, needs hardware 29, no label in the element tree 25, not installed 21, needs a file 5, no plugin fitted 1.
 
 ## Per section
 
@@ -150,7 +150,7 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | SIGNAL bank — Transmit (rail row) | 2 | 0 | 0 | 2 | 1 | 0 |
 | SIGNAL bank — TRANSMIT page | 25 | 0 | 0 | 25 | 8 | 0 |
 | SIGNAL bank — Recorder (rail section) | 15 | 4 | 0 | 11 | 6 | 0 |
-| SIGNAL bank — Frequency-list import dialog | 7 | 1 | 1 | 5 | 3 | 0 |
+| SIGNAL bank — Frequency-list import dialog | 7 | 2 | 1 | 4 | 2 | 0 |
 | SYSTEM bank — Display | 17 | 13 | 0 | 4 | 3 | 0 |
 | SYSTEM bank — Language & country | 9 | 4 | 0 | 5 | 3 | 0 |
 | SYSTEM bank — Frequency correction | 7 | 1 | 0 | 6 | 5 | 0 |
@@ -174,9 +174,9 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | TOOLS bank — Radar scope (full-window mode) | 28 | 0 | 0 | 28 | 17 | 0 |
 | TOOLS bank — Radar data panel (LCD) - three tabs | 15 | 0 | 0 | 15 | 8 | 0 |
 | TOOLS bank — Bookmarks (rail section) | 31 | 14 | 2 | 15 | 6 | 0 |
-| TOOLS bank — Import a frequency list (dialog) | 8 | 0 | 0 | 8 | 5 | 0 |
+| TOOLS bank — Import a frequency list (dialog) | 8 | 2 | 0 | 6 | 4 | 0 |
 | TOOLS bank — Scanner (rail section) | 14 | 10 | 1 | 3 | 1 | 0 |
-| TOOLS bank — Airband (rail section) | 35 | 16 | 4 | 15 | 9 | 0 |
+| TOOLS bank — Airband (rail section) | 35 | 17 | 4 | 14 | 9 | 0 |
 | TOOLS bank — Map page (window per track-source plugin) | 17 | 0 | 0 | 17 | 5 | 0 |
 | TOOLS bank — Track list (left of the map page) | 11 | 0 | 0 | 11 | 7 | 0 |
 | TOOLS bank — Map canvas (all map pages) | 10 | 0 | 0 | 10 | 4 | 0 |
@@ -2230,7 +2230,7 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 1380 | Dialog | dialog | DRIVEN+ASSERTED | signal-recorder | click Import; expect Browse... enabled equals true (the dialog opened) |
 | 1381 | Reason line | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1382 | Preset note | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1382 | Preset note | readout | DRIVEN+ASSERTED | tools-airband-import.txt | the dialog opened for the preset: the rows of the typed path land in the preset Towers (the preset line itself is read by test_slint_signal) |
 | 1383 | Drop zone | drag/gesture | NOT DRIVABLE | - | deferred: drawn as words only; no file-drop event is wired into the Slint window (not found in signal_bank.slint, main.slint or main.cpp), so a dropped file imports nothing; the path field is the way in |
 | 1384 | or / Browse... | button | NOT DRIVABLE | - | deferred: the OS file chooser: a path field takes its place (Enter imports: FOXAPP_OP_BOOKMARK_IMPORT_FILE for a frequency list, SELECT_SOURCE 'file:' for an I/Q recording); the Browse key is drawn and calls import-open, the host's local pickFile |
 | 1385 | Reading line | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -2597,7 +2597,7 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | 1631 | Count line | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1632 | Export for SDR# | button (small) | NOT DRIVABLE | - | the key copies / opens the exported file: clipboard and shell withheld in a bounded run |
 | 1633 | Remove this group | button (small) | DRIVEN+ASSERTED | tools-bookmarks-rows.txt | click "Remove this group"; state count.bookmarkGroups == 0 (label from the run-2 dump) |
-| 1634 | Rename this group | button (small) | DRIVEN+ASSERTED | tools-bookmarks-rows.txt | click "Rename this group"; type "new group name" "Flying"; key enter; state list.bookmarkGroups.names contains Flying |
+| 1634 | Rename this group | button (small) | DRIVEN+ASSERTED | tools-bookmarks-rename-key.txt | press "Rename this group", type "new group name" "Flying", key tab, press the key again, press it again: expect the field reads Aviation (the group's own name), not the abandoned text; then type + enter renames (docs 6.61, RED first) |
 | 1635 | Rename field | text field | DRIVEN+ASSERTED | tools-bookmarks-rows.txt | type "new group name" "Flying"; expect "new group name" value equals "Flying" (field label from the source, confirmed by the dump after Rename this group) |
 | 1636 | Rename | button | DRIVEN+ASSERTED | tools-bookmarks-rows.txt | key enter in the rename field; state list.bookmarkGroups.names contains Flying (the Rename key beside it is not clicked: Enter does the same) |
 | 1637 | Row scan checkbox | checkbox | NOT DRIVABLE | - | no checkbox label for the row's scan Tick in the element tree (the rows dump shows only Favourite, the row and Delete this bookmark) |
@@ -2618,12 +2618,12 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 1648 | Dialog | dialog | NOT DRIVABLE | - | a readout, not a control |
 | 1649 | Reason line | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1650 | Preset line | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1650 | Preset line | readout | DRIVEN+ASSERTED | tools-airband-import.txt | the Airband Import over an empty box opens the dialog for the preset; the rows join it |
 | 1651 | Drop zone | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 1652 | or / Browse... | button | NOT DRIVABLE | - | deferred: the SIGNAL family's dialog has a path field in place of the system file chooser (row 1384) |
 | 1653 | Waiting line | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1654 | Cancel | button | NOT DRIVABLE | - | relocated: the SIGNAL family's Cancel key (row 1386) |
-| 1655 | Escape | key (keyboard) | NOT DRIVABLE | - | deferred: Esc does not close the dialog: the escape handler of main.cpp clears the editor, About and the bias sheet only (row 1380) |
+| 1655 | Escape | key (keyboard) | DRIVEN+ASSERTED | escape-leaves-dialog.txt | click "Import" (empty box), key escape; state shown.import 1 then 0, twice; Esc with nothing open changes nothing (docs 6.61, RED first: it stayed 1) |
 
 ### TOOLS bank — Scanner (rail section)
 
@@ -2663,7 +2663,7 @@ NOT DRIVABLE by reason: readout 835, other 193, needs a signal (no fixture) 120,
 | 1682 | Add | button | DRIVEN+ASSERTED | tools-airband.txt | click "Add"; state count.bookmarks == 1 |
 | 1683 | Note | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1684 | Import path | text field | NOT DRIVABLE | - | the import path needs a file on disk; an empty path opens a native dialog |
-| 1685 | Import | button | NOT DRIVABLE | - | reads a file / opens a native dialog: not drivable in a bounded run |
+| 1685 | Import | button | DRIVEN+ASSERTED | tools-airband-import.txt | click "Import" over an empty box: the dialog opens for the preset; type "Import path"#2 the fixture airband-import.csv + enter; state count.bookmarks == 3, list.bookmarkGroups.names contains Towers and is not Other (docs 6.61, RED first: the rows landed in "Other") |
 | 1686 | Export CSV | button | DRIVEN+ASSERTED | tools-airband.txt | click "Export CSV"; state fact.bookmarks.export.count == 1 |
 | 1687 | Remove preset | button | DRIVEN+ASSERTED | tools-airband.txt | click "Remove preset"; state count.bookmarks == 0 |
 | 1688 | Preset note | readout | NOT DRIVABLE | - | a readout, not a control |

@@ -521,6 +521,21 @@ int main() {
         CHECKV(e.name == "card-rate-selected" && e.args == "2", "card rate row 2: '%s' '%s'", e.name.c_str(), e.args.c_str());
         e = press(fr - 12, ry + 12);
         CHECKV(e.name == "card-open", "Open: '%s'", e.name.c_str());
+        {   // with no sound card chosen (docs 6.61) the Open key is greyed: drawn as a disabled key, and it asks for nothing
+            auto sm = ui->get_m_card_iq();
+            const Frame live = shot();
+            sm.card_can_open = false;
+            ui->set_m_card_iq(sm);
+            const Frame grey = shot();
+            int changed = 0;
+            for (int x = fr - 40; x < fr; ++x) { const auto a = grey.at(x, ry + 12), b = live.at(x, ry + 12); if (a.r != b.r || a.g != b.g || a.b != b.b) { ++changed; } }
+            CHECKV(changed > 10, "a greyed Open is drawn differently (%d pixels changed)", changed);
+            e = press(fr - 12, ry + 12);
+            CHECKV(e.name.empty(), "a greyed Open asks for nothing: '%s'", e.name.c_str());
+            sm.card_can_open = true;
+            ui->set_m_card_iq(sm);
+            shot();
+        }
         CHECKV(g0.countNear(xb + 9, ry + 30, fr, ry + 46, dim, 40) >= 60, "the Receives line is dim");
         park();
         // the second card (b2, real audio): amber busy and none lines, the Channel line, no Swap I/Q and no Centre, the missing-card note, the converter card
@@ -1016,6 +1031,31 @@ int main() {
         CHECKV(e.name == "import-kind" && e.args == "1", "kind row 1: '%s' '%s'", e.name.c_str(), e.args.c_str());
         e = press(ix + 6, sy + 6);
         CHECKV(e.name == "import-closed", "a click on the import backdrop closes: '%s'", e.name.c_str());
+        // opened for an Airband preset (docs 6.61): a line naming the preset stands where "Import as" was and the dialog offers no I/Q file; no reason line here
+        {
+            auto pm = ui->get_m_import();
+            pm.error = "";
+            pm.preset = "Towers";
+            pm.preset_line = "The rows will join the preset \"Towers\".";
+            pm.kinds = std::make_shared<slint::VectorModel<SelectItem>>();
+            ui->set_m_import(pm);
+            const Frame pf = shot();
+            int pTop = -1;
+            for (int y = sy; y < sy + ih && pTop < 0; ++y) { if (pf.near(ipx + 100, y, knobRing, 0)) { pTop = y; } }
+            CHECKV(pTop > 0, "the preset import dialog's panel top at %d", pTop);
+            const int pContent = pTop + 31 + 12;
+            int pZone = -1;
+            for (int y = pContent + 4; y < pContent + 120 && pZone < 0; ++y) { if (pf.near(ipx + 200, y, muted, 2)) { pZone = y; } }
+            CHECKV(pZone > 0, "the drop zone is still there (at %d)", pZone);
+            CHECKV(pf.countNear(ipx + 12, pContent, ipx + ipanelW - 12, std::max(pContent + 1, pZone - 4), dim, 40) >= 60, "the line naming the preset is drawn dim above the drop zone");
+            // no "Import as" dropdown: nothing at the right edge in the rows above the drop zone carries the key's line
+            int keyLines = 0;
+            for (int y = pContent; y < pZone - 2; ++y) { if (pf.near(ipx + ipanelW - 14, y, keyLine)) { ++keyLines; } }
+            CHECKV(keyLines == 0, "no Import-as dropdown above the drop zone (%d key-line pixels)", keyLines);
+            // and the plain dialog (the first picture) still has both: its drop zone sat lower by the kind row
+            CHECKV(zoneTop - contentTop > pZone - pContent, "the plain dialog is taller by the Import-as row: %d against %d", zoneTop - contentTop, pZone - pContent);
+            park();
+        }
         park();
     }
 

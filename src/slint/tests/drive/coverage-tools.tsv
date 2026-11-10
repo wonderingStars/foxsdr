@@ -18,7 +18,7 @@
 1630	ASSERTED	tools-bookmarks.txt; tools-bookmarks-options.txt	click "Stack close names"; expect checked false/true; state cfg.bookmarkStackNames false/true (saved since docs 6.52; the names stack onto three rows by it)
 1632	NOT_DRIVABLE	-	the key copies / opens the exported file: clipboard and shell withheld in a bounded run
 1633	ASSERTED	tools-bookmarks-rows.txt	click "Remove this group"; state count.bookmarkGroups == 0 (label from the run-2 dump)
-1634	ASSERTED	tools-bookmarks-rows.txt	click "Rename this group"; type "new group name" "Flying"; key enter; state list.bookmarkGroups.names contains Flying
+1634	ASSERTED	tools-bookmarks-rename-key.txt	press "Rename this group", type "new group name" "Flying", key tab, press the key again, press it again: expect the field reads Aviation (the group's own name), not the abandoned text; then type + enter renames (docs 6.61, RED first)
 1635	ASSERTED	tools-bookmarks-rows.txt	type "new group name" "Flying"; expect "new group name" value equals "Flying" (field label from the source, confirmed by the dump after Rename this group)
 1636	ASSERTED	tools-bookmarks-rows.txt	key enter in the rename field; state list.bookmarkGroups.names contains Flying (the Rename key beside it is not clicked: Enter does the same)
 1637	NOT_DRIVABLE	-	no checkbox label for the row's scan Tick in the element tree (the rows dump shows only Favourite, the row and Delete this bookmark)
@@ -50,7 +50,7 @@
 1681	ASSERTED	tools-airband.txt	type "name" "Guard"; key enter; state list.bookmarks.names contains Guard
 1682	ASSERTED	tools-airband.txt	click "Add"; state count.bookmarks == 1
 1684	NOT_DRIVABLE	-	the import path needs a file on disk; an empty path opens a native dialog
-1685	NOT_DRIVABLE	-	reads a file / opens a native dialog: not drivable in a bounded run
+1685	ASSERTED	tools-airband-import.txt	click "Import" over an empty box: the dialog opens for the preset; type "Import path"#2 the fixture airband-import.csv + enter; state count.bookmarks == 3, list.bookmarkGroups.names contains Towers and is not Other (docs 6.61, RED first: the rows landed in "Other")
 1686	ASSERTED	tools-airband.txt	click "Export CSV"; state fact.bookmarks.export.count == 1
 1687	ASSERTED	tools-airband.txt	click "Remove preset"; state count.bookmarks == 0
 1689	NOT_DRIVABLE	-	opens the folder in the shell: withheld in a bounded run
@@ -65,3 +65,6 @@
 1702	ASSERTED	tools-airband.txt	click "LISTEN"; state fact.airband.listening == 1 (after `scroll "Tick all" 500`)
 1703	ASSERTED	tools-airband.txt	click "STOP"; state fact.airband.listening == 0 (after `scroll "Tick all" 500`)
 1704	NOT_DRIVABLE	-	drawn only when the monitor has more than one block of channels; the one EGLL preset has a single block (unverified)
+1382	ASSERTED	tools-airband-import.txt	the dialog opened for the preset: the rows of the typed path land in the preset Towers (the preset line itself is read by test_slint_signal)
+1650	ASSERTED	tools-airband-import.txt	the Airband Import over an empty box opens the dialog for the preset; the rows join it
+1655	ASSERTED	escape-leaves-dialog.txt	click "Import" (empty box), key escape; state shown.import 1 then 0, twice; Esc with nothing open changes nothing (docs 6.61, RED first: it stayed 1)

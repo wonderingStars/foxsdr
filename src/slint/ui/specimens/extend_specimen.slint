@@ -209,7 +209,7 @@ export component ExtendSpecimen inherits Window {
     property <[StoreBadge]> b-net-1090: [{ text: "NETWORK", tone: ChipTone.warn }, { text: "1090 MHz", tone: ChipTone.neutral }];
     in-out property <StoreModel> m-store-browse: {
         search: "", search-placeholder: "Search the catalogue", tab: 0, browse-label: "BROWSE", updates-label: "UPDATES (2)",
-        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", catalogue-tone: ChipTone.neutral, check-label: "CHECK AGAIN",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", catalogue-tone: ChipTone.neutral, check-label: "CHECK AGAIN", check-enabled: true,
         sites-open: false,
         top-error: "Could not fit ADS-B Aircraft Decoder: the file is in use",
         top-warning: "Catalogue warning: radioclub.example did not answer, showing the last copy",
@@ -236,7 +236,7 @@ export component ExtendSpecimen inherits Window {
     };
     in-out property <StoreModel> m-store-updates: {
         search: "", tab: 1, browse-label: "BROWSE", updates-label: "UPDATES (2)",
-        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", check-label: "CHECK AGAIN",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", check-label: "CHECK AGAIN", check-enabled: true,
         updates-heading: "2 updates available", update-all-label: "UPDATE ALL", update-all-enabled: true,
         updates: [
             { id: "adsb", glyph: "A", name: "ADS-B Aircraft Decoder", version-note: "1.9.1 > 1.9.2", badge: "NEW", whats-new: "faster decode", key-label: "UPDATE", key-enabled: true },
@@ -251,7 +251,7 @@ export component ExtendSpecimen inherits Window {
     };
     in-out property <StoreModel> m-store-plugin: {
         search: "", tab: 0, browse-label: "BROWSE", updates-label: "UPDATES (2)",
-        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", check-label: "CHECK AGAIN",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", check-label: "CHECK AGAIN", check-enabled: true,
         plugin: {
             shown: true, back-label: "< BROWSE", glyph: "A", name: "ADS-B Aircraft Decoder", version: "1.9.2", badges: root.b-net-1090,
             origin: "FOX & SCHIRMYVER - from the FoxSDR catalogue", key-label: "UPDATE", key-kind: 1, key-enabled: true,
@@ -266,10 +266,10 @@ export component ExtendSpecimen inherits Window {
     };
     in-out property <StoreModel> m-store-narrow: {
         search: "", search-placeholder: "Search the catalogue", tab: 0, browse-label: "BROWSE", updates-label: "UPDATES (2)",
-        catalogue-line: "Catalogue read 4 min ago from foxsdr.com  -  Catalogue is out of date", catalogue-tone: ChipTone.warn, check-label: "CHECK AGAIN",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com  -  Catalogue is out of date", catalogue-tone: ChipTone.warn, check-label: "CHECK AGAIN", check-enabled: true,
         cancel-label: "CANCEL",
         sites-open: true,
-        sites: [{ address: "Radio Club Plugins (radioclub.example)", remove-label: "REMOVE", status: "That address did not answer - status: last read failed" }],
+        sites: [{ address: "Radio Club Plugins (radioclub.example)", remove-label: "REMOVE", remove-enabled: true, status: "That address did not answer - status: last read failed" }],
         no-sites-line: "No other sites", site-draft: "https://", consent: false, add-site-label: "ADD",
         add-reason: "ADD is greyed until the box is ticked and the address starts with https://",
         site-error: "That address did not answer",
@@ -288,7 +288,7 @@ export component ExtendSpecimen inherits Window {
     // a short page with more cards than it can show: the body scrolls (the wheel moves it, the thumb follows)
     in-out property <StoreModel> m-store-short: {
         search: "", search-placeholder: "Search the catalogue", tab: 0, browse-label: "BROWSE", updates-label: "UPDATES (2)",
-        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", check-label: "CHECK AGAIN",
+        catalogue-line: "Catalogue read 4 min ago from foxsdr.com", check-label: "CHECK AGAIN", check-enabled: true,
         categories: [
             { heading: "Aircraft", cards: [
                 { id: "a1", glyph: "A", name: "ADS-B Aircraft Decoder", summary: "Decodes 1090 MHz aircraft position reports.", badges: root.b-net-1090, key-label: "GET", key-kind: 0, key-enabled: true },

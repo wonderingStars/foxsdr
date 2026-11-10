@@ -110,6 +110,7 @@ export global ToolsEvents {
     callback bookmark-remove-group();
     callback bookmark-rename-draft(string);
     callback bookmark-rename();
+    callback bookmark-rename-open(bool);   // the "Rename this group" key opened (true) or closed (false) the field: the host seeds the draft with the group's name
     callback bookmark-tick(int, bool);
     callback bookmark-favourite(int, bool);
     callback bookmark-tune(int);
@@ -1150,6 +1151,8 @@ export component BookmarksBody inherits VerticalLayout {
     bookmark-rename-draft(a) => { ToolsEvents.bookmark-rename-draft(a); }
     callback bookmark-rename();
     bookmark-rename() => { ToolsEvents.bookmark-rename(); }
+    callback bookmark-rename-open(bool);
+    bookmark-rename-open(a) => { ToolsEvents.bookmark-rename-open(a); }
     callback bookmark-tick(int, bool);
     bookmark-tick(a, b) => { ToolsEvents.bookmark-tick(a, b); }
     callback bookmark-favourite(int, bool);
@@ -1288,7 +1291,7 @@ export component BookmarksBody inherits VerticalLayout {
         clicked(i) => {
             if (i == 1) { root.bookmark-export(); }
             else if (i == 2) { root.bookmark-remove-group(); }
-            else { root.renaming = !root.renaming; }
+            else { root.renaming = !root.renaming; root.bookmark-rename-open(root.renaming); }
         }
     }
     if root.renaming && root.model.rename-group-label != "" : Line {

@@ -13,6 +13,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -57,6 +58,9 @@ public:
     // A bounded run's self-capture (FOXSDR_SLINT_SETUP=1, FOXSDR_SLINT_IMPORT=1): raises the Radio-setup page / the import dialog. Never set in a release.
     void raiseSetupForCapture();
     void raiseImportForCapture();
+    // The import dialog opened for an Airband preset (docs 6.61), and what a path typed in it does: the host hands it to the TOOLS bank's preset import.
+    void openImportForPreset(const std::string& preset);
+    void setPresetImport(std::function<void(const std::string& path, const std::string& preset)> fn) { presetImport_ = std::move(fn); }
 
 private:
     // A list model kept between publishes and updated row by row.
@@ -77,6 +81,7 @@ private:
     void startInstall(const std::string& target);
     void openLink(const std::string& url);
     void pollImport();
+    std::function<void(const std::string&, const std::string&)> presetImport_;
     void importPath(const std::string& typed);
     void importBrowse();
     void updateClocks();

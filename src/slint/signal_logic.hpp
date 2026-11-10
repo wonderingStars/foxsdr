@@ -294,6 +294,8 @@ struct ImportDialogModel {
     std::string path, error;
     std::vector<SelectItem> kinds;
     int kind_index = 0;
+    std::string preset;                    // ADDED (docs 6.61): the Airband preset the rows will join; "" for the plain import. The dialog says so, and offers no I/Q file
+    std::string preset_line;               // ...and the sentence it says (the ImGui dialog's own, through tr(): "The rows will join the preset \"X\"."); "" for the plain import
     // host extras
     std::string reading_line;              // "Waiting for the disk to open the file: 2 s" after a second
 };
@@ -330,6 +332,7 @@ struct ReadOptions {
     std::vector<SetupFinding> findings;
     // the import dialog
     bool import_shown = false;
+    std::string import_preset;             // the Airband preset the rows will join ("" = the plain frequency-list import), docs 6.61
     std::string import_path, import_reason;
     int import_kind = 0;
     bool import_reading = false;

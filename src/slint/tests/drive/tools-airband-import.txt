@@ -1,0 +1,18 @@
+#! frames=520 bank=2 sections=2:4
+# tools-airband-import: the Airband Import key over an EMPTY box (docs 6.61). It used to open the plain "Import a frequency list" dialog with no preset target, so
+# the rows of a file typed there joined no preset (the dialog imported them as ordinary bookmarks). The dialog now names the preset ("The rows will join the preset
+# ..."), offers no I/Q file, and a path typed in it is the Airband section's own import: the rows take the preset's name. The read-back is the engine's own list
+# (count.bookmarks, list.bookmarkGroups.names): three rows in the group "Towers" and no group "Other" (the file's own group column).
+10 state running == 1
+state count.bookmarks == 0
++1 type "Preset" "Towers"
++1 key enter
+# an empty box: the dialog opens, for the preset
++1 click "Import"
++8 expect "Import path"#2 enabled equals "true"
++1 dump
++1 type "Import path"#2 "{FIXTURES}/airband-import.csv"
++1 key enter
++40 state count.bookmarks == 3
+state list.bookmarkGroups.names contains Towers
+state list.bookmarkGroups.names != Other

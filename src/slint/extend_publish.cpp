@@ -403,8 +403,8 @@ std::shared_ptr<slint::Model<slint::Image>> ExtendPublisher::mapScreenshots(cons
 static std::string storeSig(const StoreModel& m, int pictureIndex, std::uint64_t pictureRevision) {
     std::string s;
     sigAdd(s, m.search); sigAdd(s, m.search_placeholder); sigAdd(s, m.tab); sigAdd(s, m.browse_label); sigAdd(s, m.updates_label);
-    sigAdd(s, m.catalogue_line); sigAdd(s, static_cast<int>(m.catalogue_tone)); sigAdd(s, m.check_label); sigAdd(s, m.sites_open);
-    for (const StoreSite& x : m.sites) { sigAdd(s, x.address); sigAdd(s, x.remove_label); }
+    sigAdd(s, m.catalogue_line); sigAdd(s, static_cast<int>(m.catalogue_tone)); sigAdd(s, m.check_label); sigAdd(s, m.check_enabled); sigAdd(s, m.sites_open);
+    for (const StoreSite& x : m.sites) { sigAdd(s, x.address); sigAdd(s, x.remove_label); sigAdd(s, x.remove_enabled); }
     for (const StoreLine& l : m.site_lines) { sigAdd(s, l.text); sigAdd(s, static_cast<int>(l.tone)); }
     sigAdd(s, m.no_sites_line); sigAdd(s, m.site_draft); sigAdd(s, m.consent); sigAdd(s, m.consent_sentence); sigAdd(s, m.add_site_label);
     sigAdd(s, m.top_error); sigAdd(s, m.top_warning); sigAdd(s, m.empty_line);
@@ -448,6 +448,7 @@ static std::string storeSig(const StoreModel& m, int pictureIndex, std::uint64_t
     o.catalogue_line = ss(m.catalogue_line);
     o.catalogue_tone = tone(m.catalogue_tone);
     o.check_label = ss(m.check_label);
+    o.check_enabled = m.check_enabled;     // greyed while a transfer or a picture is in flight or no address is set (docs 6.61)
     o.sites_open = m.sites_open;
 
     // the sites: the UI's one status line a site is the AMBER one (its own colour is warn), so only the lines the logic calls Warn ride it - "could not be read" and the two
@@ -458,6 +459,7 @@ static std::string storeSig(const StoreModel& m, int pictureIndex, std::uint64_t
         ::StoreSite s{};
         s.address = ss(x.address);
         s.remove_label = ss(x.remove_label);
+        s.remove_enabled = x.remove_enabled;   // greyed while a transfer runs (docs 6.61): the effect did nothing then, and the key looked alive
         std::string status;
         // a site's lines: its first, then the "hidden" ones that follow (they say " hidden: ")
         bool first = true;

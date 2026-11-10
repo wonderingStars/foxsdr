@@ -56,8 +56,9 @@
 //   bookmark-rename-draft(text)  applyBookmarkRenameDraft [local] BookmarkRenameDraft
 //   bookmark-rename()            applyBookmarkRename      FOXAPP_OP_BOOKMARK_GROUP 0x860B ival[0] = 2, text = from + 0x1F + to (to = the draft trimmed; nothing when it is empty or the same as from, or no
 //                                                         group is chosen); [local] BookmarkRenamed text = to (the filter follows the group to its new name; the field closes).
-//                                                         The contract has ONE callback for the Rename key and for "Rename this group": applyBookmarkRenameOpen is the second
-//                                                         (the ImGui key TOGGLES the field, seeded with the group's name); the publisher routes by BookmarksModel::rename_open
+//   bookmark-rename-open(open)  applyBookmarkRenameOpen  [local] BookmarkRenameOpen: the "Rename this group" key showed (true) or hid (false) the field; the draft is seeded with
+//                                                         the group's own name every time (the ImGui key's rule), so an abandoned name does not come back (docs 6.61). The key
+//                                                         TOGGLES in the effect, so the publisher hands it the model with rename_open = !open
 //   bookmark-tick(id, on)        applyBookmarkTick        FOXAPP_OP_BOOKMARK_TICK 0x8604 ival[0] = id, ival[1] = on; nothing for an id the rows shown do not hold
 //   bookmark-favourite(id, on)   applyBookmarkFavourite   FOXAPI_OP_BOOKMARK_FAVOURITE 0x0505 ival[0] = id, ival[1] = on
 //   bookmark-tune(id)            applyBookmarkTune        FOXAPI_OP_BOOKMARK_TUNE 0x0502 ival[0] = id (grant TUNE)
@@ -609,6 +610,9 @@ Effect applyAirbandMode(int index);
 Effect applyAirbandAdd(const AirbandModel& m);
 Effect applyAirbandImportPath(const std::string& text);
 Effect applyAirbandImport(const AirbandModel& m);
+// A path typed in the import DIALOG that was opened for a preset (docs 6.61): the same lookup the Airband Import key starts for a typed path, for the preset the dialog names.
+// Nothing for an empty path or no preset.
+Effect applyAirbandImportInto(const std::string& path, const std::string& preset);
 Effect applyAirbandExport(const AirbandModel& m);
 Effect applyAirbandRemovePreset(const AirbandModel& m);
 Effect applyAirbandFolder(TableReader& table);

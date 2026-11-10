@@ -1840,7 +1840,7 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 | 1248 | Swap I/Q | checkbox | PRESENT | Tick -> SOUND_CARD_FORM, field SWAP_IQ; drawn only with I/Q (stereo) |
 | 1249 | Centre (MHz) | number field | PRESENT | LineInput (mono, right) -> two commands, SOUND_CARD_FORM (centre) then FOXAPP_OP_SOUNDCARD_IQ_CENTRE; drawn only with I/Q (stereo) |
 | 1250 | Sample rate | dropdown/combo | PRESENT | DropKey of the card's rates (exclusive rows lettered '(exclusive)'; their row tooltip is not drawn) -> SOUND_CARD_FORM, field RATE |
-| 1251 | Open | button | PRESENT | Open key -> SELECT_SOURCE 'soundcard:open'; sends nothing while no card is chosen, but the key itself is not greyed |
+| 1251 | Open | button | PRESENT | Open key -> SELECT_SOURCE 'soundcard:open'; greyed while no sound card is chosen (SourceModel.card-can-open, docs 6.61; test_slint_signal reads the greyed look and that it asks nothing) |
 | 1252 | Receives line | readout | PRESENT | dim Note (card-receives) |
 | 1253 | Missing-card note | readout | PRESENT | amber Note (card-warning) |
 
@@ -2039,9 +2039,9 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1380 | Dialog | dialog | PRESENT | ImportDialog: a 460 px sheet with a close key; the backdrop and Cancel close it; Esc does not (the escape handler of main.cpp closes the editor, About and the bias sheet only) |
+| 1380 | Dialog | dialog | PRESENT | ImportDialog: a 460 px sheet with a close key; the backdrop, Cancel and Esc close it (docs 6.61: SheetFrame's key scope takes the keyboard while the sheet is up and dismisses on Esc; the root handler's escapeStep names the dialog first); drive escape-leaves-dialog.txt |
 | 1381 | Reason line | readout | PRESENT | Note at the top (import-reason, error) |
-| 1382 | Preset note | readout | DEFERRED | not found in signal_bank.slint: ImportDialogModel has no preset field (the airband preset import belongs to the TOOLS bank) |
+| 1382 | Preset note | readout | PRESENT | ImportDialogModel.preset (docs 6.61): an import opened for an Airband preset says 'The rows will join the preset "X".' where 'Import as' stood, and offers no I/Q file; a path typed in it is the section's own preset import (test_slint_signal renders it; drive tools-airband-import.txt reads the rows landing in the preset) |
 | 1383 | Drop zone | drag/gesture | DEFERRED | drawn as words only; no file-drop event is wired into the Slint window (not found in signal_bank.slint, main.slint or main.cpp), so a dropped file imports nothing; the path field is the way in |
 | 1384 | or / Browse... | button | DEFERRED | the OS file chooser: a path field takes its place (Enter imports: FOXAPP_OP_BOOKMARK_IMPORT_FILE for a frequency list, SELECT_SOURCE 'file:' for an I/Q recording); the Browse key is drawn and calls import-open, the host's local pickFile |
 | 1385 | Reading line | readout | DEFERRED | not found in signal_bank.slint: reading_line is a host extra with no field in the Slint ImportDialogModel |
@@ -2416,7 +2416,7 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1631 | Count line | readout | PRESENT | Note count-line ('n shown of m') |
 | 1632 | Export for SDR# | button (small) | PRESENT | xs Key in a KeyFlow (wraps under the next keys in a narrow column), label empty (key not drawn) for an empty view, disabled while an export is written -> bookmark-export -> applyBookmarkExport: FOXAPP_OP_BOOKMARK_EXPORT with the ids of the rows shown |
 | 1633 | Remove this group | button (small) | PRESENT | xs Key, drawn only with a group chosen -> bookmark-remove-group -> applyBookmarkRemoveGroup: FOXAPI_OP_BOOKMARK_REMOVE_GROUP and the filter back to every group; no confirmation, as in the ImGui window |
-| 1634 | Rename this group | button (small) | PRESENT | xs Key (lit while open) that toggles BookmarksBody's own `renaming` flag with no call to the host: applyBookmarkRenameOpen (the ImGui key seeds the field with the group's name) has no callback, so the rename field shows whatever BookmarksModel.rename-draft holds, not the group's name |
+| 1634 | Rename this group | button (small) | PRESENT | xs Key (lit while open) that shows / hides BookmarksBody's rename field and tells the host (bookmark-rename-open -> applyBookmarkRenameOpen): the draft is seeded with the group's own name every time it opens, so a name typed and abandoned does not come back (docs 6.61; drive tools-bookmarks-rename-key.txt, RED first: 'it reads Flying') |
 | 1635 | Rename field | text field | PRESENT | LineInput 'new group name', drawn while renaming -> bookmark-rename-draft on commit; Enter -> bookmark-rename (applyBookmarkRename) and the field closes |
 | 1636 | Rename | button | PRESENT | Key 'Rename' beside the field: flushes it -> bookmark-rename -> applyBookmarkRename: FOXAPP_OP_BOOKMARK_GROUP action 2 (from + 0x1F + to; merges when the name exists), nothing for an empty or unchanged name; the filter follows the group |
 | 1637 | Row scan checkbox | checkbox | PRESENT | Tick (14 px) with the tooltip on each row -> bookmark-tick(id, on) -> FOXAPP_OP_BOOKMARK_TICK |
@@ -2437,12 +2437,12 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 |---|---|---|---|---|
 | 1648 | Dialog | dialog | RELOCATED | the SIGNAL family's ImportDialog (row 1380), shared with this bank: opened by an empty Import path |
 | 1649 | Reason line | readout | RELOCATED | the SIGNAL family's ImportDialog reason line (row 1381) |
-| 1650 | Preset line | readout | DEFERRED | ImportDialogModel has no preset field, so the Airband Import with an empty box opens the plain dialog and its rows would join no preset (row 1382); not found in tools_bank.slint |
+| 1650 | Preset line | readout | PRESENT | the dialog's preset line (row 1382): the Airband Import over an empty box opens the dialog for the preset, and its rows join it (docs 6.61) |
 | 1651 | Drop zone | overlay/marker | DEFERRED | the drop zone is words only in the SIGNAL family's dialog and no file-drop event is wired (row 1383) |
 | 1652 | or / Browse... | button | DEFERRED | the SIGNAL family's dialog has a path field in place of the system file chooser (row 1384) |
 | 1653 | Waiting line | readout | DEFERRED | the SIGNAL family's dialog has no reading line (row 1385) |
 | 1654 | Cancel | button | RELOCATED | the SIGNAL family's Cancel key (row 1386) |
-| 1655 | Escape | key (keyboard) | DEFERRED | Esc does not close the dialog: the escape handler of main.cpp clears the editor, About and the bias sheet only (row 1380) |
+| 1655 | Escape | key (keyboard) | PRESENT | Esc closes the dialog: key_dispatch escapeStep takes the import dialog first, then the store's plugin page, else the overlays; the sheet's own key scope covers a focused field (docs 6.61; drive escape-leaves-dialog.txt) |
 
 ## TOOLS bank — Scanner (rail section)
 
@@ -2482,7 +2482,7 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1682 | Add | button | PRESENT | Key with the tooltip, disabled with no frequency -> airband-add -> applyAirbandAdd: FOXAPP_OP_BOOKMARK_ADD_ROWS with one ticked AM or NFM row in the preset (ask TypedRow); a frequency parseMhz refuses gives the 'could not read frequency' note |
 | 1683 | Note | readout | PRESENT | Note note (AirbandModel.note: outcomes and refusals) |
 | 1684 | Import path | text field | PRESENT | LineInput 'SDR# frequencies.xml or .csv - its path' -> airband-import-path on commit -> [local] AirbandImportPath |
-| 1685 | Import | button | PRESENT | Key, disabled while a read is out (import-busy) -> airband-import -> applyAirbandImport: a path = [local] PresetImportLookup (the publisher's worker sends the rows as ADD_ROWS chunks); an empty box = [local] OpenImportDialog for the preset, but the dialog has no preset field (row 971), so the rows would join no preset |
+| 1685 | Import | button | PRESENT | Key, disabled while a read is out (import-busy) -> airband-import -> applyAirbandImport: a path = [local] PresetImportLookup (the publisher's worker sends the rows as ADD_ROWS chunks); an empty box = [local] OpenImportDialog for the preset, whose dialog names it, and a path typed there is applyAirbandImportInto (docs 6.61; drive tools-airband-import.txt imports the fixture airband-import.csv and reads three rows in the group Towers, none in the file's own group) |
 | 1686 | Export CSV | button | PRESENT | Key in a KeyFlow, disabled with no rows or while an export is written -> airband-export -> applyAirbandExport: FOXAPP_OP_BOOKMARK_EXPORT action 1 with the preset (ask ExportPreset) |
 | 1687 | Remove preset | button | PRESENT | Key beside it, disabled with no rows -> airband-remove-preset -> applyAirbandRemovePreset: FOXAPI_OP_BOOKMARK_REMOVE_GROUP with the preset (ask RemoveGroup); whether the engine stops LISTEN on it is not read here |
 | 1688 | Preset note | readout | PRESENT | Note preset-note |
@@ -2655,7 +2655,7 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 | 1807 | BROWSE tab | key (latched) | PRESENT | SegKey in the SegGroup, lit while tab is 0 -> store-tab(0) -> applyStoreTab: [local] tab, page closed |
 | 1808 | UPDATES (n) tab | key (latched) | PRESENT | SegKey 'UPDATES (n)' (n from the model's updates), lit while tab is 1 -> store-tab(1) -> applyStoreTab |
 | 1809 | Catalogue line | readout | PRESENT | Note under the bar in the model's tone (amber for 'could not refresh', muted otherwise); it wraps, so the full text needs no hover |
-| 1810 | CHECK NOW / CHECK AGAIN | button | PRESENT | Key check-key -> store-check -> applyStoreCheck: FOXAPI_OP_STORE_FETCH; the key is never greyed (StoreModel has no check-enabled field, check_enabled is a host extra) and the effect does nothing while a transfer or a picture is in flight or the catalogue URL is empty |
+| 1810 | CHECK NOW / CHECK AGAIN | button | PRESENT | Key check-key -> store-check -> applyStoreCheck: FOXAPI_OP_STORE_FETCH; greyed while a transfer or a picture is in flight or the catalogue URL is empty (StoreModel.check-enabled, docs 6.61; test_slint_extend) |
 | 1811 | SITES | button | PRESENT | Key sites-key, lit while the panel is open, always enabled -> store-sites-toggle -> applyStoreSitesToggle: [local] sites_open |
 | 1812 | CANCEL | button | PRESENT | ADDED: a danger Key drawn only while cancel-label is not empty -> store-cancel (ADDED, not in the contract) -> applyStoreCancel: FOXAPI_OP_STORE_CANCEL while busy |
 | 1813 | Install/source error | readout | PRESENT | Note top-error (error tone) and top-warning (warn tone) at the top of both lists, hidden while a plugin page is open |
@@ -2686,7 +2686,7 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 1835 | Site list | list | PRESENT | the panel's rows (address Text, elided) with 'No sites added.' beside the SITES caption when empty; drawn while sites-open and no plugin page is open; the eight-site limit is the host's list |
-| 1836 | REMOVE | button (per site) | PRESENT | Key xs per site with the 'plugins already fitted stay' tooltip -> store-site-remove(i) -> applyStoreSiteRemove: FOXAPP_OP_STORE_SITE (remove); not greyed while a transfer runs (no field), the effect does nothing then |
+| 1836 | REMOVE | button (per site) | PRESENT | Key xs per site with the 'plugins already fitted stay' tooltip -> store-site-remove(i) -> applyStoreSiteRemove: FOXAPP_OP_STORE_SITE (remove); greyed while a transfer runs (StoreSite.remove-enabled, docs 6.61; test_slint_extend) |
 | 1837 | Site address | text field | PRESENT | LineInput (placeholder 'https://') -> store-site-draft on each edit -> applyStoreSiteDraft: [local] site_draft, the refusal cleared |
 | 1838 | ADD | button | PRESENT | Key greyed while add-reason is not empty (ADDED: the reason is a dim Note under the field) -> store-site-add -> applyStoreSiteAdd: the address checked (a refusal is a [local] site error), else FOXAPP_OP_STORE_SITE and the field and tick cleared |
 | 1839 | Consent tick | checkbox (+ clickable sentence) | PRESENT | SentenceTick (the sentence is the click target) -> store-consent -> applyStoreConsent: [local] consent; each ADD clears it |
@@ -2696,7 +2696,7 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1841 | < BROWSE | button | PRESENT | Key -> store-plugin-back -> applyStorePluginBack: [local] page closed, tab 0; Esc also returns in the window and is not wired (no Esc handling in extend_bank.slint or pages.slint: DEFERRED) |
+| 1841 | < BROWSE | button | PRESENT | Key -> store-plugin-back -> applyStorePluginBack: [local] page closed, tab 0; Esc also returns (docs 6.61: key_dispatch escapeStep names the plugin page after the dialog; the pure rule is held by test_slint_host_keydispatch; the live page needs a catalogue and is not drivable offline - UNVERIFIED live) |
 | 1842 | Header | readout | PRESENT | GlyphTile, the name, the meta line (maker, version, size, platforms, host) joined to the origin note with a middle dot, and the BadgeFlow badges |
 | 1843 | Page key | button | PRESENT | StoreKey at the top right -> store-plugin-key -> applyStorePluginKey: as the card's key with the page's own tick (GET greyed until the notice tick); no amber version-note and no progress line beside it (StorePluginPage has no field for either) |
 | 1844 | Install report/error | readout | PRESENT | Note report in report-tone (green, or the error tone) for this plugin only |

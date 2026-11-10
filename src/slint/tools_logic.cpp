@@ -1137,8 +1137,14 @@ Effect applyAirbandImportPath(const std::string& text) { return localEffect(Loca
 Effect applyAirbandImport(const AirbandModel& m) {
     if (!m.import_enabled) { return {}; }   // disabled while a read is out
     if (m.import_path.empty()) { return localEffect(Local::OpenImportDialog, m.preset, true); }
-    Effect e = localEffect(Local::PresetImportLookup, cc::cleanImportPath(m.import_path));
-    e.text2 = m.preset;
+    return applyAirbandImportInto(m.import_path, m.preset);
+}
+
+Effect applyAirbandImportInto(const std::string& path, const std::string& preset) {
+    const std::string p = cc::cleanImportPath(path);
+    if (p.empty() || preset.empty()) { return {}; }
+    Effect e = localEffect(Local::PresetImportLookup, p);
+    e.text2 = preset;
     e.clear_preset_note = true;
     e.clear_folder_key = true;
     return e;

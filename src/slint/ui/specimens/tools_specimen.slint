@@ -75,6 +75,7 @@ component SpecBookmarks inherits BookmarksBody {
     bookmark-remove-group() => { Rec.rec("bookmark-remove-group", ""); }
     bookmark-rename-draft(a) => { Rec.rec("bookmark-rename-draft", a); }
     bookmark-rename() => { Rec.rec("bookmark-rename", ""); }
+    bookmark-rename-open(a) => { Rec.rec("bookmark-rename-open", a ? "1" : "0"); }
     bookmark-tick(a, b) => { Rec.rec("bookmark-tick", a + " " + (b ? "1" : "0")); }
     bookmark-favourite(a, b) => { Rec.rec("bookmark-favourite", a + " " + (b ? "1" : "0")); }
     bookmark-tune(a) => { Rec.rec("bookmark-tune", "" + a); }

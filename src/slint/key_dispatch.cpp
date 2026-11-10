@@ -51,4 +51,10 @@ std::string shortcutForPress(const KeyPress& press, const KeyTable& table) {
     return {};
 }
 
+EscapeStep escapeStep(const EscapeState& open) {
+    if (open.importDialog) { return EscapeStep::ImportDialog; }
+    if (open.storePluginPage) { return EscapeStep::StorePluginPage; }
+    return EscapeStep::Overlays;
+}
+
 }  // namespace foxsdr::slintsystem

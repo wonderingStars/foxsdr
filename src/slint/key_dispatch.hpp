@@ -41,4 +41,14 @@ std::string shortcutFor(const Chord& chord, const KeyTable& table);
 // "" = the press is not answered (the window rejects it, so a field or a parent may have it).
 std::string shortcutForPress(const KeyPress& press, const KeyTable& table);
 
+// WHAT ONE Esc LEAVES (docs 6.61; the classic window's rule, one layer a press): the dialog on top first (the import dialog), then the full page under it (the Plugin
+// store's plugin page, back to the browse grid - the "< BROWSE" key), else the small overlays and editors (the counter editor, About, the bias sheet), which one Esc
+// closes together. Pure: the host says what is open, the rule says which layer the press takes.
+struct EscapeState {
+    bool importDialog = false;      // the "Import a frequency list" dialog is shown
+    bool storePluginPage = false;   // the Plugin store shows a plugin's page
+};
+enum class EscapeStep { Overlays, ImportDialog, StorePluginPage };
+EscapeStep escapeStep(const EscapeState& open);
+
 }  // namespace foxsdr::slintsystem

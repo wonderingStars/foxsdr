@@ -427,7 +427,7 @@ int main(int argc, char** argv) {
     // (once a tick, after the system bank's, whose GPS row the Radar fold shows) and wired to the effects tools_logic names. The Bookmarks Import key with an empty box
     // opens the SIGNAL bank's import dialog. A bounded run writes no clipboard and opens no folder. FOXSDR_SLINT_MARKERS=1 opens the Markers sheet for a capture.
     foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
-    toolsHooks.openImportDialog = [&] { ui->global<SignalEvents>().invoke_recorder_import(); };
+    toolsHooks.openImportDialog = [&](const std::string& preset) { signalBank.openImportForPreset(preset); };
     // the two spectrum options are the interface half's (docs 6.52): read at start, saved on each tick of a box, read again every tick by the spectrum's marks
     toolsHooks.onSpectrum = duties.interfaceHalf().bookmarkMarkers;
     toolsHooks.stackNames = duties.interfaceHalf().bookmarkStackNames;
@@ -439,6 +439,7 @@ int main(int argc, char** argv) {
     };
     foxsdr::slinttools::ToolsPublisher toolsBank(*ui, kit, api, session, bounded.bounded(), toolsHooks);
     toolsBank.wire();
+    signalBank.setPresetImport([&](const std::string& path, const std::string& preset) { toolsBank.importIntoPreset(path, preset); });   // the import dialog opened for an Airband preset (docs 6.61)
     if (std::getenv("FOXSDR_SLINT_MARKERS") != nullptr) { toolsBank.openMarkers(); }
     // A bounded run's self-capture of the gestures that touch nothing but the window (never set in a release): at tick 60 the Bookmarks search is typed, the Radar fold's
     // position boxes are filled (the Set RX here key is NOT pressed) and the Airband code, frequency and name boxes are typed - the whole path of a gesture: callback,
@@ -1018,7 +1019,17 @@ int main(int argc, char** argv) {
         else if (id == "bankView") { bankIndex = 2; ui->set_bank_index(2); } else if (id == "bankExtend") { bankIndex = 3; ui->set_bank_index(3); }
         else if (id == "bankSystem") { bankIndex = 4; ui->set_bank_index(4); }
         else if (id == "openSettings") { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(5); }
-        else if (id == "escape") { ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); }
+        else if (id == "escape") {
+            // ONE LAYER A PRESS (docs 6.61, key_dispatch.hpp escapeStep): the import dialog, then the Plugin store's plugin page (back to the grid), else the overlays
+            foxsdr::slintsystem::EscapeState open;
+            open.importDialog = ui->get_import_dialog().shown;
+            open.storePluginPage = extendBank.models().store.plugin.shown;
+            switch (foxsdr::slintsystem::escapeStep(open)) {
+                case foxsdr::slintsystem::EscapeStep::ImportDialog: ui->global<SignalEvents>().invoke_import_closed(); break;
+                case foxsdr::slintsystem::EscapeStep::StorePluginPage: ui->global<ExtendEvents>().invoke_store_plugin_back(); break;
+                case foxsdr::slintsystem::EscapeStep::Overlays: ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); break;
+            }
+        }
         else if (id == "uiSizeAuto") { systemBank.setInterfaceSize(0); }   // Ctrl+0: back to Auto (saved; the look takes it on the next tick)
         else { std::fprintf(stderr, "foxsdr-slint: shortcut %s is not bound here\n", id.c_str()); }
     });
@@ -1432,6 +1443,14 @@ int main(int argc, char** argv) {
         }
         // look.<what>: what the window is DRAWN with (docs 6.61), read from the window itself, not from the settings: scale (Window::scale_factor), width / height (the
         // logical size the screen lays out in), bg (the ground colour in force, "#rrggbb"), accent, face (nixie / neon / plain)
+        // shown.<what>: whether a dialog or page is up (docs 6.61): import (the import dialog), storePlugin (the Plugin store's plugin page), about
+        if (name.rfind("shown.", 0) == 0) {
+            const std::string what = name.substr(6);
+            if (what == "import") { out = ui->get_import_dialog().shown ? "1" : "0"; return std::string(); }
+            if (what == "storePlugin") { out = extendBank.models().store.plugin.shown ? "1" : "0"; return std::string(); }
+            if (what == "about") { out = ui->get_about_open() ? "1" : "0"; return std::string(); }
+            return "shown.import|storePlugin|about, not " + name;
+        }
         if (name.rfind("look.", 0) == 0) {
             const std::string what = name.substr(5);
             const auto hex = [](const slint::Color& c) {

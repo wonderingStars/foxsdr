@@ -1292,6 +1292,10 @@ void airbandEffects() {
     CHECK(e.local == Local::PresetImportLookup && e.text == "C:/x/list.csv" && e.text2 == "Marine" && e.clear_preset_note && e.clear_folder_key && e.commands.empty());
     imp.import_enabled = false;
     CHECK(applyAirbandImport(imp).empty());
+    // a path typed in the dialog that was opened for the preset (docs 6.61): the same lookup, for the preset the dialog names; nothing without a path or a preset
+    e = applyAirbandImportInto("\"C:/x/list.csv\" ", "Marine");
+    CHECK(e.local == Local::PresetImportLookup && e.text == "C:/x/list.csv" && e.text2 == "Marine" && e.clear_preset_note && e.clear_folder_key && e.commands.empty());
+    CHECK(applyAirbandImportInto("", "Marine").empty() && applyAirbandImportInto("   ", "Marine").empty() && applyAirbandImportInto("C:/x/list.csv", "").empty());
 
     // export and remove: the preset's name, the answer waited for, the folder key forgotten; not without rows or while one is being written
     AirbandModel ex = idle;

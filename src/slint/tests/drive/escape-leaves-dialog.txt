@@ -1,0 +1,22 @@
+#! frames=360 bank=2 sections=2:4
+# escape-leaves-dialog: Esc leaves the import dialog (docs 6.61, tick rows 1380 and 1655). The escape handler closed the counter editor, About and the bias sheet
+# and nothing else, so a dialog opened by the Airband Import key over an empty box stayed up until Cancel or the backdrop was pressed. One Esc takes ONE layer:
+# the dialog first (key_dispatch.hpp escapeStep). shown.import is the dialog's own flag, read from the window.
+10 state running == 1
+state shown.import == 0
++1 type "Preset" "Towers"
++1 key enter
+# open it (an empty box), then leave it with Esc
++1 click "Import"
++8 state shown.import == 1
++1 key escape
++8 state shown.import == 0
+# and it opens again, and closes again
++1 click "Import"
++8 state shown.import == 1
++1 key escape
++8 state shown.import == 0
+# Esc with nothing open is not an error and opens nothing
++1 key escape
++5 state shown.import == 0
++1 state shown.about == 0
