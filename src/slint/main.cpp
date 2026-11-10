@@ -74,6 +74,7 @@
 #include "patch_publish.hpp"
 #include "transmit_publish.hpp"
 #include "scope_publish.hpp"
+#include "view3d_publish.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
 #include "signatures.hpp"
@@ -442,6 +443,9 @@ int main(int argc, char** argv) {
     foxsdr::slintscope::ScopePublisher scopeBank(*ui, kit, api, session, duties, bounded.bounded());
     scopeBank.wire();
     if (const char* e = std::getenv("FOXSDR_SLINT_DEMOD_SCOPE"); e != nullptr && bounded.bounded()) { scopeBank.openDemodForCapture(e[0] >= '0' && e[0] <= '4' ? e[0] - '0' : -1); }
+    // THE 3D VIEWS (view3d_publish.hpp, docs 6.64): the receiver's waterfall as a surface; the views of the other pages are published here too as they land
+    foxsdr::slintview3d::View3DPublisher view3dBank(*ui, duties, bounded.bounded());
+    view3dBank.wire();
     foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
     toolsHooks.demodScopeClicked = [&] { scopeBank.toggleDemod(); };
     toolsHooks.radarScopeClicked = [&] { scopeBank.toggleRadar(); };
@@ -1237,6 +1241,11 @@ int main(int argc, char** argv) {
             paintTrace(wells.traceMemory(), kSpecW, kSpecH, sub, subN, state.dbMin, state.dbMax, traceState, mode,
                        Rgba{0x7a, 0xd7, 0xff, 255}, Rgba{0xff, 0x9f, 0x43, 255}, Rgba{0xf1, 0xea, 0xd6, 255});
             scrollWaterfallRow(wells.picture.data(), kWfW, kWfH, sub, subN, state.dbMin, state.dbMax);
+            {   // the 3D surface's history: one row of levels a frame, of THIS frequency window (a zoom, a pan or a retune starts it again)
+                const auto q = [](double v) { return static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(v))); };
+                const std::uint64_t windowKey = q(cur.centreHz) * 1000003ull ^ q(cur.spanHz) * 998244353ull ^ q(info.centreHz) * 31ull ^ q(info.spanHz) ^ (static_cast<std::uint64_t>(info.binCount) << 40);
+                view3dBank.pushWaterfallFrame(t, sub, subN, windowKey);
+            }
             std::memcpy(wells.waterfallMemory(), wells.picture.data(), sizeof(Rgba) * kWfW * kWfH);
             ui->set_trace_image(wells.traceImage());
             ui->set_waterfall_image(wells.waterfallImage());
@@ -1365,6 +1374,19 @@ int main(int argc, char** argv) {
         signalBank.publish(state);
         systemBank.publish(state);
         scopeBank.publish(state, static_cast<double>(nowMs()) / 1000.0);
+        {   // the 3D surface of the waterfall: repainted only while it is the page on screen and something it shows moved
+            foxsdr::slintview3d::Wf3dContext wf3d;
+            wf3d.visible = ui->get_view_index() == 0;
+            wf3d.running = (state.flags & FOXAPI_RX_RUNNING) != 0;
+            wf3d.dbMin = state.dbMin;
+            wf3d.dbMax = state.dbMax;
+            wf3d.centreHz = v.centreHz;
+            wf3d.spanHz = v.spanHz;
+            wf3d.tunedHz = state.tunedHz;
+            wf3d.nowMs = nowMs();
+            if (wf3d.visible) { for (const auto& m : lists.markers) { wf3d.markers.push_back({m.hz, "M" + std::to_string(m.id) + " " + fmt("%.3f MHz", m.hz / 1e6)}); } }
+            view3dBank.publish(wf3d);
+        }
         toolsBank.setScopeFacts(scopeBank.demodSignal(), scopeBank.demodOpen(), scopeBank.demodLive(), scopeBank.radarOn());
         toolsBank.publish(state, systemBank.models().serial.gps);
         if (!retuneProbe.empty()) {
@@ -1553,6 +1575,8 @@ int main(int argc, char** argv) {
         }
         // scope.<what>: the scope modes' own state (scope_publish.hpp readState: demodOpen, signal, live, audioCount, bins, segments, ..., radarOn, range ...)
         if (name.rfind("scope.", 0) == 0) { return scopeBank.readState(name.substr(6), out); }
+        // view3d.<what>: the 3D views' own state (view3d_publish.hpp readState: wf.on, wf.azimuth, wf.elevation, wf.zoom, wf.depth, wf.shading, wf.renders, wf.triangles, wf.pixels ...)
+        if (name.rfind("view3d.", 0) == 0) { return view3dBank.readState(name.substr(7), out); }
         if (name == "bank") { out = std::to_string(ui->get_bank_index()); return std::string(); }
         if (name == "view") { out = std::to_string(ui->get_view_index()); return std::string(); }
         if (name == "pages") { out = publisher.pagesLine(); return std::string(); }
@@ -1680,6 +1704,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", systemBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", toolsBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", scopeBank.summaryLine().c_str());
+        std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", view3dBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", extendBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", patchBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", transmitBank.summaryLine().c_str());

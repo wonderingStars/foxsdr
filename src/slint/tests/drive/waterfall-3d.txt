@@ -1,0 +1,89 @@
+#! frames=420 bank=0 sections=0:2
+# waterfall-3d (docs 6.64, specs/THREED.md section 1): the receiver's waterfall as a surface. The VIEW toggle on the 2D waterfall's top left ("3D SURFACE") swaps the waterfall for the
+# surface built from the live history; the 2D screen is the default. In the surface's strip: ELEVATION and AZIMUTH sliders, HISTORY DEPTH 30 / 60 / 120 s, SHADING Height / Colour ramp,
+# RESET VIEW, and the VIEW toggle again ("2D" goes back). The well itself takes the arrow keys (5 degrees), + and - (the zoom) and Home once it has been pressed.
+# The surface is repainted by the CPU renderer: state view3d.wf.* reads back what it drew (renders, triangles, pixels written, labels) and what the controls set. The choice is remembered in
+# the interface half's view3d setting (state cfg.view3d), which a real run writes to the settings file (the pure test_slint_host_view3d holds the text, the config tests the field).
+40 state running == 1
+state view3d.wf.on == 0
+state view3d.wf.renders == 0
+state cfg.view3d == ""
+# the history is collected whatever the page shows: the surface has something to draw the moment it is asked for
+state view3d.wf.rows > 5
++1 click "3D SURFACE"
++10 state view3d.wf.on == 1
+state view3d.wf.renders >= 1
+state view3d.wf.data == 1
+state view3d.wf.span > 0
+# (the history is real time: a second after the toggle it has a few rows, ten seconds on a full surface - the figures below are for that)
++30 state view3d.wf.triangles > 300
+state view3d.wf.pixels > 7000
+state view3d.wf.labels >= 18
+state view3d.wf.w > 400
+state view3d.wf.h > 150
+state cfg.view3d contains "waterfall:on=1"
+shot "waterfall-3d.png"
+# HISTORY DEPTH: three choices, the 60 s one the default
+state view3d.wf.depth == 1
++1 click "120 s"
++4 state view3d.wf.depth == 2
++1 click "30 s"
++4 state view3d.wf.depth == 0
++1 click "60 s"
++4 state view3d.wf.depth == 1
+# SHADING: Height, or the strength key's colour ramp
+state view3d.wf.shading == 0
++1 click "Colour ramp"
++4 state view3d.wf.shading == 1
+shot "waterfall-3d-ramp.png"
++1 click "Height"
++4 state view3d.wf.shading == 0
+# the camera sliders: ELEVATION runs 4 to 89 degrees, AZIMUTH -180 to 180
+state view3d.wf.elevation > 31
+state view3d.wf.elevation < 33
++1 slider "ELEVATION" 0.5
++6 state view3d.wf.elevation > 44
+state view3d.wf.elevation < 49
++1 slider "AZIMUTH" 0.75
++6 state view3d.wf.azimuth > 85
+state view3d.wf.azimuth < 95
+shot "waterfall-3d-turned.png"
+# the well takes the keys once pressed: the arrows turn by 5 degrees, + and - zoom, Home resets (a single press is not a double-click)
++1 press "Waterfall"
++12 key left
++3 state view3d.wf.azimuth > 90
+state view3d.wf.azimuth < 100
++1 key up
++3 state view3d.wf.elevation > 39
+state view3d.wf.elevation < 44
++1 key +
++3 state view3d.wf.zoom > 1.1
+state view3d.wf.zoom < 1.14
++1 key -
++1 key -
++3 state view3d.wf.zoom > 0.87
+state view3d.wf.zoom < 0.91
+# RESET VIEW (and Home) go back to the defaults: 32 degrees up, -58 around, zoom 1
++1 click "RESET VIEW"
++6 state view3d.wf.elevation > 31.9
+state view3d.wf.elevation < 32.1
+state view3d.wf.azimuth > -58.1
+state view3d.wf.azimuth < -57.9
+state view3d.wf.zoom > 0.99
+state view3d.wf.zoom < 1.01
++1 key left
++3 state view3d.wf.azimuth > -53.1
++1 key 0
++4 state view3d.wf.azimuth < -57.9
+# by now the history is several seconds deep: the surface is a real surface, and it kept painting (the bounded run's summary line carries the worst frame)
+state view3d.wf.renders > 10
+state view3d.wf.triangles > 1000
+state view3d.wf.pixels > 12000
+state view3d.wf.realrows > 4
+# back to the 2D waterfall, which is the default and still tunes
++1 click "2D"
++6 state view3d.wf.on == 0
+state cfg.view3d contains "waterfall:on=0"
++1 press "Waterfall"
++10 state tunedHz != 100300000
+shot "waterfall-3d-back.png"

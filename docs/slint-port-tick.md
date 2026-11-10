@@ -2901,6 +2901,36 @@ The classic window's notice for a copy the update service has withdrawn (field-e
 | 1977 | Not now (withdrawn) | button (small) | PRESENT | small Key (dismiss-label) beside Open foxsdr.com -> updates-withdrawn-dismiss -> applyUpdatesWithdrawnNotNow: apply UpdateDismiss (HostDuties::updateDismissed: the card goes for this launch); Show it again brings it back |
 | 1978 | Withdrawn card | card | PRESENT | the update Card at the foot of the sections panel in the warning tone (UpdateCardModel::withdrawn -> main.slint update-withdrawn): the headline is the withdrawn sentence, the note the advice, and the primary key is Download update while a good build is offered and none otherwise (the Updates row carries Open foxsdr.com); never shown for a Store copy or with the check off |
 
+## 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range)
+
+The 3D view is an ADDED view toggle everywhere; the 2D screen keeps everything it had and stays the default. A control or readout the spec marks NEW or [proposed] whose value the host cannot obtain today is not drawn and is listed DEFERRED with what it needs.
+
+### The receiver's 3D SURFACE (THREED.md section 1, tab RECEIVER, VIEW 2D / 3D SURFACE)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 3001 | VIEW 2D | key (segment) | PRESENT | Scene3DViewToggle "2D" in the surface's strip -> View3D.wf-view-selected(false) -> View3DPublisher: the 2D waterfall comes back, the user's split with it |
+| 3002 | VIEW 3D SURFACE | key (segment) | PRESENT | Scene3DViewToggle "3D SURFACE" on a small plate over the 2D waterfall's top left (the strength key is on its right) -> wf-view-selected(true); the choice is saved in the interface half (view3d) |
+| 3003 | The surface | picture | PRESENT | the live waterfall history (one row of levels a frame, 192 columns, up to 125 s) as a lit height field in an axis box, painted by the CPU renderer (scene3d, waterfall3d_compositor); a hole where the history is not yet that deep; repainted only while the RECEIVER tab is up and something moved |
+| 3004 | ELEVATION | slider | PRESENT | Scene3DCameraBar SliderGroup 4 to 89 degrees over View3D.wf-elevation, the well's own property (32 by default) |
+| 3005 | AZIMUTH | slider | PRESENT | Scene3DCameraBar SliderGroup -180 to 180 degrees over View3D.wf-azimuth (-58 by default) |
+| 3006 | HISTORY DEPTH 30 s | key (segment) | PRESENT | segment of HISTORY DEPTH -> wf-depth-selected(0); the age axis and the rows follow |
+| 3007 | HISTORY DEPTH 60 s | key (segment) | PRESENT | the default |
+| 3008 | HISTORY DEPTH 120 s | key (segment) | PRESENT | the longest the history keeps (125 s) |
+| 3009 | SHADING Height | key (segment) | PRESENT | one hue, lighter with level (the default) |
+| 3010 | SHADING Colour ramp | key (segment) | PRESENT | the strength key's own colours (host_logic heat()); the key plate shows the same ramp |
+| 3011 | RESET VIEW | key | PRESENT | the camera back to 32 degrees up, -58 around, zoom 1 (the well's reset(); double-click and Home do the same) |
+| 3012 | Drag to rotate, wheel to zoom, double-click to reset | gesture | PRESENT | Scene3DWell's TouchArea: 0.45 degrees per pixel, 1.12 per wheel notch, clamped (scene3d.hpp dragged() and zoomed() hold the rules for the host and the tests) |
+| 3013 | The well's keys | keys | PRESENT | after a press the well has the focus: the arrows turn by 5 degrees, + and - zoom, Home and 0 reset |
+| 3014 | Axis captions and tick values | overlay/marker | PRESENT | "MHz", "Age (s)" and "dB" captions and five ticks per axis as Slint Text at the projected positions of the box's edges |
+| 3015 | VFO line down the surface | overlay/marker | PRESENT | an amber line along the surface at the tuned frequency (and on the floor), with its frequency at the near end; none when the VFO is outside the window or there is no data |
+| 3016 | User markers | overlay/marker | PRESENT | a dashed ivory line per marker along the surface and its tab ("M1 145.212 MHz", the 2D tab's words) at the far end |
+| 3017 | Strength key plate | readout | PRESENT | Scene3DRampKey over the well's top right: the ramp the surface uses, the dB scale and the FLOOR / CEILING foot of the 2D plate |
+| 3018 | Foot lines | readout | PRESENT | the 2D waterfall's foot: lines per second and the history, the tuned frequency, mode and decoder |
+| 3019 | Empty state | readout | PRESENT | "No spectrum yet - its radio is not running." (the page's own words) while no row of the history is on the grid and the receiver is stopped |
+| 3020 | The view and the camera are remembered | setting | PRESENT | AppConfig::view3d, one text for every 3D view (view3d_prefs); the ImGui window carries it through |
+| 3021 | Right-click marker menu on the surface | gesture | DEFERRED | the 2D waterfall's right-click menu (Drop marker here at the frequency under the pointer) needs the pixel unprojected onto the surface; the 2D view and the toolbar's Markers key still drop and list markers |
+
 # Counts (the whole file: phase 1, phase 2 and the SIGNAL, SYSTEM, TOOLS and EXTEND banks of phase 3)
 
 | Status | Rows |

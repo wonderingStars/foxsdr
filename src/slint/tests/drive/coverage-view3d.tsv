@@ -1,0 +1,14 @@
+3001	ASSERTED	waterfall-3d.txt	click "2D" in the surface strip; state view3d.wf.on 1 -> 0 and cfg.view3d contains waterfall:on=0
+3002	ASSERTED	waterfall-3d.txt	click "3D SURFACE"; state view3d.wf.on 0 -> 1, cfg.view3d contains waterfall:on=1
+3003	ASSERTED	waterfall-3d.txt	state view3d.wf.renders, triangles, pixels, data, realrows (what the renderer drew from the live history)
+3004	ASSERTED	waterfall-3d.txt	slider "ELEVATION" 0.5; state view3d.wf.elevation 44..49
+3005	ASSERTED	waterfall-3d.txt	slider "AZIMUTH" 0.75; state view3d.wf.azimuth 85..95
+3006	ASSERTED	waterfall-3d.txt	click "30 s"; state view3d.wf.depth == 0
+3007	ASSERTED	waterfall-3d.txt	click "60 s"; state view3d.wf.depth == 1
+3008	ASSERTED	waterfall-3d.txt	click "120 s"; state view3d.wf.depth == 2
+3009	ASSERTED	waterfall-3d.txt	click "Height"; state view3d.wf.shading == 0
+3010	ASSERTED	waterfall-3d.txt	click "Colour ramp"; state view3d.wf.shading == 1
+3011	ASSERTED	waterfall-3d.txt	click "RESET VIEW"; state view3d.wf.elevation 32, azimuth -58, zoom 1
+3012	NOT_DRIVABLE	-	the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules
+3013	ASSERTED	waterfall-3d.txt	press "Waterfall"; key left / up / + / - / 0; state view3d.wf.azimuth, elevation, zoom
+3020	ASSERTED	waterfall-3d.txt	state cfg.view3d contains waterfall:on=1 after the toggle and waterfall:on=0 after the way back (the host-held interface half; a real run writes it, test_config and test_slint_host_view3d hold the field and the text)

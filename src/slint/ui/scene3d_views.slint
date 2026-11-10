@@ -1,0 +1,135 @@
+// FoxSDR Slint front end - THE 3D VIEWS' SCREENS (docs/engine-stage4.md 6.64): what surrounds the 3D well on each page that gained one, kept out of main.slint so the pages stay as they were.
+//
+//   Scene3DViewToggle   the VIEW switch every 3D view has: two segments, the 2D screen (the default) and the 3D one
+//   Wf3DView            the receiver's lower well in its 3D SURFACE view (specs/THREED.md section 1): the control strip (VIEW, ELEVATION, AZIMUTH, HISTORY DEPTH, SHADING, RESET VIEW),
+//                       the well, the strength key over it and the foot under it with the same words as the 2D waterfall's foot
+//
+// The 2D screen of each page is untouched and stays the default; main.slint instantiates the 3D screen INSTEAD of the 2D well while the view is 3D, and the toggle in both.
+//
+// View3D is the global every 3D view's state lives in (the host's publisher, view3d_publish.cpp, sets it and answers its callbacks), so main.slint carries one line per view and
+// the views of the next lane add theirs here without touching the pages they sit in.
+import { Theme } from "theme.slint";
+import { SegGroup, SegKey, Caption } from "keys.slint";
+import { Scene3DWell, Scene3DCameraBar, Scene3DRampKey, Scene3DLabel } from "scene3d.slint";
+export { Scene3DLabel }
+
+export global View3D {
+    // ---- the receiver's waterfall as a surface ----
+    in-out property <bool> wf-on: false;                  // the 3D SURFACE screen is up (the 2D waterfall is the default)
+    in property <image> wf-picture;
+    in property <[Scene3DLabel]> wf-labels;
+    in property <string> wf-empty;                        // the honest empty state's words while there is nothing to draw
+    in-out property <float> wf-azimuth: -58;
+    in-out property <float> wf-elevation: 32;
+    in-out property <float> wf-zoom: 1;
+    in property <int> wf-depth: 1;                        // HISTORY DEPTH: 0 30 s, 1 60 s, 2 120 s
+    in property <int> wf-shading: 0;                      // SHADING: 0 Height, 1 Colour ramp
+    in property <image> wf-key-ramp;                      // the strength key's ramp, painted from the renderer's own Ramp
+    in-out property <int> wf-w;                           // the well's size in logical pixels, for the host to render at
+    in-out property <int> wf-h;
+    callback wf-view-selected(bool);                      // VIEW: true = 3D SURFACE
+    callback wf-depth-selected(int);
+    callback wf-shading-selected(int);
+    callback wf-reset-view();                             // RESET VIEW went back to the defaults (the camera properties already did)
+}
+
+// VIEW: the 2D screen / the 3D one. `label-3d` is the page's own word (3D SURFACE, 3D AIRSPACE, 3D TUNNEL, 3D TRACK); the 2D label is the page's own too (2D, PPI, VECTOR, TABLE, MAP).
+export component Scene3DViewToggle inherits Rectangle {
+    in property <bool> three-d;
+    in property <string> label-2d: "2D";
+    in property <string> label-3d;
+    in property <string> caption: @tr("VIEW");
+    in property <string> tooltip-2d;
+    in property <string> tooltip-3d;
+    in property <bool> enabled: true;
+    callback selected(bool);        // true = the 3D screen was asked for
+    width: box.preferred-width; height: box.preferred-height;
+    box := VerticalLayout {
+        spacing: 3px;
+        Caption { label: root.caption; font-size: Theme.font-tiny; }
+        SegGroup {
+            small: true;
+            SegKey { label: root.label-2d; small: true; min-w: 0px; on: !root.three-d; enabled: root.enabled; tooltip: root.tooltip-2d; clicked => { root.selected(false); } }
+            SegKey { label: root.label-3d; small: true; min-w: 0px; on: root.three-d; enabled: root.enabled; tooltip: root.tooltip-3d; clicked => { root.selected(true); } }
+        }
+    }
+}
+
+// The receiver's waterfall as a surface. Everything the 2D waterfall's foot says is still said (lines per second and the history, the tuned frequency, the mode and decoder).
+export component Wf3DView inherits Rectangle {
+    // the 2D waterfall's own words, passed in by the page (they are properties of the main window)
+    in property <bool> show-key: true;
+    in property <[string]> key-labels;
+    in property <string> key-title: @tr("Strength");
+    in property <string> key-foot;
+    in property <string> foot-left;
+    in property <string> foot-tuned;
+    in property <string> foot-rest;
+    out property <int> pixel-w: well.pixel-w;
+    out property <int> pixel-h: well.pixel-h;
+    init => { View3D.wf-w = well.pixel-w; View3D.wf-h = well.pixel-h; }
+    changed pixel-w => { View3D.wf-w = root.pixel-w; }
+    changed pixel-h => { View3D.wf-h = root.pixel-h; }
+
+    VerticalLayout {
+        spacing: 0px;
+        Scene3DCameraBar {
+            elevation <=> View3D.wf-elevation;
+            azimuth <=> View3D.wf-azimuth;
+            reset-clicked => { well.reset(); }
+            VerticalLayout { alignment: center; width: 156px; spacing: 3px;
+                Caption { label: @tr("HISTORY DEPTH"); font-size: Theme.font-tiny; }
+                SegGroup { small: true;
+                    SegKey { label: "30 s"; small: true; min-w: 0px; on: View3D.wf-depth == 0; clicked => { View3D.wf-depth-selected(0); } }
+                    SegKey { label: "60 s"; small: true; min-w: 0px; on: View3D.wf-depth == 1; clicked => { View3D.wf-depth-selected(1); } }
+                    SegKey { label: "120 s"; small: true; min-w: 0px; on: View3D.wf-depth == 2; clicked => { View3D.wf-depth-selected(2); } }
+                }
+            }
+            VerticalLayout { alignment: center; width: 190px; spacing: 3px;
+                Caption { label: @tr("SHADING"); font-size: Theme.font-tiny; }
+                SegGroup { small: true;
+                    SegKey { label: @tr("Height"); small: true; min-w: 0px; on: View3D.wf-shading == 0; clicked => { View3D.wf-shading-selected(0); } }
+                    SegKey { label: @tr("Colour ramp"); small: true; min-w: 0px; on: View3D.wf-shading == 1; clicked => { View3D.wf-shading-selected(1); } }
+                }
+            }
+            VerticalLayout { alignment: center;
+                Scene3DViewToggle { three-d: true; label-3d: @tr("3D SURFACE"); selected(on) => { View3D.wf-view-selected(on); } }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            well := Scene3DWell {
+                x: 0px; y: 0px; width: parent.width; height: parent.height;
+                picture: View3D.wf-picture;
+                labels: View3D.wf-labels;
+                empty-text: View3D.wf-empty;
+                label: @tr("Waterfall");
+                azimuth <=> View3D.wf-azimuth;
+                elevation <=> View3D.wf-elevation;
+                zoom <=> View3D.wf-zoom;
+                reset-view => { View3D.wf-reset-view(); }
+            }
+            if root.show-key && View3D.wf-empty == "" : Scene3DRampKey {
+                x: parent.width - self.width - 14px; y: 10px;
+                title: root.key-title;
+                ramp: View3D.wf-key-ramp;
+                ticks: root.key-labels;
+                vertical: false;
+                foot: root.key-foot;
+            }
+        }
+        Rectangle {
+            height: 28px;
+            Rectangle { y: 0px; height: Theme.hairline; width: parent.width; background: Theme.line; }
+            HorizontalLayout {
+                padding-left: 14px; padding-right: 14px; padding-top: Theme.hairline; spacing: 12px;
+                Text { text: root.foot-left; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.muted; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 0px;
+                    Text { text: root.foot-tuned; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.accent-soft; vertical-alignment: center; }
+                    Text { text: root.foot-rest; font-family: Theme.font-mono; font-size: Theme.font-cap; color: Theme.muted; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+}

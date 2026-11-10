@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1978 | 439 | 82 | 1457 | 0 |
+| 1999 | 452 | 82 | 1465 | 0 |
 
-Of the 1145 rows that are controls (the 833 readout-like rows left out): 439 asserted, 82 driven without a read-back, 624 not drivable.
+Of the 1160 rows that are controls (the 839 readout-like rows left out): 452 asserted, 82 driven without a read-back, 626 not drivable.
 
-NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 61, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 839, other 208, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 62, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,6 +199,7 @@ NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
+| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 21 | 13 | 0 | 8 | 6 | 0 |
 
 ## Every row
 
@@ -3069,4 +3070,30 @@ NOT DRIVABLE by reason: readout 833, other 207, needs a signal (no fixture) 120,
 | 1976 | Open foxsdr.com (withdrawn) | button (small) | DRIVEN+ASSERTED | system-updates-withdrawn-nofix.txt | click "Open foxsdr.com" (a bounded run opens no browser: the effect on the window is none, the card stays); the key is read back with expect enabled |
 | 1977 | Not now (withdrawn) | button (small) | DRIVEN+ASSERTED | system-updates-withdrawn-nofix.txt | click "Not now"#2; state update.shown == 0, then click "Show it again"; state update.shown == 1 |
 | 1978 | Withdrawn card | card | DRIVEN+ASSERTED | system-updates-withdrawn-fix.txt | state update.shown / update.withdrawn / update.headline / update.note / update.primary over three canned answers (withdrawn-fix: Download update; withdrawn-nofix and withdrawn-offer: no key) |
+
+### 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 3001 | VIEW 2D | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "2D" in the surface strip; state view3d.wf.on 1 -> 0 and cfg.view3d contains waterfall:on=0 |
+| 3002 | VIEW 3D SURFACE | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "3D SURFACE"; state view3d.wf.on 0 -> 1, cfg.view3d contains waterfall:on=1 |
+| 3003 | The surface | picture | DRIVEN+ASSERTED | waterfall-3d.txt | state view3d.wf.renders, triangles, pixels, data, realrows (what the renderer drew from the live history) |
+| 3004 | ELEVATION | slider | DRIVEN+ASSERTED | waterfall-3d.txt | slider "ELEVATION" 0.5; state view3d.wf.elevation 44..49 |
+| 3005 | AZIMUTH | slider | DRIVEN+ASSERTED | waterfall-3d.txt | slider "AZIMUTH" 0.75; state view3d.wf.azimuth 85..95 |
+| 3006 | HISTORY DEPTH 30 s | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "30 s"; state view3d.wf.depth == 0 |
+| 3007 | HISTORY DEPTH 60 s | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "60 s"; state view3d.wf.depth == 1 |
+| 3008 | HISTORY DEPTH 120 s | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "120 s"; state view3d.wf.depth == 2 |
+| 3009 | SHADING Height | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "Height"; state view3d.wf.shading == 0 |
+| 3010 | SHADING Colour ramp | key (segment) | DRIVEN+ASSERTED | waterfall-3d.txt | click "Colour ramp"; state view3d.wf.shading == 1 |
+| 3011 | RESET VIEW | key | DRIVEN+ASSERTED | waterfall-3d.txt | click "RESET VIEW"; state view3d.wf.elevation 32, azimuth -58, zoom 1 |
+| 3012 | Drag to rotate, wheel to zoom, double-click to reset | gesture | NOT DRIVABLE | - | the scripted input has no drag verb and no wheel-notch count on the well; test_slint_scene3d_well.cpp drives the drag, the wheel and the double-click in a window against the shared rules |
+| 3013 | The well's keys | keys | DRIVEN+ASSERTED | waterfall-3d.txt | press "Waterfall"; key left / up / + / - / 0; state view3d.wf.azimuth, elevation, zoom |
+| 3014 | Axis captions and tick values | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3015 | VFO line down the surface | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3016 | User markers | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 3017 | Strength key plate | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3018 | Foot lines | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3019 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
+| 3020 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | waterfall-3d.txt | state cfg.view3d contains waterfall:on=1 after the toggle and waterfall:on=0 after the way back (the host-held interface half; a real run writes it, test_config and test_slint_host_view3d hold the field and the text) |
+| 3021 | Right-click marker menu on the surface | gesture | NOT DRIVABLE | - | deferred: the 2D waterfall's right-click menu (Drop marker here at the frequency under the pointer) needs the pixel unprojected onto the surface; the 2D view and the toolbar's Markers key still drop and list markers |
 
