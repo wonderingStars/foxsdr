@@ -6,6 +6,13 @@
 10 state bank == 4
 10 state mode == WFM
 
+# Esc through the window's own key handler (a regression of 6.56 dropped it: KeyNames had no name for Key.Escape, so the press was rejected and never reached the host):
+# the About sheet is open (two controls labelled Close: the title bar's and the sheet's), Esc closes it (one Close left; an unindexed label fails while there are two)
++2 click "About"
++8 expect "Close"#2 label equals "Close"
++2 key escape
++8 expect "Close" label equals "Close"
+
 # F1 (Bank: SIGNAL PATH) -> F6
 +2 click "Bank: SIGNAL PATH F1"
 +5 key f6
