@@ -340,6 +340,8 @@ Pipeline::Pipeline(Config cfg)
         0.5 * (cfg.sampleRateHz / static_cast<double>(vfoDecim_)) /
         (kTwoPi * kFmDeviationHz));
     rebuildChannelBlocks(cfg.sampleRateHz / static_cast<double>(vfoDecim_));
+    // The AGC gates the interleaved stream: two samples per channel instant.
+    agc_.setSampleRateHz(2.0 * cfg.sampleRateHz / static_cast<double>(vfoDecim_));
     // Post-resampler chain, fixed at the sink rate so no rate-follow touches
     // it. Everything starts disabled/bypassing: NoiseReduction at strength 0
     // is a bit-exact delay line and a disabled Notch does not even touch the
@@ -386,6 +388,8 @@ void Pipeline::publishParamMirrorsLocked() {
     mirrorDemodMode_.store(static_cast<int>(demod_.mode()), std::memory_order_relaxed);
     mirrorDeemphasisUs_.store(deemphasisUs_, std::memory_order_relaxed);
     mirrorStereoEnabled_.store(stereoEnabled_, std::memory_order_relaxed);
+    mirrorAgcMode_.store(static_cast<int>(agc_.mode()), std::memory_order_relaxed);
+    mirrorAgcFixedDb_.store(agc_.fixedGainDb(), std::memory_order_relaxed);
     // The post-resampler blocks do not exist yet on the constructor's first
     // pass (rebuildChannelBlocks runs before they are made), so each is guarded
     // rather than assumed - the alternative is a null dereference on every
@@ -1146,6 +1150,29 @@ float Pipeline::noiseReductionStrength() const {
     return mirrorNrStrength_.load(std::memory_order_relaxed);
 }
 
+void Pipeline::setAgcMode(cascade::dsp::Agc::Mode mode) {
+    post([this, mode] { agc_.setMode(mode); },
+         [this, mode] { mirrorAgcMode_.store(static_cast<int>(mode), std::memory_order_relaxed); });
+}
+
+cascade::dsp::Agc::Mode Pipeline::agcMode() const {
+    return static_cast<cascade::dsp::Agc::Mode>(mirrorAgcMode_.load(std::memory_order_relaxed));
+}
+
+void Pipeline::setAgcFixedGain(float db) {
+    // No verbatim mirror: the block clamps the request, and the getter reports
+    // what is in use (published when the command has run).
+    post([this, db] { agc_.setFixedGainDb(db); });
+}
+
+float Pipeline::agcFixedGainDb() const {
+    return mirrorAgcFixedDb_.load(std::memory_order_relaxed);
+}
+
+float Pipeline::agcGainDb() const {
+    return agcGainDb_.load(std::memory_order_relaxed);
+}
+
 void Pipeline::setNotchEnabled(bool on) {
     post(
         [this, on] {
@@ -1450,6 +1477,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // which every accepted rate >= 300 kHz lands near - within 150 to
         // 300 kHz; below that the ballistics merely slow proportionally, and
         // near 300 kHz they run up to 1.5x faster — an accepted tradeoff.)
+        agc_.setSampleRateHz(2.0 * chanRate);
         agc_.reset();
         meter_.reset();
 
@@ -2089,6 +2117,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         gateBuf_[2 * i + 1] = chanBuf_[i];
     }
     agc_.process(ilvBuf_.data(), ilvBuf_.data(), 2 * m);
+    agcGainDb_.store(agc_.gainDb(), std::memory_order_relaxed);
     // Squelch measures the pre-demod channel and gates the (AGC'd) audio, so
     // closed-squelch output is exact digital silence after the ramp.
     squelch_.process(gateBuf_.data(), 2 * m, ilvBuf_.data());

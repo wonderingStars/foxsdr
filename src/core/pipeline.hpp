@@ -492,6 +492,27 @@ public:
     void setNoiseReductionStrength(float s01);
     float noiseReductionStrength() const;
 
+    // --- AGC choice -----------------------------------------------------------
+    // Auto (the default) is the loop this pipeline has always had, sample for
+    // sample; Fast, Medium and Slow are constant-slew loops whose recovery time
+    // is the same at every channel rate; Off freezes the gain (see dsp/agc.hpp).
+    // Posted like noise reduction: the setter returns at once, the DSP thread
+    // applies it between blocks, the getters read mirrors.
+    //   setAgcMode        the mode takes effect with the gain held at that moment
+    //                     (entering Off freezes it).
+    //   setAgcFixedGain   dB above unity, clamped to 0..40; it is the gain Off
+    //                     applies, and takes effect at once while the mode is Off.
+    //                     Set it AFTER the mode: entering Off freezes the held
+    //                     gain, which a fixed gain set earlier does not survive.
+    //   agcMode / agcFixedGainDb  what is in use (the fixed gain is the clamped,
+    //                     live value, published when the command has run).
+    //   agcGainDb         the gain applied right now, dB, published once per block.
+    void setAgcMode(cascade::dsp::Agc::Mode mode);
+    cascade::dsp::Agc::Mode agcMode() const;
+    void setAgcFixedGain(float db);
+    float agcFixedGainDb() const;
+    float agcGainDb() const;
+
     void setNotchEnabled(bool on);
     bool notchEnabled() const;
     void setNotchFrequencyHz(double hz);
@@ -1155,6 +1176,9 @@ private:
     std::atomic<bool> mirrorStereoEnabled_{true};
     std::atomic<bool> mirrorNrEnabled_{false};
     std::atomic<float> mirrorNrStrength_{0.0f};
+    std::atomic<int> mirrorAgcMode_{0};          // Agc::Mode
+    std::atomic<float> mirrorAgcFixedDb_{0.0f};
+    std::atomic<float> agcGainDb_{0.0f};         // live, once per block
     std::atomic<bool> mirrorNotchEnabled_{false};
     std::atomic<double> mirrorNotchHz_{0.0};
     std::atomic<double> mirrorNotchQ_{0.0};
