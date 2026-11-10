@@ -1,1 +1,8 @@
+4001	ASSERTED	globe-propagation.txt	click "3D GLOBE" / "PICTURE"; state globe.propagation globe=1 / globe=0
+4003	ASSERTED	globe-propagation.txt	press the well, key left / down, scroll, key 0: state globe.propagation lon / lat / zoom (the scripted input has no drag verb; the pointer drag is held by test_slint_scene3d_well)
+4004	ASSERTED	globe-propagation.txt	click "20 m" / "10 m" / "ALL"; state globe.propagation band=1 / 5 / 0
+4005	ASSERTED	globe-propagation.txt	click "GREYLINE"; state globe.propagation greyline=0 / 1
+4006	ASSERTED	globe-propagation.txt	expect "about 2 hops" enabled equals "false" (a legend chip, not a key)
+4008	ASSERTED	globe-propagation.txt	expect "HOME POSITION" label; type "Your locator" "IO91wm": state globe.propagation lon=-0.1 lat=51.5
+4009	ASSERTED	globe-propagation.txt	key 0 (the well's own reset): state globe.propagation lon=0.0 lat=20.0 zoom=1.00
 4100	ASSERTED	globe-solar-system.txt	state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script)

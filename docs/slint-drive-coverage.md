@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 1980 | 440 | 82 | 1458 | 0 |
+| 1992 | 447 | 82 | 1463 | 0 |
 
-Of the 1146 rows that are controls (the 834 readout-like rows left out): 440 asserted, 82 driven without a read-back, 624 not drivable.
+Of the 1154 rows that are controls (the 838 readout-like rows left out): 447 asserted, 82 driven without a read-back, 625 not drivable.
 
-NOT DRIVABLE by reason: readout 834, other 207, needs a signal (no fixture) 120, relocated 85, withheld in a bounded run 70, deferred 61, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 838, other 207, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 70, deferred 61, needs hardware 31, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -199,7 +199,7 @@ NOT DRIVABLE by reason: readout 834, other 207, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 2 | 1 | 0 | 1 | 1 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 14 | 8 | 0 | 6 | 5 | 0 |
 
 ## Every row
 
@@ -3075,6 +3075,18 @@ NOT DRIVABLE by reason: readout 834, other 207, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
+| 4001 | Propagation: VIEW PICTURE / 3D GLOBE | segment key | DRIVEN+ASSERTED | globe-propagation.txt | click "3D GLOBE" / "PICTURE"; state globe.propagation globe=1 / globe=0 |
+| 4002 | Propagation: the globe | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4003 | Propagation: DRAG TO ROTATE | gesture | DRIVEN+ASSERTED | globe-propagation.txt | press the well, key left / down, scroll, key 0: state globe.propagation lon / lat / zoom (the scripted input has no drag verb; the pointer drag is held by test_slint_scene3d_well) |
+| 4004 | Propagation: BAND select | segment key | DRIVEN+ASSERTED | globe-propagation.txt | click "20 m" / "10 m" / "ALL"; state globe.propagation band=1 / 5 / 0 |
+| 4005 | Propagation: GREYLINE | checkbox | DRIVEN+ASSERTED | globe-propagation.txt | click "GREYLINE"; state globe.propagation greyline=0 / 1 |
+| 4006 | Propagation: PATH legend | chip | DRIVEN+ASSERTED | globe-propagation.txt | expect "about 2 hops" enabled equals "false" (a legend chip, not a key) |
+| 4007 | Propagation: path chips (name, distance, bearing) | readout | NOT DRIVABLE | - | a readout, not a control |
+| 4008 | Propagation: HOME and SUN OVER readouts | readout | DRIVEN+ASSERTED | globe-propagation.txt | expect "HOME POSITION" label; type "Your locator" "IO91wm": state globe.propagation lon=-0.1 lat=51.5 |
+| 4009 | Propagation: RESET VIEW | key | DRIVEN+ASSERTED | globe-propagation.txt | key 0 (the well's own reset): state globe.propagation lon=0.0 lat=20.0 zoom=1.00 |
+| 4010 | Propagation: sample city chips (NYC, SF, Sao Paulo, Sydney, Tokyo, Delhi, Johannesburg) | chip | NOT DRIVABLE | - | a readout, not a control |
+| 4011 | Propagation: per-path reliability colour | picture | NOT DRIVABLE | - | a readout, not a control |
+| 4012 | Propagation: the plugin's plate keys, settings and panel | key | NOT DRIVABLE | - | relocated: unchanged: NEXT PAGE / PREV PAGE / REFRESH / NEXT HOUR / PREV HOUR stay on the module page, the 13 settings fields in the fold above the VIEW bar and the "Propagation Tools" panel as its own page |
 | 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | DRIVEN+ASSERTED | globe-solar-system.txt | state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script) |
 | 4101 | 3D globes: the honest empty states | readout | NOT DRIVABLE | - | a readout, not a control |
 
