@@ -365,7 +365,9 @@ void testUdpStopWhileSending() {
             std::memset(b, 'u', sizeof(b));
             while (!stop.load()) { sink.send(b, sizeof(b)); }
         });
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // let the sender run at least once (on a loaded machine 50 ms is not always enough), then stop it mid-flood
+        for (int spins = 0; sink.stats().sent == 0 && spins < 300; ++spins) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
         const auto t0 = nettest::Clock::now();
         sink.stop();
         worst = std::max(worst, nettest::msSince(t0));
