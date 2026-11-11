@@ -840,6 +840,9 @@ if(WIN32)
     # ...and its successor for the multi-radio engine (stage 4): the same load through the REAL ENGINE (control thread, API host, per-radio publish).
     add_executable(multi_radio_load_engine EXCLUDE_FROM_ALL tools/multi_radio_load/engine_main.cpp)
     target_link_libraries(multi_radio_load_engine PRIVATE cascade_engine psapi)
+    # ...and the real-hardware run of stage 7 (a USRP B200 and an RTL-SDR as radios 1 and 2, thirty minutes, the fault checks): a tool, not a test.
+    add_executable(multi_radio_hw EXCLUDE_FROM_ALL tools/multi_radio_hw/main.cpp)
+    target_link_libraries(multi_radio_hw PRIVATE cascade_engine psapi)
 endif()
 
 # nb_real_noise - measures the noise blanker on a REAL I/Q recording of power-line impulse noise through the real Vfo, and

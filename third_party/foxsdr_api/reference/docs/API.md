@@ -487,6 +487,12 @@ Five ops, grant SETTINGS (`RADIO_FOCUS`, 6.18, is VIEW). A one-radio client neve
 * **Facts** (stage 6 adds to 6.18's): `fact.plugin.<module file>.radio` (the plugin's radio), `fact.radio.<n>.plugins` (the decoder modules running ON radio n, comma-separated),
   `fact.scanner.radio` (the radio the one scanner was started on while it is active, else `0`), `fact.transmit.radio` (the radio the transmitter follows, `1` unless a Pluto is
   another radio), and `fact.radio.restore` (stage 5: one sentence per saved radio that could not be restored at start-up, newline-separated, "Radio 3: ..."; absent when all came back).
+* **Which source a radio is on** (stage 7): `RADIO_ADD`'s `text` also takes `file:<path>` (an I/Q recording), `open-pluto:<address>` (`uri=ip:...` or the bare address) and
+  `open-rtltcp:<address>` (`rtltcp=host:port` or the bare address); the sound card and a bare `row:` id stay `UNSUPPORTED`. A file, a Pluto and an rtl_tcp server open on a worker, so the
+  radio is added at once on the generator and takes its source when the open lands; when it does not, the reason is in `fact.radio.<n>.refusal`. `fact.radio.<n>.source` says what the
+  radio is on now (`siggen`, `file`, `pluto`, `rtltcp`, `soapy`, or a native driver's key). All of them are saved with their real kind and arguments in `radios` and come back
+  after a restart; one that cannot (a missing file, an unreachable server) leaves the radio on the generator, named in `fact.radio.restore` and `fact.radio.<n>.refusal`, and the next save
+  still names it. `fact.radio.<n>.range` is the open device's tunable centre-frequency range, "lowest,highest" in Hz as the driver reports it (absent for the generator, an I/Q file and a device that reports none). The decoder backlog (`DECODER_LINES`) carries the radio whose decoder said a line in `value[1]` (0 for a patch decoder's line).
 * The reference engine (`mock_engine/`) has ONE radio: it knows the five ops and answers as an engine at its limit would - `RADIO_ADD` is `LIMIT`, `RADIO_REMOVE` of radio 1
   `UNSUPPORTED`, `RADIO_AUDIO` / `RADIO_SOLO` for radio 1 land as `NO_CHANGE` and for radio 2 are `NO_DEVICE`, `PLUGIN_RADIO` is `NOT_FOUND` (it fits no plugin) for radio 1 and
   `NO_DEVICE` for radio 2 - and does not set `FOXAPI_CAP_RADIOS` (it has no `read_radio_state` or `read_radio_list`).

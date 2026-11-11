@@ -479,6 +479,11 @@ struct Receiver {
     // A radio added on a file, a Pluto or an rtl_tcp server opens on a worker (as the first radio's panel does): until the open lands, the generator stands in, and when it fails the
     // reason is the radio's refusal. True from the add until the pass has seen the open end either way (multi-radio engine stage 7).
     bool openWatch_ = false;
+    // The open device's tunable range (fact.radio.<n>.range), asked of the device once it is open (a driver may not answer the first time) and kept: rangeKnown_ false = none yet.
+    // Pass thread only. The fingerprint of the lists block hashes it, so the fact appears when it becomes known.
+    bool rangeKnown_ = false;
+    double rangeLoHz_ = 0.0;
+    double rangeHiHz_ = 0.0;
     // When the radio asked for a stop of its own accord (RADIO_REMOVE is in progress), so the pass does not start it again. Pass thread only.
     bool removing_ = false;
     // ---- published state ----

@@ -398,6 +398,9 @@ void testAFileAsRadioTwo() {
     CHECK_EQ(r.fact("radio.2.source"), std::string("file"));
     CHECK_EQ(r.fact("radio.2.refusal"), std::string("<absent>"));
     CHECK_EQ(r.fact("radio.1.source"), std::string("siggen"));
+    // no tunable range for the generator or a file (a file's centre is nominal)
+    CHECK_EQ(r.fact("radio.1.range"), std::string("<absent>"));
+    CHECK_EQ(r.fact("radio.2.range"), std::string("<absent>"));
     CHECK(r.until([&] { return r.radio(2).sampleRateHz == 48000.0 && r.spectrum(2).status == FOXAPI_OK && peakAt(r.spectrum(2), 22500.0); }, 20000));
     const FoxReceiverState two = r.radio(2);
     CHECK_EQ(two.sampleRateHz, 48000.0);
@@ -499,13 +502,21 @@ void testBRtlTcpAsRadioTwo() {
     CHECK_EQ(r.fact("radio.2.source"), std::string("rtltcp"));
     CHECK_EQ(r.fact("radio.2.refusal"), std::string("<absent>"));
     CHECK_EQ(r.fact("radio.2.device"), std::string("rtltcp|rtltcp=" + srv.address()));
+    {
+        // the range the rtl_tcp source reports for its tuner, "lowest,highest" Hz
+        const std::string rg = r.fact("radio.2.range");
+        CHECK(rg != "<absent>");
+        double lo = 0.0, hi = 0.0;
+        CHECK_EQ(std::sscanf(rg.c_str(), "%lf,%lf", &lo, &hi), 2);
+        CHECK(lo > 0.0 && hi > lo);
+    }
     CHECK(srv.connections.load() >= 1);
     // the tone the SERVER generated is in radio 2's spectrum, at the offset it was generated at
     CHECK(r.until([&] { return r.spectrum(2).status == FOXAPI_OK && r.radio(2).sampleRateHz == srv.rateHz.load() && peakAt(r.spectrum(2), 100000.0, 4); }, 20000));
     const FoxReceiverState two = r.radio(2);
     CHECK_EQ(two.sampleRateHz, srv.rateHz.load());
     CHECK(peakAt(r.spectrum(2), 100000.0, 4));
-    CHECK(srv.bytesSent.load() > 100000u);
+    CHECK(r.until([&] { return srv.bytesSent.load() > 100000u; }, 5000));   // (counted after each chunk is sent: the client may have published first)
     // radio 1 is unaffected
     const Rig::Spectrum sp1b = r.spectrum(1);
     CHECK_EQ(peakBin(sp1b), peak1a);
@@ -647,6 +658,8 @@ void testDPlutoAsRadioTwoAndTheTransmitter() {
     CHECK_EQ(r.fact("radio.2.refusal"), std::string("<absent>"));
     CHECK_EQ(Access::deviceArgs(r.eng, 1), pluto.uriArgs());
     CHECK_EQ(r.fact("radio.2.device"), std::string("pluto|" + pluto.uriArgs()));
+    CHECK_EQ(r.fact("radio.2.range"), std::string("70000000,6000000000"));   // the LO range the board published (stockRxBoard)
+    CHECK_EQ(r.fact("radio.1.range"), std::string("<absent>"));
     CHECK_EQ(r.fact("radio.1.source"), std::string("siggen"));
     // the board is held: the same Pluto again is refused, naming the holder
     {

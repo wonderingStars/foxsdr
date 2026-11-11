@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -94,6 +95,43 @@ std::size_t threads() {
     }
     ::CloseHandle(snap);
     return n;
+}
+
+// PER-THREAD CPU (stage 7, B3): the CPU seconds of every thread of this process, by thread id, with the name the engine gave it (SetThreadDescription: "dsp.2", "source.3", ...).
+// Sampled every ten seconds; the busiest threads of a window that went over one core are printed, so that a spike has a name.
+struct ThreadCpu {
+    std::string name;
+    double seconds = 0.0;
+};
+std::map<DWORD, ThreadCpu> threadCpu() {
+    std::map<DWORD, ThreadCpu> out;
+    HANDLE snap = ::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) { return out; }
+    THREADENTRY32 te{};
+    te.dwSize = sizeof(te);
+    const DWORD pid = ::GetCurrentProcessId();
+    if (::Thread32First(snap, &te)) {
+        do {
+            if (te.th32OwnerProcessID != pid) { continue; }
+            HANDLE h = ::OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
+            if (h == nullptr) { continue; }
+            FILETIME c, e, k, u;
+            ThreadCpu t;
+            if (::GetThreadTimes(h, &c, &e, &k, &u)) {
+                const auto ticks = [](const FILETIME& f) { return static_cast<double>((static_cast<std::uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime) * 1e-7; };
+                t.seconds = ticks(k) + ticks(u);
+            }
+            PWSTR desc = nullptr;
+            if (SUCCEEDED(::GetThreadDescription(h, &desc)) && desc != nullptr) {
+                for (const wchar_t* w = desc; *w != 0; ++w) { t.name.push_back(*w < 128 ? static_cast<char>(*w) : '?'); }
+                ::LocalFree(desc);
+            }
+            ::CloseHandle(h);
+            out[te.th32ThreadID] = t;
+        } while (::Thread32Next(snap, &te));
+    }
+    ::CloseHandle(snap);
+    return out;
 }
 
 double workingSetMiB() {
@@ -209,6 +247,7 @@ int main(int argc, char** argv) {
     if (cores == 0) { cores = 1; }
     std::printf("multi_radio_load_engine: %d radios through the engine, %d s, %u logical processors\n", radios, seconds, cores);
     double peak = 0.0;
+    std::map<DWORD, ThreadCpu> prevThreads = threadCpu();
     double lastCpu = cpu0;
     auto lastT = t0;
     while (true) {
@@ -220,6 +259,24 @@ int main(int argc, char** argv) {
         peak = std::max(peak, used);
         lastCpu = cpu;
         lastT = now;
+        {
+            // The busiest threads of this window (always the top four; the whole table when the window went over one core).
+            std::map<DWORD, ThreadCpu> cur = threadCpu();
+            std::vector<std::pair<double, std::string>> rows;
+            for (const auto& [id, t] : cur) {
+                const auto was = prevThreads.find(id);
+                const double d = (t.seconds - (was == prevThreads.end() ? 0.0 : was->second.seconds)) / wall;
+                char b[96];
+                std::snprintf(b, sizeof(b), "%s#%lu %.2f", t.name.empty() ? "(unnamed)" : t.name.c_str(), static_cast<unsigned long>(id), d);
+                rows.emplace_back(d, b);
+            }
+            std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+            const std::size_t show = used > 1.0 ? std::min<std::size_t>(rows.size(), 12) : std::min<std::size_t>(rows.size(), 4);
+            std::printf("      threads:");
+            for (std::size_t i = 0; i < show; ++i) { std::printf("  %s", rows[i].second.c_str()); }
+            std::printf("\n");
+            prevThreads = std::move(cur);
+        }
         std::printf("  t=%3.0fs cpu %.2f core(s) = %.2f%% of the machine, working set %.0f MiB, %zu threads\n", std::chrono::duration<double>(now - t0).count(), used,
                     100.0 * used / cores, workingSetMiB(), threads());
         std::fflush(stdout);

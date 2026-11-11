@@ -2513,6 +2513,16 @@ than the first carry the radio's number in their high bits (`(n - 1) << 48`), so
   `schemaVersion` 1. The shape is in `src/core/config.hpp` (`SavedRadio`).
 * Usage report: the field `radios_max` (the highest number of receivers running at once in the session, 1 to 8). PRIVACY.md has its row.
 
+### 9.23 Sources of a second radio, and which radio a decoder line came from (multi-radio stage 7; docs/multi-radio-records/engine-stage-7.md)
+
+* `RADIO_ADD` really plays an I/Q file (`file:<path>`), an rtl_tcp server (`open-rtltcp:...`) and a Pluto (`open-pluto:...`) as radios 2 to 8. They open on workers (a radio has its own file-open worker), so the
+  add answers at once and the radio is on the generator until the open lands; a failed open is in `fact.radio.<n>.refusal`. New fact `fact.radio.<n>.source`: the radio's source kind.
+* The settings file's `radios` entries may now have `sourceKind` "file" (`args` the path), "pluto" (`args` "uri=...") or "rtltcp" (`args` "rtltcp=host:port"); they come back after a restart, and a source that
+  is not there leaves the generator and is named (`fact.radio.restore`), as a missing device already was. A 0.99.104 reader still loads the file (it ignores `radios`).
+* `fact.radio.<n>.range`: "lowest,highest" tunable centre frequency in Hz of the radio's open device (`DeviceSource::frequencyRangeHz`: SoapySDR's overall range, a native driver's tuner range, a Pluto's published LO range). Absent for the generator, an I/Q file (its centre is nominal) and a device that reports none.
+* `DECODER_LINES` `value[1]`: the radio (1 to 8) whose decoder said the line; 0 for a patch decoder's line.
+* The transmitter's address, when none was given, is seeded from the first open Pluto on ANY radio (it was radio 1 only), so `fact.transmit.radio` can be 2.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

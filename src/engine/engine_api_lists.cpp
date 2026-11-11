@@ -581,6 +581,23 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.value(receivers_[n - 1u]->audioRoute_);
         f.text(receivers_[n - 1u]->claimedKey_);
         f.text(receivers_[n - 1u]->refusal_);
+        {
+            // (stage 7) the device's tunable range: asked while it is unknown, forgotten with the device
+            Receiver& rr = *receivers_[n - 1u];
+            if (rr.device_ == nullptr) {
+                rr.rangeKnown_ = false;
+            } else if (!rr.rangeKnown_) {
+                double lo = 0.0, hi = -1.0;
+                if (rr.device_->frequencyRangeHz(lo, hi) && lo <= hi) {
+                    rr.rangeKnown_ = true;
+                    rr.rangeLoHz_ = lo;
+                    rr.rangeHiHz_ = hi;
+                }
+            }
+            f.value(rr.rangeKnown_);
+            f.value(rr.rangeLoHz_);
+            f.value(rr.rangeHiHz_);
+        }
     }
     // The I/Q recordings the Radio's device list offers (API 0.3 8.12: PATCH_DEVICES, with each one's rate): by what each
     // names, not their number - a relisting that finds other files must rebuild the list.
@@ -1344,6 +1361,13 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             fact(pre + "label", radioLabel());
             // WHAT KIND OF SOURCE THIS RADIO IS ON (stage 7): "siggen", "file", "pluto", "rtltcp", "soapy" or a native driver's key; the generator while a source is still opening.
             fact(pre + "source", rx().sourceKind_);
+            // THE TUNABLE RANGE of the open device, "<lowest>,<highest>" centre frequency in Hz exactly as the driver reports it (DeviceSource::frequencyRangeHz, asked once the device is
+            // open and kept); absent for the generator, an I/Q file (its centre is nominal and takes any value) and a device that reports none. (stage 7)
+            if (rx().rangeKnown_) {
+                char range[64];
+                std::snprintf(range, sizeof(range), "%.0f,%.0f", rx().rangeLoHz_, rx().rangeHiHz_);
+                fact(pre + "range", range);
+            }
             fact(pre + "audio", radioRouteWord(rx().audioRoute_));
             if (!rx().refusal_.empty()) { fact(pre + "refusal", rx().refusal_); }
         }
