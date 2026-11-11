@@ -126,6 +126,11 @@ public:
         return h - held;
     }
 
+    // The number of the oldest sample the ring EVER held in this configuration (0 for a ring that has only grown;
+    // head() at the moment of a resize that discarded audio, or at the first resize). Samples older than this
+    // never existed here; samples between this and oldest() existed and have been overwritten.
+    std::uint64_t sampleFloor() const { return floor_; }
+
     // DSP thread, one writer. Appends n samples of audio (float, nominally [-1, 1]); `gateOpen` is the squelch
     // gate for this call (true when the audio was audible). No-op for a ring with no capacity.
     void write(const float* in, std::size_t n, bool gateOpen) noexcept {
