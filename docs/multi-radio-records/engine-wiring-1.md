@@ -244,6 +244,26 @@ squelch wide open; off plays the noisy audio; back to clean it opens; in AM noth
 **UNVERIFIED.** Nobody listened; the noise is generated white complex noise on a carrier, not a real weak signal; the thresholds that suit real receivers are unknown (the record's "thresholdForQuietingDb against a measured noise-only level" is
 not wired: the user sets the threshold by eye against the live level); the guard is proved on this CPU and compiler only (no flush-to-zero was set anywhere).
 
+## Break-it results, C2 to C4 (all RED, restored, rebuilt; logs `D:/foxsdr-build/mr-engine1/lane/mut-M*.log`, `mut-P*.log`, `mut-Q*.log`)
+
+| Removal | RED in |
+|---|---|
+| M1 (C2: the bank is not run in the chain) | `test_pipeline_notchbank` (the 1000 Hz tone is not taken down; the 1700 Hz one neither) |
+| M2 (C2: the engine does not hand the slot to the pipeline) | `test_engine_api_notchbank` (pipeline counts 0 vs 1) |
+| M3 (C2: `notchBank` not written) | `test_engine_api_notchbank` (file and JSON) |
+| M4 (C2: op not receiver-scoped) | `test_radio_scope` |
+| M5 (C2: the API range check) | `test_engine_api_notchbank` (the refusals) |
+| P1 (C3: the demodulator uses the fixed 700 Hz again) | `test_pipeline_cwpitch` (the beat stays at 700) |
+| P2 (C3: the engine does not hand the pitch on) | `test_engine_api_cwpitch` (pipeline 700 vs 1100) |
+| P3 (C3: `cwPitchHz` not written) | `test_engine_api_cwpitch` (file, restored radio) |
+| P4 (C3: not receiver-scoped) | `test_radio_scope` |
+| P5 (C3: the pipeline's range check) | `test_pipeline_cwpitch` (`!p.setCwPitchHz(bad)`) |
+| Q1 (C4: the silence guard removed: no flush of the filter, no skip, no level flush) | `test_noise_squelch` (`ns < 30.0` and `ns <= nsNoise * 1.5 + 5.0`: the unguarded cost in silence) |
+| Q2 (C4: the gate not applied to the audio) | `test_pipeline_noisesq` (`audioRms == 0.0`) |
+| Q3 (C4: the engine does not hand the setting on) | `test_engine_api_noisesq` (pipeline, engine refusal, measurement) |
+| Q4 (C4: threshold not written) | `test_engine_api_noisesq` (file, restored radio) |
+| Q5 (C4: not receiver-scoped) | `test_radio_scope`, `test_engine_api_noisesq` |
+
 ## Old reader
 
 RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:
