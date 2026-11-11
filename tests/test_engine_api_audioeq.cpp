@@ -45,7 +45,9 @@ void testA() {
     CHECK_EQ(r.radio(1).eqDb[2], 0.0);
     CHECK_EQ(r.radio(1).audioLowPassHz, 0u);
     CHECK(Access::pipeline(r.eng, 0).eqBypassed());
-    CHECK(r.until([&] { return !Access::pipeline(r.eng, 1).eqBypassed(); }, 5000) || true);   // (the block reports bypass from its own next block: the audio chain runs only when the radio does)
+    // the pipeline of radio 2 really runs them (the block reports it is no longer a passthrough once its audio blocks have gone through), and radio 1's still does not
+    CHECK(r.until([&] { return !Access::pipeline(r.eng, 1).eqBypassed(); }, 15000));
+    CHECK(Access::pipeline(r.eng, 0).eqBypassed());
     CHECK_EQ(r.send(band(9, 0, 1.0)).status(), FOXAPI_NO_DEVICE);
 }
 
