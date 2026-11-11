@@ -751,12 +751,13 @@ int main() {
         CHECK(src.frequencyRangeHz(lo, hi));
         CHECK_NEAR(lo, 52e6, 1.0);
         CHECK_NEAR(hi, 2200e6, 1.0);
-        CHECK(waitForCommands(daemon, 0, 7));
+        CHECK(waitForCommands(daemon, 0, 8));
         const std::vector<Bytes> want = {
             {0x02, 0x00, 0x1F, 0x40, 0x00}, {0x01, 0x05, 0xF5, 0xE1, 0x00},
             {0x05, 0x00, 0x00, 0x00, 0x00}, {0x08, 0x00, 0x00, 0x00, 0x00},
             {0x03, 0x00, 0x00, 0x00, 0x01}, {0x0d, 0x00, 0x00, 0x00, 0x07},
             {0x0e, 0x00, 0x00, 0x00, 0x00},
+            {0x0a, 0x00, 0x00, 0x00, 0x00},  // R12: an E4000 is told explicitly that offset tuning is off
         };
         CHECK(commandsEqual(daemon.commands(0), 0, want, "E4000 open"));
         CHECK_NEAR(src.gainDb("TUNER"), 7.0, 1e-9);
@@ -768,12 +769,60 @@ int main() {
         CHECK_NEAR(src.gainDb("TUNER"), 13.0, 1e-9);
         CHECK(src.setGainDb("TUNER", -4.0));
         CHECK_NEAR(src.gainDb("TUNER"), 0.0, 1e-9);
-        CHECK(waitForCommands(daemon, 0, 10));
-        CHECK(commandsEqual(daemon.commands(0), 7,
+        CHECK(waitForCommands(daemon, 0, 11));
+        CHECK(commandsEqual(daemon.commands(0), 8,
                             {{0x0d, 0x00, 0x00, 0x00, 0x05},
                              {0x0d, 0x00, 0x00, 0x00, 0x0d},
                              {0x0d, 0x00, 0x00, 0x00, 0x00}},
                             "E4000 gain by index"));
+        src.closeDevice();
+    }
+    {
+        // R12, OFFSET TUNING (0x0a): offered only when the header names an E4000; the connection says "off" explicitly; a set sends the
+        // 0/1 argument big-endian; the readback is the request; and no other tuner is ever sent the command.
+        FakeRtlTcp daemon;
+        CHECK(daemon.start());
+        daemon.streamEnabled.store(false);
+        daemon.tunerType.store(1);
+        daemon.gainCount.store(14);
+        RtlTcpSource src;
+        CHECK(!src.hasOffsetTuning());                 // not open: not offered
+        CHECK(!src.setOffsetTuning(true) && std::string(src.lastError()).find("no rtl_tcp server open") != std::string::npos);
+        CHECK(src.open(daemon.args()));
+        CHECK(src.hasOffsetTuning() && !src.offsetTuning());
+        CHECK(waitForCommands(daemon, 0, 8));
+        CHECK(daemon.commands(0).size() == 8 && daemon.commands(0)[7] == (Bytes{0x0a, 0x00, 0x00, 0x00, 0x00}));
+        const std::size_t n = daemon.commands(0).size();
+        CHECK(src.setOffsetTuning(true));
+        CHECK(src.offsetTuning());
+        CHECK(waitForCommands(daemon, 0, n + 1));
+        CHECK(commandsEqual(daemon.commands(0), n, {{0x0a, 0x00, 0x00, 0x00, 0x01}}, "setOffsetTuning(true)"));
+        CHECK(src.setOffsetTuning(false));
+        CHECK(!src.offsetTuning());
+        CHECK(waitForCommands(daemon, 0, n + 2));
+        CHECK(commandsEqual(daemon.commands(0), n + 1, {{0x0a, 0x00, 0x00, 0x00, 0x00}}, "setOffsetTuning(false)"));
+        src.closeDevice();
+        CHECK(!src.hasOffsetTuning());                 // closed: not offered again
+    }
+    for (std::uint32_t type : {5u, 6u, 3u, 0u, 9u}) {
+        // every other tuner (R820T, R828D, FC0013, unknown, a number this table does not know): not offered, refused with a sentence, nothing sent
+        FakeRtlTcp daemon;
+        CHECK(daemon.start());
+        daemon.streamEnabled.store(false);
+        daemon.tunerType.store(type);
+        daemon.gainCount.store(14);
+        RtlTcpSource src;
+        CHECK(src.open(daemon.args()));
+        CHECK(!src.hasOffsetTuning());
+        CHECK(waitForCommands(daemon, 0, 7));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        const std::vector<Bytes> before = daemon.commands(0);
+        for (const Bytes& c : before) { CHECK(c[0] != 0x0a); }   // the connection never sent it
+        CHECK(!src.setOffsetTuning(true));
+        CHECK(std::string(src.lastError()).find("E4000") != std::string::npos);
+        CHECK(!src.offsetTuning());
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        CHECK(daemon.commands(0).size() == before.size());      // and the refused set sent nothing
         src.closeDevice();
     }
     {
