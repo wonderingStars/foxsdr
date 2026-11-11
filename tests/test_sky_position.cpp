@@ -91,6 +91,44 @@ int main() {
         CHECK(sepBefore > 0.6 && sepBefore < 1.6);
         CHECK(sepAfter > 0.6 && sepAfter < 1.6);
     }
+    // The absolute sidereal angle: the Sun transits (is highest) at longitude 0 at 12h UT minus the equation of time, and the equation of
+    // time is q/15 - RA in hours with q the mean longitude on the USNO page (a formula INDEPENDENT of the sidereal-time expression the
+    // hour angle uses). A wrong sidereal-time constant moves the transit by minutes, so this pins it to seconds.
+    {
+        struct D { int y, m, d; };
+        for (D day : {D{2025, 3, 20}, D{2025, 6, 21}, D{2025, 9, 22}, D{2025, 12, 21}, D{2026, 2, 11}}) {
+            const double noon = unixOf(day.y, day.m, day.d, 12, 0, 0);
+            double bestEl = -99, bestT = 0;
+            for (int s = -1500; s <= 1500; ++s) {
+                const auto a = sky::sunAzEl(0.0, 0.0, sky::julianDay(noon + s));   // the equator: the peak is sharp even at the solstices
+                if (a.elDeg > bestEl) { bestEl = a.elDeg; bestT = noon + s; }
+            }
+            const double jd = sky::julianDay(bestT), Dd = jd - 2451545.0;
+            const double q = std::fmod(280.459 + 0.98564736 * Dd, 360.0);
+            const double raDeg = sky::sunEquatorial(jd).raDeg;
+            double eqtH = q / 15.0 - raDeg / 15.0;
+            while (eqtH > 12) eqtH -= 24;
+            while (eqtH < -12) eqtH += 24;
+            const double predicted = noon - eqtH * 3600.0;
+            std::printf("INFO Sun transit at 0 E on %d-%02d-%02d: found %+.1f s from 12:00 UT, predicted from the equation of time %+.1f s\n", day.y, day.m, day.d,
+                        bestT - noon, predicted - noon);
+            CHECK_NEAR(bestT, predicted, 20.0);
+        }
+    }
+    // Precession of a fixed source over 25 years against the annual-precession constants (m = 3.075 s, n = 1.336 s = 20.04 arc-seconds a year
+    // in right ascension and declination; from memory of the standard values: UNVERIFIED as printed numbers, independent of the zeta / z / theta code).
+    {
+        const double jd = sky::julianDay(unixOf(2025, 6, 1, 0, 0, 0));
+        const double years = (jd - 2451545.0) / 365.25;
+        const double ra0 = (23.0 + 23.0 / 60 + 26.0 / 3600) * 15.0, dec0 = 58.0 + 48.0 / 60 + 41.0 / 3600;
+        const auto p = sky::precessJ2000(ra0, dec0, jd);
+        const double deltaRaSec = (3.075 + 1.336 * std::sin(sky::degToRad(ra0)) * std::tan(sky::degToRad(dec0))) * years;
+        const double deltaDecDeg = 20.04 * std::cos(sky::degToRad(ra0)) * years / 3600.0;
+        std::printf("INFO Cas A precession over %.2f years: dRA %.1f s (annual constants %.1f s), dDec %.4f deg (annual constants %.4f deg)\n", years,
+                    (p.raDeg - ra0) / 15.0 * 3600.0, deltaRaSec, p.decDeg - dec0, deltaDecDeg);
+        CHECK_NEAR((p.raDeg - ra0) / 15.0 * 3600.0, deltaRaSec, 3.0);
+        CHECK_NEAR(p.decDeg - dec0, deltaDecDeg, 0.005);
+    }
     // Moon distance stays in its range over a month
     {
         double lo = 99, hi = 0;
