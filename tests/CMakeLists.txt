@@ -1668,3 +1668,7 @@ foreach(t ${_cascade_registered_tests})
                 "(labels: '${_labels}'); every test must carry exactly one.")
     endif()
 endforeach()
+
+# sigmeas lane: a stand-alone runner of the sigmeas blocks on a real recording (numbers on stdout only; not a ctest).
+add_executable(sigmeas_realdata sigmeas_realdata.cpp)
+target_include_directories(sigmeas_realdata PRIVATE "${CMAKE_SOURCE_DIR}/src")
