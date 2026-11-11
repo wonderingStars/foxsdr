@@ -36,6 +36,11 @@
 
 namespace cascade::source {
 
+// "host", "host:port", "[v6]:port" or a bare IPv6 literal; `defaultPort` when none is given. False
+// with a sentence in `error` for an empty host, an unclosed bracket or a port outside 1..65535.
+bool parseHostPort(const std::string& text, std::uint16_t defaultPort, std::string& host,
+                   std::uint16_t& port, std::string& error);
+
 // A datagram socket as an iiod::Transport: recvSome() delivers ONE datagram (up to `max`
 // bytes), sendAll() sends one datagram. recvAll() is not meaningful on a datagram socket and
 // is implemented as "exactly one datagram of exactly n bytes". Bounded by ioWait on every

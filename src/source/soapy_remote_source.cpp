@@ -29,38 +29,7 @@ bool timedOut(const char* err) { return err != nullptr && std::strstr(err, "time
 
 bool parseSoapyRemoteAddress(const std::string& text, std::string& host, std::uint16_t& port,
                              std::string& error) {
-    host.clear();
-    port = sr::kDefaultPort;
-    std::string rest = text;
-    std::string portText;
-    if (!rest.empty() && rest[0] == '[') {
-        const std::size_t close = rest.find(']');
-        if (close == std::string::npos) { error = "an address with an unclosed bracket"; return false; }
-        host = rest.substr(1, close - 1);
-        if (close + 1 < rest.size()) {
-            if (rest[close + 1] != ':') { error = "text after the bracketed address"; return false; }
-            portText = rest.substr(close + 2);
-        }
-    } else {
-        const std::size_t colon = rest.find(':');
-        if (colon != std::string::npos && rest.find(':', colon + 1) == std::string::npos) {
-            host = rest.substr(0, colon);
-            portText = rest.substr(colon + 1);
-        } else {
-            host = rest;  // a name, a dotted quad, or a bare IPv6 literal
-        }
-    }
-    if (host.empty()) { error = "the server address is empty"; return false; }
-    if (!portText.empty()) {
-        char* end = nullptr;
-        const long v = std::strtol(portText.c_str(), &end, 10);
-        if (end == portText.c_str() || *end != '\0' || v < 1 || v > 65535) {
-            error = "the port is not a number from 1 to 65535";
-            return false;
-        }
-        port = static_cast<std::uint16_t>(v);
-    }
-    return true;
+    return parseHostPort(text, sr::kDefaultPort, host, port, error);
 }
 
 // ---------------------------------------------------------------------------------------
