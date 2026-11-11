@@ -1,0 +1,20 @@
+// Screen stage S3's measuring sheet (docs/multi-radio-records/screen-s3.md): the REAL workspace (WorkspaceBar over RadioWorkspace) in the workspace area of a 1440 x 900 or 1600 x 900 window,
+// where the hand-over puts it (right of the 56 px rail and the 252 px sections panel, under the 34 px title bar and the 92 px focus strip), as stage S0's sheet placed four bare panes
+// (ui/specimens/radio_pane_s0.slint). The host (tests/measure_radio_workspace.cpp) feeds the WorkspaceModel's rows new pictures each frame. The chrome around the workspace is NOT drawn.
+import { Theme } from "../theme.slint";
+import { RadioWorkspace, WorkspaceBar, WorkspaceModel, WorkspaceCell } from "../workspace.slint";
+import { RadioPaneData } from "../radio_pane.slint";
+import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker } from "../spectrum.slint";
+import { AgeTick } from "../waterfall.slint";
+export { Theme, WorkspaceModel, WorkspaceCell, RadioPaneData, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, AgeTick }
+
+export component S3Window inherits Window {
+    background: Theme.bg;
+    in property <length> ws-x: 308px;
+    in property <length> ws-y: 126px;
+    in property <length> ws-w: 1132px;
+    in property <length> ws-h: 712px;
+
+    WorkspaceBar { x: root.ws-x; y: root.ws-y; width: root.ws-w; }
+    RadioWorkspace { x: root.ws-x; y: root.ws-y + 30px; width: root.ws-w; height: root.ws-h; }
+}
