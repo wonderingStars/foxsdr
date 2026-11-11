@@ -251,6 +251,9 @@ export component MainWindow inherits Window {
     in property <string> edge-tooltip: @tr("Drag to change the passband");
     in property <string> off-band-tooltip: @tr("Click to tune here · double-click for the full span · wheel to zoom · Shift+wheel to slide the band · right-click for the trace menu");
     in-out property <float> split-ratio: 0.6;        // spectrum share of the centre height (0.1 .. 0.9)
+    // THE ONE-LAYOUT PLOT'S REAL SIZE (lane S1, the S6 leftover): the host lays the dB labels out over the plot the window gives the spectrum, not over a fixed 330 px (the labels ran into one smear at 800 x 560)
+    in-out property <length> one-plot-h: 330px;
+    in-out property <length> one-plot-w: 980px;
     in property <image> waterfall-image;
     in property <[AgeTick]> age-ticks: [];
     in property <string> waterfall-foot-left;
@@ -680,6 +683,9 @@ export component MainWindow inherits Window {
                         spectrum := SpectrumView {
                             x: 0; y: 0; width: parent.width;
                             height: max(120px, (parent.height - Theme.splitter-h) * root.split-ratio);
+                            init => { root.one-plot-h = self.plot-h; root.one-plot-w = self.plot-w; }
+                            changed plot-h => { root.one-plot-h = self.plot-h; }
+                            changed plot-w => { root.one-plot-w = self.plot-w; }
                             trace: root.trace-image; db-ticks: root.db-ticks; freq-ticks: root.freq-ticks; axis-unit: root.axis-unit;
                             caption: root.spectrum-caption; caveat: root.spectrum-caveat;
                             trace-mode: root.trace-mode == 1 ? TraceMode.peak-hold : root.trace-mode == 2 ? TraceMode.average : TraceMode.normal;
@@ -748,23 +754,34 @@ export component MainWindow inherits Window {
             // and the status bar asks for more than the window when the catalogue's words are longer than the English ones (French, German).
             // A Rectangle with a width of its own stops that climb (tests/test_slint_constraints.cpp), and clips what still does not fit.
             Rectangle { x: 0; y: 0; width: parent.width; height: parent.height; clip: true;
-                HorizontalLayout { padding-left: 4px; spacing: 0px; alignment: start;
-                    for c[i] in root.status : Rectangle {   // a chip may be squeezed down to its lamp, key and value; its detail elides first (docs 6.62)
-                        min-width: chip.min-content-width; preferred-width: chip.content-width; max-width: chip.content-width;
-                        chip := StatusChip {
-                            x: 0px; y: 0px; width: parent.width;
-                            key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp; lines: c.lines; max-detail-w: 364px;
-                            value-color: c.tone == ChipTone.good ? Theme.chip-good-fg : c.tone == ChipTone.warn ? Theme.accent-soft : c.tone == ChipTone.err ? Theme.chip-err-fg : Theme.fg;
-                            tooltip: c.detail;
-                            clicked => { root.status-clicked(i); }
+                HorizontalLayout { padding-left: 4px; spacing: 0px;
+                    // THE KEYS KEEP THEIR WORDS, THE CHIPS GIVE WAY (lane S1, the S6 leftover: "Report a bug / dislike" ran past the window's edge at 1280 in 15 languages when several radios were open, and
+                    // at 800 the keys were pushed out by chips that cannot shrink below their lamp, key and value). The chips live in an area of their own that takes what the keys leave and clips there; a
+                    // chip whose cell does not fit in that area is not drawn (it would be a clipped half chip), and the first chip always is. The keys are a group with the width of their words.
+                    chips-area := Rectangle { horizontal-stretch: 1; min-width: 0px; clip: true;
+                        HorizontalLayout { padding-left: 0px; spacing: 0px; alignment: start;
+                            for c[i] in root.status : Rectangle {   // a chip may be squeezed down to its lamp, key and value; its detail elides first (docs 6.62)
+                                min-width: chip.min-content-width; preferred-width: chip.content-width; max-width: chip.content-width;
+                                visible: i == 0 || self.x + self.width <= chips-area.width + 0.5px;
+                                chip := StatusChip {
+                                    x: 0px; y: 0px; width: parent.width;
+                                    key: c.key; value: c.value; detail: c.detail; lamp: c.lamp; show-lamp: c.show-lamp; lines: c.lines; max-detail-w: 364px;
+                                    value-color: c.tone == ChipTone.good ? Theme.chip-good-fg : c.tone == ChipTone.warn ? Theme.accent-soft : c.tone == ChipTone.err ? Theme.chip-err-fg : Theme.fg;
+                                    tooltip: c.detail;
+                                    clicked => { root.status-clicked(i); }
+                                }
+                            }
                         }
                     }
-                    Rectangle { horizontal-stretch: 1; }
-                    // STAGE S4: the way to add a radio - the one new thing a one-radio user sees (docs/multi-radio-records/screen-s4.md); the card is in a sheet
-                    if WorkspaceModel.can-add : VerticalLayout { alignment: center; Key { label: WorkspaceModel.add-key; ghost: true; small: true; min-w: 0px; tooltip: WorkspaceModel.add-key-tip; clicked => { WorkspaceModel.add-open-requested(); } } }
-                    VerticalLayout { alignment: center; Key { label: @tr("Request a feature"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Ask for a feature"); clicked => { root.feature-request-clicked(); } } }
-                    VerticalLayout { alignment: center; Key { label: @tr("Report a bug / dislike"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Report a problem"); clicked => { root.bug-report-clicked(); } } }
-                    Rectangle { width: 8px; }
+                    Rectangle { min-width: status-keys.preferred-width; preferred-width: status-keys.preferred-width; max-width: status-keys.preferred-width;
+                        status-keys := HorizontalLayout { spacing: 0px; alignment: end;
+                            // STAGE S4: the way to add a radio - the one new thing a one-radio user sees (docs/multi-radio-records/screen-s4.md); the card is in a sheet
+                            if WorkspaceModel.can-add : VerticalLayout { alignment: center; Key { label: WorkspaceModel.add-key; ghost: true; small: true; min-w: 0px; tooltip: WorkspaceModel.add-key-tip; clicked => { WorkspaceModel.add-open-requested(); } } }
+                            VerticalLayout { alignment: center; Key { label: @tr("Request a feature"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Ask for a feature"); clicked => { root.feature-request-clicked(); } } }
+                            VerticalLayout { alignment: center; Key { label: @tr("Report a bug / dislike"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Report a problem"); clicked => { root.bug-report-clicked(); } } }
+                            Rectangle { width: 8px; }
+                        }
+                    }
                 }
             }
         }

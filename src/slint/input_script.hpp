@@ -30,7 +30,8 @@
 //                                       tick (a popup's rows exist only after a frame); the steps after it wait for the pick
 //   wait <ms>                           not a step: the next step is ceil(ms / 33) ticks later than the step before it
 //   expect "<label>" <what> <cmp> "<text>"   <what>: value | label | checked | enabled (checked and enabled read "true" / "false");
-//                                       <cmp>: equals | contains
+//                                       <cmp>: equals | contains. A POSITION OR SIZE (lane S1): <what> left | top | right | bottom | width | height, in the window's pixels
+//                                       (the control's box; right = left + width), <cmp> == != < > <= >= with a number: `expect "Report a bug / dislike" right <= "1280"`
 //   state <name> <cmp> <value>          the engine's read-back (main.cpp names the states: tunedHz, mode, running, count.bookmarks,
 //                                       fact.<key>, list.<id>.names ...); <cmp>: == != < > <= >= contains; <value> a word or "..."
 //                                       - numbers compare as numbers, anything else as the exact text

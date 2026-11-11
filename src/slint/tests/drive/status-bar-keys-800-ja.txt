@@ -1,0 +1,9 @@
+#! frames=260 size=800x560 FOXSDR_LANGUAGE=ja
+# status-bar-keys-800-ja (lane S1): the same in Japanese, where the "Add a radio" key ("SDR を追加") was past the edge at 800 x 560 with four radios.
+10 state ui.language == ja
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++40 state workspace.radios == 4
++3 expect "SDR を追加" right <= "800"
++1 shot "status-bar-keys-800-ja.png"

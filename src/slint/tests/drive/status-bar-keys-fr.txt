@@ -1,0 +1,13 @@
+#! frames=260 size=1280x720 FOXSDR_LANGUAGE=fr
+# status-bar-keys-fr (lane S1): the same in French, whose words are the longest of the 15 languages that ran past the edge ("Signaler un bug / une critique").
+10 state ui.language == fr
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++40 state workspace.radios == 4
++1 click "2 x 2"
++20 state workspace.layout == 2
++3 expect "Signaler un bug / une critique" right <= "1280"
+expect "Demander une fonction" right <= "1280"
+expect "Ajouter une radio" right <= "1280"
++1 shot "status-bar-keys-fr.png"

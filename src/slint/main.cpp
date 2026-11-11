@@ -1376,7 +1376,8 @@ int main(int argc, char** argv) {
 
     // ---- the pictures: one pane's work per visible pane, then its figures into the window ----
     // The plot of layout One: the pixels the spectrum and waterfall boxes of ui/main.slint lay their axes over. A pane's plot is its own size, passed the same way.
-    const PlotSize layoutOnePlot{980, 330};
+    // THE ONE-LAYOUT PLOT: the pixels the spectrum really has (the window reports them, main.slint one-plot-h / one-plot-w), 980 x 330 until it has
+    PlotSize layoutOnePlot{980, 330};
     // The radio's spectrum frame. Today's engine API has one spectrum, the focused radio's; the per-radio read (read_radio_spectrum, engine stage 3) answers here by rv.slot.
     const auto readSpectrum = [&](RadioView& rv, FoxSpectrumInfo& info) -> int32_t {
         if (seam && seam->fake(rv.slot)) { return seam->spectrum(rv.slot, rv.sinceSeq, info, rv.bins.data(), static_cast<uint32_t>(rv.bins.size()), realState); }
@@ -1832,6 +1833,8 @@ int main(int argc, char** argv) {
         paneGainOfSelected = gainTxt == "N/A" ? std::string() : gainTxt;
         if (shownLayout == kLayoutOne) {
             workspace.restorePictures(radios.selected);
+            layoutOnePlot.w = std::max(60, static_cast<int>(ui->get_one_plot_w()));
+            layoutOnePlot.h = std::max(30, static_cast<int>(ui->get_one_plot_h()));
             paneTick(selected(), layoutOnePlot, true);
             ++paneTicks[static_cast<std::size_t>(radios.selected)];
             publishPicture(selected());
@@ -2026,6 +2029,23 @@ int main(int argc, char** argv) {
             return "update.shown|headline|note|primary|withdrawn, not " + name;
         }
         if (name.rfind("fact.", 0) == 0) { return world.fact(name.c_str(), out) ? std::string() : "no fact " + name; }
+        // figure.<what> (lane S1): the One layout's picture as the host laid it out - plotheight / plotwidth (the pixels the window reports for the spectrum's plot, which the dB labels and the frequency
+        // ticks are laid out over), dbticks (how many dB labels), dbpitch (the smallest gap between two of them in pixels, 0 with fewer than two)
+        if (name.rfind("figure.", 0) == 0) {
+            const std::string what = name.substr(7);
+            if (what == "plotheight") { out = std::to_string(layoutOnePlot.h); return std::string(); }
+            if (what == "plotwidth") { out = std::to_string(layoutOnePlot.w); return std::string(); }
+            std::vector<Tick> ticks;   // the LABELLED ticks (the unlabelled ones are only lines)
+            for (const Tick& t : selected().fig.dbTicks) { if (!t.label.empty()) { ticks.push_back(t); } }
+            if (what == "dbticks") { out = std::to_string(ticks.size()); return std::string(); }
+            if (what == "dbpitch") {
+                double least = 0.0;
+                for (std::size_t i = 1; i < ticks.size(); ++i) { const double gap = std::fabs(ticks[i].frac - ticks[i - 1].frac) * layoutOnePlot.h; least = i == 1 ? gap : std::min(least, gap); }
+                out = fmt("%.1f", least);
+                return std::string();
+            }
+            return "figure.<plotheight|plotwidth|dbticks|dbpitch>, not " + name;
+        }
         if (name == "ui.language") { out = cascade::i18n::current(); return std::string(); }   // the code in force (docs 6.62: the CJK drive scripts read it and the face named below)
         if (name == "ui.cjkFamily") { out = std::string(ui->global<Theme>().get_cjk_family()); return std::string(); }
         if (name.rfind("transmit.", 0) == 0) { return transmitBank.readState(name, out); }   // the Transmit page's page / key / sent / withheld read-back (transmit_publish.hpp)

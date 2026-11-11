@@ -1,0 +1,7 @@
+4500	ASSERTED	status-bar-keys	expect the three keys' right edge <= the window's width, with four radios open, in English at 1280 x 720
+4500	ASSERTED	status-bar-keys-fr	the same in French (the longest words: Signaler un bug / une critique)
+4500	ASSERTED	status-bar-keys-800	the same at 800 x 560 with one radio and with four
+4500	ASSERTED	status-bar-keys-800-ja	the same in Japanese at 800 x 560
+4501	NOT_DRIVABLE	-	no state names the chips that are drawn and nothing is operated; the clip sweep (EDGE items of the status bar) and the screenshots of status-bar-keys-800 show it
+4502	ASSERTED	plot-db-labels-800	state figure.plotheight < 330, figure.dbticks >= 2, figure.dbpitch >= 14 at 800 x 560
+4502	ASSERTED	plot-db-labels-1280	the same at 1280 x 720

@@ -226,6 +226,15 @@ public:
         else if (what == "label") { s = e->accessible_label(); }
         else if (what == "checked") { b = e->accessible_checked(); }
         else if (what == "enabled") { b = e->accessible_enabled(); }
+        else if (what == "left" || what == "top" || what == "right" || what == "bottom" || what == "width" || what == "height") {
+            const auto pos = e->absolute_position();
+            const auto size = e->size();
+            const double v = what == "left" ? pos.x : what == "top" ? pos.y : what == "right" ? pos.x + size.width : what == "bottom" ? pos.y + size.height : what == "width" ? size.width : size.height;
+            char text[48];
+            std::snprintf(text, sizeof(text), "%.2f", v);
+            out = text;
+            return std::string();
+        }
         else { return "nothing to read called " + what; }
         if (s.has_value()) { out = std::string(*s); return std::string(); }
         if (b.has_value()) { out = *b ? "true" : "false"; return std::string(); }

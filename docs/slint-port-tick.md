@@ -3174,3 +3174,13 @@ Two audio features of the selected radio, below the Auto notch row of the Audio 
 | 4403 | Noise blanker | checkbox | PRESENT | Tick -> filter-nb(on) -> opNb: SET_NB ival[0] = on, ival[1] = 0; off by default |
 | 4404 | Noise blanker Threshold | slider | PRESENT | SliderRow, 6 .. 30 dB over 0..1 (whole dB), greyed unless the blanker is on -> filter-nb-threshold(norm) -> opNbThreshold: SET_NB with the switch in force and ival[1] = 1 |
 | 4405 | Blanking n % / Standing down | readout | PRESENT | the engine's nbBlankedPct (rounded) as 'Blanking n %', or the amber 'Standing down: signal too strong' while nbStandingDown; shown only while the blanker is on |
+
+## Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's)
+
+The status bar and the One layout's plot (the S6 leftovers), one-click layouts, the waterfall as a file, the persistence trace and the decluttered names of plugin marks.
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 4500 | Status bar: Add a radio, Request a feature and Report a bug / dislike keep their words and sit wholly inside the window | behaviour | PRESENT | the keys are a group with the width of their words; the chips live in an area of their own that takes what is left and clips there (main.slint). Read back as the keys' right edge against the window's width in English, French (1280 x 720) and Japanese (800 x 560). Lane S1, item 1. |
+| 4501 | Status bar: a chip whose cell does not fit is not drawn (the first chip always is) | behaviour | PRESENT | no half chip is shown at the edge. Lane S1, item 1. |
+| 4502 | Spectrum (layout One): the dB labels are laid out over the plot the window gives the spectrum and are at least 14 px apart | behaviour | PRESENT | main.slint reports the plot's size (one-plot-h, one-plot-w), main.cpp lays the dB labels and the frequency ticks over it; read back as figure.plotheight and figure.dbpitch at 800 x 560 and 1280 x 720. Lane S1, item 1. |

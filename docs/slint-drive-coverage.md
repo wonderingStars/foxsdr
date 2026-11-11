@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2187 | 562 | 92 | 1533 | 0 |
+| 2190 | 564 | 92 | 1534 | 0 |
 
-Of the 1300 rows that are controls (the 887 readout-like rows left out): 562 asserted, 92 driven without a read-back, 646 not drivable.
+Of the 1303 rows that are controls (the 887 readout-like rows left out): 564 asserted, 92 driven without a read-back, 647 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 217, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -202,6 +202,7 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
 | 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 107 | 70 | 9 | 28 | 19 | 0 |
 | SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 6 | 5 | 1 | 0 | 0 | 0 |
+| Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's) | 3 | 2 | 0 | 1 | 0 | 0 |
 
 ## Every row
 
@@ -3296,4 +3297,12 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | 4403 | Noise blanker | checkbox | DRIVEN+ASSERTED | signal-noise-blanker | click on, click off; state nbEnabled == 1 / == 0; expect Noise blanker checked true / false |
 | 4404 | Noise blanker Threshold | slider | DRIVEN+ASSERTED | signal-noise-blanker | slider Threshold 1.0, 0.0, 0.5; state nbThresholdDb > 29, < 7, about 18; expect enabled false while the blanker is off, true while on |
 | 4405 | Blanking n % / Standing down | readout | DRIVEN | signal-noise-blanker | the note is text, not a control: state nbBlankedPct < 5 with the generator (no clicks) is read back; the words themselves are held by test_slint_signal |
+
+### Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 4500 | Status bar: Add a radio, Request a feature and Report a bug / dislike keep their words and sit wholly inside the window | behaviour | DRIVEN+ASSERTED | status-bar-keys | expect the three keys' right edge <= the window's width, with four radios open, in English at 1280 x 720; the same in French (the longest words: Signaler un bug / une critique); the same at 800 x 560 with one radio and with four; the same in Japanese at 800 x 560 |
+| 4501 | Status bar: a chip whose cell does not fit is not drawn (the first chip always is) | behaviour | NOT DRIVABLE | - | no state names the chips that are drawn and nothing is operated; the clip sweep (EDGE items of the status bar) and the screenshots of status-bar-keys-800 show it |
+| 4502 | Spectrum (layout One): the dB labels are laid out over the plot the window gives the spectrum and are at least 14 px apart | behaviour | DRIVEN+ASSERTED | plot-db-labels-800 | state figure.plotheight < 330, figure.dbticks >= 2, figure.dbpitch >= 14 at 800 x 560; the same at 1280 x 720 |
 

@@ -1,0 +1,14 @@
+#! frames=260 size=800x560
+# status-bar-keys-800 (lane S1): in the small window (800 x 560, which shows One whatever the layout) the status bar's keys are wholly inside it with one radio and with four; the chips that do not fit are not drawn.
+10 state workspace.radios == 1
++3 expect "Report a bug / dislike" right <= "800"
+expect "Request a feature" right <= "800"
+expect "Add a radio" right <= "800"
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++40 state workspace.radios == 4
++3 expect "Report a bug / dislike" right <= "800"
+expect "Request a feature" right <= "800"
+expect "Add a radio" right <= "800"
++1 shot "status-bar-keys-800.png"

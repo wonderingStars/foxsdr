@@ -220,9 +220,12 @@ Script parseInputScript(const std::string& text) {
             st.verb = Verb::Expect;
             if (!c.quoted(st.label) || st.label.empty()) { bad("expect takes a quoted label"); continue; }
             st.what = c.word();
-            if (st.what != "value" && st.what != "label" && st.what != "checked" && st.what != "enabled") { bad("expect reads value, label, checked or enabled, not \"" + st.what + "\""); continue; }
+            const bool geometry = st.what == "left" || st.what == "top" || st.what == "right" || st.what == "bottom" || st.what == "width" || st.what == "height";
+            if (st.what != "value" && st.what != "label" && st.what != "checked" && st.what != "enabled" && !geometry) { bad("expect reads value, label, checked, enabled, left, top, right, bottom, width or height, not \"" + st.what + "\""); continue; }
             st.compare = c.word();
-            if (st.compare != "equals" && st.compare != "contains") { bad("expect compares with equals or contains, not \"" + st.compare + "\""); continue; }
+            const bool numeric = st.compare == "==" || st.compare == "!=" || st.compare == "<" || st.compare == ">" || st.compare == "<=" || st.compare == ">=";
+            if (st.compare != "equals" && st.compare != "contains" && !(geometry && numeric)) { bad(geometry ? "expect compares a position or size with == != < > <= >=, not \"" + st.compare + "\"" : "expect compares with equals or contains, not \"" + st.compare + "\""); continue; }
+            if (geometry && !numeric) { bad("expect compares a position or size with == != < > <= >=, not \"" + st.compare + "\""); continue; }
             if (!c.quoted(st.text)) { bad("expect takes a quoted text last"); continue; }
         } else if (verb == "state") {
             st.verb = Verb::State;
