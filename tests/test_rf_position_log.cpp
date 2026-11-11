@@ -211,9 +211,10 @@ int main() {
         rp::RfPositionLog l;
         CHECK(l.addReading(T0, -50.0) == rp::ReadingResult::NoFix);                  // no fix yet
         l.addFix(T0, 10.0, 20.0);
-        l.addFix(T0 + 10, 10.0, 20.02);
+        l.addFix(T0 + 10, 10.02, 20.02);
         CHECK(l.addReading(T0 + 5, -50.0) == rp::ReadingResult::Stored);              // between: the midpoint
         CHECK_NEAR(l.samples().back().lon, 20.01, 1e-9);
+        CHECK_NEAR(l.samples().back().lat, 10.01, 1e-9);          // latitude is interpolated too
         CHECK(l.addReading(T0 + 2.5, -50.0) == rp::ReadingResult::Stored);
         CHECK_NEAR(l.samples().back().lon, 20.005, 1e-9);
         CHECK(l.addReading(T0 + 14, -50.0) == rp::ReadingResult::Stored);             // 4 s after the last fix: held at that fix

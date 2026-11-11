@@ -232,6 +232,8 @@ static int realMain() {
             "Tune", "TUNE", "tune ", " tune", "tune\n", std::string("tune\0transmit", 13), "tune/../transmit", "tune;transmit", "get_status;transmit", "../tools/tune", "tools/tune",
             "tools/call", "tune?x=1", "tune#x", "\xC3\xA9", "tun\xE2\x80\x8B" "e", "get_status\r\ntransmit", "*", "", std::string(100000, 'a')};
         int n = 0;
+        std::printf("INFO forbidden tool names tried: %zu
+", forbidden.size());
         for (const std::string& name : forbidden) {
             const Out o = run(server, callReq(500 + n++, name, {{"frequency_hz", 100e6}, {"mode", "USB"}}));
             const bool refused = (o.status == 200 && isError(o, -32602) && o.j["error"]["message"].get<std::string>().rfind("Unknown tool", 0) == 0) || (name.size() > 65536 && o.status == 413 && isError(o, -32600));

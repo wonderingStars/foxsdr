@@ -226,6 +226,10 @@ int main() {
         CHECK(pu.ok);
         if (!pu.ok) std::printf("parse: %s\n", pu.why.c_str());
         CHECK(t.find("evil_metric 99\n") == std::string::npos);
+        bool control = false;   // no raw control byte except the line feed that ends lines (a bell, a tab, a NUL in a label value is replaced)
+        for (char ch : t)
+            if (static_cast<unsigned char>(ch) < 0x20 && ch != '\n') control = true;
+        CHECK(!control);
         CHECK(t.find("caf\xC3\xA9 \xE4\xB8\x96") != std::string::npos);
         CHECK(t.find("bad\xEF\xBF\xBD\xEF\xBF\xBD" "x") != std::string::npos);
         CHECK(pu.sampleCount.at("u") == 9);
