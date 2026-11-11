@@ -4,8 +4,9 @@
 //
 // THE FRAME LAYOUT IS NOT IN THAT DOCUMENT, so the decoder installed here is a TEST INVENTION: each
 // 512-byte frame is 128 pairs of little-endian int16 I, Q. It proves the plumbing (envelope, sequence
-// accounting, gating, shutdown) and says NOTHING about the real HPSDR frame format. UNPROVEN: every
-// real device.
+// accounting, gating, shutdown) and says NOTHING about the real HPSDR frame format (that is proven in
+// test_hpsdr_frames.cpp, from the USB Data Protocol document). With an injected decoder the source sends no
+// control frames, which this file asserts. UNPROVEN: every real device.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -296,14 +297,13 @@ void testOpenAndStream() {
     CHECK(s.open(dev.args("timeout=600")));
     CHECK(s.isOpen() && s.device().reply.boardId == 1);
     CHECK(std::string(s.name()).find("HPSDR: Hermes") == 0);
-    // no decoder: start refuses, and says why; the setters refuse likewise
-    CHECK(!s.start() && std::string(s.lastError()).find("not known") != std::string::npos);
-    CHECK(dev.starts.load() == 0);
-    CHECK(!s.setCenterFrequencyHz(7.0e6) && !s.setSampleRateHz(192000.0));
-    CHECK(std::string(s.lastError()).find("not available") != std::string::npos);
-    CHECK(s.gains().empty() && s.antennas().empty() && !s.autoGainSupported());
     auto dec = std::make_shared<TestDecoder>();
     s.setFrameDecoder(dec);
+    // an injected decoder: tuning, rate and gain are not the source's to send (the frames are the test's own)
+    CHECK(!s.setCenterFrequencyHz(7.0e6) && !s.setSampleRateHz(192000.0));
+    CHECK(std::string(s.lastError()).find("injected") != std::string::npos);
+    CHECK(s.gains().empty() && s.antennas().empty() && !s.autoGainSupported());
+    CHECK(!s.setGainDb("Attenuator", 10.0));
     CHECK(s.sampleRateHz() == 192000.0 && s.supportedSampleRatesHz().size() == 1);
     std::vector<std::complex<float>> tmp(16);
     CHECK(s.read(tmp.data(), tmp.size()) == 0);
@@ -320,6 +320,7 @@ void testOpenAndStream() {
     CHECK(dev.stops.load() == 1 && dev.lastStartCommand.load() == 0);
     // PC-to-device traffic is only ever discovery, start and stop
     CHECK(dev.badCommands.load() == 0);
+    CHECK(s.controlPacketsSent() == 0);  // nothing was sent to end point 2 in plumbing mode
     s.closeDevice();
     CHECK(!s.isOpen());
 }

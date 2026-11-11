@@ -28,12 +28,11 @@
 //     512-byte USB-format frames> (1032 bytes). PC to device: end point 0x02. Device to PC: 0x06 for
 //     I&Q + mic, 0x04 for the wide bandscope; sequence numbers count from zero per end point.
 //
-// WHAT THE DOCUMENT DOES NOT GIVE, so is NOT BUILT: the layout INSIDE a 512-byte frame (sync bytes, the
-// command-and-control bytes that carry frequency, sample rate and gain, the sample widths and the
-// receiver interleave). The guide points at a separate "USB protocol proposal" document
-// (svn://svn.openhpsdr.org/svn/repos_sdr_hpsdr/trunk/Documentation) which was not opened. Receive
-// sample unpacking, and the frequency, rate and gain commands, are therefore not implemented; the source
-// takes a frame decoder from its caller. Fobos is left out: libfobos is LGPL-2.1 and no free API
+// WHAT THIS DOCUMENT DOES NOT GIVE (the layout INSIDE a 512-byte frame: sync bytes, the command-and-control
+// bytes that carry frequency, sample rate and gain, the sample widths and the receiver interleave): it
+// points at the separate "USB protocol" document, which the follow-up lane (feat/hpsdrduo) opened on
+// 2026-11-11 in the project's OpenHPSDR-SVN repository (Documentation/USB_protocol_V1.60.doc). That layer is
+// in hpsdr_frame.hpp, with its own provenance. Fobos is left out: libfobos is LGPL-2.1 and no free API
 // document was opened.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0

@@ -3,19 +3,21 @@
 // from the published "Metis - How it works" guide (hpsdr_protocol.hpp has the provenance and the full list
 // of what the guide does not say).
 //
-// STAND-ALONE, called by nothing yet, and INCOMPLETE BY NECESSITY: the guide does not contain the layout
-// of the 512-byte frames the data packets carry, so the I/Q sample unpacking and the frequency, rate and
-// gain commands (all of which live inside those frames) are NOT built. The class takes a
-// HpsdrFrameDecoder from its caller; without one start() refuses with a sentence saying so, and the
-// setters refuse. The tests install a decoder of their OWN invention (a test layout, labelled as such) to
-// prove the plumbing; it says nothing about the real frame format. UNPROVEN on every real device.
-// Receive only: no data is ever sent to end point 2.
+// STAND-ALONE, called by nothing yet. Receive works from the frame layer in hpsdr_frame.hpp (the openHPSDR
+// "USB Data Protocol" document): the 24-bit I/Q unpacking, the sample-rate, frequency and input-attenuator
+// commands (carried to the radio as command-and-control bytes in end-point-2 frames with silent audio and
+// MOX always 0: nothing is transmitted). A HpsdrFrameDecoder can still be injected with setFrameDecoder()
+// (the plumbing tests use that, with a layout of their own invention); with none, the built-in protocol-1
+// decoder and command sender are used. NOTHING HERE HAS BEEN RUN AGAINST A REAL HPSDR RADIO: UNVERIFIED ON
+// HARDWARE (none on the desk).
 //
 // ARGS ("key=value,key=value"):
 //   hpsdr=host[:port]   the device (port default 1024). Without it, discovery is broadcast to
 //                       255.255.255.255:1024 and the first device that answers (or the one whose MAC
 //                       matches mac=) is used.
 //   mac=aa:bb:cc:dd:ee:ff   choose among several that answered
+//   board=hermes       refuse a radio that answers as another board (metis, hermes, griffin, angelia,
+//                       orion, hermes_lite)
 //   timeout=ms          the discovery window and the bound on silence (default 2000)
 //
 // THREADS: the base class's one reader thread (net_sample_source.hpp).
@@ -29,6 +31,7 @@
 #include <string>
 #include <vector>
 
+#include "source/hpsdr_frame.hpp"
 #include "source/hpsdr_protocol.hpp"
 #include "source/net_sample_source.hpp"
 
@@ -48,8 +51,9 @@ struct HpsdrDevice {
 bool discoverHpsdr(const std::string& host, std::uint16_t port, std::chrono::milliseconds window,
                    std::vector<HpsdrDevice>& found, std::string& error);
 
-// What turns the 1024 bytes of a data packet (two 512-byte frames) into samples. Supplied by the caller
-// because the frame layout is not in the document this lane may read.
+// What turns the 1024 bytes of a data packet (two 512-byte frames) into samples. Optional: with none set the
+// source uses the built-in protocol-1 decoder (hpsdr_frame.hpp) and sends its own control frames; a decoder
+// set here replaces both (the source then sends nothing but discovery, start and stop - the plumbing tests).
 class HpsdrFrameDecoder {
 public:
     virtual ~HpsdrFrameDecoder() = default;
@@ -64,7 +68,7 @@ public:
     HpsdrSource() = default;
     ~HpsdrSource() override;
 
-    // The decoder must be set before start(); it is used on the reader thread.
+    // Optional (see above); null restores the built-in protocol-1 decoder. Used on the reader thread.
     void setFrameDecoder(std::shared_ptr<HpsdrFrameDecoder> d);
 
     const char* driverKey() const override { return "hpsdr"; }
@@ -74,13 +78,19 @@ public:
     void stop() override;
 
     double sampleRateHz() const override;
-    bool setSampleRateHz(double hz) override;  // refused: the rate is set inside the frames (not built)
-    double centerFrequencyHz() const override { return 0.0; }
-    bool setCenterFrequencyHz(double) override;  // refused, same reason
+    // 48, 96, 192 or 384 kHz (the speed field); anything else is refused with a sentence. Takes effect at
+    // once while streaming; the samples already queued are at the old rate.
+    bool setSampleRateHz(double hz) override;
+    double centerFrequencyHz() const override;
+    // The receiver's NCO frequency in whole Hz (0 to 4294967295); the radio's own range applies beyond that
+    // and the document names none.
+    bool setCenterFrequencyHz(double hz) override;
 
-    std::vector<GainInfo> gains() const override { return {}; }
-    bool setGainDb(const std::string&, double) override { return false; }
-    double gainDb(const std::string&) const override { return 0.0; }
+    // One control, "Attenuator" 0 to 31 dB of input attenuation (document: Hermes and Angelia only; none is
+    // offered for another board, because the document names none).
+    std::vector<GainInfo> gains() const override;
+    bool setGainDb(const std::string& name, double db) override;
+    double gainDb(const std::string& name) const override;
     bool autoGainSupported() const override { return false; }
     bool setAutoGain(bool) override { return false; }
     bool autoGain() const override { return false; }
@@ -96,11 +106,18 @@ public:
     std::uint64_t packetsLost() const;
     std::uint64_t packetsLate() const;
     std::uint64_t badPackets() const;
+    // Built-in decoder tally since the last start(): frames, refused frames, samples, per-ADC overflow
+    // frames, the software serial number the radio reports.
+    hpsdr::StreamTally frameTally() const;
+    // Packets of control frames sent to end point 2 since open (0 with an injected decoder).
+    std::uint64_t controlPacketsSent() const;
 
 private:
     struct Rx;
+    bool applySettingsLocked(const hpsdr::ControlSettings& next);
 
     mutable std::mutex mutex_;
+    hpsdr::ControlSettings settings_;  // what start() and the setters send; 48 kHz and 0 Hz until set
     std::shared_ptr<HpsdrFrameDecoder> decoder_;
     std::shared_ptr<Rx> rx_;
     std::shared_ptr<UdpTransport> udp_;
