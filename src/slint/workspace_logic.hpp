@@ -61,7 +61,7 @@ PictureSize panePictures(int cellW, int cellH, float split = kPaneSplitDefault);
 
 // ---- what a pane says, in words (every sentence through tr(); every control names its radio) ----
 struct PaneTexts {
-    std::string prefix, selectLabel, stopLabel, spectrumLabel, waterfallLabel, resizeLabel;
+    std::string prefix, selectLabel, stopLabel, spectrumLabel, waterfallLabel, resizeLabel, closeLabel;
     std::string runTip, decTip, muteTip, failTip;
     std::string device, frequency, mode, gain, squelch, volume, rate;
     bool running = false, decoding = false, muted = false, failed = false, biasTee = false;
