@@ -522,9 +522,7 @@ int main() {
             for (int i = 0; i < 4; ++i) {
                 e.forceDeviceLostForTest();
                 e.submit(x.data(), 1);  // loss found; the CPU answers (this may or may not rebuild)
-                GpuFftBatch info;
-                while (e.collect(info, out.data(), out.size())) {}
-                // do not collect a GPU batch in between: the streak is only reset by a finished GPU batch
+                // nothing is collected in between: the streak is only reset by a GPU batch that finished and was collected
             }
             CHECK(e.stats().deviceLost >= 2);
             CHECK(!e.stats().gpuActive);
