@@ -419,6 +419,32 @@ void testSidebandSwitchNoClick() {
     CHECK(maxStep < 1.5 * cleanStep);
 }
 
+
+// A harsher switch: a 0.5 interferer on the lower sideband is removed when Upper is selected mid-stream. Without the 10 ms crossfade the
+// output would jump by up to the interferer's instantaneous value (up to 0.5); with it the largest sample step stays within the tone's.
+void testSidebandSwitchWithInterferer() {
+    const double fs = 48000.0;
+    AmSpec s;
+    s.seconds = 2.0;
+    s.interfHz = -800.0;
+    s.interfAmp = 0.5;
+    const auto x = makeAm(s);
+    SyncAm d(fs);
+    std::vector<float> y(x.size());
+    for (std::size_t i = 0; i + 480 <= x.size(); i += 480) {
+        if (i == at(fs, 1.0)) { d.setSideband(SyncAm::Sideband::Upper); }
+        d.process(x.data() + i, 480, y.data() + i);
+    }
+    double maxStep = 0;
+    for (std::size_t j = at(fs, 0.99); j + 1 < at(fs, 1.1); ++j) { maxStep = std::max<double>(maxStep, std::fabs(y[j + 1] - y[j])); }
+    // the unswitched stream holds two tones (0.5 at 1 kHz, 0.5 at 800 Hz): its largest step
+    double base = 0;
+    for (std::size_t j = at(fs, 0.8); j + 1 < at(fs, 0.95); ++j) { base = std::max<double>(base, std::fabs(y[j + 1] - y[j])); }
+    std::printf("Both -> Upper with a 0.5 interferer: largest step across the switch %.4f, before it %.4f
+", maxStep, base);
+    CHECK(maxStep < 1.2 * base);
+}
+
 }  // namespace
 
 int main() {
@@ -429,5 +455,6 @@ int main() {
     testLockIndicator();
     testRobustness();
     testSidebandSwitchNoClick();
+    testSidebandSwitchWithInterferer();
     return testSummary("test_sam");
 }
