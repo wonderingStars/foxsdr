@@ -314,6 +314,21 @@ int main() {
         CHECK(e.canRedo());
         CHECK(e.flipBit(5));
         CHECK(!e.canRedo());
+        // Undo of a LENGTH-CHANGING edit on its own (an overlapping later edit would hide a wrong range): insert, erase, replace by a
+        // longer and by a shorter run, each undone and redone against the exact text.
+        {
+            const std::string base = "1011001011100101";
+            BitEditor u(B(base.c_str()));
+            CHECK(u.insertBits(5, B("0000")) && u.size() == 20);
+            CHECK(u.undo() && toString(u.bits()) == base);
+            CHECK(u.redo() && toString(u.bits()) == base.substr(0, 5) + "0000" + base.substr(5));
+            CHECK(u.undo() && u.eraseBits(2, 6) && u.size() == 10 && toString(u.bits()) == base.substr(0, 2) + base.substr(8));
+            CHECK(u.undo() && toString(u.bits()) == base);
+            CHECK(u.redo() && u.size() == 10);
+            CHECK(u.undo() && toString(u.bits()) == base);
+            CHECK(u.replaceAll(B("11")) && u.size() == 2 && u.undo() && toString(u.bits()) == base);
+            CHECK(u.replaceAll(Bits(40, 1)) && u.size() == 40 && u.undo() && toString(u.bits()) == base && u.redo() && u.size() == 40);
+        }
         // refusals change nothing
         const std::string snap = toString(e.bits());
         CHECK(!e.setBit(99, 1) && !e.flipBit(99) && !e.setByte(10, 1) && !e.insertBits(99, B("1")) && !e.eraseBits(10, 99) && !e.eraseBits(99, 0) &&

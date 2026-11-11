@@ -279,6 +279,22 @@ int main() {
         CHECK(runSpec(sp, two, nullptr, 1).size() == 1);
     }
 
+    // ---- the BEST preamble hit is used, not the first one that is within the allowed errors ------------------------------------------------------
+    {
+        const SpecParse p = parseSpec(
+            "foxsdr-bitspec 1\ncoding pwm\nshort_us 250\nlong_us 500\nreset_us 6000\ninvert no\npreamble 1010 1010\npreamble_errors 1\nframe_bits 8\n"
+            "field v at 0 8 uint\n");
+        CHECK(p.ok);
+        // a near-miss of the preamble (one bit off), 20 filler bits, then the real preamble and the payload 0xC3
+        Bits bits = fromString("1010 1011");
+        bits.insert(bits.end(), 20, 0);
+        const Bits real = fromString("1010 1010 1100 0011");
+        bits.insert(bits.end(), real.begin(), real.end());
+        Rng r4(21);
+        const auto m = runSpec(p.spec, pwmRuns(bits, 0, 0, r4));
+        CHECK(m.size() == 1 && !m.empty() && m[0].preambleDist == 0 && findValue(m[0], "v")->raw == 0xC3);
+    }
+
     // ---- ppm, invert, frame_bits, negative positions, sum8/xor8/nibblesum checks ----------------------------------------------------
     {
         const char* ppmSpec =
@@ -348,7 +364,7 @@ int main() {
             const unsigned hum = rng.below(100);
             std::vector<uint8_t> nib;
             nib.reserve(16);
-            for (uint8_t v : {0x1, 0xD, 0x2, 0x0, 0x1}) nib.push_back(v);
+            for (int v : {0x1, 0xD, 0x2, 0x0, 0x1}) nib.push_back(static_cast<uint8_t>(v));
             nib.push_back(static_cast<uint8_t>(id & 15));
             nib.push_back(static_cast<uint8_t>(id >> 4));
             nib.push_back(0x0);
@@ -407,18 +423,18 @@ int main() {
         // find the first mark run and compare the next runs to the pattern, within a sample or two plus the smoothing
         size_t first = 0;
         while (first < r.runs.size() && r.runs[first].level == 0) ++first;
-        bool good = first + 9 <= r.runs.size();
-        for (size_t k = 1; k < 8 && good; ++k) good &= std::fabs(r.runs[first + k].duration - widths[k]) < 60.0;
-        CHECK(good);
+        bool aligned = first + 9 <= r.runs.size();
+        for (size_t k = 1; k < 8 && aligned; ++k) aligned &= std::fabs(r.runs[first + k].duration - widths[k]) < 60.0;
+        CHECK(aligned);
         // pure noise has no signal
         std::vector<float> flat;
         for (int i = 0; i < 20000; ++i) flat.push_back(static_cast<float>(10.0 + 3.0 * rng.sym()));
         CHECK(!sliceEnvelope(flat, sp).signal);
         CHECK(!sliceEnvelope({}, sp).signal);
         CHECK(!sliceEnvelope({1, 2, 3}, sp).signal);
-        SliceParams bad;
-        bad.sampleRate = 0;
-        CHECK(!sliceEnvelope(mag, bad).signal);
+        SliceParams zeroRate;
+        zeroRate.sampleRate = 0;
+        CHECK(!sliceEnvelope(mag, zeroRate).signal);
         SliceParams capped = sp;
         capped.maxRuns = 3;
         CHECK(sliceEnvelope(mag, capped).runs.size() <= 3);
