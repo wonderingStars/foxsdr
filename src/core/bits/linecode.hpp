@@ -195,12 +195,18 @@ struct LevelRun {
 // squared distance to the nearest allowed multiple; because a half-size T also fits clean data
 // exactly, the LARGEST T within 0.004 of the best score is taken, then refined by least squares.
 // Runs of more than 8 chips (an idle gap) are ignored. Returns 0 for fewer than two usable runs.
-inline double estimateChipPeriod(const std::vector<LevelRun>& runs) {
+struct PeriodFit {
+    double T = 0.0;
+    double cost = 1e9;  // mean squared distance (in chips) of the usable runs from whole multiples of T; lower is cleaner
+};
+
+inline PeriodFit fitChipPeriod(const std::vector<LevelRun>& runs) {
+    PeriodFit fit;
     std::vector<double> d;
     d.reserve(runs.size());
     for (const auto& r : runs)
         if (r.duration > 0) d.push_back(r.duration);
-    if (d.size() < 2) return 0.0;
+    if (d.size() < 2) return fit;
     std::vector<double> sorted(d);
     std::sort(sorted.begin(), sorted.end());
     const double p = sorted[sorted.size() / 10];
@@ -237,8 +243,12 @@ inline double estimateChipPeriod(const std::vector<LevelRun>& runs) {
         }
         if (den > 0) T = num / den;
     }
-    return T;
+    fit.T = T;
+    fit.cost = cost(T);
+    return fit;
 }
+
+inline double estimateChipPeriod(const std::vector<LevelRun>& runs) { return fitChipPeriod(runs).T; }
 
 // Run list -> chip stream at chip period T. A run counts max(1, round(duration / T)) chips; with
 // `clipLong` a run over 8 chips (an idle gap) is cut to 8. `maxChips` bounds the output.
