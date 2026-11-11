@@ -1240,6 +1240,16 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // (both, left, right, none: only "both" until slots 1 and up carry audio) and the decoder plugins running on it, their module files separated by commas.
     fact("radio.count", std::to_string(receiverCount()));
     fact("radio.max", std::to_string(kMaxReceivers));
+    {
+        // WHAT THE LAST RESTORE OF THE SAVED RADIOS COULD NOT DO (engine stage 5): one sentence per radio, by number and by the device's name, separated by newlines;
+        // absent when every saved radio came back.
+        std::string notes;
+        for (const std::string& n : radioRestoreNotes_) {
+            if (!notes.empty()) { notes += '\n'; }
+            notes += n;
+        }
+        if (!notes.empty()) { fact("radio.restore", notes); }
+    }
     for (std::uint32_t n = 1; n <= kMaxReceivers; ++n) {
         if (!receiverLive(n)) { continue; }
         const std::string pre = "radio." + std::to_string(n) + ".";

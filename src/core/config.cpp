@@ -48,6 +48,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <set>
 
 #include <nlohmann/json.hpp>
 
@@ -232,6 +233,65 @@ double clampd(double v, double lo, double hi) {
 }
 
 }  // namespace
+
+// Radios 2 to 8 as a file may have them, made safe. A number is "not >= lo" clamped so one that is not a number cannot pass; a value that names no thing
+// (a tone, a rate, a frequency below zero) becomes 0, which the engine reads as "leave what the radio opens with".
+std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
+    static const char* const kKinds[] = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr"};
+    std::vector<SavedRadio> out;
+    std::set<int> taken;
+    for (SavedRadio& r : in) {
+        if (static_cast<int>(out.size()) >= kMaxSavedRadios) { break; }
+        if (r.number < 2 || r.number > kMaxSavedRadios + 1 || taken.count(r.number) != 0) { r.number = 0; }
+        if (r.number != 0) { taken.insert(r.number); }
+        bool known = false;
+        for (const char* k : kKinds) { known = known || r.sourceKind == k; }
+        if (!known) { r.sourceKind = "siggen"; }
+        if (r.sourceKind == "siggen") { r.args.clear(); }
+        if (r.args.size() > 512u) { r.args.clear(); r.sourceKind = "siggen"; }
+        if (r.antenna.size() > 64u) { r.antenna.clear(); }
+        if (r.mode.size() > 16u) { r.mode.clear(); }
+        const auto positive = [](double v, double hi) { return (v >= 0.0 && v <= hi) ? v : 0.0; };
+        r.sampleRateHz = positive(r.sampleRateHz, 1.0e9);
+        r.toneHz = (r.toneHz >= -1.0e9 && r.toneHz <= 1.0e9) ? r.toneHz : 0.0;
+        r.centerHz = positive(r.centerHz, 1.0e12);
+        r.bandwidthHz = positive(r.bandwidthHz, 1.0e8);
+        r.vfoOffsetHz = (r.vfoOffsetHz >= -1.0e9 && r.vfoOffsetHz <= 1.0e9) ? r.vfoOffsetHz : 0.0;
+        r.squelchDb = !(r.squelchDb >= -200.0) ? -200.0 : clampd(r.squelchDb, -200.0, 20.0);
+        r.volume = clampd(r.volume, 0.0, 1.0);
+        r.deemphasisIndex = r.deemphasisIndex < 0 ? 0 : (r.deemphasisIndex > 2 ? 2 : r.deemphasisIndex);
+        r.nrStrength = clampd(r.nrStrength, 0.0, 1.0);
+        r.agcMode = r.agcMode < 0 ? 0 : (r.agcMode > 4 ? 4 : r.agcMode);
+        r.agcFixedGainDb = !(r.agcFixedGainDb >= -20.0) ? -20.0 : clampd(r.agcFixedGainDb, -20.0, 40.0);
+        r.nbThresholdDb = !(r.nbThresholdDb >= 6.0) ? 6.0 : clampd(r.nbThresholdDb, 6.0, 30.0);
+        r.notchFreqHz = clampd(r.notchFreqHz, 10.0, 20000.0);
+        r.notchQ = clampd(r.notchQ, 0.1, 1000.0);
+        r.audioRoute = r.audioRoute < 0 ? 0 : (r.audioRoute > 3 ? 3 : r.audioRoute);
+        out.push_back(std::move(r));
+    }
+    // An entry with no usable number takes the lowest one still free, in file order, so the others keep theirs.
+    int next = 2;
+    for (SavedRadio& r : out) {
+        if (r.number != 0) { continue; }
+        while (taken.count(next) != 0) { ++next; }
+        r.number = next;
+        taken.insert(next);
+    }
+    return out;
+}
+
+// Plugin id -> radio number: the same per-entry rules as pluginRun (an empty or long id, or a number that names no radio but 1..8, is dropped alone).
+// (A 1 is legal in the file; the engine itself never writes one - radio 1 is the absence of an entry.)
+static std::map<std::string, int> sanitisePluginRadio(const std::map<std::string, int>& in) {
+    std::map<std::string, int> out;
+    for (const auto& [id, radio] : in) {
+        if (id.empty() || id.size() > 128u) { continue; }
+        if (radio < 1 || radio > kMaxSavedRadios + 1) { continue; }
+        out.emplace(id, radio);
+        if (out.size() >= AppConfig::kMaxTuneGrants) { break; }
+    }
+    return out;
+}
 
 std::string ConfigStore::defaultPath() {
 #ifdef _WIN32
@@ -857,6 +917,60 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
             out.userPresets = std::move(presets);
         }
     }
+    // Which radio each plugin runs on: pluginRun's shape, a number for a word. Only whole numbers count; the rest of the rules are sanitisePluginRadio's.
+    {
+        const auto it = j.find("pluginRadio");
+        if (it != j.end() && it->is_object()) {
+            std::map<std::string, int> m;
+            for (auto e = it->begin(); e != it->end(); ++e) {
+                if (e.value().is_number_integer()) { m[e.key()] = e.value().get<int>(); }
+            }
+            out.pluginRadio = std::move(m);
+        }
+    }
+    // Radios 2 to 8, element-wise tolerant like userPresets: an entry that is not an object is skipped, a field of the wrong type keeps its default,
+    // and every value is clamped by sanitiseSavedRadios below. Reading stops at 4 x the limit so a hostile file cannot make this loop long.
+    {
+        const auto it = j.find("radios");
+        if (it != j.end() && it->is_array()) {
+            std::vector<SavedRadio> radios;
+            for (const auto& e : *it) {
+                if (!e.is_object()) { continue; }
+                if (radios.size() >= static_cast<std::size_t>(kMaxSavedRadios) * 4u) { break; }
+                SavedRadio r;
+                getInt(e, "number", r.number);
+                getString(e, "sourceKind", r.sourceKind);
+                getString(e, "args", r.args);
+                getDouble(e, "sampleRateHz", r.sampleRateHz);
+                getString(e, "antenna", r.antenna);
+                getDouble(e, "toneHz", r.toneHz);
+                getDouble(e, "centerHz", r.centerHz);
+                getString(e, "mode", r.mode);
+                getDouble(e, "bandwidthHz", r.bandwidthHz);
+                getDouble(e, "vfoOffsetHz", r.vfoOffsetHz);
+                getDouble(e, "squelchDb", r.squelchDb);
+                getBool(e, "squelchAuto", r.squelchAuto);
+                getDouble(e, "volume", r.volume);
+                getBool(e, "muted", r.muted);
+                getInt(e, "deemphasisIndex", r.deemphasisIndex);
+                getBool(e, "stereoEnabled", r.stereoEnabled);
+                getBool(e, "nrEnabled", r.nrEnabled);
+                getDouble(e, "nrStrength", r.nrStrength);
+                getInt(e, "agcMode", r.agcMode);
+                getDouble(e, "agcFixedGainDb", r.agcFixedGainDb);
+                getBool(e, "nbEnabled", r.nbEnabled);
+                getDouble(e, "nbThresholdDb", r.nbThresholdDb);
+                getBool(e, "notchEnabled", r.notchEnabled);
+                getDouble(e, "notchFreqHz", r.notchFreqHz);
+                getDouble(e, "notchQ", r.notchQ);
+                getBool(e, "autoNotch", r.autoNotch);
+                getInt(e, "audioRoute", r.audioRoute);
+                getBool(e, "running", r.running);
+                radios.push_back(std::move(r));
+            }
+            out.radios = std::move(radios);
+        }
+    }
     getBool(j, "webEnabled", out.webEnabled);
     getString(j, "webBindAddress", out.webBindAddress);
     getInt(j, "webPort", out.webPort);
@@ -1246,6 +1360,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     // that the plugin could not have written itself.
     out.pluginSettings = sanitisePluginSettings(out.pluginSettings);
     out.userPresets = sanitiseUserPresets(out.userPresets);
+    out.pluginRadio = sanitisePluginRadio(out.pluginRadio);
+    out.radios = sanitiseSavedRadios(std::move(out.radios));
     out.patchPresets = sanitisePatchPresets(std::move(out.patchPresets), patchPresetPositions);
     out.patchPresetPrevious = sanitisePatchPresetPrevious(std::move(out.patchPresetPrevious));
     out.converters = sanitiseConverters(out.converters);
@@ -1501,6 +1617,48 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             presets.push_back(std::move(e));
         }
         j["userPresets"] = std::move(presets);
+    }
+    // Radios 2 to 8 and each plugin's radio: written ONLY when there are any, so the file of a user with one radio is the file 0.99.104 writes.
+    if (const std::map<std::string, int> placed = sanitisePluginRadio(cfg.pluginRadio); !placed.empty()) {
+        json pr = json::object();
+        for (const auto& [id, radio] : placed) { pr[id] = radio; }
+        j["pluginRadio"] = std::move(pr);
+    }
+    if (!cfg.radios.empty()) {
+        json radios = json::array();
+        for (const SavedRadio& r : sanitiseSavedRadios(cfg.radios)) {
+            json e;
+            e["number"] = r.number;
+            e["sourceKind"] = r.sourceKind;
+            e["args"] = r.args;
+            e["sampleRateHz"] = r.sampleRateHz;
+            e["antenna"] = r.antenna;
+            e["toneHz"] = r.toneHz;
+            e["centerHz"] = r.centerHz;
+            e["mode"] = r.mode;
+            e["bandwidthHz"] = r.bandwidthHz;
+            e["vfoOffsetHz"] = r.vfoOffsetHz;
+            e["squelchDb"] = r.squelchDb;
+            e["squelchAuto"] = r.squelchAuto;
+            e["volume"] = r.volume;
+            e["muted"] = r.muted;
+            e["deemphasisIndex"] = r.deemphasisIndex;
+            e["stereoEnabled"] = r.stereoEnabled;
+            e["nrEnabled"] = r.nrEnabled;
+            e["nrStrength"] = r.nrStrength;
+            e["agcMode"] = r.agcMode;
+            e["agcFixedGainDb"] = r.agcFixedGainDb;
+            e["nbEnabled"] = r.nbEnabled;
+            e["nbThresholdDb"] = r.nbThresholdDb;
+            e["notchEnabled"] = r.notchEnabled;
+            e["notchFreqHz"] = r.notchFreqHz;
+            e["notchQ"] = r.notchQ;
+            e["autoNotch"] = r.autoNotch;
+            e["audioRoute"] = r.audioRoute;
+            e["running"] = r.running;
+            radios.push_back(std::move(e));
+        }
+        j["radios"] = std::move(radios);
     }
     j["webEnabled"] = cfg.webEnabled;
     j["webBindAddress"] = cfg.webBindAddress;

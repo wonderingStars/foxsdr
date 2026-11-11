@@ -8768,6 +8768,7 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
     // MODEL ONLY - sanitiseDevice strips the serial, which the raw args carry
     // twice (once alone, once inside the label).
     r.session.sdrModel = rx().deviceModel_;
+    r.session.radiosMax = telemetryRadiosMax_;   // the highest number of receivers running at once this session (engine stage 5)
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (p.loaded && r.session.plugins.size() < 20) {
             r.session.plugins.push_back(p.name + " " + p.version);
@@ -9417,6 +9418,10 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // at the top of run(); from here the engine is the one writer).
     diagContextHave_ = false;
     pumpDiagContext();
+    // RADIOS 2 TO 8 (engine stage 5): through RADIO_ADD and the ordinary ops, last, so that the first radio's restore (which settled the band plan, the converters,
+    // the per-device memories and the output) is what they come back against. A file without `radios` restores no one.
+    restoreSavedRadios(cfg);
+    restorePluginRadios(cfg);
 }
 
 // THE RECEIVER'S HALF OF THE CONFIG SNAPSHOT (engine stage 3a): every line of
@@ -9574,6 +9579,9 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.closedWindows.clear();
     cfg.pluginMuteOverride = pluginMuteOverride_;
     cfg.userPresets = userPresets_;
+    // RADIOS 2 TO 8: read out of each radio's Receiver (engine stage 5). Empty with one radio, and then the file is the file 0.99.104 writes.
+    cfg.radios = savedRadios();
+    cfg.pluginRadio = pluginRadio_;   // (radio 1 is the absence of an entry; the map never holds one)
     telemetryJournal(cfg);
     // FALSE while running, so a start-up that reads it back knows the previous
     // session never got as far as writing true. Set only on the clean exit

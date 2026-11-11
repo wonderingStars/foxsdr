@@ -145,7 +145,11 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
         }
         if (!generator) {
             rx().sourceError_.clear();
-            if (!selectSourceById(text)) {
+            if (restoreEntry_ != nullptr) {
+                // A RESTORE (engine stage 5): the start-up open, by the saved arguments, with the saved rate, antenna and centre - not a pick from the scanned lists.
+                restoreExtraRadioDevice(text.substr(0, text.find(':')), text.substr(text.find(':') + 1), restoreEntry_->sampleRateHz, restoreEntry_->antenna,
+                                        restoreEntry_->centerHz);
+            } else if (!selectSourceById(text)) {
                 // The radio stays (it is on the generator, like the first radio after a failed open); the words say why.
                 rx().refusal_ = rx().sourceError_;
             }
@@ -276,6 +280,7 @@ void Engine::applyAudioRoutes() {
 // What the first radio's pass does for it in pumpWorkers / pumpAudio / pumpInputs, run for each added radio under its own scope. Only the functions that are
 // one radio's: the scan, the plugin store, the catalogue and the other engine-wide polls stay as they were (once a pass, not once a radio).
 void Engine::pumpExtraReceivers() {
+    telemetryNoteRadios();
     for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
         if (!receivers_[slot]) { continue; }
         RadioWork w(*this, slot);
@@ -288,6 +293,7 @@ void Engine::pumpExtraReceivers() {
         pollAudioOpen();
         pollAudioHealth();
         pollDspMinute();
+        pollSavedRadioRetry();   // (a saved device that was only busy is tried again, as the first radio's is: engine stage 5)
         // A radio whose open failed holds nothing: the ledger is told by the key going (the radio sits on the generator, as the first radio does).
         if (rx().device_ == nullptr && !rx().deviceOpenPending_) { rx().claimedKey_.clear(); }
     }

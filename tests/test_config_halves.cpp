@@ -203,6 +203,8 @@ void perturb(T& v) {
         v += "x";
     } else if constexpr (std::is_same_v<T, AppConfig::SoundCard>) {
         v.device += "x";
+    } else if constexpr (std::is_same_v<T, std::map<std::string, int>>) {
+        v.emplace("perturbed", 2);   // (pluginRadio: a radio number; 0 names no radio, and the loader would drop it)
     } else if constexpr (MapLike<T>) {
         v.emplace("perturbed", typename T::mapped_type{});
     } else {

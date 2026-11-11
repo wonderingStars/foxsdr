@@ -319,6 +319,29 @@ private:
     void applyAudioRoutes();
     // The slot's device-open poll (the tail of pollSourceAsync, which the first radio still runs from there).
     void pollDeviceOpen();
+    // --- SAVED RADIOS (engine stage 5; engine_radio_saved.cpp) ---
+    // The settings of radio `slot` (index 1..) as the file keeps them: read out of its Receiver and its *_wide_ fields, so it runs under the slot's RadioWork.
+    cascade::core::SavedRadio savedRadioOf(std::size_t slot);
+    // The saved settings of every radio but the first, in slot order (fillConfig assigns them to cfg.radios).
+    std::vector<cascade::core::SavedRadio> savedRadios();
+    // Restores cfg.radios through RADIO_ADD and the ordinary ops, in order (applyConfig, after the first radio). A radio that will not come back is reported by name
+    // (the log, fact.radio.restore) and does not stop the others.
+    void restoreSavedRadios(const cascade::core::AppConfig& cfg);
+    // The device branch of a restore for a radio other than the first: opens `kind` with `args` on THIS thread, as the first radio's start-up restore does, under
+    // the slot's RadioWork. A device that will not open leaves the radio on the generator, naming the device, and remembered for the next save.
+    void restoreExtraRadioDevice(const std::string& kind, const std::string& args, double rateHz, const std::string& antenna, double centerHz);
+    // WHICH RADIO EACH PLUGIN RUNS ON (stage 6; engine_plugin_radio.cpp): plugin id (pluginRunId) -> radio number 2..8. A plugin with no entry is on radio 1.
+    std::map<std::string, int> pluginRadio_;
+    // Takes cfg.pluginRadio as the file kept it (a plugin whose radio is not open is read as radio 1, in the log).
+    void restorePluginRadios(const cascade::core::AppConfig& cfg);
+    // The entry restoreSavedRadios is restoring, for the length of its RADIO_ADD: with it set, a device is opened with the start-up restore's synchronous open
+    // (restoreExtraRadioDevice) and not with the scanned lists' worker.
+    const cascade::core::SavedRadio* restoreEntry_ = nullptr;
+    // What the last restore could not do, one sentence per radio ("" when it all came back): fact.radio.restore.
+    std::vector<std::string> radioRestoreNotes_;
+    // THE HIGHEST NUMBER OF RECEIVERS RUNNING AT ONCE this session (the usage report's radios_max), updated once a pass.
+    std::uint32_t telemetryRadiosMax_ = 1;
+    void telemetryNoteRadios();
     // The prefix a take's file name carries ("" for the first radio while it is the only one).
     std::string takePrefix(bool iq);
     // A radio's snapshot, taken under the slot lock so a reader on another thread never meets a slot being closed (null for a radio that is not there).

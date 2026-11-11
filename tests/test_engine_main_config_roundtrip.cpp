@@ -83,6 +83,8 @@ const std::set<std::string>& engineWritten() {
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
         "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed", "pluginTransmitAllowed",
         "pluginSettings", "pluginsStopped", "pluginRun", "pluginSites", "closedWindows", "pluginMuteOverride", "userPresets",
+        // radios 2 to 8 and each plugin's radio (multi-radio engine, stages 5 and 6)
+        "radios", "pluginRadio",
         // Engine::telemetryJournal and the clean-exit flag
         "telemetryEnabled", "telemetryInstallId", "telemetryFirstRun", "telemetryFirstVersion", "telemetryLaunches",
         "telemetryCrashes", "telemetryExitsDied", "telemetryExitsKilled", "telemetryExitsEnded",

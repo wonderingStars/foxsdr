@@ -197,7 +197,7 @@ void testPayloadContainsOnlyTheAgreedFields() {
     // exactly the conversation that should happen.
     const std::set<std::string> allowed = {
         "id", "v", "os", "arch", "launches", "crashes", "exits_died", "exits_killed", "exits_ended",
-        "exits_unknown", "stalls", "health", "ch", "uch", "first", "fv", "sessionSec", "sdr",
+        "exits_unknown", "stalls", "health", "ch", "uch", "first", "fv", "sessionSec", "sdr", "radios_max",
         "modes", "panels", "plugins"};
     std::set<std::string> actual;
     for (auto it = j.begin(); it != j.end(); ++it) { actual.insert(it.key()); }
@@ -282,6 +282,7 @@ const std::map<std::string, std::string>& usageFieldLabels() {
         {"health", "Failure counts"},
         {"sessionSec", "Session length"},
         {"sdr", "SDR model"},
+        {"radios_max", "Most radios running at once"},
         {"modes", "Demodulators used"},
         {"panels", "Panels opened"},
         {"plugins", "Installed plugins"},
