@@ -422,6 +422,10 @@ public:
     ~P1Radio() { stop(); }
     bool start() {
         if (!sock_.open()) { return false; }
+        // A busy machine delays this thread; a small default receive buffer then drops the PC's start/stop
+        // and control datagrams (seen once in thirty start/stop cycles under load: 29 starts of 31).
+        const int big = 1 << 20;
+        ::setsockopt(sock_.sock(), SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&big), sizeof(big));
         run_.store(true);
         th_ = std::thread([this] { loop(); });
         return true;
@@ -676,6 +680,7 @@ void testStandInReceive() {
     CHECK(s.sampleRateHz() == 96000.0 && s.centerFrequencyHz() == 7069200.0);
     CHECK(radio.starts.load() == 0 && s.controlPacketsSent() == 0);  // nothing is sent until Start
     CHECK(s.start() && s.running());
+    CHECK(s.controlPacketsSent() >= 2);  // the settings go out from start() itself (a cycle is two packets), not later
     CHECK(waitFor([&] { return radio.nco.load() == 7069200u && radio.speedCode.load() == 1; }));
     CHECK(radio.receivers.load() == 1);
     CHECK(radio.ep2FirstSeq.load() == 0);  // the PC's sequence restarts at zero at Start
@@ -874,9 +879,17 @@ void testCyclesAndClose() {
         s.read(tmp.data(), tmp.size());
         s.stop();
     }
+    // The stand-in starts and joins a thread per Start, so on a busy machine it trails the PC by seconds:
+    // let it finish all thirty before judging it (or the source's silence bound) on the thirty-first.
+    CHECK(waitFor([&] { return radio.stops.load() == 30; }, 60000));
     CHECK(radio.ep2SeqErrors.load() == 0 && radio.ep2MoxSeen.load() == 0 && radio.ep2AudioNonZero.load() == 0);
     CHECK(s.start());
     const auto w = readSamples(s, 2000);
+    if (w.size() < 2000) {
+        std::fprintf(stderr, "short read: %zu samples; faulted=%d err=%s sent=%d lost=%llu bad=%llu starts=%d stops=%d\n", w.size(), s.faulted() ? 1 : 0,
+                     s.lastError(), radio.sentPackets.load(), static_cast<unsigned long long>(s.packetsLost()),
+                     static_cast<unsigned long long>(s.badPackets()), radio.starts.load(), radio.stops.load());
+    }
     CHECK(w.size() >= 2000);
     const auto t0 = std::chrono::steady_clock::now();
     s.closeDevice();
@@ -885,7 +898,9 @@ void testCyclesAndClose() {
     {
         HpsdrSource u;  // destroyed while streaming
         CHECK(u.open(radio.args("timeout=3000")));
-        CHECK(u.start());
+        const bool st = u.start();
+        if (!st) { std::fprintf(stderr, "u.start failed: err=%s faulted=%d open=%d\n", u.lastError(), u.faulted() ? 1 : 0, u.isOpen() ? 1 : 0); }
+        CHECK(st);
     }
     CHECK(NetSampleSource::readersAbandoned() == before);
 }
