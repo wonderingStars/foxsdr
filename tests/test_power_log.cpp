@@ -389,7 +389,7 @@ void testRotation() {
         lg.stop();
         CHECK(m.files.size() == 2 && m.files.count("foxsdr-power-20090212.csv") == 1 && m.files.count("foxsdr-power-20090213.csv") == 1);
         CHECK(lines(m.files["foxsdr-power-20090212.csv"]).size() == 2 && lines(m.files["foxsdr-power-20090213.csv"]).size() == 3);
-        CHECK(lines(m.files["foxsdr-power-20090213.csv"])[0] == pl::csvHeader());
+        CHECK(!lines(m.files["foxsdr-power-20090213.csv"]).empty() && lines(m.files["foxsdr-power-20090213.csv"])[0] == pl::csvHeader());
     }
     // by size: no file ever exceeds the limit, every file has a header, no line is lost
     {
