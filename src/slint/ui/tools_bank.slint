@@ -1285,6 +1285,7 @@ component BookmarkRowView inherits Rectangle {
 }
 
 export component BookmarksBody inherits VerticalLayout {
+    in property <bool> lane-c: true;                    // screen lane C's block under the body; the specimens of the earlier tests switch it off (their sheets stand at fixed offsets)
     in property <BookmarksModel> model;
 
     callback bookmark-name(string);
@@ -1499,12 +1500,13 @@ export component BookmarksBody inherits VerticalLayout {
         }
     }
     if root.model.error != "" : Note { wrap-w: root.width; text: root.model.error; tone: ChipTone.err; }
-    LaneCMemoryBlock { }
+    if root.lane-c : LaneCMemoryBlock { }
 }
 
 // ================================================ Scanner ================================================
 
 export component ScannerBody inherits VerticalLayout {
+    in property <bool> lane-c: true;                    // screen lane C's block under the body; the specimens of the earlier tests switch it off (their sheets stand at fixed offsets)
     in property <ScannerModel> model;
 
     callback scanner-ticked(bool);
@@ -1607,7 +1609,7 @@ export component ScannerBody inherits VerticalLayout {
         }
     }
     if root.model.status != "" : Note { wrap-w: root.width; text: root.model.status; tone: root.model.status-tone; }
-    LaneCScanBlock { }
+    if root.lane-c : LaneCScanBlock { }
 }
 
 // ================================================ Airband ================================================
