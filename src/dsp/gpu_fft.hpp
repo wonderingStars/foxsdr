@@ -69,7 +69,7 @@ struct GpuFftConfig {
     int adapterIndex = -1;                 // -1 = the hardware adapter with the most dedicated video memory
     bool lowPriority = true;               // IDXGIDevice::SetGPUThreadPriority(-7)
     double gpuBudgetFraction = 0.25;       // at most this share of each second may be spent on the GPU (0 < f <= 1)
-    std::size_t autoMinFftSize = 16384;    // Auto uses the GPU only from this size (the measured break-even, see the record)
+    std::size_t autoMinFftSize = 65536;    // Auto uses the GPU only from this size (first size where the GPU won on throughput in all three timings, see the record)
     int retryCooldownMs = 2000;            // after a device loss, wait this long before rebuilding the GPU path
     int maxRecoveries = 3;                 // consecutive rebuild attempts after losses before the engine stays on the CPU
     std::string shaderSourceOverride;      // tests: replaces the built-in HLSL (empty = built-in)
