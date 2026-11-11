@@ -947,6 +947,10 @@ const KnownWait kKnownWaits[] = {
     // the one join - 2500 ms, spent INSTEAD OF the Soapy pair's 3000, never as well as it.
     {"src/source/kiwisdr_client.hpp", "kJoinWait", 0,
      "the bound on joining the KiwiSDR client's reader and keep-alive threads in KiwiSdrClient::close() (feat/kiwi-client; wired as KiwiSdrSource::closeDevice, engine wiring lane 1). close() first shutdown()s the socket so a parked reader wakes, so the join is normally instant (13 ms measured with a stalled receiver); the bound is only reached if the reader ignores that, and then the thread is ABANDONED (ReaderLeak notice), not waited for again. Zero, as rtl_tcp's reader join is: a source's close is the pipeline's own teardown (the DeviceSource destructor), which the 3000 ms kSourceJoinWait already covers for one source; a worst case of several KiwiSDR radios closing one after the other is NOT in the budget (UNVERIFIED that the receivers' destruction is inside the stretch the budget measures; it is the same position every other radio's close has)"},
+    {"src/source/kiwisdr_source.hpp", "kFirstAudioWait", 0,
+     "KiwiSdrSource::open()'s wait for the receiver's first word (audio or a refusal) after the upgrade, spent on a radio's OPEN WORKER (launchDeviceOpen) or, for a saved radio, in the start-up restore before the control thread runs - never on the shutdown path: a pending open is reaped (a detached worker releases the receiver if it lands after) and close() cuts a wait in progress by shutting the socket (engine wiring lane 1)"},
+    {"src/source/kiwisdr_source.hpp", "kReadWait", 0,
+     "KiwiSdrSource::read()'s wait for audio, spent on the pipeline's source thread, which the teardown already waits for through kSourceJoinWait's 3000 ms - never on the GUI teardown thread; the same argument as RtlTcpSource's kReadWait (engine wiring lane 1)"},
     {"src/source/kiwisdr_client.hpp", "kKeepAliveInterval", 0,
      "not a wait at all - the cadence of the keep-alive thread, which waits on a condition variable that close() signals (feat/kiwi-client); nothing on the shutdown path sleeps on it"},
     {"src/source/kiwisdr_client.hpp", "kConnectWait", 0,
