@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -795,6 +796,40 @@ void testChatOffByDefault() {
     CHECK(!bob.get("/api/room").j.value("chatEnabled", true));
 }
 
+void testPageCarriesTheRoom() {
+    WebServer server;
+    server.setStatusProvider([] { return sensitiveStatus(); });
+    std::string error;
+    const int port = startOnFreePort(server, roomConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    httplib::Client cli("127.0.0.1", port);
+    const auto html = cli.Get("/");
+    const auto js = cli.Get("/app.js");
+    CHECK(html && js);
+    if (!html || !js) { return; }
+    for (const char* id : {"id=\"room\"", "id=\"roleBadge\"", "id=\"chatForm\"", "id=\"noteForm\"", "id=\"listenerList\"", "id=\"loginHint\""}) {
+        CHECK(html->body.find(id) != std::string::npos);
+    }
+    CHECK(html->get_header_value("Content-Security-Policy").find("unsafe-inline") == std::string::npos);
+    CHECK(html->body.find("<script>") == std::string::npos);   // no inline script: the room code is in /app.js
+    const std::size_t at = js->body.find("THE ROOM (feat/web-secure)");
+    CHECK(at != std::string::npos);
+    const std::string room = at == std::string::npos ? std::string() : js->body.substr(at);
+    CHECK(room.find("function roomApply(s)") != std::string::npos);
+    CHECK(room.find("'/api/room'") != std::string::npos && room.find("'/api/chat") != std::string::npos && room.find("'/api/admin") != std::string::npos);
+    // Text a person typed goes onto the page as text; the only innerHTML in the room's script is the server's own escaped html, and says so.
+    int uses = 0;
+    for (std::size_t p = room.find("innerHTML"); p != std::string::npos; p = room.find("innerHTML", p + 1)) {
+        ++uses;
+        const std::size_t eol = room.find('\n', p);
+        const std::string line = room.substr(p, eol == std::string::npos ? std::string::npos : eol - p);
+        CHECK(line.find("escaped by the server") != std::string::npos);
+    }
+    CHECK(uses == 2);
+    CHECK(room.find("document.write") == std::string::npos && room.find("eval(") == std::string::npos);
+}
+
 void testPolicyForRoom() {
     WebServer server;
     std::string error;
@@ -1108,6 +1143,28 @@ void testHttpsRefusals() {
 
 #endif  // _WIN32
 
+// A DEVELOPER'S AID, not a test: UW_SERVE=<seconds> keeps a server with listeners, chat and a note up on a printed port so the page can be
+// opened in a browser and looked at. The owner is admin / owner-long-password, listeners use listener-long-password. CTest never sets it.
+void serveForLooking(int seconds, bool https) {
+    WebServer server;
+    server.setStatusProvider([] { return sensitiveStatus(); });
+    CHECK(server.setSessionOpener(opener(std::make_shared<StubState>())));
+    WebServerConfig c = roomConfig(6);
+    c.chatEnabled = true;
+#ifdef _WIN32
+    c.tlsEnabled = https;
+#else
+    (void)https;
+#endif
+    std::string error;
+    const int port = startOnFreePort(server, c, error);
+    if (port <= 0) { std::printf("serve: could not start: %s\n", error.c_str()); return; }
+    std::printf("SERVING %s://127.0.0.1:%d for %d s\n", https ? "https" : "http", port, seconds);
+    std::fflush(stdout);
+    std::this_thread::sleep_for(std::chrono::seconds(seconds));
+    server.stop();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1115,6 +1172,10 @@ int main(int argc, char** argv) {
     g_scratch = (fs::temp_directory_path() / ("uw-web-secure-" + std::to_string(TEST_GETPID()))).string();
     fs::create_directories(g_scratch);
     const std::string only = argc > 2 ? argv[2] : "";
+    if (const char* serveFor = std::getenv("UW_SERVE")) {
+        serveForLooking(std::atoi(serveFor), std::getenv("UW_HTTPS") != nullptr);
+        return 0;
+    }
 #define RUN(t) \
     if (only.empty() || std::string(#t).find(only) != std::string::npos) { t(); }
     RUN(testSignIn);
@@ -1128,6 +1189,7 @@ int main(int argc, char** argv) {
     RUN(testIdleAndSessionLimits);
     RUN(testChatNoteAndEscaping);
     RUN(testChatOffByDefault);
+    RUN(testPageCarriesTheRoom);
     RUN(testPolicyForRoom);
 #ifdef _WIN32
     RUN(testServerOverHttps);

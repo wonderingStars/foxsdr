@@ -175,6 +175,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
       <button type="submit" class="primary">Sign in</button>
     </form>
     <p id="loginError" class="error"></p>
+    <p id="loginHint" class="dim hidden">To listen without controlling the receiver, give a name of your own choosing and the listener password.</p>
   </div>
 </section>
 
@@ -210,6 +211,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
     <span class="spacer"></span>
     <span id="mutedBy" class="badge warn hidden"></span>
     <span id="remote" class="badge hidden">remote access</span>
+    <span id="roleBadge" class="badge hidden"></span>
     <span id="link" class="badge warn hidden">disconnected</span>
     <button id="logout" class="hidden">Sign out</button>
   </header>
@@ -319,6 +321,23 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
     <div id="rds" class="hidden"></div>
     <div id="splitPanels" class="hsplit hidden" title="drag to resize"></div>
     <div id="panels">
+      <div id="room" class="panel hidden">
+        <h3>Listeners <span id="roomCount" class="dim"></span></h3>
+        <div id="roomNote" class="hidden"></div>
+        <div id="chatBox" class="hidden">
+          <div id="chatLog"></div>
+          <form id="chatForm"><input id="chatText" maxlength="200" autocomplete="off" placeholder="say something (text only, 200 characters)">
+            <button type="submit">Send</button></form>
+          <p id="chatError" class="error"></p>
+        </div>
+        <div id="adminBox" class="hidden">
+          <table id="listenerList"></table>
+          <form id="noteForm"><input id="noteText" maxlength="200" autocomplete="off" placeholder="a note to show every listener">
+            <button type="submit">Set note</button> <button type="button" id="noteClear">Clear</button></form>
+          <div id="banList" class="dim"></div>
+          <p id="adminError" class="error"></p>
+        </div>
+      </div>
       <div id="mapWrap" class="panel hidden">
         <h3>Map <button class="pop" data-view="map"
                         title="open the map in its own window">&#x29c9;</button></h3>
@@ -907,6 +926,23 @@ body { padding:9px; box-sizing:border-box; }
        -webkit-user-select:none; }
 .ptt.on { background:var(--fault); border-color:var(--fault); color:var(--fg);
           box-shadow:0 0 10px rgba(0,0,0,.45) inset; }
+
+/* THE ROOM (feat/web-secure): a listener sees the page without the controls, and the owner sees who is listening. */
+body.listener #side, body.listener #playstop, body.listener #mute, body.listener #volume, body.listener #master
+  { display:none !important; }
+body.listener #app { grid-template-columns:1fr; grid-template-rows:var(--bar) 1fr auto;
+                     grid-template-areas:"bar" "main" "foot"; }
+body.listener.notune #freqDigits, body.listener.notune #spectrum, body.listener.notune #waterfall { pointer-events:none; }
+#room { display:block; }
+#roomNote { background:var(--read); color:var(--bg); padding:.3rem .5rem; border-radius:3px; margin:.25rem 0; }
+#chatLog { max-height:9rem; overflow-y:auto; font-size:.85rem; margin:.25rem 0; }
+#chatLog div { padding:.05rem 0; }
+#chatLog b { color:var(--accent); font-weight:600; margin-right:.35rem; }
+#chatForm, #noteForm { display:flex; gap:.35rem; margin:.25rem 0; }
+#chatForm input, #noteForm input { flex:1 1 auto; min-width:0; }
+#listenerList { width:100%; border-collapse:collapse; font-size:.85rem; }
+#listenerList td { padding:.1rem .35rem; border-top:1px solid var(--edge); }
+#listenerList button, #banList button { padding:0 .4rem; }
 )CSS";
 
 // The joined style sheet, built once on first use - the pieces are
@@ -2871,6 +2907,7 @@ async function refreshSession() {
   $('login').classList.toggle('hidden', !needsLogin);
   $('app').classList.toggle('hidden', needsLogin);
   $('logout').classList.toggle('hidden', !s.authRequired || !s.authenticated);
+  roomApply(s);
   if (needsLogin) stopPolling(); else startPolling();
 }
 
@@ -2905,12 +2942,120 @@ pttSetup();
 refreshSession();
 )JS";
 
+constexpr char kAppJs4[] = R"JS(
+// ---- THE ROOM (feat/web-secure): roles, the owner's note, the chat and the owner's moderation. Everything here that came from a person
+// (a name, a chat line, a note) is put on the page as text, or - for the chat and the note, which the server has already escaped - as the
+// server's escaped html.
+let roomTimer = null, roomChatSeq = 0, roomRole = 'owner', roomMayTune = true;
+function roomApply(s) {
+  roomRole = s.role || 'owner';
+  document.body.classList.toggle('listener', roomRole === 'listener');
+  if (roomRole !== 'listener') document.body.classList.remove('notune');
+  const badge = $('roleBadge');
+  const show = !!s.authenticated && (roomRole === 'listener' || !!s.listenersEnabled);
+  badge.textContent = roomRole === 'listener' ? 'listener: ' + (s.name || '') : 'owner';
+  badge.classList.toggle('hidden', !show);
+  $('loginHint').classList.toggle('hidden', !s.listenersEnabled);
+  const wantRoom = !!s.authenticated && !!s.listenersEnabled;
+  $('room').classList.toggle('hidden', !wantRoom);
+  if (wantRoom && !roomTimer) { roomPoll(); roomTimer = setInterval(roomPoll, 2000); }
+  if (!wantRoom && roomTimer) { clearInterval(roomTimer); roomTimer = null; roomChatSeq = 0; $('chatLog').textContent = ''; }
+}
+async function roomPoll() {
+  const r = await getJson('/api/room');
+  if (!r) return;
+  roomMayTune = !!r.mayTune;
+  document.body.classList.toggle('notune', !roomMayTune);
+  $('roomCount').textContent = r.listeners + ' of ' + r.maxListeners;
+  const note = $('roomNote');
+  note.innerHTML = r.note || '';          // (escaped by the server)
+  note.classList.toggle('hidden', !r.note);
+  $('chatBox').classList.toggle('hidden', !r.chatEnabled);
+  if (r.chatEnabled) {
+    const c = await getJson('/api/chat?since=' + roomChatSeq);
+    if (c && c.lines) {
+      const log = $('chatLog');
+      for (const l of c.lines) {
+        const row = document.createElement('div');
+        const who = document.createElement('b');
+        who.textContent = l.name;
+        const txt = document.createElement('span');
+        txt.innerHTML = l.html;           // (escaped by the server)
+        row.appendChild(who); row.appendChild(txt);
+        log.appendChild(row);
+        roomChatSeq = Math.max(roomChatSeq, l.seq);
+      }
+      while (log.childNodes.length > 80) log.removeChild(log.firstChild);
+      if (c.lines.length) log.scrollTop = log.scrollHeight;
+    }
+  }
+  $('adminBox').classList.toggle('hidden', roomRole !== 'owner');
+  if (roomRole === 'owner') renderAdmin(await getJson('/api/admin/state'));
+}
+function adminButton(label, op, body) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.addEventListener('click', () => adminPost(Object.assign({ op }, body)));
+  return b;
+}
+function renderAdmin(a) {
+  if (!a) return;
+  const t = $('listenerList');
+  t.textContent = '';
+  for (const l of a.listeners) {
+    const tr = document.createElement('tr');
+    const cells = [l.name, l.address, Math.round(l.signedInSeconds / 60) + ' min'];
+    for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
+    const act = document.createElement('td');
+    act.appendChild(adminButton('Kick', 'kick', { name: l.name }));
+    act.appendChild(adminButton('Ban', 'ban', { name: l.name }));
+    tr.appendChild(act);
+    t.appendChild(tr);
+  }
+  const bans = $('banList');
+  bans.textContent = '';
+  const add = (label, op, body) => {
+    const span = document.createElement('span');
+    span.textContent = label + ' ';
+    span.appendChild(adminButton('Allow', op, body));
+    span.appendChild(document.createTextNode(' '));
+    bans.appendChild(span);
+  };
+  for (const n of a.bannedNames) add('banned name ' + n, 'unban', { name: n });
+  for (const ad of a.bannedAddresses) add('banned address ' + ad, 'unbanAddress', { address: ad });
+}
+async function adminPost(body) {
+  $('adminError').textContent = '';
+  const r = await fetch('/api/admin', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) {
+    let msg = 'That did not work.';
+    try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
+    $('adminError').textContent = msg;
+  }
+  roomPoll();
+}
+$('noteForm').addEventListener('submit', (e) => { e.preventDefault(); adminPost({ op: 'note', text: $('noteText').value }); });
+$('noteClear').addEventListener('click', () => { $('noteText').value = ''; adminPost({ op: 'note', text: '' }); });
+$('chatForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('chatError').textContent = '';
+  const text = $('chatText').value;
+  if (!text.trim()) return;
+  const r = await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+  if (r.ok) { $('chatText').value = ''; roomPoll(); return; }
+  let msg = 'Not sent.';
+  try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
+  $('chatError').textContent = msg;
+});
+)JS";
+
 // The joined client script. Built once on first use — the pieces are compile
 // -time constants, so there is nothing to invalidate.
 const std::string& appJs() {
     static const std::string joined =
         std::string(kAppJs1) + kAppJs2 + kAppJs2t + kAppJs2b + kAppJs2c + kAppJs2d +
-        kAppJs2e + kAppJs2p + kAppJs3 + kAppJs3b;
+        kAppJs2e + kAppJs2p + kAppJs3 + kAppJs3b + kAppJs4;
     return joined;
 }
 
