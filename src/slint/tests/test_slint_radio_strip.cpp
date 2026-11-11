@@ -288,6 +288,19 @@ int main() {
             Frame empty = render(ui, W, H);
             CHECKV(find("Add Signal generator").empty(), "%s: no choices left", skinName);
             empty.savePng(shotDir() + "strip-" + skinName + "-nochoices.png");
+            // SCREEN STAGE S6: a source that needs something typed is a field and an Add key (the I/Q file, rtl_tcp, Pluto), the sound card is an ordinary key the engine will refuse
+            {
+                AddChoice file = choice("I/Q file");
+                file.entry = true;
+                file.placeholder = ss("I/Q file path");
+                AddChoice card = choice("Sound card");
+                g.set_add_choices(modelOf(std::vector<AddChoice>{choice("Signal generator"), file, card}));
+                render(ui, W, H);
+                CHECKV(find("Add I/Q file").size() == 2, "%s: the file's Add key is on both cards (%zu)", skinName, find("Add I/Q file").size());
+                CHECKV(!find("I/Q file").empty(), "%s: the file's field is drawn", skinName);
+                CHECKV(find("Add Sound card").size() == 2, "%s: the sound card is offered (the engine refuses it in its own words)", skinName);
+                CHECKV(find("Add Signal generator").size() == 2, "%s: the generator is still offered as a plain key", skinName);
+            }
             g.set_add_choices(modelOf(std::vector<AddChoice>{choice("Signal generator"), choice("RTL-SDR #0 (native)"), choice("Airspy Mini")}));
         }
 

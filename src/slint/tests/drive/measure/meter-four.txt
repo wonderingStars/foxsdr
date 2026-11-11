@@ -1,4 +1,4 @@
-#! frames=900 size=1600x900 FOXSDR_SLINT_FRAME_LOG=1
+#! frames=900 size=1600x900 FOXSDR_SLINT_FRAME_LOG=2
 # meter-four (screen stage S6, B8): FOUR live generator radios in 2 x 2, all running, the frame meter on. The summary line FRAMEMETER is the figure; nothing is asserted.
 10 state running == 1
 +1 radio add 2 60000

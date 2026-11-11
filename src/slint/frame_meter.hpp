@@ -48,15 +48,19 @@ public:
         ++draws_;
     }
     void setNotifier(bool yes) { notifier_ = yes; }
+    // the time one full render of the window takes (Window::take_snapshot, which renders it offscreen with the window's own renderer): the render COST, which the hidden desktop's missing frames cannot give
+    void snapshotMs(double v) { snapMs_.push_back(v); }
+    bool wantsSnapshots() const { return snapshots_; }
+    void setSnapshots(bool yes) { snapshots_ = yes; }
     // skip the first n of each series (a window that is still opening is not the steady state)
     std::string summary(std::size_t warmup = 20) const {
         const auto trim = [&](std::vector<double> v) { if (v.size() > warmup) { v.erase(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(warmup)); } return v; };
-        const Stats t = stats(trim(tickMs_)), w = stats(trim(workMs_)), d = stats(trim(drawMs_));
+        const Stats t = stats(trim(tickMs_)), w = stats(trim(workMs_)), d = stats(trim(drawMs_)), sn = stats(snapMs_.size() > 4 ? std::vector<double>(snapMs_.begin() + 4, snapMs_.end()) : snapMs_);
         const double wall = std::chrono::duration<double>(Clock::now() - start_).count();
-        char buf[640];
+        char buf[800];
         std::snprintf(buf, sizeof(buf),
-                      "FRAMEMETER ticks=%zu interval mean %.2f median %.2f p95 %.2f max %.2f work mean %.2f p95 %.2f max %.2f draws=%zu interval mean %.2f median %.2f p95 %.2f max %.2f cpu=%.2f wall=%.2f notifier=%s",
-                      tickMs_.size(), t.mean, t.median, t.p95, t.max, w.mean, w.p95, w.max, draws_, d.mean, d.median, d.p95, d.max, cpuSeconds() - startCpu_, wall, notifier_ ? "yes" : "no");
+                      "FRAMEMETER ticks=%zu interval mean %.2f median %.2f p95 %.2f max %.2f work mean %.2f p95 %.2f max %.2f draws=%zu interval mean %.2f median %.2f p95 %.2f max %.2f cpu=%.2f wall=%.2f notifier=%s snapshots=%zu render mean %.2f median %.2f p95 %.2f max %.2f",
+                      tickMs_.size(), t.mean, t.median, t.p95, t.max, w.mean, w.p95, w.max, draws_, d.mean, d.median, d.p95, d.max, cpuSeconds() - startCpu_, wall, notifier_ ? "yes" : "no", snapMs_.size(), sn.mean, sn.median, sn.p95, sn.max);
         return buf;
     }
 
@@ -85,10 +89,10 @@ private:
         return 0.0;
 #endif
     }
-    std::vector<double> tickMs_, workMs_, drawMs_;
+    std::vector<double> tickMs_, workMs_, drawMs_, snapMs_;
     Clock::time_point start_{}, lastTick_{}, lastDraw_{};
     double startCpu_ = 0.0;
-    bool haveTick_ = false, haveDraw_ = false, notifier_ = false;
+    bool haveTick_ = false, haveDraw_ = false, notifier_ = false, snapshots_ = false;
     std::size_t draws_ = 0;
 };
 

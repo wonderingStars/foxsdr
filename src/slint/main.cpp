@@ -1952,7 +1952,12 @@ int main(int argc, char** argv) {
     // against this window's controls by their accessible labels, each step's effect read back from the engine through the table by name
     // (`state`). Only in a bounded run, like every other hook here; a script that does not parse ends the run before the window opens
     // (exit 2), a step that fails or is never reached makes the run exit 3.
-    const auto readState = [&](const std::string& name, std::string& out) -> std::string {
+    // `state radio.<n>.<field>` (design 3.6: the drive language's per-radio read-back) is `state workspace.r.<n>.<field>`: radio n's own state whichever radio is selected - running, tuned, centre, mode,
+    // volume, muted, agc, agcfixed, nb, nbthreshold, device, rate, decoder, notice, gains, gainstage, rates, ratenames, antennas, antennanames. Plain `state <name>` stays the selected radio.
+    std::function<std::string(const std::string&, std::string&)> readStateOf;
+    const auto readState = [&](const std::string& nameIn, std::string& out) -> std::string {
+        if (nameIn.rfind("radio.", 0) == 0) { return readStateOf("workspace.r." + nameIn.substr(6), out); }
+        const std::string& name = nameIn;
         static const std::pair<const char*, std::uint32_t> flagNames[] = {
             {"running", FOXAPI_RX_RUNNING}, {"deviceOpen", FOXAPI_RX_DEVICE_OPEN}, {"faulted", FOXAPI_RX_FAULTED}, {"muted", FOXAPI_RX_MUTED},
             {"squelchOpen", FOXAPI_RX_SQUELCH_OPEN}, {"stereo", FOXAPI_RX_STEREO_ENABLED}, {"stereoActive", FOXAPI_RX_STEREO_ACTIVE}, {"nr", FOXAPI_RX_NR},
@@ -2255,6 +2260,7 @@ int main(int argc, char** argv) {
         if (name == "tick") { out = std::to_string(bounded.ticks() + 1); return std::string(); }
         return "no state named " + name;
     };
+    readStateOf = readState;
     // The drive script's `radio add|remove` (input_script.hpp; a bounded run only): a GENERATOR radio opened or removed through the engine's real RADIO_ADD / RADIO_REMOVE, started running.
     const foxsdr::slintdrive::RadioHook radioHook = [&](const std::string& what, int n, double toneHz, double hz2) -> std::string {
         if (what == "range") {   // `radio range <n> <lo> <hi>`: a made-up tuning range for Link tuning (0 0 takes it away)
@@ -2324,6 +2330,7 @@ int main(int argc, char** argv) {
         frameMeter->begin();
         const auto err = ui->window().set_rendering_notifier([&frameMeter](slint::RenderingState st, slint::GraphicsAPI) { if (st == slint::RenderingState::AfterRendering) { frameMeter->drawn(); } });
         frameMeter->setNotifier(!err.has_value());
+        { const char* mode = std::getenv("FOXSDR_SLINT_FRAME_LOG"); frameMeter->setSnapshots(mode != nullptr && std::string(mode) == "2"); }   // 2 = also time a full render every fifth tick
     }
     slint::Timer tick;
     tick.start(slint::TimerMode::Repeated, std::chrono::milliseconds(33), [&] {
@@ -2342,7 +2349,14 @@ int main(int argc, char** argv) {
         in.deviceOpening = (state.flags & FOXAPI_RX_DEVICE_OPENING) != 0;
         duties.poll(in);
         applyUpdateCard();
-        if (frameMeter) { frameMeter->tickEnd(meterBegan); }
+        if (frameMeter) {
+            frameMeter->tickEnd(meterBegan);
+            if (frameMeter->wantsSnapshots() && bounded.ticks() % 5 == 0) {
+                const auto t0 = foxsdr::slinthost::FrameMeter::Clock::now();
+                (void)ui->window().take_snapshot();
+                frameMeter->snapshotMs(std::chrono::duration<double, std::milli>(foxsdr::slinthost::FrameMeter::Clock::now() - t0).count());
+            }
+        }
         if (bounded.noteTick()) {
             if (shotAtEnd) { ui->invoke_shortcut(ss("screenshot")); }
             slint::quit_event_loop();

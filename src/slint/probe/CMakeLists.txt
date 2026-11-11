@@ -36,11 +36,21 @@ endif()
 target_compile_features(foxsdr-slint-probe PRIVATE cxx_std_20)
 target_compile_definitions(foxsdr-slint-probe PRIVATE FOXSDR_SLINT_PROBE=1)   # main.cpp reads every Text's description at the end of a bounded run
 target_link_libraries(foxsdr-slint-probe PRIVATE Slint::Slint cascade_engine)
+# the same OpenGL the window links (TrackInfoCache's photo cache: src/slint/CMakeLists.txt, "whose default texture hooks are OpenGL calls"); the probe's link line had not followed
+if(WIN32)
+    target_link_libraries(foxsdr-slint-probe PRIVATE opengl32)
+else()
+    find_package(OpenGL QUIET)
+    if(OpenGL_FOUND)
+        target_link_libraries(foxsdr-slint-probe PRIVATE OpenGL::GL)
+    endif()
+endif()
 target_include_directories(foxsdr-slint-probe PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/.."
     "${CMAKE_SOURCE_DIR}/src"
     "${CMAKE_SOURCE_DIR}/third_party/foxsdr_api"
-    "${CMAKE_SOURCE_DIR}/third_party/glfw/deps")
+    "${CMAKE_SOURCE_DIR}/third_party/glfw/deps"
+    "${CMAKE_SOURCE_DIR}/third_party/imgui")   # HEADER ONLY, as the window's own target has it since the radar scope (gui/aircraft_icons.hpp includes imgui.h); the probe's include list had not followed
 set_source_files_properties("${CMAKE_SOURCE_DIR}/src/gui/font_probe.cpp" PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/third_party/imgui")
 set_property(TARGET foxsdr-slint-probe PROPERTY SLINT_EMBED_RESOURCES embed-files)
 if(Python3_Interpreter_FOUND)

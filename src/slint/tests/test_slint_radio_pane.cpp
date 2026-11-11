@@ -104,6 +104,7 @@ int main() {
     panes.push_back(makePane(4, "Airspy Mini", "162.550000 MHz", "NFM", true, false, true, false, "APRS"));
     panes.push_back(makePane(5, "A very long device name that cannot possibly fit beside the frequency of this short pane 0123456789", "145.500000 MHz", "NFM", true, true, false, false, "FT8"));
     panes.push_back(makePane(6, "I/Q file", "3.573000 MHz", "USB", false, false, false, false, ""));
+    panes[1].notice = ss("RTL-SDR did not open: busy");   // screen stage S6: radio 2 sits on the generator and says why
     ui->set_panes(std::make_shared<slint::VectorModel<RadioPaneData>>(panes));
     ui->set_selected_radio(1);
     render(ui, 1560, 720);
@@ -277,6 +278,19 @@ int main() {
         // the accessible default action of the key is the same click
         const auto stop1 = findOne("Stop Radio 1");
         if (stop1) { stop1->invoke_accessible_default_action(); CHECK(std::string(ui->get_last_event()) == "stop" && ui->get_last_radio() == 1); }
+    }
+
+    // ---- SCREEN STAGE S6: a pane draws the engine's sentence about its device, and only that pane ----
+    {
+        int noticed = 0, other = 0;
+        for (const auto& e : slint::testing::ElementHandle::find_by_accessible_label(ui, "Radio 2: RTL-SDR did not open: busy")) { if (e.accessible_role() == slint::language::AccessibleRole::Text) { ++noticed; } }
+        for (const auto& e : slint::testing::ElementHandle::find_by_accessible_label(ui, "Radio 1: RTL-SDR did not open: busy")) { (void)e; ++other; }
+        CHECK(noticed == 1 && other == 0);
+        // the sentence lies inside radio 2's pane (the second column of the sheet), under its header and readout row
+        for (const auto& e : slint::testing::ElementHandle::find_by_accessible_label(ui, "Radio 2: RTL-SDR did not open: busy")) {
+            const auto size = e.size();
+            CHECK(size.width > 100.0f && size.height > 8.0f);
+        }
     }
 
     return testSummary("test_slint_radio_pane");
