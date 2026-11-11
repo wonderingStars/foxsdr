@@ -1,0 +1,109 @@
+# Linux packages: deb, rpm, a Docker image for the headless engine, and a Flatpak.
+#
+# MANUAL DISPATCH ONLY (Actions tab -> "packaging" -> Run workflow, or `gh workflow run packaging.yml`).
+# Nothing here runs on a push or a pull request, so existing runs are unchanged. NEVER RUN YET: written
+# 2026-11-11 on a Windows PC with no Linux, no Docker and no flatpak, and pushed by nobody; every step is a
+# hypothesis until a first dispatch. Each job ends in a smoke check that fails loudly rather than passing
+# on an empty result. docs/feature-records/platform.md lists what each job would prove.
+name: packaging
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deb-rpm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build dpkg-dev rpm file \
+            libgl1-mesa-dev libsoapysdr-dev libssl-dev libunwind-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
+            libasound2-dev libasound2-plugins
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+      - name: Make the packages
+        run: |
+          cd build
+          cpack -G DEB
+          cpack -G RPM
+          ls -l *.deb *.rpm
+      - name: Look inside both
+        run: |
+          set -eu
+          cd build
+          deb=$(ls foxsdr_*.deb | head -n 1)
+          rpm=$(ls foxsdr-*.rpm | head -n 1)
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb" > deb-contents.txt
+          rpm -qlp "$rpm" > rpm-contents.txt
+          for f in usr/lib/foxsdr/cascade usr/lib/foxsdr/foxsdr-engine usr/bin/foxsdr usr/bin/foxsdr-engine \
+                   usr/lib/foxsdr/resources/bandplans/world.json usr/libexec/foxsdr/foxsdr-udev-helper \
+                   usr/lib/udev/rules.d/99-foxsdr-sdr.rules usr/share/polkit-1/actions/com.foxsdr.install-udev-rules.policy; do
+            grep -q "$f" deb-contents.txt || { echo "MISSING from deb: $f"; exit 1; }
+            grep -q "/$f" rpm-contents.txt || { echo "MISSING from rpm: $f"; exit 1; }
+          done
+      - name: Install the deb and run it
+        run: |
+          set -eu
+          sudo apt-get install -y ./build/foxsdr_*.deb
+          version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          out=$(foxsdr-engine --version)
+          echo "$out"
+          [ "$out" = "FoxSDR $version" ]
+          test -x /usr/libexec/foxsdr/foxsdr-udev-helper
+          # the helper refuses an argument, as root and with no pkexec involved
+          if sudo /usr/libexec/foxsdr/foxsdr-udev-helper extra; then echo "helper accepted an argument"; exit 1; fi
+          # the package must own the rules file and the program must not have written into /etc itself
+          dpkg -S /usr/lib/udev/rules.d/99-foxsdr-sdr.rules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foxsdr-linux-packages
+          path: |
+            build/*.deb
+            build/*.rpm
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -f packaging/docker/Dockerfile -t foxsdr-engine:ci .
+      - name: Every library the engine needs is in the image
+        run: |
+          missing=$(docker run --rm --entrypoint sh foxsdr-engine:ci -c 'ldd /opt/foxsdr/foxsdr-engine | grep "not found" || true')
+          echo "$missing"
+          [ -z "$missing" ]
+      - name: It answers --version
+        run: |
+          version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          out=$(docker run --rm --entrypoint /opt/foxsdr/foxsdr-engine foxsdr-engine:ci --version)
+          echo "$out"
+          [ "$out" = "FoxSDR $version" ]
+      - name: Without a password file it refuses to start (no open web page by default)
+        run: |
+          if docker run --rm foxsdr-engine:ci; then echo "started without a password"; exit 1; fi
+
+  flatpak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Build
+        run: flatpak-builder --user --install-deps-from=flathub --force-clean build-dir packaging/flatpak/com.foxsdr.FoxSDR.yaml
+      - name: It answers --version
+        run: |
+          version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          out=$(flatpak-builder --run build-dir packaging/flatpak/com.foxsdr.FoxSDR.yaml foxsdr --version)
+          echo "$out"
+          [ "$out" = "FoxSDR $version" ]

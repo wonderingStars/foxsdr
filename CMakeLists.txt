@@ -1169,6 +1169,10 @@ if(CASCADE_BUILD_SLINT)
     add_subdirectory(src/slint)
 endif()
 
+# Linux packages (deb, rpm): the install rules and CPack settings. Linux only - the file returns at once on
+# any other platform, so the Windows install layout is untouched. See cmake/linux_package.cmake.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/linux_package.cmake")
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------

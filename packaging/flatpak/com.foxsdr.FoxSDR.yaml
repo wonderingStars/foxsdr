@@ -1,0 +1,55 @@
+# Flatpak manifest for the FoxSDR window application.
+#
+# NEVER BUILT. Written on a Windows PC with no Linux or flatpak; the first build is the manual-dispatch
+# workflow .github/workflows/packaging.yml (job "flatpak"). UNVERIFIED and likely to need a round or
+# two in CI: whether the freedesktop 24.08 runtime is the current one (a newer one may be needed), that
+# its SDK carries wayland-scanner and pkg-config files for libunwind, and that the SoapySDR module below
+# builds with these options. Sources read: https://docs.flatpak.org/en/latest/flatpak-command-reference.html
+# (the --device, --socket, --share values) and the SoapySDR tag list (soapy-sdr-0.8.1 exists).
+#
+# BUILD (needs flatpak-builder and the runtime/SDK from flathub):
+#   flatpak-builder --user --install-deps-from=flathub --force-clean build-dir packaging/flatpak/com.foxsdr.FoxSDR.yaml
+#   flatpak-builder --run build-dir packaging/flatpak/com.foxsdr.FoxSDR.yaml foxsdr --version
+#
+# WHY --device=all. The native drivers open /dev/bus/usb/BBB/DDD directly (src/usb/usbfs_device.cpp). The
+# docs list a narrower --device=usb; what it exposes is not described there, so the broad one is used
+# until a radio can be tried. The host's udev rules (installer/linux/README.md) are still what grants access.
+app-id: com.foxsdr.FoxSDR
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: foxsdr
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  - --device=all
+modules:
+  - name: SoapySDR
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DENABLE_PYTHON=OFF
+      - -DENABLE_PYTHON3=OFF
+    sources:
+      - type: git
+        url: https://github.com/pothosware/SoapySDR.git
+        tag: soapy-sdr-0.8.1
+  - name: foxsdr
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCASCADE_BUILD_SLINT=OFF
+    sources:
+      - type: dir
+        path: ../..
+    post-install:
+      # The two programs read resources/ from beside themselves, so they live together under /app/lib/foxsdr
+      # (cmake/linux_package.cmake) and bin/ holds the launchers. The desktop entry and icon take the app id.
+      - mv /app/share/applications/foxsdr.desktop /app/share/applications/com.foxsdr.FoxSDR.desktop
+      - sed -i 's/^Icon=foxsdr/Icon=com.foxsdr.FoxSDR/' /app/share/applications/com.foxsdr.FoxSDR.desktop
+      - mv /app/share/icons/hicolor/256x256/apps/foxsdr.png /app/share/icons/hicolor/256x256/apps/com.foxsdr.FoxSDR.png
