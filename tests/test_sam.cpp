@@ -152,7 +152,7 @@ void testOffsetAcquisition() {
         std::printf("offset %+6.1f Hz: lock at %.3f s, residual offset error %+.3f Hz, THD+N after %.3f%%\n", off, t, err, th * 100);
         CHECK(t > 0.0);
         worst = std::max(worst, t);
-        CHECK(t < 1.0);
+        CHECK(t < 0.25);                    // pinned: measured 0.106 s worst; without the FLL assist 0.48 s
         CHECK(std::fabs(err) < 1.0);
         CHECK(th < 0.01);
     }
@@ -180,7 +180,7 @@ void testOffsetAcquisition() {
             if (lockAt < 0.0 && d.locked()) { lockAt = static_cast<double>(i + 48) / s.fs; }
         }
         std::printf("speech-like, offset %+.0f Hz: lock at %.3f s, final offset error %+.2f Hz\n", off, lockAt, d.carrierOffsetHz() - off);
-        CHECK(lockAt > 0.0 && lockAt < 1.5);
+        CHECK(lockAt > 0.0 && lockAt < 0.25);
         CHECK(std::fabs(d.carrierOffsetHz() - off) < 2.0);
     }
 }
