@@ -17,7 +17,7 @@ namespace {
 // list is the API surface rather than a convenience.
 const char* const kKnownKeys[] = {
     "running",     "centerHz",    "vfoOffsetHz",     "mode",
-    "bandwidthHz", "squelchDb",   "volume",          "dbMin",
+    "bandwidthHz", "squelchDb",   "volume",          "muted",     "dbMin",
     "dbMax",       "deemphasisIndex", "nrEnabled",   "nrStrength",
     "notchEnabled", "notchFreqHz", "notchQ",         "autoNotch",
     "stereoEnabled", "sourceKind",  "soapyArgs",     "antenna",
@@ -136,6 +136,7 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         {"notchEnabled", &req.notchEnabled},
         {"autoNotch", &req.autoNotch},
         {"stereoEnabled", &req.stereoEnabled},
+        {"muted", &req.muted},
         {"agc", &req.agc},
         {"scanDevices", &req.scanDevices},
         {"recordIq", &req.recordIq},

@@ -26,9 +26,17 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <process.h>
 #define TEST_GETPID _getpid
 #else
+#include <sys/resource.h>
 #include <unistd.h>
 #define TEST_GETPID getpid
 #endif
@@ -55,6 +63,7 @@
 // For kTxLicenceNotice: the page's transmit sentence is pinned against the
 // desktop page's own constant rather than against a copy of the words.
 #include "gui/transmit_page.hpp"
+#include "engine/fox_engine_api.hpp"
 #include "net/web_auth.hpp"
 #include "net/web_server.hpp"
 #include "test_check.hpp"
@@ -2946,10 +2955,11 @@ function El() { this.disabled = false; this.textContent = '';
 const els = { ptt: new El(), ctlError: new El() };
 function $(id) { return els[id] || new El(); }
 let timer = null;
+let es = null, esRetry = null;  // the live-update stream (feat/web-bookmarks): stopPolling lets go of it
 `;
 const prelude = [stubs, line('const PTT_REPEAT_MS'), line('let pttDown'),
                  line('let specTimer'), block('pttSend'), block('pttPress'),
-                 block('pttRelease'), block('control'), block('stopPolling')].join('\n');
+                 block('pttRelease'), block('control'), block('stopEvents'), block('stopPolling')].join('\n');
 const run = new Function(prelude + `
 return async function () {
   // The page is signed in and polling, and somebody is holding the key.
@@ -2995,6 +3005,586 @@ run().then((s) => console.log(s)).catch((e) => { console.error(e); process.exit(
 
 }  // namespace
 
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// feat/web-bookmarks: the page's MUTE and START/STOP, and the live-update stream (GET /api/events)
+// ---------------------------------------------------------------------------------------------------------------------------------------
+
+// START/STOP and MUTE reach the engine's session as the ops the window's own buttons send; a mute that is not a JSON boolean is refused before
+// it reaches anything; and the user's mute is in the status the page reads, so a mute set at the desk shows on the page.
+void testStartStopAndMuteGoToTheSession() {
+    std::atomic<bool> muted{false};
+    WebServer server;
+    server.setStatusProvider([&muted]() {
+        RadioStatus s = sampleStatus();
+        s.muted = muted.load();
+        return s;
+    });
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+
+    // Start/Stop (survey row 33's first half) already works: proved here, not assumed.
+    auto stop = cli.Post("/api/control", "{\"running\":false}", "application/json");
+    CHECK(static_cast<bool>(stop));
+    if (stop) { CHECK(stop->status == 202); }
+    auto start = cli.Post("/api/control", "{\"running\":true}", "application/json");
+    CHECK(static_cast<bool>(start));
+    CHECK(log->batchCount() == 2);
+    if (log->batchCount() == 2) {
+        CHECK(log->opsOf(0) == std::vector<std::uint32_t>{FOXAPI_OP_RUN});
+        CHECK(log->batch(0)[0].c.ival[0] == 0);
+        CHECK(log->opsOf(1) == std::vector<std::uint32_t>{FOXAPI_OP_RUN});
+        CHECK(log->batch(1)[0].c.ival[0] == 1);
+    }
+
+    // Mute on, mute off: FOXAPI_OP_SET_MUTED with 1 and 0, the op the window's MUTE key sends.
+    auto on = cli.Post("/api/control", "{\"muted\":true}", "application/json");
+    CHECK(static_cast<bool>(on));
+    if (on) { CHECK(on->status == 202); }
+    auto off = cli.Post("/api/control", "{\"muted\":false}", "application/json");
+    CHECK(static_cast<bool>(off));
+    CHECK(log->batchCount() == 4);
+    if (log->batchCount() == 4) {
+        CHECK(log->opsOf(2) == std::vector<std::uint32_t>{FOXAPI_OP_SET_MUTED});
+        CHECK(log->batch(2)[0].c.ival[0] == 1);
+        CHECK(log->opsOf(3) == std::vector<std::uint32_t>{FOXAPI_OP_SET_MUTED});
+        CHECK(log->batch(3)[0].c.ival[0] == 0);
+    }
+
+    // A mute that is not a boolean is a client bug: 400, and nothing reaches the session.
+    for (const char* bad : {"{\"muted\":\"yes\"}", "{\"muted\":1}", "{\"muted\":null}"}) {
+        auto r = cli.Post("/api/control", bad, "application/json");
+        CHECK(static_cast<bool>(r));
+        if (r) { CHECK(r->status == 400); }
+    }
+    CHECK(log->batchCount() == 4);
+
+    // The status the page polls (and the stream pushes) carries the user's mute, and follows the desk.
+    for (const bool want : {false, true, false}) {
+        muted.store(want);
+        auto st = cli.Get("/api/status");
+        CHECK(static_cast<bool>(st));
+        if (st) {
+            const auto j = nlohmann::json::parse(st->body, nullptr, false);
+            CHECK(j.is_object() && j.contains("muted") && j["muted"].is_boolean() && j["muted"].get<bool>() == want);
+        }
+    }
+
+    // HAND-OFF PROBE (informational, not a check): the engine refuses an op that is not on the web session's profile
+    // (src/engine/fox_engine_api.cpp, kWebProfile). Until FOXAPI_OP_SET_MUTED is on it the page's button is answered DENIED by the engine,
+    // whatever this server does. docs/feature-records/web-bookmarks.md, HAND-OFF.
+    {
+        bool onProfile = false;
+        for (const std::uint32_t op : cascade::engine::internalProfileOps(cascade::engine::InternalKind::Web)) {
+            onProfile = onProfile || op == FOXAPI_OP_SET_MUTED;
+        }
+        std::printf("HAND-OFF: the engine's web profile %s FOXAPI_OP_SET_MUTED\n", onProfile ? "HOLDS" : "does NOT hold");
+    }
+
+    // The page has the button and wires it to the control route with the opposite of what it shows.
+    auto page = cli.Get("/");
+    CHECK(static_cast<bool>(page));
+    if (page) { CHECK(page->body.find("id=\"mute\"") != std::string::npos); }
+    auto js = cli.Get("/app.js");
+    CHECK(static_cast<bool>(js));
+    if (js) {
+        CHECK(js->body.find("control({ muted: $('mute').getAttribute('aria-pressed') !== 'true' })") != std::string::npos);
+        CHECK(js->body.find("s.muted ? 'Unmute' : 'Mute'") != std::string::npos);
+    }
+    server.stop();
+}
+
+// One browser's live-update stream, read on its own thread. close() ends the read from outside (httplib's Client::stop shuts the socket).
+struct EventClient {
+    std::unique_ptr<httplib::Client> cli;
+    std::thread th;
+    std::mutex m;
+    std::string body;           // under m
+    std::string contentType;    // under m
+    std::atomic<int> status{0};
+    std::atomic<bool> finished{false};
+    std::atomic<std::int64_t> endedAtMs{0};
+
+    static std::int64_t nowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    void open(int port, httplib::Headers headers = {}) {
+        cli = std::make_unique<httplib::Client>("127.0.0.1", port);
+        cli->set_connection_timeout(5, 0);
+        cli->set_read_timeout(60, 0);
+        th = std::thread([this, headers]() {
+            cli->Get(
+                "/api/events", headers,
+                [this](const httplib::Response& r) {
+                    std::lock_guard<std::mutex> lk(m);
+                    contentType = r.get_header_value("Content-Type");
+                    status.store(r.status);
+                    return true;
+                },
+                [this](const char* d, std::size_t n) {
+                    std::lock_guard<std::mutex> lk(m);
+                    body.append(d, n);
+                    return true;
+                });
+            endedAtMs.store(nowMs());
+            finished.store(true);
+        });
+    }
+    std::string text() {
+        std::lock_guard<std::mutex> lk(m);
+        return body;
+    }
+    std::string type() {
+        std::lock_guard<std::mutex> lk(m);
+        return contentType;
+    }
+    static std::size_t count(const std::string& hay, const std::string& needle) {
+        std::size_t n = 0;
+        for (std::size_t at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + needle.size())) { ++n; }
+        return n;
+    }
+    std::size_t events() { return count(text(), "event: status\n"); }
+    // The JSON of every status event received, in order.
+    std::vector<nlohmann::json> statuses() {
+        std::vector<nlohmann::json> out;
+        const std::string t = text();
+        const std::string key = "event: status\ndata: ";
+        for (std::size_t at = t.find(key); at != std::string::npos; at = t.find(key, at + key.size())) {
+            const std::size_t from = at + key.size();
+            const std::size_t end = t.find("\n\n", from);
+            if (end == std::string::npos) { break; }  // a partial chunk: not an event yet
+            out.push_back(nlohmann::json::parse(t.substr(from, end - from), nullptr, false));
+        }
+        return out;
+    }
+    void close() {
+        if (cli) { cli->stop(); }
+        if (th.joinable()) { th.join(); }
+    }
+    ~EventClient() { close(); }
+};
+
+template <typename Pred>
+bool waitFor(Pred pred, int ms) {
+    for (int waited = 0; waited < ms; waited += 10) {
+        if (pred()) { return true; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return pred();
+}
+
+// A client with no session, or a wrong one, gets no stream: the same gate every other route has. The listener count never moves.
+void testEventsRequireAuth() {
+    WebServerConfig cfg = loopbackConfig();
+    cfg.passwordRecord = realRecord();
+    WebServer server;
+    server.setStatusProvider([]() { return sampleStatus(); });
+    std::string error;
+    const int port = startOnFreePort(server, cfg, error);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+
+    EventClient none;
+    none.open(port);
+    CHECK(waitFor([&] { return none.finished.load(); }, 3000));
+    CHECK(none.status.load() == 401);
+    CHECK(none.type().find("text/event-stream") == std::string::npos);
+    CHECK(none.events() == 0);
+
+    EventClient forged;
+    forged.open(port, {{"Cookie", "foxsdr_session=not-a-real-token"}});
+    CHECK(waitFor([&] { return forged.finished.load(); }, 3000));
+    CHECK(forged.status.load() == 401);
+    CHECK(forged.events() == 0);
+    CHECK(server.eventListeners() == 0);
+
+    // A real login opens one.
+    httplib::Client cli("127.0.0.1", port);
+    auto login = cli.Post("/api/login", loginBody("admin", kPassword), "application/json");
+    CHECK(static_cast<bool>(login));
+    std::string token;
+    if (login) { token = tokenFromSetCookie(login->get_header_value("Set-Cookie")); }
+    EventClient ok;
+    ok.open(port, {{"Cookie", "foxsdr_session=" + token}});
+    CHECK(waitFor([&] { return ok.events() >= 1; }, 3000));
+    CHECK(ok.status.load() == 200);
+    CHECK(ok.type().find("text/event-stream") == 0);
+    CHECK(server.eventListeners() == 1);
+
+    // Signing out ends the stream within a look or two, and the count goes back to 0.
+    httplib::Headers authed = {{"Cookie", "foxsdr_session=" + token}};
+    auto out = cli.Post("/api/logout", authed, "", "application/json");
+    CHECK(static_cast<bool>(out));
+    CHECK(waitFor([&] { return ok.finished.load(); }, 3000));
+    CHECK(waitFor([&] { return server.eventListeners() == 0; }, 3000));
+    server.stop();
+}
+
+// The stream carries the status the page polls, pushes it when it changes and not otherwise, and reads like server-sent events.
+void testEventsPushTheStatusOnChange() {
+    std::atomic<double> centre{100.0e6};
+    std::atomic<int> reads{0};
+    WebServer server;
+    server.setStatusProvider([&]() {
+        reads.fetch_add(1);
+        RadioStatus s = sampleStatus();
+        s.centerHz = centre.load();
+        return s;
+    });
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+
+    EventClient c;
+    c.open(port);
+    // The first event is the status as it stands, at once; the stream announces its reconnect delay first.
+    CHECK(waitFor([&] { return c.events() >= 1; }, 3000));
+    CHECK(c.status.load() == 200);
+    CHECK(c.type().find("text/event-stream") == 0);
+    CHECK(c.text().rfind("retry: 3000\n\n", 0) == 0);
+    auto first = c.statuses();
+    CHECK(first.size() >= 1);
+    if (!first.empty()) {
+        CHECK(first[0].is_object() && first[0]["centerHz"].get<double>() == 100.0e6);
+        CHECK(first[0]["running"].get<bool>() == true);
+    }
+
+    // Nothing changed: nothing pushed (over 4+ looks), although the provider is read on every look.
+    const int readsBefore = reads.load();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    CHECK(c.events() == 1);
+    CHECK(reads.load() >= readsBefore + 3);
+
+    // A change is pushed, once, within a look or two.
+    centre.store(145.5e6);
+    CHECK(waitFor([&] { return c.events() >= 2; }, 3000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+    CHECK(c.events() == 2);
+    auto all = c.statuses();
+    CHECK(all.size() == 2);
+    if (all.size() == 2) { CHECK(all[1]["centerHz"].get<double>() == 145.5e6); }
+
+    // THE STREAM IS NOT A HEARTBEAT (the session's keep-alive is the status poll alone), and it collects no session results.
+    CHECK(log->heartbeats.load() == 0);
+    c.close();
+    CHECK(waitFor([&] { return server.eventListeners() == 0; }, 3000));
+    server.stop();
+}
+
+// At most kMaxEventListeners at once, each holding an HTTP worker; the next is answered 503 (the page then polls), and a slot comes back when a
+// listener leaves. Several listeners at once all see every change (the concurrency case).
+void testEventListenerCapAndFanOut() {
+    std::atomic<double> centre{100.0e6};
+    WebServer server;
+    server.setStatusProvider([&]() {
+        RadioStatus s = sampleStatus();
+        s.centerHz = centre.load();
+        return s;
+    });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+
+    std::vector<std::unique_ptr<EventClient>> listeners;
+    for (std::size_t i = 0; i < WebServer::kMaxEventListeners; ++i) {
+        listeners.push_back(std::make_unique<EventClient>());
+        listeners.back()->open(port);
+    }
+    for (auto& l : listeners) { CHECK(waitFor([&] { return l->events() >= 1; }, 3000)); }
+    CHECK(server.eventListeners() == WebServer::kMaxEventListeners);
+
+    EventClient extra;
+    extra.open(port);
+    CHECK(waitFor([&] { return extra.finished.load(); }, 3000));
+    CHECK(extra.status.load() == 503);
+    CHECK(extra.events() == 0);
+    CHECK(server.eventListeners() == WebServer::kMaxEventListeners);
+
+    // The other routes still answer with every stream parked.
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_read_timeout(5, 0);
+    auto st = cli.Get("/api/status");
+    CHECK(static_cast<bool>(st));
+    if (st) { CHECK(st->status == 200); }
+
+    // Every listener sees the change.
+    centre.store(433.92e6);
+    for (auto& l : listeners) {
+        CHECK(waitFor([&] { return l->events() >= 2; }, 3000));
+        auto all = l->statuses();
+        CHECK(!all.empty() && all.back()["centerHz"].get<double>() == 433.92e6);
+    }
+
+    // A listener leaves, its slot is free again.
+    listeners.back()->close();
+    CHECK(waitFor([&] { return server.eventListeners() == WebServer::kMaxEventListeners - 1; }, 3000));
+    EventClient again;
+    again.open(port);
+    CHECK(waitFor([&] { return again.events() >= 1; }, 3000));
+    CHECK(again.status.load() == 200);
+
+    again.close();
+    for (auto& l : listeners) { l->close(); }
+    CHECK(waitFor([&] { return server.eventListeners() == 0; }, 3000));
+    server.stop();
+}
+
+// stop() with every listener attached returns inside the existing shutdown budget (kClientIoTimeout, the longest stop() may wait - see
+// test_shutdown_budget): a stream sleeps on a condition variable stop() signals, so in fact it is a fraction of a look. The streams end.
+void testStopWithListenersAttachedIsPrompt() {
+    WebServer server;
+    server.setStatusProvider([]() { return sampleStatus(); });
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    std::vector<std::unique_ptr<EventClient>> listeners;
+    for (std::size_t i = 0; i < WebServer::kMaxEventListeners; ++i) {
+        listeners.push_back(std::make_unique<EventClient>());
+        listeners.back()->open(port);
+    }
+    for (auto& l : listeners) { CHECK(waitFor([&] { return l->events() >= 1; }, 3000)); }
+    CHECK(server.eventListeners() == WebServer::kMaxEventListeners);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    server.stop();
+    const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("  stop() with %zu live-update listeners attached took %lld ms\n", WebServer::kMaxEventListeners,
+                static_cast<long long>(took));
+    CHECK(took < 200);  // under one look (kEventTick, 250 ms): stop() WAKES the streams, it does not wait a tick out; far inside kClientIoTimeout (10 s)
+    CHECK(std::chrono::seconds(took / 1000) < kClientIoTimeout);
+    CHECK(!server.running());
+    CHECK(server.eventListeners() == 0);
+    for (auto& l : listeners) { CHECK(waitFor([&] { return l->finished.load(); }, 3000)); }
+}
+
+// Silence is not a dead stream: after kEventHeartbeat with no change a comment line goes out (it keeps a proxy from closing the stream and
+// makes a vanished peer fail a write). Takes a little over kEventHeartbeat to prove.
+void testEventsHeartbeatWhenQuiet() {
+    WebServer server;
+    server.setStatusProvider([]() { return sampleStatus(); });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    EventClient c;
+    c.open(port);
+    CHECK(waitFor([&] { return c.events() >= 1; }, 3000));
+    CHECK(EventClient::count(c.text(), ": keep-alive\n\n") == 0);
+    CHECK(waitFor([&] { return EventClient::count(c.text(), ": keep-alive\n\n") >= 1; },
+                  static_cast<int>(std::chrono::milliseconds(WebServer::kEventHeartbeat).count()) + 3000));
+    CHECK(c.events() == 1);  // still the one status: a comment is not a change
+    c.close();
+    server.stop();
+}
+
+// The page: it opens the stream, slows its status poll to a keep-alive while the stream is up, and goes back to the fast poll (and retries
+// the stream later) when it drops. Structural, like the other page tests: the behaviour needs a browser.
+void testPageFallsBackToPollingWhenTheStreamDrops() {
+    const std::string js = fetchAppJs();
+    CHECK(js.find("new EventSource('/api/events')") != std::string::npos);
+    CHECK(js.find("src.onerror") != std::string::npos);
+    // Fallback: on error the fast poll comes back and a retry is scheduled.
+    const std::size_t err = js.find("src.onerror");
+    const std::string tail = err == std::string::npos ? std::string() : js.substr(err, 400);
+    CHECK(tail.find("setStatusRate(STATUS_POLL_MS)") != std::string::npos);
+    CHECK(tail.find("setTimeout(startEvents, EVENTS_RETRY_MS)") != std::string::npos);
+    // A browser with no EventSource never tries.
+    CHECK(js.find("!window.EventSource") != std::string::npos);
+    // A pushed status and a polled one go through the same function.
+    CHECK(js.find("function showStatus(s)") != std::string::npos);
+    CHECK(js.find("showStatus(s);") != std::string::npos);
+    // The stream is let go of with the polling (a sign-out, a 401).
+    const std::size_t stopAt = js.find("function stopPolling()");
+    CHECK(stopAt != std::string::npos && js.substr(stopAt, 120).find("stopEvents();") != std::string::npos);
+}
+
+// The page's use of the stream, RUN in node against a fake EventSource: the stream is opened; while it is up the status poll slows to a
+// keep-alive and a pushed status reaches showStatus; when it drops the fast poll is back at once and a retry is scheduled; the retry opens a
+// new stream; a sign-out lets go of it; and a browser with no EventSource never tries (the poll stays fast).
+void testPageUsesTheStreamAndFallsBackInNode() {
+    const std::string js = fetchAppJs();
+    const fs::path dir = scratchDir();
+    if (!haveNode(dir)) {
+        std::printf("SKIP testPageUsesTheStreamAndFallsBackInNode: node is not on PATH\n");
+        return;
+    }
+    const fs::path jsPath = dir / "app_events.js";
+    CHECK(writeFile(jsPath, js));
+    const char* kDriver = R"NODE(
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+function block(name) {
+  let i = src.indexOf('function ' + name + '(');
+  if (i < 0) throw new Error('missing function ' + name);
+  if (src.slice(i - 6, i) === 'async ') i -= 6;
+  let depth = 0, opened = false;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '{') { depth++; opened = true; }
+    else if (src[j] === '}') { depth--; if (opened && depth === 0) return src.slice(i, j + 1); }
+  }
+  throw new Error('unterminated function ' + name);
+}
+function line(prefix) {
+  const i = src.indexOf('\n' + prefix);
+  if (i < 0) throw new Error('missing ' + prefix);
+  return src.slice(i + 1, src.indexOf('\n', i + 1));
+}
+const stubs = `
+const live = new Map(); let nextId = 1;
+function setInterval(fn, ms) { const id = nextId++; live.set(id, { fn, ms }); return id; }
+function clearInterval(id) { live.delete(id); }
+const timeouts = new Map(); let nextT = 1;
+function setTimeout(fn, ms) { const id = nextT++; timeouts.set(id, { fn, ms }); return id; }
+function clearTimeout(id) { timeouts.delete(id); }
+class EventSource {
+  constructor(url) { this.url = url; this.handlers = {}; this.closed = false; EventSource.all.push(this); }
+  addEventListener(n, f) { this.handlers[n] = f; }
+  close() { this.closed = true; }
+}
+EventSource.all = [];
+let window = { EventSource };
+let polls = 0; const shown = [];
+function pollStatus() { polls++; }
+function pollSpectrum() {}
+function pttRelease() {}
+function showStatus(s) { shown.push(s); }
+function setLinkUp(up) {}
+let timer = null;
+function statusMs() { return live.size === 0 ? -1 : Array.from(live.values()).filter((v) => v.ms !== 66)[0].ms; }
+`;
+const prelude = [stubs, line('const STATUS_POLL_MS'), line('let es = null'), line('let specTimer'),
+                 block('setStatusRate'), block('stopEvents'), block('startEvents'), block('startPolling'),
+                 block('stopPolling')].join('\n');
+const run = new Function(prelude + `
+return function () {
+  const out = [];
+  startPolling();
+  out.push('opened=' + EventSource.all.length + ' url=' + EventSource.all[0].url + ' rateBefore=' + statusMs());
+  const a = EventSource.all[0];
+  a.handlers.status({ data: '{"muted":true}' });
+  out.push('pushed=' + shown.length + ' first=' + shown[0].muted + ' rateUp=' + statusMs());
+  a.handlers.status({ data: 'not json' });
+  out.push('badEventIgnored=' + (shown.length === 1 ? 1 : 0));
+  a.onerror();
+  out.push('closedA=' + (a.closed ? 1 : 0) + ' rateDown=' + statusMs() + ' retryMs=' + Array.from(timeouts.values()).map((t) => t.ms).join(','));
+  const fired = Array.from(timeouts.entries())[0]; timeouts.delete(fired[0]); fired[1].fn();  // a timeout that fires is consumed
+  const b = EventSource.all[1];
+  out.push('reopened=' + EventSource.all.length + ' retriesLeft=' + timeouts.size);
+  b.handlers.status({ data: '{"muted":false}' });
+  out.push('rateUpAgain=' + statusMs() + ' shown=' + shown.length);
+  a.handlers.status({ data: '{"muted":true}' });
+  out.push('staleStreamIgnored=' + (shown.length === 2 ? 1 : 0));
+  stopPolling();
+  out.push('closedB=' + (b.closed ? 1 : 0) + ' intervals=' + live.size + ' retries=' + timeouts.size);
+  window = {};
+  startPolling();
+  out.push('noEventSourceOpened=' + (EventSource.all.length === 2 ? 1 : 0) + ' rateNoES=' + statusMs());
+  return out.join('\\n');
+};`)();
+try { console.log(run()); } catch (e) { console.error(e); process.exit(2); }
+)NODE";
+    const fs::path driver = dir / "events_driver.js";
+    CHECK(writeFile(driver, kDriver));
+    std::string output;
+    const int rc = runCaptured("node \"" + driver.string() + "\" \"" + jsPath.string() + "\"", dir / "events.txt", output);
+    std::printf("page and stream in node:\n%s", output.c_str());
+    CHECK(rc == 0);
+    CHECK(output.find("opened=1 url=/api/events rateBefore=250") != std::string::npos);
+    CHECK(output.find("pushed=1 first=true rateUp=500") != std::string::npos);
+    CHECK(output.find("badEventIgnored=1") != std::string::npos);
+    CHECK(output.find("closedA=1 rateDown=250 retryMs=10000") != std::string::npos);
+    CHECK(output.find("reopened=2 retriesLeft=0") != std::string::npos);
+    CHECK(output.find("rateUpAgain=500 shown=2") != std::string::npos);
+    CHECK(output.find("staleStreamIgnored=1") != std::string::npos);
+    CHECK(output.find("closedB=1 intervals=0 retries=0") != std::string::npos);
+    CHECK(output.find("noEventSourceOpened=1 rateNoES=250") != std::string::npos);
+}
+
+// Opt-in measurement (FOXSDR_WEB_MEASURE=1): process CPU over 60 s with 0, 1 and the capped number of stream listeners, and with one page
+// polling /api/status four times a second as it does without the stream. The status changes on every look (a live signal level), the worst
+// case for the stream. Clients run in this process, so the figure is server plus clients' reads.
+double processCpuSeconds() {
+#ifdef _WIN32
+    FILETIME c, e, k, u;
+    if (!GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) { return 0.0; }
+    const auto to = [](const FILETIME& f) {
+        return static_cast<double>((static_cast<std::uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime) / 1e7;
+    };
+    return to(k) + to(u);
+#else
+    struct rusage ru;
+    getrusage(RUSAGE_SELF, &ru);
+    return ru.ru_utime.tv_sec + ru.ru_utime.tv_usec / 1e6 + ru.ru_stime.tv_sec + ru.ru_stime.tv_usec / 1e6;
+#endif
+}
+
+void measureEventCpu() {
+    if (std::getenv("FOXSDR_WEB_MEASURE") == nullptr) { return; }
+    const int seconds = 60;
+    std::atomic<std::uint64_t> n{0};
+    WebServer server;
+    server.setStatusProvider([&n]() {
+        RadioStatus s = sampleStatus();
+        s.signalDb = -90.0f + static_cast<float>(n.fetch_add(1) % 400) * 0.1f;  // changes on every read
+        return s;
+    });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    const auto run = [&](const char* label, std::size_t listeners, bool poller) {
+        std::vector<std::unique_ptr<EventClient>> ls;
+        for (std::size_t i = 0; i < listeners; ++i) {
+            ls.push_back(std::make_unique<EventClient>());
+            ls.back()->open(port);
+        }
+        std::atomic<bool> polling{poller};
+        std::atomic<std::uint64_t> polls{0};
+        std::thread pt([&]() {
+            httplib::Client cli("127.0.0.1", port);
+            cli.set_read_timeout(5, 0);
+            while (polling.load()) {
+                if (cli.Get("/api/status")) { polls.fetch_add(1); }
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+        });
+        std::this_thread::sleep_for(std::chrono::seconds(1));  // settle
+        const double c0 = processCpuSeconds();
+        const auto t0 = std::chrono::steady_clock::now();
+        std::this_thread::sleep_for(std::chrono::seconds(seconds));
+        const double cpu = processCpuSeconds() - c0;
+        const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        polling.store(false);
+        pt.join();
+        std::size_t events = 0;
+        for (auto& l : ls) { events += l->events(); }
+        std::printf("MEASURE %-28s cpu %.3f s over %.1f s wall = %.2f %% of one core  (events received %zu, polls %llu)\n", label, cpu,
+                    wall, 100.0 * cpu / wall, events, static_cast<unsigned long long>(polls.load()));
+        for (auto& l : ls) { l->close(); }
+        waitFor([&] { return server.eventListeners() == 0; }, 3000);
+    };
+    run("0 listeners, no poller", 0, false);
+    run("1 listener", 1, false);
+    run("cap listeners", WebServer::kMaxEventListeners, false);
+    run("0 listeners, 1 page polling", 0, true);
+    server.stop();
+}
+
 int main() {
     testLoopbackWithoutPasswordServesOpenly();
     testPasswordGateOnLoopback();
@@ -3037,5 +3627,14 @@ int main() {
     testTransmitStatusFieldsReachTheBrowser();
     testThePageKeyIsHeldAndReleases();
     testLosingTheSessionMidHoldLetsGoOfTheKey();
+    testStartStopAndMuteGoToTheSession();
+    testEventsRequireAuth();
+    testEventsPushTheStatusOnChange();
+    testEventListenerCapAndFanOut();
+    testStopWithListenersAttachedIsPrompt();
+    testEventsHeartbeatWhenQuiet();
+    testPageFallsBackToPollingWhenTheStreamDrops();
+    testPageUsesTheStreamAndFallsBackInNode();
+    measureEventCpu();
     return testSummary("test_web_server");
 }

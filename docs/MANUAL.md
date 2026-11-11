@@ -1176,16 +1176,31 @@ The browser client does everything the desktop does, with two deliberate
 exceptions: it cannot name an I/Q file or a recording directory, because those
 are host filesystem paths rather than settings.
 
-It has no Stop/Start button of its own — that lives in the window — but it does
-SAY which plugins are stopped, so it never claims output from one that is
-switched off, and pressing a stopped plugin's **preset** there starts it, just
-as pressing it in the window does. A preset press is the same unambiguous "I
-want this plugin now" wherever it comes from, and the alternative — retuning
-the receiver for a decoder that is switched off, or silently doing nothing —
-would be worse from a page that cannot explain itself. It has no mute checkbox
-either, for the same reason, but when a decoder is silencing the audio the
-toolbar carries a **muted by *plugin*** badge — a browser hearing nothing has
-no other way to tell a muted radio from a dead stream.
+The toolbar has a **Start**/**Stop** key for the receiver and a **Mute** key
+for the audio. **Mute** is the same mute as the window's MUTE key, and it
+shows **Unmute** while it is on, also when the mute was set at the desk, because
+the page reads the state back from the receiver. The MUTE lamp lights for it and
+for a decoder that is silencing the audio.
+
+The page does SAY which plugins are stopped, so it never claims output from one
+that is switched off, and pressing a stopped plugin's **preset** there starts
+it, just as pressing it in the window does. A preset press is the same
+unambiguous "I want this plugin now" wherever it comes from, and the alternative
+— retuning the receiver for a decoder that is switched off, or silently doing
+nothing — would be worse from a page that cannot explain itself. When a decoder
+is silencing the audio the toolbar also carries a **muted by *plugin*** badge —
+a browser hearing nothing has no other way to tell a muted radio from a dead
+stream.
+
+**Live updates.** The page asks the receiver to push its status when it changes
+(server-sent events, plain HTTP, no extra software) instead of asking four times
+a second. Up to four browsers can hold the stream at once; a fifth, a browser
+without the feature, or a proxy that buffers it, is not a problem: the page
+notices the stream is not there and goes back to asking, then tries the stream
+again every ten seconds. While the stream is up the page still asks twice a
+second, only to tell the receiver the page is alive (a held transmit key depends
+on that). The stream needs the same sign-in as the rest of the page, and signing
+out, an expired sign-in or stopping the web server ends it.
 
 ## How it looks
 
