@@ -143,6 +143,26 @@ public:
     PluginRunner(const PluginRunner&) = delete;
     PluginRunner& operator=(const PluginRunner&) = delete;
 
+    // ----- Which radio this runner feeds (multi-radio engine, stage 6; docs/multi-radio-records/engine-stages-5-6.md) -----
+    //
+    // Every receiver has its own runner (the first radio's is the engine's `pluginRunner_`): a decoder instance is fed the I/Q, the audio and the decoder taps of ITS radio,
+    // and of no other. The number is a LABEL the runner puts on every call it makes into plugin code, so that a host service a plugin calls from inside create(),
+    // process() or destroy() can tell which radio it runs on: currentRadio() is that number on the calling thread, 0 anywhere else (a plugin's own thread, the window's
+    // poll), and the host falls back to the plugin's chosen radio there. It changes nothing about what a runner does.
+    void setRadio(std::uint32_t radio) { radio_.store(radio, std::memory_order_release); }
+    std::uint32_t radio() const { return radio_.load(std::memory_order_acquire); }
+    static std::uint32_t currentRadio();
+    class CurrentRadioScope {
+    public:
+        explicit CurrentRadioScope(std::uint32_t radio);
+        ~CurrentRadioScope();
+        CurrentRadioScope(const CurrentRadioScope&) = delete;
+        CurrentRadioScope& operator=(const CurrentRadioScope&) = delete;
+
+    private:
+        std::uint32_t previous_;
+    };
+
     // Creates one instance per loaded plugin that declares a decoder this
     // runner can feed. Destroys whatever existed before. Safe to call while
     // the DSP thread is running.
@@ -726,6 +746,7 @@ private:
     // grows it once (the pipeline's own buffers follow the same rule).
     static constexpr std::size_t kChainReserveFrames = 16384;
 
+    std::atomic<std::uint32_t> radio_{1};
     mutable std::mutex mutex_;
     std::vector<ProcessorInstance> processors_;
     std::vector<float> chainBuf_;

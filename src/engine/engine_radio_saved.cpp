@@ -251,6 +251,8 @@ void Engine::restorePluginRadios(const cascade::core::AppConfig& cfg) {
         }
         pluginRadio_[id] = radio;
     }
+    // The runners are built from the choice: every radio's decoders again, each plugin on the radio the file put it on.
+    if (!pluginRadio_.empty()) { rebuildAllRunners(); }
 }
 
 }  // namespace cascade::engine

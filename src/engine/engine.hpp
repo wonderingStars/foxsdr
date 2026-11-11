@@ -304,6 +304,64 @@ private:
             f();
         }
     }
+    // --- PLUGINS PER RADIO (stage 6; engine_plugin_radio.cpp) ---
+    // The runner of radio `slot`+1 (slot 0: pluginRunner_); a slot with no runner reads as the first radio's. runner() is the scoped radio's.
+    cascade::core::PluginRunner& runnerOf(std::size_t slot) { return (slot == 0u || slot >= kMaxReceivers || !radioRunners_[slot]) ? pluginRunner_ : *radioRunners_[slot]; }
+    const cascade::core::PluginRunner& runnerOf(std::size_t slot) const { return (slot == 0u || slot >= kMaxReceivers || !radioRunners_[slot]) ? pluginRunner_ : *radioRunners_[slot]; }
+    cascade::core::PluginRunner& runner() { return runnerOf(scopedSlot()); }
+    template <class F>
+    void forEachRunner(F&& f) {
+        f(pluginRunner_);
+        for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+            if (radioRunners_[slot]) { f(*radioRunners_[slot]); }
+        }
+    }
+    template <class F>
+    void forEachRunner(F&& f) const {
+        f(pluginRunner_);
+        for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+            if (radioRunners_[slot]) { f(*radioRunners_[slot]); }
+        }
+    }
+    bool anyExtraRunner() const {
+        for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+            if (radioRunners_[slot]) { return true; }
+        }
+        return false;
+    }
+    // THE RADIO A PLUGIN RUNS ON (by module file name or plugin id): its saved choice if that radio is open, else radio 1. A plugin that transmits (CASCADE_CAP_TX_AUDIO)
+    // always runs on radio 1: the transmitter's audio ring has one writer, and the transmitter follows radio 1's frequency (see transmitRadioSlot).
+    std::uint32_t radioOfPlugin(const std::string& moduleKeyOrId) const;
+    // The loaded plugins that run on radio `slot`+1, in load order (what that radio's runner is built from).
+    std::vector<cascade::core::LoadedPlugin> pluginsOnRadio(std::size_t slot) const;
+    // Rebuilds the decoders of ONE radio against its own source (the rate and the centre it has now) and attaches its runner to its pipeline; detaches and clears them
+    // while the patch runs (the receiver's decoders stand down then, for every radio).
+    void rebuildRunnerOf(std::size_t slot);
+    void rebuildAllRunners();
+    // Makes radio `slot`+1's runner when the radio is added; destroys it (and puts every plugin that ran on the radio back on radio 1, stopped) when it is removed.
+    void createRadioRunner(std::size_t slot);
+    void destroyRadioRunner(std::size_t slot);
+    // PLUGIN_RADIO: moves a plugin to a radio. False with `why` when it cannot be (no such radio, a plugin that transmits).
+    bool movePluginToRadio(const std::string& moduleKey, std::uint32_t radio, std::string& why);
+    FoxCommandResult pluginRadioOp(const FoxCommand& c, const std::string& text, FoxCommandResult res);
+    // Anywhere: whether any runner is feeding the plugin; stops the plugin on every runner; the first plugin that holds the speakers; every runner's status rows.
+    bool pluginFeedingAnywhere(const std::string& moduleKey) const;
+    void stopPluginEverywhere(const std::string& moduleKey);
+    std::string playingPluginKeyAnywhere() const;
+    std::vector<cascade::core::DecoderStatus> allDecoderStatus() const;
+    std::uint64_t runnersStatusGeneration() const;
+    // The pictures of every runner in one accumulator (the image feed's poll): exactly the first runner's own with no other radio.
+    void pollAllImages(std::vector<cascade::core::HostImage>& out);
+    std::array<std::vector<cascade::core::HostImage>, kMaxReceivers> imageAcc_;
+    // The module keys fed on ANY radio (the plugin lists' matched and fed), and the scoped radio's when it is not the first.
+    std::vector<std::string> feedingKeysAll_;
+    std::vector<std::string> feedingKeysExtraScratch_;
+    const std::vector<std::string>& feedingKeysForLists() const { return anyExtraRunner() ? feedingKeysAll_ : feedingKeysScratch_; }
+    // The four lists that describe one radio, for radios 2 to 8 (read_radio_list), made with the rest of the list block.
+    void buildRadioLists(ApiListBlock& b);
+    // THE RADIO THE TRANSMITTER FOLLOWS (slot index): the radio whose device is the transmitter's own (the Pluto), else the first. A Pluto cannot be opened as a second radio
+    // in this build (its panel selects and does not connect), so this answers 0 unless a test says otherwise; it is the one place the question is asked.
+    std::size_t transmitRadioSlot() const;
     // --- radios 2 to 8 (engine_radios.cpp) ---
     // RADIO_ADD / RADIO_REMOVE / RADIO_AUDIO / RADIO_SOLO, applied by applyCommand (res is the command's result so far; the answer is returned).
     FoxCommandResult radioAddOp(const FoxCommand& c, const std::string& text, FoxCommandResult res);
@@ -856,7 +914,9 @@ private:
     // Rebuilds every decoder instance against the CURRENT source rate and
     // centre frequency. Called after any source change, because both are
     // passed to a decoder's create() and cannot be changed afterwards.
-    void refreshPluginRunner();
+    // allRadios false: a SOURCE CHANGE (the funnel of installSource/followInputRate): the decoders of the scoped radio alone are rebuilt against its new rate and centre; on an
+    // added radio that is all (no plugin UI directive, no other radio's decoders touched), on the first radio the directive goes as it always did.
+    void refreshPluginRunner(bool allRadios = true);
     // Band plan (optional program data) and plugins (optional user
     // installs) — both silently absent when their directory does not exist.
     void loadBandPlan();
@@ -1917,6 +1977,10 @@ private:
     // calls each plugin's destroy(), which is code inside a module the host
     // unmaps and which may call a host service on its way out.
     cascade::core::PluginRunner pluginRunner_;
+    // THE RUNNERS OF RADIOS 2 TO 8 (multi-radio engine, stage 6): slot n's decoder instances are fed the I/Q, the audio and the decoder taps of radio n+1 alone. Slot 0 is
+    // pluginRunner_ above (radio 1, as it has always been); a slot is made when its radio is added and destroyed when it is removed. DECLARED HERE, after pluginHost_ and the
+    // API core, so that they are destroyed before them - a decoder's destroy() is code in a module that is unmapped after, and may call a host service on its way out.
+    std::array<std::unique_ptr<cascade::core::PluginRunner>, kMaxReceivers> radioRunners_;
     // --- Anonymous usage reporting (opt-in; see PRIVACY.md) ----------------
     // Counters for the session in progress, journalled to the config at exit
     // and sent at the NEXT start-up. Nothing here is transmitted unless the

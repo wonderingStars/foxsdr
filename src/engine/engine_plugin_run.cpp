@@ -169,9 +169,9 @@ void Engine::pushPluginHoldSets() {
         if (!cascade::core::pluginCapsHaveLifecycle(p.capabilities)) { continue; }
         if (!pluginShouldRun(p)) { dormant.push_back(cascade::core::pluginRunId(key)); }
     }
-    pluginRunner_.setStopped(stopped);
+    forEachRunner([&](cascade::core::PluginRunner& r) { r.setStopped(stopped); });
     pluginApi_->setStopped(stopped);
-    pluginRunner_.setDormant(dormant);
+    forEachRunner([&](cascade::core::PluginRunner& r) { r.setDormant(dormant); });
     pluginDormantIds_ = std::move(dormant);
 }
 
@@ -254,7 +254,7 @@ void Engine::startPluginInstances(const cascade::core::LoadedPlugin& p) {
     // states.
     pushPluginHoldSets();
     postPluginLife();
-    if (!patchRunning_) { (void)pluginRunner_.startPlugin(p); }
+    if (!patchRunning_) { (void)runnerOf(radioOfPlugin(cascade::core::pluginKey(p)) - 1u).startPlugin(p); }
     // The mute snapshot carries "is it actually decoding", and that has just changed.
     rebuildMuteStates();
 }
@@ -262,7 +262,7 @@ void Engine::startPluginInstances(const cascade::core::LoadedPlugin& p) {
 void Engine::stopPluginInstances(const std::string& pluginKey) {
     // A PLUGIN BEING STOPPED ALWAYS UNKEYS (stub campaign B13): the key goes up and the window closes before its instances are destroyed.
     txPluginModuleGoing(pluginKey, "the plugin that held the key was stopped");
-    pluginRunner_.stopPlugin(pluginKey);
+    stopPluginEverywhere(pluginKey);
     pushPluginHoldSets();
     postPluginLife();
     rebuildMuteStates();
@@ -433,7 +433,7 @@ void Engine::updatePluginLifecycle() {
     std::string playingKey;
     for (const cascade::core::LoadedPlugin& p : plugins) {
         if (p.loaded && p.audioOut != nullptr) {
-            playingKey = pluginRunner_.playingPluginKey();
+            playingKey = playingPluginKeyAnywhere();
             break;
         }
     }
@@ -480,13 +480,13 @@ void Engine::updatePluginLifecycle() {
         if (c.step == PluginLifeStep::Sleep) {
             // A PLUGIN GOING DORMANT ALWAYS UNKEYS (stub campaign B13; a hardening master lacked): the key goes up and the window closes in this pass, before the instances go.
             txPluginModuleGoing(apiPluginKeys_[c.index], "the plugin that held the key went dormant");
-            pluginRunner_.stopPlugin(apiPluginKeys_[c.index]);
+            stopPluginEverywhere(apiPluginKeys_[c.index]);
         }
     }
     pushPluginHoldSets();
     postPluginLife();
     for (const Change& c : changes) {
-        if (c.step == PluginLifeStep::Wake && !patchRunning_) { (void)pluginRunner_.startPlugin(plugins[c.index]); }
+        if (c.step == PluginLifeStep::Wake && !patchRunning_) { (void)runnerOf(radioOfPlugin(apiPluginKeys_[c.index]) - 1u).startPlugin(plugins[c.index]); }
     }
     rebuildMuteStates();
 }

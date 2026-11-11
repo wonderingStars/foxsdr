@@ -186,7 +186,14 @@ void Engine::reportPluginStatus(const std::vector<cascade::core::HostImage>& ima
                 static_cast<int>(decoderLog_.size()),
                 static_cast<unsigned long long>(pluginRunner_.audioFramesFed()),
                 static_cast<unsigned long long>(pluginRunner_.iqFramesFed()));
-    for (const cascade::core::DecoderStatus& s : pluginRunner_.status()) {
+    // THE RADIOS, one line each (multi-radio stage 6): which source and rate and model, and how many decoders each radio's runner is feeding. No serial or address.
+    for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+        if (!receivers_[slot]) { continue; }
+        std::printf("radio %u: source=%s rate=%.0f model=%s running=%d decoders=%d\n", static_cast<unsigned>(slot + 1u), receivers_[slot]->sourceKind_.c_str(),
+                    receivers_[slot]->pipeline_.activeSource().sampleRateHz(), receivers_[slot]->deviceModel_.c_str(), receivers_[slot]->pipeline_.running() ? 1 : 0,
+                    radioRunners_[slot] ? static_cast<int>(radioRunners_[slot]->activeCount()) : 0);
+    }
+    for (const cascade::core::DecoderStatus& s : allDecoderStatus()) {
         std::printf("plugin decode: name=%s state=%s%s\n", s.plugin.c_str(),
                     s.reason == cascade::core::DecoderIdleReason::Running ? "running"
                                                                           : "idle",

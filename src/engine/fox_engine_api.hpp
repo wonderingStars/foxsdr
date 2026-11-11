@@ -31,6 +31,7 @@
 #define CASCADE_ENGINE_FOX_ENGINE_API_HPP
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -260,6 +261,8 @@ struct ApiListBlock {
         bool matched = false;
         bool askedSettings = false;
         bool digestMismatch = false;
+        // The radio the plugin runs on (multi-radio stage 6; fact.plugin.<file>.radio), 1 unless the user moved it.
+        std::uint32_t radio = 1;
     };
     std::vector<Plugin> plugins;
     // API 0.3 8.8: the command keys the loaded modules have added (PLUGIN_COMMANDS), module by module in host
@@ -293,11 +296,26 @@ struct ApiListBlock {
         std::string name;
         std::string key;
         std::string status;          // why it is idle, or "" running
-        bool running = false;
+        bool running = false;        // runs ON THE RADIO THE LIST IS OF (multi-radio stage 6)
         bool fed = false;
         bool mutes = false;          // API 0.3 8.7: "mute audio while running" is on
+        std::uint32_t radio = 1;     // the radio the plugin runs on (DECODERS value[0])
     };
     std::vector<Decoder> decoders;
+    // THE FOUR LISTS THAT DESCRIBE ONE RADIO, for radios 2 to 8 (multi-radio stage 6; read_radio_list): index n-1 is radio n's; radio 1's are the fields above. `present` is
+    // true for a radio the engine had when the block was built.
+    static constexpr std::size_t kRadios = 8;
+    struct RadioLists {
+        bool present = false;
+        std::vector<double> rates;
+        std::vector<std::string> rateLabels;
+        double rateHz = 0.0;
+        std::vector<Gain> gains;
+        std::vector<std::string> antennas;
+        std::string antenna;
+        std::vector<Decoder> decoders;
+    };
+    std::array<RadioLists, kRadios> radios;
     struct StoreEntry {
         std::string id, name;
         bool installed = false, compatible = false;

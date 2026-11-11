@@ -444,16 +444,52 @@ stays 0.3.
   result at once (rule 2) with the message "there is no radio with that number".
   Every other op ignores `target`. The `sourceGen` guard that drops a command
   asked of a radio that has closed since is per radio.
-* **Per-radio reads**: `read_radio_state(session, radio, out)` and
-  `read_radio_spectrum(session, radio, sinceSeq, info, bins, cap)`, `radio` 1..N
-  or 0 for the focus; `NO_DEVICE` for a radio the engine does not have. Test
-  with `FOXAPI_HAS`, never a capability bit.
-* **Plugins and the plugin ABI** are untouched (ABI 3): a command a plugin sends
-  is aimed at the radio its code runs on, never at a focus (a later stage).
+* **Per-radio reads**: `read_radio_state(session, radio, out)`,
+  `read_radio_spectrum(session, radio, sinceSeq, info, bins, cap)` and (stage 6)
+  `read_radio_list(session, radio, list, index, out)`, `radio` 1..N or 0 for the
+  focus; `NO_DEVICE` for a radio the engine does not have. Test each function with
+  `FOXAPI_HAS`; `FOXAPI_CAP_RADIOS` (1 << 30) says the engine serves the whole set
+  (the ops of 6.20, the three reads, `fact.radio.*`).
+* **`read_radio_list`** gives one radio's copy of the four lists that describe ONE
+  radio - `GAINS`, `ANTENNAS`, `SAMPLE_RATES`, `DECODERS` - with `out` NULL for the
+  count, as `read_list` does; any other list is `BAD_ARGUMENT`. `read_list` of the
+  same four follows the SESSION'S FOCUS (radio 1 until `RADIO_FOCUS`), so a client
+  that knows nothing of several radios sees what it always saw. In `DECODERS` every
+  decoder plugin is listed on every radio: `ACTIVE` and `FED` say it runs, and is
+  fed, ON THIS RADIO; `value[0]` is the radio the plugin runs on.
+* **Plugins and the plugin ABI** are untouched (ABI 3): a plugin instance is fed
+  the I/Q, the audio and the decoder taps of the radio it runs on (6.20), and a
+  command it sends is aimed at that radio, never at a focus.
 
 The reference engine in `mock_engine/` has ONE radio and room for two (so radio 2
 is a number it knows and has nothing at); it publishes no facts (its capability
 word has no `FACTS`), implements the target rule, the focus and the two reads.
+
+### 6.20 Several radios: adding and removing them, the audio route, solo, and which radio a plugin runs on (0.3, additive)
+
+Five ops, grant SETTINGS (`RADIO_FOCUS`, 6.18, is VIEW). A one-radio client never sends them and never sees a change.
+
+* **`RADIO_ADD`** (`0x1202`): opens another radio into a free slot, 2 to `fact.radio.max`. `ival[0]` the number (0 = the lowest free), `ival[1]` 1 = start it once it is
+  open, `text` a device id from the `DEVICES` list (or "" / "generator": a TEST RADIO on the built-in signal generator, with `num[0]` its tone in Hz from the centre, 0 = 25 kHz
+  times its number). `applied[0]` is the number. `NO_CHANGE`: it is open already. `OUT_OF_RANGE`: not a number from 2 to the limit. `BUSY`: the device is held by another radio
+  or a patch radio ("in use by Radio N"). `LIMIT`: no slot is free or the limit on radios open in total is reached (the message states it and names every holder).
+* **`RADIO_REMOVE`** (`0x1203`): `ival[0]` the number (2 or more; radio 1 is always there: `UNSUPPORTED`). The radio's takes end, its threads join, its device is let go, the slot
+  is free again; the plugins that ran on it go back to radio 1 and are STOPPED. `NO_DEVICE`: no radio has that number.
+* **`RADIO_AUDIO`** (`0x1204`): `ival[0]` the radio (0 = the sender's focus), `ival[1]` the route: 0 both, 1 left, 2 right, 3 none (a 10 ms ramp; on a mono output left and
+  right play as both). `fact.radio.<n>.audio` says it. `NO_CHANGE`: it is that route already.
+* **`RADIO_SOLO`** (`0x1205`): `ival[0]` the radio heard alone, 0 = nobody. The others are held silent by a ramped gain that touches neither their route nor their mute.
+* **`PLUGIN_RADIO`** (`0x1206`): puts a plugin on a radio. `text` the plugin's module file name (as `DECODER_START` takes it), `ival[0]` the radio, 1 to `fact.radio.max`, `ival[1]`
+  1 = and start it there (a stop is cleared, as `DECODER_START` clears it). The decoder instance is fed the I/Q, the audio and the decoder taps of THAT radio and of no other, and
+  its host calls (`get_state`, the controls it queues, the centre it asks for) are answered from it. A plugin that has not been placed runs on radio 1. `NOT_FOUND`: no such
+  plugin. `NO_DEVICE`: no radio has that number. `OUT_OF_RANGE`: not 1 to the limit. `UNSUPPORTED`: a plugin that transmits (`CASCADE_CAP_TX_AUDIO`) runs on radio 1 only (the
+  transmitter has one audio ring and follows radio 1, or the radio that is the Pluto). `NO_CHANGE`: it runs there already. The choice is saved in the settings file and restored
+  with the radios; one for a radio that is not open reads as radio 1.
+* **Facts** (stage 6 adds to 6.18's): `fact.plugin.<module file>.radio` (the plugin's radio), `fact.radio.<n>.plugins` (the decoder modules running ON radio n, comma-separated),
+  `fact.scanner.radio` (the radio the one scanner was started on while it is active, else `0`), `fact.transmit.radio` (the radio the transmitter follows, `1` unless a Pluto is
+  another radio), and `fact.radio.restore` (stage 5: one sentence per saved radio that could not be restored at start-up, newline-separated, "Radio 3: ..."; absent when all came back).
+* The reference engine (`mock_engine/`) has ONE radio: it knows the five ops and answers as an engine at its limit would - `RADIO_ADD` is `LIMIT`, `RADIO_REMOVE` of radio 1
+  `UNSUPPORTED`, `RADIO_AUDIO` / `RADIO_SOLO` for radio 1 land as `NO_CHANGE` and for radio 2 are `NO_DEVICE`, `PLUGIN_RADIO` is `NOT_FOUND` (it fits no plugin) for radio 1 and
+  `NO_DEVICE` for radio 2 - and does not set `FOXAPI_CAP_RADIOS` (it has no `read_radio_state` or `read_radio_list`).
 
 ### 6.19 The audio AGC and the noise blanker (0.3, additive: no capability bit)
 
@@ -675,6 +711,11 @@ Implemented by the mock engine (and exercised by `tests/`):
 | `SET_NR` | SETTINGS | ival0 on, ival1 set-strength, num0 0–1 | |
 | `SET_AGC` | SETTINGS, addresses one radio | ival0 mode 0–4 (`FOXAPI_AGC_*`), ival1 set-fixed-gain, num0 dB | mode −1/5 → `OUT_OF_RANGE`; fixed gain −20 – +40 dB (6.19) |
 | `SET_NB` | SETTINGS, addresses one radio | ival0 on, ival1 set-threshold, num0 dB | 6 – 30 dB above the average (6.19) |
+| `RADIO_ADD` | SETTINGS | ival0 number (0 = lowest free), ival1 start, text device id or "", num0 tone | the mock has one radio: `LIMIT` (6.20) |
+| `RADIO_REMOVE` | SETTINGS | ival0 number | radio 1 → `UNSUPPORTED`; no such radio → `NO_DEVICE` (6.20) |
+| `RADIO_AUDIO` | SETTINGS | ival0 radio (0 = focus), ival1 route 0–3 | route outside 0–3 → `OUT_OF_RANGE`; no such radio → `NO_DEVICE` (6.20) |
+| `RADIO_SOLO` | SETTINGS | ival0 radio, 0 = nobody | no such radio → `NO_DEVICE` (6.20) |
+| `PLUGIN_RADIO` | SETTINGS | text plugin module file, ival0 radio, ival1 start | radio outside 1–2 → `OUT_OF_RANGE`; radio 2 → `NO_DEVICE`; radio 1 → `NOT_FOUND` (the mock fits no plugin) (6.20) |
 | `SET_NOTCH` | SETTINGS | ival0 on, ival1 set, num0 10–20000 Hz, num1 Q 0.1–1000 | |
 | `SET_DISPLAY_RANGE` | SETTINGS | num0 min, num1 max dB | −200 – +40; 10 dB minimum span |
 | `SCAN_DEVICES`, `SELECT_SOURCE`, `SET_SAMPLE_RATE`, `SET_GAIN`, `SET_DEVICE_AGC` | SETTINGS | as header | id/rate/stage must be listed |

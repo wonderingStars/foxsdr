@@ -2497,6 +2497,22 @@ Per-radio reads and commands from stage 3 now act on a real second radio: `read_
 than the first carry the radio's number in their high bits (`(n - 1) << 48`), so a client moving between radios never mistakes one radio's counter for another's unchanged one.
 `fact.radio.<n>.refusal` carries the words when a radio's device could not be had.
 
+### 9.22 Several radios: the saved radios, the plugins' radio, the per-radio lists (multi-radio stages 5 and 6; docs/multi-radio-records/engine-stages-5-6.md)
+
+* `FOXAPI_CAP_RADIOS` (bit 30) says the engine serves the whole multi-radio set. The functions are still tested with `FOXAPI_HAS`.
+* `FOXAPI_OP_PLUGIN_RADIO` (0x1206, grant SETTINGS): `text` the plugin's module file name, `ival[0]` the radio (1 to `fact.radio.max`), `ival[1]` = 1 and start it. A decoder
+  instance is created on the PluginRunner of that radio and fed that radio's I/Q, audio and decoder taps; the plugin's `get_state`, `get_gain`, `get_sample_rates`,
+  `get_stream_info`, the controls it queues and its `request_tune` are answered from, and applied to, that radio (the host service `centre_hz` and `sample_rate_hz` too, when the
+  call is made from inside the plugin's `create()`, `process()` or `destroy()`; from a thread of the plugin's own they answer for radio 1). Answers: `NOT_FOUND` no such plugin,
+  `NO_DEVICE` no such radio, `OUT_OF_RANGE` not 1 to the limit, `UNSUPPORTED` a plugin that transmits (it runs on radio 1), `NO_CHANGE` it runs there already. A radio that is removed
+  sends its plugins back to radio 1, STOPPED.
+* `read_radio_list(session, radio, list, index, out)`: GAINS, ANTENNAS, SAMPLE_RATES and DECODERS of radio `radio` (0 = the session's focus). `read_list` of those four follows the
+  session's focus. DECODERS: every decoder plugin on every radio; ACTIVE and FED mean "on this radio"; `value[0]` is the plugin's radio.
+* Facts: `fact.plugin.<module file>.radio`, `fact.radio.<n>.plugins` (now every radio's), `fact.scanner.radio`, `fact.transmit.radio`, `fact.radio.restore`.
+* Saved settings: the key `radios` (an array of up to seven objects: radios 2 to 8) and the key `pluginRadio` (plugin id -> radio number), both written only when non-empty,
+  `schemaVersion` 1. The shape is in `src/core/config.hpp` (`SavedRadio`).
+* Usage report: the field `radios_max` (the highest number of receivers running at once in the session, 1 to 8). PRIVACY.md has its row.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

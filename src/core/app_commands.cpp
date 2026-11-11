@@ -102,6 +102,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPI_OP_RADIO_REMOVE, "RADIO_REMOVE", true},
     {FOXAPI_OP_RADIO_AUDIO, "RADIO_AUDIO", true},
     {FOXAPI_OP_RADIO_SOLO, "RADIO_SOLO", true},
+    {FOXAPI_OP_PLUGIN_RADIO, "PLUGIN_RADIO", true},
     {FOXAPI_OP_RADIO_FOCUS, "RADIO_FOCUS", false},   // a SESSION's op: the API host applies it (like SETTING_SET and the key ops), not applyCommand
     // --- extensions ---
     {FOXAPP_OP_VFO_TO_ABSOLUTE, "APP_VFO_TO_ABSOLUTE", true},

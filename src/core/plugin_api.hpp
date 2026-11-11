@@ -158,6 +158,9 @@ struct PluginApiClient {
     // by get_state. Kept apart from `grants` because it is a state and not a grant: it
     // changes with the operator's arming window and the key, and is never persisted.
     std::atomic<std::uint32_t> txState{0};
+    // THE RADIO THIS PLUGIN RUNS ON (multi-radio engine, stage 6): 1..PluginApiCore::kRadios, written by the engine when the user moves the plugin, read lock-free by every
+    // call that answers from a radio (get_state, get_gain, the rates, the stream clock, a control request). Radio 1 until the user says otherwise.
+    std::atomic<std::uint32_t> radio{1};
 };
 
 // One queued receiver-control request. Plain data: the queue is a fixed ring.
@@ -324,8 +327,19 @@ public:
     ReceiverSnapshot& snapshot() const { return *snapshot_; }
     const std::shared_ptr<ReceiverSnapshot>& snapshotShared() const { return snapshot_; }
 
-    // The stream clock the runner writes (shared with it).
+    // The stream clock the runner writes (shared with it): radio 1's, and - for radio 2 to kRadios - the clock of that radio's runner.
     const std::shared_ptr<StreamClock>& streamClock() const { return clock_; }
+    static constexpr std::size_t kRadios = 8;   // the engine's kMaxReceivers (the engine holds a static_assert that they agree)
+    const std::shared_ptr<StreamClock>& streamClock(std::uint32_t radio) const { return clocks_[radioIndex(radio)]; }
+    // THE RECEIVER SNAPSHOT OF RADIO `radio` (1..kRadios; anything else is radio 1's). The core owns all of them for its whole life, so a plugin's call that reads one never meets
+    // a snapshot being freed: the engine's receiver for slot n adopts radioSnapshot(n) when the radio is opened, and a radio that is closed leaves its last state behind
+    // (nothing reads it: the plugins that ran on it are moved off first).
+    const std::shared_ptr<ReceiverSnapshot>& radioSnapshot(std::uint32_t radio) const { return snapshots_[radioIndex(radio)]; }
+    // The radio a module runs on, by module file name (1 for a module the core has never seen); and the same by client index (the queued requests carry that).
+    // setClientRadio is the engine's, on the pass; the readers are any thread.
+    void setClientRadio(const std::string& key, std::uint32_t radio);
+    std::uint32_t clientRadio(const std::string& key) const;
+    std::uint32_t clientRadio(std::size_t index) const;
 
     // Drains. GUI thread. Each empties its queue into `out` (appended).
     void takeControls(std::vector<PluginControl>& out);
@@ -439,11 +453,19 @@ private:
     void clearClientLocked(std::size_t index);
     void refreshGrantsLocked(PluginApiClient& c);
 
+    static std::size_t radioIndex(std::uint32_t radio) { return (radio >= 1u && radio <= kRadios) ? static_cast<std::size_t>(radio - 1u) : 0u; }
+    // The snapshot a client's reads answer from: its radio's.
+    ReceiverSnapshot& snapshotFor(const PluginApiClient& c) const { return *snapshots_[radioIndex(c.radio.load(std::memory_order_acquire))]; }
+
     std::atomic<bool> attached_{true};
     // Set once, in the constructor, and never reassigned: plugin threads read
     // through it with no lock.
     const std::shared_ptr<ReceiverSnapshot> snapshot_;
     std::shared_ptr<StreamClock> clock_;
+    // Radio 1's are the two above; the others are made at construction and never replaced (readers take them with no lock).
+    std::array<std::shared_ptr<ReceiverSnapshot>, kRadios> snapshots_;
+    std::array<std::shared_ptr<StreamClock>, kRadios> clocks_;
+    std::map<std::string, std::uint32_t> clientRadios_;   // module key -> radio (>1), under mutex_
 
     mutable std::mutex mutex_;
     std::vector<std::unique_ptr<PluginApiClient>> clients_;

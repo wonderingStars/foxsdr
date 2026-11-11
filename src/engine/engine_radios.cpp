@@ -116,6 +116,10 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
     // bit raised. Nothing reads a slot whose bit is not set.
     std::unique_ptr<Receiver> r = std::make_unique<Receiver>(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha, /*audioEnabled=*/true});
     r->radioNumber_ = static_cast<std::uint32_t>(slot) + 1u;
+    // THE PLUGIN API CORE OWNS EVERY RADIO'S SNAPSHOT (stage 6), so a plugin's get_state on this radio never meets a snapshot being freed: the receiver adopts the core's, and
+    // it is emptied (a default state is published) so that a radio added where another was reads as new until its first pass.
+    r->receiverSnapshot_ = pluginApi_->radioSnapshot(static_cast<std::uint32_t>(slot) + 1u);
+    r->receiverSnapshot_->publish(cascade::core::PublishedState{}, nullptr, std::vector<std::uint64_t>());
     r->claimedKey_ = key;
     {
         std::unique_lock<std::shared_mutex> lk(receiverSlotsMutex_);
@@ -154,6 +158,8 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
                 rx().refusal_ = rx().sourceError_;
             }
         }
+        // ITS RUNNER (stage 6): the decoders that run on this radio, if any (none until the user puts one here), against its own source.
+        createRadioRunner(slot);
         if (c.ival[1] != 0) { startReceiver(); }
     }
     applyAudioRoutes();
@@ -186,6 +192,9 @@ void Engine::removeReceiverSlot(std::size_t slot) {
     {
         RadioWork w(*this, slot);
         rx().removing_ = true;
+        // THE PLUGINS THAT RAN HERE GO FIRST (stage 6): back to radio 1, stopped, their instances destroyed and the runner detached - before the radio's threads end and before
+        // its snapshot, which a plugin's get_state reads, goes quiet.
+        destroyRadioRunner(slot);
         // THE TAKES END FIRST and the threads are joined by the stop, as a user's Stop does (stopReceiver): a take can never outlive the sample flow it
         // taps. Then an open still in flight is reaped (a detached worker releases the device if it lands after), and the radio lets go of its device.
         // THE STOP IS THE ONE STOP: RUN 0 aimed at this radio, through applyCommand (stopReceiver is applyCommand's alone - tests/test_stop_ends_recordings

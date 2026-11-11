@@ -43,6 +43,15 @@ set_target_properties(hostile_fixture PROPERTIES
     PREFIX ""
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_hostile/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_hostile/$<CONFIG>")
+# THE RADIO PROBE (multi-radio engine, stage 6): a REAL I/Q decoder that says which radio it runs on by what it is fed and what the host tells it; the plugins-per-radio test
+# copies it under several names (each a plugin of its own). It faults on purpose when told to (command key 2), so it is built into a directory of its own.
+add_library(radio_probe_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/radio_probe_plugin.cpp")
+target_include_directories(radio_probe_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+target_link_libraries(radio_probe_fixture PRIVATE ${CMAKE_DL_LIBS})
+set_target_properties(radio_probe_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_radio_probe/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_radio_probe/$<CONFIG>")
 # The tests that are handed the hostile fixture's path as their first argument (and need it built first).
 set(CASCADE_HOSTILE_TESTS
     test_plugin_hostile
@@ -592,6 +601,10 @@ foreach(src ${CASCADE_TESTS})
         # real frame loop; both built first.
         add_dependencies(${name} late_fault_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:late_fault_fixture>")
+    elseif(name STREQUAL "test_engine_api_plugin_radio")
+        # The radio probe, copied into scratch plugin folders by the test (plugins per radio, stage 6).
+        add_dependencies(${name} radio_probe_fixture)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:radio_probe_fixture>")
     elseif(name IN_LIST CASCADE_HOSTILE_TESTS)
         # The hostile-plugin fixture (plugin containment P2) copied into scratch plugin folders by the test.
         add_dependencies(${name} hostile_fixture)
